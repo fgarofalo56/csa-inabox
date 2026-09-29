@@ -30,10 +30,17 @@ FROM ubuntu:22.04
 # The build FAILS loudly via `sha256sum -c` if the downloaded tarball does not
 # match. Both are overridable at build time, e.g.:
 #   az acr build --build-arg RUNNER_VERSION=2.x.y --build-arg RUNNER_SHA256=<hex> ...
-# For an arm64 build, pass the matching linux-arm64 hash, e.g. v2.328.0:
-#   RUNNER_SHA256=b801b9809c4d9301932bccadf57ca13533073b2aa9fa9b8e625a8db905b5d8eb
-ARG RUNNER_VERSION=2.328.0
-ARG RUNNER_SHA256=01066fad3a2893e63e6ca880ae3a1fad5bf9329d60e77ee15f2b97c148c3cd4e
+# For an arm64 build, pass the matching linux-arm64 hash, e.g. v2.337.0:
+#   RUNNER_SHA256=9b1dc70626422526e3c94767cf024896beb15da5342a3f4819bf2feac13e0393
+#
+# WHY this pin is watched: GitHub refuses registration from runners below a
+# moving minimum version. On 2026-09-29 the minimum became 2.329.0 and this
+# image, pinned at 2.328.0, stopped registering -- every [self-hosted, loom-aca]
+# workflow queued with no runner. scripts/ci/check-runner-version-pin.mjs fails
+# CI when this pin falls too far behind the latest actions/runner release, so
+# the next bump is forced by a red check instead of a dead runner fleet.
+ARG RUNNER_VERSION=2.337.0
+ARG RUNNER_SHA256=70920811a4f8ad4328818682bca5c6469c1c942fab52448868071d0063816613
 ARG TARGETARCH=amd64
 
 ENV DEBIAN_FRONTEND=noninteractive \

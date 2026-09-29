@@ -78,9 +78,21 @@ REPLICA_TIMEOUT="${REPLICA_TIMEOUT:-1800}"
 CPU="${CPU:-1.0}"
 MEMORY="${MEMORY:-2.0Gi}"
 
-# Runner image build pins (passed through to the Dockerfile ARGs).
-RUNNER_VERSION="${RUNNER_VERSION:-2.328.0}"
-RUNNER_SHA256="${RUNNER_SHA256:-}"   # optional override; Dockerfile has a pinned default
+# Runner image build pins. The Dockerfile OWNS the default (ARG RUNNER_VERSION +
+# ARG RUNNER_SHA256); these are OVERRIDES only and are passed as --build-args
+# only when set. This script used to default RUNNER_VERSION to 2.328.0 and
+# always pass it, which would override a bumped Dockerfile version while the
+# Dockerfile's SHA256 stayed the new one -- a checksum failure on the very
+# rebuild that fixes an out-of-date runner. scripts/ci/check-runner-version-pin.mjs
+# fails CI if a disagreeing default comes back.
+RUNNER_VERSION="${RUNNER_VERSION:-}"
+RUNNER_SHA256="${RUNNER_SHA256:-}"
+if [[ -n "$RUNNER_VERSION" && -z "$RUNNER_SHA256" ]]; then
+  echo "[provision-gh-runner][FATAL] RUNNER_VERSION=$RUNNER_VERSION is set without RUNNER_SHA256." >&2
+  echo "  The Dockerfile's default checksum is for its own pinned version, so the build would fail" >&2
+  echo "  its sha256 check. Pass the linux-x64 SHA256 from the release page for that version too." >&2
+  exit 1
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -153,10 +165,10 @@ release_acr_lease() {
 trap release_acr_lease EXIT
 
 echo "[provision-gh-runner] Building gh-aca-runner:${IMAGE_TAG} via ACR Tasks..."
-BUILD_ARGS=( "RUNNER_VERSION=${RUNNER_VERSION}" )
-[[ -n "$RUNNER_SHA256" ]] && BUILD_ARGS+=( "RUNNER_SHA256=${RUNNER_SHA256}" )
 BUILD_ARG_FLAGS=()
-for a in "${BUILD_ARGS[@]}"; do BUILD_ARG_FLAGS+=( --build-arg "$a" ); done
+if [[ -n "$RUNNER_VERSION" ]]; then
+  BUILD_ARG_FLAGS+=( --build-arg "RUNNER_VERSION=${RUNNER_VERSION}" --build-arg "RUNNER_SHA256=${RUNNER_SHA256}" )
+fi
 
 # Run from inside the runner dir with a relative context (".") + relative
 # --file so the Windows `az` CLI gets a path it understands. --no-logs avoids
@@ -168,7 +180,7 @@ build_rc=0
     --file "Dockerfile" \
     --subscription "$SUB" \
     --no-logs \
-    "${BUILD_ARG_FLAGS[@]}" \
+    ${BUILD_ARG_FLAGS[@]+"${BUILD_ARG_FLAGS[@]}"} \
     . ) || build_rc=$?
 
 # ---------------------------------------------------------------------------

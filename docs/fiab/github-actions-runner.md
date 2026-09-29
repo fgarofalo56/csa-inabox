@@ -149,11 +149,23 @@ If `GITHUB_PAT` is unset and no Key Vault source is given, the script **errors
 loudly and exits non-zero** — it never silently skips.
 
 > **Runner version pin.** The image pins the runner version + a `sha256sum -c`
-> checksum via build ARGs `RUNNER_VERSION` / `RUNNER_SHA256` (default `v2.328.0`);
-> the build fails loudly on a mismatch. Bump both together and confirm the SHA256
-> against the [release page](https://github.com/actions/runner/releases) before
-> the first build, or override per-run:
+> checksum via build ARGs `RUNNER_VERSION` / `RUNNER_SHA256` in
+> `platform/runners/github-actions/Dockerfile` (currently `v2.337.0`); the
+> Dockerfile owns the default and the provision script passes neither unless you
+> override both. The build fails loudly on a mismatch. Bump both together and
+> confirm the SHA256 against the [release page](https://github.com/actions/runner/releases)
+> before the first build, or override per-run:
 > `RUNNER_VERSION=2.x.y RUNNER_SHA256=<hex> ./scripts/csa-loom/provision-gh-runner.sh`.
+>
+> **The pin has an expiry.** The image never self-updates, and GitHub refuses to
+> register a runner below a moving minimum version. On 2026-09-29 it refused
+> `2.328.0` (minimum `2.329.0`) and every `[self-hosted, loom-aca]` workflow
+> stranded. `scripts/ci/check-runner-version-pin.mjs` guards it: on every PR
+> (`loom-guardrails.yml`) it checks the pin is well-formed and at or above the last
+> reported minimum; daily (`deploy-staleness.yml`, GitHub-hosted) it warns once the
+> pin has been superseded for 30 days, which is GitHub's documented update window,
+> and fails at 60. When it goes red, bump the pin and rebuild the image under a
+> new tag.
 
 The durable IaC mirror is
 `platform/fiab/bicep/modules/admin-plane/gh-runner-job.bicep` (see the `// TODO`
