@@ -118,13 +118,19 @@ const colIndex = (cols: any[], name: string): number =>
  * raw `{ tagValue, cost }` rows. The value comes from the column
  * {@link tagValueColumnIndex} resolves — never from the `TagKey` column, whose
  * every row is the key's own name and would attribute all spend to a phantom
- * domain called `loom-domain`. A null value (untagged spend) maps to ''.
+ * domain called `loom-domain`. A null value (untagged spend) maps to ''. A
+ * response with rows but no resolvable value column THROWS: booking all of it
+ * as untagged would state a cause the code never established.
  */
 export function tagCostRowsFromResponse(json: any): TagCostRow[] {
   const cols = json?.properties?.columns || [];
   const rows: any[][] = json?.properties?.rows || [];
   const iCost = colIndex(cols, 'Cost');
   const iTag = tagValueColumnIndex(cols, DOMAIN_TAG_KEY);
+  if (rows.length > 0 && iTag < 0) {
+    const names = (cols as any[]).map((c) => String(c?.name ?? '')).join(', ');
+    throw new MonitorError(`unrecognised tag response: no TagValue or '${DOMAIN_TAG_KEY}' column (columns: ${names})`, 502);
+  }
   return rows.map((r) => ({ tagValue: String(iTag >= 0 ? r[iTag] ?? '' : ''), cost: Number(r[iCost]) || 0 }));
 }
 

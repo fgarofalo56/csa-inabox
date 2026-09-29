@@ -184,6 +184,9 @@ export async function tagScope(tagKey: string): Promise<CostScope[]> {
               grouping: [{ type: 'TagKey', name: key }],
             },
           }, deadline);
+          // `key` only matters for a response whose value column is named after
+          // the key; on the measured TagValue shape dropping it changes nothing
+          // (an equivalent mutant, disclosed rather than counted as coverage).
           for (const { value: v, cost } of tagValuesFromQueryResponse(resp, key)) {
             merged.set(v, (merged.get(v) || 0) + cost);
           }

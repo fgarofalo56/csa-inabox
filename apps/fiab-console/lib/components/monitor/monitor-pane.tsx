@@ -51,6 +51,7 @@ import { SparkObservabilityPane } from '@/lib/panes/spark-observability';
 import { RefreshSummaryPane } from '@/lib/panes/refresh-summary';
 import { MetricChart } from '@/lib/components/monitor/metric-chart';
 import { KqlChart, type KqlChartType } from '@/lib/components/monitor/kql-chart';
+import { CostTagNotice } from '@/lib/components/monitor/cost-tag-notice';
 import { Section } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { LoomChart } from '@/lib/components/charts/loom-chart';
@@ -1594,19 +1595,6 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
     { value: 'tag' as const, label: `Tag · ${data?.tagKey || 'Environment'}`, rows: data?.byTag ?? [] },
   ]), [data]);
   const activeGroup = groupDims.find((g) => g.value === groupDim) || groupDims[0];
-  // An empty tag breakdown is only "no tags" when every tag query answered. If
-  // one failed (throttled, timed out, refused), say that instead (R7).
-  const tagQueryErrors = data?.tagQueryErrors ?? [];
-  const tagLoadFailed = tagQueryErrors.length > 0 && (data?.byTag?.length ?? 0) === 0;
-  const tagLoadFailedBar = (
-    <MessageBar intent="warning">
-      <MessageBarBody>
-        The <strong>{data?.tagKey || 'Environment'}</strong> tag breakdown could not be loaded:{' '}
-        {tagQueryErrors.map((s) => `${shortSub(s.subscription)}: ${s.error || 'no error text returned'}`).join(' · ')}.
-        This says nothing about whether your resources carry the tag. Refresh to retry.
-      </MessageBarBody>
-    </MessageBar>
-  );
 
   // Build donut rows ({label,value}) for a breakdown, top-N + names for subs.
   const donutRows = useCallback((rows: CostBreakdownRow[], kind: GroupDim, topN = 8) => {
@@ -1810,14 +1798,8 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
           </div>
         }
       >
-        {groupDim === 'tag' && tagLoadFailed ? tagLoadFailedBar : groupDim === 'tag' && activeGroup.rows.length === 0 ? (
-          <MessageBar intent="warning">
-            <MessageBarBody>
-              No cost-allocation tags found for tag key <strong>{data?.tagKey || 'Environment'}</strong>. Tag your
-              Azure resources with this key (or set <strong>LOOM_COST_TAG_KEY</strong> to a tag your estate already
-              uses) to break spend down by tag value.
-            </MessageBarBody>
-          </MessageBar>
+        {groupDim === 'tag' && activeGroup.rows.length === 0 ? (
+          <CostTagNotice summary={data} />
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)', gap: tokens.spacingHorizontalL, alignItems: 'start' }}>
             <LoomDataTable
@@ -1844,14 +1826,9 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
           carries no such tag key. */}
       {data && (
         <Section title={`Cost allocation by tag · ${data.tagKey}`}>
-          {tagLoadFailed ? tagLoadFailedBar : data.byTag.length === 0 ? (
-            <MessageBar intent="warning">
-              <MessageBarBody>
-                No cost-allocation tags found. Loom groups spend by the <strong>{data.tagKey}</strong> tag value; set{' '}
-                <strong>LOOM_COST_TAG_KEY</strong> to a tag your Azure estate already applies (e.g. CostCenter,
-                Project, Owner) to see chargeback by tag.
-              </MessageBarBody>
-            </MessageBar>
+          {data.byTag.length > 0 && <CostTagNotice summary={data} />}
+          {data.byTag.length === 0 ? (
+            <CostTagNotice summary={data} />
           ) : (
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)', gap: tokens.spacingHorizontalL, alignItems: 'start' }}>
               <LoomDataTable

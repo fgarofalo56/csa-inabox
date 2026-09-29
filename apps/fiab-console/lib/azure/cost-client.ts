@@ -436,6 +436,30 @@ export function foldByTag(resp: any, tagKey: string, loomRgs: Set<string>): Cost
   return sortDesc(m);
 }
 
+/**
+ * Pure (unit-tested): the tag breakdown rows ONE subscription contributes, or
+ * the reason it contributes none. A rejected query (throttled, timed out,
+ * refused) and a response with rows but no resolvable value column both
+ * return an `error` — an empty result there is unknown, not "no tags". A
+ * response with zero rows is a genuine answer: no error.
+ */
+export function tagFoldOutcome(
+  settled: PromiseSettledResult<any>,
+  tagKey: string,
+  loomRgs: Set<string>,
+): { rows: CostBreakdownRow[]; error: string | null } {
+  if (settled.status === 'rejected') {
+    return { rows: [], error: (settled.reason as Error)?.message || String(settled.reason) };
+  }
+  const cols = settled.value?.properties?.columns || [];
+  const rows: any[][] = settled.value?.properties?.rows || [];
+  if (rows.length > 0 && tagValueColumnIndex(cols, tagKey) < 0) {
+    const names = (cols as any[]).map((c) => String(c?.name ?? '')).join(', ');
+    return { rows: [], error: `unrecognised tag response: no TagValue or '${tagKey}' column (columns: ${names})` };
+  }
+  return { rows: foldByTag(settled.value, tagKey, loomRgs), error: null };
+}
+
 /** Sum the actual cost for a timeframe in one sub, filtered to Loom RGs. */
 async function periodTotal(sub: string, timeframe: CostTimeframe, loomRgs: Set<string>, deadline?: number): Promise<number> {
   const q = await costQuery(sub, {
@@ -613,8 +637,8 @@ export async function computeLoomCostSummary(opts: CostOptions = {}): Promise<Co
       // 6) Budgets.
       listBudgets(sub),
       // 7) By cost-allocation TAG value (best-effort). Groups RG × TagKey so we
-      //    can still filter to Loom RGs. A tenant with no such tag key returns
-      //    no tagged rows (or the query 400s) → the breakdown is honestly empty.
+      //    can still filter to Loom RGs. A failed query is recorded in
+      //    tagQueryErrors (tagFoldOutcome), not read as an empty breakdown.
       costQuery(sub, {
         type: 'ActualCost', timeframe,
         dataset: {
@@ -715,16 +739,11 @@ export async function computeLoomCostSummary(opts: CostOptions = {}): Promise<Co
       budgets.push(...budgetsR.value);
     }
 
-    // Tag breakdown, keyed by TAG VALUE (see foldByTag). A tag query that
-    // FAILED is recorded, not folded into "no tags": the UI must be able to say
-    // "could not load" rather than claim the estate carries no such tag.
-    if (tagR.status === 'fulfilled') {
-      for (const row of foldByTag(tagR.value, COST_TAG_KEY, loomRgs)) {
-        addTo(byTagMap, row.key, row.cost);
-      }
-    } else {
-      tagQueryErrors.push({ subscription: sub, error: (tagR.reason as Error)?.message || String(tagR.reason) });
-    }
+    // Tag breakdown, keyed by TAG VALUE. A failed or unrecognised tag query is
+    // recorded (see tagFoldOutcome), never folded into "no tags".
+    const tagOutcome = tagFoldOutcome(tagR, COST_TAG_KEY, loomRgs);
+    if (tagOutcome.error) tagQueryErrors.push({ subscription: sub, error: tagOutcome.error });
+    for (const row of tagOutcome.rows) addTo(byTagMap, row.key, row.cost);
   };
   for (let i = 0; i < subs.length; i += SUB_CHUNK) {
     await Promise.all(subs.slice(i, i + SUB_CHUNK).map(perSub));

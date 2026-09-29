@@ -55,6 +55,7 @@ export const GET = withTenantAdmin(async (req: NextRequest) => {
       currency: summary.currency,
       total: summary.monthToDate,
       tagKey: summary.tagKey,
+      tagQueryErrors: summary.tagQueryErrors ?? [],
       subscriptionNames: summary.subscriptionNames,
       rows: rows.slice(0, 100),
     });

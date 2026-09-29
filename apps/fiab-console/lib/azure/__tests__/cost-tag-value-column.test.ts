@@ -15,7 +15,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { tagValueColumnIndex } from '../cost-tag-column';
-import { foldByTag } from '../cost-client';
+import { foldByTag, tagFoldOutcome } from '../cost-client';
 import { tagValuesFromQueryResponse } from '../cost-scope';
 import { tagCostRowsFromResponse, foldDomainCostRows } from '../domain-chargeback';
 
@@ -73,6 +73,41 @@ describe('foldByTag (cost-client)', () => {
   });
 });
 
+describe('tagFoldOutcome (cost-client, per subscription)', () => {
+  const LOOM = new Set(['rg-a', 'rg-b']);
+
+  it('a rejected query is an error, not an empty answer', () => {
+    const out = tagFoldOutcome({ status: 'rejected', reason: new Error('Too many requests') }, 'Environment', LOOM);
+    // Breaks if a rejection is read as zero rows with no error: error would be null.
+    expect(out).toEqual({ rows: [], error: 'Too many requests' });
+  });
+
+  it('rows with no resolvable value column are an error, not (untagged)', () => {
+    const resp = { properties: { columns: cols('Cost', 'ResourceGroupName', 'TagKey', 'Currency'), rows: [[5, 'rg-a', 'environment', 'USD']] } };
+    const out = tagFoldOutcome({ status: 'fulfilled', value: resp }, 'Environment', LOOM);
+    // Breaks if the -1 case falls through to foldByTag: rows [{ key: '(untagged)', cost: 5 }], error null.
+    expect(out.rows).toEqual([]);
+    expect(out.error).toMatch(/unrecognised tag response/);
+  });
+
+  it('zero rows is a genuine answer (no error); the measured shape folds by value', () => {
+    const empty = { properties: { columns: cols('Cost', 'ResourceGroupName', 'TagKey', 'Currency'), rows: [] } };
+    // Breaks if an empty response is treated as unrecognised: error would be set.
+    expect(tagFoldOutcome({ status: 'fulfilled', value: empty }, 'Environment', LOOM)).toEqual({ rows: [], error: null });
+    expect(tagFoldOutcome({ status: 'fulfilled', value: RG_TAG }, 'Environment', LOOM).rows[0]).toEqual({ key: 'commercial', cost: 10 });
+  });
+});
+
+describe('tagCostRowsFromResponse (domain chargeback) on an unrecognised shape', () => {
+  it('throws instead of booking all spend as untagged', () => {
+    const resp = { properties: { columns: cols('Cost', 'TagKey', 'Currency'), rows: [[5, 'loom-domain', 'USD']] } };
+    // Breaks if -1 maps every row to tagValue '' (all spend silently untagged).
+    expect(() => tagCostRowsFromResponse(resp)).toThrow(/unrecognised tag response/);
+    // Zero rows is a genuine answer, not an error.
+    expect(tagCostRowsFromResponse({ properties: { columns: cols('Cost', 'TagKey', 'Currency'), rows: [] } })).toEqual([]);
+  });
+});
+
 describe('tagValuesFromQueryResponse (cost-scope)', () => {
   it('lists the tag values as scopes and skips untagged spend', () => {
     const out = tagValuesFromQueryResponse(
@@ -86,12 +121,12 @@ describe('tagValuesFromQueryResponse (cost-scope)', () => {
 
 describe('tagCostRowsFromResponse + foldDomainCostRows (domain chargeback)', () => {
   it('attributes untagged spend to untaggedCost, not to a domain named after the key', () => {
-    const raw = tagCostRowsFromResponse(TAG_ONLY('loom-domain', [[994, null]]));
+    const raw = tagCostRowsFromResponse(TAG_ONLY('loom-domain', [[50, null]]));
     const model = foldDomainCostRows(raw, {});
-    // Breaks on the defect: rows = [{ domainId: 'loom-domain', cost: 994, … }], untaggedCost = 0.
+    // Breaks on the defect: rows = [{ domainId: 'loom-domain', cost: 50, … }], untaggedCost = 0.
     expect(model.rows).toEqual([]);
-    expect(model.untaggedCost).toBe(994);
-    expect(model.totalCost).toBe(994);
+    expect(model.untaggedCost).toBe(50);
+    expect(model.totalCost).toBe(50);
   });
 
   it('still attributes a real domain value', () => {
