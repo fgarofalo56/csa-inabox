@@ -522,12 +522,14 @@ export const lakehouseAutoBind: AutoBindProvider = {
   itemTypes: ['lakehouse'],
 
   // The ITEM-UNIQUE root (`lakehouses/<name>--<itemId>`, see
-  // `lakehouseItemRootPath`): display names are not unique, so a root derived
-  // from the name alone would be shared by every same-name lakehouse. The
-  // installer (`lib/install/provisioners/lakehouse.ts`) still writes the
-  // name-only `lakehouseRootPath` and records it in its provisioning receipt,
-  // which `resolveLakehouseAbfss` prefers (steps 1/2), so an installed lakehouse
-  // keeps resolving to the installer's directory.
+  // `lakehouseItemRootPath`): display names are not unique, so the item id is
+  // part of the path and each lakehouse gets a directory of its own. The
+  // installer (`lib/install/provisioners/lakehouse.ts`) writes this same root,
+  // with the same ownership marker, for a lakehouse created on or after
+  // LAKEHOUSE_ITEM_ROOT_SINCE; a lakehouse created earlier keeps the name-only
+  // `lakehouseRootPath` it was installed with. Either way the installer records
+  // its root in the provisioning receipt, which `resolveLakehouseStorage`
+  // reads first (steps 1/2).
   backingNameFor: (ctx) => ({
     name: lakehouseItemRootPath(ctx.displayName, ctx.itemId),
     // Report whether the DISPLAY NAME itself had to change; the structural

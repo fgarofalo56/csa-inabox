@@ -112,6 +112,14 @@ vi.mock('@/lib/azure/fetch-with-timeout', () => ({ fetchWithTimeout: vi.fn() }))
 vi.mock('@/lib/azure/lakehouse-shortcuts', () => ({ createShortcut: vi.fn() }));
 vi.mock('@/lib/apps/repo-datasets', () => ({ readRepoDataset: vi.fn(async () => null) }));
 
+// The installer reads the item's createdAt to choose its root (see
+// lakehouse-provisioner-item-root.test.ts). An item created before
+// LAKEHOUSE_ITEM_ROOT_SINCE keeps the name-only root this spec asserts on.
+vi.mock('@/lib/azure/cosmos-client', () => ({
+  itemsContainer: vi.fn(async () => ({
+    item: (id: string) => ({ read: async () => ({ resource: { id, createdAt: '2026-01-01T00:00:00.000Z' } }) }),
+  })),
+}));
 vi.mock('@/lib/azure/adls-client', () => ({
   KNOWN_CONTAINERS: ['bronze', 'silver', 'gold', 'landing', 'csv-imports'],
   createDirectory: vi.fn(async (_c: string, path: string) => {

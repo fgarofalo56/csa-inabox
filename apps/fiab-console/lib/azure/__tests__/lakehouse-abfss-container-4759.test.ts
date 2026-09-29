@@ -141,7 +141,12 @@ vi.mock('@/lib/azure/adls-client', async (importOriginal) => {
   };
 });
 
-import { resolveLakehouseAbfss, PROBE_TIMEOUT_MS } from '@/lib/azure/lakehouse-abfss';
+import {
+  resolveLakehouseAbfss,
+  resolveLakehouseStorage,
+  lakehouseStorageWithheldMessage,
+  PROBE_TIMEOUT_MS,
+} from '@/lib/azure/lakehouse-abfss';
 import { lakehouseAutoBind } from '@/lib/azure/auto-bind-providers';
 import { ensureAutoBinding, type AutoBindContext } from '@/lib/azure/auto-bind';
 
@@ -499,7 +504,7 @@ describe('the lakehouse provider attaches only a root this item owns', () => {
 });
 
 describe('the resolver adopts a found root only when this item may use it', () => {
-  /** Another lakehouse, in another workspace, with this item's display name. */
+  /** Another lakehouse with this item's display name. */
   function putTwin(displayName = NAME, createdAt = BEFORE_CUTOVER) {
     DOCS.set(dkey('lh-twin', 'ws-twin'), {
       id: 'lh-twin', workspaceId: 'ws-twin', itemType: 'lakehouse', displayName, state: {}, createdAt,
@@ -570,5 +575,120 @@ describe('the resolver adopts a found root only when this item may use it', () =
     putItem({});
     putTwin();
     expect((await resolveLakehouseAbfss(LH_ID, WS))?.container).toBe('landing');
+  });
+});
+
+describe('a recorded location is used only when it is this item\'s own', () => {
+  const OTHER_ID = 'lh-other';
+  /** Another lakehouse's item root, literally: `lakehouseItemRootPath('Other', 'lh-other')`. */
+  const OTHER_ITEM_ROOT = 'lakehouses/Other--lh-other';
+
+  /** Another lakehouse, recorded at `root` in `container`. */
+  function putOther(container: string, root: string, createdAt = AFTER_CUTOVER) {
+    DOCS.set(dkey(OTHER_ID, 'ws-other'), {
+      id: OTHER_ID, workspaceId: 'ws-other', itemType: 'lakehouse', displayName: 'Other',
+      state: { adlsContainer: container, lakehouseRoot: root }, createdAt,
+    });
+    EXISTING.add(`${container}/${root}`);
+    OWNERS.set(`${container}/${root}`, OTHER_ID);
+  }
+
+  // M5. FAILS IF the item-root check on a recorded root is removed (the old
+  // `&& true` mutant at step 2c): the answer would be `landing/${OTHER_ITEM_ROOT}`,
+  // the other item's directory. The fixture's root has the exact shape step
+  // 2c accepts, so only the item-root check can refuse it.
+  it('a new item whose lakehouseRoot names another item\'s root gets its own root', async () => {
+    putOther('landing', OTHER_ITEM_ROOT);
+    putItem({ adlsContainer: 'landing', lakehouseRoot: OTHER_ITEM_ROOT }, AFTER_CUTOVER);
+    const r = await resolveLakehouseStorage(LH_ID, WS);
+    expect(r).toEqual({
+      ok: true,
+      bound: { abfss: `abfss://landing@dlzacct.dfs.core.windows.net/${ITEM_ROOT}`, container: 'landing', root: ITEM_ROOT },
+    });
+  });
+
+  // FAILS IF step 1 returns the installer receipt unchecked: the answer would be
+  // the other item's abfss URI. The receipt is a key a create copied from a
+  // source item; the new item derives its own root instead.
+  it('a new item whose installer receipt names another item\'s root gets its own root', async () => {
+    putOther('gold', OTHER_ITEM_ROOT);
+    putItem({
+      provisioning: { secondaryIds: {
+        adlsRoot: `abfss://gold@dlzacct.dfs.core.windows.net/${OTHER_ITEM_ROOT}`,
+        container: 'gold', rootPath: OTHER_ITEM_ROOT,
+      } },
+    }, AFTER_CUTOVER);
+    const r = await resolveLakehouseStorage(LH_ID, WS);
+    expect(r.ok && r.bound.root).toBe(ITEM_ROOT);
+    expect(r.ok && r.bound.abfss).not.toContain(OTHER_ITEM_ROOT);
+  });
+
+  // Positive twin of the two above, differing only in the recorded root. FAILS
+  // IF the check refuses this item's OWN recorded item root (it would probe).
+  it('a new item\'s own recorded item root is used with no probe', async () => {
+    putOther('landing', OTHER_ITEM_ROOT);
+    putItem({ adlsContainer: 'gold', lakehouseRoot: ITEM_ROOT }, AFTER_CUTOVER);
+    const r = await resolveLakehouseStorage(LH_ID, WS);
+    expect(r.ok && [r.bound.container, r.bound.root]).toEqual(['gold', ITEM_ROOT]);
+    expect(probes()).toEqual([]);
+  });
+
+  // FAILS IF an earlier item's recorded root is used without the overlap
+  // check: the answer would be ok at `gold/lakehouses/Old Name`. And FAILS IF
+  // the resolver falls back to probing another container (probes non-empty).
+  it('an earlier item whose recorded root another item also uses resolves to root-shared, with no fallback', async () => {
+    putItem({ adlsContainer: 'gold', lakehouseRoot: 'lakehouses/Old Name' });
+    DOCS.set(dkey('lh-twin', 'ws-twin'), {
+      id: 'lh-twin', workspaceId: 'ws-twin', itemType: 'lakehouse', displayName: 'Old Name', state: {},
+      createdAt: BEFORE_CUTOVER,
+    });
+    expect(await resolveLakehouseStorage(LH_ID, WS, PERSIST)).toEqual({ ok: false, reason: 'root-shared' });
+    expect(probes()).toEqual([]);
+    expect(replaced).toEqual([]);
+    // The null-returning wrapper agrees.
+    expect(await resolveLakehouseAbfss(LH_ID, WS)).toBeNull();
+  });
+
+  // FAILS IF a failed read of the other items is treated as "no overlap" (ok)
+  // or as "shared" (root-shared): neither was established.
+  it('an earlier item\'s recorded root resolves to root-unverified when the other items cannot be read', async () => {
+    putItem({ adlsContainer: 'gold', lakehouseRoot: 'lakehouses/Old Name' });
+    QUERY_FAILS = true;
+    expect(await resolveLakehouseStorage(LH_ID, WS)).toEqual({ ok: false, reason: 'root-unverified' });
+  });
+
+  // FAILS IF step 3 keeps walking past a directory another item also uses, to look for another
+  // container: probes would go on to the containers after `landing` (the
+  // pre-change resolver probed all five here, then answered a bare null).
+  // FAILS IF the reason is anything but root-shared.
+  it('an existing unmarked name root another item also derives resolves to root-shared', async () => {
+    EXISTING.add(`landing/${ROOT}`);
+    putItem({});
+    DOCS.set(dkey('lh-twin', 'ws-twin'), {
+      id: 'lh-twin', workspaceId: 'ws-twin', itemType: 'lakehouse', displayName: NAME, state: {},
+      createdAt: BEFORE_CUTOVER,
+    });
+    expect(await resolveLakehouseStorage(LH_ID, WS, PERSIST)).toEqual({ ok: false, reason: 'root-shared' });
+    expect(probes()).toEqual([`bronze/${ROOT}`, `landing/${ROOT}`]);
+    expect(replaced).toEqual([]);
+  });
+
+  it('the not-found and no-storage reasons are distinct', async () => {
+    // FAILS IF a missing item and unconfigured storage collapse to one reason.
+    expect(await resolveLakehouseStorage('lh-missing', WS)).toEqual({ ok: false, reason: 'not-found' });
+    configure([]);
+    putItem({});
+    expect(await resolveLakehouseStorage(LH_ID, WS)).toEqual({ ok: false, reason: 'no-storage' });
+  });
+
+  it('the withheld message names the next step for root-shared and root-unverified only', () => {
+    // FAILS IF the root-shared text stops telling the user an administrator
+    // assigns the location, or if not-found / no-storage start carrying text
+    // (each route words those itself).
+    expect(lakehouseStorageWithheldMessage('root-shared')).toMatch(/also used by another item/);
+    expect(lakehouseStorageWithheldMessage('root-shared')).toMatch(/administrator must assign/);
+    expect(lakehouseStorageWithheldMessage('root-unverified')).toMatch(/could not confirm/);
+    expect(lakehouseStorageWithheldMessage('not-found')).toBeNull();
+    expect(lakehouseStorageWithheldMessage('no-storage')).toBeNull();
   });
 });

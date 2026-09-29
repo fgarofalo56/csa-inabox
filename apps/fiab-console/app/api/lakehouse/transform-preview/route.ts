@@ -17,11 +17,14 @@
  *     body { lakehouseId, container?, path, pool?, code, sampleRows?, previewRows? }
  *     → 200 { ok, status:'warming'|'running', jobId }        (kick-off)
  *
- *   GET /api/lakehouse/transform-preview?lakehouseId=&jobId=&code=&sampleRows=&previewRows=
+ *   POST /api/lakehouse/transform-preview
+ *     body { lakehouseId, jobId, code?, sampleRows?, previewRows? }   (poll)
+ *   GET  /api/lakehouse/transform-preview?lakehouseId=&jobId=&code=&sampleRows=&previewRows=
  *     → 200 { ok, status:'available', columns, rows, rowCount }   (poll → done)
  *     → 200 { ok, status:'warming'|'running', jobId }
  *     `code` is read only while the job is `warming`, and must be the code the
- *     kick-off accepted.
+ *     kick-off accepted. The editor polls with POST so the code is sent in the
+ *     body rather than the URL.
  *
  * Item scope. Every call names the lakehouse item (`lakehouseId`) and needs
  * EDIT rights on it (`authorizeLakehouse` with `write`): the candidate is
@@ -201,6 +204,11 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   if (!lakehouseId) {
     return apiBadRequest('lakehouseId is required: a transform preview runs against a file or table of one lakehouse.');
   }
+  // A body carrying a jobId is a POLL. The client polls with POST so the
+  // candidate code (up to MAX_CODE_CHARS) travels in the body, not the URL.
+  const jobId = typeof body?.jobId === 'string' ? body.jobId : '';
+  if (jobId) return pollJob(session, { lakehouseId, jobId, code, sampleRows, previewRows });
+
   if (!path) return apiBadRequest('path is required');
   if (!code) return apiBadRequest('code is required');
   const pool = poolParam || DEFAULT_POOL;
@@ -254,7 +262,19 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
 
   if (!lakehouseId) return apiBadRequest('lakehouseId is required');
   if (!jobId) return apiBadRequest('jobId is required; start a transform preview with POST.');
+  return pollJob(session, { lakehouseId, jobId, code, sampleRows, previewRows });
+});
 
+/**
+ * Poll (and, for a warming job, submit) a transform preview job. Shared by GET
+ * and by POST-with-jobId. Every poll re-authorizes the item with edit rights,
+ * and the job's container + path come from the signed handle.
+ */
+async function pollJob(
+  session: SessionPayload,
+  p: { lakehouseId: string; jobId: string; code: string; sampleRows: number; previewRows: number },
+): Promise<NextResponse> {
+  const { lakehouseId, jobId, code, sampleRows, previewRows } = p;
   try {
     const access = await authorizeLakehouse(session, lakehouseId, { write: true, readOnlyMessage: READ_ONLY_MESSAGE });
     if (access instanceof NextResponse) return access;
@@ -321,4 +341,4 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
   } catch (e: any) {
     return NextResponse.json({ ok: false, status: 'error', error: e?.message || String(e) }, { status: 502 });
   }
-});
+}

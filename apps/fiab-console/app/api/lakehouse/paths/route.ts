@@ -7,14 +7,14 @@
  *
  * ITEM-BOUND LISTING (#3904). With `lakehouseId` the route resolves the
  * caller's lakehouse to the container + root the provisioner actually wrote to,
- * via `resolveLakehouseAbfss` — the SAME resolver `/api/lakehouse/tables` uses.
+ * via `resolveLakehouseStorage` — the SAME resolver `/api/lakehouse/tables` uses.
  * The editor used to open on `containers[0]` (`bronze`) and list the container
  * ROOT, i.e. a different container and a path the lakehouse never occupied, so
  * first open 404'd. The response echoes the resolved `container` + `root` so the
  * client adopts the binding rather than deriving a second opinion. The
- * lakehouse is authorized through `resolveItemAccessByOid` (404, not 403, so an
- * id cannot be probed for existence across tenants) exactly as the tables route
- * does — the id is caller-supplied and must never become an existence oracle.
+ * lakehouse is authorized through `resolveItemAccessByOid` (404, not 403, so a
+ * response never distinguishes a missing item from one the caller cannot
+ * open) exactly as the tables route does.
  *
  * A `container` / `prefix` sent WITH `lakehouseId` is confined to that item's
  * container and root by `scopePathToRoot` (`../_lib/item-scope`): compared
@@ -49,11 +49,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { KNOWN_CONTAINERS, listPaths, type KnownContainer, type PathEntry } from '@/lib/azure/adls-client';
 import { listPathsAsUser, AdlsUserTokenError } from '@/lib/azure/adls-user-client';
 import { oboMode } from '@/lib/azure/data-access-mode';
-import { resolveLakehouseAbfss } from '@/lib/azure/lakehouse-abfss';
+import { resolveLakehouseStorage } from '@/lib/azure/lakehouse-abfss';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { withSession } from '@/lib/api/route-toolkit';
 import { apiBadRequest, apiConflict, apiError, apiForbidden } from '@/lib/api/respond';
-import { authorizeLakehouse, pathSegments, scopePathToRoot } from '../_lib/item-scope';
+import {
+  authorizeLakehouse, lakehouseStorageWithheldResponse, pathSegments, scopePathToRoot,
+} from '../_lib/item-scope';
 import { logSafe } from '@/lib/util/log-safe';
 import { trimSlashes } from '@/lib/util/trim';
 
@@ -210,12 +212,16 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
     if (access instanceof NextResponse) return access;
 
     // `persist` (#4759): a root the resolver has to PROBE for is written back
-    // onto the item so the next open reads it directly. Opted in here, and only
-    // here, because this branch has already authorized the item — and only for
-    // a caller whose role may write the item. A read-only caller gets the same
-    // answer; the item is left as it was.
-    const bound = await resolveLakehouseAbfss(lakehouseId, access.item.workspaceId, { persist: access.canWrite });
-    if (!bound) {
+    // onto the item so the next open reads it directly. Opted in for every
+    // caller who can see the item, whatever their role: the value written is
+    // derived on the server from the item's own id and name and the probe
+    // result, never from the request, and the write is a conditional replace
+    // on the item's etag (IfMatch), so it cannot overwrite a concurrent edit.
+    // A viewer opening the item first records the same root an editor would.
+    const resolved = await resolveLakehouseStorage(lakehouseId, access.item.workspaceId, { persist: true });
+    if (!resolved.ok) {
+      const withheld = lakehouseStorageWithheldResponse(resolved.reason);
+      if (withheld) return withheld;
       // Honest gate, not an error: there is no configured storage to browse.
       // Mirrors /api/lakehouse/tables' `{ ok: true, tables: [], gate }`.
       return NextResponse.json({
@@ -223,6 +229,7 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
         identity: 'service', gate: STORAGE_NOT_CONFIGURED,
       });
     }
+    const bound = resolved.bound;
     // A container or prefix the caller names must lie inside THIS item's
     // container + root, compared segment by segment; no prefix lists the root.
     const scoped = scopePathToRoot(bound, container, prefix, false);
@@ -243,8 +250,8 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
     // security-role picker.
     if (!isTenantAdmin(session)) {
       return apiForbidden(
-        'Listing a storage container directly is limited to tenant admins. Open the lakehouse whose '
-        + 'files you want and browse them from there (pass lakehouseId).',
+        'Listing a storage container directly is limited to tenant admins. Open the lakehouse and browse '
+        + 'from its editor.',
       );
     }
     if (prefix && !pathSegments(prefix)) {

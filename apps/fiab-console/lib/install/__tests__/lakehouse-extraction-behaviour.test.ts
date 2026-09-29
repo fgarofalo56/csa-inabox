@@ -50,6 +50,14 @@ const events: string[] = [];
 /** Paths whose ADLS write should be refused, and with what status. */
 const adlsDeny = { pattern: null as RegExp | null, status: 403 };
 
+// The installer reads the item's createdAt to choose its root (see
+// lakehouse-provisioner-item-root.test.ts). An item created before
+// LAKEHOUSE_ITEM_ROOT_SINCE keeps the name-only root this spec asserts on.
+vi.mock('@/lib/azure/cosmos-client', () => ({
+  itemsContainer: vi.fn(async () => ({
+    item: (id: string) => ({ read: async () => ({ resource: { id, createdAt: '2026-01-01T00:00:00.000Z' } }) }),
+  })),
+}));
 vi.mock('@/lib/azure/adls-client', () => ({
   KNOWN_CONTAINERS: ['bronze', 'silver', 'gold', 'landing', 'csv-imports'],
   listContainers: vi.fn(async () => [{ name: 'landing' }, { name: 'bronze' }]),

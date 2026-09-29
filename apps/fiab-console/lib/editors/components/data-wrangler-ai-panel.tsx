@@ -75,6 +75,9 @@ export interface DataWranglerAiPanelProps {
   numericColNames: string[];
   /** ADLS source of the preview — required for the live transform preview. */
   previewSource?: PreviewSource | null;
+  /** Why the host withheld `previewSource` (e.g. an unsaved item, a read-only
+   *  role). Shown as the disabled reason instead of the generic one. */
+  previewUnavailableReason?: string | null;
   /** DataFrame variable the generated code targets (default `df`). */
   dataframeVar?: string;
   /** When bound to a notebook, insert the code into a cell; otherwise copy-only. */
@@ -137,7 +140,7 @@ async function copy(text: string) {
 export function DataWranglerAiPanel(props: DataWranglerAiPanelProps) {
   const s = useStyles();
   const {
-    columns, rows, columnStats, numericColNames, previewSource,
+    columns, rows, columnStats, numericColNames, previewSource, previewUnavailableReason,
     dataframeVar = 'df', onInsertToNotebook, renderResultGrid,
   } = props;
 
@@ -274,11 +277,15 @@ export function DataWranglerAiPanel(props: DataWranglerAiPanelProps) {
     try {
       // The handle names the source; `code` is only needed while the job is
       // warming (the statement is submitted once the Spark session is ready).
-      const qs = new URLSearchParams({
-        lakehouseId: previewSource.lakehouseId, jobId,
-        ...(warming ? { code } : {}),
+      // Polled with POST so the code travels in the body, not the URL.
+      const r = await clientFetch('/api/lakehouse/transform-preview', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          lakehouseId: previewSource.lakehouseId, jobId,
+          ...(warming ? { code } : {}),
+        }),
       });
-      const r = await clientFetch(`/api/lakehouse/transform-preview?${qs.toString()}`);
       const j = await r.json();
       if (j.ok && j.status === 'available') {
         setPreviewResult({
@@ -332,7 +339,8 @@ export function DataWranglerAiPanel(props: DataWranglerAiPanelProps) {
   }, [previewSource, stopPolling, pollPreview]);
 
   const previewDisabledReason = !previewSource
-    ? 'Live preview needs a file/table source — open the Table or File tab and select a file first.'
+    ? (previewUnavailableReason
+      || 'Live preview needs a file/table source — open the Table or File tab and select a file first.')
     : null;
 
   // Inline preview block reused under whichever candidate is active.

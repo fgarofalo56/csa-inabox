@@ -31,6 +31,13 @@
  *      recorded root must also be THIS item's own root shape
  *      (`lakehouseItemRootPath`: one segment ending in `--<item id>`, or the
  *      bare id); anything else falls through to step 3.
+ *
+ *   RECORDED LOCATIONS ARE CHECKED (steps 1, 2, 2b and 2c alike). A location
+ *   recorded on the item is used only when it is this item's own: for an item
+ *   created on or after the cutover, its own item root (any other value is
+ *   skipped and the next step is tried); for an earlier item, a root no other
+ *   lakehouse's root overlaps. An earlier item whose recorded root another
+ *   lakehouse also uses resolves to `root-shared` and resolution stops there.
  *   3. No persisted binding — FIND the root rather than guess it (#4759,
  *      auto-bind-by-default.md rule 3). The root is
  *      `lakehouseItemRootPath(displayName, id)` for an item created on or after
@@ -65,11 +72,13 @@
  *      about who wrote it. So before a pre-cutover item uses a name-only root
  *      (adopted OR chosen as the fallback), the resolver reads every other
  *      lakehouse's root (`listLakehouseRootFacts`, recorded or derived) and
- *      does not use a container where one of them overlaps this root
- *      segment-wise. If that read fails, no name-only root is used: an unknown
- *      answer is not a "no". Item roots skip this, being unique by
- *      construction. Lakehouses left without a root this way are the ones the
- *      readiness check `lakehouse-shared-roots` lists for an admin.
+ *      checks for one that overlaps this root segment-wise. An existing
+ *      directory that another root overlaps resolves to `root-shared`: the
+ *      files may be exactly there, so no other container is offered instead.
+ *      If that read fails the answer is `root-unverified`: an unknown answer is
+ *      not a "no". Item roots skip this, being unique by construction.
+ *      Lakehouses resolved to `root-shared` are the ones the readiness check
+ *      `lakehouse-shared-roots` lists for an admin.
  *
  *      WHEN STEP 3 RUNS AGAIN. The probe result is persisted ONLY when a root
  *      was FOUND and the caller passed `{ persist: true }`; the next resolve
@@ -78,8 +87,10 @@
  *      resolve probes again: at most one HEAD per configured container, each
  *      bounded by PROBE_TIMEOUT_MS, and the walk stops at the first failure.
  *
- * Returns null (caller skips the source silently — honest gate) when the
- * lakehouse can't be found, isn't a lakehouse, or no storage env is configured.
+ * `resolveLakehouseStorage` returns the location, or the reason there is none
+ * (`LakehouseStorageWithheld`: not-found, no-storage, root-shared,
+ * root-unverified). `resolveLakehouseAbfss` returns the location or null
+ * (caller skips the source silently — honest gate).
  */
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
@@ -91,6 +102,8 @@ import {
 } from '@/lib/azure/adls-client';
 import { dfsSuffix } from '@/lib/azure/cloud-endpoints';
 import {
+  isLakehouseItemRootOf,
+  isLakehouseRootShape,
   lakehouseContainerOrder,
   lakehouseItemRootPath,
   lakehouseRootLocation,
@@ -98,12 +111,11 @@ import {
   lakehouseRootsOverlap,
   lakehouseUsesItemRoot,
   LAKEHOUSE_OWNER_METADATA_KEY,
-  LAKEHOUSE_ROOT_PREFIX,
-  safeAdlsRelPath,
   type LakehouseRootFacts,
   type LakehouseRootLocation,
 } from '@/lib/azure/backing-name';
 import { trimSlashes } from '@/lib/util/trim';
+import { LAKEHOUSE_SHARED_ROOTS_CHECK_TITLE } from '@/lib/admin/env-checks/lakehouse-shared-roots';
 
 const CONTAINER_URL_ENV: Record<KnownContainer, string> = {
   bronze: 'LOOM_BRONZE_URL',
@@ -133,30 +145,6 @@ function configuredCandidates(owned?: string[]): KnownContainer[] {
     ? owned.filter(isKnownContainer)
     : [...KNOWN_CONTAINERS]) as KnownContainer[];
   return candidates.filter((c) => !!process.env[CONTAINER_URL_ENV[c]]);
-}
-
-/**
- * Is `root` a path auto-bind could have written as `lakehouseRoot`? Step 2c
- * accepts exactly the shape `lakehouseRootPath` produces —
- * `lakehouses/<sanitised segments>`, a fixpoint of `safeAdlsRelPath` — and
- * nothing else. Any other value is not a binding auto-bind wrote, so the
- * resolver falls through to step 3 and derives the root from the item's name.
- */
-function isLakehouseRootShape(root: string): boolean {
-  if (!root.startsWith(LAKEHOUSE_ROOT_PREFIX)) return false;
-  if (root.length <= LAKEHOUSE_ROOT_PREFIX.length) return false;
-  return safeAdlsRelPath(root) === root;
-}
-
-/**
- * Is `root` this item's own item-unique root — `lakehouses/<name>--<itemId>` or
- * `lakehouses/<itemId>`, one segment, as {@link lakehouseItemRootPath} builds?
- */
-export function isItemRootOf(root: string, itemId: string): boolean {
-  if (!itemId || !isLakehouseRootShape(root)) return false;
-  const seg = root.slice(LAKEHOUSE_ROOT_PREFIX.length);
-  if (seg.includes('/')) return false;
-  return seg === itemId || seg.endsWith(`--${itemId}`);
 }
 
 /** The ownership marker of a lakehouse root directory, as read from ADLS. */
@@ -292,8 +280,50 @@ async function persistFoundBinding(
 }
 
 /**
+ * Why a lakehouse has no storage location to hand back:
+ *
+ *   not-found        the item does not exist in that workspace, or is not a
+ *                    lakehouse.
+ *   no-storage       no `LOOM_*_URL` container is configured for this
+ *                    deployment, so there is nowhere a lakehouse can live.
+ *   root-shared      this lakehouse's storage location is also used by another
+ *                    lakehouse item (a legacy root derived from a display name,
+ *                    or a recorded location that names another item's root).
+ *                    Nothing is returned and no other container is chosen in its
+ *                    place: the files are where they are, and an administrator
+ *                    assigns the item a dedicated location.
+ *   root-unverified  the other lakehouses' roots could not be read, so Loom
+ *                    could not confirm the location is this item's alone. An
+ *                    unknown answer is not a "no"; retry.
+ */
+export type LakehouseStorageWithheld = 'not-found' | 'no-storage' | 'root-shared' | 'root-unverified';
+
+export type LakehouseStorageResolution =
+  | { ok: true; bound: ResolvedLakehouseAbfss }
+  | { ok: false; reason: LakehouseStorageWithheld };
+
+/**
+ * The user-facing text for a withheld resolution, ONE wording for every route
+ * that renders it. `null` for `not-found`, which each route answers with its own
+ * 404, and for `no-storage`, which each route already words as its own gate.
+ */
+export function lakehouseStorageWithheldMessage(reason: LakehouseStorageWithheld): string | null {
+  if (reason === 'root-shared') {
+    return 'This lakehouse\'s storage location is also used by another item, so Loom is not opening it here. '
+      + 'An administrator must assign this lakehouse a dedicated storage location: Admin > Readiness lists '
+      + `it under "${LAKEHOUSE_SHARED_ROOTS_CHECK_TITLE}", with the other item that uses the same location.`;
+  }
+  if (reason === 'root-unverified') {
+    return 'Loom could not confirm that this lakehouse\'s storage location belongs to it alone, because the '
+      + 'list of lakehouse items could not be read. Nothing was opened. Retry in a moment.';
+  }
+  return null;
+}
+
+/**
  * Read the lakehouse item from Cosmos and return its ADLS Gen2 root as abfss,
- * or null when it can't be resolved against REAL configured storage.
+ * or null when it can't be resolved against REAL configured storage. The
+ * reason is dropped; callers that show it use {@link resolveLakehouseStorage}.
  *
  * @param lakehouseId the attached-source item id
  * @param workspaceId the partition key (the notebook's workspace — the
@@ -305,31 +335,97 @@ export async function resolveLakehouseAbfss(
   workspaceId: string,
   opts: ResolveLakehouseAbfssOptions = {},
 ): Promise<ResolvedLakehouseAbfss | null> {
-  if (!lakehouseId || !workspaceId) return null;
+  const r = await resolveLakehouseStorage(lakehouseId, workspaceId, opts);
+  return r.ok ? r.bound : null;
+}
+
+/** A recorded location, before it is checked against this item. */
+interface RecordedCandidate {
+  bound: ResolvedLakehouseAbfss;
+  /** For the overlap check: '' = the primary account, null = unknown (matches any). */
+  account: string | null;
+}
+
+/**
+ * {@link resolveLakehouseAbfss}, with the reason when no location is returned.
+ * See the header for the resolution order.
+ */
+export async function resolveLakehouseStorage(
+  lakehouseId: string,
+  workspaceId: string,
+  opts: ResolveLakehouseAbfssOptions = {},
+): Promise<LakehouseStorageResolution> {
+  if (!lakehouseId || !workspaceId) return { ok: false, reason: 'not-found' };
   const items = await itemsContainer();
   let lh: WorkspaceItem | null = null;
   try {
     const { resource } = await items.item(lakehouseId, workspaceId).read<WorkspaceItem>();
     lh = resource && resource.itemType === 'lakehouse' ? resource : null;
   } catch (e: any) {
-    if (e?.code === 404) return null;
+    if (e?.code === 404) return { ok: false, reason: 'not-found' };
     throw e;
   }
-  if (!lh) return null;
+  if (!lh) return { ok: false, reason: 'not-found' };
+  const item: WorkspaceItem = lh;
 
-  const state = (lh.state as Record<string, any>) || {};
+  const state = (item.state as Record<string, any>) || {};
   const sec = (state.provisioning?.secondaryIds || {}) as Record<string, unknown>;
+  const itemRootEra = lakehouseUsesItemRoot(item.createdAt);
+  const explicitAccount = typeof state.storageAccount === 'string' ? state.storageAccount.trim() : '';
+
+  // Every OTHER lakehouse's root, read once and lazily; null when the read failed.
+  let others: LakehouseRootLocation[] | null | undefined;
+  const otherRoots = async (): Promise<LakehouseRootLocation[] | null> => {
+    if (others === undefined) {
+      others = await listLakehouseRootFacts(items)
+        .then((rows) => rows
+          .filter((r) => r.id !== item.id)
+          .map(lakehouseRootLocation)
+          .filter((l): l is LakehouseRootLocation => !!l))
+        .catch(() => null);
+    }
+    return others;
+  };
+  /** Does `root` in `container` overlap another lakehouse's root? null = could not tell. */
+  const overlapsOther = async (account: string | null, container: string, root: string): Promise<boolean | null> => {
+    const o = await otherRoots();
+    if (o === null) return null;
+    const mine: LakehouseRootLocation = {
+      id: item.id, account, container, segments: root.split('/').filter(Boolean), recorded: true,
+    };
+    return o.some((x) => lakehouseRootsOverlap(mine, x));
+  };
+
+  /**
+   * Is a RECORDED location (steps 1-2c) this item's own? An item created on or
+   * after the cutover must name its own item root (`isLakehouseItemRootOf`),
+   * which no other item can hold; anything else is skipped, and resolution
+   * moves on to the next step. An earlier item's recorded root is used unless
+   * another lakehouse's root overlaps it, in which case the answer is
+   * `root-shared` and resolution STOPS: the files are there, so no other
+   * location is offered in their place.
+   */
+  const checkRecorded = async (c: RecordedCandidate): Promise<LakehouseStorageResolution | null> => {
+    if (itemRootEra) return isLakehouseItemRootOf(c.bound.root, item.id) ? { ok: true, bound: c.bound } : null;
+    const shared = await overlapsOther(c.account, c.bound.container, c.bound.root);
+    if (shared === null) return { ok: false, reason: 'root-unverified' };
+    return shared ? { ok: false, reason: 'root-shared' } : { ok: true, bound: c.bound };
+  };
 
   // 1. Provisioner already stamped a full abfss root — most accurate + already
   //    sovereign-cloud-correct. Parse out container/root for the editor list.
   const stampedAbfss = typeof sec.adlsRoot === 'string' ? sec.adlsRoot.trim() : '';
   if (stampedAbfss.startsWith('abfss://')) {
     const m = stampedAbfss.match(/^abfss:\/\/([^@]+)@[^/]+\/(.*)$/i);
-    return {
-      abfss: stampedAbfss,
-      container: m?.[1] || (typeof sec.container === 'string' ? sec.container : ''),
-      root: trimSlashes((m?.[2] || (typeof sec.rootPath === 'string' ? sec.rootPath : ''))),
-    };
+    const decided = await checkRecorded({
+      account: null,
+      bound: {
+        abfss: stampedAbfss,
+        container: m?.[1] || (typeof sec.container === 'string' ? sec.container : ''),
+        root: trimSlashes((m?.[2] || (typeof sec.rootPath === 'string' ? sec.rootPath : ''))),
+      },
+    });
+    if (decided) return decided;
   }
 
   // 2. Re-derive from recorded container + rootPath.
@@ -337,105 +433,117 @@ export async function resolveLakehouseAbfss(
   const recRoot = typeof sec.rootPath === 'string' ? sec.rootPath : '';
   if (recContainer && recRoot && isKnownContainer(recContainer)) {
     const abfss = resolveAbfssRoot(recContainer, recRoot);
-    if (abfss) return { abfss, container: recContainer, root: trimSlashes(recRoot) };
+    if (abfss) {
+      const decided = await checkRecorded({
+        account: explicitAccount.toLowerCase(),
+        bound: { abfss, container: recContainer, root: trimSlashes(recRoot) },
+      });
+      if (decided) return decided;
+    }
   }
 
   // 2b. Lakehouse bound to an explicit external storage account (state.storageAccount).
-  const explicitAccount = typeof state.storageAccount === 'string' ? state.storageAccount.trim() : '';
   if (explicitAccount && recContainer && recRoot) {
     const clean = trimSlashes(recRoot);
-    return {
-      abfss: `abfss://${recContainer}@${explicitAccount}.${dfsSuffix()}/${clean}`,
-      container: recContainer,
-      root: clean,
-    };
+    const decided = await checkRecorded({
+      account: explicitAccount.toLowerCase(),
+      bound: {
+        abfss: `abfss://${recContainer}@${explicitAccount}.${dfsSuffix()}/${clean}`,
+        container: recContainer,
+        root: clean,
+      },
+    });
+    if (decided) return decided;
   }
 
   // 2c. The binding auto-bind persisted on create (#4759): a configured DLZ
-  //     container and a root of the exact shape auto-bind writes.
+  //     container and a root of the exact shape auto-bind writes. After the
+  //     cutover it must be THIS item's own item root (`checkRecorded`).
   const boundContainer = typeof state.adlsContainer === 'string' ? state.adlsContainer.trim() : '';
   const boundRoot = typeof state.lakehouseRoot === 'string' ? state.lakehouseRoot.trim() : '';
-  const itemRootEra = lakehouseUsesItemRoot(lh.createdAt);
-  if (
-    boundContainer && boundRoot && isKnownContainer(boundContainer) && isLakehouseRootShape(boundRoot)
-    && (!itemRootEra || isItemRootOf(boundRoot, lh.id))
-  ) {
+  if (boundContainer && boundRoot && isKnownContainer(boundContainer) && isLakehouseRootShape(boundRoot)) {
     const abfss = resolveAbfssRoot(boundContainer, boundRoot);
-    if (abfss) return { abfss, container: boundContainer, root: boundRoot };
+    if (abfss) {
+      const decided = await checkRecorded({
+        account: explicitAccount.toLowerCase(),
+        bound: { abfss, container: boundContainer, root: boundRoot },
+      });
+      if (decided) return decided;
+    }
   }
 
-  // 3. No persisted binding: probe for the root (see the header for the order,
-  //    for which items each probe exists to find, and for when it re-runs).
+  // 3. No usable recorded binding: probe for the root (see the header for the
+  //    order, for which items each probe exists to find, and for when it re-runs).
   const owned = Array.isArray(state.ownedContainers) ? (state.ownedContainers as string[]) : undefined;
   const ownedDeclared = !!owned && owned.length > 0;
   const candidates = configuredCandidates(owned);
   const legacy = candidates[0];
-  if (legacy) {
-    const root = itemRootEra
-      ? lakehouseItemRootPath(lh.displayName || '', lh.id)
-      : lakehouseRootPath(lh.displayName || '', lh.id);
-    const preferred = (ownedDeclared ? candidates : lakehouseContainerOrder(candidates)) as KnownContainer[];
-    const probeOrder = [legacy, ...preferred.filter((c) => c !== legacy)];
-    // Name-only roots only: does another lakehouse's root overlap `root` in
-    // container `c`? Read once, lazily. A failed read answers "yes" (unknown is
-    // not "no"), so no name-only root is used on an unverified answer.
-    let others: LakehouseRootLocation[] | null | undefined;
-    const sharedWithOther = async (c: KnownContainer): Promise<boolean> => {
-      if (itemRootEra) return false;
-      if (others === undefined) {
-        others = await listLakehouseRootFacts(items)
-          .then((rows) => rows
-            .filter((r) => r.id !== lh!.id)
-            .map(lakehouseRootLocation)
-            .filter((l): l is LakehouseRootLocation => !!l))
-          .catch(() => null);
-      }
-      if (others === null) return true;
-      const mine: LakehouseRootLocation = {
-        id: lh!.id, account: '', container: c, segments: root.split('/').filter(Boolean), recorded: false,
-      };
-      return others.some((o) => lakehouseRootsOverlap(mine, o));
-    };
-    let found: KnownContainer | null = null;
-    let probeFailed = false;
-    // Containers holding a directory at `root` that this item may not adopt.
-    const heldByOther = new Set<KnownContainer>();
-    for (const c of probeOrder) {
-      try {
-        const r = await readLakehouseRootOwner(c, root);
-        if (!r.exists) continue;
-        if (mayAdoptRoot(r.owner, lh.id, itemRootEra) && (r.owner === lh.id || !(await sharedWithOther(c)))) {
-          found = c;
-          break;
-        }
-        heldByOther.add(c);
-      } catch {
-        // Not a 404: this container could not be read (or the probe timed
-        // out), so the root cannot be said to be absent from it.
-        probeFailed = true;
-        break;
-      }
+  if (!legacy) {
+    // No real configured storage — honest gate: caller skips this source.
+    return { ok: false, reason: 'no-storage' };
+  }
+  const root = itemRootEra
+    ? lakehouseItemRootPath(item.displayName || '', item.id)
+    : lakehouseRootPath(item.displayName || '', item.id);
+  const preferred = (ownedDeclared ? candidates : lakehouseContainerOrder(candidates)) as KnownContainer[];
+  const probeOrder = [legacy, ...preferred.filter((c) => c !== legacy)];
+  // Name-only roots only: does another lakehouse's root overlap `root` in
+  // container `c` of the primary account? Item roots are unique by
+  // construction and skip it.
+  const nameRootShared = async (c: KnownContainer): Promise<boolean | null> =>
+    (itemRootEra ? false : overlapsOther('', c, root));
+  let found: KnownContainer | null = null;
+  let probeFailed = false;
+  // Containers holding a directory at `root` that this item may not adopt.
+  const heldByOther = new Set<KnownContainer>();
+  for (const c of probeOrder) {
+    let r: LakehouseRootOwner;
+    try {
+      r = await readLakehouseRootOwner(c, root);
+    } catch {
+      // Not a 404: this container could not be read (or the probe timed
+      // out), so the root cannot be said to be absent from it.
+      probeFailed = true;
+      break;
     }
-    let container: KnownContainer | null = found;
-    if (!container) {
-      const fallbacks = probeFailed ? [legacy] : preferred;
-      for (const c of fallbacks) {
-        if (heldByOther.has(c)) continue;
-        if (await sharedWithOther(c)) continue;
-        container = c;
-        break;
-      }
+    if (!r.exists) continue;
+    if (r.owner === item.id) { found = c; break; }
+    if (mayAdoptRoot(r.owner, item.id, itemRootEra)) {
+      // An unmarked name-only root: adopted only when no other lakehouse's root
+      // overlaps it. When one does, the item's files may be exactly here, so
+      // no other container is offered in their place.
+      const shared = await nameRootShared(c);
+      if (shared === null) return { ok: false, reason: 'root-unverified' };
+      if (shared) return { ok: false, reason: 'root-shared' };
+      found = c;
+      break;
     }
-    if (!container) return null;
-    const abfss = resolveAbfssRoot(container, root);
-    if (abfss) {
-      if (found && opts.persist === true) {
-        await persistFoundBinding(items, lh, workspaceId, found, root);
-      }
-      return { abfss, container, root };
+    heldByOther.add(c);
+  }
+  let container: KnownContainer | null = found;
+  let sawShared = false;
+  let sawUnknown = false;
+  if (!container) {
+    // Nothing adoptable exists: choose where the root WILL be, never a
+    // container that holds another item's directory there or where another
+    // item's root overlaps it.
+    const fallbacks = probeFailed ? [legacy] : preferred;
+    for (const c of fallbacks) {
+      if (heldByOther.has(c)) { sawShared = true; continue; }
+      const shared = await nameRootShared(c);
+      if (shared === null) { sawUnknown = true; continue; }
+      if (shared) { sawShared = true; continue; }
+      container = c;
+      break;
     }
   }
-
-  // No real configured storage — honest gate: caller skips this source.
-  return null;
+  if (!container) {
+    return { ok: false, reason: sawUnknown && !sawShared ? 'root-unverified' : 'root-shared' };
+  }
+  const abfss = resolveAbfssRoot(container, root);
+  if (!abfss) return { ok: false, reason: 'no-storage' };
+  if (found && opts.persist === true) {
+    await persistFoundBinding(items, item, workspaceId, found, root);
+  }
+  return { ok: true, bound: { abfss, container, root } };
 }

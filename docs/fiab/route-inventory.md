@@ -13,10 +13,10 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1694 |
+| Total routes | 1695 |
 | Public (no session) | 59 |
 | Session-only | 633 |
-| Owner-scoped | 690 |
+| Owner-scoped | 691 |
 | Admin | 312 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 499 |
@@ -1860,6 +1860,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
+| `lakehouse/access/route.ts` | GET | owner-scoped |  | Cosmos, Microsoft Graph |
 | `lakehouse/ai-clean-suggest/route.ts` | POST | session-only | ● | AML, ARM, Azure AI Services, Azure Cache for Redis, Azure OpenAI, Cosmos |
 | `lakehouse/containers/route.ts` | GET | session-only |  | ADLS, ARM, Azure Storage, Managed Identity |
 | `lakehouse/download/route.ts` | GET | owner-scoped |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Purview |
@@ -2536,7 +2537,7 @@ silently downgrading the route.
 
 ## Backend signals (derived)
 
-462 module(s) ORIGINATE a backend label — the derivation read an
+461 module(s) ORIGINATE a backend label — the derivation read an
 Azure identifier out of them. Every other route/module below inherits through the
 call graph. Nothing in this section is a Loom module name someone typed: the
 modules are derived, and only the Microsoft-owned identifier vocabulary is seeded.
@@ -2848,7 +2849,6 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/app/api/items/stream-analytics-job/[name]/test/route.ts` | Stream Analytics |
 | `apps/fiab-console/app/api/items/user-data-function/[id]/invoke/route.ts` | Fabric |
 | `apps/fiab-console/app/api/lakehouse/_lib/container-role-assignment.ts` | Azure RBAC |
-| `apps/fiab-console/app/api/lakehouse/history/route.ts` | ADLS |
 | `apps/fiab-console/app/api/lakehouse/table-stats/route.ts` | ADLS |
 | `apps/fiab-console/app/api/lakehouse/transform-preview/route.ts` | ADLS |
 | `apps/fiab-console/app/api/lakehouse/upload/route.ts` | ADLS |

@@ -8,9 +8,10 @@
  *      never 403, so a response never distinguishes "does not exist" from "not
  *      yours". A write asks for `canWrite` and answers 403 on a read-only role
  *      (the caller can already see the item, so nothing new is disclosed).
- *   2. `resolveLakehouseAbfss` derives the item's container + root from the
+ *   2. `resolveLakehouseStorage` derives the item's container + root from the
  *      ITEM's server-recorded state (see `LAKEHOUSE_SERVER_OWNED_STATE_KEYS`),
- *      never from the request.
+ *      never from the request. A withheld location is answered by
+ *      `lakehouseStorageWithheldResponse`.
  *   3. `scopePathToRoot` confines a caller path to that container and root,
  *      SEGMENT BY SEGMENT — a string-prefix test would call
  *      `lakehouses/Sales-archive` a member of `lakehouses/Sales`. The returned
@@ -25,9 +26,29 @@ import { NextResponse } from 'next/server';
 import { apiBadRequest, apiConflict, apiForbidden, apiNotFound } from '@/lib/api/respond';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { resolveItemAccessByOid } from '@/lib/auth/item-access';
-import { resolveLakehouseAbfss } from '@/lib/azure/lakehouse-abfss';
+import {
+  lakehouseStorageWithheldMessage,
+  resolveLakehouseStorage,
+  type LakehouseStorageWithheld,
+} from '@/lib/azure/lakehouse-abfss';
 import type { SessionPayload } from '@/lib/auth/session';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+
+/**
+ * The response for a lakehouse whose storage location the resolver withheld,
+ * or null for `no-storage`, which each route words as its own gate.
+ *
+ * - `not-found`: 404, the same answer `authorizeLakehouse` gives, so the item
+ *   read racing a delete is indistinguishable from any other missing item.
+ * - `root-shared` / `root-unverified`: 409 with the resolver's ONE wording
+ *   (`lakehouseStorageWithheldMessage`). Nothing is listed or written, and no
+ *   other container is offered in the item's place.
+ */
+export function lakehouseStorageWithheldResponse(reason: LakehouseStorageWithheld): NextResponse | null {
+  if (reason === 'not-found') return apiNotFound('lakehouse not found');
+  const message = lakehouseStorageWithheldMessage(reason);
+  return message ? apiConflict(message) : null;
+}
 
 /**
  * Split a container-relative path into its segments, or null when the input is
@@ -211,7 +232,7 @@ export async function scopeItemPath(
     if (!isTenantAdmin(session)) {
       return apiForbidden(
         'This path is not tied to a lakehouse, and naming a storage path directly is limited to tenant '
-        + 'admins. Open the lakehouse that owns the file and act on it from there (pass lakehouseId).',
+        + 'admins. Open the lakehouse and browse from its editor.',
       );
     }
     if (!container) return apiBadRequest('container is required');
@@ -230,15 +251,17 @@ export async function scopeItemPath(
     readOnlyMessage: opts.readOnlyMessage,
   });
   if (access instanceof NextResponse) return access;
-  const bound = await resolveLakehouseAbfss(lakehouseId, access.item.workspaceId);
-  if (!bound) {
+  const resolved = await resolveLakehouseStorage(lakehouseId, access.item.workspaceId);
+  if (!resolved.ok) {
+    const withheld = lakehouseStorageWithheldResponse(resolved.reason);
+    if (withheld) return withheld;
     return apiConflict(
       'Loom has no lakehouse storage binding for this item. Either no lakehouse storage is configured for '
       + 'this deployment (set LOOM_{BRONZE,SILVER,GOLD,LANDING}_URL, deployed by the DLZ Bicep) or the item has '
       + 'never been provisioned. Re-run the item provision and retry.',
     );
   }
-  const scoped = scopePathToRoot(bound, container, params.rawPath, true);
+  const scoped = scopePathToRoot(resolved.bound, container, params.rawPath, true);
   if (!scoped.ok) {
     if (scoped.reason === 'invalid') return apiBadRequest(scoped.message);
     if (scoped.reason === 'root-unusable') return apiConflict(scoped.message);

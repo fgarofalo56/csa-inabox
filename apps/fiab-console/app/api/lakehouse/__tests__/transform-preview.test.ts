@@ -29,7 +29,21 @@ vi.mock('@/lib/azure/synapse-dev-client', () => ({
   submitLivyStatement: vi.fn(),
   getLivyStatement: vi.fn(),
 }));
-vi.mock('@/lib/azure/lakehouse-abfss', () => ({ resolveLakehouseAbfss: vi.fn() }));
+// `resolveLakehouseStorage` delegates to the `resolveLakehouseAbfss` mock, as in
+// download.test.ts: a bound value is `{ ok: true, bound }`, null is `no-storage`.
+vi.mock('@/lib/azure/lakehouse-abfss', async () => {
+  const actual: any = await vi.importActual('@/lib/azure/lakehouse-abfss');
+  const resolveLakehouseAbfss = vi.fn();
+  return {
+    lakehouseStorageWithheldMessage: actual.lakehouseStorageWithheldMessage,
+    resolveLakehouseAbfss,
+    resolveLakehouseStorage: async (...a: any[]) => {
+      const b: any = await resolveLakehouseAbfss(...a);
+      if (b && typeof b === 'object' && 'withheld' in b) return { ok: false, reason: b.withheld };
+      return b ? { ok: true, bound: b } : { ok: false, reason: 'no-storage' };
+    },
+  };
+});
 vi.mock('@/lib/auth/item-access', () => ({ resolveItemAccessByOid: vi.fn() }));
 
 import { POST, GET } from '../transform-preview/route';
@@ -288,5 +302,44 @@ describe('GET /api/lakehouse/transform-preview (poll)', () => {
     const res = await GET(getReq(`jobId=${encodeURIComponent(running())}`));
     expect(res.status).toBe(400);
     expect((resolveItemAccessByOid as any).mock.calls).toEqual([]);
+  });
+});
+
+describe('POST /api/lakehouse/transform-preview (poll, code in the body)', () => {
+  const running = () => mintLakehouseJobHandle(SCOPE, {
+    pool: 'loompool', sessionId: 7, stmtId: 3, container: CONTAINER, path: INSIDE, codeHash: hashJobCode(CODE),
+  });
+  const warming = () => mintLakehouseJobHandle(SCOPE, {
+    pool: 'loompool', sessionId: 9, stmtId: null, container: CONTAINER, path: INSIDE, codeHash: hashJobCode(CODE),
+  });
+
+  it('a POST carrying jobId polls, and submits a warming job with the code from the body', async () => {
+    (getLivySession as any).mockResolvedValue({ id: 9, state: 'idle' });
+    (submitLivyStatement as any).mockResolvedValue({ id: 5, state: 'waiting' });
+    // No path in the body: breaks if a POST with jobId falls through to the
+    // kick-off branch (400 "path is required") instead of polling.
+    const res = await POST(postReq({ lakehouseId: LH, jobId: warming(), code: CODE }));
+    const j = await res.json();
+    expect(res.status).toBe(200);
+    expect(j.status).toBe('running');
+    expect(createLivySessionAsync).not.toHaveBeenCalled();
+    expect(submittedPath()).toBe(`abfss://${CONTAINER}@acct.dfs.core.windows.net/${INSIDE}`);
+  });
+
+  it('a POST poll still requires edit rights and a matching handle', async () => {
+    (resolveItemAccessByOid as any).mockResolvedValue(editor(false));
+    const ro = await POST(postReq({ lakehouseId: LH, jobId: running() }));
+    expect(ro.status).toBe(403);
+    (resolveItemAccessByOid as any).mockResolvedValue(editor(true));
+    const other = await POST(postReq({ lakehouseId: LH, jobId: 'loompool:7:3' }));
+    expect(other.status).toBe(404);
+    expect((getLivyStatement as any).mock.calls).toEqual([]);
+  });
+
+  it('a POST poll refuses code that differs from the kick-off code (400)', async () => {
+    (getLivySession as any).mockResolvedValue({ id: 9, state: 'idle' });
+    const res = await POST(postReq({ lakehouseId: LH, jobId: warming(), code: 'df = df.limit(1)' }));
+    expect(res.status).toBe(400);
+    expect((submitLivyStatement as any).mock.calls).toEqual([]);
   });
 });

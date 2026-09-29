@@ -440,11 +440,22 @@ const useStyles = makeStyles({
 
 interface WorkloadGroup { key: string; title: string; glyph: string; nodes: CapabilityNode[]; state?: ReadinessState; }
 
+/** An item-store check the readiness route returns beside the gate graph. */
+interface StorageCheck {
+  id: string;
+  title: string;
+  status: string;
+  detail: string;
+  remediation?: string;
+  inconclusive?: boolean;
+}
+
 export default function AdminReadinessPage() {
   const s = useStyles();
   const [report, setReport] = useState<ReadinessReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [probeError, setProbeError] = useState<string | null>(null);
+  const [storageChecks, setStorageChecks] = useState<StorageCheck[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [workloadFilter, setWorkloadFilter] = useState<string | null>(null);
@@ -471,6 +482,7 @@ export default function AdminReadinessPage() {
       if (j?.ok) {
         setReport(j as ReadinessReport);
         setProbeError(j.probeError || null);
+        setStorageChecks(Array.isArray(j.storageChecks) ? (j.storageChecks as StorageCheck[]) : []);
       } else {
         setError(j?.error || j?.remediation || `load failed (${r.status})`);
       }
@@ -582,6 +594,21 @@ export default function AdminReadinessPage() {
           </MessageBarBody>
         </MessageBar>
       )}
+      {storageChecks.filter((c) => c.status !== 'pass').map((c) => (
+        <MessageBar
+          key={c.id}
+          intent="warning"
+          layout="multiline"
+          style={{ marginBottom: tokens.spacingVerticalM }}
+          data-testid={`readiness-storage-check-${c.id}`}
+        >
+          <MessageBarBody>
+            <MessageBarTitle>{c.title}</MessageBarTitle>
+            {c.detail}
+            {c.remediation ? <> {c.remediation}</> : null}
+          </MessageBarBody>
+        </MessageBar>
+      ))}
 
       {loading && !report ? (
         <div className={s.loading}><Spinner size="small" /><Caption1>Evaluating capabilities + probing backends…</Caption1></div>

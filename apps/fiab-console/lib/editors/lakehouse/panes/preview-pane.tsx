@@ -12,6 +12,7 @@ import { LocalAnalysisPanel, type LocalArrowSource } from '@/lib/components/shar
 import { DeltaPreviewGrid } from '../../components/delta-preview-grid';
 import { useStyles, leafName, formatBytes } from '../shared';
 import { useLakehouseCtx } from '../lakehouse-editor-context';
+import { useLakehouseAccess } from '../hooks/use-lakehouse-access';
 
 export function PreviewPane() {
   const s = useStyles();
@@ -20,6 +21,15 @@ export function PreviewPane() {
     activePath, preview, previewLoading, previewMode, setPreviewMode, setTab,
     columnStats, statsLoading, statsError, activeContainer, settings,
   } = ctx;
+  // Live transform preview runs code on the Spark pool, so it needs edit
+  // rights on the item; say so up front rather than answering a click with 403.
+  const { canWrite } = useLakehouseAccess(ctx.id, ctx.isNewItem);
+  const previewUnavailableReason = ctx.isNewItem
+    ? 'Save the lakehouse first. Live preview runs on a file of a saved lakehouse.'
+    : canWrite === false
+      ? 'Live preview runs the transform on the Spark pool, which needs edit rights on this lakehouse. '
+        + 'Your role here is read-only; a workspace Member/Admin, or an item grant that includes Edit, can run it.'
+      : null;
 
   /**
    * N2a — the free tier on top of this preview. The Arrow stream is fetched
@@ -113,12 +123,13 @@ export function PreviewPane() {
                 columnStats={columnStats}
                 statsLoading={statsLoading}
                 statsError={statsError}
-                previewSource={activeContainer && !ctx.isNewItem ? {
+                previewSource={activeContainer && !ctx.isNewItem && canWrite !== false ? {
                   lakehouseId: ctx.id,
                   container: activeContainer,
                   path: activePath.name,
                   pool: settings.defaultSparkPool || undefined,
                 } : null}
+                previewUnavailableReason={previewUnavailableReason}
                 mode={previewMode}
                 onModeChange={(m) => {
                   setPreviewMode(m);

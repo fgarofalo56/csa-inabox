@@ -2121,17 +2121,35 @@ single-partition point-operation — cross-owner leakage is structurally impossi
    See `azure-functions/posture-refresh/DEPLOYMENT.md`.
 2. Publish code, capture the host key, store it in the Loom Key Vault as
    `loom-posture-function-key`.
-3. Set the admin-plane params so the Console picks it up:
+3. Set the root deploy inputs so the Console binds the key. The key is bound only
+   when **all three** hold (admin-plane `postureFunctionKeyBound`): the secret from
+   step 2, the URL param, and the flag. The URL alone gives the Console the URL and
+   no key.
 
    ```bicep
    // params/<cloud>-full.bicepparam
    param loomPostureFunctionUrl = '<functionUrl output>'
-   // param loomPostureFunctionKeySecretName = 'loom-posture-function-key'  // default
+   // Add to the file's EXISTING observabilityConfig object; do not replace it.
+   //   postureFunctionKeyEnabled: true
+   // The secret name is the admin-plane default loom-posture-function-key.
    ```
 
-   These surface as `LOOM_POSTURE_FUNCTION_URL` (plain) and
-   `LOOM_POSTURE_FUNCTION_KEY` (secretRef → Key Vault) on the Console. Empty URL →
-   honest gate + live compute fallback.
+   - `loomPostureFunctionUrl` must be a **deploy parameter**. A value set on
+     `loom-console` with `az containerapp update`, which is what the post-deploy
+     bootstrap does, does not count, and a full deploy that renders the Console
+     blanks it.
+   - Set `postureFunctionKeyEnabled: true` **only after confirming the secret exists,
+     by name**. For example,
+     `az keyvault secret show --vault-name <loom-kv> --name loom-posture-function-key --query id -o tsv`
+     prints the id, never the value. A Container App revision that references a
+     missing Key Vault secret fails to provision, so setting the flag early takes the
+     Console down.
+
+   When all three hold, these surface as `LOOM_POSTURE_FUNCTION_URL` (plain) and
+   `LOOM_POSTURE_FUNCTION_KEY` (secretRef → Key Vault) on the Console. An empty URL
+   gives the `function_not_provisioned` gate. A URL without a bound key gives
+   `key_not_bound`. Both fall back to live compute. Nothing sets the URL param or
+   the flag at deploy time yet; #4781 tracks that.
 
 Per-cloud: `LOOM_COSMOS_ENDPOINT` is already boundary-resolved by
 `admin-plane/main.bicep` (`documents.azure.com` Commercial/GCC,
