@@ -103,8 +103,13 @@ describe('DELETE /api/lakehouse/permissions — tenant admin, like POST', () => 
     // Breaks if DELETE drops the admin check (200 + a revoke row) or answers
     // with a different body than POST.
     expect(Object.keys(dj).sort()).toEqual(Object.keys(pj).sort());
-    expect(dj.error).toBe('forbidden');
-    expect(pj.error).toBe('forbidden');
+    // Callers render `error`: it must be the sentence, not a bare code. Breaks
+    // if `error` goes back to 'forbidden' with the sentence only in `hint`.
+    expect(dj.error).toMatch(/requires tenant-admin/);
+    expect(pj.error).toMatch(/requires tenant-admin/);
+    expect(dj.code).toBe('admin_only');
+    expect(pj.code).toBe('admin_only');
+    expect(dj.remediation).toMatch(/tenant admin|Azure portal/);
     expect((revokeContainerRoleAssignment as any).mock.calls).toEqual([]);
     expect((listContainerRoleAssignments as any).mock.calls).toEqual([]);
     expect((grantContainerRole as any).mock.calls).toEqual([]);

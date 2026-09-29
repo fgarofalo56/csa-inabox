@@ -75,18 +75,21 @@ function parseTab(v: string | null | undefined): Tab {
 }
 
 /**
- * The one tenant-admin refusal for the write verbs (POST grants, DELETE
- * revokes): same status, same body shape, so the dialog renders both alike.
+ * The one tenant-admin refusal body for the write verbs (POST grants, DELETE
+ * revokes). `error` carries the full sentence because every caller renders
+ * `error`; `code` and `remediation` let a caller branch or show a next step.
  */
+function tenantAdminRequiredBody(verb: 'Granting' | 'Revoking') {
+  const action = verb === 'Granting' ? 'grant' : 'remove';
+  const message = `${verb} lakehouse permissions requires tenant-admin, so Loom did not ${action} anything.`;
+  const remediation =
+    `Ask a tenant admin to ${action} the role for you, or ${action} it on the storage container in the Azure portal.`;
+  return { ok: false as const, error: message, code: 'admin_only', remediation, hint: remediation };
+}
+
+/** The 403 for a write verb when the caller is not a tenant admin. */
 function tenantAdminRequired(verb: 'Granting' | 'Revoking'): NextResponse {
-  return NextResponse.json(
-    {
-      ok: false,
-      error: 'forbidden',
-      hint: `${verb} lakehouse permissions requires tenant-admin. Ask an administrator, or ${verb === 'Granting' ? 'grant' : 'remove'} the role in the Azure portal.`,
-    },
-    { status: 403 },
-  );
+  return NextResponse.json(tenantAdminRequiredBody(verb), { status: 403 });
 }
 
 /** Honest infra-gate when the Synapse Dedicated SQL pool isn't configured. */
@@ -219,7 +222,9 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   // Role Based Access Control Administrator at that scope). Note `principalType`
   // was validated here while `role` and `principalId` were not, which is what
   // made the gap easy to miss on review.
-  if (!isTenantAdmin(session)) return tenantAdminRequired('Granting');
+  if (!isTenantAdmin(session)) {
+    return NextResponse.json(tenantAdminRequiredBody('Granting'), { status: 403 });
+  }
   const body = await req.json().catch(() => ({}));
   const tab = parseTab(body?.tab ?? req.nextUrl.searchParams.get('tab'));
 
