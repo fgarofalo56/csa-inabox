@@ -365,14 +365,23 @@ test('API REFUSED at the network layer (403 "Unauthorized network access"): the 
 });
 
 // The CAUSE text of that warning (deploy-integrity R7). The body proves only
-// that the refusal is network-layer; two workspace controls produce it, and
-// the script reads neither. BREAKS ON: a warning that names ONE control as the
-// cause, e.g. the earlier "a workspace with publicNetworkAccess Disabled is
+// that the refusal is network-layer. More than one workspace control can
+// produce it (the script names public network access, an IP access list and
+// the account-level context-based ingress policies as an OPEN list), and the
+// script reads none of them.
+// BREAKS ON (each measured as a RED arm on a sandbox copy): the 033c8abae
+// single-cause wording ("a workspace with publicNetworkAccess Disabled is
 // reachable only through its private endpoint, so a hosted runner cannot read
-// it at all" (this test goes RED against it), or one that drops the IP access
-// list, the "NOT established" disclosure, or the pointer to the tracked
-// in-VNet producer.
-test('network-layer 403: the warning names BOTH candidate controls and says which refused was NOT established', () => {
+// it at all"); the 072bf5b5b CLOSED-set wording (a stated count of exactly
+// two controls), which fails the open-list pin; dropping either named
+// candidate, the context-based ingress mention, the NOT-established
+// disclosure, the "reads none of those settings" disclosure (restoring the
+// 072bf5b5b "reads neither ... nor ..." pair), or the #3744 pointer.
+// It does NOT detect a single cause asserted in NEW words: appending
+// " The cause is the IP access list." to the warning stays green (measured,
+// reviewer arm R5). The two doesNotMatch below are regression guards for the
+// 033c8abae wording only, paired with the positive matches above them.
+test('network-layer 403: the warning names candidate controls as an OPEN list and says which refused was NOT established', () => {
   const { stderr } = discover({
     dbx: true,
     httpCode: '403',
@@ -380,11 +389,15 @@ test('network-layer 403: the warning names BOTH candidate controls and says whic
   });
   const warning = stderr.split('\n').find((l) => l.includes('did NOT answer 200')) ?? '';
   assert.match(warning, /refused this runner at the NETWORK layer/, 'positive: the refusal itself is named');
+  assert.match(warning, /Workspace controls that can produce that refusal include /,
+    'the candidate controls must be an OPEN list; a closed count of controls asserts a set the script never established');
   assert.match(warning, /public network access set to Disabled/, 'candidate 1 must be named');
-  // Anchored on "or a workspace": the disclosure sentence also says "IP access
-  // list", so a bare /IP access list/ stays green when the candidate is dropped.
+  // Anchored on "or a workspace": a bare /IP access list/ could be satisfied
+  // by another sentence mentioning it, so the candidate itself is pinned.
   assert.match(warning, /or a workspace IP access list/, 'candidate 2 must be named');
+  assert.match(warning, /context-based ingress policies/, 'the third documented control must be named');
   assert.match(warning, /Which one refused it was NOT established/, 'the unresolved cause must be disclosed');
+  assert.match(warning, /this lookup reads none of those settings/, 'the disclosure must not enumerate what was not read as a closed pair');
   assert.match(warning, /#3744/, 'the tracked in-VNet producer must be named');
   assert.doesNotMatch(warning, /publicNetworkAccess Disabled/, 'a single control must not be asserted as the cause');
   assert.doesNotMatch(warning, /cannot read it at all/, 'an unestablished remedy must not be asserted');
@@ -462,6 +475,24 @@ test('no Databricks workspace: no token requested, no API call, no databricks ke
   assert.equal(plan.eventhubs?.target?.name, EH_NS, 'positive pair: the run still produced a plan');
 });
 
+// ── plan ENCODING ───────────────────────────────────────────────────────────
+// Discovered names are JSON-encoded, never spliced into a quoted template. The
+// fixture carries a double quote AND a backslash in both an adopt TARGET name
+// (the `add` path) and an EXTRA value (the `json_obj` path), and the assertion
+// is that each round-trips byte-for-byte.
+// BREAKS ON: restoring the printf splice in `add` or in `json_obj` — the plan
+// is then invalid JSON, the script's own validity check exits 1, and
+// `status` is 1 instead of 0 (measured RED at 072bf5b5b, where both spliced).
+test('a discovered name holding a double quote and a backslash round-trips into a VALID plan', () => {
+  const nasty = 'evhns"q\\b';
+  const group = 'grp"q\\b';
+  const r = discover({ eh: nasty, groups: group });
+  assert.equal(r.status, 0, `the plan must stay valid JSON; stderr: ${r.stderr}`);
+  assert.equal(r.plan.eventhubs?.target?.name, nasty, 'the target name (add) must round-trip exactly');
+  assert.equal(r.plan.eventhubs?.extra?.schemaGroup, group, 'the extra value (json_obj) must round-trip exactly');
+  assert.equal(r.plan.eventhubs?.target?.rg, DLZ_RG, 'positive pair: an ordinary value is unchanged');
+});
+
 // ── 4. the compiled template (what actually deploys) ────────────────────────
 // Asserted against the SHIPPED compiled artifact (ADOPT_TEMPLATE overrides it
 // for a pre-regeneration check). BREAKS ON: main.bicep not passing either
@@ -504,4 +535,118 @@ test('compiled template: admin-plane receives the warehouse id and the schema gr
   const declared = m.properties.template.parameters;
   assert.ok(declared.loomDatabricksSqlWarehouseId, 'admin-plane must declare loomDatabricksSqlWarehouseId');
   assert.ok(declared.eventsConfig, 'admin-plane must declare eventsConfig');
+});
+
+// ── 5. PAST the module boundary: admin-plane's own variables and the console env ──
+// The two tests above stop at the arguments main.bicep PASSES. These follow the
+// value into admin-plane's nested template and onto the loom-console env array,
+// so a hop that silently drops the value inside admin-plane is visible.
+// DISCLOSED (assertion-design #5): these are SHAPE pins on compiled ARM
+// expression strings, like the ones above. They do not evaluate the
+// expressions. A semantically equivalent rewrite reads red here, on purpose.
+
+/** The loom-console app entry inside admin-plane's appDeployments module. */
+function consoleEnv(adminPlaneTemplate) {
+  const inner = adminPlaneTemplate.resources;
+  const list = Array.isArray(inner) ? inner : Object.values(inner);
+  const hits = [];
+  for (const r of list) {
+    const apps = r?.properties?.parameters?.apps?.value;
+    if (Array.isArray(apps)) hits.push(...apps.filter((a) => a?.name === 'loom-console'));
+  }
+  assert.equal(hits.length, 1, 'exactly one loom-console app entry must exist in admin-plane');
+  assert.equal(typeof hits[0].env, 'string', 'the console env compiles to one ARM expression string');
+  return hits[0].env;
+}
+
+/**
+ * Asserts the console env names `name` exactly ONCE, with exactly `value`.
+ * A second entry for the same name (e.g. a later literal '') would override
+ * the first at runtime, so the count is pinned as well as the value.
+ */
+function assertEnvEntry(env, name, value) {
+  const needle = `'name', '${name}'`;
+  const count = env.split(needle).length - 1;
+  assert.equal(count, 1, `${name} must appear exactly once in the loom-console env, found ${count}`);
+  assert.ok(
+    env.includes(`createObject('name', '${name}', 'value', ${value})`),
+    `${name} must render ${value}; the env entry reads: ${env.slice(env.indexOf(needle) - 20, env.indexOf(needle) + 160)}`,
+  );
+}
+
+// BREAKS ON (reviewer arm A2): `var loomEhSchemaGroup = ''` in admin-plane —
+// the variable then compiles to '' and the first assertion goes RED. Also on
+// the env entry reading anything but that variable, or on a duplicate
+// LOOM_EH_SCHEMA_GROUP / LOOM_DATABRICKS_SQL_WAREHOUSE_ID entry.
+test('compiled template: the schema group and warehouse id reach the loom-console env inside admin-plane', () => {
+  const tpl = JSON.parse(readFileSync(TEMPLATE, 'utf8'));
+  const inner = adminPlaneModule(tpl).properties.template;
+  assert.equal(
+    inner.variables.loomEhSchemaGroup,
+    "[coalesce(tryGet(parameters('eventsConfig'), 'loomEhSchemaGroup'), '')]",
+    'admin-plane must read the schema group from the eventsConfig main.bicep passes',
+  );
+  const env = consoleEnv(inner);
+  assertEnvEntry(env, 'LOOM_EH_SCHEMA_GROUP', "variables('loomEhSchemaGroup')");
+  assertEnvEntry(env, 'LOOM_DATABRICKS_SQL_WAREHOUSE_ID', "parameters('loomDatabricksSqlWarehouseId')");
+});
+
+// The Service Bus and Batch values this PR's discovery emits (adopt keys
+// `servicebus` / `batch`) reach the console only through main.bicep's
+// byoExisting object (main.bicep, the serviceBus* / batch* fields) and
+// admin-plane's variables. None of that code is new in this PR, but the PR's
+// outcome rests on it.
+// BREAKS ON (reviewer arms B2, B3): `serviceBusNamespace: !empty('')` (the
+// adopt branch is dead, so the expression no longer starts with the adoptName
+// test) and `serviceBusRg: ''` (compiles to ''). Also on the same shapes for
+// serviceBusSub, batchAccount and batchRg, and on admin-plane reading a
+// different byoExisting field or emitting a different env variable.
+test('compiled template: servicebus and batch take the ADOPT branch into byoExisting and reach the console env', () => {
+  const tpl = JSON.parse(readFileSync(TEMPLATE, 'utf8'));
+  const m = adminPlaneModule(tpl);
+  const byo = m.properties.parameters.byoExisting?.value;
+  assert.ok(byo && typeof byo === 'object', 'main.bicep must pass byoExisting to admin-plane');
+  const adoptBranch = (key, accessor) =>
+    `[if(not(empty(__bicep.adoptName(parameters('adopt'), '${key}'))), __bicep.${accessor}(parameters('adopt'), '${key}'), `;
+  assert.ok(
+    String(byo.serviceBusNamespace).startsWith(adoptBranch('servicebus', 'adoptName')),
+    `serviceBusNamespace must prefer the adopted name; got ${byo.serviceBusNamespace}`,
+  );
+  assert.equal(byo.serviceBusRg, "[__bicep.adoptRg(parameters('adopt'), 'servicebus')]");
+  assert.equal(byo.serviceBusSub, "[__bicep.adoptSub(parameters('adopt'), 'servicebus')]");
+  assert.ok(
+    String(byo.batchAccount).startsWith(adoptBranch('batch', 'adoptName')),
+    `batchAccount must prefer the adopted name; got ${byo.batchAccount}`,
+  );
+  assert.ok(
+    String(byo.batchRg).startsWith(adoptBranch('batch', 'adoptRg')),
+    `batchRg must carry the adopted RG when a batch account is adopted; got ${byo.batchRg}`,
+  );
+
+  const inner = m.properties.template;
+  const v = inner.variables;
+  assert.equal(v.loomServiceBusNamespace, "[coalesce(tryGet(parameters('byoExisting'), 'serviceBusNamespace'), '')]");
+  assert.equal(v.loomServiceBusRgIn, "[coalesce(tryGet(parameters('byoExisting'), 'serviceBusRg'), '')]");
+  assert.equal(v.loomServiceBusSubIn, "[coalesce(tryGet(parameters('byoExisting'), 'serviceBusSub'), '')]");
+  assert.equal(
+    v.effServiceBusRg,
+    "[if(not(empty(variables('loomServiceBusRgIn'))), variables('loomServiceBusRgIn'), parameters('loomDlzRg'))]",
+    'a supplied Service Bus RG must win over the DLZ RG fallback',
+  );
+  assert.equal(
+    v.effServiceBusSub,
+    "[if(not(empty(variables('loomServiceBusSubIn'))), variables('loomServiceBusSubIn'), subscription().subscriptionId)]",
+    'a supplied Service Bus subscription must win over the deployment subscription',
+  );
+  assert.equal(v.loomBatchAccount, "[coalesce(tryGet(parameters('byoExisting'), 'batchAccount'), '')]");
+  assert.ok(
+    String(v.loomBatchRg).includes("parameters('byoExisting').batchRg"),
+    `admin-plane must read the batch RG from byoExisting; got ${v.loomBatchRg}`,
+  );
+  const env = consoleEnv(inner);
+  assertEnvEntry(env, 'LOOM_SERVICEBUS_NAMESPACE', "variables('loomServiceBusNamespace')");
+  assertEnvEntry(env, 'LOOM_SERVICEBUS_RG', "variables('effServiceBusRg')");
+  assertEnvEntry(env, 'LOOM_SERVICEBUS_SUB', "variables('effServiceBusSub')");
+  assertEnvEntry(env, 'LOOM_BATCH_ACCOUNT', "variables('loomBatchAccount')");
+  assertEnvEntry(env, 'LOOM_BATCH_RG', "if(empty(variables('loomBatchAccount')), '', variables('loomBatchRg'))");
 });

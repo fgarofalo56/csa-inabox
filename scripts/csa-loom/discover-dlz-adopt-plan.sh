@@ -349,17 +349,19 @@ fi
 #
 # THREE STATES, never collapsed (deploy-integrity R7):
 #   found                  → its id is adopted.
-#   API answered, no match → '' and a ::notice:: — a measured negative (the
-#                            warehouse by either name exists on this workspace).
+#   API answered, no match → '' and a ::notice:: — a measured negative
+#                            (no warehouse by either name exists on this workspace).
 #   API refused/unreachable→ '' and a ::warning:: naming the HTTP code. This is
 #                            UNKNOWN and is never reported as "no warehouse".
 #                            A 403 whose body names network access ("Unauthorized
 #                            network access to workspace") is this state. The
 #                            warning calls it a network-layer refusal rather than
-#                            blaming RBAC, and names BOTH workspace controls that
-#                            can produce it (public network access Disabled, or an
-#                            IP access list) without asserting which: this lookup
-#                            reads neither setting.
+#                            blaming RBAC. It names controls that CAN produce it
+#                            (public network access Disabled, a workspace IP
+#                            access list, and the account-level context-based
+#                            ingress policies Azure Databricks documents) as an
+#                            OPEN list, and does not assert which one refused:
+#                            this lookup reads none of those settings.
 # It never fails the script: a warehouse is an optional binding (the console
 # auto-selects a RUNNING warehouse when the id is blank), and in a boundary
 # where Databricks SQL is unavailable the API answers with no match or an error,
@@ -386,7 +388,7 @@ dbx_sql_warehouse_id() { # dbx_sql_warehouse_id <workspace host> → id or '' on
   code="$(printf '%s' "${code:-}" | tr -d '\r\n')"
   if [ "$code" != "200" ]; then
     if grep -qi 'network access' "$body"; then
-      why="The response body names network access, so the workspace refused this runner at the NETWORK layer. Two workspace controls produce that refusal: public network access set to Disabled (only a private-endpoint path is admitted), or a workspace IP access list that does not allow this runner's egress IP. Which one refused it was NOT established: this lookup reads neither the workspace's public network access setting nor its IP access list. Producing the id from inside the VNet (the console creating and binding the warehouse itself) is tracked in #3744."
+      why="The response body names network access, so the workspace refused this runner at the NETWORK layer. Workspace controls that can produce that refusal include public network access set to Disabled (only a private-endpoint path is admitted), or a workspace IP access list that does not allow this runner's egress IP; Azure Databricks also documents account-level context-based ingress policies. Which one refused it was NOT established, nor whether a recent public-access change had yet taken effect: this lookup reads none of those settings. Producing the id from inside the VNet (the console creating and binding the warehouse itself) is tracked in #3744."
     else
       why="On 401/403 without a network-access message the deploy identity is likely not a user of that workspace (Contributor on the workspace resource provisions it as a workspace admin on first sign-in); HTTP 000 means the host was unreachable."
     fi
@@ -442,14 +444,40 @@ if [ -n "$DBX_N" ] && [ -n "$DBX_H" ]; then
   DBX_WH="$(dbx_sql_warehouse_id "$DBX_H")"
 fi
 
+# ENCODING. Every value below is a string DISCOVERED from Azure, so it is
+# JSON-encoded, never spliced into a quoted template: a double quote or a
+# backslash in a name would otherwise compose an invalid plan (the validity
+# check at the bottom then refuses it and the deploy stops). With python on PATH
+# (every hosted runner) each object is built by ONE `json.dumps` call. Without
+# python the fallback escapes backslash and double quote in bash, and ONLY
+# those two: a control character would still compose an invalid plan, and the
+# validity check needs python too. That fallback is NOT exercised by
+# scripts/ci/__tests__/adopt-plan-extras.test.mjs, which always runs with
+# python on PATH; forcing it on a sandbox copy passed that suite once, which is
+# a one-off measurement, not coverage.
+json_esc() { # json_esc <value> → the value with backslash and double quote escaped (no-python fallback)
+  local v="$1"
+  v="${v//\\/\\\\}"; v="${v//\"/\\\"}"
+  printf '%s' "$v"
+}
+
 # `extra` objects. Keys are emitted only when their value was ESTABLISHED, so
 # adoptExtra() returns '' for anything this run could not measure.
 json_obj() { # json_obj key value [key value …] → {"k":"v",…} over the non-empty pairs, or ''
+  if [ -n "$PY" ]; then
+    "$PY" -c '
+import json, sys
+a = sys.argv[1:]
+d = {a[i]: a[i + 1] for i in range(0, len(a) - 1, 2) if a[i + 1]}
+sys.stdout.write(json.dumps(d, separators=(",", ":")) if d else "")
+' "$@" || { echo "::error::[discover-dlz-adopt] python could not JSON-encode an adopt extra — refusing to compose the plan" >&2; exit 1; }
+    return 0
+  fi
   local out="" k v
   while [ $# -ge 2 ]; do
     k="$1"; v="$2"; shift 2
     [ -n "$v" ] || continue
-    out="${out:+$out,}\"$k\":\"$v\""
+    out="${out:+$out,}\"$(json_esc "$k")\":\"$(json_esc "$v")\""
   done
   [ -n "$out" ] && printf '{%s}' "$out"
   return 0
@@ -462,8 +490,20 @@ add() { # add <key> <name> <rg> <sub> [extraJson]
   [ -n "${2:-}" ] || return 0
   local extra="${5:-}"
   local one
-  one="$(printf '"%s":{"mode":"adopt","target":{"name":"%s","rg":"%s","sub":"%s"}%s}' \
-        "$1" "$2" "$3" "$4" "${extra:+,\"extra\":$extra}")"
+  if [ -n "$PY" ]; then
+    one="$("$PY" -c '
+import json, sys
+k, n, rg, sub, x = sys.argv[1:6]
+o = {"mode": "adopt", "target": {"name": n, "rg": rg, "sub": sub}}
+if x:
+    o["extra"] = json.loads(x)
+sys.stdout.write(json.dumps(k) + ":" + json.dumps(o, separators=(",", ":")))
+' "$1" "$2" "$3" "$4" "$extra")" \
+      || { echo "::error::[discover-dlz-adopt] python could not JSON-encode the '$1' adopt entry — refusing to compose the plan" >&2; exit 1; }
+  else
+    one="$(printf '"%s":{"mode":"adopt","target":{"name":"%s","rg":"%s","sub":"%s"}%s}' \
+          "$(json_esc "$1")" "$(json_esc "$2")" "$(json_esc "$3")" "$(json_esc "$4")" "${extra:+,\"extra\":$extra}")"
+  fi
   entries="${entries:+$entries,}$one"
   echo "[discover-dlz-adopt] adopt $1 = $2 (rg=$3)" >&2
 }
