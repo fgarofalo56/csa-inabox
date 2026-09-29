@@ -273,8 +273,9 @@ export function useLakehouseSecondary({
     setRefSelection({ refId: ref.id, displayName: ref.displayName, account: ref.account, container, entry });
     setRefPreview(null); setRefPreviewLoading(true);
     try {
-      const qs = new URLSearchParams({ container, path: entry.name });
-      if (ref.account) qs.set('account', ref.account);
+      // The referenced item is authorized server-side; its storage account comes
+      // from the item, not from the request.
+      const qs = new URLSearchParams({ refId: ref.id, container, path: entry.name });
       const r = await clientFetch(`/api/lakehouse/preview?${qs.toString()}`);
       const j = await parseJsonOrError<PreviewResponse>(r, 'Reference preview');
       setRefPreview(j);
