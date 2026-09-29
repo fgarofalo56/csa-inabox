@@ -105,12 +105,18 @@ describe('PromptFlowEditor', () => {
     render(<PromptFlowEditor item={item} id="new" />);
     await waitFor(() => expect(connectionCalls(calls).length).toBeGreaterThan(0), { timeout: 5000 });
 
-    // FIXTURE PRECONDITION, not coverage: the read is issued and unanswered, and
-    // the button is disabled for it — the exact window the CI flake clicked in.
-    // Fails if the fixture stops holding the read, or the component stops gating
-    // the button on it; either way this spec would no longer exercise the race.
+    // COVERAGE — the button is disabled while the connections read is in flight.
+    // This is the ONLY spec in the file that pins that behaviour: it goes red
+    // (and it alone — measured, 1 failed / 6 passed) when `disabled={conn.loading}`
+    // on the Refresh connections button becomes `disabled={false}`. Do not delete
+    // it as scaffolding. It is also what places the click below in the exact
+    // window the CI flake clicked in.
     const refresh = screen.getByTestId('refresh-connections');
     expect(refresh).toBeDisabled();
+    // FIXTURE PRECONDITION, not coverage: nothing has busted the memo yet, so the
+    // `refresh=1` assertion at the end can only be satisfied by the click. Fails
+    // if a `refresh=1` read is made before any click (the first-mount spec above
+    // is the coverage for that).
     expect(connectionCalls(calls).some((u) => u.includes('refresh=1'))).toBe(false);
 
     release();

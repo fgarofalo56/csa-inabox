@@ -99,7 +99,9 @@ describe('UserDataFunctionEditor — Execution endpoint is selected, not typed',
     // combobox is a silent no-op — the listbox never opens and the option wait
     // below times out on a slow runner. Wait for the ANSWER, then click.
     const runTarget = await screen.findByRole('combobox', { name: /Run target/i });
-    await waitFor(() => expect(runTarget).not.toBeDisabled());
+    // 5000, not the 1000 default: a 1 s wait-for-enabled on a slow runner is the
+    // same race moved one line down.
+    await waitFor(() => expect(runTarget).not.toBeDisabled(), { timeout: 5000 });
     fireEvent.click(runTarget);
     await screen.findByRole('option', { name: optionNamed(RUNTIME, 'deployment default') });
     await screen.findByRole('option', { name: optionNamed(APPROVED_FN, 'keyed') });
