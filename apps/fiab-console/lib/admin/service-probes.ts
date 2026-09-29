@@ -439,7 +439,7 @@ const databricksSqlProbe: ServiceProbe = {
     const dbx = await import('@/lib/azure/databricks-client');
     const g = dbx.databricksConfigGate();
     if (g) return gate(`Databricks not configured — set ${g.missing}. The Console then creates or adopts the 'loom-default' SQL warehouse itself.`);
-    const { resolveDatabricksSqlWarehouseId, WarehouseResolutionError } = await import('@/lib/azure/databricks-sql-warehouse');
+    const { resolveDatabricksSqlWarehouseId, withResolvedWarehouse, WarehouseResolutionError } = await import('@/lib/azure/databricks-sql-warehouse');
     let warehouseId: string;
     let how: string;
     try {
@@ -453,7 +453,13 @@ const databricksSqlProbe: ServiceProbe = {
       }
       throw e;
     }
-    const res: any = await dbx.runWarehouseStatement('SELECT 1 AS loom_health', { warehouseId });
+    // #4776 — through the self-healing wrapper, NOT an explicit id: a warehouse
+    // deleted out-of-band is invalidated and re-resolved once, so the health
+    // exercise is the first surface to notice the heal, not the last.
+    const res: any = await withResolvedWarehouse((id) => {
+      warehouseId = id;
+      return dbx.runWarehouseStatement('SELECT 1 AS loom_health', { warehouseId: id });
+    });
     const rows = res?.result?.data_array?.length ?? res?.rows?.length ?? res?.rowCount ?? 0;
     return { status: 'pass', detail: `Databricks SQL warehouse ${warehouseId} executed SELECT 1 (${rows} row(s)). ${how}`, evidence: evidenceSlice(JSON.stringify(res).slice(0, 400)) };
   },

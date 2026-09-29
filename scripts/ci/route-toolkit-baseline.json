@@ -42,7 +42,6 @@
     "apps/fiab-console/app/api/admin/env-config/route.ts": 1,
     "apps/fiab-console/app/api/admin/feedback-forwarding/route.ts": 1,
     "apps/fiab-console/app/api/admin/gates/[id]/resolve/route.ts": 1,
-    "apps/fiab-console/app/api/admin/gates/route.ts": 1,
     "apps/fiab-console/app/api/admin/governance-catalog/reindex/route.ts": 1,
     "apps/fiab-console/app/api/admin/health/exercise/route.ts": 1,
     "apps/fiab-console/app/api/admin/lineage/reconcile/route.ts": 1,

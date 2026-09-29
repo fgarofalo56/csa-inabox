@@ -80,7 +80,7 @@ import {
 } from '@/lib/azure/azure-sql-client';
 import { sqlWithNoContainmentGuarantee } from '@/lib/sql/trusted-sql';
 import { executeStatement, databricksConfigGate } from '@/lib/azure/databricks-client';
-import { resolveWarehouseIdOrThrow } from '@/lib/azure/databricks-sql-warehouse';
+import { withResolvedWarehouse } from '@/lib/azure/databricks-sql-warehouse';
 import { executePostgresQuery, postgresQueryGate } from '@/lib/azure/postgres-flex-client';
 import { queryItems } from '@/lib/azure/cosmos-data-client';
 import {
@@ -1882,8 +1882,8 @@ export async function buildConnectionExecutor(
         const [catalog, schemaPart] = (conn.database || '').split('.');
         const schema = ref.mode === 'table' ? (ref.schema || schemaPart) : schemaPart;
         const run: SqlRunner = async (sql) => {
-          const warehouseId = await resolveWarehouseIdOrThrow();
-          const r = await executeStatement(warehouseId, sql, catalog || undefined, schema || undefined);
+          // #4776 — a warehouse deleted out-of-band is invalidated and re-resolved once.
+          const r = await withResolvedWarehouse((id) => executeStatement(id, sql, catalog || undefined, schema || undefined));
           return { columns: r.columns, rows: rowsToRecords(r.columns, r.rows) };
         };
         const tableName = ref.mode === 'table' ? ref.table : 'Query';

@@ -160,13 +160,17 @@ describe('HonestGate — classified (#4776)', () => {
     expect(await screen.findAllByText(REMEDIATION)).toHaveLength(3);
   });
 
-  it('network: the Fix-it keeps the declared Fix-it — no role-grant note', async () => {
+  it('network: the Fix-it keeps the declared Fix-it, and SAYS pinning is a bypass, not the fix', async () => {
     fetchMock.mockResolvedValue(jsonRes({ ok: true, options: {} }));
     const net = 'Verify the databricks_ui_api private endpoint is Approved.';
     wrap(<HonestGate gateId="svc-databricks-sql" surface="MDM" classified={{ kind: 'network', error: 'refused at the network layer (HTTP 403)', remediation: net }} />);
     expect(screen.getByText(/MDM: .* — refused or unreachable at the network layer/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /fix it/i }));
-    // Bar item + dialog caption only. Breaks (3) if every kind became a role grant.
+    // Bar item + dialog caption carry the remediation verbatim. Breaks (3) if a
+    // network cause became a role grant (the grant note IS the bare remediation).
     expect(await screen.findAllByText(net)).toHaveLength(2);
+    // Round 4 nit: the dialog labels the pin honestly. Breaks if a non-permission
+    // cause opens the plain env-picker with no note.
+    expect(screen.getByText(/only bypasses the one the Console produces; it does not address the cause of this network failure/)).toBeInTheDocument();
   });
 });

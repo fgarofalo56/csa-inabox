@@ -644,10 +644,22 @@ export function HonestGate({
   const effective = useMemo<GateDef | undefined>(() => {
     if (!gate || !classifiedKind) return gate;
     const remediation = classifiedRemediation || gate.remediation;
+    if (classifiedKind === 'permission') {
+      return { ...gate, remediation, fixit: { kind: 'role-grant', grantNote: remediation } };
+    }
+    // Any other cause (network / authentication / quota / unknown): the gate's
+    // declared Fix-it only lets the operator PIN the value themselves, which
+    // bypasses what the Console produces and does not address the cause. Say
+    // exactly that in the dialog rather than offering the pin as "the fix" (#4776).
     return {
       ...gate,
       remediation,
-      fixit: classifiedKind === 'permission' ? { kind: 'role-grant', grantNote: remediation } : gate.fixit,
+      fixit: {
+        ...gate.fixit,
+        grantNote:
+          `Pinning a value below only bypasses the one the Console produces; it does not address the cause of this ${classifiedKind} failure. ` +
+          `To address it: ${remediation}`,
+      },
     };
   }, [gate, classifiedKind, classifiedRemediation]);
 

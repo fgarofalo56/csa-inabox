@@ -95,8 +95,8 @@ import {
   type WarehouseFailureKind,
   __testing,
 } from '../databricks-sql-warehouse';
-import { clearRuntimeProduced } from '../runtime-produced-env';
-import { gateStatus, getGate } from '@/lib/gates/registry';
+import { clearRuntimeProduced, readRuntimeFailure } from '../runtime-produced-env';
+import { gateStatus, getGate, gateAdminDiagnostic } from '@/lib/gates/registry';
 
 const HOST = 'adb-1111.11.azuredatabricks.net';
 
@@ -833,7 +833,7 @@ describe('round 3 (#4776 re-review)', () => {
     expect(got).toEqual(kinds);
   });
 
-  it('B-6: the SCIM identity diagnostic reaches the ADMIN-ONLY gate detail, never a route body', async () => {
+  it('B-6: the SCIM identity diagnostic is published SEPARATELY — never in a route body or the evalEnv detail', async () => {
     h.dbx.createWarehouse.mockRejectedValue(httpErr('createWarehouse', 403, '{"error_code":"PERMISSION_DENIED","message":"no"}'));
     meReturns({ displayName: 'loom-console-uami', applicationId: '0000-app', entitlements: [{ value: 'workspace-access' }], groups: [{ display: 'users' }] });
     const err = await resolveDatabricksSqlWarehouseId().catch((e) => e);
@@ -843,8 +843,17 @@ describe('round 3 (#4776 re-review)', () => {
     expect(body.remediation).toMatch(/cannot grant this to itself/);
     // Breaks if the identity detail leaks into the route body (message or a field).
     expect(JSON.stringify(body)).not.toMatch(/0000-app|loom-console-uami|workspace-access/);
-    // …while the admin-only gate detail (/admin/readiness, /api/admin/gates)
-    // still carries what was measured. Breaks if the diagnostic is dropped entirely.
-    expect(gateStatus('svc-databricks-sql')!.check.detail).toMatch(/loom-console-uami \(application 0000-app\)/);
+    // Round 4: the published `message` — which evalEnv turns into the check
+    // detail that NON-admin readers get (GET /api/admin/self-audit, the Copilot
+    // self-audit tool) — carries none of it. Breaks if the resolver joins the
+    // diagnostic into the published message again (the round-3 leak).
+    const f = readRuntimeFailure(WAREHOUSE_ENV_VAR)!;
+    expect(f.message).not.toMatch(/0000-app|loom-console-uami/);
+    expect(gateStatus('svc-databricks-sql')!.check.detail).not.toMatch(/0000-app|loom-console-uami/);
+    expect(gateStatus('svc-databricks-sql')!.check.detail).toMatch(/failed \(permission\)/);
+    // …while the separate field, read only by admin routes, still has it.
+    // Breaks if the diagnostic is dropped entirely.
+    expect(f.diagnostic).toMatch(/loom-console-uami \(application 0000-app\)/);
+    expect(gateAdminDiagnostic('svc-databricks-sql')).toBe(f.diagnostic);
   });
 });

@@ -42,6 +42,15 @@ export interface RuntimeProducedFailure {
   message: string;
   /** The concrete remediation for THIS cause. */
   remediation: string;
+  /**
+   * ADMIN-ONLY detail the producer measured (e.g. what SCIM Me says about the
+   * Console identity: display name, application id, entitlements, groups).
+   * NEVER merged into `message`: `evalEnv` reads `message` into check detail,
+   * and that detail reaches non-admin readers (GET /api/admin/self-audit, the
+   * Copilot self-audit tool). Only admin-capability routes read this field,
+   * via `gateAdminDiagnostic` in lib/gates/registry (#4776).
+   */
+  diagnostic?: string;
   /** Epoch ms of publication. */
   at: number;
 }

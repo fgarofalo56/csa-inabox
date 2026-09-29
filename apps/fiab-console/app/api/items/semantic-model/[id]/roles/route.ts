@@ -73,6 +73,7 @@ import { listRlsPolicies, sqlBracket, sqlString } from '@/lib/azure/synapse-perm
 import { executeStatement, databricksConfigGate } from '@/lib/azure/databricks-client';
 import {
   resolveWarehouseIdOrThrow,
+  withResolvedWarehouse,
   WarehouseResolutionError,
   warehouseErrorBody,
   warehouseErrorStatus,
@@ -433,10 +434,11 @@ export const PUT = withSession<{ id: string }>(async (req: NextRequest, { sessio
   const statements: string[] = [];
   let deployOk = true;
 
-  let warehouseId = '';
   if (engine === 'databricks') {
     try {
-      warehouseId = await resolveWarehouseIdOrThrow();
+      // Resolved up front for the classified response; each DDL step then runs
+      // through withResolvedWarehouse (a deleted warehouse is re-resolved once, #4776).
+      await resolveWarehouseIdOrThrow();
     } catch (e) {
       if (e instanceof WarehouseResolutionError) {
         // Roles ARE persisted above; only the deploy could not run.
@@ -452,7 +454,7 @@ export const PUT = withSession<{ id: string }>(async (req: NextRequest, { sessio
       if (engine === 'synapse') {
         await synapseExecute(dedicatedTarget(), step.sql);
       } else {
-        await executeStatement(warehouseId, step.sql, dbxCatalog(), dbxSchema());
+        await withResolvedWarehouse((id) => executeStatement(id, step.sql, dbxCatalog(), dbxSchema()));
       }
       if (step.kind === 'policy' || step.kind === 'rowfilter') counts.policies++;
       else if (step.kind === 'function') counts.functions++;
@@ -580,7 +582,7 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest, { sessi
     const predicate = tr.sql.replace(/current_user\(\)/gi, sparkString(effectiveUserName));
     const tableFq = `${bq(dbxCatalog())}.${bq(dbxSchema())}.${bq(table)}`;
     const stmt = `SELECT * FROM ${tableFq} WHERE (${predicate}) LIMIT 100;`;
-    const qr = await executeStatement(await resolveWarehouseIdOrThrow(), stmt, dbxCatalog(), dbxSchema());
+    const qr = await withResolvedWarehouse((id) => executeStatement(id, stmt, dbxCatalog(), dbxSchema()));
     const objs = rowsToObjects(qr);
     return NextResponse.json({
       ok: true,

@@ -179,6 +179,26 @@ export function gateForLegacyCode(code: string): GateDef | undefined {
   return GATES.find((g) => g.legacyCodes.includes(code));
 }
 
+const SPECS_BY_ID = new Map(ENV_CHECKS.map((s) => [s.id, s]));
+
+/**
+ * #4776 — ADMIN-ONLY. The diagnostic a runtime producer recorded on its last
+ * failure for this gate (e.g. what SCIM Me measured about the Console identity:
+ * display name, application id, entitlements, groups), or undefined.
+ *
+ * This is deliberately NOT part of `gateStatus()` / `evalEnv` detail, because
+ * that detail reaches NON-admin readers (GET /api/admin/self-audit, the Copilot
+ * self-audit tool). Call it only from an admin-capability route:
+ * /api/admin/gates, /api/admin/readiness and the diagnostics bundle.
+ */
+export function gateAdminDiagnostic(id: string): string | undefined {
+  for (const k of SPECS_BY_ID.get(id)?.runtimeProduced || []) {
+    const f = readRuntimeFailure(k);
+    if (f?.diagnostic && !readRuntimeValue(k)) return f.diagnostic;
+  }
+  return undefined;
+}
+
 // ── X2 — availability-gate convention ────────────────────────────────────────
 
 /** The ServiceAvailability key for the active sovereign boundary. Commercial +

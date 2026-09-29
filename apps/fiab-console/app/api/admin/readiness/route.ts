@@ -21,7 +21,7 @@
  */
 import { NextResponse } from 'next/server';
 import { withCapability } from '@/lib/api/route-toolkit';
-import { GATES, allGateStatuses } from '@/lib/gates/registry';
+import { GATES, allGateStatuses, gateAdminDiagnostic } from '@/lib/gates/registry';
 import { runRuntimeProducers } from '@/lib/admin/gate-registry';
 import { buildReadiness, GATE_PROBE_MAP, type ProbeLite } from '@/lib/admin/readiness';
 import { getOrComputeCached } from '@/lib/azure/query-result-cache';
@@ -89,10 +89,17 @@ export const GET = withCapability('admin.env-config', 'Admin', async (req) => {
     { gates: GATES, statuses, probes },
     { generatedAt: new Date().toISOString(), cloud: detectLoomCloud() },
   );
+  // #4776 — admin-only producer diagnostics keyed by gate id (e.g. what SCIM Me
+  // measured about the Console identity). Never part of the gate detail above,
+  // which non-admin readers share; this route is admin-capability gated.
+  const diagnostics = Object.fromEntries(
+    GATES.map((g) => [g.id, gateAdminDiagnostic(g.id)] as const).filter(([, d]) => !!d),
+  );
 
   return NextResponse.json({
     ok: true,
     ...report,
+    diagnostics,
     probed: probes.length,
     probeError,
     // true when the probes were served from an expired cache while a background

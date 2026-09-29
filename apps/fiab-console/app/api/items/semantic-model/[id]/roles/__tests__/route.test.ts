@@ -98,9 +98,16 @@ vi.mock('@/lib/azure/databricks-client', () => ({
 // #3744 — the warehouse is produced by the platform resolver; the REAL error
 // class and body shaper are kept so the route's instanceof branch is real.
 const resolveWarehouseMock = vi.fn(async () => 'wh-resolved');
+const withResolvedMock = vi.fn(async (fn: (id: string) => Promise<unknown>) => fn(await resolveWarehouseMock()));
 vi.mock('@/lib/azure/databricks-sql-warehouse', async () => {
   const actual = await vi.importActual<typeof import('@/lib/azure/databricks-sql-warehouse')>('@/lib/azure/databricks-sql-warehouse');
-  return { ...actual, resolveWarehouseIdOrThrow: (...a: unknown[]) => resolveWarehouseMock(...(a as [])) };
+  return {
+    ...actual,
+    resolveWarehouseIdOrThrow: (...a: unknown[]) => resolveWarehouseMock(...(a as [])),
+    // #4776 — statements now run through the self-healing wrapper; it resolves
+    // through the SAME mock so a rejected resolution still reaches the route.
+    withResolvedWarehouse: (fn: (id: string) => Promise<unknown>) => withResolvedMock(fn),
+  };
 });
 
 import { GET, PUT, POST } from '../route';
@@ -163,6 +170,7 @@ beforeEach(() => {
   vi.stubEnv('LOOM_DATABRICKS_SQL_WAREHOUSE_ID', '');
   vi.stubEnv('LOOM_DATABRICKS_HOSTNAME', '');
   resolveWarehouseMock.mockResolvedValue('wh-resolved');
+  withResolvedMock.mockImplementation(async (fn: (id: string) => Promise<unknown>) => fn(await resolveWarehouseMock()));
 });
 afterEach(() => vi.unstubAllEnvs());
 
@@ -355,6 +363,34 @@ describe('#3744 — a bound Databricks workspace is a native RLS endpoint (the w
     expect(res.status).toBe(200);
     // Breaks if the route reads process.env again: it would pass '' as the warehouse.
     expect((executeStatement as any).mock.calls[0][0]).toBe('wh-resolved');
+  });
+
+  it('#4776: each DDL step runs through the self-healing wrapper (a re-resolved id reaches executeStatement)', async () => {
+    seedItem();
+    const { executeStatement } = await import('@/lib/azure/databricks-client');
+    // The wrapper re-resolved after the first id turned out to be gone.
+    withResolvedMock.mockImplementation(async (fn: (id: string) => Promise<unknown>) => fn('wh-healed'));
+    const res = await PUT(putReq(LOOM_ID, { roles: [{
+      name: 'West', modelPermission: 'read',
+      tablePermissions: [{ name: 'dbo.Sales', filterExpression: '[Region] = "West"' }],
+      members: [{ memberName: 'ops@contoso.com' }],
+    }] }), params(LOOM_ID));
+    expect(res.status).toBe(200);
+    // Breaks if the loop calls executeStatement with the id it resolved up front
+    // ('wh-resolved') instead of going through withResolvedWarehouse.
+    const ids = (executeStatement as any).mock.calls.map((c: unknown[]) => c[0]);
+    expect(ids.length).toBeGreaterThan(0);
+    expect(new Set(ids)).toEqual(new Set(['wh-healed']));
+  });
+
+  it('#4776: test-as-role runs its SELECT through the self-healing wrapper', async () => {
+    seedItem([{ name: 'West', members: [], tablePermissions: [{ table: 'Sales', filterExpression: '[Region] = "West"' }] }]);
+    const { executeStatement } = await import('@/lib/azure/databricks-client');
+    withResolvedMock.mockImplementation(async (fn: (id: string) => Promise<unknown>) => fn('wh-healed'));
+    const res = await POST(testReq(LOOM_ID, { roleName: 'West', effectiveUserName: 'ops@contoso.com' }), params(LOOM_ID));
+    expect(res.status).toBe(200);
+    // Breaks if the SELECT goes back to executeStatement(await resolveWarehouseIdOrThrow(), …): 'wh-resolved'.
+    expect((executeStatement as any).mock.calls.map((c: unknown[]) => c[0])).toEqual(['wh-healed']);
   });
 
   it('PUT reports a classified resolution failure (403 permission), roles still persisted', async () => {

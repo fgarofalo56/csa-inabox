@@ -4418,25 +4418,6 @@
           }
         },
         {
-          "id": "sec:verdict-call:apps/fiab-console/app/api/admin/gates/route.ts#GET:enforceCapability:3",
-          "kind": "verdict-call",
-          "provenance": "declared",
-          "label": "GET /api/admin/gates -> enforceCapability",
-          "facet": {
-            "kind": "verdict-call",
-            "callSite": "GET /api/admin/gates:3",
-            "symbol": "enforceCapability",
-            "returnsVerdictUnion": true,
-            "pathsToPrivilegedSink": 0,
-            "pathsConsumingAsRefusal": 0,
-            "consumption": "returned",
-            "allowlisted": false,
-            "allowlistPremiseTested": false,
-            "sinkPrivileged": false,
-            "sinkKind": "none"
-          }
-        },
-        {
           "id": "sec:authorizer:apps/fiab-console/app/api/admin/governance-catalog/reindex/route.ts#POST",
           "kind": "authorizer",
           "provenance": "declared",
@@ -46322,11 +46303,6 @@
           "deployedAs": "loom-console"
         },
         {
-          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/admin/gates/route.ts#GET:enforceCapability:3",
-          "codeModuleId": "code:apps/fiab-console/app/api/admin/gates/route.ts",
-          "deployedAs": "loom-console"
-        },
-        {
           "nodeId": "sec:authorizer:apps/fiab-console/app/api/admin/governance-catalog/reindex/route.ts#POST",
           "codeModuleId": "code:apps/fiab-console/app/api/admin/governance-catalog/reindex/route.ts",
           "deployedAs": "loom-console"
@@ -50177,15 +50153,15 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-29T00:14:26.568Z",
-      "commit": "5a9d17e016e1ed75b82601fd63919515afa064a0",
-      "inputsDigest": "0ae4b794c2c82c3c",
+      "generatedAt": "2026-09-29T21:09:07.991Z",
+      "commit": "8b3c2b0bd7b8ea0bc2a51b2cb5c688c568c7bf80",
+      "inputsDigest": "ace036f95bb1c3ea",
       "filesScanned": 2122,
       "scanScopes": [
         {
           "scope": "app/**/route.ts (console BFF routes)",
           "filesMatched": 1700,
-          "nodesEmitted": 706
+          "nodesEmitted": 705
         },
         {
           "scope": ".github/**, scripts/** (CI publication surfaces)",

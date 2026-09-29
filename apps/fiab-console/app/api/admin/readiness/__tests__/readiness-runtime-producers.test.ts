@@ -17,7 +17,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { invalidateModel } from '@/lib/azure/query-result-cache';
-import { publishRuntimeValue, clearRuntimeProduced } from '@/lib/azure/runtime-produced-env';
+import { publishRuntimeValue, publishRuntimeFailure, clearRuntimeProduced } from '@/lib/azure/runtime-produced-env';
 
 vi.mock('@/lib/auth/session', () => ({
   getSession: vi.fn(() => ({
@@ -71,5 +71,21 @@ describe('GET /api/admin/readiness — runtime producers run first (B-7)', () =>
     const node = j.capabilities.find((n: any) => n.id === 'svc-databricks-sql');
     expect(node.gateStatus).toBe('blocked');
     expect(node.missing).toEqual([VAR]);
+  });
+
+  it('#4776 B-6: the admin-only producer diagnostic is attached under `diagnostics`, not in the capability detail', async () => {
+    producers.run.mockImplementation(async () => {
+      publishRuntimeFailure(VAR, {
+        kind: 'permission', message: 'refused (HTTP 403)', remediation: 'grant it',
+        diagnostic: 'SCIM Me: identity uami-x (application APPID-READINESS).',
+      });
+    });
+    const { GET } = await import('../route');
+    const j = await (await GET(new NextRequest('http://localhost/api/admin/readiness'))).json();
+    // Breaks if the admin route stops attaching the diagnostic.
+    expect(j.diagnostics['svc-databricks-sql']).toContain('APPID-READINESS');
+    // …and it is attached ONLY there: the capability nodes (built from the same
+    // gate detail the non-admin self-audit shares) do not carry it.
+    expect(JSON.stringify(j.capabilities)).not.toContain('APPID-READINESS');
   });
 });

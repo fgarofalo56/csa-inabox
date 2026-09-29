@@ -41,10 +41,18 @@ vi.mock('@/lib/azure/databricks-client', () => dbxMock);
 // exercised against the class the resolver actually throws.
 const whMock = {
   resolveDatabricksSqlWarehouseId: vi.fn(async () => ({ id: 'wh1', source: 'created', detail: "Created the 'loom-default' SQL warehouse (wh1)." }) as any),
+  // #4776 — the probe's statement runs through the self-healing wrapper. The
+  // spy resolves through the SAME resolver mock, so the id it hands the probe
+  // is the resolver's unless a test overrides it.
+  withResolvedWarehouse: vi.fn(async (fn: (id: string) => Promise<unknown>) => fn((await whMock.resolveDatabricksSqlWarehouseId()).id)),
 };
 vi.mock('@/lib/azure/databricks-sql-warehouse', async () => {
   const actual = await vi.importActual<typeof import('@/lib/azure/databricks-sql-warehouse')>('@/lib/azure/databricks-sql-warehouse');
-  return { ...actual, resolveDatabricksSqlWarehouseId: whMock.resolveDatabricksSqlWarehouseId };
+  return {
+    ...actual,
+    resolveDatabricksSqlWarehouseId: whMock.resolveDatabricksSqlWarehouseId,
+    withResolvedWarehouse: (fn: (id: string) => Promise<unknown>) => whMock.withResolvedWarehouse(fn),
+  };
 });
 
 const renderMock = { renderPaginatedReport: vi.fn(async () => ({ datasetCount: 1, pageCount: 1, page: { sections: [{ rows: [{ cells: [1] }] }] } })) };
@@ -77,6 +85,7 @@ describe('W-B deep exercises', () => {
     dbxMock.listWarehouses.mockResolvedValue([{ id: 'wh1', state: 'RUNNING' }] as any);
     dbxMock.runWarehouseStatement.mockResolvedValue({ rows: [[1]], rowCount: 1 } as any);
     whMock.resolveDatabricksSqlWarehouseId.mockResolvedValue({ id: 'wh1', source: 'created', detail: "Created the 'loom-default' SQL warehouse (wh1)." } as any);
+    whMock.withResolvedWarehouse.mockImplementation(async (fn: (id: string) => Promise<unknown>) => fn((await whMock.resolveDatabricksSqlWarehouseId()).id));
     renderMock.renderPaginatedReport.mockResolvedValue({ datasetCount: 1, pageCount: 1, page: { sections: [{ rows: [{ cells: [1] }] }] } } as any);
     process.env.LOOM_SYNAPSE_WORKSPACE = 'ws';
     delete process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID;
@@ -149,6 +158,18 @@ describe('W-B deep exercises', () => {
     dbxMock.listWarehouses.mockResolvedValue([{ id: 'some-other-wh', state: 'RUNNING' }] as any);
     await run('databricks-sql');
     expect(dbxMock.runWarehouseStatement).toHaveBeenCalledWith('SELECT 1 AS loom_health', { warehouseId: 'wh1' });
+  });
+  it('#4776: the SELECT 1 runs through the self-healing wrapper and reports the id it ACTUALLY ran on', async () => {
+    // The wrapper re-resolved after the first id turned out to be gone: it hands
+    // the probe 'wh-healed'. Breaks if the probe calls runWarehouseStatement with
+    // the explicit id it resolved first (0 wrapper calls, and 'wh1' in the
+    // statement and the receipt), or if the receipt names the stale id.
+    whMock.withResolvedWarehouse.mockImplementationOnce(async (fn: (id: string) => Promise<unknown>) => fn('wh-healed'));
+    const r = await run('databricks-sql');
+    expect(whMock.withResolvedWarehouse).toHaveBeenCalledTimes(1);
+    expect(dbxMock.runWarehouseStatement).toHaveBeenCalledWith('SELECT 1 AS loom_health', { warehouseId: 'wh-healed' });
+    expect(r.status).toBe('pass');
+    expect(r.detail).toMatch(/warehouse wh-healed executed SELECT 1/);
   });
   it('databricks reports a classified resolver failure as fail, not as a config gate', async () => {
     const { WarehouseResolutionError } = await import('@/lib/azure/databricks-sql-warehouse');

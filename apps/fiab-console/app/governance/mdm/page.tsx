@@ -424,7 +424,7 @@ function MatchTab({ models }: { models: MdmModel[] }) {
         </Field>
         <Field label="Min score %" style={{ minWidth: 140 }}><Input type="number" value={minScore} onChange={(_, d) => setMinScore(d.value)} /></Field>
       </div>
-      {gate && <HonestGate gateId={gate.gateId} surface="MDM" missing={gate.missing} detail={gate.error} classified={gate.classified} />}
+      {gate && <HonestGate gateId={gate.gateId} surface="MDM" missing={gate.missing} detail={gate.error} classified={gate.classified} onResolved={run} />}
       {error && <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalM }}><MessageBarBody>{error}</MessageBarBody></MessageBar>}
       {candidates && <>
         <MessageBar intent="info" style={{ marginBottom: tokens.spacingVerticalM }}><MessageBarBody>
@@ -491,7 +491,7 @@ function GoldenTab({ models }: { models: MdmModel[] }) {
           </Dropdown>
         </Field>
       </div>
-      {gate && <HonestGate gateId={gate.gateId} surface="MDM" missing={gate.missing} detail={gate.error} classified={gate.classified} />}
+      {gate && <HonestGate gateId={gate.gateId} surface="MDM" missing={gate.missing} detail={gate.error} classified={gate.classified} onResolved={load} />}
       {info && <MessageBar intent="success" style={{ marginBottom: tokens.spacingVerticalM }}><MessageBarBody>{info}</MessageBarBody></MessageBar>}
       {error && <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalM }}><MessageBarBody>{error}</MessageBarBody></MessageBar>}
       {data && <>

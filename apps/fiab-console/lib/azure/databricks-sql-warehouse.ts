@@ -184,8 +184,10 @@ export class WarehouseResolutionError extends Error {
   /**
    * What SCIM Me measured about the Console identity (display name, application
    * id, direct entitlements, groups). Kept OUT of `message` and out of
-   * {@link warehouseErrorBody}, which reach any signed-in caller; it is
-   * published only to the admin-only gate detail.
+   * {@link warehouseErrorBody}, which reach any signed-in caller. It is
+   * published as the runtime failure's separate `diagnostic` field, which
+   * `evalEnv` never reads, so it does not reach the self-audit check detail;
+   * only the admin-capability routes attach it (via `gateAdminDiagnostic`).
    */
   readonly diagnostic?: string;
   constructor(init: {
@@ -842,12 +844,15 @@ export async function resolveDatabricksSqlWarehouseId(): Promise<WarehouseResolu
       if (err.kind === 'permission') err = await measuredPermissionError(err);
       s.cached = undefined;
       s.failure = { err, host, at: Date.now() };
-      // The published failure feeds the ADMIN-ONLY gate surfaces, so it may
-      // carry the SCIM identity diagnostic that route bodies never do.
+      // `message` feeds evalEnv's check detail, which NON-admin readers get
+      // (GET /api/admin/self-audit, the Copilot self-audit tool), so it never
+      // carries the SCIM identity detail. That goes in the separate
+      // `diagnostic` field, read only by the admin-capability routes.
       publishRuntimeFailure(WAREHOUSE_ENV_VAR, {
         kind: err.kind,
-        message: err.diagnostic ? `${err.message} ${err.diagnostic}` : err.message,
+        message: err.message,
         remediation: err.remediation,
+        ...(err.diagnostic ? { diagnostic: err.diagnostic } : {}),
       });
       throw err;
     } finally {
@@ -926,8 +931,9 @@ export async function withResolvedWarehouse<T>(fn: (warehouseId: string) => Prom
  * Shape a resolution failure for a BFF JSON response. Deliberately carries NO
  * `diagnostic`: the routes that return it are open to any signed-in caller, so
  * what SCIM Me measured about the Console identity (name, application id,
- * entitlements, groups) stays on the admin-only gate surfaces (the published
- * runtime failure → /admin/readiness, /api/admin/gates, the diagnostics bundle).
+ * entitlements, groups) is attached only by the admin-capability routes
+ * (/api/admin/gates, /api/admin/readiness, the diagnostics bundle) from the
+ * runtime failure's separate `diagnostic` field.
  */
 export function warehouseErrorBody(e: WarehouseResolutionError): {
   ok: false;

@@ -75,6 +75,8 @@ describe('MDM page — a classified warehouse failure is the HonestGate (#4776)'
     expect(screen.getByText(/grants the databricks-sql-access entitlement/)).toBeInTheDocument();
     expect(screen.getByText('databricks-sql-access')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /fix it/i })).toBeInTheDocument();
+    // Round 4 nit: Recheck re-runs the match. Breaks if the gate has no onResolved.
+    expect(screen.getByRole('button', { name: /recheck/i })).toBeInTheDocument();
   });
 
   it('Golden records: a legacy not_configured body still renders the gate for the missing var', async () => {
@@ -95,5 +97,7 @@ describe('MDM page — a classified warehouse failure is the HonestGate (#4776)'
     expect(await screen.findByText(/MDM needs Azure Databricks/)).toBeInTheDocument();
     expect(screen.getByText('LOOM_DATABRICKS_HOSTNAME')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /fix it/i })).toBeInTheDocument();
+    // Round 4 nit: Recheck reloads. Breaks if the Golden gate has no onResolved.
+    expect(screen.getByRole('button', { name: /recheck/i })).toBeInTheDocument();
   });
 });
