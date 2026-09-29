@@ -21,7 +21,7 @@ import subprocess
 import sys
 import time
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import NamedTuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -2389,9 +2389,12 @@ def _receipt_comment(kind: str, issue_class: str, detail: str, binding: str) -> 
             "name and not by the title - on the default branch, not triggered by "
             "a pull request, created AFTER the newest failure this issue records, "
             "in which every job and every step that failed in that recorded "
-            "failure (named above) concluded success, and after which no "
-            "completed run of that workflow on the default branch concluded "
-            "anything but success. "
+            "failure (named above) concluded success, and no completed run of "
+            "that workflow on the default branch that was created or finished "
+            f"after it was created - looking back {_window_hours()} hours for runs "
+            "that began earlier - concluded anything but success. A cancelled or "
+            "skipped run counts as not succeeding, so the newest green run is the "
+            "one to offer. "
             "An observation of something that ran, not a merge, which is why "
             f"deploy-integrity R2 (merged is not done) makes the {issue_class} "
             "class take a receipt of this shape. "
@@ -2400,8 +2403,11 @@ def _receipt_comment(kind: str, issue_class: str, detail: str, binding: str) -> 
             "The run's dispatch inputs (a tag, a skip flag, a run mode) are NOT "
             "read - GitHub's run object does not carry them, and the run's title "
             "above shows them only where that workflow's run-name interpolates "
-            "them - so a green re-roll of an old tag would pass. Runs still in "
-            "progress are not considered. And no boundary label is consulted: "
+            "them - so a run given different inputs, a dry run or a re-roll of an "
+            "old tag included, passes whenever every failed step also ran green "
+            f"in that mode (#4799). A run created more than {_window_hours()} hours before "
+            "it that finished after it is not seen, and runs still in progress "
+            "are not considered. And no boundary label is consulted: "
             "the ONLY cloud binding is that the green run contains the same-named "
             "jobs and steps that failed, listed above. Where a job name does not "
             "encode its cloud, this receipt makes no per-cloud claim. "
@@ -3363,10 +3369,27 @@ WATCHER_CLOSE_MARKER = "Close this issue only once the path has run GREEN"
 #: by review, 2026-09-29); refused so it stays unreachable if one ever does.
 _PULL_REQUEST_EVENTS = frozenset({"pull_request", "pull_request_target"})
 
-#: How many later completed runs `_later_runs` reads. A full page is REFUSED
-#: rather than read as complete, because the run it did not return could be
-#: the red one.
-_LATER_RUNS_LIMIT = 100
+#: How many completed runs `_later_runs` reads. A full page is REFUSED rather
+#: than read as complete, because the run it did not return could be the red
+#: one. Measured 2026-09-29: 4, 11 and 11 completed runs on `main` since
+#: 2026-09-26 for the three watched workflows, so 200 covers weeks, not days.
+_LATER_RUNS_LIMIT = 200
+
+#: How far BEFORE the offered run `_later_runs` also looks, for a run CREATED
+#: earlier that FINISHED after it (review B, round 3): `deploy-fiab-commercial`
+#: has no workflow-level `concurrency:` group, and `loom-dataplane-roll` groups
+#: per boundary, so runs overlap. Measured over the last 300 completed runs of
+#: each watched workflow, the longest created-to-updated span is 21,631 s
+#: (6.0 h, `gov-console-roll`), 6,614 s and 3,245 s. 72 h is twelve times the
+#: longest seen. A run that spans MORE than this window -- one parked behind an
+#: environment approval for days -- is not seen, and the comment says so.
+_OVERLAP_WINDOW = timedelta(hours=72)
+
+
+def _window_hours() -> int:
+    """`_OVERLAP_WINDOW` in whole hours, as the published text states it -- read
+    from the constant so the sentence cannot drift from the query."""
+    return int(_OVERLAP_WINDOW.total_seconds() // 3600)
 
 #: Steps GitHub runs around EVERY job that is not skipped, whatever its `if:`s
 #: decide. A job whose only green steps are these did no work -- the job-level
@@ -3617,22 +3640,29 @@ def _failed_jobs_and_steps(failure_run: dict) -> list[tuple[str, list[str]]]:
     return failed
 
 
-def _later_runs(repo: str, workflow_id: object, branch: str, created: str) -> list[dict]:
-    """Every COMPLETED run of this workflow on `branch` created at or after `created`.
+def _later_runs(repo: str, workflow_id: object, branch: str, since: datetime) -> list[dict]:
+    """Every COMPLETED run of this workflow on `branch` that could have finished
+    after `since`: created at or after `since - _OVERLAP_WINDOW`.
+
+    The window reaches BACK so that a run created before the offered one and
+    finished after it is in the list; `refuse_if_red_since` does the
+    finished-after test on `updatedAt`. GitHub's run list filters only on
+    creation time, so the window is the bound, and it is disclosed.
 
     FAILS CLOSED on a read error, and on a FULL page: a list this tool could not
     see the end of may be missing exactly the red run it exists to find.
     """
+    lower = (since - _OVERLAP_WINDOW).strftime("%Y-%m-%dT%H:%M:%SZ")
     rc, out, err = sh([
         "gh", "run", "list", "--repo", repo, "--workflow", str(workflow_id),
-        "--branch", branch, "--status", "completed", "--created", f">={created}",
+        "--branch", branch, "--status", "completed", "--created", f">={lower}",
         "--limit", str(_LATER_RUNS_LIMIT),
-        "--json", "databaseId,conclusion,createdAt,event,url",
+        "--json", "databaseId,conclusion,createdAt,updatedAt,event,url",
     ])
     if rc != 0:
         raise ReceiptRefusedError(
             f"cannot list the runs of workflow {workflow_id} on {branch} since "
-            f"{created} (rc={rc}): {err[:200]}. Whether the path has gone red "
+            f"{lower} (rc={rc}): {err[:200]}. Whether the path has gone red "
             "again since the offered run is unknown, so this refuses."
         )
     try:
@@ -3643,16 +3673,55 @@ def _later_runs(repo: str, workflow_id: object, branch: str, created: str) -> li
         raise ReceiptRefusedError("unexpected shape for the run list")
     if len(parsed) >= _LATER_RUNS_LIMIT:
         raise ReceiptRefusedError(
-            f"{len(parsed)} completed runs of workflow {workflow_id} since {created} "
+            f"{len(parsed)} completed runs of workflow {workflow_id} since {lower} "
             f"fill the {_LATER_RUNS_LIMIT}-run page, so the list may be incomplete - "
             "offer a newer green run"
         )
     return parsed
 
 
+def refuse_if_red_since(run: dict, later_runs: list[dict], default_branch: str) -> None:
+    """Refuse if any listed run that did not succeed was created, OR FINISHED,
+    at or after the offered run was created.
+
+    "Has run GREEN" means green and not red again. A watcher notice that was
+    never posted is exactly the red run this sees. `cancelled` and `skipped`
+    count as not succeeding -- a run whose every job skipped did nothing, and
+    this refuses rather than deciding that nothing is not red, so the operator
+    offers the newest green run instead.
+
+    FINISHED-AFTER is read from `updatedAt`, which for a completed run is its
+    last update: the completion, or a later re-run attempt, whose conclusion
+    is then the one listed. A completed red run whose record was touched later
+    for any other reason also counts; that refuses, it does not accept.
+
+    PURE, and run AFTER `verify_watcher_run_receipt` so a malformed offered run
+    is refused for its own defect before anything is listed.
+    """
+    created = _parse_time(run.get("createdAt"), "the run's creation time")
+    red_since = []
+    for other in later_runs:
+        if other.get("conclusion") == "success":
+            continue
+        began = _parse_time(other.get("createdAt"), "a listed run's creation time")
+        ended = _parse_time(other.get("updatedAt"), "a listed run's completion time")
+        if began >= created or ended >= created:
+            red_since.append(other)
+    if red_since:
+        worst = red_since[0]
+        raise ReceiptRefusedError(
+            f"{len(red_since)} completed run(s) of this workflow on "
+            f"{default_branch} that did not succeed were created or finished "
+            f"after the offered run was created - e.g. {worst.get('databaseId')} "
+            f"concluded {worst.get('conclusion')!r} (created "
+            f"{worst.get('createdAt')}, finished {worst.get('updatedAt')}). The "
+            "path has not stayed green; offer the newest green run instead"
+        )
+
+
 def verify_watcher_run_receipt(
     number: int, filing: WatcherFiling, failure_run: dict, run: dict,
-    default_branch: str, later_runs: list[dict],
+    default_branch: str,
 ) -> str:
     """Refuse unless RUN is the green run a watcher-filed item asks for.
 
@@ -3682,11 +3751,9 @@ def verify_watcher_run_receipt(
        job, leaves nothing to key on and REFUSES. Jobs that did NOT fail are not
        checked: green `deploy-fiab-commercial` runs skip `Post-deploy bootstrap
        (Commercial)` at 0 steps (36568209612).
-    6. **Not red since.** No completed run of the workflow on the default
-       branch, created at or after the offered run, concluded anything but
-       success -- `cancelled` included. "Green after the failure" is not the
-       close condition; "has run GREEN and is not red again" is. A watcher
-       notice that was never posted is exactly the red run this sees.
+    6. **Not red since** is the SEPARATE `refuse_if_red_since`, run after this
+       one by the caller so the listing happens only for an offered run that
+       passed every check here.
     """
     expected = failure_run.get("workflowDatabaseId")
     if not expected:
@@ -3791,23 +3858,6 @@ def verify_watcher_run_receipt(
                         "dry run, a gated apply) did not show it recovering"
                     )
 
-    # The offered run itself may be in the list; it is `success` (checked
-    # above), so it can never be counted here and needs no exclusion.
-    red_since = [
-        other for other in later_runs
-        if _parse_time(other.get("createdAt"), "a later run's creation time") >= created
-        and other.get("conclusion") != "success"
-    ]
-    if red_since:
-        worst = red_since[0]
-        raise ReceiptRefusedError(
-            f"{len(red_since)} completed run(s) of this workflow on "
-            f"{default_branch} since the offered run did not succeed - e.g. "
-            f"{worst.get('databaseId')} concluded {worst.get('conclusion')!r} at "
-            f"{worst.get('createdAt')}. The path has not stayed green; offer the "
-            "newest green run instead"
-        )
-
     sha = run.get("headSha")
     ref = str(run.get("url") or run.get("databaseId"))
     return f"{ref} (headSha {sha})" if sha else ref
@@ -3835,9 +3885,13 @@ def _watcher_run_receipt(
     run = _watcher_run_evidence(repo, from_run)
     failure = _watcher_run_evidence(repo, filing.failure_run_id)
     branch = _default_branch(repo)
+    # THE RUN ITSELF IS CHECKED BEFORE ANYTHING IS LISTED (review B, round 3):
+    # a malformed offered run is refused for its own defect, not for a listing
+    # built from its bad `createdAt` or foreign workflow id.
+    ref = verify_watcher_run_receipt(number, filing, failure, run, branch)
     later = _later_runs(repo, run.get("workflowDatabaseId"), branch,
-                        str(run.get("createdAt")))
-    ref = verify_watcher_run_receipt(number, filing, failure, run, branch, later)
+                        _parse_time(run.get("createdAt"), "the run's creation time"))
+    refuse_if_red_since(run, later, branch)
     # EVERY CLAUSE HERE IS A FACT THE CHECK ABOVE ESTABLISHED, and nothing else:
     # the workflow by id, the run's own title as GitHub renders it (inputs appear
     # there only if that workflow's `run-name:` interpolates them), its CREATION
@@ -3851,7 +3905,9 @@ def _watcher_run_receipt(
         f"issue records (run {filing.failure_run_id}, recorded "
         f"{filing.recorded_at.isoformat()}), with the "
         f"{_recovered(failure)} that failed there now green, and no completed "
-        f"run of the workflow on {branch} red since; the workflow was read from "
+        f"run of the workflow on {branch} created or finished after it (looking "
+        f"back {_window_hours()} h) that did not "
+        "succeed; the workflow was read from "
         "that failed run as recorded by the deploy-failure watcher, not from the title"
     )
     return ref, detail

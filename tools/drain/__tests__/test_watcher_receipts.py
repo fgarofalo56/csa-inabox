@@ -563,9 +563,12 @@ def test_the_watcher_login_folds_its_three_spellings_and_nothing_else(author, is
 # --------------------------------------------------------------------------
 
 def _verify(run=None, failure=None, filing=None, branch="main", later=None):
-    return tick.verify_watcher_run_receipt(
-        4390, filing or _filing(), failure or _failure(), run or _green(), branch,
-        later if later is not None else [])
+    """The two checks in the order `_watcher_run_receipt` runs them."""
+    run = run or _green()
+    ref = tick.verify_watcher_run_receipt(
+        4390, filing or _filing(), failure or _failure(), run, branch)
+    tick.refuse_if_red_since(run, later if later is not None else [], branch)
+    return ref
 
 
 def test_the_positive_is_accepted():
@@ -760,35 +763,58 @@ def test_a_bookkeeping_step_failure_still_needs_the_job_to_do_work():
         _verify(run=_green(jobs=[idle]), failure=fail)
 
 
-@pytest.mark.parametrize("conclusion", ["failure", "cancelled", "timed_out"])
+OFFERED = "2026-09-29T04:39:13Z"  # 36522575982's createdAt, the `_green()` default
+
+
+def _listed(run_id, conclusion, created, updated):
+    """A `gh run list --json databaseId,conclusion,createdAt,updatedAt,event`
+    row. `updated` is when a completed run last changed: its completion."""
+    return {"databaseId": run_id, "conclusion": conclusion, "createdAt": created,
+            "updatedAt": updated, "event": "workflow_run"}
+
+
+@pytest.mark.parametrize("conclusion", ["failure", "cancelled", "timed_out", "skipped"])
 def test_a_completed_run_red_since_the_offered_one_refuses(conclusion):
     """"Has run GREEN" means green and not red again (review A-2). A failure
-    whose notice was never posted is exactly this. `cancelled` counts: the
-    coordinator's rule is "did not succeed", and a refusal costs only offering
-    the newer green run.
+    whose notice was never posted is exactly this. `cancelled` and `skipped`
+    count (review A-3, disclosed in the comment): the rule is "did not
+    succeed", and a refusal costs only offering the newer green run.
 
     WHAT VALUE WOULD MAKE THIS FAIL: the red-since check deleted (arm WR29).
     """
-    later = [{"databaseId": 36609548942, "conclusion": conclusion,
-              "createdAt": "2026-09-29T18:05:20Z", "event": "workflow_run"}]
+    later = [_listed(36609548942, conclusion, "2026-09-29T18:05:20Z", "2026-09-29T18:51:10Z")]
     with pytest.raises(tick.ReceiptRefusedError, match="did not succeed"):
         _verify(later=later)
 
 
-def test_a_later_green_run_and_an_earlier_red_one_do_not_refuse():
-    """The mirror, and the time filter. #4390's live list after 36522575982
-    held a green run; an EARLIER red run returned by the query (the `>=` search
-    boundary is GitHub's, not this code's) must not count.
+def test_a_run_created_before_but_finished_red_after_the_offered_one_refuses():
+    """REVIEW B, ROUND 3: the round-2 check listed only runs CREATED after the
+    offered one, while the published text claimed nothing finished red after
+    it. `deploy-fiab-commercial` has no workflow-level concurrency group, so a
+    schedule run and a dispatch run overlap. This run began nine minutes BEFORE
+    the offered run and finished red thirty-one minutes AFTER it.
 
-    WHAT VALUE WOULD MAKE THIS FAIL: the client-side time filter removed (arm
-    WR30) refuses on the earlier red run; a check that refuses on ANY later run
-    refuses on the green one.
+    WHAT VALUE WOULD MAKE THIS FAIL: the finished-after clause dropped (arm
+    WR37) -- the run was created before the offered one, so a created-only
+    test does not see it.
+    """
+    later = [_listed(36522000000, "failure", "2026-09-29T04:30:00Z", "2026-09-29T05:10:00Z")]
+    with pytest.raises(tick.ReceiptRefusedError, match="created or finished"):
+        _verify(later=later)
+
+
+def test_a_later_green_run_and_an_earlier_red_one_do_not_refuse():
+    """The mirror. #4390's live list after 36522575982 held a green run; a red
+    run the WINDOW returns that both began and FINISHED before the offered run
+    was created must not count -- it is history, not "red since".
+
+    WHAT VALUE WOULD MAKE THIS FAIL: the created-or-finished filter removed
+    (arm WR30) refuses on the earlier red run; a check that refuses on ANY
+    listed run refuses on the green one.
     """
     later = [
-        {"databaseId": 36615042913, "conclusion": "success",
-         "createdAt": "2026-09-29T18:51:25Z", "event": "workflow_run"},
-        {"databaseId": 36500000000, "conclusion": "failure",
-         "createdAt": "2026-09-29T01:00:00Z", "event": "workflow_run"},
+        _listed(36615042913, "success", "2026-09-29T18:51:25Z", "2026-09-29T18:59:47Z"),
+        _listed(36500000000, "failure", "2026-09-29T01:00:00Z", "2026-09-29T01:30:00Z"),
     ]
     _verify(later=later)
 
@@ -807,30 +833,59 @@ def test_the_later_runs_read_fails_closed(monkeypatch):
     """WHAT VALUE WOULD MAKE THIS FAIL: a read error returning `[]` -- "could
     not look" read as "nothing red since" -- or the full-page guard deleted
     (arm WR31)."""
+    since = tick._parse_time(OFFERED, "t")
     monkeypatch.setattr(tick, "sh", _gh(None, {}, list_rc=1))
     with pytest.raises(tick.ReceiptRefusedError, match="502"):
-        tick._later_runs(REPO, DATAPLANE_ID, "main", "2026-09-29T04:39:13Z")
-    full = [{"databaseId": i, "conclusion": "success", "createdAt": "2026-09-29T05:00:00Z"}
+        tick._later_runs(REPO, DATAPLANE_ID, "main", since)
+    full = [_listed(i, "success", "2026-09-29T05:00:00Z", "2026-09-29T05:10:00Z")
             for i in range(tick._LATER_RUNS_LIMIT)]
     monkeypatch.setattr(tick, "sh", _gh(None, {}, later=full))
     with pytest.raises(tick.ReceiptRefusedError, match="may be incomplete"):
-        tick._later_runs(REPO, DATAPLANE_ID, "main", "2026-09-29T04:39:13Z")
+        tick._later_runs(REPO, DATAPLANE_ID, "main", since)
     # POSITIVE: one short of the page is read as complete.
     monkeypatch.setattr(tick, "sh", _gh(None, {}, later=full[:-1]))
-    assert len(tick._later_runs(REPO, DATAPLANE_ID, "main", "t")) == tick._LATER_RUNS_LIMIT - 1
+    assert len(tick._later_runs(REPO, DATAPLANE_ID, "main", since)) == tick._LATER_RUNS_LIMIT - 1
 
 
-def test_the_later_runs_query_names_the_workflow_branch_and_time(monkeypatch):
+def test_the_later_runs_query_names_the_workflow_branch_and_window(monkeypatch):
     """The query is the only thing binding "later" to THIS workflow on THIS
-    branch. WHAT VALUE WOULD MAKE THIS FAIL: dropping `--workflow`,
-    `--branch`, `--status completed` or `--created` from the argv."""
+    branch, and its `--created` bound reaches 72 h BEFORE the offered run so a
+    run that began earlier is in the list at all.
+
+    WHAT VALUE WOULD MAKE THIS FAIL: dropping `--workflow`, `--branch`,
+    `--status completed` or `--created` from the argv; bounding `--created` at
+    the offered run itself (arm WR38), which reads `>=2026-09-29T04:39:13Z`;
+    or dropping `updatedAt` from the fields, which leaves the finished-after
+    test with nothing to read and REFUSES on every listed run that did not
+    succeed, even one that finished long before.
+    """
     stub = _gh(None, {})
     monkeypatch.setattr(tick, "sh", stub)
-    tick._later_runs(REPO, DATAPLANE_ID, "main", "2026-09-29T04:39:13Z")
+    tick._later_runs(REPO, DATAPLANE_ID, "main", tick._parse_time(OFFERED, "t"))
     argv = stub.calls[-1]
     for flag, value in (("--workflow", str(DATAPLANE_ID)), ("--branch", "main"),
-                        ("--status", "completed"), ("--created", ">=2026-09-29T04:39:13Z")):
+                        ("--status", "completed"), ("--created", ">=2026-09-26T04:39:13Z")):
         assert argv[argv.index(flag) + 1] == value, (flag, argv)
+    assert "updatedAt" in argv[argv.index("--json") + 1].split(","), argv
+
+
+def test_a_malformed_offered_run_is_refused_for_its_own_defect_before_listing(
+        tmp_path, monkeypatch):
+    """REVIEW B NIT, ROUND 3: the run is checked BEFORE the red-since listing,
+    so a run of the wrong workflow is refused for that -- not for a listing
+    that failed because it was built from the wrong workflow id.
+
+    WHAT VALUE WOULD MAKE THIS FAIL: listing first (arm WR39) -- the list read
+    fails (rc=1 here) and the refusal names the listing.
+    """
+    led, _item = _ledger(tmp_path)
+    runs = {GREEN_RUN: _green(workflowDatabaseId=999999999), NEWEST_FAILURE: _failure()}
+    stub = _gh(_issue_4390(), runs, list_rc=1)
+    monkeypatch.setattr(tick, "sh", stub)
+    with pytest.raises(tick.ReceiptRefusedError, match="different workflow"):
+        tick.record_receipt_from_evidence(
+            led, POLICY, REPO, 4390, from_pr=None, from_run=GREEN_RUN)
+    assert not any(c[:3] == ["gh", "run", "list"] for c in stub.calls), stub.calls
 
 
 def test_a_watcher_login_post_without_the_notice_marker_is_not_a_record(monkeypatch):
@@ -871,8 +926,7 @@ def test_watcher_seam_refuses_when_the_path_went_red_again(tmp_path, monkeypatch
     the call site passing `[]` instead of the list it read."""
     led, item = _ledger(tmp_path)
     runs = {GREEN_RUN: _green(), NEWEST_FAILURE: _failure()}
-    later = [{"databaseId": 36609548942, "conclusion": "failure",
-              "createdAt": "2026-09-29T18:05:20Z", "event": "workflow_run"}]
+    later = [_listed(36609548942, "failure", "2026-09-29T18:05:20Z", "2026-09-29T18:51:10Z")]
     monkeypatch.setattr(tick, "sh", _gh(_issue_4390(), runs, later=later))
     with pytest.raises(tick.ReceiptRefusedError, match="did not succeed"):
         tick.record_receipt_from_evidence(
@@ -903,7 +957,15 @@ def test_the_watcher_comment_claims_only_what_the_route_checked():
     assert "every job and every step that failed" in text, text
     assert "the ONLY cloud binding is that the green run contains the same-named" in text, text
     assert "dispatch inputs" in text, text
-    assert "no completed run of that workflow on the default branch" in text, text
+    # Round 3 (review B): the red-since sentence claims only what the query and
+    # the filter establish -- created OR finished after, over a stated window --
+    # and the window's gap and the skipped-counts-as-red rule are disclosed.
+    assert "that was created or finished after it was created" in text, text
+    assert f"looking back {tick._window_hours()} hours" in text, text
+    assert f"A run created more than {tick._window_hours()} hours before it" in text, text
+    assert "A cancelled or skipped run counts as not succeeding" in text, text
+    assert "passes whenever every failed step also ran green in that mode" in text, text
+    assert "after which no completed run" not in text, text
     assert "the one that workflow deploys to" not in text, text
     assert "executed work steps" not in text, text
     assert "A failure the watcher did not record is not seen" not in text, text

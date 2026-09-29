@@ -568,14 +568,18 @@ unique). The offered run must be:
   in the same-named job (a `whatif-only` dry run that skipped the failed
   `Provision (idempotent)` step is refused), and each such job did work beyond
   GitHub's set-up, post and complete steps;
-- followed by no completed run of the workflow on the default branch that
-  concluded anything but success, `cancelled` included.
+- with no completed run of the workflow on the default branch, created OR
+  finished after the offered run was created, that concluded anything but
+  success. `cancelled` and `skipped` count as not succeeding, so offer the
+  newest green run. The listing reaches 72 hours back for runs that began
+  earlier and finished later; a run spanning more than that is not seen.
 
 Each of those refuses on its own, and the refusals are tested in
 `__tests__/test_watcher_receipts.py`. The run is bound to no sha, its dispatch
 inputs (`tag`, `skip_build`, `run_mode`) are not read because GitHub's run
-object does not carry them, and the only cloud binding is the failed job and
-step names; the public comment says all three.
+object does not carry them -- so a run given different inputs passes whenever
+every failed step also ran green in that mode (#4799) -- and the only cloud
+binding is the failed job and step names; the public comment says all three.
 
 `receipt_class` still has no production writer, so the `human-only` class is
 reachable only by hand — and `operator` is deliberately **absent** from

@@ -4550,12 +4550,11 @@ ARMS: list[tuple[str, str, str, str]] = [
         "    if False:",
     ),
     (
-        ("WR30 the red-since filter loses its TIME bound, so a red run from "
-         "BEFORE the offered one refuses a valid receipt"),
+        ("WR30 the red-since filter loses its TIME bound, so a red run that "
+         "began AND finished before the offered one refuses a valid receipt"),
         "tick.py",
-        ('        if _parse_time(other.get("createdAt"), "a later run\'s creation time") '
-         ">= created\n"),
-        "        if True\n",
+        "        if began >= created or ended >= created:",
+        "        if True:",
     ),
     (
         ("WR31 a FULL page of later runs is read as complete, so the red run on "
@@ -4592,8 +4591,8 @@ ARMS: list[tuple[str, str, str, str]] = [
         ("WR35 the call site stops passing the runs it READ into the verifier, "
          "so red-since is checked against nothing at the seam"),
         "tick.py",
-        "    ref = verify_watcher_run_receipt(number, filing, failure, run, branch, later)",
-        "    ref = verify_watcher_run_receipt(number, filing, failure, run, branch, [])",
+        "    refuse_if_red_since(run, later, branch)",
+        "    refuse_if_red_since(run, [], branch)",
     ),
     (
         ("WR36 a step SKIPPED in the recorded failure is counted as failed, so a "
@@ -4602,6 +4601,36 @@ ARMS: list[tuple[str, str, str, str]] = [
         "tick.py",
         '            if step.get("conclusion") not in ("success", "skipped")\n        ]',
         '            if step.get("conclusion") not in ("success",)\n        ]',
+    ),
+    # -- #4764 round 3: review B (the red-since claim was wider than the
+    # created-after query) and its ordering nit. Each run RED first.
+    (
+        ("WR37 the red-since filter reads only CREATION, so a run that began "
+         "before the offered one and FINISHED red after it is unseen - the "
+         "overlap `deploy-fiab-commercial` allows, having no concurrency group"),
+        "tick.py",
+        "        if began >= created or ended >= created:",
+        "        if began >= created:",
+    ),
+    (
+        ("WR38 the listing stops reaching BACK, so a run created before the "
+         "offered one is never listed and the finished-after test has nothing "
+         "to read"),
+        "tick.py",
+        "    lower = (since - _OVERLAP_WINDOW).strftime(",
+        "    lower = (since).strftime(",
+    ),
+    (
+        ("WR39 the listing runs BEFORE the offered run is checked, so a run of "
+         "the wrong workflow is refused for a failed listing instead of for "
+         "its own defect"),
+        "tick.py",
+        ("    ref = verify_watcher_run_receipt(number, filing, failure, run, branch)\n"
+         "    later = _later_runs(repo, run.get(\"workflowDatabaseId\"), branch,\n"
+         "                        _parse_time(run.get(\"createdAt\"), \"the run's creation time\"))\n"),
+        ("    later = _later_runs(repo, run.get(\"workflowDatabaseId\"), branch,\n"
+         "                        _parse_time(run.get(\"createdAt\"), \"the run's creation time\"))\n"
+         "    ref = verify_watcher_run_receipt(number, filing, failure, run, branch)\n"),
     ),
     # -- #4728: the dependency-bump review exemption ------------------------
     #
