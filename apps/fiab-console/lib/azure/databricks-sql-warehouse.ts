@@ -34,11 +34,15 @@
  *
  * FAILURES CLASSIFY TRUTHFULLY (deploy-integrity.md R6/R7). Every failed call
  * becomes a `WarehouseResolutionError` whose `kind` is derived from what the
- * API returned: permission (naming the entitlement — measured via SCIM `Me`
- * when the create is refused), network, quota, or unknown. "Not configured" is
+ * API returned: authentication (a 401 — no entitlement named), permission (a
+ * 403 — the entitlement is named only after SCIM `Me` shows the identity is
+ * not an admin and does not already hold it; otherwise 'unknown'), network,
+ * quota, or unknown. "Not configured" is
  * reserved for the one case where no call was made: no workspace is bound
  * (LOOM_DATABRICKS_HOSTNAME unset). Transient transport / 5xx failures retry
- * with bounded backoff and fail closed.
+ * with bounded backoff and fail closed; a create is retried only after a
+ * re-list shows `loom-default` still absent, so a POST whose response was lost
+ * is adopted, not duplicated.
  *
  * The outcome is PUBLISHED to `runtime-produced-env` so the synchronous gate
  * evaluation (`svc-databricks-sql` on /admin/readiness) reads green on a
@@ -137,7 +141,7 @@ export interface WarehouseResolution {
   detail: string;
 }
 
-export type WarehouseFailureKind = 'not-configured' | 'permission' | 'network' | 'quota' | 'unknown';
+export type WarehouseFailureKind = 'not-configured' | 'authentication' | 'permission' | 'network' | 'quota' | 'unknown';
 export type WarehouseStep = 'config' | 'get' | 'list' | 'create';
 
 /**
@@ -271,19 +275,46 @@ export function classifyWarehouseFailure(step: WarehouseStep, err: unknown): War
   const host = hostKey() || '(workspace)';
   const text = `${e.body || ''} ${e.message || ''}`;
 
-  if (isTransport(e) || (status === 403 && NETWORK_REFUSAL.test(text))) {
+  const networkRemediation =
+    `The Console reaches ${host} over the workspace's private endpoint (privatelink.azuredatabricks.net). ` +
+    'Verify the databricks_ui_api private endpoint is Approved, the private DNS zone resolves the workspace host to it from the Container Apps environment VNet, ' +
+    'and — if the workspace has an IP access list enabled — that it does not exclude the Console egress. Then re-run the readiness check.';
+  if (isTransport(e)) {
+    // No HTTP answer at all — "could not reach" is exactly what was measured.
     return new WarehouseResolutionError({
       kind: 'network',
       step,
       status,
       message: `The Console could not reach the Databricks workspace ${host} to ${step} SQL warehouses: ${said}`,
-      remediation:
-        `The Console reaches ${host} over the workspace's private endpoint (privatelink.azuredatabricks.net). ` +
-        'Verify the databricks_ui_api private endpoint is Approved, the private DNS zone resolves the workspace host to it from the Container Apps environment VNet, ' +
-        'and — if the workspace has an IP access list enabled — that it does not exclude the Console egress. Then re-run the readiness check.',
+      remediation: networkRemediation,
     });
   }
-  if (status === 401 || status === 403 || code === 'PERMISSION_DENIED' || code === 'UNAUTHENTICATED') {
+  if (status === 403 && NETWORK_REFUSAL.test(text)) {
+    // The workspace ANSWERED — it was reached, and refused the request at its network layer.
+    return new WarehouseResolutionError({
+      kind: 'network',
+      step,
+      status,
+      message: `The Console's ${step} call on the Databricks workspace ${host} was refused at the network layer (HTTP 403): ${said}`,
+      remediation: networkRemediation,
+    });
+  }
+  if (status === 401 || code === 'UNAUTHENTICATED') {
+    // 401 = the token was not accepted. That is authentication, not a missing
+    // entitlement, so no entitlement is named and no grant is offered.
+    return new WarehouseResolutionError({
+      kind: 'authentication',
+      step,
+      status,
+      message: `Databricks did not accept the Console identity's token for the ${step} call on ${host} (HTTP ${status ?? '?'}${code ? ` ${code}` : ''}): ${said}`,
+      remediation:
+        'This is an authentication failure, not a missing entitlement — granting an entitlement will not fix it. ' +
+        `Verify the Console managed identity has been added to the workspace ${host} as a service principal (Admin settings → Identity and access → Service principals), ` +
+        'that its token is issued for the Azure Databricks resource (audience 2ff814a6-3304-4ab8-85cb-cd0e6f879c1d), ' +
+        'and that LOOM_DATABRICKS_HOSTNAME names the workspace the identity was added to.',
+    });
+  }
+  if (status === 403 || code === 'PERMISSION_DENIED') {
     const entitlement = step === 'create' ? CREATE_ENTITLEMENT : SQL_ACCESS_ENTITLEMENT;
     const need = step === 'create'
       ? `Creating a SQL warehouse requires workspace admin or the "${CREATE_ENTITLEMENT}" (Allow unrestricted cluster creation) entitlement.`
@@ -295,7 +326,7 @@ export function classifyWarehouseFailure(step: WarehouseStep, err: unknown): War
       entitlement,
       message: `Databricks refused the Console identity's ${step} call on ${host} (HTTP ${status ?? '?'}${code ? ` ${code}` : ''}): ${said}`,
       remediation:
-        `${need} A workspace admin grants it to the Console managed identity ` +
+        `${need} If the identity lacks it, a workspace admin grants it to the Console managed identity ` +
         `(SCIM PATCH /api/2.0/preview/scim/v2/ServicePrincipals/<id> add entitlements "${entitlement}", or Admin settings → Identity and access → Service principals). ` +
         'The Console cannot grant this to itself.',
     });
@@ -436,15 +467,45 @@ function isCreateConflict(e: unknown): boolean {
   return x.status === 409 || errorCode(x) === 'RESOURCE_ALREADY_EXISTS' || /already exists/i.test(`${x.body || ''} ${x.message || ''}`);
 }
 
-async function createLoomDefault(): Promise<{ id: string; classic: boolean }> {
+interface CreateOutcome {
+  id: string;
+  classic: boolean;
+  /** True when a retry's pre-POST re-list found `loom-default` and adopted it instead of POSTing again. */
+  adopted: boolean;
+}
+
+/**
+ * POST one create spec with bounded retry. A transient failure (transport /
+ * 5xx / 429) does NOT prove the POST did not land — the response may have been
+ * lost after the workspace created the warehouse. So before EVERY retry we
+ * re-list, and if `loom-default` now exists we adopt it rather than POST a
+ * second one. Rethrows the RAW error (the caller classifies); a failed re-list
+ * throws its own classified error.
+ */
+async function createWithRelist(spec: WarehouseCreateSpec, classic: boolean): Promise<CreateOutcome> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= RETRY_BACKOFF_MS.length; attempt++) {
+    try {
+      const r = await createWarehouse(spec);
+      return { id: String(r?.id || ''), classic, adopted: false };
+    } catch (e) {
+      lastErr = e;
+      if (!isRetryable(e) || attempt === RETRY_BACKOFF_MS.length) break;
+      await sleep(RETRY_BACKOFF_MS[attempt]);
+      const again = pickLoomDefault(await listOrThrow());
+      if (again.pick) return { id: again.pick.id, classic, adopted: true };
+    }
+  }
+  throw lastErr;
+}
+
+async function createLoomDefault(): Promise<CreateOutcome> {
   try {
-    const r = await withRetryRaw(() => createWarehouse({ ...LOOM_DEFAULT_WAREHOUSE_SPEC }));
-    return { id: String(r?.id || ''), classic: false };
+    return await createWithRelist({ ...LOOM_DEFAULT_WAREHOUSE_SPEC }, false);
   } catch (e) {
-    if (!isServerlessUnsupported(e)) throw e;
+    if (e instanceof WarehouseResolutionError || !isServerlessUnsupported(e)) throw e;
     // The bootstrap's own fallback: a small classic PRO warehouse, same size/auto-stop.
-    const r = await withRetryRaw(() => createWarehouse({ ...LOOM_DEFAULT_WAREHOUSE_SPEC, enable_serverless_compute: false }));
-    return { id: String(r?.id || ''), classic: true };
+    return createWithRelist({ ...LOOM_DEFAULT_WAREHOUSE_SPEC, enable_serverless_compute: false }, true);
   }
 }
 
@@ -464,33 +525,54 @@ async function withRetryRaw<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 /**
- * When the create is REFUSED for permission, read the identity's own
- * entitlements (SCIM `Me`) so the failure states what is actually absent —
- * a measurement, not a guess. A failed read is reported as such.
+ * When a call is REFUSED for permission, read the identity's own entitlements
+ * (SCIM `Me`) so the failure states what was actually measured, not a guess.
+ * If the identity is a workspace admin, or already holds the named entitlement
+ * directly, a missing entitlement does NOT explain the refusal: the failure is
+ * re-classified 'unknown', names no entitlement, and offers no grant (R7). A
+ * failed read is reported as such and the permission classification stands.
  */
 async function measuredPermissionError(base: WarehouseResolutionError): Promise<WarehouseResolutionError> {
-  let measured: string;
+  const ent = base.entitlement || (base.step === 'create' ? CREATE_ENTITLEMENT : SQL_ACCESS_ENTITLEMENT);
+  let me: DbxCurrentIdentity;
   try {
-    const me = await getCurrentIdentity();
-    const admin = me.groups.some((g) => g.toLowerCase() === 'admins');
-    const has = me.entitlements.includes(CREATE_ENTITLEMENT);
-    measured =
-      ` Measured via SCIM Me: identity ${me.displayName || me.applicationId || me.id || '(unnamed)'} has direct entitlements ` +
-      `[${me.entitlements.join(', ') || 'none'}], groups [${me.groups.join(', ') || 'none'}] — ` +
-      (admin
-        ? 'it IS in the admins group, so the refusal is not explained by entitlements.'
-        : has
-          ? `"${CREATE_ENTITLEMENT}" is present directly, so the refusal is not explained by that entitlement.`
-          : `"${CREATE_ENTITLEMENT}" is ABSENT from its direct entitlements and it is not in the admins group (group-inherited entitlements are not visible on this object).`);
+    me = await getCurrentIdentity();
   } catch (e: unknown) {
-    measured = ` Could not read the identity's entitlements to confirm (SCIM Me failed: ${quoteOf((e || {}) as ErrShape)}).`;
+    return new WarehouseResolutionError({
+      kind: base.kind,
+      step: base.step,
+      status: base.status,
+      entitlement: base.entitlement,
+      message: base.message + ` Could not read the identity's entitlements to confirm (SCIM Me failed: ${quoteOf((e || {}) as ErrShape)}).`,
+      remediation: base.remediation,
+    });
+  }
+  const admin = me.groups.some((g) => g.toLowerCase() === 'admins');
+  const has = me.entitlements.includes(ent);
+  const who = me.displayName || me.applicationId || me.id || '(unnamed)';
+  const measured =
+    ` Measured via SCIM Me: identity ${who} has direct entitlements ` +
+    `[${me.entitlements.join(', ') || 'none'}], groups [${me.groups.join(', ') || 'none'}] — `;
+  if (admin || has) {
+    const why = admin ? 'it IS in the admins group' : `"${ent}" is present directly`;
+    return new WarehouseResolutionError({
+      kind: 'unknown',
+      step: base.step,
+      status: base.status,
+      message: base.message + measured + `${why}, so the refusal is not explained by a missing entitlement. Its cause is not established.`,
+      remediation:
+        `Databricks answered the ${base.step} call with HTTP ${base.status ?? '?'}, but ${why}, so granting an entitlement will not fix it. ` +
+        'The cause is not established from the response: inspect the quoted Databricks error, the warehouse\'s own permissions (CAN_USE / CAN_MANAGE), ' +
+        'the workspace IP access list, and any workspace or account policy restricting SQL warehouses.',
+    });
   }
   return new WarehouseResolutionError({
     kind: base.kind,
     step: base.step,
     status: base.status,
     entitlement: base.entitlement,
-    message: base.message + measured,
+    message: base.message + measured +
+      `"${ent}" is ABSENT from its direct entitlements and it is not in the admins group (group-inherited entitlements are not visible on this object).`,
     remediation: base.remediation,
   });
 }
@@ -538,16 +620,18 @@ async function resolveUncached(host: string): Promise<WarehouseResolution> {
   // (d) create, then converge.
   let createdId = '';
   let classic = false;
+  let adopted = false;
+  let conflicted = false;
   try {
     const c = await createLoomDefault();
-    createdId = c.id;
+    createdId = c.adopted ? '' : c.id;
     classic = c.classic;
+    adopted = c.adopted;
   } catch (e) {
-    if (!isCreateConflict(e)) {
-      const base = classifyWarehouseFailure('create', e);
-      throw base.kind === 'permission' ? await measuredPermissionError(base) : base;
-    }
+    if (e instanceof WarehouseResolutionError) throw e; // a re-list between retries failed — already classified
+    if (!isCreateConflict(e)) throw classifyWarehouseFailure('create', e);
     // Another replica created it between our list and our create — adopt below.
+    conflicted = true;
   }
   const after = pickLoomDefault(await listOrThrow());
   const chosen = after.pick?.id || createdId;
@@ -559,16 +643,27 @@ async function resolveUncached(host: string): Promise<WarehouseResolution> {
       remediation: `The cause is not established. Check the workspace's SQL warehouses list and the Console identity's CAN_USE permission on '${LOOM_DEFAULT_WAREHOUSE_NAME}'.`,
     });
   }
-  const persistErr = await persistBinding({ id: chosen, name: LOOM_DEFAULT_WAREHOUSE_NAME, hostname: host, source: 'created', boundAt: new Date().toISOString() });
-  const created = chosen === createdId;
+  const created = !!createdId && chosen === createdId;
+  const source: PersistedWarehouseBinding['source'] = created ? 'created' : 'listed';
+  const persistErr = await persistBinding({ id: chosen, name: LOOM_DEFAULT_WAREHOUSE_NAME, hostname: host, source, boundAt: new Date().toISOString() });
+  let how: string;
+  if (created) {
+    how = `Created the '${LOOM_DEFAULT_WAREHOUSE_NAME}' SQL warehouse (${chosen}; ${classic ? 'classic PRO — serverless was refused by this workspace' : 'serverless PRO'}, 2X-Small, auto-stop 10 min).`;
+  } else if (adopted) {
+    how = `A create attempt failed in transit; the re-list before retrying found '${LOOM_DEFAULT_WAREHOUSE_NAME}', so the Console bound it (${chosen}) without POSTing again. Whether this replica's POST or another's produced it is not established.`;
+  } else if (conflicted) {
+    how = `The create was refused because '${LOOM_DEFAULT_WAREHOUSE_NAME}' already exists; bound to the listed '${LOOM_DEFAULT_WAREHOUSE_NAME}' (${chosen}).`;
+  } else if (!createdId) {
+    how = `The create returned no id; bound to the listed '${LOOM_DEFAULT_WAREHOUSE_NAME}' (${chosen}).`;
+  } else {
+    how = `This replica's create returned ${createdId}; bound to the lowest-id '${LOOM_DEFAULT_WAREHOUSE_NAME}' (${chosen}) so every replica binds the same warehouse.`;
+  }
   return {
     id: chosen,
-    source: 'created',
+    source,
     name: LOOM_DEFAULT_WAREHOUSE_NAME,
     detail:
-      (created
-        ? `Created the '${LOOM_DEFAULT_WAREHOUSE_NAME}' SQL warehouse (${chosen}; ${classic ? 'classic PRO — serverless was refused by this workspace' : 'serverless PRO'}, 2X-Small, auto-stop 10 min).`
-        : `A concurrent create won; bound to '${LOOM_DEFAULT_WAREHOUSE_NAME}' (${chosen}).`) +
+      how +
       surplusNote(after.surplus) +
       (persistErr ? ` Binding NOT persisted (${persistErr}); the next process re-adopts it by name.` : ''),
   };
@@ -612,7 +707,10 @@ export async function resolveDatabricksSqlWarehouseId(): Promise<WarehouseResolu
       publishRuntimeValue(WAREHOUSE_ENV_VAR, { value: res.id, source: res.source, detail: res.detail });
       return res;
     } catch (e) {
-      const err = e instanceof WarehouseResolutionError ? e : classifyWarehouseFailure('list', e);
+      let err = e instanceof WarehouseResolutionError ? e : classifyWarehouseFailure('list', e);
+      // Every permission refusal (get / list / create) is checked against what
+      // SCIM Me says the identity holds before an entitlement is named.
+      if (err.kind === 'permission') err = await measuredPermissionError(err);
       s.cached = undefined;
       s.failure = { err, host, at: Date.now() };
       publishRuntimeFailure(WAREHOUSE_ENV_VAR, {
@@ -675,7 +773,7 @@ export function warehouseErrorBody(e: WarehouseResolutionError): {
   };
 }
 
-/** HTTP status for a resolution failure: 503 for config/network/quota, 403 permission, 502 unknown. */
+/** HTTP status for a resolution failure: 503 for config/authentication/network/quota, 403 permission, 502 unknown. */
 export function warehouseErrorStatus(e: WarehouseResolutionError): number {
   switch (e.kind) {
     case 'permission': return 403;

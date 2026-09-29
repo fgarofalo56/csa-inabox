@@ -14,7 +14,6 @@
  * Honest 503 with the missing env var when Databricks isn't wired.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { tenantSettingsContainer } from '@/lib/azure/cosmos-client';
 import type { DqRule } from '@/lib/azure/data-quality-client';
 import {
@@ -23,6 +22,8 @@ import {
   type MonitorProfileType,
 } from '@/lib/azure/dq-monitor-client';
 import { apiServerError } from '@/lib/api/respond';
+import { WarehouseResolutionError, warehouseErrorBody, warehouseErrorStatus } from '@/lib/azure/databricks-sql-warehouse';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -47,9 +48,19 @@ function gated() {
     : null;
 }
 
-export async function GET(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+/**
+ * The Delta-constraint actions resolve the SQL warehouse first. A classified
+ * resolution failure keeps its kind, remediation and entitlement (403
+ * permission / 503 network / 502 unknown) — never a generic 500.
+ */
+function failed(e: unknown) {
+  if (e instanceof WarehouseResolutionError) {
+    return NextResponse.json(warehouseErrorBody(e), { status: warehouseErrorStatus(e) });
+  }
+  return apiServerError(e);
+}
+
+export const GET = withSession(async (req: NextRequest, { session: s }) => {
   const blocked = gated(); if (blocked) return blocked;
 
   const table = (req.nextUrl.searchParams.get('table') || '').trim();
@@ -60,7 +71,10 @@ export async function GET(req: NextRequest) {
   const fullName = table.includes('.') ? table : [catalog, schema, table].filter(Boolean).join('.');
   try {
     const [constraints, monitor] = await Promise.all([
-      listDeltaConstraints(table, catalog, schema).catch((e) => ({ error: e?.message || String(e) }) as any),
+      // The constraints half resolves the warehouse; a classified failure is
+      // surfaced with its kind/remediation rather than flattened to a message.
+      listDeltaConstraints(table, catalog, schema).catch((e) =>
+        (e instanceof WarehouseResolutionError ? warehouseErrorBody(e) : { error: e?.message || String(e) }) as any),
       getMonitor(fullName).catch((e) => ({ error: e?.message || String(e) }) as any),
     ]);
     let refreshes: unknown[] = [];
@@ -69,13 +83,11 @@ export async function GET(req: NextRequest) {
     }
     return NextResponse.json({ ok: true, fullName, constraints, monitor, refreshes });
   } catch (e: any) {
-    return apiServerError(e);
+    return failed(e);
   }
-}
+});
 
-export async function POST(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session: s }) => {
   const blocked = gated(); if (blocked) return blocked;
 
   const body = await req.json().catch(() => ({}));
@@ -123,13 +135,11 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: false, error: `unknown action "${action}"` }, { status: 400 });
     }
   } catch (e: any) {
-    return apiServerError(e);
+    return failed(e);
   }
-}
+});
 
-export async function DELETE(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const DELETE = withSession(async (req: NextRequest) => {
   const blocked = gated(); if (blocked) return blocked;
   const table = (req.nextUrl.searchParams.get('table') || '').trim();
   const catalog = req.nextUrl.searchParams.get('catalog') || undefined;
@@ -140,6 +150,6 @@ export async function DELETE(req: NextRequest) {
     await deleteMonitor(fullName);
     return NextResponse.json({ ok: true });
   } catch (e: any) {
-    return apiServerError(e);
+    return failed(e);
   }
-}
+});

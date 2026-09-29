@@ -94,6 +94,7 @@ import {
   type MetaPerm,
 } from '@/lib/azure/rls-compiler';
 import { withSession } from '@/lib/api/route-toolkit';
+import { isGovCloud } from '@/lib/azure/cloud-boundary';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -119,7 +120,8 @@ type RlsBackendKind = 'synapse' | 'databricks' | 'xmla' | 'none';
  * Resolve the RLS/OLS backend. `LOOM_SEMANTIC_RLS_BACKEND` ∈
  * auto|synapse|databricks|xmla (default `auto`):
  *   auto → synapse  if LOOM_SYNAPSE_DEDICATED_POOL (+ LOOM_SYNAPSE_WORKSPACE)
- *        → databricks if LOOM_DATABRICKS_SQL_WAREHOUSE_ID or a bound workspace (#3744)
+ *        → databricks if LOOM_DATABRICKS_SQL_WAREHOUSE_ID or a bound workspace (#3744),
+ *                     and NOT in Azure Government (no Unity Catalog there)
  *        → xmla      if an AAS / Power BI XMLA engine is configured (opt-in)
  *        → none      (honest Azure-native gate)
  * The DEFAULT path NEVER resolves to the AAS/Fabric gate — only when there is no
@@ -138,8 +140,11 @@ function resolveRlsBackend(): RlsBackendKind {
   if (pref === 'databricks') return hasDbx ? 'databricks' : 'none';
   if (pref === 'xmla') return hasXmla ? 'xmla' : 'none';
   // auto — Azure-native SQL endpoints win; XMLA is the last-resort opt-in.
+  // The Databricks RLS deploy is a Unity Catalog ROW FILTER, and Unity Catalog
+  // is not available in Azure Government — so `auto` never infers Databricks
+  // there (an explicit LOOM_SEMANTIC_RLS_BACKEND=databricks is still honoured).
   if (hasSynapse) return 'synapse';
-  if (hasDbx) return 'databricks';
+  if (hasDbx && !isGovCloud()) return 'databricks';
   if (hasXmla) return 'xmla';
   return 'none';
 }

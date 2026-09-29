@@ -16,7 +16,10 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 const h = vi.hoisted(() => {
-  const cosmos: { doc: any; etag: number } = { doc: undefined, etag: 0 };
+  // writes = successful binding writes; replaceCalls = every replace attempt;
+  // failNextReplace = the next replace loses an etag race (412) once.
+  const cosmos: { doc: any; etag: number; writes: number; replaceCalls: number; failNextReplace: boolean } =
+    { doc: undefined, etag: 0, writes: 0, replaceCalls: 0, failNextReplace: false };
   const container = {
     item: (_id: string, _pk: string) => ({
       read: async () => {
@@ -28,12 +31,19 @@ const h = vi.hoisted(() => {
         return { resource: { ...cosmos.doc } };
       },
       replace: async (doc: any, opts: any) => {
+        cosmos.replaceCalls++;
+        if (cosmos.failNextReplace) {
+          // A concurrent admin write landed between our read and our replace.
+          cosmos.failNextReplace = false;
+          cosmos.doc = { ...cosmos.doc, _etag: String(++cosmos.etag) };
+        }
         if (opts?.accessCondition?.condition !== cosmos.doc?._etag) {
           const e: any = new Error('precondition failed');
           e.code = 412;
           throw e;
         }
         cosmos.doc = { ...doc, _etag: String(++cosmos.etag) };
+        cosmos.writes++;
         return { resource: cosmos.doc };
       },
     }),
@@ -45,6 +55,7 @@ const h = vi.hoisted(() => {
           throw e;
         }
         cosmos.doc = { ...doc, _etag: String(++cosmos.etag) };
+        cosmos.writes++;
         return { resource: cosmos.doc };
       },
     },
@@ -111,6 +122,9 @@ beforeEach(() => {
   clearRuntimeProduced(WAREHOUSE_ENV_VAR);
   h.cosmos.doc = undefined;
   h.cosmos.etag = 0;
+  h.cosmos.writes = 0;
+  h.cosmos.replaceCalls = 0;
+  h.cosmos.failNextReplace = false;
   for (const f of Object.values(h.dbx)) f.mockReset();
   h.dbx.listWarehouses.mockResolvedValue([]);
   vi.stubEnv(WAREHOUSE_ENV_VAR, '');
@@ -264,6 +278,52 @@ describe('concurrency', () => {
     // Breaks if "the id I created" wins over the deterministic pick: 'wh-zzz'.
     expect(r.id).toBe('wh-aaa');
     expect(r.detail).toMatch(/wh-zzz/);
+    // M-B: the PERSISTED id is the converged one. Breaks if persistBinding is
+    // handed createdId ('wh-zzz') while the returned id is 'wh-aaa' — the next
+    // process would then bind a different warehouse than this one did.
+    expect(h.cosmos.doc.databricksSqlWarehouse.id).toBe('wh-aaa');
+    // Nit #8: never claims a "concurrent create won" — it names what it measured.
+    expect(r.detail).toMatch(/This replica's create returned wh-zzz; bound to the lowest-id 'loom-default' \(wh-aaa\)/);
+  });
+
+  it('a create whose response carries NO id binds the listed warehouse and says exactly that', async () => {
+    h.dbx.listWarehouses.mockResolvedValueOnce([]).mockResolvedValue([{ id: 'wh-listed', name: LOOM_DEFAULT_WAREHOUSE_NAME, state: 'STARTING' }]);
+    h.dbx.createWarehouse.mockResolvedValue({});
+    const r = await resolveDatabricksSqlWarehouseId();
+    expect(r.id).toBe('wh-listed');
+    // Breaks if the old "A concurrent create won" text comes back: no concurrency was measured.
+    expect(r.detail).toMatch(/^The create returned no id; bound to the listed 'loom-default' \(wh-listed\)\./);
+    expect(r.detail).not.toMatch(/concurrent create won/);
+  });
+
+  it('create retry: a transport failure is followed by a RE-LIST that adopts loom-default — exactly ONE POST', async () => {
+    // Breaking input: the first POST dies in transit (its response lost), and
+    // the re-list shows the warehouse it created. A blind retry POSTs a second
+    // time (createWarehouse called 2x, a duplicate warehouse).
+    const t: any = new TypeError('fetch failed');
+    t.cause = { code: 'ECONNRESET' };
+    h.dbx.listWarehouses
+      .mockResolvedValueOnce([]) // (c) nothing yet
+      .mockResolvedValue([{ id: 'wh-landed', name: LOOM_DEFAULT_WAREHOUSE_NAME, state: 'STARTING' }]);
+    h.dbx.createWarehouse.mockRejectedValueOnce(t).mockResolvedValue({ id: 'wh-second-post' });
+    const r = await resolveDatabricksSqlWarehouseId();
+    expect(h.dbx.createWarehouse).toHaveBeenCalledTimes(1);
+    expect(r.id).toBe('wh-landed');
+    expect(h.cosmos.doc.databricksSqlWarehouse).toMatchObject({ id: 'wh-landed', source: 'listed' });
+    expect(r.detail).toMatch(/without POSTing again/);
+  });
+
+  it('create retry: a re-list that still shows NO loom-default does POST again (the retry is not removed)', async () => {
+    const t: any = new TypeError('fetch failed');
+    t.cause = { code: 'ECONNRESET' };
+    let posted = 0;
+    h.dbx.listWarehouses.mockImplementation(async () =>
+      posted >= 2 ? [{ id: 'wh-retry', name: LOOM_DEFAULT_WAREHOUSE_NAME, state: 'STARTING' }] : []);
+    h.dbx.createWarehouse.mockImplementation(async () => { posted++; if (posted === 1) throw t; return { id: 'wh-retry' }; });
+    const r = await resolveDatabricksSqlWarehouseId();
+    // Breaks if the retry loop is dropped (1 POST, then a network failure).
+    expect(h.dbx.createWarehouse).toHaveBeenCalledTimes(2);
+    expect(r).toMatchObject({ id: 'wh-retry', source: 'created' });
   });
 });
 
@@ -282,7 +342,10 @@ describe('failure classification (R6/R7)', () => {
     const err = await resolveDatabricksSqlWarehouseId().catch((e) => e);
     // Breaks if the 403-status branch is checked before the body: it would read 'permission'.
     expect(err.kind).toBe('network');
-    expect(err.message).toMatch(/could not reach/);
+    // The workspace ANSWERED, so it was reached: breaks if this reuses the
+    // transport wording ("could not reach"), which claims no answer came back.
+    expect(err.message).toMatch(/was refused at the network layer \(HTTP 403\)/);
+    expect(err.message).not.toMatch(/could not reach/);
     expect(err.message).toMatch(/Unauthorized network access/);
     expect(err.message).not.toMatch(/not configured/i);
   });
@@ -295,9 +358,60 @@ describe('failure classification (R6/R7)', () => {
     h.dbx.listWarehouses.mockRejectedValue(t);
     const err = await resolveDatabricksSqlWarehouseId().catch((e) => e);
     expect(err.kind).toBe('network');
+    // No HTTP answer: "could not reach" is the measured fact. Breaks if the
+    // transport branch borrows the 403 "refused at the network layer" text.
+    expect(err.message).toMatch(/could not reach the Databricks workspace/);
+    expect(err.message).not.toMatch(/refused at the network layer/);
     // Breaks if retry is removed (1 call) or unbounded (the loop would not stop at 3).
     expect(h.dbx.listWarehouses).toHaveBeenCalledTimes(3);
     expect(sleeps).toEqual([500, 1500]);
+  });
+
+  it('M-A: a list that FAILS (500, retries exhausted) never falls through to a create', async () => {
+    h.dbx.listWarehouses.mockRejectedValue(httpErr('listWarehouses', 500, '{"error_code":"INTERNAL_ERROR","message":"boom"}'));
+    const err = await resolveDatabricksSqlWarehouseId().catch((e) => e);
+    // Breaks if a list failure is swallowed to [] — (d) would then POST a
+    // warehouse into a workspace whose contents were never read.
+    expect(h.dbx.createWarehouse).not.toHaveBeenCalled();
+    expect(err).toBeInstanceOf(WarehouseResolutionError);
+    expect(err).toMatchObject({ kind: 'unknown', step: 'list', status: 500 });
+    expect(h.dbx.listWarehouses).toHaveBeenCalledTimes(3);
+  });
+
+  it('M-E: inside the 30 s failure hold a repeat call is served the SAME error with no new workspace call', async () => {
+    h.dbx.listWarehouses.mockRejectedValue(httpErr('listWarehouses', 403, 'Unauthorized network access to workspace'));
+    const first = await resolveDatabricksSqlWarehouseId().catch((e) => e);
+    const second = await resolveDatabricksSqlWarehouseId().catch((e) => e);
+    // Breaks if the hold is removed: a render loop would re-list every call (2 here).
+    expect(h.dbx.listWarehouses).toHaveBeenCalledTimes(1);
+    expect(second).toBe(first);
+    expect(second.kind).toBe('network');
+  });
+
+  it('M-F: a REFUSED create writes NOTHING to the platform doc (no placeholder binding)', async () => {
+    h.dbx.createWarehouse.mockRejectedValue(httpErr('createWarehouse', 403, '{"error_code":"PERMISSION_DENIED","message":"not allowed"}'));
+    meReturns({ displayName: 'loom-console-uami', entitlements: [{ value: 'workspace-access' }], groups: [{ display: 'users' }] });
+    const err = await resolveDatabricksSqlWarehouseId().catch((e) => e);
+    expect(err.kind).toBe('permission');
+    // Breaks if a binding (e.g. id 'pending') is persisted on entering (d)
+    // before the create is verified: writes would be 1 and the doc defined.
+    expect(h.cosmos.writes).toBe(0);
+    expect(h.cosmos.doc).toBeUndefined();
+  });
+
+  it('M-C: a binding write that loses an etag race (412) is retried and lands', async () => {
+    // An existing platform doc forces the IfMatch replace path.
+    h.cosmos.doc = { id: '__platform__', tenantId: '__platform__', biBackend: 'powerbi', _etag: String(++h.cosmos.etag) };
+    h.cosmos.failNextReplace = true;
+    h.dbx.listWarehouses.mockResolvedValue([{ id: 'wh-race', name: LOOM_DEFAULT_WAREHOUSE_NAME, state: 'RUNNING' }]);
+    const r = await resolveDatabricksSqlWarehouseId();
+    // Breaks if a 412 is not retried: one replace call, no write, and the
+    // detail would report the binding NOT persisted.
+    expect(h.cosmos.replaceCalls).toBe(2);
+    expect(h.cosmos.writes).toBe(1);
+    expect(h.cosmos.doc.databricksSqlWarehouse.id).toBe('wh-race');
+    expect(h.cosmos.doc.biBackend).toBe('powerbi');
+    expect(r.detail).not.toMatch(/NOT persisted/);
   });
 
   it('a REFUSED create → permission, naming allow-cluster-create and what SCIM Me measured', async () => {
@@ -348,10 +462,56 @@ describe('failure classification (R6/R7)', () => {
     expect(r.detail).toMatch(/classic PRO/);
   });
 
-  it('classifyWarehouseFailure: a bare 401 on list is permission naming databricks-sql-access', () => {
+  it('classifyWarehouseFailure: a bare 401 is AUTHENTICATION and names no entitlement', () => {
     const e = classifyWarehouseFailure('list', httpErr('listWarehouses', 401, 'unauthenticated'));
-    expect(e.kind).toBe('permission');
-    expect(e.entitlement).toBe('databricks-sql-access');
+    // Breaks if 401 folds back into the 403 permission branch: kind 'permission'
+    // and entitlement 'databricks-sql-access' — a grant that cannot fix a rejected token.
+    expect(e.kind).toBe('authentication');
+    expect(e.entitlement).toBeUndefined();
+    expect(`${e.message} ${e.remediation}`).not.toMatch(/databricks-sql-access|allow-cluster-create/);
+    expect(e.remediation).toMatch(/not a missing entitlement/);
+    expect(e.message).toMatch(/HTTP 401/);
+  });
+
+  it('a 401 on list reaches the gate as authentication — no SCIM read, no role-grant Fix-it', async () => {
+    h.dbx.listWarehouses.mockRejectedValue(httpErr('listWarehouses', 401, '{"error_code":"UNAUTHENTICATED","message":"token rejected"}'));
+    const err = await resolveDatabricksSqlWarehouseId().catch((e) => e);
+    expect(err.kind).toBe('authentication');
+    expect(err.entitlement).toBeUndefined();
+    // Breaks if authentication is routed through the permission measurement.
+    expect(h.dbx.dbxFetch).not.toHaveBeenCalled();
+    const g = getGate('svc-databricks-sql')!;
+    expect(g.fixit.kind).toBe('env-picker');
+  });
+
+  it('a refused create where SCIM Me shows the identity IS an admin → unknown, no entitlement, no grant', async () => {
+    h.dbx.createWarehouse.mockRejectedValue(httpErr('createWarehouse', 403, '{"error_code":"PERMISSION_DENIED","message":"not allowed"}'));
+    meReturns({ displayName: 'loom-console-uami', entitlements: [{ value: 'workspace-access' }], groups: [{ display: 'admins' }] });
+    const err = await resolveDatabricksSqlWarehouseId().catch((e) => e);
+    // Breaks if the admin measurement only annotates the message and keeps
+    // kind 'permission' + entitlement 'allow-cluster-create' (the round-1 shape).
+    expect(err.kind).toBe('unknown');
+    expect(err.entitlement).toBeUndefined();
+    expect(err.message).toMatch(/HTTP 403/);
+    expect(err.message).toMatch(/not allowed/);
+    expect(err.message).toMatch(/cause is not established/);
+    expect(err.remediation).toMatch(/granting an entitlement will not fix it/);
+    expect(err.remediation).not.toMatch(/allow-cluster-create/);
+    // G2 overlay: a non-permission kind keeps the declared env-picker.
+    const g = getGate('svc-databricks-sql')!;
+    expect(g.fixit.kind).not.toBe('role-grant');
+    expect(g.fixit.kind).toBe('env-picker');
+  });
+
+  it('a refused LIST where the identity already holds databricks-sql-access directly → unknown, no entitlement', async () => {
+    h.dbx.listWarehouses.mockRejectedValue(httpErr('listWarehouses', 403, '{"error_code":"PERMISSION_DENIED","message":"denied"}'));
+    meReturns({ entitlements: [{ value: 'databricks-sql-access' }], groups: [{ display: 'users' }] });
+    const err = await resolveDatabricksSqlWarehouseId().catch((e) => e);
+    // Breaks if the SCIM measurement runs only for the create step (list keeps
+    // 'permission' naming databricks-sql-access), or checks the wrong entitlement.
+    expect(err.kind).toBe('unknown');
+    expect(err.entitlement).toBeUndefined();
+    expect(err.message).toMatch(/"databricks-sql-access" is present directly/);
   });
 });
 

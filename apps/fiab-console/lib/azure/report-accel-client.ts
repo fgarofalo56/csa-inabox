@@ -9,9 +9,8 @@
  * ── The three-tier preference (what the route asks for) ─────────────────────
  *   1. CACHE      — `query-result-cache`. A repeat of the same logical query is
  *                   an in-process (or Cosmos) read. Always on, no infra.
- *   2. ACCEL      — this client. When a Databricks workspace is bound
- *                   (`LOOM_DATABRICKS_HOSTNAME`; the SQL warehouse is the env
- *                   pin or the Console-produced `loom-default`, #3744)
+ *   2. ACCEL      — this client. When a Databricks SQL warehouse is configured
+ *                   (`LOOM_DATABRICKS_HOSTNAME` + `LOOM_DATABRICKS_SQL_WAREHOUSE_ID`)
  *                   AND the visual's source resolves to a Delta table, the
  *                   aggregation runs on the Photon-accelerated SQL warehouse
  *                   reading the SAME ADLS Delta files IN-PLACE
@@ -56,7 +55,6 @@ import type {
 } from '@/lib/azure/wells-to-sql';
 import {
   runWarehouseStatement,
-  warehouseConfigGate,
   databricksConfigGate,
   type DbxQueryParam,
 } from '@/lib/azure/databricks-client';
@@ -71,23 +69,25 @@ import {
 // ── Config / gate ────────────────────────────────────────────────────────────
 
 /**
- * True when the Databricks SQL (Photon) accel path is available: a workspace is
- * bound (the SQL warehouse is then produced by the Console — env pin, else the
- * adopted / ensure-created `loom-default`, #3744). A warehouse that cannot be
- * produced surfaces at query time as a `ReportAccelError`, which the
- * orchestrator treats as an accel miss and falls through to Serverless.
+ * True when a Databricks SQL warehouse (Photon) is configured for the accel path.
+ *
+ * Opt-in: BOTH the workspace AND an explicit warehouse pin are required. The pin
+ * is read directly rather than via `warehouseConfigGate()`, which (#3744) now
+ * passes on a bound workspace alone because the Console can produce
+ * `loom-default` — routing report visuals onto a Console-created warehouse is a
+ * cost + behaviour change this path does not opt into by default (PR #4776).
  */
 export function reportAccelConfigured(): boolean {
-  return !databricksConfigGate() && !warehouseConfigGate();
+  return !databricksConfigGate() && !!(process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID || '').trim();
 }
 
-/** Honest gate copy naming the exact env var the Databricks-SQL accel needs. */
+/** Honest gate copy naming the exact env vars the Databricks-SQL accel needs. */
 export function reportAccelGate(): string {
   return (
     'The Databricks SQL (Photon) query accelerator is not configured in this environment. ' +
-    'Set LOOM_DATABRICKS_HOSTNAME (the Databricks workspace URL) on the Loom Console; the Console then ' +
-    'creates or adopts the \'loom-default\' SQL warehouse itself (LOOM_DATABRICKS_SQL_WAREHOUSE_ID pins a specific one) ' +
-    'so aggregating report visuals run on the Photon warehouse over the lakehouse Delta in-place. Until then reports run on Synapse Serverless ' +
+    'Set LOOM_DATABRICKS_HOSTNAME (the Databricks workspace URL) and LOOM_DATABRICKS_SQL_WAREHOUSE_ID ' +
+    '(a SQL warehouse id) on the Loom Console so aggregating report visuals run on the Photon ' +
+    'warehouse over the lakehouse Delta in-place. Until then reports run on Synapse Serverless ' +
     '(cache + direct query) — no Fabric capacity required either way.'
   );
 }

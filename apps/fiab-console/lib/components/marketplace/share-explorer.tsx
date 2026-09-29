@@ -100,6 +100,7 @@ interface Gate { error: string; missing?: string; kind?: string; remediation?: s
 /** MessageBar title for the query route's gate, keyed on the classified cause. */
 function gateTitle(kind?: string): string {
   switch (kind) {
+    case 'authentication': return 'SQL warehouse: identity not authenticated';
     case 'permission': return 'SQL warehouse: permission refused';
     case 'network': return 'SQL warehouse: workspace unreachable';
     case 'quota': return 'SQL warehouse: quota / capacity';

@@ -312,6 +312,38 @@ describe('#3744 — a bound Databricks workspace is a native RLS endpoint (the w
     expect((await res.json()).backend).toBe('databricks');
   });
 
+  // PR #4776 — Unity Catalog (the ROW FILTER target) is not in Azure Government,
+  // so `auto` must not infer Databricks there. Breaks if `&& !isGovCloud()` is
+  // dropped from the auto branch: the same env as the test above yields
+  // 200 + backend 'databricks' instead of the 501 native gate.
+  it('Gov (LOOM_CLOUD=gcc-high): auto does NOT pick databricks from a bound workspace', async () => {
+    vi.stubEnv('LOOM_CLOUD', 'gcc-high');
+    seedItem();
+    const res = await GET(getReq(LOOM_ID), params(LOOM_ID));
+    const j = await res.json();
+    expect(j.backend).not.toBe('databricks');
+    expect(res.status).toBe(501);
+  });
+
+  it('Gov (LOOM_CLOUD=il5): auto does NOT pick databricks even with a warehouse pin', async () => {
+    vi.stubEnv('LOOM_CLOUD', 'il5');
+    vi.stubEnv('LOOM_DATABRICKS_SQL_WAREHOUSE_ID', 'wh-pinned');
+    seedItem();
+    const res = await GET(getReq(LOOM_ID), params(LOOM_ID));
+    expect((await res.json()).backend).not.toBe('databricks');
+    expect(res.status).toBe(501);
+  });
+
+  it('Gov control: an EXPLICIT LOOM_SEMANTIC_RLS_BACKEND=databricks is still honoured', async () => {
+    // Pins the guard's scope to `auto`: breaks if it is moved onto hasDbx itself.
+    vi.stubEnv('LOOM_CLOUD', 'gcc-high');
+    vi.stubEnv('LOOM_SEMANTIC_RLS_BACKEND', 'databricks');
+    seedItem();
+    const res = await GET(getReq(LOOM_ID), params(LOOM_ID));
+    expect(res.status).toBe(200);
+    expect((await res.json()).backend).toBe('databricks');
+  });
+
   it('PUT deploys on the RESOLVED warehouse id', async () => {
     seedItem();
     const { executeStatement } = await import('@/lib/azure/databricks-client');
