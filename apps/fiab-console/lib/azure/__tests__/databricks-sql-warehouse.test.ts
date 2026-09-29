@@ -53,7 +53,8 @@ const h = vi.hoisted(() => {
     listWarehouses: vi.fn(),
     getWarehouse: vi.fn(),
     createWarehouse: vi.fn(),
-    getCurrentIdentity: vi.fn(),
+    // The only raw call the resolver makes is SCIM `Me` (getCurrentIdentity lives in the resolver).
+    dbxFetch: vi.fn(),
   };
   return { cosmos, container, dbx };
 });
@@ -84,6 +85,14 @@ function httpErr(op: string, status: number, body: string): Error {
   e.status = status;
   e.body = body;
   return e;
+}
+
+/** SCIM `Me` answers with the raw SCIM shape (entitlements/groups are objects, as the API returns them). */
+function meReturns(body: object) {
+  h.dbx.dbxFetch.mockImplementation(async (p: string) => {
+    if (p !== '/api/2.0/preview/scim/v2/Me') throw new Error(`unexpected raw call ${p}`);
+    return new Response(JSON.stringify(body), { status: 200 });
+  });
 }
 
 function seedBinding(id: string, hostname = HOST) {
@@ -293,7 +302,7 @@ describe('failure classification (R6/R7)', () => {
 
   it('a REFUSED create → permission, naming allow-cluster-create and what SCIM Me measured', async () => {
     h.dbx.createWarehouse.mockRejectedValue(httpErr('createWarehouse', 403, '{"error_code":"PERMISSION_DENIED","message":"not allowed"}'));
-    h.dbx.getCurrentIdentity.mockResolvedValue({ displayName: 'loom-console-uami', entitlements: ['workspace-access', 'databricks-sql-access'], groups: ['users'] });
+    meReturns({ displayName: 'loom-console-uami', entitlements: [{ value: 'workspace-access' }, { value: 'databricks-sql-access' }], groups: [{ display: 'users' }] });
     const err = await resolveDatabricksSqlWarehouseId().catch((e) => e);
     expect(err.kind).toBe('permission');
     expect(err.entitlement).toBe('allow-cluster-create');
@@ -305,7 +314,7 @@ describe('failure classification (R6/R7)', () => {
 
   it('a refused create where SCIM Me ALSO fails says it could not confirm (no invented cause)', async () => {
     h.dbx.createWarehouse.mockRejectedValue(httpErr('createWarehouse', 403, '{"error_code":"PERMISSION_DENIED","message":"no"}'));
-    h.dbx.getCurrentIdentity.mockRejectedValue(httpErr('getCurrentIdentity', 403, 'nope'));
+    h.dbx.dbxFetch.mockResolvedValue(new Response('nope', { status: 403 }));
     const err = await resolveDatabricksSqlWarehouseId().catch((e) => e);
     expect(err.kind).toBe('permission');
     expect(err.message).toMatch(/Could not read the identity's entitlements to confirm/);
@@ -362,7 +371,7 @@ describe('the svc-databricks-sql gate reads the resolver', () => {
 
   it('after a classified failure the gate stays blocked and carries THAT cause, not "set LOOM_X"', async () => {
     h.dbx.createWarehouse.mockRejectedValue(httpErr('createWarehouse', 403, '{"error_code":"PERMISSION_DENIED","message":"no"}'));
-    h.dbx.getCurrentIdentity.mockResolvedValue({ entitlements: ['workspace-access'], groups: [] });
+    meReturns({ entitlements: [{ value: 'workspace-access' }], groups: [] });
     await resolveDatabricksSqlWarehouseId().catch(() => undefined);
     const st = gateStatus('svc-databricks-sql')!;
     expect(st.status).toBe('blocked');

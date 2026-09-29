@@ -46,16 +46,60 @@
  */
 import {
   databricksConfigGate,
+  dbxFetch,
   listWarehouses,
   getWarehouse,
   createWarehouse,
-  getCurrentIdentity,
   type Warehouse,
   type WarehouseCreateSpec,
 } from '@/lib/azure/databricks-client';
 import { envConfigContainer } from '@/lib/azure/cosmos-client';
 import { readPlatformSettings, type PlatformSettingsDoc } from '@/lib/admin/platform-settings';
 import { publishRuntimeValue, publishRuntimeFailure } from '@/lib/azure/runtime-produced-env';
+
+/** The calling identity as the workspace sees it (SCIM `Me`). */
+export interface DbxCurrentIdentity {
+  id?: string;
+  displayName?: string;
+  /** Service principals carry their Entra application (client) id here. */
+  applicationId?: string;
+  /** DIRECTLY-assigned entitlements only — group-inherited ones are not listed on this object. */
+  entitlements: string[];
+  /** Group display names the identity is a direct member of (e.g. 'admins'). */
+  groups: string[];
+}
+
+/**
+ * Read the caller's own workspace identity: GET /api/2.0/preview/scim/v2/Me.
+ * Used to MEASURE which entitlements the Console identity holds when the
+ * workspace refuses a warehouse create, so the failure names what is actually
+ * absent rather than guessing (deploy-integrity.md R7). Lives here, not in
+ * databricks-client.ts, because that module is at its file-size ceiling.
+ */
+export async function getCurrentIdentity(): Promise<DbxCurrentIdentity> {
+  const res = await dbxFetch('/api/2.0/preview/scim/v2/Me');
+  const text = await res.text();
+  if (!res.ok) {
+    const err = new Error(`getCurrentIdentity failed ${res.status}: ${text}`) as Error & { status: number; body: string };
+    err.status = res.status;
+    err.body = text;
+    throw err;
+  }
+  const b = JSON.parse(text || '{}') as {
+    id?: string;
+    displayName?: string;
+    applicationId?: string;
+    entitlements?: Array<{ value?: string }>;
+    groups?: Array<{ display?: string; value?: string }>;
+  };
+  return {
+    id: b.id,
+    displayName: b.displayName,
+    applicationId: b.applicationId,
+    entitlements: (b.entitlements || []).map((e) => String(e?.value || '')).filter(Boolean),
+    groups: (b.groups || []).map((g) => String(g?.display || g?.value || '')).filter(Boolean),
+  };
+}
 
 export const WAREHOUSE_ENV_VAR = 'LOOM_DATABRICKS_SQL_WAREHOUSE_ID';
 

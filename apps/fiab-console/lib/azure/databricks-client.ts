@@ -55,8 +55,9 @@ async function dbxToken(): Promise<string> {
  * `finally` records every `/api/2.x/unity-catalog/**` call. Catalog owner change,
  * catalog/schema/table delete and the `PATCH .../permissions/...` grant mutation
  * all issue from THIS client on the Commercial default backend, not from ucFetch.
+ * Exported for the #3744 warehouse resolver's SCIM `Me` read (audited the same way).
  */
-async function dbxFetch(path: string, init?: RequestInit): Promise<Response> {
+export async function dbxFetch(path: string, init?: RequestInit): Promise<Response> {
   const t0 = Date.now();
   let res: Response | undefined;
   let err: unknown;
@@ -119,73 +120,15 @@ export interface Warehouse {
   odbc_params?: WarehouseOdbcParams;
 }
 
-/**
- * An HTTP failure from the workspace carrying the REAL status + body, so a
- * caller can classify it (permission / network / quota — deploy-integrity.md
- * R6) from what the API returned instead of re-parsing the message string.
- * The message is unchanged from the pre-#3744 shape (`<op> failed <status>: <body>`).
- */
-function httpError(op: string, status: number, text: string): Error & { status: number; body: string } {
-  const err = new Error(`${op} failed ${status}: ${text}`) as Error & { status: number; body: string };
-  err.status = status;
-  err.body = text;
-  return err;
-}
-
+// asJsonOrThrow keeps the `<op> failed <status>: <body>` message AND sets
+// err.status / err.body, which the #3744 resolver classifies from.
 export async function listWarehouses(): Promise<Warehouse[]> {
-  const res = await dbxFetch('/api/2.0/sql/warehouses');
-  if (!res.ok) {
-    throw httpError('listWarehouses', res.status, await res.text());
-  }
-  const body = (await res.json()) as { warehouses?: Warehouse[] };
+  const body = await asJsonOrThrow<{ warehouses?: Warehouse[] }>(await dbxFetch('/api/2.0/sql/warehouses'), 'listWarehouses');
   return body.warehouses || [];
 }
 
 export async function getWarehouse(id: string): Promise<Warehouse> {
-  const res = await dbxFetch(`/api/2.0/sql/warehouses/${encodeURIComponent(id)}`);
-  if (!res.ok) {
-    throw httpError('getWarehouse', res.status, await res.text());
-  }
-  return (await res.json()) as Warehouse;
-}
-
-/** The calling identity as the workspace sees it (SCIM `Me`). */
-export interface DbxCurrentIdentity {
-  id?: string;
-  displayName?: string;
-  /** Service principals carry their Entra application (client) id here. */
-  applicationId?: string;
-  /** DIRECTLY-assigned entitlements only — group-inherited ones are not listed on this object. */
-  entitlements: string[];
-  /** Group display names the identity is a direct member of (e.g. 'admins'). */
-  groups: string[];
-}
-
-/**
- * Read the caller's own workspace identity: GET /api/2.0/preview/scim/v2/Me.
- * Used to MEASURE which entitlements the Console identity holds when the
- * workspace refuses a warehouse create, so the failure names what is actually
- * absent rather than guessing (deploy-integrity.md R7).
- */
-export async function getCurrentIdentity(): Promise<DbxCurrentIdentity> {
-  const res = await dbxFetch('/api/2.0/preview/scim/v2/Me');
-  if (!res.ok) {
-    throw httpError('getCurrentIdentity', res.status, await res.text());
-  }
-  const b = (await res.json()) as {
-    id?: string;
-    displayName?: string;
-    applicationId?: string;
-    entitlements?: Array<{ value?: string }>;
-    groups?: Array<{ display?: string; value?: string }>;
-  };
-  return {
-    id: b.id,
-    displayName: b.displayName,
-    applicationId: b.applicationId,
-    entitlements: (b.entitlements || []).map((e) => String(e?.value || '')).filter(Boolean),
-    groups: (b.groups || []).map((g) => String(g?.display || g?.value || '')).filter(Boolean),
-  };
+  return asJsonOrThrow<Warehouse>(await dbxFetch(`/api/2.0/sql/warehouses/${encodeURIComponent(id)}`), 'getWarehouse');
 }
 
 // ------------------------------------------------------------
@@ -626,40 +569,14 @@ export async function executeStatement(
 }
 
 /**
- * Honest config gate for the SQL Statement Execution path. Returns null when a
- * warehouse id is RESOLVABLE — an explicit id, the pinned
- * LOOM_DATABRICKS_SQL_WAREHOUSE_ID, or (#3744) a bound Databricks workspace,
- * because the Console then ensure-creates / adopts the `loom-default` warehouse
- * itself (`resolveDatabricksSqlWarehouseId`, auto-bind-by-default.md §5).
- *
- * The only thing that genuinely cannot be produced is the WORKSPACE, so the one
- * var this gate can name is LOOM_DATABRICKS_HOSTNAME. A resolution that is
- * attempted and FAILS is not "not configured": the resolver throws a classified
- * `WarehouseResolutionError` (permission / network / quota / unknown) at call
- * time, so the caller surfaces the real cause.
+ * Honest config gate for the SQL Statement Execution path. Only the WORKSPACE
+ * can be missing: a bound one means the warehouse is resolvable, because the
+ * Console adopts/creates `loom-default` itself (#3744). A resolution that FAILS
+ * throws the resolver's classified error at call time — never "not configured".
  */
 export function warehouseConfigGate(explicit?: string | null): { missing: string } | null {
-  const wid = (explicit || process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID || '').trim();
-  if (wid) return null;
-  if (!process.env.LOOM_DATABRICKS_HOSTNAME) return { missing: 'LOOM_DATABRICKS_HOSTNAME' };
-  return null;
-}
-
-/**
- * Typed not-configured error for the Databricks SQL warehouse path. Carries the
- * exact env var to set so the BFF can render an honest gate (no-vaporware.md)
- * rather than a generic 500.
- */
-export class WarehouseNotConfiguredError extends Error {
-  missing: string;
-  constructor(missing = 'LOOM_DATABRICKS_SQL_WAREHOUSE_ID') {
-    super(
-      `Databricks SQL warehouse not configured: set ${missing} on the Loom Console ` +
-        `(the SQL warehouse used to query subscribed Delta Share catalogs).`,
-    );
-    this.name = 'WarehouseNotConfiguredError';
-    this.missing = missing;
-  }
+  if ((explicit || process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID || '').trim()) return null;
+  return process.env.LOOM_DATABRICKS_HOSTNAME ? null : { missing: 'LOOM_DATABRICKS_HOSTNAME' };
 }
 
 /**
@@ -668,12 +585,9 @@ export class WarehouseNotConfiguredError extends Error {
  * a subscribed Delta Share's mounted Unity Catalog catalog (and any other ad-hoc
  * read against the workspace's warehouse).
  *
- * The warehouse is resolved from `opts.warehouseId` → the platform resolver
- * (`resolveDatabricksSqlWarehouseId`: LOOM_DATABRICKS_SQL_WAREHOUSE_ID → the
- * persisted binding → the `loom-default` warehouse, listed or ensure-created;
- * #3744). A resolution failure throws the resolver's classified
- * `WarehouseResolutionError` — never a "not configured" claim for a call that
- * was made and refused.
+ * The warehouse is `opts.warehouseId`, else the platform resolver (#3744 — env
+ * pin → persisted → `loom-default` listed/created; lazy-imported because it
+ * imports THIS module). A failure throws its classified WarehouseResolutionError.
  *
  * Delegates to {@link executeStatement}, which POSTs to
  * `/api/2.0/sql/statements` with `disposition: INLINE`, `format: JSON_ARRAY`,
@@ -695,13 +609,8 @@ export async function runWarehouseStatement(
     onStatementId?: (id: string) => void;
   },
 ): Promise<QueryResult> {
-  let warehouseId = (opts?.warehouseId || '').trim();
-  if (!warehouseId) {
-    // Lazy import: the resolver imports THIS module, so a static edge back
-    // would make the two a load-order cycle.
-    const { resolveWarehouseIdOrThrow } = await import('@/lib/azure/databricks-sql-warehouse');
-    warehouseId = await resolveWarehouseIdOrThrow();
-  }
+  const warehouseId = (opts?.warehouseId || '').trim()
+    || (await (await import('@/lib/azure/databricks-sql-warehouse')).resolveWarehouseIdOrThrow());
   return executeStatement(
     warehouseId,
     sql,

@@ -30,7 +30,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   runWarehouseStatement,
   warehouseConfigGate,
-  WarehouseNotConfiguredError,
 } from '@/lib/azure/databricks-client';
 import {
   WarehouseResolutionError,
@@ -167,12 +166,6 @@ export const POST = withSession(async (req: NextRequest) => {
       return NextResponse.json(
         { ...warehouseErrorBody(e), gate: true },
         { status: warehouseErrorStatus(e) },
-      );
-    }
-    if (e instanceof WarehouseNotConfiguredError) {
-      return NextResponse.json(
-        { ok: false, gate: true, missing: e.missing, error: e.message },
-        { status: 503 },
       );
     }
     // A Databricks statement error (FAILED / syntax / permission) — surface its
