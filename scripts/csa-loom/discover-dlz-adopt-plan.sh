@@ -319,21 +319,38 @@ if [ -n "$EH" ]; then
   rm -f "$SG_ERR"
 fi
 
-# ── Databricks SQL WAREHOUSE `loom-default` → LOOM_DATABRICKS_SQL_WAREHOUSE_ID ──
+# ── Databricks SQL WAREHOUSE (loom-default | loom-governance) → LOOM_DATABRICKS_SQL_WAREHOUSE_ID ──
 #
 # WHY. admin-plane/main.bicep declares `loomDatabricksSqlWarehouseId` and emits
 # it as LOOM_DATABRICKS_SQL_WAREHOUSE_ID, but main.bicep never passed it, so the
-# env var rendered '' on every estate. `loom-default` is the name every writer
-# in this repo gives the warehouse (csa-loom-post-deploy-bootstrap.yml and
-# csa-loom-grant-delta-sharing.yml both create/reuse it by that name).
+# env var rendered '' on every estate.
+#
+# TWO NAMES are written in this repo, and they differ by writer, not by cloud:
+#   loom-default     csa-loom-post-deploy-bootstrap.yml (called by the
+#                    Commercial, GCC, GCC-High and IL5 deploy lanes) and
+#                    csa-loom-grant-delta-sharing.yml create/reuse this name.
+#   loom-governance  gov-provision-dbx-sql.yml and gov-provision-dbx-sql-invnet.yml
+#                    (the apps/loom-dbx-init image), both Azure Government only,
+#                    create this name — but only when NO warehouse whose name
+#                    starts with `loom` exists; otherwise they reuse that one.
+# PREFERENCE, deterministic and stated in the output: `loom-default` if the
+# workspace lists one, else `loom-governance`. `loom-default` wins because the
+# bootstrap re-wires the console to it on every run, so preferring the other
+# would make this reconcile and the bootstrap overwrite each other. Each name
+# must match EXACTLY ONE warehouse; two of the preferred name adopts NONE
+# (it does not fall through to the next name — a duplicate is a defect to
+# surface, not a reason to pick a different warehouse).
 #
 # THREE STATES, never collapsed (deploy-integrity R7):
 #   found                  → its id is adopted.
 #   API answered, no match → '' and a ::notice:: — a measured negative (the
-#                            warehouse may simply not be created yet; the
-#                            bootstrap creates it, and the next deploy binds it).
+#                            warehouse has not been created on this workspace).
 #   API refused/unreachable→ '' and a ::warning:: naming the HTTP code. This is
 #                            UNKNOWN and is never reported as "no warehouse".
+#                            A workspace with publicNetworkAccess Disabled
+#                            answers a hosted runner 403 "Unauthorized network
+#                            access to workspace" — that is this state, and the
+#                            warning says so rather than blaming RBAC.
 # It never fails the script: a warehouse is an optional binding (the console
 # auto-selects a RUNNING warehouse when the id is blank), and in a boundary
 # where Databricks SQL is unavailable the API answers with no match or an error,
@@ -343,12 +360,12 @@ fi
 # file on STDIN (`--config -`).
 DBX_AAD_RESOURCE="2ff814a6-3304-4ab8-85cb-cd0e6f879c1d"
 dbx_sql_warehouse_id() { # dbx_sql_warehouse_id <workspace host> → id or '' on stdout
-  local host="$1" tok err body code rc=0 pick
+  local host="$1" tok err body code rc=0 pick why rest
   err="$(mktemp)"; body="$(mktemp)"
   tok="$(az account get-access-token --resource "$DBX_AAD_RESOURCE" --query accessToken -o tsv 2>"$err")" || rc=$?
   tok="$(printf '%s' "$tok" | tr -d '\r\n')"
   if [ "$rc" -ne 0 ] || [ -z "$tok" ]; then
-    echo "::warning::[discover-dlz-adopt] could NOT obtain an Azure Databricks AAD token (az exit $rc), so whether SQL warehouse 'loom-default' exists on '$host' is UNKNOWN — not 'absent'. LOOM_DATABRICKS_SQL_WAREHOUSE_ID renders '' for this run. az stderr:" >&2
+    echo "::warning::[discover-dlz-adopt] could NOT obtain an Azure Databricks AAD token (az exit $rc), so whether a 'loom-default' or 'loom-governance' SQL warehouse exists on '$host' is UNKNOWN — not 'absent'. LOOM_DATABRICKS_SQL_WAREHOUSE_ID renders '' for this run. az stderr:" >&2
     sed 's/^/  /' "$err" >&2 || true
     rm -f "$err" "$body"; return 0
   fi
@@ -359,38 +376,55 @@ dbx_sql_warehouse_id() { # dbx_sql_warehouse_id <workspace host> → id or '' on
   tok=""
   code="$(printf '%s' "${code:-}" | tr -d '\r\n')"
   if [ "$code" != "200" ]; then
-    echo "::warning::[discover-dlz-adopt] the Databricks SQL Warehouses API on '$host' did NOT answer 200 (HTTP ${code:-000}, curl exit $rc), so whether 'loom-default' exists is UNKNOWN — not 'absent'. LOOM_DATABRICKS_SQL_WAREHOUSE_ID renders '' for this run. On 401/403 the deploy identity is not a user of that workspace (Contributor on the workspace resource provisions it as a workspace admin on first sign-in); HTTP 000 means the host was unreachable. Detail:" >&2
+    if grep -qi 'network access' "$body"; then
+      why="The workspace refused this runner at the NETWORK layer (its body names network access): a workspace with publicNetworkAccess Disabled is reachable only through its private endpoint, so a hosted runner cannot read it at all. The warehouse id has to be read, or the warehouse created, from inside the network."
+    else
+      why="On 401/403 without a network-access message the deploy identity is likely not a user of that workspace (Contributor on the workspace resource provisions it as a workspace admin on first sign-in); HTTP 000 means the host was unreachable."
+    fi
+    echo "::warning::[discover-dlz-adopt] the Databricks SQL Warehouses API on '$host' did NOT answer 200 (HTTP ${code:-000}, curl exit $rc), so whether a 'loom-default' or 'loom-governance' warehouse exists is UNKNOWN — not 'absent'. LOOM_DATABRICKS_SQL_WAREHOUSE_ID renders '' for this run. $why Detail:" >&2
     { sed 's/^/  /' "$err"; head -c 300 "$body" | sed 's/^/  /'; echo; } >&2 || true
     rm -f "$err" "$body"; return 0
   fi
   if [ -z "$PY" ]; then
-    echo "::warning::[discover-dlz-adopt] the SQL Warehouses API answered but no python is on PATH to read it — 'loom-default' is UNKNOWN; LOOM_DATABRICKS_SQL_WAREHOUSE_ID renders ''." >&2
+    echo "::warning::[discover-dlz-adopt] the SQL Warehouses API answered but no python is on PATH to read it — the warehouse is UNKNOWN; LOOM_DATABRICKS_SQL_WAREHOUSE_ID renders ''." >&2
     rm -f "$err" "$body"; return 0
   fi
   # Every parse path prints ONE verdict token and exits 0 — a body of the wrong
   # SHAPE (a JSON array, a non-object warehouse) is caught like a non-JSON body,
   # so a surprising answer degrades to a ::warning:: instead of tripping `set -e`.
+  # Verdicts: ID:<name>:<id> | AMBIG:<name>:<count> | NONE | ERR:<why>. The FIRST
+  # name in PREFER with any match decides; a later name is never consulted then.
   pick="$("$PY" -c '
 import json, sys
+PREFER = ("loom-default", "loom-governance")
 try:
     d = json.load(open(sys.argv[1], encoding="utf-8"))
     ws = d.get("warehouses") or []
-    ids = [str(w["id"]) for w in ws if w.get("name") == "loom-default" and w.get("id")]
+    by = {n: [str(w["id"]) for w in ws if w.get("name") == n and w.get("id")] for n in PREFER}
 except Exception as e:
     print("ERR:" + type(e).__name__); sys.exit(0)
-print("NONE" if not ids else ("ID:" + ids[0] if len(ids) == 1 else "AMBIG:" + str(len(ids))))
+for n in PREFER:
+    ids = by[n]
+    if len(ids) == 1:
+        print("ID:" + n + ":" + ids[0]); break
+    if ids:
+        print("AMBIG:" + n + ":" + str(len(ids))); break
+else:
+    print("NONE")
 ' "$body" | tr -d '\r')" || pick="ERR:python-exit"
   rm -f "$err" "$body"
   case "$pick" in
     ID:*)
-      printf '%s' "${pick#ID:}"
-      echo "[discover-dlz-adopt] databricks SQL warehouse 'loom-default' = ${pick#ID:}" >&2 ;;
+      rest="${pick#ID:}"
+      printf '%s' "${rest#*:}"
+      echo "[discover-dlz-adopt] databricks SQL warehouse '${rest%%:*}' = ${rest#*:} (preference: loom-default, then loom-governance)" >&2 ;;
     NONE)
-      echo "::notice::[discover-dlz-adopt] the Databricks SQL Warehouses API on '$host' answered 200 and lists NO warehouse named 'loom-default' — LOOM_DATABRICKS_SQL_WAREHOUSE_ID stays '' (the post-deploy bootstrap creates it; the next deploy binds it)." >&2 ;;
+      echo "::notice::[discover-dlz-adopt] the Databricks SQL Warehouses API on '$host' answered 200 and lists NO warehouse named 'loom-default' or 'loom-governance' — LOOM_DATABRICKS_SQL_WAREHOUSE_ID stays ''. Nothing has created one on this workspace yet (csa-loom-post-deploy-bootstrap.yml creates 'loom-default'; in Azure Government gov-provision-dbx-sql.yml creates 'loom-governance'); the next deploy after one exists binds it." >&2 ;;
     AMBIG:*)
-      echo "::warning::[discover-dlz-adopt] '$host' lists ${pick#AMBIG:} warehouses named 'loom-default'; adopting NONE rather than guessing." >&2 ;;
+      rest="${pick#AMBIG:}"
+      echo "::warning::[discover-dlz-adopt] '$host' lists ${rest#*:} warehouses named '${rest%%:*}'; adopting NONE rather than guessing (and not falling back to a lower-preference name)." >&2 ;;
     *)
-      echo "::warning::[discover-dlz-adopt] the SQL Warehouses API on '$host' answered 200 with a body that is not the documented JSON ($pick) — 'loom-default' is UNKNOWN; LOOM_DATABRICKS_SQL_WAREHOUSE_ID renders ''." >&2 ;;
+      echo "::warning::[discover-dlz-adopt] the SQL Warehouses API on '$host' answered 200 with a body that is not the documented JSON ($pick) — the warehouse is UNKNOWN; LOOM_DATABRICKS_SQL_WAREHOUSE_ID renders ''." >&2 ;;
   esac
   return 0
 }

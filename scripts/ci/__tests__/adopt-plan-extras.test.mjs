@@ -253,9 +253,14 @@ test('a namespace read with zero groups: no key, a ::notice:: (a measured negati
 
 // BREAKS ON: reading through q()'s `|| true` (or any collapse of failure into
 // the zero-groups arm) — stderr would then say "holds NO schema groups".
+// ALSO BREAKS ON (#3701 property — a failed EXTRA lookup must never cost the
+// BASE adopt entry): `EH=""` in the read-failure branch drops `eventhubs` from
+// the plan, and the target-name pin below goes RED (reviewer mutation M2).
 test('an UNREADABLE namespace is reported UNKNOWN, never "no groups"', () => {
   const { plan, stderr, status } = discover({ groupsFail: true });
   assert.equal(status, 0, 'an unreadable schema registry must not fail the deploy');
+  assert.equal(plan.eventhubs?.target?.name, EH_NS, 'the BASE eventhubs adopt entry must survive a failed schema-group read');
+  assert.equal(plan.eventhubs?.mode, 'adopt');
   assert.equal(plan.eventhubs?.extra, undefined);
   assert.match(stderr, /::warning::.*could NOT list schema groups.*UNKNOWN, not 'none'/);
   assert.match(stderr, /AuthorizationFailed/, 'the az stderr must be surfaced, not swallowed');
@@ -265,19 +270,58 @@ test('an UNREADABLE namespace is reported UNKNOWN, never "no groups"', () => {
 // ── 3. the SQL warehouse, three states ──────────────────────────────────────
 // BREAKS ON: taking the first warehouse regardless of name (→ 'aaaa0000').
 test('found: the id of the warehouse NAMED loom-default is adopted', () => {
-  const { plan } = discover({
+  const { plan, stderr } = discover({
     dbx: true,
     body: '{"warehouses":[{"id":"aaaa0000","name":"someone-elses"},{"id":"d1e2f3a4b5c6","name":"loom-default"}]}',
   });
   assert.equal(plan.databricks?.extra?.sqlWarehouseId, 'd1e2f3a4b5c6');
+  assert.match(stderr, /databricks SQL warehouse 'loom-default' = d1e2f3a4b5c6 \(preference: loom-default, then loom-governance\)/);
 });
 
-// BREAKS ON: demoting the no-match notice, or on emitting an empty key.
-test('API answered 200 with no loom-default: no key, a ::notice::, no ::warning::', () => {
+// The Gov writers (gov-provision-dbx-sql.yml, gov-provision-dbx-sql-invnet.yml)
+// create `loom-governance`. BREAKS ON: a lookup that knows only `loom-default`
+// (→ no key, and the NONE notice), or on printing the wrong name in the log.
+test('found: a workspace with only loom-governance adopts it, and says which name matched', () => {
+  const { plan, stderr } = discover({
+    dbx: true,
+    body: '{"warehouses":[{"id":"aaaa0000","name":"other"},{"id":"9a8b7c6d5e4f","name":"loom-governance"}]}',
+  });
+  assert.equal(plan.databricks?.extra?.sqlWarehouseId, '9a8b7c6d5e4f');
+  assert.match(stderr, /databricks SQL warehouse 'loom-governance' = 9a8b7c6d5e4f/);
+  assert.doesNotMatch(stderr, /lists NO warehouse/);
+});
+
+// Both names present, `loom-governance` listed FIRST so list order and the
+// preference disagree. BREAKS ON: a swapped preference or a first-match-in-list
+// pick (→ '9a8b7c6d5e4f'). The two ids are distinct, so a swap is visible.
+test('both names present: loom-default is preferred over loom-governance, whatever the list order', () => {
+  const { plan, stderr } = discover({
+    dbx: true,
+    body: '{"warehouses":[{"id":"9a8b7c6d5e4f","name":"loom-governance"},{"id":"d1e2f3a4b5c6","name":"loom-default"}]}',
+  });
+  assert.equal(plan.databricks?.extra?.sqlWarehouseId, 'd1e2f3a4b5c6');
+  assert.match(stderr, /databricks SQL warehouse 'loom-default' = d1e2f3a4b5c6/);
+});
+
+// BREAKS ON: falling through to `loom-governance` when the PREFERRED name is
+// duplicated (→ '9a8b7c6d5e4f'), or on picking one of the duplicates.
+test('two loom-default warehouses: adopts NONE, and does not fall back to loom-governance', () => {
+  const { plan, stderr } = discover({
+    dbx: true,
+    body: '{"warehouses":[{"id":"d1e2f3a4b5c6","name":"loom-default"},{"id":"0f0f0f0f","name":"loom-default"},{"id":"9a8b7c6d5e4f","name":"loom-governance"}]}',
+  });
+  assert.equal(plan.databricks?.extra?.hostname, DBX_HOST);
+  assert.equal(plan.databricks?.extra?.sqlWarehouseId, undefined);
+  assert.match(stderr, /::warning::.*lists 2 warehouses named 'loom-default'; adopting NONE/);
+});
+
+// Neither name. BREAKS ON: demoting the no-match notice, on emitting an empty
+// key, or on adopting some other warehouse (→ 'aaaa0000').
+test('API answered 200 with neither loom-default nor loom-governance: no key, a ::notice::, no ::warning::', () => {
   const { plan, stderr } = discover({ dbx: true, body: '{"warehouses":[{"id":"aaaa0000","name":"other"}]}' });
   assert.equal(plan.databricks?.extra?.hostname, DBX_HOST);
   assert.equal(plan.databricks?.extra?.sqlWarehouseId, undefined);
-  assert.match(stderr, /::notice::.*answered 200 and lists NO warehouse named 'loom-default'/);
+  assert.match(stderr, /::notice::.*answered 200 and lists NO warehouse named 'loom-default' or 'loom-governance'/);
   assert.doesNotMatch(stderr, /::warning::.*SQL Warehouses API/);
 });
 
@@ -290,15 +334,40 @@ test('API REFUSED (403): no key, a ::warning:: naming HTTP 403 — never "absent
   assert.equal(plan.databricks?.extra?.hostname, DBX_HOST);
   assert.equal(plan.databricks?.extra?.sqlWarehouseId, undefined);
   assert.match(stderr, /::warning::.*did NOT answer 200 \(HTTP 403, curl exit 0\).*UNKNOWN — not 'absent'/);
+  assert.match(stderr, /likely not a user of that workspace/);
+  assert.doesNotMatch(stderr, /at the NETWORK layer/, 'a plain 403 must not be blamed on the network');
   assert.match(stderr, /PERMISSION_DENIED/, 'the body excerpt must be surfaced');
   assert.doesNotMatch(stderr, /lists NO warehouse/);
 });
 
+// The measured Commercial shape: adb-loom-default-centralus has
+// publicNetworkAccess Disabled, and a hosted runner gets this 403 body. BREAKS
+// ON: deleting the network-access branch (the warning would blame workspace
+// membership — a false cause, deploy-integrity R7), or matching it on a plain
+// 403 (the test above goes RED).
+test('API REFUSED at the network layer (403 "Unauthorized network access"): the warning says NETWORK, not RBAC', () => {
+  const { plan, stderr, status } = discover({
+    dbx: true,
+    httpCode: '403',
+    body: '{"error_code":"403","message":"Unauthorized network access to workspace: 1234567890123456"}',
+  });
+  assert.equal(status, 0);
+  assert.equal(plan.databricks?.extra?.hostname, DBX_HOST, 'the BASE databricks adopt entry must survive');
+  assert.equal(plan.databricks?.extra?.sqlWarehouseId, undefined);
+  assert.match(stderr, /refused this runner at the NETWORK layer/);
+  assert.doesNotMatch(stderr, /likely not a user of that workspace/);
+});
+
 // BREAKS ON: `set -e` aborting on curl's non-zero exit (status would be 6),
 // or on an empty http_code being printed as '' instead of 000.
+// ALSO BREAKS ON (#3701): the caller setting `DBX_N=""` when the host is
+// unreachable, which drops the BASE databricks entry — the hostname pin goes
+// RED (reviewer mutation M3).
 test('host UNREACHABLE: HTTP 000 and the curl exit are named, the script continues', () => {
   const { plan, stderr, status } = discover({ dbx: true, httpCode: '', curlRc: 6, body: '' });
   assert.equal(status, 0);
+  assert.equal(plan.databricks?.extra?.hostname, DBX_HOST, 'the BASE databricks adopt entry must survive an unreachable host');
+  assert.equal(plan.databricks?.target?.name, DBX_NAME);
   assert.equal(plan.databricks?.extra?.sqlWarehouseId, undefined);
   assert.match(stderr, /HTTP 000, curl exit 6/);
 });
@@ -313,25 +382,44 @@ test('no Databricks token: UNKNOWN warning, and the API is never called', () => 
 });
 
 // BREAKS ON: a JSON array body tripping `set -e` through an uncaught python
-// AttributeError (status would be non-zero and no plan emitted).
+// AttributeError (status would be non-zero and no plan emitted), or on the
+// BASE databricks entry being dropped when the body is unreadable.
 test('a 200 body of the wrong SHAPE degrades to a warning, not a dead deploy', () => {
   const { plan, stderr, status } = discover({ dbx: true, body: '[]' });
   assert.equal(status, 0, stderr);
+  assert.equal(plan.databricks?.extra?.hostname, DBX_HOST, 'the BASE databricks adopt entry must survive');
+  assert.equal(plan.databricks?.extra?.sqlWarehouseId, undefined);
+  assert.match(stderr, /not the documented JSON \(ERR:AttributeError\)/);
+});
+
+// The OTHER wrong shape: a well-formed object whose warehouses are not objects.
+// `[]` above fails at `d.get` and never reaches the per-warehouse read, so it
+// cannot witness this one. BREAKS ON: the per-warehouse match being moved out
+// of the try (an uncaught AttributeError → no verdict token → the NONE/ID arms
+// never print and the ERR warning is missing).
+test('a 200 body whose warehouses are not objects also degrades to a warning', () => {
+  const { plan, stderr, status } = discover({ dbx: true, body: '{"warehouses":["loom-default"]}' });
+  assert.equal(status, 0, stderr);
+  assert.equal(plan.databricks?.extra?.hostname, DBX_HOST, 'the BASE databricks adopt entry must survive');
   assert.equal(plan.databricks?.extra?.sqlWarehouseId, undefined);
   assert.match(stderr, /not the documented JSON \(ERR:AttributeError\)/);
 });
 
 // Token hygiene. BREAKS ON: `curl -H "Authorization: Bearer $tok"` (the token
 // lands in argv, visible in /proc and in any `set -x` trace), or on echoing it.
+// Plain substring checks, not RegExps built from fixture values.
 test('the AAD token travels on curl STDIN only — never argv, never the log', () => {
   const r = discover({ dbx: true, body: '{"warehouses":[{"id":"d1e2f3a4b5c6","name":"loom-default"}]}' });
   assert.ok(r.curlStdin, 'curl must have been called');
-  assert.match(r.curlStdin, new RegExp(`Authorization: Bearer ${STUB_TOKEN}`), 'the header must arrive via --config on stdin');
+  assert.ok(r.curlStdin.includes('Authorization: Bearer ' + STUB_TOKEN), `the header must arrive via --config on stdin; got:\n${r.curlStdin}`);
   assert.ok(!r.curlArgv.includes(STUB_TOKEN), `token found in curl argv:\n${r.curlArgv}`);
   assert.ok(!r.stderr.includes(STUB_TOKEN), 'token found in stderr');
   assert.ok(!r.stdout.includes(STUB_TOKEN), 'token found in stdout');
   assert.match(r.curlArgv, /\n--config\n-\n/);
-  assert.match(r.curlArgv, new RegExp(`https://${DBX_HOST.replace(/\./g, '\\.')}/api/2\\.0/sql/warehouses`));
+  assert.ok(
+    r.curlArgv.includes('https://' + DBX_HOST + '/api/2.0/sql/warehouses'),
+    `curl must call the SQL Warehouses list endpoint on the discovered host; argv:\n${r.curlArgv}`,
+  );
 });
 
 // BREAKS ON: minting a token / calling curl when no workspace was discovered.
