@@ -50,7 +50,25 @@ interface OwnerPosture {
   unendorsed: ActionItem[];
   owner: { upn: string; name: string };
 }
-interface RefreshGate { missingEnvVar: string; bicepModule: string; message: string }
+interface RefreshGate {
+  missingEnvVar: string;
+  bicepModule: string;
+  message: string;
+  /** From POST /api/governance/govern/refresh: which half of the pre-warm is missing. */
+  gateReason?: string;
+}
+
+/**
+ * The gate title must match the gate's real state. With `key_not_bound` the
+ * Function IS deployed (its URL is set) and only its host key is unbound, so
+ * "not provisioned" would be false. Any other value, including an absent one
+ * from an older route, keeps the original title.
+ */
+function refreshGateTitle(gate: RefreshGate): string {
+  return gate.gateReason === 'key_not_bound'
+    ? 'On-open refresh key not bound'
+    : 'On-open refresh not provisioned';
+}
 
 const useStyles = makeStyles({
   intro: { color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalM },
@@ -140,7 +158,7 @@ export function GovernOwnerPane() {
       const r = await clientFetch('/api/governance/govern/refresh', { method: 'POST' });
       const j = await r.json();
       if (j.ok === false && j.gate === 'not_configured') {
-        setGate({ missingEnvVar: j.missingEnvVar, bicepModule: j.bicepModule, message: j.message });
+        setGate({ missingEnvVar: j.missingEnvVar, bicepModule: j.bicepModule, message: j.message, gateReason: j.gateReason });
       } else {
         setGate(null);
       }
@@ -196,7 +214,7 @@ export function GovernOwnerPane() {
       {gate && (
         <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalL }}>
           <MessageBarBody>
-            <MessageBarTitle>On-open refresh not provisioned</MessageBarTitle>
+            <MessageBarTitle>{refreshGateTitle(gate)}</MessageBarTitle>
             {gate.message} Set <code>{gate.missingEnvVar}</code> and deploy <code>{gate.bicepModule}</code>.
           </MessageBarBody>
         </MessageBar>
