@@ -12,11 +12,25 @@
  * Azure-native backend (no Fabric dependency): the policy is written straight to
  * the storage account via ARM. A missing Storage Account Contributor role (403)
  * surfaces as an honest gate naming the role + bicep module — never a raw 5xx.
+ *
+ * Authorization (#4619): PUT is TENANT-ADMIN. It replaces the WHOLE management
+ * policy of a storage account — the workspace's bound account, or the shared
+ * DLZ account when the workspace has none — so its effect reaches data beyond
+ * any one workspace. The gate (`withTenantAdmin`) runs before the body is read,
+ * so a refused caller never reaches `setLifecyclePolicy`. GET stays
+ * session-scoped (read-only).
+ *
+ * Workspace resolution goes through the canonical `resolveAdminWorkspace`
+ * ladder (#2947's boy-scout rule for this baselined file) instead of the old
+ * owner-only partition point read: the workspace creator resolves exactly as
+ * before, and a tenant admin additionally resolves a workspace of the SAME
+ * tenant through the shared tenant-boundary resolver. A non-admin non-owner is
+ * still a 404 on both verbs — no ACL-member widening here.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { workspacesContainer } from '@/lib/azure/cosmos-client';
+import { withSession, withTenantAdmin } from '@/lib/api/route-toolkit';
+import { resolveAdminWorkspace } from '@/lib/auth/workspace-guard';
 import {
   getLifecyclePolicy,
   setLifecyclePolicy,
@@ -27,7 +41,6 @@ import {
   type ConditionField,
   type LifecycleAction,
 } from '@/lib/azure/adls-client';
-import type { Workspace } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -54,18 +67,6 @@ function accountRefFromArmId(armId?: string): LifecycleAccountRef | undefined {
   return { account, resourceGroup, subscriptionId };
 }
 
-async function loadWorkspace(id: string, tenantId: string): Promise<Workspace | null> {
-  const c = await workspacesContainer();
-  try {
-    const { resource } = await c.item(id, tenantId).read<Workspace>();
-    if (!resource || resource.tenantId !== tenantId) return null;
-    return resource;
-  } catch (e: any) {
-    if (e?.code === 404) return null;
-    throw e;
-  }
-}
-
 /** Map a LifecyclePolicyError into the honest-gate JSON payload (HTTP 200). */
 function gateResponse(e: LifecyclePolicyError) {
   if (e.code === 'forbidden') {
@@ -86,16 +87,14 @@ function gateResponse(e: LifecyclePolicyError) {
   });
 }
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest) => {
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
 
   try {
-    const ws = await loadWorkspace(workspaceId, session.claims.oid);
-    if (!ws) return NextResponse.json({ ok: false, error: 'Workspace not found' }, { status: 404 });
-    const ref = accountRefFromArmId(ws.storageAccountId);
+    const resolved = await resolveAdminWorkspace(workspaceId);
+    if (resolved.resp) return resolved.resp;
+    const ref = accountRefFromArmId(resolved.ws.storageAccountId);
     const rules = await getLifecyclePolicy(ref);
     return NextResponse.json({
       ok: true,
@@ -108,7 +107,7 @@ export async function GET(req: NextRequest) {
     if (e instanceof LifecyclePolicyError) return gateResponse(e);
     return NextResponse.json({ ok: false, error: e?.message || 'Failed to read lifecycle policy' }, { status: 502 });
   }
-}
+});
 
 /** Validate one rule; returns an error string or null when valid. */
 function validateRule(r: any, index: number): string | null {
@@ -139,10 +138,9 @@ function validateRule(r: any, index: number): string | null {
   return null;
 }
 
-export async function PUT(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
-
+// Tenant-admin: 401 without a session, then the canonical 403 `admin_only`
+// envelope — before the body is read or the workspace is loaded.
+export const PUT = withTenantAdmin(async (req: NextRequest) => {
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: 'Invalid JSON' }, { status: 400 }); }
 
@@ -172,9 +170,9 @@ export async function PUT(req: NextRequest) {
   }
 
   try {
-    const ws = await loadWorkspace(workspaceId, session.claims.oid);
-    if (!ws) return NextResponse.json({ ok: false, error: 'Workspace not found' }, { status: 404 });
-    const ref = accountRefFromArmId(ws.storageAccountId);
+    const resolved = await resolveAdminWorkspace(workspaceId);
+    if (resolved.resp) return resolved.resp;
+    const ref = accountRefFromArmId(resolved.ws.storageAccountId);
     const clean: LifecycleRule[] = rules.map((r) => ({
       name: r.name,
       enabled: r.enabled,
@@ -191,4 +189,4 @@ export async function PUT(req: NextRequest) {
     if (e instanceof LifecyclePolicyError) return gateResponse(e);
     return NextResponse.json({ ok: false, error: e?.message || 'Failed to write lifecycle policy' }, { status: 502 });
   }
-}
+});

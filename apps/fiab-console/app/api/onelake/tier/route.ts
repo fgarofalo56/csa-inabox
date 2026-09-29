@@ -14,10 +14,19 @@
  *
  * Real Azure blob data-plane only — no mock, no Fabric dependency. GA in all
  * four sovereign clouds via the .blob endpoint resolved by getBlobSuffix().
+ *
+ * Authorization (#4619): PUT is TENANT-ADMIN. The request names a blob in one
+ * of the deployment's SHARED containers (`KNOWN_CONTAINERS`) and carries no
+ * item or workspace id, so there is no per-item grant to check it against; the
+ * shared-lake data-plane precedent (`/api/lakehouse/permissions` POST) is
+ * tenant-admin. GET stays session-scoped — it reads a tier and changes nothing.
+ * Both verbs refuse a path that is not a plain container-relative path
+ * (`lib/util/blob-rel-path.ts`) before touching storage.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession, withTenantAdmin } from '@/lib/api/route-toolkit';
+import { blobRelPathError } from '@/lib/util/blob-rel-path';
 import {
   KNOWN_CONTAINERS,
   getBlobTier,
@@ -32,10 +41,7 @@ export const dynamic = 'force-dynamic';
 
 const VALID_TIERS: BlobAccessTier[] = ['Hot', 'Cool', 'Cold'];
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
-
+export const GET = withSession(async (req: NextRequest) => {
   const container = req.nextUrl.searchParams.get('container') || '';
   const path = req.nextUrl.searchParams.get('path') || '';
   if (!container || !path) {
@@ -44,6 +50,8 @@ export async function GET(req: NextRequest) {
   if (!(KNOWN_CONTAINERS as readonly string[]).includes(container)) {
     return NextResponse.json({ ok: false, error: `unknown container: ${container}` }, { status: 404 });
   }
+  const pathErr = blobRelPathError(path);
+  if (pathErr) return NextResponse.json({ ok: false, error: pathErr }, { status: 400 });
 
   try {
     const result = await getBlobTier(container as KnownContainer, path);
@@ -55,12 +63,12 @@ export async function GET(req: NextRequest) {
       { status },
     );
   }
-}
+});
 
-export async function PUT(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
-
+// Tenant-admin: 401 without a session, then the canonical 403 `admin_only`
+// envelope from `requireTenantAdmin` — before the body is read, so a refused
+// caller never reaches `getBlobTier` / `setBlobTier` / `copyBlobToTier`.
+export const PUT = withTenantAdmin(async (req: NextRequest) => {
   let body: any;
   try {
     body = await req.json();
@@ -78,6 +86,8 @@ export async function PUT(req: NextRequest) {
   if (!(KNOWN_CONTAINERS as readonly string[]).includes(container)) {
     return NextResponse.json({ ok: false, error: `unknown container: ${container}` }, { status: 404 });
   }
+  const pathErr = blobRelPathError(path);
+  if (pathErr) return NextResponse.json({ ok: false, error: pathErr }, { status: 400 });
   if (!VALID_TIERS.includes(tier)) {
     return NextResponse.json({ ok: false, error: `tier must be one of: ${VALID_TIERS.join(', ')}` }, { status: 400 });
   }
@@ -111,4 +121,4 @@ export async function PUT(req: NextRequest) {
       { status },
     );
   }
-}
+});

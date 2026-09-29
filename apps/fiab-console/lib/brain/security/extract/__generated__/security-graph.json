@@ -11323,6 +11323,36 @@
           }
         },
         {
+          "id": "sec:authorizer:apps/fiab-console/app/api/governance/dlp/restrict/route.ts#POST",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "POST /api/governance/dlp/restrict",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "POST /api/governance/dlp/restrict",
+            "params": [],
+            "resourceScoped": false,
+            "callerNamedResourceInputs": [],
+            "allowPaths": [
+              {
+                "id": "post:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": true,
+            "privilegedSinkKinds": [
+              "cosmos-cross-partition-read",
+              "cosmos-write"
+            ]
+          }
+        },
+        {
           "id": "sec:authorizer:apps/fiab-console/app/api/governance/govern/actions/route.ts#GET",
           "kind": "authorizer",
           "provenance": "declared",
@@ -15838,6 +15868,120 @@
           }
         },
         {
+          "id": "sec:authorizer:apps/fiab-console/app/api/onelake/lifecycle/route.ts#PUT",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "PUT /api/onelake/lifecycle",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "PUT /api/onelake/lifecycle",
+            "params": [],
+            "resourceScoped": true,
+            "callerNamedResourceInputs": [
+              "workspaceId"
+            ],
+            "allowPaths": [
+              {
+                "id": "put:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": false,
+            "privilegedSinkKinds": []
+          }
+        },
+        {
+          "id": "sec:authorizer:apps/fiab-console/app/api/onelake/security/route.ts#POST",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "POST /api/onelake/security",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "POST /api/onelake/security",
+            "params": [],
+            "resourceScoped": true,
+            "callerNamedResourceInputs": [
+              "id"
+            ],
+            "allowPaths": [
+              {
+                "id": "post:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": false,
+            "privilegedSinkKinds": []
+          }
+        },
+        {
+          "id": "sec:authorizer:apps/fiab-console/app/api/onelake/security/route.ts#DELETE",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "DELETE /api/onelake/security",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "DELETE /api/onelake/security",
+            "params": [],
+            "resourceScoped": true,
+            "callerNamedResourceInputs": [
+              "id"
+            ],
+            "allowPaths": [
+              {
+                "id": "delete:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": false,
+            "privilegedSinkKinds": []
+          }
+        },
+        {
+          "id": "sec:authorizer:apps/fiab-console/app/api/onelake/tier/route.ts#PUT",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "PUT /api/onelake/tier",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "PUT /api/onelake/tier",
+            "params": [],
+            "resourceScoped": false,
+            "callerNamedResourceInputs": [],
+            "allowPaths": [
+              {
+                "id": "put:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": false,
+            "privilegedSinkKinds": []
+          }
+        },
+        {
           "id": "sec:verdict-call:apps/fiab-console/app/api/setup/deploy-preflight/route.ts#GET:enforceCapability:6",
           "kind": "verdict-call",
           "provenance": "declared",
@@ -15965,6 +16109,68 @@
             "allowPaths": [
               {
                 "id": "post:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": false,
+            "privilegedSinkKinds": []
+          }
+        },
+        {
+          "id": "sec:authorizer:apps/fiab-console/app/api/synapse/notebooks/[name]/route.ts#PUT",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "PUT /api/synapse/notebooks/[name]",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "PUT /api/synapse/notebooks/[name]",
+            "params": [
+              "name"
+            ],
+            "resourceScoped": true,
+            "callerNamedResourceInputs": [
+              "name"
+            ],
+            "allowPaths": [
+              {
+                "id": "put:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": false,
+            "privilegedSinkKinds": []
+          }
+        },
+        {
+          "id": "sec:authorizer:apps/fiab-console/app/api/synapse/notebooks/[name]/route.ts#DELETE",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "DELETE /api/synapse/notebooks/[name]",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "DELETE /api/synapse/notebooks/[name]",
+            "params": [
+              "name"
+            ],
+            "resourceScoped": true,
+            "callerNamedResourceInputs": [
+              "name"
+            ],
+            "allowPaths": [
+              {
+                "id": "delete:admin-claim",
                 "conditionPredicates": [
                   "isTenantAdmin"
                 ],
@@ -47817,6 +48023,11 @@
           "deployedAs": "loom-console"
         },
         {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/governance/dlp/restrict/route.ts#POST",
+          "codeModuleId": "code:apps/fiab-console/app/api/governance/dlp/restrict/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
           "nodeId": "sec:authorizer:apps/fiab-console/app/api/governance/govern/actions/route.ts#GET",
           "codeModuleId": "code:apps/fiab-console/app/api/governance/govern/actions/route.ts",
           "deployedAs": "loom-console"
@@ -48877,6 +49088,26 @@
           "deployedAs": "loom-console"
         },
         {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/onelake/lifecycle/route.ts#PUT",
+          "codeModuleId": "code:apps/fiab-console/app/api/onelake/lifecycle/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/onelake/security/route.ts#POST",
+          "codeModuleId": "code:apps/fiab-console/app/api/onelake/security/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/onelake/security/route.ts#DELETE",
+          "codeModuleId": "code:apps/fiab-console/app/api/onelake/security/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/onelake/tier/route.ts#PUT",
+          "codeModuleId": "code:apps/fiab-console/app/api/onelake/tier/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
           "nodeId": "sec:verdict-call:apps/fiab-console/app/api/setup/deploy-preflight/route.ts#GET:enforceCapability:6",
           "codeModuleId": "code:apps/fiab-console/app/api/setup/deploy-preflight/route.ts",
           "deployedAs": "loom-console"
@@ -48909,6 +49140,16 @@
         {
           "nodeId": "sec:authorizer:apps/fiab-console/app/api/sql/trino/route.ts#POST",
           "codeModuleId": "code:apps/fiab-console/app/api/sql/trino/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/synapse/notebooks/[name]/route.ts#PUT",
+          "codeModuleId": "code:apps/fiab-console/app/api/synapse/notebooks/[name]/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/synapse/notebooks/[name]/route.ts#DELETE",
+          "codeModuleId": "code:apps/fiab-console/app/api/synapse/notebooks/[name]/route.ts",
           "deployedAs": "loom-console"
         },
         {
@@ -50177,15 +50418,15 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-29T00:14:26.568Z",
-      "commit": "5a9d17e016e1ed75b82601fd63919515afa064a0",
-      "inputsDigest": "0ae4b794c2c82c3c",
+      "generatedAt": "2026-09-29T17:23:39.965Z",
+      "commit": "159d34c04bf3a11a937e504359aec920e9681a49",
+      "inputsDigest": "b3428b9011d4aea8",
       "filesScanned": 2122,
       "scanScopes": [
         {
           "scope": "app/**/route.ts (console BFF routes)",
           "filesMatched": 1700,
-          "nodesEmitted": 706
+          "nodesEmitted": 713
         },
         {
           "scope": ".github/**, scripts/** (CI publication surfaces)",

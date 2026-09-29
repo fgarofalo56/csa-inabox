@@ -4,9 +4,14 @@
  * up from real Azure RBAC, ADLS POSIX ACL, Cosmos workspace-roles and (Comm/GCC)
  * Databricks Unity Catalog grants.
  *
- *   GET   401 / bare-list / matrix assembly / honest ACL gate / RBAC env gate
- *   POST  401 / 400 validation / grantContainerRole happy path
- *   DELETE 401 / 400 / revoke happy path
+ *   GET   401 / bare-list / matrix assembly / honest ACL gate / RBAC env gate /
+ *         400 on a container that is not a storage container name
+ *   POST  401 / 403 non-admin (grant never called) / 400 validation, including
+ *         every rejected container shape / grantContainerRole happy path (admin)
+ *   DELETE 401 / 403 non-admin (revoke never called) / 400 / revoke happy path (admin)
+ *
+ * POST and DELETE are tenant-admin (#4619): they grant and revoke data-plane
+ * roles on the shared deployment containers, which no single item owns.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -63,7 +68,10 @@ function delReq(qs: string) {
   return { nextUrl: new URL(`http://x/api/onelake/security?${qs}`) } as any;
 }
 
-const sess = { claims: { upn: 'u@x', tid: 't1' } };
+const sess = { claims: { upn: 'u@x', tid: 't1', oid: 'user-oid' } };
+// #4619: grant/revoke are tenant-admin. `isTenantAdmin` admits the bootstrap
+// oid (LOOM_TENANT_ADMIN_OID), so this session is admin and `sess` is not.
+const adminSess = { claims: { upn: 'admin@x', tid: 't1', oid: 'admin-oid' } };
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -71,6 +79,8 @@ beforeEach(() => {
   delete process.env.LOOM_DATABRICKS_HOSTNAME;
   delete process.env.LOOM_DATABRICKS_HOSTNAMES;
   delete process.env.LOOM_GRAPH_USERS_ENABLED;
+  delete process.env.LOOM_TENANT_ADMIN_GROUP_ID;
+  process.env.LOOM_TENANT_ADMIN_OID = 'admin-oid';
 });
 
 describe('GET /api/onelake/security', () => {
@@ -156,6 +166,20 @@ describe('GET /api/onelake/security', () => {
     expect(j.gates.uc).toMatch(/GCC-High/);
     expect(j.ucGrants).toBeUndefined();
   });
+
+  it('400 on a container that is not a storage container name, before any ARM read', async () => {
+    // Breaks if the GET container-name check is removed: `listContainerRoleAssignments`
+    // would be called with "a/b" and the status would be 200/502, not 400.
+    (getSession as any).mockReturnValue(sess);
+    (listContainerRoleAssignments as any).mockResolvedValue([]);
+    (getAcl as any).mockResolvedValue([]);
+    const res = await GET(getReq('container=' + encodeURIComponent('a/b')));
+    expect(res.status).toBe(400);
+    expect(listContainerRoleAssignments).not.toHaveBeenCalled();
+    // Positive pair: a valid name reaches the ARM read.
+    expect((await GET(getReq('container=bronze'))).status).toBe(200);
+    expect(listContainerRoleAssignments).toHaveBeenCalledWith('bronze');
+  });
 });
 
 describe('POST /api/onelake/security', () => {
@@ -163,12 +187,39 @@ describe('POST /api/onelake/security', () => {
     (getSession as any).mockReturnValue(null);
     expect((await POST(postReq({}))).status).toBe(401);
   });
-  it('400 without container/principalId/role', async () => {
+  it('403 admin_only for a signed-in non-admin, and never grants', async () => {
+    // Breaks if POST is not tenant-admin gated: the handler would reach
+    // grantContainerRole and answer 200.
     (getSession as any).mockReturnValue(sess);
+    (grantContainerRole as any).mockResolvedValue({ id: '/ra/new', principalId: 'oid-9' });
+    const res = await POST(postReq({ container: 'bronze', principalId: 'oid-9', role: 'Storage Blob Data Reader' }));
+    expect(res.status).toBe(403);
+    const j = await res.json();
+    expect(j.ok).toBe(false);
+    expect(j.code).toBe('admin_only');
+    expect(grantContainerRole).not.toHaveBeenCalled();
+  });
+  it('400 without container/principalId/role', async () => {
+    (getSession as any).mockReturnValue(adminSess);
     expect((await POST(postReq({ container: 'bronze' }))).status).toBe(400);
   });
-  it('grants a Storage Blob Data role', async () => {
-    (getSession as any).mockReturnValue(sess);
+  it.each([
+    ['a path separator', 'bronze/../x'],
+    ['uppercase', 'Bronze'],
+    ['a double hyphen', 'a--b'],
+    ['too short', 'ab'],
+    ['a NUL', 'bro\u0000nze'],
+  ])('400 on a container name with %s, and never grants', async (_label, container) => {
+    // Breaks if the POST container-name check is removed: each of these would
+    // reach grantContainerRole (mocked to resolve) and answer 200.
+    (getSession as any).mockReturnValue(adminSess);
+    (grantContainerRole as any).mockResolvedValue({ id: '/ra/new', principalId: 'oid-9' });
+    const res = await POST(postReq({ container, principalId: 'oid-9', role: 'Storage Blob Data Reader' }));
+    expect(res.status).toBe(400);
+    expect(grantContainerRole).not.toHaveBeenCalled();
+  });
+  it('grants a Storage Blob Data role (tenant admin)', async () => {
+    (getSession as any).mockReturnValue(adminSess);
     (grantContainerRole as any).mockResolvedValue({ id: '/ra/new', principalId: 'oid-9', roleName: 'Storage Blob Data Reader' });
     const res = await POST(postReq({ container: 'bronze', principalId: 'oid-9', role: 'Storage Blob Data Reader', principalType: 'User' }));
     const j = await res.json();
@@ -183,12 +234,22 @@ describe('DELETE /api/onelake/security', () => {
     (getSession as any).mockReturnValue(null);
     expect((await DELETE(delReq('id=/ra/1'))).status).toBe(401);
   });
-  it('400 without id', async () => {
+  it('403 admin_only for a signed-in non-admin, and never revokes', async () => {
+    // Breaks if DELETE is not tenant-admin gated: the handler would reach
+    // revokeContainerRoleAssignment and answer 200.
     (getSession as any).mockReturnValue(sess);
+    (revokeContainerRoleAssignment as any).mockResolvedValue(undefined);
+    const res = await DELETE(delReq('id=' + encodeURIComponent('/ra/1')));
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('admin_only');
+    expect(revokeContainerRoleAssignment).not.toHaveBeenCalled();
+  });
+  it('400 without id', async () => {
+    (getSession as any).mockReturnValue(adminSess);
     expect((await DELETE(delReq(''))).status).toBe(400);
   });
-  it('revokes a role assignment', async () => {
-    (getSession as any).mockReturnValue(sess);
+  it('revokes a role assignment (tenant admin)', async () => {
+    (getSession as any).mockReturnValue(adminSess);
     (revokeContainerRoleAssignment as any).mockResolvedValue(undefined);
     const res = await DELETE(delReq('id=' + encodeURIComponent('/ra/1')));
     const j = await res.json();

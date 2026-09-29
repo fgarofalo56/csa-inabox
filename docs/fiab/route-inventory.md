@@ -15,9 +15,9 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | --- | ---: |
 | Total routes | 1694 |
 | Public (no session) | 59 |
-| Session-only | 647 |
-| Owner-scoped | 678 |
-| Admin | 310 |
+| Session-only | 643 |
+| Owner-scoped | 677 |
+| Admin | 315 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 499 |
 | Areas | 122 |
@@ -1017,7 +1017,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `governance/data-contracts/route.ts` | GET | session-only |  | Azure Cache for Redis, Cosmos |
 | `governance/dlp/library/route.ts` | GET POST | admin | ● | Cosmos |
 | `governance/dlp/meta/route.ts` | GET | session-only |  | Cosmos |
-| `governance/dlp/restrict/route.ts` | POST | session-only | ● | ADLS, ADX, ARM, Azure RBAC, Azure SQL, Azure Storage, Cosmos, Managed Identity, Resource Graph, Synapse SQL |
+| `governance/dlp/restrict/route.ts` | POST | admin | ● | ADLS, ADX, ARM, Azure RBAC, Azure SQL, Azure Storage, Cosmos, Managed Identity, Resource Graph, Synapse SQL |
 | `governance/dlp/scan/route.ts` | GET POST | session-only |  | Cosmos, Purview |
 | `governance/dlp/schemas/route.ts` | GET | session-only | ● | ARM, Azure SQL, Managed Identity, Synapse SQL |
 | `governance/dlp/violations/route.ts` | GET | session-only |  | Cosmos, Microsoft Graph, Purview |
@@ -2071,13 +2071,13 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `onelake/[itemId]/route.ts` | DELETE | owner-scoped |  | ADLS, AI Search, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph |
 | `onelake/catalog/route.ts` | GET | session-only | ● | AI Search, Cosmos, Fabric, Power BI |
 | `onelake/governance/route.ts` | GET | session-only |  | Cosmos, Purview |
-| `onelake/lifecycle/route.ts` | GET PUT | owner-scoped |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity |
+| `onelake/lifecycle/route.ts` | GET PUT | admin |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph |
 | `onelake/paths/route.ts` | GET | session-only |  | ADLS, Azure Storage |
 | `onelake/recycle/route.ts` | GET POST DELETE | owner-scoped |  | ADLS, AI Search, ARM, Azure Storage, Cosmos, Managed Identity, Purview |
 | `onelake/resolve/route.ts` | GET POST | session-only |  | Loom service |
-| `onelake/security/route.ts` | GET POST DELETE | session-only |  | ADLS, ARM, Azure Monitor, Azure RBAC, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Resource Graph |
+| `onelake/security/route.ts` | GET POST DELETE | admin |  | ADLS, ARM, Azure Monitor, Azure RBAC, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Resource Graph |
 | `onelake/storage/route.ts` | GET | session-only | ● | ADLS, ARM, Azure Storage, Cosmos, Managed Identity |
-| `onelake/tier/route.ts` | GET PUT | session-only |  | ADLS, ARM, Azure Storage, Managed Identity |
+| `onelake/tier/route.ts` | GET PUT | admin |  | ADLS, ARM, Azure Storage, Managed Identity |
 
 ## ontology-functions
 
@@ -2300,7 +2300,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `synapse/linkedservices/[name]/route.ts` | GET | session-only | ● | Synapse |
 | `synapse/linkedservices/route.ts` | GET POST DELETE | session-only | ● | Synapse |
 | `synapse/linkedservices/test/route.ts` | POST | session-only | ● | Synapse |
-| `synapse/notebooks/[name]/route.ts` | GET PUT DELETE | session-only | ● | ADLS, ARM, Azure Storage, Managed Identity, Synapse |
+| `synapse/notebooks/[name]/route.ts` | GET PUT DELETE | admin | ● | ADLS, ARM, Azure Storage, Managed Identity, Synapse |
 | `synapse/notebooks/[name]/run-cell/route.ts` | GET POST | session-only | ● | ARM, Resource Graph, Synapse |
 | `synapse/notebooks/route.ts` | GET POST DELETE | session-only | ● | Synapse |
 | `synapse/pipelines/route.ts` | GET POST DELETE | session-only | ● | Synapse |

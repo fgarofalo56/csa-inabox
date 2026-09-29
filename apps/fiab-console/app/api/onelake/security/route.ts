@@ -35,10 +35,20 @@
  *
  * No mock principals. Every row originates from ARM, the DFS ACL, Cosmos, or
  * UC — or the surface shows a precise infra gate (no-vaporware.md).
+ *
+ * Authorization (#4619): POST (grant) and DELETE (revoke) change Azure RBAC on
+ * a container of the deployment's shared lake account, so they are
+ * TENANT-ADMIN — the same gate as the lakehouse permissions POST, applied via
+ * `withTenantAdmin` before the body is read. A refused caller never reaches
+ * `grantContainerRole` / `revokeContainerRoleAssignment`. POST also refuses a
+ * `container` that is not a valid storage container name, so the ARM scope it
+ * builds can only name a container of this deployment's own account. GET (the
+ * read-only matrix) stays session-scoped.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession, withTenantAdmin } from '@/lib/api/route-toolkit';
+import { isValidContainerName } from '@/app/api/storage/_lib/validate';
 import {
   listContainerRoleAssignments,
   grantContainerRole,
@@ -204,10 +214,7 @@ function rbacGate(): NextResponse {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
+export const GET = withSession(async (req: NextRequest) => {
   const sp = req.nextUrl.searchParams;
   const container = sp.get('container');
   const workspaceId = sp.get('workspaceId');
@@ -217,6 +224,12 @@ export async function GET(req: NextRequest) {
   if (!container) {
     // Bare GET — let the UI populate its container picker before a selection.
     return NextResponse.json({ ok: true, knownContainers, needsContainer: true });
+  }
+  if (!isValidContainerName(container)) {
+    return NextResponse.json(
+      { ok: false, error: 'container must be a storage container name: 3-63 lowercase letters, digits or single hyphens' },
+      { status: 400 },
+    );
   }
 
   const gates: { acl?: string; uc?: string; workspace?: string } = {};
@@ -307,17 +320,22 @@ export async function GET(req: NextRequest) {
     knownContainers,
     gates,
   });
-}
+});
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
+// Tenant-admin: 401 without a session, then the canonical 403 `admin_only`
+// envelope — before the body is read, so a refused caller never grants.
+export const POST = withTenantAdmin(async (req: NextRequest) => {
   const body = await req.json().catch(() => ({}));
   const { container, principalId, role, principalType } = body || {};
   if (!container || !principalId || !role) {
     return NextResponse.json(
       { ok: false, error: 'container, principalId and role are required' },
+      { status: 400 },
+    );
+  }
+  if (typeof container !== 'string' || !isValidContainerName(container)) {
+    return NextResponse.json(
+      { ok: false, error: 'container must be a storage container name: 3-63 lowercase letters, digits or single hyphens' },
       { status: 400 },
     );
   }
@@ -335,11 +353,10 @@ export async function POST(req: NextRequest) {
     // Re-granting an identical (principal, role, scope) triple 409s — surface it.
     return NextResponse.json({ ok: false, error: msg }, { status: e?.status || 502 });
   }
-}
+});
 
-export async function DELETE(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+// Tenant-admin, same gate as POST: a refused caller never revokes.
+export const DELETE = withTenantAdmin(async (req: NextRequest) => {
   const id = req.nextUrl.searchParams.get('id');
   if (!id) {
     return NextResponse.json(
@@ -353,4 +370,4 @@ export async function DELETE(req: NextRequest) {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: String(e?.message || e) }, { status: e?.status || 502 });
   }
-}
+});

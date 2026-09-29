@@ -19,10 +19,20 @@
  *
  * Learn (dev-plane artifact REST, list/PUT/DELETE):
  *   https://learn.microsoft.com/rest/api/synapse/data-plane/notebook
+ *
+ * Authorization (#4619): PUT and DELETE are TENANT-ADMIN. They write to (or
+ * remove from) the DEPLOYMENT-DEFAULT Synapse workspace and PUT also writes a
+ * backup blob into the shared silver container; neither carries an item or
+ * workspace id, so there is no per-item grant to check against. The gate runs
+ * before the name is parsed or the body is read. GET stays session-scoped.
+ * Every verb refuses a name outside NAME_RE (letters, digits, `_` — so no
+ * separator, dot segment, or control character can reach the ADLS backup
+ * path or the dev-plane URL), and a malformed percent-escape is a 400, not a
+ * thrown `URIError`.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession, withTenantAdmin } from '@/lib/api/route-toolkit';
 import {
   synapseConfigGate, listNotebooks, upsertNotebook, deleteNotebook,
   type SynapseNotebook,
@@ -75,12 +85,26 @@ function gate() {
   return null;
 }
 
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ name: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+/**
+ * The notebook name from the route segment, or null when it is not a valid
+ * notebook name (including a malformed percent-escape, which would otherwise
+ * throw and surface as a 500).
+ */
+function notebookName(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  let name: string;
+  try {
+    name = decodeURIComponent(raw).trim();
+  } catch {
+    return null;
+  }
+  return NAME_RE.test(name) ? name : null;
+}
+
+export const GET = withSession<{ name: string }>(async (_req: NextRequest, { params }) => {
   const g = gate(); if (g) return g;
-  const name = decodeURIComponent((await ctx.params).name).trim();
-  if (!NAME_RE.test(name)) return NextResponse.json({ ok: false, error: 'invalid notebook name' }, { status: 400 });
+  const name = notebookName(params.name);
+  if (!name) return NextResponse.json({ ok: false, error: 'invalid notebook name' }, { status: 400 });
   try {
     const all = await listNotebooks();
     const nb = all.find((n) => n.name === name);
@@ -89,14 +113,14 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ name: stri
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
 
-export async function PUT(req: NextRequest, ctx: { params: Promise<{ name: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+// Tenant-admin: 401 without a session, then the canonical 403 `admin_only`
+// envelope — a refused caller never reaches `upsertNotebook` or `uploadFile`.
+export const PUT = withTenantAdmin<{ name: string }>(async (req: NextRequest, { params }) => {
   const g = gate(); if (g) return g;
-  const name = decodeURIComponent((await ctx.params).name).trim();
-  if (!NAME_RE.test(name)) return NextResponse.json({ ok: false, error: 'name must be 1-260 chars: letters, digits, _' }, { status: 400 });
+  const name = notebookName(params.name);
+  if (!name) return NextResponse.json({ ok: false, error: 'name must be 1-260 chars: letters, digits, _' }, { status: 400 });
   const body = await req.json().catch(() => ({}));
   const properties = body?.properties as SynapseNotebook['properties'] | undefined;
   if (!properties || typeof properties !== 'object') {
@@ -109,18 +133,17 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ name: strin
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
 
-export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ name: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+// Tenant-admin, same gate as PUT: a refused caller never reaches `deleteNotebook`.
+export const DELETE = withTenantAdmin<{ name: string }>(async (_req: NextRequest, { params }) => {
   const g = gate(); if (g) return g;
-  const name = decodeURIComponent((await ctx.params).name).trim();
-  if (!NAME_RE.test(name)) return NextResponse.json({ ok: false, error: 'invalid notebook name' }, { status: 400 });
+  const name = notebookName(params.name);
+  if (!name) return NextResponse.json({ ok: false, error: 'invalid notebook name' }, { status: 400 });
   try {
     await deleteNotebook(name);
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
