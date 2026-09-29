@@ -1946,7 +1946,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `marketplace/sharing/providers/[name]/route.ts` | GET POST DELETE | session-only |  | Azure Monitor, Cosmos |
 | `marketplace/sharing/providers/route.ts` | GET POST | session-only | ● | Azure Monitor, Cosmos, Key Vault |
 | `marketplace/sharing/publishable-tables/route.ts` | GET | admin |  | ADLS, ARM, Azure SQL, Azure Storage, Cosmos, Managed Identity, Synapse SQL |
-| `marketplace/sharing/query/route.ts` | POST | session-only | ● | Azure Monitor, Cosmos, Databricks |
+| `marketplace/sharing/query/route.ts` | POST | session-only | ● | Azure Monitor, Cosmos |
 | `marketplace/sharing/recipients/[name]/route.ts` | GET PATCH DELETE | admin |  | Azure Monitor, Cosmos |
 | `marketplace/sharing/recipients/route.ts` | GET POST | admin |  | Azure Monitor, Cosmos |
 | `marketplace/sharing/shares/[name]/route.ts` | GET PATCH DELETE | admin |  | Azure Monitor, Cosmos |
