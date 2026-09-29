@@ -571,14 +571,11 @@ unique). The offered run must be:
 - with no completed run of the workflow on the default branch, created OR
   finished after the offered run was created, that concluded anything but
   success. `cancelled` and `skipped` count as not succeeding, so offer the
-  newest green run. The listing reaches 72 hours back for runs that began
-  earlier and finished later; a run spanning more than that is not seen, and
-  such runs exist -- review A measured `deploy-fiab-gcch` spans of about
-  thirty days (the constant's comment in `tick.py` lists the measured spans).
+  newest green run.
   A failure in a job that carries no notifier step, such as
-  `post-deploy-bootstrap`, files no watcher record, so it is seen only if its
-  run falls inside that window; in a run spanning more than 72 hours it is not
-  seen at all. A red run that has been re-run leaves the completed list until the
+  `post-deploy-bootstrap`, files no watcher record.
+  The window rule is stated in the published close text (`_receipt_comment`, the sentence beginning 'A run created more than 72 hours before it').
+  A red run that has been re-run leaves the completed list until the
   re-run finishes, so it is not seen meanwhile; that matters only for a red
   run the watcher did not record.
 

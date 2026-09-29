@@ -3400,12 +3400,9 @@ _LATER_RUNS_LIMIT = 200
 #:   2026-08-29T14:47:52Z and last updated 2026-09-28T14:54:26Z, and its job
 #:   `Deploy + validate CSA Loom in GCC-High` concluded `failure` with 0 steps.
 #:
-#: So 72 h is NOT longer than every span. A run spanning more than the window
-#: is not seen by the red-since check. A failure in a job that has no notifier
-#: step -- `post-deploy-bootstrap` is one -- files no record, so it is seen only
-#: if its run falls inside the window; combined with a span over 72 h it is not
-#: seen at all.
-#: The README states both; the published text states only the window.
+#: A failure in a job that has no notifier step -- `post-deploy-bootstrap` is
+#: one -- files no record.
+#: The window rule is stated in the published close text (`_receipt_comment`, the sentence beginning 'A run created more than 72 hours before it').
 _OVERLAP_WINDOW = timedelta(hours=72)
 
 
