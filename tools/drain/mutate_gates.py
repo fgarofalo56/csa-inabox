@@ -4335,6 +4335,181 @@ ARMS: list[tuple[str, str, str, str]] = [
         '            f"in boundary {boundary} ({boundary_source})"',
         '            ""',
     ),
+    # -- #4728: the dependency-bump review exemption ------------------------
+    #
+    # This change LOOSENS gate 3b, so every arm below turns it into a wider
+    # exemption than the operator granted. A survivor here is not a curiosity;
+    # it is a route by which a real change merges with too little review.
+    #
+    # BMP7 to BMP11 exist because an independent reviewer measured all five as
+    # SURVIVORS at 934 passed against the first version of this change. The
+    # caller's guard was a grep for two literal strings, and two of the three
+    # new policy keys were read inline where no arm could be pointed at them.
+    (
+        ("BMP1 the CALLER always claims a bump, so EVERY PR - human, "
+         "workflow-touching, anything - takes the zero-reviewer exemption"),
+        "merge_gate.py",
+        "        dependency_bump=is_bump,",
+        "        dependency_bump=True,",
+    ),
+    (
+        ("BMP2 the caller stops passing the flag at all, which leaves the "
+         "exemption fully implemented, fully tested and DEAD - the "
+         "unconsulted-argument shape this module has already found twice"),
+        "merge_gate.py",
+        "        dependency_bump=is_bump,\n",
+        "",
+    ),
+    (
+        ("BMP3 the AUTHOR check is dropped, so any human PR touching only a "
+         "lock file merges with no review - a strictly larger exemption than "
+         "the one granted"),
+        "gates.py",
+        "    if author not in authors:",
+        "    if False:",
+    ),
+    (
+        ("BMP4 an EMPTY changed-file list becomes exempt. Vacuously 'nothing "
+         "outside the allowlist', and a failed `gh pr diff` then buys a "
+         "WEAKER gate than a real diff"),
+        "gates.py",
+        "    if not paths:\n        return False, \"the changed-file list is empty - failing closed\"",
+        "    if False:\n        return False, \"the changed-file list is empty - failing closed\"",
+    ),
+    (
+        ("BMP5 one path outside the allowlist stops voiding the exemption, so "
+         "a bump carrying twenty lock files and one source file rides in with "
+         "no review"),
+        "gates.py",
+        "    if outside:",
+        "    if False:",
+    ),
+    (
+        ("BMP6 the allowlist is HARD-CODED instead of read from policy, so "
+         "emptying `dependency_bump_paths` changes no decision - the "
+         "list-nobody-reads defect `review._escalate` records"),
+        "gates.py",
+        "    return tuple(review.get(\"dependency_bump_paths\", ()) or ())",
+        "    return (\"requirements/\", \"Cargo.lock\", \"package-lock.json\")",
+    ),
+    (
+        ("BMP7 the caller hard-codes the AUTHOR to a bot, so every PR is "
+         "attributed to dependabot and any HUMAN PR touching only lock paths "
+         "takes the exemption. This exact one-liner survived the full suite at "
+         "934 passed: the guard was a grep of merge_gate.py for two literal "
+         "strings, and inserting a line above the call leaves both verbatim"),
+        "merge_gate.py",
+        ("    author = ((pr.get(\"author\") or {}).get(\"login\")) "
+         "if isinstance(pr.get(\"author\"), dict) else None"),
+        "    author = \"app/dependabot\"",
+    ),
+    (
+        ("BMP8 the reviewer COUNT is hard-coded instead of read from policy, "
+         "so setting `dependency_bump_reviewers: 2` would change nothing and "
+         "the operator's only dial on this exemption is inert. SURVIVED at "
+         "934 passed before this arm existed"),
+        "gates.py",
+        "    return max(0, int(review.get(\"dependency_bump_reviewers\", 0)))",
+        "    return 0",
+    ),
+    (
+        ("BMP9 the AUTHOR LIST is hard-coded instead of read from policy, so "
+         "emptying or inverting `dependency_bump_authors` disables nothing. "
+         "Same defect as BMP6 one key over, and it also SURVIVED at 934 passed"),
+        "gates.py",
+        "    return tuple(review.get(\"dependency_bump_authors\", ()) or ())",
+        "    return (\"dependabot[bot]\", \"app/dependabot\")",
+    ),
+    (
+        ("BMP10 the DIRECTORY rule loses its left boundary, matching a "
+         "`requirements` directory at any depth instead of the top level, so "
+         "`evil/requirements/x.py` and `csa_platform/requirements/backdoor.py` "
+         "take the exemption at zero reviewers"),
+        "gates.py",
+        ("        if entry.endswith(\"/\"):\n"
+         "            if parts[0] == entry.rstrip(\"/\"):"),
+        ("        if entry.endswith(\"/\"):\n"
+         "            if entry.rstrip(\"/\") in parts:"),
+    ),
+    (
+        ("BMP11 the FILENAME rule loses its right boundary, so `go.mod` admits "
+         "`go.modules/evil.py`, `poetry.lock` admits `poetry.lock.sh` and a "
+         "shell script is classified as a lock file"),
+        "gates.py",
+        "        elif parts[-1] == entry:",
+        "        elif parts[-1].startswith(entry):",
+    ),
+    (
+        ("BMP12 the `footprint_known` conjunct is dropped from the exemption "
+         "branch, so a caller that could not read the diff gets the WEAKER "
+         "gate. Equivalent through today's merge_gate caller and disclosed as "
+         "such at its test site; killed because `review_requirement` is public "
+         "and the test drives the combination directly"),
+        "gates.py",
+        "    if dependency_bump and footprint_known:",
+        "    if dependency_bump:",
+    ),
+    #
+    # BMP13 to BMP17 exist because an independent reviewer measured all five
+    # as SURVIVORS at 944 passed against the round that added BMP1-BMP12 --
+    # re-derived here on a sandbox copy at this head, control rc=0, the
+    # anchor meta-test deselected exactly as `main()` deselects it.
+    #
+    # Two of them are the SAME defect BMP3 guards, weakened rather than
+    # deleted: the author check surviving as a SUBSTRING test. `some-human`
+    # -- the only impostor the suite carried -- is not a substring of either
+    # declared login, so nothing distinguished the correct predicate from the
+    # defect. `dependabot` is a real GitHub account, distinct from the
+    # declared `dependabot[bot]` and a proper substring of BOTH declared
+    # logins, so under either rewrite it takes the exemption.
+    (
+        ("BMP13 the author check degrades to a substring test against the "
+         "REPR of the author tuple, so any login that appears anywhere inside "
+         "`str(authors)` qualifies -- `dependabot`, a real account distinct "
+         "from the declared `dependabot[bot]`, takes the exemption"),
+        "gates.py",
+        "    if author not in authors:",
+        "    if author not in str(authors):",
+    ),
+    (
+        ("BMP14 the author check degrades to a per-entry substring test, so "
+         "any login that is a substring of ANY declared login qualifies. Same "
+         "escape as BMP13 by a different route, and the one a reviewer is "
+         "likeliest to write while 'simplifying' the comparison"),
+        "gates.py",
+        "    if author not in authors:",
+        "    if not any(author in a for a in authors):",
+    ),
+    #
+    # BMP15 to BMP17 are the three boundary directions BMP10 and BMP11 do NOT
+    # pin. The grammar has FIVE edges -- a directory entry has a left and a
+    # right boundary, a filename entry has a left boundary, a right boundary
+    # and a POSITION rule -- and the shipped arms restored one each.
+    (
+        ("BMP15 the DIRECTORY rule loses its RIGHT boundary, so `requirements/` "
+         "matches any top-level directory that merely STARTS with that name "
+         "and `requirementsfoo/evil.py` takes the exemption at zero reviewers"),
+        "gates.py",
+        '            if parts[0] == entry.rstrip("/"):',
+        '            if parts[0].startswith(entry.rstrip("/")):',
+    ),
+    (
+        ("BMP16 the FILENAME rule loses its LEFT boundary, so any file whose "
+         "name merely ENDS with a declared one qualifies -- `evil.go.mod` and "
+         "`x/my.package-lock.json` become lock files. The mirror of BMP11"),
+        "gates.py",
+        "        elif parts[-1] == entry:",
+        "        elif parts[-1].endswith(entry):",
+    ),
+    (
+        ("BMP17 the FILENAME rule loses its POSITION, matching any segment "
+         "instead of the last, so a DIRECTORY named `go.mod` or `Cargo.lock` "
+         "carries arbitrary source files in with it -- `go.mod/evil.py` at "
+         "zero reviewers"),
+        "gates.py",
+        "        elif parts[-1] == entry:",
+        "        elif entry in parts:",
+    ),
 ]
 
 

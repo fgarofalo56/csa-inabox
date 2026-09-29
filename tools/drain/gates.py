@@ -340,6 +340,21 @@ OTHER_IMPLEMENTED_BY = {
     # constant in `boundary_of_issue`. `deploy-run` and `estate` are absent on
     # purpose.
     "default_boundary.g1-browser": "tick.boundary_of_issue",
+    # The dependency-bump exemption. Operator decision 2026-09-21 -
+    # dependency bumps merge on CI-green alone - PARTIALLY implemented here:
+    # this lowers gate 3b's reviewer count, while gate 2+3's unconditional
+    # "no live APPROVE at head" floor still stands, so a qualifying bump goes
+    # from two reviewers to one and not to zero.
+    #
+    # ALL THREE have their OWN reader function, and that is not tidiness. An
+    # independent reviewer measured that hard-coding either of the two that
+    # used to be read inline left the whole suite green - i.e. the policy list
+    # could be emptied or inverted with every decision unchanged, which is the
+    # `_escalate` defect this very change cites. A named function is what an
+    # arm and a deep-copy test can be pointed at.
+    "review.dependency_bump_reviewers": "gates.dependency_bump_reviewers",
+    "review.dependency_bump_authors": "gates.dependency_bump_authors",
+    "review.dependency_bump_paths": "gates.dependency_bump_paths",
     "receipt_required_steps": "tick.verify_run_backed_receipt",
     "receipt_required_steps.g1-browser": "tick.verify_run_backed_receipt",
     "receipt_required_steps.deploy-run": "tick.verify_run_backed_receipt",
@@ -5682,11 +5697,140 @@ LANE_PATHS = {
 }
 
 
+def dependency_bump_paths(policy: dict) -> tuple[str, ...]:
+    """Allowlist entries a dependency bump may touch and still skip review.
+
+    READ from policy rather than hard-coded, for the reason `_escalate` records
+    one key above: a list that code does not read can be emptied, inverted or
+    deleted with every decision unchanged.
+
+    An entry ending in `/` is a TOP-LEVEL DIRECTORY; every other entry is a
+    FILE NAME. `path_is_on_bump_allowlist` is where that grammar is enforced.
+    """
+    review = policy.get("review", {}) or {}
+    return tuple(review.get("dependency_bump_paths", ()) or ())
+
+
+def dependency_bump_authors(policy: dict) -> tuple[str, ...]:
+    """Logins whose PRs may claim the bump exemption.
+
+    A SEPARATE READER, not an inline `review.get(...)`, for exactly the reason
+    `dependency_bump_paths` is one: an arm can be pointed at a function and a
+    deep-copy test can prove that editing the policy list moves the decision.
+    Inlined, this key could be hard-coded with the whole suite green -- which
+    is what an independent reviewer measured here and is why it is a function.
+    """
+    review = policy.get("review", {}) or {}
+    return tuple(review.get("dependency_bump_authors", ()) or ())
+
+
+def dependency_bump_reviewers(policy: dict) -> int:
+    """How many reviewers a qualifying bump needs. Same reasoning as above.
+
+    CLAMPED AT ZERO because a negative value would make `len(approvals) >= n`
+    unfalsifiable in gate 3b -- `-5` reads as "always enough" rather than as
+    the nonsense it is. Clamping is not a substitute for the gate 2+3 APPROVE
+    floor; it only stops this key from expressing something the gate cannot
+    mean.
+    """
+    review = policy.get("review", {}) or {}
+    return max(0, int(review.get("dependency_bump_reviewers", 0)))
+
+
+def path_is_on_bump_allowlist(path: str, allowed: tuple[str, ...]) -> bool:
+    """Does `path` match an allowlist entry by WHOLE PATH SEGMENTS?
+
+    SEGMENTS, NOT SUBSTRINGS, and the difference is the whole point of this
+    function existing. The first version of this matcher asked
+    `p.startswith(a) or f"/{a}" in p`, which has no boundary at either end, so
+    an independent reviewer measured these as exempt at zero reviewers -- and
+    they reproduce at `9d8952420`, the head that carried that matcher:
+
+        evil/requirements/x.py          csa_platform/requirements/backdoor.py
+        go.modules/evil.py              Cargo.lockdir/evil.rs
+        package-lock.json.py            poetry.lock.sh
+        Cargo.tomlfoo/build.rs          x/go.modules/evil.py
+
+    A shell script was being classified as a lock file.
+
+    IT WAS LATENT, NOT LIVE, and the fix is a pure narrowing. Measured over
+    `git ls-files` at `9d8952420` and again after this change: 13,644 tracked
+    files, 24 admitted by the matcher, and the admitted SET is IDENTICAL on
+    both sides -- so nothing legitimate lost its exemption and none of the
+    shapes above exists in the tree today. Latent is the whole hazard: it goes
+    live the day someone adds a `csa_platform/requirements/` directory, with
+    no test change to notice it.
+
+    The grammar, deliberately small:
+      * an entry ending in `/` matches only the TOP-LEVEL directory of that
+        name -- `requirements/` admits `requirements/locks/x.txt` and refuses
+        `evil/requirements/x.py`;
+      * any other entry matches only a FILE NAME, exactly -- `go.mod` admits
+        `sdk/x/go.mod` and refuses `go.modules/evil.py`.
+
+    A DELIBERATE UNDER-REACH follows from the first rule: a top-level
+    `requirements.txt`, or `apps/x/requirements.txt`, is NOT exempt, because
+    `requirements/` is a directory entry. That fails closed, so it is left
+    alone rather than widened on a hunch.
+    """
+    parts = [seg for seg in path.replace("\\", "/").split("/") if seg]
+    if not parts:
+        return False
+    for entry in allowed:
+        entry = entry.replace("\\", "/")
+        if entry.endswith("/"):
+            if parts[0] == entry.rstrip("/"):
+                return True
+        elif parts[-1] == entry:
+            return True
+    return False
+
+
+def is_dependency_bump(policy: dict, author: str | None,
+                       changed_paths: list[str] | None) -> tuple[bool, str]:
+    """Is this a bot dependency bump confined to the allowlist?
+
+    FAILS CLOSED three ways, and each one has a name so a NO is explicable:
+    an author the policy does not recognise, an EMPTY file list (which is
+    indistinguishable from "a diff that touches nothing" and is the same
+    boundary `review_requirement`'s `footprint_known` guards), and any single
+    path outside the allowlist.
+
+    Returns (verdict, why) so the caller can print the reason rather than a
+    bare boolean -- an unexplained exemption is the shape this module exists
+    to remove.
+    """
+    authors = dependency_bump_authors(policy)
+    if not authors:
+        return False, "policy declares no dependency_bump_authors"
+    if not author:
+        return False, "the PR author could not be read - failing closed"
+    if author not in authors:
+        return False, f"author {author!r} is not a declared bump author"
+
+    allowed = dependency_bump_paths(policy)
+    if not allowed:
+        return False, "policy declares no dependency_bump_paths"
+    paths = [p for p in (changed_paths or []) if p]
+    if not paths:
+        return False, "the changed-file list is empty - failing closed"
+
+    outside = [p for p in paths if not path_is_on_bump_allowlist(p, allowed)]
+    if outside:
+        return False, f"{len(outside)} changed path(s) outside the allowlist, e.g. {outside[0]!r}"
+    # NAMED FOR WHAT IT CHECKED, per `deploy-integrity.md` R7. The earlier
+    # wording was "confined to N lock/manifest file(s)", which asserts a
+    # property this function never establishes: `requirements/README.md` is on
+    # the allowlist and is neither a lock nor a manifest.
+    return True, f"a dependency bump confined to {len(paths)} path(s) on the bump allowlist"
+
+
 def review_requirement(policy: dict, changed_paths: list[str] | None = None,
                        prior_verdict: str | None = None,
                        stream: str | None = None,
                        footprint_known: bool = True,
-                       stream_known: bool = True) -> tuple[int, str]:
+                       stream_known: bool = True,
+                       dependency_bump: bool = False) -> tuple[int, str]:
     """How many independent reviewers this change needs, and why.
 
     Operator decision 2026-09-12. W0 -- the merge gate itself -- took EIGHT
@@ -5754,6 +5898,56 @@ def review_requirement(policy: dict, changed_paths: list[str] | None = None,
                     if normalized.startswith(p) or f"/{p}" in normalized), None)
         if hit:
             return 2, f"the diff touches {hit} - a guard, deploy or console surface"
+
+    # THE DEPENDENCY-BUMP EXEMPTION, and its POSITION is the design.
+    #
+    # WHAT THIS ACTUALLY DOES, stated first because the operator decision it
+    # serves is WIDER than the change: decision 2026-09-21 is "dependency bumps
+    # merge on CI-green alone", and THIS IS A PARTIAL IMPLEMENTATION OF IT. It
+    # lowers gate 3b's reviewer count for a qualifying bump. It does NOT remove
+    # review: `reduce_verdicts` -- gate 2+3, a few thousand lines above -- ends
+    # with an unconditional refusal when no live verdict carries the APPROVE
+    # token, which this code does not touch and cannot reach. So a lock-only
+    # bot bump goes from TWO independent reviewers to ONE, never to zero.
+    # Reaching zero would mean loosening gate 2+3 as well, which is a strictly
+    # larger change than this one and needs its own decision and its own arms.
+    #
+    # It sits HERE and nowhere else:
+    #
+    #   * AFTER the blocking-verdict check, so a reviewer who blocked a bump
+    #     still escalates it. Formatting never reduces a block and neither
+    #     does being a bot.
+    #   * AFTER the escalation-path loop, so a bump that edits
+    #     `.github/workflows` or `portal/` is NOT exempt. That is deliberate:
+    #     CI-green proves least exactly where the change can alter what CI
+    #     runs.
+    #   * BEFORE the footprint/stream checks, which are the two arms that were
+    #     escalating bumps for a reason the operator's decision overrides -- a
+    #     bot PR references no ledger item, so its stream never resolves.
+    #
+    # `dependency_bump` is computed by the CALLER from the real author and the
+    # real file list (`is_dependency_bump`), never guessed from a lane. An
+    # unconsulted argument is the defect this module has already found twice,
+    # so the caller passing it is covered by its own test -- a BEHAVIOURAL one
+    # driving the real gate with a real author, because the first version of
+    # that test grepped `merge_gate.py` for two literal strings and an
+    # independent reviewer defeated it by inserting one line that left both
+    # needles verbatim.
+    #
+    # `footprint_known` is a second conjunct today's only caller cannot
+    # falsify -- `merge_gate` passes `footprint_known=bool(changed)` and
+    # `is_dependency_bump` is True only when the path list is non-empty, so
+    # `dependency_bump and not footprint_known` is unreachable through it. It
+    # is kept because `review_requirement` is public, has another caller, and
+    # defaults the flag; `test_the_footprint_conjunct_is_load_bearing` exercises
+    # it directly so the conjunct is not an assertion nothing can break.
+    if dependency_bump and footprint_known:
+        return dependency_bump_reviewers(policy), (
+            "a dependency bump confined to the bump allowlist - operator "
+            "decision 2026-09-21. This waives the gate 3b reviewer COUNT only: "
+            "gate 2+3 still requires one live APPROVE at head, and required and "
+            "advisory contexts still gate this merge"
+        )
 
     if not footprint_known and review.get("escalate_when_footprint_unknown", True):
         return 2, "the change's file footprint is not known yet - failing closed"

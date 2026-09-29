@@ -15,6 +15,7 @@ import type {
   PermAssignment, PermRole, PermsTab, SqlGrant, SqlTableRef, SqlColRef, RlsPolicy, ResolvedPrincipal,
   LakehouseSettings, IcebergEndpoint, DaAgentRow, LiveCatalogTable,
   ShortcutTargetType, ShortcutKind, ShortcutRow, SchemaRow,
+  VariableLibraryRow, VariableCheckResult,
 } from './types';
 import type { ColStat } from '../components/delta-preview-grid';
 import type { LakehouseBinding } from './lakehouse-binding';
@@ -244,6 +245,17 @@ export interface LakehouseEditorCtx {
   // ---- Semantic model gate ----
   semanticModelGateOpen: boolean;
   setSemanticModelGateOpen: (v: boolean) => void;
+
+  // ---- Check variables (read-only health check) ----
+  cvOpen: boolean;
+  setCvOpen: (v: boolean) => void;
+  cvLibraries: VariableLibraryRow[] | null;
+  cvLoadError: string | null;
+  cvTruncatedHint: string | null;
+  cvBusy: boolean;
+  cvResults: VariableCheckResult[] | null;
+  openCheckVariables: () => Promise<void>;
+  checkAllVariables: () => Promise<void>;
 
   // ---- Data agent dialog ----
   daOpen: boolean;

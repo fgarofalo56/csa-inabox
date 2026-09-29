@@ -2,6 +2,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { clientFetch } from '@/lib/client-fetch';
 import { parseJsonOrError } from '../shared';
+import { useCheckVariables } from './use-check-variables';
 import type { HistoryRow, PathEntry, ReferenceLakehouse, RefSelection, PreviewResponse } from '../shared';
 import type { DaAgentRow, SchemaRow } from '../types';
 import type { WorkspaceItem } from '@/lib/api/workspaces';
@@ -345,6 +346,12 @@ export function useLakehouseSecondary({
     finally { setDaBusy(false); }
   }, [daAgents, daSel, itemQ.data?.displayName, id, maintainTable]);
 
+  // ── Check variables (read-only Variable Library health check) ─────────────
+  // Lives in its own hook so it is reachable by `renderHook` without standing
+  // up this hook's whole parameter surface; spread below so the shell picks it
+  // up through the context it already builds from `...sec`.
+  const cv = useCheckVariables(itemQ.data?.workspaceId);
+
   return {
     // History
     historyTable, setHistoryTable,
@@ -384,5 +391,7 @@ export function useLakehouseSecondary({
     daBusy, setDaBusy,
     daMsg, setDaMsg,
     addToAgent,
+    // Check variables
+    ...cv,
   };
 }
