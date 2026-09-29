@@ -1348,6 +1348,9 @@ jobs:
           if [ "$CODE" = "200" ]; then echo "✓ Delta Sharing metastore grants applied to $UAMI"; else echo "::warning::Delta Sharing grant returned $CODE (non-fatal — re-run csa-loom-grant-delta-sharing.yml)"; fi
 
       - name: Provision default Databricks SQL warehouse (query compute) + wire it on the Console
+        # Referenced by the final "Fail the job if a gated bootstrap step failed"
+        # step — do not rename without updating it (check-bootstrap-rg-subscription-scope).
+        id: dbx_sql_warehouse
         # Day-one QUERY COMPUTE for Databricks — the equivalent of Synapse's
         # always-on Serverless SQL pool, so users don't have to create one. A SQL
         # warehouse is a Databricks DATA-PLANE resource (REST API, NOT ARM), so it
@@ -1358,11 +1361,11 @@ jobs:
         # the workspace/region supports it, else a small classic PRO warehouse.
         # Skips cleanly when no Databricks workspace is bound. When one IS bound
         # and no warehouse id results (or the Console env cannot be set), the step
-        # exits 1, so its OUTCOME is failure (#4765). continue-on-error is left as
-        # it was, so the job still continues and its conclusion does not change.
-        # That is why the annotations are warnings: a step that cannot fail the
-        # job does not get to print an error annotation (check-annotation-teeth).
-        # Read the step outcome and its warnings, not the job conclusion.
+        # exits 1 and records `reason` + `http_status` in its outputs (#4765).
+        # continue-on-error stays so the steps after this one still run; the final
+        # always() gate step reads this step's OUTCOME and fails the job, so the
+        # job conclusion is honest. The in-step annotations are warnings because
+        # this step itself cannot fail the job (check-annotation-teeth).
         # Runs inside the Databricks public-access window: after "Enable
         # Databricks public access (temp ...)" and before the always() "Restore
         # Databricks public access disabled" step.
@@ -1370,10 +1373,13 @@ jobs:
         continue-on-error: true
         run: |
           set -uo pipefail
+          # record KEY VALUE -> a step output the final gate step reads (#4765).
+          record() { printf '%s=%s\n' "$1" "$2" >> "${GITHUB_OUTPUT:-/dev/null}"; }
           if [ -z "${DBX_HOST:-}" ]; then echo "::notice::No Databricks host bound — skipping SQL warehouse provisioning."; exit 0; fi
           TOKEN=$(az account get-access-token --resource 2ff814a6-3304-4ab8-85cb-cd0e6f879c1d --query accessToken -o tsv)
           if [ -z "$TOKEN" ]; then
             echo "::warning::az account get-access-token returned no Databricks token (its stderr, if any, is above) — cannot provision the SQL warehouse on $DBX_HOST."
+            record reason no_token
             exit 1
           fi
           auth=(-H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json")
@@ -1410,6 +1416,8 @@ jobs:
           if ! is_2xx || ! is_json_object "$PROBE"; then
             show_response "GET /api/2.0/sql/warehouses" "$PROBE"
             echo "::warning::Could not list SQL warehouses on $DBX_HOST (HTTP $DBX_CODE, curl exit $DBX_RC; response above), so whether 'loom-default' already exists is unknown — not creating one blind."
+            record reason probe_failed
+            record http_status "${DBX_CODE:-none}"
             exit 1
           fi
           WID=$(jq -r '[.warehouses[]? | select(.name == "loom-default") | .id][0] // empty' "$PROBE")
@@ -1424,6 +1432,8 @@ jobs:
             fi
             if [ -z "$WID" ]; then
               echo "::warning::A Databricks workspace is bound ($DBX_HOST) but no SQL warehouse id resulted: the serverless and classic creates both returned no id (last HTTP $DBX_CODE, curl exit $DBX_RC; responses above). This step did not wire LOOM_DATABRICKS_SQL_WAREHOUSE_ID (#3744)."
+              record reason no_warehouse_id
+              record http_status "${DBX_CODE:-none}"
               exit 1
             fi
           fi
@@ -1434,6 +1444,7 @@ jobs:
             echo "✓ Wired LOOM_DATABRICKS_SQL_WAREHOUSE_ID + LINEAGE = $WID on the Console"
           else
             echo "::warning::az containerapp update failed (its stderr is above): LOOM_DATABRICKS_SQL_WAREHOUSE_ID=$WID was NOT set on loom-console in $ADMIN_RG."
+            record reason console_env_not_set
             exit 1
           fi
 
@@ -2755,3 +2766,36 @@ jobs:
           echo "  • Dataverse System Administrator on Default env — one-time Promote To Admin click"
           echo "    at https://<org>.crm.dynamics.com/main.aspx?settingsonly=true&pagetype=entitylist&etn=systemuser"
           echo "    (only needed for envs Dataverse was added to AFTER bootstrap; new custom envs don't need this)"
+
+      - name: Fail the job if a gated bootstrap step failed (#4765)
+        # A step with continue-on-error: true reports success to the job even when
+        # it exits 1. That is how run 36384158319 concluded while the SQL warehouse
+        # step had died (#4765). The gated steps keep continue-on-error so every
+        # later step still runs; THIS step, which must stay LAST and always(), reads
+        # their OUTCOME and fails the job, so the conclusion is honest.
+        # Gated today: dbx_sql_warehouse only. The Foundry storage grant has
+        # continue-on-error but no step id; the Content Safety and AOAI steps have
+        # no continue-on-error (their failures are swallowed inside the script).
+        # check-bootstrap-rg-subscription-scope fails CI if this step is removed,
+        # loses always(), stops being last, or stops reading a gated step's outcome.
+        id: bootstrap_failure_gate
+        if: always()
+        env:
+          WH_OUTCOME: ${{ steps.dbx_sql_warehouse.outcome }}
+          WH_REASON: ${{ steps.dbx_sql_warehouse.outputs.reason }}
+          WH_HTTP: ${{ steps.dbx_sql_warehouse.outputs.http_status }}
+        run: |
+          set -uo pipefail
+          echo "SQL warehouse step (dbx_sql_warehouse) outcome: ${WH_OUTCOME:-not reached}"
+          if [ "${WH_OUTCOME:-}" = "failure" ]; then
+            case "${WH_REASON:-}" in
+              no_token) FIX="the deploy identity got no token for the Azure Databricks resource. Check the azure/login step above and that the identity belongs to the workspace's tenant, then re-run the bootstrap." ;;
+              probe_failed) FIX="GET /api/2.0/sql/warehouses was refused or unreachable. HTTP 000 or a connection error: the workspace was probably still private (the 'Enable Databricks public access' update ends in || true, so that window may not have opened). HTTP 401/403: the deploy identity needs to be a workspace admin (see 'Bootstrap Databricks SCIM'). Then re-run the bootstrap." ;;
+              no_warehouse_id) FIX="the serverless and the classic create both returned no id. Read both response bodies in that step's log: a quota or SKU message needs more quota or a different warehouse size; HTTP 403 needs the deploy identity to be a workspace admin. Then re-run the bootstrap." ;;
+              console_env_not_set) FIX="az containerapp update on loom-console failed. The deploy identity needs Contributor on loom-console in the admin resource group (\$ADMIN_RG in \$ADMIN_SUB); the warehouse id is printed in that step's log. Then re-run the bootstrap." ;;
+              *) FIX="the step failed before recording a reason. Read its log above." ;;
+            esac
+            echo "::error::Step 'Provision default Databricks SQL warehouse (query compute) + wire it on the Console' failed (reason: ${WH_REASON:-not recorded}; last Databricks HTTP status: ${WH_HTTP:-not recorded}; the status and the first 500 bytes of each response body are printed in that step's log). This run did not set LOOM_DATABRICKS_SQL_WAREHOUSE_ID on loom-console. Remediation: $FIX"
+            exit 1
+          fi
+          echo "No gated step failed."

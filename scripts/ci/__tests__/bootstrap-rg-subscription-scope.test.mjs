@@ -31,6 +31,11 @@ import {
   MUST_NOT_FLAG,
   DEFAULT_TARGETS,
   RG_TO_SUB,
+  FAILURE_GATE,
+  checkFailureGate,
+  runGateControls,
+  GATE_MUST_FLAG,
+  GATE_MUST_NOT_FLAG,
 } from '../check-bootstrap-rg-subscription-scope.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -204,15 +209,106 @@ test('removing --subscription from the real, WRAPPED warehouse update is caught 
   assert.deepEqual(rows(lines.join('\n')), [{ arm: 'unscoped', line: site + 1, rgVar: 'ADMIN_RG' }]);
 });
 
+// ── Second rule: the #4765 failure gate, on the REAL workflow ──────────────
+// The ids are LIFTED from the guard's FAILURE_GATE, so a renamed gate cannot make
+// these tests aim at a step the guard no longer looks for.
+
+const gateBounds = (lines) => {
+  const idLine = lines.findIndex((l) => l.trim() === `id: ${FAILURE_GATE.gateId}`);
+  assert.ok(idLine > 0, `no "id: ${FAILURE_GATE.gateId}" line in the real workflow — re-aim these tests`);
+  let start = idLine;
+  while (start > 0 && !/^ {6}- name:/.test(lines[start])) start -= 1;
+  assert.ok(start > 0 && idLine - start < 16, 'could not find the gate step\'s "- name:" line above its id');
+  return { start, idLine };
+};
+
+test('failure gate: intact on the real workflow — present, last, always(), reads every gated outcome', () => {
+  // Breaks if the real gate is removed, loses always(), stops being last, gains
+  // continue-on-error, stops exiting 1, or stops reading steps.<id>.outcome.
+  assert.deepEqual(checkFailureGate(REAL), []);
+  // Positive pins, so the empty list above cannot come from the checker looking at nothing.
+  assert.ok(REAL.includes(`id: ${FAILURE_GATE.gateId}`), 'the gate step id is in the real workflow');
+  for (const id of FAILURE_GATE.gatedIds) {
+    assert.ok(REAL.includes(`id: ${id}`), `gated step id ${id} is in the real workflow`);
+    assert.ok(REAL.includes(`steps.${id}.outcome`), `the real gate reads steps.${id}.outcome`);
+  }
+});
+
+test('failure gate: REMOVING the gate step from the real workflow is caught', () => {
+  const lines = realLines();
+  const { start } = gateBounds(lines);
+  const problems = checkFailureGate(lines.slice(0, start).join('\n'));
+  // Breaks if a bootstrap with no gate passes — the defect #4765 is about: a failed
+  // continue-on-error step concluding the job as success. The message is only
+  // emitted AFTER the job's steps were found, so a parse failure cannot satisfy it.
+  assert.match(problems.join('\n'), new RegExp(`no step with id '${FAILURE_GATE.gateId}'`));
+});
+
+test('failure gate: the real gate losing always() (deleted, or turned into success()) is caught', () => {
+  const lines = realLines();
+  const { start, idLine } = gateBounds(lines);
+  const ifLine = lines.findIndex((l, i) => i > start && i < idLine + 4 && /^ {8}if: always\(\)\s*$/.test(l));
+  assert.ok(ifLine > start, 'the gate step\'s "if: always()" line moved — re-aim this mutation');
+  const dropped = [...lines];
+  dropped.splice(ifLine, 1);
+  // Breaks if a gate with no `if:` passes. The default is success(), which SKIPS
+  // the gate on exactly the runs where an earlier step failed the job.
+  assert.match(checkFailureGate(dropped.join('\n')).join('\n'), /runs if: \(unset, i\.e\. success\(\)\)/);
+  const narrowed = [...lines];
+  narrowed[ifLine] = '        if: success()';
+  // Breaks if an explicit success() passes.
+  assert.match(checkFailureGate(narrowed.join('\n')).join('\n'), /runs if: success\(\)/);
+});
+
+test('failure gate: a step appended after the real gate, or the warehouse step losing its id, is caught', () => {
+  const after = `${REAL.replace(/\s+$/, '')}\n\n      - name: A later step\n        run: echo later\n`;
+  // Breaks if the gate is allowed to stop being the last step (the later step's failure would be ungated).
+  assert.match(checkFailureGate(after).join('\n'), /not the LAST step/);
+  const [gated] = FAILURE_GATE.gatedIds;
+  const noId = REAL.replace(new RegExp(`\\n {8}id: ${gated}\\r?\\n`), '\n');
+  assert.notEqual(noId, REAL, 'the gated step id line was not found — re-aim this mutation');
+  // Breaks if the gate may read the outcome of a step id that no longer exists
+  // (steps.<id>.outcome is then '' and the gate never fires).
+  assert.match(checkFailureGate(noId).join('\n'), new RegExp(`gated step id '${gated}' is not in job`));
+});
+
+test('failure gate: embedded controls — every GATE_MUST_FLAG fixture is flagged, every GATE_MUST_NOT_FLAG is clean', () => {
+  // Lifted from the module. Breaks if any fixture misbehaves, or the lists are emptied.
+  assert.ok(GATE_MUST_FLAG.length >= 5 && GATE_MUST_NOT_FLAG.length >= 1, 'gate fixture lists must not be emptied');
+  for (const c of GATE_MUST_FLAG) assert.ok(checkFailureGate(c.src).length > 0, `GATE_MUST_FLAG missed: ${c.why}`);
+  for (const c of GATE_MUST_NOT_FLAG) assert.deepEqual(checkFailureGate(c.src), [], `GATE_MUST_NOT_FLAG tripped: ${c.why}`);
+  assert.deepEqual(runGateControls(), []);
+});
+
 // ── The CLI ────────────────────────────────────────────────────────────────
 
 const runGuard = (args, cwd = REPO) => spawnSync(process.execPath, [GUARD, ...args], { cwd, encoding: 'utf8' });
 
 test('CLI: exits 0 on the real workflow', () => {
   const r = runGuard([]);
-  // Breaks on any violation in the workflow, or a control failure (exit 1).
+  // Breaks on any violation in the workflow, a broken failure gate, or a control failure (exit 1).
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /all scoped to the matching subscription/);
+  assert.match(r.stdout, new RegExp(`failure gate '${FAILURE_GATE.gateId}' is last, always\\(\\)`));
+});
+
+test('CLI: exits 1 on a copy of the real workflow whose failure gate was removed', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'rgscope-gate-'));
+  try {
+    const lines = realLines();
+    const { start } = gateBounds(lines);
+    const copy = join(dir, 'bootstrap-no-gate.yml');
+    writeFileSync(copy, lines.slice(0, start).join('\r\n'));
+    const r = runGuard([copy]);
+    // Breaks if the CLI does not fail (exit 1) on a bootstrap with no gate. The
+    // copy's az calls are all scoped, so the scope rule contributes nothing here:
+    // the non-zero exit comes from the gate rule alone.
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stderr, /the #4765 failure gate is broken/);
+    assert.match(r.stdout, /all scoped to the matching subscription/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('CLI: exits 1 on a planted file and annotates the planted line; exits 1 on an empty population and on an unreadable file', () => {
@@ -221,7 +317,10 @@ test('CLI: exits 1 on a planted file and annotates the planted line; exits 1 on 
     const planted = join(dir, 'planted.yml');
     writeFileSync(planted, 'steps:\r\n  - run: |\r\n      az keyvault list \\\r\n        -g "$ADMIN_RG" -o tsv\r\n');
     const r = runGuard([planted]);
-    // Breaks if the CLI exits 0 on a violation, or annotates the -g line (4) not the az line (3).
+    // Breaks if the CLI annotates the -g line (4) not the az line (3), or misses it.
+    // DISCLOSED: these small fixtures have no failure gate, so the gate rule ALSO
+    // exits 1 on each of them. The status assertions in this test therefore cannot
+    // fail on their own; the stderr MESSAGE assertions are what pin each arm.
     assert.equal(r.status, 1, r.stdout);
     assert.match(r.stderr, /line=3::unscoped \(\$ADMIN_RG/);
 

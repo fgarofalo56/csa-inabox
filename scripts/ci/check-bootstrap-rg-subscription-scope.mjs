@@ -54,6 +54,24 @@
  *     lines WITHOUT a `\` is lexed approximately; heredoc bodies are lexed as
  *     shell. Neither changes a verdict in the target today.
  *
+ * SECOND RULE — THE FAILURE GATE (#4765). Step-level `continue-on-error: true`
+ * turns a step's exit 1 into job-level success. The bootstrap keeps it on the
+ * steps listed in FAILURE_GATE.gatedIds (so the steps after them still run),
+ * and a final step with id FAILURE_GATE.gateId reads their `outcome` and fails
+ * the job. That only works while the gate step:
+ *   - exists in the job,
+ *   - is the LAST step (a step after it would not be covered),
+ *   - runs `if: always()` (under the default `success()` it is SKIPPED on
+ *     exactly the runs that need it),
+ *   - does not itself carry continue-on-error,
+ *   - emits `::error::` and `exit 1`, and
+ *   - reads `steps.<id>.outcome` for every gated id, each of which must exist
+ *     and precede it.
+ * Each of those is checked on the parsed workflow (scripts/ci/_workflow-yaml.mjs),
+ * not by regex over lines, and proven first against embedded fixtures
+ * (GATE_MUST_FLAG / GATE_MUST_NOT_FLAG). Removing the gate, or dropping its
+ * `always()`, fails this guard.
+ *
  * Usage:
  *   node scripts/ci/check-bootstrap-rg-subscription-scope.mjs              # CHECK the bootstrap
  *   node scripts/ci/check-bootstrap-rg-subscription-scope.mjs <file> …     # CHECK named files
@@ -65,6 +83,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readLogicalLines } from './_logical-lines.mjs';
+import { parseWorkflow, scalarValue } from './_workflow-yaml.mjs';
 
 export const DEFAULT_TARGETS = ['.github/workflows/csa-loom-post-deploy-bootstrap.yml'];
 
@@ -306,9 +325,125 @@ export function runControls() {
   return failures;
 }
 
-/** Judge a list of files. Returns an exit code; prints the verdict. */
+// ── Second rule: the failure gate (#4765) ─────────────────────────────────────
+
+/** The job, the gate step's id, and the continue-on-error step ids it must cover. */
+export const FAILURE_GATE = Object.freeze({
+  job: 'bootstrap',
+  gateId: 'bootstrap_failure_gate',
+  gatedIds: Object.freeze(['dbx_sql_warehouse']),
+});
+
+/** `always()` or `${{ always() }}`, nothing else — `always() && x` would skip on !x. */
+const ALWAYS_ONLY = /^\s*(?:\$\{\{\s*)?always\(\)(?:\s*\}\})?\s*$/;
+const TRUE_SCALAR = /^\s*(?:true|'true'|"true")\s*$/;
+
+/**
+ * Judge the failure gate in one workflow's text. Returns a list of problems
+ * (empty = the gate is intact). Each message names what is missing.
+ */
+export function checkFailureGate(text, spec = FAILURE_GATE) {
+  let doc;
+  try {
+    doc = parseWorkflow(text);
+  } catch (e) {
+    return [`cannot parse the workflow to find the failure gate (${e.message})`];
+  }
+  const steps = doc?.jobs?.[spec.job]?.steps;
+  if (!Array.isArray(steps) || steps.length === 0) return [`job '${spec.job}' has no steps, so it has no failure gate`];
+  const idOf = (s) => scalarValue(s?.id);
+  const gateIdx = steps.findIndex((s) => idOf(s) === spec.gateId);
+  if (gateIdx < 0) {
+    return [`no step with id '${spec.gateId}' in job '${spec.job}' — nothing turns a failed continue-on-error step (${spec.gatedIds.join(', ')}) into a failed job`];
+  }
+  const gate = steps[gateIdx];
+  const problems = [];
+  if (gateIdx !== steps.length - 1) {
+    problems.push(`'${spec.gateId}' is step ${gateIdx + 1} of ${steps.length}, not the LAST step — a failure after it would not be gated`);
+  }
+  const cond = scalarValue(gate.if);
+  if (cond === undefined || !ALWAYS_ONLY.test(String(cond))) {
+    problems.push(`'${spec.gateId}' runs if: ${cond === undefined ? '(unset, i.e. success())' : cond} — it must be exactly always(), or it is skipped on the runs where an earlier step failed`);
+  }
+  if (TRUE_SCALAR.test(String(scalarValue(gate['continue-on-error']) ?? ''))) {
+    problems.push(`'${spec.gateId}' has continue-on-error: true, so its own exit 1 never reaches the job conclusion`);
+  }
+  const run = String(scalarValue(gate.run) ?? '');
+  if (!run.includes('::error::') || !/(^|[\s;])exit 1\b/m.test(run)) {
+    problems.push(`'${spec.gateId}' run block must emit ::error:: and exit 1 when a gated step failed`);
+  }
+  const envVals = gate.env && typeof gate.env === 'object' ? Object.values(gate.env).map((n) => String(scalarValue(n) ?? '')) : [];
+  const reads = `${envVals.join('\n')}\n${run}`;
+  for (const id of spec.gatedIds) {
+    const idx = steps.findIndex((s) => idOf(s) === id);
+    if (idx < 0) problems.push(`gated step id '${id}' is not in job '${spec.job}' — the gate reads the outcome of a step that does not exist`);
+    else if (idx > gateIdx) problems.push(`gated step '${id}' runs AFTER '${spec.gateId}'`);
+    if (!reads.includes(`steps.${id}.outcome`)) problems.push(`'${spec.gateId}' does not read steps.${id}.outcome`);
+  }
+  return problems;
+}
+
+/** A minimal intact gate; the MUST_FLAG fixtures below are single edits of it. */
+const GATE_GOOD = [
+  'on: workflow_dispatch',
+  'jobs:',
+  '  bootstrap:',
+  '    runs-on: ubuntu-latest',
+  '    steps:',
+  '      - name: gated',
+  '        id: dbx_sql_warehouse',
+  '        continue-on-error: true',
+  '        run: |',
+  '          exit 1',
+  '      - name: gate',
+  '        id: bootstrap_failure_gate',
+  '        if: always()',
+  '        env:',
+  '          WH_OUTCOME: ${{ steps.dbx_sql_warehouse.outcome }}',
+  '        run: |',
+  '          if [ "$WH_OUTCOME" = failure ]; then',
+  '            echo "::error::gated step failed"',
+  '            exit 1',
+  '          fi',
+  '',
+].join('\n');
+
+const LAST_STEP = '      - name: after\n        run: echo after\n';
+
+export const GATE_MUST_FLAG = [
+  { why: 'the gate step removed', src: GATE_GOOD.replace(/ {6}- name: gate\n[\s\S]*$/, '') },
+  { why: 'the gate loses always() (default success() skips it on a failed run)', src: GATE_GOOD.replace('        if: always()\n', '') },
+  { why: 'the gate runs if: success()', src: GATE_GOOD.replace('if: always()', 'if: success()') },
+  { why: 'the gate narrowed to always() && a condition', src: GATE_GOOD.replace('if: always()', "if: always() && github.ref == 'refs/heads/main'") },
+  { why: 'a step added after the gate', src: GATE_GOOD + LAST_STEP },
+  { why: 'the gate no longer reads the gated outcome', src: GATE_GOOD.replace('steps.dbx_sql_warehouse.outcome', 'job.status') },
+  { why: 'the gated step lost its id', src: GATE_GOOD.replace('        id: dbx_sql_warehouse\n', '') },
+  { why: 'the gate itself is continue-on-error', src: GATE_GOOD.replace('        if: always()\n', '        if: always()\n        continue-on-error: true\n') },
+  { why: 'the gate never exits 1', src: GATE_GOOD.replace('            exit 1\n', '') },
+];
+
+export const GATE_MUST_NOT_FLAG = [
+  { why: 'the intact gate', src: GATE_GOOD },
+  { why: 'the intact gate written ${{ always() }}, CRLF', src: GATE_GOOD.replace('if: always()', 'if: ${{ always() }}').replace(/\n/g, '\r\n') },
+];
+
+/** Runs the gate controls. Returns a list of failure descriptions (empty = healthy). */
+export function runGateControls() {
+  const failures = [];
+  for (const c of GATE_MUST_FLAG) {
+    if (checkFailureGate(c.src).length === 0) failures.push(`GATE MUST-FLAG missed — ${c.why}`);
+  }
+  for (const c of GATE_MUST_NOT_FLAG) {
+    const p = checkFailureGate(c.src);
+    if (p.length > 0) failures.push(`GATE MUST-NOT-FLAG tripped — ${c.why}: ${p.join('; ')}`);
+  }
+  return failures;
+}
+
+/** Judge a list of files against both rules. Returns an exit code; prints the verdict. */
 export function checkFiles(files, root = process.cwd()) {
   const all = [];
+  let gateBroken = 0;
   for (const rel of files) {
     let text;
     try {
@@ -316,6 +451,16 @@ export function checkFiles(files, root = process.cwd()) {
     } catch (e) {
       console.error(`::error::bootstrap-rg-subscription-scope: cannot read ${rel} (${e.code || e.message}). Refusing to report a pass on a file that was not read.`);
       return 1;
+    }
+    const gateProblems = checkFailureGate(text);
+    if (gateProblems.length > 0) {
+      gateBroken += 1;
+      console.error(
+        `::error file=${rel}::bootstrap-rg-subscription-scope: the #4765 failure gate is broken, so a failed continue-on-error ` +
+          `step (${FAILURE_GATE.gatedIds.join(', ')}) would conclude the job as SUCCESS: ${gateProblems.join('; ')}`,
+      );
+    } else {
+      console.log(`bootstrap-rg-subscription-scope: ${rel} — failure gate '${FAILURE_GATE.gateId}' is last, always(), and reads ${FAILURE_GATE.gatedIds.map((id) => `steps.${id}.outcome`).join(', ')}.`);
     }
     const r = scanText(text);
     if (r.guarded === 0) {
@@ -344,12 +489,12 @@ export function checkFiles(files, root = process.cwd()) {
     }
     return 1;
   }
-  return 0;
+  return gateBroken > 0 ? 1 : 0;
 }
 
 function main() {
   const args = process.argv.slice(2);
-  const controlFailures = runControls();
+  const controlFailures = [...runControls(), ...runGateControls()];
   if (controlFailures.length > 0) {
     console.error(
       `::error::bootstrap-rg-subscription-scope: the EMBEDDED CONTROL failed (${controlFailures.length}). The matcher no ` +
@@ -359,13 +504,16 @@ function main() {
     process.exit(1);
   }
   const controlCount = MUST_FLAG.length + MUST_NOT_FLAG.length;
+  const gateControlCount = GATE_MUST_FLAG.length + GATE_MUST_NOT_FLAG.length;
   if (args.includes('--self-test')) {
-    console.log(`bootstrap-rg-subscription-scope self-test OK — ${controlCount} control fixture(s) behaved as documented.`);
+    console.log(`bootstrap-rg-subscription-scope self-test OK — ${controlCount} scope + ${gateControlCount} failure-gate control fixture(s) behaved as documented.`);
     return;
   }
   const files = args.filter((a) => !a.startsWith('--'));
   const code = checkFiles(files.length ? files : DEFAULT_TARGETS);
-  if (code === 0) console.log(`bootstrap-rg-subscription-scope OK — ${controlCount} embedded control fixture(s) proved both arms still detect.`);
+  if (code === 0) {
+    console.log(`bootstrap-rg-subscription-scope OK — ${controlCount} scope + ${gateControlCount} failure-gate embedded control fixture(s) proved every arm still detects.`);
+  }
   process.exit(code);
 }
 
