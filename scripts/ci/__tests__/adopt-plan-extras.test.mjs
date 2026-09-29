@@ -316,12 +316,19 @@ test('two loom-default warehouses: adopts NONE, and does not fall back to loom-g
 });
 
 // Neither name. BREAKS ON: demoting the no-match notice, on emitting an empty
-// key, or on adopting some other warehouse (→ 'aaaa0000').
+// key, or on adopting some other warehouse (→ 'aaaa0000'). The fixture's only
+// warehouse is named 'other', the case the Azure Government writers can bind
+// (they fall back to the first warehouse of ANY name), so the notice must say
+// that name is not adopted. ALSO BREAKS ON: restoring the earlier notice, which
+// said "the next deploy after one exists binds it" with no qualifier (false
+// here: 'other' exists and the next deploy still binds nothing).
 test('API answered 200 with neither loom-default nor loom-governance: no key, a ::notice::, no ::warning::', () => {
   const { plan, stderr } = discover({ dbx: true, body: '{"warehouses":[{"id":"aaaa0000","name":"other"}]}' });
   assert.equal(plan.databricks?.extra?.hostname, DBX_HOST);
   assert.equal(plan.databricks?.extra?.sqlWarehouseId, undefined);
   assert.match(stderr, /::notice::.*answered 200 and lists NO warehouse named 'loom-default' or 'loom-governance'/);
+  assert.match(stderr, /::notice::.*a warehouse under any other name is not adopted/);
+  assert.doesNotMatch(stderr, /the next deploy after one exists binds it/);
   assert.doesNotMatch(stderr, /::warning::.*SQL Warehouses API/);
 });
 
@@ -340,11 +347,10 @@ test('API REFUSED (403): no key, a ::warning:: naming HTTP 403 — never "absent
   assert.doesNotMatch(stderr, /lists NO warehouse/);
 });
 
-// The measured Commercial shape: adb-loom-default-centralus has
-// publicNetworkAccess Disabled, and a hosted runner gets this 403 body. BREAKS
-// ON: deleting the network-access branch (the warning would blame workspace
-// membership — a false cause, deploy-integrity R7), or matching it on a plain
-// 403 (the test above goes RED).
+// The refusal shape seen on the Commercial estate: a 403 whose body names
+// network access. BREAKS ON: deleting the network-access branch (the warning
+// would blame workspace membership, a false cause under deploy-integrity R7),
+// or matching it on a plain 403 (the test above goes RED).
 test('API REFUSED at the network layer (403 "Unauthorized network access"): the warning says NETWORK, not RBAC', () => {
   const { plan, stderr, status } = discover({
     dbx: true,
@@ -356,6 +362,32 @@ test('API REFUSED at the network layer (403 "Unauthorized network access"): the 
   assert.equal(plan.databricks?.extra?.sqlWarehouseId, undefined);
   assert.match(stderr, /refused this runner at the NETWORK layer/);
   assert.doesNotMatch(stderr, /likely not a user of that workspace/);
+});
+
+// The CAUSE text of that warning (deploy-integrity R7). The body proves only
+// that the refusal is network-layer; two workspace controls produce it, and
+// the script reads neither. BREAKS ON: a warning that names ONE control as the
+// cause, e.g. the earlier "a workspace with publicNetworkAccess Disabled is
+// reachable only through its private endpoint, so a hosted runner cannot read
+// it at all" (this test goes RED against it), or one that drops the IP access
+// list, the "NOT established" disclosure, or the pointer to the tracked
+// in-VNet producer.
+test('network-layer 403: the warning names BOTH candidate controls and says which refused was NOT established', () => {
+  const { stderr } = discover({
+    dbx: true,
+    httpCode: '403',
+    body: '{"error_code":"403","message":"Unauthorized network access to workspace: 1234567890123456"}',
+  });
+  const warning = stderr.split('\n').find((l) => l.includes('did NOT answer 200')) ?? '';
+  assert.match(warning, /refused this runner at the NETWORK layer/, 'positive: the refusal itself is named');
+  assert.match(warning, /public network access set to Disabled/, 'candidate 1 must be named');
+  // Anchored on "or a workspace": the disclosure sentence also says "IP access
+  // list", so a bare /IP access list/ stays green when the candidate is dropped.
+  assert.match(warning, /or a workspace IP access list/, 'candidate 2 must be named');
+  assert.match(warning, /Which one refused it was NOT established/, 'the unresolved cause must be disclosed');
+  assert.match(warning, /#3744/, 'the tracked in-VNet producer must be named');
+  assert.doesNotMatch(warning, /publicNetworkAccess Disabled/, 'a single control must not be asserted as the cause');
+  assert.doesNotMatch(warning, /cannot read it at all/, 'an unestablished remedy must not be asserted');
 });
 
 // BREAKS ON: `set -e` aborting on curl's non-zero exit (status would be 6),

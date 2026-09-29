@@ -328,11 +328,17 @@ fi
 # TWO NAMES are written in this repo, and they differ by writer, not by cloud:
 #   loom-default     csa-loom-post-deploy-bootstrap.yml (called by the
 #                    Commercial, GCC, GCC-High and IL5 deploy lanes) and
-#                    csa-loom-grant-delta-sharing.yml create/reuse this name.
+#                    csa-loom-grant-delta-sharing.yml reuse a warehouse of this
+#                    exact name, and create it when none exists.
 #   loom-governance  gov-provision-dbx-sql.yml and gov-provision-dbx-sql-invnet.yml
-#                    (the apps/loom-dbx-init image), both Azure Government only,
-#                    create this name — but only when NO warehouse whose name
-#                    starts with `loom` exists; otherwise they reuse that one.
+#                    (the apps/loom-dbx-init image), both Azure Government only.
+#                    They reuse the first warehouse whose name starts with `loom`;
+#                    failing that, the first warehouse of ANY name. They create
+#                    `loom-governance` only when the workspace lists no warehouse
+#                    at all.
+# So a Gov workspace can be bound by those writers to a warehouse under another
+# name. This lookup does not adopt it (it adopts only the two names), so that
+# case still renders ''.
 # PREFERENCE, deterministic and stated in the output: `loom-default` if the
 # workspace lists one, else `loom-governance`. `loom-default` wins because the
 # bootstrap re-wires the console to it on every run, so preferring the other
@@ -344,13 +350,16 @@ fi
 # THREE STATES, never collapsed (deploy-integrity R7):
 #   found                  → its id is adopted.
 #   API answered, no match → '' and a ::notice:: — a measured negative (the
-#                            warehouse has not been created on this workspace).
+#                            warehouse by either name exists on this workspace).
 #   API refused/unreachable→ '' and a ::warning:: naming the HTTP code. This is
 #                            UNKNOWN and is never reported as "no warehouse".
-#                            A workspace with publicNetworkAccess Disabled
-#                            answers a hosted runner 403 "Unauthorized network
-#                            access to workspace" — that is this state, and the
-#                            warning says so rather than blaming RBAC.
+#                            A 403 whose body names network access ("Unauthorized
+#                            network access to workspace") is this state. The
+#                            warning calls it a network-layer refusal rather than
+#                            blaming RBAC, and names BOTH workspace controls that
+#                            can produce it (public network access Disabled, or an
+#                            IP access list) without asserting which: this lookup
+#                            reads neither setting.
 # It never fails the script: a warehouse is an optional binding (the console
 # auto-selects a RUNNING warehouse when the id is blank), and in a boundary
 # where Databricks SQL is unavailable the API answers with no match or an error,
@@ -377,7 +386,7 @@ dbx_sql_warehouse_id() { # dbx_sql_warehouse_id <workspace host> → id or '' on
   code="$(printf '%s' "${code:-}" | tr -d '\r\n')"
   if [ "$code" != "200" ]; then
     if grep -qi 'network access' "$body"; then
-      why="The workspace refused this runner at the NETWORK layer (its body names network access): a workspace with publicNetworkAccess Disabled is reachable only through its private endpoint, so a hosted runner cannot read it at all. The warehouse id has to be read, or the warehouse created, from inside the network."
+      why="The response body names network access, so the workspace refused this runner at the NETWORK layer. Two workspace controls produce that refusal: public network access set to Disabled (only a private-endpoint path is admitted), or a workspace IP access list that does not allow this runner's egress IP. Which one refused it was NOT established: this lookup reads neither the workspace's public network access setting nor its IP access list. Producing the id from inside the VNet (the console creating and binding the warehouse itself) is tracked in #3744."
     else
       why="On 401/403 without a network-access message the deploy identity is likely not a user of that workspace (Contributor on the workspace resource provisions it as a workspace admin on first sign-in); HTTP 000 means the host was unreachable."
     fi
@@ -419,7 +428,7 @@ else:
       printf '%s' "${rest#*:}"
       echo "[discover-dlz-adopt] databricks SQL warehouse '${rest%%:*}' = ${rest#*:} (preference: loom-default, then loom-governance)" >&2 ;;
     NONE)
-      echo "::notice::[discover-dlz-adopt] the Databricks SQL Warehouses API on '$host' answered 200 and lists NO warehouse named 'loom-default' or 'loom-governance' — LOOM_DATABRICKS_SQL_WAREHOUSE_ID stays ''. Nothing has created one on this workspace yet (csa-loom-post-deploy-bootstrap.yml creates 'loom-default'; in Azure Government gov-provision-dbx-sql.yml creates 'loom-governance'); the next deploy after one exists binds it." >&2 ;;
+      echo "::notice::[discover-dlz-adopt] the Databricks SQL Warehouses API on '$host' answered 200 and lists NO warehouse named 'loom-default' or 'loom-governance' — LOOM_DATABRICKS_SQL_WAREHOUSE_ID stays ''. This lookup adopts only those two names: a warehouse under any other name is not adopted, even one a writer bound to the console (the Azure Government writers reuse the first listed warehouse of any name when none starts with 'loom'). A later deploy binds a warehouse only once one named 'loom-default' or 'loom-governance' exists." >&2 ;;
     AMBIG:*)
       rest="${pick#AMBIG:}"
       echo "::warning::[discover-dlz-adopt] '$host' lists ${rest#*:} warehouses named '${rest%%:*}'; adopting NONE rather than guessing (and not falling back to a lower-preference name)." >&2 ;;
