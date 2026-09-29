@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "1239552512060229079"
+      "templateHash": "5297099855399461332"
     }
   },
   "definitions": {
@@ -2075,6 +2075,7 @@
     "existingEventHubNamespace": "[__bicep.adoptName(parameters('adopt'), 'eventhubs')]",
     "existingEventHubRg": "[__bicep.adoptRg(parameters('adopt'), 'eventhubs')]",
     "existingEventHubSub": "[__bicep.adoptSub(parameters('adopt'), 'eventhubs')]",
+    "existingEventHubSchemaGroup": "[__bicep.adoptExtra(parameters('adopt'), 'eventhubs', 'schemaGroup')]",
     "existingAsaJob": "[__bicep.adoptName(parameters('adopt'), 'streamanalytics')]",
     "existingAsaRg": "[__bicep.adoptRg(parameters('adopt'), 'streamanalytics')]",
     "existingAsaSub": "[__bicep.adoptSub(parameters('adopt'), 'streamanalytics')]",
@@ -2082,6 +2083,7 @@
     "existingDatabricksRg": "[__bicep.adoptRg(parameters('adopt'), 'databricks')]",
     "existingDatabricksSub": "[__bicep.adoptSub(parameters('adopt'), 'databricks')]",
     "existingDatabricksHostname": "[__bicep.adoptExtra(parameters('adopt'), 'databricks', 'hostname')]",
+    "existingDatabricksSqlWarehouseId": "[__bicep.adoptExtra(parameters('adopt'), 'databricks', 'sqlWarehouseId')]",
     "existingAdfFactory": "[__bicep.adoptName(parameters('adopt'), 'adf')]",
     "existingAdfRg": "[__bicep.adoptRg(parameters('adopt'), 'adf')]",
     "existingAdfSub": "[__bicep.adoptSub(parameters('adopt'), 'adf')]",
@@ -2220,6 +2222,9 @@
             "value": "[parameters('databricksAccountId')]"
           },
           "loomDatabricksAccountHost": "[if(empty(parameters('databricksAccountId')), createObject('value', ''), createObject('value', variables('databricksAccountHost')))]",
+          "loomDatabricksSqlWarehouseId": {
+            "value": "[variables('existingDatabricksSqlWarehouseId')]"
+          },
           "keyVaultHsmIsolated": {
             "value": "[parameters('keyVaultHsmIsolated')]"
           },
@@ -2302,6 +2307,11 @@
           },
           "workspaceIdentityConfig": {
             "value": "[parameters('workspaceIdentityConfig')]"
+          },
+          "eventsConfig": {
+            "value": {
+              "loomEhSchemaGroup": "[if(not(empty(variables('existingEventHubSchemaGroup'))), variables('existingEventHubSchemaGroup'), if(and(variables('useSingleDlz'), variables('provisionEventHubs')), 'loom-schemas', ''))]"
+            }
           },
           "copilotMafEnabled": {
             "value": "[parameters('copilotMafEnabled')]"
