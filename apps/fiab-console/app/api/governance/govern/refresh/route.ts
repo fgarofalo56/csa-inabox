@@ -87,7 +87,8 @@ export const POST = withSession(async (_req, { session: s }) => {
     // Commercial, gov-provision-posture.yml Gov), and no shipped bicepparam
     // sets the param. So the likeliest state behind this branch is "param
     // empty". An operator who only stored the key and set the flag would
-    // redeploy, still get no binding, and lose the out-of-band URL as well.
+    // redeploy, still get no binding, and, if that deploy renders the Console,
+    // lose the out-of-band URL as well.
     // This route can read neither Key Vault nor the deploy params, so the
     // message says it cannot tell which condition is missing (R7).
     return NextResponse.json({
@@ -97,7 +98,7 @@ export const POST = withSession(async (_req, { session: s }) => {
       missingEnvVar: 'LOOM_POSTURE_FUNCTION_KEY',
       bicepModule: KEY_BINDING_MODULE,
       message:
-        'On-open posture pre-warm unavailable: the posture-refresh Function URL is configured (LOOM_POSTURE_FUNCTION_URL is set), but the Function host key is not bound to this Console, and the Function accepts only keyed calls, so no refresh was dispatched. The deploy binds the key only when ALL THREE of these hold: (1) the Function host key is stored in Key Vault as loom-posture-function-key (the loomPostureFunctionKeySecretName default); (2) loomPostureFunctionUrl is passed as a deploy parameter to platform/fiab/bicep/main.bicep. A URL set on the Console with az containerapp update does not count, and a deploy without that parameter blanks it; (3) the deploy sets observabilityConfig.postureFunctionKeyEnabled to true. This route cannot read Key Vault or the deploy parameters, so it cannot tell which of these is missing. Posture below is computed live from Cosmos.',
+        'On-open posture pre-warm unavailable: the posture-refresh Function URL is configured (LOOM_POSTURE_FUNCTION_URL is set), but the Function host key is not bound to this Console, and the Function accepts only keyed calls, so no refresh was dispatched. The deploy binds the key only when ALL THREE of these hold: (1) the Function host key is stored in Key Vault as loom-posture-function-key (the loomPostureFunctionKeySecretName default); (2) loomPostureFunctionUrl is passed as a deploy parameter to platform/fiab/bicep/main.bicep (a URL set on the Console with az containerapp update does not count, and a full deploy that renders the Console without that parameter blanks it); (3) the deploy sets observabilityConfig.postureFunctionKeyEnabled to true. This route cannot read Key Vault or the deploy parameters, so it cannot tell which of these is missing. Posture below is computed live from Cosmos.',
     });
   }
 

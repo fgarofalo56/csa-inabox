@@ -34,7 +34,9 @@
  *     module must declare `output functionUrl`, which admin-plane does not.
  *   - key-gate message: every term of admin-plane `postureFunctionKeyBound` is
  *     lifted from the bicep and must appear in it. The round-2 message, which
- *     omitted loomPostureFunctionUrl, fails.
+ *     omitted loomPostureFunctionUrl, fails. The lifted var must occur exactly
+ *     once. The blanking clause and the flag's required value (`to true`) are
+ *     pinned on their own, because the term loop cannot see either.
  *   - 401 body: any change to the envelope, e.g. `{ error: 'unauthorized' }` or
  *     dropping `ok:false`, fails the `toEqual`.
  */
@@ -142,6 +144,11 @@ describe('POST /api/governance/govern/refresh', () => {
     // loop below; renaming the secret default in bicep alone fails the
     // Key Vault match.
     const adminPlane = readModule(j.bicepModule);
+    // The lift must read THE var, not a copy: a `/* ... */` block quoting the
+    // var line above the real one would otherwise be matched first (the /m `^`
+    // anchors inside a block comment). Breaking value: any second
+    // `var postureFunctionKeyBound = ` line in admin-plane.
+    expect(adminPlane.match(/^var postureFunctionKeyBound = /gm) ?? []).toHaveLength(1);
     const bound = /^var postureFunctionKeyBound = (.+)$/m.exec(adminPlane);
     expect(bound, 'admin-plane must still declare var postureFunctionKeyBound').not.toBeNull();
     const BICEP_BUILTINS = new Set(['empty', 'observabilityConfig', 'false', 'true']);
@@ -158,6 +165,14 @@ describe('POST /api/governance/govern/refresh', () => {
     // LOOM_POSTURE_FUNCTION_URL today, and it does not satisfy the bicep var.
     expect(j.message).toContain('passed as a deploy parameter to platform/fiab/bicep/main.bicep');
     expect(j.message).toMatch(/az containerapp update does not count/);
+    // The blanking hazard, scoped to the deploys that actually cause it: an
+    // image-only roll or a deployAppsEnabled=false run leaves the env alone.
+    // Breaking value: deleting the clause, or widening it back to "a deploy".
+    expect(j.message).toMatch(/a full deploy that renders the Console without that parameter blanks it/);
+    // The term loop pins that the flag is NAMED, not the value it needs.
+    // Breaking value: "postureFunctionKeyEnabled to false", which would be a
+    // false remediation the loop above accepts.
+    expect(j.message).toMatch(/observabilityConfig\.postureFunctionKeyEnabled to true\b/);
     // It says it cannot tell which condition is missing, and does not claim
     // the Function is deployed: a set URL is configuration, not a reachable host.
     expect(j.message).toMatch(/cannot tell which of these is missing/);
