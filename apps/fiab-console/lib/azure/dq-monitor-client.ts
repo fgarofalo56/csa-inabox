@@ -48,6 +48,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { executeStatement } from './databricks-client';
+import { resolveWarehouseIdOrThrow, tryResolveWarehouseId } from './databricks-sql-warehouse';
 import type { DqRule } from './data-quality-client';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { recordDatabricksUnityAccess } from '@/lib/azure/unity-audit';
@@ -103,20 +104,20 @@ async function dbxFetch(path: string, init?: RequestInit): Promise<Response> {
 }
 
 /**
- * Honest gate: a Databricks workspace + a SQL Warehouse are required for Delta
- * constraints; Lakehouse Monitoring additionally needs a Unity Catalog table.
- * Returns the exact missing env var so the BFF can 503 with a precise MessageBar.
+ * Honest gate: a Databricks workspace is required for Delta constraints;
+ * Lakehouse Monitoring additionally needs a Unity Catalog table. The SQL
+ * warehouse is NOT a gate any more (#3744): the Console adopts or creates the
+ * `loom-default` warehouse itself (`resolveWarehouseIdOrThrow`), and a failed
+ * resolution throws its classified cause at call time. Returns the exact
+ * missing env var so the BFF can 503 with a precise MessageBar.
  */
 export function dqMonitorConfigGate(): { missing: string } | null {
   if (!process.env.LOOM_DATABRICKS_HOSTNAME) return { missing: 'LOOM_DATABRICKS_HOSTNAME' };
-  if (!process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID) return { missing: 'LOOM_DATABRICKS_SQL_WAREHOUSE_ID' };
   return null;
 }
 
-function warehouse(explicit?: string): string {
-  const w = (explicit || process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID || '').trim();
-  if (!w) throw new Error('No Databricks SQL Warehouse — set LOOM_DATABRICKS_SQL_WAREHOUSE_ID');
-  return w;
+function warehouse(explicit?: string): Promise<string> {
+  return resolveWarehouseIdOrThrow(explicit);
 }
 
 function safeIdent(seg: string): string {
@@ -223,7 +224,7 @@ export async function applyDeltaConstraint(
     return { ruleId: rule.id, name, ddl: '', applied: false, detail: compiled.unsupported };
   }
   try {
-    await executeStatement(warehouse(warehouseId), compiled.ddl, catalog, schema);
+    await executeStatement(await warehouse(warehouseId), compiled.ddl, catalog, schema);
     return { ruleId: rule.id, name, ddl: compiled.ddl, applied: true, detail: 'constraint enforced on write' };
   } catch (e: any) {
     return { ruleId: rule.id, name, ddl: compiled.ddl, applied: false, detail: `error: ${e?.message || String(e)}` };
@@ -243,7 +244,7 @@ export async function listDeltaConstraints(
   warehouseId?: string,
 ): Promise<DeltaConstraint[]> {
   const T = fqTable(table, catalog, schema);
-  const r = await executeStatement(warehouse(warehouseId), `SHOW TBLPROPERTIES ${T}`, catalog, schema);
+  const r = await executeStatement(await warehouse(warehouseId), `SHOW TBLPROPERTIES ${T}`, catalog, schema);
   const keyIdx = r.columns.findIndex((c) => c.toLowerCase() === 'key');
   const valIdx = r.columns.findIndex((c) => c.toLowerCase() === 'value');
   const out: DeltaConstraint[] = [];
@@ -266,7 +267,7 @@ export async function dropDeltaConstraint(
   warehouseId?: string,
 ): Promise<void> {
   const T = fqTable(table, catalog, schema);
-  await executeStatement(warehouse(warehouseId), `ALTER TABLE ${T} DROP CONSTRAINT IF EXISTS ${quoteSpark(name)}`, catalog, schema);
+  await executeStatement(await warehouse(warehouseId), `ALTER TABLE ${T} DROP CONSTRAINT IF EXISTS ${quoteSpark(name)}`, catalog, schema);
 }
 
 // ---------------------------------------------------------------------------
@@ -476,8 +477,12 @@ export async function createMonitor(args: {
       assets_dir: args.assetsDir,
       output_schema_name: args.outputSchema,
     };
-    if (args.warehouseId || process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID) {
-      body.warehouse_id = args.warehouseId || process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID;
+    // Optional on this API: the platform warehouse when it resolves, omitted
+    // (the API's own default) when it does not — a monitor must not fail to
+    // create because the dashboard warehouse could not be produced.
+    const monitorWarehouse = args.warehouseId || (await tryResolveWarehouseId());
+    if (monitorWarehouse) {
+      body.warehouse_id = monitorWarehouse;
     }
     if (args.profileType === 'time_series') {
       body.time_series = {

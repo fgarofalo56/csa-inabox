@@ -425,8 +425,12 @@ const purviewScanProbe: ServiceProbe = {
   },
 };
 
-/** databricks-sql — SELECT 1 on a real Databricks SQL warehouse (the SQL
- *  analytics data path for databricks-sql-warehouse items). */
+/** databricks-sql — SELECT 1 on the platform's Databricks SQL warehouse (the
+ *  SQL analytics data path for databricks-sql-warehouse items). The warehouse
+ *  comes from the platform resolver (#3744): the env pin, else the persisted
+ *  binding, else the `loom-default` warehouse the Console adopts or creates.
+ *  A failed resolution is a `fail` carrying the classified cause — a call that
+ *  was made and refused is not a config gate. */
 const databricksSqlProbe: ServiceProbe = {
   service: 'databricks-sql',
   title: 'Databricks SQL — SELECT 1 on a SQL warehouse',
@@ -434,17 +438,24 @@ const databricksSqlProbe: ServiceProbe = {
   async run() {
     const dbx = await import('@/lib/azure/databricks-client');
     const g = dbx.databricksConfigGate();
-    if (g) return gate(`Databricks not configured — set ${g.missing}. The Console UAMI (or a PAT) needs "Can use" on the SQL warehouse.`);
-    let warehouseId = (process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID || '').trim();
-    if (!warehouseId) {
-      const whs = await dbx.listWarehouses().catch(() => [] as any[]);
-      const pick = whs.find((w: any) => /running/i.test(String(w?.state || ''))) || whs[0];
-      if (!pick) return gate('Databricks reachable but no SQL warehouse exists — create one (or set LOOM_DATABRICKS_SQL_WAREHOUSE_ID) then re-run.');
-      warehouseId = pick.id;
+    if (g) return gate(`Databricks not configured — set ${g.missing}. The Console then creates or adopts the 'loom-default' SQL warehouse itself.`);
+    const { resolveDatabricksSqlWarehouseId, WarehouseResolutionError } = await import('@/lib/azure/databricks-sql-warehouse');
+    let warehouseId: string;
+    let how: string;
+    try {
+      const r = await resolveDatabricksSqlWarehouseId();
+      warehouseId = r.id;
+      how = r.detail;
+    } catch (e) {
+      if (e instanceof WarehouseResolutionError) {
+        if (e.kind === 'not-configured') return gate(`${e.message} ${e.remediation}`);
+        return { status: 'fail', detail: `Warehouse resolution failed (${e.kind}): ${e.message} Remediation: ${e.remediation}` };
+      }
+      throw e;
     }
     const res: any = await dbx.runWarehouseStatement('SELECT 1 AS loom_health', { warehouseId });
     const rows = res?.result?.data_array?.length ?? res?.rows?.length ?? res?.rowCount ?? 0;
-    return { status: 'pass', detail: `Databricks SQL warehouse ${warehouseId} executed SELECT 1 (${rows} row(s)).`, evidence: evidenceSlice(JSON.stringify(res).slice(0, 400)) };
+    return { status: 'pass', detail: `Databricks SQL warehouse ${warehouseId} executed SELECT 1 (${rows} row(s)). ${how}`, evidence: evidenceSlice(JSON.stringify(res).slice(0, 400)) };
   },
 };
 

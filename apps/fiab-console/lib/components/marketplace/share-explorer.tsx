@@ -9,14 +9,17 @@ import { clientFetch } from '@/lib/client-fetch';
  * catalog (POST …/sharing/providers/[name] {action:'mount'}). This panel is the
  * "use it" path Loom previously lacked: browse the catalog's schemas → tables,
  * click a table to load a 100-row preview, and run free-form read-only SQL —
- * all against the real Databricks SQL warehouse (LOOM_DATABRICKS_SQL_WAREHOUSE_ID).
+ * all against the real Databricks SQL warehouse (the env pin, else the
+ * `loom-default` warehouse the Console creates or adopts itself — #3744).
  *
  *   Schema/table browse : GET  /api/catalog/browse?source=unity-catalog&path=host|catalog[|schema]
  *   Query / preview      : POST /api/marketplace/sharing/query { catalog, schema?, sql? }
  *
- * Honest gate (no-vaporware.md): when the warehouse isn't configured the query
- * route returns 503 { gate, missing } and a Fluent MessageBar names the exact
- * env var (LOOM_DATABRICKS_SQL_WAREHOUSE_ID) — the full surface still renders.
+ * Honest gate (no-vaporware.md): when no Databricks workspace is bound, or the
+ * Console could not produce the warehouse, the query route returns { gate,
+ * kind, error, remediation } and a Fluent MessageBar names the CLASSIFIED cause
+ * (not configured / permission / network / quota / unknown) — the full surface
+ * still renders.
  *
  * Fluent v9 + Loom design tokens only (no hard-coded px/hex). Reuses Monaco
  * (MonacoTextarea, language 'sql') for the SQL editor and the shared results
@@ -92,7 +95,18 @@ interface QueryData {
   truncated: boolean;
   executionMs: number;
 }
-interface Gate { error: string; missing?: string }
+interface Gate { error: string; missing?: string; kind?: string; remediation?: string }
+
+/** MessageBar title for the query route's gate, keyed on the classified cause. */
+function gateTitle(kind?: string): string {
+  switch (kind) {
+    case 'permission': return 'SQL warehouse: permission refused';
+    case 'network': return 'SQL warehouse: workspace unreachable';
+    case 'quota': return 'SQL warehouse: quota / capacity';
+    case 'unknown': return 'SQL warehouse could not be provisioned';
+    default: return 'Databricks workspace not configured';
+  }
+}
 
 function fmtCell(v: unknown): string {
   if (v === null || v === undefined) return 'NULL';
@@ -189,7 +203,9 @@ export function ShareExplorerPanel({ catalog, host, providerName, shareName }: {
         body: JSON.stringify({ catalog, schema, sql: statement }),
       });
       const j = await r.json().catch(() => ({}));
-      if (r.status === 503 && j?.gate) { setGate({ error: j.error, missing: j.missing }); setResult(null); return; }
+      if ((r.status === 503 || r.status === 403 || r.status === 502) && j?.gate) {
+        setGate({ error: j.error, missing: j.missing, kind: j.kind, remediation: j.remediation }); setResult(null); return;
+      }
       if (!j.ok) { setQueryErr(j.error || `HTTP ${r.status}`); setResult(null); return; }
       setResult(j.data as QueryData);
     } catch (e: any) {
@@ -238,8 +254,11 @@ export function ShareExplorerPanel({ catalog, host, providerName, shareName }: {
       {gate && (
         <MessageBar intent="warning">
           <MessageBarBody>
-            <MessageBarTitle>SQL warehouse not configured</MessageBarTitle>
+            {/* #3744 — the title names the CLASSIFIED cause; "not configured"
+                only when no workspace is bound (no call was made). */}
+            <MessageBarTitle>{gateTitle(gate.kind)}</MessageBarTitle>
             {gate.error}
+            {gate.remediation ? <> {gate.remediation}</> : null}
           </MessageBarBody>
         </MessageBar>
       )}

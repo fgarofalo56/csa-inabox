@@ -119,10 +119,23 @@ export interface Warehouse {
   odbc_params?: WarehouseOdbcParams;
 }
 
+/**
+ * An HTTP failure from the workspace carrying the REAL status + body, so a
+ * caller can classify it (permission / network / quota — deploy-integrity.md
+ * R6) from what the API returned instead of re-parsing the message string.
+ * The message is unchanged from the pre-#3744 shape (`<op> failed <status>: <body>`).
+ */
+function httpError(op: string, status: number, text: string): Error & { status: number; body: string } {
+  const err = new Error(`${op} failed ${status}: ${text}`) as Error & { status: number; body: string };
+  err.status = status;
+  err.body = text;
+  return err;
+}
+
 export async function listWarehouses(): Promise<Warehouse[]> {
   const res = await dbxFetch('/api/2.0/sql/warehouses');
   if (!res.ok) {
-    throw new Error(`listWarehouses failed ${res.status}: ${await res.text()}`);
+    throw httpError('listWarehouses', res.status, await res.text());
   }
   const body = (await res.json()) as { warehouses?: Warehouse[] };
   return body.warehouses || [];
@@ -131,9 +144,48 @@ export async function listWarehouses(): Promise<Warehouse[]> {
 export async function getWarehouse(id: string): Promise<Warehouse> {
   const res = await dbxFetch(`/api/2.0/sql/warehouses/${encodeURIComponent(id)}`);
   if (!res.ok) {
-    throw new Error(`getWarehouse failed ${res.status}: ${await res.text()}`);
+    throw httpError('getWarehouse', res.status, await res.text());
   }
   return (await res.json()) as Warehouse;
+}
+
+/** The calling identity as the workspace sees it (SCIM `Me`). */
+export interface DbxCurrentIdentity {
+  id?: string;
+  displayName?: string;
+  /** Service principals carry their Entra application (client) id here. */
+  applicationId?: string;
+  /** DIRECTLY-assigned entitlements only — group-inherited ones are not listed on this object. */
+  entitlements: string[];
+  /** Group display names the identity is a direct member of (e.g. 'admins'). */
+  groups: string[];
+}
+
+/**
+ * Read the caller's own workspace identity: GET /api/2.0/preview/scim/v2/Me.
+ * Used to MEASURE which entitlements the Console identity holds when the
+ * workspace refuses a warehouse create, so the failure names what is actually
+ * absent rather than guessing (deploy-integrity.md R7).
+ */
+export async function getCurrentIdentity(): Promise<DbxCurrentIdentity> {
+  const res = await dbxFetch('/api/2.0/preview/scim/v2/Me');
+  if (!res.ok) {
+    throw httpError('getCurrentIdentity', res.status, await res.text());
+  }
+  const b = (await res.json()) as {
+    id?: string;
+    displayName?: string;
+    applicationId?: string;
+    entitlements?: Array<{ value?: string }>;
+    groups?: Array<{ display?: string; value?: string }>;
+  };
+  return {
+    id: b.id,
+    displayName: b.displayName,
+    applicationId: b.applicationId,
+    entitlements: (b.entitlements || []).map((e) => String(e?.value || '')).filter(Boolean),
+    groups: (b.groups || []).map((g) => String(g?.display || g?.value || '')).filter(Boolean),
+  };
 }
 
 // ------------------------------------------------------------
@@ -574,14 +626,22 @@ export async function executeStatement(
 }
 
 /**
- * Honest config gate for the SQL Statement Execution path. Returns the exact
- * missing env var when no warehouse is pinned (and none was passed) so a BFF
- * route can 503 with a precise MessageBar instead of a generic 500. Returns
- * null when a warehouse id is resolvable.
+ * Honest config gate for the SQL Statement Execution path. Returns null when a
+ * warehouse id is RESOLVABLE — an explicit id, the pinned
+ * LOOM_DATABRICKS_SQL_WAREHOUSE_ID, or (#3744) a bound Databricks workspace,
+ * because the Console then ensure-creates / adopts the `loom-default` warehouse
+ * itself (`resolveDatabricksSqlWarehouseId`, auto-bind-by-default.md §5).
+ *
+ * The only thing that genuinely cannot be produced is the WORKSPACE, so the one
+ * var this gate can name is LOOM_DATABRICKS_HOSTNAME. A resolution that is
+ * attempted and FAILS is not "not configured": the resolver throws a classified
+ * `WarehouseResolutionError` (permission / network / quota / unknown) at call
+ * time, so the caller surfaces the real cause.
  */
 export function warehouseConfigGate(explicit?: string | null): { missing: string } | null {
   const wid = (explicit || process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID || '').trim();
-  if (!wid) return { missing: 'LOOM_DATABRICKS_SQL_WAREHOUSE_ID' };
+  if (wid) return null;
+  if (!process.env.LOOM_DATABRICKS_HOSTNAME) return { missing: 'LOOM_DATABRICKS_HOSTNAME' };
   return null;
 }
 
@@ -608,10 +668,12 @@ export class WarehouseNotConfiguredError extends Error {
  * a subscribed Delta Share's mounted Unity Catalog catalog (and any other ad-hoc
  * read against the workspace's warehouse).
  *
- * The warehouse is resolved from `opts.warehouseId` → `LOOM_DATABRICKS_SQL_WAREHOUSE_ID`.
- * When neither is set we throw {@link WarehouseNotConfiguredError} so the caller
- * can surface the precise remediation (per no-vaporware.md) rather than failing
- * opaquely.
+ * The warehouse is resolved from `opts.warehouseId` → the platform resolver
+ * (`resolveDatabricksSqlWarehouseId`: LOOM_DATABRICKS_SQL_WAREHOUSE_ID → the
+ * persisted binding → the `loom-default` warehouse, listed or ensure-created;
+ * #3744). A resolution failure throws the resolver's classified
+ * `WarehouseResolutionError` — never a "not configured" claim for a call that
+ * was made and refused.
  *
  * Delegates to {@link executeStatement}, which POSTs to
  * `/api/2.0/sql/statements` with `disposition: INLINE`, `format: JSON_ARRAY`,
@@ -633,8 +695,13 @@ export async function runWarehouseStatement(
     onStatementId?: (id: string) => void;
   },
 ): Promise<QueryResult> {
-  const warehouseId = (opts?.warehouseId || process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID || '').trim();
-  if (!warehouseId) throw new WarehouseNotConfiguredError();
+  let warehouseId = (opts?.warehouseId || '').trim();
+  if (!warehouseId) {
+    // Lazy import: the resolver imports THIS module, so a static edge back
+    // would make the two a load-order cycle.
+    const { resolveWarehouseIdOrThrow } = await import('@/lib/azure/databricks-sql-warehouse');
+    warehouseId = await resolveWarehouseIdOrThrow();
+  }
   return executeStatement(
     warehouseId,
     sql,

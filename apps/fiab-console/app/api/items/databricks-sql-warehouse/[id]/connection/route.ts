@@ -4,7 +4,8 @@
  * Connection details (server hostname, HTTP path, JDBC URL, CLI snippet) read
  * from the real Databricks warehouse `odbc_params`. Delegates to the shared
  * connection-handler. `warehouseId` query param pins a specific warehouse;
- * otherwise LOOM_DATABRICKS_SQL_WAREHOUSE_ID is used.
+ * otherwise the platform warehouse is used (LOOM_DATABRICKS_SQL_WAREHOUSE_ID,
+ * else the one the Console produces — #3744).
  *
  * ═══════════════════════════════════════════════════════════════════════════
  * GHSA-v2g8-gp3r-rg4r — THE HOLE THIS FILE USED TO BE

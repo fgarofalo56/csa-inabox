@@ -58,8 +58,13 @@ import {
 import {
   executeStatement,
   databricksConfigGate,
-  warehouseConfigGate,
 } from '@/lib/azure/databricks-client';
+import {
+  resolveWarehouseIdOrThrow,
+  WarehouseResolutionError,
+  warehouseErrorBody,
+  warehouseErrorStatus,
+} from '@/lib/azure/databricks-sql-warehouse';
 import { executePostgresQuery, postgresQueryGate } from '@/lib/azure/postgres-flex-client';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
@@ -393,9 +398,17 @@ export async function introspectDatabricks(
 ): Promise<NavigatorObject[] | NextResponse> {
   const cfg = databricksConfigGate();
   if (cfg) return gate(`Databricks SQL is not configured for this deployment. Set ${cfg.missing} on the Loom Console.`, cfg.missing);
-  const wh = warehouseConfigGate();
-  if (wh) return gate(`No Databricks SQL warehouse is configured. Set ${wh.missing} on the Loom Console.`, wh.missing);
-  const warehouseId = (process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID || '').trim();
+  // The SQL warehouse is produced by the Console (#3744) — a failed resolution
+  // returns its classified cause (permission / network / quota / unknown).
+  let warehouseId: string;
+  try {
+    warehouseId = await resolveWarehouseIdOrThrow();
+  } catch (e) {
+    if (e instanceof WarehouseResolutionError) {
+      return NextResponse.json(warehouseErrorBody(e), { status: warehouseErrorStatus(e) });
+    }
+    throw e;
+  }
   const [defCatalog, defSchema] = (conn.database || '').split('.');
   const catalog = (reqCatalog || defCatalog || '').trim();
   const schema = (reqSchema || defSchema || '').trim();

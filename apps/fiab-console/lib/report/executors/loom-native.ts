@@ -201,8 +201,9 @@ export async function executeLoomNativeQueryPath(
     // The result cache is ALWAYS on (in-process + optional Cosmos): a repeat of
     // this exact logical query (same compiled SQL + params, same freshness
     // token) collapses to a Map read. The Databricks-SQL (Photon) over-Delta
-    // accel fast path is offered ONLY when a Databricks SQL warehouse is
-    // configured (LOOM_DATABRICKS_HOSTNAME + LOOM_DATABRICKS_SQL_WAREHOUSE_ID)
+    // accel fast path is offered ONLY when a Databricks workspace is bound
+    // (LOOM_DATABRICKS_HOSTNAME; the SQL warehouse is the env pin or the
+    // Console-produced `loom-default`, #3744 — see reportAccelConfigured)
     // AND the chosen relation is a serverless Delta OPENROWSET (lakehouse /
     // Import-Dual-Direct Lake cache) — i.e. the exact aggregating-visual shape
     // Direct Lake speeds up; the warehouse reads the SAME ADLS Delta in-place.

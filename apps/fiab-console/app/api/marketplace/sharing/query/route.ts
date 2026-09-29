@@ -17,21 +17,27 @@
  *   subscribed catalog.
  *
  * Session-guarded (getSession). Returns the structured { ok, data, error }
- * shape. When the warehouse isn't configured (LOOM_DATABRICKS_SQL_WAREHOUSE_ID
- * unset) it returns 503 { ok:false, gate:true, missing } so the UI renders an
- * honest MessageBar — mirroring the other sharing routes' gate contract.
+ * shape. When no Databricks workspace is bound (LOOM_DATABRICKS_HOSTNAME unset)
+ * it returns 503 { ok:false, gate:true, missing }. The SQL warehouse itself is
+ * produced by the Console (#3744); when that production FAILS the response
+ * carries the classified cause (permission / network / quota / unknown).
  *
  * No-fabric-dependency: the Databricks SQL warehouse is an Azure Databricks /
  * Unity Catalog resource, not a Microsoft Fabric one — gating on it is a
  * legitimate Azure infra gate, not a Fabric dependency.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import {
   runWarehouseStatement,
   warehouseConfigGate,
   WarehouseNotConfiguredError,
 } from '@/lib/azure/databricks-client';
+import {
+  WarehouseResolutionError,
+  warehouseErrorBody,
+  warehouseErrorStatus,
+} from '@/lib/azure/databricks-sql-warehouse';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -74,12 +80,10 @@ function isReadOnly(sql: string): boolean {
   return true;
 }
 
-export async function POST(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest) => {
 
-  // Honest gate FIRST — before we touch the body — so a deployment with no
-  // warehouse pinned gets a precise 503 the UI renders as a MessageBar.
+  // Honest gate FIRST — before we touch the body. Only the Databricks WORKSPACE
+  // can be missing: the SQL warehouse is produced by the Console (#3744).
   const gate = warehouseConfigGate(req.nextUrl.searchParams.get('warehouseId'));
   if (gate) {
     return NextResponse.json(
@@ -88,9 +92,9 @@ export async function POST(req: NextRequest) {
         gate: true,
         missing: gate.missing,
         error:
-          `Databricks SQL warehouse not configured. Set ${gate.missing} on the Loom ` +
-          `Console (the SQL warehouse used to query subscribed Delta Share catalogs). ` +
-          `The push-button day-one bootstrap wires this automatically once a warehouse exists.`,
+          `Databricks workspace not configured. Set ${gate.missing} on the Loom ` +
+          `Console; the Console then creates or adopts the 'loom-default' SQL warehouse ` +
+          `used to query subscribed Delta Share catalogs.`,
       },
       { status: 503 },
     );
@@ -157,6 +161,14 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (e: any) {
+    // #3744 — the platform warehouse could not be produced. Classified, never
+    // reported as "not configured" unless no workspace is bound at all.
+    if (e instanceof WarehouseResolutionError) {
+      return NextResponse.json(
+        { ...warehouseErrorBody(e), gate: true },
+        { status: warehouseErrorStatus(e) },
+      );
+    }
     if (e instanceof WarehouseNotConfiguredError) {
       return NextResponse.json(
         { ok: false, gate: true, missing: e.missing, error: e.message },
@@ -170,4 +182,4 @@ export async function POST(req: NextRequest) {
       { status: typeof e?.status === 'number' ? e.status : 400 },
     );
   }
-}
+});

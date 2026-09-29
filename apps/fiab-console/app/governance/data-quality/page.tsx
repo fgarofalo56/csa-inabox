@@ -303,7 +303,7 @@ function RunTab() {
           </Dropdown>
         </Field>
         {backend === 'kusto' && <Field label="ADX database" style={{ minWidth: 200 }}><Input value={database} onChange={(_, d) => setDatabase(d.value)} placeholder="(LOOM_KUSTO_DEFAULT_DB)" /></Field>}
-        {backend === 'databricks' && <Field label="SQL Warehouse id" style={{ minWidth: 220 }}><Input value={warehouseId} onChange={(_, d) => setWarehouseId(d.value)} placeholder="(LOOM_DATABRICKS_SQL_WAREHOUSE_ID)" /></Field>}
+        {backend === 'databricks' && <Field label="SQL Warehouse id" style={{ minWidth: 220 }}><Input value={warehouseId} onChange={(_, d) => setWarehouseId(d.value)} placeholder="(default: the platform warehouse)" /></Field>}
         {backend === 'synapse' && (
           <Field label="Pool" style={{ minWidth: 180 }}>
             <Dropdown selectedOptions={[synapsePool]} value={synapsePool === 'dedicated' ? 'Dedicated' : 'Serverless'} onOptionSelect={(_, d) => setSynapsePool((d.optionValue as any) || 'serverless')}>

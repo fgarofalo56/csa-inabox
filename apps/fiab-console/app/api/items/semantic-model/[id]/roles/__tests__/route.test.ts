@@ -91,7 +91,17 @@ vi.mock('@/lib/azure/synapse-sql-client', async (importOriginal) => ({
 
 vi.mock('@/lib/azure/databricks-client', () => ({
   executeStatement: vi.fn(async () => ({ columns: [], rows: [] }) as any),
+  // Mirrors the real gate: only the workspace host decides it.
+  databricksConfigGate: () => (process.env.LOOM_DATABRICKS_HOSTNAME ? null : { missing: 'LOOM_DATABRICKS_HOSTNAME' }),
 }));
+
+// #3744 — the warehouse is produced by the platform resolver; the REAL error
+// class and body shaper are kept so the route's instanceof branch is real.
+const resolveWarehouseMock = vi.fn(async () => 'wh-resolved');
+vi.mock('@/lib/azure/databricks-sql-warehouse', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/azure/databricks-sql-warehouse')>('@/lib/azure/databricks-sql-warehouse');
+  return { ...actual, resolveWarehouseIdOrThrow: (...a: unknown[]) => resolveWarehouseMock(...(a as [])) };
+});
 
 import { GET, PUT, POST } from '../route';
 
@@ -151,6 +161,8 @@ beforeEach(() => {
   vi.stubEnv('LOOM_SYNAPSE_DEDICATED_POOL', 'loompool');
   vi.stubEnv('LOOM_SYNAPSE_WORKSPACE', 'syn-loom');
   vi.stubEnv('LOOM_DATABRICKS_SQL_WAREHOUSE_ID', '');
+  vi.stubEnv('LOOM_DATABRICKS_HOSTNAME', '');
+  resolveWarehouseMock.mockResolvedValue('wh-resolved');
 });
 afterEach(() => vi.unstubAllEnvs());
 
@@ -282,5 +294,51 @@ describe('#2649 controls — the fix must not rewrite ids it has no business tou
     getSessionMock.mockReturnValueOnce(null as any);
     const res = await GET(getReq(LOOM_ID), params(LOOM_ID));
     expect(res.status).toBe(401);
+  });
+});
+
+describe('#3744 — a bound Databricks workspace is a native RLS endpoint (the warehouse is produced)', () => {
+  beforeEach(() => {
+    vi.stubEnv('LOOM_SYNAPSE_DEDICATED_POOL', '');
+    vi.stubEnv('LOOM_SYNAPSE_WORKSPACE', '');
+    vi.stubEnv('LOOM_DATABRICKS_HOSTNAME', 'adb-1.azuredatabricks.net');
+  });
+
+  it('GET picks databricks with the hostname bound and NO warehouse env', async () => {
+    seedItem();
+    const res = await GET(getReq(LOOM_ID), params(LOOM_ID));
+    // Breaks if hasDbx is reverted to env-only: backend would be 'none' → 501.
+    expect(res.status).toBe(200);
+    expect((await res.json()).backend).toBe('databricks');
+  });
+
+  it('PUT deploys on the RESOLVED warehouse id', async () => {
+    seedItem();
+    const { executeStatement } = await import('@/lib/azure/databricks-client');
+    const res = await PUT(putReq(LOOM_ID, { roles: [{
+      name: 'West', modelPermission: 'read',
+      tablePermissions: [{ name: 'dbo.Sales', filterExpression: '[Region] = "West"' }],
+      members: [{ memberName: 'ops@contoso.com' }],
+    }] }), params(LOOM_ID));
+    expect(res.status).toBe(200);
+    // Breaks if the route reads process.env again: it would pass '' as the warehouse.
+    expect((executeStatement as any).mock.calls[0][0]).toBe('wh-resolved');
+  });
+
+  it('PUT reports a classified resolution failure (403 permission), roles still persisted', async () => {
+    seedItem();
+    const { WarehouseResolutionError } = await import('@/lib/azure/databricks-sql-warehouse');
+    resolveWarehouseMock.mockRejectedValueOnce(new WarehouseResolutionError({
+      kind: 'permission', step: 'create', status: 403, message: 'refused', remediation: 'grant allow-cluster-create', entitlement: 'allow-cluster-create',
+    }));
+    const res = await PUT(putReq(LOOM_ID, { roles: [{
+      name: 'West', modelPermission: 'read',
+      tablePermissions: [{ name: 'dbo.Sales', filterExpression: '[Region] = "West"' }],
+      members: [{ memberName: 'ops@contoso.com' }],
+    }] }), params(LOOM_ID));
+    // Breaks if the failure is swallowed into per-step "FAILED" lines under a 200.
+    expect(res.status).toBe(403);
+    const j = await res.json();
+    expect(j).toMatchObject({ ok: false, kind: 'permission', entitlement: 'allow-cluster-create', persisted: true });
   });
 });
