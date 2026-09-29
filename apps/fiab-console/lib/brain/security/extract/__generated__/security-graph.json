@@ -19887,6 +19887,129 @@
           }
         },
         {
+          "id": "sec:publication:scripts/ci/check-bootstrap-rg-subscription-scope.mjs#module",
+          "kind": "publication",
+          "provenance": "declared",
+          "label": "scripts/ci/check-bootstrap-rg-subscription-scope.mjs",
+          "facet": {
+            "kind": "publication",
+            "module": "scripts/ci/check-bootstrap-rg-subscription-scope.mjs",
+            "declaredSinkCount": 11,
+            "sinks": [
+              {
+                "id": "console:member:452",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:458",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:463",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:467",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:475",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:479",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:488",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:499",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:503",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:509",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:515",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              }
+            ]
+          }
+        },
+        {
           "id": "sec:publication:scripts/ci/check-build-trigger-covers-matrix.mjs#module",
           "kind": "publication",
           "provenance": "declared",
@@ -49194,6 +49317,11 @@
           "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
         },
         {
+          "nodeId": "sec:publication:scripts/ci/check-bootstrap-rg-subscription-scope.mjs#module",
+          "codeModuleId": "code:scripts/ci/check-bootstrap-rg-subscription-scope.mjs",
+          "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
+        },
+        {
           "nodeId": "sec:publication:scripts/ci/check-build-trigger-covers-matrix.mjs#module",
           "codeModuleId": "code:scripts/ci/check-build-trigger-covers-matrix.mjs",
           "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
@@ -50177,10 +50305,10 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-29T00:14:26.568Z",
-      "commit": "5a9d17e016e1ed75b82601fd63919515afa064a0",
-      "inputsDigest": "0ae4b794c2c82c3c",
-      "filesScanned": 2122,
+      "generatedAt": "2026-09-29T06:50:30.136Z",
+      "commit": "97409a9698242d5a5d1db27f528a71eadc7cf015",
+      "inputsDigest": "5b358958546610e1",
+      "filesScanned": 2124,
       "scanScopes": [
         {
           "scope": "app/**/route.ts (console BFF routes)",
@@ -50189,8 +50317,8 @@
         },
         {
           "scope": ".github/**, scripts/** (CI publication surfaces)",
-          "filesMatched": 422,
-          "nodesEmitted": 238
+          "filesMatched": 424,
+          "nodesEmitted": 239
         }
       ],
       "skipped": [
@@ -50497,6 +50625,10 @@
         {
           "subject": "scripts/ci/check-bicepparam-env-reaches-deploy.mjs",
           "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 9). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+        },
+        {
+          "subject": "scripts/ci/check-bootstrap-rg-subscription-scope.mjs",
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 11). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
           "subject": "scripts/ci/check-build-trigger-covers-matrix.mjs",
@@ -51288,7 +51420,7 @@
         },
         {
           "subject": "C4 expression arm (carriesSensitive)",
-          "reason": "matched 0 of 2465 non-spawn publication sink(s), so every C4 finding on this tree comes from the spawn-stdio arm. The expression arm is INERT here and its correctness is therefore unexercised by the real corpus — C4 output is not evidence that no unbounded sensitive write exists."
+          "reason": "matched 0 of 2476 non-spawn publication sink(s), so every C4 finding on this tree comes from the spawn-stdio arm. The expression arm is INERT here and its correctness is therefore unexercised by the real corpus — C4 output is not evidence that no unbounded sensitive write exists."
         }
       ]
     }
