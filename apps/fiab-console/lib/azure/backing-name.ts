@@ -248,6 +248,28 @@ export function lakehouseItemRootPath(displayName: string, itemId: string): stri
 }
 
 /**
+ * Is `root` a path of the shape a lakehouse root takes — `lakehouses/<sanitised
+ * segments>`, a fixpoint of {@link safeAdlsRelPath}? Anything else is not a root
+ * Loom wrote.
+ */
+export function isLakehouseRootShape(root: string): boolean {
+  if (!root.startsWith(LAKEHOUSE_ROOT_PREFIX)) return false;
+  if (root.length <= LAKEHOUSE_ROOT_PREFIX.length) return false;
+  return safeAdlsRelPath(root) === root;
+}
+
+/**
+ * Is `root` this item's own item root — `lakehouses/<name>--<itemId>` or
+ * `lakehouses/<itemId>`, one segment, as {@link lakehouseItemRootPath} builds?
+ */
+export function isLakehouseItemRootOf(root: string, itemId: string): boolean {
+  if (!itemId || !isLakehouseRootShape(root)) return false;
+  const seg = root.slice(LAKEHOUSE_ROOT_PREFIX.length);
+  if (seg.includes('/')) return false;
+  return seg === itemId || seg.endsWith(`--${itemId}`);
+}
+
+/**
  * ADLS directory-metadata key naming the Loom item that owns a lakehouse root.
  * ADLS metadata keys are case-insensitive and are returned lower-cased, so the
  * key is lower-case here and is read case-insensitively.
@@ -314,28 +336,34 @@ function rootSegments(p: string): string[] {
  * The root a lakehouse item uses: the installer's stamp, else the recorded
  * auto-bind binding, else the root the resolver would derive (the item root on
  * or after {@link LAKEHOUSE_ITEM_ROOT_SINCE}, the name root before it).
+ *
+ * For an item created on or after the cutover a recorded root counts only when
+ * it is that item's OWN item root ({@link isLakehouseItemRootOf}) — the same
+ * rule the resolver applies — so this answer and the resolver's never differ.
  */
 export function lakehouseRootLocation(f: LakehouseRootFacts): LakehouseRootLocation | null {
   const id = factStr(f.id);
   if (!id) return null;
+  const itemEra = lakehouseUsesItemRoot(f.createdAt);
+  const usable = (root: string) => !itemEra || isLakehouseItemRootOf(rootSegments(root).join('/'), id);
   const explicitAccount = factStr(f.storageAccount).toLowerCase();
   const stamped = factStr(f.provAdlsRoot).match(/^abfss:\/\/([^@]+)@[^/]+\/(.*)$/i);
-  if (stamped) {
+  if (stamped && usable(stamped[2])) {
     // The stamped URI names the account, but whether that is the primary one is
     // not knowable here, so it is compared as "any account".
     return { id, account: null, container: stamped[1], segments: rootSegments(stamped[2]), recorded: true };
   }
   const provContainer = factStr(f.provContainer);
   const provRoot = factStr(f.provRootPath);
-  if (provContainer && provRoot) {
+  if (provContainer && provRoot && usable(provRoot)) {
     return { id, account: explicitAccount, container: provContainer, segments: rootSegments(provRoot), recorded: true };
   }
   const boundRoot = factStr(f.lakehouseRoot);
-  if (boundRoot) {
+  if (boundRoot && usable(boundRoot)) {
     return { id, account: explicitAccount, container: factStr(f.adlsContainer) || null, segments: rootSegments(boundRoot), recorded: true };
   }
   const name = factStr(f.displayName);
-  const derived = lakehouseUsesItemRoot(f.createdAt) ? lakehouseItemRootPath(name, id) : lakehouseRootPath(name, id);
+  const derived = itemEra ? lakehouseItemRootPath(name, id) : lakehouseRootPath(name, id);
   return { id, account: explicitAccount, container: null, segments: rootSegments(derived), recorded: false };
 }
 

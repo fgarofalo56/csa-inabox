@@ -40,6 +40,7 @@ import {
   executeStatement,
 } from '@/lib/azure/databricks-client';
 import { withSession } from '@/lib/api/route-toolkit';
+import { dfsSuffix } from '@/lib/azure/cloud-endpoints';
 import { scopeItemPath } from '../_lib/item-scope';
 
 export const runtime = 'nodejs';
@@ -279,7 +280,11 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
       { status: 502 },
     );
   }
-  const abfss = `abfss://${container}@${account}.dfs.core.windows.net/${tablePath}`.replace(/`/g, '');
+  // The DFS host suffix is the boundary's (`dfsSuffix`): `dfs.core.windows.net`
+  // in Commercial/GCC, `dfs.core.usgovcloudapi.net` in GCC-High/IL5/DoD. A
+  // hard-coded Commercial suffix points a Gov restore at a host that does not
+  // serve the account.
+  const abfss = `abfss://${container}@${account}.${dfsSuffix()}/${tablePath}`.replace(/`/g, '');
 
   try {
     if (action === 'restore') {
