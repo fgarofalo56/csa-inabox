@@ -109,6 +109,20 @@ describe('Data quality — a classified warehouse failure is the HonestGate (#47
     expect(screen.queryByText(/permission refused/)).toBeNull();
   });
 
+  it('Monitors: a classified failure on the whole GET (top level) renders the gate', async () => {
+    installFetchMock({
+      '/api/dq/rules': () => ({ ok: true, rules: [] }),
+      '/api/dq/monitors': () => ({ ...PERMISSION_BODY, kind: 'unknown', code: 'warehouse_unknown', entitlement: undefined,
+        error: 'The list call failed and the response does not identify a permission, network, or quota cause (HTTP 500)', remediation: 'The cause is not established.' }),
+    });
+    mount();
+    await openMonitorsAndLoad();
+    // Breaks if load() drops its surfaceGateFrom check: the body falls to the
+    // plain error bar — no gate title, no Fix-it.
+    expect(await screen.findByText(/Data quality monitors: .* — failed, cause not established/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /fix it/i })).toBeInTheDocument();
+  });
+
   it('Monitors: a classified failure on DROP renders the gate (not a silent no-op)', async () => {
     let posted = 0;
     installFetchMock({

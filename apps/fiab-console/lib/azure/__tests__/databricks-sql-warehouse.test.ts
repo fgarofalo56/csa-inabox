@@ -221,6 +221,10 @@ describe('self-healing', () => {
     // Breaks if a 404 is treated as fatal (throws) or ignored (returns 'wh-gone').
     expect(r.id).toBe('wh-ld2');
     expect(h.cosmos.doc.databricksSqlWarehouse.id).toBe('wh-ld2');
+    // Round 3: the compare-and-adopt persist must not re-probe the binding this
+    // resolution already found dead. Breaks (2 GETs) if the `discardedId` guard
+    // in persistBinding is removed and the live check has to reject it again.
+    expect(h.dbx.getWarehouse).toHaveBeenCalledTimes(1);
   });
 
   it('a persisted id whose warehouse is DELETED is re-resolved', async () => {
@@ -763,6 +767,26 @@ describe('round 3 (#4776 re-review)', () => {
     calls = 0;
     const pinErr = await withResolvedWarehouse(async () => { calls++; throw new Error('executeStatement submit failed 404: gone'); }).catch((e) => e);
     expect(pinErr.message).toMatch(/submit failed 404/);
+    expect(calls).toBe(1);
+  });
+
+  it('A-3: a bare submit 404 (no RESOURCE_DOES_NOT_EXIST body) is "gone"; a missing TABLE is not', async () => {
+    h.dbx.listWarehouses.mockResolvedValue([{ id: 'wh-1', name: LOOM_DEFAULT_WAREHOUSE_NAME, state: 'RUNNING' }]);
+    await resolveDatabricksSqlWarehouseId();
+    const seen: string[] = [];
+    // Breaks if the predicate keys only on `status === 404`: executeStatement
+    // throws a plain Error whose only 404 is in the message, so no retry.
+    await withResolvedWarehouse(async (id) => {
+      seen.push(id);
+      if (seen.length === 1) throw new Error('executeStatement submit failed 404: Not Found');
+      return 'ok';
+    });
+    expect(seen).toHaveLength(2);
+    // Control: RESOURCE_DOES_NOT_EXIST about a TABLE (no "warehouse") is a SQL
+    // error for the caller, not a dead warehouse — no retry.
+    let calls = 0;
+    const e = await withResolvedWarehouse(async () => { calls++; throw new Error('[RESOURCE_DOES_NOT_EXIST] table main.s.t not found'); }).catch((x) => x);
+    expect(e.message).toMatch(/table main\.s\.t/);
     expect(calls).toBe(1);
   });
 
