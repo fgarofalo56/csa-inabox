@@ -1355,7 +1355,7 @@ REVERSAL_HOLDS = {
         "`deploy-run`. SINCE #4709 a green Commercial `loom-roll-and-validate` "
         "run is REFUSED for it: GCC-High has no declared producer, and per "
         "cloud-parity.md an unexercised producer is declared rather than "
-        "implied. Verified read-only at head against run 36053481220. The hold "
+        "implied. The hold "
         "is kept rather than deleted because lifting it is a deliberate act -- "
         "see the note above -- not because the gap is still open. What it was: "
         "`receipt_producers` carried no boundary dimension at all, so after an "
@@ -1371,8 +1371,7 @@ REVERSAL_HOLDS = {
         "green roll to the deploy-path item it is recorded against, and what "
         "#2958 actually owes is an `/admin/readiness` receipt for DuckLake and "
         "RisingWave that no roll establishes. #4709 does not touch either of "
-        "those. Measured: after an unpark it passes the same chain on the same "
-        "run as #2874 did before the boundary check existed."
+        "those."
     ),
 }
 

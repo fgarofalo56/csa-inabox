@@ -4024,8 +4024,7 @@ ARMS: list[tuple[str, str, str, str]] = [
          "disappearance into a failure, which is why it asserts the SET and "
          "not a count.\n"
          "         #4709 HAS LANDED AND BOTH ENTRIES ARE KEPT, so this arm "
-         "stays: the earlier plan to delete it with them is superseded, and "
-         "the reason is recorded at `REVERSAL_HOLDS` in tick.py. Reds "
+         "stays: the reason is recorded at `REVERSAL_HOLDS` in tick.py. Reds "
          "`test_the_shipped_holds_still_name_both_items` and errors "
          "`test_the_hold_covers_undecline_too_so_an_item_cannot_walk_out_of_it`"),
         "tick.py",
@@ -4217,9 +4216,7 @@ ARMS: list[tuple[str, str, str, str]] = [
     # -- #4709: the boundary a receipt was taken in -------------------------
     (
         ("BND1 the CALL SITE hard-codes Commercial, which is the rejected design "
-         "at the seam where it actually ships. Measured green across the whole "
-         "suite on 2026-09-27 - `verify_run_backed_receipt`'s own arm cannot "
-         "see this, because the wrong value is computed before it is called"),
+         "at the seam where it actually ships"),
         "tick.py",
         "        boundary, boundary_source = boundary_of_issue(repo, number, policy, kind)",
         '        boundary = "Commercial"',
@@ -4275,10 +4272,7 @@ ARMS: list[tuple[str, str, str, str]] = [
         "        if True\n    }",
     ),
     (
-        ("BND10 the `if not boundary:` guard becomes an ASSIGNMENT. Measured "
-         "green across 936 tests on 2026-09-27 - `boundary_of_issue` now "
-         "raises rather than returning None, so this guard is reachable only "
-         "by a direct caller and the seam tests cannot see it"),
+        ("BND10 the `if not boundary:` guard becomes an ASSIGNMENT"),
         "tick.py",
         "    if not boundary:\n        raise ReceiptRefusedError(",
         '    boundary = boundary or "Commercial"\n    if False:\n        raise ReceiptRefusedError(',
