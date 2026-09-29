@@ -93,6 +93,13 @@ if [[ -n "$RUNNER_VERSION" && -z "$RUNNER_SHA256" ]]; then
   echo "  its sha256 check. Pass the linux-x64 SHA256 from the release page for that version too." >&2
   exit 1
 fi
+if [[ -n "$RUNNER_SHA256" && -z "$RUNNER_VERSION" ]]; then
+  echo "[provision-gh-runner][FATAL] RUNNER_SHA256 is set without RUNNER_VERSION." >&2
+  echo "  An override is only passed to the build when BOTH are set, so this checksum would be silently" >&2
+  echo "  ignored and the Dockerfile's pinned version built instead. Set RUNNER_VERSION too, or unset" >&2
+  echo "  RUNNER_SHA256 to build the Dockerfile's pin." >&2
+  exit 1
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"

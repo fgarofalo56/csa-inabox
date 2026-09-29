@@ -105,36 +105,3 @@ jobs:
             echo 'A merged fix is not a deployed fix. See `/admin/readiness` in the Console for the'
             echo 'same verdict in-product (`GET /api/admin/deploy-status`).'
           } >> "$GITHUB_STEP_SUMMARY"
-
-      # RVP0, calendar half. The in-VNet self-hosted runner image pins the
-      # actions/runner version (platform/runners/github-actions/Dockerfile) and
-      # never self-updates. GitHub documents a 30-day update window and enforces
-      # a moving minimum with no machine-readable source: on 2026-09-29 it
-      # refused 2.328.0, 350 days after 2.329.0 superseded it, and every
-      # [self-hosted, loom-aca] workflow stranded. This reads the releases API
-      # and FAILS once the pin has been superseded for more than 60 days (warns
-      # past 30). It runs HERE, on ubuntu-latest, because the self-hosted runner
-      # is exactly what is down when this alarm matters, and because the verdict
-      # is a function of the calendar, not of any PR diff. `!cancelled()` so a
-      # red staleness step above cannot hide it. Exit code measured directly --
-      # no pipe, same reason as the step above.
-      - name: Runner version pin is not aging toward a GitHub registration refusal
-        if: ${{ !cancelled() }}
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set +e
-          node scripts/ci/check-runner-version-pin.mjs --online > "$RUNNER_TEMP/runner-version-pin.txt" 2>&1
-          rc=$?
-          set -e
-          cat "$RUNNER_TEMP/runner-version-pin.txt"
-          {
-            echo '## Self-hosted runner version pin'
-            echo
-            echo '```'
-            cat "$RUNNER_TEMP/runner-version-pin.txt"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          echo "[runner-version-pin] exit=$rc (measured directly, not through a pipe)"
-          exit "$rc"

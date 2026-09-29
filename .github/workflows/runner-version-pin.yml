@@ -1,0 +1,95 @@
+name: runner-version-pin
+
+# RVP0, calendar half (#4796). Watches the actions/runner version pinned in
+# platform/runners/github-actions/Dockerfile -- the image the in-VNet
+# `gh-aca-runner` Container Apps Job runs.
+#
+# WHY IT EXISTS. On 2026-09-29 GitHub refused to register that runner: the pin
+# was 2.328.0, the minimum had become 2.329.0, and every `[self-hosted,
+# loom-aca]` workflow stranded. The pin had been superseded for 350 days with
+# nothing watching it. Each execution is a fresh replica that must REGISTER
+# before any self-update could run, so a pin below GitHub's minimum can never
+# come up. GitHub publishes no machine-readable minimum; it documents a 30-day
+# update window. This workflow warns once the pin has been superseded for more
+# than 30 days and FAILS at more than 60 (the reasoning is in the script header).
+#
+# WHY ITS OWN WORKFLOW. It was first placed as a step in deploy-staleness.yml,
+# which had failed 56 of 56 recorded runs. A red step inside a workflow that is
+# red every day changes nothing anyone watches. Here, this run's conclusion IS
+# the verdict, and a failure opens or updates ONE tracking issue --
+# "deploy: runner-version-pin is failing" -- through the same notifier the
+# deploy lanes use (.github/scripts/deploy-notify-failure.mjs).
+#
+# WHY ubuntu-latest. The self-hosted runner is exactly what is down when this
+# alarm matters. This must never run on `loom-aca`.
+#
+# NOT a required PR check: the verdict is a function of the calendar, not of a
+# diff, so as a required context it would red every open PR on day 61. The
+# pull_request trigger is path-filtered to the files that decide the verdict,
+# and never files an issue.
+
+on:
+  schedule:
+    # Daily, off the hour so it does not pile onto the top-of-hour surge.
+    - cron: '23 14 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'platform/runners/github-actions/Dockerfile'
+      - 'scripts/csa-loom/provision-gh-runner.sh'
+      - 'scripts/ci/check-runner-version-pin.mjs'
+      - '.github/workflows/runner-version-pin.yml'
+
+permissions:
+  contents: read
+  # deploy-notify-failure.mjs files/updates ONE issue for this workflow on failure.
+  issues: write
+
+concurrency:
+  group: runner-version-pin-${{ github.event_name == 'pull_request' && github.ref || 'scheduled' }}
+  cancel-in-progress: false
+
+jobs:
+  pin-age:
+    name: Runner version pin age
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      # Exit code measured directly, not through a pipe: the default shell is
+      # `bash -e {0}` with NO pipefail, so `node … | tee` would report tee's 0.
+      - name: Check the pin against the actions/runner releases
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          node scripts/ci/check-runner-version-pin.mjs --online \
+            --failure-json "$RUNNER_TEMP/runner-version-pin-failure.json" \
+            > "$RUNNER_TEMP/runner-version-pin.txt" 2>&1
+          rc=$?
+          set -e
+          cat "$RUNNER_TEMP/runner-version-pin.txt"
+          {
+            echo '## Self-hosted runner version pin'
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/runner-version-pin.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "[runner-version-pin] exit=$rc (measured directly, not through a pipe)"
+          exit "$rc"
+
+      # One issue per workflow, updated. Never a hard-coded issue number (C1).
+      # Skipped on pull_request: a PR run is a preview of the verdict, not the alarm.
+      - name: Notify on failure
+        if: failure() && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          node .github/scripts/deploy-notify-failure.mjs \
+            --workflow runner-version-pin --result "${{ job.status }}" \
+            --failure-json "$RUNNER_TEMP/runner-version-pin-failure.json"

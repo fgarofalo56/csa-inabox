@@ -30,6 +30,7 @@ import {
   checkOffline,
   evaluateAge,
   fetchReleases,
+  main,
 } from '../check-runner-version-pin.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -128,7 +129,7 @@ test('a provision-script default that disagrees with the Dockerfile fails', () =
   const stale = 'RUNNER_VERSION="${RUNNER_VERSION:-2.328.0}"\n';
   const bad = checkOffline({ dockerfileText: pinned, scriptText: stale });
   assert.equal(bad.errors.length, 1);
-  assert.match(bad.errors[0], /defaults RUNNER_VERSION to '2\.328\.0'.*pins '2\.337\.0'/);
+  assert.match(bad.errors[0], /sets RUNNER_VERSION to '2\.328\.0'.*pins '2\.337\.0'/);
   // Positive pairs, so the absence above is not satisfied by a scan that
   // matches everything: an EMPTY default (the fixed form) and an AGREEING
   // default both pass. RED if every `${RUNNER_VERSION:-…}` were flagged.
@@ -141,6 +142,40 @@ test('a provision-script default that disagrees with the Dockerfile fails', () =
   assert.deepEqual(scriptVersionDefaults('# was: ${RUNNER_VERSION:-2.328.0}\n'), []);
   // And the scan does see a live one (positive control for the line above).
   assert.deepEqual(scriptVersionDefaults('  V="${RUNNER_VERSION:-2.1.0}"\n'), ['2.1.0']);
+});
+
+test('the script scan sees every literal form, and skips references', () => {
+  // Each row is RED if its form is dropped from the scan: the fixture would
+  // return [] and a stale literal would pass the offline check (review #6).
+  const seen = [
+    ['${RUNNER_VERSION:=2.328.0}', ': "${RUNNER_VERSION:=2.328.0}"'],
+    ['${RUNNER_VERSION-2.328.0} (no colon)', 'V="${RUNNER_VERSION-2.328.0}"'],
+    ['plain assignment', 'RUNNER_VERSION=2.328.0'],
+    ['quoted plain assignment', 'RUNNER_VERSION="2.328.0"'],
+    ['export', 'export RUNNER_VERSION=2.328.0'],
+    ['hard-coded --build-arg', '  az acr build --build-arg RUNNER_VERSION=2.328.0 \\'],
+    ['quoted --build-arg', '  --build-arg "RUNNER_VERSION=2.328.0" \\'],
+    ['array element', 'BUILD_ARGS=( "RUNNER_VERSION=2.328.0" )'],
+  ];
+  for (const [form, line] of seen) {
+    assert.deepEqual(scriptVersionDefaults(line), ['2.328.0'], `form not seen: ${form} -- ${line}`);
+    // And it reaches the ERROR, not just the list.
+    assert.equal(checkOffline({ dockerfileText: dockerfile('2.337.0'), scriptText: line }).errors.length, 1, form);
+  }
+  // References are not literals. RED if the `$` skip is dropped: each of these
+  // would then report a bogus default ('${RUNNER_VERSION}"', '$V', ...).
+  const skipped = [
+    '  --build-arg "RUNNER_VERSION=${RUNNER_VERSION}" --build-arg "RUNNER_SHA256=${RUNNER_SHA256}" )',
+    'RUNNER_VERSION="${RUNNER_VERSION:-}"',
+    'RUNNER_VERSION=$V',
+    'echo "[x][FATAL] RUNNER_VERSION=$RUNNER_VERSION is set without RUNNER_SHA256." >&2',
+    'MY_RUNNER_VERSION=2.1.0',
+  ];
+  for (const line of skipped) assert.deepEqual(scriptVersionDefaults(line), [], line);
+  // The real provision script, which contains all of the skipped shapes above,
+  // yields nothing. RED if the scan over-matches its override pass-through.
+  const real = readFileSync(join(REPO_ROOT, PROVISION_REL), 'utf8');
+  assert.deepEqual(scriptVersionDefaults(real), []);
 });
 
 // ---------------------------------------------------------------------------
@@ -242,6 +277,34 @@ test('fetchReleases does not retry a 404, and returns the body on 200', async ()
   assert.equal(body.length, RELEASES.length);
 });
 
+test('fetchReleases retries the rate-limit statuses 429 and 403', async () => {
+  // RED if either status is dropped from the retry set (calls = 1): a
+  // rate-limited read would then fail the alarm on its first attempt (review #4).
+  for (const status of [429, 403]) {
+    let calls = 0;
+    await assert.rejects(
+      fetchReleases({
+        fetchImpl: async () => {
+          calls += 1;
+          return { ok: false, status };
+        },
+        backoffMs: 1,
+      }),
+      new RegExp(`HTTP ${status}`),
+    );
+    assert.equal(calls, 3, `status ${status} must be retried`);
+  }
+  // Recovery: a 429 followed by a 200 returns the body. RED if the loop gave
+  // up after the first rate-limited response.
+  let n = 0;
+  const body = await fetchReleases({
+    fetchImpl: async () => (++n === 1 ? { ok: false, status: 429 } : { ok: true, status: 200, json: async () => RELEASES }),
+    backoffMs: 1,
+  });
+  assert.equal(body.length, RELEASES.length);
+  assert.equal(n, 2);
+});
+
 // ---------------------------------------------------------------------------
 // CLI wiring: main() must turn an error into a non-zero exit
 // ---------------------------------------------------------------------------
@@ -273,4 +336,131 @@ test('CLI exits 1 with an ::error:: for the outage pin, 0 for a good pin', () =>
   const good = run(sandbox('2.337.0', 'RUNNER_VERSION="${RUNNER_VERSION:-}"\n'));
   assert.equal(good.code, 0, good.out);
   assert.match(good.out, /OK \(offline\)/);
+});
+
+// ---------------------------------------------------------------------------
+// main() --online: the EXIT CODE is the alarm (review #2)
+// ---------------------------------------------------------------------------
+//
+// The workflow reads one number. evaluateAge() and fetchReleases() being right
+// proves nothing if main() maps their verdict to the wrong exit code, so these
+// drive main() itself with an injected fetch and clock.
+//
+// Why pin 2.335.0 and not 2.328.0 for the FAIL case: 2.328.0 is below the
+// offline floor, so main() returns 1 BEFORE it reaches the online branch -- a
+// fixture on 2.328.0 would stay red with the online fail branch mutated to
+// `return 0`. 2.335.0 clears the floor and is 112 days superseded at the
+// outage clock, so only the online fail branch can produce its exit 1.
+
+function repoFixture(version) {
+  const root = mkdtempSync(join(tmpdir(), 'rvp0-main-'));
+  mkdirSync(join(root, 'platform', 'runners', 'github-actions'), { recursive: true });
+  mkdirSync(join(root, 'scripts', 'csa-loom'), { recursive: true });
+  writeFileSync(join(root, DOCKERFILE_REL), dockerfile(version));
+  writeFileSync(join(root, PROVISION_REL), 'RUNNER_VERSION="${RUNNER_VERSION:-}"\n');
+  return root;
+}
+
+async function runMain({ version, fetchImpl, now = OUTAGE, online = true }) {
+  const root = repoFixture(version);
+  const failureJson = join(root, 'failure.json');
+  const out = [];
+  const argv = online ? ['--online', '--failure-json', failureJson] : [];
+  const code = await main({
+    argv,
+    repoRoot: root,
+    fetchImpl,
+    now: () => now,
+    backoffMs: 1,
+    log: (s) => out.push(`OUT ${s}`),
+    error: (s) => out.push(`ERR ${s}`),
+  });
+  let failure = null;
+  try {
+    failure = JSON.parse(readFileSync(failureJson, 'utf8'));
+  } catch {
+    failure = null;
+  }
+  return { code, out: out.join('\n'), failure };
+}
+
+const okFetch = async () => ({ ok: true, status: 200, json: async () => RELEASES });
+
+test('main --online: an unreadable releases API exits 1 and says nothing was established', async () => {
+  const r = await runMain({
+    version: '2.337.0',
+    fetchImpl: async () => {
+      throw new Error('getaddrinfo ENOTFOUND api.github.com');
+    },
+  });
+  // RED if the fetch-error branch returns 0 (review X2): an outage of the API
+  // would read as a healthy pin.
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /ERR ::error::runner-version-pin: could not read .*NOT established/);
+  // The notifier gets a TRANSIENT record, not a stale-pin one. RED if the two
+  // kinds were swapped: the tracking issue would tell someone to bump a pin
+  // that may be fine.
+  assert.equal(r.failure?.class, 'transient');
+});
+
+test('main --online: a pin superseded past 60 days exits 1 with ::error', async () => {
+  const r = await runMain({ version: '2.335.0', fetchImpl: okFetch });
+  // RED if the fail-verdict branch returns 0 (review X3). That is the alarm.
+  assert.equal(r.code, 1, r.out);
+  assert.match(
+    r.out,
+    /ERR ::error file=platform\/runners\/github-actions\/Dockerfile::runner-version-pin: pin 2\.335\.0 has been superseded for 112 day/,
+  );
+  assert.equal(r.failure?.class, 'defect');
+  assert.match(r.failure?.remediation ?? '', /RUNNER_VERSION and ARG RUNNER_SHA256/);
+});
+
+test('main --online: a pin 45 days superseded exits 0 with ::warning, and writes no failure', async () => {
+  // v2.337.0 published 2026-08-26T14:33:29Z; +45 days. Pin 2.336.0.
+  const now = Date.parse('2026-08-26T14:33:29Z') + 45 * DAY + 1000;
+  const r = await runMain({ version: '2.336.0', fetchImpl: okFetch, now });
+  // RED if warn were mapped to 1 (every warn day would fire the tracking
+  // issue) or if the warning line were dropped (the 30-day breach goes silent).
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /OUT ::warning file=.*superseded for 45 day/);
+  assert.equal(r.failure, null, 'a warn must not produce a failure record');
+});
+
+test('main --online: the latest release exits 0 with OK (positive control)', async () => {
+  const r = await runMain({ version: '2.337.0', fetchImpl: okFetch });
+  // RED if main() returned 1 unconditionally -- which would satisfy both
+  // exit-1 tests above while being useless.
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /OUT \[runner-version-pin\] OK \(online\): pin 2\.337\.0 is the latest release/);
+});
+
+test('main: the offline floor fails before any network read', async () => {
+  let fetched = false;
+  const r = await runMain({
+    version: '2.328.0',
+    fetchImpl: async () => {
+      fetched = true;
+      return okFetch();
+    },
+  });
+  assert.equal(r.code, 1, r.out);
+  // RED if the offline errors were checked AFTER the fetch.
+  assert.equal(fetched, false);
+  assert.equal(r.failure?.class, 'defect');
+});
+
+test('the failure record renders a CLASSIFIED tracking-issue body through the real notifier', async () => {
+  // Contract with .github/scripts/deploy-notify-failure.mjs, which the
+  // runner-version-pin workflow calls with --failure-json. Imported, not
+  // transcribed, so a field rename on either side shows here.
+  const { buildIssueBody, buildIssueTitle } = await import('../../../.github/scripts/deploy-notify-failure.mjs');
+  const r = await runMain({ version: '2.335.0', fetchImpl: okFetch });
+  const body = buildIssueBody({ workflow: 'runner-version-pin', runId: '1', runUrl: 'u', sha: 's', failure: r.failure });
+  // RED if the record were not written (failure null -> "No classification was
+  // captured"), or if its class / remediation fields stopped matching what the
+  // notifier reads.
+  assert.match(body, /\*\*Classification: defect\*\*/);
+  assert.match(body, /Remediation \(operator-action\):\*\* Bump ARG RUNNER_VERSION/);
+  assert.doesNotMatch(body, /No classification was captured/);
+  assert.equal(buildIssueTitle('runner-version-pin'), 'deploy: runner-version-pin is failing');
 });

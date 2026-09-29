@@ -157,15 +157,19 @@ loudly and exits non-zero** — it never silently skips.
 > before the first build, or override per-run:
 > `RUNNER_VERSION=2.x.y RUNNER_SHA256=<hex> ./scripts/csa-loom/provision-gh-runner.sh`.
 >
-> **The pin has an expiry.** The image never self-updates, and GitHub refuses to
-> register a runner below a moving minimum version. On 2026-09-29 it refused
-> `2.328.0` (minimum `2.329.0`) and every `[self-hosted, loom-aca]` workflow
-> stranded. `scripts/ci/check-runner-version-pin.mjs` guards it: on every PR
+> **The pin has an expiry.** GitHub refuses to register a runner below a moving
+> minimum version. The image does not disable self-update, but that does not
+> help: each execution is a fresh replica that starts from the pinned binary,
+> and registration happens before any update could run, so a pin below the
+> minimum can never register. On 2026-09-29 GitHub refused `2.328.0` (minimum
+> `2.329.0`) and every `[self-hosted, loom-aca]` workflow stranded.
+> `scripts/ci/check-runner-version-pin.mjs` guards it. On every PR
 > (`loom-guardrails.yml`) it checks the pin is well-formed and at or above the last
-> reported minimum; daily (`deploy-staleness.yml`, GitHub-hosted) it warns once the
-> pin has been superseded for 30 days, which is GitHub's documented update window,
-> and fails at 60. When it goes red, bump the pin and rebuild the image under a
-> new tag.
+> reported minimum. Daily, in its own workflow (`runner-version-pin.yml`,
+> GitHub-hosted), it warns once the pin has been superseded for 30 days, which is
+> GitHub's documented update window, and fails at 60. A failure opens or updates
+> the issue "deploy: runner-version-pin is failing". When it goes red, bump the
+> pin and rebuild the image under a new tag.
 
 The durable IaC mirror is
 `platform/fiab/bicep/modules/admin-plane/gh-runner-job.bicep` (see the `// TODO`

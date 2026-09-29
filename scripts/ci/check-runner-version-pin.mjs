@@ -13,18 +13,28 @@
  *   POST https://api.github.com/actions/runner-registration: "The minimum
  *   runner version required to register with GitHub Actions is now 2.329.0".
  *   Every `[self-hosted, loom-aca]` workflow queued with nothing to run it. The
- *   pin had been superseded for 350 days and nothing anywhere said so -- the
- *   image disables the runner's self-update (it is rebuilt, not patched), so the
- *   pin IS the version, and a pin with no alarm is a dead fleet on a timer.
+ *   pin had been superseded for 350 days and nothing anywhere said so.
  *
- * IS THERE A PUBLIC MINIMUM-VERSION SOURCE? No machine-readable one. What
- *   GitHub publishes is a POLICY (docs, content/actions/reference/runners/
- *   self-hosted-runners.md): "If you disable automatic updates, you will be
+ * WHY THE PIN IS THE VERSION THAT MATTERS. The image does NOT disable the
+ *   runner's self-update (entrypoint.sh runs config.sh without
+ *   --disableupdate). It does not need to for the pin to be fatal: every
+ *   execution is a fresh ephemeral replica that starts from the pinned binary,
+ *   and REGISTRATION (config.sh) happens before any self-update could run. So a
+ *   pin below GitHub's minimum can never register, however willing the runner
+ *   would have been to update afterwards. A pin with no alarm is a dead fleet on
+ *   a timer.
+ *
+ * IS THERE A PUBLIC MINIMUM-VERSION SOURCE? No machine-readable one. GitHub
+ *   documents a POLICY for runners that do not auto-update (docs,
+ *   content/actions/reference/runners/self-hosted-runners.md): "you will be
  *   required to update your runner version within 30 days of a new version
- *   being made available", plus an unannounced right to refuse jobs "until it
- *   has been updated" when a critical security update ships. The only place the
- *   enforced minimum appears is the refusal message itself. So this guard does
- *   two things:
+ *   being made available", plus a right to refuse jobs "until it has been
+ *   updated" when a critical security update ships. That wording is written for
+ *   runners with auto-update disabled; it is used here as the best published
+ *   statement of how far behind GitHub is prepared to let a registering binary
+ *   fall, because a replica that must register before it can update is in the
+ *   same position. The enforced minimum itself appears only in the refusal
+ *   message. So this guard does two things:
  *
  *   OFFLINE (hermetic; runs on every PR in loom-guardrails):
  *     1. exactly one `ARG RUNNER_VERSION=<x.y.z>` and one
@@ -32,17 +42,27 @@
  *     2. the pin is >= KNOWN_FLOOR, the minimum GitHub last REPORTED to us
  *        (2.329.0, from the 2026-09-29 refusal). This can only ratchet up by
  *        hand, so it is a regression floor, not the recurrence alarm;
- *     3. scripts/csa-loom/provision-gh-runner.sh carries no RUNNER_VERSION
- *        default that disagrees with the Dockerfile. It carried `2.328.0` and
- *        passed it as a --build-arg, which would have overridden a bumped
- *        Dockerfile default while the Dockerfile's SHA256 stayed the new one --
- *        a checksum mismatch on the very rebuild that fixes the outage.
+ *     3. scripts/csa-loom/provision-gh-runner.sh sets no literal RUNNER_VERSION
+ *        that disagrees with the Dockerfile. It carried `2.328.0` and passed it
+ *        as a --build-arg, which would have overridden a bumped Dockerfile
+ *        default while the Dockerfile's SHA256 stayed the new one -- a checksum
+ *        mismatch on the very rebuild that fixes the outage. The scan SEES:
+ *        `${RUNNER_VERSION:-X}`, `${RUNNER_VERSION:=X}` (and the colon-less
+ *        `-`/`=` forms), a plain or exported `RUNNER_VERSION=X`, and a
+ *        hard-coded `--build-arg RUNNER_VERSION=X` / `"RUNNER_VERSION=X"`. It
+ *        does NOT see: a value that arrives through ANOTHER variable
+ *        (`V=2.328.0; RUNNER_VERSION=$V` -- anything containing `$` is treated
+ *        as a reference, not a literal), a value set in a sourced file or by
+ *        the caller's environment, or a commented-out line.
  *
- *   ONLINE (`--online`; runs DAILY in deploy-staleness.yml on ubuntu-latest):
+ *   ONLINE (`--online`; runs DAILY in .github/workflows/runner-version-pin.yml
+ *   on ubuntu-latest, which files/updates one tracking issue on failure):
  *     4. reads the actions/runner releases and measures how long the pin has
  *        been SUPERSEDED -- the age of the OLDEST published release newer than
  *        the pin (that is when GitHub's 30-day clock started). WARN past
  *        WARN_DAYS (30, the documented policy); FAIL past FAIL_DAYS (60).
+ *        `--failure-json <path>` writes a classified failure record for
+ *        .github/scripts/deploy-notify-failure.mjs when the verdict is a failure.
  *
  * WHY 60 DAYS AND NOT "N MINOR VERSIONS BEHIND". Enforcement is keyed to TIME
  *   ("within 30 days of a new version"), not to a version count, and release
@@ -59,16 +79,22 @@
  *
  * WHY THE AGE CHECK IS NOT A REQUIRED PR CHECK. It is a function of the
  *   CALENDAR, not of the diff: on day 61 it would red every open PR at once,
- *   including ones that never touched the runner. deploy-staleness.yml already
- *   documents that trade-off for the same class ("blocking unrelated PRs on it
- *   would train people to ignore it") and runs daily on a GitHub-hosted runner,
- *   which is also the only place this may run -- the self-hosted runner is the
- *   thing that is down when this alarm matters.
+ *   including ones that never touched the runner. It gets its OWN daily
+ *   workflow instead -- not a step in an existing one, because a red step in a
+ *   workflow that is already red every day changes nothing anyone watches
+ *   (deploy-staleness.yml was 56/56 failure when this was first placed there).
+ *   It runs on a GitHub-hosted runner, the only place it may run: the
+ *   self-hosted runner is the thing that is down when this alarm matters.
  *
  * FAILS CLOSED. An unreadable releases API, an empty release list, a pin newer
  *   than every release, or a pin that is not a published release (its tarball
  *   would 404 at build time) is a FAILURE with the reason stated -- never a pass
  *   and never "up to date".
+ *
+ * RETRIES. A read is attempted up to 3 times. Retried: network errors, 5xx,
+ *   and 403 / 429 -- the two statuses GitHub uses for rate limiting, which is
+ *   transient. NOT retried: every other 4xx (404, 401, 422, ...), which is
+ *   deterministic.
  *
  * Self-test: scripts/ci/__tests__/check-runner-version-pin.test.mjs
  * Run:       node scripts/ci/check-runner-version-pin.mjs [--online]
@@ -139,15 +165,30 @@ export function readPin(dockerfileText) {
   return { version, sha256, errors };
 }
 
-/** Every `RUNNER_VERSION="${RUNNER_VERSION:-<default>}"`-style default in a shell script. */
+/**
+ * Every LITERAL RUNNER_VERSION a shell script sets. Two shapes:
+ *   - parameter-expansion defaults: `${RUNNER_VERSION:-X}`, `${RUNNER_VERSION:=X}`,
+ *     and the colon-less `${RUNNER_VERSION-X}` / `${RUNNER_VERSION=X}`;
+ *   - assignments: `RUNNER_VERSION=X`, `export RUNNER_VERSION=X`, and a
+ *     hard-coded `--build-arg RUNNER_VERSION=X` / `"RUNNER_VERSION=X"`.
+ * A value containing `$` is a REFERENCE (e.g. the script's own
+ * `"RUNNER_VERSION=${RUNNER_VERSION}"` pass-through), not a literal, and is
+ * skipped; so are empty values and commented lines. See the header for what
+ * this cannot see.
+ */
 export function scriptVersionDefaults(scriptText) {
   const out = [];
-  const re = /\$\{RUNNER_VERSION:-([^}]*)\}/g;
+  const expansion = /\$\{RUNNER_VERSION:?[-=]([^}]*)\}/g;
+  const assignment = /(?<![A-Za-z0-9_${])RUNNER_VERSION=([^\s;&|)]*)/g;
   for (const line of String(scriptText).split(/\r?\n/)) {
     if (/^\s*#/.test(line)) continue;
     let m;
-    while ((m = re.exec(line)) !== null) {
+    while ((m = expansion.exec(line)) !== null) {
       if (m[1] !== '') out.push(m[1]);
+    }
+    while ((m = assignment.exec(line)) !== null) {
+      const value = m[1].replace(/^["']+|["']+$/g, '');
+      if (value !== '' && !value.includes('$')) out.push(value);
     }
   }
   return out;
@@ -166,7 +207,7 @@ export function checkOffline({ dockerfileText, scriptText, floor = KNOWN_FLOOR }
   for (const d of scriptVersionDefaults(scriptText ?? '')) {
     if (d !== pin.version) {
       errors.push(
-        `${PROVISION_REL} defaults RUNNER_VERSION to '${d}' but ${DOCKERFILE_REL} pins '${pin.version}'. ` +
+        `${PROVISION_REL} sets RUNNER_VERSION to '${d}' but ${DOCKERFILE_REL} pins '${pin.version}'. ` +
           `The script passes it as a --build-arg, so it overrides the Dockerfile while the Dockerfile's ` +
           `RUNNER_SHA256 stays -- the build fails its checksum. Drop the script default; the Dockerfile owns the pin.`,
       );
@@ -250,6 +291,9 @@ export function evaluateAge({ pin, releases, now, warnDays = WARN_DAYS, failDays
   };
 }
 
+/** Statuses that are retried besides 5xx: GitHub's two rate-limit responses. */
+export const RETRY_4XX = new Set([403, 429]);
+
 export async function fetchReleases({ attempts = 3, fetchImpl = globalThis.fetch, backoffMs = 2000 } = {}) {
   const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || '';
   const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'csa-loom-runner-version-pin' };
@@ -260,8 +304,8 @@ export async function fetchReleases({ attempts = 3, fetchImpl = globalThis.fetch
       const res = await fetchImpl(RELEASES_URL, { headers });
       if (res.ok) return await res.json();
       lastErr = new Error(`HTTP ${res.status} from ${RELEASES_URL}`);
-      // 4xx other than rate limiting is not transient.
-      if (res.status < 500 && res.status !== 403 && res.status !== 429) break;
+      // Any other 4xx is deterministic -- retrying cannot change it.
+      if (res.status < 500 && !RETRY_4XX.has(res.status)) break;
     } catch (e) {
       lastErr = e;
     }
@@ -270,43 +314,108 @@ export async function fetchReleases({ attempts = 3, fetchImpl = globalThis.fetch
   throw new Error(`could not read the actions/runner releases API after ${attempts} attempt(s): ${lastErr?.message ?? lastErr}`);
 }
 
-async function main(argv) {
+/**
+ * The classified record .github/scripts/deploy-notify-failure.mjs reads via
+ * --failure-json, so the tracking issue says WHAT failed and WHAT to do rather
+ * than "no classification was captured". Classes are from
+ * apps/fiab-console/lib/deploy/failure-taxonomy.json.
+ */
+export function buildFailureRecord({ kind, message }) {
+  if (kind === 'unreadable') {
+    return {
+      class: 'transient',
+      signalId: 'runner-version-pin.releases-api-unreadable',
+      retryable: true,
+      attempts: [{ attempt: 1, exitCode: 1, class: 'transient' }],
+      whyStopped: 'the releases API could not be read after bounded retries; the pin age was NOT established',
+      established: [{ signal: 'releases-api-unreadable', line: message }],
+      remediationKind: 'operator-action',
+      remediation:
+        'Nothing is known about the pin from this run. Re-run the runner-version-pin workflow; if the API ' +
+        'stays unreadable, check GitHub status and the workflow token.',
+    };
+  }
+  return {
+    class: 'defect',
+    signalId: 'runner-version-pin.superseded',
+    retryable: false,
+    attempts: [{ attempt: 1, exitCode: 1, class: 'defect' }],
+    whyStopped: 'the pinned actions/runner version is past the alarm threshold',
+    established: [{ signal: 'runner-pin-superseded', line: message }],
+    remediationKind: 'operator-action',
+    remediation:
+      `Bump ARG RUNNER_VERSION and ARG RUNNER_SHA256 in ${DOCKERFILE_REL} to the latest actions/runner release ` +
+      '(linux-x64 hash from the release asset digest), build the image under a NEW tag, and point the ' +
+      'gh-aca-runner Container Apps Job at it. See docs/fiab/github-actions-runner.md.',
+  };
+}
+
+function argValue(argv, name) {
+  const i = argv.indexOf(`--${name}`);
+  return i === -1 ? null : argv[i + 1] ?? null;
+}
+
+/**
+ * The CLI. Exported with injectable dependencies so a test can witness the
+ * EXIT CODE the workflow reads -- the alarm IS this number, not evaluateAge's
+ * verdict. Returns the exit code; never calls process.exit itself.
+ */
+export async function main({
+  argv = process.argv.slice(2),
+  repoRoot = REPO_ROOT,
+  fetchImpl = globalThis.fetch,
+  now = () => Date.now(),
+  backoffMs = 2000,
+  log = (s) => console.log(s),
+  error = (s) => console.error(s),
+} = {}) {
   const online = argv.includes('--online');
-  const dockerfileText = fs.readFileSync(path.join(REPO_ROOT, DOCKERFILE_REL), 'utf8');
-  const scriptPath = path.join(REPO_ROOT, PROVISION_REL);
+  const failureJson = argValue(argv, 'failure-json');
+  const dockerfileText = fs.readFileSync(path.join(repoRoot, DOCKERFILE_REL), 'utf8');
+  const scriptPath = path.join(repoRoot, PROVISION_REL);
   const scriptText = fs.existsSync(scriptPath) ? fs.readFileSync(scriptPath, 'utf8') : '';
   const { pin, errors } = checkOffline({ dockerfileText, scriptText });
-  console.log(`[runner-version-pin] ${DOCKERFILE_REL}: RUNNER_VERSION=${pin.version ?? '<none>'} (floor ${KNOWN_FLOOR})`);
+  log(`[runner-version-pin] ${DOCKERFILE_REL}: RUNNER_VERSION=${pin.version ?? '<none>'} (floor ${KNOWN_FLOOR})`);
   if (errors.length > 0) {
-    for (const e of errors) console.error(`::error file=${DOCKERFILE_REL}::runner-version-pin: ${e}`);
+    for (const e of errors) error(`::error file=${DOCKERFILE_REL}::runner-version-pin: ${e}`);
+    if (failureJson) {
+      fs.writeFileSync(failureJson, JSON.stringify(buildFailureRecord({ kind: 'stale', message: errors.join(' | ') }), null, 2));
+    }
     return 1;
   }
   if (!online) {
-    console.log('[runner-version-pin] OK (offline): pin is well-formed, at/above the known floor, and no script default disagrees.');
+    log('[runner-version-pin] OK (offline): pin is well-formed, at/above the known floor, and no script default disagrees.');
     return 0;
   }
   let releases;
   try {
-    releases = await fetchReleases();
+    releases = await fetchReleases({ fetchImpl, backoffMs });
   } catch (e) {
-    console.error(`::error::runner-version-pin: ${e.message}. The pin's age was NOT established.`);
+    const message = `${e.message}. The pin's age was NOT established.`;
+    error(`::error::runner-version-pin: ${message}`);
+    if (failureJson) {
+      fs.writeFileSync(failureJson, JSON.stringify(buildFailureRecord({ kind: 'unreadable', message }), null, 2));
+    }
     return 1;
   }
-  const r = evaluateAge({ pin: pin.version, releases, now: Date.now() });
+  const r = evaluateAge({ pin: pin.version, releases, now: now() });
   if (r.verdict === 'fail') {
-    console.error(`::error file=${DOCKERFILE_REL}::runner-version-pin: ${r.message}`);
+    error(`::error file=${DOCKERFILE_REL}::runner-version-pin: ${r.message}`);
+    if (failureJson) {
+      fs.writeFileSync(failureJson, JSON.stringify(buildFailureRecord({ kind: 'stale', message: r.message }), null, 2));
+    }
     return 1;
   }
   if (r.verdict === 'warn') {
-    console.log(`::warning file=${DOCKERFILE_REL}::runner-version-pin: ${r.message}`);
+    log(`::warning file=${DOCKERFILE_REL}::runner-version-pin: ${r.message}`);
     return 0;
   }
-  console.log(`[runner-version-pin] OK (online): ${r.message}`);
+  log(`[runner-version-pin] OK (online): ${r.message}`);
   return 0;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main(process.argv.slice(2)).then(
+  main().then(
     (code) => process.exit(code),
     (e) => {
       console.error(`::error::runner-version-pin crashed: ${e?.stack ?? e}`);
