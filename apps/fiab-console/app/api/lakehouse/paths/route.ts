@@ -198,7 +198,10 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
     // 404, not 403: never confirm an id the caller may not see.
     if (!access) return apiError('lakehouse not found', 404);
 
-    const bound = await resolveLakehouseAbfss(lakehouseId, access.item.workspaceId);
+    // `persist: true` (#4759): a root the resolver has to PROBE for is written
+    // back onto the item so the next open reads it directly. Opted in here, and
+    // only here, because this branch has already run resolveItemAccessByOid.
+    const bound = await resolveLakehouseAbfss(lakehouseId, access.item.workspaceId, { persist: true });
     if (!bound) {
       // Honest gate, not an error: there is no configured storage to browse.
       // Mirrors /api/lakehouse/tables' `{ ok: true, tables: [], gate }`.
