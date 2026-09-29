@@ -23,7 +23,9 @@
  * with `{ ok:false, gate:'not_configured', ... }` so the UI shows a Fluent
  * MessageBar (and still renders live-computed posture). No silent failure.
  *
- * The same gate fires when the URL IS set but LOOM_POSTURE_FUNCTION_KEY is not.
+ * The same gate fires when the URL IS set but LOOM_POSTURE_FUNCTION_KEY is not,
+ * distinguished by `gateReason: 'key_not_bound'` and pointed at the admin-plane
+ * module that binds the key (not at the Function module, which already ran).
  * The Function's `posture-refresh` route is `AuthLevel.FUNCTION`
  * (azure-functions/posture-refresh/function_app.py), so an unkeyed call is
  * rejected 401 — and because the dispatch is fire-and-forget that rejection
@@ -39,6 +41,19 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const POSTURE_FUNCTION_MODULE = 'azure-functions/posture-refresh/deploy/main.bicep';
+// The module whose `postureFunctionKeyBound` (driven by
+// `observabilityConfig.postureFunctionKeyEnabled`) binds the key onto this
+// Console. On the key branch the Function already exists, so pointing at the
+// Function module would send the operator to redeploy something that neither
+// stores the key nor sets the flag (#4770 review, deploy-integrity R6/R7).
+const KEY_BINDING_MODULE = 'platform/fiab/bicep/modules/admin-plane/main.bicep';
+
+/**
+ * Which half of the pre-warm is missing. `lib/panes/govern-owner.tsx` keys its
+ * MessageBar title on this, because "not provisioned" is false once the URL is
+ * set. Kept module-local: a route file exports only its handlers.
+ */
+type PostureRefreshGateReason = 'function_not_provisioned' | 'key_not_bound';
 
 export const POST = withSession(async (_req, { session: s }) => {
 
@@ -48,6 +63,7 @@ export const POST = withSession(async (_req, { session: s }) => {
     return NextResponse.json({
       ok: false,
       gate: 'not_configured',
+      gateReason: 'function_not_provisioned' satisfies PostureRefreshGateReason,
       missingEnvVar: 'LOOM_POSTURE_FUNCTION_URL',
       bicepModule: POSTURE_FUNCTION_MODULE,
       message:
@@ -58,16 +74,18 @@ export const POST = withSession(async (_req, { session: s }) => {
   const functionKey = (process.env.LOOM_POSTURE_FUNCTION_KEY || '').trim();
   if (!functionKey) {
     // URL known, host key not bound: do NOT dispatch an unkeyed call the
-    // Function would reject. Same honest gate shape the UI already renders.
-    // The message names what is missing without guessing WHY (the secret may
-    // not be in Key Vault yet, or the deploy has not enabled the binding).
+    // Function would reject. The Function EXISTS on this branch (its URL is
+    // set), so the remediation names the two things that bind the key, not the
+    // Function module. This route cannot see Key Vault, so the message says
+    // which of the two it cannot tell apart rather than guessing (R7).
     return NextResponse.json({
       ok: false,
       gate: 'not_configured',
+      gateReason: 'key_not_bound' satisfies PostureRefreshGateReason,
       missingEnvVar: 'LOOM_POSTURE_FUNCTION_KEY',
-      bicepModule: POSTURE_FUNCTION_MODULE,
+      bicepModule: KEY_BINDING_MODULE,
       message:
-        'On-open posture pre-warm unavailable: LOOM_POSTURE_FUNCTION_URL is set but LOOM_POSTURE_FUNCTION_KEY is not, and the posture-refresh Function accepts only keyed calls, so no refresh was dispatched. The key is bound from Key Vault secret loom-posture-function-key once it is stored there and the deploy sets observabilityConfig.postureFunctionKeyEnabled. Posture below is computed live from Cosmos.',
+        'On-open posture pre-warm unavailable: the posture-refresh Function is deployed (LOOM_POSTURE_FUNCTION_URL is set), but its host key is not bound to this Console, and the Function accepts only keyed calls, so no refresh was dispatched. The key is bound only when BOTH (1) the Function host key is stored in Key Vault as loom-posture-function-key AND (2) the deploy sets observabilityConfig.postureFunctionKeyEnabled, which drives admin-plane postureFunctionKeyBound. This route cannot read Key Vault, so it cannot tell which of the two is missing. Posture below is computed live from Cosmos.',
     });
   }
 

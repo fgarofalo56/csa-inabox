@@ -22,8 +22,31 @@
  *     stops carrying the key, or the owner id taken from anywhere but the session.
  *   - "URL unset": deleting / reordering the URL gate so the key gate answers
  *     first (missingEnvVar would read LOOM_POSTURE_FUNCTION_KEY).
+ *   - `gateReason` on each gate: swapping or dropping it, which is what the
+ *     Govern owner pane keys its MessageBar title on.
+ *   - `bicepModule` on each gate is RESOLVED against the repo and read, not
+ *     compared as a string. The key gate's module must declare
+ *     `postureFunctionKeyEnabled`, which the Function module does not (0
+ *     occurrences). So pointing the key gate back at
+ *     `azure-functions/posture-refresh/deploy/main.bicep`, the #4770 review
+ *     blocker, fails, and so does any path that does not exist. The URL gate's
+ *     module must declare `output functionUrl`, which admin-plane does not.
+ *   - 401 body: any change to the envelope, e.g. `{ error: 'unauthorized' }` or
+ *     dropping `ok:false`, fails the `toEqual`.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { readFileSync, existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+
+// __tests__ -> refresh -> govern -> governance -> api -> app -> fiab-console -> apps -> repo root
+const REPO_ROOT = fileURLToPath(new URL('../../../../../../../../', import.meta.url));
+function readModule(rel: string): string {
+  const abs = path.join(REPO_ROOT, rel);
+  // A missing file must fail loudly here, not read as "marker absent".
+  expect(existsSync(abs), `bicepModule ${rel} must exist under ${REPO_ROOT}`).toBe(true);
+  return readFileSync(abs, 'utf8');
+}
 
 const SESSION_OID = 'refresh-owner-oid';
 const SESSION_UPN = 'owner@contoso.com';
@@ -62,6 +85,9 @@ describe('POST /api/governance/govern/refresh', () => {
     vi.stubEnv('LOOM_POSTURE_FUNCTION_KEY', FIXTURE_KEY);
     const res = await POST();
     expect(res.status).toBe(401);
+    // Pin the envelope, not just the status: withSession -> apiUnauthorized()
+    // must stay byte-compatible with the hand-rolled body it replaced.
+    expect(await res.json()).toEqual({ ok: false, error: 'unauthenticated' });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -72,7 +98,14 @@ describe('POST /api/governance/govern/refresh', () => {
     const res = await POST();
     const j = await res.json();
     expect(res.status).toBe(200);
-    expect(j).toMatchObject({ ok: false, gate: 'not_configured', missingEnvVar: 'LOOM_POSTURE_FUNCTION_URL' });
+    expect(j).toMatchObject({
+      ok: false,
+      gate: 'not_configured',
+      gateReason: 'function_not_provisioned',
+      missingEnvVar: 'LOOM_POSTURE_FUNCTION_URL',
+    });
+    // Here the Function genuinely does not exist, so its own module IS the fix.
+    expect(readModule(j.bicepModule)).toMatch(/^output functionUrl\b/m);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -84,7 +117,17 @@ describe('POST /api/governance/govern/refresh', () => {
     expect(j.ok).toBe(false);
     expect(j.gate).toBe('not_configured');
     expect(j.missingEnvVar).toBe('LOOM_POSTURE_FUNCTION_KEY');
+    expect(j.gateReason).toBe('key_not_bound');
     expect(j.dispatched).toBeUndefined();
+    // The remediation module must be the one that BINDS the key. The Function
+    // module has 0 occurrences of this flag, so the review's blocker (pointing
+    // here at azure-functions/posture-refresh/deploy/main.bicep) fails this read.
+    expect(readModule(j.bicepModule)).toMatch(/\bpostureFunctionKeyEnabled\b/);
+    // The message names BOTH preconditions and does not claim to know which is
+    // missing. Deleting either one, or asserting a cause, fails one of these.
+    expect(j.message).toMatch(/Key Vault as loom-posture-function-key/);
+    expect(j.message).toMatch(/observabilityConfig\.postureFunctionKeyEnabled/);
+    expect(j.message).toMatch(/cannot tell which of the two is missing/);
     // The message must say live posture still renders (only the pre-warm is gated).
     expect(j.message).toMatch(/computed live from Cosmos/);
     expect(fetchMock).toHaveBeenCalledTimes(0);
