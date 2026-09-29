@@ -535,8 +535,17 @@ test('S8: the real workflow has no step that trusts the raw region input', () =>
 // all. Both edits, each with its own precondition, reproduce it.
 // ---------------------------------------------------------------------------
 
-/** `env:` entry the #3701 shape hung off, restored after the surviving one. */
-const ENV_ANCHOR = /(          ADMIN_SUB: \$\{\{ steps\.topology_guard\.outputs\.deploy_sub \}\}\n)/;
+/**
+ * `env:` entry the #3701 shape hung off, restored after the surviving one.
+ *
+ * A POSITIONAL anchor only: it locates the dlz_adopt step's `env:` block so the
+ * mutant can re-insert `REGION: ${{ inputs.region }}` there. It asserts nothing
+ * about ADMIN_SUB itself — S8's property is "no step trusts inputs.region". It
+ * follows ADMIN_SUB from deploy_sub to target_sub (the admin-RG probe needs a
+ * literal subscription; the binding itself is pinned in
+ * deploy-target-subscription.test.mjs).
+ */
+const ENV_ANCHOR = /(          ADMIN_SUB: \$\{\{ steps\.topology_guard\.outputs\.target_sub \}\}\n)/;
 /** The fix's shell read plus the refusal that guards it — absent pre-fix. */
 const SHELL_READ = /          REGION="\$\{AZURE_LOCATION:-\}"\n          if \[ -z "\$REGION" \]; then\n(?:[^\n]*\n)*?          fi\n/;
 
