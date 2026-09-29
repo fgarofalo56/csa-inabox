@@ -10,17 +10,15 @@
  * Backend: ARM listCallbackUrl (real REST). No Microsoft Fabric required.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { getLogicAppCallbackUrl, MonitorError } from '@/lib/azure/monitor-client';
 import { callerArmToken, userArmGateBody } from '@/lib/azure/caller-arm-token';
 import { redactUrlSecrets } from '@/lib/azure/redact-url-secrets';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session: s }) => {
   const body = await req.json().catch(() => ({} as Record<string, unknown>));
   const workflowResourceId = typeof body?.workflowResourceId === 'string' ? body.workflowResourceId.trim() : '';
   if (!workflowResourceId) return NextResponse.json({ ok: false, error: 'workflowResourceId required' }, { status: 400 });
@@ -48,4 +46,4 @@ export async function POST(req: NextRequest) {
     }
     return NextResponse.json({ ok: false, error: redactUrlSecrets((e as Error).message) }, { status: e instanceof MonitorError ? e.status : 502 });
   }
-}
+});
