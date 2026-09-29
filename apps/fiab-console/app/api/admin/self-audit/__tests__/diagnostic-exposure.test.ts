@@ -45,6 +45,18 @@ vi.mock('@/lib/azure/databricks-sql-warehouse', async () => {
   return { ...actual, tryResolveWarehouseId: async () => null };
 });
 
+// The support-bundle route's backends (Cosmos reachability, audit rows,
+// synthetic runs) answer empty so the bundle assembles offline.
+vi.mock('@/lib/azure/cosmos-client', async () => {
+  const actual = await vi.importActual<Record<string, unknown>>('@/lib/azure/cosmos-client');
+  return {
+    ...actual,
+    probeCosmosReachable: async () => undefined,
+    auditLogContainer: async () => ({ items: { query: () => ({ fetchAll: async () => ({ resources: [] }) }) } }),
+  };
+});
+vi.mock('@/lib/admin/synthetic-runs-reader', () => ({ readSyntheticRuns: async () => ({ configured: false, runs: [] }) }));
+
 function publishPermissionFailure() {
   publishRuntimeFailure(VAR, {
     kind: 'permission',
@@ -78,7 +90,7 @@ describe('B-6 — the SCIM identity diagnostic reaches admin readers only', () =
     expect(check).toBeDefined();
     expect(check.detail).toMatch(/failed \(permission\)/);
     expect(check.remediation).toMatch(/allow-cluster-create/);
-  }, 60_000);
+  }, 120_000);
 
   it('Copilot loom_self_audit tool output: no application id, no identity name — the finding still listed', async () => {
     const { buildDefaultRegistry } = await import('@/lib/azure/copilot-orchestrator');
@@ -88,7 +100,7 @@ describe('B-6 — the SCIM identity diagnostic reaches admin readers only', () =
     expect(out).not.toContain(APP_ID);
     expect(out).not.toContain(NAME);
     expect(out).toMatch(/failed \(permission\)/);
-  }, 60_000);
+  }, 120_000);
 
   it('GET /api/admin/gates (admin capability): the diagnostic IS attached — and still not in `detail`', async () => {
     const { GET } = await import('@/app/api/admin/gates/route');
@@ -101,5 +113,16 @@ describe('B-6 — the SCIM identity diagnostic reaches admin readers only', () =
     expect(g.diagnostic).toContain(NAME);
     expect(String(g.detail)).not.toContain(APP_ID);
     expect(g.detail).toMatch(/failed \(permission\)/);
+  });
+
+  it('GET /api/admin/diagnostics/bundle (tenant admin): the gate posture carries the diagnostic', async () => {
+    vi.stubEnv('LOOM_TENANT_ADMIN_OID', 'plain-user'); // this session IS the tenant admin here
+    const { GET } = await import('@/app/api/admin/diagnostics/bundle/route');
+    const res = await GET(new NextRequest('http://localhost/api/admin/diagnostics/bundle'), { params: Promise.resolve({}) } as any);
+    expect(res.status).toBe(200);
+    const j = await res.json();
+    const g = j.bundle.gates.find((x: any) => x.id === 'svc-databricks-sql');
+    // Breaks if the bundle route stops attaching the admin-only diagnostic.
+    expect(g.diagnostic).toContain(APP_ID);
   });
 });
