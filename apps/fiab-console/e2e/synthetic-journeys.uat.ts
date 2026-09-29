@@ -185,6 +185,18 @@ test('synthetic J2 — create item (workspace item CRUD → Cosmos)', async () =
 });
 
 test('synthetic J3 — open editor + primary action (lakehouse tables → ADLS)', async ({ browser }) => {
+  // #4759 — sized above the sum of J3's own inner bounds, so each of them can
+  // fire and report its own cause. Under Playwright's default 30 s test timeout
+  // the 60 s paths wait below could never fire. Measured against a local stub:
+  // J3 was ended at 30 s, and the only verdict written was the one its teardown
+  // provoked, naming the teardown
+  // ("Target page, context or browser has been closed", "Request context
+  // disposed") instead of the call that hung.
+  // Worst case: createItem ≤30 s (APIRequestContext default) + goto and the
+  // paths wait, which run concurrently, ≤60 s + 4 s hydrate + ≤2 s capture
+  // settle + tables GET ≤30 s = 126 s. 180 s leaves margin for context setup
+  // and teardown, and is far inside the job's 1200 s replicaTimeout.
+  test.setTimeout(180_000);
   await journey('editor-primary-action', async () => {
     const id = await createItem('lakehouse', `synthetic-lh-editor-${Date.now()}`);
     // (a) The editor chunk mounts cleanly in a real browser (no console throw,
@@ -194,12 +206,55 @@ test('synthetic J3 — open editor + primary action (lakehouse tables → ADLS)'
     try {
       await signIn(ctx);
       const page = await ctx.newPage();
+      // #4759 — WAIT FOR the editor's first storage listing and assert on it.
+      // A freshly created lakehouse carries no provisioning receipt, so the
+      // editor resolves its root through `/api/lakehouse/paths?lakehouseId=…`
+      // (use-lakehouse-binding.ts). That call used to 404 on EVERY run (the
+      // root was created in `landing`, the resolver listed `bronze`), but the
+      // journey only waited a fixed 4 s after `domcontentloaded`: when the call
+      // landed after the capture window closed, nothing saw the 404 and the
+      // journey passed over the defect (~40% of runs). The listener is armed
+      // BEFORE navigation so the response cannot be missed, and its status is
+      // asserted directly rather than inferred from a console error.
+      // `as`, not an annotation: assigned inside the callback, so an annotated
+      // `= null` would be narrowed to `null` at the check below.
+      let pathsStatus = null as number | null;
+      let pathsNote = '';
       const { consoleErrors, networkErrors } = await captureFailures(page, async () => {
+        const pathsResponse = page
+          .waitForResponse((r) => {
+            // The item-bound call specifically — a container-browse request to
+            // the same route (no `lakehouseId`) must not satisfy this wait.
+            const u = new URL(r.url());
+            return u.pathname === '/api/lakehouse/paths' && u.searchParams.has('lakehouseId');
+          }, { timeout: 60_000 })
+          .catch((e: unknown) => e as Error);
         await page.goto(`${BASE}/items/lakehouse/${id}?workspaceId=${workspaceId}`, {
           waitUntil: 'domcontentloaded', timeout: 60_000,
         });
+        const pr = await pathsResponse;
+        if (pr instanceof Error) {
+          pathsNote = `no /api/lakehouse/paths response observed within 60s (${pr.message.slice(0, 120)})`;
+        } else {
+          pathsStatus = pr.status();
+          const pb = await pr.json().catch(() => null);
+          pathsNote = `paths ${pathsStatus} ${pr.url().replace(/^https?:\/\/[^/]+/, '')}: ${trunc(pb)}`;
+        }
         await page.waitForTimeout(4_000); // let the editor chunk hydrate
       });
+      // Not routed through gateFor(): a 404 here is the lakehouse's OWN root
+      // being absent where the resolver looked — a product defect (#4759), not
+      // an optional-infra gate. An unconfigured estate answers 200 + `gate`.
+      // A 403 fails here too, deliberately, although gateFor() would call it
+      // an authz gate: the console-error check below already fails on a 403
+      // it sees (a 403 resource error is not one of the reauth beacons
+      // realConsoleErrors drops), so gating it here would loosen the journey.
+      // Do not route it through gateFor().
+      if (pathsStatus !== 200) {
+        // eslint-disable-next-line no-console
+        console.log(`[J3] lakehouse root listing did not return 200 — ${pathsNote}`);
+        return { outcome: 'fail', note: `editor root listing — ${pathsNote}` };
+      }
       const fiveHundreds = networkErrors.filter((n) => n.status >= 500);
 
       // A 401 on a BACKGROUND session-maintenance beacon is a reauth-GATE, not

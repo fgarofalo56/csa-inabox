@@ -180,8 +180,11 @@ describe('item-bound resolution', () => {
     expect(res.status).toBe(200);
     expect(body).toMatchObject({ ok: true, container: 'landing', root: 'lakehouses/Foo', prefix: 'lakehouses/Foo' });
     // Resolved against the item's OWN partition, never the caller's parameter.
-    expect(resolveLakehouseAbfss).toHaveBeenCalledWith('lh-1', 'ws-owning');
-    expect(resolveLakehouseAbfss).not.toHaveBeenCalledWith('lh-1', 'ws-caller-supplied');
+    // The third argument pins that this branch opts in to persisting a probed
+    // root (#4759) — the one caller that does; drop it and this goes red.
+    expect(resolveLakehouseAbfss).toHaveBeenCalledWith('lh-1', 'ws-owning', { persist: true });
+    expect(resolveLakehouseAbfss).not.toHaveBeenCalledWith('lh-1', 'ws-caller-supplied', expect.anything());
+    expect(resolveLakehouseAbfss).toHaveBeenCalledTimes(1);
     // It listed the LAKEHOUSE root, not the container root.
     expect(listPaths).toHaveBeenCalledWith('landing', 'lakehouses/Foo', 200);
   });
