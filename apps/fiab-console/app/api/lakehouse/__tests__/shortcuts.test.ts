@@ -5,6 +5,8 @@
  *   GET    list: 401 / 400 / happy-path returns registry rows
  *   POST   create: 401 / 400 validation / ADLS happy path / external honest-gate
  *   DELETE: 401 / 400 / happy path drops engine obj + row
+ *   Item scope: GET needs read access to the lakehouse item, POST and DELETE
+ *   need edit rights; a refusal reads the probe / engine / registry call rows.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -25,9 +27,11 @@ vi.mock('@/lib/azure/shortcut-engines', () => ({
   bindExternalSource: vi.fn(),
   externalSourceGate: vi.fn(() => null),
 }));
+vi.mock('@/lib/auth/item-access', () => ({ resolveItemAccessByOid: vi.fn() }));
 
 import { GET, POST, DELETE } from '../shortcuts/route';
 import { getSession } from '@/lib/auth/session';
+import { resolveItemAccessByOid } from '@/lib/auth/item-access';
 import {
   listShortcuts, createShortcut, deleteShortcut, getShortcut,
 } from '@/lib/azure/lakehouse-shortcuts';
@@ -40,10 +44,14 @@ function postReq(body: any) { return { json: async () => body } as any; }
 function delReq(qs: string) { return { nextUrl: new URL(`http://x/api/lakehouse/shortcuts?${qs}`) } as any; }
 
 const sess = { claims: { upn: 'u@x', tid: 't1' } };
+function access(canWrite = true) {
+  return { item: { id: 'lh', workspaceId: 'ws-1', itemType: 'lakehouse' }, role: canWrite ? 'Member' : 'Viewer', via: 'workspace', canWrite };
+}
 
 beforeEach(() => {
   vi.resetAllMocks();
   (externalSourceGate as any).mockReturnValue(null);
+  (resolveItemAccessByOid as any).mockResolvedValue(access(true));
 });
 
 describe('GET /api/lakehouse/shortcuts', () => {
@@ -164,5 +172,72 @@ describe('DELETE /api/lakehouse/shortcuts', () => {
     expect(j.ok).toBe(true);
     expect(dropShortcutObject).toHaveBeenCalledWith({ engine: 'synapse', engineObject: 'shortcuts.a' });
     expect(deleteShortcut).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('/api/lakehouse/shortcuts — item scope', () => {
+  const adlsBody = { lakehouseId: 'lh', name: 'a', kind: 'files', targetType: 'adls', targetUri: 'abfss://c@loomacct.dfs.core.windows.net/p' };
+
+  it('GET requires access to the lakehouse item (404; registry not read)', async () => {
+    (getSession as any).mockReturnValue(sess);
+    (resolveItemAccessByOid as any).mockResolvedValue(null);
+    expect((await GET(getReq('lakehouseId=lh'))).status).toBe(404);
+    expect(listShortcuts).not.toHaveBeenCalled();
+  });
+
+  it('GET lists for a read-only role (positive arm)', async () => {
+    (getSession as any).mockReturnValue(sess);
+    (resolveItemAccessByOid as any).mockResolvedValue(access(false));
+    (listShortcuts as any).mockResolvedValue([]);
+    expect((await GET(getReq('lakehouseId=lh'))).status).toBe(200);
+    expect((listShortcuts as any).mock.calls).toEqual([['lh']]);
+  });
+
+  it('POST requires edit rights (403 for a read-only role; nothing probed or saved)', async () => {
+    (getSession as any).mockReturnValue(sess);
+    (resolveItemAccessByOid as any).mockResolvedValue(access(false));
+    const res = await POST(postReq(adlsBody));
+    expect(res.status).toBe(403);
+    expect(resolveAndTestAdls).not.toHaveBeenCalled();
+    expect(bindExternalSource).not.toHaveBeenCalled();
+    expect(createShortcut).not.toHaveBeenCalled();
+  });
+
+  it('POST requires access to the lakehouse item (404; nothing probed or saved)', async () => {
+    (getSession as any).mockReturnValue(sess);
+    (resolveItemAccessByOid as any).mockResolvedValue(null);
+    const res = await POST(postReq(adlsBody));
+    expect(res.status).toBe(404);
+    expect(resolveAndTestAdls).not.toHaveBeenCalled();
+    expect(createShortcut).not.toHaveBeenCalled();
+  });
+
+  it('POST authorizes before an external credential is bound', async () => {
+    (getSession as any).mockReturnValue(sess);
+    (resolveItemAccessByOid as any).mockResolvedValue(access(false));
+    const res = await POST(postReq({
+      lakehouseId: 'lh', name: 'ds', kind: 'files', targetType: 'delta_sharing',
+      targetUri: 'delta-sharing://share/schema/table', credentialRef: { kind: 'deltaSharing', keyVaultSecret: 'ds-cred' },
+    }));
+    expect(res.status).toBe(403);
+    expect(bindExternalSource).not.toHaveBeenCalled();
+  });
+
+  it('DELETE requires edit rights (403; nothing dropped or deleted)', async () => {
+    (getSession as any).mockReturnValue(sess);
+    (resolveItemAccessByOid as any).mockResolvedValue(access(false));
+    (getShortcut as any).mockResolvedValue({ id: 'lh:tables::a', engine: 'synapse', engineObject: 'shortcuts.a' });
+    const res = await DELETE(delReq('lakehouseId=lh&id=lh:tables::a'));
+    expect(res.status).toBe(403);
+    expect(dropShortcutObject).not.toHaveBeenCalled();
+    expect(deleteShortcut).not.toHaveBeenCalled();
+  });
+
+  it('DELETE requires access to the lakehouse item (404)', async () => {
+    (getSession as any).mockReturnValue(sess);
+    (resolveItemAccessByOid as any).mockResolvedValue(null);
+    const res = await DELETE(delReq('lakehouseId=lh&id=lh:tables::a'));
+    expect(res.status).toBe(404);
+    expect(deleteShortcut).not.toHaveBeenCalled();
   });
 });

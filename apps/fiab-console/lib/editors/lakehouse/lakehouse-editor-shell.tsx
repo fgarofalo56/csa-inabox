@@ -267,7 +267,8 @@ export function LakehouseEditor({ item, id }: Props) {
     tablesPrefix,
   });
   const sc_ = useLakehouseShortcuts({
-    shortcutLakehouseId: activeContainer || id,
+    // The shortcut registry belongs to the lakehouse ITEM; an unsaved item has none.
+    shortcutLakehouseId: isNewItem ? '' : id,
     schemasEnabled, containers, schemas: sec.schemas,
     bundleShortcuts, loadSchemas: sec.loadSchemas, confirm, setSqlText, setTab, tab,
   });

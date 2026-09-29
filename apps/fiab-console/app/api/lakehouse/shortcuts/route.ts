@@ -6,7 +6,12 @@
  *   POST   /api/lakehouse/shortcuts                      → create (registry + engine)
  *   DELETE /api/lakehouse/shortcuts?lakehouseId=<id>&id=<id> → drop engine obj + row
  *
- * Auth: session-required. Runtime: nodejs, force-dynamic.
+ * Item scope: `lakehouseId` is the lakehouse ITEM, authorized through
+ * `authorizeLakehouse` (404 when the caller cannot reach it). GET needs read
+ * access; POST and DELETE change the lakehouse and need edit rights. The
+ * shortcut registry is keyed by the item id.
+ *
+ * Runtime: nodejs, force-dynamic.
  * Design: docs/fiab/design/lakehouse-shortcuts.md.
  */
 
@@ -35,9 +40,14 @@ import {
 import { parseAbfss as parseExternalAbfss, listAdlsWithSas, ShortcutSourceError } from '@/lib/azure/shortcut-client';
 import { getKeyVaultSecret } from '@/lib/azure/shortcut-credentials';
 import { withSession } from '@/lib/api/route-toolkit';
+import { authorizeLakehouse } from '../_lib/item-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+const READ_ONLY_MESSAGE =
+  'Your role on this lakehouse is read-only, so Loom did not change its shortcuts. A workspace '
+  + 'Member/Admin, or an item grant that includes Edit, can make this change.';
 
 const TARGET_TYPES: ShortcutTargetType[] = ['adls', 'internal', 's3', 'gcs', 'dataverse', 'delta_sharing'];
 const KINDS: ShortcutKind[] = ['files', 'tables'];
@@ -57,6 +67,8 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
   if (!lakehouseId) return NextResponse.json({ ok: false, error: 'lakehouseId is required' }, { status: 400 });
 
   try {
+    const access = await authorizeLakehouse(session, lakehouseId);
+    if (access instanceof NextResponse) return access;
     const data = await listShortcuts(lakehouseId);
     return NextResponse.json({ ok: true, data });
   } catch (e: any) {
@@ -105,6 +117,10 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
     return NextResponse.json({ ok: false, error: `targetType must be one of ${TARGET_TYPES.join(', ')}` }, { status: 400 });
   }
   if (!targetUri) return NextResponse.json({ ok: false, error: 'targetUri is required' }, { status: 400 });
+
+  // Authorize the item before any credential read, probe or engine call.
+  const access = await authorizeLakehouse(session, lakehouseId, { write: true, readOnlyMessage: READ_ONLY_MESSAGE });
+  if (access instanceof NextResponse) return access;
 
   const createdBy = session.claims.upn;
   const tenantId = (session.claims as any).tid || (session.claims as any).tenantId;
@@ -331,7 +347,7 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   return NextResponse.json({ ok: true, data: row });
 });
 
-export const DELETE = withSession(async (req: NextRequest) => {
+export const DELETE = withSession(async (req: NextRequest, { session }) => {
 
   const lakehouseId = req.nextUrl.searchParams.get('lakehouseId')?.trim();
   const id = req.nextUrl.searchParams.get('id')?.trim();
@@ -340,6 +356,8 @@ export const DELETE = withSession(async (req: NextRequest) => {
   }
 
   try {
+    const access = await authorizeLakehouse(session, lakehouseId, { write: true, readOnlyMessage: READ_ONLY_MESSAGE });
+    if (access instanceof NextResponse) return access;
     const existing = await getShortcut(lakehouseId, id);
     if (existing) {
       // Drop the engine object (external table) — NEVER the underlying bytes.
