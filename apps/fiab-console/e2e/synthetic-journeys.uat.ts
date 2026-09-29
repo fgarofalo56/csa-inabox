@@ -194,12 +194,45 @@ test('synthetic J3 — open editor + primary action (lakehouse tables → ADLS)'
     try {
       await signIn(ctx);
       const page = await ctx.newPage();
+      // #4759 — WAIT FOR the editor's first storage listing and assert on it.
+      // A freshly created lakehouse carries no provisioning receipt, so the
+      // editor resolves its root through `/api/lakehouse/paths?lakehouseId=…`
+      // (use-lakehouse-binding.ts). That call used to 404 on EVERY run (the
+      // root was created in `landing`, the resolver listed `bronze`), but the
+      // journey only waited a fixed 4 s after `domcontentloaded`: when the call
+      // landed after the capture window closed, nothing saw the 404 and the
+      // journey passed over the defect (~40% of runs). The listener is armed
+      // BEFORE navigation so the response cannot be missed, and its status is
+      // asserted directly rather than inferred from a console error.
+      // `as`, not an annotation: assigned inside the callback, so an annotated
+      // `= null` would be narrowed to `null` at the check below.
+      let pathsStatus = null as number | null;
+      let pathsNote = '';
       const { consoleErrors, networkErrors } = await captureFailures(page, async () => {
+        const pathsResponse = page
+          .waitForResponse((r) => new URL(r.url()).pathname === '/api/lakehouse/paths', { timeout: 60_000 })
+          .catch((e: unknown) => e as Error);
         await page.goto(`${BASE}/items/lakehouse/${id}?workspaceId=${workspaceId}`, {
           waitUntil: 'domcontentloaded', timeout: 60_000,
         });
+        const pr = await pathsResponse;
+        if (pr instanceof Error) {
+          pathsNote = `no /api/lakehouse/paths response observed within 60s (${pr.message.slice(0, 120)})`;
+        } else {
+          pathsStatus = pr.status();
+          const pb = await pr.json().catch(() => null);
+          pathsNote = `paths ${pathsStatus} ${pr.url().replace(/^https?:\/\/[^/]+/, '')}: ${trunc(pb)}`;
+        }
         await page.waitForTimeout(4_000); // let the editor chunk hydrate
       });
+      // Not routed through gateFor(): a 404 here is the lakehouse's OWN root
+      // being absent where the resolver looked — a product defect (#4759), not
+      // an optional-infra gate. An unconfigured estate answers 200 + `gate`.
+      if (pathsStatus !== 200) {
+        // eslint-disable-next-line no-console
+        console.log(`[J3] lakehouse root listing did not return 200 — ${pathsNote}`);
+        return { outcome: 'fail', note: `editor root listing — ${pathsNote}` };
+      }
       const fiveHundreds = networkErrors.filter((n) => n.status >= 500);
 
       // A 401 on a BACKGROUND session-maintenance beacon is a reauth-GATE, not
