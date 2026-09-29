@@ -74,7 +74,12 @@
 #   `ResultFilter` are BYTE-IDENTICAL in v0.5.0 and v0.5.1. It is an upstream
 #   defect present in BOTH releases that fires whenever `server.authorization` is
 #   enabled — see tests/authz/iceberg-e2e.sh (which now runs that single-variable
-#   control) and docs/fiab/parity/external-engine-federation.md.
+#   control) and docs/fiab/parity/external-engine-federation.md. Since #3339 this
+#   image's IcebergRestCatalogService overlay (stage 1b) serves that route as a
+#   @ResponseAuthorizeFilter route, so the decorator installs the filter
+#   attribute, and it reads the schema repository instead of making the
+#   in-process call; the 500 does not occur here. The harness keeps the controls
+#   by running them on this image with the #3339 jar stripped off the classpath.
 #
 # Build: docker build -t loom-unity .
 # Run (local dev, ephemeral H2 file DB). NOTE: since svc-loom-unity-authz,
@@ -203,8 +208,8 @@ RUN mkdir -p /build/classes /build/lib \
 # Stage 1b — #3339: backport of upstream's scoped Iceberg REST authorization.
 #
 # WHY. Upstream v0.5.0 (and v0.6.0, the newest release, 2026-08-20) gates EVERY
-# Iceberg REST route — /v1/config, getNamespace, tableExists, loadTable,
-# listTables — on `#authorize(#principal, #metastore, OWNER)`. The permissions
+# Iceberg REST route — /v1/config, getNamespace, listNamespaces, tableExists,
+# loadTable, listTables — on `#authorize(#principal, #metastore, OWNER)`. The permissions
 # API cannot grant metastore OWNER (its Privilege enum has no OWNER; the PATCH
 # answers 400), so the Console principal, which holds real catalog grants
 # (USE CATALOG, SELECT, …), is answered 403 on /v1/config and external-engine
@@ -218,7 +223,10 @@ RUN mkdir -p /build/classes /build/lib \
 # da911fad3951 "[Server] Authorize the Iceberg REST catalog endpoints" (#1813).
 # v0.5.0's KeyMapper, AuthorizeKeyLocator, UnityAccessDecorator and ResultFilter
 # already resolve param-level keys and run a response filter, so nothing else is
-# backported. listNamespaces is NOT changed (see the header in the .java file).
+# backported. listNamespaces is changed too (second #3339 PR): it takes #1813's
+# GET_SCHEMA policy with a CATALOG key, reads the schema repository directly
+# instead of calling SchemaService.listSchemas in-process (the call behind the
+# LIST-namespaces 500), and filters the list to the schemas the caller may read.
 #
 # THE STANCE CHANGE. This image was "packaging, not a fork": upstream released
 # artifacts only, never server source built here. Operator decision 2026-09-29
@@ -256,6 +264,7 @@ RUN set -eu; \
     CLASSES="$(cd /build/classes && find . -type f | sort)"; \
     [ "${CLASSES}" = "./${REL}.class" ] || { echo "FATAL: the #3339 patch compiled to an unexpected class set (expected exactly ./${REL}.class): ${CLASSES}" >&2; exit 1; }; \
     javap -v -cp /build/classes io.unitycatalog.server.service.IcebergRestCatalogService | grep -q '#authorizeAny(#principal, #catalog, OWNER, USE_CATALOG)' || { echo "FATAL: the compiled #3339 class does not carry the scoped GET_CATALOG expression" >&2; exit 1; }; \
+    ! javap -c -p -cp /build/classes io.unitycatalog.server.service.IcebergRestCatalogService | grep -q 'SchemaService.listSchemas' || { echo "FATAL: the compiled #3339 class still calls SchemaService.listSchemas in-process; #3339 reads the schema repository, as upstream #1813 does" >&2; exit 1; }; \
     jar --create --file /build/override/loom-uc-3339-iceberg-authz.jar -C /build/classes .; \
     ENTRIES="$(jar --list --file /build/override/loom-uc-3339-iceberg-authz.jar | grep -c '\.class$')"; \
     [ "${ENTRIES}" -eq 1 ] || { echo "FATAL: the #3339 overlay carries ${ENTRIES} classes, expected exactly 1" >&2; exit 1; }

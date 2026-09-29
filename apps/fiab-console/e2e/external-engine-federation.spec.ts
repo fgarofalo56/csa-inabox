@@ -55,13 +55,17 @@
  *
  * ## DEPLOY GATING — read before judging a red run
  *
- * This spec walks the DEPLOYED console image, not the checkout. The client fix
- * only takes effect once loom-console is rebuilt and rolled. So the federation
- * data-path test reports a THREE-WAY verdict rather than a binary one:
+ * This spec walks the DEPLOYED console and catalog images, not the checkout. A
+ * fix only takes effect once the image that carries it is rebuilt and rolled.
+ * The federation data-path test names WHICH failure it saw rather than
+ * reporting a bare status:
  *
- *   'working'        — namespaces listed. The fix is deployed and correct.
- *   'pre-fix-403'    — the exact pre-fix signature. NOT a spec failure; it means
- *                      the console image predates the #3102 fix.
+ *   'working'        — namespaces listed through the native Iceberg route, and
+ *                      the provisioned `default` namespace is among them.
+ *   'refused'        — the catalog answered 403. A FAILURE. It was accepted as
+ *                      'pre-fix-403' until 2026-09-29, and that acceptance is how
+ *                      a live 403 on this exact call read as a passing receipt
+ *                      after #4783 rolled (#3339). Thrown with the upstream body.
  *   'auth-upstream'  — a 502 whose upstream body names a token/issuer refusal
  *                      (400 "requested token type", 401 "Invalid issuer"). The
  *                      BFF and transport are healthy; the CATALOG is refusing.
@@ -71,20 +75,35 @@
  *                      server-side log for the failing call at all.
  *   'regressed'      — anything else. Thrown.
  *
- * Reporting 'pre-fix-403' as a pass would be dishonest; reporting it as a
- * failure would make every pre-roll run red for a reason the code already fixed.
- * The verdict string is written to the receipt so a human can see which it was.
+ * 'gated' (a 503 honest gate: the estate does not deploy the catalog) is the only
+ * non-200 state that does not throw. The verdict string is written to the
+ * receipt so a human can see which it was.
  */
 import { test, expect, type Page, type APIResponse } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 
-// NOTE: `_lib/uat` is imported DYNAMICALLY, inside the test that needs it.
+// NOTE: `_lib/uat` is loaded LAZILY, inside the test that needs it.
 // Its module top-level does `if (!SECRET) throw`, so a static import makes the
 // whole spec file fail to COLLECT when SESSION_SECRET is absent —
 // `playwright test --list` reports "Total: 0 tests in 0 files" rather than
-// naming the cause. A dynamic import turns that into one failing test with a
-// readable message, and keeps the file listable without a secret.
+// naming the cause. Loading it inside the test turns that into one failing test
+// with a readable message, and keeps the file listable without a secret.
+//
+// It is loaded with require(), NOT `await import()`. A native dynamic import of
+// a .ts file from this spec throws "Cannot use import statement outside a
+// module" (loom-ui-verify, 2026-09-29), so the SQL Lab test failed before it
+// created anything. Measured locally with @playwright/test 1.60.0 and
+// SESSION_SECRET unset, on Node 20.20.2 and 24.19.0 alike: `await
+// import('./_lib/uat')` -> that SyntaxError; `require('./_lib/uat')` -> the
+// module's own "SESSION_SECRET env required" throw, i.e. it was transpiled and
+// ran. Prior art for require() in a spec: e2e/fixtures/logic-app-picker/
+// locator-proof.spec.ts.
+type UatModule = typeof import('./_lib/uat');
+function loadUat(): UatModule {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return require('./_lib/uat') as UatModule;
+}
 
 const RECEIPT_DIR = path.resolve(__dirname, '..', 'test-results', 'receipts');
 
@@ -164,7 +183,7 @@ async function timedGet(page: Page, url: string, label: string, timeout = ENGINE
 
 test.afterAll(async () => {
   if (createdWorkspaces.length) {
-    const { cleanupWorkspaces } = await import('./_lib/uat');
+    const { cleanupWorkspaces } = loadUat();
     await cleanupWorkspaces(createdWorkspaces).catch(() => { /* best-effort */ });
   }
   persistMeasurements();
@@ -173,25 +192,56 @@ test.afterAll(async () => {
 // ---------------------------------------------------------------------------
 // 1. PRECONDITION — the three engines are wired, reported by the console itself
 // ---------------------------------------------------------------------------
-test('federation precondition: Unity capabilities report a configured OSS backend', async ({ page }) => {
+test('federation precondition: Unity capabilities report a configured Unity backend', async ({ page }) => {
   const { res, body } = await timedGet(page, '/api/catalog/unity/capabilities', 'unity-capabilities');
   expect(res.status()).toBe(200);
   expect(body.ok).toBe(true);
-  // The estate under test runs the Azure-native OSS catalog, never Fabric
-  // (.claude/rules/no-fabric-dependency.md).
-  expect(body.backend).toBe('oss');
-  expect(body.configured).toBe(true);
-  expect(body.authorization?.mode).toBe('entra');
+
+  // WHICH backend is the estate's configuration, not this spec's to hard-code.
+  // resolveUcBackend() (lib/azure/uc-backend.ts) picks 'databricks' when a
+  // Databricks workspace is bound and LOOM_UC_BACKEND is unset — which is how
+  // the Commercial estate is deployed (admin-plane/main.bicep pins 'oss' only on
+  // GCC-High / IL5) — so this line used to read `toBe('oss')` and failed on a
+  // correctly configured Commercial estate (loom-ui-verify, 2026-09-29). This
+  // response does not carry the resolver's inputs, and the run cannot read the
+  // Console's env, so the configured backend is not derivable in full. What IS
+  // derivable from the response is the sovereign pin:
+  //   - backend must be one of the two Unity backends. Breaks on 'fabric', an
+  //     absent field, or any third value (.claude/rules/no-fabric-dependency.md).
+  //   - on a sovereign boundary (cloud !== 'Commercial') it must be 'oss': Unity
+  //     Catalog is not offered there (.claude/rules/cloud-parity.md). Breaks on
+  //     a Gov response reporting 'databricks'.
+  expect(['oss', 'databricks'], `unexpected Unity backend ${JSON.stringify(body.backend)}`).toContain(body.backend);
+  if (body.cloud !== 'Commercial') {
+    expect(body.backend, `sovereign boundary ${body.cloud} must run the OSS Unity backend`).toBe('oss');
+  }
+  // Breaks when the chosen backend reports its own config gate (a missing
+  // LOOM_UNITY_URL for oss, a missing workspace host for databricks).
+  expect(body.configured, `Unity backend ${body.backend} reports a config gate: ${JSON.stringify(body.gate ?? null)}`).toBe(true);
+
+  if (body.backend === 'oss') {
+    // Breaks if the Console calls the OSS catalog anonymously (mode 'none').
+    expect(body.authorization?.mode).toBe('entra');
+  } else {
+    // DISCLOSED SKIP: the route reports `authorization` for the OSS backend only
+    // (capabilities/route.ts), so there is no posture to assert on databricks.
+    // The Iceberg data path below does not depend on this backend: it always
+    // calls the loom-unity iceberg-catalog app.
+    test.info().annotations.push({
+      type: 'federation-auth-skipped',
+      description: `backend=${body.backend}: the OSS authorization-posture check does not apply and was not run`,
+    });
+  }
   test.info().annotations.push({
     type: 'federation-auth',
-    description: `backend=${body.backend} cloud=${body.cloud} mode=${body.authorization?.mode} audience=${body.authorization?.audience}`,
+    description: `backend=${body.backend} cloud=${body.cloud} mode=${body.authorization?.mode ?? 'n/a'} audience=${body.authorization?.audience ?? 'n/a'}`,
   });
 });
 
 // ---------------------------------------------------------------------------
-// 2. THE DATA PATH — the call that was 403, with a three-way verdict
+// 2. THE DATA PATH — the call that was 403, with a named verdict
 // ---------------------------------------------------------------------------
-test('Iceberg REST Catalog: namespaces list resolves (or reports the pre-fix 403 exactly)', async ({ page }) => {
+test('Iceberg REST Catalog: namespaces list resolves through the native route', async ({ page }) => {
   // Same scale-to-zero warm-up as the Trino path: a cold hit on iceberg-catalog
   // measured 23,370ms. Its status is recorded, not asserted on (issue #3110).
   const cold = await timedGet(page, '/api/catalog/iceberg/namespaces', 'iceberg-namespaces-coldstart');
@@ -228,9 +278,9 @@ test('Iceberg REST Catalog: namespaces list resolves (or reports the pre-fix 403
   // it belongs: provisioning (auto-bind-by-default), not authentication.
   const UPSTREAM_EMPTY_CATALOG = res.status() === 500 || res.status() === 404;
 
-  let verdict: 'working' | 'pre-fix-403' | 'auth-upstream' | 'empty-catalog' | 'gated' | 'regressed';
+  let verdict: 'working' | 'refused' | 'auth-upstream' | 'empty-catalog' | 'gated' | 'regressed';
   if (res.status() === 200) verdict = 'working';
-  else if (res.status() === 403 && /returned HTTP 403/i.test(bodyText)) verdict = 'pre-fix-403';
+  else if (res.status() === 403) verdict = 'refused';
   else if (res.status() === 503 && body?.gated === true) verdict = 'gated';
   else if (res.status() === 502 && UPSTREAM_AUTH_REFUSAL.test(bodyText)) verdict = 'auth-upstream';
   else if (UPSTREAM_EMPTY_CATALOG) verdict = 'empty-catalog';
@@ -260,6 +310,33 @@ test('Iceberg REST Catalog: namespaces list resolves (or reports the pre-fix 403
       expect(Array.isArray(ns.levels)).toBe(true);
       expect(typeof ns.name).toBe('string');
     }
+    // The native Iceberg route answered. Breaks on 'unity-schemas': the Console
+    // fell back to the Unity schemas API because the Iceberg route returned its
+    // known 500 (lib/azure/iceberg-catalog-client.ts, listNamespacesResolved).
+    expect(body.via, 'LIST-namespaces was served by the Unity-schemas FALLBACK, not the Iceberg route').toBe('irc');
+    // The catalog image provisions the `default` namespace in the warehouse on
+    // boot. Breaks on a 200 whose list is EMPTY: the response filter removed
+    // every schema, i.e. the caller holds USE CATALOG but not the grant that
+    // makes `default` readable, and an external engine would see nothing.
+    const names = (body.namespaces ?? []).map((ns: { name: string }) => ns.name);
+    expect(names, `LIST-namespaces answered 200 without the provisioned 'default' namespace: ${bodyText.slice(0, 300)}`).toContain('default');
+  } else if (verdict === 'refused') {
+    // Breaks the run on ANY 403 — the status the live estate returned for this
+    // call after #4783 rolled (#3339), while the old 'pre-fix-403' verdict let
+    // it through.
+    throw new Error(
+      `The Iceberg catalog REFUSED the namespace list (403). The token exchange and transport `
+      + `worked; the catalog's authorization for LIST-namespaces denied the call.
+
+Upstream said: ${bodyText.slice(0, 600)}
+
+`
+      + `Upstream unitycatalog v0.5.0 gates this route on metastore OWNER; the loom-unity image `
+      + `carries a #3339 overlay that serves it with upstream #1813's policy (USE CATALOG, `
+      + `list filtered per schema). A 403 here means the deployed catalog image does not carry `
+      + `that overlay, or the Console's catalog grant is missing. The catalog's boot log states `
+      + `which (ICEBERG-LIST-NAMESPACES vs ICEBERG-LIST-NAMESPACES-DEFECT).`,
+    );
   } else if (verdict === 'auth-upstream') {
     // A REAL failure — the federation path does not work — but a precisely
     // identified one, and NOT a console-code regression. Fail with the upstream
@@ -295,12 +372,12 @@ Upstream said: ${bodyText.slice(0, 600)}
   } else if (verdict === 'regressed') {
     throw new Error(
       `Iceberg REST Catalog returned an UNEXPECTED status ${res.status()}. `
-      + `Expected 200 (working), 403 with the pre-fix signature, a 503 honest gate, `
-      + `or a 502 naming an upstream auth refusal. Body: ${bodyText.slice(0, 400)}`,
+      + `Expected 200 (working), a 503 honest gate, or a 502 naming an upstream auth `
+      + `refusal. Body: ${bodyText.slice(0, 400)}`,
     );
   }
-  // 'pre-fix-403' and 'gated' fall through deliberately — both are HONEST states
-  // of a console image that predates the fix or does not deploy the catalog.
+  // Only 'gated' falls through: an estate that does not deploy the catalog says so
+  // with a 503 honest gate. Every other non-200 verdict has thrown above.
 });
 
 // ---------------------------------------------------------------------------
@@ -395,7 +472,7 @@ test('SQL Lab exposes the engine picker and the Federated SQL (Trino) option', a
   // The real contract is POST /api/workspaces then
   // POST /api/workspaces/<id>/items with {itemType, displayName}. The helpers
   // assert on it, so a broken create now FAILS here instead of skipping.
-  const { createWorkspace, createItem } = await import('./_lib/uat');
+  const { createWorkspace, createItem } = loadUat();
   const wsId = await createWorkspace(page, `f1-fed-${Date.now()}`);
   createdWorkspaces.push(wsId);
   const id = await createItem(page, wsId, 'sql-lab', `f1-federation-${Date.now()}`);
