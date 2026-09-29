@@ -573,12 +573,14 @@ unique). The offered run must be:
   success. `cancelled` and `skipped` count as not succeeding, so offer the
   newest green run. The listing reaches 72 hours back for runs that began
   earlier and finished later; a run spanning more than that is not seen, and
-  such runs exist -- review A measured `deploy-fiab-gcch` runs spanning about
-  thirty days while an environment approval expired (the constant's comment in
-  `tick.py` says why that does not publish a false close). A red run that has
-  been re-run leaves the completed list until the re-run finishes, so it is
-  not seen meanwhile; that matters only for a red run the watcher did not
-  record.
+  such runs exist -- review A measured `deploy-fiab-gcch` spans of about
+  thirty days (the constant's comment in `tick.py` lists the measured spans).
+  A failure in a job that carries no notifier step, such as
+  `post-deploy-bootstrap`, files no watcher record, so it is seen only if its
+  run falls inside that window; in a run spanning more than 72 hours it is not
+  seen at all. A red run that has been re-run leaves the completed list until the
+  re-run finishes, so it is not seen meanwhile; that matters only for a red
+  run the watcher did not record.
 
 Each of those refuses on its own, and the refusals are tested in
 `__tests__/test_watcher_receipts.py`. The run is bound to no sha, its dispatch

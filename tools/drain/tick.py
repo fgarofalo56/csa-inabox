@@ -3386,28 +3386,26 @@ _LATER_RUNS_LIMIT = 200
 #: has no workflow-level `concurrency:` group, and `loom-dataplane-roll` groups
 #: per boundary, so runs overlap.
 #:
-#: LONGEST CREATED-TO-UPDATED SPAN per watched workflow, over its last 300
-#: completed runs on `main`, and WHO measured it:
+#: LONGEST CREATED-TO-UPDATED SPAN per watched workflow, WHO measured it, and
+#: over WHICH runs -- the two measurements differ in scope:
 #:
-#: - `gov-console-roll` 21,631 s (6.0 h), `deploy-fiab-commercial` 6,614 s,
-#:   `loom-dataplane-roll` 3,245 s -- measured here, 2026-09-29.
-#: - `full-app-deploy-commercial` 10,469 s, `deploy-fiab-gcc` 772 s,
-#:   `deploy-fiab-il5` no runs at all -- measured by review A on #4791.
-#: - `deploy-fiab-gcch` about THIRTY DAYS, plus 13 runs not completed --
-#:   measured by review A. Re-read here for one: 33258539150 was created
+#: - Measured here, 2026-09-29, over up to 300 COMPLETED runs on `main`:
+#:   `gov-console-roll` 21,631 s (6.0 h), `deploy-fiab-commercial` 6,614 s,
+#:   `loom-dataplane-roll` 3,245 s.
+#: - Measured by review A on #4791 over up to 300 runs with NO branch filter,
+#:   keeping the completed ones: `full-app-deploy-commercial` 10,469 s (189
+#:   completed), `deploy-fiab-gcc` 772 s (75 completed), `deploy-fiab-il5` no
+#:   runs, and `deploy-fiab-gcch` about THIRTY DAYS (125 of 138 completed).
+#: - Re-read here for one gcch run: 33258539150 was created
 #:   2026-08-29T14:47:52Z and last updated 2026-09-28T14:54:26Z, and its job
 #:   `Deploy + validate CSA Loom in GCC-High` concluded `failure` with 0 steps.
 #:
-#: So 72 h is NOT longer than every span, and a gcch run like that one is NOT
-#: seen by this window. Why that does not publish a false close, stated so it
-#: can be checked rather than trusted: those runs waited on an environment
-#: approval that expired, the deploy job failed at 0 steps, and the notifier --
-#: a step INSIDE that job -- never ran, so nothing was recorded and nothing
-#: deployed. A gcch run approved late that then fails DOES run the notifier,
-#: and its record lands after the offered run was created, so the time bound
-#: (`created <= filing.recorded_at`) refuses the offered run once that record
-#: exists. The residue is a record that has not landed yet when the receipt is
-#: taken, and the published text discloses the window.
+#: So 72 h is NOT longer than every span. A run spanning more than the window
+#: is not seen by the red-since check. A failure in a job that has no notifier
+#: step -- `post-deploy-bootstrap` is one -- files no record, so it is seen only
+#: if its run falls inside the window; combined with a span over 72 h it is not
+#: seen at all.
+#: The README states both; the published text states only the window.
 _OVERLAP_WINDOW = timedelta(hours=72)
 
 
