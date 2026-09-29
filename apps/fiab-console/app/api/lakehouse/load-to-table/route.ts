@@ -4,7 +4,7 @@
  *
  * Submits a PySpark job to a Synapse Spark pool (via the Livy API on
  * dev.azuresynapse.net) that reads a CSV / Parquet / JSON file from ADLS Gen2
- * and writes it as a managed Delta table under the container's `Tables/`
+ * and writes it as a managed Delta table under the lakehouse item's `Tables/`
  * folder. The table then appears in the Lakehouse editor's Tables tab and is
  * queryable from a notebook / Spark SQL.
  *
@@ -13,14 +13,19 @@
  * LOOM_DEFAULT_FABRIC_WORKSPACE unset.
  *
  * Body (collected by the wizard's dropdowns + inputs — no raw JSON):
- *   { container, path, tableName, writeMode, poolName, format? }
+ *   { lakehouseId, container, path, tableName, writeMode, poolName, format? }
+ *
+ * Item scope: the lakehouse item is authorized with edit rights; the source
+ * file must sit inside the item's own root and container, and the Delta table
+ * is written under that root's `Tables/` folder (the one the item's Tables tab
+ * lists). The storage account comes from the item binding.
  *
  * Response:
  *   { ok: true, job: { id, state, poolName, tableName, rowCount: number|null, output? } }
  *   { ok: false, error }
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { KNOWN_CONTAINERS, getAccountName } from '@/lib/azure/adls-client';
+import { getAccountName } from '@/lib/azure/adls-client';
 import {
   listSparkPools,
   submitLivyBatch,
@@ -35,11 +40,15 @@ import {
   parseLoadRowCount,
 } from '@/lib/azure/load-to-table-codegen';
 import { withSession } from '@/lib/api/route-toolkit';
+import { apiBadRequest, apiConflict, apiForbidden } from '@/lib/api/respond';
+import { scopePathToRoot } from '../_lib/item-scope';
+import { abfssHost, authorizeAndBind } from '../_lib/item-binding';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 interface Body {
+  lakehouseId?: string;
   container?: string;
   path?: string;
   tableName?: string;
@@ -58,15 +67,16 @@ function resolveFormat(requested: string | undefined, path: string): LoadFormat 
     : null;
 }
 
-export const POST = withSession(async (req: NextRequest) => {
+export const POST = withSession(async (req: NextRequest, { session }) => {
 
   const body = (await req.json().catch(() => ({}))) as Body;
   const { container, path, tableName, poolName } = body;
+  const lakehouseId = typeof body.lakehouseId === 'string' ? body.lakehouseId.trim() : '';
   const writeMode = body.writeMode === 'append' ? 'append' : 'overwrite';
 
   // ---- validation (no freeform: container + pool come from dropdowns) -----
   const missing: string[] = [];
-  if (!container) missing.push('container');
+  if (!lakehouseId) missing.push('lakehouseId');
   if (!path) missing.push('path');
   if (!tableName) missing.push('tableName');
   if (!poolName) missing.push('poolName');
@@ -74,19 +84,27 @@ export const POST = withSession(async (req: NextRequest) => {
     return NextResponse.json({ ok: false, error: `Missing: ${missing.join(', ')}` }, { status: 400 });
   }
 
-  if (!(KNOWN_CONTAINERS as readonly string[]).includes(container!)) {
-    return NextResponse.json(
-      { ok: false, error: `Unknown container '${container}'. Expected one of: ${KNOWN_CONTAINERS.join(', ')}.` },
-      { status: 400 },
-    );
-  }
-
   const nameErr = validateLoadTableName(tableName!);
   if (nameErr) return NextResponse.json({ ok: false, error: nameErr }, { status: 400 });
 
-  const format = resolveFormat(body.format, path!);
+  // ---- item scope: edit rights, source inside the item root ---------------
+  const scope = await authorizeAndBind(session, lakehouseId, {
+    write: true,
+    readOnlyMessage:
+      'Your role on this lakehouse is read-only, so Loom did not load the table. A workspace '
+      + 'Member/Admin, or an item grant that includes Edit, can load tables into it.',
+  });
+  if (scope instanceof NextResponse) return scope;
+  const source = scopePathToRoot(scope.bound, (container || '').trim(), path!, true);
+  if (!source.ok) {
+    if (source.reason === 'invalid') return apiBadRequest(source.message);
+    if (source.reason === 'root-unusable') return apiConflict(source.message);
+    return apiForbidden(source.message);
+  }
+
+  const format = resolveFormat(body.format, source.path);
   if (!format) {
-    const detected = detectSparkFormat(path!);
+    const detected = detectSparkFormat(source.path);
     const connector = detected.connector ? ` (needs connector ${detected.connector})` : '';
     return NextResponse.json(
       {
@@ -97,10 +115,11 @@ export const POST = withSession(async (req: NextRequest) => {
     );
   }
 
-  // Resolve the ADLS account — honest infra gate if no container URL is set.
+  // The storage account comes from the item binding; fall back to the
+  // configured account — honest infra gate if neither is available.
   let account: string;
   try {
-    account = getAccountName();
+    account = abfssHost(scope.bound.abfss)?.split('.')[0] || getAccountName();
   } catch (e: any) {
     return NextResponse.json(
       {
@@ -150,7 +169,15 @@ export const POST = withSession(async (req: NextRequest) => {
   // ---- build + submit the PySpark job ------------------------------------
   let code: string;
   try {
-    code = buildLoadToTablePySpark({ container: container!, account, path: path!, tableName: tableName!, writeMode, format });
+    code = buildLoadToTablePySpark({
+      container: source.container,
+      account,
+      path: source.path,
+      tableName: tableName!,
+      writeMode,
+      format,
+      tablesRoot: scope.rootSegments.join('/'),
+    });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 400 });
   }

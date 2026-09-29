@@ -17,6 +17,8 @@
  * Livy), never api.fabric.microsoft.com.
  */
 
+import { trimSlashes } from '@/lib/util/trim';
+
 export const LOAD_TABLE_NAME_RE = /^[a-z][a-z0-9_]{0,63}$/;
 
 /** Formats this wizard can read with Spark's native readers (no connector). */
@@ -36,6 +38,13 @@ export interface LoadToTableSpec {
   writeMode: 'overwrite' | 'append';
   /** Resolved source format (one of SUPPORTED_LOAD_FORMATS). */
   format: LoadFormat;
+  /**
+   * The lakehouse item root inside the container (e.g. "lakehouses/Sales--<id>").
+   * When set, the Delta table is written to `<tablesRoot>/Tables/<table>`, the
+   * folder the item's Tables tab lists; when omitted, to `Tables/<table>` at the
+   * container top level.
+   */
+  tablesRoot?: string;
 }
 
 /** Validate a candidate Delta table name. Returns an error string or null. */
@@ -97,7 +106,8 @@ export function buildLoadToTablePySpark(spec: LoadToTableSpec): string {
     throw new Error(`Unsupported load format: ${spec.format}`);
   }
   const srcUrl = abfssUrl(spec.account, spec.container, spec.path);
-  const targetUrl = abfssUrl(spec.account, spec.container, `Tables/${spec.tableName}`);
+  const tablesRoot = trimSlashes(spec.tablesRoot || '');
+  const targetUrl = abfssUrl(spec.account, spec.container, `${tablesRoot ? `${tablesRoot}/` : ''}Tables/${spec.tableName}`);
   const readExpr = readExprFor(spec.format, srcUrl);
   const target = JSON.stringify(targetUrl);
   const table = JSON.stringify(spec.tableName);

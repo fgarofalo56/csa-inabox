@@ -75,6 +75,8 @@ interface ComputeTarget { id: string; name: string; kind: string; state?: string
 export interface LoadToTableWizardProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** The lakehouse item the file belongs to (the table is written under its root). */
+  lakehouseId: string;
   /** Container the file lives in (bronze|silver|gold|landing). */
   container: string;
   /** Path within the container, e.g. "Files/sales.csv". */
@@ -89,7 +91,7 @@ const FORMAT_LABELS: Record<LoadFormat, string> = {
 
 export function LoadToTableWizard(props: LoadToTableWizardProps) {
   const s = useStyles();
-  const { open, onOpenChange, container, path } = props;
+  const { open, onOpenChange, lakehouseId, container, path } = props;
 
   const hint = useMemo(() => detectSparkFormat(path), [path]);
   const detectedFormat = useMemo<LoadFormat | null>(() => {
@@ -150,7 +152,7 @@ export function LoadToTableWizard(props: LoadToTableWizardProps) {
       const r = await clientFetch('/api/lakehouse/load-to-table', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ container, path, tableName, writeMode, poolName, format }),
+        body: JSON.stringify({ lakehouseId, container, path, tableName, writeMode, poolName, format }),
       });
       const ct = r.headers.get('content-type') || '';
       const j = ct.includes('application/json')
@@ -164,7 +166,7 @@ export function LoadToTableWizard(props: LoadToTableWizardProps) {
     } finally {
       setSubmitting(false);
     }
-  }, [container, path, tableName, writeMode, poolName, format, props, onOpenChange]);
+  }, [lakehouseId, container, path, tableName, writeMode, poolName, format, props, onOpenChange]);
 
   return (
     <Dialog open={open} onOpenChange={(_, d) => { if (!submitting) onOpenChange(d.open); }}>

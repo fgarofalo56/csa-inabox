@@ -1163,10 +1163,11 @@ export function LakehouseEditor({ item, id }: Props) {
             />
             {/* Load to Table wizard + toast */}
             <Toaster toasterId={lttToasterId} />
-            {lttEntry && (
+            {lttEntry && !isNewItem && (
               <LoadToTableWizard
                 open={lttOpen}
                 onOpenChange={setLttOpen}
+                lakehouseId={id}
                 container={activeContainer || ''}
                 path={lttEntry.name}
                 onJobSubmitted={({ jobId, tableName }) => {

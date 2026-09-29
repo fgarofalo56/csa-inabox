@@ -87,6 +87,16 @@ describe('buildLoadToTablePySpark', () => {
     });
     expect(code).toContain('.mode("append")');
   });
+  it('writes under <tablesRoot>/Tables/ when a lakehouse root is given', () => {
+    const code = buildLoadToTablePySpark({
+      container: 'landing', account: 'loomstg', path: 'lakehouses/Sales--lh1/Files/s.csv',
+      tableName: 'sales', writeMode: 'overwrite', format: 'csv', tablesRoot: '/lakehouses/Sales--lh1/',
+    });
+    // Exact target: breaks if the root is dropped (container-level Tables/) or
+    // its slashes are not trimmed (a doubled or leading separator).
+    expect(code).toContain('.option("path", "abfss://landing@loomstg.dfs.core.windows.net/lakehouses/Sales--lh1/Tables/sales")');
+    expect(code).not.toContain('loomstg.dfs.core.windows.net/Tables/sales');
+  });
   it('throws on invalid table name', () => {
     expect(() => buildLoadToTablePySpark({
       container: 'bronze', account: 'a', path: 'x.csv', tableName: 'Bad-Name', writeMode: 'overwrite', format: 'csv',
