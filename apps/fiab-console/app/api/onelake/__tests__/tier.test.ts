@@ -1,17 +1,20 @@
 /**
- * /api/onelake/tier — authorization + path validation (#4619).
+ * /api/onelake/tier — item-scoped authorization + path containment (#4619).
  *
- *   PUT  401 / 403 non-admin (sink never called) / admin reaches the sink /
- *        every rejected path shape is a 400 with the sink never called
- *   GET  the same path shapes are a 400 before the tier read
- *
- * Each load-bearing assertion names the input that breaks it.
+ * A non-admin names the lakehouse (`lakehouseId`) the file belongs to; the
+ * route checks the caller's access to that item (any role for GET, a write
+ * role for PUT), then that the path lies in the lakehouse's bound container,
+ * strictly below its bound root. Without `lakehouseId` only a tenant admin may
+ * act. Each load-bearing assertion names the input that breaks it.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 vi.mock('@/lib/auth/session', () => ({ getSession: vi.fn() }));
+vi.mock('@/lib/auth/item-access', () => ({ resolveItemAccessByOid: vi.fn() }));
+vi.mock('@/lib/azure/lakehouse-abfss', () => ({ resolveLakehouseAbfss: vi.fn() }));
 vi.mock('@/lib/azure/adls-client', () => ({
   KNOWN_CONTAINERS: ['bronze', 'silver', 'gold', 'landing', 'csv-imports'],
+  getAccountName: vi.fn(),
   getBlobTier: vi.fn(),
   setBlobTier: vi.fn(),
   copyBlobToTier: vi.fn(),
@@ -19,32 +22,45 @@ vi.mock('@/lib/azure/adls-client', () => ({
 
 import { GET, PUT } from '../tier/route';
 import { getSession } from '@/lib/auth/session';
-import { getBlobTier, setBlobTier, copyBlobToTier } from '@/lib/azure/adls-client';
+import { resolveItemAccessByOid } from '@/lib/auth/item-access';
+import { resolveLakehouseAbfss } from '@/lib/azure/lakehouse-abfss';
+import { getAccountName, getBlobTier, setBlobTier, copyBlobToTier } from '@/lib/azure/adls-client';
 
 const user = { claims: { upn: 'u@x', tid: 't1', oid: 'user-oid' } };
 const admin = { claims: { upn: 'a@x', tid: 't1', oid: 'admin-oid' } };
 
-function putReq(body: unknown) {
+const LH = 'lh-1';
+const ROOT = 'lakehouses/Sales';
+/** A file inside the lakehouse root. */
+const IN = `${ROOT}/Files/a.csv`;
+const BOUND = { abfss: `abfss://bronze@acctlake.dfs.core.windows.net/${ROOT}`, container: 'bronze', root: ROOT };
+
+function access(canWrite: boolean) {
+  return { item: { id: LH, workspaceId: 'ws-1' }, role: canWrite ? 'Member' : 'Viewer', via: 'acl', canWrite };
+}
+
+function putReq(body: Record<string, unknown>) {
   return { json: async () => body, nextUrl: new URL('http://x/api/onelake/tier') } as any;
 }
-function getReq(container: string, path: string) {
+const put = (fields: Record<string, unknown>) => PUT(putReq({ tier: 'Cool', ...fields }), {} as any);
+function getReq(q: Record<string, string>) {
   const u = new URL('http://x/api/onelake/tier');
-  u.searchParams.set('container', container);
-  u.searchParams.set('path', path);
+  for (const [k, v] of Object.entries(q)) u.searchParams.set(k, v);
   return { nextUrl: u } as any;
 }
 
-/** Every path shape #4619 requires the route to refuse. */
+/** Every path shape the route must refuse as not a plain relative path. */
 const BAD_PATHS: Array<[string, string]> = [
-  ['a ".." segment', 'Files/../../other/blob.csv'],
-  ['a backslash ".." segment', 'Files\\..\\blob.csv'],
-  ['a trailing ".." segment', 'Files/..'],
-  ['a leading slash', '/Files/blob.csv'],
-  ['a leading backslash', '\\Files\\blob.csv'],
-  ['a NUL', 'Files/blob\u0000.csv'],
-  ['a control character', 'Files/blob\u001f.csv'],
-  ['a DEL', 'Files/blob\u007f.csv'],
-  ['an over-long path', 'a'.repeat(1025)],
+  ['a ".." segment', `${ROOT}/../../other/blob.csv`],
+  ['a backslash ".." segment', 'lakehouses\\Sales\\..\\..\\blob.csv'],
+  ['a trailing ".." segment', `${ROOT}/..`],
+  ['a "." segment', `${ROOT}/./Files/a.csv`],
+  ['a leading slash', `/${IN}`],
+  ['a leading backslash', '\\lakehouses\\Sales\\a.csv'],
+  ['a NUL', `${ROOT}/blob\u0000.csv`],
+  ['a control character', `${ROOT}/blob\u001f.csv`],
+  ['a DEL', `${ROOT}/blob\u007f.csv`],
+  ['an over-long path', `${ROOT}/${'a'.repeat(1025)}`],
 ];
 
 function sinkCalls() {
@@ -57,76 +73,197 @@ beforeEach(() => {
   vi.resetAllMocks();
   delete process.env.LOOM_TENANT_ADMIN_GROUP_ID;
   process.env.LOOM_TENANT_ADMIN_OID = 'admin-oid';
+  (getAccountName as any).mockReturnValue('acctlake');
+  (resolveItemAccessByOid as any).mockResolvedValue(access(true));
+  (resolveLakehouseAbfss as any).mockResolvedValue(BOUND);
   (getBlobTier as any).mockResolvedValue({ tier: 'Hot' });
   (setBlobTier as any).mockResolvedValue({ tier: 'Cool' });
   (copyBlobToTier as any).mockResolvedValue({ tier: 'Hot' });
 });
 
-describe('PUT /api/onelake/tier — authorization', () => {
+describe('PUT /api/onelake/tier — item-scoped authorization', () => {
   it('401 without a session, and the sink is never called', async () => {
     (getSession as any).mockReturnValue(null);
-    const res = await PUT(putReq({ container: 'bronze', path: 'Files/a.csv', tier: 'Cool' }), {} as any);
-    expect(res.status).toBe(401);
+    expect((await put({ lakehouseId: LH, container: 'bronze', path: IN })).status).toBe(401);
     expect(sinkCalls()).toBe(0);
   });
 
-  it('403 admin_only for a signed-in non-admin, and the sink is never called', async () => {
-    // Breaks if PUT is not tenant-admin gated: a valid body would reach
-    // getBlobTier + setBlobTier and answer 200.
+  it('a non-admin with write access to the lakehouse changes a tier inside its root', async () => {
+    // Breaks if PUT were tenant-admin only (the round-1 shape: 403 here), or
+    // if the item lookup / binding lookup stopped using this lakehouse.
     (getSession as any).mockReturnValue(user);
-    const res = await PUT(putReq({ container: 'bronze', path: 'Files/a.csv', tier: 'Cool' }), {} as any);
-    expect(res.status).toBe(403);
-    const j = await res.json();
-    expect(j.ok).toBe(false);
-    expect(j.code).toBe('admin_only');
-    expect(sinkCalls()).toBe(0);
-  });
-
-  it('a tenant admin reaches the sink (positive pair)', async () => {
-    // Breaks if the gate refuses admins too, or the handler stops calling the sink.
-    (getSession as any).mockReturnValue(admin);
-    const res = await PUT(putReq({ container: 'bronze', path: 'Files/a.csv', tier: 'Cool' }), {} as any);
+    const res = await put({ lakehouseId: LH, container: 'bronze', path: IN });
     expect(res.status).toBe(200);
     expect((await res.json()).ok).toBe(true);
-    expect(getBlobTier).toHaveBeenCalledWith('bronze', 'Files/a.csv');
-    expect(setBlobTier).toHaveBeenCalledWith('bronze', 'Files/a.csv', 'Cool');
+    expect((resolveItemAccessByOid as any).mock.calls[0].slice(1)).toEqual([LH, 'lakehouse']);
+    expect(resolveLakehouseAbfss).toHaveBeenCalledWith(LH, 'ws-1');
+    expect(setBlobTier).toHaveBeenCalledWith('bronze', IN, 'Cool');
+  });
+
+  it('403 admin_only for a non-admin who names no lakehouse, before any lookup', async () => {
+    // Breaks if an unscoped request were served to a non-admin: the path is
+    // valid, so the sink would be reached with a 200.
+    (getSession as any).mockReturnValue(user);
+    const res = await put({ container: 'bronze', path: IN });
+    expect(res.status).toBe(403);
+    const j = await res.json();
+    expect(j.code).toBe('admin_only');
+    expect(j.reason).toMatch(/does not name the lakehouse/);
+    expect(resolveItemAccessByOid).not.toHaveBeenCalled();
+    expect(sinkCalls()).toBe(0);
+  });
+
+  it('a tenant admin who names no lakehouse still reaches the sink (positive pair)', async () => {
+    // Breaks if the unscoped branch refused admins too.
+    (getSession as any).mockReturnValue(admin);
+    const res = await put({ container: 'silver', path: 'anything/a.csv' });
+    expect(res.status).toBe(200);
+    expect(setBlobTier).toHaveBeenCalledWith('silver', 'anything/a.csv', 'Cool');
+  });
+
+  it('404 when the caller cannot reach the lakehouse, and no sink', async () => {
+    // Breaks if a null access verdict were treated as an allow.
+    (getSession as any).mockReturnValue(user);
+    (resolveItemAccessByOid as any).mockResolvedValue(null);
+    expect((await put({ lakehouseId: LH, container: 'bronze', path: IN })).status).toBe(404);
+    expect(resolveLakehouseAbfss).not.toHaveBeenCalled();
+    expect(sinkCalls()).toBe(0);
+  });
+
+  it('403 for a read-only role on the lakehouse, and no sink', async () => {
+    // Breaks if PUT did not require canWrite: the path is inside, so 200.
+    (getSession as any).mockReturnValue(user);
+    (resolveItemAccessByOid as any).mockResolvedValue(access(false));
+    const res = await put({ lakehouseId: LH, container: 'bronze', path: IN });
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toMatch(/read-only/);
+    expect(sinkCalls()).toBe(0);
   });
 });
 
-describe('PUT /api/onelake/tier — path validation (tenant admin)', () => {
-  it.each(BAD_PATHS)('400 on a path with %s, and the sink is never called', async (_label, path) => {
-    // Breaks if the PUT blobRelPathError check is removed: each path is
-    // otherwise accepted and reaches getBlobTier/setBlobTier (mocked to succeed) → 200.
-    (getSession as any).mockReturnValue(admin);
-    const res = await PUT(putReq({ container: 'bronze', path, tier: 'Cool' }), {} as any);
+describe('PUT /api/onelake/tier — containment to the lakehouse root', () => {
+  it.each([
+    ['another container', { container: 'silver', path: IN }],
+    ['a sibling whose name only STARTS with the root', { container: 'bronze', path: `${ROOT}-archive/Files/a.csv` }],
+    ['another lakehouse', { container: 'bronze', path: 'lakehouses/Other/Files/a.csv' }],
+    ['the root folder itself', { container: 'bronze', path: ROOT }],
+    ['the root folder with a trailing slash', { container: 'bronze', path: `${ROOT}/` }],
+    ['a parent of the root', { container: 'bronze', path: 'lakehouses' }],
+    ['a file outside every lakehouse', { container: 'bronze', path: 'raw/a.csv' }],
+  ])('403 for %s, and the sink is never called', async (_l, fields) => {
+    // Breaks if the container check, the strictly-below check, or the
+    // segment-wise prefix compare were removed / made a string startsWith:
+    // each target would then reach setBlobTier with a 200.
+    (getSession as any).mockReturnValue(user);
+    const res = await put({ lakehouseId: LH, ...fields });
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toMatch(/outside this lakehouse/);
+    expect(sinkCalls()).toBe(0);
+  });
+
+  it('forwards the path REBUILT from its checked segments', async () => {
+    // Breaks if the raw request path were forwarded: storage would receive the
+    // backslash-and-double-slash spelling instead of the checked one.
+    (getSession as any).mockReturnValue(user);
+    const res = await put({ lakehouseId: LH, container: 'bronze', path: 'lakehouses\\Sales//Files\\a.csv' });
+    expect(res.status).toBe(200);
+    expect(setBlobTier).toHaveBeenCalledWith('bronze', IN, 'Cool');
+  });
+
+  it('409 when the lakehouse has no storage binding', async () => {
+    // Breaks if an unbound lakehouse fell through to the shared containers.
+    (getSession as any).mockReturnValue(user);
+    (resolveLakehouseAbfss as any).mockResolvedValue(null);
+    expect((await put({ lakehouseId: LH, container: 'bronze', path: IN })).status).toBe(409);
+    expect(sinkCalls()).toBe(0);
+  });
+
+  it.each([
+    ['an empty root', { ...BOUND, root: '' }],
+    ['a root that is only slashes', { ...BOUND, root: '/' }],
+    ['a root with a ".." segment', { ...BOUND, root: 'lakehouses/..' }],
+  ])('409 when the binding has %s', async (_l, bound) => {
+    // Breaks if an empty root were accepted: every path in the container would
+    // then be "below" it and reach the sink.
+    (getSession as any).mockReturnValue(user);
+    (resolveLakehouseAbfss as any).mockResolvedValue(bound);
+    expect((await put({ lakehouseId: LH, container: 'bronze', path: IN })).status).toBe(409);
+    expect(sinkCalls()).toBe(0);
+  });
+
+  it.each([
+    ['on another storage account', () => (resolveLakehouseAbfss as any).mockResolvedValue({ ...BOUND, abfss: BOUND.abfss.replace('@acctlake.', '@otheracct.') })],
+    ['when no lake account is configured', () => (getAccountName as any).mockImplementation(() => { throw new Error('none'); })],
+  ])('409 when the binding is %s', async (_l, arrange) => {
+    // Breaks if the account check were removed: the tier call acts on the
+    // deployment lake account, which is not where this lakehouse keeps files.
+    (getSession as any).mockReturnValue(user);
+    arrange();
+    expect((await put({ lakehouseId: LH, container: 'bronze', path: IN })).status).toBe(409);
+    expect(sinkCalls()).toBe(0);
+  });
+});
+
+describe('PUT /api/onelake/tier — path validation', () => {
+  it.each(BAD_PATHS)('400 on a path with %s, before any lookup or sink', async (_label, path) => {
+    // Breaks if blobRelPathError were removed: several of these normalise to
+    // a path inside the root, and all would at least reach the item lookup.
+    (getSession as any).mockReturnValue(user);
+    const res = await put({ lakehouseId: LH, container: 'bronze', path });
     expect(res.status).toBe(400);
-    expect((await res.json()).ok).toBe(false);
+    expect(resolveItemAccessByOid).not.toHaveBeenCalled();
     expect(sinkCalls()).toBe(0);
   });
 
   it('a dotted-but-legal name like "a..b.csv" is still accepted', async () => {
     // Breaks if ".." were matched as a substring rather than as a whole segment.
-    (getSession as any).mockReturnValue(admin);
-    const res = await PUT(putReq({ container: 'bronze', path: 'Files/a..b.csv', tier: 'Cool' }), {} as any);
+    (getSession as any).mockReturnValue(user);
+    const res = await put({ lakehouseId: LH, container: 'bronze', path: `${ROOT}/Files/a..b.csv` });
     expect(res.status).toBe(200);
-    expect(setBlobTier).toHaveBeenCalledWith('bronze', 'Files/a..b.csv', 'Cool');
+    expect(setBlobTier).toHaveBeenCalledWith('bronze', `${ROOT}/Files/a..b.csv`, 'Cool');
   });
 });
 
-describe('GET /api/onelake/tier — path validation', () => {
-  it.each(BAD_PATHS)('400 on a path with %s, before the tier read', async (_label, path) => {
-    // Breaks if the GET blobRelPathError check is removed: getBlobTier would be
-    // called and the mocked tier returned with 200.
+describe('GET /api/onelake/tier', () => {
+  it('403 admin_only for a non-admin who names no lakehouse, before the tier read', async () => {
+    // Breaks if an unscoped GET were served to any session: getBlobTier would
+    // run and report the blob's existence and tier.
     (getSession as any).mockReturnValue(user);
-    const res = await GET(getReq('bronze', path), {} as any);
-    expect(res.status).toBe(400);
+    const res = await GET(getReq({ container: 'bronze', path: IN }), {} as any);
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('admin_only');
     expect(getBlobTier).not.toHaveBeenCalled();
   });
 
-  it('a valid path reaches the tier read (positive pair)', async () => {
+  it('a READ-only role on the lakehouse can read a tier inside its root (positive pair)', async () => {
+    // Breaks if GET required a write role, or stopped reading the tier.
     (getSession as any).mockReturnValue(user);
-    const res = await GET(getReq('bronze', 'Files/a.csv'), {} as any);
+    (resolveItemAccessByOid as any).mockResolvedValue(access(false));
+    const res = await GET(getReq({ lakehouseId: LH, container: 'bronze', path: IN }), {} as any);
     expect(res.status).toBe(200);
-    expect(getBlobTier).toHaveBeenCalledWith('bronze', 'Files/a.csv');
+    expect(getBlobTier).toHaveBeenCalledWith('bronze', IN);
+  });
+
+  it('403 for a path outside the lakehouse root, before the tier read', async () => {
+    // Breaks if GET skipped containment: another lakehouse's file would be read.
+    (getSession as any).mockReturnValue(user);
+    const res = await GET(getReq({ lakehouseId: LH, container: 'bronze', path: 'lakehouses/Other/a.csv' }), {} as any);
+    expect(res.status).toBe(403);
+    expect(getBlobTier).not.toHaveBeenCalled();
+  });
+
+  it('404 when the caller cannot reach the lakehouse', async () => {
+    // Breaks if GET skipped the item lookup.
+    (getSession as any).mockReturnValue(user);
+    (resolveItemAccessByOid as any).mockResolvedValue(null);
+    expect((await GET(getReq({ lakehouseId: LH, container: 'bronze', path: IN }), {} as any)).status).toBe(404);
+    expect(getBlobTier).not.toHaveBeenCalled();
+  });
+
+  it.each(BAD_PATHS)('400 on a path with %s, before the tier read', async (_label, path) => {
+    (getSession as any).mockReturnValue(user);
+    const res = await GET(getReq({ lakehouseId: LH, container: 'bronze', path }), {} as any);
+    expect(res.status).toBe(400);
+    expect(getBlobTier).not.toHaveBeenCalled();
   });
 });

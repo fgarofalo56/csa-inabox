@@ -1,6 +1,8 @@
 'use client';
 
 import { clientFetch } from '@/lib/client-fetch';
+import { boundNotebookName, itemIdQuery } from '@/lib/notebook/synapse-notebook-binding';
+import { refusalText } from '@/lib/util/admin-refusal';
 /**
  * Synapse Notebook editor — the heavy-designer surface that brings the Synapse
  * Studio "Develop → Notebooks" experience into Loom 1:1: a multi-cell Spark
@@ -372,6 +374,8 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
 
   // New-notebook name field.
   const [newName, setNewName] = useState('');
+  // #4619 — the name this item publishes under (a non-admin may write only that).
+  const [boundName, setBoundName] = useState<string | null>(null);
 
   // Right-side tool drawers — shared with the other notebook flavours.
   const [variablesOpen, setVariablesOpen] = useState(false);
@@ -608,12 +612,13 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
         if (!lookup.ok) return;
         const item = await lookup.json();
         if (cancelled || !item?.workspaceId) return;
+        setBoundName(boundNotebookName(item.displayName, id));
         const r = await clientFetch(`/api/items/synapse-notebook/${encodeURIComponent(id)}?workspaceId=${encodeURIComponent(item.workspaceId)}`);
         const j = await r.json();
         if (cancelled || !j?.ok) return;
         const props = j.notebook?.properties || {};
         if (!Array.isArray(props.cells) || props.cells.length === 0) return;
-        setOpenName(j.notebook?.name || item.displayName || 'notebook');
+        setOpenName(boundNotebookName(item.displayName, id) ?? j.notebook?.name ?? 'notebook');
         setCells(ipynbToCells(props));
         // #3171 — a saved binding wins, but its ABSENCE must not wipe the pool
         // the server auto-bound on probe; a fresh notebook has no bigDataPool.
@@ -643,32 +648,32 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
   }, []);
 
   const createNotebook = useCallback(async () => {
-    const name = newName.trim();
+    const name = newName.trim() || boundName || '';
     if (!name) return;
     setBanner(null);
     try {
       const r = await clientFetch('/api/synapse/notebooks', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({ name, itemId: id }),
       });
       const j = await r.json();
-      if (!j?.ok) { setBanner({ intent: 'error', text: j?.error || 'Create failed' }); return; }
+      if (!j?.ok) { setBanner({ intent: 'error', text: refusalText(j, r.status) }); return; }
       setNewName('');
       await refreshList();
       await openNotebook(name);
     } catch (e: any) { setBanner({ intent: 'error', text: e?.message || String(e) }); }
-  }, [newName, refreshList, openNotebook]);
+  }, [newName, boundName, id, refreshList, openNotebook]);
 
   const save = useCallback(async () => {
     if (!openName) { setBanner({ intent: 'info', text: 'Open or create a notebook first.' }); return; }
     setSaving(true); setBanner(null);
     try {
-      const r = await clientFetch(`/api/synapse/notebooks/${encodeURIComponent(openName)}`, {
+      const r = await clientFetch(`/api/synapse/notebooks/${encodeURIComponent(openName)}${itemIdQuery(id)}`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ properties: cellsToIpynb(cells, attachedPool, attachedEnv) }),
       });
       const j = await r.json();
-      if (!j?.ok) { setBanner({ intent: 'error', text: j?.error || 'Save failed' }); }
+      if (!j?.ok) { setBanner({ intent: 'error', text: refusalText(j, r.status) }); }
       else {
         setDirty(false);
         const backup = j.adlsBackup;
@@ -680,18 +685,18 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
       }
     } catch (e: any) { setBanner({ intent: 'error', text: e?.message || String(e) }); }
     finally { setSaving(false); }
-  }, [openName, cells, attachedPool, attachedEnv, refreshList]);
+  }, [openName, cells, attachedPool, attachedEnv, refreshList, id]);
 
   const deleteOpen = useCallback(async () => {
     if (!openName) return;
     try {
-      const r = await clientFetch(`/api/synapse/notebooks/${encodeURIComponent(openName)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/synapse/notebooks/${encodeURIComponent(openName)}${itemIdQuery(id)}`, { method: 'DELETE' });
       const j = await r.json();
-      if (!j?.ok) { setBanner({ intent: 'error', text: j?.error || 'Delete failed' }); return; }
+      if (!j?.ok) { setBanner({ intent: 'error', text: refusalText(j, r.status) }); return; }
       setOpenName(null); setCells([{ id: uid(), type: 'code', lang: 'pyspark', source: '' }]); setDirty(false);
       refreshList();
     } catch (e: any) { setBanner({ intent: 'error', text: e?.message || String(e) }); }
-  }, [openName, refreshList]);
+  }, [openName, refreshList, id]);
 
   // ── IPYNB export (R4-SYN-10) — download the open notebook as a standard .ipynb.
   //    Client-side Blob; the same shape cellsToIpynb publishes to the workspace. ─
@@ -1345,12 +1350,12 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
             <>
               <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, marginBottom: tokens.spacingVerticalS }}>
                 <Input
-                  size="small" placeholder="new notebook name" value={newName}
+                  size="small" placeholder={boundName ?? 'new notebook name'} value={newName}
                   onChange={(_, d) => setNewName(d.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter') createNotebook(); }}
                   aria-label="New notebook name"
                 />
-                <Button size="small" icon={<Add20Regular />} onClick={createNotebook} disabled={!newName.trim()} aria-label="Create notebook" />
+                <Button size="small" icon={<Add20Regular />} onClick={createNotebook} disabled={!newName.trim() && !boundName} aria-label="Create notebook" />
               </div>
               <Tree aria-label="Workspace notebooks" defaultOpenItems={['nb']}>
                 <TreeItem itemType="branch" value="nb">

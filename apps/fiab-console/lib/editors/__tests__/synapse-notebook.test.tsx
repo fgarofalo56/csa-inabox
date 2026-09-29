@@ -11,7 +11,7 @@
  * scope (T17) — these tests cover the authoring surface only.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
 
 // U3 — CodeCell reads the 'u3-notebook-cell-resize' runtime flag through a
 // react-query hook; mock it so this editor mounts without a QueryClientProvider
@@ -20,6 +20,7 @@ vi.mock('@/lib/components/ui/use-runtime-flag', () => ({ useRuntimeFlag: () => t
 
 import { SynapseNotebookEditor } from '../synapse-notebook-editor';
 import { makeItem, installFetchMock } from './test-helpers';
+import { boundNotebookName } from '@/lib/notebook/synapse-notebook-binding';
 
 describe('SynapseNotebookEditor (F15 authoring)', () => {
   let log: ReturnType<typeof installFetchMock>;
@@ -76,5 +77,40 @@ describe('SynapseNotebookEditor (F15 authoring)', () => {
     const input = container.querySelector('input[type="file"]') as HTMLInputElement | null;
     expect(input).not.toBeNull();
     expect(input!.getAttribute('accept')).toContain('.ipynb');
+  });
+
+  it('#4619: an empty Create publishes the item-bound name WITH the item id, and Save sends ?itemId=', async () => {
+    // The write routes accept a non-admin only for a name bound to the item
+    // they name. Breaks if: Create stays disabled with an empty input (no POST
+    // is ever made), Create omits `itemId` or sends a name other than the bound
+    // one, or Save drops `?itemId=` from the PUT URL.
+    const ID = '3f2a9c1e-7b4d-4e8a-9f10-1234567890ab';
+    const BOUND = boundNotebookName('Sales nb', ID)!;
+    log = installFetchMock({
+      '/api/synapse/notebooks': () => ({ ok: true, notebooks: [] }),
+      '/api/synapse/notebooks/': () => ({ ok: true, notebook: { name: BOUND, properties: { cells: [] } } }),
+      '/api/items/synapse-spark-pool/list': () => ({ ok: true, pools: [] }),
+      '/api/synapse/environments': () => ({ ok: true, environments: [] }),
+      '/api/cosmos-items/synapse-notebook/': () => ({ id: ID, displayName: 'Sales nb', workspaceId: 'ws1' }),
+      '/api/items/synapse-notebook/': () => ({ ok: true, notebook: { properties: { cells: [] } } }),
+    });
+    render(<SynapseNotebookEditor item={makeItem('synapse-notebook', 'Synapse notebook')} id={ID} />);
+    const create = await screen.findByRole('button', { name: 'Create notebook' }, { timeout: 5000 });
+    await waitFor(() => expect(create).not.toBeDisabled());
+    fireEvent.click(create);
+    await waitFor(() => expect(log.calls.some((c) => c.init?.method === 'POST')).toBe(true));
+    const postCall = log.calls.find((c) => c.init?.method === 'POST')!;
+    expect(postCall.url).toBe('/api/synapse/notebooks');
+    expect(JSON.parse(String(postCall.init!.body))).toEqual({ name: BOUND, itemId: ID });
+
+    const saveBtn = await waitFor(() => {
+      const b = screen.getAllByRole('button', { name: 'Save' }).find((el) => !(el as HTMLButtonElement).disabled);
+      expect(b).toBeTruthy();
+      return b!;
+    });
+    fireEvent.click(saveBtn);
+    await waitFor(() => expect(log.calls.some((c) => c.init?.method === 'PUT')).toBe(true));
+    const putCall = log.calls.find((c) => c.init?.method === 'PUT')!;
+    expect(putCall.url).toBe(`/api/synapse/notebooks/${BOUND}?itemId=${encodeURIComponent(ID)}`);
   });
 });

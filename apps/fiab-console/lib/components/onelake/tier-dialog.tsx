@@ -1,6 +1,7 @@
 'use client';
 
 import { clientFetch } from '@/lib/client-fetch';
+import { refusalText } from '@/lib/util/admin-refusal';
 /**
  * TierDialog — change the OneLake / ADLS Gen2 access tier of a single blob.
  *
@@ -52,6 +53,12 @@ export type BlobAccessTier = 'Hot' | 'Cool' | 'Cold';
 interface TierDialogProps {
   open: boolean;
   onOpenChange: (v: boolean) => void;
+  /**
+   * The lakehouse the file belongs to. The route checks the caller's access
+   * to this item and that `path` lies under its storage root (#4619); without
+   * it only a tenant admin is served.
+   */
+  lakehouseId?: string;
   container: string;
   /** Full blob path within the container (e.g. "Files/data/x.parquet"). */
   path: string;
@@ -63,7 +70,16 @@ function tierOrder(t: string): number {
   return t === 'Hot' ? 2 : t === 'Cool' ? 1 : t === 'Cold' ? 0 : -1;
 }
 
-export function TierDialog({ open, onOpenChange, container, path, onTierChanged }: TierDialogProps) {
+/** GET query string; `lakehouseId` first so the route can item-scope the read. */
+export function tierQuery(lakehouseId: string | undefined, container: string, path: string): string {
+  const qs = new URLSearchParams();
+  if (lakehouseId) qs.set('lakehouseId', lakehouseId);
+  qs.set('container', container);
+  qs.set('path', path);
+  return qs.toString();
+}
+
+export function TierDialog({ open, onOpenChange, lakehouseId, container, path, onTierChanged }: TierDialogProps) {
   const s = useStyles();
   const [currentTier, setCurrentTier] = useState<BlobAccessTier | 'Archive' | null>(null);
   const [loading, setLoading] = useState(false);
@@ -79,19 +95,19 @@ export function TierDialog({ open, onOpenChange, container, path, onTierChanged 
     setLoadError(null);
     setResult(null);
     setLoading(true);
-    clientFetch(`/api/onelake/tier?container=${encodeURIComponent(container)}&path=${encodeURIComponent(path)}`)
-      .then((r) => r.json())
-      .then((j) => {
+    clientFetch(`/api/onelake/tier?${tierQuery(lakehouseId, container, path)}`)
+      .then(async (r) => ({ status: r.status, j: await r.json() }))
+      .then(({ status, j }) => {
         if (j.ok && j.tier) {
           setCurrentTier(j.tier);
           if (['Hot', 'Cool', 'Cold'].includes(j.tier)) setSelectedTier(j.tier as BlobAccessTier);
         } else {
-          setLoadError(j.error || 'Could not read the current tier.');
+          setLoadError(refusalText(j, status) || 'Could not read the current tier.');
         }
       })
       .catch((e) => setLoadError(String(e)))
       .finally(() => setLoading(false));
-  }, [open, container, path]);
+  }, [open, lakehouseId, container, path]);
 
   const isArchive = currentTier === 'Archive';
   const isDowngrade = !!currentTier && tierOrder(selectedTier) < tierOrder(currentTier);
@@ -106,11 +122,11 @@ export function TierDialog({ open, onOpenChange, container, path, onTierChanged 
       const r = await clientFetch('/api/onelake/tier', {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ container, path, tier: selectedTier }),
+        body: JSON.stringify({ ...(lakehouseId ? { lakehouseId } : {}), container, path, tier: selectedTier }),
       });
       const j = await r.json();
       if (!j.ok) {
-        setResult({ ok: false, message: j.error || `HTTP ${r.status}` });
+        setResult({ ok: false, message: refusalText(j, r.status) });
       } else {
         setResult({
           ok: true,

@@ -90,6 +90,17 @@ describe('POST /api/governance/dlp/restrict — authorization', () => {
     expect(sinkCalls()).toBe(0);
   });
 
+  it('the 403 describes a revoke, not a label/DLP policy edit', async () => {
+    // Breaks if the route drops its own refusal text and falls back to the
+    // generic "sensitivity labels, DLP, Purview" policy reason.
+    (getSession as any).mockReturnValue(user);
+    const j = await (await POST(req(containerBody), {} as any)).json();
+    expect(j.reason).toMatch(/^Restricting access from a DLP finding revokes/);
+    expect(j.reason).not.toMatch(/sensitivity labels/);
+    expect(j.remediation).toMatch(/Ask a tenant admin to apply the restriction/);
+    expect(j.gateId).toBe('bootstrap-admin');
+  });
+
   it('a tenant admin reaches the container revoke (positive pair)', async () => {
     // Breaks if the gate refuses admins, or the handler stops revoking.
     (getSession as any).mockReturnValue(admin);

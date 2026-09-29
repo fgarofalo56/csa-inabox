@@ -4,13 +4,17 @@
  * up from real Azure RBAC, ADLS POSIX ACL, Cosmos workspace-roles and (Comm/GCC)
  * Databricks Unity Catalog grants.
  *
- *   GET   401 / bare-list / matrix assembly / honest ACL gate / RBAC env gate /
- *         400 on a container that is not a storage container name
+ *   GET   401 / 403 non-admin (no ARM read) / bare-list / matrix assembly /
+ *         honest ACL gate / RBAC env gate / 400 on a container that is not a
+ *         storage container name
  *   POST  401 / 403 non-admin (grant never called) / 400 validation, including
  *         every rejected container shape / grantContainerRole happy path (admin)
- *   DELETE 401 / 403 non-admin (revoke never called) / 400 / revoke happy path (admin)
+ *   DELETE 401 / 403 non-admin (revoke never called) / 400 on every id that is
+ *         not exactly a container-scope role-assignment id of this account /
+ *         404 on a well-formed id that is not currently listed / revoke of the
+ *         LISTED id (admin)
  *
- * POST and DELETE are tenant-admin (#4619): they grant and revoke data-plane
+ * Every verb is tenant-admin (#4619): they read, grant and revoke data-plane
  * roles on the shared deployment containers, which no single item owns.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -27,6 +31,7 @@ vi.mock('@/lib/azure/adls-client', () => ({
   listContainerRoleAssignments: vi.fn(),
   grantContainerRole: vi.fn(),
   revokeContainerRoleAssignment: vi.fn(),
+  getAccountName: vi.fn(() => 'acctlake'),
   getAcl: vi.fn(),
   listKnownBlobDataRoles: vi.fn(() => [
     { name: 'Storage Blob Data Reader', id: 'r-guid' },
@@ -54,6 +59,7 @@ import {
   grantContainerRole,
   revokeContainerRoleAssignment,
   getAcl,
+  getAccountName,
 } from '@/lib/azure/adls-client';
 import { listWorkspaceRoles } from '@/lib/azure/workspace-roles-client';
 import { isGovCloud } from '@/lib/azure/cloud-endpoints';
@@ -76,6 +82,7 @@ const adminSess = { claims: { upn: 'admin@x', tid: 't1', oid: 'admin-oid' } };
 beforeEach(() => {
   vi.resetAllMocks();
   (isGovCloud as any).mockReturnValue(false);
+  (getAccountName as any).mockReturnValue('acctlake');
   delete process.env.LOOM_DATABRICKS_HOSTNAME;
   delete process.env.LOOM_DATABRICKS_HOSTNAMES;
   delete process.env.LOOM_GRAPH_USERS_ENABLED;
@@ -89,8 +96,27 @@ describe('GET /api/onelake/security', () => {
     expect((await GET(getReq('container=bronze'))).status).toBe(401);
   });
 
-  it('bare GET returns the container picker list', async () => {
+  it('403 admin_only for a signed-in non-admin, with no ARM, ACL or workspace-role read', async () => {
+    // Breaks if GET is session-scoped again: the non-admin would get the
+    // assembled matrix (200) and listContainerRoleAssignments would be called.
     (getSession as any).mockReturnValue(sess);
+    (listContainerRoleAssignments as any).mockResolvedValue([]);
+    (getAcl as any).mockResolvedValue([]);
+    const res = await GET(getReq('container=bronze&workspaceId=ws-1'));
+    expect(res.status).toBe(403);
+    const j = await res.json();
+    expect(j.code).toBe('admin_only');
+    // The route-specific reason, not the label/DLP/Purview default. Breaks if
+    // the refusal text is dropped from the wrapper.
+    expect(j.reason).toMatch(/Secure tab/);
+    expect(j.reason).not.toMatch(/sensitivity labels/);
+    expect(listContainerRoleAssignments).not.toHaveBeenCalled();
+    expect(getAcl).not.toHaveBeenCalled();
+    expect(listWorkspaceRoles).not.toHaveBeenCalled();
+  });
+
+  it('bare GET returns the container picker list', async () => {
+    (getSession as any).mockReturnValue(adminSess);
     const res = await GET(getReq(''));
     const j = await res.json();
     expect(j.ok).toBe(true);
@@ -99,7 +125,7 @@ describe('GET /api/onelake/security', () => {
   });
 
   it('assembles the matrix from RBAC + ACL + workspace roles (no mock principals)', async () => {
-    (getSession as any).mockReturnValue(sess);
+    (getSession as any).mockReturnValue(adminSess);
     (listContainerRoleAssignments as any).mockResolvedValue([
       { id: '/ra/1', principalId: 'oid-1', principalType: 'User', roleDefinitionId: 'x', roleName: 'Storage Blob Data Reader' },
     ]);
@@ -129,7 +155,7 @@ describe('GET /api/onelake/security', () => {
   });
 
   it('surfaces an honest ACL gate on 403 without failing the whole roll-up', async () => {
-    (getSession as any).mockReturnValue(sess);
+    (getSession as any).mockReturnValue(adminSess);
     (listContainerRoleAssignments as any).mockResolvedValue([]);
     (getAcl as any).mockRejectedValue(Object.assign(new Error('forbidden'), { statusCode: 403 }));
 
@@ -142,7 +168,7 @@ describe('GET /api/onelake/security', () => {
   });
 
   it('returns a 503 env gate when ARM scope env vars are missing', async () => {
-    (getSession as any).mockReturnValue(sess);
+    (getSession as any).mockReturnValue(adminSess);
     (listContainerRoleAssignments as any).mockRejectedValue(
       new Error('LOOM_SUBSCRIPTION_ID and LOOM_DLZ_RG required to resolve container scope'),
     );
@@ -154,7 +180,7 @@ describe('GET /api/onelake/security', () => {
   });
 
   it('skips Unity Catalog entirely in Gov clouds with an honest gate', async () => {
-    (getSession as any).mockReturnValue(sess);
+    (getSession as any).mockReturnValue(adminSess);
     (isGovCloud as any).mockReturnValue(true);
     process.env.LOOM_DATABRICKS_HOSTNAME = 'adb.azuredatabricks.net';
     (listContainerRoleAssignments as any).mockResolvedValue([]);
@@ -170,7 +196,7 @@ describe('GET /api/onelake/security', () => {
   it('400 on a container that is not a storage container name, before any ARM read', async () => {
     // Breaks if the GET container-name check is removed: `listContainerRoleAssignments`
     // would be called with "a/b" and the status would be 200/502, not 400.
-    (getSession as any).mockReturnValue(sess);
+    (getSession as any).mockReturnValue(adminSess);
     (listContainerRoleAssignments as any).mockResolvedValue([]);
     (getAcl as any).mockResolvedValue([]);
     const res = await GET(getReq('container=' + encodeURIComponent('a/b')));
@@ -230,16 +256,28 @@ describe('POST /api/onelake/security', () => {
 });
 
 describe('DELETE /api/onelake/security', () => {
+  // A well-formed id at a container scope of THIS deployment's account
+  // ("acctlake", the mocked getAccountName). Every refused fixture below is
+  // this string with ONE thing changed, so each refusal is attributable.
+  const SUB = '11111111-2222-3333-4444-555555555555';
+  const RA = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+  const scopeOf = (account: string, container: string) =>
+    `/subscriptions/${SUB}/resourceGroups/rg-dlz/providers/Microsoft.Storage/storageAccounts/${account}`
+    + `/blobServices/default/containers/${container}`;
+  const VALID = `${scopeOf('acctlake', 'bronze')}/providers/Microsoft.Authorization/roleAssignments/${RA}`;
+  const del = (id: string) => DELETE(delReq('id=' + encodeURIComponent(id)));
+
   it('401 without session', async () => {
     (getSession as any).mockReturnValue(null);
-    expect((await DELETE(delReq('id=/ra/1'))).status).toBe(401);
+    expect((await del(VALID)).status).toBe(401);
   });
   it('403 admin_only for a signed-in non-admin, and never revokes', async () => {
-    // Breaks if DELETE is not tenant-admin gated: the handler would reach
-    // revokeContainerRoleAssignment and answer 200.
+    // Breaks if DELETE is not tenant-admin gated: VALID is listed, so the
+    // handler would reach revokeContainerRoleAssignment and answer 200.
     (getSession as any).mockReturnValue(sess);
+    (listContainerRoleAssignments as any).mockResolvedValue([{ id: VALID, principalId: 'p' }]);
     (revokeContainerRoleAssignment as any).mockResolvedValue(undefined);
-    const res = await DELETE(delReq('id=' + encodeURIComponent('/ra/1')));
+    const res = await del(VALID);
     expect(res.status).toBe(403);
     expect((await res.json()).code).toBe('admin_only');
     expect(revokeContainerRoleAssignment).not.toHaveBeenCalled();
@@ -248,12 +286,59 @@ describe('DELETE /api/onelake/security', () => {
     (getSession as any).mockReturnValue(adminSess);
     expect((await DELETE(delReq(''))).status).toBe(400);
   });
-  it('revokes a role assignment (tenant admin)', async () => {
+
+  it.each([
+    ['a trailing path suffix', `${VALID}/x`],
+    ['a trailing "?"', `${VALID}?api-version=2022-04-01`],
+    ['a trailing "#"', `${VALID}#x`],
+    ['a leading prefix', `/x${VALID}`],
+    ['a "?" inside the id', VALID.replace('/providers/Microsoft.Authorization', '?/providers/Microsoft.Authorization')],
+    ['a subscription-scope id', `/subscriptions/${SUB}/providers/Microsoft.Authorization/roleAssignments/${RA}`],
+    ['an account-scope id (no container)', `/subscriptions/${SUB}/resourceGroups/rg-dlz/providers/Microsoft.Storage/storageAccounts/acctlake/providers/Microsoft.Authorization/roleAssignments/${RA}`],
+    ['another storage account', `${scopeOf('otheracct', 'bronze')}/providers/Microsoft.Authorization/roleAssignments/${RA}`],
+    ['an upper-case container', `${scopeOf('acctlake', 'Bronze')}/providers/Microsoft.Authorization/roleAssignments/${RA}`],
+    ['a role-assignment name that is not a GUID', `${scopeOf('acctlake', 'bronze')}/providers/Microsoft.Authorization/roleAssignments/not-a-guid`],
+  ])('400 on an id with %s, before any ARM call', async (_label, id) => {
+    // Breaks if the parse is not anchored at BOTH ends, or is loosened to a
+    // prefix / substring test: the first four would then parse (to container
+    // "bronze") and the handler would list assignments. The list is mocked to
+    // contain the refused string itself, so a missing parse is not rescued by
+    // the membership check — the answer would be 200 and a revoke.
     (getSession as any).mockReturnValue(adminSess);
+    (listContainerRoleAssignments as any).mockResolvedValue([{ id, principalId: 'p' }]);
     (revokeContainerRoleAssignment as any).mockResolvedValue(undefined);
-    const res = await DELETE(delReq('id=' + encodeURIComponent('/ra/1')));
-    const j = await res.json();
-    expect(j.ok).toBe(true);
-    expect(revokeContainerRoleAssignment).toHaveBeenCalledWith('/ra/1');
+    const res = await del(id);
+    expect(res.status).toBe(400);
+    expect(listContainerRoleAssignments).not.toHaveBeenCalled();
+    expect(revokeContainerRoleAssignment).not.toHaveBeenCalled();
+  });
+
+  it('404 on a well-formed id that is not a current assignment on that container', async () => {
+    // Breaks if the membership check is removed: the id parses, so the handler
+    // would revoke it (200) although the container lists no such assignment.
+    (getSession as any).mockReturnValue(adminSess);
+    (listContainerRoleAssignments as any).mockResolvedValue([
+      { id: VALID.replace(RA, 'ffffffff-bbbb-cccc-dddd-eeeeeeeeeeee'), principalId: 'p' },
+    ]);
+    const res = await del(VALID);
+    expect(res.status).toBe(404);
+    expect(listContainerRoleAssignments).toHaveBeenCalledWith('bronze');
+    expect(revokeContainerRoleAssignment).not.toHaveBeenCalled();
+  });
+
+  it('revokes the LISTED id for a tenant admin (positive pair)', async () => {
+    // The caller spells the fixed segments in a different case; the listed id
+    // is what reaches ARM. Breaks if the caller's string were revoked instead,
+    // or if a case-only difference were refused.
+    (getSession as any).mockReturnValue(adminSess);
+    (listContainerRoleAssignments as any).mockResolvedValue([{ id: VALID, principalId: 'p' }]);
+    (revokeContainerRoleAssignment as any).mockResolvedValue(undefined);
+    const spelled = VALID.replace('/resourceGroups/', '/resourcegroups/');
+    expect(spelled).not.toBe(VALID);
+    const res = await del(spelled);
+    expect(res.status).toBe(200);
+    expect((await res.json()).ok).toBe(true);
+    expect(listContainerRoleAssignments).toHaveBeenCalledWith('bronze');
+    expect(revokeContainerRoleAssignment).toHaveBeenCalledWith(VALID);
   });
 });

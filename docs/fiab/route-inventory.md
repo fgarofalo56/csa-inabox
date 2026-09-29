@@ -15,9 +15,9 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | --- | ---: |
 | Total routes | 1694 |
 | Public (no session) | 59 |
-| Session-only | 643 |
-| Owner-scoped | 677 |
-| Admin | 315 |
+| Session-only | 642 |
+| Owner-scoped | 679 |
+| Admin | 314 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 499 |
 | Areas | 122 |
@@ -2077,7 +2077,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `onelake/resolve/route.ts` | GET POST | session-only |  | Loom service |
 | `onelake/security/route.ts` | GET POST DELETE | admin |  | ADLS, ARM, Azure Monitor, Azure RBAC, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Resource Graph |
 | `onelake/storage/route.ts` | GET | session-only | ● | ADLS, ARM, Azure Storage, Cosmos, Managed Identity |
-| `onelake/tier/route.ts` | GET PUT | admin |  | ADLS, ARM, Azure Storage, Managed Identity |
+| `onelake/tier/route.ts` | GET PUT | admin |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph |
 
 ## ontology-functions
 
@@ -2300,9 +2300,9 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `synapse/linkedservices/[name]/route.ts` | GET | session-only | ● | Synapse |
 | `synapse/linkedservices/route.ts` | GET POST DELETE | session-only | ● | Synapse |
 | `synapse/linkedservices/test/route.ts` | POST | session-only | ● | Synapse |
-| `synapse/notebooks/[name]/route.ts` | GET PUT DELETE | admin | ● | ADLS, ARM, Azure Storage, Managed Identity, Synapse |
+| `synapse/notebooks/[name]/route.ts` | GET PUT DELETE | owner-scoped | ● | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Synapse |
 | `synapse/notebooks/[name]/run-cell/route.ts` | GET POST | session-only | ● | ARM, Resource Graph, Synapse |
-| `synapse/notebooks/route.ts` | GET POST DELETE | session-only | ● | Synapse |
+| `synapse/notebooks/route.ts` | GET POST DELETE | owner-scoped | ● | Cosmos, Microsoft Graph, Synapse |
 | `synapse/pipelines/route.ts` | GET POST DELETE | session-only | ● | Synapse |
 | `synapse/pools/route.ts` | GET | session-only | ● | ARM, Resource Graph, Synapse |
 | `synapse/sparkjobdefinitions/[name]/route.ts` | GET PUT DELETE | session-only | ● | ARM, Resource Graph, Synapse |
@@ -2423,7 +2423,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 ## Authorization resolvers (derived)
 
-188 function(s) across 84 module(s) reach an owner / workspace-ACL
+189 function(s) across 85 module(s) reach an owner / workspace-ACL
 decision. Derived by `scripts/ci/_route-auth-scope.mjs` from the seeds above —
 nothing here is hand-maintained. A change to this list in a diff means the
 authorization surface moved.
@@ -2510,6 +2510,7 @@ authorization surface moved.
 | `apps/fiab-console/lib/events/webhook-registry.ts` | `bumpHookStats`, `deleteHook`, `getHook`, `updateHook` |
 | `apps/fiab-console/lib/foundry/ontology-resolver.ts` | `resolveOntologyObjectForGrounding` |
 | `apps/fiab-console/lib/insights/digest-store.ts` | `getDigest`, `requestRunNow` |
+| `apps/fiab-console/lib/notebook/synapse-notebook-write.ts` | `authorizeNotebookWrite` |
 | `apps/fiab-console/lib/semantic-model/calc-objects.ts` | `persistCalcToCosmos` |
 | `apps/fiab-console/lib/semantic-model/model-context.ts` | `contextFromContentItem`, `loadModelContext` |
 | `apps/fiab-console/lib/semantic-model/modeling-objects.ts` | `handleCalculatedTablePost`, `handleDateTableMarkPost`, `handleMeasurePost`, `handleWhatIfPost`, `readLoomModelState` |

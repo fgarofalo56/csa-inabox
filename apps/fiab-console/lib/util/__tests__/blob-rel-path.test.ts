@@ -60,6 +60,21 @@ describe('blobRelPathError — refusals', () => {
     // (the backslash forms would then have no ".." segment).
     expect(blobRelPathError(p)).toMatch(/"\.\." segments/);
   });
+
+  it.each([
+    ['a bare "."', '.'],
+    ['"./"', './'],
+    ['"./x"', './x'],
+    ['an interior "."', 'a/./b'],
+    ['a "\\" "." segment', 'a\\.\\b'],
+  ])('refuses %s with the "." reason', (_label, p) => {
+    // Breaks if the "." segment check is removed: none of these has a ".."
+    // segment, a control char or a leading separator, so each would return
+    // null (and the SDK would fold "." to the container root, or "./x" to "x").
+    // The message is pinned, not just non-null, so the ".." reason cannot
+    // stand in for it.
+    expect(blobRelPathError(p)).toBe('path must not contain "." segments');
+  });
 });
 
 describe('blobRelPathError — accepted', () => {
@@ -67,12 +82,13 @@ describe('blobRelPathError — accepted', () => {
     'Files/a.csv',
     'Files/a..b.csv',
     'Files/..hidden',
-    'Files/./a.csv',
+    'Files/.hidden',
+    'Files/a.',
     'a',
     'Files/sub/',
   ])('accepts %s', (p) => {
-    // Breaks if ".." is matched as a substring rather than a whole segment, or
-    // if a trailing separator / single dot segment were refused.
+    // Breaks if "." or ".." is matched as a substring or prefix rather than a
+    // whole segment, or if a trailing separator were refused.
     expect(blobRelPathError(p)).toBeNull();
   });
 });

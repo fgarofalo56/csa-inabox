@@ -20,19 +20,24 @@
  * Learn (dev-plane artifact REST, list/PUT/DELETE):
  *   https://learn.microsoft.com/rest/api/synapse/data-plane/notebook
  *
- * Authorization (#4619): PUT and DELETE are TENANT-ADMIN. They write to (or
- * remove from) the DEPLOYMENT-DEFAULT Synapse workspace and PUT also writes a
- * backup blob into the shared silver container; neither carries an item or
- * workspace id, so there is no per-item grant to check against. The gate runs
- * before the name is parsed or the body is read. GET stays session-scoped.
- * Every verb refuses a name outside NAME_RE (letters, digits, `_` — so no
- * separator, dot segment, or control character can reach the ADLS backup
- * path or the dev-plane URL), and a malformed percent-escape is a 400, not a
- * thrown `URIError`.
+ * Authorization (#4619): PUT and DELETE write to (or remove from) the
+ * DEPLOYMENT-DEFAULT Synapse workspace, which every Synapse notebook item
+ * shares, and PUT also writes a backup blob into the shared silver container.
+ * They are ITEM-SCOPED: the editor sends `?itemId=` for the notebook item it
+ * is editing, and `authorizeNotebookWrite` requires a write role on that item
+ * and a name bound to it (lib/notebook/synapse-notebook-binding). A tenant
+ * admin may write any name; a non-admin with no `itemId` gets the `admin_only`
+ * 403. The check runs after the name is validated and before the body is read.
+ * GET stays session-scoped. Every verb refuses a name outside NAME_RE
+ * (letters, digits, `_` — so no separator, dot segment, or control character
+ * can reach the ADLS backup path or the dev-plane URL), and a malformed
+ * percent-escape is a 400, not a thrown `URIError`.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { withSession, withTenantAdmin } from '@/lib/api/route-toolkit';
+import { withSession } from '@/lib/api/route-toolkit';
+import { authorizeNotebookWrite } from '@/lib/notebook/synapse-notebook-write';
+import { NOTEBOOK_NAME_RE as NAME_RE } from '@/lib/notebook/synapse-notebook-binding';
 import {
   synapseConfigGate, listNotebooks, upsertNotebook, deleteNotebook,
   type SynapseNotebook,
@@ -42,8 +47,6 @@ import { logSafe } from '@/lib/util/log-safe';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-const NAME_RE = /^[A-Za-z0-9_]{1,260}$/;
 
 /**
  * Best-effort .ipynb backup of the published notebook to ADLS silver, so the
@@ -115,12 +118,14 @@ export const GET = withSession<{ name: string }>(async (_req: NextRequest, { par
   }
 });
 
-// Tenant-admin: 401 without a session, then the canonical 403 `admin_only`
-// envelope — a refused caller never reaches `upsertNotebook` or `uploadFile`.
-export const PUT = withTenantAdmin<{ name: string }>(async (req: NextRequest, { params }) => {
+// Item-scoped (see header): a refused caller never reaches `upsertNotebook`
+// or `uploadFile`.
+export const PUT = withSession<{ name: string }>(async (req: NextRequest, { params, session }) => {
   const g = gate(); if (g) return g;
   const name = notebookName(params.name);
   if (!name) return NextResponse.json({ ok: false, error: 'name must be 1-260 chars: letters, digits, _' }, { status: 400 });
+  const denied = await authorizeNotebookWrite(session, name, req.nextUrl?.searchParams.get('itemId'));
+  if (denied) return denied;
   const body = await req.json().catch(() => ({}));
   const properties = body?.properties as SynapseNotebook['properties'] | undefined;
   if (!properties || typeof properties !== 'object') {
@@ -135,11 +140,13 @@ export const PUT = withTenantAdmin<{ name: string }>(async (req: NextRequest, { 
   }
 });
 
-// Tenant-admin, same gate as PUT: a refused caller never reaches `deleteNotebook`.
-export const DELETE = withTenantAdmin<{ name: string }>(async (_req: NextRequest, { params }) => {
+// Item-scoped, same check as PUT: a refused caller never reaches `deleteNotebook`.
+export const DELETE = withSession<{ name: string }>(async (req: NextRequest, { params, session }) => {
   const g = gate(); if (g) return g;
   const name = notebookName(params.name);
   if (!name) return NextResponse.json({ ok: false, error: 'invalid notebook name' }, { status: 400 });
+  const denied = await authorizeNotebookWrite(session, name, req.nextUrl?.searchParams.get('itemId'));
+  if (denied) return denied;
   try {
     await deleteNotebook(name);
     return NextResponse.json({ ok: true });

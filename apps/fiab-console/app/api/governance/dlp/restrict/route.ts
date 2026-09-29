@@ -47,9 +47,20 @@ import { trimSlashes } from '@/lib/util/trim';
 import { blobRelPathError } from '@/lib/util/blob-rel-path';
 import { isValidContainerName } from '@/app/api/storage/_lib/validate';
 import { withTenantAdmin } from '@/lib/api/route-toolkit';
+import type { TenantAdminRefusal } from '@/lib/auth/feature-gate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+/** What the 403 says for a non-admin: this verb revokes access, it is not a policy edit. */
+const RESTRICT_REFUSAL: TenantAdminRefusal = {
+  reason:
+    'Restricting access from a DLP finding revokes role assignments, ACL entries and database grants '
+    + 'on the deployment\'s shared storage, warehouses and databases, so it is restricted to tenant admins.',
+  remediation:
+    'Ask a tenant admin to apply the restriction. The finding itself, and the scan that produced it, '
+    + 'stay visible to you.',
+};
 
 type ScopeType = 'adls-container' | 'adls-path' | 'warehouse' | 'warehouse-schema' | 'kql-database';
 const SCOPE_TYPES: ScopeType[] = ['adls-container', 'adls-path', 'warehouse', 'warehouse-schema', 'kql-database'];
@@ -242,4 +253,4 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session: s }) => 
     note,
     restriction,
   });
-});
+}, RESTRICT_REFUSAL);
