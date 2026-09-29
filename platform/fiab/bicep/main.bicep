@@ -650,6 +650,12 @@ var existingCosmosSub = adoptSub(adopt, 'cosmos')
 var existingEventHubNamespace = adoptName(adopt, 'eventhubs')
 var existingEventHubRg = adoptRg(adopt, 'eventhubs')
 var existingEventHubSub = adoptSub(adopt, 'eventhubs')
+// The Schema Registry group on an ADOPTED namespace → LOOM_EH_SCHEMA_GROUP.
+// Measured by scripts/csa-loom/discover-dlz-adopt-plan.sh (prefers
+// 'loom-schemas', else the namespace's ONLY group, else ''). Without it an
+// adopted estate rendered LOOM_EH_SCHEMA_GROUP empty on every scheduled
+// reconcile, because nothing in the adopt path carried the group.
+var existingEventHubSchemaGroup = adoptExtra(adopt, 'eventhubs', 'schemaGroup')
 var existingAsaJob = adoptName(adopt, 'streamanalytics')
 var existingAsaRg = adoptRg(adopt, 'streamanalytics')
 var existingAsaSub = adoptSub(adopt, 'streamanalytics')
@@ -657,6 +663,12 @@ var existingDatabricksWorkspace = adoptName(adopt, 'databricks')
 var existingDatabricksRg = adoptRg(adopt, 'databricks')
 var existingDatabricksSub = adoptSub(adopt, 'databricks')
 var existingDatabricksHostname = adoptExtra(adopt, 'databricks', 'hostname')
+// The id of the adopted workspace's 'loom-default' SQL warehouse →
+// LOOM_DATABRICKS_SQL_WAREHOUSE_ID. The discover script looks it up over the
+// workspace REST API and emits the key ONLY when the warehouse was found; a
+// workspace with no such warehouse yet (or one the deploy identity cannot
+// read) yields '' — the admin-plane default — never a guessed id.
+var existingDatabricksSqlWarehouseId = adoptExtra(adopt, 'databricks', 'sqlWarehouseId')
 var existingAdfFactory = adoptName(adopt, 'adf')
 var existingAdfRg = adoptRg(adopt, 'adf')
 var existingAdfSub = adoptSub(adopt, 'adf')
@@ -1306,6 +1318,9 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     // The host follows the sovereign cloud (Commercial/GCC → .net; US Gov → .us).
     loomDatabricksAccountId: databricksAccountId
     loomDatabricksAccountHost: empty(databricksAccountId) ? '' : databricksAccountHost
+    // Adopted workspace's 'loom-default' SQL warehouse (see the var's comment).
+    // '' until the warehouse exists — the admin-plane param default.
+    loomDatabricksSqlWarehouseId: existingDatabricksSqlWarehouseId
     keyVaultHsmIsolated: keyVaultHsmIsolated
     consolePrincipalNeedsCmkBind: consolePrincipalNeedsCmkBind
     adminEntraGroupId: adminEntraGroupId
@@ -1378,6 +1393,20 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     // I1 per-workspace identity settings (R0 bag → typed bag on the module;
     // emits LOOM_WORKSPACE_IDENTITY_MODE / LOOM_WS_IDENTITY_SUB / LOOM_WS_IDENTITY_RG).
     workspaceIdentityConfig: workspaceIdentityConfig
+    // Event Hubs settings bag. Only loomEhSchemaGroup is set here; every field
+    // of eventsConfigT is optional and read with `.?x ?? default`, so the other
+    // ten keep exactly the defaults they had when this bag was never passed.
+    //   adopt  → the group the discover script measured on the adopted namespace
+    //   create → 'loom-schemas' ONLY when the landing-zone Event Hubs module
+    //            actually deploys (singleDlz + provisionEventHubs), because that
+    //            module is what creates the group (landing-zone/eventhubs.bicep
+    //            schemaGroupName default). Otherwise '' — naming a group nobody
+    //            created would point the console at a 404.
+    eventsConfig: {
+      loomEhSchemaGroup: !empty(existingEventHubSchemaGroup)
+        ? existingEventHubSchemaGroup
+        : ((useSingleDlz && provisionEventHubs) ? 'loom-schemas' : '')
+    }
     copilotMafEnabled: copilotMafEnabled
     setupOrchestratorEnabled: setupOrchestratorEnabled
     setupTemplateUri: setupTemplateUri
