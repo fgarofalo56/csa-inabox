@@ -124,30 +124,34 @@ export function useLakehouseSecondary({
   const [moveTableError, setMoveTableError] = useState<string | null>(null);
   const [moveTableStatus, setMoveTableStatus] = useState<string | null>(null);
 
+  // Schemas belong to the lakehouse ITEM (the registry is keyed by its id);
+  // an unsaved item has none yet.
+  const schemaItemId = isNewItem ? '' : id;
+
   useEffect(() => {
-    if (tab === 'schemas' && shortcutLakehouseId) void loadSchemas();
+    if (tab === 'schemas' && schemaItemId) void loadSchemas();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, shortcutLakehouseId]);
+  }, [tab, schemaItemId]);
 
   const loadSchemas = useCallback(async () => {
-    if (!shortcutLakehouseId) return;
+    if (!schemaItemId) return;
     setSchemasBusy(true); setSchemasError(null);
     try {
-      const r = await clientFetch(`/api/lakehouse/schemas?lakehouseId=${encodeURIComponent(shortcutLakehouseId)}`);
+      const r = await clientFetch(`/api/lakehouse/schemas?lakehouseId=${encodeURIComponent(schemaItemId)}`);
       const j = await parseJsonOrError<{ ok: boolean; error?: string; schemas?: SchemaRow[] }>(r, 'List schemas');
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setSchemas(j.schemas || []);
     } catch (e: any) { setSchemasError(e?.message || String(e)); setSchemas([]); }
     finally { setSchemasBusy(false); }
-  }, [shortcutLakehouseId]);
+  }, [schemaItemId]);
 
   const createSchema = useCallback(async () => {
-    if (!shortcutLakehouseId || !newSchemaName.trim()) return;
+    if (!schemaItemId || !newSchemaName.trim()) return;
     setNewSchemaBusy(true); setNewSchemaError(null);
     try {
       const r = await clientFetch('/api/lakehouse/schemas', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ lakehouseId: shortcutLakehouseId, name: newSchemaName.trim(), description: newSchemaDesc.trim() || undefined }),
+        body: JSON.stringify({ lakehouseId: schemaItemId, name: newSchemaName.trim(), description: newSchemaDesc.trim() || undefined }),
       });
       const j = await parseJsonOrError<{ ok: boolean; error?: string; hint?: string }>(r, 'Create schema');
       if (!j.ok && r.status !== 503) throw new Error(j.hint || j.error || `HTTP ${r.status}`);
@@ -155,10 +159,10 @@ export function useLakehouseSecondary({
       await loadSchemas();
     } catch (e: any) { setNewSchemaError(e?.message || String(e)); }
     finally { setNewSchemaBusy(false); }
-  }, [shortcutLakehouseId, newSchemaName, newSchemaDesc, loadSchemas]);
+  }, [schemaItemId, newSchemaName, newSchemaDesc, loadSchemas]);
 
   const deleteSchema = useCallback(async (name: string) => {
-    if (!shortcutLakehouseId) return;
+    if (!schemaItemId) return;
     const ok = await confirm({
       title: `Delete schema "${name}"?`,
       body: 'This runs DROP SCHEMA … CASCADE and removes the catalog entry. This cannot be undone.',
@@ -167,13 +171,13 @@ export function useLakehouseSecondary({
     if (!ok) return;
     setSchemasBusy(true); setSchemasError(null);
     try {
-      const r = await clientFetch(`/api/lakehouse/schemas?lakehouseId=${encodeURIComponent(shortcutLakehouseId)}&name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/lakehouse/schemas?lakehouseId=${encodeURIComponent(schemaItemId)}&name=${encodeURIComponent(name)}`, { method: 'DELETE' });
       const j = await parseJsonOrError<{ ok: boolean; error?: string }>(r, 'Delete schema');
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       await loadSchemas();
     } catch (e: any) { setSchemasError(e?.message || String(e)); }
     finally { setSchemasBusy(false); }
-  }, [shortcutLakehouseId, loadSchemas, confirm]);
+  }, [schemaItemId, loadSchemas, confirm]);
 
   const openMoveTable = useCallback((tableName: string, fromSchema: string) => {
     setMoveTableName(tableName); setMoveTableFrom(fromSchema || 'dbo');
@@ -183,20 +187,20 @@ export function useLakehouseSecondary({
   }, [schemas, loadSchemas]);
 
   const submitMoveTable = useCallback(async () => {
-    if (!shortcutLakehouseId || !moveTableName.trim() || !moveTableTo.trim()) return;
+    if (!schemaItemId || !moveTableName.trim() || !moveTableTo.trim()) return;
     setMoveTableBusy(true); setMoveTableError(null);
     try {
       const r = await clientFetch('/api/lakehouse/schemas', {
         method: 'PATCH', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ lakehouseId: shortcutLakehouseId, tableName: moveTableName.trim(), fromSchema: moveTableFrom, toSchema: moveTableTo.trim() }),
+        body: JSON.stringify({ lakehouseId: schemaItemId, tableName: moveTableName.trim(), fromSchema: moveTableFrom, toSchema: moveTableTo.trim() }),
       });
       const j = await parseJsonOrError<{ ok: boolean; error?: string; hint?: string; data?: { namespace?: string } }>(r, 'Move table');
       if (!j.ok) throw new Error(j.hint || j.error || `HTTP ${r.status}`);
-      setMoveTableStatus(`Moved to ${moveTableTo.trim()} — queryable as ${j.data?.namespace || `${shortcutLakehouseId}.${moveTableTo.trim()}.${moveTableName.trim()}`}`);
+      setMoveTableStatus(`Moved to ${moveTableTo.trim()} — queryable as ${j.data?.namespace || `${schemaItemId}.${moveTableTo.trim()}.${moveTableName.trim()}`}`);
       if (activeContainer) await loadPaths(activeContainer, tablesPrefix);
     } catch (e: any) { setMoveTableError(e?.message || String(e)); }
     finally { setMoveTableBusy(false); }
-  }, [shortcutLakehouseId, moveTableName, moveTableFrom, moveTableTo, activeContainer, tablesPrefix, loadPaths]);
+  }, [schemaItemId, moveTableName, moveTableFrom, moveTableTo, activeContainer, tablesPrefix, loadPaths]);
 
   // ── References ────────────────────────────────────────────────────────────
   const [references, setReferences] = useState<ReferenceLakehouse[] | null>(null);

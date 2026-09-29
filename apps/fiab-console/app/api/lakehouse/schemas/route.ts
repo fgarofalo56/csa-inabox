@@ -12,6 +12,7 @@
  *              'dbo' is refused (400).
  *   PATCH  /api/lakehouse/schemas   { lakehouseId, tableName, fromSchema, toSchema }
  *            → `ALTER TABLE <from>.<table> RENAME TO <to>.<table>` (move table).
+ *              Both schemas must be registered on this lakehouse (dbo always is).
  *
  * The Spark DDL is the real backend; the schema name format
  * `workspace.lakehouse.schema.table` is Spark 3.x standard SQL (Fabric uses the
@@ -19,7 +20,18 @@
  * persists and the route returns an honest 503 naming the env var to set — the
  * UI surface stays fully rendered (no Fabric requirement, ever).
  *
- * Auth: session-required. Runtime: nodejs, force-dynamic.
+ * Item scope: every verb names the lakehouse item and authorizes it through
+ * `authorizeLakehouse` (404 when the caller cannot reach it). GET needs read
+ * access; POST, DELETE and PATCH change the lakehouse and need edit rights.
+ * The registry is keyed by the item id.
+ *
+ * The Spark metastore behind the pool is shared by every lakehouse, so DELETE
+ * runs `DROP SCHEMA` only when no other lakehouse item registers the same
+ * schema name; otherwise it removes this item's registry row and reports
+ * `sparkSchemaKept: true`. Identifiers are quoted with
+ * `quoteIdent(..., 'databricks-sql')`.
+ *
+ * Runtime: nodejs, force-dynamic.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -34,6 +46,9 @@ import {
 } from '@/lib/azure/lakehouse-schemas';
 import { runSparkSqlAndWait } from '@/lib/azure/synapse-dev-client';
 import { withSession } from '@/lib/api/route-toolkit';
+import { quoteIdent } from '@/lib/sql/quoting';
+import { authorizeLakehouse } from '../_lib/item-scope';
+import { otherSchemaOwners } from '../_lib/schema-owners';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -54,6 +69,15 @@ const SPARK_GATE_HINT =
   'Console Container App, and grant the Console UAMI Synapse Administrator on ' +
   'the workspace. The schema is registered in the catalog meanwhile.';
 
+const READ_ONLY_MESSAGE =
+  'Your role on this lakehouse is read-only, so Loom did not change its schemas. A workspace '
+  + 'Member/Admin, or an item grant that includes Edit, can make this change.';
+
+/** Spark SQL identifier: backtick-quoted, embedded backticks doubled. */
+function sparkIdent(name: string): string {
+  return quoteIdent(name, 'databricks-sql');
+}
+
 function sanitize(e: any): string {
   return (e?.message || String(e)).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500);
 }
@@ -64,6 +88,8 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
   if (!lakehouseId) return NextResponse.json({ ok: false, error: 'lakehouseId is required' }, { status: 400 });
 
   try {
+    const access = await authorizeLakehouse(session, lakehouseId);
+    if (access instanceof NextResponse) return access;
     const schemas = await listSchemas(lakehouseId);
     return NextResponse.json({ ok: true, schemas });
   } catch (e: any) {
@@ -86,6 +112,9 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   if (!SCHEMA_NAME_RE.test(name)) {
     return NextResponse.json({ ok: false, code: 'bad_name', error: 'name must be 1-128 chars: letters, digits, and underscores only.' }, { status: 400 });
   }
+
+  const access = await authorizeLakehouse(session, lakehouseId, { write: true, readOnlyMessage: READ_ONLY_MESSAGE });
+  if (access instanceof NextResponse) return access;
 
   const createdBy = session.claims.upn;
   const tenantId = (session.claims as any).tid || (session.claims as any).tenantId;
@@ -117,7 +146,7 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   //    retry is safe. (Same floating-promise pattern as /api/apps/[id]/install.)
   void (async () => {
     try {
-      await runSparkSqlAndWait(sparkPool(), `CREATE SCHEMA IF NOT EXISTS \`${name}\``);
+      await runSparkSqlAndWait(sparkPool(), `CREATE SCHEMA IF NOT EXISTS ${sparkIdent(name)}`);
       await updateSchemaStatus(lakehouseId, name, 'active');
     } catch (e: any) {
       await updateSchemaStatus(lakehouseId, name, 'error', sanitize(e));
@@ -149,18 +178,37 @@ export const DELETE = withSession(async (req: NextRequest, { session }) => {
   }
 
   try {
+    const access = await authorizeLakehouse(session, lakehouseId, { write: true, readOnlyMessage: READ_ONLY_MESSAGE });
+    if (access instanceof NextResponse) return access;
     const existing = await getSchemaDoc(lakehouseId, name);
-    // Drop the Spark schema (CASCADE) when a Spark backend is wired. Best-effort:
-    // a missing/already-dropped schema must not block the registry-row delete.
+    // Drop the Spark schema (CASCADE) when a Spark backend is wired and no other
+    // lakehouse item registers the same name. Best-effort: a missing or
+    // already-dropped schema must not block the registry-row delete.
+    let sparkSchemaKept = false;
     if (existing && sparkConfigured()) {
-      try {
-        await runSparkSqlAndWait(sparkPool(), `DROP SCHEMA IF EXISTS \`${name}\` CASCADE`);
-      } catch {
-        /* best-effort — surface nothing; the row delete proceeds */
+      const others = await otherSchemaOwners(lakehouseId, name);
+      if (others.length > 0) {
+        sparkSchemaKept = true;
+      } else {
+        try {
+          await runSparkSqlAndWait(sparkPool(), `DROP SCHEMA IF EXISTS ${sparkIdent(name)} CASCADE`);
+        } catch {
+          /* best-effort — surface nothing; the row delete proceeds */
+        }
       }
     }
     await deleteSchemaDoc(lakehouseId, name);
-    return NextResponse.json({ ok: true, data: { name } });
+    return NextResponse.json({
+      ok: true,
+      data: { name, sparkSchemaKept },
+      ...(sparkSchemaKept
+        ? {
+            note:
+              'Removed the schema from this lakehouse. Another lakehouse also uses a schema with this name on the '
+              + 'shared Spark pool, so the Spark schema and its tables were kept.',
+          }
+        : {}),
+    });
   } catch (e: any) {
     const code = e?.code === 'reserved_schema' ? e.code : e?.code;
     const status = e?.code === 'reserved_schema' ? 400 : 502;
@@ -168,7 +216,7 @@ export const DELETE = withSession(async (req: NextRequest, { session }) => {
   }
 });
 
-export const PATCH = withSession(async (req: NextRequest) => {
+export const PATCH = withSession(async (req: NextRequest, { session }) => {
 
   const body = await req.json().catch(() => ({}));
   const lakehouseId = (body?.lakehouseId || '').toString().trim();
@@ -188,14 +236,26 @@ export const PATCH = withSession(async (req: NextRequest) => {
     return NextResponse.json({ ok: false, error: 'fromSchema and toSchema are the same — nothing to move.' }, { status: 400 });
   }
 
+  const access = await authorizeLakehouse(session, lakehouseId, { write: true, readOnlyMessage: READ_ONLY_MESSAGE });
+  if (access instanceof NextResponse) return access;
+
   // Honest gate when no Spark backend is wired.
   if (!sparkConfigured()) {
     return NextResponse.json({ ok: false, code: 'spark_not_configured', error: SPARK_GATE_HINT, hint: SPARK_GATE_HINT }, { status: 503 });
   }
 
   // ALTER TABLE `<from>`.`<table>` RENAME TO `<to>`.`<table>` — Spark 3.x move.
-  const sql = `ALTER TABLE \`${fromSchema}\`.\`${tableName}\` RENAME TO \`${toSchema}\`.\`${tableName}\``;
+  const sql = `ALTER TABLE ${sparkIdent(fromSchema)}.${sparkIdent(tableName)} RENAME TO ${sparkIdent(toSchema)}.${sparkIdent(tableName)}`;
   try {
+    // Both schemas must belong to this lakehouse (dbo always does).
+    for (const schema of [fromSchema, toSchema]) {
+      if (!(await getSchemaDoc(lakehouseId, schema))) {
+        return NextResponse.json(
+          { ok: false, code: 'unknown_schema', error: `Schema '${schema}' is not registered on this lakehouse. Create it first, then move the table.` },
+          { status: 404 },
+        );
+      }
+    }
     await runSparkSqlAndWait(sparkPool(), sql);
     return NextResponse.json({
       ok: true,
