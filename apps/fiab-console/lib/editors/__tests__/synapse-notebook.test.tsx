@@ -189,5 +189,30 @@ describe('SynapseNotebookEditor (F15 authoring)', () => {
       expect(input.readOnly).toBe(false);
       expect(body).toEqual({ name: 'admin_nb', itemId: ID });
     });
+
+    it('a name typed as admin is not sent once admin standing is gone', async () => {
+      // The field's onChange guard alone keeps a non-admin's typed name empty,
+      // so this is the one input that reaches the send-side check: a name typed
+      // while admin, then the session re-resolves as non-admin. Breaks if
+      // Create sent the typed name regardless of standing: the POST would
+      // carry "admin_nb" instead of the bound name.
+      const tree = (isTenantAdmin: boolean) => (
+        <SessionProvider value={{ authenticated: true, user: null, isTenantAdmin, loading: false }}>
+          <SynapseNotebookEditor item={makeItem('synapse-notebook', 'Synapse notebook')} id={ID} />
+        </SessionProvider>
+      );
+      const { rerender } = render(tree(true));
+      const input = await screen.findByLabelText('New notebook name', {}, { timeout: 5000 });
+      fireEvent.change(input, { target: { value: 'admin_nb' } });
+      expect((input as HTMLInputElement).value).toBe('admin_nb');
+      rerender(tree(false));
+      await waitFor(() => expect((screen.getByLabelText('New notebook name') as HTMLInputElement).value).toBe(BOUND));
+      const create = screen.getByRole('button', { name: 'Create notebook' });
+      await waitFor(() => expect(create).not.toBeDisabled());
+      fireEvent.click(create);
+      await waitFor(() => expect(log.calls.some((c) => c.init?.method === 'POST')).toBe(true));
+      const body = JSON.parse(String(log.calls.find((c) => c.init?.method === 'POST')!.init!.body));
+      expect(body).toEqual({ name: BOUND, itemId: ID });
+    });
   });
 });

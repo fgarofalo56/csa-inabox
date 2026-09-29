@@ -122,8 +122,11 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
       : ws.storageAccountId;
     // #4619 — setting, changing or clearing the binding is a tenant-admin
     // action. Re-sending the current value (a settings form that saves every
-    // field) is not a change and passes.
-    if (storageAccountId !== (ws.storageAccountId?.trim() || undefined)) {
+    // field) is not a change and passes. A body without the field keeps the
+    // stored value as it is, so it is never a change, whatever that value holds.
+    const currentStorage = typeof ws.storageAccountId === 'string' && ws.storageAccountId.trim()
+      ? ws.storageAccountId.trim() : undefined;
+    if ('storageAccountId' in body && storageAccountId !== currentStorage) {
       const refused = requireTenantAdmin(session, WORKSPACE_STORAGE_ADMIN_ONLY);
       if (refused) return refused;
     }

@@ -16417,13 +16417,13 @@
           }
         },
         {
-          "id": "sec:verdict-call:apps/fiab-console/app/api/workspaces/[id]/route.ts#PATCH:requireTenantAdmin:22",
+          "id": "sec:verdict-call:apps/fiab-console/app/api/workspaces/[id]/route.ts#PATCH:requireTenantAdmin:25",
           "kind": "verdict-call",
           "provenance": "declared",
           "label": "PATCH /api/workspaces/[id] -> requireTenantAdmin",
           "facet": {
             "kind": "verdict-call",
-            "callSite": "PATCH /api/workspaces/[id]:22",
+            "callSite": "PATCH /api/workspaces/[id]:25",
             "symbol": "requireTenantAdmin",
             "returnsVerdictUnion": true,
             "pathsToPrivilegedSink": 1,
@@ -45860,9 +45860,9 @@
           "provenance": "declared"
         },
         {
-          "id": "sec-edge:calls:sec:authorizer:apps/fiab-console/app/api/workspaces/[id]/route.ts#PATCH->sec:verdict-call:apps/fiab-console/app/api/workspaces/[id]/route.ts#PATCH:requireTenantAdmin:22",
+          "id": "sec-edge:calls:sec:authorizer:apps/fiab-console/app/api/workspaces/[id]/route.ts#PATCH->sec:verdict-call:apps/fiab-console/app/api/workspaces/[id]/route.ts#PATCH:requireTenantAdmin:25",
           "from": "sec:authorizer:apps/fiab-console/app/api/workspaces/[id]/route.ts#PATCH",
-          "to": "sec:verdict-call:apps/fiab-console/app/api/workspaces/[id]/route.ts#PATCH:requireTenantAdmin:22",
+          "to": "sec:verdict-call:apps/fiab-console/app/api/workspaces/[id]/route.ts#PATCH:requireTenantAdmin:25",
           "kind": "calls",
           "provenance": "declared"
         },
@@ -49417,7 +49417,7 @@
           "deployedAs": "loom-console"
         },
         {
-          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/workspaces/[id]/route.ts#PATCH:requireTenantAdmin:22",
+          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/workspaces/[id]/route.ts#PATCH:requireTenantAdmin:25",
           "codeModuleId": "code:apps/fiab-console/app/api/workspaces/[id]/route.ts",
           "deployedAs": "loom-console"
         },
@@ -50662,9 +50662,9 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-29T23:23:50.430Z",
-      "commit": "e98ba3286d4d1c28a4e337005010ed764e432476",
-      "inputsDigest": "098b495f7e3f1915",
+      "generatedAt": "2026-09-29T23:49:53.893Z",
+      "commit": "1f219d44e70e5d32e14bd151733a64f60a94e4c7",
+      "inputsDigest": "e31a6bdf62e2d467",
       "filesScanned": 2127,
       "scanScopes": [
         {

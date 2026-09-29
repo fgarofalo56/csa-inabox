@@ -86,6 +86,29 @@ describe('PATCH /api/workspaces/[id] — storageAccountId', () => {
     expect(replaced[0].storageAccountId).toBe(CURRENT);
   });
 
+  it.each([
+    ['padded', ` ${CURRENT} `],
+    ['an empty string', ''],
+  ])('a non-admin who omits the field saves even when the stored value is %s', async (_l, stored) => {
+    // Breaks if an omitted field were compared as a change: the raw stored
+    // value (" <id> " or "") differs from its trimmed form, so the gate would
+    // answer 403 to a save that never touched the binding.
+    access.workspace = ws({ storageAccountId: stored });
+    const res = await patch({ description: 'new text' });
+    expect(res.status).toBe(200);
+    expect(replaced).toHaveLength(1);
+    expect(replaced[0].storageAccountId).toBe(stored);
+  });
+
+  it('a non-admin who re-sends the trimmed current value saves when the stored value is padded', async () => {
+    // Breaks if the re-sent value were compared against the untrimmed stored
+    // value: "<id>" !== " <id> " would be read as a change and answer 403.
+    access.workspace = ws({ storageAccountId: ` ${CURRENT} ` });
+    const res = await patch({ description: 'new text', storageAccountId: CURRENT });
+    expect(res.status).toBe(200);
+    expect(replaced[0].storageAccountId).toBe(CURRENT);
+  });
+
   it('a tenant admin changes the binding (positive pair)', async () => {
     // Breaks if admins were refused too, or the new value were not persisted.
     session = ADMIN;
