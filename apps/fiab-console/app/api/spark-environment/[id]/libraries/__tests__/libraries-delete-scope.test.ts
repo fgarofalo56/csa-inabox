@@ -102,6 +102,20 @@ describe('DELETE libraries — recorded location outside the environment root', 
     expect(deletePath).not.toHaveBeenCalled();
     expect(updateOwnedItem).not.toHaveBeenCalled();
   });
+
+  it('400 when the derived location itself is not a safe blob path (control char in the environment id)', async () => {
+    // The root is built from the environment id, which `isPlainSegment` screens
+    // for separators and dot segments only. Here the recorded path EQUALS the
+    // derived one, so the root-equality check admits it; the only refusal is the
+    // blob-rel-path shape check on the path. Breaks if that check is removed:
+    // deletePath would be called with "spark-env-libs/env\u0001/lib.whl".
+    const id = 'env\u0001';
+    (loadOwnedItem as any).mockResolvedValue(itemWith([lib({ path: `spark-env-libs/${id}/lib.whl` })], id));
+    const res = await DELETE(delReq('lib.whl'), ctx(id));
+    expect(res.status).toBe(400);
+    expect(deletePath).not.toHaveBeenCalled();
+    expect(updateOwnedItem).not.toHaveBeenCalled();
+  });
 });
 
 describe('DELETE libraries — name query validation', () => {
