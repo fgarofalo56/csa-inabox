@@ -40,10 +40,14 @@ on:
       - 'scripts/ci/check-runner-version-pin.mjs'
       - '.github/workflows/runner-version-pin.yml'
 
+# LEAST PRIVILEGE. The workflow token is read-only. `issues: write` is granted
+# ONLY to the `notify` job, which runs the repo's own notifier and never the
+# checker. The `pin-age` job runs checker code that a same-repo PR can modify,
+# so it must not hold a token that can write issues. Neither checkout persists
+# the token into .git/config.
+# Pinned by scripts/ci/__tests__/check-runner-version-pin.test.mjs (workflow contract).
 permissions:
   contents: read
-  # deploy-notify-failure.mjs files/updates ONE issue for this workflow on failure.
-  issues: write
 
 concurrency:
   group: runner-version-pin-${{ github.event_name == 'pull_request' && github.ref || 'scheduled' }}
@@ -54,13 +58,23 @@ jobs:
     name: Runner version pin age
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      # The classified failure record, base64 so it survives as one output line.
+      # Empty when the checker wrote none (a pass, or a crash before writing).
+      failure_b64: ${{ steps.check.outputs.failure_b64 }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          persist-credentials: false
 
       # Exit code measured directly, not through a pipe: the default shell is
       # `bash -e {0}` with NO pipefail, so `node … | tee` would report tee's 0.
+      # Each fetch attempt is bounded at 30 s by the checker, so a hung API ends
+      # as a classified transient failure well inside timeout-minutes, not as a
+      # cancelled job that files nothing.
       - name: Check the pin against the actions/runner releases
+        id: check
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -79,17 +93,43 @@ jobs:
             cat "$RUNNER_TEMP/runner-version-pin.txt"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          if [ -s "$RUNNER_TEMP/runner-version-pin-failure.json" ]; then
+            echo "failure_b64=$(base64 -w0 "$RUNNER_TEMP/runner-version-pin-failure.json")" >> "$GITHUB_OUTPUT"
+          fi
           echo "[runner-version-pin] exit=$rc (measured directly, not through a pipe)"
           exit "$rc"
 
-      # One issue per workflow, updated. Never a hard-coded issue number (C1).
-      # Skipped on pull_request: a PR run is a preview of the verdict, not the alarm.
-      - name: Notify on failure
-        if: failure() && github.event_name != 'pull_request'
+  # One issue per workflow, updated. Never a hard-coded issue number (C1).
+  # Skipped on pull_request: a PR run is a preview of the verdict, not the alarm.
+  # If the record did not reach this job, the notifier still files, with
+  # "No classification was captured" rather than a guessed class.
+  notify:
+    name: Notify on failure
+    needs: pin-age
+    if: failure() && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          persist-credentials: false
+
+      - name: File or update the tracking issue
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FAILURE_B64: ${{ needs.pin-age.outputs.failure_b64 }}
+          PIN_AGE_RESULT: ${{ needs.pin-age.result }}
         run: |
           set -euo pipefail
+          record="$RUNNER_TEMP/runner-version-pin-failure.json"
+          if [ -n "$FAILURE_B64" ]; then
+            printf '%s' "$FAILURE_B64" | base64 -d > "$record"
+          fi
           node .github/scripts/deploy-notify-failure.mjs \
-            --workflow runner-version-pin --result "${{ job.status }}" \
-            --failure-json "$RUNNER_TEMP/runner-version-pin-failure.json"
+            --workflow runner-version-pin --result "$PIN_AGE_RESULT" \
+            --failure-json "$record"

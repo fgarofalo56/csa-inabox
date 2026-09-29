@@ -168,8 +168,12 @@ loudly and exits non-zero** — it never silently skips.
 > reported minimum. Daily, in its own workflow (`runner-version-pin.yml`,
 > GitHub-hosted), it warns once the pin has been superseded for 30 days, which is
 > GitHub's documented update window, and fails at 60. A failure opens or updates
-> the issue "deploy: runner-version-pin is failing". When it goes red, bump the
-> pin and rebuild the image under a new tag.
+> the issue "deploy: runner-version-pin is failing", and the issue names which
+> failure it was. Only `runner-version-pin.pin-superseded` means the pin is
+> stale: bump it and rebuild the image under a new tag. The `releases-*` kinds
+> mean the releases API could not be read, refused the read, or gave an unusable
+> answer, so the pin's age was not established. Follow the issue's remediation
+> line; do not bump the pin on one of those.
 
 The durable IaC mirror is
 `platform/fiab/bicep/modules/admin-plane/gh-runner-job.bicep` (see the `// TODO`
