@@ -297,6 +297,31 @@ function quoteOf(e: ErrShape): string {
 }
 
 /**
+ * #4776 (round 5) — identifier-shaped tokens in a QUOTED Databricks or SCIM
+ * response are replaced before the quote enters `message`, because `message`
+ * reaches non-admin readers: the route bodies, and (through the published
+ * failure → evalEnv detail) GET /api/admin/self-audit and the Copilot
+ * self-audit tool. Replaced: a GUID (e.g. a service principal's application
+ * id), an e-mail / UPN, and a 12+ digit numeric id. The UNREDACTED quote goes to
+ * the admin-only `diagnostic`. Pattern-based: whether a real Databricks refusal
+ * names the principal has NOT been measured, so this errs toward redacting.
+ */
+const IDENTIFIER_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '<id>'],
+  [/[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g, '<principal>'],
+  [/\b\d{12,}\b/g, '<id>'],
+];
+
+export function redactIdentifiers(text: string): string {
+  return IDENTIFIER_PATTERNS.reduce((acc, [re, to]) => acc.replace(re, to), text);
+}
+
+function joinDiagnostics(...parts: Array<string | undefined>): string | undefined {
+  const d = parts.filter(Boolean).join(' ');
+  return d || undefined;
+}
+
+/**
  * Classify a failed call from what the API RETURNED. Pure — exported for tests.
  * Does not claim a cause the response does not carry (R7): an unrecognised
  * status is 'unknown' and says so.
@@ -305,7 +330,12 @@ export function classifyWarehouseFailure(step: WarehouseStep, err: unknown): War
   const e = (err || {}) as ErrShape;
   const status = typeof e.status === 'number' ? e.status : undefined;
   const code = errorCode(e);
-  const said = quoteOf(e);
+  const raw = quoteOf(e);
+  const said = redactIdentifiers(raw);
+  // The unredacted quote is admin-only (see redactIdentifiers).
+  const rawDiagnostic = said !== raw ? `Unredacted ${step} response: ${raw}` : undefined;
+  const classified = (init: ConstructorParameters<typeof WarehouseResolutionError>[0]) =>
+    new WarehouseResolutionError(rawDiagnostic ? { ...init, diagnostic: rawDiagnostic } : init);
   const host = hostKey() || '(workspace)';
   const text = `${e.body || ''} ${e.message || ''}`;
 
@@ -315,7 +345,7 @@ export function classifyWarehouseFailure(step: WarehouseStep, err: unknown): War
     'and — if the workspace has an IP access list enabled — that it does not exclude the Console egress. Then re-run the readiness check.';
   if (isTransport(e)) {
     // No HTTP answer at all — "could not reach" is exactly what was measured.
-    return new WarehouseResolutionError({
+    return classified({
       kind: 'network',
       step,
       status,
@@ -325,7 +355,7 @@ export function classifyWarehouseFailure(step: WarehouseStep, err: unknown): War
   }
   if (status === 403 && NETWORK_REFUSAL.test(text)) {
     // The workspace ANSWERED — it was reached, and refused the request at its network layer.
-    return new WarehouseResolutionError({
+    return classified({
       kind: 'network',
       step,
       status,
@@ -336,7 +366,7 @@ export function classifyWarehouseFailure(step: WarehouseStep, err: unknown): War
   if (status === 401 || code === 'UNAUTHENTICATED') {
     // 401 = the token was not accepted. That is authentication, not a missing
     // entitlement, so no entitlement is named and no grant is offered.
-    return new WarehouseResolutionError({
+    return classified({
       kind: 'authentication',
       step,
       status,
@@ -353,7 +383,7 @@ export function classifyWarehouseFailure(step: WarehouseStep, err: unknown): War
     const need = step === 'create'
       ? `Creating a SQL warehouse requires workspace admin or the "${CREATE_ENTITLEMENT}" (Allow unrestricted cluster creation) entitlement.`
       : `Listing / reading SQL warehouses requires the Console identity to be a workspace member with the "${SQL_ACCESS_ENTITLEMENT}" entitlement.`;
-    return new WarehouseResolutionError({
+    return classified({
       kind: 'permission',
       step,
       status,
@@ -366,7 +396,7 @@ export function classifyWarehouseFailure(step: WarehouseStep, err: unknown): War
     });
   }
   if (QUOTA_CODES.has(code) || /quota/i.test(text)) {
-    return new WarehouseResolutionError({
+    return classified({
       kind: 'quota',
       step,
       status,
@@ -376,7 +406,7 @@ export function classifyWarehouseFailure(step: WarehouseStep, err: unknown): War
         `or stop an unused SQL warehouse, then re-run.`,
     });
   }
-  return new WarehouseResolutionError({
+  return classified({
     kind: 'unknown',
     step,
     status,
@@ -592,7 +622,10 @@ async function createLoomDefault(): Promise<CreateOutcome> {
     return await createWithRelist({ ...LOOM_DEFAULT_WAREHOUSE_SPEC }, false);
   } catch (e) {
     if (e instanceof WarehouseResolutionError || !isServerlessUnsupported(e)) throw e;
-    // The bootstrap's own fallback: a small classic PRO warehouse, same size/auto-stop.
+    // Classic PRO fallback — same spec with serverless off — taken ONLY when the
+    // serverless create was refused with a 400 naming serverless. The bootstrap
+    // (since #4767) falls back to classic on ANY definite 4xx rejection; this is
+    // deliberately narrower, and not the same rule.
     return createWithRelist({ ...LOOM_DEFAULT_WAREHOUSE_SPEC, enable_serverless_compute: false }, true);
   }
 }
@@ -626,12 +659,15 @@ async function measuredPermissionError(base: WarehouseResolutionError): Promise<
   try {
     me = await getCurrentIdentity();
   } catch (e: unknown) {
+    const scimRaw = quoteOf((e || {}) as ErrShape);
+    const scimSaid = redactIdentifiers(scimRaw);
     return new WarehouseResolutionError({
       kind: base.kind,
       step: base.step,
       status: base.status,
       entitlement: base.entitlement,
-      message: base.message + ` Could not read the identity's entitlements to confirm (SCIM Me failed: ${quoteOf((e || {}) as ErrShape)}).`,
+      diagnostic: joinDiagnostics(base.diagnostic, scimSaid !== scimRaw ? `Unredacted SCIM Me error: ${scimRaw}` : undefined),
+      message: base.message + ` Could not read the identity's entitlements to confirm (SCIM Me failed: ${scimSaid}).`,
       remediation: base.remediation,
     });
   }
@@ -641,10 +677,12 @@ async function measuredPermissionError(base: WarehouseResolutionError): Promise<
   const who = me.displayName || me.applicationId || me.id || '(unnamed)';
   // Identity detail (name, app id, entitlement + group lists) goes ONLY into
   // `diagnostic`; `message` states the conclusion without naming the identity.
-  const diagnostic =
+  const scimDiagnostic =
     `SCIM Me: identity ${who}${me.applicationId && me.applicationId !== who ? ` (application ${me.applicationId})` : ''}; ` +
     `direct entitlements [${me.entitlements.join(', ') || 'none'}]; ` +
     `groups ${groupsKnown ? `[${me.groups!.join(', ') || 'none'}]` : 'not reported (no groups field)'}.`;
+  // Keeps the classifier's unredacted response quote (if any) alongside it.
+  const diagnostic = joinDiagnostics(base.diagnostic, scimDiagnostic);
   if (admin || has) {
     const why = admin ? 'the Console identity IS in the workspace admins group' : `"${ent}" is present directly on the Console identity`;
     return new WarehouseResolutionError({

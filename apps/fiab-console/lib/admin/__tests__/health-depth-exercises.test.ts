@@ -169,7 +169,19 @@ describe('W-B deep exercises', () => {
     expect(whMock.withResolvedWarehouse).toHaveBeenCalledTimes(1);
     expect(dbxMock.runWarehouseStatement).toHaveBeenCalledWith('SELECT 1 AS loom_health', { warehouseId: 'wh-healed' });
     expect(r.status).toBe('pass');
-    expect(r.detail).toMatch(/warehouse wh-healed executed SELECT 1/);
+    // Positive: the receipt names the id the query ACTUALLY ran on.
+    expect(r.detail).toMatch(/SELECT 1 executed on wh-healed/);
+    // Round 5: it states only what happened. Breaks if the first lookup's
+    // detail — which names the OLD warehouse — is appended again after a heal.
+    expect(r.detail).not.toMatch(/Created the 'loom-default' SQL warehouse \(wh1\)/);
+    expect(r.detail).toMatch(/first lookup's SQL warehouse wh1 was reported gone/);
+  });
+  it('#4776 control: with NO heal, the receipt keeps the first lookup\'s detail (one id, as before)', async () => {
+    const r = await run('databricks-sql');
+    // Breaks if the heal wording fires when the first id served the query.
+    expect(r.detail).toMatch(/Databricks SQL warehouse wh1 executed SELECT 1/);
+    expect(r.detail).toMatch(/Created the 'loom-default' SQL warehouse \(wh1\)/);
+    expect(r.detail).not.toMatch(/reported gone/);
   });
   it('databricks reports a classified resolver failure as fail, not as a config gate', async () => {
     const { WarehouseResolutionError } = await import('@/lib/azure/databricks-sql-warehouse');

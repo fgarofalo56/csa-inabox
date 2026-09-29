@@ -456,12 +456,18 @@ const databricksSqlProbe: ServiceProbe = {
     // #4776 — through the self-healing wrapper, NOT an explicit id: a warehouse
     // deleted out-of-band is invalidated and re-resolved once, so the health
     // exercise is the first surface to notice the heal, not the last.
+    const firstId = warehouseId;
     const res: any = await withResolvedWarehouse((id) => {
       warehouseId = id;
       return dbx.runWarehouseStatement('SELECT 1 AS loom_health', { warehouseId: id });
     });
     const rows = res?.result?.data_array?.length ?? res?.rows?.length ?? res?.rowCount ?? 0;
-    return { status: 'pass', detail: `Databricks SQL warehouse ${warehouseId} executed SELECT 1 (${rows} row(s)). ${how}`, evidence: evidenceSlice(JSON.stringify(res).slice(0, 400)) };
+    // The receipt states only what happened. After a self-heal the first
+    // lookup's detail names the OLD warehouse, so it is not repeated.
+    const detail = warehouseId === firstId
+      ? `Databricks SQL warehouse ${warehouseId} executed SELECT 1 (${rows} row(s)). ${how}`
+      : `The first lookup's SQL warehouse ${firstId} was reported gone when the statement ran; the Console re-resolved, and SELECT 1 executed on ${warehouseId} (${rows} row(s)).`;
+    return { status: 'pass', detail, evidence: evidenceSlice(JSON.stringify(res).slice(0, 400)) };
   },
 };
 

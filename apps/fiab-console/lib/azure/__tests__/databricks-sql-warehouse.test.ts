@@ -471,7 +471,7 @@ describe('failure classification (R6/R7)', () => {
     expect(err.message).toMatch(/INVALID_PARAMETER_VALUE/);
   });
 
-  it('a serverless refusal (400 naming serverless) falls back to classic PRO, same size/auto-stop — the bootstrap\'s fallback', async () => {
+  it('a serverless refusal (400 naming serverless) falls back to classic PRO, same size/auto-stop', async () => {
     h.dbx.listWarehouses.mockResolvedValueOnce([]).mockResolvedValue([{ id: 'wh-classic', name: LOOM_DEFAULT_WAREHOUSE_NAME, state: 'STARTING' }]);
     h.dbx.createWarehouse
       .mockRejectedValueOnce(httpErr('createWarehouse', 400, '{"error_code":"INVALID_PARAMETER_VALUE","message":"Serverless compute is not enabled for this workspace"}'))
@@ -618,12 +618,23 @@ describe('spec is lifted from the bootstrap, not transcribed', () => {
       path.resolve(__dirname, '../../../../../.github/workflows/csa-loom-post-deploy-bootstrap.yml'),
       'utf8',
     );
-    const bodies = [...wf.matchAll(/-d '(\{"name":"[^']*"enable_serverless_compute":true[^']*\})'/g)].map((m) => JSON.parse(m[1]));
-    // Breaks if the workflow step is renamed/removed (0 bodies) or duplicated ambiguously.
-    expect(bodies).toHaveLength(1);
-    expect(LOOM_DEFAULT_WAREHOUSE_SPEC).toEqual(bodies[0]);
-    // And the adopt-by-name select uses the same name.
-    expect(wf).toContain(`select(.name=="${LOOM_DEFAULT_WAREHOUSE_NAME}")`);
+    // #4767 made the body a `printf` template whose serverless flag is `%s`,
+    // filled by `create_warehouse true|false`. Both the template and the
+    // argument of the FIRST create call are lifted from the workflow, not
+    // transcribed. Breaks if the step is renamed/removed or duplicated (template
+    // count ≠ 1), if the template's serverless flag stops being the `%s`
+    // placeholder (count 0), if the first create stops being serverless, or if
+    // ANY field of the body drifts from the resolver's spec (deep-equal).
+    const templates = [...wf.matchAll(/printf '(\{"name":"[^']*"enable_serverless_compute":%s[^']*\})'/g)].map((m) => m[1]);
+    expect(templates).toHaveLength(1);
+    const firstCreateArg = /\bcreate_warehouse (true|false) /.exec(wf)?.[1];
+    expect(firstCreateArg).toBe('true');
+    const body = JSON.parse(templates[0].replace('%s', firstCreateArg!));
+    expect(LOOM_DEFAULT_WAREHOUSE_SPEC).toEqual(body);
+    // And the adopt-by-name select uses the same name (whitespace around `==` tolerated).
+    const selects = [...wf.matchAll(/select\(\.name\s*==\s*"([^"]+)"\)/g)].map((m) => m[1]);
+    expect(selects.length).toBeGreaterThan(0);
+    expect(new Set(selects)).toEqual(new Set([LOOM_DEFAULT_WAREHOUSE_NAME]));
   });
 });
 
@@ -818,6 +829,39 @@ describe('round 3 (#4776 re-review)', () => {
     expect(err.message).toMatch(/refused the create because a 'loom-default' SQL warehouse already exists/);
     expect(err.message).toMatch(/no 'loom-default' is visible to the Console identity/);
     expect(err.remediation).toMatch(/CAN_USE/);
+  });
+
+  it('round 5 (N2): a Databricks 403 that NAMES the principal is redacted in `message`; the raw quote is admin-only', async () => {
+    const APP = '9b1d2c3e-4f50-4a6b-8c7d-0e1f2a3b4c5d';
+    const UPN = 'uami-console@contoso.onmicrosoft.com';
+    h.dbx.createWarehouse.mockRejectedValue(httpErr('createWarehouse', 403,
+      `{"error_code":"PERMISSION_DENIED","message":"Service principal ${APP} (${UPN}) does not have permission to create SQL warehouses"}`));
+    meReturns({ displayName: 'sp', entitlements: [], groups: [] });
+    const err = await resolveDatabricksSqlWarehouseId().catch((e) => e);
+    expect(err.kind).toBe('permission');
+    // Positive half: the rest of Databricks' text is still quoted, so the cause stays readable.
+    expect(err.message).toMatch(/does not have permission to create SQL warehouses/);
+    expect(err.message).toContain('<id>');
+    // Breaks if the quote reaches `message` unredacted: the route body AND the
+    // non-admin self-audit detail would both carry the principal.
+    expect(err.message).not.toContain(APP);
+    expect(err.message).not.toContain(UPN);
+    expect(JSON.stringify(warehouseErrorBody(err))).not.toMatch(new RegExp(`${APP}|${UPN.replace('.', '\\.')}`));
+    const f = readRuntimeFailure(WAREHOUSE_ENV_VAR)!;
+    expect(f.message).not.toContain(APP);
+    expect(gateStatus('svc-databricks-sql')!.check.detail).not.toContain(APP);
+    // …while the admin-only diagnostic keeps the unredacted response AND the
+    // SCIM measurement (breaks if either half is dropped from the join).
+    expect(f.diagnostic).toContain(APP);
+    expect(f.diagnostic).toContain(UPN);
+    expect(f.diagnostic).toMatch(/SCIM Me: identity sp/);
+  });
+
+  it('round 5 (N2) control: a quote with no identifier-shaped token is not rewritten and adds no diagnostic', () => {
+    const e = classifyWarehouseFailure('list', httpErr('listWarehouses', 403, 'Unauthorized network access to workspace: 1111'));
+    // Breaks if redaction rewrites ordinary text (the short workspace number) or always sets a diagnostic.
+    expect(e.message).toMatch(/Unauthorized network access to workspace: 1111/);
+    expect(e.diagnostic).toBeUndefined();
   });
 
   it('A-6: warehouseErrorStatus maps EVERY failure kind (authentication 503, unknown 502)', () => {
