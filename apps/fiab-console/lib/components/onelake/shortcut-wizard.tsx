@@ -16,7 +16,7 @@ import { clientFetch } from '@/lib/client-fetch';
  * Backend (real, per no-vaporware.md):
  *   GET  /api/items/lakehouse?workspaceId=         source lakehouses
  *   GET  /api/lakehouse/containers                 storage containers
- *   GET  /api/lakehouse/paths?container=&prefix=    folder navigation
+ *   GET  /api/lakehouse/paths?lakehouseId=|container=&prefix=   folder navigation
  *   GET  /api/items/[type]/[id]/shortcuts          list (no mock array)
  *   POST /api/items/[type]/[id]/shortcuts          create (ADLS passthrough probe)
  *   POST /api/items/[type]/[id]/shortcuts/[name]/test   live ADLS HEAD → OK/Broken
@@ -25,6 +25,7 @@ import { clientFetch } from '@/lib/client-fetch';
  * Azure-native DEFAULT — works with LOOM_DEFAULT_FABRIC_WORKSPACE UNSET.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { shortcutBrowseCrumbs, shortcutBrowseOutcome, shortcutBrowseUrl, type ShortcutBrowseEntry } from './shortcut-browse';
 import {
   Badge,
   Body1,
@@ -114,12 +115,6 @@ interface LakehouseLite {
   id: string;
   displayName?: string;
   description?: string;
-}
-
-interface PathEntry {
-  name: string;
-  isDirectory: boolean;
-  size: number;
 }
 
 interface ContainerInfo {
@@ -256,15 +251,14 @@ export function ShortcutWizard({ itemType = 'lakehouse', lakehouseId, workspaceI
   const [containers, setContainers] = useState<ContainerInfo[] | null>(null);
   const [srcLakehouse, setSrcLakehouse] = useState<string>('');
   const [srcContainer, setSrcContainer] = useState<string>('');
-  // The picked source lakehouse's own root inside its container, as the paths route echoes it.
-  // Null while browsing a container directly (tenant admins) or before the first listing.
+  // The picked lakehouse's own root as the paths route echoes it; null for a container browse or before the first listing.
   const [srcRoot, setSrcRoot] = useState<string | null>(null);
   const [srcLoadError, setSrcLoadError] = useState<string | null>(null);
 
   // Step 2 — browse
   const [kind, setKind] = useState<ShortcutKind>('files');
   const [browsePrefix, setBrowsePrefix] = useState<string>('');
-  const [entries, setEntries] = useState<PathEntry[] | null>(null);
+  const [entries, setEntries] = useState<ShortcutBrowseEntry[] | null>(null);
   const [browseError, setBrowseError] = useState<string | null>(null);
   const [browsing, setBrowsing] = useState(false);
   const [selectedPath, setSelectedPath] = useState<string>('');
@@ -325,32 +319,18 @@ export function ShortcutWizard({ itemType = 'lakehouse', lakehouseId, workspaceI
     };
   }, [open, workspaceId, lakehouseId, reset]);
 
-  // Browse one path level (step 2). With a source lakehouse the listing is scoped to that item
-  // (`lakehouseId`), and the route answers with the container and root it resolved; the wizard
-  // adopts both. Without one it lists the picked container, which the route limits to tenant admins.
+  // Browse one path level (step 2); the URL and answer handling live in ./shortcut-browse.
   const loadEntries = useCallback(
     async (lakehouse: string, container: string, prefix: string) => {
       if (!lakehouse && !container) return;
       setBrowsing(true);
       setBrowseError(null);
-      const q = lakehouse
-        ? `lakehouseId=${encodeURIComponent(lakehouse)}&prefix=${encodeURIComponent(prefix)}`
-        : `container=${encodeURIComponent(container)}&prefix=${encodeURIComponent(prefix)}`;
-      const { status, body } = await jfetch(`/api/lakehouse/paths?${q}`);
+      const { status, body } = await jfetch(shortcutBrowseUrl(lakehouse, container, prefix));
       setBrowsing(false);
-      if (body?.ok && lakehouse && !body.container) {
-        setEntries([]);
-        setBrowseError(body.gate || 'This lakehouse has no storage to browse yet.');
-      } else if (body?.ok) {
-        if (lakehouse) { setSrcContainer(body.container); setSrcRoot(body.root ?? ''); }
-        setEntries(body.paths || []);
-      } else {
-        setEntries([]);
-        const where = lakehouse ? 'this lakehouse' : `${container}/${prefix}`;
-        const base = body?.error || `Could not list ${where} (HTTP ${status}).`;
-        setBrowseError(status === 403 && !lakehouse
-          ? `${base} Go back and pick a source lakehouse to browse its files instead.` : base);
-      }
+      const out = shortcutBrowseOutcome(status, body, lakehouse, container, prefix);
+      if (out.kind === 'error') { setEntries([]); setBrowseError(out.message); return; }
+      if (out.resolved) { setSrcContainer(out.resolved.container); setSrcRoot(out.resolved.root); }
+      setEntries(out.paths);
     },
     [],
   );
@@ -369,20 +349,10 @@ export function ShortcutWizard({ itemType = 'lakehouse', lakehouseId, workspaceI
   const shownPrefix = browsePrefix || srcRoot || '';
   const srcLakehouseName = lakehouses?.find((l) => l.id === srcLakehouse)?.displayName || srcLakehouse;
 
-  const crumbs = useMemo(() => {
-    // A lakehouse listing starts at the lakehouse's root; a container listing at the container.
-    const base = srcLakehouse && srcRoot !== null ? srcRoot : '';
-    const rel = base && shownPrefix.startsWith(base) ? shownPrefix.slice(base.length) : shownPrefix;
-    const acc: { label: string; prefix: string }[] = [
-      { label: (srcLakehouse ? srcLakehouseName : srcContainer) || 'root', prefix: base },
-    ];
-    let cur = base;
-    for (const s of rel.split('/').filter(Boolean)) {
-      cur = cur ? `${cur}/${s}` : s;
-      acc.push({ label: s, prefix: cur });
-    }
-    return acc;
-  }, [shownPrefix, srcRoot, srcLakehouse, srcLakehouseName, srcContainer]);
+  const crumbs = useMemo(
+    () => shortcutBrowseCrumbs(shownPrefix, srcRoot, !!srcLakehouse, srcLakehouse ? srcLakehouseName : srcContainer),
+    [shownPrefix, srcRoot, srcLakehouse, srcLakehouseName, srcContainer],
+  );
 
   const canNext1 = !!srcContainer || !!srcLakehouse;
   const canNext2 = !!selectedPath;
