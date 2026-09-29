@@ -37,6 +37,7 @@ import { armBase, armScope } from './cloud-endpoints';
 import { getOrComputeCached, buildScopedCacheKey, type CacheMeta } from './query-result-cache';
 import { periodEndProjection, pickComputedMethod } from './cost-forecast-core';
 import { computeAnomalies, type CostAnomaly } from './cost-anomaly-core';
+import { tagValueColumnIndex } from './cost-tag-column';
 
 // Sovereign-cloud ARM host + scope (Commercial / GCC-High / IL5).
 const ARM = armBase();
@@ -365,6 +366,13 @@ export interface CostSummary {
   byTag: CostBreakdownRow[];
   /** The tag key `byTag` is grouped on (echoed so the UI can label + hint). */
   tagKey: string;
+  /**
+   * Subscriptions whose TAG query failed (throttled, timed out, refused) while
+   * the main grouped query succeeded. When non-empty, an empty `byTag` means
+   * "could not load", not "no resource carries the tag". Optional so a cached
+   * report written before this field existed still type-checks.
+   */
+  tagQueryErrors?: { subscription: string; error: string }[];
   daily: { date: string; cost: number }[];
   /** Daily-spend outliers computed from `daily` (no extra Azure call). */
   anomalies: CostAnomaly[];
@@ -401,6 +409,29 @@ export function foldByDimension(resp: any, dimName: string, loomRgs: Set<string>
     if (iRg >= 0 && !inLoom(String(r[iRg] ?? ''), loomRgs)) continue;
     const key = iDim >= 0 ? String(r[iDim] ?? '').trim() : '';
     addTo(m, key || 'unknown', Number(r[iCost]) || 0);
+  }
+  return sortDesc(m);
+}
+
+/**
+ * Pure fold (unit-tested): collapse a Cost Management ResourceGroupName ×
+ * `TagKey` response into descending `{ key, cost }` rows keyed by the TAG VALUE,
+ * filtered to the Loom resource groups. Spend with no value for the tag folds
+ * into `(untagged)`. The value column is resolved by {@link tagValueColumnIndex}
+ * — never by position, because the response also carries a `TagKey` column
+ * whose every row is the key's own name.
+ */
+export function foldByTag(resp: any, tagKey: string, loomRgs: Set<string>): CostBreakdownRow[] {
+  const cols = resp?.properties?.columns || [];
+  const rows: any[][] = resp?.properties?.rows || [];
+  const iCost = colIndex(cols, 'Cost');
+  const iRg = colIndex(cols, 'ResourceGroupName');
+  const iVal = tagValueColumnIndex(cols, tagKey);
+  const m = new Map<string, number>();
+  for (const r of rows) {
+    if (iRg >= 0 && !inLoom(String(r[iRg] ?? ''), loomRgs)) continue;
+    const raw = iVal >= 0 ? String(r[iVal] ?? '').trim() : '';
+    addTo(m, raw || '(untagged)', Number(r[iCost]) || 0);
   }
   return sortDesc(m);
 }
@@ -502,6 +533,7 @@ export async function computeLoomCostSummary(opts: CostOptions = {}): Promise<Co
   const dailyMap = new Map<string, number>();
   const budgets: CostBudget[] = [];
   const subscriptionErrors: { subscription: string; error: string }[] = [];
+  const tagQueryErrors: { subscription: string; error: string }[] = [];
   let total = 0;
   let previousPeriod: number | null = null;
   let currency = 'USD';
@@ -683,22 +715,15 @@ export async function computeLoomCostSummary(opts: CostOptions = {}): Promise<Co
       budgets.push(...budgetsR.value);
     }
 
-    // Tag breakdown: the tag-VALUE column is whichever column isn't Cost /
-    // ResourceGroupName / Currency (robust to the API naming the column after
-    // the tag key vs. "TagKey"). Rows with no value for the tag are folded into
-    // "(untagged)" so unallocated spend is visible.
+    // Tag breakdown, keyed by TAG VALUE (see foldByTag). A tag query that
+    // FAILED is recorded, not folded into "no tags": the UI must be able to say
+    // "could not load" rather than claim the estate carries no such tag.
     if (tagR.status === 'fulfilled') {
-      const tCols = tagR.value?.properties?.columns || [];
-      const tRows: any[][] = tagR.value?.properties?.rows || [];
-      const tCost = colIndex(tCols, 'Cost');
-      const tRg = colIndex(tCols, 'ResourceGroupName');
-      const tCur = colIndex(tCols, 'Currency');
-      const tTag = (tCols as any[]).findIndex((_c, idx) => idx !== tCost && idx !== tRg && idx !== tCur);
-      for (const row of tRows) {
-        if (tRg >= 0 && !inLoom(String(row[tRg] ?? ''), loomRgs)) continue;
-        const raw = tTag >= 0 ? String(row[tTag] ?? '').trim() : '';
-        addTo(byTagMap, raw || '(untagged)', Number(row[tCost]) || 0);
+      for (const row of foldByTag(tagR.value, COST_TAG_KEY, loomRgs)) {
+        addTo(byTagMap, row.key, row.cost);
       }
+    } else {
+      tagQueryErrors.push({ subscription: sub, error: (tagR.reason as Error)?.message || String(tagR.reason) });
     }
   };
   for (let i = 0; i < subs.length; i += SUB_CHUNK) {
@@ -783,6 +808,7 @@ export async function computeLoomCostSummary(opts: CostOptions = {}): Promise<Co
     byLocation: sortDesc(byLocation),
     byTag,
     tagKey: COST_TAG_KEY,
+    tagQueryErrors,
     daily,
     anomalies,
     budgets: budgets.sort((a, b) => b.percentUsed - a.percentUsed),

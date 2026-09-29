@@ -1478,6 +1478,8 @@ interface CostSummary {
   byLocation: CostBreakdownRow[];
   byTag: CostBreakdownRow[];
   tagKey: string;
+  /** Subscriptions whose tag query failed; an empty `byTag` then means "could not load". */
+  tagQueryErrors?: { subscription: string; error: string }[];
   daily: { date: string; cost: number }[];
   anomalies: CostAnomaly[];
   budgets: CostBudget[];
@@ -1592,6 +1594,19 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
     { value: 'tag' as const, label: `Tag · ${data?.tagKey || 'Environment'}`, rows: data?.byTag ?? [] },
   ]), [data]);
   const activeGroup = groupDims.find((g) => g.value === groupDim) || groupDims[0];
+  // An empty tag breakdown is only "no tags" when every tag query answered. If
+  // one failed (throttled, timed out, refused), say that instead (R7).
+  const tagQueryErrors = data?.tagQueryErrors ?? [];
+  const tagLoadFailed = tagQueryErrors.length > 0 && (data?.byTag?.length ?? 0) === 0;
+  const tagLoadFailedBar = (
+    <MessageBar intent="warning">
+      <MessageBarBody>
+        The <strong>{data?.tagKey || 'Environment'}</strong> tag breakdown could not be loaded:{' '}
+        {tagQueryErrors.map((s) => `${shortSub(s.subscription)}: ${s.error || 'no error text returned'}`).join(' · ')}.
+        This says nothing about whether your resources carry the tag. Refresh to retry.
+      </MessageBarBody>
+    </MessageBar>
+  );
 
   // Build donut rows ({label,value}) for a breakdown, top-N + names for subs.
   const donutRows = useCallback((rows: CostBreakdownRow[], kind: GroupDim, topN = 8) => {
@@ -1795,7 +1810,7 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
           </div>
         }
       >
-        {groupDim === 'tag' && activeGroup.rows.length === 0 ? (
+        {groupDim === 'tag' && tagLoadFailed ? tagLoadFailedBar : groupDim === 'tag' && activeGroup.rows.length === 0 ? (
           <MessageBar intent="warning">
             <MessageBarBody>
               No cost-allocation tags found for tag key <strong>{data?.tagKey || 'Environment'}</strong>. Tag your
@@ -1829,7 +1844,7 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
           carries no such tag key. */}
       {data && (
         <Section title={`Cost allocation by tag · ${data.tagKey}`}>
-          {data.byTag.length === 0 ? (
+          {tagLoadFailed ? tagLoadFailedBar : data.byTag.length === 0 ? (
             <MessageBar intent="warning">
               <MessageBarBody>
                 No cost-allocation tags found. Loom groups spend by the <strong>{data.tagKey}</strong> tag value; set{' '}

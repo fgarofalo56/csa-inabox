@@ -23,6 +23,7 @@ import { MonitorError } from '@/lib/azure/monitor-client';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
 import { loomCostSubscriptions, type CostTimeframe } from '@/lib/azure/cost-client';
 import { DOMAIN_TAG_KEY } from '@/lib/azure/domain-registry';
+import { tagValueColumnIndex } from '@/lib/azure/cost-tag-column';
 
 const ARM = armBase();
 const ARM_SCOPE = armScope();
@@ -112,6 +113,21 @@ export function foldDomainCostRows(
 const colIndex = (cols: any[], name: string): number =>
   (cols || []).findIndex((c) => (c?.name || '').toLowerCase() === name.toLowerCase());
 
+/**
+ * Pure: map a Cost Management response grouped on `TagKey = loom-domain` to
+ * raw `{ tagValue, cost }` rows. The value comes from the column
+ * {@link tagValueColumnIndex} resolves — never from the `TagKey` column, whose
+ * every row is the key's own name and would attribute all spend to a phantom
+ * domain called `loom-domain`. A null value (untagged spend) maps to ''.
+ */
+export function tagCostRowsFromResponse(json: any): TagCostRow[] {
+  const cols = json?.properties?.columns || [];
+  const rows: any[][] = json?.properties?.rows || [];
+  const iCost = colIndex(cols, 'Cost');
+  const iTag = tagValueColumnIndex(cols, DOMAIN_TAG_KEY);
+  return rows.map((r) => ({ tagValue: String(iTag >= 0 ? r[iTag] ?? '' : ''), cost: Number(r[iCost]) || 0 }));
+}
+
 /** One Cost Management group-by-tag query for a subscription, with backoff. */
 async function queryDomainCost(sub: string, timeframe: CostTimeframe): Promise<TagCostRow[]> {
   const t = await credential.getToken(ARM_SCOPE);
@@ -138,15 +154,7 @@ async function queryDomainCost(sub: string, timeframe: CostTimeframe): Promise<T
     const text = await res.text();
     let json: any = null;
     try { json = text ? JSON.parse(text) : null; } catch { /* leave */ }
-    if (res.ok) {
-      const cols = json?.properties?.columns || [];
-      const rows: any[][] = json?.properties?.rows || [];
-      const iCost = colIndex(cols, 'Cost');
-      // The tag column is named after the TagKey (or 'TagKey' on some API builds).
-      let iTag = colIndex(cols, DOMAIN_TAG_KEY);
-      if (iTag < 0) iTag = colIndex(cols, 'TagKey');
-      return rows.map((r) => ({ tagValue: String(iTag >= 0 ? r[iTag] ?? '' : ''), cost: Number(r[iCost]) || 0 }));
-    }
+    if (res.ok) return tagCostRowsFromResponse(json);
     const msg = (json?.error?.message || text || `Cost query failed (${res.status})`).toString();
     if ((res.status === 429 || res.status === 503 || res.status === 504) && attempt < maxAttempts) {
       const retryAfter = Number(res.headers.get('retry-after'))
