@@ -693,7 +693,18 @@ jobs:
           # whatever that estate actually has. So the resolver runs in pure
           # DISCOVERY mode here; the bootstrap workflow keeps its explicit inputs
           # for the cases where an operator must name a DLZ by hand.
-          ADMIN_SUB: ${{ steps.topology_guard.outputs.deploy_sub }}
+          #
+          # `target_sub`, NOT `deploy_sub` — the #3916 distinction again (see the
+          # DNS-resolver step below). `deploy_sub` is '' on EVERY scheduled run
+          # ("inherit the login sub"), and the discover script's admin-RG probe
+          # (#4665) needs a LITERAL subscription: with it empty the probe was
+          # skipped and the plan carried no servicebus/batch keys, so the
+          # reconcile rendered LOOM_SERVICEBUS_NAMESPACE and LOOM_BATCH_ACCOUNT
+          # empty (run 36428134174). `target_sub` is the guard's resolved literal,
+          # never empty on a proceed, and equal to `deploy_sub` whenever the
+          # latter is set. The script now exits 2 on a half-supplied admin pair
+          # rather than skipping silently.
+          ADMIN_SUB: ${{ steps.topology_guard.outputs.target_sub }}
         run: |
           set -euo pipefail
           # ── THE REGION IS READ FROM THE SHELL, NOT FROM THE TRIGGER (#3701) ──
