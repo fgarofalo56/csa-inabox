@@ -161,7 +161,6 @@ export function LakehouseEditor({ item, id }: Props) {
   const [statsLoading, setStatsLoading] = useState(false);
   const [statsError, setStatsError] = useState<string | null>(null);
   const [statsJobId, setStatsJobId] = useState<string | null>(null);
-  const statsTargetRef = useRef<{ container: string; path: string } | null>(null);
   const deepLinkRef = useRef<{ container: string; path: string } | null>(null);
   const [sqlText, setSqlText] = useState<string>(
     `-- Select a file in the Files tab and click "Query this file"\n-- to populate this editor with a Synapse Serverless OPENROWSET.`,
@@ -362,7 +361,7 @@ export function LakehouseEditor({ item, id }: Props) {
       window.history.replaceState(null, '', `${window.location.pathname}?${sp.toString()}`);
     } catch { /* non-browser */ }
     try {
-      const qs = new URLSearchParams({ container: activeContainer, path: entry.name });
+      const qs = new URLSearchParams({ lakehouseId: id, container: activeContainer, path: entry.name });
       if (opts?.top) qs.set('top', String(opts.top));
       if (opts?.format) qs.set('format', opts.format);
       let j: PreviewResponse;
@@ -376,10 +375,9 @@ export function LakehouseEditor({ item, id }: Props) {
       setPreview(j!);
       if (j!.sql) setSqlText(j!.sql);
       if (j!.ok && (j!.columns?.length ?? 0) > 0) {
-        statsTargetRef.current = { container: activeContainer, path: entry.name };
         setStatsLoading(true);
         try {
-          const sQs = new URLSearchParams({ container: activeContainer, path: entry.name });
+          const sQs = new URLSearchParams({ lakehouseId: id, container: activeContainer, path: entry.name });
           const sr = await clientFetch(`/api/lakehouse/table-stats?${sQs.toString()}`);
           const sj = await parseJsonOrError<{ ok: boolean; error?: string; jobId?: string }>(sr, 'Column stats');
           if (sj.ok && sj.jobId) setStatsJobId(sj.jobId);
@@ -388,7 +386,7 @@ export function LakehouseEditor({ item, id }: Props) {
       }
     } catch (e: any) { setPreview({ ok: false, error: e?.message || String(e) }); }
     finally { setPreviewLoading(false); }
-  }, [activeContainer, loadPaths]);
+  }, [activeContainer, loadPaths, id]);
 
   const previewTable = useCallback((relPath: string) => {
     setPreviewMode('table');
@@ -662,9 +660,8 @@ export function LakehouseEditor({ item, id }: Props) {
     if (!statsJobId) return;
     let cancelled = false;
     const interval = setInterval(async () => {
-      const target = statsTargetRef.current;
-      const qs = new URLSearchParams({ jobId: statsJobId });
-      if (target) { qs.set('container', target.container); qs.set('path', target.path); }
+      // The handle carries the container + path; the poll names the item only.
+      const qs = new URLSearchParams({ lakehouseId: id, jobId: statsJobId });
       try {
         const r = await clientFetch(`/api/lakehouse/table-stats?${qs.toString()}`);
         const j = await parseJsonOrError<{ ok: boolean; status?: string; error?: string; jobId?: string; stats?: Record<string, ColStat> }>(r, 'Column stats');
@@ -675,7 +672,7 @@ export function LakehouseEditor({ item, id }: Props) {
       } catch (e: any) { if (cancelled) return; setStatsError(e?.message || String(e)); setStatsLoading(false); setStatsJobId(null); }
     }, 3000);
     return () => { cancelled = true; clearInterval(interval); };
-  }, [statsJobId]);
+  }, [statsJobId, id]);
 
   // Deep-link restore on first mount
   useEffect(() => {

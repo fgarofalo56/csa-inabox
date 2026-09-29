@@ -3,17 +3,22 @@
  * Spark `summary()` job on the Synapse Spark pool via the Livy interactive
  * session API. Backs the column-summary card in the Lakehouse Preview DataGrid.
  *
- *   GET /api/lakehouse/table-stats?container=&path=&pool=
+ *   GET /api/lakehouse/table-stats?lakehouseId=&container=&path=&pool=
  *     → creates a Livy session, (when idle) submits the PySpark stats
- *       statement, and returns { ok, jobId, status } immediately. `jobId`
- *       encodes "<pool>:<sessionId>:<stmtId>" ("" stmtId while the pool warms).
+ *       statement, and returns { ok, jobId, status } immediately. `jobId` is a
+ *       signed handle (`_lib/job-handle.ts`) bound to the lakehouse item, this
+ *       route, the principal, the Spark session and the scoped container + path.
  *
- *   GET /api/lakehouse/table-stats?jobId=&container=&path=&pool=
+ *   GET /api/lakehouse/table-stats?lakehouseId=&jobId=
  *     → polls. If the session has just become idle and no statement is running
- *       yet, submits it (passing container+path so the abfss URI can be rebuilt
- *       statelessly) and returns the updated jobId. Otherwise polls the Livy
- *       statement and, once 'available', parses the `LOOM_STATS:` marker the
- *       PySpark prints and returns { ok, status:'available', columns, stats }.
+ *       yet, submits it over the container + path the handle carries and
+ *       returns the updated jobId. Otherwise polls the Livy statement and, once
+ *       'available', parses the `LOOM_STATS:` marker the PySpark prints and
+ *       returns { ok, status:'available', columns, stats }.
+ *
+ * Item scope: every call needs read access to the lakehouse item; the file
+ * must sit strictly below the item's root in its own container. A handle for
+ * another item, route or principal answers 404.
  *
  * Async by design — a cold Spark pool can take 60-90s to reach 'idle', well
  * past the Front Door ~30s timeout, so the route never blocks. The client
@@ -36,6 +41,11 @@ import {
   createLivySessionAsync, getLivySession, submitLivyStatement, getLivyStatement,
 } from '@/lib/azure/synapse-dev-client';
 import { withSession } from '@/lib/api/route-toolkit';
+import { apiBadRequest, apiNotFound } from '@/lib/api/respond';
+import { authorizeLakehouse, scopeItemPath } from '../_lib/item-scope';
+import {
+  SPARK_POOL_NAME_RE, mintLakehouseJobHandle, verifyLakehouseJobHandle, type LakehouseJobScope,
+} from '../_lib/job-handle';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -169,30 +179,34 @@ function parseStatsOutput(output: any): { columns: string[]; stats: Record<strin
 
 const DEAD_SESSION = new Set(['error', 'dead', 'killed', 'shutting_down', 'success']);
 
-export const GET = withSession(async (req: NextRequest) => {
+export const GET = withSession(async (req: NextRequest, { session }) => {
   const g = gate(); if (g) return g;
 
   const sp = req.nextUrl.searchParams;
+  const lakehouseId = (sp.get('lakehouseId') || '').trim();
   const jobId = sp.get('jobId') || '';
-  const container = sp.get('container') || '';
+  const container = (sp.get('container') || '').trim();
   const path = sp.get('path') || '';
   const poolParam = sp.get('pool')?.trim() || '';
 
-  if (container && !(KNOWN_CONTAINERS as readonly string[]).includes(container)) {
-    return NextResponse.json({ ok: false, error: `unknown container: ${container}` }, { status: 404 });
+  if (!lakehouseId) {
+    return apiBadRequest('lakehouseId is required: column statistics run on a file of a lakehouse item.');
   }
+  const scope: LakehouseJobScope = { lakehouseId, purpose: 'table-stats', oid: session.claims.oid };
 
   try {
     // ---- Poll mode -----------------------------------------------------
     if (jobId) {
-      const [pool, sidStr, stidStr] = jobId.split(':');
-      const sessionId = Number(sidStr);
-      if (!pool || !Number.isFinite(sessionId)) {
-        return NextResponse.json({ ok: false, error: 'malformed jobId' }, { status: 400 });
-      }
+      const access = await authorizeLakehouse(session, lakehouseId);
+      if (access instanceof NextResponse) return access;
+      const job = verifyLakehouseJobHandle(scope, jobId);
+      // One answer for a malformed, expired, or other-item handle.
+      if (!job) return apiNotFound('column statistics job not found; open the file again to start a new one.');
+      const { pool, sessionId } = job;
 
-      // No statement yet — the pool was warming at kick-off. Submit once idle.
-      if (!stidStr) {
+      // No statement yet — the pool was warming at kick-off. Submit once idle,
+      // over the container + path the handle carries.
+      if (job.stmtId === null) {
         const s = await getLivySession(pool, sessionId);
         if (DEAD_SESSION.has(String(s.state))) {
           return NextResponse.json({ ok: false, status: 'error', error: `Spark session ${sessionId} is ${s.state}.` });
@@ -200,20 +214,16 @@ export const GET = withSession(async (req: NextRequest) => {
         if (s.state !== 'idle') {
           return NextResponse.json({ ok: true, status: 'warming', jobId, sessionState: s.state });
         }
-        if (!container || !path) {
-          return NextResponse.json({ ok: false, error: 'container and path required to submit the stats job' }, { status: 400 });
-        }
-        const abfss = abfssFor(container, path);
+        const abfss = abfssFor(job.container, job.path);
         if ('error' in abfss) {
           return NextResponse.json({ ok: false, status: 'error', code: 'not_configured', error: abfss.error }, { status: 503 });
         }
         const stmt = await submitLivyStatement(pool, sessionId, { code: buildStatsCode(abfss.abfss, abfss.ext), kind: 'pyspark' });
-        return NextResponse.json({ ok: true, status: 'running', jobId: `${pool}:${sessionId}:${stmt.id}` });
+        return NextResponse.json({ ok: true, status: 'running', jobId: mintLakehouseJobHandle(scope, { ...job, stmtId: stmt.id }) });
       }
 
       // Statement submitted — poll it.
-      const stmtId = Number(stidStr);
-      const st = await getLivyStatement(pool, sessionId, stmtId);
+      const st = await getLivyStatement(pool, sessionId, job.stmtId);
       const state = String(st.state);
       if (state === 'available') {
         const out = st.output;
@@ -233,24 +243,37 @@ export const GET = withSession(async (req: NextRequest) => {
     }
 
     // ---- Kick-off mode -------------------------------------------------
-    if (!container || !path) {
-      return NextResponse.json({ ok: false, error: 'container and path are required' }, { status: 400 });
+    if (!path) {
+      return NextResponse.json({ ok: false, error: 'path is required' }, { status: 400 });
     }
-    const abfss = abfssFor(container, path);
+    const pool = poolParam || DEFAULT_POOL;
+    if (!SPARK_POOL_NAME_RE.test(pool)) {
+      return apiBadRequest('pool must be a Spark pool name: a letter, then letters or digits, 15 characters at most.');
+    }
+    const scoped = await scopeItemPath(
+      session,
+      { lakehouseId, container, rawPath: path },
+      { knownContainers: KNOWN_CONTAINERS },
+    );
+    if (scoped instanceof NextResponse) return scoped;
+    const abfss = abfssFor(scoped.container, scoped.path);
     if ('error' in abfss) {
       return NextResponse.json({ ok: false, code: 'not_configured', error: abfss.error }, { status: 503 });
     }
-    const pool = poolParam || DEFAULT_POOL;
     const fresh = await createLivySessionAsync(pool, 'pyspark', `loom-stats-${Date.now()}`);
     const sessionId = fresh.id;
     const s = await getLivySession(pool, sessionId);
+    const base = { pool, sessionId, container: scoped.container, path: scoped.path };
     if (s.state !== 'idle') {
-      // Cold pool — hand back a stmtId-less jobId; the client polls and we
+      // Cold pool — hand back a statement-less handle; the client polls and we
       // submit once the session reaches idle.
-      return NextResponse.json({ ok: true, status: 'warming', jobId: `${pool}:${sessionId}:`, sessionState: s.state });
+      return NextResponse.json({
+        ok: true, status: 'warming', sessionState: s.state,
+        jobId: mintLakehouseJobHandle(scope, { ...base, stmtId: null }),
+      });
     }
     const stmt = await submitLivyStatement(pool, sessionId, { code: buildStatsCode(abfss.abfss, abfss.ext), kind: 'pyspark' });
-    return NextResponse.json({ ok: true, status: 'running', jobId: `${pool}:${sessionId}:${stmt.id}` });
+    return NextResponse.json({ ok: true, status: 'running', jobId: mintLakehouseJobHandle(scope, { ...base, stmtId: stmt.id }) });
   } catch (e: any) {
     return NextResponse.json({ ok: false, status: 'error', error: e?.message || String(e) }, { status: 502 });
   }
