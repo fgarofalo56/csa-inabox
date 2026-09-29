@@ -16,10 +16,16 @@ vi.mock('@/lib/auth/item-access', () => ({
   resolveItemAccessByOid: (...a: any[]) => resolveItemAccessByOid(...a),
 }));
 
-const resolveLakehouseAbfss = vi.fn();
-vi.mock('@/lib/azure/lakehouse-abfss', () => ({
-  resolveLakehouseAbfss: (...a: any[]) => resolveLakehouseAbfss(...a),
-}));
+const resolveLakehouseStorage = vi.fn();
+vi.mock('@/lib/azure/lakehouse-abfss', async () => {
+  // The REAL message function, so the gate text asserted below is the one
+  // the resolver module words, not a copy typed into this spec.
+  const actual: any = await vi.importActual('@/lib/azure/lakehouse-abfss');
+  return {
+    lakehouseStorageWithheldMessage: actual.lakehouseStorageWithheldMessage,
+    resolveLakehouseStorage: (...a: any[]) => resolveLakehouseStorage(...a),
+  };
+});
 
 const scanLakehouseTables = vi.fn();
 vi.mock('@/lib/azure/synapse-catalog-client', () => ({
@@ -58,14 +64,14 @@ describe('GET /api/lakehouse/tables — per-lakehouse scoping', () => {
 
   it('scans ONLY the lakehouse’s own resolved root (container + rootPrefix)', async () => {
     resolveItemAccessByOid.mockResolvedValue({ item: { id: 'lh-x', workspaceId: 'ws-A' } });
-    resolveLakehouseAbfss.mockResolvedValue({ abfss: 'abfss://gold@acct.dfs.core.windows.net/lakehouses/lh-x', container: 'gold', root: 'lakehouses/lh-x' });
+    resolveLakehouseStorage.mockResolvedValue({ ok: true, bound: { abfss: 'abfss://gold@acct.dfs.core.windows.net/lakehouses/lh-x', container: 'gold', root: 'lakehouses/lh-x' } });
     scanLakehouseTables.mockResolvedValue([{ schema: 'gold', name: 'orders', adlsPath: 'gold/lakehouses/lh-x/Tables/orders' }]);
 
     const res = await GET(req('lakehouseId=lh-x&workspaceId=ws-A'));
     const j = await res.json();
     expect(j.ok).toBe(true);
     // Root of the caller's OWN lakehouse resolved from its authoritative workspaceId.
-    expect(resolveLakehouseAbfss).toHaveBeenCalledWith('lh-x', 'ws-A');
+    expect(resolveLakehouseStorage).toHaveBeenCalledWith('lh-x', 'ws-A');
     // Scan is bounded to that single container + the lakehouse's rootPrefix.
     expect(scanLakehouseTables).toHaveBeenCalledWith({
       containers: ['gold'],
@@ -78,7 +84,7 @@ describe('GET /api/lakehouse/tables — per-lakehouse scoping', () => {
 
   it('a different lakehouse resolves to a DIFFERENT root — no cross-lakehouse bleed', async () => {
     resolveItemAccessByOid.mockResolvedValue({ item: { id: 'lh-y', workspaceId: 'ws-B' } });
-    resolveLakehouseAbfss.mockResolvedValue({ abfss: 'abfss://silver@acct.dfs.core.windows.net/lakehouses/lh-y', container: 'silver', root: 'lakehouses/lh-y' });
+    resolveLakehouseStorage.mockResolvedValue({ ok: true, bound: { abfss: 'abfss://silver@acct.dfs.core.windows.net/lakehouses/lh-y', container: 'silver', root: 'lakehouses/lh-y' } });
     scanLakehouseTables.mockResolvedValue([]);
     await GET(req('lakehouseId=lh-y&workspaceId=ws-B'));
     expect(scanLakehouseTables).toHaveBeenCalledWith({
@@ -90,11 +96,35 @@ describe('GET /api/lakehouse/tables — per-lakehouse scoping', () => {
 
   it('honest gate (no scan) when the lakehouse resolves to no configured storage', async () => {
     resolveItemAccessByOid.mockResolvedValue({ item: { id: 'lh-x', workspaceId: 'ws-A' } });
-    resolveLakehouseAbfss.mockResolvedValue(null);
+    resolveLakehouseStorage.mockResolvedValue({ ok: false, reason: 'no-storage' });
     const j = await (await GET(req('lakehouseId=lh-x&workspaceId=ws-A'))).json();
     expect(j.ok).toBe(true);
     expect(j.tables).toEqual([]);
     expect(j.gate).toContain('No lakehouse storage configured');
     expect(scanLakehouseTables).not.toHaveBeenCalled();
+  });
+
+  // FAILS IF a withheld location is treated as bound (the scan runs, row set 1)
+  // or worded as unconfigured storage (the gate would read "No lakehouse
+  // storage configured" instead of the resolver's root-shared text).
+  it('a withheld location (root-shared) scans nothing and carries the resolver wording', async () => {
+    resolveItemAccessByOid.mockResolvedValue({ item: { id: 'lh-x', workspaceId: 'ws-A' } });
+    resolveLakehouseStorage.mockResolvedValue({ ok: false, reason: 'root-shared' });
+    const j = await (await GET(req('lakehouseId=lh-x&workspaceId=ws-A'))).json();
+    expect(j.ok).toBe(true);
+    expect(j.tables).toEqual([]);
+    expect(j.gate).toContain('also used by another item');
+    expect(j.gate).not.toContain('No lakehouse storage configured');
+    expect(scanLakehouseTables.mock.calls).toEqual([]);
+  });
+
+  // FAILS IF `not-found` from the resolver (the item vanished between the
+  // access check and the read) is answered as a 200 gate instead of a 404.
+  it('404 when the resolver no longer finds the item', async () => {
+    resolveItemAccessByOid.mockResolvedValue({ item: { id: 'lh-x', workspaceId: 'ws-A' } });
+    resolveLakehouseStorage.mockResolvedValue({ ok: false, reason: 'not-found' });
+    const res = await GET(req('lakehouseId=lh-x&workspaceId=ws-A'));
+    expect(res.status).toBe(404);
+    expect(scanLakehouseTables.mock.calls).toEqual([]);
   });
 });

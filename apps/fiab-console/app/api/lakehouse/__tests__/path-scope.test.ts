@@ -31,7 +31,24 @@ vi.mock('@/lib/azure/adls-client', async () => {
   const actual: any = await vi.importActual('@/lib/azure/adls-client');
   return { ...actual, deletePath: vi.fn(), createDirectory: vi.fn() };
 });
-vi.mock('@/lib/azure/lakehouse-abfss', () => ({ resolveLakehouseAbfss: vi.fn() }));
+// `resolveLakehouseStorage` is a plain function (not a vi.fn, so a
+// resetAllMocks cannot clear it) that DELEGATES to the `resolveLakehouseAbfss`
+// mock: a bound value is `{ ok: true, bound }`, null is `no-storage`, and
+// `{ withheld: <reason> }` is that withheld reason. The message function is
+// the REAL one, so asserted text is the resolver module's own wording.
+vi.mock('@/lib/azure/lakehouse-abfss', async () => {
+  const actual: any = await vi.importActual('@/lib/azure/lakehouse-abfss');
+  const resolveLakehouseAbfss = vi.fn();
+  return {
+    lakehouseStorageWithheldMessage: actual.lakehouseStorageWithheldMessage,
+    resolveLakehouseAbfss,
+    resolveLakehouseStorage: async (...a: any[]) => {
+      const b: any = await resolveLakehouseAbfss(...a);
+      if (b && typeof b === 'object' && 'withheld' in b) return { ok: false, reason: b.withheld };
+      return b ? { ok: true, bound: b } : { ok: false, reason: 'no-storage' };
+    },
+  };
+});
 vi.mock('@/lib/auth/item-access', () => ({ resolveItemAccessByOid: vi.fn() }));
 
 import { DELETE, POST, pathSegments } from '../path/route';
@@ -321,6 +338,21 @@ describe('DELETE /api/lakehouse/path — scope', () => {
     expect(res.status).toBe(409);
     expect(body.error).toMatch(/no lakehouse storage binding/i);
     expect(body.error).not.toMatch(/recorded root/i);
+    expect((deletePath as any).mock.calls).toEqual([]);
+  });
+
+  // FAILS IF a withheld location is reported as a missing binding (the error
+  // would read "no lakehouse storage binding") or is treated as bound (status
+  // 200, deletePath row set 1). The message is lifted from the resolver module.
+  it('refuses with the resolver wording when the lakehouse location is withheld', async () => {
+    const actual: any = await vi.importActual('@/lib/azure/lakehouse-abfss');
+    const expected = actual.lakehouseStorageWithheldMessage('root-shared');
+    expect(expected, 'the resolver must word root-shared').toBeTruthy();
+    (resolveLakehouseAbfss as any).mockResolvedValue({ withheld: 'root-shared' });
+    const res = await del(`lakehouseId=${LH}&container=${CONTAINER}&path=${INSIDE}`);
+    const body = await res.json();
+    expect(res.status).toBe(409);
+    expect(body.error).toBe(expected);
     expect((deletePath as any).mock.calls).toEqual([]);
   });
 

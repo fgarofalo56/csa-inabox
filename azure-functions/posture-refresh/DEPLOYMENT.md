@@ -77,17 +77,33 @@ needs no cloud-specific code (`LOOM_COSMOS_ENDPOINT` is passed in per boundary b
 
 ## Wire the Console
 
-Set these on the admin-plane deployment (`platform/fiab/bicep/modules/admin-plane/main.bicep`):
+The Console gets the key only from the **root deploy** of
+`platform/fiab/bicep/main.bicep`, which passes these inputs to the admin-plane
+module. The key is bound only when **all three** hold (admin-plane
+`postureFunctionKeyBound`). Setting the URL alone gives the Console the URL and no key:
 
-| Param | Value |
+| Input | Value |
 |-------|-------|
-| `loomPostureFunctionUrl` | `functionUrl` output from step 1 |
-| `loomPostureFunctionKeySecretName` | `loom-posture-function-key` (default) |
+| Key Vault secret `loom-posture-function-key` | Stored in step 3. The name is the admin-plane default of `loomPostureFunctionKeySecretName`, which the root deploy does not override. |
+| `loomPostureFunctionUrl` (root deploy param) | The `functionUrl` output from step 1, passed as a **deploy parameter**. A value set on `loom-console` with `az containerapp update` does not count, and a full deploy that renders the Console blanks it. |
+| `observabilityConfig.postureFunctionKeyEnabled` | `true`. Add it inside the params file's existing `observabilityConfig` object; don't replace the object, which carries other fields. |
 
-The Console surfaces them as `LOOM_POSTURE_FUNCTION_URL` (plain) and
-`LOOM_POSTURE_FUNCTION_KEY` (secretRef → Key Vault). When `loomPostureFunctionUrl` is
-empty, the Console shows an honest MessageBar and serves live-computed posture instead —
-no broken surface.
+Set `postureFunctionKeyEnabled` **only after confirming the secret exists, by name**.
+For example, `az keyvault secret show --vault-name <loom-kv> --name loom-posture-function-key --query id -o tsv`
+prints the secret's id, never its value. The Loom vault is private, so run the check
+from a network path that can reach it. The order matters: a Container App revision
+that references a missing Key Vault secret **fails to provision**, so setting the flag
+before the secret exists takes the Console down.
+
+When all three hold, the Console gets `LOOM_POSTURE_FUNCTION_URL` (plain) and
+`LOOM_POSTURE_FUNCTION_KEY` (secretRef → Key Vault). Until then, the refresh route
+answers with an honest gate and dispatches nothing:
+- `gateReason: 'function_not_provisioned'` when the URL is empty;
+- `gateReason: 'key_not_bound'` when the URL is set but the key is not bound.
+
+Either way the Govern view serves live-computed posture, so no surface breaks.
+Nothing sets the URL param or the flag at deploy time yet. #4781 tracks making the
+deploy supply both itself.
 
 ## Verify
 

@@ -8,12 +8,9 @@
  *
  * WHAT IT REPORTS. Every lakehouse keeps its files under one directory in one
  * container (its "root"). Lakehouses created before `LAKEHOUSE_ITEM_ROOT_SINCE`
- * were given a root derived from their display name (`lakehouses/<name>`), and
- * existing items keep that root — no data is moved. So two older lakehouses with
- * the same name, or one whose name is a path prefix of another's
- * (`lakehouses/Sales` and `lakehouses/Sales/2024`), resolve to the same or
- * nested directories. This check lists them so an admin can decide what to do
- * with each.
+ * have a root derived from their display name (`lakehouses/<name>`) and keep it,
+ * since no data is moved. Where two of those roots are equal or nested, this
+ * check lists the lakehouses involved so an admin can give each its own root.
  *
  * WHICH ROOT IS COMPARED. Exactly the one the storage resolver compares before it
  * uses a name-only root: `lakehouseRootLocation` and `lakehouseRootsOverlap`
@@ -24,9 +21,10 @@
  * WISE: `lakehouses/Sales` overlaps `lakehouses/Sales/2024` but not
  * `lakehouses/Sales-archive`.
  *
- * IDS ARE OPT-IN. `GET /api/admin/self-audit` is readable by any signed-in user,
- * so the default result carries the COUNT only; `includeIds: true` is for an
- * admin-gated surface (the readiness route is `withCapability(..., 'Admin')`).
+ * IDS ARE OPT-IN. The default result carries the COUNT only, which suits a
+ * general diagnostics surface; `includeIds: true` is what the admin readiness
+ * route (`withCapability(..., 'Admin')`) asks for, so the admin sees which items
+ * each group holds.
  */
 import type { CheckResult } from './core';
 import {
@@ -37,6 +35,13 @@ import {
 } from '@/lib/azure/backing-name';
 
 export const LAKEHOUSE_SHARED_ROOTS_CHECK_ID = 'lakehouse-shared-roots';
+
+/**
+ * The check's title as Admin > Readiness shows it. The storage resolver's
+ * `root-shared` message names the check by THIS constant, so the text a user
+ * is pointed to and the heading an admin finds cannot drift apart.
+ */
+export const LAKEHOUSE_SHARED_ROOTS_CHECK_TITLE = 'Lakehouses sharing a storage root';
 
 /** A set of lakehouses whose roots are equal or nested in one another. */
 export interface SharedRootGroup {
@@ -80,7 +85,7 @@ export function findSharedLakehouseRoots(rows: readonly LakehouseRootFacts[]): S
 const BASE = {
   id: LAKEHOUSE_SHARED_ROOTS_CHECK_ID,
   category: 'data-plane' as const,
-  title: 'Lakehouses sharing a storage root',
+  title: LAKEHOUSE_SHARED_ROOTS_CHECK_TITLE,
   severity: 'recommended' as const,
 };
 
@@ -124,8 +129,8 @@ export async function probeLakehouseSharedRoots(
     const { listLakehouseRootFacts } = await import('@/lib/azure/lakehouse-abfss');
     rows = await listLakehouseRootFacts();
   } catch (e: unknown) {
-    // The store's own message is not echoed: this result can reach any signed-in
-    // user through the self-audit route. The status code alone is kept.
+    // The store's own message is not echoed, so the result reads the same on
+    // every surface that shows it. The status code alone is kept.
     const code = (e as { code?: unknown } | null)?.code;
     const codeText = typeof code === 'number' || (typeof code === 'string' && /^[A-Za-z0-9_]{1,40}$/.test(code))
       ? ` (code ${code})`

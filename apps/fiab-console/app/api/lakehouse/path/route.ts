@@ -22,9 +22,11 @@
  *      — 404, never 403, so an id the caller may not see is never confirmed,
  *      exactly as `/api/lakehouse/paths` does for its item-bound listing. A
  *      read-only role is refused: both verbs mutate.
- *   2. That item's container + root come from `resolveLakehouseAbfss`, the ONE
+ *   2. That item's container + root come from `resolveLakehouseStorage`, the ONE
  *      resolver `/api/lakehouse/{paths,tables}` already use. The scope is
- *      derived from the ITEM's recorded state, not from this request.
+ *      derived from the ITEM's recorded state, not from this request. A
+ *      withheld location answers 409 with the resolver's wording and nothing
+ *      is created or deleted.
  *   3. The supplied container must BE the resolved one, and the supplied path
  *      must lie strictly BELOW the resolved root — compared segment by segment,
  *      never as a string prefix (`isValidRolePath` in onelake-security-rules.ts
@@ -53,8 +55,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { withSession } from '@/lib/api/route-toolkit';
 import { apiBadRequest, apiConflict, apiForbidden, apiNotFound, apiOk } from '@/lib/api/respond';
 import { resolveItemAccessByOid } from '@/lib/auth/item-access';
-import { resolveLakehouseAbfss } from '@/lib/azure/lakehouse-abfss';
-import { pathSegments, segmentsWithin } from '../_lib/item-scope';
+import { resolveLakehouseStorage } from '@/lib/azure/lakehouse-abfss';
+import { lakehouseStorageWithheldResponse, pathSegments, segmentsWithin } from '../_lib/item-scope';
 import type { SessionPayload } from '@/lib/auth/session';
 import {
   KNOWN_CONTAINERS,
@@ -139,8 +141,9 @@ async function resolveTarget(
     );
   }
 
-  const bound = await resolveLakehouseAbfss(lakehouseId, access.item.workspaceId);
-  if (!bound) return apiConflict(STORAGE_UNBOUND);
+  const resolved = await resolveLakehouseStorage(lakehouseId, access.item.workspaceId);
+  if (!resolved.ok) return lakehouseStorageWithheldResponse(resolved.reason) ?? apiConflict(STORAGE_UNBOUND);
+  const bound = resolved.bound;
   // NOT `?? []`: an empty root would make `segments.length <= root.length` a
   // comparison against 0, i.e. the containment test always true. The two
   // conditions are refused separately because they have different causes.

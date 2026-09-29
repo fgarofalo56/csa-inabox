@@ -9,7 +9,24 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 vi.mock('@/lib/auth/session', () => ({ getSession: vi.fn() }));
-vi.mock('@/lib/azure/lakehouse-abfss', () => ({ resolveLakehouseAbfss: vi.fn() }));
+// `resolveLakehouseStorage` is a plain function (not a vi.fn, so a
+// resetAllMocks cannot clear it) that DELEGATES to the `resolveLakehouseAbfss`
+// mock: a bound value is `{ ok: true, bound }`, null is `no-storage`, and
+// `{ withheld: <reason> }` is that withheld reason. The message function is
+// the REAL one, so asserted text is the resolver module's own wording.
+vi.mock('@/lib/azure/lakehouse-abfss', async () => {
+  const actual: any = await vi.importActual('@/lib/azure/lakehouse-abfss');
+  const resolveLakehouseAbfss = vi.fn();
+  return {
+    lakehouseStorageWithheldMessage: actual.lakehouseStorageWithheldMessage,
+    resolveLakehouseAbfss,
+    resolveLakehouseStorage: async (...a: any[]) => {
+      const b: any = await resolveLakehouseAbfss(...a);
+      if (b && typeof b === 'object' && 'withheld' in b) return { ok: false, reason: b.withheld };
+      return b ? { ok: true, bound: b } : { ok: false, reason: 'no-storage' };
+    },
+  };
+});
 vi.mock('@/lib/auth/item-access', () => ({ resolveItemAccessByOid: vi.fn() }));
 
 import { GET } from '../route';
@@ -71,5 +88,37 @@ describe('GET /api/items/lakehouse/[id]/abfss', () => {
     const res = await call('lh-1');
     expect(res.status).toBe(401);
     expect((resolveLakehouseAbfss as any).mock.calls).toEqual([]);
+  });
+
+  // FAILS IF a withheld location is reported as resolved (resolved:true with an
+  // abfss) or worded as unconfigured storage (the hint would name LOOM_LANDING_URL
+  // and `reason` would be absent). The hint is lifted from the resolver module.
+  it('reports a withheld location as unresolved, with its reason and the resolver wording', async () => {
+    const actual: any = await vi.importActual('@/lib/azure/lakehouse-abfss');
+    const expected = actual.lakehouseStorageWithheldMessage('root-shared');
+    expect(expected, 'the resolver must word root-shared').toBeTruthy();
+    (resolveLakehouseAbfss as any).mockResolvedValue({ withheld: 'root-shared' });
+    const res = await call('lh-1');
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body).toEqual({ ok: true, resolved: false, reason: 'root-shared', hint: expected });
+  });
+
+  // FAILS IF resolver `not-found` is reported as the unconfigured-storage hint
+  // (status 200) rather than 404.
+  it('answers 404 when the resolver no longer finds the item', async () => {
+    (resolveLakehouseAbfss as any).mockResolvedValue({ withheld: 'not-found' });
+    const res = await call('lh-1');
+    expect(res.status).toBe(404);
+  });
+
+  // POSITIVE twin for the unconfigured case: no storage keeps the env hint and
+  // carries no `reason`. FAILS IF no-storage is sent down the withheld branch.
+  it('keeps the storage-configuration hint when no storage is configured', async () => {
+    (resolveLakehouseAbfss as any).mockResolvedValue(null);
+    const body = await (await call('lh-1')).json();
+    expect(body.resolved).toBe(false);
+    expect(body.hint).toContain('LOOM_LANDING_URL');
+    expect('reason' in body).toBe(false);
   });
 });

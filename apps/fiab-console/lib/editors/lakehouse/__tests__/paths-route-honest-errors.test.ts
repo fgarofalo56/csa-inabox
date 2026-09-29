@@ -26,7 +26,24 @@ vi.mock('@/lib/azure/adls-client', async () => {
   const actual: any = await vi.importActual('@/lib/azure/adls-client');
   return { ...actual, listPaths: vi.fn() };
 });
-vi.mock('@/lib/azure/lakehouse-abfss', () => ({ resolveLakehouseAbfss: vi.fn() }));
+// `resolveLakehouseStorage` is a plain function (not a vi.fn, so a
+// resetAllMocks cannot clear it) that DELEGATES to the `resolveLakehouseAbfss`
+// mock: a bound value is `{ ok: true, bound }`, null is `no-storage`, and
+// `{ withheld: <reason> }` is that withheld reason. The message function is
+// the REAL one, so asserted text is the resolver module's own wording.
+vi.mock('@/lib/azure/lakehouse-abfss', async () => {
+  const actual: any = await vi.importActual('@/lib/azure/lakehouse-abfss');
+  const resolveLakehouseAbfss = vi.fn();
+  return {
+    lakehouseStorageWithheldMessage: actual.lakehouseStorageWithheldMessage,
+    resolveLakehouseAbfss,
+    resolveLakehouseStorage: async (...a: any[]) => {
+      const b: any = await resolveLakehouseAbfss(...a);
+      if (b && typeof b === 'object' && 'withheld' in b) return { ok: false, reason: b.withheld };
+      return b ? { ok: true, bound: b } : { ok: false, reason: 'no-storage' };
+    },
+  };
+});
 vi.mock('@/lib/auth/item-access', () => ({ resolveItemAccessByOid: vi.fn() }));
 
 import { GET, classifyListFailure } from '@/app/api/lakehouse/paths/route';
@@ -311,15 +328,44 @@ describe('item-scoped listing', () => {
     expect((listPaths as any).mock.calls).toEqual([]);
   });
 
-  // FAILS IF persist is passed unconditionally (the previous `{ persist: true }`):
-  // the recorded third argument would be { persist: true } for a read-only
-  // caller. Paired with the item-bound arm above, where canWrite is true and the
-  // argument is { persist: true }.
-  it('does not persist a probed root for a caller whose role is read-only', async () => {
+  // The probed root is server-derived, so recording it is the same for every
+  // role: a viewer's first open records it too, and the next open (by anyone)
+  // reads the recorded value instead of probing again. FAILS IF persist is tied
+  // back to the caller's role: the recorded third argument for this read-only
+  // caller would become { persist: false }.
+  it('persists a probed root for a caller whose role is read-only', async () => {
     bindTo(false);
     const res = await GET(req('lakehouseId=lh-1'), undefined as any);
     expect(res.status).toBe(200);
-    expect((resolveLakehouseAbfss as any).mock.calls).toEqual([['lh-1', 'ws-1', { persist: false }]]);
+    expect((resolveLakehouseAbfss as any).mock.calls).toEqual([['lh-1', 'ws-1', { persist: true }]]);
+  });
+
+  // FAILS IF a withheld location falls through to the unconfigured-storage gate
+  // (status 200 with `gate`) or is listed anyway (listPaths row set 1). The
+  // message is lifted from the resolver module, not transcribed.
+  it('answers 409 with the resolver wording and lists nothing when the location is withheld', async () => {
+    const actual: any = await vi.importActual('@/lib/azure/lakehouse-abfss');
+    const expected = actual.lakehouseStorageWithheldMessage('root-shared');
+    expect(expected, 'the resolver must word root-shared').toBeTruthy();
+    (resolveItemAccessByOid as any).mockResolvedValue({ item: { id: 'lh-1', workspaceId: 'ws-1' }, canWrite: true });
+    (resolveLakehouseAbfss as any).mockResolvedValue({ withheld: 'root-shared' });
+
+    const res = await GET(req('lakehouseId=lh-1'), undefined as any);
+    const body = await res.json();
+    expect(res.status).toBe(409);
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe(expected);
+    expect((listPaths as any).mock.calls).toEqual([]);
+  });
+
+  // FAILS IF `not-found` from the resolver (the item vanished after the access
+  // check) is answered as the unconfigured-storage gate (200).
+  it('answers 404 when the resolver no longer finds the item', async () => {
+    (resolveItemAccessByOid as any).mockResolvedValue({ item: { id: 'lh-1', workspaceId: 'ws-1' }, canWrite: true });
+    (resolveLakehouseAbfss as any).mockResolvedValue({ withheld: 'not-found' });
+    const res = await GET(req('lakehouseId=lh-1'), undefined as any);
+    expect(res.status).toBe(404);
+    expect((listPaths as any).mock.calls).toEqual([]);
   });
 });
 

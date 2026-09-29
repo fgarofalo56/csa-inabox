@@ -40,7 +40,24 @@ vi.mock('@/lib/azure/databricks-client', async () => {
   };
 });
 
-vi.mock('@/lib/azure/lakehouse-abfss', () => ({ resolveLakehouseAbfss: vi.fn() }));
+// `resolveLakehouseStorage` is a plain function (not a vi.fn, so a
+// resetAllMocks cannot clear it) that DELEGATES to the `resolveLakehouseAbfss`
+// mock: a bound value is `{ ok: true, bound }`, null is `no-storage`, and
+// `{ withheld: <reason> }` is that withheld reason. The message function is
+// the REAL one, so asserted text is the resolver module's own wording.
+vi.mock('@/lib/azure/lakehouse-abfss', async () => {
+  const actual: any = await vi.importActual('@/lib/azure/lakehouse-abfss');
+  const resolveLakehouseAbfss = vi.fn();
+  return {
+    lakehouseStorageWithheldMessage: actual.lakehouseStorageWithheldMessage,
+    resolveLakehouseAbfss,
+    resolveLakehouseStorage: async (...a: any[]) => {
+      const b: any = await resolveLakehouseAbfss(...a);
+      if (b && typeof b === 'object' && 'withheld' in b) return { ok: false, reason: b.withheld };
+      return b ? { ok: true, bound: b } : { ok: false, reason: 'no-storage' };
+    },
+  };
+});
 vi.mock('@/lib/auth/item-access', () => ({ resolveItemAccessByOid: vi.fn() }));
 
 import { GET, POST } from '../route';
@@ -61,6 +78,7 @@ const CONTAINER = 'landing';
 const ROOT = 'lakehouses/Sales--lh-hist';
 const TABLE = `${ROOT}/Tables/orders`;
 let savedAdminOid: string | undefined;
+let savedLoomCloud: string | undefined;
 
 function getReq(params: Record<string, string>) {
   const sp = new URLSearchParams(params);
@@ -79,6 +97,11 @@ beforeEach(() => {
   (getAccountName as any).mockReturnValue('loomdlz');
   savedAdminOid = process.env.LOOM_TENANT_ADMIN_OID;
   process.env.LOOM_TENANT_ADMIN_OID = ADMIN_OID;
+  // The abfss host suffix follows the boundary (`dfsSuffix`). Pin Commercial
+  // here so the `dfs.core.windows.net` expectations below do not depend on the
+  // shell this suite runs in; the Gov arm sets its own boundary.
+  savedLoomCloud = process.env.LOOM_CLOUD;
+  process.env.LOOM_CLOUD = 'commercial';
   (resolveItemAccessByOid as any).mockResolvedValue({
     item: { id: LH, workspaceId: 'ws-1', itemType: 'lakehouse' },
     role: 'Viewer',
@@ -95,6 +118,8 @@ afterEach(() => {
   delete process.env.LOOM_DATABRICKS_HOSTNAME;
   if (savedAdminOid === undefined) delete process.env.LOOM_TENANT_ADMIN_OID;
   else process.env.LOOM_TENANT_ADMIN_OID = savedAdminOid;
+  if (savedLoomCloud === undefined) delete process.env.LOOM_CLOUD;
+  else process.env.LOOM_CLOUD = savedLoomCloud;
 });
 
 describe('GET /api/lakehouse/history', () => {
@@ -309,6 +334,37 @@ describe('/api/lakehouse/history — item form and storage-form access', () => {
     expect(res.status).toBe(200);
     const sql = (executeStatement as any).mock.calls[0][1] as string;
     expect(sql).toContain(`abfss://${CONTAINER}@loomdlz.dfs.core.windows.net/${TABLE}`);
+  });
+
+  // FAILS IF the host suffix is hard-coded to Commercial: in GCC-High the
+  // statement would name `loomdlz.dfs.core.windows.net`, a host that does not
+  // serve a Gov account.
+  it('POST builds the table path with the Gov DFS suffix in a Gov boundary', async () => {
+    process.env.LOOM_CLOUD = 'gcc-high';
+    (getSession as any).mockReturnValue(MEMBER);
+    (databricksConfigGate as any).mockReturnValue(null);
+    (listWarehouses as any).mockResolvedValue([{ id: 'wh1', name: 'w', state: 'RUNNING' }]);
+    (executeStatement as any).mockResolvedValue({ columns: ['id'], rows: [[1]], rowCount: 1, executionMs: 1, truncated: false });
+    const res = await POST(postReq({ lakehouseId: LH, container: CONTAINER, tablePath: TABLE, version: 1, action: 'preview' }));
+    expect(res.status).toBe(200);
+    const sql = (executeStatement as any).mock.calls[0][1] as string;
+    expect(sql).toContain(`abfss://${CONTAINER}@loomdlz.dfs.core.usgovcloudapi.net/${TABLE}`);
+    expect(sql).not.toContain('dfs.core.windows.net');
+  });
+
+  // FAILS IF a withheld location is treated as bound (listPaths row set 1) or
+  // as unconfigured storage (a different status or message). The message is
+  // lifted from the resolver module.
+  it('GET answers 409 with the resolver wording when the location is withheld', async () => {
+    const actual: any = await vi.importActual('@/lib/azure/lakehouse-abfss');
+    const expected = actual.lakehouseStorageWithheldMessage('root-unverified');
+    expect(expected, 'the resolver must word root-unverified').toBeTruthy();
+    (getSession as any).mockReturnValue(MEMBER);
+    (resolveLakehouseAbfss as any).mockResolvedValue({ withheld: 'root-unverified' });
+    const res = await GET(getReq({ lakehouseId: LH, container: CONTAINER, tablePath: TABLE }));
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe(expected);
+    expect((listPaths as any).mock.calls).toEqual([]);
   });
 
   // FAILS IF the POST storage form stops requiring a tenant admin: the row set

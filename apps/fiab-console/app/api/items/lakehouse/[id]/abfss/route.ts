@@ -11,20 +11,23 @@
  *   { ok: true, resolved: true, abfss, container, root }   — resolvable
  *   { ok: true, resolved: false, hint }                    — honest gate: no
  *     provisioning record yet / no storage env configured (names the env var).
+ *   { ok: true, resolved: false, reason, hint }            — the resolver
+ *     withheld the location (`root-shared` / `root-unverified`); `hint` is its
+ *     one wording, `lakehouseStorageWithheldMessage`.
  *
  * AUTHORIZATION. The lakehouse is authorized through `resolveItemAccessByOid`
  * (read access suffices — this only reports a path). An id the caller cannot
- * reach answers 404, never 403, so a response never distinguishes "does not
- * exist" from "not yours". The workspace passed to the resolver is the ITEM's
- * own `workspaceId`; a `?workspaceId=` on the query string is still accepted
- * for older callers and is ignored.
+ * open answers 404, like a missing one. The resolver reads the item from its
+ * own `workspaceId`; a `?workspaceId=` query parameter from older callers is
+ * not used.
  *
  * Azure-native: the path comes from the lakehouse's provisioned DLZ ADLS Gen2
  * coordinates (no Microsoft Fabric / OneLake dependency).
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { withSession } from '@/lib/api/route-toolkit';
-import { resolveLakehouseAbfss } from '@/lib/azure/lakehouse-abfss';
+import { apiNotFound } from '@/lib/api/respond';
+import { lakehouseStorageWithheldMessage, resolveLakehouseStorage } from '@/lib/azure/lakehouse-abfss';
 import { authorizeLakehouse } from '../../../../lakehouse/_lib/item-scope';
 
 export const runtime = 'nodejs';
@@ -36,9 +39,15 @@ export const GET = withSession<{ id: string }>(async (_req: NextRequest, { sessi
   if (access instanceof NextResponse) return access;
 
   try {
-    const r = await resolveLakehouseAbfss(id, access.item.workspaceId);
-    if (r) {
-      return NextResponse.json({ ok: true, resolved: true, abfss: r.abfss, container: r.container, root: r.root });
+    const r = await resolveLakehouseStorage(id, access.item.workspaceId);
+    if (r.ok) {
+      const b = r.bound;
+      return NextResponse.json({ ok: true, resolved: true, abfss: b.abfss, container: b.container, root: b.root });
+    }
+    if (r.reason === 'not-found') return apiNotFound('lakehouse not found');
+    const withheld = lakehouseStorageWithheldMessage(r.reason);
+    if (withheld) {
+      return NextResponse.json({ ok: true, resolved: false, reason: r.reason, hint: withheld });
     }
     return NextResponse.json({
       ok: true,
