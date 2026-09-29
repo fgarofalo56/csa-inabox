@@ -185,10 +185,13 @@ test('synthetic J2 — create item (workspace item CRUD → Cosmos)', async () =
 });
 
 test('synthetic J3 — open editor + primary action (lakehouse tables → ADLS)', async ({ browser }) => {
-  // #4759 — sized above the sum of J3's own inner bounds, so every one of them
-  // can fire and be RECORDED. Without it Playwright's default 30 s test timeout
-  // kills J3 first: `journey()` never reaches `recordVerdict`, no `CRASH=` line
-  // is written, and the unattended runner counts the failure as infra-gated.
+  // #4759 — sized above the sum of J3's own inner bounds, so each of them can
+  // fire and report its own cause. Under Playwright's default 30 s test timeout
+  // the 60 s paths wait below could never fire. Measured against a local stub:
+  // J3 was ended at 30 s, and the only verdict written was the one its teardown
+  // provoked, naming the teardown
+  // ("Target page, context or browser has been closed", "Request context
+  // disposed") instead of the call that hung.
   // Worst case: createItem ≤30 s (APIRequestContext default) + goto and the
   // paths wait, which run concurrently, ≤60 s + 4 s hydrate + ≤2 s capture
   // settle + tables GET ≤30 s = 126 s. 180 s leaves margin for context setup
