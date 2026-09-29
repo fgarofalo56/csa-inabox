@@ -30,12 +30,19 @@ import { readLogicalLines } from './_logical-lines.mjs';
 
 const DIR = '.github/workflows';
 const TABLE = 'ContainerAppConsoleLogs_CL';
-// A query is scoped if it constrains the container by name. BOTH columns are real
-// and mean different things: Container APPS surface `ContainerAppName_s`, Container
-// App JOBS surface `ContainerName_s`. An earlier draft of this guard knew only the
-// first and false-positived every job query in the repo -- the same defect it exists
-// to catch, in the guard itself.
-const SCOPED = /(ContainerAppName_s|ContainerName_s)\s*(==|=~|contains|startswith|has|in~?)\s*/;
+// A query is scoped if it constrains the container by name. Container APPS surface
+// `ContainerAppName_s`. Container App JOBS leave `ContainerAppName_s` EMPTY and
+// surface TWO names instead: `ContainerJobName_s` (the job resource) and
+// `ContainerName_s` (the container inside the job template). Measured 2026-09-29,
+// Log Analytics, every row of one `loom-synthetic-monitor` execution (78 rows):
+//   ContainerAppName_s == 'loom-synthetic-monitor'  ->  0 rows (the column is '')
+//   ContainerJobName_s == 'loom-synthetic-monitor'  -> 78 rows
+//   ContainerName_s    == 'synthetic'               -> 78 rows
+// An earlier draft of this guard knew only the first column and false-positived
+// every job query in the repo -- the same defect it exists to catch, in the guard
+// itself. The next draft knew two of the three and rejected a job query scoped by
+// the job's own name (#4759). Each column is a NAME predicate; nothing else counts.
+const SCOPED = /(ContainerAppName_s|ContainerJobName_s|ContainerName_s)\s*(==|=~|contains|startswith|has|in~?)\s*/;
 
 // Lines that merely TALK about a query (an ::error:: string, an echo, a summary
 // line) are not queries. Requiring the actual invocation keeps prose out of scope.
@@ -80,14 +87,14 @@ for (const f of readdirSync(DIR).filter((n) => n.endsWith('.yml') || n.endsWith(
     // ANCHORED (startswith), not `contains` -- `contains` is what let the runner's
     // own annotation satisfy the login-health query.
     if (ANCHORED_MARKER.test(raw)) continue;
-    problems.push(`${DIR}/${f}:${line}  ${TABLE} query is not scoped by ContainerAppName_s`);
+    problems.push(`${DIR}/${f}:${line}  ${TABLE} query is not scoped by ContainerAppName_s, ContainerJobName_s or ContainerName_s`);
   }
 }
 
 if (problems.length) {
   console.error('check-containerlog-query-scope: FAIL');
   for (const p of problems) console.error(`  ${p}`);
-  console.error('\nAdd `| where ContainerAppName_s == \'<app>\'` — every other query in this repo does.');
+  console.error('\nAdd `| where ContainerAppName_s == \'<app>\'` (a Container App) or `| where ContainerJobName_s == \'<job>\'` (a Container App Job).');
   process.exit(1);
 }
 console.log('check-containerlog-query-scope: OK — every ContainerAppConsoleLogs_CL query is container-scoped');
