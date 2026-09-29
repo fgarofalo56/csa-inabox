@@ -113,7 +113,7 @@
   ],
 
   "boundary_labels": {
-    "_": "ISSUE LABEL -> the cloud boundary that item is about, read by `tick.boundary_of_issue` (#4709). LABELS, NEVER THE TITLE, because a title is prose: #4709 itself names both `Commercial` and `GCC-High` because it is ABOUT boundaries, so a title needle would classify it as a Gov item. No population count is published here; the LABELS are the rule. Only labels that exist and mean exactly one boundary belong here. An item carrying two mapped labels refuses as ambiguous rather than picking a winner. An item with NO mapped label falls to `default_boundary` -- see that key for why that is a declaration and not the #4709 defect. Add a label here only after it exists in the repo's label set. Keys beginning `_` are documentation and are NOT label names: `boundary_of_issue` filters them, so an issue literally labelled `_` cannot resolve to this prose.",
+    "_": "ISSUE LABEL -> the cloud boundary that item is about, read by `tick.boundary_of_issue` (#4709). LABELS, NEVER THE TITLE, because a title is prose: #4709 itself names both `Commercial` and `GCC-High` because it is ABOUT boundaries, so a title needle would classify it as a Gov item. Only labels that exist and mean exactly one boundary belong here. An item carrying two mapped labels refuses as ambiguous rather than picking a winner. An item with NO mapped label falls to `default_boundary` -- see that key for why that is a declaration and not the #4709 defect. Add a label here only after it exists in the repo's label set. Keys beginning `_` are documentation and are NOT label names: `boundary_of_issue` filters them, so an issue literally labelled `_` cannot resolve to this prose.",
     "drift-gov": "GCC-High",
     "drift-commercial": "Commercial"
   },

@@ -2975,7 +2975,7 @@ def boundary_of_issue(repo: str, number: int, policy: dict, kind: str) -> tuple[
     LABELS, NOT THE TITLE. A title is prose: #4709 itself names both
     `Commercial` and `GCC-High` because it is ABOUT boundaries, and #4644 and
     #4584 do the same. A title needle would classify this very issue as a Gov
-    item. No population count is published here; the labels ARE the rule.
+    item.
 
     AN UNLABELLED ITEM FALLS TO `policy.default_boundary[kind]`, WHICH IS
     PER-KIND AND IS A DECLARATION RATHER THAN A GUESS. Three shapes, and why

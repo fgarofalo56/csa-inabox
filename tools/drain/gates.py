@@ -317,14 +317,8 @@ OTHER_IMPLEMENTED_BY = {
     # ONLY THE LEAVES. `policy_keys_without_implementation` descends into a
     # dict without demanding the dict's own key be declared, so a row naming a
     # NAMESPACE -- `receipt_producers.g1-browser`, `boundary_labels` -- buys
-    # nothing in THAT direction: deleting it changes no verdict there. Four
-    # such rows shipped in this change's first cut and are deleted here as
-    # redundant with their `.Commercial` leaves.
-    #
-    # TWO CORRECTIONS A REVIEWER MEASURED ON 2026-09-27, kept because the
-    # earlier wording was wrong in a way that would mislead the next reader.
-    # The function is `policy_keys_without_implementation`; there is no
-    # `policy_keys_without_code`. And a namespace row is NOT "never read by
+    # nothing in THAT direction: deleting it changes no verdict there.
+    # And a namespace row is NOT "never read by
     # anything" -- `assert_policy_matches_code` walks the OTHER direction,
     # implemented -> declared, and does consult it. So these rows were
     # redundant, not inert, and `test_no_decorative_authority_rows` guards the

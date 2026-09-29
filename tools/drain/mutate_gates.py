@@ -4215,13 +4215,6 @@ ARMS: list[tuple[str, str, str, str]] = [
         "                    and True):",
     ),
     # -- #4709: the boundary a receipt was taken in -------------------------
-    #
-    # EVERY ARM HERE EXISTS BECAUSE SOMETHING SURVIVED. The first cut of #4709
-    # reported "5 of 5 killed" and added NO arm to this matrix; two independent
-    # reviewers then found that the headline arm had been applied inside
-    # `verify_run_backed_receipt` while the same mutation at the CALL SITE left
-    # 929 of 929 green, and that three further mutations of the resolver
-    # survived outright. BD1 is that call site.
     (
         ("BND1 the CALL SITE hard-codes Commercial, which is the rejected design "
          "at the seam where it actually ships. Measured green across the whole "
@@ -4292,12 +4285,7 @@ ARMS: list[tuple[str, str, str, str]] = [
     ),
     (
         ("BND11 the NON-DICT producer guard is deleted - the third arm of the "
-         "producer-shape check, distinct from the bare-string arm. Measured "
-         "green across 936 tests: `\"deploy-run\": {}` then sails past the "
-         "declaration check. NOTE the empty-dict half of the original "
-         "description was FALSE - `if not declared:` catches `{}` first - "
-         "and the dead `or not declared` clause it credited has been "
-         "deleted; this arm pins the NON-DICT case, which is real"),
+         "producer-shape check, distinct from the bare-string arm"),
         "tick.py",
         "    if not isinstance(declared, dict):",
         "    if False:",
@@ -4310,10 +4298,8 @@ ARMS: list[tuple[str, str, str, str]] = [
         "    if False:",
     ),
     (
-        ("BND12 the boundary parameter gets a DEFAULT back. The fourth instance "
-         "of one defect and the longest-lived: `boundary: str | None = None` "
-         "survived 943/943 because every test passes the argument explicitly, "
-         "and it is not equivalent - a three-argument call flips from REFUSED "
+        ("BND12 the boundary parameter gets a DEFAULT back. A three-argument "
+         "call flips from REFUSED "
          "to ACCEPTED"),
         "tick.py",
         "    kind: str, run: dict, policy: dict, boundary: str | None,",
