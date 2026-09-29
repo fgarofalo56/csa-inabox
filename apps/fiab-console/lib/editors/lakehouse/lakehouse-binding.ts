@@ -21,7 +21,7 @@
  * resolver prefers (its steps 1 and 2) off the item the editor has already
  * fetched, and it NEVER guesses. When the record is absent, the caller asks the
  * server (`/api/lakehouse/paths?lakehouseId=…&workspaceId=…`), which runs
- * `resolveLakehouseAbfss` itself — including its env-derived step 3. One
+ * `resolveLakehouseAbfss` itself — including its step 2c (auto-bind state) and env-derived step 3. One
  * decision function, one answer; this is a cache of it, not a second opinion.
  */
 import { trimSlashes } from '@/lib/util/trim';

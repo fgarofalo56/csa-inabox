@@ -619,6 +619,7 @@ python_functions = ["test_*"]
 addopts = "--tb=short -q --strict-markers --import-mode=importlib"
 markers = [
     "live: requires a live Azure connection (az login)",
+    "real_boundary: opt OUT of the autouse boundary stub in __tests__/conftest.py - these are the only tests that witness the #4709 boundary check",
 ]
 
 [tool.coverage.run]

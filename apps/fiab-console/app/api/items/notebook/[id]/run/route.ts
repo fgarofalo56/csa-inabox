@@ -51,14 +51,12 @@ async function buildAutoMountPreamble(
     const lakehouses = (attached || []).filter((a) => a && a.kind === 'lakehouse' && a.id);
     if (lakehouses.length === 0) return '';
     const { resolveLakehouseAbfss } = await import('@/lib/azure/lakehouse-abfss');
-    const { buildLakehouseMountPreamble } = await import('@/lib/notebook/lakehouse-mount-preamble');
-    const resolved: Array<{ displayName: string; abfss: string }> = [];
-    for (const lh of lakehouses) {
-      try {
-        const r = await resolveLakehouseAbfss(lh.id as string, workspaceId);
-        if (r) resolved.push({ displayName: lh.displayName || lh.id || 'lakehouse', abfss: r.abfss });
-      } catch { /* skip this source — honest, don't break the session */ }
-    }
+    const { buildLakehouseMountPreamble, resolveAttachedLakehouses } = await import('@/lib/notebook/lakehouse-mount-preamble');
+    // Concurrent, in attachment order (see resolveAttachedLakehouses).
+    const resolved = await resolveAttachedLakehouses(
+      lakehouses,
+      (lakehouseId) => resolveLakehouseAbfss(lakehouseId, workspaceId),
+    );
     return buildLakehouseMountPreamble(resolved);
   } catch { return ''; }
 }

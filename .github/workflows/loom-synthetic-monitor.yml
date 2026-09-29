@@ -130,7 +130,20 @@ jobs:
           echo "status=$STATUS" >> "$GITHUB_OUTPUT"
 
           # Best-effort: surface the UAT_RESULT summary line from Log Analytics
-          # (ingestion lags — the execution status above is the gate, never this).
+          # (the execution status above is the gate, never this).
+          #
+          # WHICH ROWS ARE THIS EXECUTION'S (#4759). A Container Apps JOB logs to
+          # ContainerAppConsoleLogs_CL with ContainerAppName_s EMPTY: the job name
+          # is in ContainerJobName_s, and ContainerGroupName_s is the execution's
+          # replica, named `<execution>-<suffix>`. Measured 2026-09-29 over the
+          # last 6h of this job: 7/7 synthetic-monitor groups had
+          # ContainerAppName_s=='' and ContainerJobName_s=='loom-synthetic-monitor',
+          # e.g. execution loom-synthetic-monitor-29844330 ->
+          # ContainerGroupName_s loom-synthetic-monitor-29844330-j5gxl. The old
+          # `ContainerAppName_s == '$JOB_NAME'` filter therefore matched no job
+          # row, and the step reported the empty result as ingestion lag. Both
+          # queries now filter on the job AND on `startswith '$EXEC-'`, so a row
+          # from an earlier execution cannot be reported as this one's.
           #
           # R7 (deploy-integrity: error messages must be TRUE): keep stderr so a
           # FAILED query is reported as a failed query. The previous version sent
@@ -158,7 +171,7 @@ jobs:
             # class this step exists to stop mis-reporting.
             set +e
             RAW=$(az monitor log-analytics query -w "$WS" --analytics-query \
-              "ContainerAppConsoleLogs_CL | where ContainerAppName_s == '$JOB_NAME' | where Log_s contains 'UAT_RESULT' | order by TimeGenerated desc | take 1 | project Log_s" \
+              "ContainerAppConsoleLogs_CL | where ContainerJobName_s == '$JOB_NAME' | where ContainerGroupName_s startswith '$EXEC-' | where Log_s contains 'UAT_RESULT' | order by TimeGenerated desc | take 1 | project Log_s" \
               --query "[0].Log_s" -o tsv 2>"$QERR")
             QRC=$?
             set -e
@@ -171,7 +184,7 @@ jobs:
               echo "::warning::The UAT_RESULT query FAILED (rc=$QRC) — so 'no result' here is unknown, not negative. az stderr:"
               sed 's/^/  /' "$QERR" >&2 || true
             else
-              echo "::notice::No UAT_RESULT row yet for $JOB_NAME (query succeeded, zero rows — ingestion typically lags a few minutes)."
+              echo "::notice::No UAT_RESULT row for execution $EXEC (query succeeded, zero rows). This step does not establish why: the runner may not have emitted the line, or Log Analytics may not have ingested it yet."
             fi
           fi
 
@@ -189,13 +202,13 @@ jobs:
             # Exit code, not stderr-emptiness — see the UAT_RESULT block above.
             set +e
             JRAW=$(az monitor log-analytics query -w "$WS" --analytics-query \
-              "ContainerAppConsoleLogs_CL | where ContainerAppName_s == '$JOB_NAME' | where TimeGenerated > ago(2h) | where Log_s has_any ('synthetic J', 'UAT_FAIL', 'UAT_REAL_FAILS') | order by TimeGenerated asc | take 60 | project Log_s" \
+              "ContainerAppConsoleLogs_CL | where TimeGenerated > ago(2h) | where ContainerJobName_s == '$JOB_NAME' | where ContainerGroupName_s startswith '$EXEC-' | where Log_s has_any ('synthetic J', 'UAT_FAIL', 'UAT_REAL_FAILS') | order by TimeGenerated asc | take 60 | project Log_s" \
               --query "[].Log_s" -o tsv 2>"$JERR")
             JRC=$?
             set -e
             JOURNEYS=$(printf '%s' "$JRAW" | tr -d '\r')
             if [[ -n "$JOURNEYS" ]]; then
-              echo "::group::Per-journey console lines (last 2h)"
+              echo "::group::Per-journey console lines (execution $EXEC)"
               echo "$JOURNEYS"
               echo "::endgroup::"
               {
@@ -219,12 +232,12 @@ jobs:
               echo "::warning::The per-journey log query FAILED (rc=$JRC) — 'no journey lines' below is unknown, not negative."
               sed 's/^/  /' "$JERR" >&2 || true
             else
-              echo "::notice::No 'synthetic J' console lines in the last 2h (query succeeded, zero rows)."
+              echo "::notice::No 'synthetic J' console lines for execution $EXEC (query succeeded, zero rows). This step does not establish why."
             fi
           fi
 
           if [[ "$STATUS" != "Succeeded" ]]; then
-            echo "::error::Synthetic journeys FAILED (status=$STATUS, execution $EXEC) — realFails>0 (the runner exits non-zero only on real code/login failures; honest infra gates exit 0). Inspect ContainerAppConsoleLogs_CL (ContainerAppName_s=='$JOB_NAME') for the failing journey + the Journeys tab on /admin/health."
+            echo "::error::Synthetic journeys FAILED (status=$STATUS, execution $EXEC) — realFails>0 (the runner exits non-zero only on real code/login failures; honest infra gates exit 0). Inspect ContainerAppConsoleLogs_CL (ContainerJobName_s=='$JOB_NAME', ContainerGroupName_s startswith '$EXEC-') for the failing journey + the Journeys tab on /admin/health."
             exit 1
           fi
 
@@ -307,7 +320,7 @@ jobs:
             // does, so the class cannot come back.
             const status = process.env.SYNTH_STATUS || 'Failed';
             const execName = process.env.SYNTH_EXEC || '<unknown>';
-            const uat = process.env.SYNTH_UAT || '(no UAT_RESULT was retrieved — either Log Analytics ingestion lagged or the query itself failed; the poll step logs which. Check the container logs.)';
+            const uat = process.env.SYNTH_UAT || '(no UAT_RESULT was retrieved for this execution — the poll step logs whether the query FAILED or returned ZERO ROWS; zero rows does not say why. Check the container logs.)';
             const journeys = process.env.SYNTH_JOURNEYS || '(none retrieved — see the poll step, which distinguishes a failed query from zero rows)';
             const body = [
               `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
@@ -318,7 +331,7 @@ jobs:
               `Journey lines: \`${journeys}\``,
               ``,
               `The six synthetic journeys (J1 MSAL login / J2 create-item / J3 editor / J4 query / J5 marketplace / J6 git-promotion) run in-VNet every 15 min; a failure here is a REAL code or sign-in-path failure (honest infra gates never fail the run).`,
-              `Triage + ack: on-call runbook docs/fiab/runbooks/on-call.md · Journeys tab on /admin/health · runbook docs/fiab/runbooks/synthetic-journeys.md · Log Analytics ContainerAppConsoleLogs_CL (ContainerAppName_s=='loom-synthetic-monitor').`,
+              `Triage + ack: on-call runbook docs/fiab/runbooks/on-call.md · Journeys tab on /admin/health · runbook docs/fiab/runbooks/synthetic-journeys.md · Log Analytics ContainerAppConsoleLogs_CL (ContainerJobName_s=='loom-synthetic-monitor', ContainerGroupName_s startswith '${execName}-'; a job's rows leave ContainerAppName_s empty).`,
             ].join('\n');
             const existing = await github.rest.issues.listForRepo({
               owner: context.repo.owner, repo: context.repo.repo,

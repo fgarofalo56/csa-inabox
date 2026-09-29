@@ -646,9 +646,12 @@ ARMS: list[tuple[str, str, str, str]] = [
          "asserts that the estate was observed carrying this issue's change, "
          "and nothing in the receipt path establishes it: `_run_evidence` never "
          "requests `createdAt` and `verify_run_backed_receipt` compares "
-         "`headSha` to nothing. MEASURED rather than argued -- run 33238747458 "
+         "`headSha` to nothing. Since #4709 it does compare the BOUNDARY, which "
+         "is one axis and not this one. MEASURED rather than argued -- run "
+         "33238747458 "
          "(loom-roll-and-validate, 2026-08-29, headSha 70ca3d1) passes every "
-         "check today, and 147 of the 351 issues open on 2026-09-18 were filed "
+         "check today for a COMMERCIAL item, and 147 of the 351 issues open on "
+         "2026-09-18 were filed "
          "AFTER it. The mutation restores the exact shipped sentence, which is "
          "the defect rather than a proxy for it, on an artifact that is public "
          "and unrevisable"),
@@ -674,10 +677,12 @@ ARMS: list[tuple[str, str, str, str]] = [
          "`test_the_run_backed_disclosure_is_still_true_of_the_code_it_describes` "
          "red, which is a second independent killer"),
         "tick.py",
-        ('        "binding is #4489 - and it is bound to no TIME and no SHA either: no "\n'
+        ('        "that "\n'
+         '        "binding is #4489. It is bound to no TIME and no SHA either: no "\n'
          '        "run date is fetched and no head sha is compared, so a run that "\n'
          '        "PREDATES this issue is accepted exactly as one that postdates it "\n'
-         '        "(#4578). Read this as \'the declared producer ran green\', not as \'the "\n'
+         '        "(#4578). Read this as \'the declared producer ran green in this item\'s "\n'
+         '        "boundary\', not as \'the "\n'
          '        "estate was observed carrying this change\'. "\n'),
         ('        "binding is #4489. "\n'),
     ),
@@ -4018,8 +4023,8 @@ ARMS: list[tuple[str, str, str, str]] = [
          "`test_the_shipped_holds_still_name_both_items` is what turns that "
          "disappearance into a failure, which is why it asserts the SET and "
          "not a count.\n"
-         "         WHEN #4709 LANDS this arm is deleted with the entries; it "
-         "is not a permanent claim that a hold must exist. Reds "
+         "         #4709 HAS LANDED AND BOTH ENTRIES ARE KEPT, so this arm "
+         "stays: the reason is recorded at `REVERSAL_HOLDS` in tick.py. Reds "
          "`test_the_shipped_holds_still_name_both_items` and errors "
          "`test_the_hold_covers_undecline_too_so_an_item_cannot_walk_out_of_it`"),
         "tick.py",
@@ -4207,6 +4212,129 @@ ARMS: list[tuple[str, str, str, str]] = [
         "gates.py",
         '                    and not bare.endswith("/>")):',
         "                    and True):",
+    ),
+    # -- #4709: the boundary a receipt was taken in -------------------------
+    (
+        ("BND1 the CALL SITE hard-codes Commercial, which is the rejected design "
+         "at the seam where it actually ships"),
+        "tick.py",
+        "        boundary, boundary_source = boundary_of_issue(repo, number, policy, kind)",
+        '        boundary, boundary_source = "Commercial", "hard-coded"',
+    ),
+    (
+        ("BND2 the documentation key filter is dropped, so an issue labelled `_` "
+         "resolves to the PROSE in `boundary_labels._` and that paragraph "
+         "becomes the boundary a producer is looked up under"),
+        "tick.py",
+        "        if not name.startswith(\"_\")\n    }",
+        "        if True\n    }",
+    ),
+    (
+        ("BND3 label matching becomes a SUBSTRING test, so `drift-gov-triaged` "
+         "and `xdrift-commercial` route an item to a boundary nobody assigned"),
+        "tick.py",
+        "    found = sorted({mapping[name] for name in labels if name in mapping})",
+        ("    found = sorted({v for k, v in mapping.items() "
+         "for name in labels if k in name})"),
+    ),
+    (
+        ("BND4 an UNPARSEABLE response falls to the default instead of raising, "
+         "so `gh returned something unexpected` silently becomes `this item is "
+         "Commercial` - R7's exact failure shape"),
+        "tick.py",
+        "    except (ValueError, KeyError, TypeError, AttributeError) as exc:",
+        ('    except (ValueError, KeyError, TypeError) as exc:\n'
+         '        return policy.get("default_boundary")'),
+    ),
+    (
+        ("BND5 the per-kind default becomes a CODE default, so deleting a kind "
+         "from policy.json stops being visible and the assumption leaves the "
+         "file it can be audited in"),
+        "tick.py",
+        "    default = defaults.get(kind)",
+        '    default = defaults.get(kind, "Commercial")',
+    ),
+    (
+        ("BND8 every kind shares ONE default again, which re-exposes the "
+         "unlabelled Gov-about `deploy-run` items - #3449 `deploy-fiab-gcch is "
+         "failing` and #4424 `gov-console-roll is failing` among them - to "
+         "closure on a green Commercial roll"),
+        "tick.py",
+        "    default = defaults.get(kind)",
+        '    default = next(iter(defaults.values()), None)',
+    ),
+    (
+        ("BND9 the `_` filter on the DEFAULT map is dropped, the mirror of BND2 "
+         "at the other map: a receipt kind named `_` then resolves to the "
+         "documentation paragraph as its boundary"),
+        "tick.py",
+        "        if not k.startswith(\"_\")\n    }",
+        "        if True\n    }",
+    ),
+    (
+        ("BND10 the `if not boundary:` guard becomes an ASSIGNMENT"),
+        "tick.py",
+        "    if not boundary:\n        raise ReceiptRefusedError(",
+        '    boundary = boundary or "Commercial"\n    if False:\n        raise ReceiptRefusedError(',
+    ),
+    (
+        ("BND11 the NON-DICT producer guard is deleted - the third arm of the "
+         "producer-shape check, distinct from the bare-string arm"),
+        "tick.py",
+        "    if not isinstance(declared, dict):",
+        "    if False:",
+    ),
+    (
+        ("BND6 AMBIGUITY picks the first boundary instead of refusing, silently "
+         "deciding which cloud a published verification claim is about"),
+        "tick.py",
+        "    if len(found) > 1:",
+        "    if False:",
+    ),
+    (
+        ("BND12 the boundary parameter gets a DEFAULT back. A three-argument "
+         "call flips from REFUSED "
+         "to ACCEPTED"),
+        "tick.py",
+        "    kind: str, run: dict, policy: dict, boundary: str | None,",
+        "    kind: str, run: dict, policy: dict, boundary: str | None = None,",
+    ),
+    (
+        ("BND13 the boundary SOURCE stops reaching the public comment, so a "
+         "permanent `verified in boundary Commercial` lands on an item whose "
+         "boundary was a policy default nobody asserted about it - R7"),
+        "tick.py",
+        '    return default, f"the policy default for {kind!r}, NOT from a label"',
+        '    return default, "its label"',
+    ),
+    (
+        ("BND7 the public close comment stops NAMING the boundary, so a "
+         "permanent `verified` comment lands without saying which cloud "
+         "verified it - `cloud-parity.md` forbids exactly that claim shape"),
+        "tick.py",
+        '            f"in boundary {boundary} ({boundary_source})"',
+        '            ""',
+    ),
+    (
+        ("BND14 the boundary SOURCE is dropped from the public close comment"),
+        "tick.py",
+        '            f"in boundary {boundary} ({boundary_source})"',
+        '            f"in boundary {boundary}"',
+    ),
+    (
+        ("BND15 a boundary with no declared producer falls back to the "
+         "Commercial producer instead of refusing"),
+        "tick.py",
+        '    expected = None if boundary.startswith("_") else declared.get(boundary)',
+        ('    expected = None if boundary.startswith("_") else '
+         '(declared.get(boundary) or declared.get("Commercial"))'),
+    ),
+    (
+        ("BND16 the bare-string producer guard is deleted; message-pinned only, "
+         "since the non-dict guard refuses a string producer too"),
+        "tick.py",
+        "    if isinstance(declared, str):",
+        "    if False:",
     ),
     # -- #4728: the dependency-bump review exemption ------------------------
     #

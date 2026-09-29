@@ -20708,7 +20708,7 @@
             "declaredSinkCount": 4,
             "sinks": [
               {
-                "id": "console:member:88",
+                "id": "console:member:95",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -20718,7 +20718,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:89",
+                "id": "console:member:96",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -20728,7 +20728,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:90",
+                "id": "console:member:97",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -20738,7 +20738,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:93",
+                "id": "console:member:100",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -50177,10 +50177,10 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-29T13:22:45.568Z",
-      "commit": "dd65288a5f0450e8847986234b8f31bb78947914",
-      "inputsDigest": "5d0ca66bcc440b83",
-      "filesScanned": 2123,
+      "generatedAt": "2026-09-29T17:47:10.628Z",
+      "commit": "ef310624a49b4aa010f948a3efb477961589bca6",
+      "inputsDigest": "96346e926fa94b5b",
+      "filesScanned": 2124,
       "scanScopes": [
         {
           "scope": "app/**/route.ts (console BFF routes)",
@@ -50189,7 +50189,7 @@
         },
         {
           "scope": ".github/**, scripts/** (CI publication surfaces)",
-          "filesMatched": 423,
+          "filesMatched": 424,
           "nodesEmitted": 238
         }
       ],
