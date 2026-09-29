@@ -5,7 +5,9 @@
 # Catalog is unavailable/limited — get a real Unity Catalog REST backend that
 # works day one. This is PACKAGING, not a fork: we start FROM the official
 # published image and overlay a thin config-rendering entrypoint plus the two
-# jars needed for Entra-only PostgreSQL persistence (LU-1).
+# jars needed for Entra-only PostgreSQL persistence (LU-1). One bounded
+# exception since 2026-09-29 (#3339): a single upstream class recompiled with a
+# backported upstream fix — stage 1b.
 #
 # Base image is PINNED to a released tag (never :latest). The official image is
 # published on Docker Hub (unitycatalog/unitycatalog).
@@ -33,8 +35,12 @@
 #   The v0.5.0 and v0.5.1 server POMs are byte-identical except their own version
 #   strings (ZERO third-party dependency changes — verified 2026-08-04), so the
 #   v0.5.1 classes link cleanly against the base image's v0.5.0 dependency jars.
-#   Building the server from source is still NOT done here (that would end
-#   "packaging, not a fork") — this consumes upstream's released artifact verbatim.
+#   Building the server from source is still NOT done here, with ONE bounded
+#   exception: operator decision 2026-09-29 (#3339) compiles a single patched
+#   upstream class, IcebergRestCatalogService, from v0.5.0's own source with
+#   upstream #1813's scoped Iceberg REST authorization backported — see stage 1b
+#   for why, the guards, and the exit condition. Everything else consumes
+#   upstream's released artifacts verbatim.
 #   Note also (carried from LU-2): `server.access-token-timeout` exists on
 #   upstream main but NOT in v0.5.0/v0.5.1, so the entrypoint does not render it.
 #
@@ -194,6 +200,67 @@ RUN mkdir -p /build/classes /build/lib \
  && cp /build/postgresql.jar /build/loom-unity-entra-auth.jar /build/lib/
 
 # ---------------------------------------------------------------------------
+# Stage 1b — #3339: backport of upstream's scoped Iceberg REST authorization.
+#
+# WHY. Upstream v0.5.0 (and v0.6.0, the newest release, 2026-08-20) gates EVERY
+# Iceberg REST route — /v1/config, getNamespace, tableExists, loadTable,
+# listTables — on `#authorize(#principal, #metastore, OWNER)`. The permissions
+# API cannot grant metastore OWNER (its Privilege enum has no OWNER; the PATCH
+# answers 400), so the Console principal, which holds real catalog grants
+# (USE CATALOG, SELECT, …), is answered 403 on /v1/config and external-engine
+# federation cannot list a catalog. Measured locally, single variable: see
+# tests/authz/iceberg-e2e.sh and #3339.
+#
+# WHAT. uc-patch/…/IcebergRestCatalogService.java is v0.5.0's OWN source for that
+# class, with only the read endpoints' authorization changed to upstream main's
+# scoped policies (GET_CATALOG / GET_SCHEMA / GET_TABLE plus the param-level
+# CATALOG / SCHEMA / TABLE resource keys), backported from upstream commit
+# da911fad3951 "[Server] Authorize the Iceberg REST catalog endpoints" (#1813).
+# v0.5.0's KeyMapper, AuthorizeKeyLocator, UnityAccessDecorator and ResultFilter
+# already resolve param-level keys and run a response filter, so nothing else is
+# backported. listNamespaces is NOT changed (see the header in the .java file).
+#
+# THE STANCE CHANGE. This image was "packaging, not a fork": upstream released
+# artifacts only, never server source built here. Operator decision 2026-09-29
+# (#3339, Option A) accepts ONE compiled class so federation works on the pinned
+# base now; no upstream release carries #1813 yet. It is kept as small as it can
+# be and guarded so it cannot silently outlive its reason:
+#   * the build REFUSES to run if the base's own copy of that source is not the
+#     exact v0.5.0 file the patch was made from (sha256 below), and stage 2 does
+#     the same for the compiled base class;
+#   * the jar must contain exactly that one class;
+#   * the compiled class must carry the scoped expression.
+# EXIT CONDITION: delete this stage, uc-patch/, and the jar from stage 2 when the
+# base moves to an upstream release that contains #1813 (da911fad3951). The
+# base-drift assertion fires on that bump, so it cannot be forgotten.
+#
+# It compiles in a stage FROM the SAME pinned base because the class must link
+# against that server's exact classes (server/target/classpath); the base ships
+# a JDK 17 javac. -proc:none keeps any annotation processor on that classpath
+# (lombok) out of a file that uses none.
+# ---------------------------------------------------------------------------
+FROM unitycatalog/unitycatalog:v0.5.0 AS icebergauthz
+USER root
+ARG UC_ICEBERG_SERVICE_SRC_SHA256=9dcc3791ae86f77ef85b15d483b33bf320b6f10eb2165021150fb9fd963260b6
+COPY uc-patch/ /build/uc-patch/
+RUN set -eu; \
+    UC_HOME=/home/unitycatalog; \
+    REL=io/unitycatalog/server/service/IcebergRestCatalogService; \
+    BASE_SRC="${UC_HOME}/server/src/main/java/${REL}.java"; \
+    [ -f "${BASE_SRC}" ] || { echo "FATAL: ${BASE_SRC} is absent from the base image — the #3339 Iceberg authorization patch was made from unitycatalog/unitycatalog:v0.5.0's own source and cannot be applied to this base. Re-derive it (or drop it if the new base carries upstream #1813)." >&2; exit 1; }; \
+    GOT="$(sha256sum "${BASE_SRC}" | cut -d' ' -f1)"; \
+    [ "${GOT}" = "${UC_ICEBERG_SERVICE_SRC_SHA256}" ] || { echo "FATAL: base-image drift. ${BASE_SRC} hashes ${GOT}, expected the v0.5.0 value ${UC_ICEBERG_SERVICE_SRC_SHA256}. The patched class would REPLACE a different upstream version of this service. If the new base contains upstream #1813 (da911fad3951), delete this stage and uc-patch/; otherwise re-derive the patch from the new source." >&2; exit 1; }; \
+    mkdir -p /build/classes /build/override; \
+    javac -proc:none -Xlint:all -cp "$(cat "${UC_HOME}/server/target/classpath")" -d /build/classes \
+      "/build/uc-patch/${REL}.java"; \
+    CLASSES="$(cd /build/classes && find . -type f | sort)"; \
+    [ "${CLASSES}" = "./${REL}.class" ] || { echo "FATAL: the #3339 patch compiled to an unexpected class set (expected exactly ./${REL}.class): ${CLASSES}" >&2; exit 1; }; \
+    javap -v -cp /build/classes io.unitycatalog.server.service.IcebergRestCatalogService | grep -q '#authorizeAny(#principal, #catalog, OWNER, USE_CATALOG)' || { echo "FATAL: the compiled #3339 class does not carry the scoped GET_CATALOG expression" >&2; exit 1; }; \
+    jar --create --file /build/override/loom-uc-3339-iceberg-authz.jar -C /build/classes .; \
+    ENTRIES="$(jar --list --file /build/override/loom-uc-3339-iceberg-authz.jar | grep -c '\.class$')"; \
+    [ "${ENTRIES}" -eq 1 ] || { echo "FATAL: the #3339 overlay carries ${ENTRIES} classes, expected exactly 1" >&2; exit 1; }
+
+# ---------------------------------------------------------------------------
 # Stage 2 — the Loom Unity image.
 # ---------------------------------------------------------------------------
 FROM unitycatalog/unitycatalog:v0.5.0
@@ -282,6 +349,10 @@ RUN cp -a /home/unitycatalog/etc/db /home/unitycatalog/etc/db.seed 2>/dev/null |
 #            v0.5.0 class keeps resolving from the base image, which is what we
 #            want: they are byte-identical in v0.5.1 anyway (measured — see the
 #            stage-1 header), so shadowing them bought nothing and hid a lot.
+#   PREPEND  lib-loom-override/loom-uc-3339-iceberg-authz.jar (ONE class,
+#            IcebergRestCatalogService, compiled in stage 1b from v0.5.0's own
+#            source with upstream #1813's scoped authorization) — also BEFORE
+#            server/target/classes; the two override jars share no class.
 #   APPEND   lib-loom/* (Postgres driver + Entra auth plugin) — purely additive,
 #            unique classes, so their position does not matter.
 #
@@ -320,6 +391,7 @@ RUN cp -a /home/unitycatalog/etc/db /home/unitycatalog/etc/db.seed 2>/dev/null |
 # names, not whichever file find happened to return first.
 COPY --from=jdbcplugin /build/lib/ /home/unitycatalog/lib-loom/
 COPY --from=jdbcplugin /build/override/ /home/unitycatalog/lib-loom-override/
+COPY --from=icebergauthz /build/override/ /home/unitycatalog/lib-loom-override/
 RUN set -eu; \
     SERVER_CP_FILE=/home/unitycatalog/server/target/classpath; \
     if [ ! -f "${SERVER_CP_FILE}" ]; then \
@@ -329,11 +401,15 @@ RUN set -eu; \
     OVERRIDE="$(find /home/unitycatalog/lib-loom-override -name '*.jar' | sort | tr '\n' ':' | sed 's/:$//')"; \
     EXTRA="$(find /home/unitycatalog/lib-loom -name '*.jar' | sort | tr '\n' ':' | sed 's/:$//')"; \
     if [ -z "${OVERRIDE}" ]; then echo "FATAL: the #1603 override jar was not found in lib-loom-override" >&2; exit 1; fi; \
+    for JAR in loom-uc-1603-fix.jar loom-uc-3339-iceberg-authz.jar; do \
+      [ -f "/home/unitycatalog/lib-loom-override/${JAR}" ] || { echo "FATAL: lib-loom-override/${JAR} is missing — its fix (#1603 permission GET / #3339 Iceberg REST authorization) would not ship" >&2; exit 1; }; \
+    done; \
     BASE_CLASSES=/home/unitycatalog/server/target/classes; \
     for PAIR in \
       "f7ffa437ab66d3eb49675fb7c7bbfd37a2eb1b4b73b7081ece49573ee81c9176:io/unitycatalog/server/service/PermissionService.class" \
       "2f3c74023a051b1ab9b43b58ea2631d2bbff4d7a9f37eec167233e1b7519799b:io/unitycatalog/server/service/PermissionService\$1.class" \
       "f9ad9832f79c2949e71bac534c79eb1aa78cb7d114f53409b7467e63698a0a91:io/unitycatalog/server/auth/AuthorizeExpressions.class" \
+      "f8c78a68731f0e47616aab29a3f97dd86a0e0af36f69125bd8c42a74cad83c93:io/unitycatalog/server/service/IcebergRestCatalogService.class" \
     ; do \
       WANT="${PAIR%%:*}"; REL="${PAIR#*:}"; \
       if [ ! -f "${BASE_CLASSES}/${REL}" ]; then \
@@ -341,7 +417,7 @@ RUN set -eu; \
       fi; \
       GOT="$(sha256sum "${BASE_CLASSES}/${REL}" | cut -d' ' -f1)"; \
       if [ "${GOT}" != "${WANT}" ]; then \
-        echo "FATAL: base-image drift. ${REL} hashes ${GOT}, expected the v0.5.0 value ${WANT}. The base tag has moved, so prepending the v0.5.1 copy of this class would REVERT a newer server class instead of patching v0.5.0. Re-derive the narrowed overlay against the new base (diff the released jars, keep only the classes that differ AND carry the #1603 fix) and update the ARG digests." >&2; exit 1; \
+        echo "FATAL: base-image drift. ${REL} hashes ${GOT}, expected the v0.5.0 value ${WANT}. The base tag has moved, so prepending the overlay's copy of this class (v0.5.1 for the #1603 classes, the #3339 patch for IcebergRestCatalogService) would REVERT a newer server class instead of patching v0.5.0. Re-derive that overlay against the new base — or drop it if the new base already carries the upstream fix — and update the digests." >&2; exit 1; \
       fi; \
     done; \
     for CP_FILE in $(find /home/unitycatalog -type f -name classpath); do \
@@ -359,6 +435,9 @@ RUN set -eu; \
       "${OVERRIDE}:"*) : ;; \
       *) echo "FATAL: the #1603 override jar is not FIRST on ${SERVER_CP_FILE} — the v0.5.0 permission-GET-500 bug would still ship" >&2; exit 1 ;; \
     esac; \
+    javap -v -cp "$(cat "${SERVER_CP_FILE}")" io.unitycatalog.server.service.IcebergRestCatalogService | grep -q '#authorizeAny(#principal, #catalog, OWNER, USE_CATALOG)' || { \
+      echo "FATAL: the server's real classpath resolves IcebergRestCatalogService WITHOUT the #3339 scoped authorization — the base v0.5.0 copy is shadowing the overlay, so /v1/config would still demand metastore OWNER" >&2; \
+      exit 1; }; \
     java -cp "$(cat "${SERVER_CP_FILE}")" ai.limitlessdata.loom.unity.EntraPostgresAuthPlugin 2>&1 | grep -q 'Main method not found' || { \
       echo "FATAL: EntraPostgresAuthPlugin does NOT load from the server's real classpath (expected 'Main method not found' = class resolvable; got ClassNotFoundException?) — the Entra-Postgres boot would die with 'Unable to load Authentication Plugin'" >&2; \
       exit 1; }
@@ -431,3 +510,4 @@ LABEL csa.loom.component="loom-unity"
 LABEL csa.loom.version="0.2.0"
 LABEL csa.loom.upstream="unitycatalog/unitycatalog:v0.5.0"
 LABEL csa.loom.upstream.server-override="io.unitycatalog:unitycatalog-server:0.5.1 — 3 classes only (PermissionService, PermissionService\$1, AuthorizeExpressions): the #1603 permission-GET fix"
+LABEL csa.loom.upstream.server-patch="IcebergRestCatalogService — v0.5.0 source + upstream da911fad3951 (#1813) scoped Iceberg REST authorization, compiled in-build (#3339); drop when the base carries #1813"

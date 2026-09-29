@@ -69,16 +69,20 @@ def mint(sub: str, aud: str, email: str, iss: str, kid: str = KID) -> str:
     }
     # An EMPTY `email` omits the claim entirely rather than minting `"email": ""`.
     #
-    # This is the shape that matters, not a convenience. A Microsoft Entra
-    # APP-ONLY (client-credentials) token — which is exactly what the Console's
-    # managed identity mints — carries NO `email` claim, so upstream
-    # AuthService.verifyPrincipal resolves the caller as `sub`, i.e. the service
-    # principal's OBJECT ID. Every case in authz-e2e.sh mints `email=admin`
-    # (the default), which resolves to the bootstrap admin user and therefore
-    # exercises the METASTORE-OWNER path — not the Console's. That is why the
-    # authz suite could pass while the Console's real credential was answered 403
-    # on the Iceberg surface. iceberg-e2e.sh mints with `email=` to model the
-    # real thing.
+    # This models a Microsoft Entra APP-ONLY (client-credentials) token — what
+    # the Console's managed identity mints — which carries NO `email` claim, so
+    # upstream AuthService.verifyPrincipal resolves the caller by `sub`, the
+    # service principal's OBJECT ID. iceberg-e2e.sh mints with `email=` for that
+    # reason.
+    #
+    # CORRECTED 2026-09-29 (#3339): an earlier revision of this comment claimed
+    # iceberg-e2e.sh already exercised the Console's identity this way. It did
+    # not. /mint parsed its query with parse_qs's default keep_blank_values=False,
+    # which DROPS `email=` entirely, so the handler's default email applied and
+    # every "console" case in that harness ran as a DIFFERENT principal, not
+    # the Console's. That hid the real Console credential's 403 on the Iceberg
+    # surface. The handler below now keeps blank values, so `email=` reaches
+    # this function as "" and the claim is omitted as described.
     if email:
         payload["email"] = email
     signing_input = (
@@ -105,7 +109,10 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/jwks":
             return self._send(200, json.dumps(JWKS).encode())
         if u.path == "/mint":
-            q = parse_qs(u.query)
+            # keep_blank_values=True is load-bearing (#3339): without it `email=`
+            # is dropped, the default below applies, and a caller asking for an
+            # app-only token silently receives a different principal's token.
+            q = parse_qs(u.query, keep_blank_values=True)
             tok = mint(
                 sub=q.get("sub", ["loom-console"])[0],
                 aud=q.get("aud", ["api://loom-unity"])[0],

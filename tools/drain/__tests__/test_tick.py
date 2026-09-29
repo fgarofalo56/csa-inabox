@@ -793,7 +793,7 @@ def test_positive_control_a_well_formed_g1_run_establishes_the_receipt():
     is ACCEPTED -- so when a test below flips to refused, the single field it
     changed is the reason.
     """
-    ref = tick.verify_run_backed_receipt("g1-browser", _g1_run(), POLICY)
+    ref = tick.verify_run_backed_receipt("g1-browser", _g1_run(), POLICY, "Commercial")
     assert ref == "https://example.invalid/runs/123"
 
 
@@ -807,7 +807,7 @@ def test_an_undeclared_receipt_kind_cannot_be_recorded_from_a_run():
     edit this test exists to make someone justify.
     """
     with pytest.raises(tick.ReceiptRefusedError, match="no declared producer"):
-        tick.verify_run_backed_receipt("operator", _g1_run(), POLICY)
+        tick.verify_run_backed_receipt("operator", _g1_run(), POLICY, "Commercial")
 
 
 def test_a_green_run_of_the_wrong_workflow_is_refused():
@@ -819,7 +819,7 @@ def test_a_green_run_of_the_wrong_workflow_is_refused():
     """
     with pytest.raises(tick.ReceiptRefusedError, match="different workflow"):
         tick.verify_run_backed_receipt(
-            "g1-browser", _g1_run(workflow="loom-synthetic-monitor"), POLICY)
+            "g1-browser", _g1_run(workflow="loom-synthetic-monitor"), POLICY, "Commercial")
 
 
 def test_an_unfinished_run_is_refused_as_unfinished_not_as_failed():
@@ -837,13 +837,13 @@ def test_an_unfinished_run_is_refused_as_unfinished_not_as_failed():
     """
     with pytest.raises(tick.ReceiptRefusedError, match="has not finished"):
         tick.verify_run_backed_receipt(
-            "g1-browser", _g1_run(status="in_progress", conclusion="success"), POLICY)
+            "g1-browser", _g1_run(status="in_progress", conclusion="success"), POLICY, "Commercial")
 
 
 def test_a_failed_run_is_refused():
     with pytest.raises(tick.ReceiptRefusedError, match="concluded 'failure'"):
         tick.verify_run_backed_receipt(
-            "g1-browser", _g1_run(conclusion="failure"), POLICY)
+            "g1-browser", _g1_run(conclusion="failure"), POLICY, "Commercial")
 
 
 def test_blocker_a_smoke_only_run_is_green_and_captured_nothing():
@@ -863,7 +863,7 @@ def test_blocker_a_smoke_only_run_is_green_and_captured_nothing():
     """
     with pytest.raises(tick.ReceiptRefusedError, match="not success"):
         tick.verify_run_backed_receipt(
-            "g1-browser", _g1_run(step_conclusion="skipped"), POLICY)
+            "g1-browser", _g1_run(step_conclusion="skipped"), POLICY, "Commercial")
 
 
 def test_a_required_step_absent_entirely_is_refused():
@@ -872,7 +872,7 @@ def test_a_required_step_absent_entirely_is_refused():
     skipped. Measured on 34575500655. Both shapes must refuse, and they take
     different branches, so both are pinned."""
     with pytest.raises(tick.ReceiptRefusedError, match="never ran the step"):
-        tick.verify_run_backed_receipt("g1-browser", _g1_run(step_name=None), POLICY)
+        tick.verify_run_backed_receipt("g1-browser", _g1_run(step_name=None), POLICY, "Commercial")
 
 
 def _roll_run(*, job_conclusion="success", steps=True):
@@ -910,13 +910,13 @@ def test_blocker_a_green_roll_whose_job_was_skipped_is_green_over_nothing():
     """
     with pytest.raises(tick.ReceiptRefusedError, match="never ran the step"):
         tick.verify_run_backed_receipt(
-            "deploy-run", _roll_run(job_conclusion="skipped", steps=False), POLICY)
+            "deploy-run", _roll_run(job_conclusion="skipped", steps=False), POLICY, "Commercial")
 
 
 def test_positive_control_a_real_roll_establishes_a_deploy_run_receipt():
     """The control for the test above: the SAME workflow, same run conclusion,
     differing only in whether the roll job actually ran its steps."""
-    ref = tick.verify_run_backed_receipt("deploy-run", _roll_run(), POLICY)
+    ref = tick.verify_run_backed_receipt("deploy-run", _roll_run(), POLICY, "Commercial")
     assert "345" in ref
 
 
@@ -924,7 +924,7 @@ def test_the_receipt_ref_names_the_commit_that_was_deployed():
     """`headSha` was fetched and never read, so a deploy-run receipt recorded the
     run without recording WHICH COMMIT it put live -- and 'which sha is live' is
     the question `deploy-integrity.md` R3 exists to answer."""
-    ref = tick.verify_run_backed_receipt("deploy-run", _roll_run(), POLICY)
+    ref = tick.verify_run_backed_receipt("deploy-run", _roll_run(), POLICY, "Commercial")
     assert "abc123def456" in ref
 
 
@@ -944,7 +944,7 @@ def test_all_required_steps_are_checked_not_merely_the_first():
             if step["name"] == "Validate live URL":
                 step["conclusion"] = "skipped"
     with pytest.raises(tick.ReceiptRefusedError, match="Validate live URL"):
-        tick.verify_run_backed_receipt("deploy-run", run, POLICY)
+        tick.verify_run_backed_receipt("deploy-run", run, POLICY, "Commercial")
 
 
 def test_a_kind_with_no_required_steps_is_refused_not_waved_through():
@@ -955,7 +955,7 @@ def test_a_kind_with_no_required_steps_is_refused_not_waved_through():
     thin = copy.deepcopy(POLICY)
     thin["receipt_required_steps"] = {"_": "x"}
     with pytest.raises(tick.ReceiptRefusedError, match="no required steps"):
-        tick.verify_run_backed_receipt("g1-browser", _g1_run(), thin)
+        tick.verify_run_backed_receipt("g1-browser", _g1_run(), thin, "Commercial")
 
 
 def test_every_run_backed_kind_declares_required_steps():
@@ -974,7 +974,7 @@ def test_the_capture_step_must_have_concluded_success_not_merely_appeared():
     Presence is not the property; conclusion is."""
     with pytest.raises(tick.ReceiptRefusedError, match="not success"):
         tick.verify_run_backed_receipt(
-            "g1-browser", _g1_run(step_conclusion="failure"), POLICY)
+            "g1-browser", _g1_run(step_conclusion="failure"), POLICY, "Commercial")
 
 
 # -- THE GITHUB CLOSE (#4545) ------------------------------------------------
@@ -1772,7 +1772,8 @@ def test_a_run_backed_comment_does_not_claim_an_r2_satisfaction_it_cannot_establ
     establishes it. `_run_evidence` never requests `createdAt`, and
     `verify_run_backed_receipt` reads `headSha` only to interpolate it into the
     returned ref and compares it to nothing. So the run is bound to this issue
-    by NOTHING: not by reference (a workflow run names no issue at all -- the
+    on ONE axis -- its BOUNDARY, since #4709 -- and on nothing else: not by
+    reference (a workflow run names no issue at all -- the
     gap the old text did disclose, #4489), not by time, not by sha.
 
     MEASURED RATHER THAN ARGUED, which is what makes it a blocker and not a
