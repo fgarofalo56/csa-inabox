@@ -1361,7 +1361,21 @@ jobs:
         # the workspace/region supports it, else a small classic PRO warehouse.
         # Skips cleanly when no Databricks workspace is bound. When one IS bound
         # and no warehouse id results (or the Console env cannot be set), the step
-        # exits 1 and records `reason` + `http_status` in its outputs (#4765).
+        # CLASSIFIES the failure (network_blocked / auth_refused / not_json /
+        # http_error / no_id_in_response / no_token / console_env_not_set), states
+        # only what it established (for a network refusal it reads the workspace's
+        # publicNetworkAccess + requiredNsgRules from ARM), records reason / phase /
+        # http_status / detail in its outputs, and exits 1 (#4765).
+        # KNOWN (run 36526911340, bootstrap on a7eadda12): the Commercial workspace
+        # adb-loom-default-centralus refused the runner with HTTP 403 "Unauthorized
+        # network access to workspace" (SCIM, then Delta Sharing; the old warehouse
+        # step then died in jq) EVEN THOUGH the "Enable Databricks public access"
+        # step's update had just returned publicNetworkAccess=Enabled. After the
+        # run ARM reads publicNetworkAccess=Disabled, requiredNsgRules=
+        # NoAzureDatabricksRules. So, as that estate is configured today, this step
+        # cannot create a warehouse from a GitHub-hosted runner; it now fails,
+        # names that cause from what it reads at failure time, and does not claim
+        # a warehouse id. The fix is an in-VNet path (follow-up), not this step.
         # continue-on-error stays so the steps after this one still run; the final
         # always() gate step reads this step's OUTCOME and fails the job, so the
         # job conclusion is honest. The in-step annotations are warnings because
@@ -1404,7 +1418,69 @@ jobs:
             echo
           }
           is_2xx() { [[ "${DBX_CODE:-}" =~ ^2[0-9][0-9]$ ]]; }
-          is_json_object() { jq -e 'type == "object"' "$1" > /dev/null; }
+          # jq only sees a body that STARTS like a JSON object, so an HTML/text page is
+          # named as such instead of surfacing as "jq: parse error" (the #4765 symptom).
+          is_json_object() {
+            local h
+            h=$(head -c 64 "$1" | tr -d '\0')
+            h="${h#"${h%%[![:space:]]*}"}"
+            [ "${h:0:1}" = "{" ] && jq -e 'type == "object"' "$1" > /dev/null
+          }
+          # workspace_network -> WS_PNA / WS_NSG read from ARM ('' when unreadable;
+          # az's own stderr is left visible). Used only to NAME a network failure.
+          workspace_network() {
+            local rid="" row=""
+            WS_PNA=""; WS_NSG=""
+            if [ -n "${DLZ_RG:-}" ]; then
+              rid=$(az resource list --subscription "$DLZ_SUB" -g "$DLZ_RG" --resource-type Microsoft.Databricks/workspaces --query "[?name=='$DBX_WS'].id | [0]" -o tsv) || rid=""
+            fi
+            if [ -z "$rid" ]; then
+              rid=$(az resource list --subscription "$ADMIN_SUB" -g "$ADMIN_RG" --resource-type Microsoft.Databricks/workspaces --query "[?name=='$DBX_WS'].id | [0]" -o tsv) || rid=""
+            fi
+            [ -n "$rid" ] || return 0
+            row=$(az resource show --ids "$rid" --query "join('|', [properties.publicNetworkAccess || 'unset', properties.requiredNsgRules || 'unset'])" -o tsv) || row=""
+            row=$(printf '%s' "$row" | tr -d '\r\n')
+            [ -n "$row" ] || return 0
+            WS_PNA="${row%%|*}"; WS_NSG="${row#*|}"
+          }
+          # classify_failure OUTFILE -> CAUSE (a reason code) + WHY (a sentence stating
+          # ONLY what this step established). deploy-integrity R6 (classify) + R7 (true).
+          classify_failure() {
+            local body first msg
+            body=$(head -c 2000 "$1" | tr -d '\0')
+            first="${body#"${body%%[![:space:]]*}"}"
+            if [ "${DBX_RC:-0}" != 0 ] || [ "${DBX_CODE:-000}" = 000 ] || [[ "${body,,}" == *"unauthorized network access"* ]]; then
+              CAUSE=network_blocked
+              workspace_network
+              if [ "$WS_PNA" = Disabled ]; then
+                WHY="workspace public network access is disabled (ARM: publicNetworkAccess=Disabled, requiredNsgRules=${WS_NSG}); runner cannot reach it (HTTP ${DBX_CODE:-none}, curl exit ${DBX_RC:-0})"
+              elif [ -n "$WS_PNA" ]; then
+                WHY="the workspace refused the runner at the network layer (HTTP ${DBX_CODE:-none}, curl exit ${DBX_RC:-0}) although ARM reports publicNetworkAccess=${WS_PNA}, requiredNsgRules=${WS_NSG}; an IP access list or a network change still propagating may be blocking it"
+              else
+                WHY="the workspace refused the runner at the network layer (HTTP ${DBX_CODE:-none}, curl exit ${DBX_RC:-0}); its publicNetworkAccess could not be read from ARM (az output above)"
+              fi
+            elif [[ "${DBX_CODE:-}" =~ ^40[13]$ ]]; then
+              CAUSE=auth_refused
+              WHY="the workspace rejected the deploy identity (HTTP $DBX_CODE; response above)"
+            elif ! is_json_object "$1"; then
+              CAUSE=not_json
+              if [ "${first:0:1}" = "<" ]; then WHY="HTTP ${DBX_CODE:-none}, but the response was HTML, not JSON (first 500 bytes above)"; else WHY="HTTP ${DBX_CODE:-none}, but the response was not JSON (first 500 bytes above)"; fi
+            elif is_2xx; then
+              CAUSE=no_id_in_response
+              WHY="HTTP $DBX_CODE with a JSON body that carried no warehouse id (response above)"
+            else
+              CAUSE=http_error
+              msg=$(jq -r '[.error_code, .message] | map(select(. != null)) | join(": ")' "$1" | tr -d '\r\n' | head -c 300)
+              WHY="HTTP ${DBX_CODE}${msg:+ — $msg}"
+            fi
+          }
+          fail_with() {  # fail_with PHASE -> records the classified failure for the final gate, exits 1
+            record reason "$CAUSE"
+            record phase "$1"
+            record http_status "${DBX_CODE:-none}"
+            record detail "$(printf '%s' "$WHY" | tr -d '\r\n')"
+            exit 1
+          }
           create_warehouse() {  # create_warehouse true|false OUTFILE -> sets WID only when the API returned an id
             WID=""
             dbx_call POST "$2" "$WH_API" -d "$(printf '{"name":"loom-default","cluster_size":"2X-Small","min_num_clusters":1,"max_num_clusters":1,"auto_stop_mins":10,"enable_serverless_compute":%s,"warehouse_type":"PRO"}' "$1")"
@@ -1415,10 +1491,9 @@ jobs:
           dbx_call GET "$PROBE" "$WH_API"
           if ! is_2xx || ! is_json_object "$PROBE"; then
             show_response "GET /api/2.0/sql/warehouses" "$PROBE"
-            echo "::warning::Could not list SQL warehouses on $DBX_HOST (HTTP $DBX_CODE, curl exit $DBX_RC; response above), so whether 'loom-default' already exists is unknown — not creating one blind."
-            record reason probe_failed
-            record http_status "${DBX_CODE:-none}"
-            exit 1
+            classify_failure "$PROBE"
+            echo "::warning::Could not list SQL warehouses on $DBX_HOST: $WHY. Whether 'loom-default' already exists is unknown, so none was created."
+            fail_with probe
           fi
           WID=$(jq -r '[.warehouses[]? | select(.name == "loom-default") | .id][0] // empty' "$PROBE")
           if [ -n "$WID" ]; then
@@ -1426,15 +1501,16 @@ jobs:
           else
             echo ">>> Creating serverless SQL warehouse 'loom-default' (2X-Small, auto-stop 10m)"
             create_warehouse true /tmp/dbx_wh_create_serverless.json
+            LAST=/tmp/dbx_wh_create_serverless.json
             if [ -z "$WID" ]; then
               echo "::notice::Serverless create returned no warehouse id (HTTP $DBX_CODE; response above) — retrying as a classic PRO warehouse."
               create_warehouse false /tmp/dbx_wh_create_classic.json
+              LAST=/tmp/dbx_wh_create_classic.json
             fi
             if [ -z "$WID" ]; then
-              echo "::warning::A Databricks workspace is bound ($DBX_HOST) but no SQL warehouse id resulted: the serverless and classic creates both returned no id (last HTTP $DBX_CODE, curl exit $DBX_RC; responses above). This step did not wire LOOM_DATABRICKS_SQL_WAREHOUSE_ID (#3744)."
-              record reason no_warehouse_id
-              record http_status "${DBX_CODE:-none}"
-              exit 1
+              classify_failure "$LAST"
+              echo "::warning::No SQL warehouse id resulted on $DBX_HOST (serverless, then classic): $WHY. This step did not wire LOOM_DATABRICKS_SQL_WAREHOUSE_ID (#3744)."
+              fail_with create
             fi
           fi
           echo "    SQL warehouse id: $WID"
@@ -1443,9 +1519,10 @@ jobs:
               --set-env-vars "LOOM_DATABRICKS_SQL_WAREHOUSE_ID=$WID" "LOOM_DATABRICKS_LINEAGE_WAREHOUSE_ID=$WID" -o none; then
             echo "✓ Wired LOOM_DATABRICKS_SQL_WAREHOUSE_ID + LINEAGE = $WID on the Console"
           else
-            echo "::warning::az containerapp update failed (its stderr is above): LOOM_DATABRICKS_SQL_WAREHOUSE_ID=$WID was NOT set on loom-console in $ADMIN_RG."
-            record reason console_env_not_set
-            exit 1
+            CAUSE=console_env_not_set
+            WHY="az containerapp update failed (its stderr is above); LOOM_DATABRICKS_SQL_WAREHOUSE_ID=$WID was NOT set on loom-console in $ADMIN_RG"
+            echo "::warning::$WHY."
+            fail_with console
           fi
 
       - name: Databricks reachability fallback (IP access-list for Console egress)
@@ -2783,19 +2860,34 @@ jobs:
         env:
           WH_OUTCOME: ${{ steps.dbx_sql_warehouse.outcome }}
           WH_REASON: ${{ steps.dbx_sql_warehouse.outputs.reason }}
+          WH_PHASE: ${{ steps.dbx_sql_warehouse.outputs.phase }}
           WH_HTTP: ${{ steps.dbx_sql_warehouse.outputs.http_status }}
+          WH_DETAIL: ${{ steps.dbx_sql_warehouse.outputs.detail }}
         run: |
           set -uo pipefail
           echo "SQL warehouse step (dbx_sql_warehouse) outcome: ${WH_OUTCOME:-not reached}"
           if [ "${WH_OUTCOME:-}" = "failure" ]; then
+            # CLASS + FIX per deploy-integrity R6. The cause sentence itself is the
+            # step's own WH_DETAIL, which states only what that step established (R7).
             case "${WH_REASON:-}" in
-              no_token) FIX="the deploy identity got no token for the Azure Databricks resource. Check the azure/login step above and that the identity belongs to the workspace's tenant, then re-run the bootstrap." ;;
-              probe_failed) FIX="GET /api/2.0/sql/warehouses was refused or unreachable. HTTP 000 or a connection error: the workspace was probably still private (the 'Enable Databricks public access' update ends in || true, so that window may not have opened). HTTP 401/403: the deploy identity needs to be a workspace admin (see 'Bootstrap Databricks SCIM'). Then re-run the bootstrap." ;;
-              no_warehouse_id) FIX="the serverless and the classic create both returned no id. Read both response bodies in that step's log: a quota or SKU message needs more quota or a different warehouse size; HTTP 403 needs the deploy identity to be a workspace admin. Then re-run the bootstrap." ;;
-              console_env_not_set) FIX="az containerapp update on loom-console failed. The deploy identity needs Contributor on loom-console in the admin resource group (\$ADMIN_RG in \$ADMIN_SUB); the warehouse id is printed in that step's log. Then re-run the bootstrap." ;;
-              *) FIX="the step failed before recording a reason. Read its log above." ;;
+              network_blocked) CLASS="network/configuration (not transient; re-running from a GitHub-hosted runner will not help while the workspace refuses public traffic)"
+                FIX="the SQL warehouse API has to be called from inside the workspace's network: run this step from an in-VNet runner or an in-VNet Container Apps job (the pattern scripts/csa-loom/grant-synapse-rbac-invnet-job.sh uses for Synapse). If the cause above shows publicNetworkAccess=Enabled, opening public access did not make the API reachable, so a longer public-access window is not the fix." ;;
+              auth_refused) CLASS="permission"
+                FIX="make the deploy identity a workspace admin (the 'Bootstrap Databricks SCIM' step), then re-run the bootstrap." ;;
+              not_json) CLASS="configuration"
+                FIX="something other than the Databricks API answered (the first 500 bytes are in that step's log); check the host in DBX_HOST and any proxy or sign-in page in front of it." ;;
+              http_error) CLASS="configuration or capacity"
+                FIX="act on the Databricks error named in the cause (for example a quota or SKU error needs more quota or a different warehouse size), then re-run the bootstrap." ;;
+              no_id_in_response) CLASS="defect"
+                FIX="the create API answered 2xx without an id; the response is in that step's log. File it against this step." ;;
+              no_token) CLASS="permission/configuration"
+                FIX="the deploy identity got no token for the Azure Databricks resource. Check the azure/login step above and that the identity belongs to the workspace's tenant, then re-run the bootstrap." ;;
+              console_env_not_set) CLASS="permission"
+                FIX="the deploy identity needs Contributor on loom-console in the admin resource group (\$ADMIN_RG in \$ADMIN_SUB); the warehouse id is printed in that step's log. Then re-run the bootstrap." ;;
+              *) CLASS="unclassified"
+                FIX="the step failed before recording a reason. Read its log above." ;;
             esac
-            echo "::error::Step 'Provision default Databricks SQL warehouse (query compute) + wire it on the Console' failed (reason: ${WH_REASON:-not recorded}; last Databricks HTTP status: ${WH_HTTP:-not recorded}; the status and the first 500 bytes of each response body are printed in that step's log). This run did not set LOOM_DATABRICKS_SQL_WAREHOUSE_ID on loom-console. Remediation: $FIX"
+            echo "::error::Step 'Provision default Databricks SQL warehouse (query compute) + wire it on the Console' failed at ${WH_PHASE:-an unrecorded phase}: ${WH_DETAIL:-no cause recorded} [reason=${WH_REASON:-not recorded}, last Databricks HTTP status=${WH_HTTP:-not recorded}; each response's status and first 500 bytes are in that step's log]. This run did not set LOOM_DATABRICKS_SQL_WAREHOUSE_ID on loom-console. Class: ${CLASS}. Remediation: ${FIX}"
             exit 1
           fi
           echo "No gated step failed."
