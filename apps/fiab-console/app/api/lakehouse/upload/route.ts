@@ -1,11 +1,25 @@
 /**
  * POST /api/lakehouse/upload (multipart/form-data)
- * Fields: container, path, file
+ * Fields: lakehouseId | reportId, container, path, file
  *
  * Accepts ANY file type readable by Apache Spark (parquet, delta, orc, avro,
  * json, csv, tsv, xml, geojson, geoparquet, shapefile, geotiff, raster, plain
  * binary, etc.). Returns 201 with a detected Spark format hint so the
  * lakehouse UI can show the user a one-line read snippet.
+ *
+ * Three request forms, each deciding where the file may land before any byte
+ * is read or written:
+ *
+ *   ITEM FORM (`lakehouseId`) — what the lakehouse editor sends. Edit rights on
+ *   the item are required; the file must sit strictly below the item's own
+ *   root in its own container (`scopeItemPath`).
+ *
+ *   REPORT FORM (`reportId`) — what the report Get Data gallery sends. Edit
+ *   rights on the report are required, and the file must be
+ *   `landing/report-uploads/<reportId>/<file name>` (`scopeReportUpload`).
+ *
+ *   STORAGE FORM (neither) — names a container + path directly. Only a tenant
+ *   admin may use it; everyone else is refused before any storage call.
  *
  * Returns 4xx with structured { ok:false, error } JSON on validation
  * failures. Never returns HTML — the caller can therefore safely parse the
@@ -16,6 +30,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { KNOWN_CONTAINERS, uploadFile, type KnownContainer } from '@/lib/azure/adls-client';
 import { detectSparkFormat, renderReadSnippet } from '@/lib/azure/spark-format-detect';
 import { withSession } from '@/lib/api/route-toolkit';
+import { scopeItemPath } from '../_lib/item-scope';
+import { scopeReportUpload } from '../_lib/report-upload';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -24,6 +40,10 @@ export const dynamic = 'force-dynamic';
 // at 4 GB here to keep the in-process buffer manageable. For larger files,
 // see /api/lakehouse/upload-stream (streamed, chunked) once landed.
 const MAX_BYTES = 4 * 1024 * 1024 * 1024;
+
+const READ_ONLY_MESSAGE =
+  'Your role on this lakehouse is read-only, so Loom did not upload the file. A workspace '
+  + 'Member/Admin, or an item grant that includes Edit, can upload to it.';
 
 export const POST = withSession(async (req: NextRequest, { session }) => {
 
@@ -37,31 +57,30 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
     );
   }
 
-  const container = (form.get('container') || '').toString();
-  const path = (form.get('path') || '').toString();
+  const lakehouseId = (form.get('lakehouseId') || '').toString().trim();
+  const reportId = (form.get('reportId') || '').toString().trim();
+  const rawContainer = (form.get('container') || '').toString().trim();
+  const rawPath = (form.get('path') || '').toString();
   const file = form.get('file');
 
-  if (!container || !path) {
+  if (!rawPath) {
     return NextResponse.json(
-      { ok: false, error: 'container and path are required' },
+      { ok: false, error: 'path is required' },
       { status: 400 },
     );
   }
-  // Folder drag-and-drop sends a multi-segment relative path. Reject traversal
-  // (`..`) and absolute paths so a crafted folder name can't escape the
-  // container root.
-  if (path.includes('..') || path.startsWith('/') || path.startsWith('\\')) {
-    return NextResponse.json(
-      { ok: false, error: 'invalid path: must be a relative path without ".." segments' },
-      { status: 400 },
-    );
-  }
-  if (!(KNOWN_CONTAINERS as readonly string[]).includes(container)) {
-    return NextResponse.json(
-      { ok: false, error: `unknown container: ${container}` },
-      { status: 404 },
-    );
-  }
+
+  // Decide the target before touching the file body.
+  const scoped = reportId && !lakehouseId
+    ? await scopeReportUpload(session, reportId, rawContainer, rawPath)
+    : await scopeItemPath(
+        session,
+        { lakehouseId, container: rawContainer, rawPath },
+        { write: true, readOnlyMessage: READ_ONLY_MESSAGE, knownContainers: KNOWN_CONTAINERS },
+      );
+  if (scoped instanceof NextResponse) return scoped;
+  const { container, path } = scoped;
+
   if (!file || typeof file === 'string') {
     return NextResponse.json(
       { ok: false, error: 'file part is required' },

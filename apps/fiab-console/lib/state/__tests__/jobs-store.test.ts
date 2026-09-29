@@ -44,11 +44,17 @@ describe('jobs-store', () => {
 
     const file = new File([new Uint8Array([1, 2, 3])], 'data.parquet');
     const id = useJobsStore.getState().startUpload({
+      lakehouseId: 'lh-1',
       lakehouseName: 'Sales Bronze',
       container: 'bronze',
       path: 'sales/data.parquet',
       file,
     });
+
+    // The upload names its lakehouse item; breaks if the store drops the field.
+    const sent = (fetch as any).mock.calls[0][1].body as FormData;
+    expect(sent.get('lakehouseId')).toBe('lh-1');
+    expect(sent.get('path')).toBe('sales/data.parquet');
 
     // Recorded synchronously as running — survives any later unmount.
     let job = useJobsStore.getState().jobs.find((j) => j.id === id);
@@ -79,6 +85,7 @@ describe('jobs-store', () => {
 
     const file = new File([new Uint8Array([0])], 'big.bin');
     const id = useJobsStore.getState().startUpload({
+      lakehouseId: 'lh-1',
       lakehouseName: 'Gold LH', container: 'gold', path: 'big.bin', file,
     });
 
@@ -110,6 +117,7 @@ describe('jobs-store', () => {
 
     const file = new File([new Uint8Array([1])], 'x.csv');
     const id = useJobsStore.getState().startUpload({
+      lakehouseId: 'lh-1',
       lakehouseName: 'Silver', container: 'silver', path: 'x.csv', file,
     });
     expect(useJobsStore.getState().jobs.find((j) => j.id === id)?.status).toBe('running');
@@ -146,7 +154,7 @@ describe('jobs-store', () => {
   it('clearCompleted keeps only running jobs', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ ok: true }, 201)));
     const file = new File([new Uint8Array([1])], 'a.parquet');
-    useJobsStore.getState().startUpload({ lakehouseName: 'L', container: 'bronze', path: 'a.parquet', file });
+    useJobsStore.getState().startUpload({ lakehouseId: 'lh-1', lakehouseName: 'L', container: 'bronze', path: 'a.parquet', file });
     await flush();
     useJobsStore.getState().recordLoadToTable({ lakehouseName: 'L', container: 'bronze', tableName: 't' });
     expect(useJobsStore.getState().jobs.length).toBeGreaterThanOrEqual(2);

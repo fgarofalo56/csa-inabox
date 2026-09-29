@@ -97,7 +97,7 @@ export interface LakehouseEditorCtx {
   uploadQueue: { done: number; total: number } | null;
   uploading: boolean;
   jobs: ReturnType<typeof import('@/lib/state/jobs-store').useJobsStore>; // job store snapshot
-  startUpload: (p: { lakehouseName: string; container: string; path: string; file: File; onDone: (r: { ok: boolean; error?: string }) => void }) => void;
+  startUpload: (p: { lakehouseId: string; lakehouseName: string; container: string; path: string; file: File; onDone: (r: { ok: boolean; error?: string }) => void }) => void;
   recordLoadToTable: (p: { lakehouseName: string; container: string; tableName: string }) => void;
   runningUploads: unknown[];
 

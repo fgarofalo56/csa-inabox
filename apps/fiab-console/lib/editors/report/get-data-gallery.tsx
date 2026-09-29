@@ -776,9 +776,15 @@ function BindStep({
   const upload = useCallback(async (file: File) => {
     setUploadBusy(true); setUploadErr(null); setUploaded(null); setPreview(null);
     try {
+      // An uploaded file is stored with its report, so the report must exist.
+      if (!reportId || reportId === 'new') {
+        setUploadErr('Save the report first. An uploaded file is stored with the report it feeds.');
+        return;
+      }
       const form = new FormData();
+      form.append('reportId', reportId);
       form.append('container', UPLOAD_CONTAINER);
-      form.append('path', `report-uploads/${reportId || 'adhoc'}/${file.name}`);
+      form.append('path', `report-uploads/${reportId}/${file.name}`);
       form.append('file', file);
       const r = await clientFetch('/api/lakehouse/upload', { method: 'POST', credentials: 'include', body: form });
       const j = await r.json().catch(() => ({}));

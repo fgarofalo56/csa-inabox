@@ -450,9 +450,10 @@ export function LakehouseEditor({ item, id }: Props) {
 
   const uploadOne = useCallback(async (targetPath: string, file: File): Promise<string | null> => {
     if (!activeContainer) return 'No active container';
+    if (isNewItem) return 'Save the lakehouse first, then upload files to it.';
     try {
       const fd = new FormData();
-      fd.set('container', activeContainer); fd.set('path', targetPath); fd.set('file', file);
+      fd.set('lakehouseId', id); fd.set('container', activeContainer); fd.set('path', targetPath); fd.set('file', file);
       const r = await clientFetch('/api/lakehouse/upload', { method: 'POST', body: fd });
       const ct = r.headers.get('content-type') || '';
       let j: any = null; let bodyText: string | null = null;
@@ -467,7 +468,7 @@ export function LakehouseEditor({ item, id }: Props) {
       }
       return null;
     } catch (e: any) { return `${leafName(targetPath)}: ${e?.message || String(e)}`; }
-  }, [activeContainer]);
+  }, [activeContainer, id, isNewItem]);
 
   const uploadItems = useCallback(async (items: UploadItem[]) => {
     if (!activeContainer || !items.length) return;
@@ -502,15 +503,16 @@ export function LakehouseEditor({ item, id }: Props) {
       const prefix = activePath?.isDirectory ? activePath.name : rootPrefix;
       const targetPath = prefix ? `${trimTrailingSlashes(prefix)}/${file.name}` : file.name;
       setActionError(null);
+      if (isNewItem) { setActionError('Save the lakehouse first, then upload files to it.'); return; }
       startUpload({
-        lakehouseName, container: activeContainer, path: targetPath, file,
+        lakehouseId: id, lakehouseName, container: activeContainer, path: targetPath, file,
         onDone: ({ ok, error }) => { if (ok) refreshActive(); else if (error) setActionError(error); },
       });
       setTimeout(refreshActive, 500);
       return;
     }
     await uploadItems(files.map((f) => ({ relativePath: f.name, file: f })));
-  }, [activeContainer, activePath, rootPrefix, startUpload, lakehouseName, uploadItems, refreshActive]);
+  }, [activeContainer, activePath, rootPrefix, startUpload, lakehouseName, uploadItems, refreshActive, id, isNewItem]);
 
   const onFolderInputChange = useCallback(async (ev: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(ev.target.files || []) as File[];

@@ -135,6 +135,8 @@ async function parseUploadResponse(
 }
 
 interface StartUploadArgs {
+  /** The lakehouse item the file is uploaded to (the route authorizes it). */
+  lakehouseId: string;
   lakehouseName: string;
   container: string;
   /** Full target path within the container, e.g. "silver/data.parquet". */
@@ -233,7 +235,7 @@ interface JobsState {
 export const useJobsStore = create<JobsState>((set, get) => ({
   jobs: [],
 
-  startUpload: ({ lakehouseName, container, path, file, onDone }) => {
+  startUpload: ({ lakehouseId, lakehouseName, container, path, file, onDone }) => {
     const id = nextId();
     const ac = new AbortController();
     controllers.set(id, ac);
@@ -250,6 +252,7 @@ export const useJobsStore = create<JobsState>((set, get) => ({
     };
 
     const fd = new FormData();
+    fd.set('lakehouseId', lakehouseId);
     fd.set('container', container);
     fd.set('path', path);
     fd.set('file', file);
