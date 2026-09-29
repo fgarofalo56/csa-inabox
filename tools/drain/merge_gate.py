@@ -747,7 +747,7 @@ def collect(repo: str, number: int) -> dict:
     pr = gh_json(
         ["gh", "pr", "view", str(number), "--repo", repo, "--json",
          ("number,title,baseRefName,headRefOid,mergeable,mergeStateStatus,state,body,"
-          "commits,statusCheckRollup,closingIssuesReferences")],
+          "commits,statusCheckRollup,closingIssuesReferences,author")],
         f"PR #{number}",
     )
     assert isinstance(pr, dict)
@@ -1621,6 +1621,20 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None,
     )
     stream, why_stream = ledger_stream(will_close, mentioned, policy, state_path,
                                        pr=pr.get("number"))
+    # #4728 / operator decision 2026-09-21. Computed from the REAL author and
+    # the REAL changed files, for the same reason `review_requirement` is given
+    # `changed` rather than a lane: at merge time both are facts. `why_bump` is
+    # carried into the printed reason so an exemption is never silent -- and so
+    # a REFUSED exemption says which of the three fail-closed arms fired.
+    #
+    # THIS AUTHOR EXPRESSION IS THE LOAD-BEARING PART, and it is covered by a
+    # behavioural test (`test_a_lock_only_bot_bump_drops_gate_3b_to_one_...`),
+    # not by a grep of this file. The first version was guarded only by a test
+    # that asserted these two lines were still SPELLED this way; an independent
+    # reviewer inserted `author = "app/dependabot"` immediately above and the
+    # whole suite stayed green, which hands every human PR the bot's exemption.
+    author = ((pr.get("author") or {}).get("login")) if isinstance(pr.get("author"), dict) else None
+    is_bump, why_bump = gates.is_dependency_bump(policy, author, changed)
     needed, why_needed = gates.review_requirement(
         policy,
         changed_paths=changed,
@@ -1628,6 +1642,7 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None,
         stream=stream,
         footprint_known=bool(changed),
         stream_known=stream is not None,
+        dependency_bump=is_bump,
     )
     # NAMED "approval count", not "independent reviewers". The gate counts
     # APPROVE comments; it cannot tell two reviewers from one reviewer posting
@@ -1642,7 +1657,8 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None,
         "3b approval count",
         len(approvals) >= needed,
         f"{len(approvals)} live APPROVE of {needed} required - {why_needed}"
-        f" [worst verdict posted: {prior_verdict or 'none'} | {why_stream}]"
+        f" [worst verdict posted: {prior_verdict or 'none'} | {why_stream}"
+        f" | bump check: {why_bump}]"
         " (COUNT only: independence is enforced by tool access, not measured here)"
         + ("" if len(approvals) >= needed else
            ". A second reviewer must be independently briefed and their verdict POSTED "

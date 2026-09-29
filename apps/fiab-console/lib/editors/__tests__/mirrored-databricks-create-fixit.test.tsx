@@ -193,16 +193,21 @@ beforeEach(() => {
  * off a loaded run — PR #4693 §4). Same modifier, different warrant. "The same
  * jsdom reason" was overstated, and it is why the strict control below exists.
  *
- * Every PRESENCE assertion in this file stays strict — but be precise about
- * what that buys, and about the one exception. The presence assertions (the
- * `Fix it` / `Gate registry` / gate-title queries) do fail if a gate renders
- * only inside the accessibility tree's blind spot. The ABSENCE ones pass for
- * the wrong reason under exactly that state — the second direction the
- * `afterEach` docblock warns about. That is pre-existing, is not introduced
- * here, and is not closed by this change. The exception is deliberate and runs
- * the other way: probe 2's `queryAllByRole(…, { hidden: true }).length === 0`
- * is widened ON PURPOSE, because absence under the WIDEST query is strictly
- * stronger than absence under a narrow one.
+ * WHAT IS STRICT AND WHAT IS NOT, as of #4698. The `Fix it` PRESENCE queries
+ * are strict: they fail if a gate renders only inside the accessibility tree's
+ * blind spot. The `Gate registry` PRESENCE queries are NOT — both go through
+ * `findGateRegistryLinks()`, which is widened with `hidden: true` for the
+ * measured reason in its own docblock. The gate-title checks are
+ * `getAllByText`, which never had an accessibility filter.
+ *
+ * ABSENCE runs the other way: a STRICT absence query passes for the wrong
+ * reason when the thing is present but aria-hidden, which is the state the
+ * poll under findGateRegistryLinks measured. So the absence checks in the
+ * no-registry test are widened ON PURPOSE, as is probe 2's — absence under the
+ * WIDEST query is strictly stronger than absence under a narrow one. NOT
+ * widened, disclosed rather than hidden: the positive-control test's own
+ * `Fix it` absence check is still strict. It predates #4698 and is left for
+ * whoever next touches that test.
  */
 function findCreateMirrorButton() {
   return screen.findByRole('button', { name: /Create mirror/i, hidden: true }, { timeout: 5000 });
@@ -253,6 +258,59 @@ async function createMirror(user: ReturnType<typeof userEvent.setup>) {
   await user.click(await findCreateMirrorButton());
 }
 
+/**
+ * #4698 — THE REGISTRY LINK IS AWAITED AND WIDENED, NEVER SAMPLED STRICTLY.
+ *
+ * #4698 names this file's lines for the shape it is about: a synchronous
+ * `getAllByRole` on the statement AFTER an awaited `waitFor`. The two sites
+ * were the `Gate registry` link, read one statement after the `Fix it` button
+ * in the SAME bar had been awaited — and #4698 measured both of them red on a
+ * loaded workstation (`Unable to find an accessible element with the role
+ * "link" and name /Gate registry/i`) while the `Fix it` button in that same bar
+ * had just resolved.
+ *
+ * WHY THIS IS NOT JUST A `waitFor` WRAP, measured here rather than assumed.
+ * #4698's own triage prefers waiting over widening, and the first cut of this
+ * helper was a STRICT `waitFor`. It does not work at this site, and the reason
+ * is not a race. Polled every 100ms from the moment an ancestor of the link was
+ * un-hidden, on the real rendered bar:
+ *
+ *   t=0    strict=0 wide=1  parentHidden=true  parentInDoc=true linkInDoc=true
+ *   t=200  strict=0 wide=1  parentHidden=null  parentInDoc=true linkInDoc=true
+ *   …stable through t=700, and a 5000ms strict `waitFor` still times out.
+ *
+ * So the link stays in the DOM and stays findable to a WIDENED query, while a
+ * strict one never recovers: some HIGHER ancestor is aria-hidden and stays
+ * that way. WHICH ancestor was not measured — the poll records only the
+ * link's own parent, which it shows clear — so this does not name one. It is
+ * consistent with the modal aria-hidden unwind `findCreateMirrorButton`
+ * measures for the submit control, and is not claimed to be it. Waiting longer is therefore strictly worse, not better. The two
+ * call sites pass today only because the synchronous read lands BEFORE that
+ * lands; a slower CI box is the input that loses the race, which is what #4698
+ * recorded.
+ *
+ * WHAT THE WIDENING COSTS, stated rather than glossed. `hidden: true` bypasses
+ * the visibility filter (`hidden`, `aria-hidden`, `display:none`, inherited
+ * `visibility:hidden`) — but NOT the NAME filter, so this still reddens if the
+ * bar stops rendering a link named `Gate registry`. That is what the two call
+ * sites assert, and it is unchanged.
+ *
+ * THE VALUE THAT MAKES IT FAIL: the link never appearing under ANY query.
+ * `waitFor` re-throws the last error on timeout, so a bar that renders `Fix it`
+ * without a registry link is still RED here — exactly as the synchronous form
+ * was.
+ *
+ * Callers use THIS function, never a transcription of it, so the probe below
+ * cannot drift away from what the two call sites actually do.
+ */
+function findGateRegistryLinks(): Promise<HTMLElement[]> {
+  return waitFor(() => {
+    const links = screen.getAllByRole('link', { name: /Gate registry/i, hidden: true });
+    expect(links.length, 'the gate bar must carry a link to the gate registry').toBeGreaterThan(0);
+    return links;
+  }, { timeout: 5000 });
+}
+
 /** A marker long enough that an accidental substring match is implausible. */
 const GATE_PROSE = 'DUPPROBE-Databricks workspace not configured for this deployment.';
 
@@ -274,7 +332,8 @@ describe('MirroredDatabricksEditor create dialog — failed-pairing Fix-it (#418
     await waitFor(() => expect(screen.getAllByRole('button', { name: /Fix it/i }).length).toBeGreaterThan(0));
     // The id RESOLVED in the registry — the unknown-id fallback bar is absent.
     expect(screen.queryByText(/needs configuration/i)).toBeNull();
-    expect(screen.getAllByRole('link', { name: /Gate registry/i }).length).toBeGreaterThan(0);
+    // The helper asserts `length > 0` itself, inside its waitFor.
+    await findGateRegistryLinks();
     // …and it resolved to the gate the ROUTE named, by that gate's own title.
     expect(screen.getAllByText(/Azure Databricks \(notebooks \/ SQL \/ Warp\)/i).length).toBeGreaterThan(0);
     // The measured reason is still on screen…
@@ -318,7 +377,7 @@ describe('MirroredDatabricksEditor create dialog — failed-pairing Fix-it (#418
 
     await waitFor(() => expect(screen.getAllByRole('button', { name: /Fix it/i }).length).toBeGreaterThan(0));
     expect(screen.queryByText(/needs configuration/i)).toBeNull();
-    expect(screen.getAllByRole('link', { name: /Gate registry/i }).length).toBeGreaterThan(0);
+    await findGateRegistryLinks(); // asserts `length > 0` itself
     // The gate that rendered is the one the ROUTE named — `svc-synapse`'s own
     // registry title — and emphatically not the Databricks one.
     expect(screen.getAllByText(/Synapse \(warehouse \/ notebooks \/ pipelines\)/i).length).toBeGreaterThan(0);
@@ -341,12 +400,16 @@ describe('MirroredDatabricksEditor create dialog — failed-pairing Fix-it (#418
     await waitFor(() =>
       expect(screen.getByText(/Mirror created — endpoint not yet queryable/i)).toBeTruthy(),
     );
-    expect(screen.queryByRole('button', { name: /Fix it/i })).toBeNull();
+    // ABSENCE UNDER THE WIDEST QUERY (#4698). A strict role query returns 0
+    // for a control that IS present but sits under an aria-hidden ancestor —
+    // the state measured under findGateRegistryLinks — so the strict form of
+    // these two could not fail on the one input they exist to catch.
+    expect(screen.queryAllByRole('button', { name: /Fix it/i, hidden: true }).length).toBe(0);
     // The three assertions that kill the narrow mutation (see the docblock):
     // an unconditional HonestGate would mount its unknown-id bar here, which
     // carries neither the honest title above nor these tells.
     expect(screen.queryByText(/needs configuration/i)).toBeNull();
-    expect(screen.queryAllByRole('link', { name: /Gate registry/i }).length).toBe(0);
+    expect(screen.queryAllByRole('link', { name: /Gate registry/i, hidden: true }).length).toBe(0);
   });
 
   /**
@@ -711,5 +774,110 @@ describe('MirroredDatabricksEditor create dialog — failed-pairing Fix-it (#418
         'the re-attached button must actually submit the create',
       ).toBe(1),
     );
+  });
+
+  /**
+   * #4698 PROBE — THE REGISTRY-LINK QUERY SURVIVES AN A11Y-INVISIBLE SURFACE.
+   *
+   * WHY IT EXISTS. `findGateRegistryLinks` is the whole of #4698's fix in this
+   * file, and on its own NOTHING witnesses it: reverting the helper to a bare
+   * `screen.getAllByRole('link', …)` leaves the two call sites green on a quiet
+   * machine, which is exactly how the shape survived to be filed. An
+   * unwitnessed change to a test file is the shape `assertion-design.md`
+   * refuses, so the helper ships with a probe that has deterministic kill power
+   * over it.
+   *
+   * THE VALUE THAT MAKES THIS FAIL: `aria-hidden="true"` on an ancestor of the
+   * link. That is not a hypothetical — it is the state the helper's docblock
+   * measures the real bar reaching and STAYING in (`strict=0 wide=1`, stable
+   * t=0→700 with the link still in the document). The probe applies the same
+   * attribute deterministically, one ancestor down, so the input is named and
+   * repeatable rather than waited for.
+   *
+   * WHY AN ANCESTOR AND NOT THE LINK ITSELF. `hidden: true` bypasses the
+   * VISIBILITY filter but not the NAME filter, and `dom-accessibility-api`
+   * computes the EMPTY STRING for a node that is itself hidden — so marking the
+   * link would make even the widened helper find nothing, and a red could no
+   * longer tell "the guard is missing" from "the mutation broke the probe
+   * anyway", which is not a witness. Marking the parent keeps the name
+   * computable, which is what makes the two-sided control below possible.
+   *
+   * WHAT IS *NOT* WITNESSED, disclosed rather than counted
+   * (`assertion-design.md` "done" #5). This probe kills the `hidden: true`
+   * half. It does NOT independently witness the `waitFor` + `timeout` half:
+   * `waitFor(…{hidden:true})` and a bare `getAllByRole(…{hidden:true})` both
+   * pass against this fixture. The late-render input that WOULD separate them
+   * is not available here — the two routes to one were measured and both fail:
+   * detaching the link and re-inserting it on a timer never returns it to the
+   * document (React owns that subtree and has already replaced the parent), and
+   * delaying the bar's render would mean delaying the create POST, which the
+   * shared `createMirror` helper awaits. The wait is kept because it costs
+   * nothing and covers a slow first render; it is not claimed as tested.
+   *
+   * MUTATION KILL, measured: drop `hidden: true` from the helper and THIS test
+   * is the run's only red — `Unable to find role="link" and name
+   * /Gate registry/i`, at a 5000ms budget — while the two call sites above stay
+   * green. So the kill belongs to this probe, and the two production sites are
+   * the thing it protects rather than the thing that proves it.
+   *
+   * WHAT IT DOES NOT CLAIM. It does not make this file flake-free and does not
+   * touch the third red #4698 measured (the `.fui-DialogSurface` teardown wait
+   * in `a dismissed failure does not re-render`), which is a different shape
+   * and stays open on that issue.
+   */
+  it('the gate-registry link query survives an aria-hidden ancestor (#4698)', async () => {
+    const user = userEvent.setup();
+    createResponse = {
+      ok: false,
+      created: true,
+      code: 'NO_DATABRICKS',
+      gateId: 'svc-databricks',
+      error: 'Databricks workspace not configured (set LOOM_DATABRICKS_HOSTNAME).',
+      mirror: { id: 'm1' },
+      pairing: { ok: false, code: 'NO_DATABRICKS', gate: GATE_PROSE },
+    };
+    await createMirror(user);
+
+    // POSITIVE CONTROL, before the mutation: the helper resolves against the
+    // bar as rendered. Passes under the mutant too — that is the point; it
+    // localises this test's kill power to the hidden state alone rather than to
+    // "the link exists at all". Awaited FIRST so nothing below races the render.
+    const links = await findGateRegistryLinks();
+    const link = links[0];
+    const parent = link.parentElement;
+    expect(parent, 'the registry link must have an ancestor to mark').toBeTruthy();
+
+    parent!.setAttribute('aria-hidden', 'true');
+
+    // THE FIXTURE REACHES THE RULE, in both directions:
+    //  - an UNWIDENED query finds nothing, so a green below cannot be read as
+    //    "the mutation did nothing"; and
+    //  - the link is still IN THE DOCUMENT, so this fixture hides it rather
+    //    than deleting it — which is what makes the kill below attributable to
+    //    the widening and not to absence.
+    expect(
+      screen.queryAllByRole('link', { name: /Gate registry/i }).length,
+      'an aria-hidden ancestor must hide the link from an unwidened role query',
+    ).toBe(0);
+    expect(
+      document.body.contains(link),
+      'this fixture must hide the link, not remove it',
+    ).toBe(true);
+
+    try {
+      // THE ASSERTION THAT CARRIES THE KILL POWER: the helper — CALLED, not
+      // transcribed, so a future edit to it cannot drift away from what this
+      // pins — still resolves, and to the SAME node.
+      const found = await findGateRegistryLinks();
+      expect(found[0], 'the query must resolve to the same link the bar rendered').toBe(link);
+    } finally {
+      parent!.removeAttribute('aria-hidden');
+    }
+
+    // POSITIVE CONTROL, paired with the absence assertion above per
+    // `assertion-design.md` "done" #4: the bar this link belongs to is still
+    // the resolved gate's, not a re-render into the unknown-id fallback.
+    expect(screen.getAllByText(/Azure Databricks \(notebooks \/ SQL \/ Warp\)/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/needs configuration/i)).toBeNull();
   });
 });

@@ -51,12 +51,60 @@ resource lake 'Microsoft.Storage/storageAccounts@2024-01-01' existing = if (acti
   name: empty(storageAccountName) ? 'placeholderaccount' : storageAccountName
 }
 
-// Deterministic guid over (scope, principal, role): a redeploy is idempotent and
-// collapses onto the SAME assignment, and it also collapses onto an equivalent
-// grant already made for this pair elsewhere rather than erroring on a duplicate.
-// On the live Commercial estate the Console UAMI ALREADY holds this role on the
-// lake (measured 2026-08-13), so on that estate this is a confirming no-op — the
-// module exists so the grant is guaranteed rather than inherited by luck.
+// Deterministic guid over (scope, principal, role): a redeploy by THIS template
+// re-submits the SAME assignment NAME, so it is idempotent. That is the whole of
+// what the deterministic name buys, and the sentence that used to follow it here
+// claimed more than that (#4387).
+//
+// WHAT THE RETRACTED CLAIM SAID, AND WHY IT IS FALSE. Until 2026-09-28 this note
+// also asserted that the deterministic guid "collapses onto an equivalent grant
+// already made for this pair elsewhere rather than erroring on a duplicate", and
+// concluded that on the live Commercial estate this module is "a confirming
+// no-op". Both halves are wrong, and the second is the dangerous one: it reads as
+// a safety guarantee on exactly the estate where it does not hold.
+//
+// ARM enforces uniqueness on the (scope, principalId, roleDefinitionId) TUPLE,
+// not on the assignment NAME. A second assignment for a tuple that already has
+// one fails with RoleAssignmentExists even under a different name. guid()
+// idempotency therefore requires the EXISTING assignment to carry the SAME name,
+// which is true only when this template created it — an out-of-band
+// `az role assignment create` mints a RANDOM name and permanently occupies the
+// tuple. This is a Microsoft.Authorization property, so it does not vary by the
+// resource provider that owns the scope.
+//
+// MEASURED IN THIS REPO, both boundaries, cited by SYMBOL because line numbers
+// rot. Neither receipt is this module's own role or scope — they are the same
+// ARM constraint observed elsewhere, and that is stated rather than glossed:
+//   * admin-plane/swa-publish-rbac.bicep's header — COMMERCIAL centralus
+//     2026-08-07, runs 31194622139 / 31196922481. A hand-made assignment created
+//     2026-07-07 (`az role assignment create`, random name) held the triple, and
+//     that module's deterministic guid() name "could never be created beside it".
+//   * the same file's `sovereignRedundant` note — usgovvirginia 2026-07-10
+//     round 2, RoleAssignmentExists, which is why GCC-High / IL5 skip the
+//     assignment outright.
+//   * main.bicep's `adminAppResourcesRbac` gating note — the app-resources leaf
+//     "failed RoleAssignmentExists on EVERY deploy in BOTH topologies; it only
+//     ever 'worked' because the grant was created imperatively".
+//
+// WHAT THAT MEANS HERE, CONCRETELY. This module's tuple is (the DLZ lake account,
+// the Console UAMI, Storage Blob Data Contributor). data-plane/dlz-lake-grant-pass
+// .bicep records that EXACT tuple as already assigned out-of-band on the live
+// Commercial lake — created 2026-06-18, measured 2026-08-13 — and refuses #3338
+// on precisely that ground: re-creating it under a guid()-derived name would fail
+// the whole deployment. So on that estate this module is NOT a confirming no-op;
+// it is the same hazard that file exists to avoid.
+//
+// WHY IT HAS NOT FIRED YET. The caller gates this on `loomStorageGrantable`
+// (= lake bound AND same-subscription), which is false on every cross-sub estate,
+// and the live Commercial estate carrying that out-of-band grant is cross-sub. A
+// SAME-SUB estate holding an equivalent Console-UAMI grant on its lake would hit
+// it. Per the caller's note this grant also has no consumer yet — nothing in
+// apps/loom-transform-runner writes to ADLS — so it is kept, not armed harder.
+//
+// NOT ESTABLISHED, and deliberately not asserted: no one has run the isolated
+// experiment #4387 describes (imperative grant, then a guid()-named bicep grant
+// for the same tuple, in a scratch RG) against this role and this scope. The
+// receipts above are what the repo has observed; this note claims only those.
 resource lakeWriteRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (active) {
   name: guid(lake.id, principalId, storageBlobDataContributorRoleId)
   scope: lake
