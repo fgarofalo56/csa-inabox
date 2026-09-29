@@ -10,7 +10,7 @@
  * type that CAN say no. This file is the second.
  *
  * The failure it prevents is specific and this repo has shipped it: an UNKNOWN
- * reported as a NEGATIVE. A sweep over an empty or stale graph produces zero
+ * reported as a NEGATIVE. A sweep over an empty or wrong-version graph produces zero
  * security findings, and zero findings renders identically to "we looked and the
  * estate is clean". The distinction is invisible downstream unless it is refused
  * HERE, before a detector ever runs.
@@ -55,25 +55,28 @@ export type SecurityGraphSource =
   | { readonly available: false; readonly reason: string };
 
 /**
- * How old a committed artifact may be before it stops describing the tree.
+ * WHY THERE IS NO AGE REFUSAL ANY MORE (#4798).
  *
- * The artifact is baked into the container image, so its age IS the age of the
- * source it describes. An image running for six months carries a six-month-old
- * security picture, and rendering that as the current state is the stale-read
- * defect. 90 days is deliberately generous — this refuses an ABANDONED estate,
- * not a slightly-behind one, and `deploy-integrity.md` R3 already covers drift
- * that is merely recent.
+ * This module used to refuse an artifact whose committed `meta.generatedAt` was
+ * over 90 days old. That timestamp is gone from the committed bytes: it differed
+ * on every run, so every pair of PRs that regenerated the artifact conflicted on
+ * it. Keeping it as "last regenerated" would not have saved the refusal either,
+ * because a merge-stable artifact is only regenerated when a node, edge or
+ * ledger entry moves — a correct artifact over a quiet stretch of the tree would
+ * then be refused as STALE, and `generated-sweep.test.ts` (which resolves the
+ * committed artifact against the real clock) would go red on a calendar date.
+ *
+ * What the age check stood in for is now established directly. `--check`, a
+ * REQUIRED context on `main`, re-extracts and compares on every merge, so the
+ * artifact inside an image built from `main` IS the extraction of that image's
+ * own source. How far that image trails `main` is `deploy-integrity.md` R3's
+ * question, surfaced by the deploy-status lane, not something an artifact
+ * timestamp could answer.
  */
-export const MAX_ARTIFACT_AGE_DAYS = 90;
 
 /** Shared prefix so every refusal reads as the same, deliberate state. */
 const NOT_EVALUATED =
   'NOT EVALUATED — no risk verdict has been drawn, and this is NOT a clean result.';
-
-export interface ResolveOptions {
-  readonly now: Date;
-  readonly maxAgeDays?: number;
-}
 
 /**
  * Decide whether an artifact may be swept, or why it may not.
@@ -81,10 +84,7 @@ export interface ResolveOptions {
  * Never throws: a malformed artifact must degrade to an honest refusal on the
  * surface, not to a 500 that hides the reason.
  */
-export function resolveSecurityGraph(
-  artifact: SecurityGraphArtifact | null,
-  options: ResolveOptions,
-): SecurityGraphSource {
+export function resolveSecurityGraph(artifact: SecurityGraphArtifact | null): SecurityGraphSource {
   if (artifact === null) {
     return {
       available: false,
@@ -157,30 +157,6 @@ export function resolveSecurityGraph(
     };
   }
 
-  const age = ageInDays(artifact.meta.generatedAt, options.now);
-  if (age === null) {
-    return {
-      available: false,
-      reason:
-        `${NOT_EVALUATED} The shipped graph carries an unparseable generatedAt ` +
-        `('${artifact.meta.generatedAt}'), so its age cannot be established. An artifact whose ` +
-        'age is unknown cannot be certified current, and an unknown must not be reported as a ' +
-        'negative.',
-    };
-  }
-
-  const maxAge = options.maxAgeDays ?? MAX_ARTIFACT_AGE_DAYS;
-  if (age > maxAge) {
-    return {
-      available: false,
-      reason:
-        `${NOT_EVALUATED} The shipped graph is ${Math.floor(age)} days old (generated ` +
-        `${artifact.meta.generatedAt}, ceiling ${maxAge} days). It describes the source tree as ` +
-        'it was at image-build time, so it is reported as STALE rather than rendered as the ' +
-        'current state. Rebuild the image to refresh it.',
-    };
-  }
-
   try {
     assertJoinCoversGraph(artifact.join, artifact.graph.nodes);
   } catch (e) {
@@ -194,11 +170,4 @@ export function resolveSecurityGraph(
   }
 
   return { available: true, graph: artifact.graph };
-}
-
-/** Whole and fractional days between an ISO timestamp and `now`. `null` if unparseable. */
-export function ageInDays(generatedAt: string, now: Date): number | null {
-  const then = Date.parse(generatedAt);
-  if (Number.isNaN(then)) return null;
-  return (now.getTime() - then) / 86_400_000;
 }

@@ -181,10 +181,13 @@ describe('every predicate name this extractor emits is one C1 recognises', () =>
 });
 
 describe('the artifact records what it did NOT measure', () => {
-  it('carries scan scopes with real file counts', () => {
+  it('declares named scan scopes', () => {
+    // The per-scope FILE COUNTS are run values since #4798 and are floored in
+    // `--check` and counted against a census in
+    // `scripts/ci/__tests__/security-graph-drift-shape.test.mjs`; the committed
+    // bytes carry the scope names. An emptied list or a blank name breaks this.
     expect(artifact.meta.scanScopes.length).toBeGreaterThan(0);
     for (const scope of artifact.meta.scanScopes) {
-      expect(scope.filesMatched).toBeGreaterThan(0);
       expect(scope.scope.length).toBeGreaterThan(0);
     }
   });
@@ -236,14 +239,16 @@ describe('every scan scope the artifact DECLARES is a scope it actually SCANNED'
     expect(gh.some((n) => n.id.includes('.github/scripts/deploy-notify-failure.mjs'))).toBe(true);
   });
 
-  it('declares, with a COUNT, what it saw under a scanned root and could not read', () => {
+  it('declares, per root and extension, what it saw under a scanned root and could not read', () => {
     // A narrowed scope is fine. An undeclared one is the defect. Workflow YAML
     // `run:` blocks and `.sh` steps publish into the same public Actions log and
-    // this extractor lexes neither.
+    // this extractor lexes neither. How MANY is a run value since #4798 — a
+    // number in this committed reason moved with every `.yml` added anywhere
+    // under `.github/`, so every pair of such PRs conflicted on it.
     const unread = artifact.meta.skipped.filter((s) => s.reason.includes('were seen and NOT read'));
     expect(unread.length).toBeGreaterThan(0);
-    for (const s of unread) expect(s.reason).toMatch(/\d+ file\(s\)/);
-    expect(unread.some((s) => s.subject.startsWith('.github/'))).toBe(true);
+    for (const s of unread) expect(s.subject).toMatch(/\(\*\.[a-z0-9]+(?:, \*\.[a-z0-9]+)*\)$/);
+    expect(unread.some((s) => s.subject.startsWith('.github/') && s.subject.includes('*.yml'))).toBe(true);
   });
 
   it('joins every `.github` node through a LIVE no-estate-presence reason', () => {
@@ -305,88 +310,31 @@ describe('the C4 expression arm reports its own inertness', () => {
 });
 
 /**
- * THE INDEPENDENT DENOMINATOR, ON THE REQUIRED LANE.
+ * THE COMMITTED NAMES MATCH THE TREE, ON THE REQUIRED LANE.
  *
- * `build.ts` already refuses a walk whose examined count disagrees with an
- * independent census — but that runs in the GENERATOR, and the generator runs in
- * `brain security graph — committed artifact matches the tree`, which is NOT one
- * of `main`'s 15 required contexts. `vitest (node 20)` IS required.
- *
- * So the same census is recomputed here, from the filesystem, and asserted
- * against the COMMITTED bytes. A narrowed artifact — including one produced by
- * hand rather than by the generator — reddens a required check instead of only a
- * skippable one. The previous assertion on these fields was
- * `toBeGreaterThan(0)`, which a 44%-narrowed `1492` satisfied.
- *
- * This does not add a regeneration burden that did not already exist: the drift
- * gate compares the whole graph, so any change to a scanned file already
- * requires re-running the generator.
+ * Until #4798 this block also recomputed the per-scope FILE COUNTS from the
+ * filesystem and asserted them against `meta.scanScopes[].filesMatched` in the
+ * committed bytes. Those counts are no longer committed — they moved on every
+ * file added under a scanned root, so every pair of open PRs conflicted on them —
+ * and the census moved with them: `scripts/ci/__tests__/security-graph-drift-
+ * shape.test.mjs` (run on `guardrails`, required) counts the generator's own
+ * enumeration against an independent `git ls-files` census, and `--check`
+ * (a required context per `tools/drain/required_contexts.json`, snapshot
+ * 2026-09-18) floors on the run's counts before it compares anything.
  */
 describe('the committed scan scopes match a census taken from the filesystem', () => {
   const REPO_ROOT = resolve(__dirname, '..', '..', '..', '..', '..', '..', '..');
 
-  /** Count files under `dir` matching `match`, skipping what the CLI skips. */
-  function countFiles(dir: string, match: (relPath: string) => boolean): number {
-    let entries: ReturnType<typeof readdirSync>;
-    try {
-      entries = readdirSync(dir, { withFileTypes: true });
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return 0;
-      throw e;
-    }
-    let n = 0;
-    for (const entry of entries) {
-      const full = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (entry.name === 'node_modules' || entry.name === '.next' || entry.name === '.git') continue;
-        n += countFiles(full, match);
-        continue;
-      }
-      if (match(relative(REPO_ROOT, full).split(sep).join('/'))) n += 1;
-    }
-    return n;
-  }
-
-  const scopeNamed = (fragment: string) =>
-    artifact.meta.scanScopes.find((s) => s.scope.includes(fragment))!;
-
-  it('resolved the repo root (control — a wrong root would make every count 0)', () => {
-    expect(countFiles(join(REPO_ROOT, 'scripts'), (p) => p.endsWith('.mjs'))).toBeGreaterThan(0);
-  });
-
-  it('scanned every `app/**/route.ts` module in the tree', () => {
-    const census = countFiles(join(REPO_ROOT, 'apps', 'fiab-console', 'app'), (p) =>
-      /\/route\.tsx?$/.test(p),
-    );
-    expect(census).toBeGreaterThan(0);
-    expect(scopeNamed('console BFF routes').filesMatched).toBe(census);
-  });
-
-  it('scanned every JavaScript module under EVERY declared publication root', () => {
-    const publication = scopeNamed('CI publication surfaces');
-    const roots = [...publication.scope.matchAll(/([^\s,()]+)\/\*\*/g)].map((m) => m[1]);
-    expect(roots.length).toBeGreaterThan(1);
-
-    let census = 0;
-    for (const root of roots) {
-      census += countFiles(join(REPO_ROOT, root), (p) => /\.(?:mjs|cjs|js)$/.test(p));
-    }
-    expect(census).toBeGreaterThan(0);
-    expect(publication.filesMatched).toBe(census);
-  });
-
   /**
    * THE COUNT IS INVARIANT UNDER A RENAME — SO THE NAMES ARE COMPARED TOO (#4282).
    *
-   * The three assertions above compare INTEGERS. Renaming a scanned file leaves
-   * every one of them identical: `filesMatched` does not move, `filesScanned`
-   * does not move, and the census recomputed here does not move either. So a PR
+   * A file COUNT is invariant under a rename. So a PR
    * that renames `app/api/foo/route.ts` and does not regenerate the artifact
    * merges a graph whose node ids point at a path that no longer exists, with
-   * this REQUIRED lane green. Only `brain security graph — committed artifact
-   * matches the tree` would have caught it, and that job is not one of `main`'s
-   * 15 required contexts (measured 2026-09-08 via
-   * `gh api repos/.../branches/main/protection`).
+   * a count-only census green. (`brain security graph — committed artifact
+   * matches the tree` also catches it, and is listed as a required context in
+   * `tools/drain/required_contexts.json`, snapshot 2026-09-18; this is the
+   * second, independent enumeration.)
    *
    * The artifact does not enumerate every file it read — 1,499 of the 2,095
    * scanned files emit neither a node nor a ledger entry — so a full set

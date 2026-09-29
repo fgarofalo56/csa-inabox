@@ -1,127 +1,137 @@
 /**
  * LOOM BRAIN — what "the committed artifact still matches the tree" COMPARES.
  *
- * ── THE DEFECT THIS MODULE EXISTS TO CLOSE (#4128) ───────────────────────
+ * ── WHAT IS COMMITTED, AND WHY THAT CHANGED (#4798) ──────────────────────
  *
- * `security-graph.json` is guarded twice, and until now the two gates measured
- * different properties:
+ * `security-graph.json` used to carry the run's tallies in `meta`: `filesScanned`,
+ * a per-scope `filesMatched` and `nodesEmitted`, an `inputsDigest`, a
+ * `generatedAt` and a `commit`, plus unread-file and sink counts spelled inside
+ * two ledger reasons. Every one of those moves when ANY file is added under a
+ * scanned root, so every open PR that touched the artifact went CONFLICTING after
+ * each merge to `main` — measured on #4767, #4769, #4770 and #4777, some twice —
+ * and each resolution was a content push that voided every review verdict.
  *
- *   - `extract-security-graph.mjs --check` (CI job `brain security graph`,
- *     ADVISORY) compared `{graph, join}` and nothing else.
- *   - the census assertion in `no-estate-identifiers.test.ts` (CI job
- *     `vitest (node 20)`, REQUIRED) compares `meta.scanScopes[].filesMatched`
- *     against a filesystem walk it recomputes independently.
+ * Measured with `git merge-file` over artifacts regenerated on base, base+A and
+ * base+B, A and B being unrelated files: 1 conflict in each of four shapes (two
+ * zero-node `.mjs`, two sink-bearing `.mjs`, a `.yml` against a `.sh`, two
+ * `route.ts`), and in every shape the merged bytes also DIFFERED from the
+ * artifact regenerated with both files present — two PRs that each move a count
+ * N -> N+1 merge cleanly to a value that is wrong for the pair.
  *
- * So a change that moved the POPULATION without moving the GRAPH slipped past
- * `--check` entirely. Measured on PR #4127: a new `.mjs` under `scripts/**` is
- * inside the declared publication scope but carries no publication construct, so
- * it emitted zero nodes. `--check` printed `OK ... 920 nodes, 174 edges` and
- * exited 0 while the required census went red on `declared 361, census 362`.
+ * So those values are no longer committed. `build.ts#buildSecurityGraphExtraction`
+ * returns them on a separate `run` object that the CLI prints and floors on, and
+ * the committed artifact is the graph, the join and per-element ledger entries.
+ * {@link RUN_ONLY_FIELDS} names each one with its reason, and `--check` REFUSES a
+ * committed artifact that carries any of them rather than ignoring it: an
+ * exemption would let one creep back in and restore the conflict silently.
  *
- * Reproduced on this branch against the parent commit, using
- * `scripts/ci/__fixtures__/census-drift-probe.mjs` as the fixture:
+ * ── WHAT THIS GIVES UP, STATED PLAINLY ───────────────────────────────────
  *
- *     parent (pre-fix) --check  ->  RC=0   "OK — committed artifact matches the tree"
- *     tip    (post-fix) --check ->  RC=1   "filesMatched 362 -> 363"
+ * #4128 made `--check` compare `filesMatched` so that a zero-node file inside a
+ * scanned scope reddened it, because the REQUIRED census in
+ * `no-estate-identifiers.test.ts` went red on exactly that change while this
+ * then-advisory gate stayed green. That is reversed on purpose: a zero-node file
+ * changes nothing any detector reads, so it now changes nothing committed, and
+ * both gates agree it needs no regeneration. The census the #4128 fix protected
+ * is kept, moved to where the numbers now live: the generator's own enumeration
+ * is counted against an independent `git ls-files` census in
+ * `scripts/ci/__tests__/security-graph-drift-shape.test.mjs` (required, on
+ * `guardrails`), and `--check` floors on the run's counts before comparing.
  *
- * with the node and edge counts BYTE-IDENTICAL across both arms. The gate named
- * for drift detection could not see the drift, and a triager reading a green
- * `brain security graph` next to a red `vitest` would look in the wrong place.
+ * ── WHY THE COMPARISON IS STILL "EVERYTHING" AND NOT AN INCLUSION LIST ───
  *
- * ── WHY THIS IS AN EXCLUSION LIST AND NOT AN INCLUSION LIST ──────────────
- *
- * The obvious fix — add `meta.scanScopes` to the two fields already compared —
- * is the shape this repo keeps losing to. A guard keyed to an ENUMERATION of
- * watched names is defeated by the next name: `meta.filesScanned` would still
- * have been invisible, and so would every field a later extractor version adds.
- *
- * So the comparison is inverted. EVERYTHING in the artifact is compared by
- * default, and a field is exempt only by appearing in {@link
- * VOLATILE_META_FIELDS} with a stated reason. A field invented tomorrow is
- * covered the day it is written, by nobody remembering anything — which is the
- * only kind of coverage that survives.
- *
- * {@link POPULATION_META_FIELDS} then pins the other direction: the fields whose
- * drift is the whole point of this gate may never be moved INTO the exempt set
- * to silence a red. `__tests__/security-graph-drift-shape.test.mjs` asserts that
- * intersection is empty.
- *
- * ── WHY `inputsDigest` IS EXEMPT, STATED PLAINLY ─────────────────────────
- *
- * It is a content hash over all ~2,056 scanned files, so ANY edit to ANY of them
- * moves it. Measured on this branch: across the five commits between the
- * artifact's own `commit` field (0d2d28f5) and `main` at 605bb5ba, exactly one
- * scanned file changed content — and the committed digest is ALREADY stale
- * against a fresh walk of `main` (committed `0d3dccaf8dfc02fc`, recomputed
- * `8e93de8782349783`) while the graph is identical.
- *
- * Comparing it would therefore red this lane roughly every fifth merge and force
- * unrelated PRs to regenerate a 2 MB artifact to say nothing new. `build.ts`
- * warns about exactly that outcome in its determinism docblock — "a gate that
- * cries wolf is worse than no gate" — and a content change that alters what the
- * detectors READ necessarily alters the graph, which IS compared. The exemption
- * is a disclosed narrowing, not an accident, and the stale-digest observation is
- * recorded on #4128 rather than folded in silently.
+ * A guard keyed to an ENUMERATION of watched names is defeated by the next name.
+ * So every field of the committed artifact is compared, with no exemptions at
+ * all, and a field invented tomorrow is covered the day it is written.
+ * {@link POPULATION_META_FIELDS} pins the other direction: the committed fields
+ * that may never be declared run-only to silence a red.
  */
 
 /**
- * Fields that differ between two runs over the SAME tree, with the reason each
- * one is exempt. Anything not listed here is compared.
+ * Fields that belong to ONE extractor run and must never be committed (#4798).
+ *
+ * `where` is the object the field would appear on: `meta`, or each element of
+ * `meta.scanScopes`. Everything else in the artifact is compared.
  */
-export const VOLATILE_META_FIELDS = Object.freeze([
+export const RUN_ONLY_FIELDS = Object.freeze([
   Object.freeze({
+    where: 'meta',
     field: 'generatedAt',
     reason:
-      'a wall-clock stamp written at run time, so it differs on every invocation regardless of ' +
-      'whether the tree moved. Comparing it would make every run report drift.',
+      'a wall-clock stamp, so it differs on every run whether or not the tree moved, and two PRs ' +
+      'that each regenerate always conflict on it.',
   }),
   Object.freeze({
+    where: 'meta',
     field: 'commit',
     reason:
-      'the HEAD sha at generation time. It advances with every merge whether or not any scanned ' +
-      'file changed, and it is null in a shallow or absent git context.',
+      'the HEAD sha at generation time. It differs on every branch and advances with every merge ' +
+      'whether or not any scanned file changed.',
   }),
   Object.freeze({
+    where: 'meta',
     field: 'inputsDigest',
     reason:
-      'an FNV-1a hash over the text of all scanned files, so any edit to any one of them moves ' +
-      'it. Measured on #4128: it is already stale on main against an identical graph, and one ' +
-      'scanned file changed content in five commits. Comparing it would red this lane every few ' +
-      'merges and force unrelated PRs to regenerate a 2 MB artifact — the cry-wolf state ' +
-      'build.ts warns about. Behaviour-bearing content changes move the graph, which IS compared.',
+      'an FNV-1a hash over the text of every scanned file, so any edit to any one of them moves it ' +
+      'and two unrelated PRs always conflict on it. A content change that alters what the ' +
+      'detectors read necessarily alters the graph, which IS compared.',
+  }),
+  Object.freeze({
+    where: 'meta',
+    field: 'filesScanned',
+    reason:
+      'a tally over every scope. Adding any file under a scanned root moves it, and two PRs that ' +
+      'each move it N -> N+1 merge cleanly to a total that is wrong for both files together.',
+  }),
+  Object.freeze({
+    where: 'meta.scanScopes[]',
+    field: 'filesMatched',
+    reason:
+      'a tally over one whole scope, with the same two failure modes as filesScanned: a conflict ' +
+      'when two PRs move it differently, a silently wrong value when they move it the same way.',
+  }),
+  Object.freeze({
+    where: 'meta.scanScopes[]',
+    field: 'nodesEmitted',
+    reason:
+      'a tally over one whole scope that moves whenever any file in it gains or loses a node. It ' +
+      'is derivable from graph.nodes, which is compared element by element.',
   }),
 ]);
 
 /**
- * The fields whose drift this gate exists to catch.
+ * The committed meta fields this gate exists to watch.
  *
- * Listed so that "silence the red by exempting the field" is a test failure
- * rather than a one-line diff. This is NOT the set of compared fields — that set
- * is "everything" — it is the set that may never become exempt.
+ * Listed so that "silence the red by declaring the field run-only" is a test
+ * failure rather than a one-line diff. This is NOT the set of compared fields —
+ * that set is "everything" — it is the set that may never leave it.
  */
-export const POPULATION_META_FIELDS = Object.freeze([
-  'generatorVersion',
-  'filesScanned',
-  'scanScopes',
-  'skipped',
-]);
-
-/** Names only, for the exemption walk. */
-const VOLATILE_FIELD_NAMES = Object.freeze(VOLATILE_META_FIELDS.map((v) => v.field));
+export const POPULATION_META_FIELDS = Object.freeze(['generatorVersion', 'scanScopes', 'skipped']);
 
 /**
- * A deep copy of `artifact` with the run-volatile meta fields removed.
+ * Every run-only field `artifact` carries, as a path, e.g. `meta.filesScanned` or
+ * `meta.scanScopes[1].filesMatched`. Empty for a correctly committed artifact.
  *
- * Never mutates its argument: `--check` prints counts off the live artifact
- * after the comparison, and a comparison helper that hollowed out its own input
- * would make those counts a lie.
+ * Not an exemption: `--check` refuses a committed artifact for which this returns
+ * anything, because the field's presence IS the merge conflict #4798 removed.
  */
-export function comparableArtifact(artifact) {
-  const clone = JSON.parse(JSON.stringify(artifact));
-  if (clone !== null && typeof clone === 'object' && clone.meta !== null && typeof clone.meta === 'object') {
-    for (const field of VOLATILE_FIELD_NAMES) delete clone.meta[field];
+export function runOnlyFieldsPresent(artifact) {
+  const found = [];
+  const meta = artifact !== null && typeof artifact === 'object' ? artifact.meta : undefined;
+  if (meta === null || typeof meta !== 'object' || Array.isArray(meta)) return found;
+  for (const { where, field } of RUN_ONLY_FIELDS) {
+    if (where === 'meta') {
+      if (Object.prototype.hasOwnProperty.call(meta, field)) found.push(`meta.${field}`);
+      continue;
+    }
+    if (!Array.isArray(meta.scanScopes)) continue;
+    meta.scanScopes.forEach((scope, i) => {
+      if (scope !== null && typeof scope === 'object' && Object.prototype.hasOwnProperty.call(scope, field)) {
+        found.push(`meta.scanScopes[${i}].${field}`);
+      }
+    });
   }
-  return clone;
+  return found;
 }
 
 function kindOf(v) {
@@ -345,8 +355,11 @@ function collect(a, b, path, out, cap) {
 }
 
 /**
- * Every way the committed artifact differs from a freshly built one, ignoring
- * only {@link VOLATILE_META_FIELDS}.
+ * Every way the committed artifact differs from a freshly built one.
+ *
+ * No field is exempt. The fields that differ between two runs over the same tree
+ * are not committed at all ({@link RUN_ONLY_FIELDS}), so there is nothing left
+ * that may legitimately differ.
  *
  * Capped, because a genuine extractor change moves hundreds of nodes and a gate
  * that prints them all is a gate nobody reads. The cap is reported alongside the
@@ -354,12 +367,13 @@ function collect(a, b, path, out, cap) {
  */
 export function driftDifferences(committed, current, cap = 20) {
   const out = [];
-  collect(comparableArtifact(committed), comparableArtifact(current), '', out, cap);
+  collect(committed, current, '', out, cap);
   return out;
 }
 
 /**
- * Why `artifact` describes a population too degenerate to certify.
+ * Why `artifact` — optionally with the `run` that produced it — describes a
+ * population too degenerate to certify.
  *
  * A comparison of two empty things succeeds, and a gate that passes because
  * BOTH sides measured nothing is the failure mode this repo's guards-that-do-not-
@@ -367,9 +381,15 @@ export function driftDifferences(committed, current, cap = 20) {
  * on both sides, and an empty or unaccounted population is a REFUSAL rather than
  * a pass.
  *
+ * The committed side carries no counts any more (#4798), so on it the floor is
+ * the node population and the declared scopes. The file counts are checked on
+ * `run`, which `--check` has for the side it just extracted: every declared scope
+ * must have a count, every count must be positive, and they must sum to
+ * `run.filesScanned`.
+ *
  * Returns an empty array when the artifact is fit to compare.
  */
-export function populationRefusals(artifact, label) {
+export function populationRefusals(artifact, label, run = undefined) {
   if (artifact === null || typeof artifact !== 'object' || Array.isArray(artifact)) {
     return [
       `${label}: is not an object, so it declares no population at all. A comparison against it ` +
@@ -390,55 +410,66 @@ export function populationRefusals(artifact, label) {
 
   const meta = artifact.meta;
   if (meta === null || typeof meta !== 'object' || Array.isArray(meta)) {
-    refusals.push(`${label}: carries no meta, so it declares no scan scopes and no file counts.`);
+    refusals.push(`${label}: carries no meta, so it declares no scan scopes.`);
     return refusals;
   }
 
   const scopes = meta.scanScopes;
-  let scopesUsable = false;
-  let declaredSum = 0;
   if (!Array.isArray(scopes) || scopes.length === 0) {
     refusals.push(
       `${label}: declares ZERO scan scopes. The scan scopes ARE the population statement — with ` +
         'none, "the artifact matches the tree" is a claim about nothing.',
     );
-  } else {
-    scopesUsable = true;
-    for (const [i, scope] of scopes.entries()) {
-      if (scope === null || typeof scope !== 'object') {
-        refusals.push(`${label}: scan scope [${i}] is not an object, so its file count cannot be read.`);
-        scopesUsable = false;
-        continue;
-      }
-      if (!Number.isInteger(scope.filesMatched) || scope.filesMatched <= 0) {
-        refusals.push(
-          `${label}: scan scope [${i}] ('${String(scope.scope)}') reports filesMatched=` +
-            `${JSON.stringify(scope.filesMatched)}. A declared scope that matched no file is an ` +
-            'emptied population, not a clean one.',
-        );
-        scopesUsable = false;
-        continue;
-      }
-      declaredSum += scope.filesMatched;
+    return refusals;
+  }
+  const names = [];
+  for (const [i, scope] of scopes.entries()) {
+    if (scope === null || typeof scope !== 'object' || typeof scope.scope !== 'string' || scope.scope === '') {
+      refusals.push(`${label}: scan scope [${i}] does not name its scope, so it declares nothing.`);
+      continue;
     }
+    names.push(scope.scope);
   }
 
-  if (!Number.isInteger(meta.filesScanned) || meta.filesScanned <= 0) {
+  if (run === undefined) return refusals;
+  if (run === null || typeof run !== 'object' || !Array.isArray(run.scanScopes)) {
+    refusals.push(`${label}: its run carries no per-scope counts, so the files it examined are unknown.`);
+    return refusals;
+  }
+
+  let declaredSum = 0;
+  let countsUsable = true;
+  for (const name of names) {
+    const counted = run.scanScopes.find((s) => s !== null && typeof s === 'object' && s.scope === name);
+    if (counted === undefined) {
+      refusals.push(`${label}: scan scope '${name}' has no count in the run that produced it.`);
+      countsUsable = false;
+      continue;
+    }
+    if (!Number.isInteger(counted.filesMatched) || counted.filesMatched <= 0) {
+      refusals.push(
+        `${label}: scan scope '${name}' matched filesMatched=${JSON.stringify(counted.filesMatched)} on ` +
+          'this run. A declared scope that matched no file is an emptied population, not a clean one.',
+      );
+      countsUsable = false;
+      continue;
+    }
+    declaredSum += counted.filesMatched;
+  }
+
+  if (!Number.isInteger(run.filesScanned) || run.filesScanned <= 0) {
     refusals.push(
-      `${label}: reports filesScanned=${JSON.stringify(meta.filesScanned)}. A scan that examined ` +
-        'no file cannot certify anything.',
+      `${label}: its run reports filesScanned=${JSON.stringify(run.filesScanned)}. A scan that ` +
+        'examined no file cannot certify anything.',
     );
-  } else if (scopesUsable && declaredSum !== meta.filesScanned) {
-    // POPULATION ACCOUNTING, NOT A SPOT CHECK.
-    //
-    // Every scanned file belongs to exactly one declared scope. If the scopes do
-    // not add up to the total, a scope was dropped from the report or a count was
-    // hand-edited — and either way the artifact's own population statement is
-    // internally false, which no per-scope assertion catches.
+  } else if (countsUsable && declaredSum !== run.filesScanned) {
+    // POPULATION ACCOUNTING, NOT A SPOT CHECK. Every scanned file belongs to
+    // exactly one declared scope, so the scopes must add up to the total or a
+    // scope was dropped from the report.
     refusals.push(
-      `${label}: scan scopes account for ${declaredSum} file(s) but filesScanned reports ` +
-        `${meta.filesScanned}. The population statement does not reconcile with itself, so a ` +
-        'scope is missing from the report or a count was edited by hand.',
+      `${label}: scan scopes account for ${declaredSum} file(s) but the run scanned ` +
+        `${run.filesScanned}. The population statement does not reconcile with itself, so a ` +
+        'scope is missing from the report.',
     );
   }
 

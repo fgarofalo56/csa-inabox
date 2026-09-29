@@ -55,19 +55,14 @@ import generated from './__generated__/security-graph.json';
  * package's own generator from `buildSecurityGraphArtifact()`'s typed output, so
  * the shape is guaranteed at the point of WRITING; what a cast cannot guarantee is
  * that the file on disk was not hand-edited. That is exactly what
- * `resolveSecurityGraph` re-checks — version, provenance, node count, age and
- * join coverage are all re-validated below rather than trusted from the type.
+ * `resolveSecurityGraph` re-checks — version, provenance, node count and join
+ * coverage are all re-validated below rather than trusted from the type.
  */
 const ARTIFACT = (generated as { artifact: SecurityGraphArtifact | null }).artifact;
 
-/**
- * Load the security graph shipped with this build.
- *
- * `now` is injectable so the staleness refusal is testable without waiting 90
- * days — a refusal branch no test can reach is not a guard.
- */
-export function loadExtractedSecurityGraph(now: Date = new Date()): SecurityGraphSource {
-  return resolveSecurityGraph(ARTIFACT, { now });
+/** Load the security graph shipped with this build. */
+export function loadExtractedSecurityGraph(): SecurityGraphSource {
+  return resolveSecurityGraph(ARTIFACT);
 }
 
 /**
@@ -77,7 +72,7 @@ export function loadExtractedSecurityGraph(now: Date = new Date()): SecurityGrap
  * Returns `null` when nothing was generated. A caller must NOT use a non-null
  * return as evidence the graph is usable: that question is
  * {@link loadExtractedSecurityGraph}'s, and it refuses artifacts this getter
- * happily hands back (stale, wrong version, zero nodes).
+ * happily hands back (wrong version, zero nodes).
  */
 export function extractedArtifact(): SecurityGraphArtifact | null {
   return ARTIFACT;
