@@ -857,6 +857,10 @@ const FLOOR_CASES = [
     name: 'a declared scope the run has no count for',
     mutate: (a, r) => {
       r.scanScopes.pop();
+      // Reconcile the total to what is left, so the ONLY thing wrong is the
+      // missing count. Without this the total-mismatch refusal fires instead
+      // and the case passes with the missing-count check deleted (measured).
+      r.filesScanned = r.scanScopes[0].filesMatched;
     },
   },
   {
