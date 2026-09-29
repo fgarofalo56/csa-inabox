@@ -25,6 +25,23 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.109.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.108.0...csa-inabox-v0.109.0) (2026-09-29)
+
+
+### Features
+
+* **console:** add a read-only Check variables action to the lakehouse ribbon, and fix two blind console tests ([#4754](https://github.com/fgarofalo56/csa-inabox/issues/4754)) ([0f520d2](https://github.com/fgarofalo56/csa-inabox/commit/0f520d26228ffed1cc7c5e44b3d1461061d1ff68))
+
+
+### Bug Fixes
+
+* **console:** resolve health-check Logic App and Function receivers correctly and under the caller's permissions ([#4756](https://github.com/fgarofalo56/csa-inabox/issues/4756)) ([8c94cf9](https://github.com/fgarofalo56/csa-inabox/commit/8c94cf99b1d0cdb944dc66322c2b380933ad2859))
+
+
+### Tests
+
+* **console:** wait for loading-gated controls to enable before clicking them ([#4761](https://github.com/fgarofalo56/csa-inabox/issues/4761)) ([db64a64](https://github.com/fgarofalo56/csa-inabox/commit/db64a64dad8b2caac172e570f74d8359952491c8))
+
 ## [0.108.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.107.1...csa-inabox-v0.108.0) (2026-09-28)
 
 
