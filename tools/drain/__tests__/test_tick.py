@@ -1911,7 +1911,7 @@ def test_the_run_backed_disclosure_is_still_true_of_the_code_it_describes():
     assert "headSha" in fields, fields
     assert "conclusion" in fields, fields
     assert "no run date is fetched and no head sha is compared" in tick._receipt_comment(
-        "deploy-run", "deploy-path", "d"
+        "deploy-run", "deploy-path", "d", tick.BINDING_POLICY
     ), "the disclosure this test keeps honest is not in the comment at all"
 
 
@@ -1938,7 +1938,7 @@ def test_a_receipt_kind_in_neither_category_refuses_rather_than_defaulting():
         "this test's premise is that an UNCLASSIFIED kind exists to probe with"
     )
     with pytest.raises(tick.ReceiptRefusedError) as exc:
-        tick._receipt_comment("operator", "guard-or-test-only", "d")
+        tick._receipt_comment("operator", "guard-or-test-only", "d", tick.BINDING_POLICY)
     assert "neither" in str(exc.value), (
         "the refusal must say WHY - a kind classified by nothing is not the "
         "same diagnosis as a kind the policy refuses"
@@ -1947,9 +1947,9 @@ def test_a_receipt_kind_in_neither_category_refuses_rather_than_defaulting():
     # above cannot be satisfied by making `_receipt_comment` raise on
     # everything. The value that breaks these is exactly that.
     assert "a merge, not a deploy" in tick._receipt_comment(
-        "ci-green", "guard-or-test-only", "d")
+        "ci-green", "guard-or-test-only", "d", tick.BINDING_POLICY)
     assert "an observation of something that ran, not a merge" in tick._receipt_comment(
-        "g1-browser", "ui-surface", "d")
+        "g1-browser", "ui-surface", "d", tick.BINDING_POLICY)
 
 
 def test_blocker_the_github_close_happens_before_the_ledger_write(tmp_path, monkeypatch):
@@ -2973,7 +2973,7 @@ def test_the_closer_refuses_an_issue_that_resolves_to_another_repository(
 
     with pytest.raises(tick.IssueCloseFailedError, match="answered about"):
         tick.close_issue_on_github(
-            POLICY, "o/r", 4547, CLOSED, "a receipt", "g1-browser", "ui-surface")
+            POLICY, "o/r", 4547, CLOSED, "a receipt", "g1-browser", "ui-surface", tick.BINDING_POLICY)
     assert spy.closed == [], "the closer reached the write over a foreign object"
 
     # PAIRED WITH THE POSITIVE so the guard cannot be satisfied by refusing
@@ -2981,7 +2981,7 @@ def test_the_closer_refuses_an_issue_that_resolves_to_another_repository(
     # case-sensitive without going red: GitHub echoes canonical casing.
     ok_spy = _gh(monkeypatch, url_repo="O/R")
     tick.close_issue_on_github(
-        POLICY, "o/r", 4548, CLOSED, "a receipt", "g1-browser", "ui-surface")
+        POLICY, "o/r", 4548, CLOSED, "a receipt", "g1-browser", "ui-surface", tick.BINDING_POLICY)
     assert ok_spy.closed == ["4548"], (
         "the guard refused an issue in the repository it was asked about, "
         "spelled in the casing GitHub echoes"
@@ -3311,7 +3311,7 @@ def test_blocker_a_park_is_never_closed_on_github(monkeypatch):
         with pytest.raises(tick.IssueCloseFailedError, match="only"):
             tick.close_issue_on_github(
                 POLICY, "o/r", 4535, state, "blocked on a tenant",
-                "g1-browser", "ui-surface")
+                "g1-browser", "ui-surface", tick.BINDING_POLICY)
     assert spy.calls == [], "the closer reached GitHub before deciding it must not"
 
 
@@ -3331,7 +3331,7 @@ def test_the_close_is_refused_when_the_policy_does_not_permit_it(monkeypatch):
     spy = _gh(monkeypatch)
     with pytest.raises(tick.IssueCloseFailedError, match="close-on-receipt"):
         tick.close_issue_on_github(
-            thin, "o/r", 4545, CLOSED, "a receipt", "ci-green", "guard-or-test-only")
+            thin, "o/r", 4545, CLOSED, "a receipt", "ci-green", "guard-or-test-only", tick.BINDING_POLICY)
     assert spy.calls == []
 
 

@@ -15,11 +15,13 @@ import argparse
 import json
 import os
 import random
+import re
 import shutil
 import subprocess
 import sys
 import time
 import urllib.parse
+from datetime import datetime
 from typing import NamedTuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -2238,8 +2240,25 @@ MERGE_BASED_KINDS = frozenset({"ci-green"})
 #: above can claim what it claims.
 RUN_BACKED_KINDS = frozenset({"deploy-run", "estate", "g1-browser"})
 
+#: HOW a receipt's evidence was bound to its item, which decides what the
+#: permanent public comment may claim (#4764). Two values, and a third RAISES
+#: in `_receipt_comment` for the reason a third KIND does.
+#:
+#: - `BINDING_POLICY`: the evidence is whatever `policy.json` declares for the
+#:   kind -- `receipt_producers` per boundary for a run-backed kind, the
+#:   `ci_green_rule` for `ci-green`. Every route before #4764.
+#: - `BINDING_WATCHER_WORKFLOW`: the item was filed by the deploy-failure
+#:   watcher about ONE workflow, and the evidence is a run of THAT workflow,
+#:   matched by workflow id against the failed run the watcher recorded. The
+#:   policy producer is not consulted and no boundary is resolved, so the
+#:   policy-producer comment -- "the only workflow policy accepts", "bound on
+#:   one axis, its BOUNDARY", "no run date is fetched" -- would be false on
+#:   every clause.
+BINDING_POLICY = "policy"
+BINDING_WATCHER_WORKFLOW = "watcher-workflow"
 
-def _receipt_comment(kind: str, issue_class: str, detail: str) -> str:
+
+def _receipt_comment(kind: str, issue_class: str, detail: str, binding: str) -> str:
     """The comment `gh issue close --comment` posts. THE PERMANENT PUBLIC RECORD.
 
     This string is the receipt's only trace on the artifact a human reads
@@ -2299,7 +2318,10 @@ def _receipt_comment(kind: str, issue_class: str, detail: str) -> str:
     The two branches are written out rather than assembled from fragments: a
     sentence this permanent should be readable in full at the place it is
     decided, and a shared template is how the two routes came to say the same
-    wrong thing in the first place.
+    wrong thing in the first place. #4764 added a THIRD, the watcher route,
+    selected by `binding` rather than by `kind` -- its kind is `deploy-run`
+    like the policy route's, and every clause of the policy route's text is
+    false of it.
 
     **AND WHY A THIRD KIND RAISES.** Until round 7 the merge branch's else was
     an unconditional `return` of the run-backed text, so a kind in neither
@@ -2314,7 +2336,23 @@ def _receipt_comment(kind: str, issue_class: str, detail: str) -> str:
     written is recoverable, and a wrong sentence on a closed issue is not.
     """
     head = f"Drain harness: receipt verified (kind={kind}, class={issue_class}) - {detail}."
+    # AN UNKNOWN BINDING RAISES, for the reason an unclassified kind does
+    # below: the text is permanent, and a binding nothing classified would
+    # otherwise fall through to whichever sentence happened to be the default.
+    if binding not in (BINDING_POLICY, BINDING_WATCHER_WORKFLOW):
+        raise ReceiptRefusedError(
+            f"receipt binding {binding!r} is neither {BINDING_POLICY!r} nor "
+            f"{BINDING_WATCHER_WORKFLOW!r}, so this tool cannot say what the "
+            "evidence was bound to - refusing to post a permanent public comment "
+            "that would assert one by default"
+        )
     if kind in MERGE_BASED_KINDS:
+        if binding != BINDING_POLICY:
+            raise ReceiptRefusedError(
+                f"a {kind!r} receipt is a MERGE and cannot carry the "
+                f"{binding!r} binding, which describes a workflow RUN - refusing "
+                "rather than publishing a run-shaped claim over a merge"
+            )
         return (
             f"{head} WHAT THIS ESTABLISHES, AND WHAT IT DOES NOT: the evidence is "
             "CI green at the MERGED sha - a merge, not a deploy. It establishes "
@@ -2336,6 +2374,32 @@ def _receipt_comment(kind: str, issue_class: str, detail: str) -> str:
             "RUN_BACKED_KINDS, so this tool cannot say whether its evidence is a "
             "merge or an observation of something that ran - refusing to post a "
             "permanent public comment that would assert one of them by default"
+        )
+    if binding == BINDING_WATCHER_WORKFLOW:
+        # #4764. Written out in full for the reason the docstring gives: a
+        # sentence this permanent is read at the place it is decided. Every
+        # clause below is a check `verify_watcher_run_receipt` performs, and
+        # the DISCLOSED half names the three things it does not.
+        return (
+            f"{head} WHAT THIS ESTABLISHES, AND WHAT IT DOES NOT: this issue was "
+            "filed by the deploy-failure watcher about ONE workflow, and its own "
+            "close condition is that workflow running GREEN. The evidence is a "
+            "completed, successful run of THAT workflow - matched by workflow id "
+            "against the failed run the watcher recorded on this issue, not by "
+            "name and not by the title - on the default branch, created AFTER the "
+            "newest failure this issue records, in which every job that failed in "
+            "that recorded failure concluded success having executed work steps. "
+            "An observation of something that ran, not a merge, which is why "
+            f"deploy-integrity R2 (merged is not done) makes the {issue_class} "
+            "class take a receipt of this shape. "
+            "DISCLOSED: it is bound to no SHA and to no change, so it says the "
+            "path ran green after the recorded failure, not which fix made it so. "
+            "A failure the watcher did not record is not seen - the time bound is "
+            "the newest RECORDED failure, not the newest failure. And no boundary "
+            "label is consulted: the binding is the workflow's identity, so the "
+            "cloud this receipt speaks for is the one that workflow deploys to, "
+            "named above, and no other. "
+            "Closing this issue on that evidence, and on nothing wider than it."
         )
     return (
         f"{head} WHAT THIS ESTABLISHES, AND WHAT IT DOES NOT: the evidence is a "
@@ -2727,9 +2791,14 @@ def _close_outcome(err: str, repo: str, number: int) -> str:
 
 def close_issue_on_github(
     policy: dict, repo: str, number: int, target_state: str, detail: str,
-    kind: str, issue_class: str,
+    kind: str, issue_class: str, binding: str,
 ) -> str:
     """Close the GitHub issue for an item the ledger is about to make terminal.
+
+    `binding` IS REQUIRED, not defaulted (#4764): it decides which permanent
+    sentence `_receipt_comment` publishes, and a default would let the
+    watcher route publish the policy-producer text -- a claim about a producer
+    and a boundary that route never consulted.
 
     THE WRITE THAT WAS MISSING (#4545). `tick.py` read GitHub and never wrote to
     it, so a ledger close was invisible upstream and the next refresh read it as
@@ -2851,7 +2920,7 @@ def close_issue_on_github(
         # very function that decides it.
         rc, _out, err = sh(
             ["gh", "issue", "close", str(number), "--repo", repo,
-             "--comment", _receipt_comment(kind, issue_class, detail)]
+             "--comment", _receipt_comment(kind, issue_class, detail, binding)]
         )
         if rc != 0:
             raise IssueCloseFailedError(
@@ -3231,6 +3300,387 @@ def verify_run_backed_receipt(
     return f"{ref} (headSha {sha})" if sha else ref
 
 
+# -- #4764: an item the deploy-failure WATCHER filed ---------------------------
+#
+# `.github/scripts/deploy-notify-failure.mjs` files ONE issue per failing
+# workflow, titled `deploy: <workflow> is failing`, and comments on it at every
+# further failure. Each record names the failed run. Every such issue ends:
+# "Close this issue only once the path has run GREEN". Before #4764 the only
+# `deploy-run` producer was `loom-roll-and-validate`, so a green run of the very
+# workflow the issue is about was refused -- measured on #4448, #4424, #4390.
+#
+# WHERE THE WORKFLOW COMES FROM, stated because it is the load-bearing choice:
+# NOT the ledger -- `state.json` holds only the title for these items, no
+# structured filing data -- and NOT the title. It comes from the failed RUN the
+# watcher recorded on the issue, read back from GitHub, whose workflow id is a
+# fact GitHub holds about that run. The title only decides whether to look,
+# and cannot on its own route an item here: the issue must also be authored by
+# the watcher and name a run. And never from the run the CALLER supplies --
+# that would let any green run name itself as the producer.
+
+#: `buildIssueTitle(workflow)` in `deploy-notify-failure.mjs`, split at its one
+#: interpolation. TRANSCRIBED, so it is LIFTED back out of the .mjs by
+#: `test_the_watcher_shapes_are_lifted_from_the_script_that_files_them`, and a
+#: change to the template there goes red here.
+WATCHER_TITLE_PREFIX = "deploy: "
+WATCHER_TITLE_SUFFIX = " is failing"
+
+#: The login the watcher posts as. `gh issue view` spells the ISSUE author
+#: `app/github-actions` and a COMMENT author `github-actions`; the REST API
+#: spells both `github-actions[bot]`. `_login` folds all three to this. A human
+#: cannot hold this login, which is why authorship is the filter: a human's
+#: triage comment on #4424 carries run URLs too, and must not be read as a
+#: failure record.
+WATCHER_LOGIN = "github-actions"
+
+#: The run line `buildIssueBody` writes, `- run: ${runUrl}`, where `main()`
+#: builds `runUrl` as `${serverUrl}/${repo}/actions/runs/${GITHUB_RUN_ID}` --
+#: the run that FAILED, since the notifier runs inside it. Line-anchored, so a
+#: run URL quoted mid-sentence is not a record.
+_WATCHER_RUN_LINE = re.compile(
+    r"^- run: https://github\.com/([^/\s]+/[^/\s]+)/actions/runs/(\d+)[ \t]*$",
+    re.MULTILINE,
+)
+
+#: Steps GitHub runs around EVERY job that is not skipped, whatever its `if:`s
+#: decide. A job whose only green steps are these did no work -- the job-level
+#: form of `cloud-parity.md`'s "a green run whose deploy job was skipped at 0
+#: steps is not a receipt". `Post ` steps are the action post-hooks.
+_JOB_BOOKKEEPING_STEPS = frozenset({"Set up job", "Complete job"})
+
+
+def watcher_workflow_in_title(title: str) -> str | None:
+    """The `<workflow>` in `deploy: <workflow> is failing`, or None.
+
+    Only a PRE-FILTER: it decides whether `record_receipt_from_evidence` asks
+    GitHub whether the watcher filed the item. It never supplies the workflow
+    the receipt is matched against -- see the block comment above.
+    """
+    if not (title.startswith(WATCHER_TITLE_PREFIX) and title.endswith(WATCHER_TITLE_SUFFIX)):
+        return None
+    token = title[len(WATCHER_TITLE_PREFIX):len(title) - len(WATCHER_TITLE_SUFFIX)]
+    return token if token.strip() and "\n" not in token else None
+
+
+def _login(author: object) -> str:
+    """An author login with GitHub's two app spellings folded away."""
+    login = str((author or {}).get("login") or "") if isinstance(author, dict) else ""
+    if login.startswith("app/"):
+        login = login[len("app/"):]
+    if login.endswith("[bot]"):
+        login = login[:-len("[bot]")]
+    return login
+
+
+def _parse_time(value: object, what: str) -> datetime:
+    """An ISO-8601 timestamp GitHub returned, as an AWARE datetime, or refuse.
+
+    Compared as datetimes rather than strings: string order agrees only while
+    both sides share one spelling, and an offset or a fraction breaks that
+    silently -- which is a time bound that stops binding without a word.
+    """
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ReceiptRefusedError(
+            f"cannot read {what} as a time ({value!r}): {exc}. A time bound this "
+            "tool cannot read is not a bound, so it refuses rather than skipping it"
+        ) from exc
+    if parsed.tzinfo is None:
+        raise ReceiptRefusedError(
+            f"{what} ({value!r}) carries no timezone, so it cannot be ordered "
+            "against GitHub's UTC timestamps without guessing"
+        )
+    return parsed
+
+
+class WatcherFiling(NamedTuple):
+    """What the watcher's own records on an issue establish.
+
+    `failure_run_id` and `recorded_at` come from the NEWEST watcher-authored
+    record -- the issue body or the latest watcher comment -- because that is
+    the failure a green run has to come after.
+    """
+
+    workflow_in_title: str
+    failure_run_id: str
+    recorded_at: datetime
+    records: int
+
+
+def watcher_filing(repo: str, number: int) -> WatcherFiling | None:
+    """Read the issue and decide whether the deploy-failure watcher filed it.
+
+    Returns None when it did not -- the title does not have the watcher's shape,
+    or the issue was not opened by the watcher -- and the caller then takes the
+    ordinary `receipt_producers` route. RAISES, never returns None, when it
+    cannot TELL: an unreadable issue is not a non-watcher issue (R7), and
+    falling through to the other route on a read failure would decide the
+    route by a network blip.
+
+    Also refuses a watcher issue whose newest record names no run, or names
+    runs in another repository: the failure run is the only source of the
+    workflow's identity, and guessing one is the defect.
+    """
+    rc, out, err = sh([
+        "gh", "issue", "view", str(number), "--repo", repo,
+        "--json", "author,title,body,comments,createdAt,url",
+    ])
+    if rc != 0:
+        raise ReceiptRefusedError(
+            f"could not read #{number} to establish whether the deploy-failure "
+            f"watcher filed it (rc={rc}): {err[:200]}. Refusing rather than "
+            "choosing a receipt route without knowing."
+        )
+    try:
+        parsed = json.loads(out)
+    except json.JSONDecodeError as exc:
+        raise ReceiptRefusedError(f"unparseable issue #{number}: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ReceiptRefusedError(f"unexpected shape for issue #{number}")
+    url = str(parsed.get("url") or "")
+    if (_object_kind_from_url(url) != "issues"
+            or _object_repo_from_url(url).casefold() != repo.casefold()):
+        raise ReceiptRefusedError(
+            f"#{number} in {repo} resolved to {url!r}, which is not an issue in "
+            "that repository - its records are not evidence about this item"
+        )
+
+    workflow = watcher_workflow_in_title(str(parsed.get("title") or ""))
+    if workflow is None or _login(parsed.get("author")) != WATCHER_LOGIN:
+        return None
+
+    records = [(_parse_time(parsed.get("createdAt"), f"#{number}'s creation time"),
+                str(parsed.get("body") or ""))]
+    for comment in parsed.get("comments") or []:
+        if isinstance(comment, dict) and _login(comment.get("author")) == WATCHER_LOGIN:
+            records.append((
+                _parse_time(comment.get("createdAt"), f"a watcher comment on #{number}"),
+                str(comment.get("body") or ""),
+            ))
+    recorded_at, newest_body = max(records, key=lambda record: record[0])
+
+    runs = _WATCHER_RUN_LINE.findall(newest_body)
+    if not runs:
+        raise ReceiptRefusedError(
+            f"#{number} was filed by the deploy-failure watcher, but its newest "
+            f"record ({recorded_at.isoformat()}) names no failed run on a "
+            "`- run: <url>` line, so the workflow it is about cannot be read from "
+            "a run. Refusing rather than taking the workflow from the title."
+        )
+    foreign = sorted({r for r, _ in runs if r.casefold() != repo.casefold()})
+    if foreign:
+        raise ReceiptRefusedError(
+            f"#{number}'s newest watcher record names a run in {foreign}, not in "
+            f"{repo} - a run in another repository says nothing about this item"
+        )
+    ids = sorted({run_id for _, run_id in runs})
+    if len(ids) > 1:
+        raise ReceiptRefusedError(
+            f"#{number}'s newest watcher record names {len(ids)} runs ({ids}), so "
+            "which failure it records is ambiguous. Refusing rather than picking one."
+        )
+    return WatcherFiling(workflow, ids[0], recorded_at, len(records))
+
+
+#: The fields the watcher route reads off a run. WIDER than `_run_evidence`'s,
+#: and a separate read on purpose: `test_the_run_backed_disclosure_is_still_true_of_the_code_it_describes`
+#: pins that `_run_evidence` does not fetch `createdAt`, because the policy
+#: route publishes "no run date is fetched" -- which stays true on that route.
+_WATCHER_RUN_FIELDS = (
+    "databaseId,workflowName,workflowDatabaseId,headBranch,createdAt,"
+    "conclusion,status,headSha,url,jobs"
+)
+
+
+def _watcher_run_evidence(repo: str, run_id: str) -> dict:
+    """`_run_evidence` with the identity, branch and time fields the watcher
+    route checks. Never discards stderr (R7)."""
+    rc, out, err = sh(
+        ["gh", "run", "view", str(run_id), "--repo", repo, "--json", _WATCHER_RUN_FIELDS]
+    )
+    if rc != 0:
+        raise ReceiptRefusedError(
+            f"cannot read run {run_id} in {repo} (rc={rc}): {err[:200]}. "
+            "A run this tool cannot read is not evidence - it is an unanswered question."
+        )
+    try:
+        parsed = json.loads(out)
+    except json.JSONDecodeError as exc:
+        raise ReceiptRefusedError(f"unparseable run {run_id}: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ReceiptRefusedError(f"unexpected shape for run {run_id}")
+    return parsed
+
+
+def _default_branch(repo: str) -> str:
+    """The repository's default branch, READ, never assumed to be `main`."""
+    rc, out, err = sh(["gh", "repo", "view", repo, "--json", "defaultBranchRef"])
+    if rc != 0:
+        raise ReceiptRefusedError(
+            f"cannot read {repo}'s default branch (rc={rc}): {err[:200]}. "
+            "Refusing rather than assuming one."
+        )
+    try:
+        name = str((json.loads(out).get("defaultBranchRef") or {}).get("name") or "")
+    except (ValueError, AttributeError) as exc:
+        raise ReceiptRefusedError(f"unparseable default branch for {repo}: {exc}") from exc
+    if not name:
+        raise ReceiptRefusedError(f"{repo} reported no default branch")
+    return name
+
+
+def _job_did_work(job: dict) -> bool:
+    """At least one step other than GitHub's own bookkeeping concluded success."""
+    for step in job.get("steps") or []:
+        name = str(step.get("name") or "")
+        if (step.get("conclusion") == "success"
+                and name not in _JOB_BOOKKEEPING_STEPS
+                and not name.startswith("Post ")):
+            return True
+    return False
+
+
+def verify_watcher_run_receipt(
+    number: int, filing: WatcherFiling, failure_run: dict, run: dict,
+    default_branch: str,
+) -> str:
+    """Refuse unless RUN is the green run a watcher-filed item asks for.
+
+    PURE -- every GitHub fact is passed in -- so each refusal is reachable from
+    a test without a network. FAILS CLOSED AT EVERY STEP, in this order:
+
+    1. **Same workflow, by ID.** `workflowDatabaseId` of the run the watcher
+       recorded against that of the offered run. Not by name: #4390's workflow
+       is filed as `loom-dataplane-roll` while its runs report the display name
+       `Loom data-plane roll (unity / iceberg / trino)`, and a display name is
+       not unique.
+    2. **Completed, then success** -- two states, kept apart for the reason
+       `verify_run_backed_receipt` keeps them apart.
+    3. **On the default branch.** A green run of a branch is a fact about that
+       branch.
+    4. **Created strictly AFTER the newest recorded failure.** A green run from
+       before the failure cannot say the failure is over.
+    5. **Every job that failed in the recorded failure concluded success here
+       having executed a work step.** This is the "did it actually run" check:
+       a run whose deploy job was skipped at 0 steps -- or whose jobs all
+       skipped -- concludes success over nothing (`cloud-parity.md`). Keyed on
+       the jobs that FAILED rather than on every job, because a green
+       `deploy-fiab-commercial` run legitimately skips `Post-deploy bootstrap
+       (Commercial)` at 0 steps -- measured on 36568209612 -- so "no job
+       skipped" would refuse every real receipt. A recorded failure with no
+       failed job leaves nothing to key on and REFUSES.
+    """
+    expected = failure_run.get("workflowDatabaseId")
+    if not expected:
+        raise ReceiptRefusedError(
+            f"the failed run #{number} records ({filing.failure_run_id}) reports no "
+            "workflow id, so which workflow this item is about cannot be established"
+        )
+    actual = run.get("workflowDatabaseId")
+    if actual != expected:
+        raise ReceiptRefusedError(
+            f"run is from workflow {run.get('workflowName')!r} (id {actual}), but "
+            f"#{number} was filed by the deploy-failure watcher about workflow "
+            f"{failure_run.get('workflowName')!r} (id {expected}), read from the "
+            f"failed run {filing.failure_run_id} it recorded - a green run of a "
+            "different workflow says nothing about this item"
+        )
+    # Read into locals rather than written as `if run.get(...)`: the policy
+    # route above carries those exact lines, and a mutation arm anchored on
+    # one must match exactly once or it is skipped as AMBIGUOUS.
+    status, conclusion = run.get("status"), run.get("conclusion")
+    if status != "completed":
+        raise ReceiptRefusedError(
+            f"run has status {status!r} - it has not finished, so it is "
+            "not yet a verdict either way"
+        )
+    if conclusion != "success":
+        raise ReceiptRefusedError(f"run concluded {conclusion!r}, not success")
+    if run.get("headBranch") != default_branch:
+        raise ReceiptRefusedError(
+            f"run is on branch {run.get('headBranch')!r}, not the default branch "
+            f"{default_branch!r} - a green run of another branch says nothing about "
+            "the path this item is about"
+        )
+    created = _parse_time(run.get("createdAt"), "the run's creation time")
+    if created <= filing.recorded_at:
+        raise ReceiptRefusedError(
+            f"run was created {created.isoformat()}, not after the newest failure "
+            f"#{number} records ({filing.recorded_at.isoformat()}, run "
+            f"{filing.failure_run_id}) - a green run from before the failure "
+            "cannot close it"
+        )
+
+    failed_jobs = [
+        str(job.get("name"))
+        for job in failure_run.get("jobs") or []
+        if job.get("conclusion") not in ("success", "skipped")
+    ]
+    if not failed_jobs:
+        raise ReceiptRefusedError(
+            f"the recorded failure {filing.failure_run_id} has no failed job, so "
+            "there is no job whose recovery this run could show - refusing rather "
+            "than accepting any green run of the workflow"
+        )
+    by_name: dict[str, list[dict]] = {}
+    for job in run.get("jobs") or []:
+        by_name.setdefault(str(job.get("name")), []).append(job)
+    for name in failed_jobs:
+        jobs_named = by_name.get(name) or []
+        if not jobs_named:
+            raise ReceiptRefusedError(
+                f"the run has no job {name!r}, which is the job that failed in "
+                f"{filing.failure_run_id} - a green run without it did not show "
+                "that job recovering"
+            )
+        for job in jobs_named:
+            if job.get("conclusion") != "success":
+                raise ReceiptRefusedError(
+                    f"the job {name!r} concluded {job.get('conclusion')!r}, not "
+                    "success - a skipped deploy job is a green run over nothing"
+                )
+            if not _job_did_work(job):
+                raise ReceiptRefusedError(
+                    f"the job {name!r} concluded success having executed no work "
+                    f"step ({len(job.get('steps') or [])} steps, none beyond "
+                    "GitHub's own set-up, post and complete) - green over nothing"
+                )
+
+    sha = run.get("headSha")
+    ref = str(run.get("url") or run.get("databaseId"))
+    return f"{ref} (headSha {sha})" if sha else ref
+
+
+def _watcher_run_receipt(
+    repo: str, number: int, filing: WatcherFiling, from_run: str | None,
+) -> tuple[str, str]:
+    """Read everything `verify_watcher_run_receipt` needs, verify, and build
+    the `(ref, detail)` pair the close publishes."""
+    if not from_run:
+        raise ReceiptRefusedError(
+            f"#{number} was filed by the deploy-failure watcher about "
+            f"{filing.workflow_in_title!r} and needs a green run of THAT workflow - "
+            "pass --from-run"
+        )
+    run = _watcher_run_evidence(repo, from_run)
+    failure = _watcher_run_evidence(repo, filing.failure_run_id)
+    ref = verify_watcher_run_receipt(number, filing, failure, run, _default_branch(repo))
+    # THE WORKFLOW IS NAMED BY ID AS WELL AS NAME, and the source of that
+    # identity is named too, because the comment is permanent and R7 governs
+    # what it implies: this route read the workflow off the failed run, not
+    # off the title and not off a policy declaration.
+    detail = (
+        f"{run.get('workflowName')} run {from_run} (workflow id "
+        f"{run.get('workflowDatabaseId')}) concluded success on "
+        f"{run.get('headBranch')} at {run.get('createdAt')}, after the newest "
+        f"failure this issue records (run {filing.failure_run_id}, recorded "
+        f"{filing.recorded_at.isoformat()}); the workflow was read from that "
+        "failed run as recorded by the deploy-failure watcher, not from the title"
+    )
+    return ref, detail
+
+
 def _pr_references_item(repo: str, pr_number: int, item: int) -> None:
     """Refuse unless PR #pr_number actually NAMES this item. Raises or returns None.
 
@@ -3406,6 +3856,10 @@ def record_receipt_from_evidence(
       no issue reference at all. Nothing stops a green roll being recorded
       against a second deploy-path item it never touched. `Item.pr` (#4489)
       now records which PR a lane opened, but this path does not consult it.
+    - EXCEPT for an item the deploy-failure WATCHER filed (#4764), where the
+      run IS bound: to the workflow the watcher recorded failing, by workflow
+      id, and to a time after its newest recorded failure. See
+      `verify_watcher_run_receipt`. Such an item takes ONLY that route.
     """
     item = led.items.get(number)
     if item is None:
@@ -3423,6 +3877,7 @@ def record_receipt_from_evidence(
             f"#{number} resolves to class {issue_class!r}, which names no receipt kind"
         )
 
+    binding = BINDING_POLICY
     if kind == "ci-green":
         if from_pr is None:
             raise ReceiptRefusedError(
@@ -3445,6 +3900,18 @@ def record_receipt_from_evidence(
             )
         ref = data["merged"]
         detail = f"{receipt.summary} at {ref} (PR #{from_pr})"
+    # #4764: AN ITEM THE DEPLOY-FAILURE WATCHER FILED is closed by a green run
+    # of the workflow it was filed about, and by NOTHING ELSE -- in particular
+    # not by the policy producer, since a green `loom-roll-and-validate` says
+    # nothing about a failing `gov-console-roll`. The ledger title is only the
+    # pre-filter that decides whether to ask GitHub; `watcher_filing` returns
+    # None for an issue the watcher did not open, and that item takes the
+    # policy route below exactly as before.
+    elif (kind == "deploy-run"
+          and watcher_workflow_in_title(item.title) is not None
+          and (filing := watcher_filing(repo, number)) is not None):
+        ref, detail = _watcher_run_receipt(repo, number, filing, from_run)
+        binding = BINDING_WATCHER_WORKFLOW
     else:
         if not from_run:
             raise ReceiptRefusedError(
@@ -3489,7 +3956,7 @@ def record_receipt_from_evidence(
     # The close raises rather than returning a flag, so the ledger write below
     # is unreachable unless the issue is observably closed on GitHub.
     close_note = close_issue_on_github(
-        policy, repo, number, CLOSED, detail, kind, issue_class)
+        policy, repo, number, CLOSED, detail, kind, issue_class, binding)
     # EVERY FAILURE FROM HERE ON IS A POST-CLOSE FAILURE, and it is wrapped so
     # it cannot be reported as a refusal. `_record_close_in_ledger` restores the
     # item, so the in-memory ledger is untouched and `main()` saves nothing --

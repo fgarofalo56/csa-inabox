@@ -542,6 +542,23 @@ ledger is byte-identical afterwards, verified by digest, **and no GitHub write
 happens either**, because the close runs only after every refusal has been
 passed.
 
+**Items the deploy-failure watcher filed take a different route (#4764).**
+`.github/scripts/deploy-notify-failure.mjs` files `deploy: <workflow> is
+failing` and asks to be closed "only once the path has run GREEN". Such an item
+is closed by a green run of **that** workflow and by nothing else: not by the
+policy producer, since a green `loom-roll-and-validate` says nothing about a
+failing `gov-console-roll`. The ledger title only decides whether to ask
+GitHub; the route is taken when the issue was opened by `github-actions`, and
+the workflow is read from the failed run named on the newest watcher record,
+by **workflow id** (a display name such as `Loom data-plane roll (unity /
+iceberg / trino)` is neither the file name nor unique). The offered run must
+be that workflow, completed and successful, on the default branch, created
+after the newest recorded failure, and every job that failed in that failure
+must have concluded success having run a step beyond GitHub's own set-up, post
+and complete steps. Each of those refuses on its own, and the refusals are
+tested in `__tests__/test_watcher_receipts.py`. The run is bound to no sha, and
+a failure the watcher did not record is not seen; the public comment says both.
+
 `receipt_class` still has no production writer, so the `human-only` class is
 reachable only by hand — and `operator` is deliberately **absent** from
 `receipt_producers`, because a human-only receipt a program can record is not
