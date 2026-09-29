@@ -227,11 +227,15 @@ test('CONTROL: schema group AND warehouse id both reach the plan', () => {
 // ── 1. half-supplied admin coordinates ──────────────────────────────────────
 // BREAKS ON: deleting the guard — the script then exits 0 with a plan that has
 // no servicebus/batch keys, which is the scheduled-run defect verbatim.
+// ALSO BREAKS ON (round 6, R7): restoring "which blanks ... on the next deploy",
+// false on an infra-only run that applies no console env.
 test('an EMPTY --admin-subscription beside a real --admin-rg exits 2, loudly', () => {
   const r = discover({ admin: ['--admin-subscription', '', '--admin-rg', ADMIN_RG] });
   assert.equal(r.status, 2, `expected exit 2, got ${r.status}; stderr: ${r.stderr}`);
   assert.match(r.stderr, /::error::\[discover-dlz-adopt\] admin coordinates are HALF-supplied/);
   assert.match(r.stderr, /--admin-subscription is EMPTY/);
+  assert.match(r.stderr, /LOOM_SERVICEBUS_NAMESPACE \/ LOOM_BATCH_ACCOUNT would render '' on a deploy that applies the console env/);
+  assert.doesNotMatch(r.stderr, /on the next deploy\./, 'regression guard: the unconditional "blanks ... on the next deploy"');
   assert.equal(r.stdout.trim(), '', 'a refused run must not emit a plan a caller could mistake for a real one');
 });
 
@@ -277,12 +281,16 @@ test('several groups and none is loom-schemas: adopts NONE and says why', () => 
 });
 
 // BREAKS ON: emitting `"schemaGroup":""` or an empty `extra:{}` — json_obj must
-// omit empty values. Also on the notice being demoted to silence.
+// omit empty values. Also on the notice being demoted to silence. ALSO BREAKS
+// ON (round 6, R7): restoring "LOOM_EH_SCHEMA_GROUP stays ''", which asserts a
+// render an infra-only run never performs.
 test('a namespace read with zero groups: no key, a ::notice:: (a measured negative)', () => {
   const { plan, stderr } = discover({ groups: '' });
   assert.equal(plan.eventhubs?.target?.name, EH_NS);
   assert.equal(plan.eventhubs?.extra, undefined);
   assert.match(stderr, /::notice::.*holds NO schema groups/);
+  assert.match(stderr, /::notice::.*holds NO schema groups — the plan carries no schemaGroup, so LOOM_EH_SCHEMA_GROUP would render '' if this run applies the console env/);
+  assert.doesNotMatch(stderr, /LOOM_EH_SCHEMA_GROUP stays ''/, "regression guard: the unconditional \"stays ''\"");
   assert.doesNotMatch(stderr, /could NOT list schema groups/);
 });
 
@@ -398,12 +406,15 @@ test('two loom-governance warehouses (no loom-default): adopts NONE, without the
 // (they fall back to the first warehouse of ANY name), so the notice must say
 // that name is not adopted. ALSO BREAKS ON: restoring the earlier notice, which
 // said "the next deploy after one exists binds it" with no qualifier (false
-// here: 'other' exists and the next deploy still binds nothing).
+// here: 'other' exists and the next deploy still binds nothing). ALSO BREAKS ON
+// (round 6, R7): restoring "LOOM_DATABRICKS_SQL_WAREHOUSE_ID stays ''".
 test('API answered 200 with neither loom-default nor loom-governance: no key, a ::notice::, no ::warning::', () => {
   const { plan, stderr } = discover({ dbx: true, body: '{"warehouses":[{"id":"aaaa0000","name":"other"}]}' });
   assert.equal(plan.databricks?.extra?.hostname, DBX_HOST);
   assert.equal(plan.databricks?.extra?.sqlWarehouseId, undefined);
   assert.match(stderr, /::notice::.*answered 200 and lists NO warehouse named 'loom-default' or 'loom-governance'/);
+  assert.match(stderr, /::notice::.*lists NO warehouse named 'loom-default' or 'loom-governance' — the plan carries no sqlWarehouseId, so LOOM_DATABRICKS_SQL_WAREHOUSE_ID would render '' if this run applies the console env/);
+  assert.doesNotMatch(stderr, /LOOM_DATABRICKS_SQL_WAREHOUSE_ID stays ''/, "regression guard: the unconditional \"stays ''\"");
   assert.match(stderr, /::notice::.*a warehouse under any other name is not adopted/);
   assert.doesNotMatch(stderr, /the next deploy after one exists binds it/);
   assert.doesNotMatch(stderr, /::warning::.*SQL Warehouses API/);
@@ -431,6 +442,24 @@ test('API REFUSED (403): no key, a ::warning:: naming HTTP 403 — never "absent
   assert.doesNotMatch(stderr, /at the NETWORK layer/, 'a plain 403 must not be blamed on the network');
   assert.match(stderr, /PERMISSION_DENIED/, 'the body excerpt must be surfaced');
   assert.doesNotMatch(stderr, /lists NO warehouse/);
+});
+
+// The 401 half of the membership branch. Every other refusal fixture is a 403,
+// so none of them can see `"401" ||` dropped from the condition. BREAKS ON:
+// dropping it — a 401 then falls to the generic other-status text, and the
+// not-established refusal sentence and the membership candidate both vanish.
+// The doesNotMatch pins the generic text is NOT what a 401 gets; it is paired
+// with the two positives above it.
+test('API REFUSED (401): the same not-established refusal text as a plain 403, with membership as one candidate', () => {
+  const { plan, stderr, status } = discover({ dbx: true, httpCode: '401', body: '{"error_code":"UNAUTHENTICATED"}' });
+  assert.equal(status, 0);
+  assert.equal(plan.databricks?.extra?.hostname, DBX_HOST, 'the BASE databricks adopt entry must survive');
+  assert.equal(plan.databricks?.extra?.sqlWarehouseId, undefined);
+  assert.match(stderr, /::warning::.*did NOT answer 200 \(HTTP 401, curl exit 0\)/);
+  assert.match(stderr, /the cause of this refusal was NOT established by this lookup/, 'a 401 must take the 401/403 branch');
+  assert.match(stderr, /One cause that produces a 401\/403 here is a deploy identity that is not a user of that workspace/);
+  assert.doesNotMatch(stderr, /The cause was NOT established by this lookup; the body below is the evidence\./,
+    'a 401 must not fall to the generic other-status text');
 });
 
 // A non-auth, non-network error status. BREAKS ON: routing every non-200 into

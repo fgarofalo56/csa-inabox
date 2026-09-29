@@ -87,7 +87,7 @@ done
 # here means a caller regressed, and a warning would let that regression strip
 # two env vars off the console on every run (deploy-integrity R6/R7).
 if { [ -n "$ADMIN_RG" ] && [ -z "$ADMIN_SUB" ]; } || { [ -z "$ADMIN_RG" ] && [ -n "$ADMIN_SUB" ]; }; then
-  echo "::error::[discover-dlz-adopt] admin coordinates are HALF-supplied (--admin-rg='${ADMIN_RG}', --admin-subscription is $( [ -n "$ADMIN_SUB" ] && echo set || echo EMPTY )). The admin-RG fallback needs both, and skipping it would silently drop the servicebus/batch adopt keys — which blanks LOOM_SERVICEBUS_NAMESPACE / LOOM_BATCH_ACCOUNT on the next deploy. Pass both or neither. In a deploy workflow the subscription must be a RESOLVED literal (the topology guard's target_sub), never deploy_sub, which is '' on every scheduled run." >&2
+  echo "::error::[discover-dlz-adopt] admin coordinates are HALF-supplied (--admin-rg='${ADMIN_RG}', --admin-subscription is $( [ -n "$ADMIN_SUB" ] && echo set || echo EMPTY )). The admin-RG fallback needs both, and skipping it would silently drop the servicebus/batch adopt keys — so the plan would carry neither, and LOOM_SERVICEBUS_NAMESPACE / LOOM_BATCH_ACCOUNT would render '' on a deploy that applies the console env. Pass both or neither. In a deploy workflow the subscription must be a RESOLVED literal (the topology guard's target_sub), never deploy_sub, which is '' on every scheduled run." >&2
   exit 2
 fi
 
@@ -318,7 +318,7 @@ if [ -n "$EH" ]; then
       EH_SCHEMA_GROUP="$SG_LIST"
       echo "[discover-dlz-adopt] eventhubs schema group = $EH_SCHEMA_GROUP (the ONLY group on '$EH'; no 'loom-schemas' present)" >&2
     elif [ "$SG_N" -eq 0 ]; then
-      echo "::notice::[discover-dlz-adopt] Event Hubs namespace '$EH' was read and holds NO schema groups — LOOM_EH_SCHEMA_GROUP stays '' (in-process Avro validator)." >&2
+      echo "::notice::[discover-dlz-adopt] Event Hubs namespace '$EH' was read and holds NO schema groups — the plan carries no schemaGroup, so LOOM_EH_SCHEMA_GROUP would render '' if this run applies the console env (the console then uses its in-process Avro validator)." >&2
     else
       echo "::warning::[discover-dlz-adopt] Event Hubs namespace '$EH' holds $SG_N schema groups ($(printf '%s' "$SG_LIST" | tr '\n' ' ')) and none is 'loom-schemas', so there is no unambiguous one to bind. Adopting NONE rather than guessing — name it in LOOM_ADOPT_JSON (eventhubs.extra.schemaGroup) to choose." >&2
     fi
@@ -452,7 +452,7 @@ else:
       printf '%s' "${rest#*:}"
       echo "[discover-dlz-adopt] databricks SQL warehouse '${rest%%:*}' = ${rest#*:} (preference: loom-default, then loom-governance)" >&2 ;;
     NONE)
-      echo "::notice::[discover-dlz-adopt] the Databricks SQL Warehouses API on '$host' answered 200 and lists NO warehouse named 'loom-default' or 'loom-governance' — LOOM_DATABRICKS_SQL_WAREHOUSE_ID stays ''. This lookup adopts only those two names: a warehouse under any other name is not adopted, even one a writer bound to the console (the Azure Government writers reuse the first listed warehouse of any name when none starts with 'loom'). A later deploy binds a warehouse only once one named 'loom-default' or 'loom-governance' exists." >&2 ;;
+      echo "::notice::[discover-dlz-adopt] the Databricks SQL Warehouses API on '$host' answered 200 and lists NO warehouse named 'loom-default' or 'loom-governance' — the plan carries no sqlWarehouseId, so LOOM_DATABRICKS_SQL_WAREHOUSE_ID would render '' if this run applies the console env. This lookup adopts only those two names: a warehouse under any other name is not adopted, even one a writer bound to the console (the Azure Government writers reuse the first listed warehouse of any name when none starts with 'loom'). A later deploy can bind a warehouse only once one named 'loom-default' or 'loom-governance' exists." >&2 ;;
     AMBIG:*)
       rest="${pick#AMBIG:}"
       ambig_note=""
