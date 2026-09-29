@@ -1358,9 +1358,11 @@ jobs:
         # the workspace/region supports it, else a small classic PRO warehouse.
         # Skips cleanly when no Databricks workspace is bound. When one IS bound
         # and no warehouse id results (or the Console env cannot be set), the step
-        # exits 1 with an ::error:: annotation (#4765). continue-on-error is left
-        # as it was, so the job still continues: read the step's annotation /
-        # outcome, not the job conclusion.
+        # exits 1, so its OUTCOME is failure (#4765). continue-on-error is left as
+        # it was, so the job still continues and its conclusion does not change.
+        # That is why the annotations are warnings: a step that cannot fail the
+        # job does not get to print an error annotation (check-annotation-teeth).
+        # Read the step outcome and its warnings, not the job conclusion.
         # Runs inside the Databricks public-access window: after "Enable
         # Databricks public access (temp ...)" and before the always() "Restore
         # Databricks public access disabled" step.
@@ -1371,7 +1373,7 @@ jobs:
           if [ -z "${DBX_HOST:-}" ]; then echo "::notice::No Databricks host bound — skipping SQL warehouse provisioning."; exit 0; fi
           TOKEN=$(az account get-access-token --resource 2ff814a6-3304-4ab8-85cb-cd0e6f879c1d --query accessToken -o tsv)
           if [ -z "$TOKEN" ]; then
-            echo "::error::az account get-access-token returned no Databricks token (its stderr, if any, is above) — cannot provision the SQL warehouse on $DBX_HOST."
+            echo "::warning::az account get-access-token returned no Databricks token (its stderr, if any, is above) — cannot provision the SQL warehouse on $DBX_HOST."
             exit 1
           fi
           auth=(-H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json")
@@ -1407,7 +1409,7 @@ jobs:
           dbx_call GET "$PROBE" "$WH_API"
           if ! is_2xx || ! is_json_object "$PROBE"; then
             show_response "GET /api/2.0/sql/warehouses" "$PROBE"
-            echo "::error::Could not list SQL warehouses on $DBX_HOST (HTTP $DBX_CODE, curl exit $DBX_RC; response above), so whether 'loom-default' already exists is unknown — not creating one blind."
+            echo "::warning::Could not list SQL warehouses on $DBX_HOST (HTTP $DBX_CODE, curl exit $DBX_RC; response above), so whether 'loom-default' already exists is unknown — not creating one blind."
             exit 1
           fi
           WID=$(jq -r '[.warehouses[]? | select(.name == "loom-default") | .id][0] // empty' "$PROBE")
@@ -1421,7 +1423,7 @@ jobs:
               create_warehouse false /tmp/dbx_wh_create_classic.json
             fi
             if [ -z "$WID" ]; then
-              echo "::error::A Databricks workspace is bound ($DBX_HOST) but no SQL warehouse id resulted: the serverless and classic creates both returned no id (last HTTP $DBX_CODE, curl exit $DBX_RC; responses above). This step did not wire LOOM_DATABRICKS_SQL_WAREHOUSE_ID (#3744)."
+              echo "::warning::A Databricks workspace is bound ($DBX_HOST) but no SQL warehouse id resulted: the serverless and classic creates both returned no id (last HTTP $DBX_CODE, curl exit $DBX_RC; responses above). This step did not wire LOOM_DATABRICKS_SQL_WAREHOUSE_ID (#3744)."
               exit 1
             fi
           fi
@@ -1431,7 +1433,7 @@ jobs:
               --set-env-vars "LOOM_DATABRICKS_SQL_WAREHOUSE_ID=$WID" "LOOM_DATABRICKS_LINEAGE_WAREHOUSE_ID=$WID" -o none; then
             echo "✓ Wired LOOM_DATABRICKS_SQL_WAREHOUSE_ID + LINEAGE = $WID on the Console"
           else
-            echo "::error::az containerapp update failed (its stderr is above): LOOM_DATABRICKS_SQL_WAREHOUSE_ID=$WID was NOT set on loom-console in $ADMIN_RG."
+            echo "::warning::az containerapp update failed (its stderr is above): LOOM_DATABRICKS_SQL_WAREHOUSE_ID=$WID was NOT set on loom-console in $ADMIN_RG."
             exit 1
           fi
 
