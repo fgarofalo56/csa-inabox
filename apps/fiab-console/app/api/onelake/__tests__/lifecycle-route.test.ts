@@ -2,12 +2,12 @@
  * /api/onelake/lifecycle — who may replace a storage account's management
  * policy (#4619), and workspace resolution through `resolveAdminWorkspace`.
  *
- * The PUT replaces ONE storage account's whole policy. A workspace OWNER may
- * write when the workspace binds a DEDICATED account (well-formed ARM id, not
- * the deployment's shared lake account, bound by no other workspace); every
- * other case is SHARED and needs a tenant admin. A non-admin non-owner is a
- * 404 before any ARM call. Each load-bearing assertion names the input that
- * breaks it.
+ * The PUT replaces ONE storage account's whole policy, and a workspace's
+ * `storageAccountId` does not establish that the account is that workspace's
+ * alone. So PUT is tenant-admin for EVERY account; a non-admin gets the 403
+ * `admin_only` envelope before the body is read or any workspace is looked
+ * up. GET is owner-or-admin and reports `accountScope` as information only.
+ * Each load-bearing assertion names the input that breaks it.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -34,6 +34,7 @@ import { GET, PUT } from '../lifecycle/route';
 import { getSession } from '@/lib/auth/session';
 import { resolveWorkspaceAccessByOid } from '@/lib/auth/workspace-access';
 import { getAccountName, getLifecyclePolicy, setLifecyclePolicy } from '@/lib/azure/adls-client';
+import { LIFECYCLE_ADMIN_ONLY } from '@/lib/util/admin-only-copy';
 
 const user = { claims: { upn: 'u@x', tid: 't1', oid: 'user-oid' } };
 const admin = { claims: { upn: 'a@x', tid: 't1', oid: 'admin-oid' } };
@@ -59,6 +60,7 @@ function putReq(body: unknown) {
 }
 const getReq = () => ({ nextUrl: new URL('http://x/api/onelake/lifecycle?workspaceId=ws-1') }) as any;
 const put = () => PUT(putReq({ workspaceId: 'ws-1', rules: [RULE] }), {} as any);
+const get = () => GET(getReq(), {} as any);
 
 /** The caller created ws-1 (bound to `storageAccountId`): the owner point read finds it. */
 function callerOwnsWorkspace(binding: string | null = ACCOUNT_ARM_ID) {
@@ -83,60 +85,56 @@ beforeEach(() => {
   (getLifecyclePolicy as any).mockResolvedValue([]);
 });
 
-async function expectAdminOnly(res: Response) {
-  expect(res.status).toBe(403);
-  const j = await res.json();
-  expect(j.code).toBe('admin_only');
-  // The envelope names THIS surface, not the canonical labels/DLP text.
-  expect(j.reason).toMatch(/lifecycle rules/);
-  expect(j.reason).not.toMatch(/sensitivity labels/);
-  expect(setLifecyclePolicy).not.toHaveBeenCalled();
-}
-
-describe('PUT /api/onelake/lifecycle — dedicated account: the workspace owner may write', () => {
+describe('PUT /api/onelake/lifecycle — tenant admin for every account', () => {
   it('401 without a session, and the sink is never called', async () => {
     (getSession as any).mockReturnValue(null);
     expect((await put()).status).toBe(401);
     expect(setLifecyclePolicy).not.toHaveBeenCalled();
   });
 
-  it('a non-admin OWNER of a workspace with its own account reaches the sink with the parsed ref', async () => {
-    // Breaks if PUT were tenant-admin for every workspace (the round-1 shape:
-    // 403 here), or if the ref stopped coming from the workspace binding.
+  it.each([
+    ['a dedicated account', ACCOUNT_ARM_ID],
+    ['no account (the shared default)', null],
+    ['the shared lake account by id', armId(SHARED_ACCOUNT)],
+  ])('403 admin_only for a non-admin OWNER whose workspace binds %s, before any lookup', async (_l, binding) => {
+    // Breaks if PUT goes back to owner-scoped on a dedicated account (the
+    // round-2 shape: the first row answered 200), or if the gate moves after
+    // the workspace lookup (readMock would be called).
     (getSession as any).mockReturnValue(user);
+    callerOwnsWorkspace(binding);
+    const res = await put();
+    expect(res.status).toBe(403);
+    const j = await res.json();
+    expect(j.code).toBe('admin_only');
+    // The envelope names THIS surface, not the canonical labels/DLP text.
+    expect(j.reason).toBe(LIFECYCLE_ADMIN_ONLY.reason);
+    expect(readMock).not.toHaveBeenCalled();
+    expect(setLifecyclePolicy).not.toHaveBeenCalled();
+  });
+
+  it('a tenant admin on a dedicated account reaches the sink with that account (positive pair)', async () => {
+    // Breaks if admins are refused too, or the ref stops coming from the binding.
+    (getSession as any).mockReturnValue(admin);
     const res = await put();
     expect(res.status).toBe(200);
-    expect((await res.json()).ok).toBe(true);
     expect((setLifecyclePolicy as any).mock.calls[0][0][0].name).toBe('cool-after-30');
     expect((setLifecyclePolicy as any).mock.calls[0][1]).toEqual({
       account: 'acctws', resourceGroup: 'rg-1', subscriptionId: SUB,
     });
   });
 
-  it('asks Cosmos for OTHER workspaces binding the same account', async () => {
-    // Breaks if the uniqueness query dropped its self-exclusion (ws-1 would
-    // count itself and every owner would be refused) or searched another name.
-    (getSession as any).mockReturnValue(user);
-    await put();
-    const spec = queryMock.mock.calls[0][0];
-    expect(spec.query).toMatch(/c\.id != @id/);
-    expect(spec.parameters).toEqual(expect.arrayContaining([
-      { name: '@id', value: 'ws-1' },
-      { name: '@needle', value: '/storageaccounts/acctws' },
-    ]));
-  });
-
-  it('a substring-only hit (another workspace binds "acctws2") does not make the account shared', async () => {
-    // CONTAINS is a prefilter; the exact compare decides. Breaks if a
-    // substring hit were counted: this would become a 403.
-    (getSession as any).mockReturnValue(user);
-    queryMock.mockResolvedValue({ resources: [{ id: 'ws-2', storageAccountId: armId('acctws2') }] });
-    expect((await put()).status).toBe(200);
+  it('a tenant admin on an unbound workspace reaches the sink with the default account', async () => {
+    // Breaks if an unbound workspace were refused, or given a made-up ref.
+    (getSession as any).mockReturnValue(admin);
+    callerOwnsWorkspace(null);
+    const res = await put();
+    expect(res.status).toBe(200);
     expect(setLifecyclePolicy).toHaveBeenCalledTimes(1);
+    expect((setLifecyclePolicy as any).mock.calls[0][1]).toBeUndefined();
   });
 });
 
-describe('PUT /api/onelake/lifecycle — rule-name shape', () => {
+describe('PUT /api/onelake/lifecycle — rule-name shape (as a tenant admin)', () => {
   const putNamed = (name: string) =>
     PUT(putReq({ workspaceId: 'ws-1', rules: [{ ...RULE, name }] }), {} as any);
 
@@ -148,7 +146,7 @@ describe('PUT /api/onelake/lifecycle — rule-name shape', () => {
     ['a valid prefix then a space', 'ok bad'],
     ['64 characters', 'a'.repeat(64)],
   ])('422 invalid_rule for %s, before any workspace lookup or ARM write', async (_label, name) => {
-    (getSession as any).mockReturnValue(user);
+    (getSession as any).mockReturnValue(admin);
     const res = await putNamed(name);
     expect(res.status).toBe(422);
     expect((await res.json()).code).toBe('invalid_rule');
@@ -158,96 +156,14 @@ describe('PUT /api/onelake/lifecycle — rule-name shape', () => {
 
   it('a 63-character name is accepted (positive pair for the length bound)', async () => {
     // Breaks if the bound were tightened below 63, or if every name were refused.
-    (getSession as any).mockReturnValue(user);
+    (getSession as any).mockReturnValue(admin);
     const res = await putNamed('a'.repeat(63));
     expect(res.status).toBe(200);
     expect((setLifecyclePolicy as any).mock.calls[0][0][0].name).toBe('a'.repeat(63));
   });
 });
 
-describe('PUT /api/onelake/lifecycle — shared account: tenant admin only', () => {
-  it('403 for a non-admin owner whose workspace binds no account (the shared default)', async () => {
-    // Breaks if an unbound workspace were treated as dedicated: the policy
-    // would land on the shared account with a 200.
-    (getSession as any).mockReturnValue(user);
-    callerOwnsWorkspace(null);
-    await expectAdminOnly(await put());
-  });
-
-  it.each([
-    ['exactly', armId(SHARED_ACCOUNT)],
-    ['in upper case', armId(SHARED_ACCOUNT.toUpperCase())],
-  ])('403 for a non-admin owner whose workspace binds the shared account by id, %s', async (_l, id) => {
-    // Breaks if the shared-account comparison were removed, or made
-    // case-sensitive (ARM account names are case-insensitive).
-    (getSession as any).mockReturnValue(user);
-    callerOwnsWorkspace(id);
-    await expectAdminOnly(await put());
-  });
-
-  it('403 for a non-admin owner when ANOTHER workspace binds the same account', async () => {
-    // Breaks if the uniqueness check were removed: ws-1 is otherwise dedicated
-    // and the owner would get a 200 on an account ws-2 also uses.
-    (getSession as any).mockReturnValue(user);
-    queryMock.mockResolvedValue({ resources: [{ id: 'ws-2', storageAccountId: ACCOUNT_ARM_ID.toUpperCase() }] });
-    await expectAdminOnly(await put());
-  });
-
-  it.each([
-    ['a trailing path segment', `${ACCOUNT_ARM_ID}/x`],
-    ['a query string', `${ACCOUNT_ARM_ID}?x=1`],
-    ['a leading prefix', `/x${ACCOUNT_ARM_ID}`],
-    ['a non-GUID subscription', ACCOUNT_ARM_ID.replace(SUB, 'sub-1')],
-    ['a non-storage provider', ACCOUNT_ARM_ID.replace('Microsoft.Storage/storageAccounts', 'Microsoft.Web/sites')],
-  ])('403 for a non-admin owner whose binding has %s', async (_l, id) => {
-    // Breaks if the ARM-id parse were not anchored at both ends: each of these
-    // would parse to account "acctws" (or similar) and answer 200.
-    (getSession as any).mockReturnValue(user);
-    callerOwnsWorkspace(id);
-    await expectAdminOnly(await put());
-  });
-
-  it('403 (fail closed) when the other-workspaces lookup throws', async () => {
-    // Breaks if a failed lookup were read as "no other workspace": 200.
-    (getSession as any).mockReturnValue(user);
-    queryMock.mockRejectedValue(new Error('cosmos down'));
-    await expectAdminOnly(await put());
-  });
-
-  it('403 (fail closed) when the shared account name cannot be resolved', async () => {
-    // Breaks if an unresolvable shared account were read as "not shared": 200.
-    (getSession as any).mockReturnValue(user);
-    (getAccountName as any).mockImplementation(() => { throw new Error('no LOOM_*_URL'); });
-    await expectAdminOnly(await put());
-  });
-
-  it('a tenant admin on an unbound workspace reaches the sink with the default account (positive pair)', async () => {
-    // Breaks if the shared branch refused admins too.
-    (getSession as any).mockReturnValue(admin);
-    callerOwnsWorkspace(null);
-    const res = await put();
-    expect(res.status).toBe(200);
-    expect(setLifecyclePolicy).toHaveBeenCalledTimes(1);
-    expect((setLifecyclePolicy as any).mock.calls[0][1]).toBeUndefined();
-  });
-});
-
-describe('PUT /api/onelake/lifecycle — workspace resolution', () => {
-  it('a non-admin who does not own the workspace gets 404 and no sink', async () => {
-    // Breaks if a non-owner non-admin were resolved (e.g. via ACL): the
-    // account is dedicated, so the sink would be reached with a 200.
-    (getSession as any).mockReturnValue(user);
-    workspaceOwnedByOther();
-    (resolveWorkspaceAccessByOid as any).mockResolvedValue({
-      workspace: { id: 'ws-1', tenantId: 'creator-oid', storageAccountId: ACCOUNT_ARM_ID },
-      role: 'Admin', via: 'acl', canWrite: true,
-    });
-    const res = await put();
-    expect(res.status).toBe(404);
-    expect(resolveWorkspaceAccessByOid).not.toHaveBeenCalled();
-    expect(setLifecyclePolicy).not.toHaveBeenCalled();
-  });
-
+describe('PUT /api/onelake/lifecycle — workspace resolution (tenant admin)', () => {
   it('a tenant admin on another creator\'s workspace resolves through the tenant-boundary resolver', async () => {
     // Breaks if resolution were still the owner-only partition read: ws-1 is
     // not in the admin's partition, so that read 404s and the answer is 404.
@@ -277,19 +193,54 @@ describe('PUT /api/onelake/lifecycle — workspace resolution', () => {
 describe('GET /api/onelake/lifecycle', () => {
   it('a non-admin owner reads the policy, and learns the account is dedicated', async () => {
     // Breaks if GET were gated tenant-admin (403), the owner path were lost,
-    // or accountScope stopped reporting the classification (editor gating).
+    // or accountScope stopped reporting the classification.
     (getSession as any).mockReturnValue(user);
-    const res = await GET(getReq(), {} as any);
+    const res = await get();
     expect(res.status).toBe(200);
     expect((getLifecyclePolicy as any).mock.calls[0][0].account).toBe('acctws');
     expect((await res.json()).accountScope).toBe('dedicated');
   });
 
-  it('reports accountScope "shared" for an unbound workspace (paired with the above)', async () => {
-    // Breaks if accountScope were a constant.
+  it('asks Cosmos for OTHER workspaces binding the same account', async () => {
+    // Breaks if the uniqueness query dropped its self-exclusion or searched another name.
     (getSession as any).mockReturnValue(user);
-    callerOwnsWorkspace(null);
-    const res = await GET(getReq(), {} as any);
+    await get();
+    const spec = queryMock.mock.calls[0][0];
+    expect(spec.query).toMatch(/c\.id != @id/);
+    expect(spec.parameters).toEqual(expect.arrayContaining([
+      { name: '@id', value: 'ws-1' },
+      { name: '@needle', value: '/storageaccounts/acctws' },
+    ]));
+  });
+
+  it('a substring-only hit (another workspace binds "acctws2") still reports dedicated', async () => {
+    // CONTAINS is a prefilter; the exact compare decides. Breaks if a
+    // substring hit were counted.
+    (getSession as any).mockReturnValue(user);
+    queryMock.mockResolvedValue({ resources: [{ id: 'ws-2', storageAccountId: armId('acctws2') }] });
+    expect((await (await get()).json()).accountScope).toBe('dedicated');
+  });
+
+  it.each([
+    ['binds no account', null, undefined],
+    ['binds the shared account by id', armId(SHARED_ACCOUNT), undefined],
+    ['binds the shared account in upper case', armId(SHARED_ACCOUNT.toUpperCase()), undefined],
+    ['binds an id with a trailing path segment', `${ACCOUNT_ARM_ID}/x`, undefined],
+    ['binds an id with a leading prefix', `/x${ACCOUNT_ARM_ID}`, undefined],
+    ['binds an account another workspace also binds', ACCOUNT_ARM_ID, 'also-bound'],
+    ['cannot complete the other-workspaces lookup', ACCOUNT_ARM_ID, 'lookup-throws'],
+  ])('reports accountScope "shared" when the workspace %s', async (_l, binding, extra) => {
+    // Each row is refused by one check in classifyAccount: the shared-account
+    // compare (case-insensitive), the anchored ARM-id parse, the uniqueness
+    // query, or its fail-closed catch. Breaks if that check is removed: the
+    // row would report "dedicated".
+    (getSession as any).mockReturnValue(user);
+    callerOwnsWorkspace(binding as string | null);
+    if (extra === 'also-bound') {
+      queryMock.mockResolvedValue({ resources: [{ id: 'ws-2', storageAccountId: ACCOUNT_ARM_ID.toUpperCase() }] });
+    }
+    if (extra === 'lookup-throws') queryMock.mockRejectedValue(new Error('cosmos down'));
+    const res = await get();
     expect(res.status).toBe(200);
     expect((await res.json()).accountScope).toBe('shared');
   });
@@ -303,7 +254,7 @@ describe('GET /api/onelake/lifecycle', () => {
       workspace: { id: 'ws-1', tenantId: 'creator-oid', storageAccountId: ACCOUNT_ARM_ID },
       role: 'Viewer', via: 'acl', canWrite: false,
     });
-    const res = await GET(getReq(), {} as any);
+    const res = await get();
     expect(res.status).toBe(404);
     expect(resolveWorkspaceAccessByOid).not.toHaveBeenCalled();
     expect(getLifecyclePolicy).not.toHaveBeenCalled();

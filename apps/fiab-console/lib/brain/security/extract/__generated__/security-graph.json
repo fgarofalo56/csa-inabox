@@ -15897,25 +15897,6 @@
           }
         },
         {
-          "id": "sec:verdict-call:apps/fiab-console/app/api/onelake/lifecycle/route.ts#PUT:requireTenantAdmin:35",
-          "kind": "verdict-call",
-          "provenance": "declared",
-          "label": "PUT /api/onelake/lifecycle -> requireTenantAdmin",
-          "facet": {
-            "kind": "verdict-call",
-            "callSite": "PUT /api/onelake/lifecycle:35",
-            "symbol": "requireTenantAdmin",
-            "returnsVerdictUnion": true,
-            "pathsToPrivilegedSink": 0,
-            "pathsConsumingAsRefusal": 0,
-            "consumption": "returned",
-            "allowlisted": true,
-            "allowlistPremiseTested": false,
-            "sinkPrivileged": false,
-            "sinkKind": "none"
-          }
-        },
-        {
           "id": "sec:authorizer:apps/fiab-console/app/api/onelake/security/route.ts#GET",
           "kind": "authorizer",
           "provenance": "declared",
@@ -15989,6 +15970,33 @@
             "allowPaths": [
               {
                 "id": "delete:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": false,
+            "privilegedSinkKinds": []
+          }
+        },
+        {
+          "id": "sec:authorizer:apps/fiab-console/app/api/onelake/tier/route.ts#PUT",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "PUT /api/onelake/tier",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "PUT /api/onelake/tier",
+            "params": [],
+            "resourceScoped": false,
+            "callerNamedResourceInputs": [],
+            "allowPaths": [
+              {
+                "id": "put:admin-claim",
                 "conditionPredicates": [
                   "isTenantAdmin"
                 ],
@@ -16376,6 +16384,58 @@
           }
         },
         {
+          "id": "sec:authorizer:apps/fiab-console/app/api/workspaces/[id]/route.ts#PATCH",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "PATCH /api/workspaces/[id]",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "PATCH /api/workspaces/[id]",
+            "params": [
+              "id"
+            ],
+            "resourceScoped": true,
+            "callerNamedResourceInputs": [
+              "id"
+            ],
+            "allowPaths": [
+              {
+                "id": "patch:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": true,
+            "privilegedSinkKinds": [
+              "cosmos-write"
+            ]
+          }
+        },
+        {
+          "id": "sec:verdict-call:apps/fiab-console/app/api/workspaces/[id]/route.ts#PATCH:requireTenantAdmin:22",
+          "kind": "verdict-call",
+          "provenance": "declared",
+          "label": "PATCH /api/workspaces/[id] -> requireTenantAdmin",
+          "facet": {
+            "kind": "verdict-call",
+            "callSite": "PATCH /api/workspaces/[id]:22",
+            "symbol": "requireTenantAdmin",
+            "returnsVerdictUnion": true,
+            "pathsToPrivilegedSink": 1,
+            "pathsConsumingAsRefusal": 1,
+            "consumption": "returned",
+            "allowlisted": false,
+            "allowlistPremiseTested": false,
+            "sinkPrivileged": true,
+            "sinkKind": "cosmos-write"
+          }
+        },
+        {
           "id": "sec:verdict-call:apps/fiab-console/app/api/workspaces/[id]/scm/route.ts#GET:authorizeWorkspace:9",
           "kind": "verdict-call",
           "provenance": "declared",
@@ -16503,6 +16563,54 @@
             ],
             "reachesPrivilegedSink": false,
             "privilegedSinkKinds": []
+          }
+        },
+        {
+          "id": "sec:authorizer:apps/fiab-console/app/api/workspaces/route.ts#POST",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "POST /api/workspaces",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "POST /api/workspaces",
+            "params": [],
+            "resourceScoped": false,
+            "callerNamedResourceInputs": [],
+            "allowPaths": [
+              {
+                "id": "post:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": true,
+            "privilegedSinkKinds": [
+              "cosmos-write"
+            ]
+          }
+        },
+        {
+          "id": "sec:verdict-call:apps/fiab-console/app/api/workspaces/route.ts#POST:requireTenantAdmin:15",
+          "kind": "verdict-call",
+          "provenance": "declared",
+          "label": "POST /api/workspaces -> requireTenantAdmin",
+          "facet": {
+            "kind": "verdict-call",
+            "callSite": "POST /api/workspaces:15",
+            "symbol": "requireTenantAdmin",
+            "returnsVerdictUnion": true,
+            "pathsToPrivilegedSink": 1,
+            "pathsConsumingAsRefusal": 1,
+            "consumption": "returned",
+            "allowlisted": false,
+            "allowlistPremiseTested": false,
+            "sinkPrivileged": true,
+            "sinkKind": "cosmos-write"
           }
         },
         {
@@ -45609,9 +45717,16 @@
           "provenance": "declared"
         },
         {
-          "id": "sec-edge:calls:sec:authorizer:apps/fiab-console/app/api/onelake/lifecycle/route.ts#PUT->sec:verdict-call:apps/fiab-console/app/api/onelake/lifecycle/route.ts#PUT:requireTenantAdmin:35",
-          "from": "sec:authorizer:apps/fiab-console/app/api/onelake/lifecycle/route.ts#PUT",
-          "to": "sec:verdict-call:apps/fiab-console/app/api/onelake/lifecycle/route.ts#PUT:requireTenantAdmin:35",
+          "id": "sec-edge:calls:sec:authorizer:apps/fiab-console/app/api/workspaces/[id]/route.ts#PATCH->sec:verdict-call:apps/fiab-console/app/api/workspaces/[id]/route.ts#PATCH:requireTenantAdmin:22",
+          "from": "sec:authorizer:apps/fiab-console/app/api/workspaces/[id]/route.ts#PATCH",
+          "to": "sec:verdict-call:apps/fiab-console/app/api/workspaces/[id]/route.ts#PATCH:requireTenantAdmin:22",
+          "kind": "calls",
+          "provenance": "declared"
+        },
+        {
+          "id": "sec-edge:calls:sec:authorizer:apps/fiab-console/app/api/workspaces/route.ts#POST->sec:verdict-call:apps/fiab-console/app/api/workspaces/route.ts#POST:requireTenantAdmin:15",
+          "from": "sec:authorizer:apps/fiab-console/app/api/workspaces/route.ts#POST",
+          "to": "sec:verdict-call:apps/fiab-console/app/api/workspaces/route.ts#POST:requireTenantAdmin:15",
           "kind": "calls",
           "provenance": "declared"
         }
@@ -49059,11 +49174,6 @@
           "deployedAs": "loom-console"
         },
         {
-          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/onelake/lifecycle/route.ts#PUT:requireTenantAdmin:35",
-          "codeModuleId": "code:apps/fiab-console/app/api/onelake/lifecycle/route.ts",
-          "deployedAs": "loom-console"
-        },
-        {
           "nodeId": "sec:authorizer:apps/fiab-console/app/api/onelake/security/route.ts#GET",
           "codeModuleId": "code:apps/fiab-console/app/api/onelake/security/route.ts",
           "deployedAs": "loom-console"
@@ -49076,6 +49186,11 @@
         {
           "nodeId": "sec:authorizer:apps/fiab-console/app/api/onelake/security/route.ts#DELETE",
           "codeModuleId": "code:apps/fiab-console/app/api/onelake/security/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/onelake/tier/route.ts#PUT",
+          "codeModuleId": "code:apps/fiab-console/app/api/onelake/tier/route.ts",
           "deployedAs": "loom-console"
         },
         {
@@ -49154,6 +49269,16 @@
           "deployedAs": "loom-console"
         },
         {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/workspaces/[id]/route.ts#PATCH",
+          "codeModuleId": "code:apps/fiab-console/app/api/workspaces/[id]/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/workspaces/[id]/route.ts#PATCH:requireTenantAdmin:22",
+          "codeModuleId": "code:apps/fiab-console/app/api/workspaces/[id]/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
           "nodeId": "sec:verdict-call:apps/fiab-console/app/api/workspaces/[id]/scm/route.ts#GET:authorizeWorkspace:9",
           "codeModuleId": "code:apps/fiab-console/app/api/workspaces/[id]/scm/route.ts",
           "deployedAs": "loom-console"
@@ -49181,6 +49306,16 @@
         {
           "nodeId": "sec:authorizer:apps/fiab-console/app/api/workspaces/bulk-delete/route.ts#POST",
           "codeModuleId": "code:apps/fiab-console/app/api/workspaces/bulk-delete/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/workspaces/route.ts#POST",
+          "codeModuleId": "code:apps/fiab-console/app/api/workspaces/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/workspaces/route.ts#POST:requireTenantAdmin:15",
+          "codeModuleId": "code:apps/fiab-console/app/api/workspaces/route.ts",
           "deployedAs": "loom-console"
         }
       ],
@@ -50379,15 +50514,15 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-29T20:42:38.549Z",
-      "commit": "b10a63fd9b9945ddd2af5b807459c86d6be344bf",
-      "inputsDigest": "c2a675a31b917782",
+      "generatedAt": "2026-09-29T22:56:56.812Z",
+      "commit": "2b3ed06459315edf3683cd7ffcbb59ad7ff8905c",
+      "inputsDigest": "a7df991619bc0730",
       "filesScanned": 2124,
       "scanScopes": [
         {
           "scope": "app/**/route.ts (console BFF routes)",
           "filesMatched": 1700,
-          "nodesEmitted": 712
+          "nodesEmitted": 716
         },
         {
           "scope": ".github/**, scripts/** (CI publication surfaces)",

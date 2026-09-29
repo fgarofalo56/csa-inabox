@@ -31,7 +31,7 @@ import {
 } from '@fluentui/react-icons';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { AdminOnlyNotice, useTenantAdminGate } from '@/lib/components/shared/admin-only-notice';
-import { SHARED_LIFECYCLE_ADMIN_ONLY } from '@/lib/util/admin-only-copy';
+import { LIFECYCLE_ADMIN_ONLY } from '@/lib/util/admin-only-copy';
 import { isAdminOnlyRefusal, refusalText, type RefusalEnvelope } from '@/lib/util/admin-refusal';
 
 // ---- Domain types (mirror lib/azure/adls-client.ts, kept local for the client) ----
@@ -137,12 +137,11 @@ export function LifecycleRulesPanel({ workspaceId }: { workspaceId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [account, setAccount] = useState<string | undefined>();
   const [editing, setEditing] = useState<{ rule: LifecycleRule | null; original?: string } | null>(null);
-  // Rules on a SHARED account are tenant-admin only at the PUT (#4619); the GET
-  // reports which kind of account this is so the controls are gated up front.
+  // Saving rules is tenant-admin only at the PUT for every account (#4619), so
+  // the controls are gated on the shell's admin flag up front.
   const adminGate = useTenantAdminGate();
-  const [accountScope, setAccountScope] = useState<string | undefined>();
   const [refused, setRefused] = useState<RefusalEnvelope | null>(null);
-  const readOnly = accountScope === 'shared' && !adminGate.allowed;
+  const readOnly = !adminGate.allowed;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -151,7 +150,7 @@ export function LifecycleRulesPanel({ workspaceId }: { workspaceId: string }) {
       const res = await clientFetch(`/api/onelake/lifecycle?workspaceId=${encodeURIComponent(workspaceId)}`);
       const j = await res.json();
       if (j?.gate) { setGate({ missing: j.missing, hint: j.hint, bicepModule: j.bicepModule }); setRules([]); }
-      else if (j?.ok) { setGate(null); setRules(j.rules || []); setAccount(j.account); setAccountScope(j.accountScope); }
+      else if (j?.ok) { setGate(null); setRules(j.rules || []); setAccount(j.account); }
       else { setError(refusalText(j, res.status)); }
     } catch (e: any) {
       setError(e?.message || 'Failed to load lifecycle rules');
@@ -314,8 +313,8 @@ export function LifecycleRulesPanel({ workspaceId }: { workspaceId: string }) {
 
       {refused ? (
         <AdminOnlyNotice reason={refused.reason} remediation={refused.remediation} />
-      ) : accountScope === 'shared' && adminGate.refused && (
-        <AdminOnlyNotice {...SHARED_LIFECYCLE_ADMIN_ONLY} />
+      ) : adminGate.refused && (
+        <AdminOnlyNotice {...LIFECYCLE_ADMIN_ONLY} />
       )}
       {atLimit && (
         <MessageBar intent="error">

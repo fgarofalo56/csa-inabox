@@ -15,7 +15,12 @@
  * Real Azure blob data-plane only — no mock, no Fabric dependency. GA in all
  * four sovereign clouds via the .blob endpoint resolved by getBlobSuffix().
  *
- * Authorization (#4619) — ITEM-scoped, the same model as `/api/lakehouse/path`:
+ * Authorization (#4619):
+ *   - PUT is TENANT-ADMIN for now (`withTenantAdmin`, before the body is read).
+ *     The confinement below relies on the lakehouse root recorded in the item's
+ *     state, which is not yet server-owned. PUT becomes item-scoped once #4777's
+ *     server-owned roots land. An admin's PUT still runs every check below.
+ *   - GET is ITEM-scoped, the same model as `/api/lakehouse/path`:
  *   1. The path must be a plain container-relative path
  *      (`lib/util/blob-rel-path.ts`) in a known lake container.
  *   2. `lakehouseId` names the lakehouse the file belongs to. The caller must
@@ -32,7 +37,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { withSession } from '@/lib/api/route-toolkit';
+import { withSession, withTenantAdmin } from '@/lib/api/route-toolkit';
 import { blobRelPathError } from '@/lib/util/blob-rel-path';
 import { requireTenantAdmin, type TenantAdminRefusal } from '@/lib/auth/feature-gate';
 import { resolveItemAccessByOid } from '@/lib/auth/item-access';
@@ -58,6 +63,12 @@ const UNSCOPED_REFUSAL: TenantAdminRefusal = {
     'This storage-tier request does not name the lakehouse the file belongs to, so Loom cannot check it '
     + 'against your access to that lakehouse. Only a tenant admin may change tiers without naming a lakehouse.',
   remediation: 'Open the lakehouse that holds the file and change its tier from the Files view.',
+};
+
+/** Keep in step with `TIER_CHANGE_ADMIN_ONLY` in lib/util/admin-only-copy.ts. */
+const TIER_CHANGE_REFUSAL: TenantAdminRefusal = {
+  reason: 'Changing a file\'s storage tier is limited to tenant admins for now.',
+  remediation: 'Ask a tenant admin to change the tier. You can still see the current tier here.',
 };
 
 const STORAGE_UNBOUND =
@@ -175,10 +186,13 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
   }
 });
 
-// 401 without a session; then the request is validated and item-scoped by
-// `resolveTierTarget` before any of `getBlobTier` / `setBlobTier` /
-// `copyBlobToTier` runs.
-export const PUT = withSession(async (req: NextRequest, { session }) => {
+// 401 without a session; 403 `admin_only` for a non-admin before the body is
+// read. PUT becomes item-scoped once #4777's server-owned roots land; until
+// then the root `resolveTierTarget` confines to is read from item state, so
+// only a tenant admin may write. The admin's request is still validated and
+// confined by `resolveTierTarget` before any of `getBlobTier` / `setBlobTier`
+// / `copyBlobToTier` runs.
+export const PUT = withTenantAdmin(async (req: NextRequest, { session }) => {
   let body: any;
   try {
     body = await req.json();
@@ -227,4 +241,4 @@ export const PUT = withSession(async (req: NextRequest, { session }) => {
       { status },
     );
   }
-});
+}, TIER_CHANGE_REFUSAL);

@@ -51,6 +51,8 @@ import {
   ChevronDown16Regular, ChevronRight16Regular, Keyboard20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { NewItemCreateGate } from './new-item-gate';
+import { useTenantAdminGate } from '@/lib/components/shared/admin-only-notice';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { loomDocUrl } from '@/lib/learn/content';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -71,11 +73,12 @@ import {
 } from '@/lib/components/notebook/session-config-dialog';
 import {
   type EditorCell, type CellKind, type CellOutput, type CellComment,
-  KIND_LABEL, KIND_MAGIC, LANG_TO_KIND,
+  KIND_LABEL, LANG_TO_KIND,
   toSharedCell, mergeSharedChange, buildRichFromTable,
   parseRunReference, buildRunPreamble, clampProgress,
-  metaToComments, commentsToMeta, SPARK_SNIPPETS,
+  SPARK_SNIPPETS,
 } from './synapse-notebook-cell-adapter';
+import { uid, isConfigureCell, ipynbToCells, cellsToIpynb } from './synapse-notebook-ipynb';
 
 /** Shaped AML schedule row returned by /api/notebook/[id]/schedule. */
 interface AmlScheduleRow {
@@ -223,118 +226,32 @@ function useStyles() {
   return useMemo(() => ({ ...shared, ...local }), [shared, local]);
 }
 
-// ── IPYNB ⇄ editor-cell mapping ───────────────────────────────────────────────
-// EditorCell / CellKind / CellOutput and the KIND_* maps live in the shared
-// ./synapse-notebook-cell-adapter so this editor renders on the shared CodeCell /
-// RichDisplay / MarkdownCell stack (imported at the top of the file). The IPYNB
-// (de)serialisation + magic round-trip helpers below stay here.
-
-function uid(): string {
-  return (typeof crypto !== 'undefined' && crypto.randomUUID)
-    ? crypto.randomUUID() : `c-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-}
-
-// Client-side mirror of the server's parseConfigureMagic detection — only the
-// "is this a %%configure cell?" check. The server does the authoritative parse
-// (and validates the JSON body) when the cell is sent to /execute.
-function isConfigureCell(source: string): boolean {
-  const first = source.split('\n').find((l) => l.trim() !== '')?.trim().toLowerCase() || '';
-  return first.split(/\s+/)[0].startsWith('%%configure');
-}
-
-// Synapse magic %%sql / %%spark etc. carry per-cell language in IPYNB source.
-function detectKind(metaTags: unknown, source: string): CellKind {
-  const head = source.split('\n')[0]?.trim().toLowerCase() || '';
-  if (head.startsWith('%%sql')) return 'sql';
-  if (head.startsWith('%%spark')) return 'spark';
-  if (head.startsWith('%%sparkr') || head.startsWith('%%r')) return 'sparkr';
-  if (head.startsWith('%%csharp')) return 'csharp';
-  return 'pyspark';
-}
-
-function tagsOf(meta: any): string[] {
-  return Array.isArray(meta?.tags) ? meta.tags.map((t: unknown) => String(t)) : [];
-}
-
-// Synapse persists per-cell language as a leading %%magic in the IPYNB source.
-// We strip it for clean editing and re-stamp it on save so language round-trips.
-function stripMagic(source: string, kind: CellKind): string {
-  if (kind === 'pyspark') return source;
-  const lines = source.split('\n');
-  const head = lines[0]?.trim().toLowerCase() || '';
-  if (head.startsWith('%%')) return lines.slice(1).join('\n');
-  return source;
-}
-function withMagic(source: string, kind: CellKind): string {
-  if (kind === 'pyspark') return source;
-  const magic = KIND_MAGIC[kind];
-  const head = source.split('\n')[0]?.trim().toLowerCase() || '';
-  if (head.startsWith(magic.toLowerCase())) return source;
-  return `${magic}\n${source}`;
-}
-
-function ipynbToCells(props: any): EditorCell[] {
-  const raw: any[] = Array.isArray(props?.cells) ? props.cells : [];
-  const out: EditorCell[] = raw.map((c) => {
-    const src = Array.isArray(c?.source) ? c.source.join('') : (typeof c?.source === 'string' ? c.source : '');
-    const isMd = c?.cell_type === 'markdown';
-    const outputs: any[] = Array.isArray(c?.outputs) ? c.outputs : [];
-    const textOut = outputs
-      .map((o) => {
-        if (o?.text) return Array.isArray(o.text) ? o.text.join('') : String(o.text);
-        const d = o?.data?.['text/plain'];
-        return Array.isArray(d) ? d.join('') : (d ? String(d) : '');
-      })
-      .filter(Boolean).join('\n');
-    const tags = tagsOf(c?.metadata);
-    const lang: CellKind = isMd ? 'pyspark' : detectKind(c?.metadata?.tags, src);
-    return {
-      id: uid(),
-      type: isMd ? 'markdown' : 'code',
-      lang,
-      source: isMd ? src : stripMagic(src, lang),
-      output: textOut ? { status: 'ok', text: textOut } : undefined,
-      isParameters: !isMd && tags.includes('parameters'),
-      collapsed: !!(c?.metadata?.jupyter?.source_hidden),
-      outputCollapsed: !!(c?.metadata?.jupyter?.outputs_hidden),
-      comments: metaToComments(c?.metadata),
-    };
-  });
-  return out.length ? out : [{ id: uid(), type: 'code', lang: 'pyspark', source: '' }];
-}
-
-function cellsToIpynb(cells: EditorCell[], pool: string | null, env?: string | null): any {
-  return {
-    nbformat: 4,
-    nbformat_minor: 2,
-    bigDataPool: pool ? { referenceName: pool, type: 'BigDataPoolReference' } : undefined,
-    metadata: {
-      language_info: { name: 'python' },
-      kernelspec: { name: 'synapse_pyspark', display_name: 'Synapse PySpark' },
-      // Synapse stores the attached Spark configuration ("environment") here.
-      ...(env ? { a365ComputeOptions: { id: env, name: env } } : {}),
-    },
-    cells: cells.map((c) => ({
-      cell_type: c.type === 'markdown' ? 'markdown' : 'code',
-      metadata: {
-        ...(c.type === 'code' ? { tags: c.isParameters ? ['parameters'] : [] } : {}),
-        ...((c.collapsed || c.outputCollapsed) ? { jupyter: { ...(c.collapsed ? { source_hidden: true } : {}), ...(c.outputCollapsed ? { outputs_hidden: true } : {}) } } : {}),
-        ...(commentsToMeta(c.comments) ? { loomComments: commentsToMeta(c.comments) } : {}),
-      },
-      source: (c.type === 'code' ? withMagic(c.source, c.lang) : c.source)
-        .split('\n').map((l, i, a) => (i < a.length - 1 ? l + '\n' : l)),
-      ...(c.type === 'code' ? { outputs: [], execution_count: null } : {}),
-    })),
-  };
-}
+// IPYNB ⇄ editor-cell mapping lives in ./synapse-notebook-ipynb (pure, like
+// ./synapse-notebook-cell-adapter, which owns EditorCell / CellKind / KIND_*).
 
 // Markdown rendering uses the shared GFM renderer (tables / fenced code / lists /
 // blockquotes / HR) — lib/notebook/render-markdown, imported at the top of the file.
 
 interface SparkPoolLite { name: string; properties?: { nodeSize?: string; sparkVersion?: string } }
 
+/**
+ * `/items/synapse-notebook/new` has no Loom item yet, so there is no id to
+ * bind a notebook name to and every write route would answer "not found".
+ * Create the item first (the shared create gate), then author under its id.
+ */
 export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: string }) {
+  if (id === 'new') {
+    return (
+      <NewItemCreateGate item={item} createLabel="Create Synapse notebook"
+        intro="A Synapse notebook is a multi-cell Spark notebook that runs on a Synapse Big Data pool. Create the item first; its notebook is then published to the workspace under the item's name." />
+    );
+  }
+  return <SynapseNotebookAuthoring item={item} id={id} />;
+}
+
+function SynapseNotebookAuthoring({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  const adminGate = useTenantAdminGate();
 
   // Notebook catalog (workspace artifacts) + the open notebook.
   const [notebooks, setNotebooks] = useState<{ name: string; language?: string; pool?: string }[]>([]);
@@ -648,7 +565,9 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
   }, []);
 
   const createNotebook = useCallback(async () => {
-    const name = newName.trim() || boundName || '';
+    // A non-admin may create only the item's bound name, so their typed name
+    // is never used; a tenant admin may name any notebook.
+    const name = (adminGate.allowed ? newName.trim() : '') || boundName || '';
     if (!name) return;
     setBanner(null);
     try {
@@ -662,7 +581,7 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
       await refreshList();
       await openNotebook(name);
     } catch (e: any) { setBanner({ intent: 'error', text: e?.message || String(e) }); }
-  }, [newName, boundName, id, refreshList, openNotebook]);
+  }, [newName, boundName, id, refreshList, openNotebook, adminGate.allowed]);
 
   const save = useCallback(async () => {
     if (!openName) { setBanner({ intent: 'info', text: 'Open or create a notebook first.' }); return; }
@@ -1349,13 +1268,18 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
           ) : (
             <>
               <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, marginBottom: tokens.spacingVerticalS }}>
+                {/* A non-admin can create only the item's bound name, so the
+                    field shows it read-only; a tenant admin types any name. */}
                 <Input
-                  size="small" placeholder={boundName ?? 'new notebook name'} value={newName}
-                  onChange={(_, d) => setNewName(d.value)}
+                  size="small" placeholder={boundName ?? 'new notebook name'}
+                  value={adminGate.allowed ? newName : (boundName ?? '')}
+                  readOnly={!adminGate.allowed}
+                  onChange={(_, d) => { if (adminGate.allowed) setNewName(d.value); }}
                   onKeyDown={(e) => { if (e.key === 'Enter') createNotebook(); }}
                   aria-label="New notebook name"
                 />
-                <Button size="small" icon={<Add20Regular />} onClick={createNotebook} disabled={!newName.trim() && !boundName} aria-label="Create notebook" />
+                <Button size="small" icon={<Add20Regular />} onClick={createNotebook}
+                  disabled={!(adminGate.allowed && newName.trim()) && !boundName} aria-label="Create notebook" />
               </div>
               <Tree aria-label="Workspace notebooks" defaultOpenItems={['nb']}>
                 <TreeItem itemType="branch" value="nb">

@@ -238,10 +238,12 @@ const GUID = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-
  * A role-assignment id at a CONTAINER scope, in full. Anchored at both ends (JS
  * `$` without the `m` flag matches only at the end of the input), and no
  * character class admits `/` beyond the literal separators, or `?` / `#`.
- * Captures: 1 account, 2 container.
+ * Captures: 1 account, 2 container. The resource-group segment follows ARM's
+ * naming rule: 1 to 90 of letters, digits, `_`, `-`, `.`, `(`, `)`, and it
+ * does not end in a period, so `.` and `..` are refused.
  */
 const CONTAINER_ROLE_ASSIGNMENT_ID_RE = new RegExp(
-  `^/subscriptions/${GUID}/resourceGroups/[-\\w.()]{1,90}`
+  `^/subscriptions/${GUID}/resourceGroups/[-\\w.()]{0,89}[-\\w()]`
   + '/providers/Microsoft\\.Storage/storageAccounts/([a-z0-9]{3,24})'
   + '/blobServices/default/containers/([a-z0-9-]{3,63})'
   + `/providers/Microsoft\\.Authorization/roleAssignments/${GUID}$`,

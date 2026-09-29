@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { isTenantAdmin } from '@/lib/auth/feature-gate';
+import { isTenantAdmin, requireTenantAdmin } from '@/lib/auth/feature-gate';
+import { WORKSPACE_STORAGE_ADMIN_ONLY } from '@/lib/util/admin-only-copy';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, deleteLoomDoc, docForWorkspace } from '@/lib/azure/loom-search';
 import { cleanupWorkspaceMetadata, type CleanupItem } from '@/lib/azure/lineage-gc';
@@ -113,18 +114,26 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
     // Mutations require a write-capable role (Owner/Admin/Member).
     if (!access.canWrite) return err('You have read-only access to this workspace.', 403, 'read_only_role');
     const ws = access.workspace;
+    // Storage-account binding for OneLake lifecycle management. A full ARM
+    // resource id (string) — the lifecycle route validates it at use time.
+    // Empty string clears the binding (falls back to deployment-default).
+    const storageAccountId: string | undefined = 'storageAccountId' in body
+      ? (typeof body.storageAccountId === 'string' && body.storageAccountId.trim() ? body.storageAccountId.trim() : undefined)
+      : ws.storageAccountId;
+    // #4619 — setting, changing or clearing the binding is a tenant-admin
+    // action. Re-sending the current value (a settings form that saves every
+    // field) is not a change and passes.
+    if (storageAccountId !== (ws.storageAccountId?.trim() || undefined)) {
+      const refused = requireTenantAdmin(session, WORKSPACE_STORAGE_ADMIN_ONLY);
+      if (refused) return refused;
+    }
     const next: Workspace = {
       ...ws,
       name: typeof body.name === 'string' && body.name.trim() ? body.name.trim() : ws.name,
       description: 'description' in body ? (body.description?.trim() || undefined) : ws.description,
       capacity: 'capacity' in body ? (body.capacity?.trim() || undefined) : ws.capacity,
       domain: 'domain' in body ? (body.domain?.trim() || undefined) : ws.domain,
-      // Storage-account binding for OneLake lifecycle management. A full ARM
-      // resource id (string) — the lifecycle route validates it at use time.
-      // Empty string clears the binding (falls back to deployment-default).
-      storageAccountId: 'storageAccountId' in body
-        ? (typeof body.storageAccountId === 'string' && body.storageAccountId.trim() ? body.storageAccountId.trim() : undefined)
-        : ws.storageAccountId,
+      storageAccountId,
       updatedAt: new Date().toISOString(),
     };
     const c = await workspacesContainer();

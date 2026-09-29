@@ -298,6 +298,10 @@ describe('DELETE /api/onelake/security', () => {
     ['another storage account', `${scopeOf('otheracct', 'bronze')}/providers/Microsoft.Authorization/roleAssignments/${RA}`],
     ['an upper-case container', `${scopeOf('acctlake', 'Bronze')}/providers/Microsoft.Authorization/roleAssignments/${RA}`],
     ['a role-assignment name that is not a GUID', `${scopeOf('acctlake', 'bronze')}/providers/Microsoft.Authorization/roleAssignments/not-a-guid`],
+    ['a ".." resource group', VALID.replace('/resourceGroups/rg-dlz/', '/resourceGroups/../')],
+    ['a "." resource group', VALID.replace('/resourceGroups/rg-dlz/', '/resourceGroups/./')],
+    ['a resource group ending in "."', VALID.replace('/resourceGroups/rg-dlz/', '/resourceGroups/rg-dlz./')],
+    ['a 91-character resource group', VALID.replace('/resourceGroups/rg-dlz/', `/resourceGroups/${'r'.repeat(91)}/`)],
   ])('400 on an id with %s, before any ARM call', async (_label, id) => {
     // Breaks if the parse is not anchored at BOTH ends, or is loosened to a
     // prefix / substring test: the first four would then parse (to container
@@ -340,5 +344,22 @@ describe('DELETE /api/onelake/security', () => {
     expect((await res.json()).ok).toBe(true);
     expect(listContainerRoleAssignments).toHaveBeenCalledWith('bronze');
     expect(revokeContainerRoleAssignment).toHaveBeenCalledWith(VALID);
+  });
+
+  it.each([
+    ['dots and parentheses inside', 'rg.dlz_(1)'],
+    ['a single character', 'r'],
+    ['90 characters', 'r'.repeat(90)],
+  ])('accepts a resource group with %s (positive pair for the name rule)', async (_l, rg) => {
+    // Breaks if the tightened segment refused a legal ARM name: the answer
+    // would be 400 instead of the revoke.
+    const id = VALID.replace('/resourceGroups/rg-dlz/', `/resourceGroups/${rg}/`);
+    expect(id).not.toBe(VALID);
+    (getSession as any).mockReturnValue(adminSess);
+    (listContainerRoleAssignments as any).mockResolvedValue([{ id, principalId: 'p' }]);
+    (revokeContainerRoleAssignment as any).mockResolvedValue(undefined);
+    const res = await del(id);
+    expect(res.status).toBe(200);
+    expect(revokeContainerRoleAssignment).toHaveBeenCalledWith(id);
   });
 });

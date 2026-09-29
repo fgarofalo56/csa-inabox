@@ -14,30 +14,24 @@
  * surfaces as an honest gate naming the role + bicep module — never a raw 5xx.
  *
  * Authorization (#4619). A PUT replaces the WHOLE management policy of ONE
- * storage account, so who may write depends on whose account it is:
- *
- *   - DEDICATED account — the workspace binds a well-formed storage-account ARM
- *     id that is not the deployment's shared lake account and that no other
- *     workspace binds: the workspace OWNER may write (and a tenant admin).
- *   - SHARED account — the workspace binds nothing (the policy would land on
- *     the deployment's shared lake account), binds the shared account by id,
- *     binds an account another workspace also binds, binds an id that does not
- *     parse, or the check itself could not complete: TENANT ADMIN only, with a
- *     403 `admin_only` envelope that names this surface.
+ * storage account, and a workspace's `storageAccountId` does not yet establish
+ * that the account belongs to that workspace alone. So PUT is TENANT-ADMIN for
+ * every account (`withTenantAdmin`, before the body is read), with a 403
+ * `admin_only` envelope that names this surface. It can become owner-scoped
+ * once a server-verified per-workspace account binding exists.
  *
  * Both verbs resolve the workspace through the canonical `resolveAdminWorkspace`
  * ladder: the creator resolves on their own partition, a tenant admin resolves
  * a workspace of the same tenant, and anyone else is a 404 before any ARM call
- * (no ACL-member widening). The PUT body is validated first, then the
- * workspace resolved, then the account classified; `setLifecyclePolicy` is only
- * reached past all three. GET is read-only and reports `accountScope` so the
- * editor can show the tenant-admin requirement before a save is attempted.
+ * (no ACL-member widening). GET is read-only; it also reports `accountScope`
+ * (`dedicated` | `shared`) as information about the binding. That field does
+ * not change who may write.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { withSession } from '@/lib/api/route-toolkit';
+import { withSession, withTenantAdmin } from '@/lib/api/route-toolkit';
 import { resolveAdminWorkspace } from '@/lib/auth/workspace-guard';
-import { requireTenantAdmin, type TenantAdminRefusal } from '@/lib/auth/feature-gate';
+import type { TenantAdminRefusal } from '@/lib/auth/feature-gate';
 import { workspacesContainer } from '@/lib/azure/cosmos-client';
 import type { Workspace } from '@/lib/types/workspace';
 import {
@@ -79,39 +73,39 @@ function accountRefFromArmId(armId?: string): LifecycleAccountRef | undefined {
 
 const GUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 /**
- * A storage-account ARM id, whole-string anchored. The owner path only ever
- * acts on an id of exactly this shape, so a suffix, query, fragment or nested
- * path can never stand in for the account segment.
+ * A storage-account ARM id, whole-string anchored, so a suffix, query, fragment
+ * or nested path can never stand in for the account segment when GET reports
+ * `accountScope`.
  */
 const STORAGE_ACCOUNT_ARM_ID_RE = new RegExp(
   `^/subscriptions/(${GUID})/resourceGroups/([-\\w.()]{1,90})/providers/Microsoft\\.Storage/storageAccounts/([a-z0-9]{3,24})$`,
   'i',
 );
 
-const SHARED_ACCOUNT_REFUSAL: TenantAdminRefusal = {
+/** Keep in step with `LIFECYCLE_ADMIN_ONLY` in lib/util/admin-only-copy.ts. */
+const LIFECYCLE_REFUSAL: TenantAdminRefusal = {
   reason:
-    'This workspace has no storage account of its own, so its lifecycle rules apply to a storage account '
-    + 'other workspaces share (or one Loom could not confirm is used by this workspace alone). Rules on a '
-    + 'shared account can only be changed by a tenant admin.',
-  remediation:
-    'Ask a tenant admin to change these rules, or bind this workspace to a storage account of its own in '
-    + 'workspace settings and manage its rules there.',
+    'Lifecycle rules replace the whole management policy of a storage account, and Loom cannot yet '
+    + 'confirm that the account is used by this workspace alone, so only a tenant admin can change them.',
+  remediation: 'Ask a tenant admin to change these rules. You can still review them here.',
 };
 
 type AccountScope = 'dedicated' | 'shared';
 
 /**
- * Classify the account a workspace's lifecycle policy lands on. `dedicated`
- * only when every check positively passes; any doubt — no binding, an id that
- * does not parse, the deployment's shared account, another workspace binding
- * the same account, or a failed lookup — is `shared`, which is tenant-admin.
+ * Classify the account a workspace's lifecycle policy lands on, for GET's
+ * `accountScope`. `dedicated` only when every check positively passes; any
+ * doubt — no binding, an id that does not parse, the deployment's shared
+ * account, another workspace binding the same account, or a failed lookup — is
+ * `shared`. `dedicated` means "not shared", not "owned by this workspace", so
+ * it grants nothing: PUT is tenant-admin either way.
  */
-async function classifyAccount(ws: Workspace): Promise<{ scope: AccountScope; ref?: LifecycleAccountRef }> {
+async function classifyAccount(ws: Workspace): Promise<AccountScope> {
   const m = STORAGE_ACCOUNT_ARM_ID_RE.exec(ws.storageAccountId ?? '');
-  if (!m) return { scope: 'shared' };
+  if (!m) return 'shared';
   const account = m[3].toLowerCase();
   try {
-    if (account === getAccountName().toLowerCase()) return { scope: 'shared' };
+    if (account === getAccountName().toLowerCase()) return 'shared';
     const c = await workspacesContainer();
     const { resources } = await c.items
       .query<{ id: string; storageAccountId?: string }>({
@@ -127,11 +121,11 @@ async function classifyAccount(ws: Workspace): Promise<{ scope: AccountScope; re
     const alsoBound = resources.some(
       (o) => accountRefFromArmId(o.storageAccountId)?.account?.toLowerCase() === account,
     );
-    if (alsoBound) return { scope: 'shared' };
+    if (alsoBound) return 'shared';
   } catch {
-    return { scope: 'shared' };
+    return 'shared';
   }
-  return { scope: 'dedicated', ref: { account: m[3], resourceGroup: m[2], subscriptionId: m[1] } };
+  return 'dedicated';
 }
 
 /** Map a LifecyclePolicyError into the honest-gate JSON payload (HTTP 200). */
@@ -163,8 +157,8 @@ export const GET = withSession(async (req: NextRequest) => {
     if (resolved.resp) return resolved.resp;
     const ref = accountRefFromArmId(resolved.ws.storageAccountId);
     const rules = await getLifecyclePolicy(ref);
-    // Which role may SAVE these rules — the editor gates its controls on it.
-    const { scope } = await classifyAccount(resolved.ws);
+    // Information about the binding; it does not change who may write.
+    const scope = await classifyAccount(resolved.ws);
     return NextResponse.json({
       ok: true,
       rules,
@@ -208,10 +202,9 @@ function validateRule(r: any, index: number): string | null {
   return null;
 }
 
-// 401 without a session; body validated; workspace resolved (404 for a
-// non-owner non-admin); then a SHARED account needs tenant admin (403
-// `admin_only`) while a DEDICATED one is writable by the workspace owner.
-export const PUT = withSession(async (req: NextRequest, { session }) => {
+// 401 without a session; 403 `admin_only` for a non-admin before the body is
+// read; then the body is validated and the workspace resolved before ARM.
+export const PUT = withTenantAdmin(async (req: NextRequest) => {
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: 'Invalid JSON' }, { status: 400 }); }
 
@@ -243,14 +236,8 @@ export const PUT = withSession(async (req: NextRequest, { session }) => {
   try {
     const resolved = await resolveAdminWorkspace(workspaceId);
     if (resolved.resp) return resolved.resp;
-    const classified = await classifyAccount(resolved.ws);
-    if (classified.scope === 'shared') {
-      const gate = requireTenantAdmin(session, SHARED_ACCOUNT_REFUSAL);
-      if (gate) return gate;
-    }
-    // Dedicated: the strictly parsed ref. Shared (admin): the workspace's
-    // binding as before, or the deployment default when it has none.
-    const ref = classified.ref ?? accountRefFromArmId(resolved.ws.storageAccountId);
+    // The workspace's binding, or the deployment default when it has none.
+    const ref = accountRefFromArmId(resolved.ws.storageAccountId);
     const clean: LifecycleRule[] = rules.map((r) => ({
       name: r.name,
       enabled: r.enabled,
@@ -267,4 +254,4 @@ export const PUT = withSession(async (req: NextRequest, { session }) => {
     if (e instanceof LifecyclePolicyError) return gateResponse(e);
     return NextResponse.json({ ok: false, error: e?.message || 'Failed to write lifecycle policy' }, { status: 502 });
   }
-});
+}, LIFECYCLE_REFUSAL);

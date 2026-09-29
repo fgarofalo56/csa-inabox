@@ -33,12 +33,29 @@ export const SECURE_TAB_ADMIN_ONLY: AdminOnlyCopy = {
   remediation: 'Ask a tenant admin to review or change access on these containers.',
 };
 
-/** Lifecycle rules on a SHARED storage account (PUT /api/onelake/lifecycle). */
-export const SHARED_LIFECYCLE_ADMIN_ONLY: AdminOnlyCopy = {
+/** Lifecycle rules (PUT /api/onelake/lifecycle) — tenant-admin for every account. */
+export const LIFECYCLE_ADMIN_ONLY: AdminOnlyCopy = {
   reason:
-    'This workspace has no storage account of its own, so these rules apply to a storage account other '
-    + 'workspaces share. Rules on a shared account can only be changed by a tenant admin.',
+    'Lifecycle rules replace the whole management policy of a storage account, and Loom cannot yet '
+    + 'confirm that the account is used by this workspace alone, so only a tenant admin can change them.',
+  remediation: 'Ask a tenant admin to change these rules. You can still review them here.',
+};
+
+/** Change storage tier (PUT /api/onelake/tier). */
+export const TIER_CHANGE_ADMIN_ONLY: AdminOnlyCopy = {
+  reason: 'Changing a file\'s storage tier is limited to tenant admins for now.',
+  remediation: 'Ask a tenant admin to change the tier. You can still see the current tier here.',
+};
+
+/**
+ * A workspace's storage account (`storageAccountId` on POST /api/workspaces
+ * and PATCH /api/workspaces/[id]). The binding decides which account the
+ * workspace's lifecycle and metrics surfaces act on, so setting or changing it
+ * is a tenant-admin action. The route answers with this text.
+ */
+export const WORKSPACE_STORAGE_ADMIN_ONLY: AdminOnlyCopy = {
+  reason: 'Setting or changing a workspace\'s storage account is limited to tenant admins.',
   remediation:
-    'Ask a tenant admin to change these rules, or bind this workspace to a storage account of its own in '
-    + 'workspace settings and manage its rules there.',
+    'Create the workspace on the deployment default storage, then ask a tenant admin to set '
+    + 'the storage account.',
 };

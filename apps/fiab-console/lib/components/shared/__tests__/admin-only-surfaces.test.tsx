@@ -3,7 +3,7 @@
  * on the shell's admin flag and render the 403 `admin_only` envelope as the
  * AdminOnlyNotice (reason + remediation), not as the bare token "forbidden".
  *
- *   - OneLake lifecycle rules on a SHARED account (PUT is admin-only there);
+ *   - OneLake lifecycle rules (PUT is admin-only on every account);
  *   - the OneLake Secure tab (GET / grant are admin-only);
  *   - the DLP "Restrict access" section (POST is admin-only).
  *
@@ -30,7 +30,7 @@ import { LifecycleRulesPanel } from '@/lib/components/onelake/lifecycle-rules';
 import { SecureView } from '@/lib/components/onelake/secure-view';
 import { DlpPanel } from '@/lib/components/admin-security/dlp-panel';
 import {
-  DLP_RESTRICT_ADMIN_ONLY, SECURE_TAB_ADMIN_ONLY, SHARED_LIFECYCLE_ADMIN_ONLY,
+  DLP_RESTRICT_ADMIN_ONLY, SECURE_TAB_ADMIN_ONLY, LIFECYCLE_ADMIN_ONLY,
 } from '@/lib/util/admin-only-copy';
 
 type Route = { status?: number; body: unknown };
@@ -79,11 +79,12 @@ function lifecycleGet(accountScope: 'shared' | 'dedicated') {
   return { body: { ok: true, rules: [RULE], ruleCount: 1, maxRules: 10, account: 'acct', accountScope } };
 }
 
-describe('LifecycleRulesPanel — shared-account rules are tenant-admin only', () => {
-  it('shared account + non-admin: notice shown, Add / Pause / Delete disabled', async () => {
+describe('LifecycleRulesPanel — saving rules is tenant-admin only on every account', () => {
+  it.each(['shared', 'dedicated'] as const)('%s account + non-admin: notice shown, Add / Pause / Delete disabled', async (scope) => {
     // Breaks if `readOnly` is dropped from the controls' `disabled` (Delete
-    // enabled), or the pre-emptive notice is not rendered.
-    stubFetch({ '/api/onelake/lifecycle': lifecycleGet('shared') });
+    // enabled), if the gate keys on `accountScope` again (the dedicated row
+    // would be enabled, the round-2 shape), or the notice is not rendered.
+    stubFetch({ '/api/onelake/lifecycle': lifecycleGet(scope) });
     render(withSession(false, <LifecycleRulesPanel workspaceId="ws1" />));
     const del = await screen.findByRole('button', { name: 'Delete cool-30' });
     expect(del).toBeDisabled();
@@ -91,10 +92,10 @@ describe('LifecycleRulesPanel — shared-account rules are tenant-admin only', (
     // The Tooltip is relationship="label", so it names the Add button.
     expect(screen.getByRole('button', { name: 'Add a lifecycle rule' })).toBeDisabled();
     expect(screen.getByRole('button', { name: /Create from template/ })).toBeDisabled();
-    expect(screen.getByTestId('admin-only-notice').textContent).toContain(SHARED_LIFECYCLE_ADMIN_ONLY.remediation);
+    expect(screen.getByTestId('admin-only-notice').textContent).toContain(LIFECYCLE_ADMIN_ONLY.reason);
   });
 
-  it('shared account + tenant admin: controls enabled, no notice (positive pair)', async () => {
+  it('tenant admin: controls enabled, no notice (positive pair)', async () => {
     // Breaks if the gate ignores the admin flag (Delete stays disabled).
     stubFetch({ '/api/onelake/lifecycle': lifecycleGet('shared') });
     render(withSession(true, <LifecycleRulesPanel workspaceId="ws1" />));
@@ -102,24 +103,15 @@ describe('LifecycleRulesPanel — shared-account rules are tenant-admin only', (
     expect(screen.queryByTestId('admin-only-notice')).toBeNull();
   });
 
-  it('dedicated account + non-admin: controls enabled, no notice', async () => {
-    // Breaks if the gate keys on the admin flag alone instead of
-    // `accountScope === "shared"` — the owner of a dedicated account must keep
-    // their controls.
-    stubFetch({ '/api/onelake/lifecycle': lifecycleGet('dedicated') });
-    render(withSession(false, <LifecycleRulesPanel workspaceId="ws1" />));
-    expect(await screen.findByRole('button', { name: 'Delete cool-30' })).not.toBeDisabled();
-    expect(screen.queryByTestId('admin-only-notice')).toBeNull();
-  });
-
   it('a PUT answered with 403 admin_only renders the envelope reason + remediation', async () => {
+    // The shell flag says admin but the route refuses (e.g. a stale session).
     // Breaks if persist() renders `j.error` ("forbidden") instead of passing
     // the envelope to the notice.
     const calls = stubFetch({
       'GET /api/onelake/lifecycle': lifecycleGet('dedicated'),
       'PUT /api/onelake/lifecycle': { status: 403, body: ENVELOPE },
     });
-    render(withSession(false, <LifecycleRulesPanel workspaceId="ws1" />));
+    render(withSession(true, <LifecycleRulesPanel workspaceId="ws1" />));
     fireEvent.click(await screen.findByRole('button', { name: 'Delete cool-30' }));
     const notice = await screen.findByTestId('admin-only-notice');
     expect(calls.some((c) => c.method === 'PUT')).toBe(true);

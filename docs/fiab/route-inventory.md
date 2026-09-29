@@ -15,9 +15,9 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | --- | ---: |
 | Total routes | 1694 |
 | Public (no session) | 59 |
-| Session-only | 642 |
+| Session-only | 641 |
 | Owner-scoped | 679 |
-| Admin | 314 |
+| Admin | 315 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 499 |
 | Areas | 122 |
@@ -2419,7 +2419,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `workspaces/[id]/time-branches/[branchId]/route.ts` | DELETE | admin |  | Cosmos, Microsoft Graph |
 | `workspaces/[id]/time-branches/route.ts` | GET POST | admin |  | Cosmos, Microsoft Graph |
 | `workspaces/bulk-delete/route.ts` | GET POST | admin |  | ADF, ADLS, ADX, AI Search, AML, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Event Hubs, IoT Hub, Managed Identity, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Service Bus, Stream Analytics, Synapse, Synapse SQL |
-| `workspaces/route.ts` | GET POST | session-only |  | ADX, AI Search, ARM, Azure Monitor, Azure RBAC, Azure Storage, Cosmos, Event Hubs, Fabric, Managed Identity, Purview, Resource Graph |
+| `workspaces/route.ts` | GET POST | admin |  | ADX, AI Search, ARM, Azure Monitor, Azure RBAC, Azure Storage, Cosmos, Event Hubs, Fabric, Managed Identity, Purview, Resource Graph |
 
 ## Authorization resolvers (derived)
 
