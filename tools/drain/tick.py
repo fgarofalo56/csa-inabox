@@ -3095,8 +3095,7 @@ def verify_run_backed_receipt(
        which is the run-level check this whole branch exists to replace.
     5. **The producer declaration must BE a boundary map** -- neither a bare
        string (the pre-#4709 shape) nor any other type, and not an empty dict.
-       Those are THREE separate branches below, so each needs its own test;
-       arms `BND11` and the bare-string case are different mutations.
+       Those are THREE separate branches below, so each needs its own test.
     6. **A boundary must have been PASSED.** `boundary_of_issue` raises rather
        than returning None, so this guard is reachable only by a direct caller
        -- which is why it needs a test of its own and why the seam tests cannot

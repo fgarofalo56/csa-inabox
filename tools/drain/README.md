@@ -241,24 +241,6 @@ condition. `--status` now refuses outright when no ledger file exists, because
 | `g1-browser` | any UI surface | Playwright walk on the live console: screenshot + an assertion **unreachable from an error path** |
 | `operator` | genuinely human | parked with an exact click-script |
 
-**A run-backed receipt is bound to the issue on ONE axis — its BOUNDARY — and
-on nothing else, and the comment it posts says so.**
-Everything else is still
-unbound: `_run_evidence` does not request `createdAt`, and
-`headSha` is read only to be interpolated into the ref. Measured: run
-`33238747458` (`loom-roll-and-validate`, 2026-08-29, headSha `70ca3d1`) passes
-every check today **for an item whose boundary resolves to Commercial** — a
-`drift-gov` item refuses it — and it would pass just as well for an issue filed
-long after it, because no run date is ever fetched. So the receipt establishes
-*the declared producer ran green in this
-item's boundary*, not
-*the estate was observed carrying this change* — the comment no longer cites
-deploy-integrity R2 as **satisfied**, only as the reason the class takes a run
-rather than a merge, and it discloses the time and sha gap in terms. Binding it
-is #4578 (fetch the run's date, compare it to the item's, refuse a run that
-predates it); the sha half is bound by neither, and #4489 did not deliver it
--- that writer records WHICH PR, not which sha.
-
 **The G1 trap, recorded because it already happened.** An assertion advertised
 as "requires a real answer" was satisfied by `Error: HTTP 500`, because the pane
 fills its streaming placeholder with the error text on any non-ok response. The

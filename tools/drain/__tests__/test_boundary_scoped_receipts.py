@@ -111,8 +111,7 @@ def test_seam_a_commercial_run_cannot_close_a_gov_labelled_item(tmp_path, monkey
     """THE DEFECT, at the production seam. #2874's shape, end to end.
 
     WHAT VALUE WOULD MAKE THIS FAIL: `boundary = "Commercial"` at
-    `record_receipt_from_evidence`'s call site -- the rejected design applied
-    where it actually ships, and the arm `BND1` in `mutate_gates.py`. Also
+    `record_receipt_from_evidence`'s call site. Also
     killed: deleting the `boundary_of_issue` call entirely, and passing `None`
     through to `verify_run_backed_receipt`.
 
