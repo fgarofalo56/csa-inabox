@@ -18,7 +18,7 @@
  */
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 
 vi.mock('next/navigation', () => ({
@@ -52,6 +52,21 @@ function wrap(ui: React.ReactElement) {
   return render(<FluentProvider theme={webLightTheme}>{ui}</FluentProvider>);
 }
 
+/**
+ * The open dialog that contains `el`. Role queries inside it pass `hidden: true`:
+ * Fluent's modal focus handling applies `aria-hidden` on a timer, and under a
+ * loaded runner it was measured hiding a dialog's own content between a
+ * `findByTestId` that found an element in it and the next `getByRole` (which
+ * skips aria-hidden subtrees), failing tests whose assertions were all true.
+ * The dialog is required to be present and attached, so a closed dialog still fails.
+ */
+function openDialogOf(el: HTMLElement): HTMLElement {
+  const dlg = el.closest('[role="dialog"]') as HTMLElement | null;
+  expect(dlg, 'expected the element to sit inside an open dialog').not.toBeNull();
+  expect(document.body.contains(dlg)).toBe(true);
+  return dlg as HTMLElement;
+}
+
 beforeEach(() => { calls = []; });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -78,11 +93,12 @@ describe('Foundry data-URI picker, ADLS tab, container listing refused', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Browse/ }, { timeout: 5000 }));
     fireEvent.click(await screen.findByText('bronze', {}, { timeout: 5000 }));
 
-    expect(await screen.findByText(new RegExp(REFUSAL.slice(0, 40)), {}, { timeout: 5000 })).toBeInTheDocument();
+    const refusal = await screen.findByText(new RegExp(REFUSAL.slice(0, 40)), {}, { timeout: 5000 });
     expect(calls.some((u) => u.includes('/api/lakehouse/paths?container=bronze'))).toBe(true);
-    fireEvent.click(screen.getByRole('button', { name: /Use Datastore path/ }));
-    expect(await screen.findByText('workspaceblobstore', {}, { timeout: 5000 })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /Datastore path/ }).getAttribute('aria-selected')).toBe('true');
+    const dlg = openDialogOf(refusal);
+    fireEvent.click(within(dlg).getByRole('button', { name: /Use Datastore path/, hidden: true }));
+    expect(await within(dlg).findByText('workspaceblobstore', {}, { timeout: 5000 })).toBeInTheDocument();
+    expect(within(dlg).getByRole('tab', { name: /Datastore path/, hidden: true }).getAttribute('aria-selected')).toBe('true');
   });
 
   // Positive pair: an admin's successful listing still renders rows and no refusal.
@@ -134,7 +150,7 @@ describe('Shortcut wizard, source browse', () => {
     fireEvent.click(next);
 
     fireEvent.click(await screen.findByRole('button', { name: /^Select$/ }, { timeout: 5000 }));
-    expect(await screen.findByText('internal://gold/lakehouses/Sales/Files')).toBeInTheDocument();
+    expect(await screen.findByText('internal://gold/lakehouses/Sales/Files', {}, { timeout: 5000 })).toBeInTheDocument();
     expect(calls.some((u) => u.includes('/api/lakehouse/paths?lakehouseId=lh-src'))).toBe(true);
     expect(calls.some((u) => u.includes('/api/lakehouse/paths?container='))).toBe(false);
   });
@@ -166,9 +182,12 @@ describe('OneLake security tab, folder picker', () => {
     const { OneLakeSecurityTab } = await import('@/lib/editors/components/onelake-security-tab');
     wrap(<OneLakeSecurityTab itemId="it-1" itemType={itemType} container="bronze" />);
     fireEvent.click(await screen.findByRole('button', { name: /New role/i }, { timeout: 5000 }));
-    fireEvent.change(await screen.findByPlaceholderText(/SalesReaders/i), { target: { value: 'FinanceReaders' } });
-    fireEvent.click(screen.getByRole('button', { name: /^Next$/ }));
-    fireEvent.click(await screen.findByRole('radio', { name: /Selected folders/ }));
+    const nameBox = await screen.findByPlaceholderText(/SalesReaders/i, {}, { timeout: 5000 });
+    const dlg = openDialogOf(nameBox);
+    fireEvent.change(nameBox, { target: { value: 'FinanceReaders' } });
+    fireEvent.click(within(dlg).getByRole('button', { name: /^Next$/, hidden: true }));
+    fireEvent.click(await within(dlg).findByRole('radio', { name: /Selected folders/, hidden: true }, { timeout: 5000 }));
+    return dlg;
   }
 
   // FAILS IF the 403 for a mirrored item stays a red error under a picker that can
@@ -176,13 +195,14 @@ describe('OneLake security tab, folder picker', () => {
   // disabled), or if the route's reason is not shown.
   it('mirrored item: disables Selected folders with the route reason and keeps the wizard finishable', async () => {
     installStatusFetch({ '/security-roles': ROLES, '/api/lakehouse/paths': refused });
-    await openStep2('mirrored-database');
+    const dlg = await openStep2('mirrored-database');
 
-    const bar = await screen.findByTestId('security-list-refused', {}, { timeout: 5000 });
+    const bar = await within(dlg).findByTestId('security-list-refused', {}, { timeout: 5000 });
     expect(bar.textContent).toContain(REFUSAL);
-    expect(screen.getByRole('radio', { name: /Selected folders/ })).toBeDisabled();
-    expect(screen.getByRole('radio', { name: /All folders/ })).toBeChecked();
-    expect(screen.getByRole('button', { name: /^Next$/ })).not.toBeDisabled();
+    expect(within(dlg).getByRole('radio', { name: /Selected folders/, hidden: true })).toBeDisabled();
+    expect(within(dlg).getByRole('radio', { name: /All folders/, hidden: true })).toBeChecked();
+    expect(within(dlg).getByRole('button', { name: /^Next$/, hidden: true })).not.toBeDisabled();
+    expect(document.body.contains(dlg)).toBe(true);
     expect(calls.some((u) => u.includes('/api/lakehouse/paths?container=bronze'))).toBe(true);
   });
 
@@ -191,11 +211,12 @@ describe('OneLake security tab, folder picker', () => {
   // FAILS IF the refusal branch drops its `itemType !== 'lakehouse'` guard.
   it('lakehouse: lists by lakehouseId and a failure does not disable the option', async () => {
     installStatusFetch({ '/security-roles': ROLES, '/api/lakehouse/paths': refused });
-    await openStep2('lakehouse');
+    const dlg = await openStep2('lakehouse');
 
-    expect(await screen.findByText(REFUSAL, {}, { timeout: 5000 })).toBeInTheDocument();
+    expect(await within(dlg).findByText(REFUSAL, {}, { timeout: 5000 })).toBeInTheDocument();
     expect(screen.queryByTestId('security-list-refused')).toBeNull();
-    expect(screen.getByRole('radio', { name: /Selected folders/ })).not.toBeDisabled();
+    expect(within(dlg).getByRole('radio', { name: /Selected folders/, hidden: true })).not.toBeDisabled();
+    expect(document.body.contains(dlg)).toBe(true);
     expect(calls.some((u) => u.includes('/api/lakehouse/paths?lakehouseId=it-1'))).toBe(true);
     expect(calls.some((u) => u.includes('/api/lakehouse/paths?container='))).toBe(false);
   });
@@ -219,11 +240,11 @@ describe('Governance policies, restrict-access ADLS path picker', () => {
     fireEvent.click(await screen.findByRole('button', { name: /^Restrict access$/ }, { timeout: 10000 }));
     const scope = await screen.findByRole('combobox', { name: /Scope \(data plane\)/ }, { timeout: 5000 });
     fireEvent.click(scope);
-    fireEvent.click(await screen.findByRole('option', { name: /ADLS path/ }));
-    const container = await screen.findByRole('combobox', { name: /ADLS container/ });
+    fireEvent.click(await screen.findByRole('option', { name: /ADLS path/ }, { timeout: 5000 }));
+    const container = await screen.findByRole('combobox', { name: /ADLS container/ }, { timeout: 5000 });
     await waitFor(() => expect(container).not.toBeDisabled());
     fireEvent.click(container);
-    fireEvent.click(await screen.findByRole('option', { name: 'bronze' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'bronze' }, { timeout: 5000 }));
 
     const bar = await screen.findByTestId('rst-path-error', {}, { timeout: 5000 });
     expect(bar.textContent).toContain(REFUSAL);
@@ -231,6 +252,6 @@ describe('Governance policies, restrict-access ADLS path picker', () => {
 
     fireEvent.change(screen.getByLabelText('Path under the container (typed)'), { target: { value: '/raw/sales' } });
     // Leading slash stripped: the restrict route takes a container-relative path.
-    expect(await screen.findByText('bronze/raw/sales')).toBeInTheDocument();
+    expect(await screen.findByText('bronze/raw/sales', {}, { timeout: 5000 })).toBeInTheDocument();
   }, 20000);
 });
