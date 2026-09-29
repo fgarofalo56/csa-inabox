@@ -21,22 +21,23 @@
  * tests are red there too, for that reason and not the container.
  *
  * Instrument: the REAL `lakehouseAutoBind` provider and the REAL resolver.
- * Only Cosmos (an in-memory doc map) and `getMetadata` (the storage probe) are
- * faked; `configuredContainerNames` and `resolveAbfssRoot` are the real ones and
- * read the LOOM_*_URL env this file sets.
+ * Only Cosmos (an in-memory doc map) and the storage probe
+ * (`getServiceClient().getFileSystemClient(c).getFileClient(p).getProperties`)
+ * are faked; `configuredContainerNames` and `resolveAbfssRoot` are the real
+ * ones and read the LOOM_*_URL env this file sets.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const DOCS = new Map<string, any>();
-const replaced: any[] = [];
+const replaced: Array<{ doc: any; opts: any }> = [];
 const dkey = (id: string, pk: string) => `${pk}::${id}`;
 
 vi.mock('@/lib/azure/cosmos-client', () => ({
   itemsContainer: async () => ({
     item: (id: string, pk: string) => ({
       read: async () => ({ resource: DOCS.has(dkey(id, pk)) ? structuredClone(DOCS.get(dkey(id, pk))) : undefined }),
-      replace: async (doc: any) => {
-        replaced.push(structuredClone(doc));
+      replace: async (doc: any, opts?: any) => {
+        replaced.push({ doc: structuredClone(doc), opts });
         DOCS.set(dkey(id, pk), structuredClone(doc));
         return { resource: doc };
       },
@@ -48,23 +49,41 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
 const EXISTING = new Set<string>();
 /** Containers whose probe fails with a non-404 status. */
 const FAILING = new Map<string, number>();
+/** Containers whose probe never answers — it settles only when its signal aborts. */
+const HANGING = new Set<string>();
+/** Every probe made: `<container>/<path>` and the abort signal it carried. */
+const PROBES: Array<{ at: string; signal: unknown }> = [];
 
 vi.mock('@/lib/azure/adls-client', async (importOriginal) => {
   const real = await importOriginal<typeof import('@/lib/azure/adls-client')>();
   return {
     ...real,
-    getMetadata: vi.fn(async (container: string, path: string) => {
-      const status = FAILING.get(container);
-      if (status) throw Object.assign(new Error('denied'), { statusCode: status });
-      return EXISTING.has(`${container}/${path}`)
-        ? { exists: true, size: 0, isDirectory: true }
-        : { exists: false, size: 0, isDirectory: false };
+    getServiceClient: () => ({
+      getFileSystemClient: (container: string) => ({
+        getFileClient: (path: string) => ({
+          getProperties: (opts?: { abortSignal?: AbortSignal }) => {
+            PROBES.push({ at: `${container}/${path}`, signal: opts?.abortSignal });
+            const status = FAILING.get(container);
+            if (status) return Promise.reject(Object.assign(new Error('denied'), { statusCode: status }));
+            if (HANGING.has(container)) {
+              return new Promise((_resolve, reject) => {
+                const s = opts?.abortSignal;
+                if (!s) return; // no signal: hangs forever — exactly the defect
+                s.addEventListener('abort', () =>
+                  reject(Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' })));
+              });
+            }
+            return EXISTING.has(`${container}/${path}`)
+              ? Promise.resolve({})
+              : Promise.reject(Object.assign(new Error('not found'), { statusCode: 404 }));
+          },
+        }),
+      }),
     }),
   };
 });
 
-import { getMetadata } from '@/lib/azure/adls-client';
-import { resolveLakehouseAbfss } from '@/lib/azure/lakehouse-abfss';
+import { resolveLakehouseAbfss, PROBE_TIMEOUT_MS } from '@/lib/azure/lakehouse-abfss';
 import { lakehouseAutoBind } from '@/lib/azure/auto-bind-providers';
 import type { AutoBindContext } from '@/lib/azure/auto-bind';
 
@@ -90,11 +109,12 @@ const WS = 'ws-4759';
 const NAME = 'Sales Lake';
 /** `lakehouseRootPath('Sales Lake', id)` — written literally, not recomputed. */
 const ROOT = 'lakehouses/Sales Lake';
+const PERSIST = { persist: true } as const;
 
 function putItem(state: Record<string, unknown>) {
   DOCS.set(dkey(LH_ID, WS), {
     id: LH_ID, workspaceId: WS, itemType: 'lakehouse', displayName: NAME, state,
-    createdAt: 'a', updatedAt: 'a',
+    createdAt: 'a', updatedAt: 'a', _etag: '"etag-1"',
   });
 }
 
@@ -102,7 +122,7 @@ function ctx(state: Record<string, unknown> = {}): AutoBindContext {
   return { itemId: LH_ID, itemType: 'lakehouse', displayName: NAME, workspaceId: WS, state };
 }
 
-const probes = () => (getMetadata as any).mock.calls.map((c: any[]) => `${c[0]}/${c[1]}`);
+const probes = () => PROBES.map((p) => p.at);
 
 beforeEach(() => {
   for (const v of Object.values(ENV)) SAVED[v] = process.env[v];
@@ -110,7 +130,8 @@ beforeEach(() => {
   replaced.length = 0;
   EXISTING.clear();
   FAILING.clear();
-  (getMetadata as any).mockClear();
+  HANGING.clear();
+  PROBES.length = 0;
   configure(ALL_FIVE);
 });
 
@@ -136,7 +157,7 @@ describe('#4759 — the resolver reads the container auto-bind created in', () =
     EXISTING.add(`${created}/${name}`);
     putItem({ ...lakehouseAutoBind.stateKeys(name, pre.coords) });
 
-    const r = await resolveLakehouseAbfss(LH_ID, WS);
+    const r = await resolveLakehouseAbfss(LH_ID, WS, PERSIST);
     // RED on the defect: 'bronze' (the pre-fix step 3, which never read state).
     expect(r?.container).toBe(created);
     expect(r?.root).toBe(ROOT);
@@ -169,31 +190,49 @@ describe('#4759 — the resolver reads the container auto-bind created in', () =
 });
 
 describe('#4759 — an item with NO persisted binding is found, not guessed', () => {
-  it('finds a post-08-22 root in landing and persists it (self-heal)', async () => {
+  it('finds a post-08-22 root in landing and, when the caller opts in, persists it', async () => {
     EXISTING.add(`landing/${ROOT}`);
     putItem({});
-    const r = await resolveLakehouseAbfss(LH_ID, WS);
+    const r = await resolveLakehouseAbfss(LH_ID, WS, PERSIST);
     // RED on the defect: 'bronze'.
     expect(r?.container).toBe('landing');
     expect(r?.root).toBe(ROOT);
     // Legacy container probed FIRST, then auto-bind's order.
     expect(probes()).toEqual([`bronze/${ROOT}`, `landing/${ROOT}`]);
-    // What was found is recorded, so the next resolve takes step 2c.
+    // What was found is recorded, so the next resolve takes step 2c ...
     expect(replaced).toHaveLength(1);
-    expect(replaced[0].state).toMatchObject({ adlsContainer: 'landing', lakehouseRoot: ROOT });
-    (getMetadata as any).mockClear();
+    expect(replaced[0].doc.state).toMatchObject({ adlsContainer: 'landing', lakehouseRoot: ROOT });
+    // ... conditionally on the item not having changed since it was read.
+    // Breaks if the write drops its IfMatch (a concurrent edit would be lost).
+    expect(replaced[0].opts).toEqual({ accessCondition: { type: 'IfMatch', condition: '"etag-1"' } });
+    PROBES.length = 0;
     expect((await resolveLakehouseAbfss(LH_ID, WS))?.container).toBe('landing');
     expect(probes()).toEqual([]);
   });
 
-  it('answers the container auto-bind WOULD create in when no root exists anywhere', async () => {
+  it('a DEFAULT call writes nothing, even when it finds the root', async () => {
+    // Breaks if `persist` defaults to true: the resolver is reached from read
+    // routes and must not write unless the caller opts in.
+    EXISTING.add(`landing/${ROOT}`);
     putItem({});
     const r = await resolveLakehouseAbfss(LH_ID, WS);
+    // Paired positive — the answer is still right; only the write is withheld.
+    expect(r?.container).toBe('landing');
+    expect(replaced).toEqual([]);
+    // Nothing was recorded, so the next resolve probes again.
+    PROBES.length = 0;
+    await resolveLakehouseAbfss(LH_ID, WS);
+    expect(probes()).toEqual([`bronze/${ROOT}`, `landing/${ROOT}`]);
+  });
+
+  it('answers the container auto-bind WOULD create in when no root exists anywhere', async () => {
+    putItem({});
+    const r = await resolveLakehouseAbfss(LH_ID, WS, PERSIST);
     // RED on the defect: 'bronze'. Also breaks a fix that returns the legacy
     // container when nothing is found.
     expect(r?.container).toBe('landing');
     expect(probes()).toHaveLength(ALL_FIVE.length);
-    // Nothing was found, so nothing is persisted.
+    // Nothing was found, so nothing is persisted, even with persist:true.
     expect(replaced).toEqual([]);
   });
 
@@ -202,17 +241,17 @@ describe('#4759 — an item with NO persisted binding is found, not guessed', ()
     // probing — which would answer 'landing' here and orphan the item's data.
     EXISTING.add(`bronze/${ROOT}`);
     putItem({});
-    const r = await resolveLakehouseAbfss(LH_ID, WS);
+    const r = await resolveLakehouseAbfss(LH_ID, WS, PERSIST);
     expect(r?.container).toBe('bronze');
     expect(r?.abfss).toBe('abfss://bronze@dlzacct.dfs.core.windows.net/lakehouses/Sales Lake');
-    expect(replaced[0].state).toMatchObject({ adlsContainer: 'bronze', lakehouseRoot: ROOT });
+    expect(replaced[0].doc.state).toMatchObject({ adlsContainer: 'bronze', lakehouseRoot: ROOT });
   });
 
-  it('GUARD: legacy bronze wins when the same root ALSO exists in landing', async () => {
-    // Root paths are not workspace-scoped, so another lakehouse of the same
-    // name can own `landing/<root>`. Breaks a probe that walks auto-bind's
-    // order (landing first) before the legacy container: it would answer
-    // 'landing' — a different item's data — for a lakehouse that lives in bronze.
+  it('GUARD: the legacy container is probed before auto-bind\'s order', async () => {
+    // Pins resolver precedence: when the root is present in both the legacy
+    // container and `landing`, the legacy container is the answer and the walk
+    // stops there. Breaks if the probe walks auto-bind's order (landing first)
+    // before the legacy container.
     EXISTING.add(`bronze/${ROOT}`);
     EXISTING.add(`landing/${ROOT}`);
     putItem({});
@@ -226,9 +265,46 @@ describe('#4759 — an item with NO persisted binding is found, not guessed', ()
     FAILING.set('bronze', 403);
     EXISTING.add(`landing/${ROOT}`);
     putItem({});
-    expect((await resolveLakehouseAbfss(LH_ID, WS))?.container).toBe('bronze');
+    expect((await resolveLakehouseAbfss(LH_ID, WS, PERSIST))?.container).toBe('bronze');
     expect(probes()).toEqual([`bronze/${ROOT}`]);
     expect(replaced).toEqual([]);
+  });
+
+  it('every probe carries an abort signal', async () => {
+    // Breaks if the signal is dropped from the probe: an unreachable account
+    // then retries with backoff and the caller hangs (see the next test).
+    putItem({});
+    await resolveLakehouseAbfss(LH_ID, WS);
+    expect(PROBES).toHaveLength(ALL_FIVE.length);
+    for (const p of PROBES) expect(p.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it(`a HANGING probe is cut off at PROBE_TIMEOUT_MS and treated as failed`, async () => {
+    // Real timers, deliberately: this is the bound itself, not a mock of it.
+    // Breaks (test times out) if the probe carries no signal, and answers
+    // 'landing' if a timed-out probe is treated as "absent".
+    expect(PROBE_TIMEOUT_MS).toBe(6000);
+    HANGING.add('bronze');
+    EXISTING.add(`landing/${ROOT}`);
+    putItem({});
+    const t0 = Date.now();
+    const r = await resolveLakehouseAbfss(LH_ID, WS, PERSIST);
+    const took = Date.now() - t0;
+    expect(r?.container).toBe('bronze');
+    expect(probes()).toEqual([`bronze/${ROOT}`]);
+    expect(replaced).toEqual([]);
+    expect(took).toBeGreaterThanOrEqual(PROBE_TIMEOUT_MS - 250);
+    expect(took).toBeLessThan(PROBE_TIMEOUT_MS + 4000);
+  }, 20_000);
+
+  it('keeps the declared ownedContainers order when nothing is found', async () => {
+    // Unchanged from before #4759: with ownedContainers ['gold','bronze'] and
+    // no root in either, the answer is the first owned container. Breaks if the
+    // owned list is re-ordered through auto-bind's preference ('bronze').
+    putItem({ ownedContainers: ['gold', 'bronze'] });
+    const r = await resolveLakehouseAbfss(LH_ID, WS);
+    expect(r?.container).toBe('gold');
+    expect(probes()).toEqual([`gold/${ROOT}`, `bronze/${ROOT}`]);
   });
 
   it('returns null, and probes nothing, when no LOOM_*_URL is configured', async () => {
@@ -239,7 +315,7 @@ describe('#4759 — an item with NO persisted binding is found, not guessed', ()
   });
 });
 
-describe('#4759 — step 2c is bounded: a client-written binding cannot widen the root', () => {
+describe('#4759 — step 2c accepts only the binding shape auto-bind writes', () => {
   it('honours a well-formed persisted binding in a non-default container', async () => {
     // The paired POSITIVE for the refusals below — without it they would pass
     // with step 2c deleted outright.
@@ -251,13 +327,13 @@ describe('#4759 — step 2c is bounded: a client-written binding cannot widen th
   });
 
   it.each([
-    ['gold', 'finance/secret'],           // outside lakehouses/
+    ['gold', 'finance/reports'],          // outside lakehouses/
     ['gold', 'lakehouses/'],              // the whole lakehouses/ tree
     ['gold', 'lakehouses/../finance'],    // traversal
     ['gold', 'lakehouses//x'],            // not a sanitiser fixpoint
     ['not-a-container', 'lakehouses/x'],  // unknown container
-  ])('refuses adlsContainer=%s lakehouseRoot=%s and falls back to the convention root', async (c, root) => {
-    // Breaks if the shape bound (or the known-container check) is removed:
+  ])('ignores adlsContainer=%s lakehouseRoot=%s and falls back to the convention root', async (c, root) => {
+    // Breaks if the shape check (or the known-container check) is removed:
     // the resolver would answer `${c}/${root}` instead of the convention root.
     putItem({ adlsContainer: c, lakehouseRoot: root });
     const r = await resolveLakehouseAbfss(LH_ID, WS);

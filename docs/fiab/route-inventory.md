@@ -433,8 +433,8 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `ai-search/aliases/route.ts` | GET POST DELETE | session-only | ● | AI Search |
 | `ai-search/datasources/route.ts` | GET POST DELETE | session-only | ● | AI Search |
 | `ai-search/debug-sessions/route.ts` | GET POST DELETE | session-only | ● | AI Search, ARM |
-| `ai-search/index-my-data/prepare/route.ts` | GET | owner-scoped |  | ADLS, AI Search, AML, ARM, Azure AI Services, Azure OpenAI, Azure SQL, Azure Storage, Cosmos, Microsoft Graph, Resource Graph, Synapse |
-| `ai-search/index-my-data/run/route.ts` | POST | owner-scoped | ● | ADLS, AI Search, AML, ARM, Azure AI Services, Azure OpenAI, Azure SQL, Azure Storage, Cosmos, Microsoft Graph, Resource Graph, Synapse |
+| `ai-search/index-my-data/prepare/route.ts` | GET | owner-scoped |  | ADLS, AI Search, AML, ARM, Azure AI Services, Azure OpenAI, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Resource Graph, Synapse |
+| `ai-search/index-my-data/run/route.ts` | POST | owner-scoped | ● | ADLS, AI Search, AML, ARM, Azure AI Services, Azure OpenAI, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Resource Graph, Synapse |
 | `ai-search/index-my-data/sources/route.ts` | GET | owner-scoped |  | Azure SQL, Cosmos, Microsoft Graph, Synapse |
 | `ai-search/indexers/route.ts` | GET POST DELETE | session-only | ● | AI Search |
 | `ai-search/indexes/[name]/analyze/route.ts` | POST | session-only | ● | AI Search |
@@ -1518,7 +1518,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/lakebase-postgres/[id]/route.ts` | GET PATCH | owner-scoped |  | ARM, Cosmos, Databricks, Microsoft Graph, PostgreSQL |
 | `items/lakebase-postgres/[id]/snapshot/route.ts` | GET POST | owner-scoped |  | Cosmos, Microsoft Graph |
 | `items/lakehouse-shortcut/route.ts` | GET POST DELETE | owner-scoped | ● | ADLS, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Key Vault, Managed Identity, Microsoft Graph, Synapse SQL |
-| `items/lakehouse/[id]/abfss/route.ts` | GET | session-only |  | ADLS, Azure Storage, Cosmos |
+| `items/lakehouse/[id]/abfss/route.ts` | GET | session-only |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity |
 | `items/lakehouse/[id]/assist/route.ts` | — | public |  | — |
 | `items/lakehouse/[id]/query/route.ts` | POST | owner-scoped | ● | ARM, Azure SQL, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
 | `items/lakehouse/route.ts` | GET | session-only |  | Cosmos |
@@ -1539,7 +1539,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/loom-app-runtime/[id]/publish-api/route.ts` | POST | owner-scoped | ● | APIM, ARM, Container Apps, Cosmos, Microsoft Graph, Purview |
 | `items/loom-app-runtime/[id]/publish-mcp/route.ts` | POST DELETE | owner-scoped |  | ARM, Container Apps, Cosmos, Microsoft Graph |
 | `items/loom-app-runtime/[id]/reconcile/route.ts` | GET POST | owner-scoped |  | ACR, AI Search, ARM, Azure AI Services, Cosmos, Key Vault, Microsoft Graph |
-| `items/loom-app-runtime/[id]/resources/route.ts` | GET POST DELETE | owner-scoped | ● | ADLS, ADX, AI Search, ARM, Azure AI Services, Azure RBAC, Azure Storage, Cosmos, Event Hubs, Key Vault, Microsoft Graph, PostgreSQL, Resource Graph |
+| `items/loom-app-runtime/[id]/resources/route.ts` | GET POST DELETE | owner-scoped | ● | ADLS, ADX, AI Search, ARM, Azure AI Services, Azure RBAC, Azure Storage, Cosmos, Event Hubs, Key Vault, Managed Identity, Microsoft Graph, PostgreSQL, Resource Graph |
 | `items/loom-app-runtime/[id]/route.ts` | GET DELETE | owner-scoped |  | ARM, Container Apps, Cosmos, Microsoft Graph |
 | `items/loom-app-runtime/config/route.ts` | GET | session-only |  | — |
 | `items/loom-app-runtime/import/route.ts` | POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, ARM, Azure AI Services, Azure SQL, Azure Storage, Compute, Cosmos, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Synapse |
@@ -1604,7 +1604,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/notebook/[id]/execute-spark/route.ts` | GET POST | owner-scoped |  | AML, ARM, Azure Storage, Cosmos, Microsoft Graph, Synapse |
 | `items/notebook/[id]/jobs/route.ts` | GET | owner-scoped |  | Cosmos, Fabric, Microsoft Graph |
 | `items/notebook/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | Cosmos, Microsoft Graph |
-| `items/notebook/[id]/run/route.ts` | POST | owner-scoped |  | ADLS, AML, ARM, Azure Monitor, Azure Storage, Cosmos, Microsoft Graph, Synapse |
+| `items/notebook/[id]/run/route.ts` | POST | owner-scoped |  | ADLS, AML, ARM, Azure Monitor, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Synapse |
 | `items/notebook/[id]/runs/[runId]/log/route.ts` | GET | owner-scoped |  | AML, Cosmos, Microsoft Graph, Synapse |
 | `items/notebook/[id]/runs/[runId]/route.ts` | GET DELETE | owner-scoped |  | AML, ARM, Azure Monitor, Cosmos, Microsoft Graph, Synapse |
 | `items/notebook/import/route.ts` | POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, ARM, Azure SQL, Azure Storage, Compute, Cosmos, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Synapse |
@@ -2348,7 +2348,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `thread/mirror-to-notebook/route.ts` | POST | session-only |  | — |
 | `thread/model-tables/route.ts` | GET | owner-scoped |  | Cosmos, Microsoft Graph |
 | `thread/open-in-report-builder/route.ts` | POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, ARM, Azure SQL, Azure Storage, Compute, Cosmos, Key Vault, Managed Identity, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Synapse, Synapse SQL |
-| `thread/promote-medallion/route.ts` | POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, ARM, Azure SQL, Azure Storage, Compute, Cosmos, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Synapse |
+| `thread/promote-medallion/route.ts` | POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, ARM, Azure SQL, Azure Storage, Compute, Cosmos, Managed Identity, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Synapse |
 | `thread/publish-as-api/route.ts` | POST | owner-scoped | ● | ADF, ADLS, ADX, AI Search, ARM, Azure SQL, Azure Storage, Compute, Cosmos, Managed Identity, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Synapse, Synapse SQL |
 | `thread/warehouse-tables/route.ts` | GET | session-only | ● | Azure SQL, Synapse SQL |
 

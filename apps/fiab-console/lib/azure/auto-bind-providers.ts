@@ -83,6 +83,7 @@ import {
   safeAdxDatabaseName,
   safeAdlsRelPath,
   lakehouseRootPath,
+  lakehouseContainerOrder,
 } from './backing-name';
 import { DEFAULT_PIPELINE_RUNTIME } from '@/lib/components/pipeline/types';
 import type { AutoBindContext, AutoBindPreflight, AutoBindProvider } from './auto-bind';
@@ -515,46 +516,6 @@ export const adxDatabaseAutoBind: AutoBindProvider = {
 // ===========================================================================
 // lakehouse → ADLS Gen2 Delta root
 // ===========================================================================
-
-/**
- * The containers a NEW lakehouse root prefers, in order: `landing` (the raw
- * zone, a new lakehouse's natural home — the installer provisioner at
- * `lib/install/provisioners/lakehouse.ts` makes the same choice), then
- * `bronze`. Anything else configured follows in `KNOWN_CONTAINERS` order.
- */
-export const LAKEHOUSE_CONTAINER_PREFERENCE = ['landing', 'bronze'] as const;
-
-/**
- * THE container decision for a lakehouse root (#4759) — ONE function, read by
- * both halves of the binding:
- *
- *   - `lakehouseAutoBind.preflight` below takes element [0] as the container it
- *     CREATES the root in;
- *   - `resolveLakehouseAbfss` (lib/azure/lakehouse-abfss.ts) walks the same
- *     order to FIND a root no binding was persisted for.
- *
- * #4759 was these two disagreeing: auto-bind created `landing/lakehouses/<n>`
- * while the resolver's fallback walked `KNOWN_CONTAINERS` and answered
- * `bronze`, so every freshly created lakehouse opened on a 404.
- *
- * Order: the item's `pinned` container (if configured), then
- * {@link LAKEHOUSE_CONTAINER_PREFERENCE}, then every other configured container
- * in the order given. Only CONFIGURED containers are returned; an empty result
- * means there is nowhere for a lakehouse to live.
- */
-export function lakehouseContainerOrder(
-  configured: readonly string[],
-  pinned?: string | null,
-): string[] {
-  const order: string[] = [];
-  const push = (c: string | null | undefined) => {
-    if (c && configured.includes(c) && !order.includes(c)) order.push(c);
-  };
-  push(pinned);
-  for (const c of LAKEHOUSE_CONTAINER_PREFERENCE) push(c);
-  for (const c of configured) push(c);
-  return order;
-}
 
 export const lakehouseAutoBind: AutoBindProvider = {
   provider: 'lakehouse-adls',
