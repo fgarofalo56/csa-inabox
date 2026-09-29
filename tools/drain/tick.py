@@ -2407,7 +2407,10 @@ def _receipt_comment(kind: str, issue_class: str, detail: str, binding: str) -> 
             "old tag included, passes whenever every failed step also ran green "
             f"in that mode (#4799). A run created more than {_window_hours()} hours before "
             "it that finished after it is not seen, and runs still in progress "
-            "are not considered. And no boundary label is consulted: "
+            "are not considered - which includes a red run that has been "
+            "re-run, since it leaves the completed list until the re-run "
+            "finishes; that matters only for a red run the watcher did not "
+            "record. And no boundary label is consulted: "
             "the ONLY cloud binding is that the green run contains the same-named "
             "jobs and steps that failed, listed above. Where a job name does not "
             "encode its cloud, this receipt makes no per-cloud claim. "
@@ -3371,18 +3374,40 @@ _PULL_REQUEST_EVENTS = frozenset({"pull_request", "pull_request_target"})
 
 #: How many completed runs `_later_runs` reads. A full page is REFUSED rather
 #: than read as complete, because the run it did not return could be the red
-#: one. Measured 2026-09-29: 4, 11 and 11 completed runs on `main` since
-#: 2026-09-26 for the three watched workflows, so 200 covers weeks, not days.
+#: one. Measured 2026-09-29 for THREE of the seven workflows that call the
+#: notifier -- `deploy-fiab-commercial` 4, `gov-console-roll` 11 and
+#: `loom-dataplane-roll` 11 completed runs on `main` since 2026-09-26. The other
+#: four were not counted, so this is not a claim about them; a page that fills
+#: refuses whichever workflow it is.
 _LATER_RUNS_LIMIT = 200
 
 #: How far BEFORE the offered run `_later_runs` also looks, for a run CREATED
 #: earlier that FINISHED after it (review B, round 3): `deploy-fiab-commercial`
 #: has no workflow-level `concurrency:` group, and `loom-dataplane-roll` groups
-#: per boundary, so runs overlap. Measured over the last 300 completed runs of
-#: each watched workflow, the longest created-to-updated span is 21,631 s
-#: (6.0 h, `gov-console-roll`), 6,614 s and 3,245 s. 72 h is twelve times the
-#: longest seen. A run that spans MORE than this window -- one parked behind an
-#: environment approval for days -- is not seen, and the comment says so.
+#: per boundary, so runs overlap.
+#:
+#: LONGEST CREATED-TO-UPDATED SPAN per watched workflow, over its last 300
+#: completed runs on `main`, and WHO measured it:
+#:
+#: - `gov-console-roll` 21,631 s (6.0 h), `deploy-fiab-commercial` 6,614 s,
+#:   `loom-dataplane-roll` 3,245 s -- measured here, 2026-09-29.
+#: - `full-app-deploy-commercial` 10,469 s, `deploy-fiab-gcc` 772 s,
+#:   `deploy-fiab-il5` no runs at all -- measured by review A on #4791.
+#: - `deploy-fiab-gcch` about THIRTY DAYS, plus 13 runs not completed --
+#:   measured by review A. Re-read here for one: 33258539150 was created
+#:   2026-08-29T14:47:52Z and last updated 2026-09-28T14:54:26Z, and its job
+#:   `Deploy + validate CSA Loom in GCC-High` concluded `failure` with 0 steps.
+#:
+#: So 72 h is NOT longer than every span, and a gcch run like that one is NOT
+#: seen by this window. Why that does not publish a false close, stated so it
+#: can be checked rather than trusted: those runs waited on an environment
+#: approval that expired, the deploy job failed at 0 steps, and the notifier --
+#: a step INSIDE that job -- never ran, so nothing was recorded and nothing
+#: deployed. A gcch run approved late that then fails DOES run the notifier,
+#: and its record lands after the offered run was created, so the time bound
+#: (`created <= filing.recorded_at`) refuses the offered run once that record
+#: exists. The residue is a record that has not landed yet when the receipt is
+#: taken, and the published text discloses the window.
 _OVERLAP_WINDOW = timedelta(hours=72)
 
 
