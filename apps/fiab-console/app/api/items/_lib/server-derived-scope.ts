@@ -163,8 +163,8 @@ export function stableStringify(v: unknown, depth = 0): string {
  * OMISSION IS ALLOWED AND NO LONGER DELETES. The assert below permits a body
  * that leaves a guarded key out — making omission an error would break every
  * caller that builds a fresh state object — but `state` is replaced WHOLESALE,
- * so an omitted key used to be DROPPED. That was the bypass, and it defeated
- * the resolver-side precedence fix outright: ONE request could edit
+ * so an omitted key used to be DROPPED, and that undid the resolver-side
+ * precedence fix outright: ONE request could edit
  * `state.database` and drop `state.provisioning`, leaving no receipt to
  * prefer. {@link carryServerDerivedScope} now rebases those keys onto whatever
  * the item already carries, at ALL SIX UPDATE WRITERS enumerated above. This
@@ -239,13 +239,14 @@ export function stableStringify(v: unknown, depth = 0): string {
  * and `app/` returns only those two server writers, and the deployment-rule key
  * `adlsContainer` in `lib/install/pipeline-deploy.ts` patches a ProvisionTarget,
  * not item state — so no client flow writes them and listing them breaks none.
- * The CREATE half is `clearServerOwnedLakehouseKeysOnCreate` in
- * lib/azure/auto-bind.ts, reached from the three routes that call
- * `autoBindOnCreate` (createOwnedItem, the cosmos-items POST, the workspace
- * items POST). The bundle-import CREATE arm (`workspace-bundle-io.ts`) writes
- * its document directly and is NOT covered by either half; there the item id is
- * new and `createdAt` is the import time, so the resolver's step 2c accepts a
- * carried `lakehouseRoot` only if it is that new item's own root.
+ * The CREATE half: `createOwnedItem` (branch-out, promotion, the Copilot tool
+ * and every collection route that calls it) and the bundle-import create arm
+ * (`workspace-bundle-io.ts`) write a lakehouse's state through
+ * `stripLakehouseCreateState`, and `clearServerOwnedLakehouseKeysOnCreate` in
+ * lib/azure/auto-bind.ts, reached from the routes that call `autoBindOnCreate`
+ * (createOwnedItem, the cosmos-items POST, the workspace items POST), removes
+ * the same keys from the stored document. A copied or imported lakehouse
+ * therefore starts with no location of its own and resolves to its item root.
  */
 export const SERVER_DERIVED_SCOPE_KEYS: readonly string[] = [
   'provisioning',
