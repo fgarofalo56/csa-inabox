@@ -218,10 +218,18 @@ describe('concurrency', () => {
   it('N simultaneous first calls issue exactly ONE create and all get the same id', async () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => { release = r; });
-    h.dbx.listWarehouses.mockResolvedValueOnce([]).mockResolvedValue([{ id: 'wh-once', name: LOOM_DEFAULT_WAREHOUSE_NAME, state: 'STARTING' }]);
-    h.dbx.createWarehouse.mockImplementation(async () => { await gate; return { id: 'wh-once' }; });
+    // The list stays EMPTY until a create has actually landed. (A first version
+    // used mockResolvedValueOnce([]) and a mutation run showed it BLIND: the
+    // 2nd..Nth undeduplicated callers listed after the first and adopted
+    // instead of creating, so removing the in-flight promise stayed green.)
+    let created = 0;
+    h.dbx.listWarehouses.mockImplementation(async () =>
+      created ? [{ id: 'wh-once', name: LOOM_DEFAULT_WAREHOUSE_NAME, state: 'STARTING' }] : []);
+    h.dbx.createWarehouse.mockImplementation(async () => { await gate; created++; return { id: 'wh-once' }; });
     const all = Array.from({ length: 5 }, () => resolveDatabricksSqlWarehouseId());
-    await Promise.resolve();
+    // Let every caller reach its create (or its await on the shared promise)
+    // before releasing — a macrotask drains every pending microtask chain.
+    await new Promise((r) => setTimeout(r, 25));
     release();
     const ids = (await Promise.all(all)).map((r) => r.id);
     // Breaks if the in-flight promise is removed: create would be called 5 times.
