@@ -1366,10 +1366,16 @@ jobs:
         # console_env_not_set), states only what it established (for a network
         # refusal it reads the workspace's publicNetworkAccess + requiredNsgRules
         # from ARM), records reason / phase / http_status / detail in its outputs,
-        # and exits 1 (#4765). network_blocked is ONLY an HTTP 403 whose JSON
-        # .message starts "Unauthorized network access to workspace" (the shape
-        # run 36526911340 returned); a curl transport failure is transport_error,
-        # retried with bounded backoff first (deploy-integrity R6).
+        # and exits 1 (#4765). network_blocked is ONLY curl exit 0 + HTTP 403 whose
+        # message starts "Unauthorized network access to workspace": the JSON
+        # .message, or else the first line of a plain-text body (run 36526911340's
+        # SCIM and Delta Sharing refusals were plain text). A curl transport
+        # failure is transport_error, retried with bounded backoff first
+        # (deploy-integrity R6). A create whose outcome is unknown (transport
+        # failure, 5xx, or 2xx without an id) is never followed by a second
+        # create: the step re-lists warehouses and reuses 'loom-default' if it
+        # landed. The classic fallback runs only after a definite 4xx JSON
+        # rejection of the serverless create.
         # scripts/ci/__tests__/bootstrap-warehouse-classifier.test.mjs runs this
         # block and the gate step under stub curl/az and pins every class.
         # KNOWN (run 36526911340, bootstrap on a7eadda12): the Commercial workspace
@@ -1385,14 +1391,18 @@ jobs:
         # continue-on-error stays so the steps after this one still run; the final
         # always() gate step reads this step's OUTCOME and fails the job for every
         # failure class EXCEPT network_blocked, which it reports as a warning
-        # (operator decision 2026-09-29: the warehouse must be created from inside
-        # the VNet; tracked on #3744, where the console is to ensure-create it). The
+        # (operator decision 2026-09-29, recorded at
+        # https://github.com/fgarofalo56/csa-inabox/issues/4765#issuecomment-5895322196:
+        # the warehouse must be created from inside the VNet; tracked on #3744,
+        # where the console is to ensure-create it). The
         # in-step annotations are warnings because this step itself cannot fail
-        # the job (check-annotation-teeth).
+        # the job (check-annotation-teeth). timeout-minutes bounds the whole step;
+        # each curl call is bounded by --connect-timeout 15 --max-time 60.
         # Runs inside the Databricks public-access window: after "Enable
         # Databricks public access (temp ...)" and before the always() "Restore
         # Databricks public access disabled" step.
         # Learn: https://learn.microsoft.com/azure/databricks/sql/admin/sql-endpoints
+        timeout-minutes: 15
         continue-on-error: true
         run: |
           set -uo pipefail
@@ -1403,6 +1413,8 @@ jobs:
           if [ -z "$TOKEN" ]; then
             echo "::warning::az account get-access-token returned no Databricks token (its stderr, if any, is above) — cannot provision the SQL warehouse on $DBX_HOST."
             record reason no_token
+            record phase token
+            record detail "az account get-access-token returned no token for the Azure Databricks resource (its stderr, if any, is in this step's log)"
             exit 1
           fi
           auth=(-H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json")
@@ -1430,17 +1442,18 @@ jobs:
             local method="$1" out="$2" retry_on
             shift 2
             # R6: retry a transport failure that can be transient — at most 3
-            # attempts, 5s then 10s apart — then fail closed with the last exit.
-            # A GET is safe to repeat: DNS (6), connect (7), timeout (28) and
-            # receive (56) failures retry. A POST retries only 6 and 7, where the
-            # request never reached the workspace, so a create that may have
-            # landed is not sent twice.
+            # attempts, 5s then 10s apart, each bounded by --connect-timeout 15
+            # --max-time 60 — then fail closed with the last exit. A GET is safe
+            # to repeat: DNS (6), connect (7), timeout (28) and receive (56)
+            # failures retry. A POST retries only 6 and 7, where the request never
+            # left the runner; after any other POST failure the step does NOT send
+            # the create again at this level (see the re-probe below).
             if [ "$method" = GET ]; then retry_on=" 6 7 28 56 "; else retry_on=" 6 7 "; fi
             DBX_ATTEMPTS=1
             while :; do
               : > "$out"
               DBX_RC=0
-              DBX_CODE=$(curl -sS -o "$out" -w '%{http_code}' "${auth[@]}" -X "$method" "$@") || DBX_RC=$?
+              DBX_CODE=$(curl -sS --connect-timeout 15 --max-time 60 -o "$out" -w '%{http_code}' "${auth[@]}" -X "$method" "$@") || DBX_RC=$?
               if [ "$DBX_RC" = 0 ] || [[ "$retry_on" != *" $DBX_RC "* ]] || [ "$DBX_ATTEMPTS" -ge 3 ]; then break; fi
               echo "    $method attempt $DBX_ATTEMPTS: curl exit $DBX_RC ($(curl_exit_meaning "$DBX_RC")); retrying in $((DBX_ATTEMPTS * 5))s"
               sleep $((DBX_ATTEMPTS * 5))
@@ -1487,8 +1500,17 @@ jobs:
             body=$(head -c 2000 "$1" | tr -d '\0')
             first="${body#"${body%%[![:space:]]*}"}"
             msg=""
-            if [ "${DBX_RC:-0}" = 0 ] && [ "${DBX_CODE:-}" = 403 ] && is_json_object "$1"; then
-              msg=$(jq -r '.message // empty | tostring' "$1" | tr -d '\r\n')
+            # A 403's message: the JSON .message when the body is a JSON object,
+            # otherwise the body's first line, trimmed (the run-36526911340
+            # refusals were plain text: "Unauthorized network access to workspace: <id>").
+            if [ "${DBX_RC:-0}" = 0 ] && [ "${DBX_CODE:-}" = 403 ]; then
+              if is_json_object "$1"; then
+                msg=$(jq -r '.message // empty | tostring' "$1" | tr -d '\r\n')
+              else
+                msg=$(printf '%s\n' "$body" | head -n 1 | tr -d '\r')
+                msg="${msg#"${msg%%[![:space:]]*}"}"
+                msg="${msg%"${msg##*[![:space:]]}"}"
+              fi
             fi
             if [ "${DBX_RC:-0}" != 0 ] || [ "${DBX_CODE:-000}" = 000 ]; then
               # curl did not complete the request, so nothing answered: this step
@@ -1496,8 +1518,8 @@ jobs:
               CAUSE=transport_error
               WHY="curl could not complete the request (curl exit ${DBX_RC:-0}: $(curl_exit_meaning "${DBX_RC:-0}"), after ${DBX_ATTEMPTS:-1} attempt(s); HTTP ${DBX_CODE:-none}; curl's own message is above); this step did not establish why"
             elif [[ "$msg" == "Unauthorized network access to workspace"* ]]; then
-              # ONLY the shape measured on run 36526911340: curl exit 0, HTTP 403,
-              # a JSON body whose .message starts with this phrase.
+              # ONLY curl exit 0 + HTTP 403 whose message (JSON .message or the
+              # plain-text first line) starts with this phrase.
               CAUSE=network_blocked
               workspace_network
               if [ "$WS_PNA" = Disabled ]; then
@@ -1535,6 +1557,9 @@ jobs:
             show_response "POST /api/2.0/sql/warehouses (serverless=$1)" "$2"
             if is_2xx && is_json_object "$2"; then WID=$(jq -r '.id // empty' "$2"); fi
           }
+          # definite_rejection OUTFILE -> true only when the API answered the last
+          # call with a 4xx JSON body: the create certainly did not land.
+          definite_rejection() { [ "${DBX_RC:-1}" = 0 ] && [[ "${DBX_CODE:-}" =~ ^4[0-9][0-9]$ ]] && is_json_object "$1"; }
           PROBE=/tmp/dbx_wh_list.json
           dbx_call GET "$PROBE" "$WH_API"
           if ! is_2xx || ! is_json_object "$PROBE"; then
@@ -1550,15 +1575,39 @@ jobs:
             echo ">>> Creating serverless SQL warehouse 'loom-default' (2X-Small, auto-stop 10m)"
             create_warehouse true /tmp/dbx_wh_create_serverless.json
             LAST=/tmp/dbx_wh_create_serverless.json
-            if [ -z "$WID" ]; then
-              echo "::notice::Serverless create returned no warehouse id (HTTP $DBX_CODE; response above) — retrying as a classic PRO warehouse."
+            if [ -z "$WID" ] && definite_rejection "$LAST"; then
+              echo "::notice::Serverless create was rejected (HTTP $DBX_CODE; response above) — retrying as a classic PRO warehouse."
               create_warehouse false /tmp/dbx_wh_create_classic.json
               LAST=/tmp/dbx_wh_create_classic.json
             fi
             if [ -z "$WID" ]; then
               classify_failure "$LAST"
-              echo "::warning::No SQL warehouse id resulted on $DBX_HOST (serverless, then classic): $WHY. This step did not wire LOOM_DATABRICKS_SQL_WAREHOUSE_ID (#3744)."
-              fail_with create
+              if ! definite_rejection "$LAST"; then
+                # The create's outcome is unknown (transport failure, 5xx, non-JSON,
+                # or 2xx without an id): it may have landed. Re-list instead of
+                # sending a second create for the same name.
+                echo "::notice::The create's outcome is unknown ($WHY) — re-listing warehouses instead of sending another create."
+                P_CAUSE=$CAUSE; P_WHY=$WHY; P_CODE=${DBX_CODE:-}; P_RC=${DBX_RC:-}
+                REPROBE=/tmp/dbx_wh_relist.json
+                dbx_call GET "$REPROBE" "$WH_API"
+                if is_2xx && is_json_object "$REPROBE"; then
+                  WID=$(jq -r '[.warehouses[]? | select(.name == "loom-default") | .id][0] // empty' "$REPROBE")
+                  REPROBE_SAYS="a re-list found no 'loom-default'"
+                else
+                  show_response "GET /api/2.0/sql/warehouses (re-list)" "$REPROBE"
+                  REPROBE_SAYS="a re-list could not read the warehouses (HTTP ${DBX_CODE:-none}, curl exit ${DBX_RC:-0}), so whether the create landed is unknown"
+                fi
+                CAUSE=$P_CAUSE; DBX_CODE=$P_CODE; DBX_RC=$P_RC
+                if [ -n "$WID" ]; then
+                  echo "    The create landed after all: reusing SQL warehouse 'loom-default' found by the re-list"
+                else
+                  WHY="$P_WHY; $REPROBE_SAYS"
+                fi
+              fi
+              if [ -z "$WID" ]; then
+                echo "::warning::No SQL warehouse id resulted on $DBX_HOST: $WHY. This step did not wire LOOM_DATABRICKS_SQL_WAREHOUSE_ID (#3744)."
+                fail_with create
+              fi
             fi
           fi
           echo "    SQL warehouse id: $WID"
@@ -2371,6 +2420,13 @@ jobs:
           # one-time manual actions, printed at the end of the script. Until
           # then label/DLP-policy READS work and CRUD returns the honest
           # 'mip_admin_not_configured' / 'dlp_admin_not_configured' gate (no vaporware).
+          #
+          # #4765: provision-scc-labels-sidecar.sh runs `az ... -g "$SCC_FUNCTION_RG"`
+          # with no --subscription, and provision-databricks-compute.sh (an earlier
+          # step) leaves the az profile on $DLZ_SUB. Pin the profile to the admin
+          # subscription first, with no error suppression, so the script's calls
+          # resolve $ADMIN_RG in $ADMIN_SUB.
+          az account set --subscription "$ADMIN_SUB"
           set +e
           SCC_FUNCTION_APP=$(az functionapp list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[?starts_with(name,'func-scclbl-')].name | [0]" -o tsv 2>/dev/null)
           if [ -n "$SCC_FUNCTION_APP" ]; then
@@ -2893,12 +2949,16 @@ jobs:
           echo "    (only needed for envs Dataverse was added to AFTER bootstrap; new custom envs don't need this)"
 
       - name: Fail the job if a gated bootstrap step failed (#4765)
+        id: bootstrap_failure_gate
+        if: always()
         # A step with continue-on-error: true reports success to the job even when
         # it exits 1. That is how run 36384158319 concluded while the SQL warehouse
         # step had died (#4765). The gated steps keep continue-on-error so every
         # later step still runs; THIS step, which must stay LAST and always(), reads
         # their OUTCOME and fails the job, so the conclusion is honest. Exception
-        # (operator decision 2026-09-29): a network_blocked warehouse failure is a
+        # (operator decision 2026-09-29, recorded at
+        # https://github.com/fgarofalo56/csa-inabox/issues/4765#issuecomment-5895322196):
+        # a network_blocked warehouse failure is a
         # ::warning:: naming its cause and #3744, not a job failure.
         # Gated today: dbx_sql_warehouse only. The Foundry storage grant has
         # continue-on-error but no step id; the Content Safety and AOAI steps have
@@ -2907,8 +2967,6 @@ jobs:
         # loses always(), stops being last, or stops reading a gated step's outcome;
         # scripts/ci/__tests__/bootstrap-warehouse-classifier.test.mjs runs this
         # block and pins which failure classes warn and which fail the job.
-        id: bootstrap_failure_gate
-        if: always()
         env:
           WH_OUTCOME: ${{ steps.dbx_sql_warehouse.outcome }}
           WH_REASON: ${{ steps.dbx_sql_warehouse.outputs.reason }}
@@ -2922,9 +2980,9 @@ jobs:
             # CLASS + FIX per deploy-integrity R6. The cause sentence itself is the
             # step's own WH_DETAIL, which states only what that step established (R7).
             case "${WH_REASON:-}" in
-              network_blocked) CLASS="network/configuration (not transient; re-running from a GitHub-hosted runner will not help while the workspace refuses public traffic)"
+              network_blocked) CLASS="network/configuration (the workspace refused this runner at the network layer; the cause above names what ARM reported)"
                 FIX="" ;;  # not printed: this class warns with the #3744 sentence below instead
-              transport_error) CLASS="transport (curl did not complete the request; the step retried DNS and connect failures, and timeouts on its read-only probe, before failing)"
+              transport_error) CLASS="transport (curl did not complete the request; the attempt count is in the cause above)"
                 FIX="check that DBX_HOST resolves and is reachable from the runner, using curl's exit code and message in that step's log, then re-run the bootstrap." ;;
               auth_refused) CLASS="permission"
                 FIX="make the deploy identity a workspace admin (the 'Bootstrap Databricks SCIM' step), then re-run the bootstrap." ;;
@@ -2939,10 +2997,11 @@ jobs:
               console_env_not_set) CLASS="permission"
                 FIX="the deploy identity needs Contributor on loom-console in the admin resource group (\$ADMIN_RG in \$ADMIN_SUB); the warehouse id is printed in that step's log. Then re-run the bootstrap." ;;
               *) CLASS="unclassified"
-                FIX="the step failed before recording a reason. Read its log above." ;;
+                FIX="the step failed before recording a reason (for example it was stopped by its timeout-minutes). Read its log above." ;;
             esac
             if [ "${WH_REASON:-}" = network_blocked ]; then
-              # Operator decision 2026-09-29 ("warn + gate, build producer"): ONLY the
+              # Operator decision 2026-09-29 ("warn + gate, build producer"), recorded at
+              # https://github.com/fgarofalo56/csa-inabox/issues/4765#issuecomment-5895322196: ONLY the
               # network-blocked class does not fail the job. Every other class below does.
               echo "::warning::Step 'Provision default Databricks SQL warehouse (query compute) + wire it on the Console' was refused by the workspace at ${WH_PHASE:-an unrecorded phase}: ${WH_DETAIL:-no cause recorded} [reason=network_blocked, last Databricks HTTP status=${WH_HTTP:-not recorded}]. Class: ${CLASS}. The Databricks SQL warehouse must be created from inside the VNet; tracked on #3744 (the console is to ensure-create it from inside the VNet). This run did not set LOOM_DATABRICKS_SQL_WAREHOUSE_ID on loom-console."
             else

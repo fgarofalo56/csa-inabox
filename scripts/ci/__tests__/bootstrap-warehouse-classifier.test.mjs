@@ -5,19 +5,24 @@
 // ── WHY THIS SUITE EXISTS ───────────────────────────────────────────────────
 // The warehouse step keeps `continue-on-error: true`, so the job's conclusion
 // comes from the gate step, which WARNS for exactly one failure class
-// (`network_blocked`, operator decision 2026-09-29) and FAILS the job for every
-// other one. The shape guard (check-bootstrap-rg-subscription-scope.mjs, Rule 2)
-// proves the gate exists, is last and runs always(); it cannot see WHICH
-// reasons reach the `exit 1`. Review of #4767 at 89d89887 measured three
-// one-line defects that the shape guard and its 25 tests passed green:
-//   M3  gate `if [ "${WH_REASON:-}" = network_blocked ]` -> `if true`
-//       (every failure warns, the job is always green)
-//   M4  any 401/403 classified as network_blocked (an identity refusal warns)
-//   M5  the step's `fail_with` exits 0 (the gate sees success)
-// and a classifier that called a DNS failure, a timeout, a TLS failure and a
-// 500/502 body containing the phrase "network_blocked". This suite runs the
-// REAL shell against stub curl/az and pins, per class, the recorded reason, the
-// step exit code, the gate exit code and the exact annotation counts.
+// (`network_blocked`, operator decision 2026-09-29, recorded at
+// https://github.com/fgarofalo56/csa-inabox/issues/4765#issuecomment-5895322196)
+// and FAILS the job for every other one. The shape guard
+// (check-bootstrap-rg-subscription-scope.mjs, Rule 2) proves the gate exists,
+// is last and runs always(); it cannot see WHICH reasons reach the `exit 1`.
+// Reviews of #4767 measured defects the shape guard passed green:
+//   - gate `if true` (every failure warns) / `if false` (the network class fails)
+//   - any 401/403 classified network_blocked; the step's `fail_with` exiting 0
+//   - a DNS failure, a timeout, a TLS failure and a 500/502 body containing the
+//     phrase all classified network_blocked
+//   - the network_blocked test requiring JSON, when run 36526911340's refusals
+//     were PLAIN TEXT ("Unauthorized network access to workspace: <id>"), so the
+//     measured refusal became auth_refused with a false remediation
+//   - a create whose outcome was unknown (timeout, 5xx) followed by a SECOND
+//     create for the same name
+// This suite runs the REAL shell against stub curl/az and pins, per scenario,
+// the recorded reason, the step exit code, the gate exit code, the exact
+// annotation counts, the GET/POST attempt counts and the backoff sleeps.
 //
 // ── WHAT IS UNDER TEST ──────────────────────────────────────────────────────
 // Both `run:` blocks AND the gate's `env:` wiring are lifted from the parsed
@@ -83,15 +88,21 @@ function lift() {
     envMap[k] = m[3] ? { output: m[3] } : { outcome: true };
   }
   assert.ok(Object.values(envMap).some((v) => v.outcome), 'gate env reads no steps.dbx_sql_warehouse.outcome');
-  return { whRun, gateRun, envMap };
+  return { whRun, gateRun, envMap, timeoutMinutes: scalarValue(wh['timeout-minutes']) };
 }
 
 // ── Stubs ───────────────────────────────────────────────────────────────────
 const STUB_CURL = `#!/usr/bin/env bash
 # Stub curl: -o FILE gets the body, stdout gets the HTTP code (-w '%{http_code}').
 # S_GET_CODE / S_GET_RC (and S_POST_*) are space-separated per-call lists; the
-# last element repeats. A non-zero rc prints 000 on stdout like real curl -w.
+# last element repeats. The body is S_GET_BODY_<n> for the n-th GET when set,
+# else S_GET_BODY (same for POST). A non-zero rc prints 000 like real curl -w.
+# Each call's time limits are logged as flags, never the arguments (the
+# Authorization header carries the token).
 out=""; method=GET
+a=" $* "; ct=0; mt=0
+[[ "$a" == *" --connect-timeout 15 "* ]] && ct=1
+[[ "$a" == *" --max-time 60 "* ]] && mt=1
 while [ $# -gt 0 ]; do
   case "$1" in
     -o) out="$2"; shift 2 ;;
@@ -100,10 +111,11 @@ while [ $# -gt 0 ]; do
   esac
 done
 echo "$method" >> "$STUB_STATE/curl"
+echo "$method ct=$ct mt=$mt" >> "$STUB_STATE/curl_limits"
 n=$(grep -c "^$method\\$" "$STUB_STATE/curl")
 pick() { local -a a; read -r -a a <<< "$1"; local i=$(( $2 - 1 )); [ "$i" -ge "\${#a[@]}" ] && i=$(( \${#a[@]} - 1 )); printf '%s' "\${a[$i]}"; }
-if [ "$method" = GET ]; then codes="$S_GET_CODE"; rcs="\${S_GET_RC:-0}"; body="$S_GET_BODY"
-else codes="$S_POST_CODE"; rcs="\${S_POST_RC:-0}"; body="$S_POST_BODY"; fi
+if [ "$method" = GET ]; then codes="$S_GET_CODE"; rcs="\${S_GET_RC:-0}"; bvar="S_GET_BODY_$n"; body="\${!bvar-$S_GET_BODY}"
+else codes="$S_POST_CODE"; rcs="\${S_POST_RC:-0}"; bvar="S_POST_BODY_$n"; body="\${!bvar-$S_POST_BODY}"; fi
 code=$(pick "$codes" "$n"); rc=$(pick "$rcs" "$n")
 if [ "$rc" != 0 ]; then echo "curl: ($rc) stub transport failure" >&2; printf '000'; exit "$rc"; fi
 [ -n "$out" ] && printf '%s' "$body" > "$out"
@@ -174,6 +186,7 @@ function scenario(s, blocks = lift()) {
     gateRc: gate.status,
     gateLog: `${gate.stdout}${gate.stderr}`,
     curl: lines(path.join(state, 'curl')),
+    limits: lines(path.join(state, 'curl_limits')),
     az: lines(path.join(state, 'az')),
     sleeps: lines(path.join(state, 'sleep')),
   };
@@ -184,31 +197,45 @@ function scenario(s, blocks = lift()) {
 }
 
 const count = (arr, v) => arr.filter((x) => x === v).length;
-const J403NET = '{"error_code":"403","message":"Unauthorized network access to workspace: 7405606457049619"}';
+const WS_ID = '7405606457049619';
+// The MEASURED shape: run 36526911340, bootstrap job 109290442554, log line 1657
+// (SCIM) and 1862 (Delta Sharing) printed this body verbatim, with no JSON envelope.
+const NET_PLAIN = `Unauthorized network access to workspace: ${WS_ID}`;
+// The JSON shape of the same refusal, kept so both parse paths are pinned.
+const NET_JSON = JSON.stringify({ error_code: '403', message: NET_PLAIN });
 const EMPTY_LIST = '{"warehouses":[]}';
+const LANDED = '{"warehouses":[{"name":"loom-default","id":"w-landed"}]}';
+const NOT_LANDED = 'a re-list found no \'loom-default\'';
 
 /**
  * The class table. Each row: env for the stubs, and what must hold. `breaks`
  * names the value that turns the row red (assertion-design.md).
  */
+const NET_ROWS = [];
+for (const [shape, body] of [['plain-text (measured)', NET_PLAIN], ['JSON', NET_JSON]]) {
+  NET_ROWS.push(
+    { name: `network 403 ${shape}, ARM Enabled`, env: { S_GET_CODE: '403', S_GET_BODY: body, S_ARM: 'Enabled' },
+      reason: 'network_blocked', stepRc: 1, gateRc: 0, err: 0, warn: 1, get: 1,
+      has: ['was refused by the workspace', 'although ARM reports publicNetworkAccess=Enabled', TRACK_3744, NET_PLAIN], lacks: ['public network access is disabled', 'workspace admin'],
+      breaks: `the ${shape} refusal is classed auth_refused (JSON-only read), the network class fails the job (\`if false\`), loses the #3744 sentence, or says "disabled" when ARM said Enabled` },
+    { name: `network 403 ${shape}, ARM Disabled`, env: { S_GET_CODE: '403', S_GET_BODY: body, S_ARM: 'Disabled' },
+      reason: 'network_blocked', stepRc: 1, gateRc: 0, err: 0, warn: 1, get: 1,
+      has: ['its public network access is disabled (ARM: publicNetworkAccess=Disabled', TRACK_3744], lacks: ['workspace admin'],
+      breaks: 'the Disabled reading is dropped, or the class fails the job' },
+    { name: `network 403 ${shape}, ARM unreadable`, env: { S_GET_CODE: '403', S_GET_BODY: body, S_ARM: 'unreadable' },
+      reason: 'network_blocked', stepRc: 1, gateRc: 0, err: 0, warn: 1, get: 1,
+      has: ['could not be read from ARM', TRACK_3744], lacks: ['public network access is disabled', 'although ARM reports'],
+      breaks: 'an ARM read that failed is reported as a Disabled/Enabled reading' },
+  );
+}
+
 const ROWS = [
   // ── network_blocked: the ONLY class that warns (gate rc 0) ────────────────
-  { name: 'network 403 JSON, ARM Enabled', env: { S_GET_CODE: '403', S_GET_BODY: J403NET, S_ARM: 'Enabled' },
-    reason: 'network_blocked', stepRc: 1, gateRc: 0, err: 0, warn: 1, get: 1,
-    has: ['was refused by the workspace', 'although ARM reports publicNetworkAccess=Enabled', TRACK_3744], lacks: ['public network access is disabled'],
-    breaks: 'the network class exits 1 or prints ::error:: (e.g. `if false`), loses the #3744 sentence, or says "disabled" when ARM said Enabled' },
-  { name: 'network 403 JSON, ARM Disabled', env: { S_GET_CODE: '403', S_GET_BODY: J403NET, S_ARM: 'Disabled' },
-    reason: 'network_blocked', stepRc: 1, gateRc: 0, err: 0, warn: 1, get: 1,
-    has: ['its public network access is disabled (ARM: publicNetworkAccess=Disabled', TRACK_3744], lacks: [],
-    breaks: 'the Disabled reading is dropped, or the class fails the job' },
-  { name: 'network 403 JSON, ARM unreadable', env: { S_GET_CODE: '403', S_GET_BODY: J403NET, S_ARM: 'unreadable' },
-    reason: 'network_blocked', stepRc: 1, gateRc: 0, err: 0, warn: 1, get: 1,
-    has: ['could not be read from ARM', TRACK_3744], lacks: ['public network access is disabled', 'although ARM reports'],
-    breaks: 'an ARM read that failed is reported as a Disabled/Enabled reading' },
+  ...NET_ROWS,
   // ── transport_error: FAILS the job, after a bounded retry ────────────────
   { name: 'curl exit 6 (DNS) on every GET', env: { S_GET_CODE: '000', S_GET_RC: '6' },
     reason: 'transport_error', stepRc: 1, gateRc: 1, err: 1, warn: 0, get: 3, sleeps: ['5', '10'],
-    has: ['curl exit 6: could not resolve host', 'after 3 attempt(s)', 'this step did not establish why'], lacks: ['refused'],
+    has: ['curl exit 6: could not resolve host', 'after 3 attempt(s)', 'this step did not establish why', 'the attempt count is in the cause above'], lacks: ['refused', 'retried DNS'],
     breaks: 'DNS failure classed network_blocked (warns, rc 0), the retry removed (1 GET) or unbounded (>3 GETs)' },
   { name: 'curl exit 28 (timeout) on every GET', env: { S_GET_CODE: '000', S_GET_RC: '28' },
     reason: 'transport_error', stepRc: 1, gateRc: 1, err: 1, warn: 0, get: 3, sleeps: ['5', '10'],
@@ -216,34 +243,75 @@ const ROWS = [
     breaks: 'a timeout warned as a network refusal, or not retried' },
   { name: 'curl exit 60 (TLS certificate) is not retried', env: { S_GET_CODE: '000', S_GET_RC: '60' },
     reason: 'transport_error', stepRc: 1, gateRc: 1, err: 1, warn: 0, get: 1, sleeps: [],
-    has: ['curl exit 60: peer certificate'], lacks: ['refused'],
+    has: ['curl exit 60: peer certificate', 'after 1 attempt(s)'], lacks: ['refused'],
     breaks: 'a TLS failure warned as a network block, or retried as if transient' },
   { name: 'GET timeout then success: the retry recovers', env: { S_GET_CODE: '000 200', S_GET_RC: '28 0', S_GET_BODY: '{"warehouses":[{"name":"loom-default","id":"w-reuse"}]}' },
     reason: '', stepRc: 0, gateRc: 0, err: 0, warn: 0, get: 2, sleeps: ['5'],
     has: ['No gated step failed.'], lacks: [],
     breaks: 'the retry is removed (the first 28 fails the step)' },
-  { name: 'probe 200, create times out: POST is NOT re-sent', env: { S_GET_CODE: '200', S_GET_BODY: EMPTY_LIST, S_POST_CODE: '000', S_POST_RC: '28' },
-    reason: 'transport_error', stepRc: 1, gateRc: 1, err: 1, warn: 0, get: 1, post: 2, sleeps: [], phase: 'create',
-    has: ['curl exit 28'], lacks: ['refused'],
-    breaks: 'a create that timed out is warned as a network block, or re-POSTed (serverless + classic = 2 POSTs, no retries)' },
-  // ── the phrase outside the 403-JSON shape is NOT network_blocked ─────────
+  // ── a create whose outcome is unknown is NEVER followed by a second create ─
+  { name: 'create times out, re-list finds nothing: one POST, no classic', env: { S_GET_CODE: '200', S_GET_BODY: EMPTY_LIST, S_POST_CODE: '000', S_POST_RC: '28' },
+    reason: 'transport_error', stepRc: 1, gateRc: 1, err: 1, warn: 0, get: 2, post: 1, sleeps: [], phase: 'create',
+    has: ['curl exit 28', NOT_LANDED], lacks: ['refused', 'retrying as a classic'], stepLacks: ['returned no warehouse id (HTTP 000'],
+    breaks: 'a create with an unknown outcome is followed by the classic create (2 POSTs), or not re-listed (1 GET)' },
+  { name: 'create times out, re-list finds the landed warehouse: reuse it', env: { S_GET_CODE: '200 200', S_GET_BODY_1: EMPTY_LIST, S_GET_BODY_2: LANDED, S_POST_CODE: '000', S_POST_RC: '28' },
+    reason: '', stepRc: 0, gateRc: 0, err: 0, warn: 0, get: 2, post: 1, wired: 'w-landed',
+    has: ['No gated step failed.'], lacks: ['retrying as a classic'],
+    breaks: 'the re-list is removed (the step fails) or a second create is sent' },
+  { name: 'create 503 JSON, re-list finds nothing: one POST', env: { S_GET_CODE: '200', S_GET_BODY: EMPTY_LIST, S_POST_CODE: '503', S_POST_BODY: '{"error_code":"TEMPORARILY_UNAVAILABLE","message":"try later"}' },
+    reason: 'http_error', stepRc: 1, gateRc: 1, err: 1, warn: 0, get: 2, post: 1, phase: 'create',
+    has: ['HTTP 503', NOT_LANDED], lacks: ['retrying as a classic'],
+    breaks: 'a 5xx create (outcome unknown) falls through to the classic create' },
+  { name: 'create times out and the re-list cannot read: unknown, one POST', env: { S_GET_CODE: '200 000', S_GET_RC: '0 7', S_GET_BODY: EMPTY_LIST, S_POST_CODE: '000', S_POST_RC: '28' },
+    reason: 'transport_error', stepRc: 1, gateRc: 1, err: 1, warn: 0, get: 4, post: 1, sleeps: ['5', '10'], phase: 'create',
+    has: ['curl exit 28', 'whether the create landed is unknown'], lacks: [NOT_LANDED],
+    breaks: 'a failed re-list is reported as "found no loom-default"' },
+  { name: 'serverless rejected with 4xx JSON, classic succeeds', env: { S_GET_CODE: '200', S_GET_BODY: EMPTY_LIST, S_POST_CODE: '400 200', S_POST_BODY_1: '{"error_code":"INVALID_PARAMETER_VALUE","message":"serverless not available"}', S_POST_BODY_2: '{"id":"w-classic"}' },
+    reason: '', stepRc: 0, gateRc: 0, err: 0, warn: 0, get: 1, post: 2, wired: 'w-classic',
+    has: ['No gated step failed.'], lacks: [], stepHas: ['Serverless create was rejected (HTTP 400'],
+    breaks: 'the classic fallback is removed after a definite rejection' },
+  { name: 'create 400 quota on both', env: { S_GET_CODE: '200', S_GET_BODY: EMPTY_LIST, S_POST_CODE: '400', S_POST_BODY: '{"error_code":"QUOTA_EXCEEDED","message":"quota"}' },
+    reason: 'http_error', stepRc: 1, gateRc: 1, err: 1, warn: 0, get: 1, post: 2, phase: 'create',
+    has: ['QUOTA_EXCEEDED: quota', 'Class: configuration or capacity'], lacks: [NOT_LANDED],
+    breaks: 'an API error exits 0 (fail_with exit 0), or a definite rejection is re-listed' },
+  { name: 'create 200 JSON without an id: re-list, one POST', env: { S_GET_CODE: '200', S_GET_BODY: EMPTY_LIST, S_POST_CODE: '200', S_POST_BODY: '{"state":"STARTING"}' },
+    reason: 'no_id_in_response', stepRc: 1, gateRc: 1, err: 1, warn: 0, get: 2, post: 1, phase: 'create',
+    has: ['Class: defect', NOT_LANDED], lacks: ['retrying as a classic'],
+    breaks: 'a 2xx without an id is treated as success, or followed by the classic create' },
+  // ── the phrase outside the 403 shape is NOT network_blocked ──────────────
+  { name: '500 JSON whose message STARTS with the phrase', env: { S_GET_CODE: '500', S_GET_BODY: JSON.stringify({ error_code: 'X', message: `${NET_PLAIN}` }) },
+    reason: 'http_error', stepRc: 1, gateRc: 1, err: 1, warn: 0, get: 1,
+    has: ['HTTP 500'], lacks: ['refused', TRACK_3744],
+    breaks: 'the HTTP 403 status check is dropped (review arm D)' },
+  { name: '400 JSON whose message STARTS with the phrase', env: { S_GET_CODE: '400', S_GET_BODY: JSON.stringify({ error_code: 'X', message: `${NET_PLAIN}` }) },
+    reason: 'http_error', stepRc: 1, gateRc: 1, err: 1, warn: 0, get: 1,
+    has: ['HTTP 400'], lacks: ['refused', TRACK_3744],
+    breaks: 'the HTTP 403 status check is dropped, or loosened to any 4xx' },
+  { name: '500 plain text that STARTS with the phrase', env: { S_GET_CODE: '500', S_GET_BODY: NET_PLAIN },
+    reason: 'not_json', stepRc: 1, gateRc: 1, err: 1, warn: 0, get: 1,
+    has: ['was not JSON'], lacks: ['refused', TRACK_3744],
+    breaks: 'the plain-text read runs on a status other than 403' },
   { name: '500 JSON whose message contains the phrase', env: { S_GET_CODE: '500', S_GET_BODY: '{"error_code":"INTERNAL_ERROR","message":"upstream said: unauthorized network access"}' },
     reason: 'http_error', stepRc: 1, gateRc: 1, err: 1, warn: 0, get: 1,
     has: ['HTTP 500'], lacks: ['refused'],
-    breaks: 'the phrase matched on any status (the #4767 review B1 shape)' },
+    breaks: 'the phrase matched anywhere, on any status (the first review\'s B1 shape)' },
   { name: '502 HTML from a proxy containing the phrase', env: { S_GET_CODE: '502', S_GET_BODY: '<html><body>502 Bad Gateway. Unauthorized network access to workspace</body></html>' },
     reason: 'not_json', stepRc: 1, gateRc: 1, err: 1, warn: 0, get: 1,
     has: ['HTML, not JSON'], lacks: ['refused'],
-    breaks: 'the phrase matched in a non-JSON body' },
+    breaks: 'the phrase matched in a non-JSON body on a non-403 status' },
   { name: '403 JSON whose message only CONTAINS the phrase', env: { S_GET_CODE: '403', S_GET_BODY: '{"error_code":"PERMISSION_DENIED","message":"denied; not an Unauthorized network access to workspace case"}' },
     reason: 'auth_refused', stepRc: 1, gateRc: 1, err: 1, warn: 0, get: 1,
     has: ['Class: permission'], lacks: [TRACK_3744],
-    breaks: 'the .message test is a substring match instead of a prefix match' },
+    breaks: 'the JSON .message test is a substring match instead of a prefix match' },
+  { name: '403 plain text that only CONTAINS the phrase', env: { S_GET_CODE: '403', S_GET_BODY: `denied: ${NET_PLAIN}` },
+    reason: 'auth_refused', stepRc: 1, gateRc: 1, err: 1, warn: 0, get: 1,
+    has: ['Class: permission'], lacks: [TRACK_3744],
+    breaks: 'the plain-text first-line test is a substring match instead of a prefix match' },
   // ── every other class FAILS the job ──────────────────────────────────────
   { name: '403 JSON PERMISSION_DENIED', env: { S_GET_CODE: '403', S_GET_BODY: '{"error_code":"PERMISSION_DENIED","message":"User is not authorized"}' },
     reason: 'auth_refused', stepRc: 1, gateRc: 1, err: 1, warn: 0, get: 1,
     has: ['Class: permission'], lacks: [TRACK_3744],
-    breaks: 'any 401/403 classed network_blocked (review M4), or the gate warns for every class (review M3)' },
+    breaks: 'any 401/403 classed network_blocked, or the gate warns for every class (`if true`)' },
   { name: '401 JSON', env: { S_GET_CODE: '401', S_GET_BODY: '{"error_code":"401","message":"Credential was not sent"}' },
     reason: 'auth_refused', stepRc: 1, gateRc: 1, err: 1, warn: 0, get: 1,
     has: ['Class: permission'], lacks: [TRACK_3744],
@@ -252,25 +320,17 @@ const ROWS = [
     reason: 'not_json', stepRc: 1, gateRc: 1, err: 1, warn: 0, get: 1,
     has: ['Class: configuration'], lacks: ['jq: parse error'],
     breaks: 'a non-JSON 200 exits 0, or reaches jq unguarded' },
-  { name: 'create 400 quota', env: { S_GET_CODE: '200', S_GET_BODY: EMPTY_LIST, S_POST_CODE: '400', S_POST_BODY: '{"error_code":"QUOTA_EXCEEDED","message":"quota"}' },
-    reason: 'http_error', stepRc: 1, gateRc: 1, err: 1, warn: 0, get: 1, post: 2, phase: 'create',
-    has: ['QUOTA_EXCEEDED: quota', 'Class: configuration or capacity'], lacks: [],
-    breaks: 'an API error exits 0 (review M5: fail_with exit 0)' },
-  { name: 'create 200 JSON without an id', env: { S_GET_CODE: '200', S_GET_BODY: EMPTY_LIST, S_POST_CODE: '200', S_POST_BODY: '{"state":"STARTING"}' },
-    reason: 'no_id_in_response', stepRc: 1, gateRc: 1, err: 1, warn: 0, get: 1, post: 2, phase: 'create',
-    has: ['Class: defect'], lacks: [],
-    breaks: 'a 2xx without an id is treated as success' },
   { name: 'no Databricks token', env: { S_TOKEN: 'no' },
-    reason: 'no_token', stepRc: 1, gateRc: 1, err: 1, warn: 0, get: 0,
-    has: ['no token for the Azure Databricks resource'], lacks: [],
-    breaks: 'a missing token exits 0' },
+    reason: 'no_token', stepRc: 1, gateRc: 1, err: 1, warn: 0, get: 0, phase: 'token',
+    has: ['no token for the Azure Databricks resource', 'failed at token'], lacks: ['no cause recorded'],
+    breaks: 'a missing token exits 0, or records no phase/detail' },
   { name: 'Console env update fails', env: { S_GET_CODE: '200', S_GET_BODY: '{"warehouses":[{"name":"loom-default","id":"w-1"}]}', S_CA_RC: '1' },
     reason: 'console_env_not_set', stepRc: 1, gateRc: 1, err: 1, warn: 0, get: 1, phase: 'console',
     has: ['Contributor on loom-console'], lacks: [],
     breaks: 'a Console env failure exits 0' },
   // ── success paths: no reason, gate silent ────────────────────────────────
   { name: 'create succeeds', env: { S_GET_CODE: '200', S_GET_BODY: EMPTY_LIST, S_POST_CODE: '200', S_POST_BODY: '{"id":"w-new"}' },
-    reason: '', stepRc: 0, gateRc: 0, err: 0, warn: 0, get: 1, post: 1,
+    reason: '', stepRc: 0, gateRc: 0, err: 0, warn: 0, get: 1, post: 1, wired: 'w-new',
     has: ['No gated step failed.'], lacks: [],
     breaks: 'a successful create records a reason or fails' },
   { name: 'no Databricks host bound: skip', env: { DBX_HOST: '' },
@@ -294,16 +354,27 @@ for (const row of ROWS) {
     if (row.phase !== undefined) assert.equal(r.outputs.phase, row.phase, `recorded phase${ctx}`);
     for (const needle of row.has) assert.ok(r.gateLog.includes(needle), `gate output lacks "${needle}"${ctx}`);
     for (const needle of row.lacks) assert.ok(!`${r.stepLog}${r.gateLog}`.includes(needle), `output contains "${needle}"${ctx}`);
+    for (const needle of row.stepHas ?? []) assert.ok(r.stepLog.includes(needle), `step output lacks "${needle}"${ctx}`);
+    for (const needle of row.stepLacks ?? []) assert.ok(!r.stepLog.includes(needle), `step output contains "${needle}"${ctx}`);
     assert.ok(!`${r.stepLog}${r.gateLog}`.includes(TOKEN), 'the Databricks token was printed');
     // Positive pair for the absence checks above: the step really ran (it called
     // az for a token unless the host was unbound).
     if (row.env.DBX_HOST !== '') assert.ok(r.az.some((l) => l.startsWith('az account get-access-token')), `the step never asked az for a token${ctx}`);
-    if (row.reason === '' && row.stepRc === 0 && row.env.DBX_HOST !== '') {
-      assert.ok(r.az.some((l) => l.startsWith('az containerapp update') && l.includes('--subscription sub-admin')),
-        `a successful run did not update loom-console in the admin subscription${ctx}`);
+    // R6 bounded: every curl call carries both time limits (breaks if either flag is dropped).
+    assert.equal(r.limits.length, r.curl.length, `curl limit log does not match the call count${ctx}`);
+    for (const l of r.limits) assert.match(l, / ct=1 mt=1$/, `a curl call lacked --connect-timeout 15 / --max-time 60: ${l}`);
+    if (row.wired !== undefined) {
+      assert.ok(r.az.some((l) => l.startsWith('az containerapp update') && l.includes('--subscription sub-admin') && l.includes(`LOOM_DATABRICKS_SQL_WAREHOUSE_ID=${row.wired}`)),
+        `loom-console was not updated with warehouse ${row.wired} in the admin subscription${ctx}`);
     }
   });
 }
+
+test('the warehouse step is bounded by timeout-minutes (breaks if: the key is removed, or raised past 30)', { skip: SKIP }, () => {
+  const { timeoutMinutes } = lift();
+  const n = Number(timeoutMinutes);
+  assert.ok(Number.isInteger(n) && n > 0 && n <= 30, `timeout-minutes is ${timeoutMinutes}`);
+});
 
 test('gate: a skipped or unreached warehouse step is not reported; a failure with no reason fails (breaks if: an empty outcome fails the job, or an unrecorded failure warns)', { skip: SKIP }, () => {
   const { gateRun, envMap } = lift();
