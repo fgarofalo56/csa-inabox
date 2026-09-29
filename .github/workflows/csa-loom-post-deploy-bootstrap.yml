@@ -1373,13 +1373,16 @@ jobs:
         # step's update had just returned publicNetworkAccess=Enabled. After the
         # run ARM reads publicNetworkAccess=Disabled, requiredNsgRules=
         # NoAzureDatabricksRules. So, as that estate is configured today, this step
-        # cannot create a warehouse from a GitHub-hosted runner; it now fails,
+        # cannot create a warehouse from a GitHub-hosted runner; it now exits 1,
         # names that cause from what it reads at failure time, and does not claim
-        # a warehouse id. The fix is an in-VNet path (follow-up), not this step.
+        # a warehouse id. The fix is an in-VNet path (#3744), not this step.
         # continue-on-error stays so the steps after this one still run; the final
-        # always() gate step reads this step's OUTCOME and fails the job, so the
-        # job conclusion is honest. The in-step annotations are warnings because
-        # this step itself cannot fail the job (check-annotation-teeth).
+        # always() gate step reads this step's OUTCOME and fails the job for every
+        # failure class EXCEPT network_blocked, which it reports as a warning
+        # (operator decision 2026-09-29: the warehouse must be created from inside
+        # the VNet; the console will ensure-create it; tracked on #3744). The
+        # in-step annotations are warnings because this step itself cannot fail
+        # the job (check-annotation-teeth).
         # Runs inside the Databricks public-access window: after "Enable
         # Databricks public access (temp ...)" and before the always() "Restore
         # Databricks public access disabled" step.
@@ -2849,7 +2852,9 @@ jobs:
         # it exits 1. That is how run 36384158319 concluded while the SQL warehouse
         # step had died (#4765). The gated steps keep continue-on-error so every
         # later step still runs; THIS step, which must stay LAST and always(), reads
-        # their OUTCOME and fails the job, so the conclusion is honest.
+        # their OUTCOME and fails the job, so the conclusion is honest. Exception
+        # (operator decision 2026-09-29): a network_blocked warehouse failure is a
+        # ::warning:: naming its cause and #3744, not a job failure.
         # Gated today: dbx_sql_warehouse only. The Foundry storage grant has
         # continue-on-error but no step id; the Content Safety and AOAI steps have
         # no continue-on-error (their failures are swallowed inside the script).
@@ -2871,7 +2876,7 @@ jobs:
             # step's own WH_DETAIL, which states only what that step established (R7).
             case "${WH_REASON:-}" in
               network_blocked) CLASS="network/configuration (not transient; re-running from a GitHub-hosted runner will not help while the workspace refuses public traffic)"
-                FIX="the SQL warehouse API has to be called from inside the workspace's network: run this step from an in-VNet runner or an in-VNet Container Apps job (the pattern scripts/csa-loom/grant-synapse-rbac-invnet-job.sh uses for Synapse). If the cause above shows publicNetworkAccess=Enabled, opening public access did not make the API reachable, so a longer public-access window is not the fix." ;;
+                FIX="" ;;  # not printed: this class warns with the #3744 sentence below instead
               auth_refused) CLASS="permission"
                 FIX="make the deploy identity a workspace admin (the 'Bootstrap Databricks SCIM' step), then re-run the bootstrap." ;;
               not_json) CLASS="configuration"
@@ -2887,7 +2892,14 @@ jobs:
               *) CLASS="unclassified"
                 FIX="the step failed before recording a reason. Read its log above." ;;
             esac
-            echo "::error::Step 'Provision default Databricks SQL warehouse (query compute) + wire it on the Console' failed at ${WH_PHASE:-an unrecorded phase}: ${WH_DETAIL:-no cause recorded} [reason=${WH_REASON:-not recorded}, last Databricks HTTP status=${WH_HTTP:-not recorded}; each response's status and first 500 bytes are in that step's log]. This run did not set LOOM_DATABRICKS_SQL_WAREHOUSE_ID on loom-console. Class: ${CLASS}. Remediation: ${FIX}"
-            exit 1
+            if [ "${WH_REASON:-}" = network_blocked ]; then
+              # Operator decision 2026-09-29 ("warn + gate, build producer"): ONLY the
+              # network-blocked class does not fail the job. Every other class below does.
+              echo "::warning::Step 'Provision default Databricks SQL warehouse (query compute) + wire it on the Console' could not reach the workspace at ${WH_PHASE:-an unrecorded phase}: ${WH_DETAIL:-no cause recorded} [reason=network_blocked, last Databricks HTTP status=${WH_HTTP:-not recorded}]. Class: ${CLASS}. The Databricks SQL warehouse must be created from inside the VNet; the console will ensure-create it; tracked on #3744. This run did not set LOOM_DATABRICKS_SQL_WAREHOUSE_ID on loom-console."
+            else
+              echo "::error::Step 'Provision default Databricks SQL warehouse (query compute) + wire it on the Console' failed at ${WH_PHASE:-an unrecorded phase}: ${WH_DETAIL:-no cause recorded} [reason=${WH_REASON:-not recorded}, last Databricks HTTP status=${WH_HTTP:-not recorded}; each response's status and first 500 bytes are in that step's log]. This run did not set LOOM_DATABRICKS_SQL_WAREHOUSE_ID on loom-console. Class: ${CLASS}. Remediation: ${FIX}"
+              exit 1
+            fi
+          else
+            echo "No gated step failed."
           fi
-          echo "No gated step failed."
