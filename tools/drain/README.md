@@ -243,12 +243,7 @@ condition. `--status` now refuses outright when no ledger file exists, because
 
 **A run-backed receipt is bound to the issue on ONE axis — its BOUNDARY — and
 on nothing else, and the comment it posts says so.**
-`verify_run_backed_receipt` matches the producer workflow, `status`,
-`conclusion` and every declared step, and since #4709 it also requires the
-run's boundary to be the producer declared for THIS ITEM's boundary
-(`tick.boundary_of_issue`, from the issue's labels, falling to
-`policy.default_boundary[kind]` when it carries none — and `deploy-run` and
-`estate` have no such entry, so those refuse instead). Everything else is still
+Everything else is still
 unbound: `_run_evidence` does not request `createdAt`, and
 `headSha` is read only to be interpolated into the ref. Measured: run
 `33238747458` (`loom-roll-and-validate`, 2026-08-29, headSha `70ca3d1`) passes

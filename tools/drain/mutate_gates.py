@@ -4219,7 +4219,7 @@ ARMS: list[tuple[str, str, str, str]] = [
          "at the seam where it actually ships"),
         "tick.py",
         "        boundary, boundary_source = boundary_of_issue(repo, number, policy, kind)",
-        '        boundary = "Commercial"',
+        '        boundary, boundary_source = "Commercial", "hard-coded"',
     ),
     (
         ("BND2 the documentation key filter is dropped, so an issue labelled `_` "
@@ -4314,6 +4314,27 @@ ARMS: list[tuple[str, str, str, str]] = [
         "tick.py",
         '            f"in boundary {boundary} ({boundary_source})"',
         '            ""',
+    ),
+    (
+        ("BND14 the boundary SOURCE is dropped from the public close comment"),
+        "tick.py",
+        '            f"in boundary {boundary} ({boundary_source})"',
+        '            f"in boundary {boundary}"',
+    ),
+    (
+        ("BND15 a boundary with no declared producer falls back to the "
+         "Commercial producer instead of refusing"),
+        "tick.py",
+        '    expected = None if boundary.startswith("_") else declared.get(boundary)',
+        ('    expected = None if boundary.startswith("_") else '
+         '(declared.get(boundary) or declared.get("Commercial"))'),
+    ),
+    (
+        ("BND16 the bare-string producer guard is deleted; message-pinned only, "
+         "since the non-dict guard refuses a string producer too"),
+        "tick.py",
+        "    if isinstance(declared, str):",
+        "    if False:",
     ),
     # -- #4728: the dependency-bump review exemption ------------------------
     #

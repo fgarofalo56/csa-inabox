@@ -3165,8 +3165,7 @@ def verify_run_backed_receipt(
         )
 
     # `_` KEYS ARE DOCUMENTATION HERE TOO, matching `boundary_labels` and
-    # `default_boundary`. Without this a boundary literally named `_` would
-    # resolve to the prose. Unreachable today -- no boundary label maps to
+    # `default_boundary`. Unreachable today -- no boundary label maps to
     # `_` -- and filtered anyway, because the other two maps taught that the
     # unreachable case is the one nobody writes a test for.
     expected = None if boundary.startswith("_") else declared.get(boundary)
@@ -3691,6 +3690,11 @@ def main() -> int:
             return 2
 
     policy = gates.load_policy(POLICY_PATH)
+    try:
+        gates.assert_policy_matches_code(policy)
+    except ValueError as exc:
+        print(f"{POLICY_PATH} does not match the code - refusing: {exc}", file=sys.stderr)
+        return 2
     repo = policy["repo"]
     led = Ledger(STATE_PATH, receipts=policy["receipts"])
     if not args.bootstrap:

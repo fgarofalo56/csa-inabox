@@ -175,7 +175,36 @@ def test_seam_an_unlabelled_g1_item_takes_the_per_kind_default_and_names_it(tmp_
     assert item.receipt_kind == "g1-browser"
     # The BOUNDARY is in the text that gets published, not merely checked.
     assert "Commercial" in seen["detail"], seen["detail"]
+    assert "NOT from a label" in seen["detail"], seen["detail"]
     assert "36053481220" in out.summary
+
+
+@pytest.mark.real_boundary
+def test_main_refuses_a_policy_missing_the_drift_gov_row(tmp_path, monkeypatch, capsys):
+    """WHAT VALUE WOULD MAKE THIS FAIL: deleting the
+    `assert_policy_matches_code` call from `main()`."""
+    policy = copy.deepcopy(POLICY)
+    del policy["boundary_labels"]["drift-gov"]
+    policy_path = tmp_path / "policy.json"
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    state = str(tmp_path / "state.json")
+    seed = Ledger(state, receipts=POLICY["receipts"])
+    seed.upsert(4408, "a console surface", "W5-console", lane="lane:console", size=1)
+    seed.save()
+    monkeypatch.setattr(tick, "POLICY_PATH", str(policy_path))
+    monkeypatch.setattr(tick, "STATE_PATH", state)
+    monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1())
+    monkeypatch.setattr(tick, "sh", _labels_stub(["drift-gov"]))
+    closed = []
+    monkeypatch.setattr(tick, "close_issue_on_github",
+                        lambda *a: closed.append(a) or "closed (test stub)")
+    monkeypatch.setattr(sys, "argv", ["tick.py", "--record-receipt", "4408",
+                                      "--from-run", "36053481220"])
+
+    assert tick.main() == 2
+    assert "boundary_labels.drift-gov" in capsys.readouterr().err
+    assert closed == []
+    assert Ledger(state, receipts=POLICY["receipts"]).load().items[4408].state != CLOSED
 
 
 @pytest.mark.real_boundary
