@@ -115,6 +115,7 @@ import {
   type LakehouseRootLocation,
 } from '@/lib/azure/backing-name';
 import { trimSlashes } from '@/lib/util/trim';
+import { LAKEHOUSE_SHARED_ROOTS_CHECK_TITLE } from '@/lib/admin/env-checks/lakehouse-shared-roots';
 
 const CONTAINER_URL_ENV: Record<KnownContainer, string> = {
   bronze: 'LOOM_BRONZE_URL',
@@ -310,7 +311,7 @@ export function lakehouseStorageWithheldMessage(reason: LakehouseStorageWithheld
   if (reason === 'root-shared') {
     return 'This lakehouse\'s storage location is also used by another item, so Loom is not opening it here. '
       + 'An administrator must assign this lakehouse a dedicated storage location: Admin > Readiness lists '
-      + 'it under "Lakehouse storage roots", with the other item that uses the same location.';
+      + `it under "${LAKEHOUSE_SHARED_ROOTS_CHECK_TITLE}", with the other item that uses the same location.`;
   }
   if (reason === 'root-unverified') {
     return 'Loom could not confirm that this lakehouse\'s storage location belongs to it alone, because the '
