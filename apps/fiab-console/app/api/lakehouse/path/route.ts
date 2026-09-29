@@ -54,6 +54,7 @@ import { withSession } from '@/lib/api/route-toolkit';
 import { apiBadRequest, apiConflict, apiForbidden, apiNotFound, apiOk } from '@/lib/api/respond';
 import { resolveItemAccessByOid } from '@/lib/auth/item-access';
 import { resolveLakehouseAbfss } from '@/lib/azure/lakehouse-abfss';
+import { pathSegments, segmentsWithin } from '../_lib/item-scope';
 import type { SessionPayload } from '@/lib/auth/session';
 import {
   KNOWN_CONTAINERS,
@@ -82,36 +83,11 @@ function rootUnusable(root: unknown): string {
 }
 
 /**
- * Split a container-relative path into its segments, or null when the input is
- * not one.
- *
- * Backslashes are treated as separators (a folder drag-and-drop on Windows
- * sends them). An ABSOLUTE form is REFUSED, matching the sibling
- * `/api/lakehouse/upload`: this API takes a container-relative path. A `.` or
- * `..` segment, a NUL, or an input with no segments at all is REFUSED too —
- * returning null rather than dropping the segment, so an input that names a
- * relative back-reference can never be rewritten into one that does not.
- *
- * Doubled (`//`) and trailing separators COLLAPSE rather than refuse: the
- * caller's string is never what goes to storage, so a non-canonical spelling of
- * a path that is genuinely inside the scope cannot change the target — the
- * target is rebuilt from these segments.
+ * `pathSegments` lives in `../_lib/item-scope` (shared with
+ * `/api/lakehouse/paths` and the other item-scoped lakehouse routes) and is
+ * re-exported here for the existing callers and specs.
  */
-export function pathSegments(raw: string): string[] | null {
-  const s = String(raw ?? '');
-  if (!s || s.includes('\0')) return null;
-  // Single-character class, no quantifier — linear, not the quadratic
-  // trailing-run shape lib/util/trim.ts exists to replace.
-  const normalized = s.replace(/\\/g, '/');
-  if (normalized.charCodeAt(0) === 47 /* '/' */) return null;
-  const out: string[] = [];
-  for (const part of normalized.split('/')) {
-    if (part === '') continue;
-    if (part === '.' || part === '..') return null;
-    out.push(part);
-  }
-  return out.length ? out : null;
-}
+export { pathSegments };
 
 /** The container + path an already-authorized request is allowed to act on. */
 interface ResolvedTarget {
@@ -178,13 +154,9 @@ async function resolveTarget(
     + 'and deletes paths BELOW that root; open the lakehouse that owns the path you meant and act from there.';
 
   if (bound.container !== container) return apiForbidden(outside);
-  // Strictly below the root: `segments.length === root.length` is the root
-  // itself, which this route never targets.
-  if (segments.length <= root.length) return apiForbidden(outside);
-  for (let i = 0; i < root.length; i += 1) {
-    // Segment-wise, so `lakehouses/Sales-archive` is NOT inside `lakehouses/Sales`.
-    if (segments[i] !== root[i]) return apiForbidden(outside);
-  }
+  // Strictly below the root (`strict`): the root itself is never a target here.
+  // Segment-wise, so `lakehouses/Sales-archive` is NOT inside `lakehouses/Sales`.
+  if (!segmentsWithin(segments, root, true)) return apiForbidden(outside);
 
   return {
     container: bound.container as KnownContainer,

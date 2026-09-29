@@ -171,21 +171,40 @@ export function OneLakeSecurityTab({ itemId, itemType, container, workspaceId, f
   const [treeLoading, setTreeLoading] = useState(false);
   const [treeErr, setTreeErr] = useState<string | null>(null);
 
+  // A lakehouse lists through its own item (`lakehouseId`), so the picker shows
+  // THIS lakehouse's Tables/Files under its storage root, and role paths stay
+  // item-relative (`/Tables/<t>`). The mirrored item types have no lakehouse
+  // binding and use the container-level listing, which the route limits to
+  // tenant admins — a refusal is shown, never rendered as an empty tree.
   const loadTree = useCallback(async () => {
     setTreeLoading(true); setTreeErr(null);
     try {
       const out: PathEntry[] = [];
-      for (const prefix of ['Tables', 'Files']) {
-        const r = await clientFetch(`/api/lakehouse/paths?container=${encodeURIComponent(effContainer)}&prefix=${prefix}`);
+      const listing = async (qs: URLSearchParams) => {
+        const r = await clientFetch(`/api/lakehouse/paths?${qs.toString()}`);
         const j = await r.json();
-        if (j.ok && Array.isArray(j.paths)) {
-          for (const p of j.paths) if (p.isDirectory) out.push({ name: `/${p.name}`, isDirectory: true });
+        if (!j.ok) throw new Error(j.error || `Listing failed (HTTP ${r.status}).`);
+        return j as { root?: string | null; paths?: PathEntry[] };
+      };
+      let root = '';
+      if (itemType === 'lakehouse') {
+        root = String((await listing(new URLSearchParams({ lakehouseId: itemId }))).root || '');
+      }
+      for (const folder of ['Tables', 'Files']) {
+        const qs = itemType === 'lakehouse'
+          ? new URLSearchParams({ lakehouseId: itemId, prefix: root ? `${root}/${folder}` : folder })
+          : new URLSearchParams({ container: effContainer, prefix: folder });
+        const j = await listing(qs);
+        for (const p of j.paths || []) {
+          if (!p.isDirectory) continue;
+          const rel = root && p.name.startsWith(`${root}/`) ? p.name.slice(root.length + 1) : p.name;
+          out.push({ name: `/${rel}`, isDirectory: true });
         }
       }
       setTreeEntries(out);
     } catch (e: any) { setTreeErr(e?.message || String(e)); }
     finally { setTreeLoading(false); }
-  }, [effContainer]);
+  }, [effContainer, itemId, itemType]);
 
   useEffect(() => {
     if (wizardOpen && step === 2 && pathMode === 'selected' && treeEntries.length === 0) loadTree();

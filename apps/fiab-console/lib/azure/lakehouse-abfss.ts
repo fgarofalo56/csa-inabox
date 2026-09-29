@@ -27,10 +27,20 @@
  *      (auto-bind roots it in `landing`) fell through to step 3, which answered
  *      `bronze`, and the editor's first open 404'd on a directory that was
  *      never there.
+ *      For an item created on or after `LAKEHOUSE_ITEM_ROOT_SINCE` the
+ *      recorded root must also be THIS item's own root shape
+ *      (`lakehouseItemRootPath`: one segment ending in `--<item id>`, or the
+ *      bare id); anything else falls through to step 3.
  *   3. No persisted binding — FIND the root rather than guess it (#4759,
  *      auto-bind-by-default.md rule 3). The root is
- *      `lakehouseRootPath(displayName, id)`. Containers are probed in order and
- *      the first that holds the root wins:
+ *      `lakehouseItemRootPath(displayName, id)` for an item created on or after
+ *      `LAKEHOUSE_ITEM_ROOT_SINCE`, else the name-only
+ *      `lakehouseRootPath(displayName, id)` that item already has. A directory
+ *      is adopted only when its ownership marker (`LAKEHOUSE_OWNER_METADATA_KEY`)
+ *      allows it: an item root must carry THIS item's id; a name-only root may
+ *      carry this item's id or no marker (roots written before markers existed),
+ *      never another item's id. Containers are probed in order and the first
+ *      that holds an adoptable root wins:
  *        a. the LEGACY answer — the first configured (+ owned) container, i.e.
  *           exactly what this step returned before #4759. Lakehouses created
  *           before auto-bind existed (2026-08-22) were materialised there,
@@ -42,12 +52,24 @@
  *           deadline, a save that dropped it). When the item declares
  *           `ownedContainers`, the owned order is kept instead, unchanged
  *           from before #4759.
- *      Nothing found anywhere → the first container of that order, so the
- *      resolver and the creator agree on a lakehouse with no root yet. A probe
+ *      Nothing found anywhere → the first container of that order that does
+ *      not hold another item's directory at that path, so the resolver and the
+ *      creator agree on a lakehouse with no root yet. A probe
  *      that FAILS (403, network, or the PROBE_TIMEOUT_MS bound) stops the walk
  *      and returns the legacy answer: a failed probe establishes nothing, so it
  *      must not move an item to a different container. No LOOM_*_URL
  *      configured at all → null, and no probe is made.
+ *
+ *      A NAME-ONLY ROOT IS SHARED-CHECKED. A name-only root is derived from the
+ *      display name, which can change, and an unmarked directory says nothing
+ *      about who wrote it. So before a pre-cutover item uses a name-only root
+ *      (adopted OR chosen as the fallback), the resolver reads every other
+ *      lakehouse's root (`listLakehouseRootFacts`, recorded or derived) and
+ *      does not use a container where one of them overlaps this root
+ *      segment-wise. If that read fails, no name-only root is used: an unknown
+ *      answer is not a "no". Item roots skip this, being unique by
+ *      construction. Lakehouses left without a root this way are the ones the
+ *      readiness check `lakehouse-shared-roots` lists for an admin.
  *
  *      WHEN STEP 3 RUNS AGAIN. The probe result is persisted ONLY when a root
  *      was FOUND and the caller passed `{ persist: true }`; the next resolve
@@ -70,9 +92,16 @@ import {
 import { dfsSuffix } from '@/lib/azure/cloud-endpoints';
 import {
   lakehouseContainerOrder,
+  lakehouseItemRootPath,
+  lakehouseRootLocation,
   lakehouseRootPath,
+  lakehouseRootsOverlap,
+  lakehouseUsesItemRoot,
+  LAKEHOUSE_OWNER_METADATA_KEY,
   LAKEHOUSE_ROOT_PREFIX,
   safeAdlsRelPath,
+  type LakehouseRootFacts,
+  type LakehouseRootLocation,
 } from '@/lib/azure/backing-name';
 import { trimSlashes } from '@/lib/util/trim';
 
@@ -120,21 +149,97 @@ function isLakehouseRootShape(root: string): boolean {
 }
 
 /**
- * Does `root` exist in `container`? true / false for a definite answer; THROWS
- * when the answer is unknown (403, network, or the PROBE_TIMEOUT_MS abort).
- * `getMetadata` is not used because it takes no abort signal.
+ * Is `root` this item's own item-unique root — `lakehouses/<name>--<itemId>` or
+ * `lakehouses/<itemId>`, one segment, as {@link lakehouseItemRootPath} builds?
  */
-async function rootExists(container: KnownContainer, root: string): Promise<boolean> {
+export function isItemRootOf(root: string, itemId: string): boolean {
+  if (!itemId || !isLakehouseRootShape(root)) return false;
+  const seg = root.slice(LAKEHOUSE_ROOT_PREFIX.length);
+  if (seg.includes('/')) return false;
+  return seg === itemId || seg.endsWith(`--${itemId}`);
+}
+
+/** The ownership marker of a lakehouse root directory, as read from ADLS. */
+export type LakehouseRootOwner =
+  | { exists: false }
+  /** `owner` is null when the directory carries no marker. */
+  | { exists: true; owner: string | null };
+
+/**
+ * Read `root` in `container` and its ownership marker. A definite answer is
+ * returned; THROWS when the answer is unknown (403, network, or the
+ * PROBE_TIMEOUT_MS abort). `getMetadata` is not used because it takes no abort
+ * signal; `getProperties` returns the metadata in the same call.
+ */
+export async function readLakehouseRootOwner(container: string, root: string): Promise<LakehouseRootOwner> {
   try {
-    await getServiceClient()
+    const props = await getServiceClient()
       .getFileSystemClient(container)
       .getFileClient(root)
       .getProperties({ abortSignal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
-    return true;
+    const meta = ((props as { metadata?: Record<string, string | undefined> } | undefined)?.metadata || {});
+    let owner: string | null = null;
+    for (const [k, v] of Object.entries(meta)) {
+      if (k.toLowerCase() === LAKEHOUSE_OWNER_METADATA_KEY && typeof v === 'string' && v) { owner = v; break; }
+    }
+    return { exists: true, owner };
   } catch (e: any) {
-    if (e?.statusCode === 404) return false;
+    if (e?.statusCode === 404) return { exists: false };
     throw e;
   }
+}
+
+/**
+ * Create a lakehouse root directory carrying this item's ownership marker. The
+ * create is conditional (`If-None-Match: *`), so it never re-marks or replaces a
+ * directory that already exists: a 409/412 means another writer got there
+ * first, and the error is rethrown for the caller to report.
+ */
+export async function createOwnedLakehouseRoot(container: string, root: string, itemId: string): Promise<void> {
+  await getServiceClient()
+    .getFileSystemClient(container)
+    .getDirectoryClient(root)
+    .create({
+      metadata: { [LAKEHOUSE_OWNER_METADATA_KEY]: itemId },
+      conditions: { ifNoneMatch: '*' },
+    });
+}
+
+/**
+ * May `lakehouseId` adopt a root directory whose marker is `owner`? An item root
+ * must carry this item's id. A name-only root may carry this item's id or no
+ * marker at all (it was written before markers existed), never another id.
+ */
+export function mayAdoptRoot(owner: string | null, lakehouseId: string, itemRoot: boolean): boolean {
+  if (owner === lakehouseId) return true;
+  return !itemRoot && owner === null;
+}
+
+/**
+ * Every lakehouse item's root facts (recycled items excluded), read across all
+ * workspaces: lakehouses in different workspaces share the same containers.
+ * Shared by the resolver's name-root check and the readiness check
+ * `lib/admin/env-checks/lakehouse-shared-roots.ts`. Throws on a failed read.
+ */
+export async function listLakehouseRootFacts(
+  items?: Awaited<ReturnType<typeof itemsContainer>>,
+): Promise<LakehouseRootFacts[]> {
+  const c = items ?? (await itemsContainer());
+  const { resources } = await c.items
+    .query<LakehouseRootFacts>({
+      query:
+        'SELECT c.id, c.displayName, c.createdAt, '
+        + 'c.state.lakehouseRoot AS lakehouseRoot, c.state.adlsContainer AS adlsContainer, '
+        + 'c.state.storageAccount AS storageAccount, '
+        + 'c.state.provisioning.secondaryIds.adlsRoot AS provAdlsRoot, '
+        + 'c.state.provisioning.secondaryIds.container AS provContainer, '
+        + 'c.state.provisioning.secondaryIds.rootPath AS provRootPath '
+        + "FROM c WHERE c.itemType = 'lakehouse' "
+        + 'AND (NOT IS_DEFINED(c.state._recycled) OR c.state._recycled = null)',
+      parameters: [],
+    })
+    .fetchAll();
+  return resources;
 }
 
 export interface ResolvedLakehouseAbfss {
@@ -250,7 +355,11 @@ export async function resolveLakehouseAbfss(
   //     container and a root of the exact shape auto-bind writes.
   const boundContainer = typeof state.adlsContainer === 'string' ? state.adlsContainer.trim() : '';
   const boundRoot = typeof state.lakehouseRoot === 'string' ? state.lakehouseRoot.trim() : '';
-  if (boundContainer && boundRoot && isKnownContainer(boundContainer) && isLakehouseRootShape(boundRoot)) {
+  const itemRootEra = lakehouseUsesItemRoot(lh.createdAt);
+  if (
+    boundContainer && boundRoot && isKnownContainer(boundContainer) && isLakehouseRootShape(boundRoot)
+    && (!itemRootEra || isItemRootOf(boundRoot, lh.id))
+  ) {
     const abfss = resolveAbfssRoot(boundContainer, boundRoot);
     if (abfss) return { abfss, container: boundContainer, root: boundRoot };
   }
@@ -262,14 +371,44 @@ export async function resolveLakehouseAbfss(
   const candidates = configuredCandidates(owned);
   const legacy = candidates[0];
   if (legacy) {
-    const root = lakehouseRootPath(lh.displayName || '', lh.id);
+    const root = itemRootEra
+      ? lakehouseItemRootPath(lh.displayName || '', lh.id)
+      : lakehouseRootPath(lh.displayName || '', lh.id);
     const preferred = (ownedDeclared ? candidates : lakehouseContainerOrder(candidates)) as KnownContainer[];
     const probeOrder = [legacy, ...preferred.filter((c) => c !== legacy)];
+    // Name-only roots only: does another lakehouse's root overlap `root` in
+    // container `c`? Read once, lazily. A failed read answers "yes" (unknown is
+    // not "no"), so no name-only root is used on an unverified answer.
+    let others: LakehouseRootLocation[] | null | undefined;
+    const sharedWithOther = async (c: KnownContainer): Promise<boolean> => {
+      if (itemRootEra) return false;
+      if (others === undefined) {
+        others = await listLakehouseRootFacts(items)
+          .then((rows) => rows
+            .filter((r) => r.id !== lh!.id)
+            .map(lakehouseRootLocation)
+            .filter((l): l is LakehouseRootLocation => !!l))
+          .catch(() => null);
+      }
+      if (others === null) return true;
+      const mine: LakehouseRootLocation = {
+        id: lh!.id, account: '', container: c, segments: root.split('/').filter(Boolean), recorded: false,
+      };
+      return others.some((o) => lakehouseRootsOverlap(mine, o));
+    };
     let found: KnownContainer | null = null;
     let probeFailed = false;
+    // Containers holding a directory at `root` that this item may not adopt.
+    const heldByOther = new Set<KnownContainer>();
     for (const c of probeOrder) {
       try {
-        if (await rootExists(c, root)) { found = c; break; }
+        const r = await readLakehouseRootOwner(c, root);
+        if (!r.exists) continue;
+        if (mayAdoptRoot(r.owner, lh.id, itemRootEra) && (r.owner === lh.id || !(await sharedWithOther(c)))) {
+          found = c;
+          break;
+        }
+        heldByOther.add(c);
       } catch {
         // Not a 404: this container could not be read (or the probe timed
         // out), so the root cannot be said to be absent from it.
@@ -277,7 +416,17 @@ export async function resolveLakehouseAbfss(
         break;
       }
     }
-    const container: KnownContainer = found ?? (probeFailed ? legacy : (preferred[0] ?? legacy));
+    let container: KnownContainer | null = found;
+    if (!container) {
+      const fallbacks = probeFailed ? [legacy] : preferred;
+      for (const c of fallbacks) {
+        if (heldByOther.has(c)) continue;
+        if (await sharedWithOther(c)) continue;
+        container = c;
+        break;
+      }
+    }
+    if (!container) return null;
     const abfss = resolveAbfssRoot(container, root);
     if (abfss) {
       if (found && opts.persist === true) {

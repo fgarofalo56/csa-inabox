@@ -1,5 +1,5 @@
 /**
- * GET /api/items/lakehouse/[id]/abfss?workspaceId=...
+ * GET /api/items/lakehouse/[id]/abfss
  *
  * Resolve an attached lakehouse to the canonical
  *   abfss://<container>@<account>.dfs.<suffix>/<root>
@@ -12,24 +12,31 @@
  *   { ok: true, resolved: false, hint }                    — honest gate: no
  *     provisioning record yet / no storage env configured (names the env var).
  *
+ * AUTHORIZATION. The lakehouse is authorized through `resolveItemAccessByOid`
+ * (read access suffices — this only reports a path). An id the caller cannot
+ * reach answers 404, never 403, so a response never distinguishes "does not
+ * exist" from "not yours". The workspace passed to the resolver is the ITEM's
+ * own `workspaceId`; a `?workspaceId=` on the query string is still accepted
+ * for older callers and is ignored.
+ *
  * Azure-native: the path comes from the lakehouse's provisioned DLZ ADLS Gen2
  * coordinates (no Microsoft Fabric / OneLake dependency).
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import { resolveLakehouseAbfss } from '@/lib/azure/lakehouse-abfss';
+import { authorizeLakehouse } from '../../../../lakehouse/_lib/item-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
+export const GET = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
+  const id = String(params?.id || '').trim();
+  const access = await authorizeLakehouse(session, id);
+  if (access instanceof NextResponse) return access;
 
   try {
-    const r = await resolveLakehouseAbfss((await ctx.params).id, workspaceId);
+    const r = await resolveLakehouseAbfss(id, access.item.workspaceId);
     if (r) {
       return NextResponse.json({ ok: true, resolved: true, abfss: r.abfss, container: r.container, root: r.root });
     }
@@ -46,4 +53,4 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});

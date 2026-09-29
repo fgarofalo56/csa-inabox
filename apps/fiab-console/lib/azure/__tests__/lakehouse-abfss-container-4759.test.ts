@@ -31,9 +31,34 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const DOCS = new Map<string, any>();
 const replaced: Array<{ doc: any; opts: any }> = [];
 const dkey = (id: string, pk: string) => `${pk}::${id}`;
+/** When set, the cross-item root read (`listLakehouseRootFacts`) rejects. */
+let QUERY_FAILS = false;
 
 vi.mock('@/lib/azure/cosmos-client', () => ({
   itemsContainer: async () => ({
+    // `listLakehouseRootFacts`: every lakehouse's root facts, projected the way
+    // its SELECT projects them. The step-3 name-root check reads this.
+    items: {
+      query: () => ({
+        fetchAll: async () => {
+          if (QUERY_FAILS) throw Object.assign(new Error('cosmos unavailable'), { code: 503 });
+          const resources = [...DOCS.values()]
+            .filter((d) => d.itemType === 'lakehouse' && !d.state?._recycled)
+            .map((d) => ({
+              id: d.id,
+              displayName: d.displayName,
+              createdAt: d.createdAt,
+              lakehouseRoot: d.state?.lakehouseRoot,
+              adlsContainer: d.state?.adlsContainer,
+              storageAccount: d.state?.storageAccount,
+              provAdlsRoot: d.state?.provisioning?.secondaryIds?.adlsRoot,
+              provContainer: d.state?.provisioning?.secondaryIds?.container,
+              provRootPath: d.state?.provisioning?.secondaryIds?.rootPath,
+            }));
+          return { resources };
+        },
+      }),
+    },
     item: (id: string, pk: string) => ({
       read: async () => ({ resource: DOCS.has(dkey(id, pk)) ? structuredClone(DOCS.get(dkey(id, pk))) : undefined }),
       replace: async (doc: any, opts?: any) => {
@@ -47,6 +72,8 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
 
 /** `<container>/<path>` pairs the fake storage account holds. */
 const EXISTING = new Set<string>();
+/** `<container>/<path>` → the ownership marker that directory carries. */
+const OWNERS = new Map<string, string>();
 /** Containers whose probe fails with a non-404 status. */
 const FAILING = new Map<string, number>();
 /** Containers whose probe never answers — it settles only when its signal aborts. */
@@ -54,12 +81,42 @@ const HANGING = new Set<string>();
 /** Every probe made: `<container>/<path>` and the abort signal it carried. */
 const PROBES: Array<{ at: string; signal: unknown }> = [];
 
+/**
+ * Every directory create: `[container, path, marker]` (marker null when none is
+ * written). A create over an existing directory with `ifNoneMatch: '*'` is
+ * refused with 409, as ADLS refuses it.
+ */
+const CREATES: Array<[string, string, string | null]> = [];
+
+function fakeCreate(container: string, path: string, marker: string | null, ifNoneMatch: boolean) {
+  CREATES.push([container, path, marker]);
+  const at = `${container}/${path}`;
+  if (EXISTING.has(at) && ifNoneMatch) {
+    return Promise.reject(Object.assign(new Error('PathAlreadyExists'), { statusCode: 409 }));
+  }
+  EXISTING.add(at);
+  if (marker) OWNERS.set(at, marker);
+  return Promise.resolve({});
+}
+
 vi.mock('@/lib/azure/adls-client', async (importOriginal) => {
   const real = await importOriginal<typeof import('@/lib/azure/adls-client')>();
   return {
     ...real,
+    // The storage helpers the lakehouse provider used before item roots, backed
+    // by the same fake account, so a copy of this file run against that code
+    // reaches its assertions rather than a live endpoint.
+    getMetadata: async (container: string, path: string) => ({ exists: EXISTING.has(`${container}/${path}`) }),
+    createDirectory: async (container: string, path: string) => {
+      await fakeCreate(container, path, null, false);
+      return { ok: true };
+    },
     getServiceClient: () => ({
       getFileSystemClient: (container: string) => ({
+        getDirectoryClient: (path: string) => ({
+          create: (opts?: { metadata?: Record<string, string>; conditions?: { ifNoneMatch?: string } }) =>
+            fakeCreate(container, path, opts?.metadata?.loomitemid ?? null, opts?.conditions?.ifNoneMatch === '*'),
+        }),
         getFileClient: (path: string) => ({
           getProperties: (opts?: { abortSignal?: AbortSignal }) => {
             PROBES.push({ at: `${container}/${path}`, signal: opts?.abortSignal });
@@ -73,8 +130,9 @@ vi.mock('@/lib/azure/adls-client', async (importOriginal) => {
                   reject(Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' })));
               });
             }
-            return EXISTING.has(`${container}/${path}`)
-              ? Promise.resolve({})
+            const at = `${container}/${path}`;
+            return EXISTING.has(at)
+              ? Promise.resolve({ metadata: OWNERS.has(at) ? { loomitemid: OWNERS.get(at) } : {} })
               : Promise.reject(Object.assign(new Error('not found'), { statusCode: 404 }));
           },
         }),
@@ -85,7 +143,7 @@ vi.mock('@/lib/azure/adls-client', async (importOriginal) => {
 
 import { resolveLakehouseAbfss, PROBE_TIMEOUT_MS } from '@/lib/azure/lakehouse-abfss';
 import { lakehouseAutoBind } from '@/lib/azure/auto-bind-providers';
-import type { AutoBindContext } from '@/lib/azure/auto-bind';
+import { ensureAutoBinding, type AutoBindContext } from '@/lib/azure/auto-bind';
 
 const ENV: Record<string, string> = {
   bronze: 'LOOM_BRONZE_URL',
@@ -107,14 +165,20 @@ function configure(containers: string[]) {
 const LH_ID = 'lh-4759';
 const WS = 'ws-4759';
 const NAME = 'Sales Lake';
-/** `lakehouseRootPath('Sales Lake', id)` — written literally, not recomputed. */
+/** `lakehouseRootPath('Sales Lake', id)` — written literally, not recomputed.
+ *  The root of an item created BEFORE `LAKEHOUSE_ITEM_ROOT_SINCE`. */
 const ROOT = 'lakehouses/Sales Lake';
+/** `lakehouseItemRootPath('Sales Lake', id)`, literally — a NEW item's root. */
+const ITEM_ROOT = 'lakehouses/Sales Lake--lh-4759';
+/** A `createdAt` before the cutover (the name root) and one after (the item root). */
+const BEFORE_CUTOVER = '2026-09-01T00:00:00.000Z';
+const AFTER_CUTOVER = '2026-09-29T12:00:00.000Z';
 const PERSIST = { persist: true } as const;
 
-function putItem(state: Record<string, unknown>) {
+function putItem(state: Record<string, unknown>, createdAt = BEFORE_CUTOVER) {
   DOCS.set(dkey(LH_ID, WS), {
     id: LH_ID, workspaceId: WS, itemType: 'lakehouse', displayName: NAME, state,
-    createdAt: 'a', updatedAt: 'a', _etag: '"etag-1"',
+    createdAt, updatedAt: createdAt, _etag: '"etag-1"',
   });
 }
 
@@ -129,6 +193,9 @@ beforeEach(() => {
   DOCS.clear();
   replaced.length = 0;
   EXISTING.clear();
+  OWNERS.clear();
+  CREATES.length = 0;
+  QUERY_FAILS = false;
   FAILING.clear();
   HANGING.clear();
   PROBES.length = 0;
@@ -145,7 +212,8 @@ afterEach(() => {
 describe('#4759 — the resolver reads the container auto-bind created in', () => {
   it('resolves the persisted auto-bind binding, with no storage probe', async () => {
     // The item exactly as New item leaves it: preflight picks the container,
-    // create makes the root there, stateKeys is what gets persisted.
+    // create makes the root there, stateKeys is what gets persisted. A New item
+    // today is created after the cutover, so it carries an ITEM root.
     const pre = await lakehouseAutoBind.preflight(ctx());
     if (!pre.ok) throw new Error('fixture: preflight refused with all five containers configured');
     const created = pre.coords.container;
@@ -153,15 +221,15 @@ describe('#4759 — the resolver reads the container auto-bind created in', () =
     // Fixture arithmetic, asserted: the defect only shows when these differ
     // from the legacy fallback (`bronze`), so pin that they do.
     expect(created).toBe('landing');
-    expect(name).toBe(ROOT);
+    expect(name).toBe(ITEM_ROOT);
     EXISTING.add(`${created}/${name}`);
-    putItem({ ...lakehouseAutoBind.stateKeys(name, pre.coords) });
+    putItem({ ...lakehouseAutoBind.stateKeys(name, pre.coords) }, AFTER_CUTOVER);
 
     const r = await resolveLakehouseAbfss(LH_ID, WS, PERSIST);
     // RED on the defect: 'bronze' (the pre-fix step 3, which never read state).
     expect(r?.container).toBe(created);
-    expect(r?.root).toBe(ROOT);
-    expect(r?.abfss).toBe('abfss://landing@dlzacct.dfs.core.windows.net/lakehouses/Sales Lake');
+    expect(r?.root).toBe(ITEM_ROOT);
+    expect(r?.abfss).toBe('abfss://landing@dlzacct.dfs.core.windows.net/lakehouses/Sales Lake--lh-4759');
     // Pins that STEP 2c answered, not the probe fallback: delete step 2c and the
     // container is still 'landing' (the probe finds it) but these go non-empty.
     expect(probes()).toEqual([]);
@@ -180,12 +248,12 @@ describe('#4759 — the resolver reads the container auto-bind created in', () =
     // Pin preflight's own answer literally, so this cannot pass by both sides
     // drifting together.
     expect(pre.coords.container).toBe(expected);
-    putItem({});
+    putItem({}, AFTER_CUTOVER);
     const r = await resolveLakehouseAbfss(LH_ID, WS);
     // RED on the defect for ['silver','landing'] (pre-fix answered 'silver',
     // first in KNOWN_CONTAINERS order) and for all five ('bronze').
     expect(r?.container).toBe(pre.coords.container);
-    expect(r?.root).toBe(ROOT);
+    expect(r?.root).toBe(ITEM_ROOT);
   });
 });
 
@@ -356,5 +424,151 @@ describe('#4759 — preflight still honours an item\'s pinned container', () => 
     configure([]);
     const pre = await lakehouseAutoBind.preflight(ctx());
     expect(pre.ok).toBe(false);
+  });
+});
+
+describe('the lakehouse provider attaches only a root this item owns', () => {
+  const OTHER = 'lh-someone-else';
+
+  // Direct probe arms. Each pair differs in ONE value: the marker, or the record.
+  it('probe: a root marked for another item is reported absent; one marked for this item is present', async () => {
+    EXISTING.add(`landing/${ITEM_ROOT}`);
+    OWNERS.set(`landing/${ITEM_ROOT}`, OTHER);
+    // FAILS IF the probe is existence-only (the pre-change provider): true.
+    expect(await lakehouseAutoBind.probe(ITEM_ROOT, { container: 'landing' }, ctx())).toBe(false);
+    OWNERS.set(`landing/${ITEM_ROOT}`, LH_ID);
+    // FAILS IF the probe refuses its own marker: false.
+    expect(await lakehouseAutoBind.probe(ITEM_ROOT, { container: 'landing' }, ctx())).toBe(true);
+  });
+
+  it('probe: an unmarked root is present only when it is the root this item has on record', async () => {
+    EXISTING.add(`landing/${ROOT}`);
+    // FAILS IF an unmarked directory is adopted without a record (true here).
+    expect(await lakehouseAutoBind.probe(ROOT, { container: 'landing' }, ctx())).toBe(false);
+    // FAILS IF an existing item's unmarked root is no longer recognised (false
+    // here) — the item would be given a new, empty root.
+    expect(await lakehouseAutoBind.probe(ROOT, { container: 'landing' }, ctx({ lakehouseRoot: ROOT }))).toBe(true);
+  });
+
+  // Through the engine. FAILS IF a recorded root marked for another item is
+  // kept: the pre-change provider answers via 'existing' at ROOT with no create.
+  it('a recorded root marked for another item is not kept; this item gets its own root', async () => {
+    EXISTING.add(`landing/${ROOT}`);
+    OWNERS.set(`landing/${ROOT}`, OTHER);
+    const out = await ensureAutoBinding(ctx({ adlsContainer: 'landing', lakehouseRoot: ROOT }));
+    expect(out.status).toBe('bound');
+    if (out.status !== 'bound') return;
+    expect(out.record.backingName).toBe(ITEM_ROOT);
+    expect(out.record.via).toBe('recreated');
+    expect(CREATES).toEqual([['landing', ITEM_ROOT, LH_ID]]);
+    expect(out.statePatch).toMatchObject({ adlsContainer: 'landing', lakehouseRoot: ITEM_ROOT });
+    // The other item's directory is untouched.
+    expect(OWNERS.get(`landing/${ROOT}`)).toBe(OTHER);
+  });
+
+  // Positive control for the arm above, differing only in the marker. HOLDS on
+  // the pre-change provider too, by design: it pins that an existing item keeps
+  // its root. FAILS IF the marker rule also refuses an unmarked recorded root
+  // (via 'recreated' and one create).
+  it('a recorded unmarked root is kept, with no create', async () => {
+    EXISTING.add(`landing/${ROOT}`);
+    const out = await ensureAutoBinding(ctx({ adlsContainer: 'landing', lakehouseRoot: ROOT }));
+    expect(out.status === 'bound' && [out.record.backingName, out.record.via]).toEqual([ROOT, 'existing']);
+    expect(CREATES).toEqual([]);
+  });
+
+  // FAILS IF the provider still targets the name root: the pre-change provider
+  // probes `lakehouses/Sales Lake`, finds nothing and creates it (via 'created').
+  it('an item root marked for this item is attached, with no create', async () => {
+    EXISTING.add(`landing/${ITEM_ROOT}`);
+    OWNERS.set(`landing/${ITEM_ROOT}`, LH_ID);
+    const out = await ensureAutoBinding(ctx());
+    expect(out.status === 'bound' && [out.record.backingName, out.record.via]).toEqual([ITEM_ROOT, 'attached']);
+    expect(CREATES).toEqual([]);
+  });
+
+  // FAILS IF the create overwrites or adopts an existing directory: status
+  // would be 'bound'. The create is attempted once, conditionally, and refused.
+  it('an unmarked directory already at the target is neither attached nor overwritten', async () => {
+    EXISTING.add(`landing/${ITEM_ROOT}`);
+    const out = await ensureAutoBinding(ctx());
+    expect(out.status).not.toBe('bound');
+    expect(CREATES).toEqual([['landing', ITEM_ROOT, LH_ID]]);
+    expect(OWNERS.has(`landing/${ITEM_ROOT}`)).toBe(false);
+  });
+});
+
+describe('the resolver adopts a found root only when this item may use it', () => {
+  /** Another lakehouse, in another workspace, with this item's display name. */
+  function putTwin(displayName = NAME, createdAt = BEFORE_CUTOVER) {
+    DOCS.set(dkey('lh-twin', 'ws-twin'), {
+      id: 'lh-twin', workspaceId: 'ws-twin', itemType: 'lakehouse', displayName, state: {}, createdAt,
+    });
+  }
+
+  // FAILS IF an item-era root marked for another item is adopted: the answer
+  // would be 'landing' (where that directory is). The resolver skips it and
+  // answers the next preferred container.
+  it('an item root marked for another item is skipped', async () => {
+    EXISTING.add(`landing/${ITEM_ROOT}`);
+    OWNERS.set(`landing/${ITEM_ROOT}`, 'lh-someone-else');
+    putItem({}, AFTER_CUTOVER);
+    const r = await resolveLakehouseAbfss(LH_ID, WS, PERSIST);
+    expect(r?.container).toBe('bronze');
+    expect(r?.root).toBe(ITEM_ROOT);
+    expect(replaced).toEqual([]);
+  });
+
+  // Positive twin, differing only in the marker. FAILS IF the resolver refuses
+  // its own marker (answer 'bronze', nothing persisted).
+  it('an item root marked for this item is adopted and persisted', async () => {
+    EXISTING.add(`landing/${ITEM_ROOT}`);
+    OWNERS.set(`landing/${ITEM_ROOT}`, LH_ID);
+    putItem({}, AFTER_CUTOVER);
+    const r = await resolveLakehouseAbfss(LH_ID, WS, PERSIST);
+    expect(r?.container).toBe('landing');
+    expect(replaced.map((x) => [x.doc.state.adlsContainer, x.doc.state.lakehouseRoot])).toEqual([['landing', ITEM_ROOT]]);
+  });
+
+  // FAILS IF a name-only root is adopted while another lakehouse derives the
+  // same root: the answer would be 'landing', persisted.
+  it('an unrecorded name root that another lakehouse also derives is not adopted', async () => {
+    EXISTING.add(`landing/${ROOT}`);
+    putItem({});
+    putTwin();
+    expect(await resolveLakehouseAbfss(LH_ID, WS, PERSIST)).toBeNull();
+    expect(replaced).toEqual([]);
+  });
+
+  // FAILS IF a failed read of the other items counts as "no other item": the
+  // answer would be 'landing'.
+  it('an unrecorded name root is not adopted when the other items cannot be read', async () => {
+    EXISTING.add(`landing/${ROOT}`);
+    putItem({});
+    QUERY_FAILS = true;
+    expect(await resolveLakehouseAbfss(LH_ID, WS, PERSIST)).toBeNull();
+    expect(replaced).toEqual([]);
+  });
+
+  // HOLDS on the pre-change resolver by design (it had no overlap check). FAILS
+  // IF overlap is a string-prefix test: `lakehouses/Sales Lake-archive` starts
+  // with `lakehouses/Sales Lake`, and the answer would be null.
+  it('a lakehouse whose root only shares a string prefix does not block adoption', async () => {
+    EXISTING.add(`landing/${ROOT}`);
+    putItem({});
+    putTwin(`${NAME}-archive`);
+    expect(`lakehouses/${NAME}-archive`.startsWith(ROOT)).toBe(true);
+    expect((await resolveLakehouseAbfss(LH_ID, WS, PERSIST))?.container).toBe('landing');
+    expect(replaced).toHaveLength(1);
+  });
+
+  // HOLDS on the pre-change resolver by design. FAILS IF the overlap check also
+  // refuses a name root marked for THIS item (the answer would be null).
+  it('a name root marked for this item is adopted even when another lakehouse derives it', async () => {
+    EXISTING.add(`landing/${ROOT}`);
+    OWNERS.set(`landing/${ROOT}`, LH_ID);
+    putItem({});
+    putTwin();
+    expect((await resolveLakehouseAbfss(LH_ID, WS))?.container).toBe('landing');
   });
 });

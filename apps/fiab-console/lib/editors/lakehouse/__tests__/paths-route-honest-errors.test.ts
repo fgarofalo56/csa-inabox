@@ -19,7 +19,7 @@
  * exercises is imported directly, so the coverage is real wherever the file
  * sits.
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 vi.mock('@/lib/auth/session', () => ({ getSession: vi.fn() }));
 vi.mock('@/lib/azure/adls-client', async () => {
@@ -51,14 +51,30 @@ function restError(statusCode: number, code: string) {
 
 const req = (qs: string) => ({ nextUrl: new URL(`http://x/api/lakehouse/paths?${qs}`) }) as any;
 const session = { claims: { oid: 'oid-1', upn: 'u@x', tid: 't' } };
+/**
+ * A tenant admin (via LOOM_TENANT_ADMIN_OID). Listing a container with no
+ * lakehouseId is the storage-browse form and is limited to tenant admins, so the
+ * arms that exercise it run as ADMIN; the item-bound arms run as `session`.
+ */
+const ADMIN_OID = 'oid-tenant-admin';
+const admin = { claims: { oid: ADMIN_OID, upn: 'admin@x', tid: 't' } };
+let savedAdminOid: string | undefined;
 
 beforeEach(() => {
   vi.resetAllMocks();
   (getSession as any).mockReturnValue(session);
+  savedAdminOid = process.env.LOOM_TENANT_ADMIN_OID;
+  process.env.LOOM_TENANT_ADMIN_OID = ADMIN_OID;
+});
+
+afterEach(() => {
+  if (savedAdminOid === undefined) delete process.env.LOOM_TENANT_ADMIN_OID;
+  else process.env.LOOM_TENANT_ADMIN_OID = savedAdminOid;
 });
 
 describe('storage-failure translation', () => {
   it('a 404 becomes an honest remediation with NO RequestId in the body', async () => {
+    (getSession as any).mockReturnValue(admin);
     (listPaths as any).mockRejectedValue(restError(404, 'PathNotFound'));
 
     const res = await GET(req('container=bronze&prefix=Tables'), undefined as any);
@@ -80,6 +96,7 @@ describe('storage-failure translation', () => {
   });
 
   it('a permission failure is classified as 403 with the exact role to grant', async () => {
+    (getSession as any).mockReturnValue(admin);
     (listPaths as any).mockRejectedValue(restError(403, 'AuthorizationPermissionMismatch'));
 
     const res = await GET(req('container=gold&prefix=Tables'), undefined as any);
@@ -92,6 +109,7 @@ describe('storage-failure translation', () => {
   });
 
   it('an UNCLASSIFIED failure says so — it does not invent a cause', async () => {
+    (getSession as any).mockReturnValue(admin);
     (listPaths as any).mockRejectedValue(Object.assign(new Error('socket hang up RequestId:abc'), { statusCode: 500 }));
 
     const res = await GET(req('container=silver'), undefined as any);
@@ -166,7 +184,7 @@ describe('item-bound resolution', () => {
     // `sp.get('workspaceId')` left the suite green, i.e. the spec could not
     // discriminate between the safe and the unsafe input. Test where the two
     // inputs can actually differ.
-    (resolveItemAccessByOid as any).mockResolvedValue({ item: { id: 'lh-1', workspaceId: 'ws-owning' } });
+    (resolveItemAccessByOid as any).mockResolvedValue({ item: { id: 'lh-1', workspaceId: 'ws-owning' }, canWrite: true });
     (resolveLakehouseAbfss as any).mockResolvedValue({
       abfss: 'abfss://landing@acct.dfs.core.windows.net/lakehouses/Foo',
       container: 'landing',
@@ -211,12 +229,97 @@ describe('item-bound resolution', () => {
     expect(body.gate).toContain('LOOM_');
   });
 
-  it('an explicitly named container is still honoured (the container picker)', async () => {
+  it('a tenant admin can still browse a named container directly (the container picker)', async () => {
+    (getSession as any).mockReturnValue(admin);
     (listPaths as any).mockResolvedValue([]);
     const res = await GET(req('container=gold&prefix=Tables'), undefined as any);
     expect(res.status).toBe(200);
     expect(resolveItemAccessByOid).not.toHaveBeenCalled();
     expect(listPaths).toHaveBeenCalledWith('gold', 'Tables', 200);
+  });
+});
+
+describe('item-scoped listing', () => {
+  const ROOT = 'lakehouses/Sales';
+  const bindTo = (canWrite: boolean) => {
+    (resolveItemAccessByOid as any).mockResolvedValue({ item: { id: 'lh-1', workspaceId: 'ws-1' }, canWrite });
+    (resolveLakehouseAbfss as any).mockResolvedValue({
+      abfss: `abfss://landing@acct.dfs.core.windows.net/${ROOT}`,
+      container: 'landing',
+      root: ROOT,
+    });
+    (listPaths as any).mockResolvedValue([]);
+  };
+
+  // FAILS IF the container-only form stops requiring a tenant admin: the same
+  // request the admin arm above makes would answer 200 and listPaths would be
+  // called with ['gold','Tables',200].
+  it('refuses a direct container listing from a caller who is not a tenant admin', async () => {
+    const res = await GET(req('container=gold&prefix=Tables'), undefined as any);
+    expect(res.status).toBe(403);
+    expect((listPaths as any).mock.calls).toEqual([]);
+    expect(resolveItemAccessByOid).not.toHaveBeenCalled();
+  });
+
+  // FAILS IF an explicit container short-circuits the item check (the storage
+  // call happens, or the status is 200/403 rather than 404).
+  it('answers 404 with no storage call when a named container comes with a lakehouse the caller cannot reach', async () => {
+    (resolveItemAccessByOid as any).mockResolvedValue(null);
+    const res = await GET(req('lakehouseId=lh-other&container=landing&prefix=lakehouses/Sales'), undefined as any);
+    expect(res.status).toBe(404);
+    expect((listPaths as any).mock.calls).toEqual([]);
+    expect(resolveLakehouseAbfss).not.toHaveBeenCalled();
+  });
+
+  // POSITIVE, paired with the refusals below: a sub-folder of the item's own
+  // root lists. FAILS IF the containment test refuses a genuine member.
+  it('lists a sub-folder inside the lakehouse root', async () => {
+    bindTo(true);
+    const res = await GET(req(`lakehouseId=lh-1&container=landing&prefix=${ROOT}/Files`), undefined as any);
+    expect(res.status).toBe(200);
+    expect((listPaths as any).mock.calls).toEqual([['landing', `${ROOT}/Files`, 200]]);
+  });
+
+  // FAILS IF containment is a string-prefix test: `lakehouses/Sales-archive`
+  // starts with `lakehouses/Sales`, so the row set would become 1.
+  it('refuses a prefix that only shares a string prefix with the root', async () => {
+    bindTo(true);
+    expect(`${ROOT}-archive`.startsWith(ROOT)).toBe(true);
+    const res = await GET(req(`lakehouseId=lh-1&container=landing&prefix=${ROOT}-archive`), undefined as any);
+    expect(res.status).toBe(403);
+    expect((listPaths as any).mock.calls).toEqual([]);
+  });
+
+  // FAILS IF `..` is folded rather than refused: `<root>/Files/..` folds back to
+  // the root, and the row set would become [['landing','lakehouses/Sales',200]].
+  it('refuses a ".." segment in the prefix', async () => {
+    bindTo(true);
+    const res = await GET(
+      req(`lakehouseId=lh-1&container=landing&prefix=${encodeURIComponent(`${ROOT}/Files/..`)}`),
+      undefined as any,
+    );
+    expect(res.status).toBe(400);
+    expect((listPaths as any).mock.calls).toEqual([]);
+  });
+
+  // FAILS IF the caller's container is used instead of the bound one: the row
+  // set would become [['gold','lakehouses/Sales',200]].
+  it('refuses a container other than the one the lakehouse is bound to', async () => {
+    bindTo(true);
+    const res = await GET(req(`lakehouseId=lh-1&container=gold&prefix=${ROOT}`), undefined as any);
+    expect(res.status).toBe(403);
+    expect((listPaths as any).mock.calls).toEqual([]);
+  });
+
+  // FAILS IF persist is passed unconditionally (the previous `{ persist: true }`):
+  // the recorded third argument would be { persist: true } for a read-only
+  // caller. Paired with the item-bound arm above, where canWrite is true and the
+  // argument is { persist: true }.
+  it('does not persist a probed root for a caller whose role is read-only', async () => {
+    bindTo(false);
+    const res = await GET(req('lakehouseId=lh-1'), undefined as any);
+    expect(res.status).toBe(200);
+    expect((resolveLakehouseAbfss as any).mock.calls).toEqual([['lh-1', 'ws-1', { persist: false }]]);
   });
 });
 
@@ -233,6 +336,7 @@ describe('unchanged contracts', () => {
   });
 
   it('404s on an unknown container', async () => {
+    (getSession as any).mockReturnValue(admin);
     const res = await GET(req('container=not-a-container'), undefined as any);
     expect(res.status).toBe(404);
   });

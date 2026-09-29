@@ -216,9 +216,11 @@ export function LakehouseEditor({ item, id }: Props) {
 
   const loadPaths = useCallback(async (container: string, prefix: string) => {
     const key = cacheKey(container, prefix);
+    // An unsaved item has no storage yet; every listing is item-scoped (lakehouseId).
+    if (isNewItem) { setOpenPrefixes((p) => ({ ...p, [key]: [] })); return; }
     setOpenPrefixes((p) => ({ ...p, [key]: 'loading' }));
     try {
-      const qs = new URLSearchParams({ container, prefix });
+      const qs = new URLSearchParams({ lakehouseId: id, container, prefix });
       const r = await clientFetch(`/api/lakehouse/paths?${qs.toString()}`);
       const j = await parseJsonOrError<{ ok: boolean; paths?: PathEntry[] } & Partial<ListingError>>(r, 'List paths');
       setOpenPrefixes((p) => ({
@@ -233,7 +235,7 @@ export function LakehouseEditor({ item, id }: Props) {
     } catch (e: any) {
       setOpenPrefixes((p) => ({ ...p, [key]: { error: e?.message || String(e) } }));
     }
-  }, [cacheKey]);
+  }, [cacheKey, id, isNewItem]);
 
   // ── The item's own ADLS binding (#3904) ───────────────────────────────────
   // Which container + root this lakehouse actually owns, and therefore what
@@ -584,7 +586,7 @@ export function LakehouseEditor({ item, id }: Props) {
   ) => {
     if (!activeContainer || entry.isDirectory) return;
     setMipStatus(null); setMipLabelName(null);
-    const params: Record<string, string> = { container: activeContainer, path: entry.name };
+    const params: Record<string, string> = { lakehouseId: id, container: activeContainer, path: entry.name };
     const labelName = label?.displayName ?? label?.name ?? label?.id ?? '';
     if (label?.id) { params.labelId = label.id; params.labelName = labelName; if (label.method) params.labelMethod = label.method; }
     try {
@@ -600,7 +602,7 @@ export function LakehouseEditor({ item, id }: Props) {
         document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
       }
     } catch (e: any) { setActionError(e?.message || String(e)); }
-  }, [activeContainer]);
+  }, [activeContainer, id]);
 
   const openLabelDialog = useCallback(async (entry: PathEntry) => {
     setLabelDlgEntry(entry); setLabelDlgOpen(true); setChosenLabelId(''); setMipLabelsError(null);

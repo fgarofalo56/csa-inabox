@@ -82,7 +82,7 @@ import {
   safePipelineName,
   safeAdxDatabaseName,
   safeAdlsRelPath,
-  lakehouseRootPath,
+  lakehouseItemRootPath,
   lakehouseContainerOrder,
 } from './backing-name';
 import { DEFAULT_PIPELINE_RUNTIME } from '@/lib/components/pipeline/types';
@@ -521,14 +521,18 @@ export const lakehouseAutoBind: AutoBindProvider = {
   provider: 'lakehouse-adls',
   itemTypes: ['lakehouse'],
 
-  // EXACTLY the expression `lib/install/provisioners/lakehouse.ts` uses for its
-  // root directory (`lakehouseRootPath`, itemId fallback included), so an
-  // installed lakehouse is ATTACHED here rather than duplicated under a second
-  // root with the user's Delta tables in the wrong one.
+  // The ITEM-UNIQUE root (`lakehouses/<name>--<itemId>`, see
+  // `lakehouseItemRootPath`): display names are not unique, so a root derived
+  // from the name alone would be shared by every same-name lakehouse. The
+  // installer (`lib/install/provisioners/lakehouse.ts`) still writes the
+  // name-only `lakehouseRootPath` and records it in its provisioning receipt,
+  // which `resolveLakehouseAbfss` prefers (steps 1/2), so an installed lakehouse
+  // keeps resolving to the installer's directory.
   backingNameFor: (ctx) => ({
-    name: lakehouseRootPath(ctx.displayName, ctx.itemId),
+    name: lakehouseItemRootPath(ctx.displayName, ctx.itemId),
     // Report whether the DISPLAY NAME itself had to change; the structural
-    // `lakehouses/` prefix is not part of the mapping a human is inspecting.
+    // `lakehouses/` prefix and the `--<itemId>` suffix are not part of the
+    // mapping a human is inspecting.
     sanitized: safeAdlsRelPath(ctx.displayName) !== ctx.displayName,
   }),
 
@@ -564,15 +568,26 @@ export const lakehouseAutoBind: AutoBindProvider = {
     return { ok: true, coords: { container } };
   },
 
-  probe: async (name, coords) => {
-    const { getMetadata } = await import('./adls-client');
-    const meta = await getMetadata(coords.container, name);
-    return meta.exists;
+  /**
+   * A directory counts as THIS item's root only when its ownership marker says
+   * so. The one exception is the root this item already has on record
+   * (`state.lakehouseRoot`, written only by the server) when that directory
+   * predates markers and carries none — an existing item keeps its root. A
+   * directory marked for another item, or an unmarked one this item has no
+   * record of, is reported absent, so the engine creates this item's own root.
+   */
+  probe: async (name, coords, ctx) => {
+    const { readLakehouseRootOwner } = await import('./lakehouse-abfss');
+    const r = await readLakehouseRootOwner(coords.container, name);
+    if (!r.exists) return false;
+    if (r.owner === ctx.itemId) return true;
+    return r.owner === null && name === stateString(ctx, 'lakehouseRoot');
   },
 
-  create: async (name, coords) => {
-    const { createDirectory } = await import('./adls-client');
-    await createDirectory(coords.container, name);
+  /** Creates the root with this item's ownership marker, never over an existing directory. */
+  create: async (name, coords, ctx) => {
+    const { createOwnedLakehouseRoot } = await import('./lakehouse-abfss');
+    await createOwnedLakehouseRoot(coords.container, name, ctx.itemId);
   },
 
   /**

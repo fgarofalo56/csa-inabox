@@ -14715,6 +14715,33 @@
           }
         },
         {
+          "id": "sec:authorizer:apps/fiab-console/app/api/lakehouse/paths/route.ts#GET",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "GET /api/lakehouse/paths",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "GET /api/lakehouse/paths",
+            "params": [],
+            "resourceScoped": false,
+            "callerNamedResourceInputs": [],
+            "allowPaths": [
+              {
+                "id": "get:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": false,
+            "privilegedSinkKinds": []
+          }
+        },
+        {
           "id": "sec:authorizer:apps/fiab-console/app/api/lakehouse/permissions/route.ts#POST",
           "kind": "authorizer",
           "provenance": "declared",
@@ -48657,6 +48684,11 @@
           "deployedAs": "loom-console"
         },
         {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/lakehouse/paths/route.ts#GET",
+          "codeModuleId": "code:apps/fiab-console/app/api/lakehouse/paths/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
           "nodeId": "sec:authorizer:apps/fiab-console/app/api/lakehouse/permissions/route.ts#POST",
           "codeModuleId": "code:apps/fiab-console/app/api/lakehouse/permissions/route.ts",
           "deployedAs": "loom-console"
@@ -50177,15 +50209,15 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-29T08:17:43.651Z",
-      "commit": "f6bfad406faff616ae529943572731aaba00b7cd",
-      "inputsDigest": "c661e382e3548926",
+      "generatedAt": "2026-09-29T15:06:07.409Z",
+      "commit": "e08c6adff1db6cb6295df80ebfec56c8ced73129",
+      "inputsDigest": "47c42d38c52ccc64",
       "filesScanned": 2123,
       "scanScopes": [
         {
           "scope": "app/**/route.ts (console BFF routes)",
           "filesMatched": 1700,
-          "nodesEmitted": 706
+          "nodesEmitted": 707
         },
         {
           "scope": ".github/**, scripts/** (CI publication surfaces)",

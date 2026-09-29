@@ -49,6 +49,15 @@
  * half of the rule and make the name unguessable from the Loom UI. The binding
  * record written by the auto-bind engine records `sourceName` alongside
  * `backingName`, so a shared backing object is always visible on the item.
+ *
+ * ONE EXCEPTION: lakehouse storage roots. A lakehouse root is a DATA directory,
+ * and its contents belong to exactly one Loom item, so two same-name lakehouses
+ * must not resolve to one directory. New lakehouses therefore get an item-unique
+ * root from {@link lakehouseItemRootPath} (display name + item id), and the
+ * directory carries an ownership marker ({@link LAKEHOUSE_OWNER_METADATA_KEY}).
+ * {@link lakehouseRootPath} stays as the name-only root that items created
+ * before {@link LAKEHOUSE_ITEM_ROOT_SINCE} (and the installer) already use —
+ * existing roots are not moved.
  */
 
 /** How one Azure service's naming rules constrain a Loom displayName. */
@@ -215,6 +224,140 @@ export const LAKEHOUSE_ROOT_PREFIX = 'lakehouses/';
 export function lakehouseRootPath(displayName: string, itemId: string): string {
   return `${LAKEHOUSE_ROOT_PREFIX}${safeAdlsRelPath(displayName) || itemId}`;
 }
+
+/**
+ * The ITEM-UNIQUE root of a lakehouse created on or after
+ * {@link LAKEHOUSE_ITEM_ROOT_SINCE}: `lakehouses/<name>--<itemId>`.
+ *
+ * Why this shape, and not the name-only {@link lakehouseRootPath}:
+ *   - Display names are neither unique nor stable (two items may share one, and
+ *     an item can be renamed), so a root derived from the name alone would be
+ *     shared by every same-name lakehouse. The full item id makes it unique.
+ *   - The name part is FLATTENED to a single segment (`/` becomes `-`), so every
+ *     item root is exactly one level under `lakehouses/` and no item root can
+ *     ever sit inside another one.
+ *   - The name is kept as a prefix so the directory is still recognisable in
+ *     Storage Explorer next to the Loom item (auto-bind-by-default §2), and the
+ *     exact mapping is recorded in the item's state (`lakehouseRoot`).
+ *
+ * `itemId` alone is the root when the name sanitizes to nothing.
+ */
+export function lakehouseItemRootPath(displayName: string, itemId: string): string {
+  const flat = safeAdlsRelPath(displayName).replace(/\//g, '-');
+  return `${LAKEHOUSE_ROOT_PREFIX}${flat ? `${flat}--${itemId}` : itemId}`;
+}
+
+/**
+ * ADLS directory-metadata key naming the Loom item that owns a lakehouse root.
+ * ADLS metadata keys are case-insensitive and are returned lower-cased, so the
+ * key is lower-case here and is read case-insensitively.
+ */
+export const LAKEHOUSE_OWNER_METADATA_KEY = 'loomitemid';
+
+/**
+ * Lakehouses created on or after this instant get an item-unique root
+ * ({@link lakehouseItemRootPath}). Earlier items keep the name-only root they
+ * already have — no data is moved. An item whose `createdAt` is missing or
+ * unparsable is treated as pre-cutover, which only ever selects its existing
+ * root, never a new one.
+ */
+export const LAKEHOUSE_ITEM_ROOT_SINCE = '2026-09-29T00:00:00.000Z';
+
+/** Was this lakehouse created on or after {@link LAKEHOUSE_ITEM_ROOT_SINCE}? */
+export function lakehouseUsesItemRoot(createdAt: unknown): boolean {
+  if (typeof createdAt !== 'string') return false;
+  const t = Date.parse(createdAt);
+  return Number.isFinite(t) && t >= Date.parse(LAKEHOUSE_ITEM_ROOT_SINCE);
+}
+
+/**
+ * The item fields that say where a lakehouse's files are. Read by the resolver
+ * (before it adopts an unmarked name root) and by the readiness check
+ * `lib/admin/env-checks/lakehouse-shared-roots.ts`, so both compare the same thing.
+ */
+export interface LakehouseRootFacts {
+  id: string;
+  displayName?: unknown;
+  createdAt?: unknown;
+  /** state.lakehouseRoot / state.adlsContainer — the binding auto-bind records. */
+  lakehouseRoot?: unknown;
+  adlsContainer?: unknown;
+  /** state.storageAccount — an explicit external account. */
+  storageAccount?: unknown;
+  /** state.provisioning.secondaryIds.{adlsRoot,container,rootPath} — the installer's stamp. */
+  provAdlsRoot?: unknown;
+  provContainer?: unknown;
+  provRootPath?: unknown;
+}
+
+/** Where one lakehouse's files are, as far as its item record says. */
+export interface LakehouseRootLocation {
+  id: string;
+  /** '' = the primary Loom account; null = not known from the record (matches any). */
+  account: string | null;
+  /** null = not recorded; the resolver would probe for it (matches any). */
+  container: string | null;
+  segments: string[];
+  /** true when read from a recorded binding, false when derived from the name. */
+  recorded: boolean;
+}
+
+function factStr(v: unknown): string {
+  return typeof v === 'string' ? v.trim() : '';
+}
+
+function rootSegments(p: string): string[] {
+  return p.split('/').map((s) => s.trim()).filter(Boolean);
+}
+
+/**
+ * The root a lakehouse item uses: the installer's stamp, else the recorded
+ * auto-bind binding, else the root the resolver would derive (the item root on
+ * or after {@link LAKEHOUSE_ITEM_ROOT_SINCE}, the name root before it).
+ */
+export function lakehouseRootLocation(f: LakehouseRootFacts): LakehouseRootLocation | null {
+  const id = factStr(f.id);
+  if (!id) return null;
+  const explicitAccount = factStr(f.storageAccount).toLowerCase();
+  const stamped = factStr(f.provAdlsRoot).match(/^abfss:\/\/([^@]+)@[^/]+\/(.*)$/i);
+  if (stamped) {
+    // The stamped URI names the account, but whether that is the primary one is
+    // not knowable here, so it is compared as "any account".
+    return { id, account: null, container: stamped[1], segments: rootSegments(stamped[2]), recorded: true };
+  }
+  const provContainer = factStr(f.provContainer);
+  const provRoot = factStr(f.provRootPath);
+  if (provContainer && provRoot) {
+    return { id, account: explicitAccount, container: provContainer, segments: rootSegments(provRoot), recorded: true };
+  }
+  const boundRoot = factStr(f.lakehouseRoot);
+  if (boundRoot) {
+    return { id, account: explicitAccount, container: factStr(f.adlsContainer) || null, segments: rootSegments(boundRoot), recorded: true };
+  }
+  const name = factStr(f.displayName);
+  const derived = lakehouseUsesItemRoot(f.createdAt) ? lakehouseItemRootPath(name, id) : lakehouseRootPath(name, id);
+  return { id, account: explicitAccount, container: null, segments: rootSegments(derived), recorded: false };
+}
+
+/**
+ * Do two lakehouse roots share files? Same account and container (an unknown
+ * one matches any), and one root's segments are a prefix of the other's —
+ * `lakehouses/Sales` overlaps `lakehouses/Sales/2024`, not `lakehouses/Sales-archive`.
+ */
+export function lakehouseRootsOverlap(a: LakehouseRootLocation, b: LakehouseRootLocation): boolean {
+  if (a.account !== null && b.account !== null && a.account !== b.account) return false;
+  if (a.container !== null && b.container !== null && a.container !== b.container) return false;
+  const n = Math.min(a.segments.length, b.segments.length);
+  for (let i = 0; i < n; i++) if (a.segments[i] !== b.segments[i]) return false;
+  return true;
+}
+
+/**
+ * The lakehouse `state` keys that record WHERE its data lives. They are written
+ * only by the server (auto-bind and the resolver's persist), never by a request
+ * body: see `app/api/items/_lib/server-derived-scope.ts`.
+ */
+export const LAKEHOUSE_SERVER_OWNED_STATE_KEYS = ['lakehouseRoot', 'adlsContainer', 'ownedContainers'] as const;
 
 /**
  * The containers a NEW lakehouse root prefers, in order: `landing` (the raw
