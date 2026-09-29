@@ -98,6 +98,29 @@
  *                                     failure path rewrites or that starts
  *                                     nullish (`state.data?.ok && …`)
  *   E5  `X !== null` / `X === null` etc. — resolved to E1/E2 with polarity
+ *   E6  required-FALSE `Q.isError` or `W(Q).isError` — a react-query outcome.
+ *       ALL of these must hold, or it is not evidence:
+ *         a. Q is bound in the SAME component as `const Q = useQuery(…)`.
+ *         b. the literal is required FALSE — the claim is on the not-errored
+ *            side (never inside `if (…isError) return <EmptyState/>`, which the
+ *            early-return pass misreads; E6 refuses those literals by flag).
+ *         c. the isError is COMPLETE:
+ *              `Q.isError`    — Q's own queryFn (or one same-file helper it
+ *                               calls) throws inside an if-not-ok / status
+ *                               branch and has no catch that swallows;
+ *              `W(Q).isError` — W is a same-file function whose returned
+ *                               `isError` is `<param>.isError || …`, where the
+ *                               right side compares a status read from
+ *                               `<param>.data` against 400 (or Q is loud as above).
+ *            W is proved from its body, never trusted from its name.
+ *         d. DATA LINK: every emptiness test on the claim's render path (a
+ *            condition reading `.length` / `.size`) reads ONLY Q's data —
+ *            `Q.data`, `W(Q).data`, or a const in the component derived purely
+ *            from them — and there is at least one such test. This is the rule
+ *            implemented for "the claim's data comes from Q"; it is stricter
+ *            than "Q is the only useQuery feeding the branch".
+ *       (#4771. Before E6 a react-query surface could only be baselined, even
+ *       when gated correctly: 6 claims in 4 files were, and are now SAFE.)
  *
  * (E3 — "a loaded flag set only on success" — was measured, judged
  * indefensible, and REMOVED. See verdictFor().)
@@ -130,19 +153,36 @@
  *     this reason, not because the read is unproven. Admitting custom-hook
  *     roots would reclassify a large share of the existing `unguarded`
  *     population at once and strand the baseline as stale everywhere, so it is
- *     a deliberate deferral rather than an oversight.
+ *     a deliberate deferral rather than an oversight. `useQuery` is the ONE
+ *     hook admitted, and only under E6's four conditions.
+ *   - E6 is conservative in known ways. A destructured `const { data, isError }
+ *     = useQuery(…)`, a shorthand or positional `queryFn`, a fetcher in another
+ *     file, and a derived const whose initialiser also mentions a useState var
+ *     (even pure UI state such as a search box) all leave the claim UNGUARDED.
+ *     It trusts react-query's own contract that `isError` is true after a
+ *     rejected queryFn; it does not model a queryFn that resolves 200 with an
+ *     error body the not-ok test does not read.
+ *   - The early-return pass reads `if (COND) return <EmptyState/>` — where the
+ *     claim IS the returned value — as if COND were required FALSE. It should
+ *     be TRUE. Correcting it moves 3 claims from safe to unguarded
+ *     (agent-quality-panel.tsx:431, :580; data-product-detail.tsx:783) and so
+ *     needs a baseline RAISE; left for an operator decision (#4771 report).
  *
  * ---------------------------------------------------------------------------
  * EMBEDDED CONTROLS (run on EVERY invocation, not behind a flag)
  * ---------------------------------------------------------------------------
  * A ratchet whose population can drain to zero can end up protecting nothing,
- * and an analyser that silently stops parsing reports a clean tree. So three
- * fixtures are analysed in memory before the repo is:
+ * and an analyser that silently stops parsing reports a clean tree. So a set of
+ * fixtures is analysed in memory before the repo is — among them:
  *
  *   DEFECT  the real pre-fix /catalog/domains shape  -> must be UNGUARDED
  *   FIXED   the shipped /admin/domains shape         -> must be SAFE
  *   ADOPTER the FIXED shape PLUS one new unguarded claim in the SAME component
  *           -> must be SAFE for the old claim AND UNGUARDED for the new one
+ *   QUERY / QUERY_SWAP  the finops cockpit's react-query shape -> SAFE (E6),
+ *           and the same shape reading ANOTHER query's data -> UNGUARDED
+ *
+ * The full list is CONTROLS (§8); the CLI prints its size on every run.
  *
  * The ADOPTER control is the anti-blindness proof: it fails the build if
  * adopting the fix ever makes the analyser stop judging the file.
@@ -570,6 +610,11 @@ function classifyInit(argText) {
 function regionsOf(text, lo, hi, pairs) {
   const failure = [];
   const promotion = [];
+  // The subset of `failure` that is an `if` branch on response ok-ness / HTTP
+  // status (never a `catch`). E6 needs it: a `throw` there is what makes a
+  // RESOLVED non-2xx reject the query; a rethrow in a catch proves nothing
+  // about a response that never threw.
+  const notOk = [];
 
   const blockAfter = (from) => {
     let i = from;
@@ -632,7 +677,7 @@ function regionsOf(text, lo, hi, pairs) {
       const stop = semi < 0 || semi > hi ? Math.min(i + 200, hi) : semi;
       cons = { lo: i, hi: stop }; after = stop + 1;
     }
-    if (negated) { if (cons) failure.push(cons); continue; }
+    if (negated) { if (cons) { failure.push(cons); notOk.push(cons); } continue; }
     // positive ok-test -> the ELSE branch handles the failure
     let j = after;
     while (j < hi && /\s/.test(text[j])) j++;
@@ -641,14 +686,15 @@ function regionsOf(text, lo, hi, pairs) {
       while (k < hi && /\s/.test(text[k])) k++;
       if (text[k] === '{') {
         const b = pairs.find((x) => x.open === k);
-        if (b) failure.push({ lo: b.open, hi: b.close });
+        if (b) { failure.push({ lo: b.open, hi: b.close }); notOk.push({ lo: b.open, hi: b.close }); }
       } else {
         const semi = text.indexOf(';', k);
-        failure.push({ lo: k, hi: semi < 0 || semi > hi ? Math.min(k + 200, hi) : semi });
+        const r = { lo: k, hi: semi < 0 || semi > hi ? Math.min(k + 200, hi) : semi };
+        failure.push(r); notOk.push(r);
       }
     }
   }
-  return { failure, promotion };
+  return { failure, promotion, notOk };
 }
 
 const inAny = (regions, idx) => regions.some((r) => idx >= r.lo && idx < r.hi);
@@ -733,10 +779,261 @@ export function analyseScope(text, scope, pairs, helpers = new Map()) {
     if (s.init === 'nullish' && !writtenOnFailure.has(v)) loadSentinels.add(v);
   }
 
+  const queries = queryBindings(text, start, end, pairs);
+  const derived = derivedFromQueries(text, start, end, queries, states);
+
   return {
     states, setterToVar, hasRead, failure, promotion,
-    errorSignals, writtenOnFailure, loadSentinels,
+    errorSignals, writtenOnFailure, loadSentinels, queries, derived,
   };
+}
+
+// ---------------------------------------------------------------------------
+// E6 support — a react-query result as the read's outcome.
+// ---------------------------------------------------------------------------
+
+/**
+ * `const Q = useQuery(…)` / `useQuery<T>(…)` bindings in [start, end), as
+ * name -> the call's `( … )` span. Destructured bindings
+ * (`const { data, isError } = useQuery(…)`) are NOT resolved: their isError has
+ * no name to tie to a data read, so they stay outside E6.
+ */
+function queryBindings(text, start, end, pairs) {
+  const out = new Map();
+  const re = /(?:const|let)\s+([A-Za-z_$][\w$]*)\s*(?::[^=;]+)?=\s*useQuery\b/g;
+  const slice = text.slice(start, end);
+  let m;
+  while ((m = re.exec(slice))) {
+    let i = start + m.index + m[0].length;
+    while (i < end && /\s/.test(text[i])) i++;
+    if (text[i] === '<') {
+      let d = 0;
+      for (; i < end; i++) {
+        if (text[i] === '<') d++;
+        else if (text[i] === '>') { d--; if (d === 0) { i++; break; } }
+      }
+      while (i < end && /\s/.test(text[i])) i++;
+    }
+    if (text[i] !== '(') continue;
+    const p = pairs.find((x) => x.open === i && x.ch === '(');
+    if (p) out.set(m[1], { lo: p.open, hi: p.close });
+  }
+  return out;
+}
+
+/** Does `s` read query `q`'s data — `q.data`, `q?.data`, or `W(q).data`? */
+const readsQueryData = (s, q) => new RegExp(
+  `(?<![\\w$.])${q}\\s*\\??\\.\\s*data\\b|\\b[A-Za-z_$][\\w$]*\\s*\\(\\s*${q}\\s*\\)\\s*\\??\\.\\s*data\\b`,
+).test(s);
+
+/** Identifiers in `s` that are not a property access (`.x` / `?.x`). */
+const freeIdents = (s) => {
+  const ids = [];
+  const re = /[A-Za-z_$][\w$]*/g;
+  let m;
+  while ((m = re.exec(s))) {
+    let j = m.index - 1;
+    while (j >= 0 && /\s/.test(s[j])) j--;
+    if (s[j] === '.' || /[0-9]/.test(s[m.index - 1] ?? '')) continue;
+    ids.push({ id: m[0], at: m.index });
+  }
+  return ids;
+};
+
+/**
+ * Same-scope consts whose value is PURELY one query's data: name -> query.
+ *
+ * `const feed = anomaliesQ.data?.feed || [];` derives from anomaliesQ. An
+ * initialiser that also mentions ANOTHER query, a useState variable, or a const
+ * derived from something else is not derived from anything — the guard cannot
+ * tell a read-fed state from UI state, so it refuses both rather than guess.
+ * A name declared twice in the scope counts only if every declaration agrees.
+ */
+function derivedFromQueries(text, start, end, queries, states) {
+  const derived = new Map();
+  if (queries.size === 0) return derived;
+  const decls = [];
+  const re = /(?:const|let)\s+([A-Za-z_$][\w$]*)\s*(?::[^=;]+?)?=(?![=>])/g;
+  const slice = text.slice(start, end);
+  let m;
+  while ((m = re.exec(slice))) {
+    let i = start + m.index + m[0].length;
+    const lo = i;
+    let depth = 0;
+    for (; i < end; i++) {
+      const c = text[i];
+      if (c === '(' || c === '[' || c === '{') depth++;
+      else if (c === ')' || c === ']' || c === '}') { if (depth === 0) break; depth--; }
+      else if ((c === ';' || c === '\n') && depth === 0) break;
+    }
+    decls.push({ name: m[1], init: text.slice(lo, i) });
+  }
+  for (let pass = 0; pass < 6; pass++) {
+    let changed = false;
+    const byName = new Map();
+    for (const d of decls) {
+      if (queries.has(d.name)) continue;
+      let src = null; let bad = false;
+      for (const q of queries.keys()) {
+        if (readsQueryData(d.init, q)) { if (src && src !== q) bad = true; src = q; }
+      }
+      for (const { id } of freeIdents(d.init)) {
+        if (id === d.name) continue;
+        if (queries.has(id) && id !== src) bad = true;
+        if (states.has(id)) bad = true;
+        if (derived.has(id)) { if (src && derived.get(id) !== src) bad = true; src = src || derived.get(id); }
+      }
+      const verdict = !bad && src ? src : null;
+      if (byName.has(d.name) && byName.get(d.name) !== verdict) byName.set(d.name, null);
+      else if (!byName.has(d.name)) byName.set(d.name, verdict);
+    }
+    for (const [name, q] of byName) {
+      if (q && derived.get(name) !== q) { derived.set(name, q); changed = true; }
+      if (!q && derived.has(name)) { derived.delete(name); changed = true; }
+    }
+    if (!changed) break;
+  }
+  return derived;
+}
+
+/**
+ * Does query `q` REJECT when its read fails — so that `q.isError` is false only
+ * after a successful read?
+ *
+ * Proved only from the query's own `queryFn` (or ONE same-file helper it calls):
+ *   - a `throw` inside an if-not-ok / HTTP-status branch, AND
+ *   - no catch that swallows: every `catch` block or `.catch(…)` handler must
+ *     rethrow, except `.json().catch(…)`, whose fallback value still meets the
+ *     ok test below it.
+ * `queryFn` given by shorthand, a positional (v3) `useQuery(key, fn)`, or a
+ * helper in another file is NOT resolved and therefore NOT loud. This file's
+ * own `getJson` is the counter-example the rule is built on: it RESOLVES with
+ * the status merged in, so its query's `isError` stays false through a 504.
+ */
+function queryFailsLoudly(text, pairs, call, helpers) {
+  let i = call.lo + 1;
+  while (i < call.hi && /\s/.test(text[i])) i++;
+  if (text[i] !== '{') return false;
+  const obj = pairs.find((x) => x.open === i && x.ch === '{');
+  if (!obj) return false;
+  const bounds = [...depth0Ops(text, obj.open + 1, obj.close).filter((o) => o.op === ',').map((o) => o.at), obj.close];
+  let segLo = obj.open + 1;
+  for (const b of bounds) {
+    const mm = /^\s*queryFn\s*:/.exec(text.slice(segLo, b));
+    if (mm) return spanFailsLoudly(text, pairs, { lo: segLo + mm[0].length, hi: b }, helpers, 0);
+    segLo = b + 1;
+  }
+  return false;
+}
+
+function spanFailsLoudly(text, pairs, span, helpers, depth) {
+  const { failure, notOk } = regionsOf(text, span.lo, span.hi, pairs);
+  const isNotOk = (r) => notOk.some((n) => n.lo === r.lo && n.hi === r.hi);
+  for (const r of failure) {
+    if (isNotOk(r)) continue;
+    if (/\bthrow\b/.test(text.slice(r.lo, r.hi))) continue;
+    if (/\.\s*json\s*\(\s*\)\s*\.\s*catch\s*$/.test(text.slice(Math.max(span.lo, r.lo - 60), r.lo))) continue;
+    return false;
+  }
+  const body = text.slice(span.lo, span.hi);
+  const throwRe = /\bthrow\b/g;
+  let m;
+  while ((m = throwRe.exec(body))) {
+    if (inAny(notOk, span.lo + m.index)) return true;
+  }
+  if (depth > 0) return false;
+  for (const [name, h] of helpers) {
+    if (!h.hasFetch || h.start === undefined) continue;
+    if (!new RegExp(`(?<![\\w$.])${name}\\s*[(<]`).test(body)) continue;
+    if (spanFailsLoudly(text, pairs, { lo: h.start, hi: h.end }, helpers, 1)) return true;
+  }
+  return false;
+}
+
+/**
+ * Is same-file function `w` a wrapper whose returned `isError` is
+ * `<param>.isError || <HTTP failure of <param>.data>`?
+ *
+ * Proved from its body, never trusted from its name: the `isError` property
+ * must OR the query's own isError with either an expression, or a same-body
+ * const, that compares a `status` read from `<param>.data` against 400.
+ * `foldsQuery` alone (no HTTP fold) is still accepted when the query itself
+ * fails loudly; a wrapper that DROPS `<param>.isError` is never accepted.
+ */
+function wrapperFold(text, helpers, w) {
+  const h = helpers.get(w);
+  if (!h || h.start === undefined) return { foldsQuery: false, foldsHttp: false };
+  const body = text.slice(h.start, h.end);
+  const pm = /^\s*(?:export\s+)?(?:async\s+)?(?:function\s+[\w$]+\s*(?:<[^>]*>)?\s*\(\s*|(?:const|let|var)\s+[\w$]+\s*=\s*(?:async\s*)?\(?\s*)([A-Za-z_$][\w$]*)/.exec(body);
+  if (!pm) return { foldsQuery: false, foldsHttp: false };
+  const p = pm[1];
+  const im = new RegExp(`\\bisError\\s*:\\s*${p}\\s*\\.\\s*isError\\s*\\|\\|\\s*([^,}\\n]+)`).exec(body);
+  if (!im) return { foldsQuery: false, foldsHttp: false };
+  const constInit = (name) => (new RegExp(`\\b(?:const|let)\\s+${name}\\s*(?::[^=;]+?)?=(?![=>])\\s*([^;\\n]+)`).exec(body) ?? [])[1] ?? '';
+  let http = im[1].trim();
+  if (/^[A-Za-z_$][\w$]*$/.test(http)) http = constInit(http);
+  const comparesTo400 = /(?:>=\s*400|>\s*399)(?![\d])/.test(http);
+  const statusFromData = new RegExp(`\\b${p}\\s*\\??\\.\\s*data\\s*\\??\\.\\s*status\\b`).test(http)
+    || (/(?<![\w$.])status\b/.test(http) && new RegExp(`\\b${p}\\s*\\??\\.\\s*data\\b`).test(constInit('status')));
+  return { foldsQuery: true, foldsHttp: comparesTo400 && statusFromData };
+}
+
+/**
+ * The claim's DATA LINK to query `q`: every emptiness test on its render path
+ * (a condition reading `.length` / `.size`) must read ONLY `q`'s data — directly
+ * or through consts derived purely from it — and there must be at least one.
+ * A claim whose emptiness is computed from anything else is not attested by
+ * `q`'s success, however tightly `q.isError` gates it.
+ */
+function dataLinked(q, conds, info) {
+  const IGNORABLE = new Set(['Object', 'Array', 'Math', 'Number', 'String', 'Boolean', 'JSON',
+    'undefined', 'null', 'true', 'false', 'typeof', 'void', 'new', 'in', 'instanceof']);
+  const tests = conds.filter((c) => /\.\s*(?:length|size)\b/.test(c));
+  if (tests.length === 0) return false;
+  for (const raw of tests) {
+    const c = raw.replace(new RegExp(`\\b[A-Za-z_$][\\w$]*\\s*\\(\\s*${q}\\s*\\)`, 'g'), q);
+    let linked = false;
+    for (const { id, at } of freeIdents(c)) {
+      if (IGNORABLE.has(id)) continue;
+      if (id === q && /^\s*\??\.\s*data\b/.test(c.slice(at + id.length))) { linked = true; continue; }
+      if (info.derived.get(id) === q) { linked = true; continue; }
+      return false;
+    }
+    if (!linked) return false;
+  }
+  return true;
+}
+
+/**
+ * E6 — a react-query read outcome required FALSE: `Q.isError` or `W(Q).isError`
+ * on the not-errored side of the claim. Every condition is necessary; see the
+ * header's EVIDENCE list.
+ */
+function queryErrorEvidence(info, literals, ctx) {
+  for (const lit of literals) {
+    if (lit.polarity || lit.consequentMisread) continue;
+    let q = null; let wrapper = null;
+    if (lit.kind === 'query-error') { q = lit.root; wrapper = lit.wrapper; }
+    else {
+      const mm = /^([A-Za-z_$][\w$]*)\??\.isError$/.exec(lit.expr);
+      if (!mm) continue;
+      q = mm[1];
+    }
+    const call = info.queries.get(q);
+    if (!call) continue;
+    const loud = () => queryFailsLoudly(ctx.text, ctx.pairs, call, ctx.helpers);
+    let complete;
+    if (wrapper) {
+      const w = wrapperFold(ctx.text, ctx.helpers, wrapper);
+      complete = w.foldsQuery && (w.foldsHttp || loud());
+    } else {
+      complete = loud();
+    }
+    if (!complete) continue;
+    if (!dataLinked(q, ctx.conds, info)) continue;
+    return { safe: true, why: `E6 !${lit.expr}` };
+  }
+  return { safe: false, why: null };
 }
 
 // ===========================================================================
@@ -804,6 +1101,15 @@ function literalsOf(cond, polarity, out = []) {
   mm = /^Array\.isArray\s*\(\s*([A-Za-z_$][\w$.?[\]]*)\s*\)$/.exec(t);
   if (mm) { out.push({ expr: mm[1], root: rootOf(mm[1]), polarity }); return out; }
 
+  // `W(Q).isError` — a same-file wrapper over a useQuery result. Tagged so the
+  // useState rules (E1/E2/E4) never read it: only E6 may, and only after it has
+  // proved W, Q and the data link (see queryErrorEvidence()).
+  mm = /^([A-Za-z_$][\w$]*)\s*\(\s*([A-Za-z_$][\w$]*)\s*\)\s*\??\.\s*isError$/.exec(t);
+  if (mm) {
+    out.push({ expr: t.replace(/\s+/g, ''), root: mm[2], wrapper: mm[1], kind: 'query-error', polarity });
+    return out;
+  }
+
   // A bare identifier or member chain used for its truthiness.
   if (/^[A-Za-z_$][\w$]*(?:\??\.[A-Za-z_$][\w$]*)*$/.test(t)) {
     out.push({ expr: t, root: rootOf(t), polarity });
@@ -816,8 +1122,13 @@ const rootOf = (expr) => (/^([A-Za-z_$][\w$]*)/.exec(expr) ?? [])[1] ?? null;
 /**
  * Every literal that must hold for the claim at `claimIdx` to render.
  * Returns null when the structure could not be resolved (-> UNKNOWN).
+ *
+ * `conds`, when given, receives the RAW text of every condition on the claim's
+ * render path (ternary tests, `&&` operands, earlier `||` disjuncts, dominating
+ * early returns). E6 reads it to find the claim's emptiness test, which
+ * `literalsOf` cannot represent (`(q.data?.rows || []).length` is not a literal).
  */
-export function requiredLiterals(text, pairs, scope, claimIdx) {
+export function requiredLiterals(text, pairs, scope, claimIdx, conds = null) {
   const spans = enclosing(pairs, claimIdx, scope.start, scope.end);
   const out = [];
   let resolved = false;
@@ -839,7 +1150,7 @@ export function requiredLiterals(text, pairs, scope, claimIdx) {
       else hi = Math.min(hi, o.at);
     }
     resolved = true;
-    collectFrom(text, lo, hi, claimIdx, out);
+    collectFrom(text, lo, hi, claimIdx, out, conds);
   }
 
   // `if (COND) return …;` earlier in the SAME body dominates the claim.
@@ -860,14 +1171,52 @@ export function requiredLiterals(text, pairs, scope, claimIdx) {
     if (!owner || !(owner.open < claimIdx && owner.close > claimIdx)) continue;
     const rest = text.slice(p.close + 1, Math.min(p.close + 400, scope.end));
     if (!/^\s*(?:\{[^{}]*)?return\b/.test(rest)) continue;
-    literalsOf(text.slice(p.open + 1, p.close), false, out);
+    // The claim may BE the returned value: `if (err) return <EmptyState …/>`.
+    // Then COND is really required TRUE, and reading it as a dominating early
+    // exit (required FALSE, below) is WRONG. That misreading is pre-existing
+    // and is deliberately NOT corrected here: correcting it moves three claims
+    // from safe to unguarded (agent-quality-panel.tsx:431 and :580,
+    // data-product-detail.tsx:783), which needs a baseline RAISE and an operator
+    // decision. What IS done: literals read that way are flagged, and E6 refuses
+    // them, so the new rule can never inherit the misreading.
+    const cond = text.slice(p.open + 1, p.close);
+    const inConsequent = claimIdx > p.close && claimIdx < consequentEnd(text, pairs, p.close + 1, scope.end);
+    if (inConsequent) {
+      const misread = literalsOf(cond, false, []);
+      for (const l of misread) out.push({ ...l, consequentMisread: true });
+      continue;
+    }
+    literalsOf(cond, false, out);
+    if (conds) conds.push(cond);
   }
 
   return resolved ? out : null;
 }
 
+/** End offset of the statement / block that starts at or after `from`. */
+function consequentEnd(text, pairs, from, hi) {
+  let i = from;
+  while (i < hi && /\s/.test(text[i])) i++;
+  if (text[i] === '{') {
+    const b = pairs.find((x) => x.open === i);
+    return b ? b.close : hi;
+  }
+  let depth = 0;
+  for (; i < hi; i++) {
+    const c = text[i];
+    if (c === '(' || c === '[' || c === '{') depth++;
+    else if (c === ')' || c === ']' || c === '}') { if (depth === 0) return i; depth--; }
+    else if (c === ';' && depth === 0) return i;
+  }
+  return hi;
+}
+
 /** Walk `&&` / `?:` structure inside [lo,hi) and record what the claim needs. */
-function collectFrom(text, lo, hi, claimIdx, out) {
+function collectFrom(text, lo, hi, claimIdx, out, conds = null) {
+  const need = (cond, polarity) => {
+    literalsOf(cond, polarity, out);
+    if (conds) conds.push(cond);
+  };
   const ops = depth0Ops(text, lo, hi).filter((o) => o.op === '&&' || o.op === '||' || o.op === '?' || o.op === ':');
   if (ops.length === 0) return;
 
@@ -881,14 +1230,14 @@ function collectFrom(text, lo, hi, claimIdx, out) {
       else if (o.op === ':') { level--; if (level === 0) { colon = o.at; break; } }
     }
     if (colon >= 0) {
-      if (claimIdx < q.at) { collectFrom(text, lo, q.at, claimIdx, out); return; }
+      if (claimIdx < q.at) { collectFrom(text, lo, q.at, claimIdx, out, conds); return; }
       const cond = text.slice(lo, q.at);
       if (claimIdx > q.at && claimIdx < colon) {
-        literalsOf(cond, true, out);
-        collectFrom(text, q.at + 1, colon, claimIdx, out);
+        need(cond, true);
+        collectFrom(text, q.at + 1, colon, claimIdx, out, conds);
       } else if (claimIdx > colon) {
-        literalsOf(cond, false, out);
-        collectFrom(text, colon + 1, hi, claimIdx, out);
+        need(cond, false);
+        collectFrom(text, colon + 1, hi, claimIdx, out, conds);
       }
       return;
     }
@@ -906,10 +1255,10 @@ function collectFrom(text, lo, hi, claimIdx, out) {
     let prev = lo;
     for (const o of ors) {
       if (o.at >= claimIdx) break;
-      literalsOf(text.slice(prev, o.at), false, out);
+      need(text.slice(prev, o.at), false);
       prev = o.at + 2;
     }
-    collectFrom(text, dLo, dHi, claimIdx, out);
+    collectFrom(text, dLo, dHi, claimIdx, out, conds);
     return;
   }
 
@@ -918,7 +1267,7 @@ function collectFrom(text, lo, hi, claimIdx, out) {
   for (const o of ops) {
     if (o.op !== '&&') continue;
     if (o.at >= claimIdx) break;
-    literalsOf(text.slice(prev, o.at), true, out);
+    need(text.slice(prev, o.at), true);
     prev = o.at + 2;
   }
 }
@@ -940,9 +1289,12 @@ function collectFrom(text, lo, hi, claimIdx, out) {
  * safe for a reason that would not survive review, so the rule was removed and
  * both surfaces are baselined instead.
  */
-function verdictFor(info, literals) {
+function verdictFor(info, literals, ctx = null) {
   for (const lit of literals) {
     const root = lit.root;
+    // A wrapped query outcome is E6's alone (below); the useState rules must
+    // never read it, whatever its root happens to be named.
+    if (lit.kind === 'query-error') continue;
     if (!root || !info.states.has(root)) continue;
     const isMemberChain = lit.expr !== root;
     // E1 / E5 — a nullish sentinel required truthy proves the read returned.
@@ -956,6 +1308,9 @@ function verdictFor(info, literals) {
       return { safe: true, why: `E4 ${lit.expr}` };
     }
   }
+  // E6 runs only after E1/E2/E4 have all declined, so no existing verdict or
+  // reason can change because it exists.
+  if (ctx && info.queries && info.queries.size) return queryErrorEvidence(info, literals, ctx);
   return { safe: false, why: null };
 }
 
@@ -987,6 +1342,8 @@ export function judgeSource(src, path = '<memory>') {
   for (const s of scopes) {
     const body = text.slice(s.start, s.end);
     helpers.set(s.name, {
+      start: s.start,
+      end: s.end,
       hasFetch: /\b(?:clientFetch|fetch)\s*\(/.test(body),
       hasFailure: /\bcatch\b/.test(body) || /\.\s*catch\s*\(/.test(body)
         || /\bif\s*\([^)]*!\s*[A-Za-z_$][\w$.?]*\.\s*ok\b/.test(body),
@@ -1025,12 +1382,13 @@ export function judgeSource(src, path = '<memory>') {
       });
       continue;
     }
-    const literals = requiredLiterals(text, pairs, scope, at);
+    const conds = [];
+    const literals = requiredLiterals(text, pairs, scope, at, conds);
     if (literals === null) {
       claims.push({ path, scope: scope.name, line, tag: m[1], verdict: 'unknown', why: 'unresolvable render structure' });
       continue;
     }
-    const v = verdictFor(info, literals);
+    const v = verdictFor(info, literals, { text, pairs, helpers, conds });
     claims.push({
       path,
       scope: scope.name,
@@ -1219,6 +1577,57 @@ export function PoliciesSection() {
 `;
 
 /**
+ * QUERY. finops-cockpit-pane.tsx's shape: the read is a react-query whose
+ * fetcher RESOLVES on a non-2xx (so `breakdownQ.isError` alone stays false
+ * through a 504), and a same-file wrapper folds the HTTP status back into
+ * `isError`. The claim sits on the not-errored side of `readState(breakdownQ)`
+ * and its emptiness test reads breakdownQ's own data. SAFE via E6.
+ */
+const CONTROL_QUERY = `'use client';
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { clientFetch } from '@/lib/client-fetch';
+
+async function getJson(url: string): Promise<any> {
+  const res = await clientFetch(url, { cache: 'no-store' });
+  const json = await res.json().catch(() => ({}));
+  return { ...json, status: res.status };
+}
+
+function readState(q: { isError: boolean; data: any }) {
+  const status = typeof q.data?.status === 'number' ? q.data.status : null;
+  const httpFailed = status !== null && status >= 400;
+  return { isError: q.isError || httpFailed };
+}
+
+export function BreakdownPane() {
+  const [dimension, setDimension] = useState('service');
+  const breakdownQ = useQuery({ queryKey: ['b', dimension], queryFn: () => getJson('/api/b') });
+  const budgetsQ = useQuery({ queryKey: ['u'], queryFn: () => getJson('/api/u') });
+  return (
+    <div>
+      {breakdownQ.isLoading ? <Spinner /> :
+        readState(breakdownQ).isError ? null :
+        (breakdownQ.data?.rows || []).length ? <Chart rows={breakdownQ.data.rows} /> : (
+          <EmptyState title="No breakdown data" />
+        )}
+    </div>
+  );
+}
+`;
+
+/**
+ * QUERY_SWAP. The QUERY control with ONE change: the emptiness test reads a
+ * DIFFERENT query's data. `readState(breakdownQ)` succeeding says nothing about
+ * budgetsQ, so the claim is UNGUARDED. This is the data-link half of E6; without
+ * it, any isError anywhere above a claim would launder it.
+ */
+const CONTROL_QUERY_SWAP = CONTROL_QUERY.replace(
+  '(breakdownQ.data?.rows || []).length ?',
+  '(budgetsQ.data?.rows || []).length ?',
+);
+
+/**
  * Each row: [name, source, expected verdicts in order, why-prefix per claim,
  * what a failure of this row means].
  */
@@ -1235,6 +1644,10 @@ const CONTROLS = [
     'A failure handler that writes an EMPTY value into the data state is no longer tracked, so a nullish sentinel it destroys is being accepted as proof the read succeeded.'],
   ['PAYLOAD', CONTROL_PAYLOAD, ['safe'], ['E4'],
     'A read delegated to a same-file helper is no longer resolved. Those components silently leave the judged population while the guard keeps printing OK.'],
+  ['QUERY', CONTROL_QUERY, ['safe'], ['E6'],
+    'A react-query read gated on its folded outcome is no longer recognised, so every correctly-gated useQuery surface reads as a violation again.'],
+  ['QUERY_SWAP', CONTROL_QUERY_SWAP, ['unguarded'], [null],
+    'E6 has lost its data link: a claim whose emptiness comes from one query is being accepted on ANOTHER query\'s success.'],
 ];
 
 function runControls() {
@@ -1295,7 +1708,7 @@ function main() {
     process.exit(2);
   }
   if (SELF_TEST) {
-    console.log('check-empty-claim-read-evidence: embedded controls PASS (6 fixtures: DEFECT, FIXED, ADOPTER, POLARITY, COERCION, PAYLOAD — verdict AND reason)');
+    console.log(`check-empty-claim-read-evidence: embedded controls PASS (${CONTROLS.length} fixtures: ${CONTROLS.map((c) => c[0]).join(', ')} — verdict AND reason)`);
     if (!REPORT) return;
   }
 
@@ -1417,7 +1830,7 @@ function main() {
     + `${safe.length} gated on read-success evidence, ${unguarded.length} not, `
     + `${unknown.length} unresolvable; all within baseline. `
     + `${noReadClaims} further claim(s) sit in components with no read of their own and are NOT judged. `
-    + '6 embedded controls intact.)',
+    + `${CONTROLS.length} embedded controls intact.)`,
   );
 }
 

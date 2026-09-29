@@ -149,3 +149,209 @@ export function Panel() {
 `;
   assert.deepEqual(verdicts(src), ['unguarded']);
 });
+
+// ---------------------------------------------------------------------------
+// E6 — a react-query outcome as read evidence (#4771).
+//
+// Every negative below is ONE edit away from a SAFE base, and `variant()`
+// throws if the edit did not apply — so no negative can silently be the base
+// itself and pass for the wrong reason. Each names the guard condition whose
+// removal turns it RED; the mutation run is in the PR body.
+// ---------------------------------------------------------------------------
+
+const variant = (base, from, to) => {
+  assert.ok(base.includes(from), `fixture edit did not apply: ${JSON.stringify(from)}`);
+  const out = base.replace(from, to);
+  assert.notEqual(out, base);
+  return out;
+};
+
+/** finops-cockpit-pane.tsx's shape: a RESOLVING fetcher + a same-file fold. */
+const WRAPPED = `'use client';
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+
+async function getJson(url: string): Promise<any> {
+  const res = await clientFetch(url, { cache: 'no-store' });
+  const json = await res.json().catch(() => ({}));
+  return { ...json, status: res.status };
+}
+
+function readState(q: { isError: boolean; data: any }) {
+  const status = typeof q.data?.status === 'number' ? q.data.status : null;
+  const httpFailed = status !== null && status >= 400;
+  return { isError: q.isError || httpFailed };
+}
+
+export function Pane() {
+  const [dimension, setDimension] = useState('service');
+  const rowsQ = useQuery({ queryKey: ['r', dimension], queryFn: () => getJson('/api/r') });
+  const otherQ = useQuery({ queryKey: ['o'], queryFn: () => getJson('/api/o') });
+  const rows = rowsQ.data?.rows || [];
+  return (
+    <div>
+      {rowsQ.isLoading ? <Spinner /> :
+        readState(rowsQ).isError ? null :
+        rows.length ? <Chart rows={rows} /> : (
+          <EmptyState title="No rows" />
+        )}
+    </div>
+  );
+}
+`;
+
+/** The loud shape: the queryFn itself throws on a not-ok body. */
+const LOUD = `'use client';
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+
+export function Panel() {
+  const [open, setOpen] = useState(false);
+  const q = useQuery({
+    queryKey: ['p'],
+    queryFn: async () => {
+      const r = await clientFetch('/api/p');
+      const j = await r.json();
+      if (!j?.ok) throw new Error(j?.error || 'load failed');
+      return j;
+    },
+  });
+  if (q.isLoading) return <Spinner />;
+  if (q.isError) return <MessageBar intent="error">failed</MessageBar>;
+  const data = q.data!;
+  return <div>{data.prompts.length === 0 ? <EmptyState title="No prompts" /> : <List items={data.prompts} />}</div>;
+}
+`;
+
+test('E6 POSITIVE: a folded react-query outcome gates the claim (the finops cockpit shape)', () => {
+  // Breaks if E6 stops recognising `W(Q).isError`, the fold, or the derived `rows`.
+  assert.deepEqual(verdicts(WRAPPED), ['safe']);
+  assert.match(String(reasons(WRAPPED)[0]), /^E6 !readState\(rowsQ\)\.isError$/);
+});
+
+/**
+ * WRAPPED with the emptiness test reading `rowsQ.data` DIRECTLY instead of via
+ * the derived `rows`. The negatives built on it are the ones where the data
+ * link HOLDS, so the condition they target is the only thing that can stop
+ * them — measured: on WRAPPED, three of them were also stopped by the data
+ * link and their own mutation arm stayed green.
+ */
+const WRAPPED_DIRECT = variant(WRAPPED,
+  'rows.length ? <Chart rows={rows} /> : (',
+  '(rowsQ.data?.rows || []).length ? <Chart rows={rowsQ.data.rows} /> : (');
+
+test('E6 POSITIVE: the same gate with the emptiness test reading the query data directly', () => {
+  assert.deepEqual(verdicts(WRAPPED_DIRECT), ['safe']);
+  assert.match(String(reasons(WRAPPED_DIRECT)[0]), /^E6 /);
+});
+
+test('E6 POSITIVE: a queryFn whose same-file helper throws on a not-ok response', () => {
+  // The fetcher is loud here, so bare `rowsQ.isError` IS complete. Breaks if E6
+  // stops following one same-file helper from the queryFn.
+  const loudHelper = variant(
+    variant(WRAPPED, '  const json = await res.json().catch(() => ({}));',
+      "  if (!res.ok) throw new Error('HTTP ' + res.status);\n  const json = await res.json().catch(() => ({}));"),
+    'readState(rowsQ).isError ? null :', 'rowsQ.isError ? null :');
+  assert.deepEqual(verdicts(loudHelper), ['safe']);
+  assert.match(String(reasons(loudHelper)[0]), /^E6 !rowsQ\.isError$/);
+});
+
+test('E6 POSITIVE: a queryFn that throws on a not-ok body makes bare q.isError evidence', () => {
+  // Breaks if the loud-queryFn proof or the early-return `if (q.isError)` path is lost.
+  assert.deepEqual(verdicts(LOUD), ['safe']);
+  assert.match(String(reasons(LOUD)[0]), /^E6 !q\.isError$/);
+});
+
+test('E6 NEGATIVE: a claim gated on a DIFFERENT query\'s isError is unguarded', () => {
+  // otherQ succeeding says nothing about rowsQ. Both spellings of the claim's
+  // data are pinned: through the derived `rows` (RED if a const derived from
+  // ANY query is accepted) and reading rowsQ.data directly (RED if ANY query's
+  // data is accepted).
+  const viaDerived = variant(WRAPPED, 'readState(rowsQ).isError ? null :', 'readState(otherQ).isError ? null :');
+  assert.deepEqual(verdicts(viaDerived), ['unguarded']);
+  const direct = variant(WRAPPED_DIRECT, 'readState(rowsQ).isError ? null :', 'readState(otherQ).isError ? null :');
+  assert.deepEqual(verdicts(direct), ['unguarded']);
+});
+
+test('E6 NEGATIVE: a claim with no isError gate at all is unguarded', () => {
+  // RED if E6 accepts the data link alone, without a required-false isError.
+  const src = variant(WRAPPED, '        readState(rowsQ).isError ? null :\n', '');
+  assert.deepEqual(verdicts(src), ['unguarded']);
+});
+
+test('E6 NEGATIVE: a claim on the ERRORED side of the gate is unguarded (ternary)', () => {
+  // "On error, and no rows, say empty" — the claim renders ONLY when the read
+  // failed. The data link HOLDS (`rows.length` is on its path), so only the
+  // polarity requirement can stop it: RED if E6 accepts a required-TRUE isError.
+  const src = variant(WRAPPED,
+    'readState(rowsQ).isError ? null :\n        rows.length ? <Chart rows={rows} /> : (\n          <EmptyState title="No rows" />\n        )',
+    'readState(rowsQ).isError ? (rows.length ? null : <EmptyState title="No rows" />) : <Chart rows={rows} />');
+  assert.deepEqual(verdicts(src), ['unguarded']);
+});
+
+test('E6 NEGATIVE: a claim that IS the early return of `if (q.isError)` is unguarded', () => {
+  // The early-return pass misreads this COND as required-false (pre-existing,
+  // disclosed in the guard header). The data link HOLDS via the earlier
+  // `if (…length) return`, so only E6's refusal of flagged literals stops it:
+  // RED if that refusal goes.
+  const src = variant(LOUD,
+    'if (q.isError) return <MessageBar intent="error">failed</MessageBar>;',
+    'if ((q.data?.prompts || []).length) return <List items={q.data.prompts} />;\n  if (q.isError) return <EmptyState title="No prompts" />;');
+  const got = judgeSource(src, '<test>').claims.sort((a, b) => a.line - b.line);
+  assert.equal(got.length, 2);
+  assert.equal(got[0].verdict, 'unguarded', `the errored-side claim must not be safe: ${JSON.stringify(got[0])}`);
+});
+
+test('E6 NEGATIVE: readState over something that is NOT a useQuery result is unguarded', () => {
+  // Built on WRAPPED_DIRECT so the data link holds — RED if E6 stops requiring
+  // `const Q = useQuery(…)` in the same component.
+  const src = variant(WRAPPED_DIRECT,
+    "const rowsQ = useQuery({ queryKey: ['r', dimension], queryFn: () => getJson('/api/r') });",
+    "const rowsQ = useCachedRead(['r', dimension], () => getJson('/api/r'));");
+  assert.deepEqual(verdicts(src), ['unguarded']);
+});
+
+test('E6 NEGATIVE: bare q.isError over a RESOLVING fetcher is unguarded', () => {
+  // getJson resolves on a 504, so rowsQ.isError stays false — the exact C2 arm
+  // in #4771. RED if E6 stops proving the queryFn rejects on failure.
+  const src = variant(WRAPPED, 'readState(rowsQ).isError ? null :', 'rowsQ.isError ? null :');
+  assert.deepEqual(verdicts(src), ['unguarded']);
+});
+
+test('E6 NEGATIVE: a wrapper that DROPS the query\'s own isError is unguarded', () => {
+  // A rejected fetch would then read as not-errored. RED if E6 stops requiring
+  // `isError: <param>.isError || …`.
+  const src = variant(WRAPPED, 'return { isError: q.isError || httpFailed };', 'return { isError: httpFailed };');
+  assert.deepEqual(verdicts(src), ['unguarded']);
+});
+
+test('E6 NEGATIVE: a wrapper with no HTTP fold, over a RESOLVING fetcher, is unguarded', () => {
+  // `q.isError || false` adds nothing, and getJson resolves on a 504. RED if a
+  // wrapper that only passes isError through is accepted without a loud queryFn.
+  const src = variant(WRAPPED, 'return { isError: q.isError || httpFailed };', 'return { isError: q.isError || false };');
+  assert.deepEqual(verdicts(src), ['unguarded']);
+});
+
+test('E6 NEGATIVE: a wrapper whose status is NOT read from the query data is unguarded', () => {
+  // The fold compares SOME status against 400, but not the response's. RED if
+  // E6 stops tracing `status` back to `<param>.data`.
+  const src = variant(WRAPPED,
+    "const status = typeof q.data?.status === 'number' ? q.data.status : null;",
+    'const status = Number(lastKnownStatus);');
+  assert.deepEqual(verdicts(src), ['unguarded']);
+});
+
+test('E6 NEGATIVE: a loud queryFn whose catch SWALLOWS the failure is unguarded', () => {
+  // The throw is caught and turned back into data. RED if the swallow check goes.
+  const src = variant(LOUD,
+    "      const r = await clientFetch('/api/p');\n      const j = await r.json();\n      if (!j?.ok) throw new Error(j?.error || 'load failed');\n      return j;",
+    "      try {\n        const r = await clientFetch('/api/p');\n        const j = await r.json();\n        if (!j?.ok) throw new Error(j?.error || 'load failed');\n        return j;\n      } catch (e) { return { prompts: [] }; }");
+  assert.deepEqual(verdicts(src), ['unguarded']);
+});
+
+test('E6 NEGATIVE: an emptiness test over a const that mixes in useState is unguarded', () => {
+  // `dimension` is state, so `rows` is no longer PURELY rowsQ's data. RED if
+  // derived consts stop refusing state in their initialiser.
+  const src = variant(WRAPPED, 'const rows = rowsQ.data?.rows || [];', 'const rows = rowsQ.data?.rows || dimension;');
+  assert.deepEqual(verdicts(src), ['unguarded']);
+});
