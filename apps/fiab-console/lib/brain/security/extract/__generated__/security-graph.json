@@ -50241,14 +50241,14 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-29T20:09:47.174Z",
-      "commit": "6e714b015c565455963c0ebd66006107823f9ef8",
-      "inputsDigest": "87a37f1dbaeac2ff",
-      "filesScanned": 2124,
+      "generatedAt": "2026-09-29T21:15:08.112Z",
+      "commit": "b06c1967babce4cd3ac291a063d8f6115fb0026e",
+      "inputsDigest": "d00a90dbe86ba82a",
+      "filesScanned": 2125,
       "scanScopes": [
         {
           "scope": "app/**/route.ts (console BFF routes)",
-          "filesMatched": 1700,
+          "filesMatched": 1701,
           "nodesEmitted": 708
         },
         {

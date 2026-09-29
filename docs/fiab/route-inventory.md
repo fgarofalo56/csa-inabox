@@ -13,10 +13,10 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1694 |
+| Total routes | 1695 |
 | Public (no session) | 59 |
 | Session-only | 643 |
-| Owner-scoped | 681 |
+| Owner-scoped | 682 |
 | Admin | 311 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 499 |
@@ -1860,6 +1860,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
+| `lakehouse/access/route.ts` | GET | owner-scoped |  | Cosmos, Microsoft Graph |
 | `lakehouse/ai-clean-suggest/route.ts` | POST | session-only | ● | AML, ARM, Azure AI Services, Azure Cache for Redis, Azure OpenAI, Cosmos |
 | `lakehouse/containers/route.ts` | GET | session-only |  | ADLS, ARM, Azure Storage, Managed Identity |
 | `lakehouse/download/route.ts` | GET | owner-scoped |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Purview |
