@@ -113,7 +113,8 @@ export function PreviewPane() {
                 columnStats={columnStats}
                 statsLoading={statsLoading}
                 statsError={statsError}
-                previewSource={activeContainer ? {
+                previewSource={activeContainer && !ctx.isNewItem ? {
+                  lakehouseId: ctx.id,
                   container: activeContainer,
                   path: activePath.name,
                   pool: settings.defaultSparkPool || undefined,

@@ -10,16 +10,30 @@
  *
  * Uses the SAME Livy interactive-session plumbing as /api/lakehouse/table-stats
  * (createLivySessionAsync → poll to idle → submitLivyStatement → getLivyStatement),
- * so it inherits the cold-pool async contract: `jobId = "<pool>:<sid>:<stmtId>"`,
- * "" stmtId while the pool warms, and the client polls every 3s.
+ * so it inherits the cold-pool async contract: a kick-off may answer `warming`
+ * (no statement yet) and the client polls every 3s.
  *
  *   POST /api/lakehouse/transform-preview
- *     body { container, path, pool?, code, sampleRows?, previewRows? }
+ *     body { lakehouseId, container?, path, pool?, code, sampleRows?, previewRows? }
  *     → 200 { ok, status:'warming'|'running', jobId }        (kick-off)
  *
- *   GET /api/lakehouse/transform-preview?jobId=&container=&path=&code=&sampleRows=&previewRows=
+ *   GET /api/lakehouse/transform-preview?lakehouseId=&jobId=&code=&sampleRows=&previewRows=
  *     → 200 { ok, status:'available', columns, rows, rowCount }   (poll → done)
  *     → 200 { ok, status:'warming'|'running', jobId }
+ *     `code` is read only while the job is `warming`, and must be the code the
+ *     kick-off accepted.
+ *
+ * Item scope. Every call names the lakehouse item (`lakehouseId`) and needs
+ * EDIT rights on it (`authorizeLakehouse` with `write`): the candidate is
+ * Python that runs in a Spark session under the workspace's Spark identity, so
+ * running it is an edit-level action even though the preview itself writes
+ * nothing. The source it samples is confined to the item's own container and
+ * root (`scopeItemPath`), and the `jobId` is a signed handle (`../_lib/job-handle`)
+ * that binds the Livy job to that item, this route, the principal, and the
+ * scoped container + path — a poll reads the path from the handle, never from
+ * the request. What the candidate itself can reach from inside the session is
+ * what the workspace's Spark identity can reach; the item scope governs the
+ * sampled source and who may run a preview.
  *
  * Real Azure data plane: ADLS Gen2 (abfss) + Synapse Spark (Livy REST) via
  * synapse-dev-client. No Fabric / OneLake. Honest 503 gate when the Synapse
@@ -35,6 +49,13 @@ import {
   createLivySessionAsync, getLivySession, submitLivyStatement, getLivyStatement,
 } from '@/lib/azure/synapse-dev-client';
 import { withSession } from '@/lib/api/route-toolkit';
+import { apiBadRequest, apiNotFound } from '@/lib/api/respond';
+import type { SessionPayload } from '@/lib/auth/session';
+import { authorizeLakehouse, scopeItemPath } from '../_lib/item-scope';
+import {
+  SPARK_POOL_NAME_RE, hashJobCode, mintLakehouseJobHandle, verifyLakehouseJobHandle,
+  type LakehouseJobScope,
+} from '../_lib/job-handle';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -149,37 +170,19 @@ function parsePreviewOutput(output: any): PreviewOut | null {
 
 const DEAD_SESSION = new Set(['error', 'dead', 'killed', 'shutting_down', 'success']);
 
-/** Shared kick-off used by both POST (fresh) and the GET warm-up branch. */
+/** The candidate code, trimmed and capped at MAX_CODE_CHARS. */
 function readCode(v: unknown): string {
   const c = typeof v === 'string' ? v.trim() : '';
   return c.slice(0, MAX_CODE_CHARS);
 }
 
-async function kickoff(container: string, path: string, poolParam: string, code: string, sampleRows: number, previewRows: number): Promise<NextResponse> {
-  if (!container || !path) {
-    return NextResponse.json({ ok: false, error: 'container and path are required' }, { status: 400 });
-  }
-  if (container && !(KNOWN_CONTAINERS as readonly string[]).includes(container)) {
-    return NextResponse.json({ ok: false, error: `unknown container: ${container}` }, { status: 404 });
-  }
-  if (!code) {
-    return NextResponse.json({ ok: false, error: 'code is required' }, { status: 400 });
-  }
-  const abfss = abfssFor(container, path);
-  if ('error' in abfss) {
-    return NextResponse.json({ ok: false, code: 'not_configured', error: abfss.error }, { status: 503 });
-  }
-  const pool = poolParam || DEFAULT_POOL;
-  const fresh = await createLivySessionAsync(pool, 'pyspark', `loom-wrangler-${Date.now()}`);
-  const sessionId = fresh.id;
-  const s = await getLivySession(pool, sessionId);
-  if (s.state !== 'idle') {
-    return NextResponse.json({ ok: true, status: 'warming', jobId: `${pool}:${sessionId}:`, sessionState: s.state });
-  }
-  const stmt = await submitLivyStatement(pool, sessionId, {
-    code: buildPreviewCode(abfss.abfss, abfss.ext, code, sampleRows, previewRows), kind: 'pyspark',
-  });
-  return NextResponse.json({ ok: true, status: 'running', jobId: `${pool}:${sessionId}:${stmt.id}` });
+const READ_ONLY_MESSAGE =
+  'Your role on this lakehouse is read-only. Previewing a transform runs its code on the Spark pool, so it needs '
+  + 'a workspace Member/Admin role or an item grant that includes Edit.';
+
+/** The job handle's scope for this request: this item, this route, this principal. */
+function jobScope(session: SessionPayload, lakehouseId: string): LakehouseJobScope {
+  return { lakehouseId, purpose: 'transform-preview', oid: String(session.claims.oid || '') };
 }
 
 export const POST = withSession(async (req: NextRequest, { session }) => {
@@ -187,6 +190,7 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
 
   let body: any;
   try { body = await req.json(); } catch { body = {}; }
+  const lakehouseId = String(body?.lakehouseId || '').trim();
   const container = String(body?.container || '');
   const path = String(body?.path || '');
   const poolParam = String(body?.pool || '').trim();
@@ -194,43 +198,74 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   const sampleRows = Number.isFinite(body?.sampleRows) ? Math.floor(body.sampleRows) : 5000;
   const previewRows = Number.isFinite(body?.previewRows) ? Math.floor(body.previewRows) : 50;
 
+  if (!lakehouseId) {
+    return apiBadRequest('lakehouseId is required: a transform preview runs against a file or table of one lakehouse.');
+  }
+  if (!path) return apiBadRequest('path is required');
+  if (!code) return apiBadRequest('code is required');
+  const pool = poolParam || DEFAULT_POOL;
+  if (!SPARK_POOL_NAME_RE.test(pool)) {
+    return apiBadRequest('pool must be a Spark pool name: a letter, then letters or digits, 15 characters at most.');
+  }
+
   try {
-    return await kickoff(container, path, poolParam, code, sampleRows, previewRows);
+    const scoped = await scopeItemPath(
+      session,
+      { lakehouseId, container, rawPath: path },
+      { write: true, readOnlyMessage: READ_ONLY_MESSAGE, knownContainers: KNOWN_CONTAINERS },
+    );
+    if (scoped instanceof NextResponse) return scoped;
+
+    const abfss = abfssFor(scoped.container, scoped.path);
+    if ('error' in abfss) {
+      return NextResponse.json({ ok: false, code: 'not_configured', error: abfss.error }, { status: 503 });
+    }
+    const scope = jobScope(session, lakehouseId);
+    const fresh = await createLivySessionAsync(pool, 'pyspark', `loom-wrangler-${Date.now()}`);
+    const sessionId = fresh.id;
+    const s = await getLivySession(pool, sessionId);
+    const base = { pool, sessionId, container: scoped.container, path: scoped.path, codeHash: hashJobCode(code) };
+    if (s.state !== 'idle') {
+      return NextResponse.json({
+        ok: true, status: 'warming', sessionState: s.state,
+        jobId: mintLakehouseJobHandle(scope, { ...base, stmtId: null }),
+      });
+    }
+    const stmt = await submitLivyStatement(pool, sessionId, {
+      code: buildPreviewCode(abfss.abfss, abfss.ext, code, sampleRows, previewRows), kind: 'pyspark',
+    });
+    return NextResponse.json({
+      ok: true, status: 'running', jobId: mintLakehouseJobHandle(scope, { ...base, stmtId: stmt.id }),
+    });
   } catch (e: any) {
     return NextResponse.json({ ok: false, status: 'error', error: e?.message || String(e) }, { status: 502 });
   }
 });
 
-export const GET = withSession(async (req: NextRequest) => {
+export const GET = withSession(async (req: NextRequest, { session }) => {
   const g = gate(); if (g) return g;
 
   const sp = req.nextUrl.searchParams;
+  const lakehouseId = (sp.get('lakehouseId') || '').trim();
   const jobId = sp.get('jobId') || '';
-  const container = sp.get('container') || '';
-  const path = sp.get('path') || '';
-  const poolParam = sp.get('pool')?.trim() || '';
   const code = readCode(sp.get('code'));
   const sampleRows = Number(sp.get('sampleRows')) || 5000;
   const previewRows = Number(sp.get('previewRows')) || 50;
 
-  if (container && !(KNOWN_CONTAINERS as readonly string[]).includes(container)) {
-    return NextResponse.json({ ok: false, error: `unknown container: ${container}` }, { status: 404 });
-  }
+  if (!lakehouseId) return apiBadRequest('lakehouseId is required');
+  if (!jobId) return apiBadRequest('jobId is required; start a transform preview with POST.');
 
   try {
-    if (!jobId) {
-      // Allow a GET-based kick-off too (symmetry with table-stats); POST is primary.
-      return await kickoff(container, path, poolParam, code, sampleRows, previewRows);
-    }
-
-    const [pool, sidStr, stidStr] = jobId.split(':');
-    const sessionId = Number(sidStr);
-    if (!pool || !Number.isFinite(sessionId)) {
-      return NextResponse.json({ ok: false, error: 'malformed jobId' }, { status: 400 });
-    }
+    const access = await authorizeLakehouse(session, lakehouseId, { write: true, readOnlyMessage: READ_ONLY_MESSAGE });
+    if (access instanceof NextResponse) return access;
+    const job = verifyLakehouseJobHandle(jobScope(session, lakehouseId), jobId);
+    // One answer for a malformed, expired, or other-item handle: none of them
+    // names a job this request may poll.
+    if (!job) return apiNotFound('transform preview job not found; start a new preview.');
+    const { pool, sessionId } = job;
 
     // No statement yet — pool was warming at kick-off. Submit once idle.
-    if (!stidStr) {
+    if (job.stmtId === null) {
       const s = await getLivySession(pool, sessionId);
       if (DEAD_SESSION.has(String(s.state))) {
         return NextResponse.json({ ok: false, status: 'error', error: `Spark session ${sessionId} is ${s.state}.` });
@@ -238,20 +273,26 @@ export const GET = withSession(async (req: NextRequest) => {
       if (s.state !== 'idle') {
         return NextResponse.json({ ok: true, status: 'warming', jobId, sessionState: s.state });
       }
-      if (!container || !path || !code) {
-        return NextResponse.json({ ok: false, error: 'container, path and code required to submit the transform' }, { status: 400 });
+      if (!code) {
+        return apiBadRequest('code is required to submit the transform once the Spark session is ready.');
       }
-      const abfss = abfssFor(container, path);
+      if (hashJobCode(code) !== job.codeHash) {
+        return apiBadRequest('code does not match the transform this preview was started with; start a new preview.');
+      }
+      const abfss = abfssFor(job.container, job.path);
       if ('error' in abfss) {
         return NextResponse.json({ ok: false, status: 'error', code: 'not_configured', error: abfss.error }, { status: 503 });
       }
       const stmt = await submitLivyStatement(pool, sessionId, {
         code: buildPreviewCode(abfss.abfss, abfss.ext, code, sampleRows, previewRows), kind: 'pyspark',
       });
-      return NextResponse.json({ ok: true, status: 'running', jobId: `${pool}:${sessionId}:${stmt.id}` });
+      return NextResponse.json({
+        ok: true, status: 'running',
+        jobId: mintLakehouseJobHandle(jobScope(session, lakehouseId), { ...job, stmtId: stmt.id }),
+      });
     }
 
-    const stmtId = Number(stidStr);
+    const stmtId = job.stmtId;
     const st = await getLivyStatement(pool, sessionId, stmtId);
     const state = String(st.state);
     if (state === 'available') {

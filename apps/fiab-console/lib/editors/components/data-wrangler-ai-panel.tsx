@@ -39,6 +39,8 @@ import type { ColStat } from './delta-preview-grid-utils';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 export interface PreviewSource {
+  /** The lakehouse item the source belongs to; the preview is scoped to it. */
+  lakehouseId: string;
   container: string;
   path: string;
   pool?: string;
@@ -267,12 +269,14 @@ export function DataWranglerAiPanel(props: DataWranglerAiPanelProps) {
   }, []);
   useEffect(() => () => stopPolling(), [stopPolling]);
 
-  const pollPreview = useCallback(async (jobId: string) => {
+  const pollPreview = useCallback(async (jobId: string, code: string, warming: boolean) => {
     if (!previewSource) return;
     try {
+      // The handle names the source; `code` is only needed while the job is
+      // warming (the statement is submitted once the Spark session is ready).
       const qs = new URLSearchParams({
-        jobId, container: previewSource.container, path: previewSource.path,
-        ...(previewSource.pool ? { pool: previewSource.pool } : {}),
+        lakehouseId: previewSource.lakehouseId, jobId,
+        ...(warming ? { code } : {}),
       });
       const r = await clientFetch(`/api/lakehouse/transform-preview?${qs.toString()}`);
       const j = await r.json();
@@ -292,7 +296,7 @@ export function DataWranglerAiPanel(props: DataWranglerAiPanelProps) {
       }
       // warming / running — keep polling.
       setPreviewMsg(j.status === 'warming' ? 'Warming the Spark pool…' : 'Running transform on a sample…');
-      pollRef.current = window.setTimeout(() => void pollPreview(j.jobId || jobId), 3000);
+      pollRef.current = window.setTimeout(() => void pollPreview(j.jobId || jobId, code, j.status === 'warming'), 3000);
     } catch (e: any) {
       setPreviewStatus('error'); setPreviewMsg(e?.message || String(e));
     }
@@ -309,6 +313,7 @@ export function DataWranglerAiPanel(props: DataWranglerAiPanelProps) {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
+          lakehouseId: previewSource.lakehouseId,
           container: previewSource.container, path: previewSource.path,
           pool: previewSource.pool, code,
         }),
@@ -318,8 +323,9 @@ export function DataWranglerAiPanel(props: DataWranglerAiPanelProps) {
         if (r.status === 503 && j.code === 'not_configured') { setPreviewStatus('error'); setPreviewGate(j.error); return; }
         setPreviewStatus('error'); setPreviewMsg(j.error || `HTTP ${r.status}`); return;
       }
-      if (j.status === 'available') { void pollPreview(j.jobId); return; }
-      pollRef.current = window.setTimeout(() => void pollPreview(j.jobId), 2000);
+      const warming = j.status === 'warming';
+      if (j.status === 'available') { void pollPreview(j.jobId, code, false); return; }
+      pollRef.current = window.setTimeout(() => void pollPreview(j.jobId, code, warming), 2000);
     } catch (e: any) {
       setPreviewStatus('error'); setPreviewMsg(e?.message || String(e));
     }
