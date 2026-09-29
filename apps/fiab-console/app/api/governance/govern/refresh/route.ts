@@ -22,16 +22,43 @@
  * Honest gate: when LOOM_POSTURE_FUNCTION_URL is unset the route returns 200
  * with `{ ok:false, gate:'not_configured', ... }` so the UI shows a Fluent
  * MessageBar (and still renders live-computed posture). No silent failure.
+ *
+ * The same gate fires when the URL IS set but LOOM_POSTURE_FUNCTION_KEY is not,
+ * distinguished by `gateReason: 'key_not_bound'` and pointed at the admin-plane
+ * module that binds the key (not at the Function module, which already ran).
+ * The Function's `posture-refresh` route is `AuthLevel.FUNCTION`
+ * (azure-functions/posture-refresh/function_app.py), so an unkeyed call is
+ * rejected 401 — and because the dispatch is fire-and-forget that rejection
+ * was swallowed and the route answered `{ ok:true, dispatched:true }`: a
+ * success claim for a refresh that could never run. The key is bound only when
+ * admin-plane `postureFunctionKeyBound` holds: the root deploy param
+ * loomPostureFunctionUrl is set AND observabilityConfig.postureFunctionKeyEnabled
+ * is true, the latter asserting the Key Vault secret exists. So "URL without
+ * key" is a real, expected deploy state, not a misconfiguration. Nothing sets
+ * either value at deploy time yet (#4781).
  */
 import { NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST() {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+const POSTURE_FUNCTION_MODULE = 'azure-functions/posture-refresh/deploy/main.bicep';
+// The module whose `postureFunctionKeyBound` (driven by the loomPostureFunctionUrl
+// param and `observabilityConfig.postureFunctionKeyEnabled`) binds the key onto
+// this Console. On the key branch the Function URL is known, so pointing at the
+// Function module would send the operator to redeploy something that neither
+// stores the key nor sets the flag (#4770 review, deploy-integrity R6/R7).
+const KEY_BINDING_MODULE = 'platform/fiab/bicep/modules/admin-plane/main.bicep';
+
+/**
+ * Which half of the pre-warm is missing. `lib/panes/govern-owner.tsx` keys its
+ * MessageBar title on this, because "not provisioned" is false once the URL is
+ * set. Kept module-local: a route file exports only its handlers.
+ */
+type PostureRefreshGateReason = 'function_not_provisioned' | 'key_not_bound';
+
+export const POST = withSession(async (_req, { session: s }) => {
 
   const functionUrl = (process.env.LOOM_POSTURE_FUNCTION_URL || '').trim().replace(/\/$/, '');
   if (!functionUrl) {
@@ -39,10 +66,39 @@ export async function POST() {
     return NextResponse.json({
       ok: false,
       gate: 'not_configured',
+      gateReason: 'function_not_provisioned' satisfies PostureRefreshGateReason,
       missingEnvVar: 'LOOM_POSTURE_FUNCTION_URL',
-      bicepModule: 'azure-functions/posture-refresh/deploy/main.bicep',
+      bicepModule: POSTURE_FUNCTION_MODULE,
       message:
         'On-open posture refresh Function not provisioned. Deploy azure-functions/posture-refresh and set LOOM_POSTURE_FUNCTION_URL. Posture below is computed live from Cosmos.',
+    });
+  }
+
+  const functionKey = (process.env.LOOM_POSTURE_FUNCTION_KEY || '').trim();
+  if (!functionKey) {
+    // URL known, host key not bound: do NOT dispatch an unkeyed call the
+    // Function would reject. The remediation names every condition the
+    // admin-plane `postureFunctionKeyBound` needs, not the Function module.
+    //
+    // Three conditions, not two (#4770 review). The admin-plane var reads the
+    // DEPLOY PARAM loomPostureFunctionUrl, and this env var does not prove that
+    // param was set: the day-one writer of LOOM_POSTURE_FUNCTION_URL is an
+    // out-of-band `az containerapp update` (csa-loom-post-deploy-bootstrap.yml
+    // Commercial, gov-provision-posture.yml Gov), and no shipped bicepparam
+    // sets the param. So the likeliest state behind this branch is "param
+    // empty". An operator who only stored the key and set the flag would
+    // redeploy, still get no binding, and, if that deploy renders the Console,
+    // lose the out-of-band URL as well.
+    // This route can read neither Key Vault nor the deploy params, so the
+    // message says it cannot tell which condition is missing (R7).
+    return NextResponse.json({
+      ok: false,
+      gate: 'not_configured',
+      gateReason: 'key_not_bound' satisfies PostureRefreshGateReason,
+      missingEnvVar: 'LOOM_POSTURE_FUNCTION_KEY',
+      bicepModule: KEY_BINDING_MODULE,
+      message:
+        'On-open posture pre-warm unavailable: the posture-refresh Function URL is configured (LOOM_POSTURE_FUNCTION_URL is set), but the Function host key is not bound to this Console, and the Function accepts only keyed calls, so no refresh was dispatched. The deploy binds the key only when ALL THREE of these hold: (1) the Function host key is stored in Key Vault as loom-posture-function-key (the loomPostureFunctionKeySecretName default); (2) loomPostureFunctionUrl is passed as a deploy parameter to platform/fiab/bicep/main.bicep (a URL set on the Console with az containerapp update does not count, and a full deploy that renders the Console without that parameter blanks it); (3) the deploy sets observabilityConfig.postureFunctionKeyEnabled to true. This route cannot read Key Vault or the deploy parameters, so it cannot tell which of these is missing. Posture below is computed live from Cosmos.',
     });
   }
 
@@ -59,7 +115,7 @@ export async function POST() {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-functions-key': process.env.LOOM_POSTURE_FUNCTION_KEY || '',
+      'x-functions-key': functionKey,
     },
     body: JSON.stringify(payload),
     // Short timeout guard so a hung Function never holds a socket on this node.
@@ -69,4 +125,4 @@ export async function POST() {
   });
 
   return NextResponse.json({ ok: true, dispatched: true, scope: 'owner' });
-}
+});
