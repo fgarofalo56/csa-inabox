@@ -216,6 +216,50 @@ export function lakehouseRootPath(displayName: string, itemId: string): string {
   return `${LAKEHOUSE_ROOT_PREFIX}${safeAdlsRelPath(displayName) || itemId}`;
 }
 
+/**
+ * The containers a NEW lakehouse root prefers, in order: `landing` (the raw
+ * zone, a new lakehouse's natural home — the installer provisioner at
+ * `lib/install/provisioners/lakehouse.ts` makes the same choice), then
+ * `bronze`. Anything else configured follows in the order given.
+ */
+export const LAKEHOUSE_CONTAINER_PREFERENCE = ['landing', 'bronze'] as const;
+
+/**
+ * THE container decision for a lakehouse root (#4759) — ONE function, read by
+ * both halves of the binding:
+ *
+ *   - `lakehouseAutoBind.preflight` (auto-bind-providers.ts) takes element [0]
+ *     as the container it CREATES the root in;
+ *   - `resolveLakehouseAbfss` (lakehouse-abfss.ts) walks the same order to FIND
+ *     a root no binding was persisted for.
+ *
+ * #4759 was these two disagreeing: auto-bind created `landing/lakehouses/<n>`
+ * while the resolver's fallback walked `KNOWN_CONTAINERS` and answered
+ * `bronze`, so every freshly created lakehouse opened on a 404.
+ *
+ * It lives HERE, in a module with no imports, because the resolver is reached
+ * from a dozen routes: importing it from the provider module would pull every
+ * provider's backend into each of them (`docs/fiab/route-inventory.md`).
+ *
+ * Order: `pinned` (if configured), then {@link LAKEHOUSE_CONTAINER_PREFERENCE},
+ * then every other configured container in the order given. Only CONFIGURED
+ * containers are returned; an empty result means there is nowhere for a
+ * lakehouse to live.
+ */
+export function lakehouseContainerOrder(
+  configured: readonly string[],
+  pinned?: string | null,
+): string[] {
+  const order: string[] = [];
+  const push = (c: string | null | undefined) => {
+    if (c && configured.includes(c) && !order.includes(c)) order.push(c);
+  };
+  push(pinned);
+  for (const c of LAKEHOUSE_CONTAINER_PREFERENCE) push(c);
+  for (const c of configured) push(c);
+  return order;
+}
+
 // ---------------------------------------------------------------------------
 // Named wrappers — THE call sites.
 //

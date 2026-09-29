@@ -764,10 +764,11 @@ bind_console_principal() {  bind_principal="$1"
 # outside the container ever needs it.
 #
 # HONEST ABOUT WHAT THIS DOES NOT FIX. See announce_iceberg_list_ns_defect below:
-# provisioning the warehouse does NOT make the Iceberg REST surface readable by
-# the Console, because upstream gates every one of those routes on metastore
-# OWNER. That is stated on every boot rather than left to be rediscovered from a
-# 403.
+# LIST-namespaces is still the upstream metastore-OWNER route and still 500s with
+# authorization enabled. The other Iceberg REST read routes are readable by the
+# Console only because this image backports upstream's scoped Iceberg
+# authorization (#3339, Dockerfile stage 1b) AND the grants below include
+# USE SCHEMA; on the unpatched upstream image they demand metastore OWNER.
 # ---------------------------------------------------------------------------
 
 # The catalog name backing the Iceberg namespaces. Emitted by
@@ -835,9 +836,12 @@ announce_warehouse_plan() {
 # routes. IcebergRestCatalogService.listNamespaces reaches SchemaService.listSchemas
 # IN-PROCESS, under the Iceberg route's context, where that attribute was never set
 # — so it throws INTERNAL. With authorization DISABLED the whole body is skipped,
-# which is the only reason the bare image looked healthy. Every OTHER Iceberg route
-# is unaffected (namespace GET, table list, table load and register all return 200).
-# v0.5.1 is the newest release on Maven Central, so there is no version to bump to.
+# which is the only reason the bare image looked healthy. No OTHER Iceberg route
+# has this defect: namespace GET, table list and table load answer 200 to a caller
+# holding the grants (iceberg-e2e.sh J/K/N2; since #3339 that caller is the
+# Console's own principal). v0.6.0, the newest release on Maven Central
+# (2026-08-19), carries the same in-process listSchemas call in its source (read,
+# not run), so there is no release to bump to.
 #
 # The Console works around it by serving namespaces from the Unity schemas API on
 # this same server (lib/azure/iceberg-catalog-client.ts listNamespaces). An
@@ -845,7 +849,7 @@ announce_warehouse_plan() {
 # route.
 announce_iceberg_list_ns_defect() {
   [ -n "$(unity_warehouse)" ] || return 0
-  echo "[loom-unity] ICEBERG-LIST-NAMESPACES-DEFECT: GET <iceberg>/v1/catalogs/<warehouse>/namespaces answers HTTP 500 'Authorization filter not initialized' on this image, for EVERY principal including the metastore owner. Cause: an UPSTREAM defect in unitycatalog v0.5.0 AND v0.5.1 that fires whenever server.authorization is enabled — IcebergRestCatalogService.listNamespaces reaches SchemaService.listSchemas in-process, under a request context where UnityAccessDecorator never installed the RESULT_FILTER attribute that AuthorizedService.applyResponseFilter requires. It is NOT caused by the #1603 overlay this image applies: measured with the overlay removed and authorization still enabled, the same call returns the same 500, and the overlaid classes are byte-identical in both releases. The same call with authorization DISABLED returns 200, which is the only reason the bare upstream image looked healthy. Every other Iceberg route is unaffected. The Console serves namespaces from /api/2.1/unity-catalog/schemas instead; a DIRECT external-engine LIST-namespaces call still fails. See docs/fiab/parity/external-engine-federation.md." >&2
+  echo "[loom-unity] ICEBERG-LIST-NAMESPACES-DEFECT: GET <iceberg>/v1/catalogs/<warehouse>/namespaces answers HTTP 500 'Authorization filter not initialized' on this image, for EVERY principal including the metastore owner. Cause: an UPSTREAM defect in unitycatalog v0.5.0 AND v0.5.1 that fires whenever server.authorization is enabled — IcebergRestCatalogService.listNamespaces reaches SchemaService.listSchemas in-process, under a request context where UnityAccessDecorator never installed the RESULT_FILTER attribute that AuthorizedService.applyResponseFilter requires. It is NOT caused by the #1603 overlay this image applies: measured with the overlay removed and authorization still enabled, the same call returns the same 500, and the overlaid classes are byte-identical in both releases. The same call with authorization DISABLED returns 200, which is the only reason the bare upstream image looked healthy. No other Iceberg route has this defect. The Console serves namespaces from /api/2.1/unity-catalog/schemas instead; a DIRECT external-engine LIST-namespaces call still fails. See docs/fiab/parity/external-engine-federation.md." >&2
 }
 
 # Block until the server has written its admin token AND is answering, then echo
@@ -872,12 +876,20 @@ uc_admin_token() {
 }
 
 # Create the warehouse catalog if it is absent, then grant the bound Console
-# principal every privilege it CAN hold on it.
+# principal the privileges it needs on it.
 #
-# Grants are deliberately the API-expressible set — USE CATALOG / SELECT /
-# CREATE SCHEMA / CREATE TABLE. They are what make the Unity surface usable for
-# the Console (list schemas, read tables, register new ones under this catalog);
-# they do NOT and cannot include OWNER (see announce_iceberg_list_ns_defect).
+# The grants are USE CATALOG / USE SCHEMA / SELECT / CREATE SCHEMA / CREATE
+# TABLE (not every privilege the API can express — MODIFY and the function/
+# volume/model privileges are deliberately left out). They are what make the Unity surface
+# usable for the Console (list schemas, read tables, register new ones under
+# this catalog) AND, since #3339, the Iceberg REST read routes: this image
+# backports upstream's scoped Iceberg authorization (Dockerfile stage 1b), which
+# accepts USE CATALOG for /v1/config and USE CATALOG + USE SCHEMA for a namespace
+# and its tables. Granted at the CATALOG, both inherit to every schema and table
+# under it. USE SCHEMA was added for #3339: without it the scoped namespace and
+# table routes still refuse the Console. The PATCH is additive and idempotent —
+# re-adding a held privilege is a no-op, so every boot converges.
+# They do NOT and cannot include OWNER: the permissions API has no OWNER privilege.
 provision_warehouse() {
   pw_name="$1"
   pw_principal="$2"      # '' when nothing was bound (no user exists to grant to)
@@ -982,12 +994,12 @@ provision_warehouse() {
     "${pw_api}/permissions/catalog/${pw_name}" \
     -H "Authorization: Bearer ${pw_token}" \
     -H 'Content-Type: application/json' \
-    -d "{\"changes\":[{\"principal\":\"${pw_principal}\",\"add\":[\"USE CATALOG\",\"SELECT\",\"CREATE SCHEMA\",\"CREATE TABLE\"]}]}")" || pw_grant="000" || true
+    -d "{\"changes\":[{\"principal\":\"${pw_principal}\",\"add\":[\"USE CATALOG\",\"USE SCHEMA\",\"SELECT\",\"CREATE SCHEMA\",\"CREATE TABLE\"]}]}")" || pw_grant="000" || true
   [ -n "${pw_grant}" ] || pw_grant="000"
 
   case "${pw_grant}" in
     20*)
-      echo "[loom-unity] WAREHOUSE-BIND: granted USE CATALOG,SELECT,CREATE SCHEMA,CREATE TABLE on ${pw_name} to the Console principal (HTTP ${pw_grant})."
+      echo "[loom-unity] WAREHOUSE-BIND: granted USE CATALOG,USE SCHEMA,SELECT,CREATE SCHEMA,CREATE TABLE on ${pw_name} to the Console principal (HTTP ${pw_grant})."
       ;;
     *)
       echo "[loom-unity] WAREHOUSE-BIND: grants FAILED on ${pw_name} (HTTP ${pw_grant}) — the catalog exists but the Console principal holds no privilege on it, so the Unity surface will refuse its reads. Check that the SCIM bind above succeeded: PermissionService resolves the grantee by getUserByEmail(<principal object id>)." >&2
