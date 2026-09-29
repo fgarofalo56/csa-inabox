@@ -663,11 +663,11 @@ var existingDatabricksWorkspace = adoptName(adopt, 'databricks')
 var existingDatabricksRg = adoptRg(adopt, 'databricks')
 var existingDatabricksSub = adoptSub(adopt, 'databricks')
 var existingDatabricksHostname = adoptExtra(adopt, 'databricks', 'hostname')
-// The id of the adopted workspace's 'loom-default' SQL warehouse →
-// LOOM_DATABRICKS_SQL_WAREHOUSE_ID. The discover script looks it up over the
-// workspace REST API and emits the key ONLY when the warehouse was found; a
-// workspace with no such warehouse yet (or one the deploy identity cannot
-// read) yields '' — the admin-plane default — never a guessed id.
+// The id of the adopted workspace's 'loom-default' (else 'loom-governance') SQL
+// warehouse → LOOM_DATABRICKS_SQL_WAREHOUSE_ID. The discover script looks it up
+// over the workspace REST API and emits the key ONLY when exactly one warehouse
+// of the preferred name was found; a workspace with neither name (or one this
+// lookup could not read) yields '' — the admin-plane default — never a guessed id.
 var existingDatabricksSqlWarehouseId = adoptExtra(adopt, 'databricks', 'sqlWarehouseId')
 var existingAdfFactory = adoptName(adopt, 'adf')
 var existingAdfRg = adoptRg(adopt, 'adf')
@@ -1318,7 +1318,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     // The host follows the sovereign cloud (Commercial/GCC → .net; US Gov → .us).
     loomDatabricksAccountId: databricksAccountId
     loomDatabricksAccountHost: empty(databricksAccountId) ? '' : databricksAccountHost
-    // Adopted workspace's 'loom-default' SQL warehouse (see the var's comment).
+    // Adopted workspace's 'loom-default' (else 'loom-governance') SQL warehouse (see the var's comment).
     // '' until the warehouse exists — the admin-plane param default.
     loomDatabricksSqlWarehouseId: existingDatabricksSqlWarehouseId
     keyVaultHsmIsolated: keyVaultHsmIsolated

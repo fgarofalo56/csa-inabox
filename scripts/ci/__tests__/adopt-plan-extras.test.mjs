@@ -54,29 +54,45 @@ const DBX_HOST = 'adb-1234567890123456.7.azuredatabricks.net';
 // Low-entropy placeholder, not a credential. Used only to prove where the
 // token travels (curl's stdin) and where it must never appear (argv, logs).
 const STUB_TOKEN = 'stubstubstubstub';
+// The interpreter the script would resolve without a stub. The python-failure
+// tests put a `python` wrapper FIRST on PATH that fails at one call site and
+// execs this for every other call, so only the site under test changes.
+const REAL_PY = (spawnSync('bash', ['-c', 'command -v python || command -v python3'], { encoding: 'utf8' }).stdout || '').trim();
+// A substring of each python program the failure stub targets. Each is asserted
+// to occur exactly once in the script before it is used, so a rewrite of that
+// program makes the test RED instead of silently leaving the stub inert.
+const PY_SITE_MARKERS = {
+  prefer: 'PREFER = ("loom-default", "loom-governance")',
+  validity: 'json.load(sys.stdin)',
+};
 
 /**
  * @param {object} o
  * @param {string}  [o.eh]          eventhubs namespace name ('' = none)
  * @param {string}  [o.groups]      newline-separated schema groups the namespace lists
  * @param {boolean} [o.groupsFail]  schema-registry list exits non-zero
+ * @param {string}  [o.groupsErr]   the stderr of that failure (default: an AuthorizationFailed line)
  * @param {boolean} [o.dbx]         a Databricks workspace exists
  * @param {boolean} [o.tokenFail]   `az account get-access-token` fails
  * @param {string}  [o.httpCode]    what curl's -w '%{http_code}' prints
  * @param {number}  [o.curlRc]      curl's exit code
  * @param {string}  [o.body]        the SQL Warehouses API body
  * @param {string[]|null} [o.admin] admin args override (null = pass none)
+ * @param {''|'prefer'|'validity'} [o.pyFail] make python exit non-zero at ONE site:
+ *        'prefer' = the warehouse-body parse, 'validity' = the final plan check
  */
 function discover({
   eh = EH_NS,
   groups = '',
   groupsFail = false,
+  groupsErr = '',
   dbx = false,
   tokenFail = false,
   httpCode = '200',
   curlRc = 0,
   body = '{"warehouses":[]}',
   admin = null,
+  pyFail = '',
 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'adopt-extras-'));
   const curlLog = join(dir, 'curl.argv');
@@ -91,7 +107,11 @@ done
 if [ "$1" = "group" ] && [ "$2" = "show" ]; then exit 0; fi
 if [ "$1" = "eventhubs" ] && [ "$2" = "namespace" ] && [ "$3" = "schema-registry" ]; then
   if [ -n "\${STUB_SG_FAIL:-}" ]; then
-    echo "(AuthorizationFailed) The client does not have authorization to perform action 'Microsoft.EventHub/namespaces/schemagroups/read'." >&2
+    if [ -n "\${STUB_SG_ERR:-}" ]; then
+      echo "$STUB_SG_ERR" >&2
+    else
+      echo "(AuthorizationFailed) The client does not have authorization to perform action 'Microsoft.EventHub/namespaces/schemagroups/read'." >&2
+    fi
     exit 1
   fi
   [ -n "\${STUB_SG:-}" ] && printf '%s\\n' "$STUB_SG"
@@ -129,6 +149,20 @@ exit "\${STUB_CURL_RC:-0}"
     writeFileSync(join(dir, n), s);
     chmodSync(join(dir, n), 0o755);
   }
+  if (pyFail) {
+    // Fails ONLY when its -c program contains the marker of the chosen site
+    // (PY_SITE_MARKERS, each asserted present in the script by its test), and
+    // execs the real interpreter for every other call.
+    const marker = PY_SITE_MARKERS[pyFail];
+    const py = `#!/usr/bin/env bash
+case "$*" in
+  *${JSON.stringify(marker)}*) echo "stub python: forced failure at the '${pyFail}' site" >&2; exit 3 ;;
+esac
+exec ${JSON.stringify(REAL_PY)} "$@"
+`;
+    writeFileSync(join(dir, 'python'), py);
+    chmodSync(join(dir, 'python'), 0o755);
+  }
 
   const args = ['--dlz-subscription', DLZ_SUB, '--dlz-rg', DLZ_RG];
   if (admin) args.push(...admin);
@@ -141,6 +175,7 @@ exit "\${STUB_CURL_RC:-0}"
       STUB_EH: eh,
       STUB_SG: groups,
       STUB_SG_FAIL: groupsFail ? '1' : '',
+      STUB_SG_ERR: groupsErr,
       STUB_DBX: dbx ? '1' : '',
       STUB_TOKEN_FAIL: tokenFail ? '1' : '',
       STUB_CODE: httpCode,
@@ -265,6 +300,31 @@ test('an UNREADABLE namespace is reported UNKNOWN, never "no groups"', () => {
   assert.match(stderr, /::warning::.*could NOT list schema groups.*UNKNOWN, not 'none'/);
   assert.match(stderr, /AuthorizationFailed/, 'the az stderr must be surfaced, not swallowed');
   assert.doesNotMatch(stderr, /holds NO schema groups/);
+  // The remediation is conditional on what az said. This fixture's stderr names
+  // AuthorizationFailed, so the grant is named. BREAKS ON: dropping the grant
+  // from the AuthorizationFailed arm.
+  assert.match(stderr, /az reports AuthorizationFailed, so the deploy identity lacks read on the namespace: grant it Reader on the namespace/);
+  // Whether the env is applied is not this script's to know (an infra-only
+  // run applies no console env). BREAKS ON: restoring the ef310624a
+  // "will render '' for this run".
+  assert.match(stderr, /The plan carries no schemaGroup, so LOOM_EH_SCHEMA_GROUP would render '' if this run applies the console env/);
+});
+
+// The same failure with a stderr that does NOT name an authorization failure.
+// BREAKS ON: an unconditional "grant Reader" remediation (the ef310624a text),
+// which presumes an RBAC cause that a throttled or otherwise failed read did
+// not establish.
+test('an unreadable namespace whose az stderr is NOT AuthorizationFailed: no grant is prescribed', () => {
+  const { plan, stderr, status } = discover({
+    groupsFail: true,
+    groupsErr: '(TooManyRequests) The request was throttled. Retry after 30 seconds.',
+  });
+  assert.equal(status, 0);
+  assert.equal(plan.eventhubs?.target?.name, EH_NS, 'the BASE eventhubs adopt entry must survive');
+  assert.match(stderr, /could NOT list schema groups.*The cause was NOT established from the az exit alone; the az stderr below is the evidence/);
+  assert.match(stderr, /TooManyRequests/, 'the az stderr must be surfaced');
+  assert.doesNotMatch(stderr, /grant it Reader/, 'no RBAC remediation without an RBAC cause');
+  assert.doesNotMatch(stderr, /Grant the deploy identity Reader/, 'regression guard: the ef310624a unconditional remediation');
 });
 
 // ── 3. the SQL warehouse, three states ──────────────────────────────────────
@@ -313,6 +373,23 @@ test('two loom-default warehouses: adopts NONE, and does not fall back to loom-g
   assert.equal(plan.databricks?.extra?.hostname, DBX_HOST);
   assert.equal(plan.databricks?.extra?.sqlWarehouseId, undefined);
   assert.match(stderr, /::warning::.*lists 2 warehouses named 'loom-default'; adopting NONE/);
+  // The bootstrap binds the FIRST 'loom-default' (csa-loom-post-deploy-bootstrap.yml,
+  // `jq ... | head -1`) where this lookup refuses, so the two disagree on a
+  // duplicate. BREAKS ON: dropping that disclosure from the AMBIG warning.
+  assert.match(stderr, /lists 2 warehouses named 'loom-default'.*csa-loom-post-deploy-bootstrap\.yml does NOT refuse a duplicate 'loom-default': it binds the first one listed.*#4784/);
+});
+
+// The bootstrap disclosure is about 'loom-default' only. BREAKS ON: printing it
+// for a duplicated 'loom-governance', where no bootstrap binding is in play.
+test('two loom-governance warehouses (no loom-default): adopts NONE, without the loom-default bootstrap note', () => {
+  const { plan, stderr } = discover({
+    dbx: true,
+    body: '{"warehouses":[{"id":"9a8b7c6d5e4f","name":"loom-governance"},{"id":"0e0e0e0e","name":"loom-governance"}]}',
+  });
+  assert.equal(plan.databricks?.extra?.hostname, DBX_HOST);
+  assert.equal(plan.databricks?.extra?.sqlWarehouseId, undefined);
+  assert.match(stderr, /::warning::.*lists 2 warehouses named 'loom-governance'; adopting NONE/, 'positive: the duplicate is still reported');
+  assert.doesNotMatch(stderr, /does NOT refuse a duplicate 'loom-default'/);
 });
 
 // Neither name. BREAKS ON: demoting the no-match notice, on emitting an empty
@@ -335,22 +412,42 @@ test('API answered 200 with neither loom-default nor loom-governance: no key, a 
 // The load-bearing distinction. BREAKS ON: collapsing the non-200 branch into
 // the NONE branch (stderr would say "lists NO warehouse" — a false negative
 // that reads as "not created yet" when the truth is "could not look").
-test('API REFUSED (403): no key, a ::warning:: naming HTTP 403 — never "absent"', () => {
+// CAUSE TEXT (deploy-integrity R7): the body names neither network access nor
+// an IP ACL, so the cause is NOT established, and workspace membership may be
+// offered only as ONE cause that can produce it. BREAKS ON: restoring the
+// ef310624a wording, which asserted the identity "is likely not a user of that
+// workspace" (the not-established pin goes RED, and the doesNotMatch guard is
+// the regression guard for that exact phrase).
+test('API REFUSED (403): no key, a ::warning:: naming HTTP 403 — never "absent", and the cause is NOT asserted', () => {
   const { plan, stderr, status } = discover({ dbx: true, httpCode: '403', body: '{"error_code":"PERMISSION_DENIED"}' });
   assert.equal(status, 0);
   assert.equal(plan.databricks?.extra?.hostname, DBX_HOST);
   assert.equal(plan.databricks?.extra?.sqlWarehouseId, undefined);
   assert.match(stderr, /::warning::.*did NOT answer 200 \(HTTP 403, curl exit 0\).*UNKNOWN — not 'absent'/);
-  assert.match(stderr, /likely not a user of that workspace/);
+  assert.match(stderr, /the cause of this refusal was NOT established by this lookup/, 'a plain 403 must say its cause is unknown');
+  assert.match(stderr, /One cause that produces a 401\/403 here is a deploy identity that is not a user of that workspace/,
+    'membership is offered as one candidate, not as the cause');
+  assert.doesNotMatch(stderr, /is likely not a user of that workspace/, 'regression guard: the ef310624a asserted cause');
   assert.doesNotMatch(stderr, /at the NETWORK layer/, 'a plain 403 must not be blamed on the network');
   assert.match(stderr, /PERMISSION_DENIED/, 'the body excerpt must be surfaced');
   assert.doesNotMatch(stderr, /lists NO warehouse/);
 });
 
+// A non-auth, non-network error status. BREAKS ON: routing every non-200 into
+// the 401/403 text (the membership candidate would appear for a 500).
+test('API error that is not 401/403 (HTTP 500): cause NOT established, membership not offered', () => {
+  const { plan, stderr, status } = discover({ dbx: true, httpCode: '500', body: '{"error_code":"INTERNAL_ERROR"}' });
+  assert.equal(status, 0);
+  assert.equal(plan.databricks?.extra?.hostname, DBX_HOST, 'the BASE databricks adopt entry must survive');
+  assert.match(stderr, /HTTP 500, curl exit 0\).*The cause was NOT established by this lookup; the body below is the evidence/);
+  assert.doesNotMatch(stderr, /not a user of that workspace/);
+});
+
 // The refusal shape seen on the Commercial estate: a 403 whose body names
 // network access. BREAKS ON: deleting the network-access branch (the warning
-// would blame workspace membership, a false cause under deploy-integrity R7),
-// or matching it on a plain 403 (the test above goes RED).
+// would fall to the plain-401/403 text and offer workspace membership, the
+// false-cause shape under deploy-integrity R7), or matching it on a plain 403
+// (the test above goes RED).
 test('API REFUSED at the network layer (403 "Unauthorized network access"): the warning says NETWORK, not RBAC', () => {
   const { plan, stderr, status } = discover({
     dbx: true,
@@ -361,14 +458,39 @@ test('API REFUSED at the network layer (403 "Unauthorized network access"): the 
   assert.equal(plan.databricks?.extra?.hostname, DBX_HOST, 'the BASE databricks adopt entry must survive');
   assert.equal(plan.databricks?.extra?.sqlWarehouseId, undefined);
   assert.match(stderr, /refused this runner at the NETWORK layer/);
-  assert.doesNotMatch(stderr, /likely not a user of that workspace/);
+  // Not vacuous: the plain-401/403 branch emits this phrase (test above).
+  assert.doesNotMatch(stderr, /not a user of that workspace/);
 });
 
-// The CAUSE text of that warning (deploy-integrity R7). The body proves only
-// that the refusal is network-layer. More than one workspace control can
-// produce it (the script names public network access, an IP access list and
-// the account-level context-based ingress policies as an OPEN list), and the
-// script reads none of them.
+// A Databricks IP access list refusal. The body shape is the one three
+// independent codebases match (reviewer A, round 4: the Databricks-owned
+// security-analysis-tool, PostHog's Databricks source, and a Genie bot's
+// troubleshooting doc); it was NOT measured on this estate, and Learn quotes
+// no body. It contains no "network access", so before this branch it fell to
+// the plain-401/403 text and blamed workspace membership.
+// BREAKS ON: deleting the IP-ACL branch (the positive pin goes RED: measured
+// RED at ef310624a, arm F0), or matching it after the membership text.
+const ACL_BODY = '{"error_code":"403","message":"Source IP address: 20.1.2.3 is blocked by Databricks IP ACL for workspace: 1234567890123456"}';
+test('IP-ACL 403: the IP access list is named as the refusing control, never workspace membership', () => {
+  const { plan, stderr, status } = discover({ dbx: true, httpCode: '403', body: ACL_BODY });
+  assert.equal(status, 0);
+  const warning = stderr.split('\n').find((l) => l.includes('did NOT answer 200')) ?? '';
+  assert.match(warning, /an IP access list refused this runner's egress IP/, 'positive: the IP ACL is named as the refusing control');
+  assert.match(warning, /Which IP access list, and what it admits, was NOT established/, 'what was not read must be disclosed');
+  assert.match(warning, /#3744/, 'the tracked in-VNet producer must be named');
+  // Not vacuous: the plain-401/403 branch emits this phrase for another 403.
+  assert.doesNotMatch(warning, /not a user of that workspace/, 'an IP ACL block must not be blamed on membership');
+  assert.doesNotMatch(warning, /at the NETWORK layer/, 'the body names an IP ACL, not network access');
+  assert.equal(plan.databricks?.target?.name, DBX_NAME, 'the BASE databricks entry survives');
+  assert.equal(plan.databricks?.extra?.sqlWarehouseId, undefined);
+});
+
+// The CAUSE text of the network-layer warning (deploy-integrity R7). The body
+// proves only that the refusal is network-layer. More than one control can
+// produce it (the script names public network access and a workspace IP access
+// list, both workspace settings, and the ACCOUNT-level context-based ingress
+// policies, as an OPEN list), and the script reads none of them. A body that
+// names an IP ACL takes its own branch (the test above).
 // BREAKS ON (each measured as a RED arm on a sandbox copy): the 033c8abae
 // single-cause wording ("a workspace with publicNetworkAccess Disabled is
 // reachable only through its private endpoint, so a hosted runner cannot read
@@ -415,6 +537,9 @@ test('host UNREACHABLE: HTTP 000 and the curl exit are named, the script continu
   assert.equal(plan.databricks?.target?.name, DBX_NAME);
   assert.equal(plan.databricks?.extra?.sqlWarehouseId, undefined);
   assert.match(stderr, /HTTP 000, curl exit 6/);
+  // BREAKS ON: restoring the ef310624a "HTTP 000 means the host was
+  // unreachable", which names one cause for any of curl's failure exits.
+  assert.match(stderr, /HTTP 000 means curl received no HTTP response; the curl exit and stderr below say why/);
 });
 
 // BREAKS ON: calling the API with an empty bearer, or reporting "absent".
@@ -424,6 +549,8 @@ test('no Databricks token: UNKNOWN warning, and the API is never called', () => 
   assert.equal(plan.databricks?.extra?.sqlWarehouseId, undefined);
   assert.match(stderr, /::warning::.*could NOT obtain an Azure Databricks AAD token \(az exit 1\)/);
   assert.equal(curlArgv, null, 'curl must not run without a token');
+  // BREAKS ON: restoring the ef310624a "renders '' for this run".
+  assert.match(stderr, /could NOT obtain.*The plan carries no sqlWarehouseId, so LOOM_DATABRICKS_SQL_WAREHOUSE_ID would render '' if this run applies the console env/);
 });
 
 // BREAKS ON: a JSON array body tripping `set -e` through an uncaught python
@@ -448,6 +575,53 @@ test('a 200 body whose warehouses are not objects also degrades to a warning', (
   assert.equal(plan.databricks?.extra?.hostname, DBX_HOST, 'the BASE databricks adopt entry must survive');
   assert.equal(plan.databricks?.extra?.sqlWarehouseId, undefined);
   assert.match(stderr, /not the documented JSON \(ERR:AttributeError\)/);
+});
+
+// The stub-marker precondition for the two python-failure tests below. If a
+// marker no longer occurs exactly once, the stub cannot target its site, and
+// this fails first instead of letting those tests measure an inert stub.
+test('python-failure stub: each site marker occurs exactly once in the script, and a real python exists', () => {
+  const src = readFileSync(SCRIPT, 'utf8');
+  for (const [site, marker] of Object.entries(PY_SITE_MARKERS)) {
+    assert.equal(src.split(marker).length - 1, 1, `the '${site}' marker must occur exactly once in ${SCRIPT}`);
+  }
+  assert.ok(REAL_PY, 'a real python must be on PATH for the stub to exec');
+});
+
+// python ITSELF fails while reading a 200 body. Nothing is then known about the
+// body, so the warning must not describe it. BREAKS ON: folding ERR:python-exit
+// back into the generic arm, which said the body "is not the documented JSON"
+// (the ef310624a text: the positive pin goes RED and the doesNotMatch guard
+// fires). The body here IS the documented JSON with a match, so a claim that it
+// is not would be false by construction.
+test('python exits non-zero while reading a 200 body: the warning says the body was never parsed, not that it was malformed', () => {
+  const { plan, stderr, status } = discover({
+    dbx: true,
+    body: '{"warehouses":[{"id":"d1e2f3a4b5c6","name":"loom-default"}]}',
+    pyFail: 'prefer',
+  });
+  assert.equal(status, 0, stderr);
+  assert.match(stderr, /stub python: forced failure at the 'prefer' site/, 'control: the stub fired at this site');
+  assert.match(stderr, /answered 200, but python \(.+\) exited non-zero while reading the body, so the body was never parsed/);
+  assert.doesNotMatch(stderr, /not the documented JSON/, 'regression guard: a claim about a body nobody read');
+  assert.equal(plan.databricks?.target?.name, DBX_NAME, 'the BASE databricks adopt entry must survive');
+  assert.equal(plan.databricks?.extra?.sqlWarehouseId, undefined, 'the valid id in the body must NOT be adopted: it was never read');
+});
+
+// The final validity check refuses a plan. Its ::error:: must reach STDERR:
+// the caller captures stdout as the plan, so a refusal on stdout never reaches
+// the log. BREAKS ON: dropping `>&2` from the refusal (stdout then holds the
+// ::error:: line and the stderr pin goes RED), or on the check no longer
+// failing closed (status 0 with a plan).
+// NOT WITNESSED: the switch from `python` to "$PY". Wherever `python` resolves
+// both name the same interpreter, and hiding `python` while keeping `python3`
+// is not portable across the runners and workstations this suite runs on.
+test('the plan validity check refuses on STDERR and emits nothing on stdout', () => {
+  const r = discover({ pyFail: 'validity' });
+  assert.match(r.stderr, /stub python: forced failure at the 'validity' site/, 'control: the stub fired at this site');
+  assert.equal(r.status, 1, `expected exit 1, got ${r.status}; stderr: ${r.stderr}`);
+  assert.match(r.stderr, /::error::\[discover-dlz-adopt\] composed an INVALID adopt plan — refusing to emit it/);
+  assert.equal(r.stdout, '', 'a refused plan must leave stdout EMPTY, so the caller cannot capture the refusal as a plan');
 });
 
 // Token hygiene. BREAKS ON: `curl -H "Authorization: Bearer $tok"` (the token

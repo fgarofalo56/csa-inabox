@@ -299,7 +299,14 @@ if [ -n "$EH" ]; then
   SG_LIST="$(az eventhubs namespace schema-registry list --subscription "$DLZ_SUB" -g "$DLZ_RG" \
                --namespace-name "$EH" --query "[].name" -o tsv 2>"$SG_ERR")" || SG_RC=$?
   if [ "$SG_RC" -ne 0 ]; then
-    echo "::warning::[discover-dlz-adopt] could NOT list schema groups on Event Hubs namespace '$EH' (az exit $SG_RC) — that is UNKNOWN, not 'none'. LOOM_EH_SCHEMA_GROUP will render '' for this run (the console falls back to its in-process Avro validator). Grant the deploy identity Reader on the namespace. az stderr:" >&2
+    # The remediation is named only when az's own stderr names the cause; a
+    # non-zero exit alone does not establish that RBAC refused the read.
+    if grep -q 'AuthorizationFailed' "$SG_ERR"; then
+      sg_fix="az reports AuthorizationFailed, so the deploy identity lacks read on the namespace: grant it Reader on the namespace."
+    else
+      sg_fix="The cause was NOT established from the az exit alone; the az stderr below is the evidence."
+    fi
+    echo "::warning::[discover-dlz-adopt] could NOT list schema groups on Event Hubs namespace '$EH' (az exit $SG_RC) — that is UNKNOWN, not 'none'. The plan carries no schemaGroup, so LOOM_EH_SCHEMA_GROUP would render '' if this run applies the console env (the console then uses its in-process Avro validator). $sg_fix az stderr:" >&2
     sed 's/^/  /' "$SG_ERR" >&2 || true
   else
     SG_LIST="$(printf '%s\n' "$SG_LIST" | tr -d '\r' | sed '/^[[:space:]]*$/d')"
@@ -337,8 +344,8 @@ fi
 #                    `loom-governance` only when the workspace lists no warehouse
 #                    at all.
 # So a Gov workspace can be bound by those writers to a warehouse under another
-# name. This lookup does not adopt it (it adopts only the two names), so that
-# case still renders ''.
+# name. This lookup does not adopt it (it adopts only the two names), so in that
+# case the plan carries no warehouse id.
 # PREFERENCE, deterministic and stated in the output: `loom-default` if the
 # workspace lists one, else `loom-governance`. `loom-default` wins because the
 # bootstrap re-wires the console to it on every run, so preferring the other
@@ -362,21 +369,30 @@ fi
 #                            ingress policies Azure Databricks documents) as an
 #                            OPEN list, and does not assert which one refused:
 #                            this lookup reads none of those settings.
-# It never fails the script: a warehouse is an optional binding (the console
-# auto-selects a RUNNING warehouse when the id is blank), and in a boundary
-# where Databricks SQL is unavailable the API answers with no match or an error,
-# both of which degrade to ''.
+#                            A 403 whose body names an IP ACL ("Source IP address:
+#                            <ip> is blocked by Databricks IP ACL for workspace:
+#                            <id>") is reported as an IP access list refusal,
+#                            because the body says so. Any other 401/403 is
+#                            reported with its cause NOT established; workspace
+#                            membership is named only as one cause that can
+#                            produce it.
+# It never fails the script: a warehouse is an optional binding, and a blank id
+# is the pre-PR state. The console's health probe falls back to a listed
+# warehouse (a RUNNING one first) when the id is blank, but other readers do
+# not: the report navigator and the Databricks data-quality runs, among others,
+# gate on it. In a boundary where Databricks SQL is unavailable the API answers
+# with no match or an error, both of which degrade to ''.
 #
 # The AAD token never reaches argv or the log: it is handed to curl as a config
 # file on STDIN (`--config -`).
 DBX_AAD_RESOURCE="2ff814a6-3304-4ab8-85cb-cd0e6f879c1d"
 dbx_sql_warehouse_id() { # dbx_sql_warehouse_id <workspace host> → id or '' on stdout
-  local host="$1" tok err body code rc=0 pick why rest
+  local host="$1" tok err body code rc=0 pick why rest ambig_note
   err="$(mktemp)"; body="$(mktemp)"
   tok="$(az account get-access-token --resource "$DBX_AAD_RESOURCE" --query accessToken -o tsv 2>"$err")" || rc=$?
   tok="$(printf '%s' "$tok" | tr -d '\r\n')"
   if [ "$rc" -ne 0 ] || [ -z "$tok" ]; then
-    echo "::warning::[discover-dlz-adopt] could NOT obtain an Azure Databricks AAD token (az exit $rc), so whether a 'loom-default' or 'loom-governance' SQL warehouse exists on '$host' is UNKNOWN — not 'absent'. LOOM_DATABRICKS_SQL_WAREHOUSE_ID renders '' for this run. az stderr:" >&2
+    echo "::warning::[discover-dlz-adopt] could NOT obtain an Azure Databricks AAD token (az exit $rc), so whether a 'loom-default' or 'loom-governance' SQL warehouse exists on '$host' is UNKNOWN — not 'absent'. The plan carries no sqlWarehouseId, so LOOM_DATABRICKS_SQL_WAREHOUSE_ID would render '' if this run applies the console env. az stderr:" >&2
     sed 's/^/  /' "$err" >&2 || true
     rm -f "$err" "$body"; return 0
   fi
@@ -389,15 +405,21 @@ dbx_sql_warehouse_id() { # dbx_sql_warehouse_id <workspace host> → id or '' on
   if [ "$code" != "200" ]; then
     if grep -qi 'network access' "$body"; then
       why="The response body names network access, so the workspace refused this runner at the NETWORK layer. Workspace controls that can produce that refusal include public network access set to Disabled (only a private-endpoint path is admitted), or a workspace IP access list that does not allow this runner's egress IP; Azure Databricks also documents account-level context-based ingress policies. Which one refused it was NOT established, nor whether a recent public-access change had yet taken effect: this lookup reads none of those settings. Producing the id from inside the VNet (the console creating and binding the warehouse itself) is tracked in #3744."
+    elif grep -qi 'IP ACL' "$body"; then
+      why="The response body names an IP ACL, so an IP access list refused this runner's egress IP. Which IP access list, and what it admits, was NOT established: this lookup reads no IP access list, and the body below is the evidence. Producing the id from inside the VNet (the console creating and binding the warehouse itself) is tracked in #3744."
+    elif [ "${code:-000}" = "000" ]; then
+      why="HTTP 000 means curl received no HTTP response; the curl exit and stderr below say why."
+    elif [ "$code" = "401" ] || [ "$code" = "403" ]; then
+      why="The body names neither network access nor an IP ACL, so the cause of this refusal was NOT established by this lookup; the body below is the evidence. One cause that produces a 401/403 here is a deploy identity that is not a user of that workspace (Contributor on the workspace resource provisions it as a workspace admin on first sign-in)."
     else
-      why="On 401/403 without a network-access message the deploy identity is likely not a user of that workspace (Contributor on the workspace resource provisions it as a workspace admin on first sign-in); HTTP 000 means the host was unreachable."
+      why="The cause was NOT established by this lookup; the body below is the evidence."
     fi
-    echo "::warning::[discover-dlz-adopt] the Databricks SQL Warehouses API on '$host' did NOT answer 200 (HTTP ${code:-000}, curl exit $rc), so whether a 'loom-default' or 'loom-governance' warehouse exists is UNKNOWN — not 'absent'. LOOM_DATABRICKS_SQL_WAREHOUSE_ID renders '' for this run. $why Detail:" >&2
+    echo "::warning::[discover-dlz-adopt] the Databricks SQL Warehouses API on '$host' did NOT answer 200 (HTTP ${code:-000}, curl exit $rc), so whether a 'loom-default' or 'loom-governance' warehouse exists is UNKNOWN — not 'absent'. The plan carries no sqlWarehouseId, so LOOM_DATABRICKS_SQL_WAREHOUSE_ID would render '' if this run applies the console env. $why Detail:" >&2
     { sed 's/^/  /' "$err"; head -c 300 "$body" | sed 's/^/  /'; echo; } >&2 || true
     rm -f "$err" "$body"; return 0
   fi
   if [ -z "$PY" ]; then
-    echo "::warning::[discover-dlz-adopt] the SQL Warehouses API answered but no python is on PATH to read it — the warehouse is UNKNOWN; LOOM_DATABRICKS_SQL_WAREHOUSE_ID renders ''." >&2
+    echo "::warning::[discover-dlz-adopt] the SQL Warehouses API answered but no python is on PATH to read it — the warehouse is UNKNOWN. The plan carries no sqlWarehouseId, so LOOM_DATABRICKS_SQL_WAREHOUSE_ID would render '' if this run applies the console env." >&2
     rm -f "$err" "$body"; return 0
   fi
   # Every parse path prints ONE verdict token and exits 0 — a body of the wrong
@@ -433,9 +455,15 @@ else:
       echo "::notice::[discover-dlz-adopt] the Databricks SQL Warehouses API on '$host' answered 200 and lists NO warehouse named 'loom-default' or 'loom-governance' — LOOM_DATABRICKS_SQL_WAREHOUSE_ID stays ''. This lookup adopts only those two names: a warehouse under any other name is not adopted, even one a writer bound to the console (the Azure Government writers reuse the first listed warehouse of any name when none starts with 'loom'). A later deploy binds a warehouse only once one named 'loom-default' or 'loom-governance' exists." >&2 ;;
     AMBIG:*)
       rest="${pick#AMBIG:}"
-      echo "::warning::[discover-dlz-adopt] '$host' lists ${rest#*:} warehouses named '${rest%%:*}'; adopting NONE rather than guessing (and not falling back to a lower-preference name)." >&2 ;;
+      ambig_note=""
+      [ "${rest%%:*}" = "loom-default" ] && ambig_note=" csa-loom-post-deploy-bootstrap.yml does NOT refuse a duplicate 'loom-default': it binds the first one listed. So if this run applies the console env it blanks the id that bootstrap bound, until the duplicate is removed (#4784)."
+      echo "::warning::[discover-dlz-adopt] '$host' lists ${rest#*:} warehouses named '${rest%%:*}'; adopting NONE rather than guessing (and not falling back to a lower-preference name).$ambig_note" >&2 ;;
+    ERR:python-exit)
+      # The interpreter itself exited non-zero, so nothing is known about the
+      # body — the message must not describe it.
+      echo "::warning::[discover-dlz-adopt] the SQL Warehouses API on '$host' answered 200, but python ($PY) exited non-zero while reading the body, so the body was never parsed — the warehouse is UNKNOWN. The plan carries no sqlWarehouseId, so LOOM_DATABRICKS_SQL_WAREHOUSE_ID would render '' if this run applies the console env." >&2 ;;
     *)
-      echo "::warning::[discover-dlz-adopt] the SQL Warehouses API on '$host' answered 200 with a body that is not the documented JSON ($pick) — the warehouse is UNKNOWN; LOOM_DATABRICKS_SQL_WAREHOUSE_ID renders ''." >&2 ;;
+      echo "::warning::[discover-dlz-adopt] the SQL Warehouses API on '$host' answered 200 with a body that is not the documented JSON ($pick) — the warehouse is UNKNOWN. The plan carries no sqlWarehouseId, so LOOM_DATABRICKS_SQL_WAREHOUSE_ID would render '' if this run applies the console env." >&2 ;;
   esac
   return 0
 }
@@ -524,9 +552,14 @@ fi
 
 PLAN="{$entries}"
 # Never emit a document the param file cannot parse: a malformed plan would take
-# `json()` down inside bicep compilation and fail the whole deploy.
-if command -v python >/dev/null 2>&1; then
-  printf '%s' "$PLAN" | python -c 'import json,sys; json.load(sys.stdin)' \
-    || { echo "::error::[discover-dlz-adopt] composed an INVALID adopt plan — refusing to emit it"; exit 1; }
+# `json()` down inside bicep compilation and fail the whole deploy. The check
+# uses the same interpreter as the encoding ($PY, which also accepts python3),
+# and its refusal goes to STDERR: the caller captures stdout as the plan, so a
+# message on stdout would never reach the log.
+if [ -n "$PY" ]; then
+  printf '%s' "$PLAN" | "$PY" -c 'import json,sys; json.load(sys.stdin)' \
+    || { echo "::error::[discover-dlz-adopt] composed an INVALID adopt plan — refusing to emit it" >&2; exit 1; }
+else
+  echo "::warning::[discover-dlz-adopt] no python on PATH, so the composed adopt plan was NOT validity-checked before it was emitted." >&2
 fi
 printf '%s\n' "$PLAN"
