@@ -15,8 +15,8 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | --- | ---: |
 | Total routes | 1694 |
 | Public (no session) | 59 |
-| Session-only | 643 |
-| Owner-scoped | 681 |
+| Session-only | 639 |
+| Owner-scoped | 685 |
 | Admin | 311 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 499 |
@@ -1865,7 +1865,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `lakehouse/download/route.ts` | GET | owner-scoped |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Purview |
 | `lakehouse/history/route.ts` | GET POST | owner-scoped | ● | ADLS, ARM, Azure Monitor, Azure Storage, Cosmos, Managed Identity, Microsoft Graph |
 | `lakehouse/interop/route.ts` | GET PUT | session-only | ● | ADLS, ADX, Azure Monitor, Azure Networking, Azure Storage, Container Apps, Cosmos, Cost Management, Log Analytics, Synapse |
-| `lakehouse/load-to-table/route.ts` | POST | session-only | ● | ADLS, ARM, Azure Storage, Resource Graph, Synapse |
+| `lakehouse/load-to-table/route.ts` | POST | owner-scoped | ● | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Resource Graph, Synapse |
 | `lakehouse/maintenance/route.ts` | GET POST | session-only |  | ADLS, Azure Storage, Cosmos, Synapse |
 | `lakehouse/path/route.ts` | POST DELETE | owner-scoped |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph |
 | `lakehouse/paths/route.ts` | GET | admin |  | AAS, ADLS, ARM, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Power BI |
@@ -1874,8 +1874,8 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `lakehouse/preview/route.ts` | GET | session-only |  | ADLS, ARM, Azure SQL, Azure Storage, Managed Identity, Synapse SQL |
 | `lakehouse/references/paths/route.ts` | GET | owner-scoped |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity |
 | `lakehouse/references/route.ts` | GET POST | owner-scoped |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity |
-| `lakehouse/schemas/route.ts` | GET POST PATCH DELETE | session-only | ● | Cosmos, Synapse |
-| `lakehouse/settings/route.ts` | GET PUT | session-only | ● | ADLS, Azure Monitor, Azure Storage, Cosmos |
+| `lakehouse/schemas/route.ts` | GET POST PATCH DELETE | owner-scoped | ● | Cosmos, Microsoft Graph, Synapse |
+| `lakehouse/settings/route.ts` | GET PUT | owner-scoped | ● | ADLS, ARM, Azure Monitor, Azure Storage, Cosmos, Managed Identity, Microsoft Graph |
 | `lakehouse/shortcuts/browse/route.ts` | GET | session-only | ● | ADLS, ARM, Azure Storage, Key Vault, Managed Identity |
 | `lakehouse/shortcuts/credentials/route.ts` | POST | session-only | ● | Key Vault |
 | `lakehouse/shortcuts/route.ts` | GET POST DELETE | session-only |  | ADLS, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Key Vault, Managed Identity, Microsoft Graph, Synapse SQL |
@@ -1884,7 +1884,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `lakehouse/table-stats/route.ts` | GET | session-only | ● | ADLS, Azure Storage, Synapse |
 | `lakehouse/tables/route.ts` | GET | owner-scoped |  | ADLS, ARM, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
 | `lakehouse/transform-preview/route.ts` | GET POST | owner-scoped | ● | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Synapse |
-| `lakehouse/upload/route.ts` | POST | session-only |  | ADLS, ARM, Azure Storage, Managed Identity |
+| `lakehouse/upload/route.ts` | POST | owner-scoped |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph |
 
 ## landing-zones
 
@@ -2423,7 +2423,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 ## Authorization resolvers (derived)
 
-190 function(s) across 85 module(s) reach an owner / workspace-ACL
+192 function(s) across 87 module(s) reach an owner / workspace-ACL
 decision. Derived by `scripts/ci/_route-auth-scope.mjs` from the seeds above —
 nothing here is hand-maintained. A change to this list in a diff means the
 authorization surface moved.
@@ -2458,7 +2458,9 @@ authorization surface moved.
 | `apps/fiab-console/app/api/items/materialized-lake-view/_lib/load.ts` | `loadMlvItem` |
 | `apps/fiab-console/app/api/items/scorecard/config-store.ts` | `loadScorecardConfig` |
 | `apps/fiab-console/app/api/items/semantic-model/_lib/prep-for-ai-store.ts` | `enrichSemanticModelSources`, `readPrepForAi`, `writePrepForAi` |
+| `apps/fiab-console/app/api/lakehouse/_lib/item-binding.ts` | `authorizeAndBind` |
 | `apps/fiab-console/app/api/lakehouse/_lib/item-scope.ts` | `authorizeLakehouse`, `scopeItemPath` |
+| `apps/fiab-console/app/api/lakehouse/_lib/report-upload.ts` | `scopeReportUpload` |
 | `apps/fiab-console/app/api/notebook/_lib/notebook-access.ts` | `loadAccessibleNotebook` |
 | `apps/fiab-console/app/api/sqldb/_shared.ts` | `guardSqlDbRequest`, `loadWs` |
 | `apps/fiab-console/app/api/storage/_lib/authorize.ts` | `authorizeStorageAccount`, `boundByAccessibleLakehouse` |
@@ -2533,7 +2535,7 @@ silently downgrading the route.
 
 ## Backend signals (derived)
 
-463 module(s) ORIGINATE a backend label — the derivation read an
+462 module(s) ORIGINATE a backend label — the derivation read an
 Azure identifier out of them. Every other route/module below inherits through the
 call graph. Nothing in this section is a Loom module name someone typed: the
 modules are derived, and only the Microsoft-owned identifier vocabulary is seeded.
@@ -2846,7 +2848,6 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/app/api/items/user-data-function/[id]/invoke/route.ts` | Fabric |
 | `apps/fiab-console/app/api/lakehouse/_lib/container-role-assignment.ts` | Azure RBAC |
 | `apps/fiab-console/app/api/lakehouse/history/route.ts` | ADLS |
-| `apps/fiab-console/app/api/lakehouse/settings/route.ts` | ADLS |
 | `apps/fiab-console/app/api/lakehouse/table-stats/route.ts` | ADLS |
 | `apps/fiab-console/app/api/lakehouse/transform-preview/route.ts` | ADLS |
 | `apps/fiab-console/app/api/lakehouse/upload/route.ts` | ADLS |
