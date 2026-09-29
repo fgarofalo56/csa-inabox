@@ -91,8 +91,8 @@ const useLocalStyles = makeStyles({
   tableWrap: { overflowX: 'auto', minWidth: 0 },
 });
 
-async function fetchInterop(container: string): Promise<InteropResponse> {
-  const res = await clientFetch(`/api/lakehouse/interop?container=${encodeURIComponent(container)}`, {
+async function fetchInterop(lakehouseId: string): Promise<InteropResponse> {
+  const res = await clientFetch(`/api/lakehouse/interop?lakehouseId=${encodeURIComponent(lakehouseId)}`, {
     cache: 'no-store',
   });
   const json = (await res.json().catch(() => ({}))) as InteropResponse;
@@ -107,15 +107,17 @@ export function InteropPane() {
   const ctx = useLakehouseCtx();
   const { activeContainer, liveTables, liveTablesLoading, liveTablesGate, setActionError, setActionStatus } = ctx;
   const container = activeContainer || '';
+  // Interop state belongs to the lakehouse ITEM; an unsaved item has none yet.
+  const lakehouseId = ctx.isNewItem ? '' : ctx.id;
 
   const [engine, setEngine] = useState<ConnectSnippet['id']>('spark');
   const [busyTable, setBusyTable] = useState<string | null>(null);
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
 
   const interopQ = useQuery({
-    queryKey: ['lakehouse-interop', container],
-    queryFn: () => fetchInterop(container),
-    enabled: !!container,
+    queryKey: ['lakehouse-interop', lakehouseId],
+    queryFn: () => fetchInterop(lakehouseId),
+    enabled: !!lakehouseId && !!container,
     staleTime: 15_000,
   });
 
@@ -161,7 +163,7 @@ export function InteropPane() {
       const res = await clientFetch('/api/lakehouse/interop', {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ container, tableName: table, iceberg: next }),
+        body: JSON.stringify({ lakehouseId, tableName: table, iceberg: next }),
       });
       const json = (await res.json().catch(() => ({}))) as InteropResponse & { catalogNote?: string };
       if (!res.ok || json?.ok !== true) {
@@ -180,7 +182,7 @@ export function InteropPane() {
     } finally {
       setBusyTable(null);
     }
-  }, [container, interopQ, setActionError, setActionStatus]);
+  }, [lakehouseId, interopQ, setActionError, setActionStatus]);
 
   const copy = useCallback((text: string) => {
     try { void navigator.clipboard?.writeText(text); } catch { /* clipboard unavailable */ }

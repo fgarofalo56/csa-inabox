@@ -1148,6 +1148,7 @@ export function LakehouseEditor({ item, id }: Props) {
             <DeltaMaintenanceDialog
               open={maintainOpen}
               onOpenChange={setMaintainOpen}
+              lakehouseId={id}
               container={activeContainer || ''}
               tableName={maintainTable}
               columns={maintainColumns}

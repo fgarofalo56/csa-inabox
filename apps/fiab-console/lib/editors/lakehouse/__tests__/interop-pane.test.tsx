@@ -97,8 +97,11 @@ describe('InteropPane — configured catalog', () => {
       const put = calls.find((c) => c.init?.method === 'PUT');
       expect(put, 'a PUT to /api/lakehouse/interop must be issued').toBeTruthy();
       expect(JSON.parse(String(put!.init!.body))).toEqual({
-        container: 'gold', tableName: 'customers', iceberg: true,
+        lakehouseId: 'lh-1', tableName: 'customers', iceberg: true,
       });
+      // The state read names the item too (breaks if it goes back to ?container=).
+      const get = calls.find((c) => c.url.includes('/api/lakehouse/interop?') && c.init?.method !== 'PUT');
+      expect(get?.url).toContain('lakehouseId=lh-1');
     });
   });
 

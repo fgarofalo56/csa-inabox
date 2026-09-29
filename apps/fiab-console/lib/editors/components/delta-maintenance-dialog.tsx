@@ -61,6 +61,8 @@ const useStyles = makeStyles({
 interface DeltaMaintenanceDialogProps {
   open: boolean;
   onOpenChange: (v: boolean) => void;
+  /** The lakehouse item the table belongs to (the route authorizes it). */
+  lakehouseId: string;
   /** ADLS container (e.g. "bronze"). */
   container: string;
   /** Table name / relative path under Tables/ (e.g. "orders"). */
@@ -82,7 +84,7 @@ interface RunResult {
   code?: string;
 }
 
-export function DeltaMaintenanceDialog({ open, onOpenChange, container, tableName, columns }: DeltaMaintenanceDialogProps) {
+export function DeltaMaintenanceDialog({ open, onOpenChange, lakehouseId, container, tableName, columns }: DeltaMaintenanceDialogProps) {
   const s = useStyles();
   const { computes, loading: poolsLoading, error: poolsError } = useComputes(['synapse-spark']);
 
@@ -110,6 +112,7 @@ export function DeltaMaintenanceDialog({ open, onOpenChange, container, tableNam
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
+          lakehouseId,
           container,
           tableName,
           pool,

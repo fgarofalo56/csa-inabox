@@ -1,14 +1,14 @@
 /**
  * N1 — lakehouse Delta↔Iceberg INTEROP BFF.
  *
- *   GET /api/lakehouse/interop?container=<c>
- *     → the real per-table interop state for the container (from the
+ *   GET /api/lakehouse/interop?lakehouseId=<id>
+ *     → the real per-table interop state for the lakehouse item (from the
  *       loom-lakehouse-interop Cosmos container), the catalog endpoint external
  *       engines point at, and the honest gate block when the catalog service is
  *       not deployed. Never empty, never mock.
  *
  *   PUT /api/lakehouse/interop
- *     body { container, tableName, iceberg: boolean, pool?, namespace? }
+ *     body { lakehouseId, tableName, iceberg: boolean, pool?, namespace? }
  *     → flips ONE table's Iceberg exposure. This submits a REAL Synapse Spark
  *       Livy statement (Delta UniForm first, Apache XTable fallback — see
  *       lib/azure/iceberg-metadata) that writes Iceberg V2 metadata beside the
@@ -17,16 +17,23 @@
  *       pointer in the catalog. Zero copy: the Parquet data files and the
  *       `_delta_log` are never touched, so Delta readability cannot be lost.
  *
+ * Item scope: GET needs read access to the lakehouse item and PUT needs edit
+ * rights. The container, root and storage account come from the item binding,
+ * and the table is `<root>/Tables/<tableName>`. The state doc is kept per item.
+ * A catalog entry is (re-)registered or de-registered only when it is absent or
+ * already points under this item's table (`catalogEntryOwner`).
+ *
  * Azure-native end to end: Synapse Spark + ADLS Gen2 + the self-hosted Unity
  * Catalog OSS container. No Microsoft Fabric / OneLake / Power BI, and — unlike
  * the older UniForm toggle in /api/lakehouse/settings — no Databricks SQL
  * Warehouse either, so this works with Databricks entirely unconfigured.
  *
- * Auth: session required. Every flip writes an audit row (the toggle is a
- * privileged data-plane mutation) plus the catalog registration's own row.
+ * Every flip writes an audit row (the toggle is a privileged data-plane
+ * mutation) plus the catalog registration's own row.
  */
 import { NextResponse } from 'next/server';
 import { withSession } from '@/lib/api/route-toolkit';
+import { apiBadRequest } from '@/lib/api/respond';
 import { externalOrigin } from '@/lib/auth/auth-breaker';
 import { buildGateEnvelope } from '@/lib/api/gate-envelope';
 import {
@@ -41,6 +48,8 @@ import { defaultSparkPool } from '@/lib/azure/synapse-livy-client';
 import { buildAbfssUri, buildMaintenancePySpark, validateMaintenanceRequest } from '@/lib/azure/delta-maintenance';
 import { icebergMetadataLocation } from '@/lib/azure/iceberg-metadata';
 import { logSafe } from '@/lib/util/log-safe';
+import { abfssHost, authorizeAndBind } from '../_lib/item-binding';
+import { catalogEntryOwner } from '../_lib/interop-catalog-owner';
 import {
   ICEBERG_CATALOG_GATE_ID,
   icebergCatalogConfigGate,
@@ -51,7 +60,6 @@ import {
 } from '@/lib/azure/iceberg-catalog-client';
 import {
   emptyInteropDoc,
-  interopDocId,
   defaultNamespaceFor,
   normalizeTableKey,
   tableNameOf,
@@ -63,7 +71,19 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const CONTAINER_RE = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
+const READ_ONLY_MESSAGE =
+  'Your role on this lakehouse is read-only, so Loom did not change its Iceberg exposure. A workspace '
+  + 'Member/Admin, or an item grant that includes Edit, can make this change.';
+
+/** One interop state doc per lakehouse ITEM (several items can share a container). */
+function itemDocId(lakehouseId: string): string {
+  return `interop:item:${lakehouseId}`;
+}
+
+/** The storage account in the item binding, else the configured account (throws when neither). */
+function bindingAccount(abfss: string): string {
+  return abfssHost(abfss)?.split('.')[0] || getAccountName();
+}
 
 /**
  * Flatten an error for a user-facing status string. Strips markup, collapses
@@ -78,10 +98,10 @@ function sanitize(e: unknown): string {
   );
 }
 
-async function loadDoc(tenantId: string, container: string): Promise<LakehouseInteropDoc | null> {
+async function loadDoc(tenantId: string, docId: string): Promise<LakehouseInteropDoc | null> {
   const c = await lakehouseInteropContainer();
   try {
-    const r = await c.item(interopDocId(container), tenantId).read<LakehouseInteropDoc>();
+    const r = await c.item(docId, tenantId).read<LakehouseInteropDoc>();
     return r.resource ?? null;
   } catch (e) {
     if ((e as { code?: number })?.code === 404) return null;
@@ -111,16 +131,17 @@ function originOf(req: Request): string {
 }
 
 export const GET = withSession(async (req, { session }) => {
-  const container = (req.nextUrl.searchParams.get('container') || '').trim();
-  if (!container || !CONTAINER_RE.test(container)) {
-    return NextResponse.json({ ok: false, error: 'a valid container query param is required' }, { status: 400 });
-  }
+  const lakehouseId = (req.nextUrl.searchParams.get('lakehouseId') || '').trim();
+  if (!lakehouseId) return apiBadRequest('lakehouseId is required: interop state belongs to a lakehouse item.');
+  const scope = await authorizeAndBind(session, lakehouseId);
+  if (scope instanceof NextResponse) return scope;
+  const container = scope.bound.container;
   const tenantId = session.claims.oid;
 
   let doc: LakehouseInteropDoc | null = null;
   let storeError: string | null = null;
   try {
-    doc = await loadDoc(tenantId, container);
+    doc = await loadDoc(tenantId, itemDocId(lakehouseId));
   } catch (e) {
     storeError = sanitize(e);
   }
@@ -130,7 +151,7 @@ export const GET = withSession(async (req, { session }) => {
   let account: string | null = null;
   let accountGate: string | null = null;
   try {
-    account = getAccountName();
+    account = bindingAccount(scope.bound.abfss);
   } catch {
     accountGate =
       'No Loom ADLS Gen2 account is configured, so Iceberg metadata has no target storage. Set '
@@ -155,27 +176,30 @@ export const GET = withSession(async (req, { session }) => {
 
 export const PUT = withSession(async (req, { session }) => {
   const body = (await req.json().catch(() => ({}))) as {
-    container?: string;
+    lakehouseId?: string;
     tableName?: string;
     iceberg?: boolean;
     pool?: string;
     namespace?: string;
   };
-  const container = String(body?.container ?? '').trim();
+  const lakehouseId = String(body?.lakehouseId ?? '').trim();
   const tableKey = normalizeTableKey(body?.tableName);
   const iceberg = body?.iceberg === true;
   const pool = String(body?.pool ?? '').trim() || defaultSparkPool();
 
-  if (!container || !CONTAINER_RE.test(container)) {
-    return NextResponse.json({ ok: false, error: 'a valid container is required' }, { status: 400 });
-  }
+  if (!lakehouseId) return apiBadRequest('lakehouseId is required: interop state belongs to a lakehouse item.');
   if (!tableKey) {
     return NextResponse.json({ ok: false, error: 'tableName is required and must be a valid table path' }, { status: 400 });
   }
 
+  const scope = await authorizeAndBind(session, lakehouseId, { write: true, readOnlyMessage: READ_ONLY_MESSAGE });
+  if (scope instanceof NextResponse) return scope;
+  const container = scope.bound.container;
+  const tablesRoot = scope.rootSegments.join('/');
+
   let account: string;
   try {
-    account = getAccountName();
+    account = bindingAccount(scope.bound.abfss);
   } catch {
     return NextResponse.json({
       ok: false,
@@ -201,8 +225,8 @@ export const PUT = withSession(async (req, { session }) => {
   });
   if (!v.ok) return NextResponse.json({ ok: false, error: v.error }, { status: 400 });
 
-  const { code, ops } = buildMaintenancePySpark(v.value, account);
-  const tableRootUri = buildAbfssUri(container, account, tableKey);
+  const { code, ops } = buildMaintenancePySpark({ ...v.value, tablesRoot }, account);
+  const tableRootUri = buildAbfssUri(container, account, tableKey, tablesRoot);
   const metadataLocation = icebergMetadataLocation(tableRootUri);
   const namespace = String(body?.namespace ?? '').trim() || defaultNamespaceFor(container, tableKey);
   const icebergTableName = tableNameOf(tableKey);
@@ -226,6 +250,7 @@ export const PUT = withSession(async (req, { session }) => {
     await jobs.items.upsert({
       id: jobId,
       tenantId,
+      lakehouseId,
       container,
       tableName: tableKey,
       pool,
@@ -264,41 +289,51 @@ export const PUT = withSession(async (req, { session }) => {
 
   let persistError: string | null = null;
   let doc: LakehouseInteropDoc;
+  const freshDoc = (): LakehouseInteropDoc => ({ ...emptyInteropDoc(tenantId, container), id: itemDocId(lakehouseId) });
   try {
-    const existing = await loadDoc(tenantId, container);
-    doc = upsertTableState(existing ?? emptyInteropDoc(tenantId, container), state);
+    const existing = await loadDoc(tenantId, itemDocId(lakehouseId));
+    doc = upsertTableState(existing ?? freshDoc(), state);
     const c = await lakehouseInteropContainer();
     await c.items.upsert(doc);
   } catch (e) {
     persistError = sanitize(e);
-    doc = upsertTableState(emptyInteropDoc(tenantId, container), state);
+    doc = upsertTableState(freshDoc(), state);
   }
 
   // ── Catalog registration (only when the catalog service is deployed). The
   //    metadata file may not exist until the Spark statement completes, so a
-  //    registration failure here is reported honestly, not swallowed. ──
+  //    registration failure here is reported honestly, not swallowed. The
+  //    entry is changed only when it is absent or already points under THIS
+  //    item's table — never one that points at another table. ──
   let catalogNote: string | null = null;
   if (!icebergCatalogConfigGate()) {
     try {
-      if (iceberg) {
-        await registerTable(namespace, icebergTableName, metadataLocation);
-        state.registeredInCatalog = true;
+      const owner = await catalogEntryOwner(namespace, icebergTableName, tableRootUri);
+      if (owner === 'other') {
+        catalogNote =
+          `The catalog already has ${namespace}.${icebergTableName} pointing at a different table, so Loom left that `
+          + 'entry unchanged. Choose another namespace for this table to register it in the catalog.';
       } else {
-        await dropTableRegistration(namespace, icebergTableName);
+        if (iceberg) {
+          await registerTable(namespace, icebergTableName, metadataLocation);
+          state.registeredInCatalog = true;
+        } else if (owner === 'ours') {
+          await dropTableRegistration(namespace, icebergTableName);
+        }
+        await logIcebergAccess({
+          actorOid: session.claims.oid,
+          actorUpn: session.claims.upn,
+          tenantId: session.claims.tid || session.claims.oid,
+          operation: iceberg ? 'table.register' : 'table.deregister',
+          namespace,
+          table: icebergTableName,
+          outcome: 'success',
+        });
+        try {
+          const c = await lakehouseInteropContainer();
+          await c.items.upsert(upsertTableState(doc, state));
+        } catch { /* the state row is already persisted; the flag re-syncs on next GET */ }
       }
-      await logIcebergAccess({
-        actorOid: session.claims.oid,
-        actorUpn: session.claims.upn,
-        tenantId: session.claims.tid || session.claims.oid,
-        operation: iceberg ? 'table.register' : 'table.deregister',
-        namespace,
-        table: icebergTableName,
-        outcome: 'success',
-      });
-      try {
-        const c = await lakehouseInteropContainer();
-        await c.items.upsert(upsertTableState(doc, state));
-      } catch { /* the state row is already persisted; the flag re-syncs on next GET */ }
     } catch (e) {
       catalogNote =
         `Iceberg metadata is being written, but the catalog ${iceberg ? 'registration' : 'de-registration'} `
