@@ -216,6 +216,12 @@ export async function getDomainChargeback(opts: {
   // Every subscription failed. An access denial propagates the honest RBAC
   // gate; any other failure (throttled, unrecognised response, 5xx) is thrown
   // with its OWN status so the route does not mislabel it as a missing role.
+  //
+  // The trailing `new MonitorError(..., 500)` cannot be reached: `subs` is
+  // non-empty (404 above), and every subscription either succeeds or fills one
+  // of the two slots in its catch. It stays as a defensive fallback, so
+  // changing its status is an EQUIVALENT mutant (no input distinguishes it),
+  // not a gap in the tests.
   if (!anySucceeded) throw firstAuthError || firstOtherError || new MonitorError('Cost Management query failed for all subscriptions', 500);
 
   const { rows, untaggedCost, totalCost } = foldDomainCostRows(raw, opts.domainNames || {});

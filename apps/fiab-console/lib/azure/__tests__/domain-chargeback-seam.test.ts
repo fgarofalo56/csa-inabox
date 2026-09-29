@@ -23,11 +23,12 @@ vi.mock('@/lib/azure/cost-client', () => ({ loomCostSubscriptions: async () => [
 
 /** How each subscription's Cost Management query answers in the current test. */
 let answers: Record<string, { status: number; body: unknown }>;
-const fetchMock = vi.fn(async (url: string) => {
+const defaultFetch = async (url: string) => {
   const sub = [SUB_A, SUB_B].find((s) => url.includes(`/subscriptions/${s}/`)) as string;
   const { status, body } = answers[sub];
   return { ok: status >= 200 && status < 300, status, headers: new Headers(), text: async () => JSON.stringify(body) };
-});
+};
+const fetchMock = vi.fn(defaultFetch);
 vi.mock('@/lib/azure/fetch-with-timeout', () => ({ fetchWithTimeout: (...a: unknown[]) => fetchMock(a[0] as string) }));
 
 /** Rows present but no TagValue / key-named column: the unrecognised shape. */
@@ -65,8 +66,34 @@ describe('getDomainChargeback — every subscription failed', () => {
   it('prefers the access denial when the failures are mixed', async () => {
     answers = { [SUB_A]: UNRECOGNISED, [SUB_B]: DENIED };
     const { getDomainChargeback } = await import('../domain-chargeback');
-    // Breaks if the order becomes firstOtherError || firstAuthError (502 here).
+    // Breaks if the order becomes firstOtherError || firstAuthError (502 here),
+    // or if the FIRST failure to arrive wins across classes (SUB_A's 502
+    // arrives first in this order).
     await expect(getDomainChargeback()).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('prefers the access denial in the reversed arrival order too', async () => {
+    answers = { [SUB_A]: DENIED, [SUB_B]: UNRECOGNISED };
+    const { getDomainChargeback } = await import('../domain-chargeback');
+    // SUB_A's denial arrives first here, so this breaks if the LAST failure to
+    // arrive wins (a later non-auth failure clearing the recorded denial): the
+    // route would render SUB_B's 502 instead of the RBAC gate.
+    await expect(getDomainChargeback()).rejects.toMatchObject({ status: 403, message: 'denied for test' });
+  });
+
+  it('keeps a thrown non-MonitorError out of the RBAC statuses', async () => {
+    // Every subscription's fetch REJECTS outright (a timeout or abort), so the
+    // per-subscription catch sees a plain Error, not a MonitorError.
+    fetchMock.mockImplementation(async () => { throw new Error('socket hang up for test'); });
+    try {
+      const { getDomainChargeback } = await import('../domain-chargeback');
+      // Breaks if the coercion `new MonitorError(String(e), 500)` uses 401, 403
+      // or 404: the route would then show the "grant Cost Management Reader"
+      // gate for a network failure.
+      await expect(getDomainChargeback()).rejects.toMatchObject({ status: 500, message: expect.stringContaining('socket hang up for test') });
+    } finally {
+      fetchMock.mockImplementation(defaultFetch);
+    }
   });
 });
 
