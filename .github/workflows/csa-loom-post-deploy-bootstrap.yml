@@ -323,10 +323,10 @@ jobs:
           az account set --subscription "$ADMIN_SUB" 2>/dev/null || true
           UAMI_NAME="uami-loom-console-$REGION"
           # Discover the real UAMI in the admin RG (tolerates a renamed identity).
-          DISCOVERED_NAME=$(az identity list -g "$ADMIN_RG" \
+          DISCOVERED_NAME=$(az identity list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" \
             --query "[?contains(name,'console')].name | [0]" -o tsv 2>/dev/null || true)
           [ -n "${DISCOVERED_NAME:-}" ] && [ "$DISCOVERED_NAME" != "None" ] && UAMI_NAME="$DISCOVERED_NAME"
-          UAMI_JSON=$(az identity show -n "$UAMI_NAME" -g "$ADMIN_RG" 2>/dev/null || true)
+          UAMI_JSON=$(az identity show -n "$UAMI_NAME" -g "$ADMIN_RG" --subscription "$ADMIN_SUB" 2>/dev/null || true)
           if [ -n "${UAMI_JSON:-}" ]; then
             RES_PRINCIPAL=$(echo "$UAMI_JSON" | python3 -c "import sys,json;print(json.load(sys.stdin).get('principalId',''))" 2>/dev/null || true)
             RES_CLIENT=$(echo "$UAMI_JSON"   | python3 -c "import sys,json;print(json.load(sys.stdin).get('clientId',''))"   2>/dev/null || true)
@@ -353,8 +353,8 @@ jobs:
           fi
           # --- Databricks host (dlz sub) ---
           az account set --subscription "$DLZ_SUB" 2>/dev/null || true
-          DBX_URL=$(az databricks workspace show -g "$DLZ_RG" -n "$DBX_WS" --query workspaceUrl -o tsv 2>/dev/null \
-                    || az databricks workspace show -g "$ADMIN_RG" -n "$DBX_WS" --query workspaceUrl -o tsv 2>/dev/null || true)
+          DBX_URL=$(az databricks workspace show -g "$DLZ_RG" --subscription "$DLZ_SUB" -n "$DBX_WS" --query workspaceUrl -o tsv 2>/dev/null \
+                    || az databricks workspace show -g "$ADMIN_RG" --subscription "$ADMIN_SUB" -n "$DBX_WS" --query workspaceUrl -o tsv 2>/dev/null || true)
           if [ -n "${DBX_URL:-}" ] && [ "$DBX_URL" != "None" ]; then
             echo "DBX_HOST=$DBX_URL" >> "$GITHUB_ENV"
             echo "Resolved Databricks host: $DBX_URL"
@@ -375,9 +375,9 @@ jobs:
         run: |
           set -uo pipefail
           # Resolve the Loom Key Vault in the admin RG (kv-loom-*).
-          KV_NAME=$(az keyvault list -g "$ADMIN_RG" --query "[?starts_with(name,'kv-loom')].name | [0]" -o tsv 2>/dev/null || true)
+          KV_NAME=$(az keyvault list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[?starts_with(name,'kv-loom')].name | [0]" -o tsv 2>/dev/null || true)
           if [ -z "${KV_NAME:-}" ]; then
-            KV_NAME=$(az keyvault list -g "$ADMIN_RG" --query "[0].name" -o tsv 2>/dev/null || true)
+            KV_NAME=$(az keyvault list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[0].name" -o tsv 2>/dev/null || true)
           fi
           if [ -z "${KV_NAME:-}" ]; then
             echo "::warning::No Key Vault found in $ADMIN_RG — skipping MSAL app-reg provisioning"
@@ -415,7 +415,7 @@ jobs:
               || echo "::warning::Could not open the Key Vault write window — secret writes may be unreachable from the runner."
           fi
           # Resolve the Console Container App's runtime FQDN to add to redirect URIs.
-          CONSOLE_FQDN=$(az containerapp show -n loom-console -g "$ADMIN_RG" --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || true)
+          CONSOLE_FQDN=$(az containerapp show -n loom-console -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || true)
           HOSTS="${CSA_LOOM_CONSOLE_HOSTS:-}"
           if [ -n "${CONSOLE_FQDN:-}" ]; then
             HOSTS="${HOSTS:+$HOSTS,}$CONSOLE_FQDN"
@@ -428,12 +428,12 @@ jobs:
           # every AFD profile in the admin RG and append each to HOSTS so the
           # callback is registered for the real user-facing host(s). Best-effort:
           # a missing AFD must not fail the step.
-          for AFD_PROFILE in $(az afd profile list -g "$ADMIN_RG" --query "[].name" -o tsv 2>/dev/null || true); do
-            for FD_HOST in $(az afd endpoint list --profile-name "$AFD_PROFILE" -g "$ADMIN_RG" --query "[].hostName" -o tsv 2>/dev/null || true); do
+          for AFD_PROFILE in $(az afd profile list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[].name" -o tsv 2>/dev/null || true); do
+            for FD_HOST in $(az afd endpoint list --profile-name "$AFD_PROFILE" -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[].hostName" -o tsv 2>/dev/null || true); do
               [ -n "$FD_HOST" ] && HOSTS="${HOSTS:+$HOSTS,}$FD_HOST"
             done
           done
-          UAMI_ID=$(az identity list -g "$ADMIN_RG" --query "[?contains(name,'console')].id | [0]" -o tsv 2>/dev/null || true)
+          UAMI_ID=$(az identity list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[?contains(name,'console')].id | [0]" -o tsv 2>/dev/null || true)
           chmod +x scripts/csa-loom/bootstrap-msal-app-reg.sh
           # NOT best-effort any more (#3176). This step OWNS interactive sign-in:
           # if it does not put a VALIDATED client secret into Key Vault, every
@@ -633,12 +633,12 @@ jobs:
           elif [ -n "${CSA_LOOM_CONSOLE_HOSTS:-}" ]; then
             BASE="https://${CSA_LOOM_CONSOLE_HOSTS%%,*}"
           else
-            for AFD_PROFILE in $(az afd profile list -g "$ADMIN_RG" --query "[].name" -o tsv 2>/dev/null || true); do
-              FD_HOST=$(az afd endpoint list --profile-name "$AFD_PROFILE" -g "$ADMIN_RG" --query "[0].hostName" -o tsv 2>/dev/null || true)
+            for AFD_PROFILE in $(az afd profile list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[].name" -o tsv 2>/dev/null || true); do
+              FD_HOST=$(az afd endpoint list --profile-name "$AFD_PROFILE" -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[0].hostName" -o tsv 2>/dev/null || true)
               [ -n "$FD_HOST" ] && { BASE="https://$FD_HOST"; break; }
             done
             if [ -z "$BASE" ]; then
-              ACA_FQDN=$(az containerapp show -n loom-console -g "$ADMIN_RG" --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || true)
+              ACA_FQDN=$(az containerapp show -n loom-console -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || true)
               [ -n "$ACA_FQDN" ] && BASE="https://$ACA_FQDN"
             fi
           fi
@@ -686,7 +686,7 @@ jobs:
           # admin RG, then any account in the subscription. Skip the grants cleanly
           # when none exists (Purview opted out / reused account in another sub).
           if [ -z "${PURVIEW_ACCOUNT:-}" ]; then
-            PURVIEW_ACCOUNT="$(az purview account list -g "$ADMIN_RG" --query "[?starts_with(name,'purview-csa-loom')].name | [0]" -o tsv 2>/dev/null || true)"
+            PURVIEW_ACCOUNT="$(az purview account list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[?starts_with(name,'purview-csa-loom')].name | [0]" -o tsv 2>/dev/null || true)"
             [ -z "$PURVIEW_ACCOUNT" ] && PURVIEW_ACCOUNT="$(az resource list --resource-type Microsoft.Purview/accounts --query "[?starts_with(name,'purview-csa-loom')].name | [0]" -o tsv 2>/dev/null || true)"
           fi
           if [ -z "${PURVIEW_ACCOUNT:-}" ]; then
@@ -718,7 +718,7 @@ jobs:
           PURVIEW_ID="$(az resource list --resource-type Microsoft.Purview/accounts \
             --query "[?name=='$PURVIEW_ACCOUNT'].id | [0]" -o tsv 2>/dev/null)"
           if [ -z "$PURVIEW_ID" ]; then
-            PURVIEW_ID="$(az purview account show -n "$PURVIEW_ACCOUNT" -g "$ADMIN_RG" --query id -o tsv 2>/dev/null || true)"
+            PURVIEW_ID="$(az purview account show -n "$PURVIEW_ACCOUNT" -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query id -o tsv 2>/dev/null || true)"
           fi
           ORIG_PNA=""
           restore_purview_pna() {
@@ -1103,7 +1103,7 @@ jobs:
           # "Login failed for user" (ELOGIN) on every Synapse SQL call. Discover
           # the real UAMI in the admin RG and derive the region from ADMIN_RG so
           # CREATE LOGIN/USER targets the identity that actually runs the console.
-          DISCOVERED=$(az identity list -g "$ADMIN_RG" \
+          DISCOVERED=$(az identity list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" \
             --query "[?contains(name,'console')].name | [0]" -o tsv 2>/dev/null || true)
           if [ -n "${DISCOVERED:-}" ] && [ "$DISCOVERED" != "None" ]; then
             echo "CONSOLE_SQL_UAMI=$DISCOVERED" >> "$GITHUB_ENV"
@@ -1348,6 +1348,9 @@ jobs:
           if [ "$CODE" = "200" ]; then echo "✓ Delta Sharing metastore grants applied to $UAMI"; else echo "::warning::Delta Sharing grant returned $CODE (non-fatal — re-run csa-loom-grant-delta-sharing.yml)"; fi
 
       - name: Provision default Databricks SQL warehouse (query compute) + wire it on the Console
+        # Referenced by the final "Fail the job if a gated bootstrap step failed"
+        # step — do not rename without updating it (check-bootstrap-rg-subscription-scope).
+        id: dbx_sql_warehouse
         # Day-one QUERY COMPUTE for Databricks — the equivalent of Synapse's
         # always-on Serverless SQL pool, so users don't have to create one. A SQL
         # warehouse is a Databricks DATA-PLANE resource (REST API, NOT ARM), so it
@@ -1356,31 +1359,278 @@ jobs:
         # nothing to run against (LOOM_DATABRICKS_SQL_WAREHOUSE_ID was empty).
         # Idempotent (reuses an existing 'loom-default' warehouse). Serverless when
         # the workspace/region supports it, else a small classic PRO warehouse.
-        # Best-effort; skips cleanly when no Databricks workspace is bound.
+        # Skips cleanly when no Databricks workspace is bound. When one IS bound
+        # and no warehouse id results (or the Console env cannot be set), the step
+        # CLASSIFIES the failure (transport_error / network_blocked / auth_refused /
+        # not_json / http_error / no_id_in_response / no_token /
+        # console_env_not_set), states only what it established (for a network
+        # refusal it reads the workspace's publicNetworkAccess + requiredNsgRules
+        # from ARM), records reason / phase / http_status / detail in its outputs,
+        # and exits 1 (#4765). network_blocked is ONLY curl exit 0 + HTTP 403 whose
+        # message starts "Unauthorized network access to workspace": the JSON
+        # .message, or else the first line of a plain-text body (run 36526911340's
+        # SCIM and Delta Sharing refusals were plain text). A curl transport
+        # failure is transport_error, retried with bounded backoff first
+        # (deploy-integrity R6). A create whose outcome is unknown (transport
+        # failure, 5xx, or 2xx without an id) is never followed by a second
+        # create: the step re-lists warehouses and reuses 'loom-default' if it
+        # landed. The classic fallback runs only after a definite 4xx JSON
+        # rejection of the serverless create.
+        # scripts/ci/__tests__/bootstrap-warehouse-classifier.test.mjs runs this
+        # block and the gate step under stub curl/az and pins every class.
+        # KNOWN (run 36526911340, bootstrap on a7eadda12): the Commercial workspace
+        # adb-loom-default-centralus refused the runner with HTTP 403 "Unauthorized
+        # network access to workspace" (SCIM, then Delta Sharing; the old warehouse
+        # step then died in jq) EVEN THOUGH the "Enable Databricks public access"
+        # step's update had just returned publicNetworkAccess=Enabled. After the
+        # run ARM reads publicNetworkAccess=Disabled, requiredNsgRules=
+        # NoAzureDatabricksRules. So, as that estate is configured today, this step
+        # cannot create a warehouse from a GitHub-hosted runner; it now exits 1,
+        # names that cause from what it reads at failure time, and does not claim
+        # a warehouse id. The fix is an in-VNet path (#3744), not this step.
+        # continue-on-error stays so the steps after this one still run; the final
+        # always() gate step reads this step's OUTCOME and fails the job for every
+        # failure class EXCEPT network_blocked, which it reports as a warning
+        # (operator decision 2026-09-29, recorded at
+        # https://github.com/fgarofalo56/csa-inabox/issues/4765#issuecomment-5895322196:
+        # the warehouse must be created from inside the VNet; tracked on #3744,
+        # where the console is to ensure-create it). The
+        # in-step annotations are warnings because this step itself cannot fail
+        # the job (check-annotation-teeth). timeout-minutes bounds the whole step;
+        # each curl call is bounded by --connect-timeout 15 --max-time 60.
+        # Runs inside the Databricks public-access window: after "Enable
+        # Databricks public access (temp ...)" and before the always() "Restore
+        # Databricks public access disabled" step.
         # Learn: https://learn.microsoft.com/azure/databricks/sql/admin/sql-endpoints
+        timeout-minutes: 15
         continue-on-error: true
         run: |
           set -uo pipefail
+          # record KEY VALUE -> a step output the final gate step reads (#4765).
+          record() { printf '%s=%s\n' "$1" "$2" >> "${GITHUB_OUTPUT:-/dev/null}"; }
           if [ -z "${DBX_HOST:-}" ]; then echo "::notice::No Databricks host bound — skipping SQL warehouse provisioning."; exit 0; fi
           TOKEN=$(az account get-access-token --resource 2ff814a6-3304-4ab8-85cb-cd0e6f879c1d --query accessToken -o tsv)
+          if [ -z "$TOKEN" ]; then
+            echo "::warning::az account get-access-token returned no Databricks token (its stderr, if any, is above) — cannot provision the SQL warehouse on $DBX_HOST."
+            record reason no_token
+            record phase token
+            record detail "az account get-access-token returned no token for the Azure Databricks resource (its stderr, if any, is in this step's log)"
+            exit 1
+          fi
           auth=(-H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json")
-          WID=$(curl -sf "${auth[@]}" "https://$DBX_HOST/api/2.0/sql/warehouses" 2>/dev/null | jq -r '.warehouses[]? | select(.name=="loom-default") | .id' | head -1 || true)
-          if [ -z "$WID" ] || [ "$WID" = "null" ]; then
-            echo ">>> Creating serverless SQL warehouse 'loom-default' (2X-Small, auto-stop 10m)"
-            RESP=$(curl -s "${auth[@]}" -X POST "https://$DBX_HOST/api/2.0/sql/warehouses" -d '{"name":"loom-default","cluster_size":"2X-Small","min_num_clusters":1,"max_num_clusters":1,"auto_stop_mins":10,"enable_serverless_compute":true,"warehouse_type":"PRO"}')
-            WID=$(echo "$RESP" | jq -r '.id // empty')
-            if [ -z "$WID" ]; then
-              echo "::notice::Serverless unavailable in this workspace/region — creating a classic PRO warehouse."
-              RESP=$(curl -s "${auth[@]}" -X POST "https://$DBX_HOST/api/2.0/sql/warehouses" -d '{"name":"loom-default","cluster_size":"2X-Small","min_num_clusters":1,"max_num_clusters":1,"auto_stop_mins":10,"enable_serverless_compute":false,"warehouse_type":"PRO"}')
-              WID=$(echo "$RESP" | jq -r '.id // empty')
+          WH_API="https://$DBX_HOST/api/2.0/sql/warehouses"
+          # Response bodies go in a per-run directory, not fixed /tmp paths, so two
+          # runs on one machine (e.g. concurrent test runs) cannot read each
+          # other's files.
+          WH_TMP=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/dbx-wh.XXXXXX") || WH_TMP=""
+          if [ -z "$WH_TMP" ] || [ ! -d "$WH_TMP" ]; then
+            echo "::warning::mktemp -d failed (its stderr is above) — cannot provision the SQL warehouse on $DBX_HOST."
+            exit 1
+          fi
+          # #4765: every Databricks call records its HTTP status and keeps its body
+          # in a file, so a refused request is PRINTED instead of reading as "no
+          # warehouse" (the old probe was `curl -sf ... 2>/dev/null | jq ... || true`),
+          # and a non-JSON body is shown before jq parses it. Only the status and
+          # the response body are printed — never the token or request headers.
+          # curl_exit_meaning N -> curl's documented meaning of exit code N (man curl).
+          curl_exit_meaning() {
+            case "$1" in
+              0) echo "no curl error" ;;
+              6) echo "could not resolve host" ;;
+              7) echo "failed to connect to host" ;;
+              28) echo "operation timed out" ;;
+              35) echo "TLS/SSL connect error" ;;
+              52) echo "the server replied with nothing" ;;
+              56) echo "failure receiving network data" ;;
+              60) echo "peer certificate cannot be authenticated with known CA certificates" ;;
+              *) echo "see curl's own message above" ;;
+            esac
+          }
+          dbx_call() {  # dbx_call METHOD OUTFILE URL [curl args...] -> sets DBX_CODE, DBX_RC, DBX_ATTEMPTS
+            local method="$1" out="$2" retry_on
+            shift 2
+            # R6: retry a transport failure that can be transient — at most 3
+            # attempts, 5s then 10s apart, each bounded by --connect-timeout 15
+            # --max-time 60 — then fail closed with the last exit. A GET is safe
+            # to repeat: DNS (6), connect (7), timeout (28) and receive (56)
+            # failures retry. A POST retries only 6 and 7, where the request never
+            # left the runner; after any other POST failure the step does NOT send
+            # the create again at this level (see the re-probe below).
+            if [ "$method" = GET ]; then retry_on=" 6 7 28 56 "; else retry_on=" 6 7 "; fi
+            DBX_ATTEMPTS=1
+            while :; do
+              : > "$out"
+              DBX_RC=0
+              DBX_CODE=$(curl -sS --connect-timeout 15 --max-time 60 -o "$out" -w '%{http_code}' "${auth[@]}" -X "$method" "$@") || DBX_RC=$?
+              if [ "$DBX_RC" = 0 ] || [[ "$retry_on" != *" $DBX_RC "* ]] || [ "$DBX_ATTEMPTS" -ge 3 ]; then break; fi
+              echo "    $method attempt $DBX_ATTEMPTS: curl exit $DBX_RC ($(curl_exit_meaning "$DBX_RC")); retrying in $((DBX_ATTEMPTS * 5))s"
+              sleep $((DBX_ATTEMPTS * 5))
+              DBX_ATTEMPTS=$((DBX_ATTEMPTS + 1))
+            done
+          }
+          show_response() {  # show_response LABEL OUTFILE
+            local size
+            size=$(wc -c < "$2")
+            echo "    $1: HTTP ${DBX_CODE:-none} (curl exit $DBX_RC), body $size bytes; first 500:"
+            head -c 500 "$2"
+            echo
+          }
+          is_2xx() { [[ "${DBX_CODE:-}" =~ ^2[0-9][0-9]$ ]]; }
+          # jq only sees a body that STARTS like a JSON object, so an HTML/text page is
+          # named as such instead of surfacing as "jq: parse error" (the #4765 symptom).
+          is_json_object() {
+            local h
+            h=$(head -c 64 "$1" | tr -d '\0')
+            h="${h#"${h%%[![:space:]]*}"}"
+            [ "${h:0:1}" = "{" ] && jq -e 'type == "object"' "$1" > /dev/null
+          }
+          # workspace_network -> WS_PNA / WS_NSG read from ARM ('' when unreadable;
+          # az's own stderr is left visible). Used only to NAME a network failure.
+          workspace_network() {
+            local rid="" row=""
+            WS_PNA=""; WS_NSG=""
+            if [ -n "${DLZ_RG:-}" ]; then
+              rid=$(az resource list --subscription "$DLZ_SUB" -g "$DLZ_RG" --resource-type Microsoft.Databricks/workspaces --query "[?name=='$DBX_WS'].id | [0]" -o tsv) || rid=""
             fi
-            if [ -z "$WID" ]; then echo "::warning::Could not create a SQL warehouse: $RESP"; exit 0; fi
+            if [ -z "$rid" ]; then
+              rid=$(az resource list --subscription "$ADMIN_SUB" -g "$ADMIN_RG" --resource-type Microsoft.Databricks/workspaces --query "[?name=='$DBX_WS'].id | [0]" -o tsv) || rid=""
+            fi
+            [ -n "$rid" ] || return 0
+            row=$(az resource show --ids "$rid" --query "join('|', [properties.publicNetworkAccess || 'unset', properties.requiredNsgRules || 'unset'])" -o tsv) || row=""
+            row=$(printf '%s' "$row" | tr -d '\r\n')
+            [ -n "$row" ] || return 0
+            WS_PNA="${row%%|*}"; WS_NSG="${row#*|}"
+          }
+          # classify_failure OUTFILE -> CAUSE (a reason code) + WHY (a sentence stating
+          # ONLY what this step established). deploy-integrity R6 (classify) + R7 (true).
+          classify_failure() {
+            local body first msg
+            body=$(head -c 2000 "$1" | tr -d '\0')
+            first="${body#"${body%%[![:space:]]*}"}"
+            msg=""
+            # A 403's message: the JSON .message when the body is a JSON object,
+            # otherwise the body's first line, trimmed (the run-36526911340
+            # refusals were plain text: "Unauthorized network access to workspace: <id>").
+            if [ "${DBX_RC:-0}" = 0 ] && [ "${DBX_CODE:-}" = 403 ]; then
+              if is_json_object "$1"; then
+                msg=$(jq -r '.message // empty | tostring' "$1" | tr -d '\r\n')
+              else
+                msg=$(printf '%s\n' "$body" | head -n 1 | tr -d '\r')
+                msg="${msg#"${msg%%[![:space:]]*}"}"
+                msg="${msg%"${msg##*[![:space:]]}"}"
+              fi
+            fi
+            if [ "${DBX_RC:-0}" != 0 ] || [ "${DBX_CODE:-000}" = 000 ]; then
+              # curl did not complete the request, so nothing answered: this step
+              # cannot say WHY (DNS, a timeout and a TLS failure are all this shape).
+              CAUSE=transport_error
+              WHY="curl could not complete the request (curl exit ${DBX_RC:-0}: $(curl_exit_meaning "${DBX_RC:-0}"), after ${DBX_ATTEMPTS:-1} attempt(s); HTTP ${DBX_CODE:-none}; curl's own message is above); this step did not establish why"
+            elif [[ "$msg" == "Unauthorized network access to workspace"* ]]; then
+              # ONLY curl exit 0 + HTTP 403 whose message (JSON .message or the
+              # plain-text first line) starts with this phrase.
+              CAUSE=network_blocked
+              workspace_network
+              if [ "$WS_PNA" = Disabled ]; then
+                WHY="the workspace refused the runner at the network layer (HTTP 403 \"${msg:0:120}\") and its public network access is disabled (ARM: publicNetworkAccess=Disabled, requiredNsgRules=${WS_NSG})"
+              elif [ -n "$WS_PNA" ]; then
+                WHY="the workspace refused the runner at the network layer (HTTP 403 \"${msg:0:120}\") although ARM reports publicNetworkAccess=${WS_PNA}, requiredNsgRules=${WS_NSG}; an IP access list or a network change still propagating may be blocking it"
+              else
+                WHY="the workspace refused the runner at the network layer (HTTP 403 \"${msg:0:120}\"); its publicNetworkAccess could not be read from ARM (az output above)"
+              fi
+            elif [[ "${DBX_CODE:-}" =~ ^40[13]$ ]]; then
+              CAUSE=auth_refused
+              WHY="the workspace rejected the deploy identity (HTTP $DBX_CODE; response above)"
+            elif ! is_json_object "$1"; then
+              CAUSE=not_json
+              if [ "${first:0:1}" = "<" ]; then WHY="HTTP ${DBX_CODE:-none}, but the response was HTML, not JSON (first 500 bytes above)"; else WHY="HTTP ${DBX_CODE:-none}, but the response was not JSON (first 500 bytes above)"; fi
+            elif is_2xx; then
+              CAUSE=no_id_in_response
+              WHY="HTTP $DBX_CODE with a JSON body that carried no warehouse id (response above)"
+            else
+              CAUSE=http_error
+              msg=$(jq -r '[.error_code, .message] | map(select(. != null)) | join(": ")' "$1" | tr -d '\r\n' | head -c 300)
+              WHY="HTTP ${DBX_CODE}${msg:+ — $msg}"
+            fi
+          }
+          fail_with() {  # fail_with PHASE -> records the classified failure for the final gate, exits 1
+            record reason "$CAUSE"
+            record phase "$1"
+            record http_status "${DBX_CODE:-none}"
+            record detail "$(printf '%s' "$WHY" | tr -d '\r\n')"
+            exit 1
+          }
+          create_warehouse() {  # create_warehouse true|false OUTFILE -> sets WID only when the API returned an id
+            WID=""
+            dbx_call POST "$2" "$WH_API" -d "$(printf '{"name":"loom-default","cluster_size":"2X-Small","min_num_clusters":1,"max_num_clusters":1,"auto_stop_mins":10,"enable_serverless_compute":%s,"warehouse_type":"PRO"}' "$1")"
+            show_response "POST /api/2.0/sql/warehouses (serverless=$1)" "$2"
+            if is_2xx && is_json_object "$2"; then WID=$(jq -r '.id // empty' "$2"); fi
+          }
+          # definite_rejection OUTFILE -> true only when the API answered the last
+          # call with a 4xx JSON body: the create certainly did not land.
+          definite_rejection() { [ "${DBX_RC:-1}" = 0 ] && [[ "${DBX_CODE:-}" =~ ^4[0-9][0-9]$ ]] && is_json_object "$1"; }
+          PROBE="$WH_TMP/list.json"
+          dbx_call GET "$PROBE" "$WH_API"
+          if ! is_2xx || ! is_json_object "$PROBE"; then
+            show_response "GET /api/2.0/sql/warehouses" "$PROBE"
+            classify_failure "$PROBE"
+            echo "::warning::Could not list SQL warehouses on $DBX_HOST: $WHY. Whether 'loom-default' already exists is unknown, so none was created."
+            fail_with probe
+          fi
+          WID=$(jq -r '[.warehouses[]? | select(.name == "loom-default") | .id][0] // empty' "$PROBE")
+          if [ -n "$WID" ]; then
+            echo "    Reusing existing SQL warehouse 'loom-default'"
+          else
+            echo ">>> Creating serverless SQL warehouse 'loom-default' (2X-Small, auto-stop 10m)"
+            create_warehouse true "$WH_TMP/create_serverless.json"
+            LAST="$WH_TMP/create_serverless.json"
+            if [ -z "$WID" ] && definite_rejection "$LAST"; then
+              echo "::notice::Serverless create was rejected (HTTP $DBX_CODE; response above) — retrying as a classic PRO warehouse."
+              create_warehouse false "$WH_TMP/create_classic.json"
+              LAST="$WH_TMP/create_classic.json"
+            fi
+            if [ -z "$WID" ]; then
+              classify_failure "$LAST"
+              # A network-layer refusal (network_blocked) is an answer: the create
+              # did not land, so it is reported directly, without a re-list.
+              if ! definite_rejection "$LAST" && [ "$CAUSE" != network_blocked ]; then
+                # The create's outcome is unknown (transport failure, 5xx, non-JSON,
+                # or 2xx without an id): it may have landed. Re-list instead of
+                # sending a second create for the same name.
+                echo "::notice::The create's outcome is unknown ($WHY) — re-listing warehouses instead of sending another create."
+                P_CAUSE=$CAUSE; P_WHY=$WHY; P_CODE=${DBX_CODE:-}; P_RC=${DBX_RC:-}
+                REPROBE="$WH_TMP/relist.json"
+                dbx_call GET "$REPROBE" "$WH_API"
+                if is_2xx && is_json_object "$REPROBE"; then
+                  WID=$(jq -r '[.warehouses[]? | select(.name == "loom-default") | .id][0] // empty' "$REPROBE")
+                  REPROBE_SAYS="a re-list found no 'loom-default'"
+                else
+                  show_response "GET /api/2.0/sql/warehouses (re-list)" "$REPROBE"
+                  REPROBE_SAYS="a re-list could not read the warehouses (HTTP ${DBX_CODE:-none}, curl exit ${DBX_RC:-0}), so whether the create landed is unknown"
+                fi
+                CAUSE=$P_CAUSE; DBX_CODE=$P_CODE; DBX_RC=$P_RC
+                if [ -n "$WID" ]; then
+                  echo "    The create landed after all: reusing SQL warehouse 'loom-default' found by the re-list"
+                else
+                  WHY="$P_WHY; $REPROBE_SAYS"
+                fi
+              fi
+              if [ -z "$WID" ]; then
+                echo "::warning::No SQL warehouse id resulted on $DBX_HOST: $WHY. This step did not wire LOOM_DATABRICKS_SQL_WAREHOUSE_ID (#3744)."
+                fail_with create
+              fi
+            fi
           fi
           echo "    SQL warehouse id: $WID"
           # One warehouse serves SQL execution, Delta-Sharing grants, lineage, and system-tables.
-          az containerapp update -n loom-console -g "$ADMIN_RG" --set-env-vars "LOOM_DATABRICKS_SQL_WAREHOUSE_ID=$WID" "LOOM_DATABRICKS_LINEAGE_WAREHOUSE_ID=$WID" -o none \
-            && echo "✓ Wired LOOM_DATABRICKS_SQL_WAREHOUSE_ID + LINEAGE = $WID on the Console" \
-            || echo "::warning::Could not set the warehouse env on the Console (set LOOM_DATABRICKS_SQL_WAREHOUSE_ID=$WID manually)."
+          if az containerapp update -n loom-console -g "$ADMIN_RG" --subscription "$ADMIN_SUB" \
+              --set-env-vars "LOOM_DATABRICKS_SQL_WAREHOUSE_ID=$WID" "LOOM_DATABRICKS_LINEAGE_WAREHOUSE_ID=$WID" -o none; then
+            echo "✓ Wired LOOM_DATABRICKS_SQL_WAREHOUSE_ID + LINEAGE = $WID on the Console"
+          else
+            CAUSE=console_env_not_set
+            WHY="az containerapp update failed (its stderr is above); LOOM_DATABRICKS_SQL_WAREHOUSE_ID=$WID was NOT set on loom-console in $ADMIN_RG"
+            echo "::warning::$WHY."
+            fail_with console
+          fi
 
       - name: Databricks reachability fallback (IP access-list for Console egress)
         # #1466 FALLBACK to the databricks_ui_api Private Endpoint (databricks.bicep).
@@ -1473,11 +1723,11 @@ jobs:
           # /catalog/domains UC-mirror surfaces would honest-gate on a missing env.
           # The console UC client (lib/azure/unity-catalog-account-client.ts) reads
           # LOOM_DATABRICKS_ACCOUNT_ID; set it now so the surfaces are live day-one.
-          CONSOLE_APP=$(az containerapp list -g "$ADMIN_RG" --query "[?contains(name,'loom-console') || contains(name,'console')].name | [0]" -o tsv 2>/dev/null || true)
+          CONSOLE_APP=$(az containerapp list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[?contains(name,'loom-console') || contains(name,'console')].name | [0]" -o tsv 2>/dev/null || true)
           if [ -n "$CONSOLE_APP" ]; then
             ENVPAIRS=("LOOM_DATABRICKS_ACCOUNT_ID=$DATABRICKS_ACCOUNT_ID")
             [ -n "${DATABRICKS_ACCOUNT_HOST:-}" ] && ENVPAIRS+=("LOOM_DATABRICKS_ACCOUNT_HOST=$DATABRICKS_ACCOUNT_HOST")
-            az containerapp update -g "$ADMIN_RG" -n "$CONSOLE_APP" --set-env-vars "${ENVPAIRS[@]}" -o none 2>&1 | tail -1 \
+            az containerapp update -g "$ADMIN_RG" --subscription "$ADMIN_SUB" -n "$CONSOLE_APP" --set-env-vars "${ENVPAIRS[@]}" -o none 2>&1 | tail -1 \
               && echo "Wired LOOM_DATABRICKS_ACCOUNT_ID onto $CONSOLE_APP (UC metastore enumerate/attach now configured)." \
               || echo "::warning::Could not set LOOM_DATABRICKS_ACCOUNT_ID on $CONSOLE_APP — run scripts/csa-loom/patch-navigator-env.sh (it now wires this env)."
           else
@@ -1500,7 +1750,7 @@ jobs:
       - name: Grant Console UAMI APIM Service Contributor (if APIM exists)
         run: |
           set -e
-          APIM_STATE=$(az apim show -n $APIM_NAME -g $ADMIN_RG --query provisioningState -o tsv 2>/dev/null || echo "Missing")
+          APIM_STATE=$(az apim show -n $APIM_NAME -g $ADMIN_RG --subscription "$ADMIN_SUB" --query provisioningState -o tsv 2>/dev/null || echo "Missing")
           echo "APIM state: $APIM_STATE"
           if [[ "$APIM_STATE" == "Succeeded" ]]; then
             az role assignment create \
@@ -1628,9 +1878,9 @@ jobs:
           }
 
           # Prefer an AIServices/Cognitive-Services account (the CSA Loom default).
-          AISVC=$(az cognitiveservices account list -g "$ADMIN_RG" \
+          AISVC=$(az cognitiveservices account list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" \
                     --query "[?contains(name,'aifndry') || kind=='AIServices' || kind=='OpenAI'].id | [0]" -o tsv 2>/dev/null || true)
-          MLWS=$(az resource list -g "$ADMIN_RG" --resource-type Microsoft.MachineLearningServices/workspaces --query "[0].id" -o tsv 2>/dev/null || true)
+          MLWS=$(az resource list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --resource-type Microsoft.MachineLearningServices/workspaces --query "[0].id" -o tsv 2>/dev/null || true)
 
           if [ -n "$AISVC" ]; then
             echo "Foundry is an AIServices/Cognitive Services account: $AISVC"
@@ -1652,7 +1902,7 @@ jobs:
         continue-on-error: true
         run: |
           set -uo pipefail
-          STG=$(az storage account list -g $ADMIN_RG --query "[?contains(name,'aifound') || contains(name,'aifndry') || contains(name,'foundry') || contains(name,'aml')].id" -o tsv | head -1)
+          STG=$(az storage account list -g $ADMIN_RG --subscription "$ADMIN_SUB" --query "[?contains(name,'aifound') || contains(name,'aifndry') || contains(name,'foundry') || contains(name,'aml')].id" -o tsv | head -1)
           if [ -n "$STG" ]; then
             echo "Foundry storage: $STG"
             az role assignment create \
@@ -1737,7 +1987,7 @@ jobs:
           SA_DFS=$(az storage account show --subscription "$DLZ_SUB" -n "$SA_ACCT" -g "$DLZ_RG"  --query "primaryEndpoints.dfs"  -o tsv)
           SA_BLOB="${SA_BLOB%/}"; SA_DFS="${SA_DFS%/}"
           CONSOLE_APP="${LOOM_CONSOLE_APP:-loom-console}"
-          az containerapp update -g "$ADMIN_RG" -n "$CONSOLE_APP" --set-env-vars \
+          az containerapp update -g "$ADMIN_RG" --subscription "$ADMIN_SUB" -n "$CONSOLE_APP" --set-env-vars \
             "LOOM_ADLS_ACCOUNT=$SA_ACCT" \
             "LOOM_ORG_VISUALS_URL=$SA_BLOB/org-visuals" \
             "LOOM_BRONZE_URL=$SA_DFS/bronze" \
@@ -1751,7 +2001,7 @@ jobs:
 
       - name: Grant Console UAMI Cognitive Services User on Content Safety (unblocks /items/content-safety)
         run: |
-          CS=$(az cognitiveservices account list -g $ADMIN_RG --query "[?kind=='ContentSafety'].id" -o tsv | head -1)
+          CS=$(az cognitiveservices account list -g $ADMIN_RG --subscription "$ADMIN_SUB" --query "[?kind=='ContentSafety'].id" -o tsv | head -1)
           if [ -n "$CS" ]; then
             echo "Content Safety: $CS"
             az role assignment create \
@@ -1775,18 +2025,18 @@ jobs:
           # data-agents and AI functions then work on first login. If the account
           # is missing entirely, it prints the exact remediation (re-run the
           # deploy with agentFoundryEnabled=true) rather than silently passing.
-          AOAI=$(az cognitiveservices account list -g $ADMIN_RG \
+          AOAI=$(az cognitiveservices account list -g $ADMIN_RG --subscription "$ADMIN_SUB" \
             --query "[?kind=='AIServices' && starts_with(name,'aifndry-loom')].name" -o tsv | head -1)
           if [ -z "$AOAI" ]; then
-            AOAI=$(az cognitiveservices account list -g $ADMIN_RG \
+            AOAI=$(az cognitiveservices account list -g $ADMIN_RG --subscription "$ADMIN_SUB" \
               --query "[?kind=='AIServices' || kind=='OpenAI'].name" -o tsv | head -1)
           fi
           if [ -z "$AOAI" ]; then
             echo "::warning::No AOAI (AIServices) account in $ADMIN_RG. Copilot / data-agent / AI-functions will honest-gate. Re-run the deploy with agentFoundryEnabled=true (default) to provision aifndry-loom-<region> + gpt-4o + embeddings."
           else
-            AOAI_ID=$(az cognitiveservices account show -n "$AOAI" -g $ADMIN_RG --query id -o tsv)
+            AOAI_ID=$(az cognitiveservices account show -n "$AOAI" -g $ADMIN_RG --subscription "$ADMIN_SUB" --query id -o tsv)
             echo "AOAI account: $AOAI"
-            CHAT=$(az cognitiveservices account deployment list -n "$AOAI" -g $ADMIN_RG \
+            CHAT=$(az cognitiveservices account deployment list -n "$AOAI" -g $ADMIN_RG --subscription "$ADMIN_SUB" \
               --query "[?contains(to_string(properties.model.name) || '','gpt-4')].name | [0]" -o tsv 2>/dev/null || true)
             if [ -z "$CHAT" ]; then
               echo "::warning::AOAI account $AOAI has no gpt-4o-class chat deployment. Re-run the deploy (agentFoundryEnabled=true deploys 'chat' = gpt-4o) or deploy a gpt-4o model to it."
@@ -2180,8 +2430,18 @@ jobs:
           # one-time manual actions, printed at the end of the script. Until
           # then label/DLP-policy READS work and CRUD returns the honest
           # 'mip_admin_not_configured' / 'dlp_admin_not_configured' gate (no vaporware).
+          #
+          # #4765: provision-scc-labels-sidecar.sh runs `az ... -g "$SCC_FUNCTION_RG"`
+          # with no --subscription, and provision-databricks-compute.sh (an earlier
+          # step) leaves the az profile on $DLZ_SUB. Pin the profile to the admin
+          # subscription first. No `|| true`: if the pin fails, `bash -e` stops
+          # this step before the script runs. The step is continue-on-error and
+          # is not in the final gate, so that shows only as this step failing;
+          # the job still continues. check-bootstrap-rg-subscription-scope
+          # (PROFILE_PINS) fails CI if this pin is removed or suppressed.
+          az account set --subscription "$ADMIN_SUB"
           set +e
-          SCC_FUNCTION_APP=$(az functionapp list -g "$ADMIN_RG" --query "[?starts_with(name,'func-scclbl-')].name | [0]" -o tsv 2>/dev/null)
+          SCC_FUNCTION_APP=$(az functionapp list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[?starts_with(name,'func-scclbl-')].name | [0]" -o tsv 2>/dev/null)
           if [ -n "$SCC_FUNCTION_APP" ]; then
             echo "Found SCC labels Function app: $SCC_FUNCTION_APP — provisioning + publishing code (labels + dlp functions)."
             SCC_FUNCTION_APP="$SCC_FUNCTION_APP" SCC_FUNCTION_RG="$ADMIN_RG" \
@@ -2300,12 +2560,12 @@ jobs:
             # had not established (deploy-integrity R7). Now the real az error is
             # quoted, and the message says only what was observed.
             UPD_ERR="$RUNNER_TEMP/posture-url-update.err"
-            az containerapp update -g "$ADMIN_RG" -n loom-console \
+            az containerapp update -g "$ADMIN_RG" --subscription "$ADMIN_SUB" -n loom-console \
               --set-env-vars "LOOM_POSTURE_FUNCTION_URL=$FUNC_URL" -o none 2> "$UPD_ERR"
             UPD_RC=$?
             # R6: never report success on an unverified outcome. Read the value
             # BACK off the app rather than trusting the update's exit status.
-            LIVE_URL=$(az containerapp show -g "$ADMIN_RG" -n loom-console \
+            LIVE_URL=$(az containerapp show -g "$ADMIN_RG" --subscription "$ADMIN_SUB" -n loom-console \
               --query "properties.template.containers[0].env[?name=='LOOM_POSTURE_FUNCTION_URL'].value | [0]" \
               -o tsv 2> "$RUNNER_TEMP/posture-url-read.err")
             LIVE_URL=$(printf '%s' "$LIVE_URL" | tr -d '\r')
@@ -2388,7 +2648,7 @@ jobs:
             IB_FQDN=$(az containerapp show -n iceberg-catalog -g "$ADMIN_RG" --subscription "$ADMIN_SUB" \
               --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null)
             if [ -n "$IB_FQDN" ]; then
-              az containerapp update -g "$ADMIN_RG" -n loom-console \
+              az containerapp update -g "$ADMIN_RG" --subscription "$ADMIN_SUB" -n loom-console \
                 --set-env-vars "LOOM_ICEBERG_CATALOG_URL=https://$IB_FQDN" -o none 2>/dev/null \
                 && echo "  Wired LOOM_ICEBERG_CATALOG_URL=https://$IB_FQDN on loom-console." \
                 || echo "::warning::Could not set LOOM_ICEBERG_CATALOG_URL on loom-console — set it manually to https://$IB_FQDN."
@@ -2557,6 +2817,15 @@ jobs:
           # Loom app runs as) so weave-ontology app resources work day-one — the
           # Resources-tab attach then reports already-exists instead of a
           # pending-grants script.
+          # #4765: bootstrap-weave-pg.sh runs `az … -g "$DLZ_RG"` with no
+          # --subscription (it only checks SUB is set), and an earlier step (the
+          # SCC step) leaves the az profile on $ADMIN_SUB. Pin the profile to the
+          # DLZ subscription first. No `|| true`: if the pin fails, `bash -e` stops
+          # this step before the script runs; the step is continue-on-error, so
+          # that shows as this step failing while the job continues.
+          # check-bootstrap-rg-subscription-scope (PROFILE_PINS) fails CI if this
+          # pin is removed, suppressed, or pointed at another subscription.
+          az account set --subscription "$DLZ_SUB"
           SUB="$DLZ_SUB" DLZ_RG="$DLZ_RG" WEAVE_PG_SERVER="$WEAVE_PG_SERVER" \
             CONSOLE_UAMI_NAME="$CONSOLE_UAMI_NAME" \
             EXTRA_PG_PRINCIPALS="uami-loom-mcp-${{ inputs.region }}" \
@@ -2576,14 +2845,14 @@ jobs:
           # MUST match the bicep defaults + platform/fiab/grafana/*.json.
           set -uo pipefail
           az account set --subscription "$ADMIN_SUB" 2>/dev/null || true
-          GRAFANA_NAME=$(az grafana list -g "$ADMIN_RG" --query "[?starts_with(name,'grafana-csa-loom')].name | [0]" -o tsv 2>/dev/null)
+          GRAFANA_NAME=$(az grafana list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[?starts_with(name,'grafana-csa-loom')].name | [0]" -o tsv 2>/dev/null)
           if [ -z "${GRAFANA_NAME:-}" ] || [ "$GRAFANA_NAME" = "None" ]; then
             echo "::notice::No grafana-csa-loom-* instance in $ADMIN_RG — deploy with managedGrafanaEnabled=true to create it, then re-run this job."
             exit 0
           fi
           echo "Managed Grafana: $GRAFANA_NAME"
           az extension add -n amg -y 2>/dev/null || az extension update -n amg 2>/dev/null || true
-          GRAFANA_ID=$(az grafana show -n "$GRAFANA_NAME" -g "$ADMIN_RG" --query id -o tsv 2>/dev/null)
+          GRAFANA_ID=$(az grafana show -n "$GRAFANA_NAME" -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query id -o tsv 2>/dev/null)
           # The deploy SP must be a Grafana Admin to create dashboards via the API.
           DEPLOY_SP_OID=$(az ad sp show --id "$(az account show --query user.name -o tsv)" --query id -o tsv 2>/dev/null || echo "")
           if [ -n "$DEPLOY_SP_OID" ] && [ -n "${GRAFANA_ID:-}" ]; then
@@ -2592,7 +2861,7 @@ jobs:
               -o none 2>&1 | grep -v "already exists" || echo "  (deploy SP Grafana Admin already assigned)"
           fi
           # The Grafana managed identity needs Monitoring Reader to read metrics/logs.
-          GRAFANA_MI=$(az grafana show -n "$GRAFANA_NAME" -g "$ADMIN_RG" --query "identity.principalId" -o tsv 2>/dev/null)
+          GRAFANA_MI=$(az grafana show -n "$GRAFANA_NAME" -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "identity.principalId" -o tsv 2>/dev/null)
           if [ -n "${GRAFANA_MI:-}" ] && [ "$GRAFANA_MI" != "None" ]; then
             for S in "$ADMIN_SUB" "$DLZ_SUB"; do
               [ -n "$S" ] && az role assignment create --assignee-object-id "$GRAFANA_MI" --assignee-principal-type ServicePrincipal \
@@ -2603,7 +2872,7 @@ jobs:
           sleep 30
           for D in loom-governance loom-usage; do
             if [ -f "platform/fiab/grafana/${D}.json" ]; then
-              az grafana dashboard create -n "$GRAFANA_NAME" -g "$ADMIN_RG" --overwrite \
+              az grafana dashboard create -n "$GRAFANA_NAME" -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --overwrite \
                 --definition "@platform/fiab/grafana/${D}.json" \
                 --query "{uid:uid,status:status}" -o tsv 2>&1 \
                 && echo "  created/updated dashboard: $D" \
@@ -2704,3 +2973,67 @@ jobs:
           echo "  • Dataverse System Administrator on Default env — one-time Promote To Admin click"
           echo "    at https://<org>.crm.dynamics.com/main.aspx?settingsonly=true&pagetype=entitylist&etn=systemuser"
           echo "    (only needed for envs Dataverse was added to AFTER bootstrap; new custom envs don't need this)"
+
+      - name: Fail the job if a gated bootstrap step failed (#4765)
+        id: bootstrap_failure_gate
+        if: always()
+        # A step with continue-on-error: true reports success to the job even when
+        # it exits 1. That is how run 36384158319 concluded while the SQL warehouse
+        # step had died (#4765). The gated steps keep continue-on-error so every
+        # later step still runs; THIS step, which must stay LAST and always(), reads
+        # their OUTCOME and fails the job, so the conclusion is honest. Exception
+        # (operator decision 2026-09-29, recorded at
+        # https://github.com/fgarofalo56/csa-inabox/issues/4765#issuecomment-5895322196):
+        # a network_blocked warehouse failure is a
+        # ::warning:: naming its cause and #3744, not a job failure.
+        # Gated today: dbx_sql_warehouse only. The Foundry storage grant has
+        # continue-on-error but no step id; the Content Safety and AOAI steps have
+        # no continue-on-error (their failures are swallowed inside the script).
+        # check-bootstrap-rg-subscription-scope fails CI if this step is removed,
+        # loses always(), stops being last, or stops reading a gated step's outcome;
+        # scripts/ci/__tests__/bootstrap-warehouse-classifier.test.mjs runs this
+        # block and pins which failure classes warn and which fail the job.
+        env:
+          WH_OUTCOME: ${{ steps.dbx_sql_warehouse.outcome }}
+          WH_REASON: ${{ steps.dbx_sql_warehouse.outputs.reason }}
+          WH_PHASE: ${{ steps.dbx_sql_warehouse.outputs.phase }}
+          WH_HTTP: ${{ steps.dbx_sql_warehouse.outputs.http_status }}
+          WH_DETAIL: ${{ steps.dbx_sql_warehouse.outputs.detail }}
+        run: |
+          set -uo pipefail
+          echo "SQL warehouse step (dbx_sql_warehouse) outcome: ${WH_OUTCOME:-not reached}"
+          if [ "${WH_OUTCOME:-}" = "failure" ]; then
+            # CLASS + FIX per deploy-integrity R6. The cause sentence itself is the
+            # step's own WH_DETAIL, which states only what that step established (R7).
+            case "${WH_REASON:-}" in
+              network_blocked) CLASS="network/configuration (the workspace refused this runner at the network layer; the cause above names what ARM reported)"
+                FIX="" ;;  # not printed: this class warns with the #3744 sentence below instead
+              transport_error) CLASS="transport (curl did not complete the request; the attempt count is in the cause above)"
+                FIX="check that DBX_HOST resolves and is reachable from the runner, using curl's exit code and message in that step's log, then re-run the bootstrap." ;;
+              auth_refused) CLASS="permission"
+                FIX="make the deploy identity a workspace admin (the 'Bootstrap Databricks SCIM' step), then re-run the bootstrap." ;;
+              not_json) CLASS="configuration"
+                FIX="something other than the Databricks API answered (the first 500 bytes are in that step's log); check the host in DBX_HOST and any proxy or sign-in page in front of it." ;;
+              http_error) CLASS="configuration or capacity"
+                FIX="act on the Databricks error named in the cause (for example a quota or SKU error needs more quota or a different warehouse size), then re-run the bootstrap." ;;
+              no_id_in_response) CLASS="defect"
+                FIX="the create API answered 2xx without an id; the response is in that step's log. File it against this step." ;;
+              no_token) CLASS="permission/configuration"
+                FIX="the deploy identity got no token for the Azure Databricks resource. Check the azure/login step above and that the identity belongs to the workspace's tenant, then re-run the bootstrap." ;;
+              console_env_not_set) CLASS="permission"
+                FIX="the deploy identity needs Contributor on loom-console in the admin resource group (\$ADMIN_RG in \$ADMIN_SUB); the warehouse id is printed in that step's log. Then re-run the bootstrap." ;;
+              *) CLASS="unclassified"
+                FIX="the step failed before recording a reason (for example it was stopped by its timeout-minutes). Read its log above." ;;
+            esac
+            if [ "${WH_REASON:-}" = network_blocked ]; then
+              # Operator decision 2026-09-29 ("warn + gate, build producer"), recorded at
+              # https://github.com/fgarofalo56/csa-inabox/issues/4765#issuecomment-5895322196: ONLY the
+              # network-blocked class does not fail the job. Every other class below does.
+              echo "::warning::Step 'Provision default Databricks SQL warehouse (query compute) + wire it on the Console' was refused by the workspace at ${WH_PHASE:-an unrecorded phase}: ${WH_DETAIL:-no cause recorded} [reason=network_blocked, last Databricks HTTP status=${WH_HTTP:-not recorded}]. Class: ${CLASS}. The Databricks SQL warehouse must be created from inside the VNet; tracked on #3744 (the console is to ensure-create it from inside the VNet). This run did not set LOOM_DATABRICKS_SQL_WAREHOUSE_ID on loom-console."
+            else
+              echo "::error::Step 'Provision default Databricks SQL warehouse (query compute) + wire it on the Console' failed at ${WH_PHASE:-an unrecorded phase}: ${WH_DETAIL:-no cause recorded} [reason=${WH_REASON:-not recorded}, last Databricks HTTP status=${WH_HTTP:-not recorded}; each response's status and first 500 bytes are in that step's log]. This run did not set LOOM_DATABRICKS_SQL_WAREHOUSE_ID on loom-console. Class: ${CLASS}. Remediation: ${FIX}"
+              exit 1
+            fi
+          else
+            echo "No gated step failed."
+          fi
