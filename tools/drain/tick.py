@@ -2386,19 +2386,25 @@ def _receipt_comment(kind: str, issue_class: str, detail: str, binding: str) -> 
             "close condition is that workflow running GREEN. The evidence is a "
             "completed, successful run of THAT workflow - matched by workflow id "
             "against the failed run the watcher recorded on this issue, not by "
-            "name and not by the title - on the default branch, created AFTER the "
-            "newest failure this issue records, in which every job that failed in "
-            "that recorded failure concluded success having executed work steps. "
+            "name and not by the title - on the default branch, not triggered by "
+            "a pull request, created AFTER the newest failure this issue records, "
+            "in which every job and every step that failed in that recorded "
+            "failure (named above) concluded success, and after which no "
+            "completed run of that workflow on the default branch concluded "
+            "anything but success. "
             "An observation of something that ran, not a merge, which is why "
             f"deploy-integrity R2 (merged is not done) makes the {issue_class} "
             "class take a receipt of this shape. "
             "DISCLOSED: it is bound to no SHA and to no change, so it says the "
             "path ran green after the recorded failure, not which fix made it so. "
-            "A failure the watcher did not record is not seen - the time bound is "
-            "the newest RECORDED failure, not the newest failure. And no boundary "
-            "label is consulted: the binding is the workflow's identity, so the "
-            "cloud this receipt speaks for is the one that workflow deploys to, "
-            "named above, and no other. "
+            "The run's dispatch inputs (a tag, a skip flag, a run mode) are NOT "
+            "read - GitHub's run object does not carry them, and the run's title "
+            "above shows them only where that workflow's run-name interpolates "
+            "them - so a green re-roll of an old tag would pass. Runs still in "
+            "progress are not considered. And no boundary label is consulted: "
+            "the ONLY cloud binding is that the green run contains the same-named "
+            "jobs and steps that failed, listed above. Where a job name does not "
+            "encode its cloud, this receipt makes no per-cloud claim. "
             "Closing this issue on that evidence, and on nothing wider than it."
         )
     return (
@@ -3342,6 +3348,26 @@ _WATCHER_RUN_LINE = re.compile(
     re.MULTILINE,
 )
 
+#: The sentence `buildIssueBody` ends EVERY failure notice with. A record is a
+#: FAILURE RECORD only if it carries this as well as the watcher's login: any
+#: workflow with `issues: write` posts as `github-actions`, so the login alone
+#: says "a GITHUB_TOKEN wrote this", not "the watcher recorded a failure". A
+#: login-matching comment without it -- `copilot-auto-fix.yml`'s acknowledgement
+#: is the measured candidate -- is NOT a record and is skipped. Lifted back out
+#: of the .mjs by the same test as the title.
+WATCHER_CLOSE_MARKER = "Close this issue only once the path has run GREEN"
+
+#: Events whose `headBranch` is a PR's branch rather than a branch of this
+#: repository -- a fork's branch named `main` would otherwise pass the
+#: default-branch check. No watched workflow triggers on these today (measured
+#: by review, 2026-09-29); refused so it stays unreachable if one ever does.
+_PULL_REQUEST_EVENTS = frozenset({"pull_request", "pull_request_target"})
+
+#: How many later completed runs `_later_runs` reads. A full page is REFUSED
+#: rather than read as complete, because the run it did not return could be
+#: the red one.
+_LATER_RUNS_LIMIT = 100
+
 #: Steps GitHub runs around EVERY job that is not skipped, whatever its `if:`s
 #: decide. A job whose only green steps are these did no work -- the job-level
 #: form of `cloud-parity.md`'s "a green run whose deploy job was skipped at 0
@@ -3420,7 +3446,16 @@ def watcher_filing(repo: str, number: int) -> WatcherFiling | None:
 
     Also refuses a watcher issue whose newest record names no run, or names
     runs in another repository: the failure run is the only source of the
-    workflow's identity, and guessing one is the defect.
+    workflow's identity, and guessing one is the defect. A "record" is a
+    watcher-login post that carries `WATCHER_CLOSE_MARKER`; other posts by the
+    same login are not failure notices and are skipped.
+
+    THE ROUTE STILL DEPENDS ON THE TITLE, disclosed rather than fixed: the
+    caller asks only when the LEDGER title is watcher-shaped, and this returns
+    None when the GITHUB title is not. A human who retitles a watcher issue
+    therefore moves it to the policy route, where an unlabelled `deploy-run`
+    item refuses (no `default_boundary`). Deciding the route without the title
+    would put a GitHub read on every `deploy-run` record.
     """
     rc, out, err = sh([
         "gh", "issue", "view", str(number), "--repo", repo,
@@ -3450,14 +3485,25 @@ def watcher_filing(repo: str, number: int) -> WatcherFiling | None:
     if workflow is None or _login(parsed.get("author")) != WATCHER_LOGIN:
         return None
 
-    records = [(_parse_time(parsed.get("createdAt"), f"#{number}'s creation time"),
-                str(parsed.get("body") or ""))]
+    # A RECORD is watcher-authored AND carries the notice's closing line. The
+    # issue itself is already known to be watcher-authored; its body counts on
+    # the same marker test as a comment, so the two cannot drift apart.
+    candidates = [(parsed.get("createdAt"), parsed.get("body"), f"#{number}'s body")]
     for comment in parsed.get("comments") or []:
         if isinstance(comment, dict) and _login(comment.get("author")) == WATCHER_LOGIN:
-            records.append((
-                _parse_time(comment.get("createdAt"), f"a watcher comment on #{number}"),
-                str(comment.get("body") or ""),
-            ))
+            candidates.append((comment.get("createdAt"), comment.get("body"),
+                               f"a watcher comment on #{number}"))
+    records = [
+        (_parse_time(created, what), str(body or ""))
+        for created, body, what in candidates
+        if WATCHER_CLOSE_MARKER in str(body or "")
+    ]
+    if not records:
+        raise ReceiptRefusedError(
+            f"#{number} was opened by {WATCHER_LOGIN}, but no record on it carries "
+            f"the watcher's closing line ({WATCHER_CLOSE_MARKER!r}), so no failure "
+            "notice exists to read the workflow from. Refusing."
+        )
     recorded_at, newest_body = max(records, key=lambda record: record[0])
 
     runs = _WATCHER_RUN_LINE.findall(newest_body)
@@ -3488,8 +3534,8 @@ def watcher_filing(repo: str, number: int) -> WatcherFiling | None:
 #: pins that `_run_evidence` does not fetch `createdAt`, because the policy
 #: route publishes "no run date is fetched" -- which stays true on that route.
 _WATCHER_RUN_FIELDS = (
-    "databaseId,workflowName,workflowDatabaseId,headBranch,createdAt,"
-    "conclusion,status,headSha,url,jobs"
+    "databaseId,workflowName,workflowDatabaseId,headBranch,createdAt,event,"
+    "displayTitle,conclusion,status,headSha,url,jobs"
 )
 
 
@@ -3531,7 +3577,16 @@ def _default_branch(repo: str) -> str:
 
 
 def _job_did_work(job: dict) -> bool:
-    """At least one step other than GitHub's own bookkeeping concluded success."""
+    """At least one step other than GitHub's own bookkeeping concluded success.
+
+    A FLOOR, not the "did it run" check. `actions/checkout` and a login count
+    here, so on its own this accepted a `whatif-only` dry run whose apply step
+    was skipped (review A, 34217993648 / 34262376463). The check that binds the
+    offered run to the failure is `_failed_jobs_and_steps` + the step loop in
+    `verify_watcher_run_receipt`. This one is kept for the case that loop cannot
+    see: a failure in `Set up job` itself, where the failed step is bookkeeping
+    and "that step is green now" says nothing about whether the job did work.
+    """
     for step in job.get("steps") or []:
         name = str(step.get("name") or "")
         if (step.get("conclusion") == "success"
@@ -3541,9 +3596,63 @@ def _job_did_work(job: dict) -> bool:
     return False
 
 
+def _failed_jobs_and_steps(failure_run: dict) -> list[tuple[str, list[str]]]:
+    """Each job that failed in the recorded failure, with the steps that failed in it.
+
+    "Failed" is anything but `success` and `skipped` -- so `failure`,
+    `cancelled` and `timed_out` all count, for jobs and for steps alike.
+    Shared by the verifier and by the published `detail`, so the names the
+    comment prints are the names the check used.
+    """
+    failed = []
+    for job in failure_run.get("jobs") or []:
+        if job.get("conclusion") in ("success", "skipped"):
+            continue
+        steps = [
+            str(step.get("name"))
+            for step in job.get("steps") or []
+            if step.get("conclusion") not in ("success", "skipped")
+        ]
+        failed.append((str(job.get("name")), steps))
+    return failed
+
+
+def _later_runs(repo: str, workflow_id: object, branch: str, created: str) -> list[dict]:
+    """Every COMPLETED run of this workflow on `branch` created at or after `created`.
+
+    FAILS CLOSED on a read error, and on a FULL page: a list this tool could not
+    see the end of may be missing exactly the red run it exists to find.
+    """
+    rc, out, err = sh([
+        "gh", "run", "list", "--repo", repo, "--workflow", str(workflow_id),
+        "--branch", branch, "--status", "completed", "--created", f">={created}",
+        "--limit", str(_LATER_RUNS_LIMIT),
+        "--json", "databaseId,conclusion,createdAt,event,url",
+    ])
+    if rc != 0:
+        raise ReceiptRefusedError(
+            f"cannot list the runs of workflow {workflow_id} on {branch} since "
+            f"{created} (rc={rc}): {err[:200]}. Whether the path has gone red "
+            "again since the offered run is unknown, so this refuses."
+        )
+    try:
+        parsed = json.loads(out)
+    except json.JSONDecodeError as exc:
+        raise ReceiptRefusedError(f"unparseable run list: {exc}") from exc
+    if not isinstance(parsed, list):
+        raise ReceiptRefusedError("unexpected shape for the run list")
+    if len(parsed) >= _LATER_RUNS_LIMIT:
+        raise ReceiptRefusedError(
+            f"{len(parsed)} completed runs of workflow {workflow_id} since {created} "
+            f"fill the {_LATER_RUNS_LIMIT}-run page, so the list may be incomplete - "
+            "offer a newer green run"
+        )
+    return parsed
+
+
 def verify_watcher_run_receipt(
     number: int, filing: WatcherFiling, failure_run: dict, run: dict,
-    default_branch: str,
+    default_branch: str, later_runs: list[dict],
 ) -> str:
     """Refuse unless RUN is the green run a watcher-filed item asks for.
 
@@ -3557,19 +3666,27 @@ def verify_watcher_run_receipt(
        not unique.
     2. **Completed, then success** -- two states, kept apart for the reason
        `verify_run_backed_receipt` keeps them apart.
-    3. **On the default branch.** A green run of a branch is a fact about that
-       branch.
-    4. **Created strictly AFTER the newest recorded failure.** A green run from
-       before the failure cannot say the failure is over.
-    5. **Every job that failed in the recorded failure concluded success here
-       having executed a work step.** This is the "did it actually run" check:
-       a run whose deploy job was skipped at 0 steps -- or whose jobs all
-       skipped -- concludes success over nothing (`cloud-parity.md`). Keyed on
-       the jobs that FAILED rather than on every job, because a green
-       `deploy-fiab-commercial` run legitimately skips `Post-deploy bootstrap
-       (Commercial)` at 0 steps -- measured on 36568209612 -- so "no job
-       skipped" would refuse every real receipt. A recorded failure with no
-       failed job leaves nothing to key on and REFUSES.
+    3. **On the default branch, from a non-pull-request event.** For a
+       `pull_request*` run `headBranch` is the PR's branch, so a fork branch
+       named `main` would otherwise pass.
+    4. **Created strictly AFTER the newest recorded failure.**
+    5. **Every STEP that failed in the recorded failure concluded success in
+       the same-named job here.** This is the "did it actually run" check, and
+       it is keyed on STEPS because a job-level check was not enough: review A
+       measured a `deploy-fiab-commercial` `whatif-only` dry run (34262376463)
+       whose job was green because checkout and login ran, with the failed step
+       `Provision (idempotent)` SKIPPED -- and it was ACCEPTED for the failure in
+       that step (34217993648). Each failed job must also be present, concluded
+       success, and have done work beyond bookkeeping (`_job_did_work`). A
+       failed job with no failed step recorded, or a failure with no failed
+       job, leaves nothing to key on and REFUSES. Jobs that did NOT fail are not
+       checked: green `deploy-fiab-commercial` runs skip `Post-deploy bootstrap
+       (Commercial)` at 0 steps (36568209612).
+    6. **Not red since.** No completed run of the workflow on the default
+       branch, created at or after the offered run, concluded anything but
+       success -- `cancelled` included. "Green after the failure" is not the
+       close condition; "has run GREEN and is not red again" is. A watcher
+       notice that was never posted is exactly the red run this sees.
     """
     expected = failure_run.get("workflowDatabaseId")
     if not expected:
@@ -3603,6 +3720,13 @@ def verify_watcher_run_receipt(
             f"{default_branch!r} - a green run of another branch says nothing about "
             "the path this item is about"
         )
+    event = run.get("event")
+    if not event or event in _PULL_REQUEST_EVENTS:
+        raise ReceiptRefusedError(
+            f"run was triggered by {event!r} - for a pull-request event the branch "
+            "is the PR's, not this repository's, so the default-branch check does "
+            "not bind it"
+        )
     created = _parse_time(run.get("createdAt"), "the run's creation time")
     if created <= filing.recorded_at:
         raise ReceiptRefusedError(
@@ -3612,11 +3736,7 @@ def verify_watcher_run_receipt(
             "cannot close it"
         )
 
-    failed_jobs = [
-        str(job.get("name"))
-        for job in failure_run.get("jobs") or []
-        if job.get("conclusion") not in ("success", "skipped")
-    ]
+    failed_jobs = _failed_jobs_and_steps(failure_run)
     if not failed_jobs:
         raise ReceiptRefusedError(
             f"the recorded failure {filing.failure_run_id} has no failed job, so "
@@ -3626,7 +3746,13 @@ def verify_watcher_run_receipt(
     by_name: dict[str, list[dict]] = {}
     for job in run.get("jobs") or []:
         by_name.setdefault(str(job.get("name")), []).append(job)
-    for name in failed_jobs:
+    for name, failed_steps in failed_jobs:
+        if not failed_steps:
+            raise ReceiptRefusedError(
+                f"the job {name!r} failed in {filing.failure_run_id} with no failed "
+                "STEP recorded, so there is no step whose recovery this run could "
+                "show - refusing rather than accepting the job-level green"
+            )
         jobs_named = by_name.get(name) or []
         if not jobs_named:
             raise ReceiptRefusedError(
@@ -3646,10 +3772,53 @@ def verify_watcher_run_receipt(
                     f"step ({len(job.get('steps') or [])} steps, none beyond "
                     "GitHub's own set-up, post and complete) - green over nothing"
                 )
+            steps_named: dict[str, list[dict]] = {}
+            for step in job.get("steps") or []:
+                steps_named.setdefault(str(step.get("name")), []).append(step)
+            for step_name in failed_steps:
+                same_steps = steps_named.get(step_name) or []
+                if not same_steps:
+                    raise ReceiptRefusedError(
+                        f"the job {name!r} has no step {step_name!r}, which is the "
+                        f"step that failed in {filing.failure_run_id} - the run did "
+                        "not show that step recovering"
+                    )
+                if any(s.get("conclusion") != "success" for s in same_steps):
+                    raise ReceiptRefusedError(
+                        f"the step {step_name!r} in job {name!r} concluded "
+                        f"{same_steps[0].get('conclusion')!r}, not success - it failed "
+                        f"in {filing.failure_run_id}, and a run that skipped it (a "
+                        "dry run, a gated apply) did not show it recovering"
+                    )
+
+    # The offered run itself may be in the list; it is `success` (checked
+    # above), so it can never be counted here and needs no exclusion.
+    red_since = [
+        other for other in later_runs
+        if _parse_time(other.get("createdAt"), "a later run's creation time") >= created
+        and other.get("conclusion") != "success"
+    ]
+    if red_since:
+        worst = red_since[0]
+        raise ReceiptRefusedError(
+            f"{len(red_since)} completed run(s) of this workflow on "
+            f"{default_branch} since the offered run did not succeed - e.g. "
+            f"{worst.get('databaseId')} concluded {worst.get('conclusion')!r} at "
+            f"{worst.get('createdAt')}. The path has not stayed green; offer the "
+            "newest green run instead"
+        )
 
     sha = run.get("headSha")
     ref = str(run.get("url") or run.get("databaseId"))
     return f"{ref} (headSha {sha})" if sha else ref
+
+
+def _recovered(failure_run: dict) -> str:
+    """The failed jobs and steps, as the published `detail` names them."""
+    return "; ".join(
+        f"job {name!r} step(s) {', '.join(repr(s) for s in steps) or '(none)'}"
+        for name, steps in _failed_jobs_and_steps(failure_run)
+    )
 
 
 def _watcher_run_receipt(
@@ -3665,18 +3834,25 @@ def _watcher_run_receipt(
         )
     run = _watcher_run_evidence(repo, from_run)
     failure = _watcher_run_evidence(repo, filing.failure_run_id)
-    ref = verify_watcher_run_receipt(number, filing, failure, run, _default_branch(repo))
-    # THE WORKFLOW IS NAMED BY ID AS WELL AS NAME, and the source of that
-    # identity is named too, because the comment is permanent and R7 governs
-    # what it implies: this route read the workflow off the failed run, not
-    # off the title and not off a policy declaration.
+    branch = _default_branch(repo)
+    later = _later_runs(repo, run.get("workflowDatabaseId"), branch,
+                        str(run.get("createdAt")))
+    ref = verify_watcher_run_receipt(number, filing, failure, run, branch, later)
+    # EVERY CLAUSE HERE IS A FACT THE CHECK ABOVE ESTABLISHED, and nothing else:
+    # the workflow by id, the run's own title as GitHub renders it (inputs appear
+    # there only if that workflow's `run-name:` interpolates them), its CREATION
+    # time -- not when it concluded -- and the jobs and steps that failed and are
+    # now green, which are the only cloud binding this route has.
     detail = (
         f"{run.get('workflowName')} run {from_run} (workflow id "
-        f"{run.get('workflowDatabaseId')}) concluded success on "
-        f"{run.get('headBranch')} at {run.get('createdAt')}, after the newest "
-        f"failure this issue records (run {filing.failure_run_id}, recorded "
-        f"{filing.recorded_at.isoformat()}); the workflow was read from that "
-        "failed run as recorded by the deploy-failure watcher, not from the title"
+        f"{run.get('workflowDatabaseId')}, titled {run.get('displayTitle')!r}), "
+        f"created {run.get('createdAt')} on {run.get('headBranch')} by "
+        f"{run.get('event')}, concluded success after the newest failure this "
+        f"issue records (run {filing.failure_run_id}, recorded "
+        f"{filing.recorded_at.isoformat()}), with the "
+        f"{_recovered(failure)} that failed there now green, and no completed "
+        f"run of the workflow on {branch} red since; the workflow was read from "
+        "that failed run as recorded by the deploy-failure watcher, not from the title"
     )
     return ref, detail
 
@@ -3858,8 +4034,11 @@ def record_receipt_from_evidence(
       now records which PR a lane opened, but this path does not consult it.
     - EXCEPT for an item the deploy-failure WATCHER filed (#4764), where the
       run IS bound: to the workflow the watcher recorded failing, by workflow
-      id, and to a time after its newest recorded failure. See
-      `verify_watcher_run_receipt`. Such an item takes ONLY that route.
+      id, to the steps that failed there, and to a time after its newest
+      recorded failure with nothing red since. See
+      `verify_watcher_run_receipt`. While its title stands, such an item takes
+      only that route; a retitled one falls back to the policy route (see
+      `watcher_filing`).
     """
     item = led.items.get(number)
     if item is None:
@@ -3900,13 +4079,13 @@ def record_receipt_from_evidence(
             )
         ref = data["merged"]
         detail = f"{receipt.summary} at {ref} (PR #{from_pr})"
-    # #4764: AN ITEM THE DEPLOY-FAILURE WATCHER FILED is closed by a green run
-    # of the workflow it was filed about, and by NOTHING ELSE -- in particular
-    # not by the policy producer, since a green `loom-roll-and-validate` says
-    # nothing about a failing `gov-console-roll`. The ledger title is only the
-    # pre-filter that decides whether to ask GitHub; `watcher_filing` returns
-    # None for an issue the watcher did not open, and that item takes the
-    # policy route below exactly as before.
+    # #4764: A `deploy-run` ITEM THE DEPLOY-FAILURE WATCHER FILED is closed by
+    # a green run of the workflow it was filed about, and NOT by the policy
+    # producer, since a green `loom-roll-and-validate` says nothing about a
+    # failing `gov-console-roll`. The ledger title is the pre-filter that
+    # decides whether to ask GitHub; `watcher_filing` returns None for an issue
+    # the watcher did not open or whose title was changed, and that item takes
+    # the policy route below exactly as before.
     elif (kind == "deploy-run"
           and watcher_workflow_in_title(item.title) is not None
           and (filing := watcher_filing(repo, number)) is not None):

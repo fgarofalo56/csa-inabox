@@ -102,33 +102,57 @@ def _issue_4390() -> dict:
     }
 
 
-def _job(name: str, conclusion: str, work: bool = True) -> dict:
-    """A job as `gh run view --json jobs` reports it. `work=False` gives the
-    shape of a job GitHub ran whose every `if:` said no: bookkeeping only."""
+#: The step that failed in 35492055049, read off the run on 2026-09-29.
+ROLL_STEP = "Wait for revision health"
+CHECKOUT = "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+LOGIN = "Azure login (Commercial)"
+
+
+def _job(name: str, conclusion: str, *, work: bool = True, step: str = ROLL_STEP,
+         step_conclusion: str | None = None) -> dict:
+    """A job as `gh run view --json jobs` reports it, trimmed to the steps
+    that matter: bookkeeping, checkout and login (which ran in the dry run as
+    well as the real one), and `step`, the one that failed in the recorded
+    failure. `step_conclusion` defaults to the job's own conclusion.
+
+    `work=False` gives a job GitHub ran whose every `if:` said no: bookkeeping
+    only. A `skipped` job has no steps at all, as GitHub reports it.
+    """
     if conclusion == "skipped":
         return {"name": name, "conclusion": "skipped", "steps": []}
-    steps = [{"name": "Set up job", "conclusion": "success"},
-             {"name": "Run actions/checkout@v7.0.1", "conclusion": "success"}]
-    if work:
-        steps.append({"name": "Roll unity", "conclusion": conclusion})
-    steps += [{"name": "Post Run actions/checkout@v7.0.1", "conclusion": "success"},
-              {"name": "Complete job", "conclusion": "success"}]
     if not work:
-        steps = [s for s in steps if s["name"] != "Run actions/checkout@v7.0.1"]
-    return {"name": name, "conclusion": conclusion, "steps": steps}
+        return {"name": name, "conclusion": conclusion, "steps": [
+            {"name": "Set up job", "conclusion": "success"},
+            {"name": f"Post {CHECKOUT}", "conclusion": "success"},
+            {"name": "Complete job", "conclusion": "success"}]}
+    return {"name": name, "conclusion": conclusion, "steps": [
+        {"name": "Set up job", "conclusion": "success"},
+        {"name": CHECKOUT, "conclusion": "success"},
+        {"name": LOGIN, "conclusion": "success"},
+        # Skipped in the failed run AND the green one, as on 35492055049 and
+        # 36522575982: a step skipped in the FAILURE did not fail, so a check
+        # that counted it (arm WR36) would demand it green and refuse the
+        # real receipt.
+        {"name": "Azure login (Gov)", "conclusion": "skipped"},
+        {"name": step, "conclusion": step_conclusion or conclusion},
+        {"name": f"Post {CHECKOUT}", "conclusion": "success"},
+        {"name": "Complete job", "conclusion": "success"}]}
 
 
 def _failure(**over) -> dict:
-    """35492055049: the newest failure #4390 records."""
+    """35492055049: the newest failure #4390 records. `headSha` and
+    `displayTitle` are what `gh run view` reported on 2026-09-29."""
     run = {
         "databaseId": int(NEWEST_FAILURE),
         "workflowName": DATAPLANE_NAME,
         "workflowDatabaseId": DATAPLANE_ID,
         "headBranch": "main",
+        "event": "workflow_run",
+        "displayTitle": "Roll all → 1c5b177738b2131dae5a09308150c476652a71ee on commercial",
         "createdAt": "2026-09-20T05:35:14Z",
         "status": "completed",
         "conclusion": "failure",
-        "headSha": "b" * 40,
+        "headSha": "1c5b177738b2131dae5a09308150c476652a71ee",
         "url": f"https://github.com/{REPO}/actions/runs/{NEWEST_FAILURE}",
         "jobs": [_job("Roll all on commercial", "failure")],
     }
@@ -137,16 +161,20 @@ def _failure(**over) -> dict:
 
 
 def _green(**over) -> dict:
-    """36522575982: the green run the operator tried to record against #4390."""
+    """36522575982: the green run the operator tried to record against #4390.
+    `headSha` is what GitHub reports for the RUN (a7eadda1...); the
+    `7db4c44a...` in its title is the TAG it rolled, which is a different fact."""
     run = {
         "databaseId": int(GREEN_RUN),
         "workflowName": DATAPLANE_NAME,
         "workflowDatabaseId": DATAPLANE_ID,
         "headBranch": "main",
+        "event": "workflow_run",
+        "displayTitle": "Roll all → 7db4c44afe5e56938f1b0906900af8a5f1cfda25 on commercial",
         "createdAt": "2026-09-29T04:39:13Z",
         "status": "completed",
         "conclusion": "success",
-        "headSha": "7db4c44afe5e56938f1b0906900af8a5f1cfda25",
+        "headSha": "a7eadda1293339f95b90921dde350a010e4e1f61",
         "url": f"https://github.com/{REPO}/actions/runs/{GREEN_RUN}",
         "jobs": [_job("Roll all on commercial", "success")],
     }
@@ -165,12 +193,14 @@ def _filing(**over) -> tick.WatcherFiling:
     return tick.WatcherFiling(**base)
 
 
-def _gh(issue: dict | None, runs: dict, *, default_branch: str = "main"):
-    """Answer the three reads the watcher route makes, and nothing else.
+def _gh(issue: dict | None, runs: dict, *, default_branch: str = "main",
+        later: list | None = None, list_rc: int = 0):
+    """Answer the four reads the watcher route makes, and nothing else.
 
     Anything else is rc=1, so a test that silently depends on another `gh`
     call fails loudly rather than reading an empty string as an answer.
-    `issue=None` answers the issue read with rc=1 too.
+    `issue=None` answers the issue read with rc=1 too; `later` is what
+    `gh run list` returns, `list_rc` its exit code.
     """
     calls: list[list[str]] = []
 
@@ -180,6 +210,10 @@ def _gh(issue: dict | None, runs: dict, *, default_branch: str = "main"):
             return 0, json.dumps(issue), ""
         if args[:3] == ["gh", "run", "view"] and str(args[3]) in runs:
             return 0, json.dumps(runs[str(args[3])]), ""
+        if args[:3] == ["gh", "run", "list"]:
+            if list_rc:
+                return list_rc, "", "HTTP 502: bad gateway"
+            return 0, json.dumps(later or []), ""
         if args[:3] == ["gh", "repo", "view"]:
             return 0, json.dumps({"defaultBranchRef": {"name": default_branch}}), ""
         return 1, "", f"test stub: unexpected gh call {args!r}"
@@ -240,6 +274,11 @@ def test_watcher_seam_accepts_the_real_4390_shape(tmp_path, monkeypatch):
     assert f"run {NEWEST_FAILURE}" in seen["detail"], seen["detail"]
     assert "34175684740" not in seen["detail"], "the OLDEST record was used"
     assert "not from the title" in seen["detail"], seen["detail"]
+    # The published detail NAMES what recovered -- the only cloud binding this
+    # route has (review B-1) -- and says CREATED, not "concluded at" (B-4).
+    assert f"job 'Roll all on commercial' step(s) '{ROLL_STEP}'" in seen["detail"], seen["detail"]
+    assert "created 2026-09-29T04:39:13Z" in seen["detail"], seen["detail"]
+    assert "on commercial" in seen["detail"], "the run's own title must be published"
     assert GREEN_RUN in out.summary
 
 
@@ -257,13 +296,15 @@ def test_watcher_seam_the_4448_shape_accepts_a_legitimately_skipped_sibling_job(
     """
     deploy, bootstrap = ("Deploy + validate CSA Loom in Commercial",
                          "Post-deploy bootstrap (Commercial)")
+    provision = "Provision (idempotent)"  # the step that failed in 35852726537
     issue = _issue_4390()
     issue["title"] = "deploy: deploy-fiab-commercial is failing"
     led, _item = _ledger(tmp_path, number=4448, title=issue["title"], lane="lane:bicep")
     fail = _failure(workflowName="deploy-fiab-commercial", workflowDatabaseId=281877765,
-                    jobs=[_job(deploy, "failure"), _job(bootstrap, "skipped")])
+                    jobs=[_job(deploy, "failure", step=provision), _job(bootstrap, "skipped")])
     green = _green(workflowName="deploy-fiab-commercial", workflowDatabaseId=281877765,
-                   jobs=[_job(deploy, "success"), _job(bootstrap, "skipped")])
+                   event="schedule",
+                   jobs=[_job(deploy, "success", step=provision), _job(bootstrap, "skipped")])
     monkeypatch.setattr(tick, "sh", _gh(issue, {GREEN_RUN: green, NEWEST_FAILURE: fail}))
     seen: dict = {}
     monkeypatch.setattr(tick, "close_issue_on_github", _closer(seen))
@@ -390,11 +431,15 @@ def test_the_newest_record_is_the_one_read(monkeypatch):
 
 def test_a_human_comment_is_not_a_failure_record(monkeypatch):
     """#4424's shape: the watcher's body records one failure (2026-09-09), and
-    a HUMAN triage comment (2026-09-18) quotes a run line of its own.
+    a HUMAN triage comment (2026-09-18) quotes a notice of its own -- run line
+    AND closing line, as a pasted notice would -- so the notice MARKER cannot
+    exclude it and only the author filter does.
 
     WHAT VALUE WOULD MAKE THIS FAIL: the comment-author filter dropped (arm
     WR6). The human comment then becomes the newest "record", the filing names
-    run 99999999999 recorded 2026-09-18, and both assertions move.
+    run 99999999999 recorded 2026-09-18, and both assertions move. (Round 2:
+    before the pasted closing line was added, the marker filter excluded this
+    comment on its own and WR6 SURVIVED -- measured, then fixed here.)
     """
     issue = {
         "author": {"login": "app/github-actions"},
@@ -405,10 +450,12 @@ def test_a_human_comment_is_not_a_failure_record(monkeypatch):
         "comments": [{
             "author": {"login": "fgarofalo56"},
             "createdAt": "2026-09-18T17:05:40Z",
-            "body": ("TRIAGE 2026-09-18: ALREADY-FIXED.\n"
-                     f"- run: https://github.com/{REPO}/actions/runs/99999999999\n"),
+            "body": "TRIAGE 2026-09-18: ALREADY-FIXED. Quoting the notice:\n"
+                    + _record("gov-console-roll", "99999999999"),
         }],
     }
+    assert tick.WATCHER_CLOSE_MARKER in issue["comments"][0]["body"], (
+        "the premise: the human comment carries the marker too")
     monkeypatch.setattr(tick, "sh", _gh(issue, {}))
     filing = tick.watcher_filing(REPO, 4424)
     assert filing is not None
@@ -436,7 +483,12 @@ def test_a_newest_record_naming_no_run_refuses(monkeypatch):
     WR24) -- `ids[0]` then raises IndexError, not a refusal.
     """
     issue = _issue_4390()
-    issue["comments"][-1]["body"] = "**loom-dataplane-roll** failed.\n\n- commit: `abc`\n"
+    # A real NOTICE (it carries the closing marker) whose run line is gone, so
+    # the record is found and then refuses for naming no run.
+    body = _record("loom-dataplane-roll", NEWEST_FAILURE)
+    issue["comments"][-1]["body"] = "\n".join(
+        line for line in body.splitlines() if not line.startswith("- run:"))
+    assert tick.WATCHER_CLOSE_MARKER in issue["comments"][-1]["body"]
     monkeypatch.setattr(tick, "sh", _gh(issue, {}))
     with pytest.raises(tick.ReceiptRefusedError, match="names no failed run"):
         tick.watcher_filing(REPO, 4390)
@@ -510,9 +562,10 @@ def test_the_watcher_login_folds_its_three_spellings_and_nothing_else(author, is
 # `verify_watcher_run_receipt`: each refusal, with the accepted positive.
 # --------------------------------------------------------------------------
 
-def _verify(run=None, failure=None, filing=None, branch="main"):
+def _verify(run=None, failure=None, filing=None, branch="main", later=None):
     return tick.verify_watcher_run_receipt(
-        4390, filing or _filing(), failure or _failure(), run or _green(), branch)
+        4390, filing or _filing(), failure or _failure(), run or _green(), branch,
+        later if later is not None else [])
 
 
 def test_the_positive_is_accepted():
@@ -520,7 +573,7 @@ def test_the_positive_is_accepted():
     WOULD MAKE THIS FAIL: any check below becoming unconditional."""
     ref = _verify()
     assert GREEN_RUN in ref, ref
-    assert "7db4c44a" in ref, ref
+    assert "a7eadda1" in ref, ref
 
 
 def test_a_different_workflow_with_the_same_display_name_is_refused():
@@ -626,7 +679,7 @@ def test_a_job_that_ran_only_bookkeeping_is_refused():
     exclusion dropped (arm WR13) so `Set up job` counts as work."""
     job = _job("Roll all on commercial", "success", work=False)
     assert [s["name"] for s in job["steps"]] == [
-        "Set up job", "Post Run actions/checkout@v7.0.1", "Complete job"], job
+        "Set up job", f"Post {CHECKOUT}", "Complete job"], job
     with pytest.raises(tick.ReceiptRefusedError, match="executed no work step"):
         _verify(run=_green(jobs=[job]))
 
@@ -647,13 +700,198 @@ def test_a_recorded_failure_with_no_failed_job_refuses():
 
 
 # --------------------------------------------------------------------------
+# Round 2: the STEP key, "not red since", the event, the record marker.
+# --------------------------------------------------------------------------
+
+DEPLOY_JOB = "Deploy + validate CSA Loom in Commercial"
+PROVISION = "Provision (idempotent)"
+
+
+def test_a_dry_run_that_skipped_the_failed_step_is_refused():
+    """REVIEW A's MEASURED BLOCKER, in its live shape: failure 34217993648
+    (`Provision (idempotent)` = failure) against the `whatif-only` dry run
+    34262376463, whose job is green because checkout and login ran while
+    `Provision (idempotent)` was SKIPPED. Round 1 ACCEPTED this.
+
+    WHAT VALUE WOULD MAKE THIS FAIL: the step-conclusion check deleted (arm
+    WR26). Nothing else refuses it: the job concluded success and did work
+    (checkout, login), which is exactly why the job-level check was not enough.
+    """
+    fail = _failure(jobs=[_job(DEPLOY_JOB, "failure", step=PROVISION)])
+    dry = _green(event="workflow_dispatch",
+                 displayTitle="deploy-fiab-commercial — DRY RUN (whatif-only, applies nothing)",
+                 jobs=[_job(DEPLOY_JOB, "success", step=PROVISION, step_conclusion="skipped")])
+    assert tick._job_did_work(dry["jobs"][0]), "the premise: the job DID do work"
+    with pytest.raises(tick.ReceiptRefusedError, match=r"concluded 'skipped', not success - it failed"):
+        _verify(run=dry, failure=fail)
+    # THE POSITIVE PAIR: the same job with the step green is accepted.
+    _verify(run=_green(jobs=[_job(DEPLOY_JOB, "success", step=PROVISION)]), failure=fail)
+
+
+def test_a_run_whose_job_lacks_the_failed_step_is_refused():
+    """WHAT VALUE WOULD MAKE THIS FAIL: the missing-step guard deleted (arm
+    WR27) -- the loop over same-named steps then iterates nothing and accepts."""
+    job = _job("Roll all on commercial", "success", step="Roll the Container Apps")
+    with pytest.raises(tick.ReceiptRefusedError, match=f"has no step '{ROLL_STEP}'"):
+        _verify(run=_green(jobs=[job]))
+
+
+def test_a_failed_job_with_no_failed_step_refuses():
+    """A job can fail with no failed step (a runner assignment failure reports
+    `steps: []`). WHAT VALUE WOULD MAKE THIS FAIL: the guard deleted (arm
+    WR28) -- the step loop then checks nothing and the job-level green passes."""
+    fail = _failure(jobs=[{"name": "Roll all on commercial", "conclusion": "failure", "steps": []}])
+    with pytest.raises(tick.ReceiptRefusedError, match="with no failed STEP recorded"):
+        _verify(failure=fail)
+
+
+def test_a_bookkeeping_step_failure_still_needs_the_job_to_do_work():
+    """The case `_job_did_work` exists for now that steps are keyed: the
+    failed step is `Set up job` itself, so "that step is green now" is true of
+    a job whose every `if:` said no. WHAT VALUE WOULD MAKE THIS FAIL: the
+    did-work check deleted (arm WR12) or `Set up job` counted as work (arm
+    WR13) -- the step loop passes on its own here, so this is an OUTCOME kill
+    for both, where `test_a_job_that_ran_only_bookkeeping_is_refused` is a
+    MESSAGE kill."""
+    fail = _failure(jobs=[{"name": "Roll all on commercial", "conclusion": "failure",
+                           "steps": [{"name": "Set up job", "conclusion": "failure"}]}])
+    idle = _job("Roll all on commercial", "success", work=False)
+    with pytest.raises(tick.ReceiptRefusedError, match="executed no work step"):
+        _verify(run=_green(jobs=[idle]), failure=fail)
+
+
+@pytest.mark.parametrize("conclusion", ["failure", "cancelled", "timed_out"])
+def test_a_completed_run_red_since_the_offered_one_refuses(conclusion):
+    """"Has run GREEN" means green and not red again (review A-2). A failure
+    whose notice was never posted is exactly this. `cancelled` counts: the
+    coordinator's rule is "did not succeed", and a refusal costs only offering
+    the newer green run.
+
+    WHAT VALUE WOULD MAKE THIS FAIL: the red-since check deleted (arm WR29).
+    """
+    later = [{"databaseId": 36609548942, "conclusion": conclusion,
+              "createdAt": "2026-09-29T18:05:20Z", "event": "workflow_run"}]
+    with pytest.raises(tick.ReceiptRefusedError, match="did not succeed"):
+        _verify(later=later)
+
+
+def test_a_later_green_run_and_an_earlier_red_one_do_not_refuse():
+    """The mirror, and the time filter. #4390's live list after 36522575982
+    held a green run; an EARLIER red run returned by the query (the `>=` search
+    boundary is GitHub's, not this code's) must not count.
+
+    WHAT VALUE WOULD MAKE THIS FAIL: the client-side time filter removed (arm
+    WR30) refuses on the earlier red run; a check that refuses on ANY later run
+    refuses on the green one.
+    """
+    later = [
+        {"databaseId": 36615042913, "conclusion": "success",
+         "createdAt": "2026-09-29T18:51:25Z", "event": "workflow_run"},
+        {"databaseId": 36500000000, "conclusion": "failure",
+         "createdAt": "2026-09-29T01:00:00Z", "event": "workflow_run"},
+    ]
+    _verify(later=later)
+
+
+@pytest.mark.parametrize("event", ["pull_request", "pull_request_target", None])
+def test_a_pull_request_run_is_refused(event):
+    """For a `pull_request*` run `headBranch` is the PR's branch, so a fork
+    branch named `main` passes the branch check. WHAT VALUE WOULD MAKE THIS
+    FAIL: the event check deleted (arm WR32). `None` pins that an ABSENT event
+    refuses rather than passing."""
+    with pytest.raises(tick.ReceiptRefusedError, match="triggered by"):
+        _verify(run=_green(event=event))
+
+
+def test_the_later_runs_read_fails_closed(monkeypatch):
+    """WHAT VALUE WOULD MAKE THIS FAIL: a read error returning `[]` -- "could
+    not look" read as "nothing red since" -- or the full-page guard deleted
+    (arm WR31)."""
+    monkeypatch.setattr(tick, "sh", _gh(None, {}, list_rc=1))
+    with pytest.raises(tick.ReceiptRefusedError, match="502"):
+        tick._later_runs(REPO, DATAPLANE_ID, "main", "2026-09-29T04:39:13Z")
+    full = [{"databaseId": i, "conclusion": "success", "createdAt": "2026-09-29T05:00:00Z"}
+            for i in range(tick._LATER_RUNS_LIMIT)]
+    monkeypatch.setattr(tick, "sh", _gh(None, {}, later=full))
+    with pytest.raises(tick.ReceiptRefusedError, match="may be incomplete"):
+        tick._later_runs(REPO, DATAPLANE_ID, "main", "2026-09-29T04:39:13Z")
+    # POSITIVE: one short of the page is read as complete.
+    monkeypatch.setattr(tick, "sh", _gh(None, {}, later=full[:-1]))
+    assert len(tick._later_runs(REPO, DATAPLANE_ID, "main", "t")) == tick._LATER_RUNS_LIMIT - 1
+
+
+def test_the_later_runs_query_names_the_workflow_branch_and_time(monkeypatch):
+    """The query is the only thing binding "later" to THIS workflow on THIS
+    branch. WHAT VALUE WOULD MAKE THIS FAIL: dropping `--workflow`,
+    `--branch`, `--status completed` or `--created` from the argv."""
+    stub = _gh(None, {})
+    monkeypatch.setattr(tick, "sh", stub)
+    tick._later_runs(REPO, DATAPLANE_ID, "main", "2026-09-29T04:39:13Z")
+    argv = stub.calls[-1]
+    for flag, value in (("--workflow", str(DATAPLANE_ID)), ("--branch", "main"),
+                        ("--status", "completed"), ("--created", ">=2026-09-29T04:39:13Z")):
+        assert argv[argv.index(flag) + 1] == value, (flag, argv)
+
+
+def test_a_watcher_login_post_without_the_notice_marker_is_not_a_record(monkeypatch):
+    """Any workflow with `issues: write` posts as `github-actions`. A newer
+    such post that is not a failure notice (`copilot-auto-fix.yml`'s
+    acknowledgement is the measured candidate) must be skipped, not read as the
+    newest failure.
+
+    WHAT VALUE WOULD MAKE THIS FAIL: the marker filter removed (arm WR33) --
+    the acknowledgement becomes the newest record, names no run, and the
+    filing REFUSES instead of naming 35492055049.
+    """
+    issue = _issue_4390()
+    issue["comments"].append({"author": {"login": "github-actions"},
+                              "createdAt": "2026-09-21T00:00:00Z",
+                              "body": "Copilot is taking a look at this issue."})
+    monkeypatch.setattr(tick, "sh", _gh(issue, {}))
+    filing = tick.watcher_filing(REPO, 4390)
+    assert filing is not None
+    assert filing.failure_run_id == NEWEST_FAILURE, filing
+    assert filing.records == 7, "the acknowledgement was counted as a record"
+
+
+def test_an_issue_with_no_notice_at_all_refuses(monkeypatch):
+    """WHAT VALUE WOULD MAKE THIS FAIL: the empty-records guard deleted (arm
+    WR34) -- `max([])` then raises ValueError, not a refusal. Killed by a
+    crash, disclosed."""
+    issue = _issue_4390()
+    issue["body"], issue["comments"] = "hand-written body", []
+    monkeypatch.setattr(tick, "sh", _gh(issue, {}))
+    with pytest.raises(tick.ReceiptRefusedError, match="no record on it carries"):
+        tick.watcher_filing(REPO, 4390)
+
+
+def test_watcher_seam_refuses_when_the_path_went_red_again(tmp_path, monkeypatch):
+    """The red-since check at the SEAM: `_watcher_run_receipt` must pass what
+    `gh run list` returned into the verifier. WHAT VALUE WOULD MAKE THIS FAIL:
+    the call site passing `[]` instead of the list it read."""
+    led, item = _ledger(tmp_path)
+    runs = {GREEN_RUN: _green(), NEWEST_FAILURE: _failure()}
+    later = [{"databaseId": 36609548942, "conclusion": "failure",
+              "createdAt": "2026-09-29T18:05:20Z", "event": "workflow_run"}]
+    monkeypatch.setattr(tick, "sh", _gh(_issue_4390(), runs, later=later))
+    with pytest.raises(tick.ReceiptRefusedError, match="did not succeed"):
+        tick.record_receipt_from_evidence(
+            led, POLICY, REPO, 4390, from_pr=None, from_run=GREEN_RUN)
+    assert item.state == READY
+
+
+# --------------------------------------------------------------------------
 # The PUBLIC COMMENT the watcher route posts.
 # --------------------------------------------------------------------------
 
 def test_the_watcher_comment_claims_only_what_the_route_checked():
     """WHAT VALUE WOULD MAKE THIS FAIL: the watcher branch in `_receipt_comment`
     removed (arm WR20) -- the policy text then says "the only workflow policy
-    accepts" and "no run date is fetched", both false on this route.
+    accepts" and "no run date is fetched", both false on this route. Also a
+    reintroduction of the round-1 sentence "the cloud this receipt speaks for
+    is the one that workflow deploys to", which is FALSE for
+    `loom-dataplane-roll` -- its `boundary` input picks commercial, gcc-high
+    or il5 (review B-1).
 
     The absence assertions are PAIRED with the positive ones above them, so
     they cannot be satisfied by an empty comment.
@@ -662,7 +900,13 @@ def test_the_watcher_comment_claims_only_what_the_route_checked():
                                  tick.BINDING_WATCHER_WORKFLOW)
     assert "matched by workflow id" in text, text
     assert "created AFTER the newest failure" in text, text
-    assert "executed work steps" in text, text
+    assert "every job and every step that failed" in text, text
+    assert "the ONLY cloud binding is that the green run contains the same-named" in text, text
+    assert "dispatch inputs" in text, text
+    assert "no completed run of that workflow on the default branch" in text, text
+    assert "the one that workflow deploys to" not in text, text
+    assert "executed work steps" not in text, text
+    assert "A failure the watcher did not record is not seen" not in text, text
     assert "the only workflow policy accepts" not in text, text
     assert "no run date is fetched" not in text, text
     policy_text = tick._receipt_comment("deploy-run", "deploy-path", "d", tick.BINDING_POLICY)
@@ -744,6 +988,9 @@ def test_the_watcher_shapes_are_lifted_from_the_script_that_files_them():
         "main()'s runUrl changed shape")
     rendered = f"**x** failed.\n\n- run: https://github.com/{REPO}/actions/runs/123\n- commit: `s`"
     assert tick._WATCHER_RUN_LINE.findall(rendered) == [(REPO, "123")]
+    # The notice marker is in the closing line `buildIssueBody` pushes last.
+    assert f"'{tick.WATCHER_CLOSE_MARKER} — not on a merge (R2).'" in source, (
+        "buildIssueBody's closing line no longer carries WATCHER_CLOSE_MARKER")
 
 
 def test_policy_is_unchanged_by_the_watcher_route():

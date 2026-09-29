@@ -4516,6 +4516,93 @@ ARMS: list[tuple[str, str, str, str]] = [
         '    elif (kind == "deploy-run"\n',
         "    elif (True\n",
     ),
+    # -- #4764 round 2: review A-1/B-2 (a whatif-only DRY RUN was accepted for
+    # a failed apply), A-2 (red since), A-3 (event), A-4 (record marker). Each
+    # run RED against `test_watcher_receipts.py` in a sandbox copy first.
+    (
+        ("WR26 the failed STEP is no longer required to be green, so a "
+         "whatif-only dry run whose job ran checkout and login while SKIPPING "
+         "`Provision (idempotent)` closes the failure in that step - review A's "
+         "measured 34217993648 / 34262376463"),
+        "tick.py",
+        '                if any(s.get("conclusion") != "success" for s in same_steps):',
+        "                if False:",
+    ),
+    (
+        "WR27 a job MISSING the step that failed stops refusing",
+        "tick.py",
+        "                if not same_steps:",
+        "                if False:",
+    ),
+    (
+        ("WR28 a failed job with NO failed step recorded stops refusing, so the "
+         "step loop checks nothing and a job-level green passes"),
+        "tick.py",
+        "        if not failed_steps:",
+        "        if False:",
+    ),
+    (
+        ("WR29 a completed run RED SINCE the offered one stops refusing, so a "
+         "path that went red again - through a notice that was never posted - "
+         "closes on its last green run"),
+        "tick.py",
+        "    if red_since:",
+        "    if False:",
+    ),
+    (
+        ("WR30 the red-since filter loses its TIME bound, so a red run from "
+         "BEFORE the offered one refuses a valid receipt"),
+        "tick.py",
+        ('        if _parse_time(other.get("createdAt"), "a later run\'s creation time") '
+         ">= created\n"),
+        "        if True\n",
+    ),
+    (
+        ("WR31 a FULL page of later runs is read as complete, so the red run on "
+         "the page it did not fetch is invisible"),
+        "tick.py",
+        "    if len(parsed) >= _LATER_RUNS_LIMIT:",
+        "    if False:",
+    ),
+    (
+        ("WR32 a pull_request run stops being refused, so a fork branch named "
+         "`main` passes the default-branch check"),
+        "tick.py",
+        "    if not event or event in _PULL_REQUEST_EVENTS:",
+        "    if False:",
+    ),
+    (
+        ("WR33 the notice MARKER stops filtering records, so any `github-actions` "
+         "post - not only a failure notice - can become the newest record"),
+        "tick.py",
+        '        if WATCHER_CLOSE_MARKER in str(body or "")\n',
+        "        if True\n",
+    ),
+    (
+        ("WR34 an issue with NO notice stops refusing. KILLED BY A CRASH, "
+         "disclosed: `max([])` raises ValueError, which "
+         "`pytest.raises(ReceiptRefusedError)` does not catch"),
+        "tick.py",
+        ("    if not records:\n        raise ReceiptRefusedError(\n"
+         '            f"#{number} was opened by {WATCHER_LOGIN}'),
+        ("    if False:\n        raise ReceiptRefusedError(\n"
+         '            f"#{number} was opened by {WATCHER_LOGIN}'),
+    ),
+    (
+        ("WR35 the call site stops passing the runs it READ into the verifier, "
+         "so red-since is checked against nothing at the seam"),
+        "tick.py",
+        "    ref = verify_watcher_run_receipt(number, filing, failure, run, branch, later)",
+        "    ref = verify_watcher_run_receipt(number, filing, failure, run, branch, [])",
+    ),
+    (
+        ("WR36 a step SKIPPED in the recorded failure is counted as failed, so a "
+         "real receipt whose run skips the same conditional step - `Azure login "
+         "(Gov)` on a Commercial roll - is refused"),
+        "tick.py",
+        '            if step.get("conclusion") not in ("success", "skipped")\n        ]',
+        '            if step.get("conclusion") not in ("success",)\n        ]',
+    ),
     # -- #4728: the dependency-bump review exemption ------------------------
     #
     # This change LOOSENS gate 3b, so every arm below turns it into a wider

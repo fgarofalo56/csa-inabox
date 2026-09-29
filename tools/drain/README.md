@@ -525,7 +525,8 @@ class a receipt was *taken under* against the class at the decision and a caller
 who names the wrong kind up front is consistent with itself. `ci-green` is
 re-measured by `gates.ci_green_receipt` at record time, so this path cannot
 record a receipt `--ci-green-receipt` would not print. Run-backed kinds must
-match the workflow named in `policy.receipt_producers`, must have *concluded*
+match the workflow named in `policy.receipt_producers` (except on the watcher
+route, below), must have *concluded*
 success (status and conclusion checked separately, so an in-progress run is
 refused as unfinished rather than as failed), and — where
 `policy.receipt_required_steps` names one — that step must itself have concluded
@@ -535,7 +536,9 @@ concludes green having captured nothing.
 
 **What it does not establish.** That the evidence is *about* the item. Nothing
 stops a green roll being recorded against a second deploy-path item it never
-touched; the operator supplies that pairing. `Item.pr` now records which PR a
+touched; the operator supplies that pairing (except on the watcher route,
+below, where the run is bound to the workflow and the failed steps the item
+records). `Item.pr` now records which PR a
 lane opened for an item (`tick.py --bind-pr`, #4489), but the `--from-run`
 path does not consult it, so that pairing is still unchecked. A refused receipt writes nothing — the
 ledger is byte-identical afterwards, verified by digest, **and no GitHub write
@@ -544,20 +547,35 @@ passed.
 
 **Items the deploy-failure watcher filed take a different route (#4764).**
 `.github/scripts/deploy-notify-failure.mjs` files `deploy: <workflow> is
-failing` and asks to be closed "only once the path has run GREEN". Such an item
-is closed by a green run of **that** workflow and by nothing else: not by the
-policy producer, since a green `loom-roll-and-validate` says nothing about a
-failing `gov-console-roll`. The ledger title only decides whether to ask
-GitHub; the route is taken when the issue was opened by `github-actions`, and
-the workflow is read from the failed run named on the newest watcher record,
-by **workflow id** (a display name such as `Loom data-plane roll (unity /
-iceberg / trino)` is neither the file name nor unique). The offered run must
-be that workflow, completed and successful, on the default branch, created
-after the newest recorded failure, and every job that failed in that failure
-must have concluded success having run a step beyond GitHub's own set-up, post
-and complete steps. Each of those refuses on its own, and the refusals are
-tested in `__tests__/test_watcher_receipts.py`. The run is bound to no sha, and
-a failure the watcher did not record is not seen; the public comment says both.
+failing` and asks to be closed "only once the path has run GREEN". A
+`deploy-run` item it filed (any other kind stays on the policy route) is closed
+by a green run of **that** workflow, and the policy producer is not accepted
+for it: a green `loom-roll-and-validate` says nothing about a failing
+`gov-console-roll`. The route is chosen when the ledger title has the watcher's
+shape, the GitHub title does too, and GitHub reports the issue author as
+`github-actions`. **So it depends on the title**: a human who retitles a watcher
+issue moves it back to the policy route, where an unlabelled `deploy-run` item
+refuses for want of a `default_boundary`. A record is a `github-actions` post
+carrying the notice's closing line; the workflow is read from the failed run
+named on the newest record, by **workflow id** (a display name such as
+`Loom data-plane roll (unity / iceberg / trino)` is neither the file name nor
+unique). The offered run must be:
+
+- that workflow, completed and successful;
+- on the default branch, from an event that is not `pull_request*`;
+- created after the newest recorded failure;
+- a run in which **every step** that failed in that failure concluded success
+  in the same-named job (a `whatif-only` dry run that skipped the failed
+  `Provision (idempotent)` step is refused), and each such job did work beyond
+  GitHub's set-up, post and complete steps;
+- followed by no completed run of the workflow on the default branch that
+  concluded anything but success, `cancelled` included.
+
+Each of those refuses on its own, and the refusals are tested in
+`__tests__/test_watcher_receipts.py`. The run is bound to no sha, its dispatch
+inputs (`tag`, `skip_build`, `run_mode`) are not read because GitHub's run
+object does not carry them, and the only cloud binding is the failed job and
+step names; the public comment says all three.
 
 `receipt_class` still has no production writer, so the `human-only` class is
 reachable only by hand — and `operator` is deliberately **absent** from
