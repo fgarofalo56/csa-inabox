@@ -256,6 +256,9 @@ export function ShortcutWizard({ itemType = 'lakehouse', lakehouseId, workspaceI
   const [containers, setContainers] = useState<ContainerInfo[] | null>(null);
   const [srcLakehouse, setSrcLakehouse] = useState<string>('');
   const [srcContainer, setSrcContainer] = useState<string>('');
+  // The picked source lakehouse's own root inside its container, as the paths route echoes it.
+  // Null while browsing a container directly (tenant admins) or before the first listing.
+  const [srcRoot, setSrcRoot] = useState<string | null>(null);
   const [srcLoadError, setSrcLoadError] = useState<string | null>(null);
 
   // Step 2 — browse
@@ -277,6 +280,7 @@ export function ShortcutWizard({ itemType = 'lakehouse', lakehouseId, workspaceI
     setStep(1);
     setSrcLakehouse('');
     setSrcContainer('');
+    setSrcRoot(null);
     setSrcLoadError(null);
     setKind('files');
     setBrowsePrefix('');
@@ -321,45 +325,66 @@ export function ShortcutWizard({ itemType = 'lakehouse', lakehouseId, workspaceI
     };
   }, [open, workspaceId, lakehouseId, reset]);
 
-  // Browse a container path level whenever container / prefix changes (step 2).
+  // Browse one path level (step 2). With a source lakehouse the listing is scoped to that item
+  // (`lakehouseId`), and the route answers with the container and root it resolved; the wizard
+  // adopts both. Without one it lists the picked container, which the route limits to tenant admins.
   const loadEntries = useCallback(
-    async (container: string, prefix: string) => {
-      if (!container) return;
+    async (lakehouse: string, container: string, prefix: string) => {
+      if (!lakehouse && !container) return;
       setBrowsing(true);
       setBrowseError(null);
-      const { status, body } = await jfetch(
-        `/api/lakehouse/paths?container=${encodeURIComponent(container)}&prefix=${encodeURIComponent(prefix)}`,
-      );
+      const q = lakehouse
+        ? `lakehouseId=${encodeURIComponent(lakehouse)}&prefix=${encodeURIComponent(prefix)}`
+        : `container=${encodeURIComponent(container)}&prefix=${encodeURIComponent(prefix)}`;
+      const { status, body } = await jfetch(`/api/lakehouse/paths?${q}`);
       setBrowsing(false);
-      if (body?.ok) {
+      if (body?.ok && lakehouse && !body.container) {
+        setEntries([]);
+        setBrowseError(body.gate || 'This lakehouse has no storage to browse yet.');
+      } else if (body?.ok) {
+        if (lakehouse) { setSrcContainer(body.container); setSrcRoot(body.root ?? ''); }
         setEntries(body.paths || []);
       } else {
         setEntries([]);
-        setBrowseError(body?.error || `Could not list ${container}/${prefix} (HTTP ${status}).`);
+        const where = lakehouse ? 'this lakehouse' : `${container}/${prefix}`;
+        const base = body?.error || `Could not list ${where} (HTTP ${status}).`;
+        setBrowseError(status === 403 && !lakehouse
+          ? `${base} Go back and pick a source lakehouse to browse its files instead.` : base);
       }
     },
     [],
   );
 
+  // Keyed on the SOURCE, not on srcContainer alone: a lakehouse listing sets srcContainer from
+  // the response, and that must not trigger a second listing.
+  const browseSource = srcLakehouse ? `lh:${srcLakehouse}` : `ct:${srcContainer}`;
   useEffect(() => {
-    if (open && step === 2 && srcContainer) loadEntries(srcContainer, browsePrefix);
-  }, [open, step, srcContainer, browsePrefix, loadEntries]);
+    if (open && step === 2) loadEntries(srcLakehouse, srcLakehouse ? '' : srcContainer, browsePrefix);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, step, browseSource, browsePrefix, loadEntries]);
 
   const leaf = (full: string) => full.split('/').filter(Boolean).pop() || full;
   const targetUri = srcContainer && selectedPath ? `internal://${srcContainer}/${selectedPath}` : '';
+  // The folder currently shown: an empty prefix on a lakehouse listing IS its root.
+  const shownPrefix = browsePrefix || srcRoot || '';
+  const srcLakehouseName = lakehouses?.find((l) => l.id === srcLakehouse)?.displayName || srcLakehouse;
 
   const crumbs = useMemo(() => {
-    const segs = browsePrefix.split('/').filter(Boolean);
-    const acc: { label: string; prefix: string }[] = [{ label: srcContainer || 'root', prefix: '' }];
-    let cur = '';
-    for (const s of segs) {
+    // A lakehouse listing starts at the lakehouse's root; a container listing at the container.
+    const base = srcLakehouse && srcRoot !== null ? srcRoot : '';
+    const rel = base && shownPrefix.startsWith(base) ? shownPrefix.slice(base.length) : shownPrefix;
+    const acc: { label: string; prefix: string }[] = [
+      { label: (srcLakehouse ? srcLakehouseName : srcContainer) || 'root', prefix: base },
+    ];
+    let cur = base;
+    for (const s of rel.split('/').filter(Boolean)) {
       cur = cur ? `${cur}/${s}` : s;
       acc.push({ label: s, prefix: cur });
     }
     return acc;
-  }, [browsePrefix, srcContainer]);
+  }, [shownPrefix, srcRoot, srcLakehouse, srcLakehouseName, srcContainer]);
 
-  const canNext1 = !!srcContainer;
+  const canNext1 = !!srcContainer || !!srcLakehouse;
   const canNext2 = !!selectedPath;
   const canSubmit = !!name.trim() && /^[A-Za-z0-9 _.-]{1,128}$/.test(name.trim()) && !!targetUri;
 
@@ -407,38 +432,42 @@ export function ShortcutWizard({ itemType = 'lakehouse', lakehouseId, workspaceI
                     </MessageBarBody>
                   </MessageBar>
                 )}
-                <Field label="Source lakehouse (optional context)">
+                <Field label="Source lakehouse" hint="Browse inside another lakehouse's own storage. Picking a lakehouse clears the container choice below.">
                   {lakehouses === null ? (
                     <Spinner size="tiny" label="Loading lakehouses…" />
                   ) : lakehouses.length === 0 ? (
                     <Caption1>No other lakehouses in this workspace — pick a storage container below.</Caption1>
                   ) : (
                     <div className={styles.cardGrid}>
-                      {lakehouses.map((lh) => (
-                        <div
-                          key={lh.id}
-                          className={`${styles.card} ${srcLakehouse === lh.id ? styles.cardSelected : ''}`}
-                          onClick={() => setSrcLakehouse(lh.id)}
-                          role="button"
-                          tabIndex={0}
-                          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setSrcLakehouse(lh.id); }}
-                        >
-                          <Database20Regular />
-                          <div>
-                            <Body1>{lh.displayName || lh.id}</Body1>
-                            {lh.description && <Caption1>{lh.description}</Caption1>}
+                      {lakehouses.map((lh) => {
+                        const pick = () => { setSrcLakehouse(lh.id); setSrcContainer(''); setSrcRoot(null); setBrowsePrefix(''); setSelectedPath(''); };
+                        return (
+                          <div
+                            key={lh.id}
+                            className={`${styles.card} ${srcLakehouse === lh.id ? styles.cardSelected : ''}`}
+                            onClick={pick}
+                            role="button"
+                            aria-pressed={srcLakehouse === lh.id}
+                            tabIndex={0}
+                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') pick(); }}
+                          >
+                            <Database20Regular />
+                            <div>
+                              <Body1>{lh.displayName || lh.id}</Body1>
+                              {lh.description && <Caption1>{lh.description}</Caption1>}
+                            </div>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </Field>
-                <Field label="Storage container" required hint="The ADLS Gen2 file system the source data lives in. The shortcut resolves to internal://<container>/<path> on the primary account.">
+                <Field label="Or a storage container" hint="Lists a whole ADLS Gen2 file system; limited to tenant admins. The shortcut resolves to internal://<container>/<path> on the primary account.">
                   <Dropdown
                     placeholder={containers === null ? 'Loading…' : 'Select a container'}
-                    selectedOptions={srcContainer ? [srcContainer] : []}
-                    value={srcContainer}
-                    onOptionSelect={(_, d) => { setSrcContainer(d.optionValue || ''); setBrowsePrefix(''); setSelectedPath(''); }}
+                    selectedOptions={!srcLakehouse && srcContainer ? [srcContainer] : []}
+                    value={srcLakehouse ? '' : srcContainer}
+                    onOptionSelect={(_, d) => { setSrcContainer(d.optionValue || ''); setSrcLakehouse(''); setSrcRoot(null); setBrowsePrefix(''); setSelectedPath(''); }}
                   >
                     {(containers || []).map((c) => (
                       <Option key={c.name} value={c.name}>{c.name}</Option>
@@ -456,7 +485,7 @@ export function ShortcutWizard({ itemType = 'lakehouse', lakehouseId, workspaceI
                   <Tab value="tables" icon={<DocumentTable20Regular />}>Tables</Tab>
                 </TabList>
                 <Caption1>
-                  Navigate {srcContainer} and select the {kind === 'tables' ? 'table (Delta/Parquet) folder' : 'folder'} to point at.
+                  Navigate {srcLakehouse ? srcLakehouseName : srcContainer} and select the {kind === 'tables' ? 'table (Delta/Parquet) folder' : 'folder'} to point at.
                 </Caption1>
                 <div className={styles.browser}>
                   <div className={styles.crumbs}>
@@ -470,7 +499,9 @@ export function ShortcutWizard({ itemType = 'lakehouse', lakehouseId, workspaceI
                   {browsing ? (
                     <div className={styles.empty}><Spinner size="tiny" label="Listing…" /></div>
                   ) : browseError ? (
-                    <div className={styles.empty}><Caption1>{browseError}</Caption1></div>
+                    <MessageBar intent="warning" data-testid="shortcut-browse-error">
+                      <MessageBarBody>{browseError}</MessageBarBody>
+                    </MessageBar>
                   ) : entries && entries.length === 0 ? (
                     <div className={styles.empty}><Caption1>Empty folder. Use the breadcrumb to select a parent, or pick a different container.</Caption1></div>
                   ) : (
@@ -497,13 +528,13 @@ export function ShortcutWizard({ itemType = 'lakehouse', lakehouseId, workspaceI
                     ))
                   )}
                 </div>
-                {browsePrefix && (
+                {shownPrefix && !browseError && (
                   <Button
                     size="small"
-                    appearance={selectedPath === browsePrefix ? 'primary' : 'secondary'}
-                    onClick={() => { setSelectedPath(browsePrefix); if (!name) setName(leaf(browsePrefix)); }}
+                    appearance={selectedPath === shownPrefix ? 'primary' : 'secondary'}
+                    onClick={() => { setSelectedPath(shownPrefix); if (!name) setName(leaf(shownPrefix)); }}
                   >
-                    Use current folder ({leaf(browsePrefix)})
+                    Use current folder ({leaf(shownPrefix)})
                   </Button>
                 )}
                 {selectedPath && (

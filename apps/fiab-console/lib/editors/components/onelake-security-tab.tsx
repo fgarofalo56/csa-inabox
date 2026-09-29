@@ -170,6 +170,9 @@ export function OneLakeSecurityTab({ itemId, itemType, container, workspaceId, f
   const [treeEntries, setTreeEntries] = useState<PathEntry[]>([]);
   const [treeLoading, setTreeLoading] = useState(false);
   const [treeErr, setTreeErr] = useState<string | null>(null);
+  // Set when the container-level listing was refused (403) for this caller. "Selected folders"
+  // is then disabled with this reason instead of offering a picker that cannot be filled.
+  const [listRefused, setListRefused] = useState<string | null>(null);
 
   // A lakehouse lists through its own item (`lakehouseId`), so the picker shows
   // THIS lakehouse's Tables/Files under its storage root, and role paths stay
@@ -183,6 +186,9 @@ export function OneLakeSecurityTab({ itemId, itemType, container, workspaceId, f
       const listing = async (qs: URLSearchParams) => {
         const r = await clientFetch(`/api/lakehouse/paths?${qs.toString()}`);
         const j = await r.json();
+        if (r.status === 403 && itemType !== 'lakehouse') {
+          throw Object.assign(new Error(j.error || `Listing ${effContainer} was refused (HTTP 403).`), { refused: true });
+        }
         if (!j.ok) throw new Error(j.error || `Listing failed (HTTP ${r.status}).`);
         return j as { root?: string | null; paths?: PathEntry[] };
       };
@@ -202,7 +208,10 @@ export function OneLakeSecurityTab({ itemId, itemType, container, workspaceId, f
         }
       }
       setTreeEntries(out);
-    } catch (e: any) { setTreeErr(e?.message || String(e)); }
+    } catch (e: any) {
+      if (e?.refused) { setListRefused(e.message); setPathMode('all'); }
+      else setTreeErr(e?.message || String(e));
+    }
     finally { setTreeLoading(false); }
   }, [effContainer, itemId, itemType]);
 
@@ -704,8 +713,17 @@ export function OneLakeSecurityTab({ itemId, itemType, container, workspaceId, f
                   <div><span className={s.stepNum}>2</span><Subtitle2 style={{ display: 'inline' }}>Folders &amp; tables</Subtitle2></div>
                   <RadioGroup value={pathMode} onChange={(_, d) => setPathMode(d.value as any)}>
                     <Radio value="all" label="All folders (DefaultReader-equivalent)" />
-                    <Radio value="selected" label="Selected folders / tables" />
+                    <Radio value="selected" label="Selected folders / tables" disabled={!!listRefused} />
                   </RadioGroup>
+                  {listRefused && (
+                    <MessageBar intent="warning" data-testid="security-list-refused">
+                      <MessageBarBody>
+                        <MessageBarTitle>Selected folders is not available to you</MessageBarTitle>
+                        {listRefused} This role can still be created for all folders; a tenant admin can narrow it
+                        to specific folders later.
+                      </MessageBarBody>
+                    </MessageBar>
+                  )}
                   {pathMode === 'all' && defaultSpansAll && (
                     <MessageBar intent="warning"><MessageBarBody>{DEFAULT_WARNING}</MessageBarBody></MessageBar>
                   )}
