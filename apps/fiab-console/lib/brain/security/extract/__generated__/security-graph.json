@@ -14742,6 +14742,52 @@
           }
         },
         {
+          "id": "sec:authorizer:apps/fiab-console/app/api/lakehouse/permissions/rls-test/route.ts#POST",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "POST /api/lakehouse/permissions/rls-test",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "POST /api/lakehouse/permissions/rls-test",
+            "params": [],
+            "resourceScoped": false,
+            "callerNamedResourceInputs": [],
+            "allowPaths": [
+              {
+                "id": "post:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": false,
+            "privilegedSinkKinds": []
+          }
+        },
+        {
+          "id": "sec:verdict-call:apps/fiab-console/app/api/lakehouse/permissions/rls-test/route.ts#POST:requireTenantAdmin:2",
+          "kind": "verdict-call",
+          "provenance": "declared",
+          "label": "POST /api/lakehouse/permissions/rls-test -> requireTenantAdmin",
+          "facet": {
+            "kind": "verdict-call",
+            "callSite": "POST /api/lakehouse/permissions/rls-test:2",
+            "symbol": "requireTenantAdmin",
+            "returnsVerdictUnion": true,
+            "pathsToPrivilegedSink": 0,
+            "pathsConsumingAsRefusal": 0,
+            "consumption": "returned",
+            "allowlisted": true,
+            "allowlistPremiseTested": false,
+            "sinkPrivileged": false,
+            "sinkKind": "none"
+          }
+        },
+        {
           "id": "sec:authorizer:apps/fiab-console/app/api/lakehouse/permissions/route.ts#POST",
           "kind": "authorizer",
           "provenance": "declared",
@@ -45477,6 +45523,13 @@
           "provenance": "declared"
         },
         {
+          "id": "sec-edge:calls:sec:authorizer:apps/fiab-console/app/api/lakehouse/permissions/rls-test/route.ts#POST->sec:verdict-call:apps/fiab-console/app/api/lakehouse/permissions/rls-test/route.ts#POST:requireTenantAdmin:2",
+          "from": "sec:authorizer:apps/fiab-console/app/api/lakehouse/permissions/rls-test/route.ts#POST",
+          "to": "sec:verdict-call:apps/fiab-console/app/api/lakehouse/permissions/rls-test/route.ts#POST:requireTenantAdmin:2",
+          "kind": "calls",
+          "provenance": "declared"
+        },
+        {
           "id": "sec-edge:calls:sec:authorizer:apps/fiab-console/app/api/network/managed-private-endpoints/route.ts#GET->sec:verdict-call:apps/fiab-console/app/api/network/managed-private-endpoints/route.ts#GET:requireTenantAdmin:3",
           "from": "sec:authorizer:apps/fiab-console/app/api/network/managed-private-endpoints/route.ts#GET",
           "to": "sec:verdict-call:apps/fiab-console/app/api/network/managed-private-endpoints/route.ts#GET:requireTenantAdmin:3",
@@ -48716,6 +48769,16 @@
           "deployedAs": "loom-console"
         },
         {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/lakehouse/permissions/rls-test/route.ts#POST",
+          "codeModuleId": "code:apps/fiab-console/app/api/lakehouse/permissions/rls-test/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/lakehouse/permissions/rls-test/route.ts#POST:requireTenantAdmin:2",
+          "codeModuleId": "code:apps/fiab-console/app/api/lakehouse/permissions/rls-test/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
           "nodeId": "sec:authorizer:apps/fiab-console/app/api/lakehouse/permissions/route.ts#POST",
           "codeModuleId": "code:apps/fiab-console/app/api/lakehouse/permissions/route.ts",
           "deployedAs": "loom-console"
@@ -50241,15 +50304,15 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-29T18:06:32.989Z",
-      "commit": "0d6780bfbdaa0ff4738bae87785fca76b189a8a4",
-      "inputsDigest": "ab51333bd7df26a8",
+      "generatedAt": "2026-09-29T19:02:34.670Z",
+      "commit": "2811e1b16703ff348bd0b1780555256887efa29c",
+      "inputsDigest": "6463ef9e4cb857de",
       "filesScanned": 2123,
       "scanScopes": [
         {
           "scope": "app/**/route.ts (console BFF routes)",
           "filesMatched": 1700,
-          "nodesEmitted": 708
+          "nodesEmitted": 710
         },
         {
           "scope": ".github/**, scripts/** (CI publication surfaces)",

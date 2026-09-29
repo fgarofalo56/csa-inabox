@@ -15,9 +15,9 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | --- | ---: |
 | Total routes | 1694 |
 | Public (no session) | 59 |
-| Session-only | 639 |
-| Owner-scoped | 685 |
-| Admin | 311 |
+| Session-only | 633 |
+| Owner-scoped | 690 |
+| Admin | 312 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 499 |
 | Areas | 122 |
@@ -1864,24 +1864,24 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `lakehouse/containers/route.ts` | GET | session-only |  | ADLS, ARM, Azure Storage, Managed Identity |
 | `lakehouse/download/route.ts` | GET | owner-scoped |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Purview |
 | `lakehouse/history/route.ts` | GET POST | owner-scoped | ● | ADLS, ARM, Azure Monitor, Azure Storage, Cosmos, Managed Identity, Microsoft Graph |
-| `lakehouse/interop/route.ts` | GET PUT | session-only | ● | ADLS, ADX, Azure Monitor, Azure Networking, Azure Storage, Container Apps, Cosmos, Cost Management, Log Analytics, Synapse |
+| `lakehouse/interop/route.ts` | GET PUT | owner-scoped | ● | ADLS, ADX, ARM, Azure Monitor, Azure Networking, Azure Storage, Container Apps, Cosmos, Cost Management, Log Analytics, Managed Identity, Microsoft Graph, Synapse |
 | `lakehouse/load-to-table/route.ts` | POST | owner-scoped | ● | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Resource Graph, Synapse |
-| `lakehouse/maintenance/route.ts` | GET POST | session-only |  | ADLS, Azure Storage, Cosmos, Synapse |
+| `lakehouse/maintenance/route.ts` | GET POST | owner-scoped |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Synapse |
 | `lakehouse/path/route.ts` | POST DELETE | owner-scoped |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph |
 | `lakehouse/paths/route.ts` | GET | admin |  | AAS, ADLS, ARM, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Power BI |
-| `lakehouse/permissions/rls-test/route.ts` | POST | session-only |  | ARM, Azure SQL, Managed Identity, Synapse SQL |
+| `lakehouse/permissions/rls-test/route.ts` | POST | admin |  | ARM, Azure SQL, Managed Identity, Synapse SQL |
 | `lakehouse/permissions/route.ts` | GET POST DELETE | admin |  | ADLS, ARM, Azure RBAC, Azure SQL, Azure Storage, Managed Identity, Microsoft Graph, Resource Graph, Synapse SQL |
-| `lakehouse/preview/route.ts` | GET | session-only |  | ADLS, ARM, Azure SQL, Azure Storage, Managed Identity, Synapse SQL |
-| `lakehouse/references/paths/route.ts` | GET | owner-scoped |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity |
+| `lakehouse/preview/route.ts` | GET | owner-scoped |  | ADLS, ARM, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
+| `lakehouse/references/paths/route.ts` | GET | owner-scoped |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph |
 | `lakehouse/references/route.ts` | GET POST | owner-scoped |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity |
 | `lakehouse/schemas/route.ts` | GET POST PATCH DELETE | owner-scoped | ● | Cosmos, Microsoft Graph, Synapse |
 | `lakehouse/settings/route.ts` | GET PUT | owner-scoped | ● | ADLS, ARM, Azure Monitor, Azure Storage, Cosmos, Managed Identity, Microsoft Graph |
 | `lakehouse/shortcuts/browse/route.ts` | GET | session-only | ● | ADLS, ARM, Azure Storage, Key Vault, Managed Identity |
 | `lakehouse/shortcuts/credentials/route.ts` | POST | session-only | ● | Key Vault |
-| `lakehouse/shortcuts/route.ts` | GET POST DELETE | session-only |  | ADLS, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Key Vault, Managed Identity, Microsoft Graph, Synapse SQL |
+| `lakehouse/shortcuts/route.ts` | GET POST DELETE | owner-scoped |  | ADLS, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Key Vault, Managed Identity, Microsoft Graph, Synapse SQL |
 | `lakehouse/shortcuts/sharepoint/route.ts` | GET | session-only | ● | Microsoft Graph |
 | `lakehouse/shortcuts/test/route.ts` | POST | session-only | ● | ADLS, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Key Vault, Managed Identity, Microsoft Graph, Synapse SQL |
-| `lakehouse/table-stats/route.ts` | GET | session-only | ● | ADLS, Azure Storage, Synapse |
+| `lakehouse/table-stats/route.ts` | GET | owner-scoped | ● | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Synapse |
 | `lakehouse/tables/route.ts` | GET | owner-scoped |  | ADLS, ARM, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
 | `lakehouse/transform-preview/route.ts` | GET POST | owner-scoped | ● | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Synapse |
 | `lakehouse/upload/route.ts` | POST | owner-scoped |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph |
@@ -2423,7 +2423,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 ## Authorization resolvers (derived)
 
-192 function(s) across 87 module(s) reach an owner / workspace-ACL
+193 function(s) across 88 module(s) reach an owner / workspace-ACL
 decision. Derived by `scripts/ci/_route-auth-scope.mjs` from the seeds above —
 nothing here is hand-maintained. A change to this list in a diff means the
 authorization surface moved.
@@ -2460,6 +2460,7 @@ authorization surface moved.
 | `apps/fiab-console/app/api/items/semantic-model/_lib/prep-for-ai-store.ts` | `enrichSemanticModelSources`, `readPrepForAi`, `writePrepForAi` |
 | `apps/fiab-console/app/api/lakehouse/_lib/item-binding.ts` | `authorizeAndBind` |
 | `apps/fiab-console/app/api/lakehouse/_lib/item-scope.ts` | `authorizeLakehouse`, `scopeItemPath` |
+| `apps/fiab-console/app/api/lakehouse/_lib/reference-scope.ts` | `scopeReferencePath` |
 | `apps/fiab-console/app/api/lakehouse/_lib/report-upload.ts` | `scopeReportUpload` |
 | `apps/fiab-console/app/api/notebook/_lib/notebook-access.ts` | `loadAccessibleNotebook` |
 | `apps/fiab-console/app/api/sqldb/_shared.ts` | `guardSqlDbRequest`, `loadWs` |
