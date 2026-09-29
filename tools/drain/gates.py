@@ -309,9 +309,31 @@ OTHER_IMPLEMENTED_BY = {
     # a worktree does not own and once for an unlocked read-modify-write with
     # four lanes live.
     "receipt_producers": "tick.verify_run_backed_receipt",
-    "receipt_producers.g1-browser": "tick.verify_run_backed_receipt",
-    "receipt_producers.estate": "tick.verify_run_backed_receipt",
-    "receipt_producers.deploy-run": "tick.verify_run_backed_receipt",
+    # #4709. The producer map gained a BOUNDARY level, so every leaf is now
+    # `<kind>.<boundary>` and each must be declared here. That is the point of
+    # this authority: adding a Gov producer is a deliberate edit in two files,
+    # not something that appears because someone widened a dict.
+    #
+    # ONLY THE LEAVES. `policy_keys_without_implementation` descends into a
+    # dict without demanding the dict's own key be declared, so a row naming a
+    # NAMESPACE -- `receipt_producers.g1-browser`, `boundary_labels` -- buys
+    # nothing in THAT direction: deleting it changes no verdict there.
+    # And a namespace row is NOT "never read by
+    # anything" -- `assert_policy_matches_code` walks the OTHER direction,
+    # implemented -> declared, and does consult it. So these rows were
+    # redundant, not inert, and `test_no_decorative_authority_rows` guards the
+    # declared -> implemented direction only.
+    "receipt_producers.g1-browser.Commercial": "tick.verify_run_backed_receipt",
+    "receipt_producers.estate.Commercial": "tick.verify_run_backed_receipt",
+    "receipt_producers.deploy-run.Commercial": "tick.verify_run_backed_receipt",
+    "boundary_labels.drift-gov": "tick.boundary_of_issue",
+    "boundary_labels.drift-commercial": "tick.boundary_of_issue",
+    # The per-kind default an UNLABELLED item resolves to. A LEAF, not the
+    # namespace above it, and declared here precisely so that widening which
+    # kinds assume a boundary is an edit two files can see rather than a
+    # constant in `boundary_of_issue`. `deploy-run` and `estate` are absent on
+    # purpose.
+    "default_boundary.g1-browser": "tick.boundary_of_issue",
     # The dependency-bump exemption. Operator decision 2026-09-21 -
     # dependency bumps merge on CI-green alone - PARTIALLY implemented here:
     # this lowers gate 3b's reviewer count, while gate 2+3's unconditional

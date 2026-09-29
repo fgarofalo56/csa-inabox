@@ -83,6 +83,7 @@ import {
   safeAdxDatabaseName,
   safeAdlsRelPath,
   lakehouseRootPath,
+  lakehouseContainerOrder,
 } from './backing-name';
 import { DEFAULT_PIPELINE_RUNTIME } from '@/lib/components/pipeline/types';
 import type { AutoBindContext, AutoBindPreflight, AutoBindProvider } from './auto-bind';
@@ -541,16 +542,15 @@ export const lakehouseAutoBind: AutoBindProvider = {
    * Reads the CONFIGURED container names rather than listing the account: this
    * runs on every lakehouse open, the configured set is what the provisioner's
    * listing can return anyway, and it keeps the choice deterministic.
+   *
+   * The choice itself is {@link lakehouseContainerOrder} — shared with the
+   * resolver, so the container created here is the container read there (#4759).
    */
   preflight: async (ctx): Promise<AutoBindPreflight> => {
     const pinned = stateString(ctx, 'adlsContainer');
     const { configuredContainerNames } = await import('./adls-client');
     const configured = configuredContainerNames() as string[];
-    if (pinned && configured.includes(pinned)) return { ok: true, coords: { container: pinned } };
-    const container =
-      (configured.includes('landing') && 'landing')
-      || (configured.includes('bronze') && 'bronze')
-      || configured[0];
+    const container = lakehouseContainerOrder(configured, pinned)[0];
     if (!container) {
       return {
         ok: false,
@@ -584,6 +584,11 @@ export const lakehouseAutoBind: AutoBindProvider = {
     return seedLakehouseFromContent(name, coords, ctx);
   },
 
+  /**
+   * Persisted by `persistAutoBindPatch` on create (and on any later ensure).
+   * `resolveLakehouseAbfss` step 2c reads exactly these two keys (#4759), so
+   * the container written here IS the container every lakehouse route reads.
+   */
   stateKeys: (name, coords) => ({
     lakehouseRoot: name,
     adlsContainer: coords.container,
