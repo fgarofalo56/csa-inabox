@@ -30,9 +30,12 @@
  * (azure-functions/posture-refresh/function_app.py), so an unkeyed call is
  * rejected 401 — and because the dispatch is fire-and-forget that rejection
  * was swallowed and the route answered `{ ok:true, dispatched:true }`: a
- * success claim for a refresh that could never run. The key is bound only once
- * it is known to exist in Key Vault (admin-plane `postureFunctionKeyBound`), so
- * "URL without key" is a real, expected deploy state, not a misconfiguration.
+ * success claim for a refresh that could never run. The key is bound only when
+ * admin-plane `postureFunctionKeyBound` holds: the root deploy param
+ * loomPostureFunctionUrl is set AND observabilityConfig.postureFunctionKeyEnabled
+ * is true, the latter asserting the Key Vault secret exists. So "URL without
+ * key" is a real, expected deploy state, not a misconfiguration. Nothing sets
+ * either value at deploy time yet (#4781).
  */
 import { NextResponse } from 'next/server';
 import { withSession } from '@/lib/api/route-toolkit';
@@ -41,9 +44,9 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const POSTURE_FUNCTION_MODULE = 'azure-functions/posture-refresh/deploy/main.bicep';
-// The module whose `postureFunctionKeyBound` (driven by
-// `observabilityConfig.postureFunctionKeyEnabled`) binds the key onto this
-// Console. On the key branch the Function already exists, so pointing at the
+// The module whose `postureFunctionKeyBound` (driven by the loomPostureFunctionUrl
+// param and `observabilityConfig.postureFunctionKeyEnabled`) binds the key onto
+// this Console. On the key branch the Function URL is known, so pointing at the
 // Function module would send the operator to redeploy something that neither
 // stores the key nor sets the flag (#4770 review, deploy-integrity R6/R7).
 const KEY_BINDING_MODULE = 'platform/fiab/bicep/modules/admin-plane/main.bicep';
@@ -74,10 +77,19 @@ export const POST = withSession(async (_req, { session: s }) => {
   const functionKey = (process.env.LOOM_POSTURE_FUNCTION_KEY || '').trim();
   if (!functionKey) {
     // URL known, host key not bound: do NOT dispatch an unkeyed call the
-    // Function would reject. The Function EXISTS on this branch (its URL is
-    // set), so the remediation names the two things that bind the key, not the
-    // Function module. This route cannot see Key Vault, so the message says
-    // which of the two it cannot tell apart rather than guessing (R7).
+    // Function would reject. The remediation names every condition the
+    // admin-plane `postureFunctionKeyBound` needs, not the Function module.
+    //
+    // Three conditions, not two (#4770 review). The admin-plane var reads the
+    // DEPLOY PARAM loomPostureFunctionUrl, and this env var does not prove that
+    // param was set: the day-one writer of LOOM_POSTURE_FUNCTION_URL is an
+    // out-of-band `az containerapp update` (csa-loom-post-deploy-bootstrap.yml
+    // Commercial, gov-provision-posture.yml Gov), and no shipped bicepparam
+    // sets the param. So the likeliest state behind this branch is "param
+    // empty". An operator who only stored the key and set the flag would
+    // redeploy, still get no binding, and lose the out-of-band URL as well.
+    // This route can read neither Key Vault nor the deploy params, so the
+    // message says it cannot tell which condition is missing (R7).
     return NextResponse.json({
       ok: false,
       gate: 'not_configured',
@@ -85,7 +97,7 @@ export const POST = withSession(async (_req, { session: s }) => {
       missingEnvVar: 'LOOM_POSTURE_FUNCTION_KEY',
       bicepModule: KEY_BINDING_MODULE,
       message:
-        'On-open posture pre-warm unavailable: the posture-refresh Function is deployed (LOOM_POSTURE_FUNCTION_URL is set), but its host key is not bound to this Console, and the Function accepts only keyed calls, so no refresh was dispatched. The key is bound only when BOTH (1) the Function host key is stored in Key Vault as loom-posture-function-key AND (2) the deploy sets observabilityConfig.postureFunctionKeyEnabled, which drives admin-plane postureFunctionKeyBound. This route cannot read Key Vault, so it cannot tell which of the two is missing. Posture below is computed live from Cosmos.',
+        'On-open posture pre-warm unavailable: the posture-refresh Function URL is configured (LOOM_POSTURE_FUNCTION_URL is set), but the Function host key is not bound to this Console, and the Function accepts only keyed calls, so no refresh was dispatched. The deploy binds the key only when ALL THREE of these hold: (1) the Function host key is stored in Key Vault as loom-posture-function-key (the loomPostureFunctionKeySecretName default); (2) loomPostureFunctionUrl is passed as a deploy parameter to platform/fiab/bicep/main.bicep. A URL set on the Console with az containerapp update does not count, and a deploy without that parameter blanks it; (3) the deploy sets observabilityConfig.postureFunctionKeyEnabled to true. This route cannot read Key Vault or the deploy parameters, so it cannot tell which of these is missing. Posture below is computed live from Cosmos.',
     });
   }
 
