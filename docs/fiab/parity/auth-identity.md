@@ -11,7 +11,7 @@ Identity & Admin step + `/admin/permissions` bootstrap.
 |---|---|
 | Interactive user login (OAuth code flow) | Entra app registration (confidential client) + client secret |
 | Redirect URI matches the console host | App registration `web.redirectUris` reconciled to the deploy's FQDN |
-| Device-code CLI login (`loom auth login`) | App registration `isFallbackPublicClient=true` |
+| Device-code CLI login (`loom auth login`) | The same confidential app registration: the Console redeems the device code with its client secret (`isFallbackPublicClient=false`, #4805) |
 | Session cookies mint/verify across redeploys | Stable `SESSION_SECRET` (HKDF input) |
 | First admin can open `/admin/*` before any grants | `LOOM_TENANT_ADMIN_OID` / `_GROUP_ID` bootstrap |
 | Secrets stored securely | Key Vault (`loom-msal-client-secret`, `session-secret`) |
@@ -22,7 +22,7 @@ Identity & Admin step + `/admin/permissions` bootstrap.
 |---|---|---|
 | App registration provisioned by default | built ✅ | `modules/admin-plane/entra-app-registration.bicep` (deploymentScript) + `scripts/csa-loom/bootstrap-msal-app-reg.sh` (bootstrap), gated `loomMsalAppReg.enabled` (default true) |
 | Redirect URIs reconciled to console FQDN | built ✅ | `az ad app update --web-redirect-uris` (bicep script + bootstrap, runtime FQDN added by the bootstrap step) |
-| Public-client / device-code flows | built ✅ | `az ad app update --set isFallbackPublicClient=true` |
+| Device-code flow (CLI + VS Code) | built ✅ | `app/api/auth/cli-session/route.ts` → `lib/auth/device-code-grant.ts`: Entra v2 `/devicecode` + `/token` as a confidential client (`client_secret` on the redemption). Public-client flows stay OFF — `isFallbackPublicClient=true` makes Entra refuse the browser sign-in's secret (AADSTS700025). Failures stream the classified AADSTS code + remediation (#4805) |
 | Delegated Graph `User.Read` | built ✅ | `az ad app update --required-resource-accesses` (`e1fe6dd8-…`) |
 | Client secret in Key Vault | built ✅ | `az ad app credential reset` → `az keyvault secret set` → ACA KV-backed secretRef |
 | `SESSION_SECRET` always set + KV-backed | built ✅ | admin-plane env (unconditional) + `session-secret` ACA secret (KV-backed whenever the app-reg flow owns the secret — in-bicep script OR post-deploy bootstrap, GH #1534; else stable per-RG GUID) |

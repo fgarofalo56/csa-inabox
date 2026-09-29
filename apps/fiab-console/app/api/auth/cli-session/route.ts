@@ -14,9 +14,17 @@
  *       ... (server polls Entra) ...
  *       {"type":"session", ok:true, cookie, expiresAt, claims}
  *     The first line carries the code the human types at the verification URL;
- *     the final line carries the minted cookie. MSAL handles the polling
- *     server-side via the device-authorization grant (RFC 8628). The Entra app
- *     must allow public-client flows — see docs/fiab/MSAL-handoff.md.
+ *     the final line carries the minted cookie. The server runs the
+ *     device-authorization grant (RFC 8628) as a CONFIDENTIAL client — it
+ *     redeems the code with the Console app registration's client secret —
+ *     via lib/auth/device-code-grant.ts. The app registration must NOT allow
+ *     public-client flows (#4805: MSAL's public client sent no credential, so
+ *     every redemption was refused AADSTS7000218; turning public flows on to
+ *     "fix" that breaks browser sign-in with AADSTS700025).
+ *     On failure the last line is
+ *       {"type":"error", ok:false, error, code, aadsts?, correlationId?}
+ *     where `error` is the classified, remediating message (it names the
+ *     AADSTS code) — the CLI and the VS Code extension surface only `error`.
  *
  *  2. Service principal (non-interactive / CI).  Single JSON response:
  *       { ok:true, cookie, expiresAt, claims }
@@ -28,7 +36,7 @@
  * TENANCY, PER BRANCH — the two chains are DIFFERENT, and conflating them is
  * what hid #3845 for as long as it lived:
  *
- *   device code        `tid` = idTokenClaims.tid → account.tenantId → homeAccountId[1]
+ *   device code        `tid` = id_token `tid` → client_info `utid` (MSAL's homeAccountId[1])
  *   service principal  `tid` = access-token `tid` → the request's `tenantId`
  *
  * The SP branch has no id token and no MSAL account object, so it shares none of
@@ -49,12 +57,18 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import {
-  getMsalPublicClient,
   getSpConfidentialClient,
   graphBase,
   type UserClaims,
 } from '@/lib/auth/msal';
 import { encodeSessionCookie, COOKIE_NAME, MAX_AGE_SECS } from '@/lib/auth/session';
+import {
+  runDeviceCodeGrant,
+  isValidTenantSegment,
+  DeviceCodeGrantError,
+  type DeviceCodeFailure,
+} from '@/lib/auth/device-code-grant';
+import { logSafe } from '@/lib/util/log-safe';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -98,7 +112,7 @@ export async function POST(req: NextRequest) {
         ok: false,
         error: `Loom sign-in is not configured on this deployment (missing: ${cfg.missing.join(', ')}).`,
         code: 'not_configured',
-        hint: 'See docs/fiab/MSAL-handoff.md for the az ad app + Container App env steps.',
+        hint: 'Run the post-deploy bootstrap (.github/workflows/csa-loom-post-deploy-bootstrap.yml), which registers the Console app and wires these onto the Console.',
       },
       { status: 503 },
     );
@@ -170,52 +184,75 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: `unknown flow "${flow}"`, code: 'bad_flow' }, { status: 400 });
   }
 
-  const tenantOverride = body?.tenantId as string | undefined;
+  const rawTenant: unknown = body?.tenantId || undefined;
+  // The override is interpolated into the authority URL path, so only a tenant
+  // GUID or domain shape is accepted — never a path, query or host fragment.
+  if (rawTenant !== undefined && (typeof rawTenant !== 'string' || !isValidTenantSegment(rawTenant))) {
+    return NextResponse.json(
+      { ok: false, error: 'tenantId must be an Entra tenant id or verified domain name', code: 'bad_tenant' },
+      { status: 400 },
+    );
+  }
+  const tenantOverride = rawTenant as string | undefined;
   const enc = new TextEncoder();
-  let capturedCookie: string | null = null;
+  let cancelled = false;
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      const send = (obj: unknown) => controller.enqueue(enc.encode(JSON.stringify(obj) + '\n'));
+      const send = (obj: unknown) => {
+        if (!cancelled) controller.enqueue(enc.encode(JSON.stringify(obj) + '\n'));
+      };
       try {
-        const pca = getMsalPublicClient(tenantOverride);
-        const result = await pca.acquireTokenByDeviceCode({
+        const who = await runDeviceCodeGrant({
           scopes: LOGIN_SCOPES,
-          deviceCodeCallback: (resp) => {
+          tenantId: tenantOverride,
+          isCancelled: () => cancelled,
+          onPrompt: (p) =>
             send({
               type: 'device_code',
-              userCode: resp.userCode,
-              verificationUri: resp.verificationUri,
-              message: resp.message,
-              expiresIn: resp.expiresIn,
-            });
-          },
+              userCode: p.userCode,
+              verificationUri: p.verificationUri,
+              message: p.message,
+              expiresIn: p.expiresIn,
+            }),
         });
-        if (!result?.account || !result.accessToken) {
-          send({ type: 'error', ok: false, error: 'Device-code flow returned no account/token', code: 'no_token' });
-          return;
-        }
-        const account = result.account;
+        // Entra TENANT id (rel-T11) — kept in lock-step with app/auth/callback:
+        // `oid` is client_info.uid (MSAL's homeAccountId[0]); `tid` is the id
+        // token's tid, falling back to client_info.utid.
         const claims: UserClaims = {
-          oid: account.homeAccountId.split('.')[0],
-          // Entra TENANT id (rel-T11) — kept in lock-step with app/auth/callback.
-          tid:
-            ((account.idTokenClaims as Record<string, unknown> | undefined)?.tid as string) ||
-            account.tenantId ||
-            account.homeAccountId.split('.')[1] ||
-            undefined,
-          name: account.name ?? account.username,
-          email: account.username,
-          upn: account.username,
+          oid: who.oid,
+          tid: who.tid,
+          name: who.name || who.username,
+          email: who.username,
+          upn: who.username,
         };
         const exp = sessionExp();
-        capturedCookie = encodeSessionCookie({ claims, exp });
-        send({ type: 'session', ok: true, cookie: capturedCookie, expiresAt: exp, claims });
-      } catch (e: any) {
-        send({ type: 'error', ok: false, error: e?.message || 'device-code login failed', code: 'device_login_failed' });
+        const cookie = encodeSessionCookie({ claims, exp });
+        send({ type: 'session', ok: true, cookie, expiresAt: exp, claims });
+      } catch (e: unknown) {
+        const f: DeviceCodeFailure =
+          e instanceof DeviceCodeGrantError
+            ? e.failure
+            : {
+                code: 'device_login_failed',
+                deploymentFault: false,
+                message: `Device-code sign-in failed inside the Console before Entra answered: ${e instanceof Error ? e.message : String(e)}`,
+              };
+        // Code, AADSTS and correlation id — never a token, device code or user code.
+        console.error(
+          '[auth/cli-session] device-code failed:',
+          logSafe(f.code),
+          logSafe(f.aadsts ?? '-'),
+          logSafe(f.correlationId ?? '-'),
+          logSafe(f.message),
+        );
+        send({ type: 'error', ok: false, error: f.message, code: f.code, aadsts: f.aadsts, correlationId: f.correlationId });
       } finally {
-        controller.close();
+        if (!cancelled) controller.close();
       }
+    },
+    cancel() {
+      cancelled = true;
     },
   });
 

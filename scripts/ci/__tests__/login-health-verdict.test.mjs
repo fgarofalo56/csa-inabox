@@ -613,3 +613,93 @@ test('an az ERROR that happens to contain digits is unreadable, NOT a hit count'
     assert.doesNotMatch(r.out, /OK — no invalid_client callback errors/);
   }
 });
+
+// ---------------------------------------------------------------------------
+// #4805 — THE REASON IS PART OF THE VERDICT. Run 36628363301 printed
+//   "could NOT read the invalid_client count (query error / no Log Analytics
+//    Reader on it) … The hits query itself exited 0."
+// The parenthetical was a guess the same line's own diagnosis contradicted. The
+// real fault was the OUTPUT SHAPE: the log-analytics extension builds each row as
+// an OrderedDict whose first key is `TableName`, so bare `-o tsv` printed
+// `PrimaryResult<TAB>4<TAB><ts>` and the count field was `PrimaryResult`.
+// ---------------------------------------------------------------------------
+/** The row bare `-o tsv` produced (knack 0.14.0 tsv writer over the extension's row). */
+const TABLENAME_ROW = 'PrimaryResult\t4\t2026-09-29T20:01:02.345Z';
+
+test('#4805 rc=0 + a TableName-prefixed row is reported as an OUTPUT-SHAPE fault, never as a permission one', () => {
+  const r = run({ LH_LAW: 'ws-guid', LH_HITS_ROW: TABLENAME_ROW, LH_HITS_RC: '0', LH_MIN_END: daysOut(400) });
+  // Verdict unchanged: an unparsed count is unknown, not zero and not broken.
+  assert.equal(r.code, 0, r.out);
+  assert.equal(token(r.out), 'unknown');
+  // Breaks if the row is not quoted back, or the TAB rendering / charset filter
+  // mangles it (the quote is how the NEXT shape fault names itself).
+  assert.match(r.out, /hits query exited 0, but its first field is not a count: row=\[PrimaryResult<TAB>4<TAB>2026-09-29T20:01:02\.345Z\]/);
+  assert.match(r.out, /output-shape fault, not a permission one/);
+  // Breaks against the pre-#4805 script, whose only unreadable-count message
+  // named "no Log Analytics Reader" whatever the exit status was.
+  assert.doesNotMatch(r.out, /Log Analytics Reader/);
+  assert.doesNotMatch(r.out, /OK — no invalid_client callback errors/);
+});
+
+test('#4805 rc=0 + NO row says the query returned nothing, and not that it failed', () => {
+  const r = run({ LH_LAW: 'ws-guid', LH_HITS_ROW: '', LH_HITS_RC: '0', LH_MIN_END: daysOut(400) });
+  assert.equal(r.code, 0);
+  assert.equal(token(r.out), 'unknown');
+  assert.match(r.out, /hits query exited 0, but it returned NO row/);
+  assert.doesNotMatch(r.out, /Log Analytics Reader/);
+});
+
+test('#4805 rc!=0 still names the permission as a likely cause AND quotes az — the exit status picks the message', () => {
+  // Same row as the rc=0 test: ONLY the exit status differs, so a script that
+  // ignored LH_HITS_RC would print the same message for both and one test fails.
+  const r = run({
+    LH_LAW: 'ws-guid',
+    LH_HITS_ROW: TABLENAME_ROW,
+    LH_HITS_RC: '1',
+    LH_HITS_ERR: '(InsufficientAccessError) forbidden',
+    LH_MIN_END: daysOut(400),
+  });
+  assert.equal(r.code, 0);
+  assert.equal(token(r.out), 'unknown');
+  assert.match(r.out, /the hits query failed \(a query error or a missing Log Analytics Reader grant/);
+  assert.match(r.out, /hits query FAILED \(az exited 1\): \[\(InsufficientAccessError\) forbidden\]/);
+  assert.doesNotMatch(r.out, /output-shape fault/);
+});
+
+test('#4805 the quoted row is bounded and reduced to a safe charset (it lands in a workflow annotation)', () => {
+  // An ESC sequence + a `"` + a `$` BEFORE 300 filler chars, then a newline-borne
+  // workflow command. The ESC sits INSIDE the first 120 chars on purpose: placed
+  // after the filler (an earlier draft), the `cut` removed it first and deleting
+  // the `tr -cd` filter left this test green. Breaks if the `cut -c1-120` is
+  // removed (length), or the `tr -cd` filter is removed (the ESC, `[`, `"` and `$`
+  // survive, so the exact prefix below and the ESC absence both fail).
+  // `head -1` is killed by the two-line test below, not here.
+  const hostile = `PrimaryResult\t\u001b[31m"$x${'A'.repeat(300)}\n::error::forged`;
+  const r = run({ LH_LAW: 'ws-guid', LH_HITS_ROW: hostile, LH_HITS_RC: '0', LH_MIN_END: daysOut(400) });
+  const shown = r.out.match(/row=\[([^\]]*)\]/)?.[1];
+  assert.ok(shown, `no quoted row in: ${r.out}`);
+  assert.ok(shown.startsWith('PrimaryResult<TAB>31mxAAAA'), shown);
+  assert.match(shown, /^[A-Za-z0-9 <>._:+/()-]*$/, `only the safe charset may be quoted: ${shown}`);
+  assert.equal(shown.length, 120, `the quote must be cut at 120 chars, got ${shown.length}`);
+  assert.doesNotMatch(r.out, /\u001b/);
+  assert.doesNotMatch(r.out, /^::error::forged/m);
+});
+
+test('#4805 only the FIRST line of the row is quoted', () => {
+  // Short enough that the 120-char cut cannot hide line 2, so this is what kills
+  // a removed `head -1`: without it `tr -cd` drops the newline and the quote
+  // becomes `PrimaryResult<TAB>4second`.
+  const r = run({ LH_LAW: 'ws-guid', LH_HITS_ROW: 'PrimaryResult\t4\nsecond', LH_HITS_RC: '0', LH_MIN_END: daysOut(400) });
+  assert.match(r.out, /row=\[PrimaryResult<TAB>4\]/);
+});
+
+test('#4805 the FIXED projection\'s output parses; the rejected `[0].[…]` shape does not order the hits', () => {
+  // `--query "[].[hits, lastHit]"` → knack writes one TAB-joined line per row.
+  const fixed = run({ LH_LAW: 'ws-guid', LH_HITS_ROW: '4\t2026-08-15T10:00:00Z', LH_HITS_RC: '0', LH_CRED_NEWEST: CRED_TODAY, LH_MIN_END: daysOut(400) });
+  assert.equal(token(fixed.out), 'ok', fixed.out);
+  // `--query "[0].[hits, lastHit]"` → a flat list, which knack writes ONE ELEMENT
+  // PER LINE: the timestamp lands on line 2 and the gate fails closed as UNPROVEN.
+  // Pinned so nobody "simplifies" the workflow projection to that form.
+  const flat = run({ LH_LAW: 'ws-guid', LH_HITS_ROW: '4\n2026-08-15T10:00:00Z', LH_HITS_RC: '0', LH_CRED_NEWEST: CRED_TODAY, LH_MIN_END: daysOut(400) });
+  assert.equal(token(flat.out), 'unproven', flat.out);
+});
