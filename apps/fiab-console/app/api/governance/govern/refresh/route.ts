@@ -22,12 +22,23 @@
  * Honest gate: when LOOM_POSTURE_FUNCTION_URL is unset the route returns 200
  * with `{ ok:false, gate:'not_configured', ... }` so the UI shows a Fluent
  * MessageBar (and still renders live-computed posture). No silent failure.
+ *
+ * The same gate fires when the URL IS set but LOOM_POSTURE_FUNCTION_KEY is not.
+ * The Function's `posture-refresh` route is `AuthLevel.FUNCTION`
+ * (azure-functions/posture-refresh/function_app.py), so an unkeyed call is
+ * rejected 401 — and because the dispatch is fire-and-forget that rejection
+ * was swallowed and the route answered `{ ok:true, dispatched:true }`: a
+ * success claim for a refresh that could never run. The key is bound only once
+ * it is known to exist in Key Vault (admin-plane `postureFunctionKeyBound`), so
+ * "URL without key" is a real, expected deploy state, not a misconfiguration.
  */
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+const POSTURE_FUNCTION_MODULE = 'azure-functions/posture-refresh/deploy/main.bicep';
 
 export async function POST() {
   const s = getSession();
@@ -40,9 +51,25 @@ export async function POST() {
       ok: false,
       gate: 'not_configured',
       missingEnvVar: 'LOOM_POSTURE_FUNCTION_URL',
-      bicepModule: 'azure-functions/posture-refresh/deploy/main.bicep',
+      bicepModule: POSTURE_FUNCTION_MODULE,
       message:
         'On-open posture refresh Function not provisioned. Deploy azure-functions/posture-refresh and set LOOM_POSTURE_FUNCTION_URL. Posture below is computed live from Cosmos.',
+    });
+  }
+
+  const functionKey = (process.env.LOOM_POSTURE_FUNCTION_KEY || '').trim();
+  if (!functionKey) {
+    // URL known, host key not bound: do NOT dispatch an unkeyed call the
+    // Function would reject. Same honest gate shape the UI already renders.
+    // The message names what is missing without guessing WHY (the secret may
+    // not be in Key Vault yet, or the deploy has not enabled the binding).
+    return NextResponse.json({
+      ok: false,
+      gate: 'not_configured',
+      missingEnvVar: 'LOOM_POSTURE_FUNCTION_KEY',
+      bicepModule: POSTURE_FUNCTION_MODULE,
+      message:
+        'On-open posture pre-warm unavailable: LOOM_POSTURE_FUNCTION_URL is set but LOOM_POSTURE_FUNCTION_KEY is not, and the posture-refresh Function accepts only keyed calls, so no refresh was dispatched. The key is bound from Key Vault secret loom-posture-function-key once it is stored there and the deploy sets observabilityConfig.postureFunctionKeyEnabled. Posture below is computed live from Cosmos.',
     });
   }
 
@@ -59,7 +86,7 @@ export async function POST() {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-functions-key': process.env.LOOM_POSTURE_FUNCTION_KEY || '',
+      'x-functions-key': functionKey,
     },
     body: JSON.stringify(payload),
     // Short timeout guard so a hung Function never holds a socket on this node.

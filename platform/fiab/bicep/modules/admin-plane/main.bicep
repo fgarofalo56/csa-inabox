@@ -395,6 +395,9 @@ type observabilityConfigT = {
   @description('Key Vault secret NAME holding the on-call webhook URL (only read when alertWebhookEnabled). Default loom-alert-webhook-url.')
   alertWebhookSecretName: string?
 
+  @description('Posture pre-warm — bind the posture-refresh Function host key (Key Vault secret loomPostureFunctionKeySecretName, default loom-posture-function-key) into the Console as LOOM_POSTURE_FUNCTION_KEY via a Key Vault secretRef. Set true ONLY once that secret is KNOWN to exist in the Loom Key Vault (the post-deploy bootstrap writes it after publishing the Function code): a Container App revision that references a missing Key Vault secret fails to provision, so binding it on loomPostureFunctionUrl alone would take the Console down. Deliberately independent of the URL — the URL is known as soon as the Function App exists, the key only once code is published and the key stored. Takes effect only when loomPostureFunctionUrl is also set. Default false (empty-safe): the Govern owner view still computes posture live from Cosmos; only the on-open pre-warm is unavailable, and the refresh route says so.')
+  postureFunctionKeyEnabled: bool?
+
   @description('C2 — FinOps forecast horizon in days (LOOM_COST_FORECAST_HORIZON_DAYS). How far forward the Cost Management Forecast API / computed projection projects. Default 30 (console clamps 1–90).')
   costForecastHorizonDays: int?
 
@@ -549,6 +552,15 @@ var syntheticLoginSecretUri = observabilityConfig.?syntheticLoginSecretUri ?? ''
 // are the day-one channel).
 var alertWebhookEnabled = observabilityConfig.?alertWebhookEnabled ?? false
 var alertWebhookSecretName = observabilityConfig.?alertWebhookSecretName ?? 'loom-alert-webhook-url'
+// Posture pre-warm key binding (observabilityConfig bag, default OFF). The
+// Console's `loom-posture-function-key` Key Vault secretRef — and the
+// LOOM_POSTURE_FUNCTION_KEY env that reads it — are emitted ONLY when this is
+// true. It is deliberately NOT derived from loomPostureFunctionUrl: the URL can
+// be known before the host key has been written to Key Vault, and a revision
+// that references a missing Key Vault secret FAILS TO PROVISION, so gating the
+// secretRef on the URL would turn "wire the URL" into "take the Console down".
+// The URL is still required (a key with no Function to call is dead weight).
+var postureFunctionKeyBound = !empty(loomPostureFunctionUrl) && (observabilityConfig.?postureFunctionKeyEnabled ?? false)
 // C2 (observabilityConfig bag) — FinOps forecast knobs (fully-functional defaults).
 var costForecastHorizonDays = observabilityConfig.?costForecastHorizonDays ?? 30
 var costForecastMethod = observabilityConfig.?costForecastMethod ?? 'auto'
@@ -1912,7 +1924,7 @@ param deployConsoleCosmos bool = false
 @description('Base URL of the posture-refresh Azure Function (deployed from azure-functions/posture-refresh/deploy/main.bicep). Backs the Govern tab data-owner view on-open refresh. Empty surfaces an honest MessageBar gate; the owner view still computes posture live from Cosmos.')
 param loomPostureFunctionUrl string = ''
 
-@description('Key Vault secret name holding the posture-refresh Function host key. The Console reads this via secretRef as LOOM_POSTURE_FUNCTION_KEY. Only emitted when loomPostureFunctionUrl is set.')
+@description('Key Vault secret name holding the posture-refresh Function host key. The Console reads this via secretRef as LOOM_POSTURE_FUNCTION_KEY. Only emitted when loomPostureFunctionUrl is set AND observabilityConfig.postureFunctionKeyEnabled is true (the secret is known to exist).')
 param loomPostureFunctionKeySecretName string = 'loom-posture-function-key'
 
 @description('Base URL of the paginated-report-renderer Azure Function (deployed from azure-functions/paginated-report-renderer/deploy/main.bicep). Backs PDF/Excel/Word export for the paginated-report editor. Empty surfaces an honest export gate in the designer; authoring still works fully (no Microsoft Fabric / Power BI dependency).')
@@ -5650,9 +5662,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           !empty(effectiveMapsAccount) ? [
             { name: 'NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY', secretRef: 'loom-azure-maps-key' }
           ] : [],
-          // Posture-refresh Function host key — only when the Function URL is wired.
+          // Posture-refresh Function host key — only once the key is KNOWN to be
+          // in Key Vault (postureFunctionKeyBound; NOT the URL alone — see the var).
           // Surfaced to the Govern owner-view refresh BFF, never to the browser.
-          !empty(loomPostureFunctionUrl) ? [
+          postureFunctionKeyBound ? [
             { name: 'LOOM_POSTURE_FUNCTION_KEY', secretRef: 'loom-posture-function-key' }
           ] : [],
           // O1 — optional on-call webhook bridge (observabilityConfig.
@@ -6674,7 +6687,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           ] : [],
           // Posture-refresh Function host key — stored in KV post-deploy as
           // 'loom-posture-function-key' (see azure-functions/posture-refresh/DEPLOYMENT.md).
-          !empty(loomPostureFunctionUrl) ? [
+          // Declared ONLY when postureFunctionKeyBound: ARM resolves a
+          // keyVaultUrl secret at revision provision, so declaring it before
+          // the secret exists fails the whole Console revision.
+          postureFunctionKeyBound ? [
             { name: 'loom-posture-function-key', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/${loomPostureFunctionKeySecretName}', identity: identity.outputs.uamiConsoleId }
           ] : [],
           // O1 — on-call webhook URL (operator-created KV secret, default name
