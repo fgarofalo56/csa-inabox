@@ -1361,11 +1361,17 @@ jobs:
         # the workspace/region supports it, else a small classic PRO warehouse.
         # Skips cleanly when no Databricks workspace is bound. When one IS bound
         # and no warehouse id results (or the Console env cannot be set), the step
-        # CLASSIFIES the failure (network_blocked / auth_refused / not_json /
-        # http_error / no_id_in_response / no_token / console_env_not_set), states
-        # only what it established (for a network refusal it reads the workspace's
-        # publicNetworkAccess + requiredNsgRules from ARM), records reason / phase /
-        # http_status / detail in its outputs, and exits 1 (#4765).
+        # CLASSIFIES the failure (transport_error / network_blocked / auth_refused /
+        # not_json / http_error / no_id_in_response / no_token /
+        # console_env_not_set), states only what it established (for a network
+        # refusal it reads the workspace's publicNetworkAccess + requiredNsgRules
+        # from ARM), records reason / phase / http_status / detail in its outputs,
+        # and exits 1 (#4765). network_blocked is ONLY an HTTP 403 whose JSON
+        # .message starts "Unauthorized network access to workspace" (the shape
+        # run 36526911340 returned); a curl transport failure is transport_error,
+        # retried with bounded backoff first (deploy-integrity R6).
+        # scripts/ci/__tests__/bootstrap-warehouse-classifier.test.mjs runs this
+        # block and the gate step under stub curl/az and pins every class.
         # KNOWN (run 36526911340, bootstrap on a7eadda12): the Commercial workspace
         # adb-loom-default-centralus refused the runner with HTTP 403 "Unauthorized
         # network access to workspace" (SCIM, then Delta Sharing; the old warehouse
@@ -1380,7 +1386,7 @@ jobs:
         # always() gate step reads this step's OUTCOME and fails the job for every
         # failure class EXCEPT network_blocked, which it reports as a warning
         # (operator decision 2026-09-29: the warehouse must be created from inside
-        # the VNet; the console will ensure-create it; tracked on #3744). The
+        # the VNet; tracked on #3744, where the console is to ensure-create it). The
         # in-step annotations are warnings because this step itself cannot fail
         # the job (check-annotation-teeth).
         # Runs inside the Databricks public-access window: after "Enable
@@ -1406,12 +1412,40 @@ jobs:
           # warehouse" (the old probe was `curl -sf ... 2>/dev/null | jq ... || true`),
           # and a non-JSON body is shown before jq parses it. Only the status and
           # the response body are printed — never the token or request headers.
-          dbx_call() {  # dbx_call METHOD OUTFILE URL [curl args...] -> sets DBX_CODE, DBX_RC
-            local method="$1" out="$2"
+          # curl_exit_meaning N -> curl's documented meaning of exit code N (man curl).
+          curl_exit_meaning() {
+            case "$1" in
+              0) echo "no curl error" ;;
+              6) echo "could not resolve host" ;;
+              7) echo "failed to connect to host" ;;
+              28) echo "operation timed out" ;;
+              35) echo "TLS/SSL connect error" ;;
+              52) echo "the server replied with nothing" ;;
+              56) echo "failure receiving network data" ;;
+              60) echo "peer certificate cannot be authenticated with known CA certificates" ;;
+              *) echo "see curl's own message above" ;;
+            esac
+          }
+          dbx_call() {  # dbx_call METHOD OUTFILE URL [curl args...] -> sets DBX_CODE, DBX_RC, DBX_ATTEMPTS
+            local method="$1" out="$2" retry_on
             shift 2
-            : > "$out"
-            DBX_RC=0
-            DBX_CODE=$(curl -sS -o "$out" -w '%{http_code}' "${auth[@]}" -X "$method" "$@") || DBX_RC=$?
+            # R6: retry a transport failure that can be transient — at most 3
+            # attempts, 5s then 10s apart — then fail closed with the last exit.
+            # A GET is safe to repeat: DNS (6), connect (7), timeout (28) and
+            # receive (56) failures retry. A POST retries only 6 and 7, where the
+            # request never reached the workspace, so a create that may have
+            # landed is not sent twice.
+            if [ "$method" = GET ]; then retry_on=" 6 7 28 56 "; else retry_on=" 6 7 "; fi
+            DBX_ATTEMPTS=1
+            while :; do
+              : > "$out"
+              DBX_RC=0
+              DBX_CODE=$(curl -sS -o "$out" -w '%{http_code}' "${auth[@]}" -X "$method" "$@") || DBX_RC=$?
+              if [ "$DBX_RC" = 0 ] || [[ "$retry_on" != *" $DBX_RC "* ]] || [ "$DBX_ATTEMPTS" -ge 3 ]; then break; fi
+              echo "    $method attempt $DBX_ATTEMPTS: curl exit $DBX_RC ($(curl_exit_meaning "$DBX_RC")); retrying in $((DBX_ATTEMPTS * 5))s"
+              sleep $((DBX_ATTEMPTS * 5))
+              DBX_ATTEMPTS=$((DBX_ATTEMPTS + 1))
+            done
           }
           show_response() {  # show_response LABEL OUTFILE
             local size
@@ -1452,15 +1486,26 @@ jobs:
             local body first msg
             body=$(head -c 2000 "$1" | tr -d '\0')
             first="${body#"${body%%[![:space:]]*}"}"
-            if [ "${DBX_RC:-0}" != 0 ] || [ "${DBX_CODE:-000}" = 000 ] || [[ "${body,,}" == *"unauthorized network access"* ]]; then
+            msg=""
+            if [ "${DBX_RC:-0}" = 0 ] && [ "${DBX_CODE:-}" = 403 ] && is_json_object "$1"; then
+              msg=$(jq -r '.message // empty | tostring' "$1" | tr -d '\r\n')
+            fi
+            if [ "${DBX_RC:-0}" != 0 ] || [ "${DBX_CODE:-000}" = 000 ]; then
+              # curl did not complete the request, so nothing answered: this step
+              # cannot say WHY (DNS, a timeout and a TLS failure are all this shape).
+              CAUSE=transport_error
+              WHY="curl could not complete the request (curl exit ${DBX_RC:-0}: $(curl_exit_meaning "${DBX_RC:-0}"), after ${DBX_ATTEMPTS:-1} attempt(s); HTTP ${DBX_CODE:-none}; curl's own message is above); this step did not establish why"
+            elif [[ "$msg" == "Unauthorized network access to workspace"* ]]; then
+              # ONLY the shape measured on run 36526911340: curl exit 0, HTTP 403,
+              # a JSON body whose .message starts with this phrase.
               CAUSE=network_blocked
               workspace_network
               if [ "$WS_PNA" = Disabled ]; then
-                WHY="workspace public network access is disabled (ARM: publicNetworkAccess=Disabled, requiredNsgRules=${WS_NSG}); runner cannot reach it (HTTP ${DBX_CODE:-none}, curl exit ${DBX_RC:-0})"
+                WHY="the workspace refused the runner at the network layer (HTTP 403 \"${msg:0:120}\") and its public network access is disabled (ARM: publicNetworkAccess=Disabled, requiredNsgRules=${WS_NSG})"
               elif [ -n "$WS_PNA" ]; then
-                WHY="the workspace refused the runner at the network layer (HTTP ${DBX_CODE:-none}, curl exit ${DBX_RC:-0}) although ARM reports publicNetworkAccess=${WS_PNA}, requiredNsgRules=${WS_NSG}; an IP access list or a network change still propagating may be blocking it"
+                WHY="the workspace refused the runner at the network layer (HTTP 403 \"${msg:0:120}\") although ARM reports publicNetworkAccess=${WS_PNA}, requiredNsgRules=${WS_NSG}; an IP access list or a network change still propagating may be blocking it"
               else
-                WHY="the workspace refused the runner at the network layer (HTTP ${DBX_CODE:-none}, curl exit ${DBX_RC:-0}); its publicNetworkAccess could not be read from ARM (az output above)"
+                WHY="the workspace refused the runner at the network layer (HTTP 403 \"${msg:0:120}\"); its publicNetworkAccess could not be read from ARM (az output above)"
               fi
             elif [[ "${DBX_CODE:-}" =~ ^40[13]$ ]]; then
               CAUSE=auth_refused
@@ -2859,7 +2904,9 @@ jobs:
         # continue-on-error but no step id; the Content Safety and AOAI steps have
         # no continue-on-error (their failures are swallowed inside the script).
         # check-bootstrap-rg-subscription-scope fails CI if this step is removed,
-        # loses always(), stops being last, or stops reading a gated step's outcome.
+        # loses always(), stops being last, or stops reading a gated step's outcome;
+        # scripts/ci/__tests__/bootstrap-warehouse-classifier.test.mjs runs this
+        # block and pins which failure classes warn and which fail the job.
         id: bootstrap_failure_gate
         if: always()
         env:
@@ -2877,6 +2924,8 @@ jobs:
             case "${WH_REASON:-}" in
               network_blocked) CLASS="network/configuration (not transient; re-running from a GitHub-hosted runner will not help while the workspace refuses public traffic)"
                 FIX="" ;;  # not printed: this class warns with the #3744 sentence below instead
+              transport_error) CLASS="transport (curl did not complete the request; the step retried DNS and connect failures, and timeouts on its read-only probe, before failing)"
+                FIX="check that DBX_HOST resolves and is reachable from the runner, using curl's exit code and message in that step's log, then re-run the bootstrap." ;;
               auth_refused) CLASS="permission"
                 FIX="make the deploy identity a workspace admin (the 'Bootstrap Databricks SCIM' step), then re-run the bootstrap." ;;
               not_json) CLASS="configuration"
@@ -2895,7 +2944,7 @@ jobs:
             if [ "${WH_REASON:-}" = network_blocked ]; then
               # Operator decision 2026-09-29 ("warn + gate, build producer"): ONLY the
               # network-blocked class does not fail the job. Every other class below does.
-              echo "::warning::Step 'Provision default Databricks SQL warehouse (query compute) + wire it on the Console' could not reach the workspace at ${WH_PHASE:-an unrecorded phase}: ${WH_DETAIL:-no cause recorded} [reason=network_blocked, last Databricks HTTP status=${WH_HTTP:-not recorded}]. Class: ${CLASS}. The Databricks SQL warehouse must be created from inside the VNet; the console will ensure-create it; tracked on #3744. This run did not set LOOM_DATABRICKS_SQL_WAREHOUSE_ID on loom-console."
+              echo "::warning::Step 'Provision default Databricks SQL warehouse (query compute) + wire it on the Console' was refused by the workspace at ${WH_PHASE:-an unrecorded phase}: ${WH_DETAIL:-no cause recorded} [reason=network_blocked, last Databricks HTTP status=${WH_HTTP:-not recorded}]. Class: ${CLASS}. The Databricks SQL warehouse must be created from inside the VNet; tracked on #3744 (the console is to ensure-create it from inside the VNet). This run did not set LOOM_DATABRICKS_SQL_WAREHOUSE_ID on loom-console."
             else
               echo "::error::Step 'Provision default Databricks SQL warehouse (query compute) + wire it on the Console' failed at ${WH_PHASE:-an unrecorded phase}: ${WH_DETAIL:-no cause recorded} [reason=${WH_REASON:-not recorded}, last Databricks HTTP status=${WH_HTTP:-not recorded}; each response's status and first 500 bytes are in that step's log]. This run did not set LOOM_DATABRICKS_SQL_WAREHOUSE_ID on loom-console. Class: ${CLASS}. Remediation: ${FIX}"
               exit 1
