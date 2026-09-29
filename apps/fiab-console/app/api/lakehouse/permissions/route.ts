@@ -22,10 +22,11 @@
  * GET  ?tab=column&list=columns&objectId=<n>     → { columns }
  * GET  ?tab=row                                  → { policies }
  * GET  ?tab=row&list=tables | &list=columns&objectId=<n>
- * POST { tab, ... }                              → grant / create
- * DELETE ?tab=object&id=<armId>                  → revoke RBAC
- * DELETE ?tab=table|column body { upn, objectId, columnIds? } → revoke SELECT
- * DELETE ?tab=row&policyObjectId=<n>             → drop security policy
+ * POST { tab, ... }                              → grant / create      (tenant admin)
+ * DELETE ?tab=object&container=<c>&id=<armId>    → revoke RBAC         (tenant admin; id must be
+ *                                                  an assignment listed on <c>)
+ * DELETE ?tab=table|column body { upn, objectId, columnIds? } → revoke SELECT (tenant admin)
+ * DELETE ?tab=row&policyObjectId=<n>             → drop security policy (tenant admin)
  *
  * Principals: RBAC assignments are enriched OID→UPN via Microsoft Graph when
  * LOOM_GRAPH_USERS_ENABLED=true; SQL-plane principals are already UPNs (the
@@ -37,10 +38,10 @@ import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import {
   listContainerRoleAssignments,
   grantContainerRole,
-  revokeContainerRoleAssignment,
   listKnownBlobDataRoles,
   type ContainerRoleAssignment,
 } from '@/lib/azure/adls-client';
+import { revokeContainerRoleAssignmentInScope } from '../_lib/container-role-assignment';
 import {
   dedicatedTarget,
   serverlessTarget,
@@ -71,6 +72,21 @@ export const dynamic = 'force-dynamic';
 type Tab = 'object' | 'table' | 'column' | 'row' | 'cls';
 function parseTab(v: string | null | undefined): Tab {
   return v === 'table' || v === 'column' || v === 'row' || v === 'cls' ? v : 'object';
+}
+
+/**
+ * The one tenant-admin refusal for the write verbs (POST grants, DELETE
+ * revokes): same status, same body shape, so the dialog renders both alike.
+ */
+function tenantAdminRequired(verb: 'Granting' | 'Revoking'): NextResponse {
+  return NextResponse.json(
+    {
+      ok: false,
+      error: 'forbidden',
+      hint: `${verb} lakehouse permissions requires tenant-admin. Ask an administrator, or ${verb === 'Granting' ? 'grant' : 'remove'} the role in the Azure portal.`,
+    },
+    { status: 403 },
+  );
 }
 
 /** Honest infra-gate when the Synapse Dedicated SQL pool isn't configured. */
@@ -203,16 +219,7 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   // Role Based Access Control Administrator at that scope). Note `principalType`
   // was validated here while `role` and `principalId` were not, which is what
   // made the gap easy to miss on review.
-  if (!isTenantAdmin(session)) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: 'forbidden',
-        hint: 'Granting lakehouse permissions requires tenant-admin. Ask an administrator, or grant the role in the Azure portal.',
-      },
-      { status: 403 },
-    );
-  }
+  if (!isTenantAdmin(session)) return tenantAdminRequired('Granting');
   const body = await req.json().catch(() => ({}));
   const tab = parseTab(body?.tab ?? req.nextUrl.searchParams.get('tab'));
 
@@ -306,15 +313,26 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   }
 });
 
-export const DELETE = withSession(async (req: NextRequest) => {
+export const DELETE = withSession(async (req: NextRequest, { session }) => {
+  // Revoking is the mirror of granting: the same tenant-admin rule as POST.
+  if (!isTenantAdmin(session)) return tenantAdminRequired('Revoking');
   const sp = req.nextUrl.searchParams;
   const tab = parseTab(sp.get('tab'));
 
   try {
     if (tab === 'object') {
-      const id = sp.get('id');
-      if (!id) return NextResponse.json({ ok: false, error: 'id (full ARM role-assignment id) required' }, { status: 400 });
-      await revokeContainerRoleAssignment(id);
+      const id = (sp.get('id') || '').trim();
+      const container = (sp.get('container') || '').trim();
+      if (!id || !container) {
+        return NextResponse.json(
+          { ok: false, error: 'container and id (full ARM role-assignment id on that container) required' },
+          { status: 400 },
+        );
+      }
+      const res = await revokeContainerRoleAssignmentInScope(container, id);
+      if (!res.ok) {
+        return NextResponse.json({ ok: false, error: res.message }, { status: res.reason === 'invalid' ? 400 : 404 });
+      }
       return NextResponse.json({ ok: true });
     }
 
