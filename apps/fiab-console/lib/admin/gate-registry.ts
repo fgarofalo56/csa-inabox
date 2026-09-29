@@ -65,6 +65,17 @@ async function runProducer(gateId: string): Promise<void> {
   }
 }
 
+/**
+ * #4776 — run EVERY runtime producer (in parallel, each bounded by
+ * RUNTIME_PRODUCER_BOUND_MS) so the replica SERVING this request has a
+ * populated runtime store before its gate statuses are read. The store is
+ * per-process: without this, /admin/readiness on a replica that never ran the
+ * producer reads the gate blocked even when another replica produced the value.
+ */
+export async function runRuntimeProducers(): Promise<void> {
+  await Promise.all(Object.keys(RUNTIME_PRODUCERS).map((id) => runProducer(id)));
+}
+
 export async function loadExternalGates(): Promise<ExternalGateCheck[]> {
   return GATES.map((g) => ({
     id: `gate-${g.id}`,

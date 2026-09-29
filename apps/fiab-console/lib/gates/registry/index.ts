@@ -103,9 +103,14 @@ function settingsFor(spec: EnvSpec, meta: GateMeta | undefined): GateRequiredSet
 /**
  * #3744 — for a spec whose vars the Console produces at runtime, the gate's
  * `remediation` and `fixit` are what the LAST ATTEMPT measured, not the static
- * pre-attempt text. Defined as enumerable getters so every consumer that reads
- * a GateDef (readiness nodes, /api/admin/gates JSON, HonestGate, Copilot's
- * gate tools) sees the live value with no change on its side.
+ * pre-attempt text. Defined as enumerable getters so every SERVER-SIDE consumer
+ * that reads a GateDef (readiness nodes, /api/admin/gates JSON, Copilot's gate
+ * tools) sees the live value with no change on its side.
+ *
+ * NOT the browser: the runtime store is per-process and empty in a client
+ * bundle, so a client component's `getGate()` returns the static def. A
+ * surface that has the route's classified failure passes it to
+ * `<HonestGate classified={...}>`, which applies the same rule (#4776).
  *
  *  - no failure recorded → the spec's own remediation + its declared Fix-it;
  *  - a classified failure → that failure's remediation (permission / network /

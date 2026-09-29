@@ -22,6 +22,7 @@
 import { NextResponse } from 'next/server';
 import { withCapability } from '@/lib/api/route-toolkit';
 import { GATES, allGateStatuses } from '@/lib/gates/registry';
+import { runRuntimeProducers } from '@/lib/admin/gate-registry';
 import { buildReadiness, GATE_PROBE_MAP, type ProbeLite } from '@/lib/admin/readiness';
 import { getOrComputeCached } from '@/lib/azure/query-result-cache';
 import { detectLoomCloud } from '@/lib/azure/cloud-endpoints';
@@ -78,8 +79,12 @@ async function collectProbes(refresh: boolean): Promise<{ probes: ProbeLite[]; p
 
 export const GET = withCapability('admin.env-config', 'Admin', async (req) => {
   const refresh = ['1', 'true'].includes((req.nextUrl.searchParams.get('refresh') || '').toLowerCase());
+  // #4776 — run the runtime producers in THIS replica (bounded, in parallel with
+  // the probes) BEFORE reading gate statuses: the produced-value store is
+  // per-process, and the probe result below may be served from a cache that
+  // another replica filled, so nothing else guarantees this replica ran them.
+  const [, { probes, probeError, stale }] = await Promise.all([runRuntimeProducers(), collectProbes(refresh)]);
   const statuses = allGateStatuses();
-  const { probes, probeError, stale } = await collectProbes(refresh);
   const report = buildReadiness(
     { gates: GATES, statuses, probes },
     { generatedAt: new Date().toISOString(), cloud: detectLoomCloud() },

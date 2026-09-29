@@ -73,6 +73,7 @@ export const GET = withSession(async (req: NextRequest, { session: s }) => {
     const [constraints, monitor] = await Promise.all([
       // The constraints half resolves the warehouse; a classified failure is
       // surfaced with its kind/remediation rather than flattened to a message.
+      // The panel renders it as the HonestGate (page.tsx `load()`).
       listDeltaConstraints(table, catalog, schema).catch((e) =>
         (e instanceof WarehouseResolutionError ? warehouseErrorBody(e) : { error: e?.message || String(e) }) as any),
       getMonitor(fullName).catch((e) => ({ error: e?.message || String(e) }) as any),

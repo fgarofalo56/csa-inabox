@@ -223,8 +223,13 @@ export async function applyDeltaConstraint(
   if ('unsupported' in compiled) {
     return { ruleId: rule.id, name, ddl: '', applied: false, detail: compiled.unsupported };
   }
+  // #4776 — resolve the warehouse OUTSIDE the try: a classified
+  // WarehouseResolutionError must reach the route (403/503/502 + remediation),
+  // not be flattened into a 200 `applied:false` row the panel cannot tell apart
+  // from a DDL error.
+  const wid = await warehouse(warehouseId);
   try {
-    await executeStatement(await warehouse(warehouseId), compiled.ddl, catalog, schema);
+    await executeStatement(wid, compiled.ddl, catalog, schema);
     return { ruleId: rule.id, name, ddl: compiled.ddl, applied: true, detail: 'constraint enforced on write' };
   } catch (e: any) {
     return { ruleId: rule.id, name, ddl: compiled.ddl, applied: false, detail: `error: ${e?.message || String(e)}` };

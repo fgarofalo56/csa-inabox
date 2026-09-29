@@ -18,19 +18,24 @@
  *       lib/admin/platform-settings.ts uses), validated with a GET: a 404 /
  *       DELETED warehouse, or a binding recorded against a different workspace
  *       host, is discarded and resolution continues (self-healing);
- *   (c) list warehouses and adopt the one named `loom-default` (the bootstrap's
- *       name — pinned against the workflow by a test, not transcribed);
- *   (d) create it — serverless PRO 2X-Small, 1..1 clusters, auto-stop 10 min,
- *       the bootstrap's exact spec — then persist.
+ *   (c) list warehouses and adopt one by NAME, in a fixed preference order:
+ *       `loom-default` (the post-deploy bootstrap's name), else
+ *       `loom-governance` (the name BOTH Azure Government producers create —
+ *       gov-provision-dbx-sql.yml and apps/loom-dbx-init/init.sh). Same names,
+ *       same order as the deploy-time discover script (#4769). Each name is
+ *       pinned against its producer by a test, not transcribed;
+ *   (d) create `loom-default` — serverless PRO 2X-Small, 1..1 clusters,
+ *       auto-stop 10 min, the bootstrap's exact spec — then persist.
  *
  * CONCURRENCY. One process-level in-flight promise (held on globalThis so
  * every Next.js route chunk shares it): N simultaneous first calls issue ONE
- * create. Across replicas, a create that conflicts re-lists and adopts; and
- * after any create we re-list and, when more than one `loom-default` exists,
- * every replica converges on the lexicographically smallest id so they all
- * bind the SAME warehouse. The surplus is left in place (never auto-deleted —
- * deleting compute is not a call this resolver gets to make) and named in the
- * resolution detail.
+ * create. Across replicas: a create that conflicts re-lists and adopts; after
+ * any create the replica re-lists and binds the lowest id IT LISTED; and the
+ * persist is compare-and-adopt — a replica that finds another replica's live
+ * binding for the same workspace already stored ADOPTS it instead of
+ * overwriting, so replicas converge on the first binding persisted. The
+ * surplus is left in place (never auto-deleted — deleting compute is not a
+ * call this resolver gets to make) and named in the resolution detail.
  *
  * FAILURES CLASSIFY TRUTHFULLY (deploy-integrity.md R6/R7). Every failed call
  * becomes a `WarehouseResolutionError` whose `kind` is derived from what the
@@ -60,6 +65,7 @@ import {
 import { envConfigContainer } from '@/lib/azure/cosmos-client';
 import { readPlatformSettings, type PlatformSettingsDoc } from '@/lib/admin/platform-settings';
 import { publishRuntimeValue, publishRuntimeFailure } from '@/lib/azure/runtime-produced-env';
+import { privateDnsZoneNameForGroupId } from '@/lib/azure/pe-subresource-groups';
 
 /** The calling identity as the workspace sees it (SCIM `Me`). */
 export interface DbxCurrentIdentity {
@@ -69,8 +75,12 @@ export interface DbxCurrentIdentity {
   applicationId?: string;
   /** DIRECTLY-assigned entitlements only — group-inherited ones are not listed on this object. */
   entitlements: string[];
-  /** Group display names the identity is a direct member of (e.g. 'admins'). */
-  groups: string[];
+  /**
+   * Group display names the identity is a direct member of (e.g. 'admins').
+   * UNDEFINED when SCIM Me returned no `groups` field at all — admin membership
+   * is then NOT ESTABLISHED, which is different from a measured empty list (R7).
+   */
+  groups?: string[];
 }
 
 /**
@@ -101,18 +111,31 @@ export async function getCurrentIdentity(): Promise<DbxCurrentIdentity> {
     displayName: b.displayName,
     applicationId: b.applicationId,
     entitlements: (b.entitlements || []).map((e) => String(e?.value || '')).filter(Boolean),
-    groups: (b.groups || []).map((g) => String(g?.display || g?.value || '')).filter(Boolean),
+    groups: Array.isArray(b.groups)
+      ? b.groups.map((g) => String(g?.display || g?.value || '')).filter(Boolean)
+      : undefined,
   };
 }
 
 export const WAREHOUSE_ENV_VAR = 'LOOM_DATABRICKS_SQL_WAREHOUSE_ID';
 
-/** The bootstrap's warehouse name (csa-loom-post-deploy-bootstrap.yml). */
+/** The bootstrap's warehouse name (csa-loom-post-deploy-bootstrap.yml) — the one the resolver CREATES. */
 export const LOOM_DEFAULT_WAREHOUSE_NAME = 'loom-default';
 
+/** The name both Azure Government producers create (gov-provision-dbx-sql.yml, apps/loom-dbx-init/init.sh). */
+export const LOOM_GOV_WAREHOUSE_NAME = 'loom-governance';
+
 /**
- * The bootstrap's exact create body. `warehouse-resolver.test.ts` parses the
- * workflow's POST payload and asserts equality, so the two cannot drift.
+ * Names the resolver ADOPTS, in preference order — identical to the deploy-time
+ * discover script (#4769): `loom-default` wins because the bootstrap re-wires
+ * the Console to it on every run. A Gov workspace whose producers made
+ * `loom-governance` is adopted, never duplicated with a second `loom-default`.
+ */
+export const LOOM_ADOPTABLE_WAREHOUSE_NAMES: readonly string[] = [LOOM_DEFAULT_WAREHOUSE_NAME, LOOM_GOV_WAREHOUSE_NAME];
+
+/**
+ * The bootstrap's exact create body. `__tests__/databricks-sql-warehouse.test.ts`
+ * parses the workflow's POST payload and asserts equality, so the two cannot drift.
  */
 export const LOOM_DEFAULT_WAREHOUSE_SPEC: Required<
   Pick<WarehouseCreateSpec, 'name' | 'cluster_size' | 'min_num_clusters' | 'max_num_clusters' | 'auto_stop_mins' | 'enable_serverless_compute' | 'warehouse_type'>
@@ -158,6 +181,13 @@ export class WarehouseResolutionError extends Error {
   readonly entitlement?: string;
   /** Only for kind 'not-configured': the env var that was genuinely unset. */
   readonly missing?: string;
+  /**
+   * What SCIM Me measured about the Console identity (display name, application
+   * id, direct entitlements, groups). Kept OUT of `message` and out of
+   * {@link warehouseErrorBody}, which reach any signed-in caller; it is
+   * published only to the admin-only gate detail.
+   */
+  readonly diagnostic?: string;
   constructor(init: {
     kind: WarehouseFailureKind;
     step: WarehouseStep;
@@ -166,6 +196,7 @@ export class WarehouseResolutionError extends Error {
     status?: number;
     entitlement?: string;
     missing?: string;
+    diagnostic?: string;
   }) {
     super(init.message);
     this.name = 'WarehouseResolutionError';
@@ -175,6 +206,7 @@ export class WarehouseResolutionError extends Error {
     this.remediation = init.remediation;
     this.entitlement = init.entitlement;
     this.missing = init.missing;
+    this.diagnostic = init.diagnostic;
   }
 }
 
@@ -276,7 +308,7 @@ export function classifyWarehouseFailure(step: WarehouseStep, err: unknown): War
   const text = `${e.body || ''} ${e.message || ''}`;
 
   const networkRemediation =
-    `The Console reaches ${host} over the workspace's private endpoint (privatelink.azuredatabricks.net). ` +
+    `The Console reaches ${host} over the workspace's private endpoint (${privateDnsZoneNameForGroupId('databricks_ui_api')}). ` +
     'Verify the databricks_ui_api private endpoint is Approved, the private DNS zone resolves the workspace host to it from the Container Apps environment VNet, ' +
     'and — if the workspace has an IP access list enabled — that it does not exclude the Console egress. Then re-run the readiness check.';
   if (isTransport(e)) {
@@ -387,11 +419,18 @@ type DocWithBinding = PlatformSettingsDoc & { databricksSqlWarehouse?: Persisted
 
 const PLATFORM_ID = '__platform__';
 
+/** A stored binding is usable only with BOTH a non-blank id and a hostname (an admin write can leave either malformed). */
+function validBinding(b: unknown): PersistedWarehouseBinding | null {
+  const x = b as Partial<PersistedWarehouseBinding> | undefined;
+  return x && typeof x.id === 'string' && x.id.trim() && typeof x.hostname === 'string' && x.hostname.trim()
+    ? (x as PersistedWarehouseBinding)
+    : null;
+}
+
 async function readBinding(): Promise<PersistedWarehouseBinding | null> {
   try {
     const doc = (await readPlatformSettings()) as DocWithBinding | null;
-    const b = doc?.databricksSqlWarehouse;
-    return b && typeof b.id === 'string' && b.id.trim() ? b : null;
+    return validBinding(doc?.databricksSqlWarehouse);
   } catch {
     // A store outage must not block resolution — (c) re-finds `loom-default`
     // by name, so no duplicate warehouse results from skipping this layer.
@@ -399,16 +438,52 @@ async function readBinding(): Promise<PersistedWarehouseBinding | null> {
   }
 }
 
+interface PersistOutcome {
+  /** Why the write did not land, or null. */
+  err: string | null;
+  /** Set when ANOTHER replica's live binding for this workspace was already stored and was adopted instead. */
+  adopted?: PersistedWarehouseBinding;
+}
+
+/** True only when a GET shows the warehouse exists and is not DELETED/DELETING. Any failure → false. */
+async function isLiveWarehouse(id: string): Promise<boolean> {
+  try {
+    const w = await withRetryRaw(() => getWarehouse(id));
+    return !GONE_STATES.has(String(w?.state || '').toUpperCase());
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Merge the binding into the singleton doc. IfMatch on the doc's etag so a
- * concurrent admin write (BI backend, Maps account, Spark binding) is never
- * clobbered; bounded retry on a lost race. Returns an error string, or null.
+ * Merge the binding into the singleton doc — COMPARE-AND-ADOPT. The doc is
+ * re-read first: if it already holds a DIFFERENT binding for the same workspace
+ * host (another replica bound first) and a GET shows that warehouse live, it is
+ * adopted and nothing is written, so replicas converge on the first binding
+ * persisted rather than on the last writer. `discardedId` is a binding THIS
+ * resolution already found dead and is never adopted back. If the stored
+ * binding cannot be verified live, it is overwritten (last-writer-wins only
+ * then).
+ *
+ * The write is a replace with IfMatch on the doc's etag, so this resolver
+ * never clobbers a concurrent admin setting (BI backend, Maps account, Spark
+ * binding); bounded retry on a lost race. The OTHER direction is not protected:
+ * the admin writers in platform-settings.ts upsert the doc without an etag and
+ * can drop `databricksSqlWarehouse` — the next resolution re-adopts by name.
  */
-async function persistBinding(b: PersistedWarehouseBinding): Promise<string | null> {
+async function persistBinding(b: PersistedWarehouseBinding, discardedId?: string): Promise<PersistOutcome> {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const c = await envConfigContainer();
       const existing = (await readPlatformSettings()) as DocWithBinding | null;
+      const stored = validBinding(existing?.databricksSqlWarehouse);
+      if (
+        stored && stored.id !== b.id && stored.id !== discardedId &&
+        stored.hostname.toLowerCase() === b.hostname.toLowerCase() &&
+        (await isLiveWarehouse(stored.id))
+      ) {
+        return { err: null, adopted: stored };
+      }
       const doc: DocWithBinding = {
         ...(existing ?? {}),
         id: PLATFORM_ID,
@@ -424,14 +499,14 @@ async function persistBinding(b: PersistedWarehouseBinding): Promise<string | nu
       } else {
         await c.items.create(doc);
       }
-      return null;
+      return { err: null };
     } catch (e: unknown) {
       const code = (e as { code?: number })?.code;
       if (code === 412 || code === 409) continue; // lost a race — re-read and retry
-      return (e as Error)?.message || String(e);
+      return { err: (e as Error)?.message || String(e) };
     }
   }
-  return 'lost the concurrent-write race 3 times';
+  return { err: 'lost the concurrent-write race 3 times' };
 }
 
 // ── resolution ───────────────────────────────────────────────────────────────
@@ -443,16 +518,27 @@ function isNotFound(e: unknown): boolean {
   return x.status === 404 || errorCode(x) === 'RESOURCE_DOES_NOT_EXIST';
 }
 
-function pickLoomDefault(whs: Warehouse[]): { pick: Warehouse | undefined; surplus: string[] } {
-  const matches = whs
-    .filter((w) => w?.name === LOOM_DEFAULT_WAREHOUSE_NAME && !GONE_STATES.has(String(w.state || '').toUpperCase()))
-    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  return { pick: matches[0], surplus: matches.slice(1).map((w) => w.id) };
+/**
+ * Pick the adoptable warehouse: the FIRST name in {@link LOOM_ADOPTABLE_WAREHOUSE_NAMES}
+ * that the list carries wins (`loom-default` over `loom-governance`, whatever
+ * the list order); within that name the lowest id, with the rest reported as
+ * surplus. Unlike the deploy-time discover script, two warehouses of the chosen
+ * name do NOT adopt none: the Console binds the lowest and names the surplus,
+ * because refusing would leave every replica unbound.
+ */
+function pickLoomDefault(whs: Warehouse[]): { pick: Warehouse | undefined; surplus: string[]; name: string } {
+  for (const name of LOOM_ADOPTABLE_WAREHOUSE_NAMES) {
+    const matches = whs
+      .filter((w) => w?.name === name && !GONE_STATES.has(String(w.state || '').toUpperCase()))
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    if (matches.length) return { pick: matches[0], surplus: matches.slice(1).map((w) => w.id), name };
+  }
+  return { pick: undefined, surplus: [], name: LOOM_DEFAULT_WAREHOUSE_NAME };
 }
 
-function surplusNote(surplus: string[]): string {
+function surplusNote(surplus: string[], name: string): string {
   return surplus.length
-    ? ` ${surplus.length} other '${LOOM_DEFAULT_WAREHOUSE_NAME}' warehouse(s) exist (${surplus.join(', ')}); left in place — every replica binds the lowest id.`
+    ? ` ${surplus.length} other '${name}' warehouse(s) exist (${surplus.join(', ')}); left in place — this replica bound the lowest id it listed.`
     : '';
 }
 
@@ -547,32 +633,41 @@ async function measuredPermissionError(base: WarehouseResolutionError): Promise<
       remediation: base.remediation,
     });
   }
-  const admin = me.groups.some((g) => g.toLowerCase() === 'admins');
+  const groupsKnown = Array.isArray(me.groups);
+  const admin = groupsKnown && me.groups!.some((g) => g.toLowerCase() === 'admins');
   const has = me.entitlements.includes(ent);
   const who = me.displayName || me.applicationId || me.id || '(unnamed)';
-  const measured =
-    ` Measured via SCIM Me: identity ${who} has direct entitlements ` +
-    `[${me.entitlements.join(', ') || 'none'}], groups [${me.groups.join(', ') || 'none'}] — `;
+  // Identity detail (name, app id, entitlement + group lists) goes ONLY into
+  // `diagnostic`; `message` states the conclusion without naming the identity.
+  const diagnostic =
+    `SCIM Me: identity ${who}${me.applicationId && me.applicationId !== who ? ` (application ${me.applicationId})` : ''}; ` +
+    `direct entitlements [${me.entitlements.join(', ') || 'none'}]; ` +
+    `groups ${groupsKnown ? `[${me.groups!.join(', ') || 'none'}]` : 'not reported (no groups field)'}.`;
   if (admin || has) {
-    const why = admin ? 'it IS in the admins group' : `"${ent}" is present directly`;
+    const why = admin ? 'the Console identity IS in the workspace admins group' : `"${ent}" is present directly on the Console identity`;
     return new WarehouseResolutionError({
       kind: 'unknown',
       step: base.step,
       status: base.status,
-      message: base.message + measured + `${why}, so the refusal is not explained by a missing entitlement. Its cause is not established.`,
+      diagnostic,
+      message: base.message + ` Measured via SCIM Me: ${why}, so the refusal is not explained by a missing entitlement. Its cause is not established.`,
       remediation:
         `Databricks answered the ${base.step} call with HTTP ${base.status ?? '?'}, but ${why}, so granting an entitlement will not fix it. ` +
         'The cause is not established from the response: inspect the quoted Databricks error, the warehouse\'s own permissions (CAN_USE / CAN_MANAGE), ' +
         'the workspace IP access list, and any workspace or account policy restricting SQL warehouses.',
     });
   }
+  const adminClause = groupsKnown
+    ? 'it is not in the admins group'
+    : 'SCIM Me returned no group membership, so whether it is a workspace admin is not established';
   return new WarehouseResolutionError({
     kind: base.kind,
     step: base.step,
     status: base.status,
     entitlement: base.entitlement,
-    message: base.message + measured +
-      `"${ent}" is ABSENT from its direct entitlements and it is not in the admins group (group-inherited entitlements are not visible on this object).`,
+    diagnostic,
+    message: base.message +
+      ` Measured via SCIM Me: "${ent}" is ABSENT from the Console identity's direct entitlements and ${adminClause} (group-inherited entitlements are not visible on this object).`,
     remediation: base.remediation,
   });
 }
@@ -581,9 +676,26 @@ async function listOrThrow(): Promise<Warehouse[]> {
   return withRetry('list', () => listWarehouses());
 }
 
+/** Compare-and-adopt lost: another replica's live binding was stored first — serve THAT one. */
+function adoptedFromReplica(a: PersistedWarehouseBinding): WarehouseResolution {
+  return {
+    id: a.id,
+    source: 'persisted',
+    name: a.name,
+    detail:
+      `Another Console replica had already bound '${a.name}' (${a.id}) for this workspace (${a.source} on ${a.boundAt}); ` +
+      'this replica adopted that binding, verified live, instead of overwriting it, so both serve the same warehouse.',
+  };
+}
+
+function notPersisted(err: string | null): string {
+  return err ? ` Binding NOT persisted (${err}); the next process re-adopts it by name.` : '';
+}
+
 async function resolveUncached(host: string): Promise<WarehouseResolution> {
   // (b) persisted binding — validated, self-healing.
   const bound = await readBinding();
+  let discardedId: string | undefined;
   if (bound && bound.hostname.toLowerCase() === host) {
     try {
       const w = await withRetryRaw(() => getWarehouse(bound.id));
@@ -600,20 +712,22 @@ async function resolveUncached(host: string): Promise<WarehouseResolution> {
       if (!isNotFound(e)) throw classifyWarehouseFailure('get', e);
       // 404 → the warehouse was deleted out-of-band; re-resolve below.
     }
+    discardedId = bound.id;
   }
 
-  // (c) list + adopt `loom-default`.
+  // (c) list + adopt by name (`loom-default`, else `loom-governance`).
   const listed = pickLoomDefault(await listOrThrow());
   if (listed.pick) {
-    const persistErr = await persistBinding({ id: listed.pick.id, name: listed.pick.name, hostname: host, source: 'listed', boundAt: new Date().toISOString() });
+    const p = await persistBinding({ id: listed.pick.id, name: listed.name, hostname: host, source: 'listed', boundAt: new Date().toISOString() }, discardedId);
+    if (p.adopted) return adoptedFromReplica(p.adopted);
     return {
       id: listed.pick.id,
       source: 'listed',
-      name: listed.pick.name,
+      name: listed.name,
       detail:
-        `Adopted the existing '${LOOM_DEFAULT_WAREHOUSE_NAME}' SQL warehouse (${listed.pick.id}).` +
-        surplusNote(listed.surplus) +
-        (persistErr ? ` Binding NOT persisted (${persistErr}); the next process re-adopts it by name.` : ''),
+        `Adopted the existing '${listed.name}' SQL warehouse (${listed.pick.id}).` +
+        surplusNote(listed.surplus, listed.name) +
+        notPersisted(p.err),
     };
   }
 
@@ -636,6 +750,22 @@ async function resolveUncached(host: string): Promise<WarehouseResolution> {
   const after = pickLoomDefault(await listOrThrow());
   const chosen = after.pick?.id || createdId;
   if (!chosen) {
+    if (conflicted) {
+      // The workspace SAID the name exists, yet the list does not show it: the
+      // likely cause is a `loom-default` the Console identity cannot see.
+      throw new WarehouseResolutionError({
+        kind: 'unknown',
+        step: 'create',
+        message:
+          `Databricks refused the create because a '${LOOM_DEFAULT_WAREHOUSE_NAME}' SQL warehouse already exists, ` +
+          `but no '${LOOM_DEFAULT_WAREHOUSE_NAME}' is visible to the Console identity when it lists warehouses.`,
+        remediation:
+          `A '${LOOM_DEFAULT_WAREHOUSE_NAME}' warehouse the Console identity cannot see is the likely cause — for example one the ` +
+          'post-deploy bootstrap created under another identity. A workspace admin grants the Console managed identity CAN_USE ' +
+          `(or CAN_MANAGE) on that '${LOOM_DEFAULT_WAREHOUSE_NAME}' warehouse (SQL Warehouses → ${LOOM_DEFAULT_WAREHOUSE_NAME} → Permissions); ` +
+          'the Console then adopts it on the next attempt.',
+      });
+    }
     throw new WarehouseResolutionError({
       kind: 'unknown',
       step: 'create',
@@ -643,29 +773,28 @@ async function resolveUncached(host: string): Promise<WarehouseResolution> {
       remediation: `The cause is not established. Check the workspace's SQL warehouses list and the Console identity's CAN_USE permission on '${LOOM_DEFAULT_WAREHOUSE_NAME}'.`,
     });
   }
+  const chosenName = after.pick ? after.name : LOOM_DEFAULT_WAREHOUSE_NAME;
   const created = !!createdId && chosen === createdId;
   const source: PersistedWarehouseBinding['source'] = created ? 'created' : 'listed';
-  const persistErr = await persistBinding({ id: chosen, name: LOOM_DEFAULT_WAREHOUSE_NAME, hostname: host, source, boundAt: new Date().toISOString() });
+  const p = await persistBinding({ id: chosen, name: chosenName, hostname: host, source, boundAt: new Date().toISOString() }, discardedId);
+  if (p.adopted) return adoptedFromReplica(p.adopted);
   let how: string;
   if (created) {
     how = `Created the '${LOOM_DEFAULT_WAREHOUSE_NAME}' SQL warehouse (${chosen}; ${classic ? 'classic PRO — serverless was refused by this workspace' : 'serverless PRO'}, 2X-Small, auto-stop 10 min).`;
   } else if (adopted) {
-    how = `A create attempt failed in transit; the re-list before retrying found '${LOOM_DEFAULT_WAREHOUSE_NAME}', so the Console bound it (${chosen}) without POSTing again. Whether this replica's POST or another's produced it is not established.`;
+    how = `A create attempt failed in transit; the re-list before retrying found '${chosenName}', so the Console bound it (${chosen}) without POSTing again. Whether this replica's POST or another's produced it is not established.`;
   } else if (conflicted) {
-    how = `The create was refused because '${LOOM_DEFAULT_WAREHOUSE_NAME}' already exists; bound to the listed '${LOOM_DEFAULT_WAREHOUSE_NAME}' (${chosen}).`;
+    how = `The create was refused because '${LOOM_DEFAULT_WAREHOUSE_NAME}' already exists; bound to the listed '${chosenName}' (${chosen}).`;
   } else if (!createdId) {
-    how = `The create returned no id; bound to the listed '${LOOM_DEFAULT_WAREHOUSE_NAME}' (${chosen}).`;
+    how = `The create returned no id; bound to the listed '${chosenName}' (${chosen}).`;
   } else {
-    how = `This replica's create returned ${createdId}; bound to the lowest-id '${LOOM_DEFAULT_WAREHOUSE_NAME}' (${chosen}) so every replica binds the same warehouse.`;
+    how = `This replica's create returned ${createdId}; bound to the lowest-id '${chosenName}' it listed (${chosen}).`;
   }
   return {
     id: chosen,
     source,
-    name: LOOM_DEFAULT_WAREHOUSE_NAME,
-    detail:
-      how +
-      surplusNote(after.surplus) +
-      (persistErr ? ` Binding NOT persisted (${persistErr}); the next process re-adopts it by name.` : ''),
+    name: chosenName,
+    detail: how + surplusNote(after.surplus, chosenName) + notPersisted(p.err),
   };
 }
 
@@ -713,9 +842,11 @@ export async function resolveDatabricksSqlWarehouseId(): Promise<WarehouseResolu
       if (err.kind === 'permission') err = await measuredPermissionError(err);
       s.cached = undefined;
       s.failure = { err, host, at: Date.now() };
+      // The published failure feeds the ADMIN-ONLY gate surfaces, so it may
+      // carry the SCIM identity diagnostic that route bodies never do.
       publishRuntimeFailure(WAREHOUSE_ENV_VAR, {
         kind: err.kind,
-        message: err.message,
+        message: err.diagnostic ? `${err.message} ${err.diagnostic}` : err.message,
         remediation: err.remediation,
       });
       throw err;
@@ -750,7 +881,54 @@ export async function tryResolveWarehouseId(): Promise<string | null> {
   }
 }
 
-/** Shape a resolution failure for a BFF JSON response. */
+/**
+ * Drop the in-process cache when it holds `id` — the self-heal for a warehouse
+ * deleted out-of-band while cached (auto-bind-by-default.md §3). The next
+ * resolve re-verifies the persisted binding with a GET instead of serving the
+ * dead id for up to REVERIFY_MS.
+ */
+export function invalidateResolvedWarehouse(id: string): void {
+  const s = state();
+  if (s.cached && s.cached.res.id === id) s.cached = undefined;
+}
+
+/**
+ * True when a statement failed because the WAREHOUSE is gone: the submit was
+ * answered 404, or Databricks says RESOURCE_DOES_NOT_EXIST about a warehouse.
+ * What the Statement Execution API returns for a deleted warehouse is NOT
+ * measured on a live workspace — this keys only on those two documented shapes.
+ */
+export function isWarehouseGoneError(e: unknown): boolean {
+  const x = (e || {}) as ErrShape;
+  const text = `${x.message || ''} ${x.body || ''}`;
+  if (x.status === 404 || /submit failed 404\b/.test(text)) return true;
+  return (x.code === 'RESOURCE_DOES_NOT_EXIST' || /RESOURCE_DOES_NOT_EXIST/.test(text)) && /warehouse/i.test(text);
+}
+
+/**
+ * Run `fn` against the resolver's warehouse. If the warehouse turns out to be
+ * gone, the cached id is invalidated and `fn` is retried ONCE on a fresh
+ * resolution. An operator pin (source 'env') is never second-guessed: its
+ * failure is rethrown as-is.
+ */
+export async function withResolvedWarehouse<T>(fn: (warehouseId: string) => Promise<T>): Promise<T> {
+  const first = await resolveDatabricksSqlWarehouseId();
+  try {
+    return await fn(first.id);
+  } catch (e) {
+    if (first.source === 'env' || !isWarehouseGoneError(e)) throw e;
+    invalidateResolvedWarehouse(first.id);
+    return fn((await resolveDatabricksSqlWarehouseId()).id);
+  }
+}
+
+/**
+ * Shape a resolution failure for a BFF JSON response. Deliberately carries NO
+ * `diagnostic`: the routes that return it are open to any signed-in caller, so
+ * what SCIM Me measured about the Console identity (name, application id,
+ * entitlements, groups) stays on the admin-only gate surfaces (the published
+ * runtime failure → /admin/readiness, /api/admin/gates, the diagnostics bundle).
+ */
 export function warehouseErrorBody(e: WarehouseResolutionError): {
   ok: false;
   code: string;

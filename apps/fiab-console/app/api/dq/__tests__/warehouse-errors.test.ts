@@ -84,6 +84,9 @@ function post(path: string, body: unknown) {
   });
 }
 
+/** A rule that compiles to real DDL (not-null on a column scope). */
+const RULE = { id: 'r1', name: 'email not null', check: 'not-null', scope: 'column:t1.email', enabled: true };
+
 beforeEach(() => {
   vi.stubEnv('LOOM_DATABRICKS_HOSTNAME', 'adb-1.azuredatabricks.net');
   for (const f of Object.values(m)) f.mockReset();
@@ -157,5 +160,47 @@ describe('DQ routes — classified warehouse failure is NOT a generic 500', () =
     const res = await monitorsPOST(post('/api/dq/monitors', { action: 'drop-constraint', table: 'cat.sch.t', name: 'c1' }));
     expect(res.status).toBe(500);
     expect(m.executeStatement).toHaveBeenCalledTimes(1);
+  });
+
+  it('A-1: apply-constraint with a permission failure → 403 + entitlement (was 200 {ok:false, applied:false})', async () => {
+    m.rulesRead.mockResolvedValue({ resource: { items: [RULE] } });
+    m.resolve.mockRejectedValue(permissionError());
+    const res = await monitorsPOST(post('/api/dq/monitors', { action: 'apply-constraint', table: 't1', ruleId: 'r1' }));
+    const j = await res.json();
+    // Breaks if applyDeltaConstraint resolves the warehouse INSIDE its try again:
+    // the WRE is flattened into { applied:false, detail:'error: …' } at HTTP 200.
+    expect(res.status).toBe(403);
+    expect(j.kind).toBe('permission');
+    expect(j.entitlement).toBe('databricks-sql-access');
+    expect(j.result).toBeUndefined();
+    expect(m.executeStatement).not.toHaveBeenCalled();
+  });
+
+  it('A-1 control: a DDL failure AFTER the warehouse resolved is still the applied:false row', async () => {
+    m.rulesRead.mockResolvedValue({ resource: { items: [RULE] } });
+    m.resolve.mockResolvedValue('wh-1');
+    m.executeStatement.mockRejectedValue(new Error('DELTA_VIOLATE_CONSTRAINT'));
+    const res = await monitorsPOST(post('/api/dq/monitors', { action: 'apply-constraint', table: 't1', ruleId: 'r1' }));
+    const j = await res.json();
+    expect(res.status).toBe(200);
+    expect(j.ok).toBe(false);
+    expect(j.result).toMatchObject({ applied: false });
+    expect(j.result.detail).toMatch(/DELTA_VIOLATE_CONSTRAINT/);
+  });
+
+  it('B-6: the SCIM identity diagnostic never reaches the route body — not even for a tenant admin', async () => {
+    const withDiag = () => new WarehouseResolutionError({
+      kind: 'permission', step: 'list', message: 'refused', remediation: 'grant it',
+      entitlement: 'databricks-sql-access', diagnostic: 'SCIM Me: identity loom-console-uami (application 0000-app).',
+    });
+    m.resolve.mockRejectedValue(withDiag());
+    vi.stubEnv('LOOM_TENANT_ADMIN_OID', 'oid-1'); // the session's oid → tenant admin
+    const res = await runPOST(post('/api/dq/run', { backend: 'databricks' }));
+    const j = await res.json();
+    // Positive half: the classified cause + remediation still reach the caller.
+    expect(res.status).toBe(403);
+    expect(j).toMatchObject({ kind: 'permission', remediation: 'grant it' });
+    // Breaks if a route (or warehouseErrorBody) forwards `diagnostic`.
+    expect(JSON.stringify(j)).not.toMatch(/0000-app|loom-console-uami/);
   });
 });

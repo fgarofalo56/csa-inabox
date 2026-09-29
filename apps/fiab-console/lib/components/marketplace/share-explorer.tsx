@@ -17,9 +17,9 @@ import { clientFetch } from '@/lib/client-fetch';
  *
  * Honest gate (no-vaporware.md): when no Databricks workspace is bound, or the
  * Console could not produce the warehouse, the query route returns { gate,
- * kind, error, remediation } and a Fluent MessageBar names the CLASSIFIED cause
- * (not configured / permission / network / quota / unknown) — the full surface
- * still renders.
+ * kind, error, remediation } and the registry-driven HonestGate names the
+ * CLASSIFIED cause (not configured / permission / network / quota / unknown)
+ * with a Fix-it matched to it — the full surface still renders.
  *
  * Fluent v9 + Loom design tokens only (no hard-coded px/hex). Reuses Monaco
  * (MonacoTextarea, language 'sql') for the SQL editor and the shared results
@@ -44,6 +44,8 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { LOOM_ACCENT } from '@/lib/components/shared/accent-tokens';
 import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
+import { HonestGate } from '@/lib/components/shared/honest-gate';
+import { surfaceGateFrom, type SurfaceGate } from '@/lib/gates/surface-gate';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
@@ -95,19 +97,7 @@ interface QueryData {
   truncated: boolean;
   executionMs: number;
 }
-interface Gate { error: string; missing?: string; kind?: string; remediation?: string }
 
-/** MessageBar title for the query route's gate, keyed on the classified cause. */
-function gateTitle(kind?: string): string {
-  switch (kind) {
-    case 'authentication': return 'SQL warehouse: identity not authenticated';
-    case 'permission': return 'SQL warehouse: permission refused';
-    case 'network': return 'SQL warehouse: workspace unreachable';
-    case 'quota': return 'SQL warehouse: quota / capacity';
-    case 'unknown': return 'SQL warehouse could not be provisioned';
-    default: return 'Databricks workspace not configured';
-  }
-}
 
 function fmtCell(v: unknown): string {
   if (v === null || v === undefined) return 'NULL';
@@ -161,7 +151,7 @@ export function ShareExplorerPanel({ catalog, host, providerName, shareName }: {
   const [result, setResult] = useState<QueryData | null>(null);
   const [running, setRunning] = useState(false);
   const [queryErr, setQueryErr] = useState<string | null>(null);
-  const [gate, setGate] = useState<Gate | null>(null);
+  const [gate, setGate] = useState<SurfaceGate | null>(null);
   const [filter, setFilter] = useState('');
 
   // --- browse: schemas in the catalog ---
@@ -204,9 +194,10 @@ export function ShareExplorerPanel({ catalog, host, providerName, shareName }: {
         body: JSON.stringify({ catalog, schema, sql: statement }),
       });
       const j = await r.json().catch(() => ({}));
-      if ((r.status === 503 || r.status === 403 || r.status === 502) && j?.gate) {
-        setGate({ error: j.error, missing: j.missing, kind: j.kind, remediation: j.remediation }); setResult(null); return;
-      }
+      // #4776 — not-configured AND every classified warehouse failure render
+      // through HonestGate (registry-driven, with a Fix-it matched to the cause).
+      const g = surfaceGateFrom(j);
+      if (g) { setGate(g); setResult(null); return; }
       if (!j.ok) { setQueryErr(j.error || `HTTP ${r.status}`); setResult(null); return; }
       setResult(j.data as QueryData);
     } catch (e: any) {
@@ -253,15 +244,13 @@ export function ShareExplorerPanel({ catalog, host, providerName, shareName }: {
       />
 
       {gate && (
-        <MessageBar intent="warning">
-          <MessageBarBody>
-            {/* #3744 — the title names the CLASSIFIED cause; "not configured"
-                only when no workspace is bound (no call was made). */}
-            <MessageBarTitle>{gateTitle(gate.kind)}</MessageBarTitle>
-            {gate.error}
-            {gate.remediation ? <> {gate.remediation}</> : null}
-          </MessageBarBody>
-        </MessageBar>
+        <HonestGate
+          gateId={gate.gateId}
+          surface="Share explorer"
+          missing={gate.missing}
+          detail={gate.error}
+          classified={gate.classified}
+        />
       )}
 
       <div className={s.split}>

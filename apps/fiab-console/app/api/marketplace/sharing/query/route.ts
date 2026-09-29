@@ -16,7 +16,7 @@
  *   default namespace so an unqualified table name resolves inside the
  *   subscribed catalog.
  *
- * Session-guarded (getSession). Returns the structured { ok, data, error }
+ * Session-guarded (withSession, route-toolkit). Returns the structured { ok, data, error }
  * shape. When no Databricks workspace is bound (LOOM_DATABRICKS_HOSTNAME unset)
  * it returns 503 { ok:false, gate:true, missing }. The SQL warehouse itself is
  * produced by the Console (#3744); when that production FAILS the response
@@ -89,6 +89,7 @@ export const POST = withSession(async (req: NextRequest) => {
       {
         ok: false,
         gate: true,
+        code: 'not_configured',
         missing: gate.missing,
         error:
           `Databricks workspace not configured. Set ${gate.missing} on the Loom ` +

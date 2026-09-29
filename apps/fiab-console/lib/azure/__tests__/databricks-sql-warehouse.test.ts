@@ -17,13 +17,16 @@ import path from 'node:path';
 
 const h = vi.hoisted(() => {
   // writes = successful binding writes; replaceCalls = every replace attempt;
-  // failNextReplace = the next replace loses an etag race (412) once.
-  const cosmos: { doc: any; etag: number; writes: number; replaceCalls: number; failNextReplace: boolean } =
-    { doc: undefined, etag: 0, writes: 0, replaceCalls: 0, failNextReplace: false };
+  // failNextReplace = the next replace loses an etag race (412) once;
+  // hideNextRead = the next read answers 404 once (a replica that read the doc
+  // BEFORE another replica's binding landed).
+  const cosmos: { doc: any; etag: number; writes: number; replaceCalls: number; failNextReplace: boolean; hideNextRead: boolean } =
+    { doc: undefined, etag: 0, writes: 0, replaceCalls: 0, failNextReplace: false, hideNextRead: false };
   const container = {
     item: (_id: string, _pk: string) => ({
       read: async () => {
-        if (!cosmos.doc) {
+        if (!cosmos.doc || cosmos.hideNextRead) {
+          cosmos.hideNextRead = false;
           const e: any = new Error('Entity with the specified id does not exist');
           e.code = 404;
           throw e;
@@ -83,7 +86,13 @@ import {
   WarehouseResolutionError,
   LOOM_DEFAULT_WAREHOUSE_SPEC,
   LOOM_DEFAULT_WAREHOUSE_NAME,
+  LOOM_GOV_WAREHOUSE_NAME,
+  LOOM_ADOPTABLE_WAREHOUSE_NAMES,
   WAREHOUSE_ENV_VAR,
+  warehouseErrorBody,
+  warehouseErrorStatus,
+  withResolvedWarehouse,
+  type WarehouseFailureKind,
   __testing,
 } from '../databricks-sql-warehouse';
 import { clearRuntimeProduced } from '../runtime-produced-env';
@@ -125,6 +134,7 @@ beforeEach(() => {
   h.cosmos.writes = 0;
   h.cosmos.replaceCalls = 0;
   h.cosmos.failNextReplace = false;
+  h.cosmos.hideNextRead = false;
   for (const f of Object.values(h.dbx)) f.mockReset();
   h.dbx.listWarehouses.mockResolvedValue([]);
   vi.stubEnv(WAREHOUSE_ENV_VAR, '');
@@ -282,8 +292,10 @@ describe('concurrency', () => {
     // handed createdId ('wh-zzz') while the returned id is 'wh-aaa' — the next
     // process would then bind a different warehouse than this one did.
     expect(h.cosmos.doc.databricksSqlWarehouse.id).toBe('wh-aaa');
-    // Nit #8: never claims a "concurrent create won" — it names what it measured.
-    expect(r.detail).toMatch(/This replica's create returned wh-zzz; bound to the lowest-id 'loom-default' \(wh-aaa\)/);
+    // Nit #8: never claims a "concurrent create won" — it names what it measured,
+    // and (round 3) claims only what THIS replica did: the lowest id IT listed.
+    expect(r.detail).toMatch(/This replica's create returned wh-zzz; bound to the lowest-id 'loom-default' it listed \(wh-aaa\)/);
+    expect(r.detail).not.toMatch(/every replica binds/);
   });
 
   it('a create whose response carries NO id binds the listed warehouse and says exactly that', async () => {
@@ -422,7 +434,11 @@ describe('failure classification (R6/R7)', () => {
     expect(err.entitlement).toBe('allow-cluster-create');
     // Breaks if the SCIM measurement is dropped from the message.
     expect(err.message).toMatch(/"allow-cluster-create" is ABSENT/);
-    expect(err.message).toMatch(/workspace-access, databricks-sql-access/);
+    // B-6: the identity listing lives in `diagnostic`, NOT in the message any
+    // signed-in caller receives. Breaks if the name/entitlement list moves back.
+    expect(err.diagnostic).toMatch(/workspace-access, databricks-sql-access/);
+    expect(err.diagnostic).toMatch(/loom-console-uami/);
+    expect(err.message).not.toMatch(/loom-console-uami|workspace-access/);
     expect(err.remediation).toMatch(/cannot grant this to itself/);
   });
 
@@ -604,5 +620,207 @@ describe('spec is lifted from the bootstrap, not transcribed', () => {
     expect(LOOM_DEFAULT_WAREHOUSE_SPEC).toEqual(bodies[0]);
     // And the adopt-by-name select uses the same name.
     expect(wf).toContain(`select(.name=="${LOOM_DEFAULT_WAREHOUSE_NAME}")`);
+  });
+});
+
+describe('round 3 (#4776 re-review)', () => {
+  const REPO = path.resolve(__dirname, '../../../../..');
+  /** The `"name":"<x>"` of the create body a producer POSTs — lifted, not transcribed. */
+  function producerCreateName(rel: string): string[] {
+    const src = readFileSync(path.join(REPO, rel), 'utf8');
+    return [...src.matchAll(/-d '\{"name":"([^"]+)"/g)].map((m) => m[1]);
+  }
+
+  it('B-1: the Gov producers\' warehouse name is lifted from BOTH producers and is adoptable', () => {
+    const wf = producerCreateName('.github/workflows/gov-provision-dbx-sql.yml');
+    const init = producerCreateName('apps/loom-dbx-init/init.sh');
+    // Breaks if a producer is renamed (the resolver would adopt a name nobody
+    // creates). The workflow POSTs twice (serverless, then the classic
+    // fallback), so compare the DISTINCT names — and require at least one body,
+    // so a regex that stops matching cannot pass on an empty list.
+    expect(wf.length).toBeGreaterThanOrEqual(1);
+    expect([...new Set(wf)]).toEqual([LOOM_GOV_WAREHOUSE_NAME]);
+    expect([...new Set(init)]).toEqual([LOOM_GOV_WAREHOUSE_NAME]);
+    // Order is the #4769 discover script's: loom-default first.
+    expect(LOOM_ADOPTABLE_WAREHOUSE_NAMES).toEqual([LOOM_DEFAULT_WAREHOUSE_NAME, LOOM_GOV_WAREHOUSE_NAME]);
+  });
+
+  it('B-1: a Gov workspace listing ONLY loom-governance (no pin) adopts it — 0 creates', async () => {
+    vi.stubEnv('LOOM_CLOUD', 'gcc-high');
+    vi.stubEnv('LOOM_DATABRICKS_HOSTNAME', 'adb-1.2.databricks.azure.us');
+    h.dbx.listWarehouses.mockResolvedValue([
+      { id: 'wh-other', name: 'analyst-adhoc', state: 'RUNNING' },
+      { id: 'gov1', name: LOOM_GOV_WAREHOUSE_NAME, state: 'STOPPED' },
+    ]);
+    const r = await resolveDatabricksSqlWarehouseId();
+    // The measured defect: { id:'new1', source:'created', creates:1 } — a
+    // second warehouse beside the one the Gov producers made.
+    expect(h.dbx.createWarehouse).toHaveBeenCalledTimes(0);
+    expect(r).toMatchObject({ id: 'gov1', source: 'listed', name: LOOM_GOV_WAREHOUSE_NAME });
+    expect(r.detail).toMatch(/Adopted the existing 'loom-governance' SQL warehouse \(gov1\)/);
+    expect(h.cosmos.doc.databricksSqlWarehouse).toMatchObject({ id: 'gov1', name: LOOM_GOV_WAREHOUSE_NAME });
+  });
+
+  it('B-1: both names listed (loom-governance FIRST) → loom-default is preferred, whatever the list order', async () => {
+    h.dbx.listWarehouses.mockResolvedValue([
+      { id: 'aaa-gov', name: LOOM_GOV_WAREHOUSE_NAME, state: 'RUNNING' },
+      { id: 'zzz-default', name: LOOM_DEFAULT_WAREHOUSE_NAME, state: 'RUNNING' },
+    ]);
+    const r = await resolveDatabricksSqlWarehouseId();
+    // Breaks if the pick is list-order or lowest-id across names: 'aaa-gov'.
+    expect(r.id).toBe('zzz-default');
+    expect(h.dbx.createWarehouse).not.toHaveBeenCalled();
+  });
+
+  it('B-2: the network remediation names the Gov private DNS zone in Gov, the Commercial one in Commercial', () => {
+    const t: any = new TypeError('fetch failed');
+    t.cause = { code: 'ECONNREFUSED' };
+    vi.stubEnv('LOOM_CLOUD', 'gcc-high');
+    const gov = classifyWarehouseFailure('list', t);
+    // Breaks if the zone is hard-coded again: the Gov text would name privatelink.azuredatabricks.net.
+    expect(gov.remediation).toContain('privatelink.databricks.azure.us');
+    expect(gov.remediation).not.toContain('privatelink.azuredatabricks.net');
+    vi.stubEnv('LOOM_CLOUD', 'commercial');
+    const com = classifyWarehouseFailure('list', t);
+    expect(com.remediation).toContain('privatelink.azuredatabricks.net');
+  });
+
+  it('A-2: a replica that finds ANOTHER replica\'s live binding already stored ADOPTS it (P1)', async () => {
+    // Replica B lists both and binds the lowest id it listed: wh-a.
+    h.dbx.listWarehouses.mockResolvedValue([
+      { id: 'wh-b', name: LOOM_DEFAULT_WAREHOUSE_NAME, state: 'RUNNING' },
+      { id: 'wh-a', name: LOOM_DEFAULT_WAREHOUSE_NAME, state: 'RUNNING' },
+    ]);
+    const rB = await resolveDatabricksSqlWarehouseId();
+    expect(rB.id).toBe('wh-a');
+    // Replica A: a fresh process that read the doc BEFORE B's binding landed
+    // (hideNextRead) and whose list is stale ([wh-b] only).
+    __testing.reset();
+    h.cosmos.hideNextRead = true;
+    h.dbx.listWarehouses.mockResolvedValue([{ id: 'wh-b', name: LOOM_DEFAULT_WAREHOUSE_NAME, state: 'RUNNING' }]);
+    h.dbx.getWarehouse.mockResolvedValue({ id: 'wh-a', name: LOOM_DEFAULT_WAREHOUSE_NAME, state: 'RUNNING' });
+    const writesBefore = h.cosmos.writes;
+    const rA = await resolveDatabricksSqlWarehouseId();
+    // Measured before the fix: B=wh-a | A=wh-b | persisted=wh-b (last writer wins).
+    expect(rA.id).toBe(rB.id);
+    expect(h.cosmos.doc.databricksSqlWarehouse.id).toBe('wh-a');
+    expect(h.cosmos.writes).toBe(writesBefore); // adopted, nothing overwritten
+    expect(rA.source).toBe('persisted');
+    expect(rA.detail).toMatch(/Another Console replica had already bound 'loom-default' \(wh-a\)/);
+    expect(h.dbx.getWarehouse).toHaveBeenCalledWith('wh-a'); // verified live before adopting
+  });
+
+  it('A-2 control: a stored binding whose warehouse is GONE is overwritten, not adopted', async () => {
+    seedBinding('wh-dead');
+    h.cosmos.hideNextRead = true; // this replica's (b) read missed it
+    h.dbx.getWarehouse.mockRejectedValue(httpErr('getWarehouse', 404, '{"error_code":"RESOURCE_DOES_NOT_EXIST"}'));
+    h.dbx.listWarehouses.mockResolvedValue([{ id: 'wh-live', name: LOOM_DEFAULT_WAREHOUSE_NAME, state: 'RUNNING' }]);
+    const r = await resolveDatabricksSqlWarehouseId();
+    // Breaks if adoption skips the live check: 'wh-dead' would be served.
+    expect(r.id).toBe('wh-live');
+    expect(h.cosmos.doc.databricksSqlWarehouse.id).toBe('wh-live');
+  });
+
+  it('nit: a stored binding with NO hostname is ignored, not dereferenced', async () => {
+    h.cosmos.doc = {
+      id: '__platform__', tenantId: '__platform__',
+      databricksSqlWarehouse: { id: 'wh-nohost', name: LOOM_DEFAULT_WAREHOUSE_NAME, source: 'created', boundAt: 'x' },
+      _etag: String(++h.cosmos.etag),
+    };
+    h.dbx.listWarehouses.mockResolvedValue([{ id: 'wh-ok', name: LOOM_DEFAULT_WAREHOUSE_NAME, state: 'RUNNING' }]);
+    // Breaks (TypeError: Cannot read properties of undefined) if hostname is not validated.
+    const r = await resolveDatabricksSqlWarehouseId();
+    expect(r.id).toBe('wh-ok');
+    expect(h.dbx.getWarehouse).not.toHaveBeenCalledWith('wh-nohost');
+  });
+
+  it('A-3: a statement that finds the warehouse GONE invalidates the cache and retries ONCE on a fresh resolution', async () => {
+    h.dbx.listWarehouses.mockResolvedValueOnce([{ id: 'wh-1', name: LOOM_DEFAULT_WAREHOUSE_NAME, state: 'RUNNING' }]);
+    expect((await resolveDatabricksSqlWarehouseId()).id).toBe('wh-1'); // now cached
+    // The warehouse is deleted out-of-band.
+    h.dbx.getWarehouse.mockRejectedValue(httpErr('getWarehouse', 404, '{"error_code":"RESOURCE_DOES_NOT_EXIST"}'));
+    h.dbx.listWarehouses.mockResolvedValue([{ id: 'wh-2', name: LOOM_DEFAULT_WAREHOUSE_NAME, state: 'RUNNING' }]);
+    const seen: string[] = [];
+    const out = await withResolvedWarehouse(async (id) => {
+      seen.push(id);
+      if (id === 'wh-1') throw new Error('executeStatement submit failed 404: {"error_code":"RESOURCE_DOES_NOT_EXIST","message":"warehouse wh-1 does not exist"}');
+      return 'ran';
+    });
+    // Breaks if the cache is not invalidated: the retry is served 'wh-1' again
+    // with 0 GETs (the reviewer's P2) and the call fails twice.
+    expect(seen).toEqual(['wh-1', 'wh-2']);
+    expect(out).toBe('ran');
+    expect(h.dbx.getWarehouse).toHaveBeenCalledWith('wh-1');
+  });
+
+  it('A-3 controls: a non-"gone" statement error is NOT retried; an env pin is never second-guessed', async () => {
+    h.dbx.listWarehouses.mockResolvedValue([{ id: 'wh-1', name: LOOM_DEFAULT_WAREHOUSE_NAME, state: 'RUNNING' }]);
+    let calls = 0;
+    const sqlErr = await withResolvedWarehouse(async () => { calls++; throw new Error('TABLE_OR_VIEW_NOT_FOUND t'); }).catch((e) => e);
+    expect(sqlErr.message).toMatch(/TABLE_OR_VIEW_NOT_FOUND/);
+    expect(calls).toBe(1);
+    vi.stubEnv(WAREHOUSE_ENV_VAR, 'wh-pinned');
+    calls = 0;
+    const pinErr = await withResolvedWarehouse(async () => { calls++; throw new Error('executeStatement submit failed 404: gone'); }).catch((e) => e);
+    expect(pinErr.message).toMatch(/submit failed 404/);
+    expect(calls).toBe(1);
+  });
+
+  it('A-4: SCIM Me with NO groups field does not assert non-membership', async () => {
+    h.dbx.createWarehouse.mockRejectedValue(httpErr('createWarehouse', 403, '{"error_code":"PERMISSION_DENIED","message":"no"}'));
+    meReturns({ displayName: 'sp' }); // no `groups` key at all (P3)
+    const err = await resolveDatabricksSqlWarehouseId().catch((e) => e);
+    expect(err.kind).toBe('permission');
+    // Breaks if an absent field is mapped to [] and reported as a measured non-membership.
+    expect(err.message).not.toMatch(/not in the admins group/);
+    expect(err.message).toMatch(/SCIM Me returned no group membership, so whether it is a workspace admin is not established/);
+    expect(err.diagnostic).toMatch(/groups not reported/);
+  });
+
+  it('A-4 control: an EMPTY groups list is a measured non-membership', async () => {
+    h.dbx.createWarehouse.mockRejectedValue(httpErr('createWarehouse', 403, '{"error_code":"PERMISSION_DENIED","message":"no"}'));
+    meReturns({ displayName: 'sp', groups: [] });
+    const err = await resolveDatabricksSqlWarehouseId().catch((e) => e);
+    expect(err.message).toMatch(/it is not in the admins group/);
+  });
+
+  it('A-5: a create refused as ALREADY EXISTS with no visible loom-default names the unseen warehouse + CAN_USE', async () => {
+    h.dbx.listWarehouses.mockResolvedValue([]); // before AND after the create
+    h.dbx.createWarehouse.mockRejectedValue(httpErr('createWarehouse', 400, '{"error_code":"RESOURCE_ALREADY_EXISTS","message":"loom-default exists"}'));
+    const err = await resolveDatabricksSqlWarehouseId().catch((e) => e);
+    expect(err.kind).toBe('unknown');
+    // Breaks if the conflicted branch falls to the "returned no warehouse id" text (P4).
+    expect(err.message).not.toMatch(/returned no warehouse id/);
+    expect(err.message).toMatch(/refused the create because a 'loom-default' SQL warehouse already exists/);
+    expect(err.message).toMatch(/no 'loom-default' is visible to the Console identity/);
+    expect(err.remediation).toMatch(/CAN_USE/);
+  });
+
+  it('A-6: warehouseErrorStatus maps EVERY failure kind (authentication 503, unknown 502)', () => {
+    const kinds: Record<WarehouseFailureKind, number> = {
+      'not-configured': 503, authentication: 503, permission: 403, network: 503, quota: 503, unknown: 502,
+    };
+    const got = Object.fromEntries(
+      (Object.keys(kinds) as WarehouseFailureKind[]).map((k) =>
+        [k, warehouseErrorStatus(new WarehouseResolutionError({ kind: k, step: 'list', message: 'm', remediation: 'r' }))]),
+    );
+    // Breaks on `case 'authentication': return 401` (the reviewer's blind arm)
+    // and on dropping the unknown → 502 case (it would read 503).
+    expect(got).toEqual(kinds);
+  });
+
+  it('B-6: the SCIM identity diagnostic reaches the ADMIN-ONLY gate detail, never a route body', async () => {
+    h.dbx.createWarehouse.mockRejectedValue(httpErr('createWarehouse', 403, '{"error_code":"PERMISSION_DENIED","message":"no"}'));
+    meReturns({ displayName: 'loom-console-uami', applicationId: '0000-app', entitlements: [{ value: 'workspace-access' }], groups: [{ display: 'users' }] });
+    const err = await resolveDatabricksSqlWarehouseId().catch((e) => e);
+    const body = warehouseErrorBody(err);
+    // Positive half: the classified cause + remediation still reach every caller.
+    expect(body).toMatchObject({ kind: 'permission', entitlement: 'allow-cluster-create' });
+    expect(body.remediation).toMatch(/cannot grant this to itself/);
+    // Breaks if the identity detail leaks into the route body (message or a field).
+    expect(JSON.stringify(body)).not.toMatch(/0000-app|loom-console-uami|workspace-access/);
+    // …while the admin-only gate detail (/admin/readiness, /api/admin/gates)
+    // still carries what was measured. Breaks if the diagnostic is dropped entirely.
+    expect(gateStatus('svc-databricks-sql')!.check.detail).toMatch(/loom-console-uami \(application 0000-app\)/);
   });
 });

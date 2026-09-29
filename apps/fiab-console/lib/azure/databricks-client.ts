@@ -609,16 +609,12 @@ export async function runWarehouseStatement(
     onStatementId?: (id: string) => void;
   },
 ): Promise<QueryResult> {
-  const warehouseId = (opts?.warehouseId || '').trim()
-    || (await (await import('@/lib/azure/databricks-sql-warehouse')).resolveWarehouseIdOrThrow());
-  return executeStatement(
-    warehouseId,
-    sql,
-    opts?.catalog,
-    opts?.schema,
-    opts?.parameters,
-    opts?.onStatementId,
-  );
+  const explicit = (opts?.warehouseId || '').trim();
+  const run = (id: string) =>
+    executeStatement(id, sql, opts?.catalog, opts?.schema, opts?.parameters, opts?.onStatementId);
+  // #4776 — a resolver-produced id whose warehouse is gone is invalidated and re-resolved ONCE.
+  if (explicit) return run(explicit);
+  return (await import('@/lib/azure/databricks-sql-warehouse')).withResolvedWarehouse(run);
 }
 
 // ============================================================
