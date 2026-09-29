@@ -6,14 +6,16 @@
  * (404 when the caller cannot reach it, 403 when `write` is asked of a
  * read-only role), then resolves the item's storage binding from its
  * server-recorded state. The container and root a route acts on come from the
- * returned `bound`, never from the request.
+ * returned `bound`, never from the request. A location the resolver withholds
+ * (`root-shared`, `root-unverified`, `not-found`) gets the same response
+ * `scopeItemPath` gives (`lakehouseStorageWithheldResponse`).
  */
 import { NextResponse } from 'next/server';
 import { apiConflict } from '@/lib/api/respond';
-import { resolveLakehouseAbfss, type ResolvedLakehouseAbfss } from '@/lib/azure/lakehouse-abfss';
+import { resolveLakehouseStorage, type ResolvedLakehouseAbfss } from '@/lib/azure/lakehouse-abfss';
 import type { SessionPayload } from '@/lib/auth/session';
 import type { WorkspaceItem } from '@/lib/types/workspace';
-import { authorizeLakehouse, pathSegments } from './item-scope';
+import { authorizeLakehouse, lakehouseStorageWithheldResponse, pathSegments } from './item-scope';
 
 export interface BoundLakehouse {
   item: WorkspaceItem;
@@ -37,8 +39,9 @@ export async function authorizeAndBind(
 ): Promise<BoundLakehouse | NextResponse> {
   const access = await authorizeLakehouse(session, lakehouseId, opts);
   if (access instanceof NextResponse) return access;
-  const bound = await resolveLakehouseAbfss(lakehouseId, access.item.workspaceId);
-  if (!bound) return apiConflict(NO_BINDING_MESSAGE);
+  const resolved = await resolveLakehouseStorage(lakehouseId, access.item.workspaceId);
+  if (!resolved.ok) return lakehouseStorageWithheldResponse(resolved.reason) ?? apiConflict(NO_BINDING_MESSAGE);
+  const bound = resolved.bound;
   const rootSegments = pathSegments(bound.root);
   if (!rootSegments) {
     return apiConflict(

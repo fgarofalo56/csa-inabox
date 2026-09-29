@@ -23,7 +23,20 @@ vi.mock('@/lib/azure/synapse-sql-client', () => ({
   executeQuery: vi.fn(),
   serverlessTarget: vi.fn(() => ({ server: 's', database: 'master' })),
 }));
-vi.mock('@/lib/azure/lakehouse-abfss', () => ({ resolveLakehouseAbfss: vi.fn() }));
+vi.mock('@/lib/azure/lakehouse-abfss', async () => {
+  const actual: any = await vi.importActual('@/lib/azure/lakehouse-abfss');
+  const resolveLakehouseAbfss = vi.fn();
+  return {
+    lakehouseStorageWithheldMessage: actual.lakehouseStorageWithheldMessage,
+    listLakehouseRootFacts: vi.fn(async () => []),
+    resolveLakehouseAbfss,
+    resolveLakehouseStorage: async (...a: any[]) => {
+      const b: any = await resolveLakehouseAbfss(...a);
+      if (b && typeof b === 'object' && 'withheld' in b) return { ok: false, reason: b.withheld };
+      return b ? { ok: true, bound: b } : { ok: false, reason: 'no-storage' };
+    },
+  };
+});
 vi.mock('@/lib/auth/item-access', () => ({ resolveItemAccessByOid: vi.fn() }));
 
 import { GET } from '../preview/route';
