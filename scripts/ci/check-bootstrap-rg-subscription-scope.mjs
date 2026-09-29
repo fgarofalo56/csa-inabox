@@ -1,0 +1,372 @@
+#!/usr/bin/env node
+/**
+ * check-bootstrap-rg-subscription-scope.mjs  (#4765)
+ *
+ * RULE. In the post-deploy bootstrap, every `az` command that names the admin
+ * resource group (`-g`/`--resource-group` = `$ADMIN_RG`) must ALSO pass
+ * `--subscription "$ADMIN_SUB"`, and every one that names the landing-zone group
+ * (`$DLZ_RG`) must pass `--subscription "$DLZ_SUB"`. Two arms:
+ *
+ *   unscoped    — the command names the group and passes no `--subscription`.
+ *   mis-scoped  — it passes one, but not the subscription that holds the group.
+ *
+ * WHY. An unscoped `az` call runs against whatever subscription the az CLI
+ * profile happens to hold, and in this workflow that is NOT a fixed value: the
+ * CLI profile persists across steps, and in several scripts the bootstrap calls
+ * the last `az account set` targets "$DLZ_SUB" (grant-synapse-rbac-invnet-job.sh,
+ * run-spark-storage-fix-invnet-job.sh, wire-spark-telemetry.sh,
+ * provision-databricks-compute.sh). A later unscoped admin-RG call can then ask
+ * the DLZ subscription for `rg-csa-loom-admin-<region>` and get
+ * `(ResourceGroupNotFound)`. Run 36384158319 (#4765) shows that error for the
+ * Foundry storage grant (exit 3), and "The containerapp 'loom-console' does not
+ * exist" in the Content Safety / AOAI steps. Step-level
+ * `continue-on-error: true` reported every one of them as success. Which
+ * `az account set` left the profile where it was on that run is not established.
+ *
+ * The fix is explicit scoping on the call, not ordering of `az account set` —
+ * an ordering invariant spread over 60 steps and a dozen scripts is exactly the
+ * kind of thing that silently breaks again. This guard keeps it explicit.
+ *
+ * HOW IT READS THE FILE. Shell commands span `\` continuations, and the
+ * `--subscription` routinely sits on a different physical line from the `-g`.
+ * So the file is folded into LOGICAL lines first (scripts/ci/_logical-lines.mjs,
+ * which also normalises CRLF — a physical-line guard over a CRLF file matches
+ * nothing and reports clean). Each logical line is then split into SIMPLE
+ * COMMANDS by a small quote-aware lexer: `$( … )` / backtick / `( … )` bodies
+ * become their own commands, and `;` `&&` `||` `|` `&` end one. That matters
+ * because `X=$(az a -g "$ADMIN_RG" --subscription "$ADMIN_SUB" || az b -g
+ * "$ADMIN_RG")` is TWO commands and the second is unscoped — a line-level
+ * "does it contain --subscription" would call it clean.
+ *
+ * EMBEDDED CONTROL. The arms are proven against MUST_FLAG / MUST_NOT_FLAG
+ * fixtures before the file is judged; a control failure fails the guard. It also
+ * refuses to pass when it finds ZERO admin-RG `az` commands in a target: this
+ * workflow has dozens, so zero means the lexer drifted off the code.
+ *
+ * KNOWN LIMITS, stated rather than hidden:
+ *   - An ALIAS is invisible: `RG="$ADMIN_RG"; az … -g "$RG"` is not judged.
+ *   - Scripts the workflow calls (`bash scripts/csa-loom/*.sh`) are not judged;
+ *     they receive the subscription as an argument or env var and are out of
+ *     this guard's scope.
+ *   - `--scope /subscriptions/$SUB/resourceGroups/$ADMIN_RG` and `--ids …`
+ *     carry the subscription inside the id and are not `-g` calls; not judged.
+ *   - The lexer resets per logical line, so a quoted string spanning physical
+ *     lines WITHOUT a `\` is lexed approximately; heredoc bodies are lexed as
+ *     shell. Neither changes a verdict in the target today.
+ *
+ * Usage:
+ *   node scripts/ci/check-bootstrap-rg-subscription-scope.mjs              # CHECK the bootstrap
+ *   node scripts/ci/check-bootstrap-rg-subscription-scope.mjs <file> …     # CHECK named files
+ *   node scripts/ci/check-bootstrap-rg-subscription-scope.mjs --self-test  # controls only
+ *
+ * Tests: node --test scripts/ci/__tests__/bootstrap-rg-subscription-scope.test.mjs
+ */
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { readLogicalLines } from './_logical-lines.mjs';
+
+export const DEFAULT_TARGETS = ['.github/workflows/csa-loom-post-deploy-bootstrap.yml'];
+
+/** Resource-group variable -> the subscription variable that must scope it. */
+export const RG_TO_SUB = Object.freeze({ ADMIN_RG: 'ADMIN_SUB', DLZ_RG: 'DLZ_SUB' });
+
+/** Marker the lexer leaves where a `$( … )` / backtick / subshell body was lifted out. */
+const SUBST = '\u0000SUBST\u0000';
+
+/**
+ * Split ONE logical line into simple commands, each a list of raw words (quotes
+ * kept). Command substitutions and subshells are emitted as commands of their
+ * own; the enclosing word keeps a placeholder. An unquoted `#` at a word start
+ * ends the line.
+ *
+ * @param {string} text one logical line
+ * @returns {string[][]} simple commands, each an array of raw words
+ */
+export function splitCommands(text) {
+  const out = [];
+  const s = String(text);
+  // Frames: `cmd` frames collect words; `sq`/`dq` are quote states; `arith` is $(( … )).
+  const stack = [{ t: 'cmd', words: [], word: '', close: null }];
+  const cmdFrame = () => {
+    for (let k = stack.length - 1; k >= 0; k--) if (stack[k].t === 'cmd') return stack[k];
+    return stack[0];
+  };
+  const endWord = (f) => {
+    if (f.word !== '') f.words.push(f.word);
+    f.word = '';
+  };
+  const flush = (f) => {
+    endWord(f);
+    if (f.words.length) out.push(f.words);
+    f.words = [];
+  };
+  const openSubst = (close) => {
+    cmdFrame().word += SUBST;
+    stack.push({ t: 'cmd', words: [], word: '', close });
+  };
+
+  let i = 0;
+  scan: for (; i < s.length; i++) {
+    const c = s[i];
+    const n1 = s[i + 1];
+    const top = stack[stack.length - 1];
+
+    if (top.t === 'sq') {
+      cmdFrame().word += c;
+      if (c === "'") stack.pop();
+      continue;
+    }
+    if (top.t === 'arith') {
+      cmdFrame().word += c;
+      if (c === '(') top.depth++;
+      else if (c === ')' && --top.depth === 0) stack.pop();
+      continue;
+    }
+    if (top.t === 'dq') {
+      if (c === '\\') { cmdFrame().word += c + (n1 ?? ''); i++; continue; }
+      if (c === '"') { cmdFrame().word += c; stack.pop(); continue; }
+      if (c === '$' && n1 === '(' && s[i + 2] !== '(') { openSubst(')'); i++; continue; }
+      if (c === '`') { openSubst('`'); continue; }
+      cmdFrame().word += c;
+      continue;
+    }
+
+    // top.t === 'cmd'
+    if (c === '\\') { top.word += c + (n1 ?? ''); i++; continue; }
+    if (c === "'") { top.word += c; stack.push({ t: 'sq' }); continue; }
+    if (c === '"') { top.word += c; stack.push({ t: 'dq' }); continue; }
+    if (c === '#' && top.word === '') break scan; // comment to end of line
+    if (c === '$' && n1 === '(' && s[i + 2] === '(') {
+      top.word += '$((';
+      stack.push({ t: 'arith', depth: 2 });
+      i += 2;
+      continue;
+    }
+    if (c === '$' && n1 === '(') { openSubst(')'); i++; continue; }
+    if (c === '`') {
+      if (top.close === '`') { flush(top); stack.pop(); continue; }
+      openSubst('`');
+      continue;
+    }
+    if (c === '(') { openSubst(')'); continue; }
+    if (c === ')') {
+      if (top.close === ')') { flush(top); stack.pop(); continue; }
+      top.word += c; // a stray `)` — e.g. a `case` pattern
+      continue;
+    }
+    if (c === '&' && (top.word.endsWith('>') || top.word.endsWith('<') || n1 === '>')) {
+      top.word += c; // `2>&1`, `>&2`, `&>` are redirections, not separators
+      continue;
+    }
+    if (c === ';' || c === '|' || c === '&' || c === '\n') {
+      flush(top);
+      if ((c === '|' || c === '&' || c === ';') && n1 === c) i++;
+      continue;
+    }
+    if (c === ' ' || c === '\t' || c === '\r') { endWord(top); continue; }
+    top.word += c;
+  }
+  for (let k = stack.length - 1; k >= 0; k--) if (stack[k].t === 'cmd') flush(stack[k]);
+  return out;
+}
+
+/** `$X`, `"$X"`, `${X}`, `"${X}"` (and single-quoted) -> `X`; anything else -> null. */
+export function varName(word) {
+  const m = /^(["']?)\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?\1$/.exec(word ?? '');
+  return m ? m[2] : null;
+}
+
+/** Value of a flag given as `--flag value` or `--flag=value`, for any of `names`. */
+function flagValues(words, names) {
+  const vals = [];
+  for (let k = 0; k < words.length; k++) {
+    const w = words[k];
+    if (names.includes(w)) {
+      vals.push(words[k + 1] ?? '');
+      continue;
+    }
+    for (const nm of names) {
+      if (nm.startsWith('--') && w.startsWith(nm + '=')) vals.push(w.slice(nm.length + 1));
+    }
+  }
+  return vals;
+}
+
+/**
+ * Judge one simple command. Returns null when it is not an `az` command naming a
+ * guarded resource group, else `{ rgVar, subVar, arm }` where `arm` is null for a
+ * correctly scoped call.
+ */
+export function judgeCommand(words) {
+  // `az` must be an UNQUOTED word; a message that merely mentions `az` inside
+  // quotes is prose, not a call.
+  if (!words.includes('az')) return null;
+  const rgVars = flagValues(words, ['-g', '--resource-group']).map(varName).filter((v) => v in RG_TO_SUB);
+  if (rgVars.length === 0) return null;
+  const rgVar = rgVars[0];
+  const want = RG_TO_SUB[rgVar];
+  const subs = flagValues(words, ['--subscription']);
+  if (subs.length === 0) return { rgVar, subVar: null, arm: 'unscoped' };
+  const subVar = varName(subs[subs.length - 1]);
+  if (subVar !== want) return { rgVar, subVar: subVar ?? subs[subs.length - 1], arm: 'mis-scoped' };
+  return { rgVar, subVar, arm: null };
+}
+
+/**
+ * Judge one file's text. Returns the population of guarded `az` commands found
+ * (for the empty-population self-defence) and one record per violation.
+ */
+export function scanText(text) {
+  const violations = [];
+  let guarded = 0;
+  for (const { line, text: logical } of readLogicalLines(text)) {
+    if (/^\s*#/.test(logical)) continue;
+    for (const words of splitCommands(logical)) {
+      const v = judgeCommand(words);
+      if (!v) continue;
+      guarded++;
+      if (v.arm) {
+        violations.push({
+          arm: v.arm,
+          line,
+          rgVar: v.rgVar,
+          subVar: v.subVar,
+          want: RG_TO_SUB[v.rgVar],
+          text: words.join(' ').replaceAll(SUBST, '$(…)').slice(0, 160),
+        });
+      }
+    }
+  }
+  return { guarded, violations };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EMBEDDED CONTROL — proven on every run, before any file is judged.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Fixtures the scanner MUST flag, with the arm each must trip. */
+export const MUST_FLAG = [
+  { why: 'unscoped, one line', arm: 'unscoped', src: 'az containerapp show -n loom-console -g "$ADMIN_RG" --query id -o tsv' },
+  { why: 'unscoped, bare $ADMIN_RG', arm: 'unscoped', src: 'az identity list -g $ADMIN_RG -o tsv' },
+  { why: 'unscoped, --resource-group long form', arm: 'unscoped', src: 'az keyvault list --resource-group "${ADMIN_RG}" -o tsv' },
+  { why: 'unscoped DLZ group', arm: 'unscoped', src: 'az storage account list -g "$DLZ_RG" --query "[0].id" -o tsv' },
+  {
+    why: 'unscoped inside $( … ), wrapped over `\\` continuations',
+    arm: 'unscoped',
+    src: 'X=$(az containerapp show -n loom-console \\\n  -g "$ADMIN_RG" \\\n  --query id -o tsv 2>&1)',
+  },
+  {
+    why: 'the SECOND command of an `||` pair is unscoped although the line contains --subscription',
+    arm: 'unscoped',
+    src: 'X=$(az a show -g "$ADMIN_RG" --subscription "$ADMIN_SUB" -o tsv || az a show -g "$ADMIN_RG" -o tsv)',
+  },
+  { why: 'admin group scoped to the DLZ subscription', arm: 'mis-scoped', src: 'az identity list -g "$ADMIN_RG" --subscription "$DLZ_SUB"' },
+  { why: 'DLZ group scoped to the admin subscription', arm: 'mis-scoped', src: 'az resource list --subscription "$ADMIN_SUB" -g $DLZ_RG' },
+  {
+    why: 'unscoped, CRLF line endings with a continuation',
+    arm: 'unscoped',
+    src: 'az role assignment create --assignee "$P" \\\r\n  --role Reader -g "$ADMIN_RG"\r\n',
+  },
+];
+
+/** Fixtures the scanner MUST NOT flag — the over-broad direction. */
+export const MUST_NOT_FLAG = [
+  { why: 'scoped, same line', src: 'az containerapp show -n loom-console -g "$ADMIN_RG" --subscription "$ADMIN_SUB" -o tsv' },
+  { why: 'scoped, --subscription BEFORE -g', src: 'az cosmosdb list --subscription "$ADMIN_SUB" -g "$ADMIN_RG" -o tsv' },
+  { why: 'scoped, --subscription= form', src: 'az acr list -g "$ADMIN_RG" --subscription="$ADMIN_SUB" -o tsv' },
+  {
+    why: 'scoped, --subscription on a CONTINUATION line',
+    src: 'az containerapp update -n loom-console -g "$ADMIN_RG" \\\n  --subscription "$ADMIN_SUB" \\\n  --set-env-vars A=b',
+  },
+  { why: 'DLZ group scoped to DLZ', src: 'az storage account list --subscription "$DLZ_SUB" -g $DLZ_RG -o tsv' },
+  { why: 'an unrelated resource group is not this rule', src: 'az cosmosdb show -n x -g "$COSMOS_RG" --subscription "$COSMOS_SUB"' },
+  { why: 'az mentioned only inside a quoted message', src: 'echo "::warning::run az identity list -g $ADMIN_RG to check"' },
+  { why: 'a comment describing the rule', src: '# az identity list -g "$ADMIN_RG"   <- unscoped, do not do this' },
+  { why: 'a non-az command taking -g', src: 'grep -g "$ADMIN_RG" file' },
+  // `az` must be a WHOLE word: a substring match would flag this on `lazy.txt`.
+  { why: 'a word merely CONTAINING az is not an az call', src: 'grep -g "$ADMIN_RG" lazy.txt' },
+  {
+    why: 'scoped, CRLF with the --subscription on the continuation',
+    src: 'az role assignment create --assignee "$P" \\\r\n  -g "$ADMIN_RG" --subscription "$ADMIN_SUB"\r\n',
+  },
+];
+
+/** Runs the controls. Returns a list of failure descriptions (empty = healthy). */
+export function runControls() {
+  const failures = [];
+  for (const c of MUST_FLAG) {
+    const arms = scanText(c.src).violations.map((v) => v.arm);
+    if (!arms.includes(c.arm)) failures.push(`MUST-FLAG missed (${c.arm}) — ${c.why}: ${JSON.stringify(c.src)}`);
+  }
+  for (const c of MUST_NOT_FLAG) {
+    const hits = scanText(c.src).violations;
+    if (hits.length > 0) failures.push(`MUST-NOT-FLAG tripped (${hits.map((h) => h.arm).join(',')}) — ${c.why}: ${JSON.stringify(c.src)}`);
+  }
+  return failures;
+}
+
+/** Judge a list of files. Returns an exit code; prints the verdict. */
+export function checkFiles(files, root = process.cwd()) {
+  const all = [];
+  for (const rel of files) {
+    let text;
+    try {
+      text = readFileSync(resolve(root, rel), 'utf8');
+    } catch (e) {
+      console.error(`::error::bootstrap-rg-subscription-scope: cannot read ${rel} (${e.code || e.message}). Refusing to report a pass on a file that was not read.`);
+      return 1;
+    }
+    const r = scanText(text);
+    if (r.guarded === 0) {
+      console.error(
+        `::error::bootstrap-rg-subscription-scope: found ZERO \`az\` commands naming $ADMIN_RG/$DLZ_RG in ${rel}. ` +
+          'That file has dozens, so zero means the lexer has drifted off the code. Refusing to report a pass on an empty population.',
+      );
+      return 1;
+    }
+    for (const v of r.violations) all.push({ file: rel, ...v });
+    if (r.violations.length === 0) {
+      console.log(`bootstrap-rg-subscription-scope: ${rel} — ${r.guarded} admin/DLZ resource-group az command(s), all scoped to the matching subscription.`);
+    }
+  }
+  if (all.length > 0) {
+    console.error(
+      `::error::bootstrap-rg-subscription-scope: ${all.length} az command(s) name the admin or DLZ resource group without ` +
+        'the subscription that holds it. The az CLI profile persists across steps and several bootstrap scripts leave it on ' +
+        '$DLZ_SUB, so an unscoped call can ask the wrong subscription and fail with (ResourceGroupNotFound), which ' +
+        'continue-on-error then reports as success (#4765). Add --subscription "$ADMIN_SUB" to every -g "$ADMIN_RG" call ' +
+        'and --subscription "$DLZ_SUB" to every -g "$DLZ_RG" call.',
+    );
+    for (const v of all) {
+      const detail = v.arm === 'unscoped' ? `no --subscription; needs "$${v.want}"` : `--subscription is ${v.subVar}; needs "$${v.want}"`;
+      console.error(`::error file=${v.file},line=${v.line}::${v.arm} ($${v.rgVar}: ${detail}): ${v.text}`);
+    }
+    return 1;
+  }
+  return 0;
+}
+
+function main() {
+  const args = process.argv.slice(2);
+  const controlFailures = runControls();
+  if (controlFailures.length > 0) {
+    console.error(
+      `::error::bootstrap-rg-subscription-scope: the EMBEDDED CONTROL failed (${controlFailures.length}). The matcher no ` +
+        'longer behaves as documented, so any verdict about the workflow would be meaningless.',
+    );
+    for (const f of controlFailures) console.error(`   - ${f}`);
+    process.exit(1);
+  }
+  const controlCount = MUST_FLAG.length + MUST_NOT_FLAG.length;
+  if (args.includes('--self-test')) {
+    console.log(`bootstrap-rg-subscription-scope self-test OK — ${controlCount} control fixture(s) behaved as documented.`);
+    return;
+  }
+  const files = args.filter((a) => !a.startsWith('--'));
+  const code = checkFiles(files.length ? files : DEFAULT_TARGETS);
+  if (code === 0) console.log(`bootstrap-rg-subscription-scope OK — ${controlCount} embedded control fixture(s) proved both arms still detect.`);
+  process.exit(code);
+}
+
+if (resolve(process.argv[1] || '') === resolve(fileURLToPath(import.meta.url))) main();

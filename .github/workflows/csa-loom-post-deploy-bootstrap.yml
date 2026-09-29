@@ -323,10 +323,10 @@ jobs:
           az account set --subscription "$ADMIN_SUB" 2>/dev/null || true
           UAMI_NAME="uami-loom-console-$REGION"
           # Discover the real UAMI in the admin RG (tolerates a renamed identity).
-          DISCOVERED_NAME=$(az identity list -g "$ADMIN_RG" \
+          DISCOVERED_NAME=$(az identity list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" \
             --query "[?contains(name,'console')].name | [0]" -o tsv 2>/dev/null || true)
           [ -n "${DISCOVERED_NAME:-}" ] && [ "$DISCOVERED_NAME" != "None" ] && UAMI_NAME="$DISCOVERED_NAME"
-          UAMI_JSON=$(az identity show -n "$UAMI_NAME" -g "$ADMIN_RG" 2>/dev/null || true)
+          UAMI_JSON=$(az identity show -n "$UAMI_NAME" -g "$ADMIN_RG" --subscription "$ADMIN_SUB" 2>/dev/null || true)
           if [ -n "${UAMI_JSON:-}" ]; then
             RES_PRINCIPAL=$(echo "$UAMI_JSON" | python3 -c "import sys,json;print(json.load(sys.stdin).get('principalId',''))" 2>/dev/null || true)
             RES_CLIENT=$(echo "$UAMI_JSON"   | python3 -c "import sys,json;print(json.load(sys.stdin).get('clientId',''))"   2>/dev/null || true)
@@ -353,8 +353,8 @@ jobs:
           fi
           # --- Databricks host (dlz sub) ---
           az account set --subscription "$DLZ_SUB" 2>/dev/null || true
-          DBX_URL=$(az databricks workspace show -g "$DLZ_RG" -n "$DBX_WS" --query workspaceUrl -o tsv 2>/dev/null \
-                    || az databricks workspace show -g "$ADMIN_RG" -n "$DBX_WS" --query workspaceUrl -o tsv 2>/dev/null || true)
+          DBX_URL=$(az databricks workspace show -g "$DLZ_RG" --subscription "$DLZ_SUB" -n "$DBX_WS" --query workspaceUrl -o tsv 2>/dev/null \
+                    || az databricks workspace show -g "$ADMIN_RG" --subscription "$ADMIN_SUB" -n "$DBX_WS" --query workspaceUrl -o tsv 2>/dev/null || true)
           if [ -n "${DBX_URL:-}" ] && [ "$DBX_URL" != "None" ]; then
             echo "DBX_HOST=$DBX_URL" >> "$GITHUB_ENV"
             echo "Resolved Databricks host: $DBX_URL"
@@ -375,9 +375,9 @@ jobs:
         run: |
           set -uo pipefail
           # Resolve the Loom Key Vault in the admin RG (kv-loom-*).
-          KV_NAME=$(az keyvault list -g "$ADMIN_RG" --query "[?starts_with(name,'kv-loom')].name | [0]" -o tsv 2>/dev/null || true)
+          KV_NAME=$(az keyvault list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[?starts_with(name,'kv-loom')].name | [0]" -o tsv 2>/dev/null || true)
           if [ -z "${KV_NAME:-}" ]; then
-            KV_NAME=$(az keyvault list -g "$ADMIN_RG" --query "[0].name" -o tsv 2>/dev/null || true)
+            KV_NAME=$(az keyvault list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[0].name" -o tsv 2>/dev/null || true)
           fi
           if [ -z "${KV_NAME:-}" ]; then
             echo "::warning::No Key Vault found in $ADMIN_RG — skipping MSAL app-reg provisioning"
@@ -415,7 +415,7 @@ jobs:
               || echo "::warning::Could not open the Key Vault write window — secret writes may be unreachable from the runner."
           fi
           # Resolve the Console Container App's runtime FQDN to add to redirect URIs.
-          CONSOLE_FQDN=$(az containerapp show -n loom-console -g "$ADMIN_RG" --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || true)
+          CONSOLE_FQDN=$(az containerapp show -n loom-console -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || true)
           HOSTS="${CSA_LOOM_CONSOLE_HOSTS:-}"
           if [ -n "${CONSOLE_FQDN:-}" ]; then
             HOSTS="${HOSTS:+$HOSTS,}$CONSOLE_FQDN"
@@ -428,12 +428,12 @@ jobs:
           # every AFD profile in the admin RG and append each to HOSTS so the
           # callback is registered for the real user-facing host(s). Best-effort:
           # a missing AFD must not fail the step.
-          for AFD_PROFILE in $(az afd profile list -g "$ADMIN_RG" --query "[].name" -o tsv 2>/dev/null || true); do
-            for FD_HOST in $(az afd endpoint list --profile-name "$AFD_PROFILE" -g "$ADMIN_RG" --query "[].hostName" -o tsv 2>/dev/null || true); do
+          for AFD_PROFILE in $(az afd profile list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[].name" -o tsv 2>/dev/null || true); do
+            for FD_HOST in $(az afd endpoint list --profile-name "$AFD_PROFILE" -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[].hostName" -o tsv 2>/dev/null || true); do
               [ -n "$FD_HOST" ] && HOSTS="${HOSTS:+$HOSTS,}$FD_HOST"
             done
           done
-          UAMI_ID=$(az identity list -g "$ADMIN_RG" --query "[?contains(name,'console')].id | [0]" -o tsv 2>/dev/null || true)
+          UAMI_ID=$(az identity list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[?contains(name,'console')].id | [0]" -o tsv 2>/dev/null || true)
           chmod +x scripts/csa-loom/bootstrap-msal-app-reg.sh
           # NOT best-effort any more (#3176). This step OWNS interactive sign-in:
           # if it does not put a VALIDATED client secret into Key Vault, every
@@ -633,12 +633,12 @@ jobs:
           elif [ -n "${CSA_LOOM_CONSOLE_HOSTS:-}" ]; then
             BASE="https://${CSA_LOOM_CONSOLE_HOSTS%%,*}"
           else
-            for AFD_PROFILE in $(az afd profile list -g "$ADMIN_RG" --query "[].name" -o tsv 2>/dev/null || true); do
-              FD_HOST=$(az afd endpoint list --profile-name "$AFD_PROFILE" -g "$ADMIN_RG" --query "[0].hostName" -o tsv 2>/dev/null || true)
+            for AFD_PROFILE in $(az afd profile list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[].name" -o tsv 2>/dev/null || true); do
+              FD_HOST=$(az afd endpoint list --profile-name "$AFD_PROFILE" -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[0].hostName" -o tsv 2>/dev/null || true)
               [ -n "$FD_HOST" ] && { BASE="https://$FD_HOST"; break; }
             done
             if [ -z "$BASE" ]; then
-              ACA_FQDN=$(az containerapp show -n loom-console -g "$ADMIN_RG" --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || true)
+              ACA_FQDN=$(az containerapp show -n loom-console -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || true)
               [ -n "$ACA_FQDN" ] && BASE="https://$ACA_FQDN"
             fi
           fi
@@ -686,7 +686,7 @@ jobs:
           # admin RG, then any account in the subscription. Skip the grants cleanly
           # when none exists (Purview opted out / reused account in another sub).
           if [ -z "${PURVIEW_ACCOUNT:-}" ]; then
-            PURVIEW_ACCOUNT="$(az purview account list -g "$ADMIN_RG" --query "[?starts_with(name,'purview-csa-loom')].name | [0]" -o tsv 2>/dev/null || true)"
+            PURVIEW_ACCOUNT="$(az purview account list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[?starts_with(name,'purview-csa-loom')].name | [0]" -o tsv 2>/dev/null || true)"
             [ -z "$PURVIEW_ACCOUNT" ] && PURVIEW_ACCOUNT="$(az resource list --resource-type Microsoft.Purview/accounts --query "[?starts_with(name,'purview-csa-loom')].name | [0]" -o tsv 2>/dev/null || true)"
           fi
           if [ -z "${PURVIEW_ACCOUNT:-}" ]; then
@@ -718,7 +718,7 @@ jobs:
           PURVIEW_ID="$(az resource list --resource-type Microsoft.Purview/accounts \
             --query "[?name=='$PURVIEW_ACCOUNT'].id | [0]" -o tsv 2>/dev/null)"
           if [ -z "$PURVIEW_ID" ]; then
-            PURVIEW_ID="$(az purview account show -n "$PURVIEW_ACCOUNT" -g "$ADMIN_RG" --query id -o tsv 2>/dev/null || true)"
+            PURVIEW_ID="$(az purview account show -n "$PURVIEW_ACCOUNT" -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query id -o tsv 2>/dev/null || true)"
           fi
           ORIG_PNA=""
           restore_purview_pna() {
@@ -1103,7 +1103,7 @@ jobs:
           # "Login failed for user" (ELOGIN) on every Synapse SQL call. Discover
           # the real UAMI in the admin RG and derive the region from ADMIN_RG so
           # CREATE LOGIN/USER targets the identity that actually runs the console.
-          DISCOVERED=$(az identity list -g "$ADMIN_RG" \
+          DISCOVERED=$(az identity list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" \
             --query "[?contains(name,'console')].name | [0]" -o tsv 2>/dev/null || true)
           if [ -n "${DISCOVERED:-}" ] && [ "$DISCOVERED" != "None" ]; then
             echo "CONSOLE_SQL_UAMI=$DISCOVERED" >> "$GITHUB_ENV"
@@ -1356,31 +1356,84 @@ jobs:
         # nothing to run against (LOOM_DATABRICKS_SQL_WAREHOUSE_ID was empty).
         # Idempotent (reuses an existing 'loom-default' warehouse). Serverless when
         # the workspace/region supports it, else a small classic PRO warehouse.
-        # Best-effort; skips cleanly when no Databricks workspace is bound.
+        # Skips cleanly when no Databricks workspace is bound. When one IS bound
+        # and no warehouse id results (or the Console env cannot be set), the step
+        # exits 1 with an ::error:: annotation (#4765). continue-on-error is left
+        # as it was, so the job still continues: read the step's annotation /
+        # outcome, not the job conclusion.
+        # Runs inside the Databricks public-access window: after "Enable
+        # Databricks public access (temp ...)" and before the always() "Restore
+        # Databricks public access disabled" step.
         # Learn: https://learn.microsoft.com/azure/databricks/sql/admin/sql-endpoints
         continue-on-error: true
         run: |
           set -uo pipefail
           if [ -z "${DBX_HOST:-}" ]; then echo "::notice::No Databricks host bound — skipping SQL warehouse provisioning."; exit 0; fi
           TOKEN=$(az account get-access-token --resource 2ff814a6-3304-4ab8-85cb-cd0e6f879c1d --query accessToken -o tsv)
+          if [ -z "$TOKEN" ]; then
+            echo "::error::az account get-access-token returned no Databricks token (its stderr, if any, is above) — cannot provision the SQL warehouse on $DBX_HOST."
+            exit 1
+          fi
           auth=(-H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json")
-          WID=$(curl -sf "${auth[@]}" "https://$DBX_HOST/api/2.0/sql/warehouses" 2>/dev/null | jq -r '.warehouses[]? | select(.name=="loom-default") | .id' | head -1 || true)
-          if [ -z "$WID" ] || [ "$WID" = "null" ]; then
+          WH_API="https://$DBX_HOST/api/2.0/sql/warehouses"
+          # #4765: every Databricks call records its HTTP status and keeps its body
+          # in a file, so a refused request is PRINTED instead of reading as "no
+          # warehouse" (the old probe was `curl -sf ... 2>/dev/null | jq ... || true`),
+          # and a non-JSON body is shown before jq parses it. Only the status and
+          # the response body are printed — never the token or request headers.
+          dbx_call() {  # dbx_call METHOD OUTFILE URL [curl args...] -> sets DBX_CODE, DBX_RC
+            local method="$1" out="$2"
+            shift 2
+            : > "$out"
+            DBX_RC=0
+            DBX_CODE=$(curl -sS -o "$out" -w '%{http_code}' "${auth[@]}" -X "$method" "$@") || DBX_RC=$?
+          }
+          show_response() {  # show_response LABEL OUTFILE
+            local size
+            size=$(wc -c < "$2")
+            echo "    $1: HTTP ${DBX_CODE:-none} (curl exit $DBX_RC), body $size bytes; first 500:"
+            head -c 500 "$2"
+            echo
+          }
+          is_2xx() { [[ "${DBX_CODE:-}" =~ ^2[0-9][0-9]$ ]]; }
+          is_json_object() { jq -e 'type == "object"' "$1" > /dev/null; }
+          create_warehouse() {  # create_warehouse true|false OUTFILE -> sets WID only when the API returned an id
+            WID=""
+            dbx_call POST "$2" "$WH_API" -d "$(printf '{"name":"loom-default","cluster_size":"2X-Small","min_num_clusters":1,"max_num_clusters":1,"auto_stop_mins":10,"enable_serverless_compute":%s,"warehouse_type":"PRO"}' "$1")"
+            show_response "POST /api/2.0/sql/warehouses (serverless=$1)" "$2"
+            if is_2xx && is_json_object "$2"; then WID=$(jq -r '.id // empty' "$2"); fi
+          }
+          PROBE=/tmp/dbx_wh_list.json
+          dbx_call GET "$PROBE" "$WH_API"
+          if ! is_2xx || ! is_json_object "$PROBE"; then
+            show_response "GET /api/2.0/sql/warehouses" "$PROBE"
+            echo "::error::Could not list SQL warehouses on $DBX_HOST (HTTP $DBX_CODE, curl exit $DBX_RC; response above), so whether 'loom-default' already exists is unknown — not creating one blind."
+            exit 1
+          fi
+          WID=$(jq -r '[.warehouses[]? | select(.name == "loom-default") | .id][0] // empty' "$PROBE")
+          if [ -n "$WID" ]; then
+            echo "    Reusing existing SQL warehouse 'loom-default'"
+          else
             echo ">>> Creating serverless SQL warehouse 'loom-default' (2X-Small, auto-stop 10m)"
-            RESP=$(curl -s "${auth[@]}" -X POST "https://$DBX_HOST/api/2.0/sql/warehouses" -d '{"name":"loom-default","cluster_size":"2X-Small","min_num_clusters":1,"max_num_clusters":1,"auto_stop_mins":10,"enable_serverless_compute":true,"warehouse_type":"PRO"}')
-            WID=$(echo "$RESP" | jq -r '.id // empty')
+            create_warehouse true /tmp/dbx_wh_create_serverless.json
             if [ -z "$WID" ]; then
-              echo "::notice::Serverless unavailable in this workspace/region — creating a classic PRO warehouse."
-              RESP=$(curl -s "${auth[@]}" -X POST "https://$DBX_HOST/api/2.0/sql/warehouses" -d '{"name":"loom-default","cluster_size":"2X-Small","min_num_clusters":1,"max_num_clusters":1,"auto_stop_mins":10,"enable_serverless_compute":false,"warehouse_type":"PRO"}')
-              WID=$(echo "$RESP" | jq -r '.id // empty')
+              echo "::notice::Serverless create returned no warehouse id (HTTP $DBX_CODE; response above) — retrying as a classic PRO warehouse."
+              create_warehouse false /tmp/dbx_wh_create_classic.json
             fi
-            if [ -z "$WID" ]; then echo "::warning::Could not create a SQL warehouse: $RESP"; exit 0; fi
+            if [ -z "$WID" ]; then
+              echo "::error::A Databricks workspace is bound ($DBX_HOST) but no SQL warehouse id resulted: the serverless and classic creates both returned no id (last HTTP $DBX_CODE, curl exit $DBX_RC; responses above). This step did not wire LOOM_DATABRICKS_SQL_WAREHOUSE_ID (#3744)."
+              exit 1
+            fi
           fi
           echo "    SQL warehouse id: $WID"
           # One warehouse serves SQL execution, Delta-Sharing grants, lineage, and system-tables.
-          az containerapp update -n loom-console -g "$ADMIN_RG" --set-env-vars "LOOM_DATABRICKS_SQL_WAREHOUSE_ID=$WID" "LOOM_DATABRICKS_LINEAGE_WAREHOUSE_ID=$WID" -o none \
-            && echo "✓ Wired LOOM_DATABRICKS_SQL_WAREHOUSE_ID + LINEAGE = $WID on the Console" \
-            || echo "::warning::Could not set the warehouse env on the Console (set LOOM_DATABRICKS_SQL_WAREHOUSE_ID=$WID manually)."
+          if az containerapp update -n loom-console -g "$ADMIN_RG" --subscription "$ADMIN_SUB" \
+              --set-env-vars "LOOM_DATABRICKS_SQL_WAREHOUSE_ID=$WID" "LOOM_DATABRICKS_LINEAGE_WAREHOUSE_ID=$WID" -o none; then
+            echo "✓ Wired LOOM_DATABRICKS_SQL_WAREHOUSE_ID + LINEAGE = $WID on the Console"
+          else
+            echo "::error::az containerapp update failed (its stderr is above): LOOM_DATABRICKS_SQL_WAREHOUSE_ID=$WID was NOT set on loom-console in $ADMIN_RG."
+            exit 1
+          fi
 
       - name: Databricks reachability fallback (IP access-list for Console egress)
         # #1466 FALLBACK to the databricks_ui_api Private Endpoint (databricks.bicep).
@@ -1473,11 +1526,11 @@ jobs:
           # /catalog/domains UC-mirror surfaces would honest-gate on a missing env.
           # The console UC client (lib/azure/unity-catalog-account-client.ts) reads
           # LOOM_DATABRICKS_ACCOUNT_ID; set it now so the surfaces are live day-one.
-          CONSOLE_APP=$(az containerapp list -g "$ADMIN_RG" --query "[?contains(name,'loom-console') || contains(name,'console')].name | [0]" -o tsv 2>/dev/null || true)
+          CONSOLE_APP=$(az containerapp list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[?contains(name,'loom-console') || contains(name,'console')].name | [0]" -o tsv 2>/dev/null || true)
           if [ -n "$CONSOLE_APP" ]; then
             ENVPAIRS=("LOOM_DATABRICKS_ACCOUNT_ID=$DATABRICKS_ACCOUNT_ID")
             [ -n "${DATABRICKS_ACCOUNT_HOST:-}" ] && ENVPAIRS+=("LOOM_DATABRICKS_ACCOUNT_HOST=$DATABRICKS_ACCOUNT_HOST")
-            az containerapp update -g "$ADMIN_RG" -n "$CONSOLE_APP" --set-env-vars "${ENVPAIRS[@]}" -o none 2>&1 | tail -1 \
+            az containerapp update -g "$ADMIN_RG" --subscription "$ADMIN_SUB" -n "$CONSOLE_APP" --set-env-vars "${ENVPAIRS[@]}" -o none 2>&1 | tail -1 \
               && echo "Wired LOOM_DATABRICKS_ACCOUNT_ID onto $CONSOLE_APP (UC metastore enumerate/attach now configured)." \
               || echo "::warning::Could not set LOOM_DATABRICKS_ACCOUNT_ID on $CONSOLE_APP — run scripts/csa-loom/patch-navigator-env.sh (it now wires this env)."
           else
@@ -1500,7 +1553,7 @@ jobs:
       - name: Grant Console UAMI APIM Service Contributor (if APIM exists)
         run: |
           set -e
-          APIM_STATE=$(az apim show -n $APIM_NAME -g $ADMIN_RG --query provisioningState -o tsv 2>/dev/null || echo "Missing")
+          APIM_STATE=$(az apim show -n $APIM_NAME -g $ADMIN_RG --subscription "$ADMIN_SUB" --query provisioningState -o tsv 2>/dev/null || echo "Missing")
           echo "APIM state: $APIM_STATE"
           if [[ "$APIM_STATE" == "Succeeded" ]]; then
             az role assignment create \
@@ -1628,9 +1681,9 @@ jobs:
           }
 
           # Prefer an AIServices/Cognitive-Services account (the CSA Loom default).
-          AISVC=$(az cognitiveservices account list -g "$ADMIN_RG" \
+          AISVC=$(az cognitiveservices account list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" \
                     --query "[?contains(name,'aifndry') || kind=='AIServices' || kind=='OpenAI'].id | [0]" -o tsv 2>/dev/null || true)
-          MLWS=$(az resource list -g "$ADMIN_RG" --resource-type Microsoft.MachineLearningServices/workspaces --query "[0].id" -o tsv 2>/dev/null || true)
+          MLWS=$(az resource list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --resource-type Microsoft.MachineLearningServices/workspaces --query "[0].id" -o tsv 2>/dev/null || true)
 
           if [ -n "$AISVC" ]; then
             echo "Foundry is an AIServices/Cognitive Services account: $AISVC"
@@ -1652,7 +1705,7 @@ jobs:
         continue-on-error: true
         run: |
           set -uo pipefail
-          STG=$(az storage account list -g $ADMIN_RG --query "[?contains(name,'aifound') || contains(name,'aifndry') || contains(name,'foundry') || contains(name,'aml')].id" -o tsv | head -1)
+          STG=$(az storage account list -g $ADMIN_RG --subscription "$ADMIN_SUB" --query "[?contains(name,'aifound') || contains(name,'aifndry') || contains(name,'foundry') || contains(name,'aml')].id" -o tsv | head -1)
           if [ -n "$STG" ]; then
             echo "Foundry storage: $STG"
             az role assignment create \
@@ -1737,7 +1790,7 @@ jobs:
           SA_DFS=$(az storage account show --subscription "$DLZ_SUB" -n "$SA_ACCT" -g "$DLZ_RG"  --query "primaryEndpoints.dfs"  -o tsv)
           SA_BLOB="${SA_BLOB%/}"; SA_DFS="${SA_DFS%/}"
           CONSOLE_APP="${LOOM_CONSOLE_APP:-loom-console}"
-          az containerapp update -g "$ADMIN_RG" -n "$CONSOLE_APP" --set-env-vars \
+          az containerapp update -g "$ADMIN_RG" --subscription "$ADMIN_SUB" -n "$CONSOLE_APP" --set-env-vars \
             "LOOM_ADLS_ACCOUNT=$SA_ACCT" \
             "LOOM_ORG_VISUALS_URL=$SA_BLOB/org-visuals" \
             "LOOM_BRONZE_URL=$SA_DFS/bronze" \
@@ -1751,7 +1804,7 @@ jobs:
 
       - name: Grant Console UAMI Cognitive Services User on Content Safety (unblocks /items/content-safety)
         run: |
-          CS=$(az cognitiveservices account list -g $ADMIN_RG --query "[?kind=='ContentSafety'].id" -o tsv | head -1)
+          CS=$(az cognitiveservices account list -g $ADMIN_RG --subscription "$ADMIN_SUB" --query "[?kind=='ContentSafety'].id" -o tsv | head -1)
           if [ -n "$CS" ]; then
             echo "Content Safety: $CS"
             az role assignment create \
@@ -1775,18 +1828,18 @@ jobs:
           # data-agents and AI functions then work on first login. If the account
           # is missing entirely, it prints the exact remediation (re-run the
           # deploy with agentFoundryEnabled=true) rather than silently passing.
-          AOAI=$(az cognitiveservices account list -g $ADMIN_RG \
+          AOAI=$(az cognitiveservices account list -g $ADMIN_RG --subscription "$ADMIN_SUB" \
             --query "[?kind=='AIServices' && starts_with(name,'aifndry-loom')].name" -o tsv | head -1)
           if [ -z "$AOAI" ]; then
-            AOAI=$(az cognitiveservices account list -g $ADMIN_RG \
+            AOAI=$(az cognitiveservices account list -g $ADMIN_RG --subscription "$ADMIN_SUB" \
               --query "[?kind=='AIServices' || kind=='OpenAI'].name" -o tsv | head -1)
           fi
           if [ -z "$AOAI" ]; then
             echo "::warning::No AOAI (AIServices) account in $ADMIN_RG. Copilot / data-agent / AI-functions will honest-gate. Re-run the deploy with agentFoundryEnabled=true (default) to provision aifndry-loom-<region> + gpt-4o + embeddings."
           else
-            AOAI_ID=$(az cognitiveservices account show -n "$AOAI" -g $ADMIN_RG --query id -o tsv)
+            AOAI_ID=$(az cognitiveservices account show -n "$AOAI" -g $ADMIN_RG --subscription "$ADMIN_SUB" --query id -o tsv)
             echo "AOAI account: $AOAI"
-            CHAT=$(az cognitiveservices account deployment list -n "$AOAI" -g $ADMIN_RG \
+            CHAT=$(az cognitiveservices account deployment list -n "$AOAI" -g $ADMIN_RG --subscription "$ADMIN_SUB" \
               --query "[?contains(to_string(properties.model.name) || '','gpt-4')].name | [0]" -o tsv 2>/dev/null || true)
             if [ -z "$CHAT" ]; then
               echo "::warning::AOAI account $AOAI has no gpt-4o-class chat deployment. Re-run the deploy (agentFoundryEnabled=true deploys 'chat' = gpt-4o) or deploy a gpt-4o model to it."
@@ -2181,7 +2234,7 @@ jobs:
           # then label/DLP-policy READS work and CRUD returns the honest
           # 'mip_admin_not_configured' / 'dlp_admin_not_configured' gate (no vaporware).
           set +e
-          SCC_FUNCTION_APP=$(az functionapp list -g "$ADMIN_RG" --query "[?starts_with(name,'func-scclbl-')].name | [0]" -o tsv 2>/dev/null)
+          SCC_FUNCTION_APP=$(az functionapp list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[?starts_with(name,'func-scclbl-')].name | [0]" -o tsv 2>/dev/null)
           if [ -n "$SCC_FUNCTION_APP" ]; then
             echo "Found SCC labels Function app: $SCC_FUNCTION_APP — provisioning + publishing code (labels + dlp functions)."
             SCC_FUNCTION_APP="$SCC_FUNCTION_APP" SCC_FUNCTION_RG="$ADMIN_RG" \
@@ -2296,12 +2349,12 @@ jobs:
             # had not established (deploy-integrity R7). Now the real az error is
             # quoted, and the message says only what was observed.
             UPD_ERR="$RUNNER_TEMP/posture-url-update.err"
-            az containerapp update -g "$ADMIN_RG" -n loom-console \
+            az containerapp update -g "$ADMIN_RG" --subscription "$ADMIN_SUB" -n loom-console \
               --set-env-vars "LOOM_POSTURE_FUNCTION_URL=$FUNC_URL" -o none 2> "$UPD_ERR"
             UPD_RC=$?
             # R6: never report success on an unverified outcome. Read the value
             # BACK off the app rather than trusting the update's exit status.
-            LIVE_URL=$(az containerapp show -g "$ADMIN_RG" -n loom-console \
+            LIVE_URL=$(az containerapp show -g "$ADMIN_RG" --subscription "$ADMIN_SUB" -n loom-console \
               --query "properties.template.containers[0].env[?name=='LOOM_POSTURE_FUNCTION_URL'].value | [0]" \
               -o tsv 2> "$RUNNER_TEMP/posture-url-read.err")
             LIVE_URL=$(printf '%s' "$LIVE_URL" | tr -d '\r')
@@ -2384,7 +2437,7 @@ jobs:
             IB_FQDN=$(az containerapp show -n iceberg-catalog -g "$ADMIN_RG" --subscription "$ADMIN_SUB" \
               --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null)
             if [ -n "$IB_FQDN" ]; then
-              az containerapp update -g "$ADMIN_RG" -n loom-console \
+              az containerapp update -g "$ADMIN_RG" --subscription "$ADMIN_SUB" -n loom-console \
                 --set-env-vars "LOOM_ICEBERG_CATALOG_URL=https://$IB_FQDN" -o none 2>/dev/null \
                 && echo "  Wired LOOM_ICEBERG_CATALOG_URL=https://$IB_FQDN on loom-console." \
                 || echo "::warning::Could not set LOOM_ICEBERG_CATALOG_URL on loom-console — set it manually to https://$IB_FQDN."
@@ -2572,14 +2625,14 @@ jobs:
           # MUST match the bicep defaults + platform/fiab/grafana/*.json.
           set -uo pipefail
           az account set --subscription "$ADMIN_SUB" 2>/dev/null || true
-          GRAFANA_NAME=$(az grafana list -g "$ADMIN_RG" --query "[?starts_with(name,'grafana-csa-loom')].name | [0]" -o tsv 2>/dev/null)
+          GRAFANA_NAME=$(az grafana list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[?starts_with(name,'grafana-csa-loom')].name | [0]" -o tsv 2>/dev/null)
           if [ -z "${GRAFANA_NAME:-}" ] || [ "$GRAFANA_NAME" = "None" ]; then
             echo "::notice::No grafana-csa-loom-* instance in $ADMIN_RG — deploy with managedGrafanaEnabled=true to create it, then re-run this job."
             exit 0
           fi
           echo "Managed Grafana: $GRAFANA_NAME"
           az extension add -n amg -y 2>/dev/null || az extension update -n amg 2>/dev/null || true
-          GRAFANA_ID=$(az grafana show -n "$GRAFANA_NAME" -g "$ADMIN_RG" --query id -o tsv 2>/dev/null)
+          GRAFANA_ID=$(az grafana show -n "$GRAFANA_NAME" -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query id -o tsv 2>/dev/null)
           # The deploy SP must be a Grafana Admin to create dashboards via the API.
           DEPLOY_SP_OID=$(az ad sp show --id "$(az account show --query user.name -o tsv)" --query id -o tsv 2>/dev/null || echo "")
           if [ -n "$DEPLOY_SP_OID" ] && [ -n "${GRAFANA_ID:-}" ]; then
@@ -2588,7 +2641,7 @@ jobs:
               -o none 2>&1 | grep -v "already exists" || echo "  (deploy SP Grafana Admin already assigned)"
           fi
           # The Grafana managed identity needs Monitoring Reader to read metrics/logs.
-          GRAFANA_MI=$(az grafana show -n "$GRAFANA_NAME" -g "$ADMIN_RG" --query "identity.principalId" -o tsv 2>/dev/null)
+          GRAFANA_MI=$(az grafana show -n "$GRAFANA_NAME" -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "identity.principalId" -o tsv 2>/dev/null)
           if [ -n "${GRAFANA_MI:-}" ] && [ "$GRAFANA_MI" != "None" ]; then
             for S in "$ADMIN_SUB" "$DLZ_SUB"; do
               [ -n "$S" ] && az role assignment create --assignee-object-id "$GRAFANA_MI" --assignee-principal-type ServicePrincipal \
@@ -2599,7 +2652,7 @@ jobs:
           sleep 30
           for D in loom-governance loom-usage; do
             if [ -f "platform/fiab/grafana/${D}.json" ]; then
-              az grafana dashboard create -n "$GRAFANA_NAME" -g "$ADMIN_RG" --overwrite \
+              az grafana dashboard create -n "$GRAFANA_NAME" -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --overwrite \
                 --definition "@platform/fiab/grafana/${D}.json" \
                 --query "{uid:uid,status:status}" -o tsv 2>&1 \
                 && echo "  created/updated dashboard: $D" \
