@@ -163,11 +163,13 @@ const SCENARIOS: Scenario[] = [
     b: { files: [...BASE_FILES, script('zz-new')] },
   },
   {
-    // A `.yml` under one root and a `.sh` under the other: each moves one
-    // unread-file count that the ledger reason used to spell.
+    // A `.yml` on EACH side, under the SAME root — the common case, two PRs
+    // that each add a workflow. Both move that root's unread-file count the
+    // same way, which the ledger reason used to spell: a clean merge to a
+    // count one short.
     name: 'two files this extractor does not lex',
     a: { unmodeled: [{ ...BASE_UNMODELED[0], fileCount: 4 }, BASE_UNMODELED[1]] },
-    b: { unmodeled: [BASE_UNMODELED[0], { ...BASE_UNMODELED[1], fileCount: 3 }] },
+    b: { unmodeled: [{ ...BASE_UNMODELED[0], fileCount: 4 }, BASE_UNMODELED[1]] },
   },
 ];
 
