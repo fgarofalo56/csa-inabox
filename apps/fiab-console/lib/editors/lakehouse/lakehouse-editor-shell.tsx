@@ -261,7 +261,7 @@ export function LakehouseEditor({ item, id }: Props) {
 
   // ── Domain hooks ──────────────────────────────────────────────────────────
   const perms = useLakehousePermissions({ activeContainer, confirm });
-  const settings_ = useLakehouseSettings({ activeContainer, schemasEnabled, setSchemasEnabled, setActionStatus });
+  const settings_ = useLakehouseSettings({ lakehouseId: isNewItem ? null : id, schemasEnabled, setSchemasEnabled, setActionStatus });
   const sec = useLakehouseSecondary({
     id, isNewItem, activeContainer, shortcutLakehouseId: activeContainer || id,
     schemasEnabled, setSchemasEnabled, loadPaths, confirm, itemQ, maintainTable, tab,
@@ -641,17 +641,19 @@ export function LakehouseEditor({ item, id }: Props) {
     if (openPrefixes[key] === undefined) loadPaths(activeContainer, rootPrefix);
   }, [activeContainer, rootPrefix, loadPaths, openPrefixes, cacheKey]);
 
-  // Resolve schemasEnabled on container change (authoritative from settings doc)
+  // Resolve schemasEnabled for the item (authoritative from its settings doc)
   useEffect(() => {
     if (!activeContainer) return;
     let cancelled = false;
     if (lhContent?.schemasEnabled) setSchemasEnabled(true);
-    clientFetch(`/api/lakehouse/settings?container=${encodeURIComponent(activeContainer)}`)
+    // An unsaved item has no settings doc yet.
+    if (isNewItem) return;
+    clientFetch(`/api/lakehouse/settings?lakehouseId=${encodeURIComponent(id)}`)
       .then((r) => parseJsonOrError<{ ok: boolean; settings?: { schemasEnabled?: boolean } }>(r, 'Load settings'))
       .then((j) => { if (!cancelled && j.ok && typeof j.settings?.schemasEnabled === 'boolean') setSchemasEnabled(j.settings.schemasEnabled); })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [activeContainer, lhContent?.schemasEnabled]);
+  }, [activeContainer, lhContent?.schemasEnabled, id, isNewItem]);
 
   // Column stats polling
   useEffect(() => {

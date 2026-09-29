@@ -5,13 +5,14 @@ import { parseJsonOrError } from '../shared';
 import type { LakehouseSettings, IcebergEndpoint } from '../types';
 
 interface Params {
-  activeContainer: string | null;
+  /** The lakehouse item id; null for an unsaved item (settings then neither load nor save). */
+  lakehouseId: string | null;
   schemasEnabled: boolean;
   setSchemasEnabled: (v: boolean) => void;
   setActionStatus: (s: string | null) => void;
 }
 
-export function useLakehouseSettings({ activeContainer, schemasEnabled, setSchemasEnabled, setActionStatus }: Params) {
+export function useLakehouseSettings({ lakehouseId, schemasEnabled, setSchemasEnabled, setActionStatus }: Params) {
   // ── Settings dialog ───────────────────────────────────────────────────────
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<LakehouseSettings>({});
@@ -43,10 +44,10 @@ export function useLakehouseSettings({ activeContainer, schemasEnabled, setSchem
 
   // ── Callbacks ─────────────────────────────────────────────────────────────
   const loadSettings = useCallback(async () => {
-    if (!activeContainer) return;
+    if (!lakehouseId) return;
     setSettingsBusy(true); setSettingsError(null);
     try {
-      const r = await clientFetch(`/api/lakehouse/settings?container=${encodeURIComponent(activeContainer)}`);
+      const r = await clientFetch(`/api/lakehouse/settings?lakehouseId=${encodeURIComponent(lakehouseId)}`);
       const j = await parseJsonOrError<{ ok: boolean; error?: string; cloud?: typeof cloud; settings?: LakehouseSettings; icebergEndpoint?: IcebergEndpoint }>(r, 'Load settings');
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setSettings(j.settings || {});
@@ -64,7 +65,7 @@ export function useLakehouseSettings({ activeContainer, schemasEnabled, setSchem
       setIcebergApplied(null); setIcebergSql(null); setIcebergGate(null); setIcebergError(null);
     } catch (e: any) { setSettingsError(e?.message || String(e)); }
     finally { setSettingsBusy(false); }
-  }, [activeContainer, setSchemasEnabled]);
+  }, [lakehouseId, setSchemasEnabled]);
 
   const loadSparkPools = useCallback(async () => {
     try {
@@ -85,7 +86,7 @@ export function useLakehouseSettings({ activeContainer, schemasEnabled, setSchem
   }, [loadSettings, loadSparkPools, sparkPools]);
 
   const saveSettings = useCallback(async () => {
-    if (!activeContainer) return;
+    if (!lakehouseId) return;
     setSettingsBusy(true); setSettingsError(null);
     setLcApplied(null); setLcSql(null); setLcGate(null); setLcError(null);
     setIcebergApplied(null); setIcebergSql(null); setIcebergGate(null); setIcebergError(null);
@@ -107,7 +108,7 @@ export function useLakehouseSettings({ activeContainer, schemasEnabled, setSchem
       const r = await clientFetch('/api/lakehouse/settings', {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          container: activeContainer,
+          lakehouseId,
           displayName: settings.displayName,
           description: settings.description,
           defaultSparkPool: settings.defaultSparkPool,
@@ -142,7 +143,7 @@ export function useLakehouseSettings({ activeContainer, schemasEnabled, setSchem
       if (!j.clusteringGate && !j.clusteringError && !j.icebergGate && !j.icebergError) setSettingsOpen(false);
     } catch (e: any) { setSettingsError(e?.message || String(e)); }
     finally { setSettingsBusy(false); }
-  }, [activeContainer, settings, settingsSparkConfText, lcTableName, lcColumns, icebergEnabled, icebergTable, icebergSchema, schemasEnabled, setSchemasEnabled, setActionStatus]);
+  }, [lakehouseId, settings, settingsSparkConfText, lcTableName, lcColumns, icebergEnabled, icebergTable, icebergSchema, schemasEnabled, setSchemasEnabled, setActionStatus]);
 
   return {
     settingsOpen, setSettingsOpen, openSettings,
