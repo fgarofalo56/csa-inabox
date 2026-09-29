@@ -70,20 +70,37 @@ node scripts/brain/extract-security-graph.mjs           # regenerate + write
 node scripts/brain/extract-security-graph.mjs --check    # CI drift gate, exit 1 on drift
 ```
 
-The `--check` mode compares the **graph and join**, not the inputs digest.
-Measured 2026-08-24: fixing the generic-call matcher moved the node count
-905 → 908 with a **byte-identical** digest, because the inputs had not changed
-— only the extractor had. A digest-only check would have called a stale
-artifact current.
+`--check` does four things, in order, and exits 1 on the first that fails:
+
+1. **Refuses run-only fields in the committed bytes.** `generatedAt`, `commit`,
+   `inputsDigest`, `filesScanned` and the per-scope `filesMatched` /
+   `nodesEmitted` moved whenever any file under a scanned root was added, so
+   every pair of open PRs that touched the artifact conflicted (#4798). They are
+   now printed by each run and never committed, and `--check` refuses them if
+   they come back.
+2. **Floors the population** on both sides, so two empty artifacts cannot
+   compare equal.
+3. **Reconciles the builder's input against `git ls-files`.** The counts the
+   builder received are compared, scope by scope and in total, against a
+   separate `git ls-files` census taken inside `--check`
+   (`_artifact-drift.mjs#censusRefusals`). This is what catches a file dropped
+   between the enumeration and the build. For a file that emits no node, that
+   drop would leave both sides of the comparison unchanged.
+4. **Compares the whole artifact**: every field, not the inputs digest and not
+   a list of watched fields. Measured 2026-08-24: fixing the generic-call
+   matcher moved the node count 905 → 908 with a **byte-identical** digest,
+   because only the extractor had changed. A digest-only check would have called
+   a stale artifact current.
 
 CI runs `--check` in the job named
-`brain security graph — committed artifact matches the tree`. **That context is
-not among `main`'s 15 required status checks**, so it can go red without
-blocking a merge (#4029). Stated rather than assumed, because it bounds what the
-gate can promise: the assertions that must hold for a *merge* to be blocked live
-in `vitest (node 20)`, which is required. Making the drift gate required is a
-post-merge follow-up — a context must exist on `main` before it can be added to
-branch protection.
+`brain security graph — committed artifact matches the tree`, on pull requests
+and on push to `main`. That context is listed as required in
+`tools/drain/required_contexts.json` (a snapshot of `main`'s branch protection,
+taken 2026-09-18). Branch protection is `strict: false`, so a PR's green run is
+against the base it last merged, not against the `main` it lands on. Two PRs that
+each regenerate can therefore merge cleanly into bytes that no regeneration
+produces. The push-to-`main` run turns red when that happens, **after** the
+merge. It does not gate the console roll. That exposure is tracked in #4807.
 
 ## What is measured today
 
@@ -105,7 +122,10 @@ edges would add weight and no fact.
 
 ### The scan scope, and why it is DERIVED rather than declared
 
-Two scopes are scanned. Both are reported in `meta.scanScopes` with real counts:
+Two scopes are scanned, and both are NAMED in the committed `meta.scanScopes`.
+Their counts are run values since #4798: printed by every extractor run
+and by `--check`, and not committed. The figures below come from one earlier
+run and are not the current tree:
 
 | Scope | Files matched | Nodes |
 |---|---:|---:|
@@ -129,7 +149,9 @@ What remains genuinely unread under those roots is everything that is not
 JavaScript/TypeScript — 177 files under `scripts/` and 141 under `.github/`
 (`.sh`, `.ps1`, `.py`, `.yml`, `.yaml`). A workflow `run:` block publishes into
 the same public Actions log a `console.log` does, and this extractor does not
-lex it. That narrowing is written into `meta.skipped` **with a count**, per root.
+lex it. That narrowing is written into `meta.skipped` per root, naming the
+extensions. The count is printed by every run and is not committed (#4798),
+because a count there moved with every file added under the root.
 A narrowed scope is fine; an undeclared one is the defect.
 
 ### The extractor's own population contract
@@ -188,10 +210,14 @@ subject with a code that means something else, in a closed enumeration validated
 at runtime. The cheapest evasion, inventing a plausible-sounding reason, is
 refused outright.
 
-The same census is re-derived from the filesystem by
-`__tests__/no-estate-identifiers.test.ts` and asserted against the committed
-bytes, so a narrowed artifact reddens `vitest (node 20)` — a **required**
-context — and not only the drift gate, which is not one.
+The file census is independent of the extractor's own loop in two places.
+`scripts/ci/__tests__/security-graph-drift-shape.test.mjs` (the required
+`guardrails` lane) counts the CLI's enumeration against `git ls-files`, and
+`--check` reconciles the counts the builder actually received against its own
+`git ls-files` census (step 3 above). Until #4798 this census was recomputed in
+`__tests__/no-estate-identifiers.test.ts` against the COMMITTED counts. Those
+counts are no longer committed. That file now checks only that every path the
+artifact names still exists.
 
 ### Findings on this tree
 
@@ -326,9 +352,9 @@ is now a red test rather than an implied reach.
 
 ## Not evaluated, and why
 
-`resolveSecurityGraph()` refuses an artifact it cannot trust and returns a
-**reason**, never a zero. Every branch below is reachable and is entered by
-`__tests__/artifact.test.ts`:
+`resolveSecurityGraph(artifact, { now, imageBuiltAt })` refuses an artifact it
+cannot trust and returns a **reason**, never a zero. Every branch below is
+reachable and is entered by `__tests__/artifact.test.ts`:
 
 | Refusal | Cause |
 |---|---|
@@ -336,10 +362,32 @@ is now a red test rather than an implied reach.
 | version | produced by a different extractor version |
 | provenance | `source` is not `'extracted'` |
 | **zero nodes** | a sweep would report zero findings, indistinguishable from clean |
-| **stale** | older than 90 days — the artifact's age *is* the age of the source it describes |
-| unparseable date | age cannot be established; an unknown must not be reported as a negative |
+| **stale** | the IMAGE was built more than 90 days ago (`MAX_ARTIFACT_AGE_DAYS`) |
+| unreadable / unparseable build date | the image carries a build date that cannot be read or parsed. An unknown age must not be reported as fresh |
+| future build date | the build date is more than a day ahead of the clock |
 | malformed | shape does not carry graph/join/meta |
 | incoherent join | some node is on no surface |
+
+**Where the age comes from.** The artifact carries no clock (#4798: a committed
+timestamp conflicted between every pair of PRs). Instead, the console
+`Dockerfile`'s runner stage writes `/app/loom-image-built-at.txt`, an ISO-8601
+UTC date taken with `date -u` at build time. That file is never committed, and
+`build-date.ts#readImageBuildDate` reads it at runtime. Every console image
+path builds that `Dockerfile`: `build-fiab-images-acr-tasks.yml`,
+`full-app-deploy-commercial.yml`, `console-bluegreen-roll.yml`,
+`gov-build-images.yml`, `gov-console-roll.yml` and `publish-ghcr-images.yml`. So
+the date reaches Commercial and Gov images alike, with no workflow change. In
+Gov the console cannot reach GitHub, so this date is the runtime's only
+staleness signal for the `.github/**` and `scripts/**` half of the graph.
+
+A layer-cache hit reuses an older date. That can refuse too early, but it can
+never report an image as newer than it is.
+
+When the file is **absent** (a local `next dev` or `next build` outside the
+image), the graph is still available, and it carries an `ageNote` saying that
+its age was NOT checked. The synapses panel renders that note beside the graph
+source. It does not refuse, because there is no age to judge, and it does not
+claim the graph is fresh.
 
 A zero-node graph is refused rather than swept. Handing it to the detectors is
 tempting — all nine would raise "green and blind" population findings — but a

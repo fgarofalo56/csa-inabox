@@ -33,8 +33,12 @@
  * then-advisory gate stayed green. That is reversed on purpose: a zero-node file
  * changes nothing any detector reads, so it now changes nothing committed, and
  * both gates agree it needs no regeneration. The census the #4128 fix protected
- * is kept, moved to where the numbers now live: the generator's own enumeration
- * is counted against an independent `git ls-files` census in
+ * is kept, moved to where the numbers now live. {@link censusRefusals} runs INSIDE
+ * `--check`: the counts the builder actually received are reconciled against
+ * {@link gitCensus}, an independent `git ls-files` count with its own literal
+ * roots and patterns, so a file dropped anywhere between the enumeration and the
+ * build turns the gate red even when that file emits no node. The generator's
+ * enumeration is also counted against a census in
  * `scripts/ci/__tests__/security-graph-drift-shape.test.mjs` (required, on
  * `guardrails`), and `--check` floors on the run's counts before comparing.
  *
@@ -46,6 +50,10 @@
  * {@link POPULATION_META_FIELDS} pins the other direction: the committed fields
  * that may never be declared run-only to silence a red.
  */
+
+import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 
 /**
  * Fields that belong to ONE extractor run and must never be committed (#4798).
@@ -473,5 +481,141 @@ export function populationRefusals(artifact, label, run = undefined) {
     );
   }
 
+  return refusals;
+}
+
+// ── THE INDEPENDENT CENSUS, INSIDE `--check` (#4798) ────────────────────────
+//
+// `--check` compares the committed artifact against one the extractor has just
+// built. If the CLI stops handing the builder some file, both sides of that
+// comparison lose it together: for a file that emits no node, the artifact does
+// not move at all, and the gate goes green over a narrower population than it
+// claims. `build.ts`'s own census cannot see this either, because it counts the
+// files it was HANDED. Measured on the round-1 head of #4798: a `.filter()`
+// after `enumerateScan()` in `main()` dropping the zero-node census fixture left
+// `--check` green. Before #4798 the committed `filesMatched` would have reddened
+// it; that count is no longer committed, so the count is re-derived here, from
+// git, at check time.
+
+/**
+ * What the census counts, spelled HERE rather than imported from the extractor.
+ *
+ * A census that imported the extractor's roots and patterns would narrow with
+ * them. These are literals, and `security-graph-drift-shape.test.mjs` checks
+ * them against the extractor's SOURCE, so a root added there and not here is a
+ * red test rather than a silently narrower census.
+ *
+ * `runScopeTokens` identifies the matching entry in the run's `scanScopes`.
+ * `build.ts` names the scopes, and it sorts the publication roots, so matching is
+ * by whole comma- or space-separated token, in any order. No match, or more than
+ * one, is a refusal.
+ */
+export const CENSUS_SCOPES = Object.freeze([
+  Object.freeze({
+    runScopeTokens: Object.freeze(['app/**/route.ts']),
+    roots: Object.freeze(['apps/fiab-console/app']),
+    include: /\/route\.tsx?$/,
+  }),
+  Object.freeze({
+    runScopeTokens: Object.freeze(['scripts/**', '.github/**']),
+    roots: Object.freeze(['scripts', '.github']),
+    include: /\.(?:mjs|cjs|js)$/,
+  }),
+]);
+
+/** Whether the run scope named `scope` is the one `tokens` identifies. */
+function namesScope(scope, tokens) {
+  const words = scope.split(/[\s,]+/);
+  return tokens.every((t) => words.includes(t));
+}
+
+/**
+ * The number of files git carries for each census scope, counted from
+ * `git ls-files` alone.
+ *
+ * It uses the same `git ls-files` flags as the extractor's `gitVisibleFiles`
+ * (`-z --cached --others --exclude-standard`): tracked files plus untracked files
+ * that are not ignored. The two must share flags, or they would count different
+ * populations and disagree over a file nobody dropped. A path listed by
+ * `--cached` but deleted from the worktree is excluded here for the same reason
+ * the extractor excludes it: nothing reads it.
+ *
+ * Throws if git fails. With no census, the check cannot establish what the tree
+ * holds, so the caller refuses rather than skipping the reconciliation.
+ */
+export function gitCensus(repoRoot, scopes = CENSUS_SCOPES, git = execFileSync) {
+  const roots = [...new Set(scopes.flatMap((s) => s.roots))];
+  const raw = git('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...roots], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    maxBuffer: 256 * 1024 * 1024,
+  });
+  const present = String(raw)
+    .split('\0')
+    .filter(Boolean)
+    .filter((rel) => existsSync(path.join(repoRoot, rel)));
+  return scopes.map((s) => ({
+    runScopeTokens: s.runScopeTokens,
+    label: s.runScopeTokens.join(', '),
+    files: present.filter((rel) => s.roots.some((r) => rel.startsWith(`${r}/`)) && s.include.test(rel)).length,
+  }));
+}
+
+/**
+ * Why the builder's input did NOT match the tree: the run's counts reconciled
+ * against {@link gitCensus}, one scope at a time and then in total.
+ *
+ * `run.scanScopes[].filesMatched` is what the builder received per scope
+ * (`build.ts` asserts it against its own predicate over the handed files), and
+ * `run.filesScanned` is the total. A count BELOW the census means a file was
+ * dropped between enumeration and build. A count ABOVE it means the builder read
+ * a file git does not carry, which is #4216. Returns an empty array when every
+ * count reconciles.
+ */
+export function censusRefusals(run, census) {
+  if (!Array.isArray(census) || census.length === 0) {
+    return ['the independent census is empty, so the counts the builder received were checked against nothing.'];
+  }
+  const scopes = run !== null && typeof run === 'object' && Array.isArray(run.scanScopes) ? run.scanScopes : [];
+  const refusals = [];
+  let total = 0;
+  for (const c of census) {
+    if (!Number.isInteger(c.files) || c.files <= 0) {
+      refusals.push(
+        `the census counted ${JSON.stringify(c.files)} file(s) for '${c.label}', so git lists nothing ` +
+          'the extractor should read there. That is an emptied census, not a reconciled one.',
+      );
+      continue;
+    }
+    total += c.files;
+    const matches = scopes.filter(
+      (s) => s !== null && typeof s === 'object' && typeof s.scope === 'string' && namesScope(s.scope, c.runScopeTokens),
+    );
+    if (matches.length !== 1) {
+      refusals.push(
+        `${matches.length} run scope(s) are named by '${c.label}', not exactly one, so the census for it ` +
+          'has nothing to reconcile against. A scope was renamed or dropped from the run.',
+      );
+      continue;
+    }
+    const got = matches[0].filesMatched;
+    if (got !== c.files) {
+      refusals.push(
+        `scan scope '${matches[0].scope}': the builder received ${JSON.stringify(got)} file(s) but ` +
+          `\`git ls-files\` lists ${c.files}. ` +
+          (Number.isInteger(got) && got < c.files
+            ? `${c.files - got} file(s) were dropped between the enumeration and the build, so the artifact ` +
+              'was compared over a narrower population than the tree holds.'
+            : 'The builder read file(s) git does not carry (#4216), or the count is not a number.'),
+      );
+    }
+  }
+  const scanned = run !== null && typeof run === 'object' ? run.filesScanned : undefined;
+  if (refusals.length === 0 && scanned !== total) {
+    refusals.push(
+      `the run scanned ${JSON.stringify(scanned)} file(s) in total but the census lists ${total} across its ` +
+        'scopes, so a file reached the builder outside every census scope, or one was lost from the total.',
+    );
+  }
   return refusals;
 }

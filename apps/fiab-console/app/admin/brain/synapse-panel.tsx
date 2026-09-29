@@ -249,6 +249,10 @@ export function SynapsePanel({
               </Badge>
             </div>
 
+            {/* Provenance and age of the graph (#4798) — including, for a build with
+                no image build date, that its age was NOT checked. */}
+            <Caption1 data-testid="risk-provenance">{risk.reason}</Caption1>
+
             {risk.incompleteDetectors.length > 0 && (
               <MessageBar intent="error" data-testid="risk-incomplete">
                 <MessageBarBody>

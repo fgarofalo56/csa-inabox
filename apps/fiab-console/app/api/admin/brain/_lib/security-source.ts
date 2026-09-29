@@ -23,7 +23,7 @@
  *
  * `SecurityGraph.source` has three members — `'modelled' | 'extracted' |
  * 'observed'` — and none of them means "there is no graph". An artifact can be
- * absent, malformed, zero-node, or produced by a different extractor
+ * absent, malformed, stale, zero-node, or produced by a different extractor
  * version, and every one of those must render as NOT EVALUATED rather than as a
  * sweep that found nothing: a consumer counting SECURITY findings gets zero
  * either way, and zero is indistinguishable from clean. `resolveSecurityGraph`
@@ -42,7 +42,12 @@ import { loadExtractedSecurityGraph } from '@/lib/brain/security/extract';
 import type { SecurityGraph } from '@/lib/brain/security';
 
 export type SecurityGraphSource =
-  | { readonly available: true; readonly graph: SecurityGraph }
+  | {
+      readonly available: true;
+      readonly graph: SecurityGraph;
+      /** What is known about the graph's age (see `extract/artifact.ts`). */
+      readonly ageNote?: string;
+    }
   | { readonly available: false; readonly reason: string };
 
 /**
@@ -57,7 +62,7 @@ export const NO_SECURITY_GRAPH_REASON =
   'this is not a clean result. The nine detectors in lib/brain/security run over a graph of ' +
   'the SOURCE (authorizers, verdict calls, publication sinks, predicate implementations), and ' +
   'the console reads Azure Resource Graph, not the repository it was built from, so the ' +
-  'extractor is a build-time artifact. When it is missing, malformed, or produced by a different ' +
+  'extractor is a build-time artifact. When it is missing, stale, or produced by a different ' +
   'extractor version, the risk lane below reports what WOULD have been examined and refuses to ' +
   'report a count of zero as an absence of risk.';
 
@@ -65,10 +70,10 @@ export const NO_SECURITY_GRAPH_REASON =
  * Load the security graph for this deployment.
  *
  * Delegates to the extraction package's runtime half, which re-validates the
- * committed artifact — version, provenance, node count, join coverage —
- * before handing it over. It never throws: every failure degrades to a refusal
- * carrying its own specific reason, because a 500 here would hide which one it
- * was.
+ * committed artifact — version, provenance, node count, the age of the image it
+ * shipped in, join coverage — before handing it over. It never throws: every
+ * failure degrades to a refusal carrying its own specific reason, because a 500
+ * here would hide which one it was.
  */
 export function loadSecurityGraph(): SecurityGraphSource {
   return loadExtractedSecurityGraph();

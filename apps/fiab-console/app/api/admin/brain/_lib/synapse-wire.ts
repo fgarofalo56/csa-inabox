@@ -133,6 +133,12 @@ export type RiskLayer =
        * exactly the R7 error, so the provenance rides on the payload.
        */
       readonly graphSource: 'modelled' | 'extracted' | 'observed';
+      /**
+       * What is known about the graph's age — including, for a build with no
+       * image build date, that it was NOT checked (#4798). Rendered beside the
+       * source so an unchecked age is never silent.
+       */
+      readonly ageNote?: string;
       readonly findings: readonly WireRiskFinding[];
       readonly detectors: readonly WireRiskDetectorRun[];
       readonly coverage: {

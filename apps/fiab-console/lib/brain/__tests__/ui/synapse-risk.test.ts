@@ -148,7 +148,7 @@ describe('no security graph ⇒ NOT EVALUATED, never an empty findings array', (
     // A LIVE measurement of the seam, not a restatement of it (#3934). Until
     // this landed, `loadSecurityGraph()` returned a hard-coded refusal and this
     // assertion read `available === false`. It now proves the committed
-    // build-time artifact resolves: an absent, malformed, zero-node or
+    // build-time artifact resolves: an absent, malformed, stale, zero-node or
     // wrong-version artifact is refused by `resolveSecurityGraph`, so a green
     // here is evidence the risk lane actually has a population to range over.
     const src = loadSecurityGraph();

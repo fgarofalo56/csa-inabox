@@ -320,9 +320,10 @@ describe('the C4 expression arm reports its own inertness', () => {
  * shape.test.mjs` (run on `guardrails`, required) counts the generator's own
  * enumeration against an independent `git ls-files` census, and `--check`
  * (a required context per `tools/drain/required_contexts.json`, snapshot
- * 2026-09-18) floors on the run's counts before it compares anything.
+ * 2026-09-18) floors on the run's counts and reconciles them against its own
+ * `git ls-files` census before it compares anything.
  */
-describe('the committed scan scopes match a census taken from the filesystem', () => {
+describe('the paths the committed artifact names are still files in the tree', () => {
   const REPO_ROOT = resolve(__dirname, '..', '..', '..', '..', '..', '..', '..');
 
   /**
@@ -336,12 +337,14 @@ describe('the committed scan scopes match a census taken from the filesystem', (
    * `tools/drain/required_contexts.json`, snapshot 2026-09-18; this is the
    * second, independent enumeration.)
    *
-   * The artifact does not enumerate every file it read — 1,499 of the 2,095
-   * scanned files emit neither a node nor a ledger entry — so a full set
-   * EQUALITY is not available from the committed bytes. What IS available is the
-   * ~600-path subset the artifact NAMES, in node ids and in file-shaped
-   * `meta.skipped` subjects, and every one of those must still be a file the
-   * tree carries. That direction is exactly the one a rename breaks.
+   * The artifact does not enumerate every file it read: most scanned files
+   * emit neither a node nor a ledger entry, and since #4798 the scanned total
+   * is a run value that `--check` prints rather than a committed one. So a full
+   * set EQUALITY is not available from the committed bytes. What IS available
+   * is the subset the artifact NAMES, in node ids and in file-shaped
+   * `meta.skipped` subjects (the floor below requires more than 300), and every
+   * one of those must still be a file the tree carries. That direction is
+   * exactly the one a rename breaks.
    *
    * Comparison is on `canonicalRepoPath`, which LOWERCASES — node ids embed it,
    * so `app/api/admin/copilot-quality/prompts/[promptId]/route.ts` is carried as

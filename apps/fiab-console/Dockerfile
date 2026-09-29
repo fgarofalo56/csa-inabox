@@ -149,8 +149,22 @@ COPY --from=builder --chown=nextjs:nodejs /app/deploy-templates ./deploy-templat
 
 # Overwrite any source-tree marker with one stamped at build time.
 # Validator probes /build-marker.txt and grep's for sha=<expected>.
+#
+# The same step records WHEN this image was built, in ISO-8601 UTC, beside
+# server.js (#4798). The brain security graph is baked into the image, so this
+# date bounds how old the source it describes can be, and
+# lib/brain/security/extract/artifact.ts refuses a graph from an image older
+# than 90 days. It is computed HERE, not passed as a build-arg, so every build
+# path that uses this Dockerfile gets it with no workflow plumbing, and it is
+# never committed (a committed timestamp conflicted between every pair of PRs).
+# Written as root before USER, so the runtime user can read it but not rewrite
+# it. The file name is pinned by lib/brain/security/extract/build-date.ts.
+# A build that reuses a cached layer (same sha AND stamp args) records the
+# cached layer's date, which is never LATER than the truth, so a cache hit can
+# only make the refusal fire early, never late.
 RUN echo "loom-build-marker sha=${LOOM_BUILD_SHA} stamp=${LOOM_BUILD_TIMESTAMP} token=LOOM_LIVE_BUILD" > /app/public/build-marker.txt && \
-    chown nextjs:nodejs /app/public/build-marker.txt
+    chown nextjs:nodejs /app/public/build-marker.txt && \
+    date -u +%Y-%m-%dT%H:%M:%SZ > /app/loom-image-built-at.txt
 
 USER nextjs
 

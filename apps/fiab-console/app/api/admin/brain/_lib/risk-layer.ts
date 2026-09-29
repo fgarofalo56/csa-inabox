@@ -120,6 +120,7 @@ export function buildRiskLayer(source: SecurityGraphSource): RiskLayer {
   return {
     evaluated: true,
     graphSource: source.graph.source,
+    ...(source.ageNote === undefined ? {} : { ageNote: source.ageNote }),
     findings: sweep.findings.map(toWireFinding),
     detectors,
     coverage: {

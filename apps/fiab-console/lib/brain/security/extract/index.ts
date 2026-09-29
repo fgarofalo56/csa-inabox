@@ -55,9 +55,11 @@ export {
   DEPLOYABLE_UNITS,
   pathOfNodeId,
 } from './join';
-export { resolveSecurityGraph } from './artifact';
+export { MAX_ARTIFACT_AGE_DAYS, ageInDays, resolveSecurityGraph } from './artifact';
+export { IMAGE_BUILD_DATE_FILE, readImageBuildDate } from './build-date';
 export { extractedArtifact, loadExtractedSecurityGraph } from './runtime';
-export type { SecurityGraphSource } from './artifact';
+export type { ResolveOptions, SecurityGraphSource } from './artifact';
+export type { ImageBuildDate } from './build-date';
 export type {
   ExtractionMeta,
   ExtractionRun,

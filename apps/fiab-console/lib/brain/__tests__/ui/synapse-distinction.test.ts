@@ -456,6 +456,25 @@ function evaluatedRisk(findings: readonly WireRiskFinding[]): RiskLayer {
 }
 
 describe('the risk lane paints what it can join and REPORTS what it cannot', () => {
+  it("#4798 — an evaluated lane carries the graph's age note into the rendered reason", () => {
+    // The panel renders `risk.reason` beside the badges (`risk-provenance`).
+    // Breaks if the model drops `ageNote` (the reason is then exactly
+    // 'Security graph source: modelled.'), which would make "age NOT checked"
+    // silent on a build with no image build date.
+    const noted: RiskLayer = {
+      evaluated: true,
+      graphSource: 'modelled',
+      findings: [],
+      detectors: [],
+      coverage: { judged: 9, candidates: 9, ratio: 1, incompleteDetectors: [] },
+      ageNote: 'AGE-NOTE-4798',
+    };
+    const withNote = overlayOf({ risk: noted });
+    expect(withNote.risk.reason).toBe('Security graph source: modelled. AGE-NOTE-4798');
+    // Positive control: no note means no trailing text, not "undefined".
+    expect(overlayOf({ risk: evaluatedRisk([]) }).risk.reason).toBe('Security graph source: modelled.');
+  });
+
   it('a finding naming an estate node paints that node as risk', () => {
     const o = overlayOf({
       risk: evaluatedRisk([riskFinding({ evidence: { nodeIds: [BROKER_ID], edgeIds: [], query: 'q', facts: [] } })]),

@@ -30,6 +30,11 @@
  *      than by testing, which is the only form of parity claim that does not need
  *      a per-cloud receipt to be believed.
  *
+ * The ONE file this module does read is the image build date (`build-date.ts`),
+ * and reason 1 does not bite it: file tracing never sees it because the
+ * Dockerfile's runner stage writes it straight into `/app`, after the traced
+ * standalone output is copied in. Its absence is a reported state, not a refusal.
+ *
  * ── THE ONLY CHANGE #3992's SEAM NEEDS ───────────────────────────────────
  *
  * `app/api/admin/brain/_lib/security-source.ts#loadSecurityGraph` currently
@@ -46,6 +51,7 @@
 
 import type { SecurityGraphArtifact } from './types';
 import { resolveSecurityGraph, type SecurityGraphSource } from './artifact';
+import { readImageBuildDate, type ImageBuildDate } from './build-date';
 import generated from './__generated__/security-graph.json';
 
 /**
@@ -60,9 +66,17 @@ import generated from './__generated__/security-graph.json';
  */
 const ARTIFACT = (generated as { artifact: SecurityGraphArtifact | null }).artifact;
 
+/**
+ * The image build date, read once per process: the file is written at image
+ * build time and cannot change under a running server. See `build-date.ts`
+ * for why it is a file in the image and not a field in the artifact.
+ */
+let imageBuiltAt: ImageBuildDate | undefined;
+
 /** Load the security graph shipped with this build. */
 export function loadExtractedSecurityGraph(): SecurityGraphSource {
-  return resolveSecurityGraph(ARTIFACT);
+  imageBuiltAt ??= readImageBuildDate();
+  return resolveSecurityGraph(ARTIFACT, { now: new Date(), imageBuiltAt });
 }
 
 /**

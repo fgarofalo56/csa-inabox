@@ -39,6 +39,7 @@ import type { SecurityGraph } from '../substrate';
 import type { SecurityGraphArtifact } from './types';
 import { GENERATOR_VERSION } from './build';
 import { assertJoinCoversGraph } from './join';
+import { IMAGE_BUILD_DATE_FILE, type ImageBuildDate } from './build-date';
 
 /**
  * The seam's contract, restated structurally.
@@ -51,32 +52,61 @@ import { assertJoinCoversGraph } from './join';
  * depend on an unmerged PR.
  */
 export type SecurityGraphSource =
-  | { readonly available: true; readonly graph: SecurityGraph }
+  | {
+      readonly available: true;
+      readonly graph: SecurityGraph;
+      /**
+       * What is known about the graph's age, in the operator's words. Always set
+       * by {@link resolveSecurityGraph}; optional only so hand-built test sources
+       * need not invent one.
+       */
+      readonly ageNote?: string;
+    }
   | { readonly available: false; readonly reason: string };
 
 /**
- * WHY THERE IS NO AGE REFUSAL ANY MORE (#4798).
+ * How old the IMAGE may be before its graph stops describing the source.
  *
- * This module used to refuse an artifact whose committed `meta.generatedAt` was
- * over 90 days old. That timestamp is gone from the committed bytes: it differed
- * on every run, so every pair of PRs that regenerated the artifact conflicted on
- * it. Keeping it as "last regenerated" would not have saved the refusal either,
- * because a merge-stable artifact is only regenerated when a node, edge or
- * ledger entry moves — a correct artifact over a quiet stretch of the tree would
- * then be refused as STALE, and `generated-sweep.test.ts` (which resolves the
- * committed artifact against the real clock) would go red on a calendar date.
+ * The graph is baked into the image, so the image's build date bounds how old
+ * the source it describes can be. An image left running for six months carries
+ * a six-month-old security picture, and rendering that as current is the
+ * stale-read defect. 90 days is deliberately generous: this refuses an
+ * ABANDONED estate, not a slightly-behind one.
  *
- * What the age check stood in for is now established directly. `--check`, a
- * REQUIRED context on `main`, re-extracts and compares on every merge, so the
- * artifact inside an image built from `main` IS the extraction of that image's
- * own source. How far that image trails `main` is `deploy-integrity.md` R3's
- * question, surfaced by the deploy-status lane, not something an artifact
- * timestamp could answer.
+ * WHERE THE DATE COMES FROM (#4798). Not from the committed artifact: its
+ * `generatedAt` differed on every run, so every pair of PRs that regenerated the
+ * artifact conflicted on it, and it was removed. The console Dockerfile writes
+ * the build date into the image instead (`build-date.ts`), where it is true and
+ * never committed. In a sovereign boundary the deploy-status lane cannot reach
+ * GitHub to say how far an image trails `main`, so this is the only OFFLINE
+ * staleness signal for the `.github/**` and `scripts/**` half of the graph.
+ *
+ * WHAT `--check` DOES AND DOES NOT ESTABLISH. The drift job re-extracts and
+ * compares on each PR and again on every push to `main`. Branch protection is
+ * `strict: false`, so a PR's check ran against the base it was last updated to,
+ * not the tip it merged into: two PRs that each pass can merge cleanly into an
+ * artifact that is the extraction of neither tree. The run on `main` goes red on
+ * that drift, but it does not gate the console roll (#4807) — so an image built
+ * from `main` is NOT guaranteed to carry its own source's extraction.
  */
+export const MAX_ARTIFACT_AGE_DAYS = 90;
 
 /** Shared prefix so every refusal reads as the same, deliberate state. */
 const NOT_EVALUATED =
   'NOT EVALUATED — no risk verdict has been drawn, and this is NOT a clean result.';
+
+export interface ResolveOptions {
+  readonly now: Date;
+  /** What `readImageBuildDate()` found. Required, so no caller can skip the age check. */
+  readonly imageBuiltAt: ImageBuildDate;
+  readonly maxAgeDays?: number;
+}
+
+/**
+ * How far in the FUTURE a build date may sit before it is treated as wrong
+ * rather than as clock skew between the build agent and the console host.
+ */
+const FUTURE_TOLERANCE_DAYS = 1;
 
 /**
  * Decide whether an artifact may be swept, or why it may not.
@@ -84,7 +114,10 @@ const NOT_EVALUATED =
  * Never throws: a malformed artifact must degrade to an honest refusal on the
  * surface, not to a 500 that hides the reason.
  */
-export function resolveSecurityGraph(artifact: SecurityGraphArtifact | null): SecurityGraphSource {
+export function resolveSecurityGraph(
+  artifact: SecurityGraphArtifact | null,
+  options: ResolveOptions,
+): SecurityGraphSource {
   if (artifact === null) {
     return {
       available: false,
@@ -152,10 +185,15 @@ export function resolveSecurityGraph(artifact: SecurityGraphArtifact | null): Se
       reason:
         `${NOT_EVALUATED} The shipped graph contains ZERO nodes. A sweep over it would report ` +
         'zero security findings, which is indistinguishable from a clean estate — so it is ' +
-        'refused rather than swept. Either the extractor matched no files (check the scan ' +
-        'scopes in the artifact meta) or its analyzers emitted nothing.',
+        'refused rather than swept. Either the extractor matched no files or its analyzers ' +
+        'emitted nothing: run `node scripts/brain/extract-security-graph.mjs --check`, whose ' +
+        'output prints the files matched and nodes emitted per scan scope (those counts are ' +
+        'printed per run, not committed).',
     };
   }
+
+  const age = resolveAge(options);
+  if (!age.ok) return { available: false, reason: `${NOT_EVALUATED} ${age.reason}` };
 
   try {
     assertJoinCoversGraph(artifact.join, artifact.graph.nodes);
@@ -169,5 +207,81 @@ export function resolveSecurityGraph(artifact: SecurityGraphArtifact | null): Se
     };
   }
 
-  return { available: true, graph: artifact.graph };
+  return { available: true, graph: artifact.graph, ageNote: age.note };
+}
+
+type AgeVerdict = { readonly ok: true; readonly note: string } | { readonly ok: false; readonly reason: string };
+
+/**
+ * The age half of the decision. Every branch names what was, and was not,
+ * established — "absent" is reported, not refused (a local build never ran the
+ * Dockerfile), while a date that is present but unusable IS refused, because an
+ * image that claims a build date and cannot state one is not a dev build.
+ */
+function resolveAge(options: ResolveOptions): AgeVerdict {
+  const built = options.imageBuiltAt;
+  const maxAge = options.maxAgeDays ?? MAX_ARTIFACT_AGE_DAYS;
+  const where = `\`${IMAGE_BUILD_DATE_FILE}\``;
+
+  if (built.state === 'absent') {
+    return {
+      ok: true,
+      note:
+        `This build carries no image build date (${where} is written only by the console ` +
+        "Dockerfile), so the graph's age was NOT checked. That is expected for a local " +
+        'development build; in a deployed image it is a defect.',
+    };
+  }
+  if (built.state === 'unreadable') {
+    return {
+      ok: false,
+      reason:
+        `The image build date ${where} exists but could not be read (${built.detail}), so the ` +
+        "graph's age cannot be established. An artifact whose age is unknown cannot be " +
+        'certified current, and an unknown must not be reported as a negative.',
+    };
+  }
+
+  const age = ageInDays(built.value, options.now);
+  if (age === null) {
+    return {
+      ok: false,
+      reason:
+        `The image build date in ${where} is unparseable ('${built.value.slice(0, 64)}'), so ` +
+        "the graph's age cannot be established. An artifact whose age is unknown cannot be " +
+        'certified current, and an unknown must not be reported as a negative.',
+    };
+  }
+  if (age < -FUTURE_TOLERANCE_DAYS) {
+    return {
+      ok: false,
+      reason:
+        `The image build date in ${where} (${built.value}) is ${Math.ceil(-age)} days in the ` +
+        "future, so either it or this host's clock is wrong and the graph's age cannot be " +
+        'established.',
+    };
+  }
+  if (age > maxAge) {
+    return {
+      ok: false,
+      reason:
+        `This image was built ${Math.floor(age)} days ago (${built.value}, ceiling ${maxAge} ` +
+        'days). Its security graph describes the source tree as it was at build time, so it is ' +
+        'reported as STALE rather than rendered as the current state. Rebuild and roll the ' +
+        'console image to refresh it.',
+    };
+  }
+  return {
+    ok: true,
+    note:
+      `Extracted from the source this image was built from, ${built.value} ` +
+      `(${Math.max(0, Math.floor(age))} of ${maxAge} days).`,
+  };
+}
+
+/** Whole and fractional days between an ISO timestamp and `now`. `null` if unparseable. */
+export function ageInDays(isoTimestamp: string, now: Date): number | null {
+  const then = Date.parse(isoTimestamp);
+  if (Number.isNaN(then)) return null;
+  return (now.getTime() - then) / 86_400_000;
 }

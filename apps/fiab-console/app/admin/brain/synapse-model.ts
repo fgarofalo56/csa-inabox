@@ -584,7 +584,8 @@ export function buildSynapseOverlay(args: {
         args.risk === null
           ? 'The risk lane has not been loaded yet.'
           : args.risk.evaluated
-            ? `Security graph source: ${args.risk.graphSource}.`
+            ? `Security graph source: ${args.risk.graphSource}.` +
+              (args.risk.ageNote === undefined ? '' : ` ${args.risk.ageNote}`)
             : args.risk.reason,
       findings: riskFindings,
       painted,

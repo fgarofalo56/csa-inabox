@@ -57,9 +57,12 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  CENSUS_SCOPES,
   RUN_ONLY_FIELDS,
   POPULATION_META_FIELDS,
+  censusRefusals,
   driftDifferences,
+  gitCensus as checkCensus,
   populationRefusals,
   runOnlyFieldsPresent,
 } from '../../brain/_artifact-drift.mjs';
@@ -1268,4 +1271,181 @@ test('the extractor reads EVERY JavaScript module git carries under each publica
   const { scripts } = await extractorEnumeration();
   assert.ok(census.length > 100, `the script census found only ${census.length}`);
   assert.deepEqual(scripts, census);
+});
+
+// ── THE CENSUS INSIDE `--check` (#4798, review round 2) ────────────────────
+//
+// The two tests above count `enumerateScan()` against git. They can't see a
+// file dropped AFTER that call. Review A measured one on the round-1 head: a
+// `.filter()` in `main()` between `enumerateScan()` and the builder, dropping
+// the zero-node fixture, left `--check` green, because both sides of the drift
+// comparison came from the filtered list. So `--check` now reconciles the
+// counts the builder RECEIVED (`run.scanScopes[].filesMatched`,
+// `run.filesScanned`) against `_artifact-drift.mjs#gitCensus`. The arms below
+// pin the helper. The end-to-end kill (that `main()` filter, and its
+// `console.log`-sink variant, both RED) needs a compiled extractor, so it was
+// run as a sandbox mutation and is recorded in the PR body, not here.
+
+/** A census that reconciles with {@link baseRun}: 1694 routes + 362 scripts = 2056. */
+function baseCensus() {
+  return [
+    { runScopeTokens: ['app/**/route.ts'], label: 'app/**/route.ts', files: 1694 },
+    { runScopeTokens: ['scripts/**', '.github/**'], label: 'scripts/**, .github/**', files: 362 },
+  ];
+}
+
+test('census: a run whose counts match git reconciles (control)', () => {
+  // Without this every refusal arm below could pass on a helper that refuses
+  // everything. It is also the SORTED-ROOTS control: the run names the scope
+  // '.github/**, scripts/**' and the census tokens are in the other order, so a
+  // prefix or order-sensitive match would refuse here. The first revision of
+  // this helper did exactly that against the real tree.
+  assert.equal(baseRun().scanScopes[1].scope.startsWith('.github/**'), true, 'the fixture must carry the sorted spelling');
+  assert.deepEqual(censusRefusals(baseRun(), baseCensus()), []);
+});
+
+test('census: ONE file dropped between enumeration and build is refused, naming the count', () => {
+  // The review's measured defect in helper form. The value that breaks this:
+  // any comparison that tolerates a shortfall (`>=` in place of `!==`), or one
+  // that compares only the total, because the total is moved too.
+  const run = baseRun();
+  run.scanScopes[1].filesMatched = 361;
+  run.filesScanned = 2055;
+  const refusals = censusRefusals(run, baseCensus());
+  assert.equal(refusals.length, 1, refusals.join('\n'));
+  assert.match(refusals[0], /received 361 file\(s\) but `git ls-files` lists 362/);
+  assert.match(refusals[0], /1 file\(s\) were dropped between the enumeration and the build/);
+});
+
+test('census: a count ABOVE git is refused as #4216, not as a drop', () => {
+  // Pins the MESSAGE branch as well as the refusal: a builder reading a file
+  // git does not carry is a different fault with a different fix.
+  const run = baseRun();
+  run.scanScopes[0].filesMatched = 1695;
+  run.filesScanned = 2057;
+  const refusals = censusRefusals(run, baseCensus());
+  assert.equal(refusals.length, 1, refusals.join('\n'));
+  assert.match(refusals[0], /#4216/);
+  assert.doesNotMatch(refusals[0], /were dropped/);
+});
+
+test('census: a per-scope shortfall that the other scope hides from the TOTAL is still refused', () => {
+  // A total-only reconciliation passes this: -1 in one scope and +1 in the
+  // other leaves 2056. The per-scope comparison is what refuses it.
+  const run = baseRun();
+  run.scanScopes[0].filesMatched = 1693;
+  run.scanScopes[1].filesMatched = 363;
+  assert.equal(run.scanScopes[0].filesMatched + run.scanScopes[1].filesMatched, run.filesScanned, 'the total must be unmoved');
+  assert.equal(censusRefusals(run, baseCensus()).length, 2);
+});
+
+test('census: a total that disagrees while every scope matches is refused', () => {
+  // A file reaching the builder outside every census scope moves the total and
+  // no scope. Deleting the total comparison makes this pass.
+  const run = baseRun();
+  run.filesScanned = 2057;
+  const refusals = censusRefusals(run, baseCensus());
+  assert.equal(refusals.length, 1, refusals.join('\n'));
+  assert.match(refusals[0], /2057 file\(s\) in total but the census lists 2056/);
+});
+
+test('census: a run scope the census cannot find, or can find twice, is refused', () => {
+  // Breaks on a match that takes the FIRST candidate, or skips a scope with no
+  // match. 'scripts/** only' carries one of the two tokens, so a match on ANY
+  // token instead of EVERY token would reconcile it against the wrong count.
+  const renamed = baseRun();
+  renamed.scanScopes[1].scope = 'scripts/** only (CI publication surfaces)';
+  assert.match(censusRefusals(renamed, baseCensus()).join('\n'), /0 run scope\(s\) are named by 'scripts\/\*\*, \.github\/\*\*'/);
+
+  const doubled = baseRun();
+  doubled.scanScopes.push({ ...doubled.scanScopes[1] });
+  assert.match(censusRefusals(doubled, baseCensus()).join('\n'), /2 run scope\(s\) are named by/);
+});
+
+test('census: an empty or zero census is refused, never read as reconciled', () => {
+  // Two empty things compare equal. Each input here would otherwise reconcile
+  // vacuously against a run that also counted nothing.
+  assert.ok(censusRefusals(baseRun(), []).length > 0, 'an empty census');
+  assert.ok(censusRefusals(baseRun(), null).length > 0, 'no census');
+  const zeroed = baseCensus();
+  zeroed[0].files = 0;
+  const run = baseRun();
+  run.scanScopes[0].filesMatched = 0;
+  run.filesScanned = 362;
+  assert.match(censusRefusals(run, zeroed).join('\n'), /emptied census/);
+});
+
+test('census: CENSUS_SCOPES spells the extractor\'s roots and predicates, lifted from its source', () => {
+  // The census is literal on purpose, so it cannot narrow along with the
+  // extractor. The cost is that it can DISAGREE with it, which is what this
+  // pins. Breaks on: a root added to PUBLICATION_ROOTS and not here, an
+  // extension added to PUBLICATION_INCLUDE and not here, or the route predicate
+  // changing on one side. Lifted from the source text, never transcribed.
+  const source = readFileSync(resolve(REPO_ROOT, 'scripts/brain/extract-security-graph.mjs'), 'utf8');
+  const pubRoots = [...(/const PUBLICATION_ROOTS = \[([^\]]*)\]/.exec(source)?.[1] ?? '').matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  const pubInclude = /const PUBLICATION_INCLUDE = (\/.+\/);/.exec(source)?.[1];
+  const routeRoot = /const ROUTE_ROOT = '([^']+)'/.exec(source)?.[1];
+  const routeInclude = /scanFiles\(repoRoot, ROUTE_ROOT, \(rel\) => (\/.+\/)\.test\(rel\)/.exec(source)?.[1];
+  assert.ok(pubRoots.length > 0 && pubInclude && routeRoot && routeInclude, 'the extractor no longer declares these in the shape read here');
+
+  const [route, publication] = CENSUS_SCOPES;
+  assert.deepEqual([...route.roots], [routeRoot]);
+  assert.equal(String(route.include), routeInclude);
+  assert.deepEqual([...publication.roots].sort(), [...pubRoots].sort());
+  assert.equal(String(publication.include), pubInclude);
+});
+
+test('census: gitCensus asks git the SAME question the extractor asks', () => {
+  // The census and `gitVisibleFiles` must share `git ls-files` flags, or they
+  // count different populations. Dropping `--others` here, for instance, would
+  // make a new untracked-but-not-ignored route a false drop. The flags are
+  // lifted from the extractor's call and compared with what gitCensus passes.
+  const source = readFileSync(resolve(REPO_ROOT, 'scripts/brain/extract-security-graph.mjs'), 'utf8');
+  const extractorArgs = /\['ls-files',([^\]]*?)'--', \.\.\.roots\]/.exec(source);
+  assert.ok(extractorArgs, 'the extractor no longer calls git ls-files in the shape read here');
+  const flags = ['ls-files', ...[...extractorArgs[1].matchAll(/'([^']+)'/g)].map((m) => m[1])];
+
+  let seen;
+  const fakeGit = (cmd, args) => {
+    seen = { cmd, args };
+    return ['apps/fiab-console/app/api/x/route.ts', 'scripts/a.mjs', 'scripts/b.yml', ''].join('\0');
+  };
+  const census = checkCensus(REPO_ROOT, CENSUS_SCOPES, fakeGit);
+  assert.equal(seen.cmd, 'git');
+  const dash = seen.args.indexOf('--');
+  assert.deepEqual(seen.args.slice(0, dash), flags);
+  assert.deepEqual(seen.args.slice(dash + 1).sort(), ['.github', 'apps/fiab-console/app', 'scripts']);
+  // The stub's paths do not exist on disk, so all three are dropped. That is
+  // the deleted-from-the-worktree exclusion, and it zeroes both scopes.
+  assert.deepEqual(census.map((c) => c.files), [0, 0]);
+});
+
+test('census: gitCensus on the real tree equals the extractor\'s enumeration, scope by scope', async () => {
+  // The positive half: on an unmutated tree the census must NOT refuse, or
+  // `--check` would be red on every PR. Breaks on a census predicate that
+  // counts `.yml`, a root typo, or a missing existence filter.
+  const census = checkCensus(REPO_ROOT);
+  const { routes, scripts } = await extractorEnumeration();
+  assert.ok(census[0].files > 100 && census[1].files > 100, JSON.stringify(census));
+  assert.deepEqual(census.map((c) => c.files), [routes.length, scripts.length]);
+});
+
+test('census: `--check` reconciles the RUN against the census before it compares (the call site)', () => {
+  // A helper that is never called is the gap round 1 shipped. Structural pin,
+  // comment lines stripped. The inputs that break it: dropping the call,
+  // passing it anything but the run, calling it after the comparison, or not
+  // exiting on a refusal. The end-to-end version of this was run as a sandbox
+  // mutation (PR body).
+  const source = readFileSync(resolve(REPO_ROOT, 'scripts/brain/extract-security-graph.mjs'), 'utf8')
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*(?:\/\/|\/\*|\*)/.test(line))
+    .join('\n');
+  const floor = source.indexOf("populationRefusals(artifact, 'the artifact just extracted");
+  const takeCensus = source.indexOf('gitCensus(REPO_ROOT)');
+  const call = source.indexOf('censusRefusals(run, census)');
+  const compare = source.indexOf('driftDifferences(a, artifact');
+  assert.ok(floor > 0 && takeCensus > floor, 'the census is no longer taken after the population floor');
+  assert.ok(call > takeCensus, '--check no longer reconciles the run against the census');
+  assert.ok(compare > call, 'the census reconciliation must run BEFORE the comparison');
+  assert.match(source.slice(call, compare), /process\.exit\(1\)/, 'a census refusal must exit non-zero');
 });

@@ -32,8 +32,19 @@
  *     cleanly to a wrong number.
  *
  * `LEGACY arm` runs the pre-#4798 committed shape through the identical harness
- * and must FAIL it, so a green here is a statement about the shape and not about
- * a harness that cannot go red.
+ * and must CONFLICT, so the zero-conflict assertion is shown able to go red. The
+ * equality assertion's power on the legacy shape is the real-tree measurement
+ * above; it is not re-witnessed in process.
+ *
+ * ── WHAT THIS DOES NOT ESTABLISH ─────────────────────────────────────────
+ *
+ * These scenarios add UNRELATED files. Two PRs that each change graph CONTENT
+ * (for example, both regenerate after editing files whose nodes sit next to each
+ * other) can still merge cleanly into bytes that no regeneration of the merged
+ * tree produces. Before #4798 the tally conflict forced a regeneration in that
+ * case as a side effect; now nothing does. The drift `--check` also runs on push
+ * to `main`, which catches such a merge after it lands, not before, because
+ * branch protection is `strict: false`. That exposure is #4807.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -232,17 +243,23 @@ describe('LEGACY arm — the pre-#4798 committed shape FAILS the same harness', 
   // the harness can no longer tell the two shapes apart and the arm above has
   // stopped measuring anything.
   for (const s of SCENARIOS) {
-    it(`${s.name}: the legacy shape conflicts or merges to a wrong value`, () => {
+    it(`${s.name}: the legacy shape conflicts`, () => {
       const x = sides(s);
-      const { conflicts, merged } = merge3(
+      const { conflicts } = merge3(
         serializeArtifact(legacyArtifact(x.a)),
         serializeArtifact(legacyArtifact(x.base)),
         serializeArtifact(legacyArtifact(x.b)),
       );
-      const wrong = merged !== serializeArtifact(legacyArtifact(x.ab));
-      expect(conflicts > 0 || wrong).toBe(true);
       // Every legacy scenario conflicts on the clock/sha/digest block, which is
-      // the measured real-tree result as well.
+      // the measured real-tree result as well. The input that breaks this: a
+      // `legacyArtifact` that stops re-committing the run values, or a `merge3`
+      // that reads a failed merge as zero conflicts.
+      //
+      // Round 1 also asserted `conflicts > 0 || merged !== expected`. That
+      // disjunct was dominated by this line (whenever it could fail, this line
+      // had already failed), so it pinned nothing and was removed. The
+      // clean-but-wrong merge the legacy COUNTS produced is described in the
+      // header; it is not separately witnessed here.
       expect(conflicts).toBeGreaterThan(0);
     });
   }
