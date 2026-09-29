@@ -2464,11 +2464,15 @@ jobs:
           # which would create an admin-plane→DLZ ordering coupling): (1) DEPLOY the
           # bicep into the admin RG if the app is absent, (2) PUBLISH the code,
           # (3) store the host key in Key Vault (loom-posture-function-key), and
-          # (4) set LOOM_POSTURE_FUNCTION_URL + the LOOM_POSTURE_FUNCTION_KEY
-          # secretRef on the Console app. The Console BFF still computes posture LIVE
+          # (4) set LOOM_POSTURE_FUNCTION_URL on the Console app, out-of-band. It
+          # does NOT bind the key: the LOOM_POSTURE_FUNCTION_KEY secretRef comes
+          # only from bicep, behind admin-plane postureFunctionKeyBound, which needs
+          # the root param loomPostureFunctionUrl AND
+          # observabilityConfig.postureFunctionKeyEnabled (#4770, #4781). The
+          # Console BFF still computes posture LIVE
           # from Cosmos, so this is a latency pre-warm + on-open recompute, never a
           # hard dependency. Every sub-step is best-effort; the honest gate in
-          # app/api/governance/govern/refresh/route.ts remains until the URL lands.
+          # app/api/governance/govern/refresh/route.ts remains until the key is bound.
           set +e
           POSTURE_FUNC=$(az functionapp list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[?starts_with(name, 'func-loom-posture')].name | [0]" -o tsv 2>/dev/null)
           # Resolve the Loom Cosmos account (admin RG first, then DLZ) for the bicep params.
@@ -2536,7 +2540,7 @@ jobs:
               LOOM_KV_WINDOW_SOFT_FAIL=1 bash scripts/csa-loom/kv-firewall-window.sh close --vault "$KV_NAME" || true
             fi
           fi
-          # Set the URL on the Console (and the key secretRef if a KV secret exists).
+          # Set the URL on the Console. This never binds the key secretRef; see (4) above.
           #
           # #4161 — THIS ASSIGNMENT IS NOT DURABLE, and saying so is the point.
           # `az containerapp update --set-env-vars` writes out-of-band state that
