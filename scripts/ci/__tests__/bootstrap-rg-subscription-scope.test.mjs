@@ -36,6 +36,11 @@ import {
   runGateControls,
   GATE_MUST_FLAG,
   GATE_MUST_NOT_FLAG,
+  PROFILE_PINS,
+  checkProfilePins,
+  runPinControls,
+  PIN_MUST_FLAG,
+  PIN_MUST_NOT_FLAG,
 } from '../check-bootstrap-rg-subscription-scope.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -344,4 +349,72 @@ test('CLI: --self-test runs only the controls and passes', () => {
   const r = runGuard(['--self-test']);
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /self-test OK/);
+});
+
+// ── Third rule: profile pins (#4765 review S4), on the REAL workflow ─────────
+// Each plant is ONE edit of the real text, lifted by a literal anchor that must
+// be found exactly once (so a moved line re-aims the test instead of silently
+// planting nothing).
+
+const WEAVE_PIN = '          az account set --subscription "$DLZ_SUB"';
+const SCC_PIN = '          az account set --subscription "$ADMIN_SUB"';
+const onlyLine = (lines, text, what) => {
+  const hits = lines.map((l, i) => (l === text ? i : -1)).filter((i) => i >= 0);
+  assert.equal(hits.length, 1, `expected exactly one "${what}" line in the real workflow, found ${hits.length} — re-aim this test`);
+  return hits[0];
+};
+
+test('profile pins: every PIN_MUST_FLAG control is flagged and every PIN_MUST_NOT_FLAG control is clean', () => {
+  // Breaks if the rule stops detecting a removed / mis-pointed / suppressed /
+  // late / set +e pin, or starts flagging the intact or CRLF ${VAR} form.
+  assert.deepEqual(runPinControls(), []);
+  assert.ok(PIN_MUST_FLAG.length >= 7 && PIN_MUST_NOT_FLAG.length >= 2);
+  assert.deepEqual(PROFILE_PINS.map((p) => p.sub), ['ADMIN_SUB', 'DLZ_SUB']);
+});
+
+test('profile pins: the real workflow is intact, and removing, re-pointing or suppressing the Weave pin is caught', () => {
+  // Breaks if the real workflow's pins stop satisfying the rule (the positive half).
+  assert.deepEqual(checkProfilePins(REAL), []);
+  const lines = realLines();
+  const at = onlyLine(lines, WEAVE_PIN, 'Weave DLZ pin');
+  const removed = [...lines];
+  removed.splice(at, 1);
+  // Breaks if deleting the pin before bootstrap-weave-pg.sh passes: the profile is
+  // then whatever the SCC step left ($ADMIN_SUB), and the script's -g "$DLZ_RG" misses.
+  assert.match(checkProfilePins(removed.join('\n')).join('\n'), /bootstrap-weave-pg\.sh with no `az account set --subscription "\$DLZ_SUB"`/);
+  const repointed = [...lines];
+  repointed[at] = SCC_PIN;
+  // Breaks if a pin to the WRONG subscription passes.
+  assert.match(checkProfilePins(repointed.join('\n')).join('\n'), /names \$ADMIN_SUB, not \$DLZ_SUB/);
+  const suppressed = [...lines];
+  suppressed[at] = `${WEAVE_PIN} || true`;
+  // Breaks if a suppressed pin passes (a failed pin would then not stop the step).
+  assert.match(checkProfilePins(suppressed.join('\n')).join('\n'), /is followed by `\|\| true`/);
+});
+
+test('profile pins: removing the real SCC admin pin is caught', () => {
+  const lines = realLines();
+  const at = onlyLine(lines, SCC_PIN, 'SCC admin pin');
+  lines.splice(at, 1);
+  // Breaks if the SCC step can call provision-scc-labels-sidecar.sh with no admin pin.
+  assert.match(checkProfilePins(lines.join('\n')).join('\n'), /provision-scc-labels-sidecar\.sh with no `az account set --subscription "\$ADMIN_SUB"`/);
+});
+
+test('CLI: exits 1 on a copy of the real workflow whose Weave DLZ pin was removed', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'rgscope-pin-'));
+  try {
+    const lines = realLines();
+    lines.splice(onlyLine(lines, WEAVE_PIN, 'Weave DLZ pin'), 1);
+    const copy = join(dir, 'bootstrap-no-weave-pin.yml');
+    writeFileSync(copy, lines.join('\r\n'));
+    const r = runGuard([copy]);
+    // Breaks if the CLI does not fail on the pin alone: the copy's gate and its az
+    // calls are intact, so the non-zero exit comes from the pin rule.
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stderr, /profile pin broken \(#4765\).*bootstrap-weave-pg\.sh/);
+    assert.match(r.stdout, /failure gate 'bootstrap_failure_gate' is last/);
+    assert.match(r.stdout, /all scoped to the matching subscription/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

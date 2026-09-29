@@ -278,6 +278,10 @@ const ROWS = [
     reason: 'no_id_in_response', stepRc: 1, gateRc: 1, err: 1, warn: 0, get: 2, post: 1, phase: 'create',
     has: ['Class: defect', NOT_LANDED], lacks: ['retrying as a classic'],
     breaks: 'a 2xx without an id is treated as success, or followed by the classic create' },
+  { name: 'create refused with the plain-text network 403: network_blocked, no re-list', env: { S_GET_CODE: '200', S_GET_BODY: EMPTY_LIST, S_POST_CODE: '403', S_POST_BODY: NET_PLAIN, S_ARM: 'Enabled' },
+    reason: 'network_blocked', stepRc: 1, gateRc: 0, err: 0, warn: 1, get: 1, post: 1, phase: 'create',
+    has: [TRACK_3744, 'at create'], lacks: [NOT_LANDED, 'whether the create landed is unknown'], stepLacks: ["The create's outcome is unknown"],
+    breaks: 'a network-layer refusal of the create is re-listed and reported as an unknown outcome (2 GETs)' },
   // ── the phrase outside the 403 shape is NOT network_blocked ──────────────
   { name: '500 JSON whose message STARTS with the phrase', env: { S_GET_CODE: '500', S_GET_BODY: JSON.stringify({ error_code: 'X', message: `${NET_PLAIN}` }) },
     reason: 'http_error', stepRc: 1, gateRc: 1, err: 1, warn: 0, get: 1,
@@ -374,6 +378,15 @@ test('the warehouse step is bounded by timeout-minutes (breaks if: the key is re
   const { timeoutMinutes } = lift();
   const n = Number(timeoutMinutes);
   assert.ok(Number.isInteger(n) && n > 0 && n <= 30, `timeout-minutes is ${timeoutMinutes}`);
+});
+
+test('the warehouse step keeps its response bodies in a per-run mktemp directory (breaks if: a fixed /tmp/dbx_wh_* path returns, or mktemp is dropped)', { skip: SKIP }, () => {
+  const { whRun } = lift();
+  // Positive half: the per-run directory is created and every body path uses it.
+  assert.match(whRun, /WH_TMP=\$\(mktemp -d /, 'the step no longer creates WH_TMP with mktemp -d');
+  assert.match(whRun, /PROBE="\$WH_TMP\/list\.json"/, 'the probe body is not under $WH_TMP');
+  // Absence half: no fixed shared path, which let concurrent runs read each other's bodies.
+  assert.doesNotMatch(whRun, /\/tmp\/dbx_wh_/, 'a fixed /tmp/dbx_wh_* path is back');
 });
 
 test('gate: a skipped or unreached warehouse step is not reported; a failure with no reason fails (breaks if: an empty outcome fails the job, or an unrecorded failure warns)', { skip: SKIP }, () => {

@@ -45,9 +45,10 @@
  *
  * KNOWN LIMITS, stated rather than hidden:
  *   - An ALIAS is invisible: `RG="$ADMIN_RG"; az … -g "$RG"` is not judged.
- *   - Scripts the workflow calls (`bash scripts/csa-loom/*.sh`) are not judged;
- *     they receive the subscription as an argument or env var and are out of
- *     this guard's scope.
+ *   - Scripts the workflow calls (`bash scripts/csa-loom/*.sh`) are not scanned;
+ *     the ones known to run unscoped `-g` calls are listed on #4789. For those
+ *     whose ordering is not already safe, THIRD RULE below requires the calling
+ *     step to pin the az profile first.
  *   - `--scope /subscriptions/$SUB/resourceGroups/$ADMIN_RG` and `--ids …`
  *     carry the subscription inside the id and are not `-g` calls; not judged.
  *   - The lexer resets per logical line, so a quoted string spanning physical
@@ -71,6 +72,12 @@
  * not by regex over lines, and proven first against embedded fixtures
  * (GATE_MUST_FLAG / GATE_MUST_NOT_FLAG). Removing the gate, or dropping its
  * `always()`, fails this guard.
+ *
+ * THIRD RULE — PROFILE PINS (#4765 review S4). For each script in PROFILE_PINS,
+ * every step that calls it must, before the call, run a bare
+ * `az account set --subscription "$<SUB>"` naming the required subscription,
+ * not suppressed and not after `set +e`. Proven first against PIN_MUST_FLAG /
+ * PIN_MUST_NOT_FLAG.
  *
  * Usage:
  *   node scripts/ci/check-bootstrap-rg-subscription-scope.mjs              # CHECK the bootstrap
@@ -440,6 +447,133 @@ export function runGateControls() {
   return failures;
 }
 
+// ── THIRD RULE — PROFILE PINS (#4765 review S4) ─────────────────────────────
+// Some scripts the bootstrap calls run `az … -g <rg>` WITHOUT --subscription,
+// so they act on whatever subscription the az profile holds, and the profile
+// persists across steps. Until those scripts take the subscription themselves
+// (#4789), the step that calls each one must pin the profile to the right
+// subscription first. This rule checks, for every step whose run block calls
+// the script, that the LAST `az account set --subscription …` before the call
+// names the required variable, stands alone on its line (no `||`, `;`, `&&`,
+// redirection), and is not preceded by `set +e` (under which a failed pin would
+// not stop the step).
+export const PROFILE_PINS = Object.freeze([
+  Object.freeze({ script: 'scripts/csa-loom/provision-scc-labels-sidecar.sh', sub: 'ADMIN_SUB' }),
+  Object.freeze({ script: 'scripts/csa-loom/bootstrap-weave-pg.sh', sub: 'DLZ_SUB' }),
+]);
+
+const ACCOUNT_SET = /^az\s+account\s+set\s+(?:--subscription|-s)\s+("?)\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?\1(.*)$/;
+
+/** Fold a run block into logical lines: CRLF-normalised, `\` continuations joined, trimmed. */
+function foldRun(run) {
+  const out = [];
+  let acc = '';
+  for (const raw of run.replace(/\r\n?/g, '\n').split('\n')) {
+    const line = raw.replace(/\s+$/, '');
+    if (line.endsWith('\\')) { acc += `${line.slice(0, -1)} `; continue; }
+    out.push((acc + line).trim());
+    acc = '';
+  }
+  if (acc) out.push(acc.trim());
+  return out;
+}
+
+/**
+ * Judge the profile pins in one workflow's text. Returns a list of problems.
+ * @param {string} text workflow YAML
+ * @param {ReadonlyArray<{script: string, sub: string}>} pins
+ */
+export function checkProfilePins(text, pins = PROFILE_PINS, job = FAILURE_GATE.job) {
+  let doc;
+  try {
+    doc = parseWorkflow(text);
+  } catch (e) {
+    return [`cannot parse the workflow to check profile pins (${e.message})`];
+  }
+  const steps = doc?.jobs?.[job]?.steps;
+  if (!Array.isArray(steps)) return [`job '${job}' has no steps, so no profile pin can be checked`];
+  const problems = [];
+  for (const pin of pins) {
+    const call = new RegExp(`(^|\\s)bash\\s+${pin.script.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}(\\s|$)`);
+    let callers = 0;
+    for (const s of steps) {
+      const name = String(scalarValue(s?.name) ?? '(unnamed step)');
+      const lines = foldRun(String(scalarValue(s?.run) ?? ''));
+      const callIdx = lines.findIndex((l) => !l.startsWith('#') && call.test(l));
+      if (callIdx < 0) continue;
+      callers += 1;
+      let pinned = null;
+      let setPlusE = false;
+      for (let i = 0; i < callIdx; i++) {
+        const l = lines[i];
+        if (/^set\s+\+e\b/.test(l)) setPlusE = true;
+        if (/^set\s+-e\b/.test(l)) setPlusE = false;
+        const m = l.match(ACCOUNT_SET);
+        if (m) pinned = { sub: m[2], rest: m[3].trim(), afterSetPlusE: setPlusE };
+      }
+      if (!pinned) {
+        problems.push(`step '${name}' calls ${pin.script} with no \`az account set --subscription "$${pin.sub}"\` before it — the script's unscoped \`-g\` calls run against whatever subscription an earlier step left`);
+      } else if (pinned.sub !== pin.sub) {
+        problems.push(`step '${name}': the last \`az account set\` before ${pin.script} names $${pinned.sub}, not $${pin.sub}`);
+      } else if (pinned.rest !== '') {
+        problems.push(`step '${name}': the \`az account set --subscription "$${pin.sub}"\` before ${pin.script} is followed by \`${pinned.rest}\` — the pin must stand alone so a failure stops the step`);
+      } else if (pinned.afterSetPlusE) {
+        problems.push(`step '${name}': the pin before ${pin.script} runs after \`set +e\`, so a failed pin would not stop the step`);
+      }
+    }
+    if (callers === 0) problems.push(`no step in job '${job}' calls ${pin.script} — the pin rule is aimed at a call that no longer exists; re-aim PROFILE_PINS`);
+  }
+  return problems;
+}
+
+const PIN_GOOD = [
+  'on: workflow_dispatch',
+  'jobs:',
+  '  bootstrap:',
+  '    runs-on: ubuntu-latest',
+  '    steps:',
+  '      - name: scc',
+  '        run: |',
+  '          az account set --subscription "$ADMIN_SUB"',
+  '          set +e',
+  '          bash scripts/csa-loom/provision-scc-labels-sidecar.sh || true',
+  '      - name: weave',
+  '        run: |',
+  '          az account set --subscription "$DLZ_SUB"',
+  '          SUB="$DLZ_SUB" DLZ_RG="$DLZ_RG" \\',
+  '            bash scripts/csa-loom/bootstrap-weave-pg.sh \\',
+  '            || echo "::warning::incomplete"',
+  '',
+].join('\n');
+
+export const PIN_MUST_FLAG = [
+  { why: 'the weave pin removed', src: PIN_GOOD.replace('          az account set --subscription "$DLZ_SUB"\n', '') },
+  { why: 'the weave pin names the admin subscription', src: PIN_GOOD.replace('--subscription "$DLZ_SUB"', '--subscription "$ADMIN_SUB"') },
+  { why: 'the weave pin suppressed with || true', src: PIN_GOOD.replace('--subscription "$DLZ_SUB"', '--subscription "$DLZ_SUB" || true') },
+  { why: 'the weave pin moved after the call', src: PIN_GOOD.replace('          az account set --subscription "$DLZ_SUB"\n', '').replace('            || echo "::warning::incomplete"\n', '            || echo "::warning::incomplete"\n          az account set --subscription "$DLZ_SUB"\n') },
+  { why: 'the scc pin removed', src: PIN_GOOD.replace('          az account set --subscription "$ADMIN_SUB"\n', '') },
+  { why: 'the scc pin placed after set +e', src: PIN_GOOD.replace('          az account set --subscription "$ADMIN_SUB"\n          set +e\n', '          set +e\n          az account set --subscription "$ADMIN_SUB"\n') },
+  { why: 'the weave script no longer called anywhere', src: PIN_GOOD.replace('bash scripts/csa-loom/bootstrap-weave-pg.sh', 'echo skipped') },
+];
+
+export const PIN_MUST_NOT_FLAG = [
+  { why: 'the intact pins', src: PIN_GOOD },
+  { why: 'the intact pins, CRLF, ${VAR} form', src: PIN_GOOD.replace('"$DLZ_SUB"\n          SUB', '"${DLZ_SUB}"\n          SUB').replace(/\n/g, '\r\n') },
+];
+
+/** Runs the profile-pin controls. Returns a list of failure descriptions (empty = healthy). */
+export function runPinControls() {
+  const failures = [];
+  for (const c of PIN_MUST_FLAG) {
+    if (checkProfilePins(c.src).length === 0) failures.push(`PIN MUST-FLAG missed — ${c.why}`);
+  }
+  for (const c of PIN_MUST_NOT_FLAG) {
+    const p = checkProfilePins(c.src);
+    if (p.length > 0) failures.push(`PIN MUST-NOT-FLAG tripped — ${c.why}: ${p.join('; ')}`);
+  }
+  return failures;
+}
+
 /** Judge a list of files against both rules. Returns an exit code; prints the verdict. */
 export function checkFiles(files, root = process.cwd()) {
   const all = [];
@@ -461,6 +595,15 @@ export function checkFiles(files, root = process.cwd()) {
       );
     } else {
       console.log(`bootstrap-rg-subscription-scope: ${rel} — failure gate '${FAILURE_GATE.gateId}' is last, always(), and reads ${FAILURE_GATE.gatedIds.map((id) => `steps.${id}.outcome`).join(', ')}.`);
+    }
+    const pinProblems = checkProfilePins(text);
+    if (pinProblems.length > 0) {
+      gateBroken += 1;
+      for (const p of pinProblems) {
+        console.error(`::error file=${rel}::bootstrap-rg-subscription-scope: profile pin broken (#4765): ${p}`);
+      }
+    } else {
+      console.log(`bootstrap-rg-subscription-scope: ${rel} — ${PROFILE_PINS.length} profile pin(s) intact (${PROFILE_PINS.map((p) => `${p.script.split('/').pop()} -> $${p.sub}`).join(', ')}).`);
     }
     const r = scanText(text);
     if (r.guarded === 0) {
@@ -494,7 +637,7 @@ export function checkFiles(files, root = process.cwd()) {
 
 function main() {
   const args = process.argv.slice(2);
-  const controlFailures = [...runControls(), ...runGateControls()];
+  const controlFailures = [...runControls(), ...runGateControls(), ...runPinControls()];
   if (controlFailures.length > 0) {
     console.error(
       `::error::bootstrap-rg-subscription-scope: the EMBEDDED CONTROL failed (${controlFailures.length}). The matcher no ` +
@@ -505,14 +648,15 @@ function main() {
   }
   const controlCount = MUST_FLAG.length + MUST_NOT_FLAG.length;
   const gateControlCount = GATE_MUST_FLAG.length + GATE_MUST_NOT_FLAG.length;
+  const pinControlCount = PIN_MUST_FLAG.length + PIN_MUST_NOT_FLAG.length;
   if (args.includes('--self-test')) {
-    console.log(`bootstrap-rg-subscription-scope self-test OK — ${controlCount} scope + ${gateControlCount} failure-gate control fixture(s) behaved as documented.`);
+    console.log(`bootstrap-rg-subscription-scope self-test OK — ${controlCount} scope + ${gateControlCount} failure-gate + ${pinControlCount} profile-pin control fixture(s) behaved as documented.`);
     return;
   }
   const files = args.filter((a) => !a.startsWith('--'));
   const code = checkFiles(files.length ? files : DEFAULT_TARGETS);
   if (code === 0) {
-    console.log(`bootstrap-rg-subscription-scope OK — ${controlCount} scope + ${gateControlCount} failure-gate embedded control fixture(s) proved every arm still detects.`);
+    console.log(`bootstrap-rg-subscription-scope OK — ${controlCount} scope + ${gateControlCount} failure-gate + ${pinControlCount} profile-pin embedded control fixture(s) proved every arm still detects.`);
   }
   process.exit(code);
 }

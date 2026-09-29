@@ -1419,6 +1419,14 @@ jobs:
           fi
           auth=(-H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json")
           WH_API="https://$DBX_HOST/api/2.0/sql/warehouses"
+          # Response bodies go in a per-run directory, not fixed /tmp paths, so two
+          # runs on one machine (e.g. concurrent test runs) cannot read each
+          # other's files.
+          WH_TMP=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/dbx-wh.XXXXXX") || WH_TMP=""
+          if [ -z "$WH_TMP" ] || [ ! -d "$WH_TMP" ]; then
+            echo "::warning::mktemp -d failed (its stderr is above) — cannot provision the SQL warehouse on $DBX_HOST."
+            exit 1
+          fi
           # #4765: every Databricks call records its HTTP status and keeps its body
           # in a file, so a refused request is PRINTED instead of reading as "no
           # warehouse" (the old probe was `curl -sf ... 2>/dev/null | jq ... || true`),
@@ -1560,7 +1568,7 @@ jobs:
           # definite_rejection OUTFILE -> true only when the API answered the last
           # call with a 4xx JSON body: the create certainly did not land.
           definite_rejection() { [ "${DBX_RC:-1}" = 0 ] && [[ "${DBX_CODE:-}" =~ ^4[0-9][0-9]$ ]] && is_json_object "$1"; }
-          PROBE=/tmp/dbx_wh_list.json
+          PROBE="$WH_TMP/list.json"
           dbx_call GET "$PROBE" "$WH_API"
           if ! is_2xx || ! is_json_object "$PROBE"; then
             show_response "GET /api/2.0/sql/warehouses" "$PROBE"
@@ -1573,22 +1581,24 @@ jobs:
             echo "    Reusing existing SQL warehouse 'loom-default'"
           else
             echo ">>> Creating serverless SQL warehouse 'loom-default' (2X-Small, auto-stop 10m)"
-            create_warehouse true /tmp/dbx_wh_create_serverless.json
-            LAST=/tmp/dbx_wh_create_serverless.json
+            create_warehouse true "$WH_TMP/create_serverless.json"
+            LAST="$WH_TMP/create_serverless.json"
             if [ -z "$WID" ] && definite_rejection "$LAST"; then
               echo "::notice::Serverless create was rejected (HTTP $DBX_CODE; response above) — retrying as a classic PRO warehouse."
-              create_warehouse false /tmp/dbx_wh_create_classic.json
-              LAST=/tmp/dbx_wh_create_classic.json
+              create_warehouse false "$WH_TMP/create_classic.json"
+              LAST="$WH_TMP/create_classic.json"
             fi
             if [ -z "$WID" ]; then
               classify_failure "$LAST"
-              if ! definite_rejection "$LAST"; then
+              # A network-layer refusal (network_blocked) is an answer: the create
+              # did not land, so it is reported directly, without a re-list.
+              if ! definite_rejection "$LAST" && [ "$CAUSE" != network_blocked ]; then
                 # The create's outcome is unknown (transport failure, 5xx, non-JSON,
                 # or 2xx without an id): it may have landed. Re-list instead of
                 # sending a second create for the same name.
                 echo "::notice::The create's outcome is unknown ($WHY) — re-listing warehouses instead of sending another create."
                 P_CAUSE=$CAUSE; P_WHY=$WHY; P_CODE=${DBX_CODE:-}; P_RC=${DBX_RC:-}
-                REPROBE=/tmp/dbx_wh_relist.json
+                REPROBE="$WH_TMP/relist.json"
                 dbx_call GET "$REPROBE" "$WH_API"
                 if is_2xx && is_json_object "$REPROBE"; then
                   WID=$(jq -r '[.warehouses[]? | select(.name == "loom-default") | .id][0] // empty' "$REPROBE")
@@ -2424,8 +2434,11 @@ jobs:
           # #4765: provision-scc-labels-sidecar.sh runs `az ... -g "$SCC_FUNCTION_RG"`
           # with no --subscription, and provision-databricks-compute.sh (an earlier
           # step) leaves the az profile on $DLZ_SUB. Pin the profile to the admin
-          # subscription first, with no error suppression, so the script's calls
-          # resolve $ADMIN_RG in $ADMIN_SUB.
+          # subscription first. No `|| true`: if the pin fails, `bash -e` stops
+          # this step before the script runs. The step is continue-on-error and
+          # is not in the final gate, so that shows only as this step failing;
+          # the job still continues. check-bootstrap-rg-subscription-scope
+          # (PROFILE_PINS) fails CI if this pin is removed or suppressed.
           az account set --subscription "$ADMIN_SUB"
           set +e
           SCC_FUNCTION_APP=$(az functionapp list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[?starts_with(name,'func-scclbl-')].name | [0]" -o tsv 2>/dev/null)
@@ -2800,6 +2813,15 @@ jobs:
           # Loom app runs as) so weave-ontology app resources work day-one — the
           # Resources-tab attach then reports already-exists instead of a
           # pending-grants script.
+          # #4765: bootstrap-weave-pg.sh runs `az … -g "$DLZ_RG"` with no
+          # --subscription (it only checks SUB is set), and an earlier step (the
+          # SCC step) leaves the az profile on $ADMIN_SUB. Pin the profile to the
+          # DLZ subscription first. No `|| true`: if the pin fails, `bash -e` stops
+          # this step before the script runs; the step is continue-on-error, so
+          # that shows as this step failing while the job continues.
+          # check-bootstrap-rg-subscription-scope (PROFILE_PINS) fails CI if this
+          # pin is removed, suppressed, or pointed at another subscription.
+          az account set --subscription "$DLZ_SUB"
           SUB="$DLZ_SUB" DLZ_RG="$DLZ_RG" WEAVE_PG_SERVER="$WEAVE_PG_SERVER" \
             CONSOLE_UAMI_NAME="$CONSOLE_UAMI_NAME" \
             EXTRA_PG_PRINCIPALS="uami-loom-mcp-${{ inputs.region }}" \
