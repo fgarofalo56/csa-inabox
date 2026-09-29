@@ -1,6 +1,6 @@
 /**
  * redactUrlSecrets — the value of a secret query parameter is replaced, and
- * nothing else is (GHSA-66f6-7xvq-8qxw / S4).
+ * nothing else is.
  *
  * WHAT MAKES THESE FAIL (assertion-design.md): each fixture embeds a unique
  * token that MUST NOT survive, paired with a positive that a non-secret part of

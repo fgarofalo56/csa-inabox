@@ -26,8 +26,7 @@ export const POST = withSession(async (req: NextRequest, { session: s }) => {
   // The callback URL carries a SAS signature — a SECRET. The workflow is
   // caller-chosen, so this resolves it under the CALLER's own ARM RBAC and only
   // hands it back to a caller who could have minted it themselves; there is no
-  // platform-identity fallback that would return it to any signed-in user
-  // (GHSA-66f6-7xvq-8qxw / S3).
+  // platform-identity fallback.
   const authz = await callerArmToken(s.claims.oid);
   if (authz.gate) return NextResponse.json(userArmGateBody('the selected Logic App'), { status: 401 });
   try {

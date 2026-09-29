@@ -34,7 +34,9 @@ export interface LogicAppTriggerInfo {
   /** Workflow Definition Language trigger type, verbatim (`Request`, `Recurrence`, `ApiConnection`, …). */
   type: string;
   kind?: string;
-  /** True only for `type: Request` — the one trigger type with a callback URL. */
+  /** A Request trigger's `inputs.method`, upper-cased, when the definition restricts it. */
+  method?: string;
+  /** True only for a `Request` trigger that accepts POST — the one Azure Monitor can invoke. */
   callbackCapable: boolean;
 }
 
@@ -57,11 +59,10 @@ export interface ResolvedLogicAppTrigger {
 }
 
 /**
- * ANCHORED, whole-id match with a STRICT allowlist. The id arrives from the
- * browser and becomes an ARM path a management-plane token is sent to, so each
- * segment admits ONLY the characters an ARM resource name can carry — a strict
- * allowlist, not a denylist. `armIdPath` adds a second gate that accepts a path
- * only when it is already in canonical form. GHSA-66f6-7xvq-8qxw.
+ * Validate the resource id strictly: an anchored, whole-id match where each
+ * segment admits only the characters an ARM resource name can carry (a strict
+ * allowlist). `armIdPath` adds a second check that accepts a path only when it
+ * is already in canonical form.
  */
 const SEG = "[A-Za-z0-9._()-]+";
 const WORKFLOW_ID_RE = new RegExp(`^/subscriptions/(${SEG})/resourceGroups/(${SEG})/providers/Microsoft\\.Logic/workflows/(${SEG})$`, 'i');
@@ -75,9 +76,7 @@ export function assertLogicAppId(workflowResourceId: string): string {
 /**
  * The ARM path for a validated id: trimmed, trailing slashes removed, and
  * accepted only when the value is already the canonical path — i.e. it parses to
- * exactly itself, with no query and no fragment. Anything that would resolve to a
- * different path is rejected here rather than used to build a request.
- * GHSA-66f6-7xvq-8qxw.
+ * exactly itself, with no query and no fragment.
  */
 export function armIdPath(id: string): string {
   const trimmed = (id || '').trim().replace(/\/+$/, '');
@@ -106,14 +105,27 @@ export function triggersOfDefinition(definition: unknown): LogicAppTriggerInfo[]
     const kind = typeof v?.kind === 'string' ? v.kind : undefined;
     const method = typeof v?.inputs?.method === 'string' ? v.inputs.method.toUpperCase() : '';
     const callbackCapable = type.toLowerCase() === 'request' && (method === '' || method === 'POST');
-    return { name, type, kind, callbackCapable };
+    return { name, type, kind, ...(method ? { method } : {}), callbackCapable };
   });
 }
 
-/** "Recurrence (Recurrence), foo (ApiConnection)" — or "none". */
+/**
+ * "'Recurrence' (Recurrence), 'hook' (Request, GET only)" — or "none". A
+ * Request trigger's method is printed when it is set and is not POST, so a
+ * message never names a Request trigger while calling it absent.
+ */
 export function describeTriggers(triggers: LogicAppTriggerInfo[]): string {
   if (!triggers.length) return 'none';
-  return triggers.map((t) => `'${t.name}' (${t.type || 'unknown type'})`).join(', ');
+  return triggers.map((t) => {
+    const methodNote = t.method && t.method !== 'POST' ? `, ${t.method} only` : '';
+    return `'${t.name}' (${t.type || 'unknown type'}${methodNote})`;
+  }).join(', ');
+}
+
+/** True when the definition has a Request trigger, but none of them accepts POST. */
+function onlyNonPostRequests(triggers: LogicAppTriggerInfo[]): boolean {
+  const reqs = triggers.filter((t) => t.type.toLowerCase() === 'request');
+  return reqs.length > 0 && reqs.every((t) => !t.callbackCapable);
 }
 
 /**
@@ -132,19 +144,22 @@ export function chooseRequestTrigger(
     const hit = requests.find((t) => t.name === wanted);
     if (hit) return { triggerName: hit.name, chosenBy: 'explicit' };
     throw new MonitorError(
-      `Logic App '${workflowName}' has no HTTP-request trigger named '${wanted}'. `
+      `Logic App '${workflowName}' has no HTTP-request trigger named '${wanted}' that accepts POST. `
       + `Triggers found: ${describeTriggers(triggers)}. `
       + (requests.length
         ? `Pick one of its HTTP-request triggers: ${requests.map((t) => `'${t.name}'`).join(', ')}.`
-        : 'An HTTP-request trigger ("When a HTTP request is received") is required for Azure Monitor to invoke it.'),
+        : 'An HTTP-request trigger ("When a HTTP request is received") that accepts POST is required for Azure Monitor to invoke it.'),
       422,
     );
   }
   if (!requests.length) {
+    const reason = onlyNonPostRequests(triggers)
+      ? 'no Request trigger accepts POST (Azure Monitor invokes receivers with POST)'
+      : 'it has no HTTP-request trigger';
     throw new MonitorError(
-      `Logic App '${workflowName}' cannot be notified by Azure Monitor: it has no HTTP-request trigger. `
+      `Logic App '${workflowName}' cannot be notified by Azure Monitor: ${reason}. `
       + `Triggers found: ${describeTriggers(triggers)}. `
-      + 'Add a "When a HTTP request is received" trigger to the workflow, or pick a different Logic App.',
+      + 'Add (or change to POST) a "When a HTTP request is received" trigger, or pick a different Logic App.',
       422,
     );
   }

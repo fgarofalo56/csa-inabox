@@ -179,7 +179,7 @@ export const PUT = withSession<{ id: string }>(async (req: NextRequest, { sessio
 
   // Resolving a Logic App SAS callback or a Function key is a PRIVILEGED ARM
   // call on a CALLER-CHOSEN resource, so it runs under the caller's own ARM
-  // RBAC — never the platform identity (GHSA-66f6-7xvq-8qxw / S2). Only needed
+  // RBAC — never the platform identity. Only needed
   // when there is at least one such receiver to resolve.
   const needsArm = logicAppsIn.length > 0 || functions.some((f) => !isLegacyFunctionReceiver(f));
   const authz = needsArm ? await callerArmToken(s.claims.oid) : { gate: false, token: undefined };

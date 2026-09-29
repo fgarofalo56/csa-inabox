@@ -40,10 +40,9 @@ import { armIdPath } from './logic-app-trigger';
 
 export const WEB_API = '2024-04-01';
 
-// Anchored whole-id match with a STRICT allowlist — the id comes from the
-// browser and becomes an ARM path a management-plane token is sent to (shared
-// reasoning and the canonical-path gate live in `logic-app-trigger.ts`).
-// GHSA-66f6-7xvq-8qxw.
+// Anchored whole-id match with a STRICT allowlist — validate the resource id
+// strictly (shared reasoning and the canonical-path gate live in
+// `logic-app-trigger.ts`).
 const SEG = '[A-Za-z0-9._()-]+';
 const SITE_ID_RE = new RegExp(`^/subscriptions/(${SEG})/resourceGroups/(${SEG})/providers/Microsoft\\.Web/sites/(${SEG})$`, 'i');
 /** A function name is a single ARM child segment: the same strict allowlist. */

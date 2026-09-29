@@ -33,8 +33,16 @@ vi.mock('@/lib/auth/session', () => ({ getSession: () => getSessionMock() }));
 
 // The caller's ARM token. When it is null the route must gate (S2); when present
 // every privileged ARM call must carry THIS bearer, not the UAMI one.
-const getUserArmTokenMock = vi.fn(async () => 'USER-ARM-7z' as string | null);
-vi.mock('@/lib/azure/user-token-store', () => ({ getUserArmToken: (...a: any[]) => getUserArmTokenMock(...(a as [string])) }));
+const getUserArmTokenMock = vi.fn(async (_oid: string) => 'USER-ARM-7z' as string | null);
+vi.mock('@/lib/azure/user-token-store', () => ({
+  getUserArmToken: (oid: string) => getUserArmTokenMock(oid),
+  saveUserToken: vi.fn(async () => true),
+}));
+// No MSAL account ⇒ the silent refresh cannot mint a token, so a null cache is a
+// real "no caller token" (deterministic — not dependent on MSAL env config).
+vi.mock('@/lib/auth/msal', () => ({
+  getMsalClient: () => ({ getTokenCache: () => ({ getAllAccounts: async () => [] }), acquireTokenSilent: vi.fn() }),
+}));
 
 let storedItem: any = null;
 const updateOwnedItemMock = vi.fn(async (_id: string, _t: string, _o: string, patch: any) => {
@@ -168,7 +176,7 @@ describe('health-check action-group — Azure Function receiver (#4740)', () => 
   });
 });
 
-describe('health-check action-group — caller authorization (GHSA-66f6-7xvq-8qxw / S2)', () => {
+describe('health-check action-group — resolves under the caller\'s permissions', () => {
   it('gates with 401 and mints NOTHING when the caller has no Azure token', async () => {
     getUserArmTokenMock.mockResolvedValue(null);
     const res = await PUT(put({ name: 'hc-ag', functions: [{ functionAppResourceId: SITE, functionName: 'OnAlert' }] }), CTX);

@@ -148,4 +148,15 @@ describe('chooseRequestTrigger — deterministic choice among several (#4748)', 
     } });
     expect(ts.filter((t) => t.callbackCapable).map((t) => t.name)).toEqual(['postOnly', 'anyMethod']);
   });
+
+  it('a workflow whose only Request trigger is GET-only says no Request trigger accepts POST — not that none exists', async () => {
+    const { triggersOfDefinition, chooseRequestTrigger } = await import('../logic-app-trigger');
+    const ts = triggersOfDefinition({ triggers: { hook: { type: 'Request', inputs: { method: 'GET' } } } });
+    let msg = '';
+    try { chooseRequestTrigger('wf', ts); } catch (e) { msg = (e as Error).message; }
+    // Breaks if the message still claims there is no HTTP-request trigger while naming one.
+    expect(msg).toContain('no Request trigger accepts POST');
+    expect(msg).toContain("'hook' (Request, GET only)");
+    expect(msg).not.toContain('it has no HTTP-request trigger');
+  });
 });

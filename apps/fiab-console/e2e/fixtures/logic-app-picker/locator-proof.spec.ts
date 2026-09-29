@@ -51,6 +51,7 @@ import { test, expect, type Page } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { combobox, refreshBtn, manualInput, enterManuallyBtn, MANUAL_LABEL } from './locators';
+import { isKnownOutcome, strictDiscoveryFailed, classifyInspection, exactOptionPattern } from './outcomes';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { renderAll } = require('./render-fixtures.cjs') as { renderAll: () => string };
@@ -143,5 +144,69 @@ test.describe('Logic App picker locator proof (#3541)', () => {
       page.getByLabel(MANUAL_LABEL),
       'without { exact: true } the same label query matches the defect — which is why the shared locator sets it',
     ).toHaveCount(1);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// The walk's OUTCOME vocabulary — proven offline, lifted from the walk source.
+// ────────────────────────────────────────────────────────────────────────────
+test.describe('Logic App walk outcome proof (#3541 / #4748)', () => {
+  /** Every `return { outcome: '…'` in the live walk, read from its SOURCE at run time. */
+  function outcomesReturnedByWalk(): string[] {
+    const src = fs.readFileSync(path.join(DIR, '..', '..', 'health-check-logic-app-picker.spec.ts'), 'utf8');
+    return [...src.matchAll(/return \{ outcome: '([^']+)'/g)].map((m) => m[1]);
+  }
+
+  test('every outcome the walk can return is registered — an unregistered branch reds', () => {
+    const returned = outcomesReturnedByWalk();
+    // Positive control: the lift must find the branches, or this row proves nothing.
+    // FAILING INPUT: the regex drifting from the walk's `return { outcome: '…'` shape.
+    expect(returned.length, 'the lift must find the walk\'s outcome returns').toBeGreaterThanOrEqual(7);
+    const unregistered = [...new Set(returned)].filter((o) => !isKnownOutcome(o));
+    // FAILING INPUT: adding a walk branch `return { outcome: 'new-thing' }` without
+    // registering it in outcomes.ts KNOWN_OUTCOMES (the round-2 defect).
+    expect(unregistered, 'walk outcomes missing from KNOWN_OUTCOMES').toEqual([]);
+    // The new wiring outcomes are among them — pinned by name.
+    for (const o of ['no-caller-arm-token', 'no-callable-workflow', 'label-mismatch']) expect(returned).toContain(o);
+  });
+
+  test('an unknown outcome string is NOT known, so the walk\'s final check reds on it', () => {
+    // FAILING INPUT: an `isKnownOutcome` that returned true for any string.
+    expect(isKnownOutcome('not-a-real-outcome')).toBe(false);
+    expect(isKnownOutcome(null)).toBe(false);
+    expect(isKnownOutcome('wired')).toBe(true);
+  });
+
+  test('strict (-receipt) project reds on DISCOVERY outcomes only', () => {
+    // FAILING INPUT: treating a wiring outcome (the robot's by-design state) as a
+    // discovery failure — the strict project would red on every unattended run.
+    for (const o of ['discovery-failed', 'no-workflows']) expect(strictDiscoveryFailed(o), o).toBe(true);
+    for (const o of ['wired', 'save-gated', 'no-callable-workflow', 'label-mismatch', 'no-caller-arm-token']) {
+      expect(strictDiscoveryFailed(o), o).toBe(false);
+    }
+  });
+
+  test('a "no delegated token" gate is its OWN verdict — never folded into "no callable workflow"', () => {
+    const gate = { id: '/w/a', status: 401, body: { ok: false, code: 'NO_USER_ARM_TOKEN' } };
+    const problem = { id: '/w/b', status: 200, body: { ok: true, problem: 'no HTTP-request trigger' } };
+    const callable = { id: '/w/c', status: 200, body: { ok: true, triggerName: 'manual' } };
+    // FAILING INPUT: a classifier that returned `none` for the 401 gate (triage pointed at the estate).
+    expect(classifyInspection([gate]).kind).toBe('no-caller-arm-token');
+    expect(classifyInspection([problem]).kind).toBe('none');
+    expect(classifyInspection([problem, callable])).toEqual({ kind: 'callable', id: '/w/c', triggerName: 'manual' });
+  });
+
+  test('the option match is EXACT on name and group — WeathForeCast never matches WeathForeCast2', async ({ page }) => {
+    await page.setContent(
+      '<div role="listbox">'
+      + '<div role="option">WeathForeCast2 · rg-a · westus</div>'
+      + '<div role="option">WeathForeCast · rg-b · westus</div>'
+      + '<div role="option">WeathForeCast · rg-a · westus</div>'
+      + '</div>',
+    );
+    const pat = exactOptionPattern('WeathForeCast', 'rg-a');
+    // FAILING INPUT: a substring match (`hasText: 'WeathForeCast'`) matches all 3.
+    await expect(page.getByRole('option').filter({ hasText: pat })).toHaveCount(1);
+    await expect(page.getByRole('option').filter({ hasText: pat })).toHaveText('WeathForeCast · rg-a · westus');
   });
 });

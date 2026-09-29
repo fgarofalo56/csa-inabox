@@ -221,6 +221,10 @@ import {
   BASE, signIn, createWorkspace, createItem, cleanupWorkspaces,
   captureFailures, recordVerdict,
 } from './_lib/uat';
+import {
+  isKnownOutcome, strictDiscoveryFailed, classifyInspection, exactOptionPattern, nameAndGroupOf,
+  NO_CALLER_ARM_TOKEN_NOTE, type InspectionResponse, type InspectionVerdict,
+} from './fixtures/logic-app-picker/outcomes';
 
 /** The creatable catalog slug whose editor hosts the pane (fabric-iq.ts:268). */
 const ITEM_TYPE = 'health-check';
@@ -242,29 +246,31 @@ const LOGIC_APP_ARM_TYPE = 'Microsoft.Logic/workflows';
 const LOGIC_APP_ID_RE =
   /^\/subscriptions\/[0-9a-f-]{36}\/resourcegroups\/[^/]+\/providers\/microsoft\.logic\/workflows\/[^/]+$/i;
 
-/** Every outcome the walk can legitimately reach. Used to give the walk's final
- *  assertion real kill power: a branch that returns an unclassified outcome is
- *  not a member and reds. */
-const KNOWN_OUTCOMES = new Set(['wired', 'save-gated', 'no-workflows', 'discovery-failed']);
+/* The walk's outcome vocabulary (`KNOWN_OUTCOMES`, `DISCOVERY_FAILURE_OUTCOMES`)
+ * lives in `./fixtures/logic-app-picker/outcomes.ts`, so the offline
+ * `logic-app-locator-proof` project can prove every `outcome: '…'` this file
+ * returns is registered — lifted from this file's source at runtime. */
 
 /**
- * STRICT MODE is selected by PROJECT, not by an environment variable.
+ * STRICT MODE is selected by PROJECT, not by an environment variable, and it is
+ * strict on DISCOVERY ONLY.
  *
- * Round 3 gated it on `HC_REQUIRE_RECEIPT=1`, which could never fire through a
- * dispatch: `loom-ui-verify.yml` has seven dispatch inputs (none of them
- * `require_receipt`) and the extra-projects step forwards a fixed six-entry
- * `env:` list, so nothing carried the variable into the process. A dispatch
- * input is an expression, not an environment variable. The mitigation was
- * documented as active while being unable to fire — worse than the open hole it
- * was meant to close, because it invited a dispatch made in the belief that a
- * green check meant something.
+ * Operator decision (#3541): the receipt is SPLIT. The robot proves DISCOVERY —
+ * the picker lists at least one real Logic App. The WIRING half is an OPERATOR
+ * receipt: binding a receiver resolves its secret under the signed-in user's own
+ * Azure permissions, and the unattended session holds no delegated Azure token
+ * by design, so no robot can complete it without reintroducing the platform
+ * identity. The strict project therefore reds when discovery fails or lists zero
+ * workflows, and is green once it lists at least one — whatever the wiring
+ * outcome.
  *
- * `playwright.config.ts` is already in this change's ownership, so strict mode
- * is a SIBLING PROJECT over the same `testMatch`, armed through the
- * `extra_projects` input the workflow already has:
+ * Why a project and not an env var: an earlier `HC_REQUIRE_RECEIPT=1` could
+ * never fire through a dispatch (`loom-ui-verify.yml` forwards a fixed `env:`
+ * list). A project arms through the `extra_projects` input the workflow already
+ * has:
  *
  *   -f extra_projects="health-check-logic-app-picker"          lenient
- *   -f extra_projects="health-check-logic-app-picker-receipt"  strict
+ *   -f extra_projects="health-check-logic-app-picker-receipt"  strict (discovery)
  */
 const STRICT_PROJECT = 'health-check-logic-app-picker-receipt';
 
@@ -297,22 +303,25 @@ async function probeLogicApps(page: Page): Promise<Probe> {
 }
 
 /**
- * The first discovered workflow that CAN back a receiver — i.e. the
- * trigger-inspector (`/api/monitor/logic-app-triggers`) reports a resolvable
- * HTTP-request trigger and no `problem` (#4748). Picking the combobox's first
- * option is not enough: a workflow with no HTTP trigger would fail the save even
- * with the wiring correct, so the receipt must select a callable one or record a
- * NO MEASUREMENT skip. Returns null when none of the discovered workflows is
- * callable (or the caller lacks Azure rights to inspect them).
+ * Ask the trigger-inspector (`/api/monitor/logic-app-triggers`) about each
+ * discovered workflow and classify the result (#4748): a CALLABLE workflow, NO
+ * caller ARM token (the inspector's 401 `NO_USER_ARM_TOKEN` gate — the
+ * unattended session's expected state), or neither. The decision itself is the
+ * pure `classifyInspection` in `outcomes.ts`, proven offline.
  */
-async function firstCallableWorkflow(page: Page, ids: string[]): Promise<{ id: string; triggerName: string } | null> {
+async function inspectWorkflows(page: Page, ids: string[]): Promise<InspectionVerdict> {
+  const responses: InspectionResponse[] = [];
   for (const id of ids) {
     const r = await page.request.get(`${BASE}/api/monitor/logic-app-triggers?workflowResourceId=${encodeURIComponent(id)}`).catch(() => null);
     if (!r) continue;
-    const j = await r.json().catch(() => ({} as any));
-    if (j?.ok && j?.triggerName && !j?.problem) return { id, triggerName: String(j.triggerName) };
+    const body = await r.json().catch(() => ({} as any));
+    responses.push({ id, status: r.status(), body });
+    const v = classifyInspection(responses);
+    // Stop early on a decisive answer: a callable workflow, or proof the session
+    // has no delegated token (every further call would gate identically).
+    if (v.kind !== 'none') return v;
   }
-  return null;
+  return classifyInspection(responses);
 }
 
 test.describe.serial('health-check Logic App notification picker (#3541 G1)', () => {
@@ -358,8 +367,18 @@ test.describe.serial('health-check Logic App notification picker (#3541 G1)', ()
   test.afterAll(async () => {
     // One line per ATTEMPT, not one per run: `retries: 2` on this project means
     // a flaky attempt can emit this up to three times. Read the LAST one.
-    const obtained = walkOutcome === 'wired';
-    console.log(`HC_LOGIC_APP_RECEIPT=${obtained ? 'obtained' : 'NOT-OBTAINED'} outcome=${walkOutcome ?? 'none'}`);
+    //
+    // The receipt is SPLIT (operator decision, #3541): this robot proves
+    // DISCOVERY only. The line names exactly that; WIRING is reported separately
+    // and is an operator receipt unless this run happened to wire.
+    // `isKnownOutcome` first: `setup-failed` (no scratch item) is not a walk
+    // outcome and must never read as "discovery obtained".
+    const discovered = isKnownOutcome(walkOutcome) && !strictDiscoveryFailed(walkOutcome);
+    const wired = walkOutcome === 'wired';
+    console.log(
+      `HC_LOGIC_APP_DISCOVERY_RECEIPT=${discovered ? 'obtained' : 'NOT-OBTAINED'} ` +
+      `HC_LOGIC_APP_WIRING=${wired ? 'obtained' : 'operator-receipt'} outcome=${walkOutcome ?? 'none'}`,
+    );
     if (createdActionGroup) {
       console.log(
         `HC_LOGIC_APP_LEFTOVER_ACTION_GROUP=${createdActionGroup} ` +
@@ -368,10 +387,11 @@ test.describe.serial('health-check Logic App notification picker (#3541 G1)', ()
     }
     recordVerdict({
       surface: `editor:${ITEM_TYPE}`, feature: 'logic-app-picker:receipt', verdict: 'A',
-      status: obtained ? 'pass' : 'skip',
-      notes: obtained
-        ? `#3541 G1 receipt OBTAINED (outcome=wired)`
-        : `NO MEASUREMENT: #3541 G1 receipt NOT obtained (outcome=${walkOutcome ?? 'none'}${setupError ? `; setup: ${setupError}` : ''})`,
+      status: discovered ? 'pass' : 'skip',
+      notes: discovered
+        ? `#3541 DISCOVERY receipt OBTAINED — the picker listed real Logic Apps (outcome=${walkOutcome}). ` +
+          `Wiring: ${wired ? 'also wired in this run' : 'operator receipt (not measured by the robot)'}.`
+        : `NO MEASUREMENT: #3541 DISCOVERY receipt NOT obtained (outcome=${walkOutcome ?? 'none'}${setupError ? `; setup: ${setupError}` : ''})`,
     });
     await cleanupWorkspaces(createdWorkspaces).catch(() => { /* best-effort */ });
   });
@@ -380,10 +400,11 @@ test.describe.serial('health-check Logic App notification picker (#3541 G1)', ()
   // A) DISCOVERY BFF — the picker's data source answers real rows or a
   //    resolvable honest gate, never a bare error.
   // --------------------------------------------------------------------------
-  test('discovery BFF serves Microsoft.Logic/workflows or an honest gate', async ({ page, context }) => {
+  test('discovery BFF serves Microsoft.Logic/workflows or an honest gate', async ({ page, context }, testInfo) => {
     test.setTimeout(120_000);
     await signIn(context).catch(() => { /* storageState may already be set */ });
     const p = await probeLogicApps(page);
+    const strict = testInfo.project.name === STRICT_PROJECT;
 
     // FAILING INPUT: adding 'microsoft.logic/workflows' to UNSUPPORTED_TYPES
     // (app/api/azure/resources/route.ts:176) makes the route answer
@@ -404,6 +425,9 @@ test.describe.serial('health-check Logic App notification picker (#3541 G1)', ()
         surface: `editor:${ITEM_TYPE}`, feature: 'logic-app-picker:discovery', verdict: 'A', status: 'skip',
         notes: `NO MEASUREMENT: discovery gated, code=${p.code} — ${String(p.error).slice(0, 160)}`,
       });
+      // STRICT (discovery-only): a gated discovery is exactly what the receipt
+      // project must refuse. FAILING INPUT: the `-receipt` project with no ARM read.
+      if (strict) throw new Error(`[${STRICT_PROJECT}] DISCOVERY gated (code=${p.code}) — the picker cannot list Logic Apps`);
       return;
     }
 
@@ -425,6 +449,9 @@ test.describe.serial('health-check Logic App notification picker (#3541 G1)', ()
         surface: `editor:${ITEM_TYPE}`, feature: 'logic-app-picker:discovery', verdict: 'A', status: 'skip',
         notes: `NO MEASUREMENT: ok via=${p.via} but the tenant has zero Microsoft.Logic/workflows`,
       });
+      // STRICT (discovery-only): zero workflows proves nothing. FAILING INPUT:
+      // the `-receipt` project against a tenant with no Logic Apps.
+      if (strict) throw new Error(`[${STRICT_PROJECT}] DISCOVERY listed zero Microsoft.Logic/workflows`);
     }
   });
 
@@ -529,25 +556,36 @@ test.describe.serial('health-check Logic App notification picker (#3541 G1)', ()
       // 5) Pick a CALLABLE workflow — one whose HTTP-request trigger resolves
       //    (#4748). The first discovered option may have no HTTP trigger and
       //    would fail the save even with the wiring correct, so ask the
-      //    trigger-inspector which workflows are callable and select one of
-      //    those. If none is callable, record a NO MEASUREMENT skip — never a
-      //    green over a save that could not complete for a data reason.
-      const callable = await firstCallableWorkflow(page, probe?.ids ?? []);
-      if (!callable) {
+      //    trigger-inspector. Discovery is already PROVEN at this point (the
+      //    combobox listed `optionCount` >= 1 real workflows); everything below
+      //    is the WIRING half, which the unattended session cannot complete by
+      //    design — each non-wired branch is a distinct NO MEASUREMENT skip.
+      const verdict = await inspectWorkflows(page, probe?.ids ?? []);
+      if (verdict.kind === 'no-caller-arm-token') {
         await page.keyboard.press('Escape').catch(() => {});
         recordVerdict({
           surface: `editor:${ITEM_TYPE}`, feature: 'logic-app-picker:clickwalk', verdict: 'A', status: 'skip',
-          notes: `NO MEASUREMENT: no-callable-workflow — ${optionCount} option(s) discovered but none has a resolvable HTTP-request trigger (or the account cannot inspect them); nothing was wired`,
+          notes: `${NO_CALLER_ARM_TOKEN_NOTE}; discovery listed ${optionCount} workflow(s)`,
+        });
+        return { outcome: 'no-caller-arm-token', optionCount };
+      }
+      if (verdict.kind !== 'callable') {
+        await page.keyboard.press('Escape').catch(() => {});
+        recordVerdict({
+          surface: `editor:${ITEM_TYPE}`, feature: 'logic-app-picker:clickwalk', verdict: 'A', status: 'skip',
+          notes: `NO MEASUREMENT: no-callable-workflow — ${optionCount} option(s) discovered but none has an HTTP-request trigger that accepts POST; nothing was wired`,
         });
         return { outcome: 'no-callable-workflow', optionCount };
       }
-      const wantName = callable.id.split('/').pop() || '';
-      const callableOption = options.filter({ hasText: wantName }).first();
+      const { name: wantName, resourceGroup: wantRg } = nameAndGroupOf(verdict.id);
+      // EXACT match on name AND resource group — a substring match would let
+      // `WeathForeCast` select `WeathForeCast2`, a workflow the inspector never checked.
+      const callableOption = options.filter({ hasText: exactOptionPattern(wantName, wantRg) }).first();
       if ((await callableOption.count()) === 0) {
         await page.keyboard.press('Escape').catch(() => {});
         recordVerdict({
           surface: `editor:${ITEM_TYPE}`, feature: 'logic-app-picker:clickwalk', verdict: 'A', status: 'skip',
-          notes: `NO MEASUREMENT: label-mismatch — a callable workflow "${wantName}" was found via the trigger inspector but no combobox option matched its name; nothing was wired`,
+          notes: `NO MEASUREMENT: label-mismatch — callable workflow "${wantName}" (${wantRg}) found via the trigger inspector but no combobox option matched it exactly; nothing was wired`,
         });
         return { outcome: 'label-mismatch', optionCount };
       }
@@ -602,6 +640,15 @@ test.describe.serial('health-check Logic App notification picker (#3541 G1)', ()
           ).toBeTruthy();
         }
         const why = saveBody?.gate?.remediation || saveBody?.error || `no PUT response within 120s`;
+        // The save resolves the receiver under the caller's own Azure token too;
+        // a "no delegated token" gate here is the session, not the estate.
+        if (saveBody?.code === 'NO_USER_ARM_TOKEN') {
+          recordVerdict({
+            surface: `editor:${ITEM_TYPE}`, feature: 'logic-app-picker:clickwalk', verdict: 'A', status: 'skip',
+            notes: `${NO_CALLER_ARM_TOKEN_NOTE}; the save gated after picking "${optionLabel.slice(0, 80)}"`,
+          });
+          return { outcome: 'no-caller-arm-token', optionCount };
+        }
         recordVerdict({
           surface: `editor:${ITEM_TYPE}`, feature: 'logic-app-picker:clickwalk', verdict: 'A', status: 'skip',
           notes: `NO MEASUREMENT: picked "${optionLabel.slice(0, 80)}" from ${optionCount} option(s) but the save was gated: ${String(why).slice(0, 160)}`,
@@ -647,39 +694,31 @@ test.describe.serial('health-check Logic App notification picker (#3541 G1)', ()
 
     walkOutcome = result?.outcome ?? null;
     // Real kill power, not `toBeTruthy()` on an always-truthy object.
-    // FAILING INPUT: a branch that returns an outcome not in KNOWN_OUTCOMES
-    // (adding a fifth classification and forgetting to register it) reds here.
+    // FAILING INPUT: a branch that returns an outcome not registered in
+    // `outcomes.ts` KNOWN_OUTCOMES (e.g. `'no-callable-workflow'` before it was
+    // registered — the round-2 defect), or any unknown string, reds here. The
+    // offline proof lifts every `outcome: '…'` from this file and checks it too.
     expect(
-      walkOutcome !== null && KNOWN_OUTCOMES.has(walkOutcome),
+      isKnownOutcome(walkOutcome),
       `the walk must end in a classified outcome, got ${JSON.stringify(walkOutcome)}`,
     ).toBeTruthy();
 
-    // ── STRICT MODE. Fail THE TEST, deliberately not `afterAll`. ─────────────
-    // Failing here rather than in the hook is what makes strict mode correct
-    // under `retries: 2`, and it is not a stylistic choice:
+    // ── STRICT MODE — on DISCOVERY only. Fail THE TEST, not `afterAll`. ──────
+    // Failing the test (not the hook) hands retries to Playwright: a discovery
+    // failure is retried; one that recovers is flaky-but-green; every attempt
+    // failing is a red run. (An `afterAll` throw would fire on every attempt,
+    // and gating it on the last retry never fires for a PASSING-but-empty run.)
     //
-    //   • An `afterAll` throw fires on EVERY attempt, so attempt 1 failing and
-    //     the retry coming back `wired` would still throw for attempt 1 — a
-    //     false RED on a run that DID obtain the receipt.
-    //   • Restricting that throw to the last attempt (`testInfo.retry` vs
-    //     `project.retries`) does not fix it either, and fails the other way:
-    //     Playwright only retries FAILED tests, so a `no-workflows` outcome
-    //     PASSES, no retry is scheduled, `retry` stays 0 < 2, and strict mode
-    //     never fires — green over nothing, which is the thing it exists to
-    //     prevent.
-    //
-    // Failing the test instead hands both cases to Playwright's own retry
-    // machinery: not-wired is a failure, so it IS retried; a `wired` retry
-    // makes the run flaky and rc 0; every attempt not-wired makes it rc 1.
-    //
-    // FAILING INPUT: running the `health-check-logic-app-picker-receipt`
-    // project against an estate where the outcome is anything but `wired` —
-    // gated discovery, zero Logic Apps, or a gated save.
-    if (testInfo.project.name === STRICT_PROJECT && walkOutcome !== 'wired') {
+    // FAILING INPUT: the `-receipt` project against an estate where discovery
+    // failed or listed zero workflows (`discovery-failed` / `no-workflows`).
+    // Every WIRING outcome — `no-caller-arm-token`, `no-callable-workflow`,
+    // `label-mismatch`, `save-gated`, `wired` — is green here: the wiring half is
+    // an operator receipt by design.
+    if (testInfo.project.name === STRICT_PROJECT && strictDiscoveryFailed(walkOutcome)) {
       throw new Error(
-        `[${STRICT_PROJECT}] the #3541 G1 receipt was NOT obtained (outcome=${walkOutcome ?? 'none'}). ` +
-        `This project exists to fail in exactly this case: a run that measured nothing must not report success. ` +
-        `Use the lenient 'health-check-logic-app-picker' project to walk an estate that legitimately gates.`,
+        `[${STRICT_PROJECT}] DISCOVERY was not proven (outcome=${walkOutcome ?? 'none'}): the picker did not list ` +
+        `at least one real Logic App. This project fails in exactly this case. The wiring half is an operator ` +
+        `receipt and is not what this project measures.`,
       );
     }
   });
