@@ -8,7 +8,7 @@
  * production grants it (LOOM_TENANT_ADMIN_OID). Only the session and the cost
  * summary are mocked.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 
 const getSessionMock = vi.fn(
   () => ({ claims: { oid: 'ten-1', tid: 'ten-1', upn: 'a@t.com', name: 'A' }, exp: Date.now() / 1000 + 3600 }) as any,
@@ -29,6 +29,12 @@ vi.mock('@/lib/azure/cost-client', () => {
 
 const req = (qs: string) => ({ nextUrl: new URL(`http://localhost/api/admin/finops/breakdown?${qs}`) }) as any;
 
+// The route's cold import pulls the auth and cost-client module graph, which
+// exceeded the 5 s per-test default on a loaded box (#4771 R8). Import it once,
+// on its own budget, so no test's timeout is spent on module loading.
+let GET: typeof import('../route').GET;
+beforeAll(async () => { ({ GET } = await import('../route')); }, 60_000);
+
 const ORIG_ENV = { ...process.env };
 beforeEach(() => {
   process.env.LOOM_TENANT_ADMIN_OID = 'ten-1';
@@ -42,7 +48,6 @@ afterEach(() => { vi.clearAllMocks(); process.env = { ...ORIG_ENV }; });
 
 describe('GET /api/admin/finops/breakdown — tag query errors reach the client', () => {
   it('forwards tagQueryErrors alongside the tag rows', async () => {
-    const { GET } = await import('../route');
     const r = await GET(req('dimension=tag'), undefined as any);
     expect(r.status).toBe(200);
     const j = await r.json();
@@ -57,7 +62,6 @@ describe('GET /api/admin/finops/breakdown — tag query errors reach the client'
 
   it('defaults a summary with no tagQueryErrors to an empty list', async () => {
     delete summary.tagQueryErrors;
-    const { GET } = await import('../route');
     const j = await (await GET(req('dimension=tag'), undefined as any)).json();
     // Breaks if the `?? []` default is dropped: the field would be missing and
     // the client contract would stop being a list.
@@ -67,7 +71,6 @@ describe('GET /api/admin/finops/breakdown — tag query errors reach the client'
   it('forwards subscriptionErrors, so a sub whose whole read failed is not missed (#4771 R7, B-4)', async () => {
     const SUB_ERRORS = [{ subscription: 'cccccccc-0000-0000-0000-000000000003', error: 'AuthorizationFailed for test' }];
     summary.subscriptionErrors = SUB_ERRORS;
-    const { GET } = await import('../route');
     const j = await (await GET(req('dimension=tag'), undefined as any)).json();
     // Positive half: the tag errors are still forwarded beside it.
     expect(j.tagQueryErrors).toEqual(TAG_ERRORS);
@@ -80,7 +83,6 @@ describe('GET /api/admin/finops/breakdown — tag query errors reach the client'
   it('defaults a summary with no subscriptionErrors to an empty list', async () => {
     // The beforeEach summary carries no subscriptionErrors key at all.
     expect('subscriptionErrors' in summary).toBe(false);
-    const { GET } = await import('../route');
     const j = await (await GET(req('dimension=tag'), undefined as any)).json();
     // Breaks if the `?? []` default is dropped: the field would be missing.
     expect(j.subscriptionErrors).toEqual([]);

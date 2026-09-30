@@ -19,23 +19,69 @@ export const shortSub = (s: string) => (s.length > 12 ? `${s.slice(0, 8)}…${s.
 
 /** How many per-subscription errors are listed inline before the rest are counted. */
 export const ERRORS_SHOWN = 3;
+/** Longest raw Azure error text shown per subscription; longer text is cut and marked with an ellipsis. */
+export const ERROR_TEXT_MAX = 300;
+const clip = (t: string) => (t.length > ERROR_TEXT_MAX ? `${t.slice(0, ERROR_TEXT_MAX)}…` : t);
 export const listErrors = (errors: TagQueryError[]) => {
   const shown = errors.slice(0, ERRORS_SHOWN)
-    .map((s) => `${shortSub(s.subscription)}: ${s.error || 'no error text returned'}`).join(' · ');
+    .map((s) => `${shortSub(s.subscription)}: ${clip(s.error || 'no error text returned')}`).join(' · ');
   const more = errors.length - ERRORS_SHOWN;
   return more > 0 ? `${shown} · and ${more} more` : shown;
 };
 
-export function CostTagNotice({ summary, loading = false, onRetry }: {
+/**
+ * The empty text for a breakdown table, which must never claim emptiness it did
+ * not read: a gate, a failed read, and a breakdown missing whole subscriptions
+ * each say so instead of "No cost recorded." (#4771 round 8, B-2).
+ */
+export function breakdownEmptyText({ gated, failed, partial }: { gated: boolean; failed: boolean; partial: boolean }) {
+  if (gated) return 'Grant Cost Management Reader to see this breakdown.';
+  if (failed) return 'The cost read did not complete, so nothing is known about this breakdown. The message above says why.';
+  if (partial) return 'No cost recorded in the subscriptions that answered. The partial-breakdown notice above names the ones that did not.';
+  return 'No cost recorded.';
+}
+
+/**
+ * A breakdown on any dimension that omits whole subscriptions whose cost read
+ * failed (`subscriptionErrors`). Rendered with the rows, so a partial answer is
+ * never read as complete (#4771 round 8, B-1 and A-4). The tag dimension folds
+ * the same errors into {@link CostTagNotice} instead.
+ */
+export function PartialBreakdownNotice({ errors, dimension, onRetry }: {
+  errors: TagQueryError[] | null | undefined;
+  /** The dimension the breakdown is grouped by, as the user reads it. */
+  dimension: string;
+  /** Re-reads the breakdown. */
+  onRetry?: () => void;
+}) {
+  if (!errors?.length) return null;
+  return (
+    <MessageBar intent="warning">
+      <MessageBarBody>
+        <MessageBarTitle>Partial breakdown</MessageBarTitle>
+        Partial: the <strong>{dimension}</strong> breakdown omits spend from {errors.length} subscription
+        {errors.length === 1 ? '' : 's'} whose cost read failed — {listErrors(errors)}.
+      </MessageBarBody>
+      {onRetry ? <MessageBarActions><Button size="small" onClick={onRetry}>Retry</Button></MessageBarActions> : null}
+    </MessageBar>
+  );
+}
+
+export function CostTagNotice({ summary, loading = false, gated = false, onRetry }: {
   summary: (TagSummaryLike & { tagKey?: string }) | null | undefined;
   /** The summary is still being read: render a skeleton, claim nothing. */
   loading?: boolean;
+  /**
+   * A gate answered instead of a summary. The gate's own bar carries the fix;
+   * a Retry here could only hit the same gate, so it is withheld.
+   */
+  gated?: boolean;
   /** Re-reads the summary. Offered on every state that is not a final answer. */
   onRetry?: () => void;
 }) {
   const state = tagLoadState(summary);
   const key = summary?.tagKey || 'Environment';
-  const retry = onRetry ? (
+  const retry = onRetry && !gated ? (
     <MessageBarActions><Button size="small" onClick={onRetry}>Retry</Button></MessageBarActions>
   ) : null;
   if (state.kind === 'ok') return null;
@@ -51,8 +97,8 @@ export function CostTagNotice({ summary, loading = false, onRetry }: {
       <MessageBar intent="info">
         <MessageBarBody>
           <MessageBarTitle>Tag breakdown unavailable</MessageBarTitle>
-          The cost summary was not read, so nothing is known yet about the <strong>{key}</strong> tag. The message
-          above says why.
+          The cost summary was not read, so nothing is known yet about the <strong>{key}</strong> tag.
+          {gated ? ' Cost is not configured on this deployment; the notice above names what is missing and how to fix it.' : ' The message above says why.'}
         </MessageBarBody>
         {retry}
       </MessageBar>

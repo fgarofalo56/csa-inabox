@@ -20,7 +20,7 @@
  */
 import React from 'react';
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, waitFor, cleanup, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { CostTab } from '../monitor-pane';
@@ -128,5 +128,84 @@ describe('CostTab — Group by Tag never claims "no tags" when nothing was read'
     // Breaks if Retry is not wired to the pane's re-read (`setTick`): the cost
     // route would be called no further times.
     await waitFor(() => expect(spy.mock.calls.filter(([u]) => String(u).includes('/api/monitor/cost')).length).toBe(before + 1));
+  });
+
+  it('under a gate the tag notice withholds Retry: the gate bar carries the fix (#4771 R8)', async () => {
+    stubFetch(json(200, { ok: true, gate: { missing: ['LOOM_MONITOR_SUBSCRIPTION_ID'], message: 'gate for test' } }));
+    mount();
+    expect(await screen.findByText(/Cost not configured/)).toBeInTheDocument();
+    await groupByTag();
+    const notice = (await screen.findByText('Tag breakdown unavailable')).closest('.fui-MessageBar') as HTMLElement;
+    expect(notice).not.toBeNull();
+    // Positive half: the notice points at the gate's own remediation.
+    expect(notice.textContent).toContain('the notice above names what is missing and how to fix it');
+    // Breaks if `gated` is not passed or ignored: a Retry that can only hit the
+    // same gate would render.
+    expect(within(notice).queryByRole('button', { name: 'Retry' })).toBeNull();
+  });
+});
+
+const SVC_ROWS = [{ key: 'Microsoft.Storage', cost: 5 }];
+const SUB_ERRORS = [{ subscription: 'dddddddd-0000-0000-0000-000000000004', error: 'AuthorizationFailed for partial test' }];
+
+describe('CostTab — non-tag groupings never read a partial or failed breakdown as complete (#4771 R8)', () => {
+  it('A-4: service with subscriptionErrors shows the partial notice in the breakdown', async () => {
+    stubFetch(json(200, { ok: true, data: { ...EMPTY_SUMMARY, byService: SVC_ROWS, subscriptionErrors: SUB_ERRORS } }));
+    mount();
+    // Positive half: the service row reached the table.
+    expect((await screen.findAllByText('Storage')).length).toBeGreaterThan(0);
+    // Breaks if the breakdown site does not render the notice for non-tag
+    // groupings: only the page-level bar would say anything.
+    const notice = screen.getByText('Partial breakdown').closest('.fui-MessageBar') as HTMLElement;
+    expect(notice).not.toBeNull();
+    // Breaks if the dimension label or the omitted count is dropped.
+    expect(notice.textContent).toContain('the service breakdown omits spend from 1 subscription whose cost read failed');
+  });
+
+  it('POSITIVE CONTROL: service with no subscriptionErrors shows no partial notice', async () => {
+    stubFetch(json(200, { ok: true, data: { ...EMPTY_SUMMARY, byService: SVC_ROWS } }));
+    mount();
+    expect((await screen.findAllByText('Storage')).length).toBeGreaterThan(0);
+    // Breaks if the notice renders on an empty error list.
+    expect(screen.queryByText('Partial breakdown')).toBeNull();
+  });
+
+  it('A-4: grouping by tag does not add the generic notice on top of the tag notice', async () => {
+    stubFetch(json(200, { ok: true, data: { ...EMPTY_SUMMARY, byService: SVC_ROWS, byTag: [{ key: 'prod', cost: 5 }], subscriptionErrors: SUB_ERRORS } }));
+    mount();
+    expect(await screen.findByText('Partial breakdown')).toBeInTheDocument();
+    await groupByTag();
+    // Positive half: the tag notice folds the same error in (it appears in the
+    // breakdown AND the dedicated tag section).
+    await waitFor(() => expect(screen.getAllByText('Partial tag breakdown').length).toBe(2));
+    // Breaks if the generic notice is rendered on `tag` as well.
+    expect(screen.queryByText('Partial breakdown')).toBeNull();
+  });
+
+  it('B-2: a 504 never says "No cost recorded." under the error bar', async () => {
+    stubFetch(text(504, '<html>Gateway Timeout</html>'));
+    mount();
+    expect(await screen.findByText(/timed out at the gateway/)).toBeInTheDocument();
+    // Breaks on the B-2 defect: the table's empty text claimed emptiness for a
+    // read that failed. The positive half is the failed-read text itself.
+    expect(await screen.findByText(/The cost read did not complete/)).toBeInTheDocument();
+    expect(screen.queryByText('No cost recorded.')).toBeNull();
+  });
+
+  it('B-2: a partial read with no rows says so, not "No cost recorded."', async () => {
+    stubFetch(json(200, { ok: true, data: { ...EMPTY_SUMMARY, subscriptionErrors: SUB_ERRORS } }));
+    mount();
+    // Breaks if the partial flag is not passed: the plain empty claim renders.
+    expect(await screen.findByText(/No cost recorded in the subscriptions that answered/)).toBeInTheDocument();
+    expect(screen.queryByText('No cost recorded.')).toBeNull();
+  });
+
+  it('POSITIVE CONTROL: a genuine empty answer still says "No cost recorded."', async () => {
+    stubFetch(json(200, { ok: true, data: EMPTY_SUMMARY }));
+    mount();
+    // Breaks if every empty table is routed to a failure text: this is what
+    // keeps the absence assertions above from passing on a deleted claim.
+    expect(await screen.findByText('No cost recorded.')).toBeInTheDocument();
+    expect(screen.queryByText(/The cost read did not complete/)).toBeNull();
   });
 });

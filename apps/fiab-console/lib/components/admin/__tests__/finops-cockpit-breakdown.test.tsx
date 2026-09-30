@@ -167,6 +167,66 @@ describe('FinopsCockpitPane breakdown — the tag dimension tells a failed tag q
   });
 });
 
+describe('FinopsCockpitPane breakdown — every dimension discloses a partial breakdown (#4771 R8, B-1)', () => {
+  const SUB_ERRORS = [{ subscription: 'dddddddd-0000-0000-0000-000000000004', error: 'AuthorizationFailed for partial test' }];
+  const PARTIAL = /omits spend from 1 subscription whose cost read failed/;
+
+  it('service with rows AND subscriptionErrors: the partial notice renders with the chart', async () => {
+    routeMock(() => ok({ rows: [{ key: 'svc', cost: 5 }], total: 5, tagQueryErrors: [], subscriptionErrors: SUB_ERRORS }));
+    mount(<FinopsCockpitPane />);
+    // Positive half: the rows branch was reached, so the chart is on screen.
+    expect((await screen.findAllByText(/Spend by service/)).length).toBeGreaterThan(0);
+    // Breaks on the B-1 defect: `subscriptionErrors` read only for `tag`, so the
+    // service breakdown rendered as complete with no notice at all.
+    expect(screen.getByText('Partial breakdown')).toBeInTheDocument();
+    expect(screen.getByText(PARTIAL)).toBeInTheDocument();
+    // Breaks if the notice drops the error list: the failing subscription and
+    // its reason would not be named.
+    expect(screen.getByText(/AuthorizationFailed for partial test/)).toBeInTheDocument();
+  });
+
+  it('POSITIVE CONTROL: service with rows and NO subscriptionErrors shows the chart and no partial notice', async () => {
+    routeMock(() => ok({ rows: [{ key: 'svc', cost: 5 }], total: 5, tagQueryErrors: [], subscriptionErrors: [] }));
+    mount(<FinopsCockpitPane />);
+    expect((await screen.findAllByText(/Spend by service/)).length).toBeGreaterThan(0);
+    // Breaks if the notice renders unconditionally, e.g. on an empty error list.
+    expect(screen.queryByText('Partial breakdown')).toBeNull();
+  });
+
+  it('service with NO rows but subscriptionErrors: the partial notice, never "No breakdown data"', async () => {
+    routeMock(() => ok({ rows: [], total: 0, tagQueryErrors: [], subscriptionErrors: SUB_ERRORS }));
+    mount(<FinopsCockpitPane />);
+    // Breaks if the empty branch ignores subscriptionErrors: the EmptyState would
+    // then claim no service rows for spend it never read.
+    expect(await screen.findByText('Partial breakdown')).toBeInTheDocument();
+    expect(screen.queryByText('No breakdown data')).toBeNull();
+  });
+
+  it('Retry on the partial notice re-reads the service breakdown', async () => {
+    routeMock(() => ok({ rows: [{ key: 'svc', cost: 5 }], total: 5, tagQueryErrors: [], subscriptionErrors: SUB_ERRORS }));
+    mount(<FinopsCockpitPane />);
+    const notice = (await screen.findByText('Partial breakdown')).closest('.fui-MessageBar') as HTMLElement;
+    expect(notice).not.toBeNull();
+    const reads = () => (global.fetch as any).mock.calls
+      .filter(([u]: [unknown]) => String(u).includes('/api/admin/finops/breakdown') && String(u).includes('dimension=service')).length;
+    const before = reads();
+    await userEvent.click(within(notice).getByRole('button', { name: 'Retry' }));
+    // Breaks if the notice's Retry is missing (getByRole throws) or not wired
+    // to `breakdownQ.refetch()` (no further read).
+    await waitFor(() => expect(reads()).toBe(before + 1));
+  });
+
+  it('tag keeps its own notice: subscriptionErrors are not disclosed twice', async () => {
+    routeMock(() => ok({ rows: [{ key: 'commercial', cost: 5 }], total: 5, tagKey: 'Environment', tagQueryErrors: [], subscriptionErrors: SUB_ERRORS }));
+    mount(<FinopsCockpitPane />);
+    await pickTagDimension();
+    // Positive half: the tag notice folds the same error into its partial state.
+    await waitFor(() => expect(screen.getByText('Partial tag breakdown')).toBeInTheDocument());
+    // Breaks if the generic notice is also rendered on `tag`.
+    expect(screen.queryByText('Partial breakdown')).toBeNull();
+  });
+});
+
 describe('FinopsCockpitPane breakdown — loading', () => {
   it('a pending breakdown read holds the panel with a labelled skeleton', async () => {
     vi.spyOn(global, 'fetch').mockImplementation(async (input: any) => {

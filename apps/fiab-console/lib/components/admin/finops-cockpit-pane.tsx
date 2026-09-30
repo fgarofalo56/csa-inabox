@@ -34,7 +34,7 @@ import { FocusCostPanel } from '@/lib/components/finops/focus-cost-panel';
 import { EmptyState } from '@/lib/components/empty-state';
 import { SplitPane } from '@/lib/components/shared/split-pane';
 import { LoomChart } from '@/lib/components/charts/loom-chart';
-import { CostTagNotice } from '@/lib/components/monitor/cost-tag-notice';
+import { CostTagNotice, PartialBreakdownNotice } from '@/lib/components/monitor/cost-tag-notice';
 import {
   makeStyles, tokens, Card, Title3, Subtitle2, Body1, Caption1, Badge, Spinner,
   Dropdown, Option, Button, Input, Field, Switch, Dialog, DialogSurface, DialogTitle,
@@ -392,12 +392,18 @@ export function FinopsCockpitPane() {
             breakdownQ.data?.gate ? <GateBar gate={breakdownQ.data.gate} /> :
             (breakdownQ.data?.rows || []).length ? (
               <>
-                {dimension === 'tag' && <CostTagNotice summary={tagSummary} onRetry={() => { void breakdownQ.refetch(); }} />}
+                {/* #4771 R8 B-1: every dimension discloses subscriptions whose whole cost read failed;
+                    the tag notice folds the same errors into its own state. */}
+                {dimension === 'tag' ? <CostTagNotice summary={tagSummary} onRetry={() => { void breakdownQ.refetch(); }} />
+                  : <PartialBreakdownNotice errors={breakdownQ.data?.subscriptionErrors} dimension={dimension} onRetry={() => { void breakdownQ.refetch(); }} />}
                 <LoomChart type="bar" height={300}
                   rows={(breakdownQ.data.rows as Array<{ key: string; cost: number }>).slice(0, 15).map((r) => ({ key: r.key, cost: Math.round(r.cost * 100) / 100 }))}
                   title={`Spend by ${dimension} (${currency})`} />
               </>
-            ) : dimension === 'tag' ? <CostTagNotice summary={tagSummary} onRetry={() => { void breakdownQ.refetch(); }} /> : (
+            ) : dimension === 'tag' ? <CostTagNotice summary={tagSummary} onRetry={() => { void breakdownQ.refetch(); }} /> :
+            breakdownQ.data?.subscriptionErrors?.length ? (
+              <PartialBreakdownNotice errors={breakdownQ.data.subscriptionErrors} dimension={dimension} onRetry={() => { void breakdownQ.refetch(); }} />
+            ) : (
               <EmptyState icon={<Money24Regular />} title="No breakdown data"
                 body={`The cost summary has no ${dimension} rows for this timeframe.`} />
             )}

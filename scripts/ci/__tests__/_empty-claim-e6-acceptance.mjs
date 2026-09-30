@@ -13,6 +13,12 @@
  * throws when the edit does not apply), so a fixture can never silently BE the
  * base and pass for the wrong reason. `expect` is the verdict the guard must
  * give; `rule` names the guard condition that stops it (the mutation arm).
+ *
+ * Round 8 replaced E6's refuse-list with an ALLOW-LIST (Shape L, Shape W; see
+ * the guard). Since then a fixture's `rule` names the part of the allow-list
+ * it misses; where several fixtures miss the same part, only the ones named by
+ * a broadening arm in the PR body are WITNESSES of it — the rest are held
+ * regression guards and are counted as such, not as coverage.
  */
 
 export const variant = (base, from, to) => {
@@ -22,23 +28,42 @@ export const variant = (base, from, to) => {
   return out;
 };
 
-/** finops-cockpit-pane.tsx's shape: a RESOLVING fetcher + a same-file fold. */
-export const WRAPPED = `'use client';
-import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-
-async function getJson(url: string): Promise<any> {
-  const res = await clientFetch(url, { cache: 'no-store' });
+/**
+ * The cockpit's fetch helper and fold, VERBATIM from finops-cockpit-pane.tsx
+ * (:77-81 and :100-112). The suite asserts both still appear in that file, so
+ * a drift in the real pane turns a test RED instead of leaving these bases
+ * describing a shape nobody ships.
+ */
+export const COCKPIT_GETJSON = `async function getJson(url: string, timeout = 90_000): Promise<any> {
+  const res = await clientFetch(url, { cache: 'no-store' }, timeout);
   const json = await res.json().catch(() => ({}));
   return { ...json, status: res.status };
 }
-
-function readState(q: { isError: boolean; data: any }) {
+`;
+export const COCKPIT_READSTATE = `function readState(q: { isError: boolean; error: unknown; data: any; refetch: () => unknown }) {
   const status = typeof q.data?.status === 'number' ? q.data.status : null;
   const httpFailed = status !== null && status >= 400;
-  return { isError: q.isError || httpFailed };
+  return {
+    isError: q.isError || httpFailed,
+    error: q.isError
+      ? q.error
+      : httpFailed
+        ? new Error(q.data?.error || \`Cost Management returned HTTP \${status}.\`)
+        : null,
+    refetch: q.refetch,
+  };
 }
+`;
+/** The one clientFetch import all four real E6 files carry. */
+const CF_IMPORT = "import { clientFetch } from '@/lib/client-fetch';\n";
 
+/** finops-cockpit-pane.tsx's shape (E6 Shape W): a RESOLVING fetcher + a same-file fold. */
+export const WRAPPED = `'use client';
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+${CF_IMPORT}
+${COCKPIT_GETJSON}
+${COCKPIT_READSTATE}
 export function Pane() {
   const [dimension, setDimension] = useState('service');
   const rowsQ = useQuery({ queryKey: ['r', dimension], queryFn: () => getJson('/api/r') });
@@ -56,11 +81,14 @@ export function Pane() {
 }
 `;
 
-/** The loud shape: the queryFn itself throws on a not-ok body. */
+/**
+ * The loud shape (E6 Shape L): the queryFn itself throws on a not-ok body —
+ * prompt-registry / search-quality / token-budget, with a literal message.
+ */
 export const LOUD = `'use client';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-
+${CF_IMPORT}
 export function Panel() {
   const [open, setOpen] = useState(false);
   const q = useQuery({
@@ -118,75 +146,76 @@ const onInstalled = (src) => variant(
  * round-7 rule also holds.
  */
 const ROUND7 = [
-  // ---- positives: honest shapes the round-7 rules must NOT refuse ----
-  { id: 'P3', extra: true, review: 'base', klass: 'positive control', expect: 'safe', rule: 'E6 loud queryFn (HTTP not-ok test)', src: LOUD_HTTP },
-  { id: 'P4', extra: true, review: 'base', klass: 'positive control', expect: 'safe', rule: 'a .catch handler whose body throws at its top level',
+  // ---- honest shapes the round-7 rules did not refuse. Round 8 (allow-list)
+  // flips all three to unguarded: an HTTP `!r.ok` test, a `.catch` on the
+  // fetch, and a computed URL are not what any of the six real E6 claims use.
+  // They are false NEGATIVES by design (the scan does not move: no real file
+  // has these shapes), disclosed in the guard header. R-S1b stays SAFE. ----
+  { id: 'P3', extra: true, review: 'base', klass: 'allow-list refusal', expect: 'unguarded', rule: 'not an allow-listed shape (HTTP !r.ok test, not Shape L)', src: LOUD_HTTP },
+  { id: 'P4', extra: true, review: 'base', klass: 'allow-list refusal', expect: 'unguarded', rule: 'not an allow-listed shape (.catch on the fetch)',
     src: variant(LOUD_HTTP, "      const r = await clientFetch('/api/p');",
       "      const r = await clientFetch('/api/p').catch((e) => { throw new Error('network: ' + e); });") },
   { id: 'R-S1b', extra: true, review: 'A-3', klass: 'positive control', expect: 'safe', rule: 'a leading `return` is not part of the emptiness test',
     src: variant(LOUD, '  return <div>{data.prompts.length === 0 ? <EmptyState title="No prompts" /> : <List items={data.prompts} />}</div>;',
       '  return data.prompts.length === 0 ? <EmptyState title="No prompts" /> : <List items={data.prompts} />;') },
-  // A bare builtin call in the queryFn. Without the E6_PURE_CALLS allowlist
-  // `encodeURIComponent` is an unknown callee and this honest shape is refused.
-  { id: 'P5', extra: true, review: 'base', klass: 'positive control', expect: 'safe', rule: 'a pure builtin callee (encodeURIComponent) is allowed',
+  { id: 'P5', extra: true, review: 'base', klass: 'allow-list refusal', expect: 'unguarded', rule: 'not an allow-listed shape (URL is a call expression)',
     src: variant(LOUD_HTTP, "      const r = await clientFetch('/api/p');",
       "      const r = await clientFetch('/api/p?scope=' + encodeURIComponent('all users'));") },
 
   // ---- a return beside a top-level throw, with no nested if ----
-  // 1a and 1b each carry a nested `if`, so the round-7 nested-if rule holds
-  // them as well as the never-returns rule. Here the throw is DEAD code after
-  // an unconditional return, and only the never-returns rule stops SAFE.
-  { id: '1a-dead', extra: true, review: 'round-7 witness', klass: 'shared with E2', expect: 'unguarded', rule: 'catch must never return (throw after it is dead)',
+  // Round 7 built these as sole witnesses of its never-returns rule. Under the
+  // allow-list Shape L's exact text holds them, alongside 1a and 1b.
+  { id: '1a-dead', extra: true, review: 'round-7 witness', klass: 'shared with E2', expect: 'unguarded', rule: 'Shape L is exact (a try/catch; the throw after its return is dead)',
     src: variant(LOUD, LOUD_BODY,
       "      try {\n  " + LOUD_BODY.replace(/\n/g, '\n  ') + "\n      } catch (e) {\n        return { prompts: [] };\n        throw e;\n      }") },
-  { id: '1b-dead', extra: true, review: 'round-7 witness', klass: 'shared with E2', expect: 'unguarded', rule: 'not-ok branch must never return (throw after it is dead)',
+  { id: '1b-dead', extra: true, review: 'round-7 witness', klass: 'shared with E2', expect: 'unguarded', rule: 'Shape L is exact (a block not-ok branch; the throw is dead)',
     src: variant(LOUD, "      if (!j?.ok) throw new Error(j?.error || 'load failed');",
       "      if (!j?.ok) {\n        return { prompts: [] };\n        throw new Error(j?.error || 'load failed');\n      }") },
 
   // ---- a NARROWED not-ok test: a 403 resolves, isError stays false ----
-  { id: '1d', extra: true, review: 'B-2', klass: 'E6-specific', expect: 'unguarded', rule: 'not-ok test is exactly !R.ok / R.status >= 400 (&& status >= 500)',
+  // Built on LOUD_HTTP, which round 8 no longer accepts (P3), so since round 8
+  // these are held by their BASE and witness nothing on their own; L-narrow
+  // (ROUND8) is the Shape L sibling that does witness the exact not-ok test.
+  { id: '1d', extra: true, review: 'B-2', klass: 'E6-specific', expect: 'unguarded', rule: 'not an allow-listed shape (HTTP base as P3; narrowed && status >= 500)',
     src: httpTest("      if (!r.ok && r.status >= 500) throw new Error('HTTP ' + r.status);") },
-  { id: '1e', extra: true, review: 'A-1', klass: 'E6-specific', expect: 'unguarded', rule: 'not-ok test is exactly !R.ok / R.status >= 400 (&& status !== 403)',
+  { id: '1e', extra: true, review: 'A-1', klass: 'E6-specific', expect: 'unguarded', rule: 'not an allow-listed shape (HTTP base as P3; narrowed && status !== 403)',
     src: httpTest("      if (!r.ok && r.status !== 403) throw new Error('HTTP ' + r.status);") },
-  { id: '1e-404', extra: true, review: 'B-2', klass: 'E6-specific', expect: 'unguarded', rule: 'not-ok test is exactly !R.ok / R.status >= 400 (&& status !== 404)',
+  { id: '1e-404', extra: true, review: 'B-2', klass: 'E6-specific', expect: 'unguarded', rule: 'not an allow-listed shape (HTTP base as P3; narrowed && status !== 404)',
     src: httpTest("      if (!r.ok && r.status !== 404) throw new Error('HTTP ' + r.status);") },
-  { id: '1f', extra: true, review: 'B-2', klass: 'E6-specific', expect: 'unguarded', rule: 'not-ok test is exactly !R.ok / R.status >= 400 (&& status === 401)',
+  { id: '1f', extra: true, review: 'B-2', klass: 'E6-specific', expect: 'unguarded', rule: 'not an allow-listed shape (HTTP base as P3; narrowed && status === 401)',
     src: httpTest("      if (!r.ok && r.status === 401) throw new Error('HTTP ' + r.status);") },
-  { id: '1g', extra: true, review: 'A-1', klass: 'E6-specific', expect: 'unguarded', rule: 'no nested if in a failure branch',
+  { id: '1g', extra: true, review: 'A-1', klass: 'E6-specific', expect: 'unguarded', rule: 'not an allow-listed shape (HTTP base as P3; nested if)',
     src: httpTest("      if (!r.ok) {\n        if (r.status >= 500) throw new Error('HTTP ' + r.status);\n      }") },
   // 1g's inner test is itself a narrowed status test, so the exact-test rule
   // holds it too. Here the inner test reads no response, so ONLY the nested-if
   // rule stands between it and SAFE.
-  { id: '1g-open', extra: true, review: 'A-1', klass: 'E6-specific', expect: 'unguarded', rule: 'no nested if in a failure branch (inner test reads no response)',
+  { id: '1g-open', extra: true, review: 'A-1', klass: 'E6-specific', expect: 'unguarded', rule: 'not an allow-listed shape (HTTP base as P3; nested if on non-response state)',
     src: httpTest("      if (!r.ok) {\n        if (open) throw new Error('HTTP ' + r.status);\n      }") },
-  { id: '1h', extra: true, review: 'B-6', klass: 'E6-specific', expect: 'unguarded', rule: 'the throw must sit at the branch top level',
+  { id: '1h', extra: true, review: 'B-6', klass: 'E6-specific', expect: 'unguarded', rule: 'not an allow-listed shape (HTTP base as P3; throw deferred to a then)',
     src: httpTest("      if (!r.ok) {\n        Promise.resolve().then(() => { throw new Error('HTTP ' + r.status); });\n      }") },
-  { id: '1h-timeout', extra: true, review: 'B-6', klass: 'E6-specific', expect: 'unguarded', rule: 'a throw inside setTimeout (unknown callee + top-level throw)',
+  { id: '1h-timeout', extra: true, review: 'B-6', klass: 'E6-specific', expect: 'unguarded', rule: 'not an allow-listed shape (HTTP base as P3; throw deferred to setTimeout)',
     src: httpTest("      if (!r.ok) {\n        setTimeout(() => { throw new Error('HTTP ' + r.status); });\n      }") },
 
   // ---- a callee E6 cannot read ----
-  { id: '2d', extra: true, review: 'A-2', klass: 'E6-specific', expect: 'unguarded', rule: 'an unknown bare callee refuses the queryFn (component-local fetcher)',
+  { id: '2d', extra: true, review: 'A-2', klass: 'E6-specific', expect: 'unguarded', rule: 'Shape L return is exact (return { ...j, installed } from a component-local swallowing fetcher)',
     src: onInstalled(variant(LOUD, '  const q = useQuery({\n',
       "  const loadInstalled = async () => {\n    try {\n      const r2 = await clientFetch('/api/installed');\n      return (await r2.json()).items;\n    } catch {\n      return [];\n    }\n  };\n  const q = useQuery({\n")) },
-  { id: '2e', extra: true, review: 'A-2 (sibling)', klass: 'E6-specific', expect: 'unguarded', rule: 'a non-fetching top-level helper must be pure (it calls an imported fetcher)',
+  { id: '2e', extra: true, review: 'A-2 (sibling)', klass: 'E6-specific', expect: 'unguarded', rule: 'Shape L return is exact (return { ...j, installed } from an imported fetcher)',
     src: onInstalled(variant(LOUD, "import { useQuery } from '@tanstack/react-query';\n",
       "import { useQuery } from '@tanstack/react-query';\nimport { apiGet } from '@/lib/api';\n\nasync function loadInstalled() {\n  try {\n    return await apiGet('/api/installed');\n  } catch {\n    return [];\n  }\n}\n")) },
-  // The import refusal runs BEFORE the pure-builtin allowlist. An imported
-  // binding that shadows a builtin name is someone else's function: with the
-  // import check gone, `Object` would read as pure and this claim as SAFE.
-  // 2b cannot witness that ordering, because the unknown-callee rule also
-  // refuses `fetchRows`.
-  { id: '2f', extra: true, review: 'round-7 witness', klass: 'E6-specific', expect: 'unguarded', rule: 'an imported binding that shadows a pure builtin is still imported',
+  // Round 7: an imported binding that shadows a builtin name. The round-8
+  // allow-list has no callee lists at all; Shape L's exact text holds it.
+  { id: '2f', extra: true, review: 'round-7 witness', klass: 'E6-specific', expect: 'unguarded', rule: 'Shape L is exact (the queryFn calls other functions)',
     src: variant(
       variant(LOUD, "import { useQuery } from '@tanstack/react-query';\n",
         "import { useQuery } from '@tanstack/react-query';\nimport { Object } from '@/lib/rows-client';\n\n" + LOUD_HELPER('ensureAuth', '/api/me')),
       LOUD_FN_OPEN, "    queryFn: async () => { await ensureAuth(); return Object('/api/p'); },") },
 
   // ---- a wrapper whose fold is overwritten after it ----
-  { id: '3f', extra: true, review: 'B-3', klass: 'E6-specific', expect: 'unguarded', rule: 'no spread after the folded isError',
-    src: variant(WRAPPED, '  return { isError: q.isError || httpFailed };', '  return { isError: q.isError || httpFailed, ...q };') },
-  { id: '3g', extra: true, review: 'B-3 (sibling)', klass: 'E6-specific', expect: 'unguarded', rule: 'no second isError key, quoted or not',
-    src: variant(WRAPPED, '  return { isError: q.isError || httpFailed };', "  return { isError: q.isError || httpFailed, 'isError': q.isError };") },
+  { id: '3f', extra: true, review: 'B-3', klass: 'E6-specific', expect: 'unguarded', rule: 'Shape W wrapper return is exact (a spread after the fold)',
+    src: variant(WRAPPED, '    refetch: q.refetch,\n  };', '    refetch: q.refetch,\n    ...q,\n  };') },
+  { id: '3g', extra: true, review: 'B-3 (sibling)', klass: 'E6-specific', expect: 'unguarded', rule: 'Shape W wrapper return is exact (a second, quoted isError key)',
+    src: variant(WRAPPED, '    refetch: q.refetch,\n  };', "    refetch: q.refetch,\n    'isError': q.isError,\n  };") },
 
   // ---- a `function` expression shadowing the query ----
   { id: '6c', extra: true, review: 'B-6', klass: 'held negative', expect: 'unguarded', rule: 'function-expression param shadowing the query',
@@ -197,6 +226,72 @@ const ROUND7 = [
 /** The round-7 ids, for a LITERAL membership test. */
 export const ROUND7_IDS = ROUND7.map((f) => f.id);
 
+/**
+ * Round 8 (re-reviews 5904912205 A, 5904901510 B at cd560987e). Each shape was
+ * SAFE on the round-7 refuse-list; the allow-list refuses all of them by
+ * construction. The `witness` fixtures below them exist so that each part of
+ * the allow-list has a fixture that goes SAFE when ONLY that part is broadened
+ * (the broadening arms in the PR body name them).
+ */
+const LOUD_THROW = "      if (!j?.ok) throw new Error(j?.error || 'load failed');";
+/** LOUD with `extra` top-level code after the imports and `fnLine` as the queryFn. */
+const loudWith = (extra, fnLine) => variant(variant(LOUD, CF_IMPORT, CF_IMPORT + '\n' + extra), LOUD_FN_OPEN, fnLine);
+/** LOUD with `stmt` declared in the component, before the query. */
+const inPanel = (stmt) => variant(LOUD, '  const q = useQuery({\n', stmt + '  const q = useQuery({\n');
+const HOOKS = LOUD_HELPER('loadHooks', '/api/hooks');
+const OR_EMPTY = 'async function orEmpty(p) { try { return await p; } catch { return { prompts: [] }; } }\n';
+
+const ROUND8 = [
+  // ---- review A: a failure swallowed one level away from the fetch ----
+  { id: 'R-U4', extra: true, review: 'A-1', klass: 'allow-list refusal', expect: 'unguarded', rule: 'Shape L is exact (a helper that catches and returns empty)',
+    src: loudWith(HOOKS + OR_EMPTY, '    queryFn: () => orEmpty(loadHooks()),') },
+  { id: 'R-U4b', extra: true, review: 'A-1', klass: 'allow-list refusal', expect: 'unguarded', rule: 'Shape L is exact (the same helper, awaited in a body)',
+    src: loudWith(HOOKS + OR_EMPTY, '    queryFn: async () => { return await orEmpty(loadHooks()); },') },
+  { id: 'R-U3', extra: true, review: 'A-2', klass: 'allow-list refusal', expect: 'unguarded', rule: 'Shape L is exact (Promise.allSettled with a fallback)',
+    src: loudWith(HOOKS, "    queryFn: async () => { const [r] = await Promise.allSettled([loadHooks()]); return r.status === 'fulfilled' ? r.value : { prompts: [] }; },") },
+  { id: 'R-U6', extra: true, review: 'A-2', klass: 'allow-list refusal', expect: 'unguarded', rule: 'Shape L is exact (Promise.any with a resolving fallback)',
+    src: loudWith(HOOKS, '    queryFn: async () => Promise.any([loadHooks(), Promise.resolve({ prompts: [] })]),') },
+  { id: 'R-U6-race', extra: true, review: 'A-2 (sibling)', klass: 'allow-list refusal', expect: 'unguarded', rule: 'Shape L is exact (Promise.race against a resolving timer)',
+    src: loudWith(HOOKS, '    queryFn: async () => Promise.race([loadHooks(), new Promise((ok) => setTimeout(() => ok({ prompts: [] }), 5000))]),') },
+  // ---- review B: a throw that never runs, a receiver that is not the read ----
+  { id: 'B-iife-arrow', extra: true, review: 'B-3', klass: 'allow-list refusal', expect: 'unguarded', rule: 'Shape L throw is the direct consequent (a never-invoked arrow)',
+    src: variant(LOUD, LOUD_THROW, "      if (!j?.ok) (() => { throw new Error(j?.error || 'load failed'); });") },
+  { id: 'B-iife-fn', extra: true, review: 'B-3', klass: 'allow-list refusal', expect: 'unguarded', rule: 'Shape L throw is the direct consequent (a never-invoked function)',
+    src: variant(LOUD, LOUD_THROW, "      if (!j?.ok) (function () { throw new Error(j?.error || 'load failed'); });") },
+  { id: 'B-decoy', extra: true, review: 'B-4', klass: 'allow-list refusal', expect: 'unguarded', rule: 'Shape L is exact (a decoy { ok: true } is tested, the response is not)',
+    src: variant(LOUD, LOUD_BODY, "      const r = await clientFetch('/api/p');\n      const d = { ok: true };\n      if (!d.ok) throw new Error('x');\n      return r.json();") },
+  // ---- witnesses: each goes SAFE when exactly one part is broadened ----
+  { id: 'B-decoy-recv', extra: true, review: 'round-8 witness', klass: 'allow-list refusal', expect: 'unguarded', rule: 'Shape L tests the parsed body J itself (a decoy receiver)',
+    src: variant(inPanel("  const d = { ok: true, error: '' };\n"), LOUD_THROW, "      if (!d?.ok) throw new Error(d?.error || 'load failed');") },
+  { id: 'L-narrow', extra: true, review: 'round-8 witness', klass: 'allow-list refusal', expect: 'unguarded', rule: 'Shape L not-ok test is exactly !J?.ok (narrowed && status >= 500)',
+    src: variant(LOUD, LOUD_THROW, "      if (!j?.ok && r.status >= 500) throw new Error(j?.error || 'load failed');") },
+  { id: 'M-slot', extra: true, review: 'round-8 witness', klass: 'allow-list refusal', expect: 'unguarded', rule: 'the MSG slot is a literal (a 5xx that returns empty after the throw)',
+    src: variant(LOUD, '      return j;\n', '      if (r.status >= 500) return ({ prompts: [] });\n      return j;\n') },
+  { id: 'L-fetch-catch', extra: true, review: 'round-8 witness', klass: 'allow-list refusal', expect: 'unguarded', rule: 'Shape L fetch takes one URL (a .catch that resolves ok)',
+    src: variant(LOUD, "      const r = await clientFetch('/api/p');",
+      "      const r = await clientFetch('/api/p').catch(() => ({ json: async () => ({ ok: true, prompts: [] }) }));") },
+  { id: 'S-cf', extra: true, review: 'round-8 witness', klass: 'allow-list refusal', expect: 'unguarded', rule: 'clientFetch is only ever called (a local rebinding)',
+    src: inPanel('  const clientFetch = async (u: string) => ({ json: async () => ({ ok: true, prompts: [] }) });\n') },
+  { id: 'S-cf-import', extra: true, review: 'round-8 witness', klass: 'allow-list refusal', expect: 'unguarded', rule: 'clientFetch comes from @/lib/client-fetch (another module)',
+    src: variant(LOUD, CF_IMPORT, "import { clientFetch } from '@/lib/evil-fetch';\n") },
+  { id: 'S-cf-commented', extra: true, review: 'round-8 witness', klass: 'allow-list refusal', expect: 'unguarded', rule: 'the clientFetch import is code (the real one is commented out)',
+    // The replacement binding is a PROPERTY write, which e6OnlyCalled skips, so
+    // the in-code check on the import is this fixture's only hold (a second
+    // `import { clientFetch }` would also be refused as a non-call mention).
+    src: variant(LOUD, CF_IMPORT, '/*\n' + CF_IMPORT + "*/\nglobalThis.clientFetch = async () => ({ json: async () => ({ ok: true, prompts: [] }) });\n") },
+  { id: 'S-getJson', extra: true, review: 'round-8 witness', klass: 'allow-list refusal', expect: 'unguarded', rule: 'the Shape W helper is only ever called (a local getJson)',
+    src: variant(WRAPPED, "  const [dimension, setDimension] = useState('service');\n",
+      "  const [dimension, setDimension] = useState('service');\n  const getJson = async (u: string) => ({ rows: [] });\n") },
+  { id: 'W-catch', extra: true, review: 'round-8 witness', klass: 'allow-list refusal', expect: 'unguarded', rule: 'Shape W helper is exact (a .catch on the fetch resolves 200)',
+    src: variant(WRAPPED, "  const res = await clientFetch(url, { cache: 'no-store' }, timeout);",
+      "  const res = await clientFetch(url, { cache: 'no-store' }, timeout).catch(() => ({ status: 200, json: async () => ({ rows: [] }) }));") },
+  { id: 'W-qf-catch', extra: true, review: 'round-8 witness', klass: 'allow-list refusal', expect: 'unguarded', rule: 'Shape W queryFn is exactly () => H(URL) (a .catch that resolves empty)',
+    src: variant(WRAPPED, ROWS_OPTS, "useQuery({ queryKey: ['r', dimension], queryFn: () => getJson('/api/r').catch(() => ({ rows: [] })) })") },
+];
+
+/** The round-8 ids, for a LITERAL membership test. */
+export const ROUND8_IDS = ROUND8.map((f) => f.id);
+
 /** Where each fixture sits in the review: E6-specific, shared with E2, or a held negative/control. */
 export const FIXTURES = [
   // ---- positive controls (SAFE on the new guard) ----
@@ -204,25 +299,25 @@ export const FIXTURES = [
   { id: 'P2', klass: 'positive control', expect: 'safe', src: LOUD, rule: 'E6 loud queryFn' },
 
   // ---- 1: a queryFn that is loud only SOMETIMES ----
-  { id: '1a', klass: 'shared with E2', expect: 'unguarded', rule: 'catch must throw and never return',
+  { id: '1a', klass: 'shared with E2', expect: 'unguarded', rule: 'Shape L is exact (a try/catch around the read)',
     src: variant(LOUD, LOUD_BODY,
       "      try {\n  " + LOUD_BODY.replace(/\n/g, '\n  ') + "\n      } catch (e) {\n        if (e instanceof TypeError) return { prompts: [] };\n        throw e;\n      }") },
-  { id: '1b', klass: 'shared with E2', expect: 'unguarded', rule: 'not-ok branch must throw and never return',
+  { id: '1b', klass: 'shared with E2', expect: 'unguarded', rule: 'Shape L is exact (a return inside the not-ok branch)',
     src: variant(LOUD, "      if (!j?.ok) throw new Error(j?.error || 'load failed');",
       "      if (!j?.ok) {\n        if (r.status === 503 || r.status === 504) return { prompts: [] };\n        throw new Error(j?.error || 'load failed');\n      }") },
-  { id: '1c', klass: 'shared with E2', expect: 'unguarded', rule: 'at most one direct fetch',
+  { id: '1c', klass: 'shared with E2', expect: 'unguarded', rule: 'Shape L is exact (a second fetch)',
     src: variant(LOUD, LOUD_BODY,
       "      const c = await clientFetch('/api/cfg');\n      if (!c.ok) throw new Error('config ' + c.status);\n      const r = await clientFetch('/api/p');\n      const j = r.ok ? await r.json() : { ok: true, prompts: [] };\n      if (!j?.ok) throw new Error(j?.error || 'load failed');\n      return j;") },
-  { id: '1c-single', extra: true, klass: 'shared with E2', expect: 'unguarded', rule: 'every .ok/.status read sits in a not-ok test',
+  { id: '1c-single', extra: true, klass: 'shared with E2', expect: 'unguarded', rule: 'Shape L is exact (J is `await R.json()` itself)',
     src: variant(LOUD, "      const j = await r.json();", "      const j = r.ok ? await r.json() : { ok: true, prompts: [] };") },
 
   // ---- 2: a queryFn that calls more than one fetching helper ----
-  { id: '2b', klass: 'E6-specific', expect: 'unguarded', rule: 'no imported callee',
+  { id: '2b', klass: 'E6-specific', expect: 'unguarded', rule: 'Shape L is exact (the queryFn calls other functions)',
     src: variant(
       variant(LOUD, "import { useQuery } from '@tanstack/react-query';\n",
         "import { useQuery } from '@tanstack/react-query';\nimport { fetchRows } from '@/lib/rows-client';\n\n" + LOUD_HELPER('ensureAuth', '/api/me')),
       LOUD_FN_OPEN, '    queryFn: async () => { await ensureAuth(); return fetchRows(); },') },
-  { id: '2c', klass: 'E6-specific', expect: 'unguarded', rule: 'EVERY fetching helper must be loud',
+  { id: '2c', klass: 'E6-specific', expect: 'unguarded', rule: 'Shape L is exact (the queryFn calls other functions)',
     src: variant(
       variant(LOUD, "import { useQuery } from '@tanstack/react-query';\n",
         "import { useQuery } from '@tanstack/react-query';\n\n" + LOUD_HELPER('getConfig', '/api/cfg')
@@ -230,19 +325,19 @@ export const FIXTURES = [
       LOUD_FN_OPEN, "    queryFn: async () => { await getConfig(); return getJson('/api/p'); },") },
 
   // ---- 3: a wrapper whose fold is not complete ----
-  { id: '3a', klass: 'E6-specific', expect: 'unguarded', rule: 'fold refuses < / <=',
+  { id: '3a', klass: 'E6-specific', expect: 'unguarded', rule: 'Shape W wrapper is exact (httpFailed narrowed with < 500)',
     src: variant(WRAPPED, 'status !== null && status >= 400;', 'status !== null && status >= 400 && status < 500;') },
-  { id: '3b', klass: 'E6-specific', expect: 'unguarded', rule: 'wrapper has exactly one return',
-    src: variant(WRAPPED, "function readState(q: { isError: boolean; data: any }) {\n",
-      "function readState(q: { isError: boolean; data: any }) {\n  if (q.data?.status === 504) return { isError: false };\n") },
-  { id: '3c', klass: 'E6-specific', expect: 'unguarded', rule: 'status is P.data?.status itself',
+  { id: '3b', klass: 'E6-specific', expect: 'unguarded', rule: 'Shape W wrapper is exact (an early return before the fold)',
+    src: variant(WRAPPED, "function readState(q: { isError: boolean; error: unknown; data: any; refetch: () => unknown }) {\n",
+      "function readState(q: { isError: boolean; error: unknown; data: any; refetch: () => unknown }) {\n  if (q.data?.status === 504) return { isError: false, error: null, refetch: q.refetch };\n") },
+  { id: '3c', klass: 'E6-specific', expect: 'unguarded', rule: 'Shape W wrapper is exact (status not read from P.data?.status)',
     src: variant(WRAPPED, "const status = typeof q.data?.status === 'number' ? q.data.status : null;",
       'const status = q.data?.meta?.status ?? 200;') },
   // The fold reads `data.status`, so the fetcher must merge the HTTP status
   // LAST — otherwise a body field (or nothing) is what the fold sees.
-  { id: '3d-unmerged', extra: true, klass: 'E6-specific', expect: 'unguarded', rule: 'fetcher merges status last (not at all)',
+  { id: '3d-unmerged', extra: true, klass: 'E6-specific', expect: 'unguarded', rule: 'Shape W helper is exact (status not merged)',
     src: variant(WRAPPED, '  return { ...json, status: res.status };', '  return json;') },
-  { id: '3e-status-first', extra: true, klass: 'E6-specific', expect: 'unguarded', rule: 'fetcher merges status last (body spread overrides it)',
+  { id: '3e-status-first', extra: true, klass: 'E6-specific', expect: 'unguarded', rule: 'Shape W helper is exact (body spread after status)',
     src: variant(WRAPPED, '  return { ...json, status: res.status };', '  return { status: res.status, ...json };') },
 
   // ---- 4: the claim's data is not purely the gated query's ----
@@ -315,6 +410,7 @@ export const FIXTURES = [
     src: variant(WRAPPED, /export function Pane\(\)[\s\S]*$/.exec(WRAPPED)[0],
       'export function RowsView({ rowsQ }: { rowsQ: any }) {\n  return <div>{readState(rowsQ).isError ? null : (rowsQ.data?.rows || []).length ? <Chart /> : <EmptyState title="No rows" />}</div>;\n}\n') },
   ...ROUND7,
+  ...ROUND8,
 ];
 
 /** The review's own 28 (the extras are ours). */

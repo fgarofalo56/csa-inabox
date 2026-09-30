@@ -111,35 +111,30 @@
  *            early-return pass misreads, and never under a return that is
  *            itself CONDITIONAL inside `if (…isError) { … }`; E6 refuses both
  *            by flag).
- *         c. the isError is COMPLETE:
- *              `Q.isError`    — Q's queryFn fails LOUDLY: it calls nothing
- *                               imported (other than `clientFetch`), every
- *                               bare callee is a pure builtin (E6_PURE_CALLS)
- *                               or a same-file top-level helper — a callee E6
- *                               cannot read is refused — EVERY same-file
- *                               fetching helper it calls is itself loud, every
- *                               non-fetching one is provably pure, it makes at
- *                               most one direct fetch, every not-ok test is
- *                               EXACTLY `!R.ok` / `!R?.ok` / `R.status >= 400`
- *                               (no `&&` / `||` conjunct, no other comparison),
- *                               every not-ok branch throws at its OWN top level
- *                               (not in a nested callback), never returns, and
- *                               holds no nested `if` / `switch`; every `.ok` /
- *                               `.status` read sits in such a test (bar a plain
- *                               `status: R.status` copy), and every catch
- *                               throws the same way;
- *              `W(Q).isError` — W is a same-file function with ONE `return`,
- *                               whose returned `isError` is `<param>.isError`
- *                               OR'd with `status >= 400` (plus only null /
- *                               typeof guards, never `<` / `<=`), where status
- *                               is `<param>.data?.status` itself; the returned
- *                               object names `isError` exactly once and has no
- *                               spread or computed key after it — AND Q's
- *                               queryFn is `() => H(…)` for a same-file H that
- *                               merges its one fetch's status LAST
- *                               (`return { ...json, status: res.status }`).
- *                               Otherwise Q must be loud as above.
- *            W is proved from its body, never trusted from its name.
+ *         c. the isError is COMPLETE — decided by an ALLOW-LIST, not a
+ *            refuse-list (#4771 round 8). The read must be, token for token,
+ *            one of the TWO shapes the six real E6 claims use; anything else,
+ *            however honest, is unguarded. See E6_SHAPE_L / E6_SHAPE_W below
+ *            for the exact text and the sites each is lifted from.
+ *              `Q.isError`    — Shape L: Q's queryFn is exactly
+ *                                 async () => { const R = await clientFetch(URL);
+ *                                   const J = await R.json();
+ *                                   if (!J?.ok) throw new Error(J?.error || MSG);
+ *                                   return J [as T]; }
+ *                               (prompt-registry, search-quality, token-budget).
+ *              `W(Q).isError` — Shape W: Q's queryFn is exactly `() => H(URL)`,
+ *                               H is the cockpit's `getJson` (it merges the
+ *                               HTTP status last) and W is the cockpit's
+ *                               `readState` (it ORs `status >= 400` into
+ *                               isError), each matched against its WHOLE text.
+ *            Around both: `clientFetch` is bound by exactly one
+ *            `import { clientFetch } from '@/lib/client-fetch';`, and every
+ *            other mention of clientFetch, H and W in the file is a call — no
+ *            second declaration, no reassignment, no parameter shadowing it.
+ *            Whitespace is ignored; comments inside a shape refuse it. URL is
+ *            one string literal, or a template whose holes are bare
+ *            identifiers; MSG is one string literal, or a template whose holes
+ *            are member chains — never a call, so it cannot hide a statement.
  *         d. SETTLED: the claim also requires `!Q.isPending`, `Q.isSuccess` or
  *            `Q.data`. `isLoading` is NOT enough — in react-query v5 it is
  *            `isPending && isFetching`, so a paused (offline) query is neither
@@ -192,23 +187,25 @@
  *     population at once and strand the baseline as stale everywhere, so it is
  *     a deliberate deferral rather than an oversight. `useQuery` is the ONE
  *     hook admitted, and only under E6's conditions.
- *   - E6 is conservative in known ways. A destructured `const { data, isError }
- *     = useQuery(…)`, a shorthand or positional `queryFn`, any option outside
- *     E6_OPTION_KEYS, a fetcher in another file, and a derived const whose
- *     initialiser mentions anything but the gated query's data (even pure UI
- *     state such as a search box) all leave the claim UNGUARDED. So do an
- *     honest not-ok test written with a conjunct (`!r.ok || r.status === 204`),
- *     a status-specific branch that throws for every status (a nested `if`),
- *     and a helper calling a builtin outside E6_PURE_CALLS — each is refused
- *     because the guard cannot tell it from the round-7 false-SAFE shapes.
- *     It trusts react-query's own contract that `isError` is true after a
- *     rejected queryFn; it does not model a queryFn that resolves 200 with an
- *     error body the not-ok test does not read. A gated 200 (`{ items: [],
- *     gate }`) is not an error to E6 either — the component must refuse the
- *     claim under the gate itself (the cockpit does, #4771).
- *     The acceptance set (__tests__/_empty-claim-e6-acceptance.mjs) is every
- *     false-SAFE shape the reviews have FOUND; it is not a proof that no other
- *     shape exists. Three rounds each found new ones.
+ *   - E6 is conservative BY CONSTRUCTION. It accepts two shapes, lifted from
+ *     the six real claims, and nothing else: an honest `if (!r.ok) throw`, a
+ *     `.catch` that rethrows, a helper that throws, a builtin in the URL, a
+ *     different option or formatting inside a comment — all UNGUARDED. So are
+ *     a destructured `const { data, isError } = useQuery(…)`, a shorthand or
+ *     positional `queryFn`, any option outside E6_OPTION_KEYS, a fetcher in
+ *     another file, and a derived const whose initialiser mentions anything
+ *     but the gated query's data. Widening the allow-list for one of these is
+ *     a design change, not a bug fix: three refuse-list rounds each found new
+ *     false-SAFE shapes, which is why the list is positive now.
+ *     What the allow-list relies on, and does not check: react-query's
+ *     contract that `isError` is true after a rejected queryFn; the real
+ *     `@/lib/client-fetch` rejecting on transport failure and resolving the
+ *     Response otherwise; and the route answering `{ ok: false }` (Shape L)
+ *     or a non-2xx status (Shape W) when its read failed. A gated 200
+ *     (`{ items: [], gate }`) is not an error to E6 — the component must
+ *     refuse the claim under the gate itself (the cockpit does, #4771).
+ *     `as T` on Shape L's return is accepted because a type assertion is
+ *     erased at runtime.
  *   - E2 does not yet carry E6's round-6 tightening: its useState analogs of
  *     the #4771 re-review shapes (a catch or not-ok branch that returns, two
  *     fetches, a conditional return under the error test, a claim in a
@@ -664,14 +661,6 @@ function classifyInit(argText) {
 function regionsOf(text, lo, hi, pairs) {
   const failure = [];
   const promotion = [];
-  // The subset of `failure` that is an `if` branch on response ok-ness / HTTP
-  // status (never a `catch`). E6 needs it: a `throw` there is what makes a
-  // RESOLVED non-2xx reject the query; a rethrow in a catch proves nothing
-  // about a response that never threw.
-  const notOk = [];
-  // The `( … )` test of every `if` that produced a notOk region — E6 allows a
-  // response's `.ok` / `.status` to be read ONLY there or inside the branch.
-  const notOkTests = [];
 
   const blockAfter = (from) => {
     let i = from;
@@ -734,7 +723,7 @@ function regionsOf(text, lo, hi, pairs) {
       const stop = semi < 0 || semi > hi ? Math.min(i + 200, hi) : semi;
       cons = { lo: i, hi: stop }; after = stop + 1;
     }
-    if (negated) { if (cons) { failure.push(cons); notOk.push(cons); notOkTests.push({ lo: p.open, hi: p.close }); } continue; }
+    if (negated) { if (cons) failure.push(cons); continue; }
     // positive ok-test -> the ELSE branch handles the failure
     let j = after;
     while (j < hi && /\s/.test(text[j])) j++;
@@ -743,15 +732,14 @@ function regionsOf(text, lo, hi, pairs) {
       while (k < hi && /\s/.test(text[k])) k++;
       if (text[k] === '{') {
         const b = pairs.find((x) => x.open === k);
-        if (b) { failure.push({ lo: b.open, hi: b.close }); notOk.push({ lo: b.open, hi: b.close }); notOkTests.push({ lo: p.open, hi: p.close }); }
+        if (b) failure.push({ lo: b.open, hi: b.close });
       } else {
         const semi = text.indexOf(';', k);
-        const r = { lo: k, hi: semi < 0 || semi > hi ? Math.min(k + 200, hi) : semi };
-        failure.push(r); notOk.push(r); notOkTests.push({ lo: p.open, hi: p.close });
+        failure.push({ lo: k, hi: semi < 0 || semi > hi ? Math.min(k + 200, hi) : semi });
       }
     }
   }
-  return { failure, promotion, notOk, notOkTests };
+  return { failure, promotion };
 }
 
 const inAny = (regions, idx) => regions.some((r) => idx >= r.lo && idx < r.hi);
@@ -866,35 +854,6 @@ const E6_IGNORABLE = new Set(['Object', 'Array', 'Math', 'Number', 'String', 'Bo
 const E6_OPTION_KEYS = new Set(['queryKey', 'queryFn', 'staleTime', 'gcTime', 'refetchInterval',
   'refetchIntervalInBackground', 'refetchOnWindowFocus', 'refetchOnMount', 'refetchOnReconnect',
   'retry', 'retryDelay']);
-
-const FETCH_CALL_RE = /(?<![\w$.])(?:clientFetch|fetch)\s*\(/g;
-const NOT_A_CALL = new Set(['if', 'for', 'while', 'switch', 'catch', 'function', 'return', 'typeof',
-  'await', 'new', 'delete', 'void', 'super', 'import', 'async']);
-
-/** Names bound by this file's `import` statements (default, named, namespace). */
-export function importedNames(text) {
-  const names = new Set();
-  const re = /\bimport\s+(?:type\s+)?([^;]*?)\s+from\s*['"]/g;
-  let m;
-  while ((m = re.exec(text))) {
-    let clause = m[1];
-    const braces = /\{([^}]*)\}/.exec(clause);
-    if (braces) {
-      for (const part of braces[1].split(',')) {
-        const t = part.trim().replace(/^type\s+/, '');
-        if (!t) continue;
-        const alias = /\bas\s+([A-Za-z_$][\w$]*)$/.exec(t);
-        names.add(alias ? alias[1] : t.split(/\s+/)[0]);
-      }
-      clause = clause.replace(braces[0], '');
-    }
-    const ns = /\*\s*as\s+([A-Za-z_$][\w$]*)/.exec(clause);
-    if (ns) names.add(ns[1]);
-    const def = /^\s*([A-Za-z_$][\w$]*)/.exec(clause.replace(/\*\s*as\s+[A-Za-z_$][\w$]*/, ''));
-    if (def) names.add(def[1]);
-  }
-  return names;
-}
 
 /**
  * `const Q = useQuery(…)` / `useQuery<T>(…)` bindings in [start, end), as
@@ -1035,284 +994,198 @@ function queryFnOf(text, pairs, call) {
   return queryFn;
 }
 
-/** Bare-identifier calls in [lo, hi): `name(` not preceded by `.` / `new`. */
-function callsIn(text, lo, hi) {
-  const out = [];
-  const re = /(?<![\w$.])([A-Za-z_$][\w$]*)\s*(?:<[^<>()]*>)?\s*\(/g;
-  const body = text.slice(lo, hi);
+// ---------------------------------------------------------------------------
+// E6 ALLOW-LIST (#4771 round 8).
+//
+// Three refuse-list rounds each found new false-SAFE shapes: a helper that
+// catches and returns empty, Promise.allSettled / any / race with a fallback,
+// a never-invoked throwing arrow, a decoy `{ ok: true }` receiver. A blocklist
+// that keeps generating instances of its own defect class is replaced here by
+// a POSITIVE grammar: E6 accepts a read only when it is, token for token, one
+// of the two shapes the six real E6 claims use. Everything else is unguarded.
+//
+// Matching is on the ORIGINAL source (strings kept, so a URL or a message is
+// a real literal) after e6Norm, which drops whitespace that does not separate
+// two word characters. A comment inside a shape is not dropped, so it refuses
+// the match.
+// ---------------------------------------------------------------------------
+
+const E6_ID = String.raw`[A-Za-z_$][\w$]*`;
+/** One single- or double-quoted literal, no escapes, one line. */
+const E6_QUOTED = String.raw`'[^'\\\n]*'|"[^"\\\n]*"`;
+/** A template literal whose every `${…}` hole matches `hole`; no escapes. */
+const e6Template = (hole) => String.raw`\x60(?:[^\x60\\$]|\$(?!\{)|\$\{` + hole + String.raw`\})*\x60`;
+/** URL slot: a literal, or a template whose holes are bare identifiers. */
+const E6_URL = `(?:${E6_QUOTED}|${e6Template(E6_ID)})`;
+/**
+ * MSG slot: a literal, or a template whose holes are member chains. Never a
+ * call and never a `)`-bearing expression, so the slot cannot close the
+ * `new Error(` and smuggle a statement after the throw (fixture M-slot).
+ */
+const E6_MSG = `(?:${E6_QUOTED}|${e6Template(`${E6_ID}(?:\\??\\.${E6_ID})*`)})`;
+
+/** Collapse whitespace, then drop every space that does not sit between two word characters. */
+export const e6Norm = (s) => s.replace(/\s+/g, ' ').trim().replace(/ (?=[^\w$])|(?<=[^\w$]) /g, '');
+
+/**
+ * Shape L — the queryFn is its own loud read. Lifted from, and identical at:
+ *   prompt-registry-panel.tsx `q`  (queryFn :148-153, claim :209)
+ *   search-quality-panel.tsx  `q`  (queryFn :92-97,   claim :153)
+ *   token-budget-panel.tsx    `q`  (queryFn :138-143, claim :249)
+ *     async () => {
+ *       const r = await clientFetch('/api/admin/copilot-quality/prompts');
+ *       const j = await r.json();
+ *       if (!j?.ok) throw new Error(j?.error || `load failed (${r.status})`);
+ *       return j as PromptsResponse;
+ *     }
+ * The route answers `{ ok: false }` on every failed read, so `!j?.ok` is the
+ * whole failure test; the throw is unconditional under it; the only return is
+ * the parsed body. `as T` is erased at runtime.
+ */
+export const E6_SHAPE_L = new RegExp('^'
+  + String.raw`async\(\)=>\{`
+  + String.raw`const (?<R>${E6_ID})=await clientFetch\(${E6_URL}\);`
+  + String.raw`const (?<J>${E6_ID})=await \k<R>\.json\(\);`
+  + String.raw`if\(!\k<J>\?\.ok\)throw new Error\(\k<J>\?\.error\|\|${E6_MSG}\);`
+  + String.raw`return \k<J>(?: as ${E6_ID})?;`
+  + String.raw`\}$`);
+
+/**
+ * Shape W, part 1 — the queryFn only hands one URL to the fetch helper.
+ * finops-cockpit-pane.tsx :234 / :235 / :236 (budgetsQ, anomaliesQ,
+ * breakdownQ): `queryFn: () => getJson('/api/admin/finops/budgets')`.
+ */
+export const E6_SHAPE_W_QUERYFN = new RegExp(String.raw`^\(\)=>(?<H>${E6_ID})\(${E6_URL}\)$`);
+
+/**
+ * Shape W, part 2 — the fetch helper RESOLVES every HTTP answer and merges its
+ * status LAST, so a non-2xx reaches the wrapper as `data.status`.
+ * finops-cockpit-pane.tsx :77-81:
+ *   async function getJson(url: string, timeout = 90_000): Promise<any> {
+ *     const res = await clientFetch(url, { cache: 'no-store' }, timeout);
+ *     const json = await res.json().catch(() => ({}));
+ *     return { ...json, status: res.status };
+ *   }
+ * The one `.catch` is on the BODY parse; a transport failure or the timeout
+ * still rejects out of clientFetch.
+ */
+export const E6_SHAPE_W_HELPER = new RegExp('^'
+  + String.raw`async function (?<H>${E6_ID})\((?<P>${E6_ID}):string,(?<T>${E6_ID})=\d[\d_]*\):Promise<any>\{`
+  + String.raw`const (?<R>${E6_ID})=await clientFetch\(\k<P>,\{cache:'no-store'\},\k<T>\);`
+  + String.raw`const (?<J>${E6_ID})=await \k<R>\.json\(\)\.catch\(\(\)=>\(\{\}\)\);`
+  + String.raw`return\{\.\.\.\k<J>,status:\k<R>\.status\};`
+  + String.raw`\}$`);
+
+/**
+ * Shape W, part 3 — the wrapper ORs an HTTP failure into isError, once, with
+ * nothing after it that could overwrite it. finops-cockpit-pane.tsx :100-112
+ * (`readState`, claims :368 anomaliesQ, :407 breakdownQ, :470 budgetsQ):
+ *   function readState(q: { isError: boolean; error: unknown; data: any; refetch: () => unknown }) {
+ *     const status = typeof q.data?.status === 'number' ? q.data.status : null;
+ *     const httpFailed = status !== null && status >= 400;
+ *     return {
+ *       isError: q.isError || httpFailed,
+ *       error: q.isError ? q.error : httpFailed ? new Error(q.data?.error || `…HTTP ${status}.`) : null,
+ *       refetch: q.refetch,
+ *     };
+ *   }
+ */
+export const E6_SHAPE_W_WRAPPER = new RegExp('^'
+  + String.raw`function (?<W>${E6_ID})\((?<P>${E6_ID}):\{isError:boolean;error:unknown;data:any;refetch:\(\)=>unknown\}\)\{`
+  + String.raw`const status=typeof \k<P>\.data\?\.status==='number'\?\k<P>\.data\.status:null;`
+  + String.raw`const httpFailed=status!==null&&status>=400;`
+  + String.raw`return\{isError:\k<P>\.isError\|\|httpFailed,`
+  + String.raw`error:\k<P>\.isError\?\k<P>\.error:httpFailed\?new Error\(\k<P>\.data\?\.error\|\|${E6_MSG}\):null,`
+  + String.raw`refetch:\k<P>\.refetch,?\};`
+  + String.raw`\}$`);
+
+/** The one import that binds clientFetch in all four real files. */
+const E6_CLIENT_FETCH_IMPORT = /^import \{ clientFetch \} from '@\/lib\/client-fetch';[ \t]*\r?$/gm;
+
+/**
+ * Is every mention of `name` in the file's CODE a call of the binding — other
+ * than the offsets in `allowed` (its one declaration or import)? A property
+ * (`x.name`) is not the binding and is skipped. Anything else — a second
+ * declaration, `name = …`, a parameter or destructuring that shadows it, a
+ * `typeof name`, a spread — refuses, because the binding the shape was
+ * matched against might not be the one that runs.
+ */
+function e6OnlyCalled(text, name, allowed) {
+  const re = new RegExp(String.raw`(?<![\w$])${name.replace(/\$/g, '\\$')}(?![\w$])`, 'g');
   let m;
-  while ((m = re.exec(body))) {
-    if (NOT_A_CALL.has(m[1])) continue;
-    if (/\bnew\s+$/.test(body.slice(Math.max(0, m.index - 8), m.index))) continue;
-    out.push(m[1]);
-  }
-  return out;
-}
-
-/**
- * Bare calls E6 treats as pure: builtins that neither read nor swallow a
- * failure. Every other bare callee must be a same-file top-level helper E6 can
- * read. A callee that is neither — a function declared INSIDE the component,
- * a global, anything unresolved — refuses the queryFn: it may catch and
- * return `[]` (fixture 2d).
- */
-const E6_PURE_CALLS = new Set(['Error', 'String', 'Number', 'Boolean', 'encodeURIComponent',
-  'decodeURIComponent', 'Array', 'Object', 'Promise', 'parseInt', 'parseFloat']);
-
-/**
- * The ONLY not-ok tests E6 accepts, whole and unconjoined: `!R.ok`, `!R?.ok`
- * (the consequent throws), `R.ok` / `R?.ok` (the `else` throws) and
- * `R.status >= 400`. A conjunct narrows the failure it throws on —
- * `!r.ok && r.status !== 403` lets a 403 resolve (fixtures 1d-1g).
- */
-const E6_NOT_OK_TEST = /^(?:!?\s*[A-Za-z_$][\w$]*\s*\??\.\s*ok|[A-Za-z_$][\w$]*\s*\??\.\s*status\s*>=\s*400)$/;
-
-/** Is there a `throw` at the TOP level of region `r` — not inside a nested
- *  function, call or block, where it may never run (`setTimeout(() => { throw
- *  … })`, fixture 1h)? A `.catch( … )` handler region is judged by the top
- *  level of its handler's `{ … }` body; an expression-bodied handler cannot
- *  throw. */
-function throwsAtTop(text, r, pairs = null) {
-  if (text[r.lo] === '(' && pairs) {
-    const inner = text.slice(r.lo + 1, r.hi);
-    const am = /^\s*(?:async\s*)?(?:\([^()]*\)|[A-Za-z_$][\w$]*)\s*=>\s*|^\s*(?:async\s+)?function\s*[\w$]*\s*\([^()]*\)\s*/.exec(inner);
-    if (!am) return false;
-    const open = r.lo + 1 + am[0].length;
-    if (text[open] !== '{') return false;
-    const b = pairs.find((x) => x.open === open && x.ch === '{');
-    if (!b || text.slice(b.close + 1, r.hi).trim() !== '') return false;
-    return throwsAtTop(text, { lo: b.open, hi: b.close });
-  }
-  let i = r.lo;
-  if (text[i] === '{') i++;
-  let depth = 0;
-  for (; i < r.hi; i++) {
-    const c = text[i];
-    if (c === '(' || c === '[' || c === '{') depth++;
-    else if (c === ')' || c === ']' || c === '}') depth--;
-    else if (depth === 0 && c === 't' && /^throw\b/.test(text.slice(i, i + 6)) && !/[\w$.]/.test(text[i - 1] ?? '')) return true;
-  }
-  return false;
-}
-
-/**
- * Is same-file top-level helper `name` PURE — it fetches nothing, calls nothing
- * imported, and every bare call in it is a pure builtin or another pure helper?
- * A helper with no literal `fetch(` can still call an imported fetcher.
- */
-function helperIsPure(ctx, name, depth, seen = new Set()) {
-  const { text, helpers, imports } = ctx;
-  if (seen.has(name)) return true;
-  seen.add(name);
-  const h = helpers.get(name);
-  if (!h || h.start === undefined || h.hasFetch) return false;
-  for (const c of callsIn(text, h.start, h.end)) {
-    if (c === name || E6_PURE_CALLS.has(c)) continue;
-    if (imports.has(c)) return false;
-    if (depth >= 2 || !helperIsPure(ctx, c, depth + 1, seen)) return false;
+  while ((m = re.exec(text))) {
+    if (allowed.has(m.index)) continue;
+    let j = m.index - 1;
+    while (j >= 0 && /\s/.test(text[j])) j--;
+    if (text[j] === '.' && text[j - 1] !== '.') continue;
+    if (/(?:^|[^\w$])(?:new|const|let|var|class|function|async)\s*\*?\s*$/.test(text.slice(Math.max(0, m.index - 16), m.index))) return false;
+    let k = m.index + name.length;
+    while (k < text.length && /\s/.test(text[k])) k++;
+    if (text[k] !== '(') return false;
   }
   return true;
 }
 
-/**
- * Does the code in `span` REJECT whenever its read fails?
- *
- *   - no call to an identifier IMPORTED from another module, other than
- *     `clientFetch` itself — its failure handling cannot be read here (2b);
- *   - EVERY same-file helper it calls that fetches must itself fail loudly —
- *     one loud helper beside a quiet one proves nothing (2c); every other bare
- *     callee must be a pure builtin (E6_PURE_CALLS) or a provably pure
- *     same-file helper — a callee E6 cannot read is refused (2d);
- *   - at most ONE direct fetch; with one, every if-not-ok test is EXACTLY one
- *     of E6_NOT_OK_TEST, with no conjunct (1d-1g); every not-ok branch throws
- *     at its top level and never returns (1b, 1h), at least one must exist,
- *     and every `.ok` / `.status` read must sit in such an `if` test or branch
- *     — a ternary on `.ok` is a swallow the branch check cannot see (1c). The
- *     one exception is a plain `status: R.status` copied into an object
- *     literal, which decides nothing;
- *   - every catch throws at its top level and never returns (1a), except
- *     `.json().catch(…)`, whose fallback still meets the ok test below it;
- *   - no failure branch contains a nested `if` or `switch` — a throw under one
- *     runs only sometimes (1g).
- */
-function unitFailsLoudly(ctx, span, self, depth) {
-  const { text, pairs, helpers, imports } = ctx;
-  const body = text.slice(span.lo, span.hi);
-  const direct = (body.match(FETCH_CALL_RE) || []).length;
-  if (direct > 1) return false;
-  let reads = direct;
-  const seen = new Set();
-  for (const name of callsIn(text, span.lo, span.hi)) {
-    if (name === self || name === 'clientFetch' || name === 'fetch') continue;
-    if (imports.has(name)) return false;
-    if (E6_PURE_CALLS.has(name)) continue;
-    const h = helpers.get(name);
-    if (!h || h.start === undefined) return false;
-    if (!h.hasFetch) {
-      if (!helperIsPure(ctx, name, depth)) return false;
-      continue;
-    }
-    if (seen.has(name)) continue;
-    seen.add(name);
-    if (depth >= 2 || !unitFailsLoudly(ctx, { lo: h.start, hi: h.end }, name, depth + 1)) return false;
-    reads++;
-  }
-  if (reads === 0) return false;
-  const { failure, notOk, notOkTests } = regionsOf(text, span.lo, span.hi, pairs);
-  const isNotOk = (r) => notOk.some((n) => n.lo === r.lo && n.hi === r.hi);
-  for (const r of failure) {
-    const seg = text.slice(r.lo, r.hi);
-    if (!isNotOk(r) && /\.\s*json\s*\(\s*\)\s*\.\s*catch\s*$/.test(text.slice(Math.max(span.lo, r.lo - 60), r.lo))) continue;
-    if (!throwsAtTop(text, r, pairs) || /\breturn\b/.test(seg)) return false;
-    if (/\b(?:if|switch)\b/.test(seg)) return false;
-  }
-  for (const t of notOkTests) {
-    if (!E6_NOT_OK_TEST.test(unwrap(text.slice(t.lo + 1, t.hi)).replace(/\s+/g, ' ').trim())) return false;
-  }
-  if (direct === 1) {
-    if (!notOk.some((r) => throwsAtTop(text, r, pairs))) return false;
-    const tokRe = /\??\.\s*(?:ok|status)\b/g;
-    let m;
-    while ((m = tokRe.exec(body))) {
-      const at = span.lo + m.index;
-      if (inAny(notOk, at) || inAny(notOkTests, at)) continue;
-      // The one plain VALUE read allowed: `status: R.status` copied into an
-      // object literal (`,` or `}` follows). It decides nothing.
-      const copied = /\bstatus\s*:\s*[A-Za-z_$][\w$]*\s*$/.test(body.slice(Math.max(0, m.index - 60), m.index))
-        && /^\s*[,}]/.test(body.slice(m.index + m[0].length));
-      if (!copied) return false;
-    }
-  }
-  return true;
+/** Is clientFetch bound by exactly the real import, and only ever called? */
+function e6ClientFetchBound(ctx) {
+  const { text, src } = ctx;
+  const hits = [...src.matchAll(E6_CLIENT_FETCH_IMPORT)];
+  if (hits.length !== 1) return false;
+  const at = hits[0].index;
+  const head = 'import { clientFetch } from';
+  // In code, not inside a comment (blankNonCode blanks comments in `text`).
+  if (text.slice(at, at + head.length) !== head) return false;
+  return e6OnlyCalled(text, 'clientFetch', new Set([at + 'import { '.length]));
 }
 
 /**
- * Is `queryFn` exactly `() => H(args)` for a same-file H whose one fetch's
- * status is merged LAST into its single returned object
- * (`return { ...json, status: res.status }`)? That is what makes a wrapper's
- * `data.status` fold see a resolved non-2xx. A fetcher that never merges the
- * status would leave the fold reading nothing.
+ * The ORIGINAL text of the one top-level `function name(…) … { … }` in the
+ * file (with its leading `async`, if any), or null. Exactly one declaration,
+ * at the top level, and every other mention a call.
  */
-function queryFnMergesStatus(ctx, fn) {
-  const { text, pairs, helpers, imports } = ctx;
-  const t = text.slice(fn.lo, fn.hi);
-  const mm = /^\s*(?:async\s*)?\(\s*\)\s*=>\s*([A-Za-z_$][\w$]*)\s*\(/.exec(t);
-  if (!mm) return false;
-  const open = fn.lo + mm[0].length - 1;
-  const p = pairs.find((x) => x.open === open && x.ch === '(');
-  if (!p || text.slice(p.close + 1, fn.hi).trim() !== '') return false;
-  if (callsIn(text, p.open + 1, p.close).length) return false;
-  const name = mm[1];
-  const h = helpers.get(name);
-  if (!h || !h.hasFetch || h.start === undefined) return false;
-  const body = text.slice(h.start, h.end);
-  if ((body.match(FETCH_CALL_RE) || []).length !== 1) return false;
-  const fr = /\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*await\s+(?:clientFetch|fetch)\s*\(/.exec(body);
-  if (!fr) return false;
-  const rets = [...body.matchAll(/\breturn\b/g)];
-  if (rets.length !== 1) return false;
-  let i = h.start + rets[0].index + 6;
-  while (i < h.end && /\s/.test(text[i])) i++;
-  const obj = pairs.find((x) => x.open === i && x.ch === '{');
-  if (!obj) return false;
-  const objText = text.slice(obj.open + 1, obj.close).replace(/\s+/g, '');
-  if (!new RegExp(`^(?:\\.\\.\\.[A-Za-z_$][\\w$]*,)?status:${fr[1]}\\.status,?$`).test(objText)) return false;
-  for (const c of callsIn(text, h.start, h.end)) {
-    if (c === name || c === 'clientFetch' || c === 'fetch') continue;
-    if (imports.has(c)) return false;
-    const other = helpers.get(c);
-    if (other && other.hasFetch) return false;
-  }
-  const { failure } = regionsOf(text, h.start, h.end, pairs);
-  for (const r of failure) {
-    if (/\.\s*json\s*\(\s*\)\s*\.\s*catch\s*$/.test(text.slice(Math.max(h.start, r.lo - 60), r.lo))) continue;
-    return false;
-  }
-  return true;
+function e6TopFunction(ctx, name) {
+  const { text, src, pairs } = ctx;
+  const re = new RegExp(String.raw`(?<![\w$.])function\s*\*?\s*${name.replace(/\$/g, '\\$')}(?![\w$])`, 'g');
+  const hits = [...text.matchAll(re)];
+  if (hits.length !== 1) return null;
+  const at = hits[0].index;
+  if (enclosing(pairs, at, 0, text.length).length) return null;
+  const nameAt = at + hits[0][0].length - name.length;
+  if (!e6OnlyCalled(text, name, new Set([nameAt]))) return null;
+  let i = nameAt + name.length;
+  while (i < text.length && /\s/.test(text[i])) i++;
+  const params = pairs.find((x) => x.open === i && x.ch === '(');
+  if (!params) return null;
+  const open = text.indexOf('{', params.close);
+  if (open < 0) return null;
+  const body = pairs.find((x) => x.open === open && x.ch === '{');
+  if (!body) return null;
+  const lead = /async\s+$/.exec(text.slice(Math.max(0, at - 12), at));
+  const start = lead ? at - lead[0].length : at;
+  return src.slice(start, body.close + 1);
 }
 
-/**
- * Is same-file function `w` a wrapper whose single returned `isError` is
- * `<param>.isError` OR'd with an HTTP-failure fold of `<param>.data.status`?
- *
- * Proved from the ORIGINAL text of its body, never trusted from its name:
- *   - exactly ONE `return` — an early `return { isError: false }` (3b) is out;
- *   - exactly one `isError:` in that returned object, of the form
- *     `P.isError` or `P.isError || X`;
- *   - X (or the const it names, declared once, never reassigned) is `&&` of
- *     exactly one `status >= 400` / `> 399` and optional `status !== null` /
- *     `typeof status === 'number'` guards — no `<` / `<=` (3a), no `||`, no
- *     parentheses, nothing else;
- *   - `status` is `P.data?.status` itself, or
- *     `typeof P.data?.status === 'number' ? P.data.status : null` — never a
- *     deeper member or a default (3c).
- */
-function wrapperFold(ctx, w) {
-  const none = { foldsQuery: false, foldsHttp: false };
-  const { text, pairs, helpers, src } = ctx;
-  const h = helpers.get(w);
-  if (!h || h.start === undefined) return none;
-  const body = text.slice(h.start, h.end);
-  const orig = src.slice(h.start, h.end);
-  const pm = /^\s*(?:export\s+)?(?:async\s+)?(?:function\s+[\w$]+\s*(?:<[^>]*>)?\s*\(\s*|(?:const|let|var)\s+[\w$]+\s*=\s*(?:async\s*)?\(?\s*)([A-Za-z_$][\w$]*)/.exec(body);
-  if (!pm) return none;
-  const P = pm[1];
-  const rets = [...body.matchAll(/\breturn\b/g)];
-  if (rets.length !== 1) return none;
-  let i = h.start + rets[0].index + 6;
-  while (i < h.end && /\s/.test(text[i])) i++;
-  const obj = pairs.find((x) => x.open === i && x.ch === '{');
-  if (!obj) return none;
-  const objText = text.slice(obj.open + 1, obj.close);
-  if ((objText.match(/(?<![\w$.])isError\s*:/g) || []).length !== 1) return none;
-  const im = new RegExp(`(?<![\\w$.])isError\\s*:\\s*${P}\\s*\\.\\s*isError\\s*(?:\\|\\|\\s*([A-Za-z_$][\\w$]*))?\\s*(?:,|$)`).exec(objText);
-  if (!im) return none;
-  // Nothing after the fold may overwrite it: a spread (`...q` brings q's own
-  // bare isError, fixture 3f), a computed key, or a second mention of the
-  // name — counted in the ORIGINAL text, so a quoted `'isError':` key counts.
-  const tail = objText.slice(im.index + im[0].length);
-  if (/\.\.\./.test(tail) || /(?:^|,)\s*\[/.test(tail)) return none;
-  const origObj = src.slice(obj.open + 1, obj.close);
-  if ((origObj.match(/(?<![\w$.])isError\b/g) || []).length !== 1) return none;
-  if (!im[1]) return { foldsQuery: true, foldsHttp: false };
+/** Shape L: the queryFn at `fn` is the real loud read, over the real clientFetch. */
+function e6ShapeL(ctx, fn) {
+  const m = E6_SHAPE_L.exec(e6Norm(ctx.src.slice(fn.lo, fn.hi)));
+  if (!m || m.groups.R === m.groups.J) return false;
+  return e6ClientFetchBound(ctx);
+}
 
-  /** The original initialiser of a const declared once and never reassigned. */
-  const constInit = (name) => {
-    const decls = [...body.matchAll(new RegExp(`\\bconst\\s+${name}\\s*(?::[^=;]+?)?=(?![=>])`, 'g'))];
-    if (decls.length !== 1) return null;
-    const assigns = (body.match(new RegExp(`(?<![\\w$.])${name}\\s*(?:=(?![=>])|\\+=|-=|\\+\\+|--)`, 'g')) || []).length;
-    if (assigns !== 1) return null;
-    const lo = decls[0].index + decls[0][0].length;
-    const semi = body.indexOf(';', lo);
-    const nl = body.indexOf('\n', lo);
-    const hi = Math.min(semi < 0 ? body.length : semi, nl < 0 ? body.length : nl);
-    return orig.slice(lo, hi).trim();
-  };
-  const http = constInit(im[1]);
-  if (http === null || /[<|()]/.test(http)) return { foldsQuery: true, foldsHttp: false };
-  const statusRef = `(?:status|${P}\\s*\\??\\.\\s*data\\s*\\??\\.\\s*status)`;
-  const conj = http.split('&&').map((c) => c.trim());
-  let compares = 0; let usesBareStatus = false;
-  for (const c of conj) {
-    if (new RegExp(`^${statusRef}\\s*(?:>=\\s*400|>\\s*399)$`).test(c)) {
-      compares++;
-      if (/^status\b/.test(c)) usesBareStatus = true;
-      continue;
-    }
-    if (/^status\s*!==?\s*null$/.test(c)) continue;
-    if (/^typeof\s+status\s*===?\s*(['"])number\1$/.test(c)) continue;
-    return { foldsQuery: true, foldsHttp: false };
-  }
-  if (compares !== 1) return { foldsQuery: true, foldsHttp: false };
-  if (usesBareStatus || conj.some((c) => /^(?:status\b|typeof\s+status\b)/.test(c))) {
-    const s = constInit('status');
-    const dataStatus = `${P}\\s*\\??\\.\\s*data\\s*\\??\\.\\s*status`;
-    const ok = s !== null && (
-      new RegExp(`^${dataStatus}$`).test(s)
-      || new RegExp(`^typeof\\s+${dataStatus}\\s*===\\s*(['"])number\\1\\s*\\?\\s*${dataStatus}\\s*:\\s*null$`).test(s));
-    if (!ok) return { foldsQuery: true, foldsHttp: false };
-  }
-  return { foldsQuery: true, foldsHttp: true };
+/** Shape W: `() => H(URL)` + the real getJson + the real readState as `wrapper`. */
+function e6ShapeW(ctx, fn, wrapper) {
+  const q = E6_SHAPE_W_QUERYFN.exec(e6Norm(ctx.src.slice(fn.lo, fn.hi)));
+  if (!q) return false;
+  const H = q.groups.H;
+  if (H === wrapper || H === 'clientFetch' || wrapper === 'clientFetch') return false;
+  const helper = e6TopFunction(ctx, H);
+  const hm = helper && E6_SHAPE_W_HELPER.exec(e6Norm(helper));
+  if (!hm || hm.groups.H !== H) return false;
+  if (new Set([hm.groups.P, hm.groups.T, hm.groups.R, hm.groups.J]).size !== 4) return false;
+  const w = e6TopFunction(ctx, wrapper);
+  const wm = w && E6_SHAPE_W_WRAPPER.exec(e6Norm(w));
+  if (!wm || wm.groups.W !== wrapper || ['status', 'httpFailed'].includes(wm.groups.P)) return false;
+  return e6ClientFetchBound(ctx);
 }
 
 /**
@@ -1416,14 +1289,10 @@ function queryErrorEvidence(info, literals, ctx) {
     if (!call) continue;
     const fn = queryFnOf(ctx.text, ctx.pairs, call);
     if (!fn) continue;
-    const loud = () => unitFailsLoudly(ctx, fn, null, 0);
-    let complete;
-    if (wrapper) {
-      const w = wrapperFold(ctx, wrapper);
-      complete = w.foldsQuery && ((w.foldsHttp && queryFnMergesStatus(ctx, fn)) || loud());
-    } else {
-      complete = loud();
-    }
+    // The ALLOW-LIST: a bare `Q.isError` needs Shape L; `W(Q).isError` needs
+    // Shape W. A wrapper over Shape L, or a bare isError over Shape W (whose
+    // fetcher RESOLVES a non-2xx), is unguarded.
+    const complete = wrapper ? e6ShapeW(ctx, fn, wrapper) : e6ShapeL(ctx, fn);
     if (!complete) continue;
     if (!querySettled(q, literals)) continue;
     if (claimOutOfReach(ctx, ctx.scope, ctx.claimIdx, q)) continue;
@@ -1760,7 +1629,6 @@ export function judgeSource(src, path = '<memory>') {
     });
   }
   const scopeCache = new Map();
-  const imports = importedNames(text);
   const infoFor = (s) => {
     if (!scopeCache.has(s.name + s.start)) scopeCache.set(s.name + s.start, analyseScope(text, s, pairs, helpers));
     return scopeCache.get(s.name + s.start);
@@ -1799,7 +1667,7 @@ export function judgeSource(src, path = '<memory>') {
       claims.push({ path, scope: scope.name, line, tag: m[1], verdict: 'unknown', why: 'unresolvable render structure' });
       continue;
     }
-    const v = verdictFor(info, literals, { text, src, pairs, helpers, imports, conds, scope, claimIdx: at });
+    const v = verdictFor(info, literals, { text, src, pairs, helpers, conds, scope, claimIdx: at });
     claims.push({
       path,
       scope: scope.name,
@@ -1992,23 +1860,33 @@ export function PoliciesSection() {
  * fetcher RESOLVES on a non-2xx (so `breakdownQ.isError` alone stays false
  * through a 504), and a same-file wrapper folds the HTTP status back into
  * `isError`. The claim sits on the not-errored side of `readState(breakdownQ)`
- * and its emptiness test reads breakdownQ's own data. SAFE via E6.
+ * and its emptiness test reads breakdownQ's own data. SAFE via E6 Shape W:
+ * getJson and readState are the cockpit's real ones, token for token, so this
+ * control goes red the moment the allow-list stops matching the real site.
  */
 const CONTROL_QUERY = `'use client';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { clientFetch } from '@/lib/client-fetch';
 
-async function getJson(url: string): Promise<any> {
-  const res = await clientFetch(url, { cache: 'no-store' });
+async function getJson(url: string, timeout = 90_000): Promise<any> {
+  const res = await clientFetch(url, { cache: 'no-store' }, timeout);
   const json = await res.json().catch(() => ({}));
   return { ...json, status: res.status };
 }
 
-function readState(q: { isError: boolean; data: any }) {
+function readState(q: { isError: boolean; error: unknown; data: any; refetch: () => unknown }) {
   const status = typeof q.data?.status === 'number' ? q.data.status : null;
   const httpFailed = status !== null && status >= 400;
-  return { isError: q.isError || httpFailed };
+  return {
+    isError: q.isError || httpFailed,
+    error: q.isError
+      ? q.error
+      : httpFailed
+        ? new Error(q.data?.error || \`Cost Management returned HTTP \${status}.\`)
+        : null,
+    refetch: q.refetch,
+  };
 }
 
 export function BreakdownPane() {

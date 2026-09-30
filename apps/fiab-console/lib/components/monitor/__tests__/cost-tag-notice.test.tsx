@@ -9,7 +9,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, fireEvent } from '@testing-library/react';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
-import { CostTagNotice, ERRORS_SHOWN, listErrors, shortSub } from '@/lib/components/monitor/cost-tag-notice';
+import {
+  CostTagNotice, ERROR_TEXT_MAX, ERRORS_SHOWN, PartialBreakdownNotice, breakdownEmptyText, listErrors, shortSub,
+} from '@/lib/components/monitor/cost-tag-notice';
 
 const SUB = 'aaaaaaaa-0000-0000-0000-000000000001';
 const ERR = { subscription: SUB, error: 'Too many requests for test' };
@@ -102,6 +104,71 @@ describe('listErrors', () => {
   it('adds no "and N more" suffix at or under the limit', () => {
     // Breaks if the suffix is emitted for a remainder of zero ("and 0 more").
     expect(listErrors(many.slice(0, ERRORS_SHOWN))).toBe('sub-0: err-0 · sub-1: err-1 · sub-2: err-2');
+  });
+
+  it(`cuts each raw Azure message at ${ERROR_TEXT_MAX} characters (#4771 R8)`, () => {
+    // Breaks if the cut is removed (the 301st character survives), moved, or
+    // loses its ellipsis marker.
+    expect(listErrors([{ subscription: 'sub-0', error: 'x'.repeat(ERROR_TEXT_MAX + 100) }]))
+      .toBe(`sub-0: ${'x'.repeat(ERROR_TEXT_MAX)}…`);
+    // Boundary: exactly ERROR_TEXT_MAX is left whole. Breaks if `>` becomes `>=`.
+    expect(listErrors([{ subscription: 'sub-0', error: 'y'.repeat(ERROR_TEXT_MAX) }]))
+      .toBe(`sub-0: ${'y'.repeat(ERROR_TEXT_MAX)}`);
+    // Breaks if the limit constant drifts from what the review asked for.
+    expect(ERROR_TEXT_MAX).toBe(300);
+  });
+});
+
+describe('PartialBreakdownNotice (#4771 R8, B-1 and A-4)', () => {
+  const mountP = (props: Parameters<typeof PartialBreakdownNotice>[0]) =>
+    render(<FluentProvider theme={webLightTheme}><PartialBreakdownNotice {...props} /></FluentProvider>);
+
+  it('renders nothing for an empty or absent error list', () => {
+    // Breaks if the notice renders unconditionally.
+    expect(mountP({ errors: [], dimension: 'service' }).container.textContent).toBe('');
+    expect(mountP({ errors: undefined, dimension: 'service' }).container.textContent).toBe('');
+  });
+
+  it('names the dimension, the omitted count and the errors, under a title', () => {
+    const t = mountP({ errors: [ERR, { ...ERR, subscription: 'bbbbbbbb-0000-0000-0000-000000000002' }], dimension: 'resource group' }).container.textContent || '';
+    // Breaks if the title, the dimension, the plural or the count is dropped.
+    expect(t).toContain('Partial breakdown');
+    expect(t).toContain('the resource group breakdown omits spend from 2 subscriptions whose cost read failed');
+    // Breaks if the error list is dropped.
+    expect(t).toContain(`${shortSub(SUB)}: Too many requests for test`);
+  });
+
+  it('offers Retry, and Retry calls back', () => {
+    const onRetry = vi.fn();
+    const { getByRole } = mountP({ errors: [ERR], dimension: 'service', onRetry });
+    fireEvent.click(getByRole('button', { name: 'Retry' }));
+    // Breaks if Retry is missing (getByRole throws) or not wired (0 calls).
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('breakdownEmptyText (#4771 R8, B-2)', () => {
+  it('claims "No cost recorded." only for a complete, successful read', () => {
+    // Breaks if any branch is dropped or reordered: each row's expected text is distinct.
+    expect(breakdownEmptyText({ gated: false, failed: false, partial: false })).toBe('No cost recorded.');
+    expect(breakdownEmptyText({ gated: false, failed: true, partial: false })).toMatch(/^The cost read did not complete/);
+    expect(breakdownEmptyText({ gated: false, failed: false, partial: true })).toMatch(/^No cost recorded in the subscriptions that answered/);
+    expect(breakdownEmptyText({ gated: true, failed: false, partial: false })).toMatch(/^Grant Cost Management Reader/);
+    // Precedence: a gate outranks a failure, which outranks a partial read.
+    expect(breakdownEmptyText({ gated: true, failed: true, partial: true })).toMatch(/^Grant/);
+    expect(breakdownEmptyText({ gated: false, failed: true, partial: true })).toMatch(/^The cost read did not complete/);
+  });
+});
+
+describe('CostTagNotice under a gate (#4771 R8)', () => {
+  it('withholds Retry and points at the gate bar', () => {
+    const onRetry = vi.fn();
+    const { queryByRole, container } = mount({ summary: null, gated: true, onRetry });
+    // Positive half: the neutral notice rendered, and names the gate as the fix.
+    expect(container.textContent).toContain('Tag breakdown unavailable');
+    expect(container.textContent).toContain('the notice above names what is missing and how to fix it');
+    // Breaks if `gated` is ignored: a Retry that can only hit the same gate renders.
+    expect(queryByRole('button', { name: 'Retry' })).toBeNull();
   });
 });
 

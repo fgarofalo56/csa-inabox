@@ -51,7 +51,7 @@ import { SparkObservabilityPane } from '@/lib/panes/spark-observability';
 import { RefreshSummaryPane } from '@/lib/panes/refresh-summary';
 import { MetricChart } from '@/lib/components/monitor/metric-chart';
 import { KqlChart, type KqlChartType } from '@/lib/components/monitor/kql-chart';
-import { CostTagNotice, shortSub } from '@/lib/components/monitor/cost-tag-notice';
+import { CostTagNotice, PartialBreakdownNotice, breakdownEmptyText, shortSub } from '@/lib/components/monitor/cost-tag-notice';
 import { Section } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { LoomChart } from '@/lib/components/charts/loom-chart';
@@ -1797,9 +1797,10 @@ export function CostTab({ onUnauth }: { onUnauth: () => void }) {
           </div>
         }
       >
+        {groupDim !== 'tag' && <PartialBreakdownNotice errors={data?.subscriptionErrors} dimension={activeGroup.label.toLowerCase()} onRetry={() => setTick((t) => t + 1)} />}
         {groupDim === 'tag' && activeGroup.rows.length > 0 && <CostTagNotice summary={data} onRetry={() => setTick((t) => t + 1)} />}
         {groupDim === 'tag' && activeGroup.rows.length === 0 ? (
-          <CostTagNotice summary={data} loading={loading} onRetry={() => setTick((t) => t + 1)} />
+          <CostTagNotice summary={data} loading={loading} gated={!!gate} onRetry={() => setTick((t) => t + 1)} />
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)', gap: tokens.spacingHorizontalL, alignItems: 'start' }}>
             <LoomDataTable
@@ -1807,7 +1808,7 @@ export function CostTab({ onUnauth }: { onUnauth: () => void }) {
               rows={activeGroup.rows}
               getRowId={(r) => r.key}
               loading={loading}
-              empty={gate ? 'Grant Cost Management Reader to see this breakdown.' : 'No cost recorded.'}
+              empty={breakdownEmptyText({ gated: !!gate, failed: !!err, partial: !!data?.subscriptionErrors?.length })}
               ariaLabel={`Cost by ${activeGroup.label}`}
             />
             {total > 0 && activeGroup.rows.length > 0 && (
