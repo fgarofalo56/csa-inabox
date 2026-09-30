@@ -21,7 +21,8 @@
  */
 import * as vscode from 'vscode';
 import { LoomApi, type Credential, isLoomApiError } from '../api/loom-client';
-import { runDeviceCodeLogin, DeviceCodeError, type DevicePrompt } from './device-code';
+import { runDeviceCodeLogin, DeviceCodeError, describeDeviceCodeError, type DevicePrompt } from './device-code';
+import { expiryDelayMs } from './session-expiry';
 import type { Deployment } from '../config/deployments';
 import { log, logError } from '../logger';
 
@@ -53,15 +54,20 @@ export class LoomAuthenticationProvider implements vscode.AuthenticationProvider
   readonly onDidChangeSessions = this._onDidChangeSessions.event;
 
   private meta: MetaStore;
+  /** One timer per cookie session, firing a change event when it expires (#4805). */
+  private readonly expiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly getDeployments: () => Deployment[],
   ) {
     this.meta = context.globalState.get<MetaStore>(META_STATE_KEY, {});
+    for (const id of Object.keys(this.meta)) this.scheduleExpiry(id);
   }
 
   dispose(): void {
+    for (const t of this.expiryTimers.values()) clearTimeout(t);
+    this.expiryTimers.clear();
     this._onDidChangeSessions.dispose();
   }
 
@@ -96,6 +102,7 @@ export class LoomAuthenticationProvider implements vscode.AuthenticationProvider
     const cred = await this.readCredential(sessionId);
     await this.context.secrets.delete(secretKey(sessionId));
     delete this.meta[sessionId];
+    this.clearExpiry(sessionId);
     await this.context.globalState.update(META_STATE_KEY, this.meta);
     if (dep && m && cred) {
       this._onDidChangeSessions.fire({ added: [], removed: [this.toSession(dep, cred, m)], changed: [] });
@@ -196,6 +203,8 @@ export class LoomAuthenticationProvider implements vscode.AuthenticationProvider
         vscode.window.showErrorMessage(
           `${dep.name} is unreachable from this network. If this is a Government deployment, confirm you are on the admin VPN. (${msg})`,
         );
+      } else if (e instanceof DeviceCodeError) {
+        vscode.window.showErrorMessage(`Sign-in to ${dep.name} failed: ${describeDeviceCodeError(e)}`);
       } else {
         vscode.window.showErrorMessage(`Sign-in to ${dep.name} failed: ${msg}`);
       }
@@ -302,6 +311,7 @@ export class LoomAuthenticationProvider implements vscode.AuthenticationProvider
     await this.context.secrets.store(secretKey(dep.id), cred.value);
     this.meta[dep.id] = meta;
     await this.context.globalState.update(META_STATE_KEY, this.meta);
+    this.scheduleExpiry(dep.id);
     this._onDidChangeSessions.fire({ added: [this.toSession(dep, cred, meta)], removed: [], changed: [] });
     log(`signed in to ${dep.id} via ${meta.kind}${meta.scope ? ` (${meta.scope})` : ''}`);
   }
@@ -318,6 +328,41 @@ export class LoomAuthenticationProvider implements vscode.AuthenticationProvider
     const m = this.meta[deploymentId];
     if (!m?.expiresAt) return false; // PAT / unknown → not locally expired
     return m.expiresAt <= Math.floor(Date.now() / 1000) + EXPIRY_SKEW;
+  }
+
+  /**
+   * Fire a `changed` event when a cookie session reaches its expiry, so the
+   * tree and the status bar switch to "Sign in" then rather than on their next
+   * refresh. A device-code session lives one hour (#4805). PATs have no expiry
+   * here and get no timer.
+   */
+  private scheduleExpiry(deploymentId: string): void {
+    this.clearExpiry(deploymentId);
+    const delay = expiryDelayMs(this.meta[deploymentId]?.expiresAt, Date.now(), EXPIRY_SKEW);
+    if (delay === undefined) return;
+    // +1 s so `isExpired` already reads true when listeners re-check.
+    const t = setTimeout(() => {
+      this.expiryTimers.delete(deploymentId);
+      void this.announceExpired(deploymentId);
+    }, delay + 1000);
+    (t as { unref?: () => void }).unref?.();
+    this.expiryTimers.set(deploymentId, t);
+  }
+
+  private clearExpiry(deploymentId: string): void {
+    const t = this.expiryTimers.get(deploymentId);
+    if (t) clearTimeout(t);
+    this.expiryTimers.delete(deploymentId);
+  }
+
+  private async announceExpired(deploymentId: string): Promise<void> {
+    const dep = this.getDeployments().find((d) => d.id === deploymentId);
+    const m = this.meta[deploymentId];
+    const cred = await this.readCredential(deploymentId);
+    if (dep && m && cred) {
+      this._onDidChangeSessions.fire({ added: [], removed: [], changed: [this.toSession(dep, cred, m)] });
+    }
+    log(`session for ${deploymentId} expired; sign in again`);
   }
 
   private toSession(dep: Deployment, cred: Credential, meta: SessionMeta): vscode.AuthenticationSession {

@@ -11,7 +11,7 @@
  */
 import { parseArgs, flagStr, flagBool } from './args.js';
 import type { GlobalOptions, OutputFormat } from './config.js';
-import { CliError, LoomApiErrorGuard } from './errors.js';
+import { CliError, LoomApiErrorGuard, formatApiError } from './errors.js';
 import { runAuth } from './commands/auth.js';
 import { runWorkspace } from './commands/workspace.js';
 import { runItem } from './commands/item.js';
@@ -169,8 +169,7 @@ async function main(): Promise<number> {
       return 1;
     }
     if (LoomApiErrorGuard(e)) {
-      process.stderr.write(`API error (${e.status}${e.code ? ` ${e.code}` : ''}): ${e.message}\n`);
-      if (e.hint) process.stderr.write(`Hint: ${e.hint}\n`);
+      process.stderr.write(formatApiError(e));
       return 1;
     }
     process.stderr.write(`Unexpected error: ${(e as Error)?.message || String(e)}\n`);

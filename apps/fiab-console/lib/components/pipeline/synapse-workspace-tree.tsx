@@ -23,7 +23,7 @@
  *   - Pipelines      → /api/synapse/pipelines      (list/create/delete) + open on canvas
  *   - Datasets       → /api/synapse/datasets        (list/create/delete)
  *   - Data flows     → /api/synapse/dataflows       (list/create/delete)
- *   - Notebooks      → /api/synapse/notebooks       (list/create/delete)
+ *   - Notebooks      → /api/synapse/notebooks       (list; create/delete tenant-admin here, see notebookWriteAction)
  *   - SQL scripts    → /api/synapse/sqlscripts      (list/create/delete)
  *   - KQL scripts    → /api/synapse/kqlscripts      (list/create/delete + open editor → Run on a Kusto pool)
  *   - Spark job defs → /api/synapse/sparkjobdefinitions (list/create/delete + open editor → Submit Livy batch)
@@ -56,6 +56,8 @@ import {
   Database20Regular, DatabaseArrowRight20Regular, AppsListDetail20Regular,
 } from '@fluentui/react-icons';
 import { ExplorerTree, type ExplorerNode, type ExplorerAction } from '@/lib/components/shared/explorer-tree';
+import { useIsTenantAdmin } from '@/lib/components/session-context';
+import { refusalText } from '@/lib/util/admin-refusal';
 
 const PIPE_ROUTE = '/api/synapse/pipelines';
 const DS_ROUTE = '/api/synapse/datasets';
@@ -97,6 +99,27 @@ function iconForSynapseNode(node: ExplorerNode): ReactElement {
   return KIND_ICON[node.kind] ?? <DocumentText20Regular />;
 }
 
+/**
+ * Notebook writes from this navigator (#4619). `/api/synapse/notebooks` lets a
+ * non-admin write only the notebook bound to a Synapse notebook ITEM they can
+ * edit, and this tree edits workspace artifacts with no item behind them — so
+ * notebook create/delete here is a tenant-admin action. For anyone else the
+ * actions stay visible (discoverable) but disabled, and the label says where
+ * to go instead. The route is the enforcement point; this only avoids offering
+ * a click that would be refused.
+ */
+export const NOTEBOOK_ADMIN_ONLY_HINT = 'tenant admins only; create a Synapse notebook item to author your own';
+
+export function notebookWriteAction(
+  kind: 'new' | 'delete', isTenantAdmin: boolean, busy: boolean,
+): { label: string; disabled: boolean } {
+  const base = kind === 'new' ? 'New notebook' : 'Delete';
+  return {
+    label: isTenantAdmin ? base : `${base} (${NOTEBOOK_ADMIN_ONLY_HINT})`,
+    disabled: busy || !isTenantAdmin,
+  };
+}
+
 // Delete route per creatable/deletable leaf kind.
 const ROUTE_BY_KIND: Record<string, string> = {
   pipeline: PIPE_ROUTE, dataset: DS_ROUTE, dataflow: DF_ROUTE, notebook: NB_ROUTE,
@@ -131,6 +154,7 @@ export function SynapseWorkspaceTree({
   boundPipeline, onOpenPipeline, onOpenKqlScript, onOpenSparkJobDef, refreshKey = 0,
 }: SynapseWorkspaceTreeProps) {
   const [gate, setGate] = useState<{ missing: string } | null>(null);
+  const isTenantAdmin = useIsTenantAdmin();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -240,7 +264,7 @@ export function SynapseWorkspaceTree({
       });
       const body = await readJson(res);
       if (applyGate(body)) { setBusy(false); return; }
-      if (!body.ok) { setCreateError(body.error || 'create failed'); setBusy(false); return; }
+      if (!body.ok) { setCreateError(refusalText(body, res.status)); setBusy(false); return; }
       const group = createGroup;
       setCreateGroup(null);
       await loadAll();
@@ -262,7 +286,7 @@ export function SynapseWorkspaceTree({
       const res = await fetch(`${route}?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
       const body = await readJson(res);
       if (applyGate(body)) { setBusy(false); return; }
-      if (!body.ok) { setError(body.error || 'delete failed'); setBusy(false); return; }
+      if (!body.ok) { setError(refusalText(body, res.status)); setBusy(false); return; }
       await loadAll();
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setBusy(false); }
@@ -307,13 +331,14 @@ export function SynapseWorkspaceTree({
       case 'group-pipelines': return [newAction('New pipeline')];
       case 'group-datasets': return [newAction('New dataset')];
       case 'group-dataflows': return [newAction('New data flow')];
-      case 'group-notebooks': return [newAction('New notebook')];
+      case 'group-notebooks': return [{ ...newAction('New notebook'), ...notebookWriteAction('new', isTenantAdmin, busy) }];
       case 'group-sqlscripts': return [newAction('New SQL script')];
       case 'group-kqlscripts': return [newAction('New KQL script')];
       case 'group-sparkjobdefs': return [newAction('New Spark job definition')];
       case 'group-triggers': return [newAction('New trigger')];
       case 'pipeline': return [openAction, deleteAction];
-      case 'dataset': case 'dataflow': case 'notebook': case 'sqlscript': case 'linkedservice':
+      case 'notebook': return [{ ...deleteAction, ...notebookWriteAction('delete', isTenantAdmin, busy) }];
+      case 'dataset': case 'dataflow': case 'sqlscript': case 'linkedservice':
         return [deleteAction];
       case 'kqlscript': return [...(onOpenKqlScript ? [openAction] : []), deleteAction];
       case 'sparkjobdef': return [...(onOpenSparkJobDef ? [openAction] : []), deleteAction];
@@ -326,7 +351,7 @@ export function SynapseWorkspaceTree({
       }
       default: return [];
     }
-  }, [busy, onOpenKqlScript, onOpenSparkJobDef]);
+  }, [busy, isTenantAdmin, onOpenKqlScript, onOpenSparkJobDef]);
 
   const nodes = useMemo<ExplorerNode[]>(() => [
     {
@@ -438,7 +463,9 @@ export function SynapseWorkspaceTree({
         <MenuList>
           <MenuItem icon={<Flow20Regular />} onClick={() => openCreate('pipeline')}>Pipeline</MenuItem>
           <MenuItem icon={<DataUsage20Regular />} onClick={() => openCreate('dataflow')}>Data flow</MenuItem>
-          <MenuItem icon={<Notebook20Regular />} onClick={() => openCreate('notebook')}>Notebook</MenuItem>
+          <MenuItem icon={<Notebook20Regular />} onClick={() => openCreate('notebook')} disabled={!isTenantAdmin}>
+            {isTenantAdmin ? 'Notebook' : `Notebook (${NOTEBOOK_ADMIN_ONLY_HINT})`}
+          </MenuItem>
           <MenuItem icon={<DocumentText20Regular />} onClick={() => openCreate('sqlscript')}>SQL script</MenuItem>
           <MenuItem icon={<DatabaseArrowRight20Regular />} onClick={() => openCreate('kqlscript')}>KQL script</MenuItem>
           <MenuItem icon={<AppsListDetail20Regular />} onClick={() => openCreate('sparkjobdef')}>Spark job definition</MenuItem>

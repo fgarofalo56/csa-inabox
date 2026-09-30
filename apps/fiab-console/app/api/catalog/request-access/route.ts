@@ -24,6 +24,7 @@
 import { NextResponse } from 'next/server';
 import { withSession } from '@/lib/api/route-toolkit';
 import { tenantScopeId } from '@/lib/auth/session';
+import { isDeviceCodeSession } from '@/lib/auth/device-code-policy';
 import {
   auditLogContainer, notificationsContainer, accessRequestWorkflowContainer,
 } from '@/lib/azure/cosmos-client';
@@ -80,7 +81,10 @@ export const POST = withSession(async (req, { session: s }) => {
   // scopeRef (the backing container/db/pool) — when present and the grant lands
   // 'active' we short-circuit. Anything else (no scopeRef, honest gate, or error)
   // falls through to the governed approval workflow so the request is never lost.
-  if (accessModel === 'self-serve' && scopeRef) {
+  // A CLI / VS Code device-code session never self-grants (#4805, operator
+  // decision 2026-09-30): its request takes the governed path instead, so an
+  // approver decides and nothing outlives the session unreviewed.
+  if (accessModel === 'self-serve' && scopeRef && !isDeviceCodeSession(s)) {
     try {
       const grants = [];
       for (const t of targets) {

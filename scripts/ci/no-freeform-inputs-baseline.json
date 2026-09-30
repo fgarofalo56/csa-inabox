@@ -7,7 +7,6 @@
     "apps/fiab-console/app/catalog/unity/page.tsx": 4,
     "apps/fiab-console/app/governance/scans/page.tsx": 1,
     "apps/fiab-console/lib/coe-library/report-render/report-view.tsx": 3,
-    "apps/fiab-console/lib/components/admin-security/dlp-panel.tsx": 2,
     "apps/fiab-console/lib/components/admin/apim-named-values-pane.tsx": 1,
     "apps/fiab-console/lib/components/admin/copilot-agents-config.tsx": 4,
     "apps/fiab-console/lib/components/adx/adx-database-tree.tsx": 2,

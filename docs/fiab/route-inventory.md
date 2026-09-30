@@ -15,9 +15,9 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | --- | ---: |
 | Total routes | 1695 |
 | Public (no session) | 59 |
-| Session-only | 642 |
+| Session-only | 638 |
 | Owner-scoped | 681 |
-| Admin | 313 |
+| Admin | 317 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 499 |
 | Areas | 122 |
@@ -547,7 +547,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
-| `auth/cli-session/route.ts` | POST | public | ● | Microsoft Graph |
+| `auth/cli-session/route.ts` | POST | public | ● | Cosmos, Microsoft Graph |
 | `auth/me/route.ts` | GET | session-only |  | — |
 | `auth/refresh/route.ts` | POST | session-only |  | — |
 
@@ -605,7 +605,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `catalog/metastores/route.ts` | GET POST | session-only | ● | ADLS, ADX, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Databricks, Fabric, PostgreSQL, Purview, Resource Graph, Synapse |
 | `catalog/permissions/route.ts` | GET POST DELETE | session-only |  | Azure Monitor, Cosmos, Fabric |
 | `catalog/register/route.ts` | POST | owner-scoped |  | Azure Monitor, Cosmos, Fabric, Microsoft Graph, Purview |
-| `catalog/request-access/route.ts` | POST | owner-scoped |  | ADLS, ADX, ARM, Azure RBAC, Azure SQL, Azure Storage, Cosmos, Fabric, Managed Identity, Microsoft Graph, Resource Graph, Synapse, Synapse SQL |
+| `catalog/request-access/route.ts` | POST | session-only |  | ADLS, ADX, ARM, Azure RBAC, Azure SQL, Azure Storage, Cosmos, Fabric, Managed Identity, Resource Graph, Synapse, Synapse SQL |
 | `catalog/search/route.ts` | GET | owner-scoped |  | Azure Monitor, Cosmos, Fabric, Microsoft Graph, Purview |
 | `catalog/shortcut/route.ts` | GET POST DELETE | session-only | ● | Fabric, Purview |
 | `catalog/unity/capabilities/route.ts` | GET | session-only | ● | — |
@@ -1018,7 +1018,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `governance/data-contracts/route.ts` | GET | session-only |  | Azure Cache for Redis, Cosmos |
 | `governance/dlp/library/route.ts` | GET POST | admin | ● | Cosmos |
 | `governance/dlp/meta/route.ts` | GET | session-only |  | Cosmos |
-| `governance/dlp/restrict/route.ts` | POST | session-only | ● | ADLS, ADX, ARM, Azure RBAC, Azure SQL, Azure Storage, Cosmos, Managed Identity, Resource Graph, Synapse SQL |
+| `governance/dlp/restrict/route.ts` | POST | admin | ● | ADLS, ADX, ARM, Azure RBAC, Azure SQL, Azure Storage, Cosmos, Managed Identity, Resource Graph, Synapse SQL |
 | `governance/dlp/scan/route.ts` | GET POST | session-only |  | Cosmos, Purview |
 | `governance/dlp/schemas/route.ts` | GET | session-only | ● | ARM, Azure SQL, Managed Identity, Synapse SQL |
 | `governance/dlp/violations/route.ts` | GET | session-only |  | Cosmos, Microsoft Graph, Purview |
@@ -1038,7 +1038,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `governance/labels/library/route.ts` | GET POST | admin | ● | Cosmos |
 | `governance/lineage/route.ts` | GET | session-only |  | Azure Cache for Redis, Cosmos |
 | `governance/pdp-mode/route.ts` | GET | session-only |  | — |
-| `governance/policies/route.ts` | GET POST PUT DELETE | admin | ● | ADLS, ADX, ARM, Azure RBAC, Azure SQL, Azure Storage, Cosmos, Fabric, Managed Identity, Resource Graph, Synapse, Synapse SQL |
+| `governance/policies/route.ts` | GET POST PUT DELETE | session-only | ● | ADLS, ADX, ARM, Azure RBAC, Azure SQL, Azure Storage, Cosmos, Fabric, Managed Identity, Resource Graph, Synapse, Synapse SQL |
 | `governance/policy-code/engine-rules/route.ts` | GET | admin |  | Cosmos |
 | `governance/purview/status/route.ts` | GET | session-only |  | ARM, Purview, Resource Graph |
 | `governance/scans/register-existing/route.ts` | POST | admin | ● | ADLS, ADX, ARM, Azure SQL, Azure Storage, Cosmos, PostgreSQL, Purview, Resource Graph, Synapse, Synapse SQL |
@@ -2072,13 +2072,13 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `onelake/[itemId]/route.ts` | DELETE | owner-scoped |  | ADLS, AI Search, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph |
 | `onelake/catalog/route.ts` | GET | session-only | ● | AI Search, Cosmos, Fabric, Power BI |
 | `onelake/governance/route.ts` | GET | session-only |  | Cosmos, Purview |
-| `onelake/lifecycle/route.ts` | GET PUT | owner-scoped |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity |
+| `onelake/lifecycle/route.ts` | GET PUT | admin |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph |
 | `onelake/paths/route.ts` | GET | session-only |  | ADLS, Azure Storage |
 | `onelake/recycle/route.ts` | GET POST DELETE | owner-scoped |  | ADLS, AI Search, ARM, Azure Storage, Cosmos, Managed Identity, Purview |
 | `onelake/resolve/route.ts` | GET POST | session-only |  | Loom service |
-| `onelake/security/route.ts` | GET POST DELETE | session-only |  | ADLS, ARM, Azure Monitor, Azure RBAC, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Resource Graph |
+| `onelake/security/route.ts` | GET POST DELETE | admin |  | ADLS, ARM, Azure Monitor, Azure RBAC, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Resource Graph |
 | `onelake/storage/route.ts` | GET | session-only | ● | ADLS, ARM, Azure Storage, Cosmos, Managed Identity |
-| `onelake/tier/route.ts` | GET PUT | session-only |  | ADLS, ARM, Azure Storage, Managed Identity |
+| `onelake/tier/route.ts` | GET PUT | admin |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph |
 
 ## ontology-functions
 
@@ -2301,9 +2301,9 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `synapse/linkedservices/[name]/route.ts` | GET | session-only | ● | Synapse |
 | `synapse/linkedservices/route.ts` | GET POST DELETE | session-only | ● | Synapse |
 | `synapse/linkedservices/test/route.ts` | POST | session-only | ● | Synapse |
-| `synapse/notebooks/[name]/route.ts` | GET PUT DELETE | session-only | ● | ADLS, ARM, Azure Storage, Managed Identity, Synapse |
+| `synapse/notebooks/[name]/route.ts` | GET PUT DELETE | owner-scoped | ● | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Synapse |
 | `synapse/notebooks/[name]/run-cell/route.ts` | GET POST | session-only | ● | ARM, Resource Graph, Synapse |
-| `synapse/notebooks/route.ts` | GET POST DELETE | session-only | ● | Synapse |
+| `synapse/notebooks/route.ts` | GET POST DELETE | owner-scoped | ● | Cosmos, Microsoft Graph, Synapse |
 | `synapse/pipelines/route.ts` | GET POST DELETE | session-only | ● | Synapse |
 | `synapse/pools/route.ts` | GET | session-only | ● | ARM, Resource Graph, Synapse |
 | `synapse/sparkjobdefinitions/[name]/route.ts` | GET PUT DELETE | session-only | ● | ARM, Resource Graph, Synapse |
@@ -2420,7 +2420,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `workspaces/[id]/time-branches/[branchId]/route.ts` | DELETE | admin |  | Cosmos, Microsoft Graph |
 | `workspaces/[id]/time-branches/route.ts` | GET POST | admin |  | Cosmos, Microsoft Graph |
 | `workspaces/bulk-delete/route.ts` | GET POST | admin |  | ADF, ADLS, ADX, AI Search, AML, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Event Hubs, IoT Hub, Managed Identity, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Service Bus, Stream Analytics, Synapse, Synapse SQL |
-| `workspaces/route.ts` | GET POST | session-only |  | ADX, AI Search, ARM, Azure Monitor, Azure RBAC, Azure Storage, Cosmos, Event Hubs, Fabric, Managed Identity, Purview, Resource Graph |
+| `workspaces/route.ts` | GET POST | admin |  | ADX, AI Search, ARM, Azure Monitor, Azure RBAC, Azure Storage, Cosmos, Event Hubs, Fabric, Managed Identity, Purview, Resource Graph |
 
 ## Authorization resolvers (derived)
 
@@ -2463,7 +2463,6 @@ authorization surface moved.
 | `apps/fiab-console/app/api/notebook/_lib/notebook-access.ts` | `loadAccessibleNotebook` |
 | `apps/fiab-console/app/api/sqldb/_shared.ts` | `guardSqlDbRequest`, `loadWs` |
 | `apps/fiab-console/app/api/storage/_lib/authorize.ts` | `authorizeStorageAccount`, `boundByAccessibleLakehouse` |
-| `apps/fiab-console/lib/access/request-asset.ts` | `resolveRequestableAsset` |
 | `apps/fiab-console/lib/activation/run-service.ts` | `executeActivationRun` |
 | `apps/fiab-console/lib/admin/service-probes.ts` | `getExerciseRunState`, `startExerciseRun` |
 | `apps/fiab-console/lib/api/route-toolkit.ts` | `withWorkspaceOwner` |
@@ -2513,6 +2512,7 @@ authorization surface moved.
 | `apps/fiab-console/lib/events/webhook-registry.ts` | `bumpHookStats`, `deleteHook`, `getHook`, `updateHook` |
 | `apps/fiab-console/lib/foundry/ontology-resolver.ts` | `resolveOntologyObjectForGrounding` |
 | `apps/fiab-console/lib/insights/digest-store.ts` | `getDigest`, `requestRunNow` |
+| `apps/fiab-console/lib/notebook/synapse-notebook-write.ts` | `authorizeNotebookWrite` |
 | `apps/fiab-console/lib/semantic-model/calc-objects.ts` | `persistCalcToCosmos` |
 | `apps/fiab-console/lib/semantic-model/model-context.ts` | `contextFromContentItem`, `loadModelContext` |
 | `apps/fiab-console/lib/semantic-model/modeling-objects.ts` | `handleCalculatedTablePost`, `handleDateTableMarkPost`, `handleMeasurePost`, `handleWhatIfPost`, `readLoomModelState` |
@@ -2535,7 +2535,7 @@ silently downgrading the route.
 
 ## Backend signals (derived)
 
-461 module(s) ORIGINATE a backend label — the derivation read an
+463 module(s) ORIGINATE a backend label — the derivation read an
 Azure identifier out of them. Every other route/module below inherits through the
 call graph. Nothing in this section is a Loom module name someone typed: the
 modules are derived, and only the Microsoft-owned identifier vocabulary is seeded.
@@ -3217,6 +3217,7 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/migrate/migrate-client.ts` | Loom service |
 | `apps/fiab-console/lib/monitor/monitor-alert-editor.tsx` | Azure Monitor |
 | `apps/fiab-console/lib/panes/cmk.tsx` | Azure Storage, Key Vault |
+| `apps/fiab-console/lib/panes/workspace-settings.tsx` | Azure Storage |
 | `apps/fiab-console/lib/parity/parity-issue.ts` | GitHub |
 | `apps/fiab-console/lib/perf/apply-change.ts` | ADX, Synapse |
 | `apps/fiab-console/lib/pipeline/connector-catalog.ts` | ADLS, ADX, Azure SQL, Azure Storage, Cosmos, Databricks, Dataverse, PostgreSQL, Synapse SQL |
@@ -3231,3 +3232,4 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/setup/wire-existing.ts` | Resource Graph |
 | `apps/fiab-console/lib/telemetry/rum-ingest.ts` | Azure Monitor |
 | `apps/fiab-console/lib/versions/item-version-store.ts` | Cosmos |
+| `apps/fiab-console/lib/wizards/workspace-create.tsx` | Azure Storage |

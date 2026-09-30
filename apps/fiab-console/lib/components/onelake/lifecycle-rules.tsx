@@ -30,6 +30,9 @@ import {
   DocumentBulletList20Regular,
 } from '@fluentui/react-icons';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { AdminOnlyNotice, useTenantAdminGate } from '@/lib/components/shared/admin-only-notice';
+import { LIFECYCLE_ADMIN_ONLY } from '@/lib/util/admin-only-copy';
+import { isAdminOnlyRefusal, refusalText, type RefusalEnvelope } from '@/lib/util/admin-refusal';
 
 // ---- Domain types (mirror lib/azure/adls-client.ts, kept local for the client) ----
 
@@ -134,6 +137,11 @@ export function LifecycleRulesPanel({ workspaceId }: { workspaceId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [account, setAccount] = useState<string | undefined>();
   const [editing, setEditing] = useState<{ rule: LifecycleRule | null; original?: string } | null>(null);
+  // Saving rules is tenant-admin only at the PUT for every account (#4619), so
+  // the controls are gated on the shell's admin flag up front.
+  const adminGate = useTenantAdminGate();
+  const [refused, setRefused] = useState<RefusalEnvelope | null>(null);
+  const readOnly = !adminGate.allowed;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -143,7 +151,7 @@ export function LifecycleRulesPanel({ workspaceId }: { workspaceId: string }) {
       const j = await res.json();
       if (j?.gate) { setGate({ missing: j.missing, hint: j.hint, bicepModule: j.bicepModule }); setRules([]); }
       else if (j?.ok) { setGate(null); setRules(j.rules || []); setAccount(j.account); }
-      else { setError(j?.error || `HTTP ${res.status}`); }
+      else { setError(refusalText(j, res.status)); }
     } catch (e: any) {
       setError(e?.message || 'Failed to load lifecycle rules');
     } finally {
@@ -157,6 +165,7 @@ export function LifecycleRulesPanel({ workspaceId }: { workspaceId: string }) {
   const persist = useCallback(async (next: LifecycleRule[]): Promise<boolean> => {
     setSaving(true);
     setError(null);
+    setRefused(null);
     try {
       const res = await clientFetch('/api/onelake/lifecycle', {
         method: 'PUT',
@@ -165,7 +174,8 @@ export function LifecycleRulesPanel({ workspaceId }: { workspaceId: string }) {
       });
       const j = await res.json();
       if (j?.gate) { setGate({ missing: j.missing, hint: j.hint, bicepModule: j.bicepModule }); return false; }
-      if (!res.ok || !j?.ok) { setError(j?.error || `HTTP ${res.status}`); return false; }
+      if (isAdminOnlyRefusal(j)) { setRefused(j); return false; }
+      if (!res.ok || !j?.ok) { setError(refusalText(j, res.status)); return false; }
       await load(); // re-GET → confirm the live policy matches
       return true;
     } catch (e: any) {
@@ -227,31 +237,31 @@ export function LifecycleRulesPanel({ workspaceId }: { workspaceId: string }) {
         <div className={styles.rowActions}>
           <Tooltip content="Edit" relationship="label">
             <Button size="small" appearance="subtle" icon={<Edit20Regular />}
-              aria-label={`Edit ${r.name}`} disabled={saving}
+              aria-label={`Edit ${r.name}`} disabled={saving || readOnly}
               onClick={() => setEditing({ rule: r, original: r.name })} />
           </Tooltip>
           {r.enabled ? (
             <Tooltip content="Pause (set Inactive)" relationship="label">
               <Button size="small" appearance="subtle" icon={<Pause20Regular />}
-                aria-label={`Pause ${r.name}`} disabled={saving}
+                aria-label={`Pause ${r.name}`} disabled={saving || readOnly}
                 onClick={() => toggleRule(r, false)} />
             </Tooltip>
           ) : (
             <Tooltip content="Reactivate (set Active)" relationship="label">
               <Button size="small" appearance="subtle" icon={<Play20Regular />}
-                aria-label={`Reactivate ${r.name}`} disabled={saving}
+                aria-label={`Reactivate ${r.name}`} disabled={saving || readOnly}
                 onClick={() => toggleRule(r, true)} />
             </Tooltip>
           )}
           <Tooltip content="Delete" relationship="label">
             <Button size="small" appearance="subtle" icon={<Delete20Regular />}
-              aria-label={`Delete ${r.name}`} disabled={saving}
+              aria-label={`Delete ${r.name}`} disabled={saving || readOnly}
               onClick={() => deleteRule(r)} />
           </Tooltip>
         </div>
       ),
     },
-  ], [styles, saving, toggleRule, deleteRule]);
+  ], [styles, saving, readOnly, toggleRule, deleteRule]);
 
   if (loading) return <Spinner size="tiny" label="Loading lifecycle rules…" />;
 
@@ -276,14 +286,14 @@ export function LifecycleRulesPanel({ workspaceId }: { workspaceId: string }) {
     <div className={styles.root}>
       <div className={styles.toolbar}>
         <Tooltip content={atLimit ? `Maximum ${MAX_RULES} rules reached` : 'Add a lifecycle rule'} relationship="label">
-          <Button appearance="primary" icon={<Add20Regular />} disabled={atLimit || saving}
+          <Button appearance="primary" icon={<Add20Regular />} disabled={atLimit || saving || readOnly}
             onClick={() => setEditing({ rule: null })}>
             Add rule
           </Button>
         </Tooltip>
         <Menu>
           <MenuTrigger disableButtonEnhancement>
-            <Button icon={<DocumentBulletList20Regular />} disabled={atLimit || saving}>
+            <Button icon={<DocumentBulletList20Regular />} disabled={atLimit || saving || readOnly}>
               Create from template
             </Button>
           </MenuTrigger>
@@ -301,6 +311,11 @@ export function LifecycleRulesPanel({ workspaceId }: { workspaceId: string }) {
         </span>
       </div>
 
+      {refused ? (
+        <AdminOnlyNotice reason={refused.reason} remediation={refused.remediation} />
+      ) : adminGate.refused && (
+        <AdminOnlyNotice {...LIFECYCLE_ADMIN_ONLY} />
+      )}
       {atLimit && (
         <MessageBar intent="error">
           <MessageBarBody>

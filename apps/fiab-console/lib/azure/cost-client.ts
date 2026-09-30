@@ -37,6 +37,7 @@ import { armBase, armScope } from './cloud-endpoints';
 import { getOrComputeCached, buildScopedCacheKey, type CacheMeta } from './query-result-cache';
 import { periodEndProjection, pickComputedMethod } from './cost-forecast-core';
 import { computeAnomalies, type CostAnomaly } from './cost-anomaly-core';
+import { tagValueColumnIndex } from './cost-tag-column';
 
 // Sovereign-cloud ARM host + scope (Commercial / GCC-High / IL5).
 const ARM = armBase();
@@ -365,6 +366,14 @@ export interface CostSummary {
   byTag: CostBreakdownRow[];
   /** The tag key `byTag` is grouped on (echoed so the UI can label + hint). */
   tagKey: string;
+  /**
+   * Subscriptions whose tag spend was not read: the TAG query failed (throttled,
+   * timed out, refused, unrecognised shape), or the main grouped query failed
+   * and the tag fold was skipped. When non-empty, an empty `byTag` means
+   * "could not load", not "no resource carries the tag". Optional so a cached
+   * report written before this field existed still type-checks.
+   */
+  tagQueryErrors?: { subscription: string; error: string }[];
   daily: { date: string; cost: number }[];
   /** Daily-spend outliers computed from `daily` (no extra Azure call). */
   anomalies: CostAnomaly[];
@@ -403,6 +412,53 @@ export function foldByDimension(resp: any, dimName: string, loomRgs: Set<string>
     addTo(m, key || 'unknown', Number(r[iCost]) || 0);
   }
   return sortDesc(m);
+}
+
+/**
+ * Pure fold (unit-tested): collapse a Cost Management ResourceGroupName ×
+ * `TagKey` response into descending `{ key, cost }` rows keyed by the TAG VALUE,
+ * filtered to the Loom resource groups. Spend with no value for the tag folds
+ * into `(untagged)`. The value column is resolved by {@link tagValueColumnIndex}
+ * — never by position, because the response also carries a `TagKey` column
+ * whose every row is the key's own name.
+ */
+export function foldByTag(resp: any, tagKey: string, loomRgs: Set<string>): CostBreakdownRow[] {
+  const cols = resp?.properties?.columns || [];
+  const rows: any[][] = resp?.properties?.rows || [];
+  const iCost = colIndex(cols, 'Cost');
+  const iRg = colIndex(cols, 'ResourceGroupName');
+  const iVal = tagValueColumnIndex(cols, tagKey);
+  const m = new Map<string, number>();
+  for (const r of rows) {
+    if (iRg >= 0 && !inLoom(String(r[iRg] ?? ''), loomRgs)) continue;
+    const raw = iVal >= 0 ? String(r[iVal] ?? '').trim() : '';
+    addTo(m, raw || '(untagged)', Number(r[iCost]) || 0);
+  }
+  return sortDesc(m);
+}
+
+/**
+ * Pure (unit-tested): the tag breakdown rows ONE subscription contributes, or
+ * the reason it contributes none. A rejected query (throttled, timed out,
+ * refused) and a response with rows but no resolvable value column both
+ * return an `error` — an empty result there is unknown, not "no tags". A
+ * response with zero rows is a genuine answer: no error.
+ */
+export function tagFoldOutcome(
+  settled: PromiseSettledResult<any>,
+  tagKey: string,
+  loomRgs: Set<string>,
+): { rows: CostBreakdownRow[]; error: string | null } {
+  if (settled.status === 'rejected') {
+    return { rows: [], error: (settled.reason as Error)?.message || String(settled.reason) };
+  }
+  const cols = settled.value?.properties?.columns || [];
+  const rows: any[][] = settled.value?.properties?.rows || [];
+  if (rows.length > 0 && tagValueColumnIndex(cols, tagKey) < 0) {
+    const names = (cols as any[]).map((c) => String(c?.name ?? '')).join(', ');
+    return { rows: [], error: `unrecognised tag response: no TagValue or '${tagKey}' column (columns: ${names})` };
+  }
+  return { rows: foldByTag(settled.value, tagKey, loomRgs), error: null };
 }
 
 /** Sum the actual cost for a timeframe in one sub, filtered to Loom RGs. */
@@ -502,6 +558,7 @@ export async function computeLoomCostSummary(opts: CostOptions = {}): Promise<Co
   const dailyMap = new Map<string, number>();
   const budgets: CostBudget[] = [];
   const subscriptionErrors: { subscription: string; error: string }[] = [];
+  const tagQueryErrors: { subscription: string; error: string }[] = [];
   let total = 0;
   let previousPeriod: number | null = null;
   let currency = 'USD';
@@ -581,8 +638,8 @@ export async function computeLoomCostSummary(opts: CostOptions = {}): Promise<Co
       // 6) Budgets.
       listBudgets(sub),
       // 7) By cost-allocation TAG value (best-effort). Groups RG × TagKey so we
-      //    can still filter to Loom RGs. A tenant with no such tag key returns
-      //    no tagged rows (or the query 400s) → the breakdown is honestly empty.
+      //    can still filter to Loom RGs. A failed query is recorded in
+      //    tagQueryErrors (tagFoldOutcome), not read as an empty breakdown.
       costQuery(sub, {
         type: 'ActualCost', timeframe,
         dataset: {
@@ -614,8 +671,15 @@ export async function computeLoomCostSummary(opts: CostOptions = {}): Promise<Co
     // The grouped query is the gate: if it failed (e.g. no Cost Management
     // Reader on this sub), record the sub error and skip — exactly the old
     // outer-catch behaviour. The other five are best-effort.
+    //
+    // The early return also skips the tag fold below, so this subscription's
+    // tag spend is never read. Record that as a tag error too: without it an
+    // estate whose other subscriptions answered with no tag rows would report
+    // "no tags found" for spend that was simply never read (#4771 R7, B-4).
     if (groupedR.status === 'rejected') {
-      subscriptionErrors.push({ subscription: sub, error: (groupedR.reason as Error)?.message || String(groupedR.reason) });
+      const error = (groupedR.reason as Error)?.message || String(groupedR.reason);
+      subscriptionErrors.push({ subscription: sub, error });
+      tagQueryErrors.push({ subscription: sub, error: `cost query failed, so tag spend was not read: ${error}` });
       return;
     }
 
@@ -683,23 +747,11 @@ export async function computeLoomCostSummary(opts: CostOptions = {}): Promise<Co
       budgets.push(...budgetsR.value);
     }
 
-    // Tag breakdown: the tag-VALUE column is whichever column isn't Cost /
-    // ResourceGroupName / Currency (robust to the API naming the column after
-    // the tag key vs. "TagKey"). Rows with no value for the tag are folded into
-    // "(untagged)" so unallocated spend is visible.
-    if (tagR.status === 'fulfilled') {
-      const tCols = tagR.value?.properties?.columns || [];
-      const tRows: any[][] = tagR.value?.properties?.rows || [];
-      const tCost = colIndex(tCols, 'Cost');
-      const tRg = colIndex(tCols, 'ResourceGroupName');
-      const tCur = colIndex(tCols, 'Currency');
-      const tTag = (tCols as any[]).findIndex((_c, idx) => idx !== tCost && idx !== tRg && idx !== tCur);
-      for (const row of tRows) {
-        if (tRg >= 0 && !inLoom(String(row[tRg] ?? ''), loomRgs)) continue;
-        const raw = tTag >= 0 ? String(row[tTag] ?? '').trim() : '';
-        addTo(byTagMap, raw || '(untagged)', Number(row[tCost]) || 0);
-      }
-    }
+    // Tag breakdown, keyed by TAG VALUE. A failed or unrecognised tag query is
+    // recorded (see tagFoldOutcome), never folded into "no tags".
+    const tagOutcome = tagFoldOutcome(tagR, COST_TAG_KEY, loomRgs);
+    if (tagOutcome.error) tagQueryErrors.push({ subscription: sub, error: tagOutcome.error });
+    for (const row of tagOutcome.rows) addTo(byTagMap, row.key, row.cost);
   };
   for (let i = 0; i < subs.length; i += SUB_CHUNK) {
     await Promise.all(subs.slice(i, i + SUB_CHUNK).map(perSub));
@@ -783,6 +835,7 @@ export async function computeLoomCostSummary(opts: CostOptions = {}): Promise<Co
     byLocation: sortDesc(byLocation),
     byTag,
     tagKey: COST_TAG_KEY,
+    tagQueryErrors,
     daily,
     anomalies,
     budgets: budgets.sort((a, b) => b.percentUsed - a.percentUsed),
