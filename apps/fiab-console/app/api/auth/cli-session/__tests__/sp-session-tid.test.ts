@@ -49,7 +49,6 @@ vi.mock('@/lib/admin/audit-stream', () => ({ emitAuditEvent: (...a: unknown[]) =
 vi.mock('@/lib/auth/feature-gate', () => ({ isTenantAdmin: () => false }));
 
 vi.mock('@/lib/auth/msal', () => ({
-  getMsalPublicClient: vi.fn(),
   getSpConfidentialClient: (...a: any[]) => getSpConfidentialClient(...(a as [])),
   graphBase: () => 'https://graph.microsoft.com',
 }));

@@ -86,7 +86,7 @@ available inside the container")
 | Sign-in route honest gate | `apps/fiab-console/app/auth/sign-in/route.ts` (~L79-87) | Same gate update |
 | Setup-identity configured check | `apps/fiab-console/app/api/setup/identity/route.ts` (~L71) | Same gate update |
 | Explicit-SP CLI path | `lib/auth/msal.ts` `getSpConfidentialClient()` | **Unchanged** — caller-supplied SP secret, not ours |
-| Device-code public client | `lib/auth/msal.ts` `getMsalPublicClient()` | **Unchanged** — public clients carry no credential |
+| Device-code CLI grant | `lib/auth/device-code-grant.ts` (`msalClientSecret()` on the `/token` redemption, #4805) | **Replace** alongside the singleton — it presents the same Console credential, so it takes the `client_assertion` in FIC mode |
 | Secret mint + KV write | `platform/fiab/bicep/modules/admin-plane/entra-app-registration.bicep`, `scripts/csa-loom/bootstrap-msal-app-reg.sh` | Reworked to ensure the **FIC** instead of resetting a secret (end state) |
 | Container App secretRef + env | `platform/fiab/bicep/modules/admin-plane/main.bicep` (`loomMsalClientSecret` → `LOOM_MSAL_CLIENT_SECRET` secretRef) | Removed at end state (params ride the R0 bag — no new top-level params) |
 | Login-health alert text | `.github/workflows/loom-ui-verify.yml` (~L122, AADSTS7000215 rotation hint) | Update remediation text post-flip |
@@ -223,7 +223,9 @@ Notes for the implementer:
   migration" guidance).
 - Update the three secret-presence gates (§3) to accept
   `LOOM_MSAL_CREDENTIAL=fic` as "configured".
-- `getSpConfidentialClient` and the device-code public client are untouched.
+- `getSpConfidentialClient` is untouched. The device-code grant
+  (`lib/auth/device-code-grant.ts`, #4805) is NOT: it presents the Console's own
+  credential, so it moves with the singleton (see its row in §3).
 
 ## 6. Rollout plan (FIC added alongside secret → flip → remove secret)
 
