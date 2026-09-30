@@ -33,7 +33,10 @@
  *      "the AUTO-BIND provider computes the installer's root, not a look-alike"
  *      — which is precisely the duplicate-root bug, since that expression maps
  *      "Demo lakehouse" to `Demo-lakehouse` while the installer wrote
- *      `Demo lakehouse`.
+ *      `Demo lakehouse`. (Since 2026-09-29 a NEW lakehouse gets an item-unique
+ *      root; that test is now "the AUTO-BIND provider computes the ITEM root,
+ *      not the name-only one", which pins literal roots, so the same look-alike
+ *      still goes red there.)
  *   e) Replace `pipelineBackend`'s `DEFAULT_PIPELINE_RUNTIME`-derived fallback
  *      with a literal `'synapse'`. 2 RED:
  *      "a slug-less data-pipeline binds the editor's DEFAULT_PIPELINE_RUNTIME
@@ -48,6 +51,7 @@ import {
   safeAdxDatabaseName,
   safeAdlsRelPath,
   lakehouseRootPath,
+  lakehouseItemRootPath,
   PIPELINE_NAME_RULES,
   EVENT_HUB_NAME_RULES,
   ADX_DATABASE_NAME_RULES,
@@ -193,12 +197,24 @@ describe('lakehouse roots — a displayName cannot escape the lakehouses/ prefix
     }
   });
 
-  it('the AUTO-BIND provider computes the installer’s root, not a look-alike', () => {
-    // The parity that matters: `lakehouse.ts` builds its root with
-    // `lakehouseRootPath(displayName, cosmosItemId)`. If the provider ever
-    // stops calling the same function, an installed lakehouse gets a SECOND
-    // root on first open and the editor lands on the empty one.
-    for (const displayName of ['Demo lakehouse', 'a/b/c', '../../etc/passwd', '..', 'Ünïcødé Lake']) {
+  it('the AUTO-BIND provider computes the ITEM root, not the name-only one', () => {
+    // A NEW lakehouse is created at `lakehouses/<flattened name>--<itemId>`, so
+    // two same-name lakehouses get two directories. The installer still writes
+    // the name-only root and records it in its provisioning receipt, which the
+    // resolver prefers (steps 1/2), so an installed item keeps its directory.
+    //
+    // FAILS IF the provider goes back to `lakehouseRootPath` (it would return
+    // `lakehouses/Demo lakehouse` for the first row, not
+    // `lakehouses/Demo lakehouse--item-guid`), or to any inline look-alike.
+    const cases: Array<[string, string]> = [
+      ['Demo lakehouse', 'lakehouses/Demo lakehouse--item-guid'],
+      // Flattened to ONE segment, so no item root can sit inside another.
+      ['a/b/c', 'lakehouses/a-b-c--item-guid'],
+      ['../../etc/passwd', 'lakehouses/etc-passwd--item-guid'],
+      // Nothing nameable left: the id alone.
+      ['..', 'lakehouses/item-guid'],
+    ];
+    for (const [displayName, expected] of cases) {
       const ctx = {
         itemId: 'item-guid',
         itemType: 'lakehouse',
@@ -206,9 +222,22 @@ describe('lakehouse roots — a displayName cannot escape the lakehouses/ prefix
         workspaceId: 'ws-1',
         state: {},
       };
-      expect(lakehouseAutoBind.backingNameFor(ctx).name)
-        .toBe(lakehouseRootPath(displayName, 'item-guid'));
+      const name = lakehouseAutoBind.backingNameFor(ctx).name;
+      expect(name, displayName).toBe(expected);
+      expect(name).toBe(lakehouseItemRootPath(displayName, 'item-guid'));
+      expect(name.split('/')).toHaveLength(2);
     }
+  });
+
+  it('two lakehouses with the same name get different item roots', () => {
+    // FAILS IF the item id leaves the root: both would be `lakehouses/Sales`.
+    const a = lakehouseItemRootPath('Sales', 'id-a');
+    const b = lakehouseItemRootPath('Sales', 'id-b');
+    expect(a).toBe('lakehouses/Sales--id-a');
+    expect(b).toBe('lakehouses/Sales--id-b');
+    // The name-only root, for contrast, IS shared — which is why it is kept only
+    // for items created before the cutover.
+    expect(lakehouseRootPath('Sales', 'id-a')).toBe(lakehouseRootPath('Sales', 'id-b'));
   });
 });
 
