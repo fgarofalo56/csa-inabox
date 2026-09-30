@@ -334,17 +334,19 @@ describe('analyzeLakehouseQuery — refused queries name the construct', () => {
   }
 
   it('a name with 20 characters to check is refused, and quickly', () => {
-    // With the cap it is refused before any walk. Without the cap the walk keeps only distinct
-    // starts of a system name, so it still ends in well under a second; a walk that kept every
-    // combination (2^20 of them) would not, and a cap removed turns the construct check red.
+    // The time is checked first, so a slow walk reads as slow rather than as a wrong answer.
+    // With the cap the name is refused before any walk. Without the cap the walk keeps only
+    // distinct starts of a system name and still ends quickly, and the name is then accepted, so
+    // the ok check is what turns red. The time limit is for a walk that keeps every distinct
+    // reading, not only the starts of a system name.
     const started = performance.now();
     const out = analyze(`SELECT t.[${fullwidthLetters(20)}] FROM t`);
     const elapsed = performance.now() - started;
+    expect(elapsed).toBeLessThan(250);
     expect(out.ok).toBe(false);
     if (out.ok) return;
     expect(out.construct).toBe(`the name part [${fullwidthShown(20)}]`);
     expect(out.error).toContain('more than 16 characters outside ASCII');
-    expect(elapsed).toBeLessThan(1000);
   });
 
   it('the character offsets named above are where the text stops being readable', () => {
