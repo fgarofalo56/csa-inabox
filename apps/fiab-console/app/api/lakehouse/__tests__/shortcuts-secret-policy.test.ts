@@ -153,7 +153,7 @@ describe('POST /api/lakehouse/shortcuts — credential checks', () => {
     }));
     expect(res.status).toBe(200);
     expect(bindExternalSource).toHaveBeenCalledWith(expect.objectContaining({
-      owner: { kind: 'principal', via: 'request', oid: 'oid-me', upn: 'me@contoso.com', lakehouseId: 'bronze' },
+      owner: { kind: 'principal', via: 'request', oid: 'oid-me', upn: 'me@contoso.com', lakehouseId: 'bronze', targetType: 's3' },
     }));
   });
 

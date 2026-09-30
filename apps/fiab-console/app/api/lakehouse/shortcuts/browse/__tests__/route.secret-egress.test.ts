@@ -35,9 +35,11 @@ vi.mock('@/lib/auth/session', () => ({
 const VAULT_VALUE = 'SENTINEL-VAULT-VALUE-NOT-A-REAL-SECRET';
 
 /** The metadata read the resolver makes: one version, tagged as saved by `oid`. */
-function versionsFor(oid: string) {
+function versionsFor(oid: string, lakehouseId?: string) {
+  const tags: Record<string, string> = { 'loom-owner-oid': oid, 'loom-purpose': 'shortcut-credential' };
+  if (lakehouseId) tags['loom-lakehouse'] = lakehouseId;
   return new Response(JSON.stringify({
-    value: [{ id: 'x', attributes: { enabled: true, created: 1 }, tags: { 'loom-owner-oid': oid, 'loom-purpose': 'shortcut-credential' } }],
+    value: [{ id: 'x', attributes: { enabled: true, created: 1 }, tags }],
   }), { status: 200 });
 }
 
@@ -67,10 +69,10 @@ vi.mock('@/lib/azure/adls-client', () => ({
 vi.mock('@/lib/azure/lakehouse-shortcuts', () => ({ listShortcutSecretBindings: vi.fn(async () => []) }));
 
 /** Default vault behaviour: metadata says user-1 saved it; the value read returns `value`. */
-function vault(value: string, ownerOid = 'user-1') {
+function vault(value: string, ownerOid = 'user-1', lakehouseId?: string) {
   return async (url: any) => {
     const u = String(url);
-    if (u.includes('/versions')) return versionsFor(ownerOid);
+    if (u.includes('/versions')) return versionsFor(ownerOid, lakehouseId);
     if (u.includes('/secrets/')) return new Response(JSON.stringify({ value }), { status: 200 });
     return new Response('{}', { status: 200 });
   };
@@ -243,6 +245,22 @@ describe('the legitimate browse flow still works', () => {
     expect(res.status).toBe(403);
     expect((await res.json()).error).toMatch(/saved by another user/);
     expect(valueReads()).toEqual([]);
+  });
+
+  it('refuses the caller\'s own credential saved for a different lakehouse, without reading it', async () => {
+    // WHAT BREAKS IT: browse resolving without the request's lakehouseId (the
+    // round-2 owner), so the lakehouse comparison is skipped and the value is
+    // read (200). The same fixture with the matching lakehouse is read, which
+    // pins that the refusal comes from the lakehouse and not from the principal.
+    fetchWithTimeoutMock.mockImplementation(vault('abfss://dataverse@contoso.dfs.core.windows.net/exports/tables', 'user-1', 'lh-a'));
+    const res = await GET(req('sourceType=dataverse&kvSecret=loom-sc-abc&lakehouseId=lh-b'));
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toMatch(/saved for a different lakehouse/);
+    expect(valueReads()).toEqual([]);
+
+    const ok = await GET(req('sourceType=dataverse&kvSecret=loom-sc-abc&lakehouseId=lh-a'));
+    expect(ok.status).toBe(200);
+    expect(valueReads()).toEqual(['https://loomkv.vault.azure.net/secrets/loom-sc-abc?api-version=7.4']);
   });
 
   it('refuses an item-minted loom-shortcut- name on the browse tree, without reading it', async () => {

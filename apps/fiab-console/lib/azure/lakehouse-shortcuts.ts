@@ -112,7 +112,15 @@ export function shortcutFullPath(kind: ShortcutKind, parentPath: string, name: s
   return [section, mid, name].filter(Boolean).join('/');
 }
 
-/** List all shortcuts for a lakehouse (single-partition query). */
+/**
+ * Rows written before `statusDetail` was redacted on write still hold the raw
+ * text, so every read path redacts it again before a row leaves this module.
+ */
+function redactStoredDetail(row: LakehouseShortcut): LakehouseShortcut {
+  return typeof row.statusDetail === 'string' ? { ...row, statusDetail: redactErrorText(row.statusDetail) } : row;
+}
+
+/** List all shortcuts for a lakehouse (single-partition query). `statusDetail` is redacted on read. */
 export async function listShortcuts(lakehouseId: string): Promise<LakehouseShortcut[]> {
   const c = await lakehouseShortcutsContainer();
   const { resources } = await c.items
@@ -124,15 +132,15 @@ export async function listShortcuts(lakehouseId: string): Promise<LakehouseShort
       { partitionKey: lakehouseId },
     )
     .fetchAll();
-  return resources;
+  return resources.map(redactStoredDetail);
 }
 
-/** Read a single shortcut by id within a lakehouse. Returns null if absent. */
+/** Read a single shortcut by id within a lakehouse. Returns null if absent. `statusDetail` is redacted on read. */
 export async function getShortcut(lakehouseId: string, id: string): Promise<LakehouseShortcut | null> {
   const c = await lakehouseShortcutsContainer();
   try {
     const { resource } = await c.item(id, lakehouseId).read<LakehouseShortcut>();
-    return resource ?? null;
+    return resource ? redactStoredDetail(resource) : null;
   } catch (e: any) {
     if (e?.code === 404) return null;
     throw e;
@@ -183,8 +191,10 @@ function boundSecret(ref: ShortcutCredentialRef | undefined): string {
  * changes which credential the row binds, the row's creator becomes the caller
  * (`createdBy` / `createdByOid` / `createdAt` reset): the creator is who the
  * row's credential is resolved for, and keeping the previous creator would
- * resolve the new credential for someone who never saved it. A re-create that
- * keeps the same credential keeps the original creator.
+ * resolve the new credential for someone who never saved it. The same holds
+ * when the target changes (type or URI): the caller chose the new target, so
+ * the row is theirs. Only a re-create that keeps both the credential and the
+ * target keeps the original creator.
  *
  * `statusDetail` passes through {@link redactErrorText} before it is stored.
  */
@@ -193,7 +203,10 @@ export async function createShortcut(def: ShortcutDef): Promise<LakehouseShortcu
   const id = shortcutId(def.lakehouseId, def.kind, parentPath, def.name);
   const now = new Date().toISOString();
   const existing = await getShortcut(def.lakehouseId, id);
-  const keepCreator = !!existing && boundSecret(existing.credentialRef) === boundSecret(def.credentialRef);
+  const keepCreator = !!existing
+    && boundSecret(existing.credentialRef) === boundSecret(def.credentialRef)
+    && existing.targetType === def.targetType
+    && (existing.targetUri || '') === (def.targetUri || '');
   const doc: LakehouseShortcut = {
     id,
     lakehouseId: def.lakehouseId,

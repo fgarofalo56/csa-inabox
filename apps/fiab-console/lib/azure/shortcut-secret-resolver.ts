@@ -69,6 +69,8 @@ export type ShortcutSecretOwner =
       lakehouseId?: string | null;
       /** `request`: the caller supplied the name. `row`: a stored row's creator (Test). */
       via: 'request' | 'row';
+      /** The shortcut's target type, when known. Picks the guidance a refusal gives. */
+      targetType?: string | null;
     };
 
 /** Which vault read the resolver delegates to once the checks pass. */
@@ -86,6 +88,27 @@ const REGISTRY_PREFIX = 'loom-sc-';
 const SAVE_HINT = 'Use Save to Key Vault in the shortcut wizard to save the credential.';
 /** What the user can do about a refused credential on an existing row. */
 const ROW_HINT = 'Delete the shortcut and re-create it with a credential saved via Save to Key Vault in the shortcut wizard.';
+/**
+ * Delta Sharing has no Save to Key Vault in the shortcut wizard. Its credential
+ * is the one Loom stores when a provider is added under Data shares, so the
+ * guidance points there — to actions that exist.
+ */
+const SHARE_PATH = 'Data shares → Shared with me → Explore & query → select the table → Create lakehouse shortcut';
+const DS_SAVE_HINT =
+  `Saving a Delta Sharing credential file from the shortcut wizard is not available. Use ${SHARE_PATH}, ` +
+  "or enter a registered provider's credential name (loom-dsp-<provider>).";
+const DS_ROW_HINT = `Delete the shortcut and re-create it from ${SHARE_PATH}.`;
+/** A loom-dsp- name whose provider is no longer registered. */
+const READD_HINT = 'Re-add the provider under Data shares → Add provider, then retry.';
+/** Naming an arbitrary Key Vault secret in the wizard is not supported yet. */
+const TYPED_NAME_NOTE = 'Naming any other Key Vault secret here is not supported yet (#4854).';
+
+function isDeltaSharing(owner: ShortcutSecretOwner): boolean {
+  return owner.kind === 'principal' && lower(owner.targetType) === 'delta_sharing';
+}
+const saveHint = (owner: ShortcutSecretOwner) => (isDeltaSharing(owner) ? DS_SAVE_HINT : SAVE_HINT);
+const rowHint = (owner: ShortcutSecretOwner) => (isDeltaSharing(owner) ? DS_ROW_HINT : ROW_HINT);
+const isRow = (owner: ShortcutSecretOwner) => owner.kind === 'principal' && owner.via === 'row';
 
 /** Thrown when the named credential does not belong to the requested owner. */
 export class ShortcutSecretOwnershipError extends Error {
@@ -152,11 +175,21 @@ function samePrincipal(
   return !!ru && !!wu && ru === wu;
 }
 
-function refuse(name: string, owner: ShortcutSecretOwner, requestText: string, rowText?: string): never {
-  const text = owner.kind === 'principal' && owner.via === 'row'
-    ? `Test uses the credential of the shortcut's owner. ${rowText ?? requestText.replace(SAVE_HINT, '').trim()} ${ROW_HINT}`
-    : requestText;
-  throw new ShortcutSecretOwnershipError(name, text.trim());
+/**
+ * Refuse with guidance for how the name arrived. A caller-supplied name gets
+ * `request` + the save hint for the target type; a stored row (Test) gets
+ * `row` (or `request`) + the row hint. `hint` / `requestHint` override the
+ * default hint where a refusal has a more specific remedy.
+ */
+function refuse(
+  name: string,
+  owner: ShortcutSecretOwner,
+  text: { request: string; row?: string; hint?: string; requestHint?: string },
+): never {
+  const msg = isRow(owner)
+    ? `Test uses the credential of the shortcut's owner. ${text.row ?? text.request} ${text.hint ?? rowHint(owner)}`
+    : `${text.request} ${text.requestHint ?? text.hint ?? saveHint(owner)}`;
+  throw new ShortcutSecretOwnershipError(name, msg.trim());
 }
 
 /** 1 + 2: grammar, then purpose policy. No call of any kind. */
@@ -164,18 +197,21 @@ function assertNameAndPolicy(name: unknown, owner: ShortcutSecretOwner): asserts
   if (!isValidKeyVaultSecretName(name)) {
     throw new ShortcutSecretNameError(
       'The Key Vault secret name is not valid: it must be 1-127 letters, digits or hyphens, with no spaces. ' +
-        (owner.kind === 'principal' && owner.via === 'row' ? ROW_HINT : SAVE_HINT),
+        (isRow(owner) ? rowHint(owner) : saveHint(owner)),
     );
   }
   try {
     assertSecretReadAllowed(name, 'shortcut-credential');
   } catch (e) {
     if (!(e instanceof KeyVaultSecretPolicyError)) throw e;
+    const named = isDeltaSharing(owner)
+      ? `named ${REGISTRY_PREFIX}… or ${SHARE_PROVIDER_SECRET_PREFIX}…`
+      : `named ${REGISTRY_PREFIX}…`;
     const detail = owner.kind === 'item'
       ? `Key Vault secret '${name}' is not the credential Loom saved for this shortcut. Re-enter the credential on the shortcut to replace it.`
       : owner.via === 'row'
-        ? `Test uses the credential of the shortcut's owner. Its stored credential '${name}' is not a shortcut credential Loom saved (those are named ${REGISTRY_PREFIX}…). ${ROW_HINT}`
-        : `Key Vault secret '${name}' is not a shortcut credential Loom saved (those are named ${REGISTRY_PREFIX}…). ${SAVE_HINT}`;
+        ? `Test uses the credential of the shortcut's owner. Its stored credential '${name}' is not a shortcut credential Loom saved (those are ${named}). ${rowHint(owner)}`
+        : `Key Vault secret '${name}' is not a shortcut credential Loom saved (those are ${named}). ${TYPED_NAME_NOTE} ${saveHint(owner)}`;
     throw new KeyVaultSecretPolicyError(name, 'shortcut-credential', detail);
   }
 }
@@ -197,18 +233,16 @@ async function assertShortcutSecretOwned(name: string, owner: ShortcutSecretOwne
   }
 
   if (n.startsWith(ITEM_PREFIX)) {
-    refuse(name, owner, `Key Vault secret '${name}' belongs to a lakehouse-shortcut item and cannot be reused here. ${SAVE_HINT}`);
+    refuse(name, owner, { request: `Key Vault secret '${name}' belongs to a lakehouse-shortcut item and cannot be reused here.` });
   }
 
   if (n.startsWith(SHARE_PROVIDER_SECRET_PREFIX)) {
     if (!(await shareProviderForSecret(n))) {
-      refuse(
-        name,
-        owner,
-        `Key Vault secret '${name}' does not belong to a data share provider registered on this deployment. ` +
-          'Re-add the provider under Data shares → Add provider, then retry.',
-        `Its stored credential '${name}' does not belong to a data share provider registered on this deployment.`,
-      );
+      refuse(name, owner, {
+        request: `Key Vault secret '${name}' does not belong to a data share provider registered on this deployment.`,
+        row: `Its stored credential '${name}' does not belong to a data share provider registered on this deployment.`,
+        hint: READD_HINT,
+      });
     }
     return;
   }
@@ -216,30 +250,35 @@ async function assertShortcutSecretOwned(name: string, owner: ShortcutSecretOwne
   // loom-sc-: the mint record decides; a legacy name falls back to the registry.
   const who = { oid: owner.oid, upn: owner.upn };
   if (!lower(who.oid) && !lower(who.upn)) {
-    refuse(
-      name,
-      owner,
-      `Loom could not identify who is using Key Vault secret '${name}', so it did not read it. Sign in again and retry.`,
-      `This shortcut has no recorded owner, so Loom did not use its credential '${name}'.`,
-    );
+    refuse(name, owner, {
+      request: `Loom could not identify who is using Key Vault secret '${name}', so it did not read it.`,
+      requestHint: 'Sign in again and retry.',
+      row: `This shortcut has no recorded owner, so Loom did not use its credential '${name}'.`,
+    });
   }
 
   const { exists, owner: record } = await getShortcutSecretOwnerRecord(name);
   if (!exists) {
-    refuse(name, owner, `Key Vault secret '${name}' was not found. ${SAVE_HINT}`,
-      `Its stored credential '${name}' was not found in Key Vault.`);
+    refuse(name, owner, {
+      request: `Key Vault secret '${name}' was not found.`,
+      row: `Its stored credential '${name}' was not found in Key Vault.`,
+    });
   }
 
   if (record) {
     if (!samePrincipal(record, who)) {
-      refuse(name, owner, `Key Vault secret '${name}' was saved by another user, so Loom did not read it. ${SAVE_HINT}`,
-        `Its stored credential '${name}' was saved by another user, so Loom did not use it.`);
+      refuse(name, owner, {
+        request: `Key Vault secret '${name}' was saved by another user, so Loom did not read it.`,
+        row: `Its stored credential '${name}' was saved by another user, so Loom did not use it.`,
+      });
     }
     const recLh = (record.lakehouseId || '').trim();
     const reqLh = (owner.lakehouseId || '').trim();
     if (recLh && reqLh && recLh !== reqLh) {
-      refuse(name, owner, `Key Vault secret '${name}' was saved for a different lakehouse, so Loom did not read it. ${SAVE_HINT}`,
-        `Its stored credential '${name}' was saved for a different lakehouse, so Loom did not use it.`);
+      refuse(name, owner, {
+        request: `Key Vault secret '${name}' was saved for a different lakehouse, so Loom did not read it.`,
+        row: `Its stored credential '${name}' was saved for a different lakehouse, so Loom did not use it.`,
+      });
     }
     return;
   }
@@ -247,12 +286,16 @@ async function assertShortcutSecretOwned(name: string, owner: ShortcutSecretOwne
   // Legacy: no mint record. The earliest registry row that binds the name records its owner.
   const first = firstBinding(await listShortcutSecretBindings(n));
   if (!first) {
-    refuse(name, owner, `Key Vault secret '${name}' has no recorded owner, so Loom did not read it. ${SAVE_HINT}`,
-      `Its stored credential '${name}' has no recorded owner, so Loom did not use it.`);
+    refuse(name, owner, {
+      request: `Key Vault secret '${name}' has no recorded owner, so Loom did not read it.`,
+      row: `Its stored credential '${name}' has no recorded owner, so Loom did not use it.`,
+    });
   }
   if (!samePrincipal({ oid: first.createdByOid, upn: first.createdBy }, who)) {
-    refuse(name, owner, `Key Vault secret '${name}' is bound to another user's shortcut, so Loom did not read it. ${SAVE_HINT}`,
-      `Its stored credential '${name}' is bound to another user's shortcut, so Loom did not use it.`);
+    refuse(name, owner, {
+      request: `Key Vault secret '${name}' is bound to another user's shortcut, so Loom did not read it.`,
+      row: `Its stored credential '${name}' is bound to another user's shortcut, so Loom did not use it.`,
+    });
   }
 }
 

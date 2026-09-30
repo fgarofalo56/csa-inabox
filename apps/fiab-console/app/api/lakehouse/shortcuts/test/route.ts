@@ -24,6 +24,7 @@ import { parseAbfss as parseExternalAbfss, listAdlsWithSas, ShortcutSourceError 
 import { headDriveItem, parseSharepointUri, graphDriveConfigGate } from '@/lib/azure/graph-drive-client';
 import { withSession } from '@/lib/api/route-toolkit';
 import { stripTrailingSlashes } from '@/lib/util/path-strings';
+import { SHARE_PROVIDER_SECRET_PREFIX } from '@/lib/azure/share-provider-access';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -60,6 +61,7 @@ export const POST = withSession(async (req: NextRequest) => {
   // presses Test.
   const secretOwner: ShortcutSecretOwner = {
     kind: 'principal', via: 'row', oid: sc.createdByOid, upn: sc.createdBy, lakehouseId: sc.lakehouseId,
+    targetType: sc.targetType,
   };
 
   // Delta Sharing: re-validate by listing shares with the stored bearer token.
@@ -107,11 +109,17 @@ export const POST = withSession(async (req: NextRequest) => {
         );
       }
       if (testRes.status === 401 || testRes.status === 403) {
+        // A loom-dsp- credential is the one Loom stored when the provider was
+        // added under Data shares; adding the provider again saves a new one.
+        const fromProvider = sc.credentialRef.keyVaultSecret.toLowerCase().startsWith(SHARE_PROVIDER_SECRET_PREFIX);
+        const fix = fromProvider
+          ? 'Get a fresh activation file from the provider, then under Data shares remove the provider and add it ' +
+            'again with that file (Add provider), which saves the new credential. Then Retry.'
+          : 'Update the Key Vault secret with a fresh credential file from the provider, then Retry.';
         throw Object.assign(
           new Error(
             `Delta Sharing authentication failed (HTTP ${testRes.status}). The bearer token in secret ` +
-            `'${sc.credentialRef.keyVaultSecret}' is invalid or expired. Update the Key Vault secret with a ` +
-            `fresh credential file from the provider, then Retry.`,
+            `'${sc.credentialRef.keyVaultSecret}' is invalid or expired. ${fix}`,
           ),
           { code: 'delta_sharing_auth_failure' },
         );

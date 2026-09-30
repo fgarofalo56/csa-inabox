@@ -40,7 +40,12 @@ const fakeContainer = {
     },
     query: (spec: { query: string; parameters: { name: string; value: string }[] }) => ({
       fetchAll: async () => {
-        // Only the bindings query is issued in these tests; evaluate its predicate.
+        // listShortcuts: every document in the lakehouse partition, as stored.
+        if (spec.query.startsWith('SELECT * FROM c WHERE c.lakehouseId = @lh')) {
+          const lh = spec.parameters.find((p) => p.name === '@lh')!.value;
+          return { resources: [...store.values()].filter((d) => d.lakehouseId === lh).map((d) => structuredClone(d)) };
+        }
+        // Otherwise the bindings query; evaluate its predicate.
         expect(spec.query).toContain('LOWER(TRIM(c.credentialRef.keyVaultSecret)) = @n');
         const n = spec.parameters.find((p) => p.name === '@n')!.value;
         const resources = [...store.values()]
@@ -60,7 +65,7 @@ vi.mock('../kv-secrets-client', () => ({
   getShortcutSecretValue: vi.fn(),
 }));
 
-import { createShortcut, updateShortcutStatus, getShortcut, shortcutId } from '../lakehouse-shortcuts';
+import { createShortcut, updateShortcutStatus, getShortcut, listShortcuts, shortcutId } from '../lakehouse-shortcuts';
 import { resolveShortcutSecret, ShortcutSecretOwnershipError } from '../shortcut-secret-resolver';
 import { getShortcutSecretOwnerRecord } from '../kv-secrets-client';
 
@@ -122,6 +127,30 @@ describe('re-create resets the creator when the credential changes', () => {
     expect(row.createdBy).toBe('alice@contoso.com');
     expect(row.createdAt).toBe('2026-01-01T00:00:00.000Z');
   });
+
+  it('a re-create that keeps the credential but changes the target makes the caller the creator', async () => {
+    // WHAT BREAKS IT: `keepCreator` comparing only the bound credential. A
+    // loom-dsp- name is shared by everyone who may use the provider, so Bob can
+    // re-create Alice's row with the SAME credential and a different table; the
+    // row must then be Bob's, not credit Alice with a target she never chose.
+    const cred = { kind: 'deltaSharingProfile', keyVaultSecret: 'loom-dsp-acme' } as const;
+    const share = { ...base, targetType: 'delta_sharing' as const };
+    await at('2026-01-01T00:00:00Z', () => createShortcut({ ...share, targetUri: 'share.sales.orders', credentialRef: cred, createdBy: ALICE.upn, createdByOid: ALICE.oid }));
+    await at('2026-03-01T00:00:00Z', () => createShortcut({ ...share, targetUri: 'share.sales.refunds', credentialRef: cred, createdBy: BOB.upn, createdByOid: BOB.oid }));
+    const row = (await getShortcut('lh', ID))!;
+    expect(row.targetUri).toBe('share.sales.refunds');
+    expect(row.createdBy).toBe('bob@contoso.com');
+    expect(row.createdByOid).toBe('oid-bob');
+    expect(row.createdAt).toBe('2026-03-01T00:00:00.000Z');
+  });
+
+  it('a re-create that changes only the target type also makes the caller the creator', async () => {
+    // WHAT BREAKS IT: comparing targetUri but not targetType.
+    const cred = { kind: 'awsKeys', keyVaultSecret: 'loom-sc-a' } as const;
+    await at('2026-01-01T00:00:00Z', () => createShortcut({ ...base, targetType: 's3', targetUri: 'x://b/k', credentialRef: cred, createdBy: ALICE.upn, createdByOid: ALICE.oid }));
+    await at('2026-03-01T00:00:00Z', () => createShortcut({ ...base, targetType: 'gcs', targetUri: 'x://b/k', credentialRef: cred, createdBy: BOB.upn, createdByOid: BOB.oid }));
+    expect((await getShortcut('lh', ID))!.createdBy).toBe('bob@contoso.com');
+  });
 });
 
 describe('statusDetail is redacted before it is stored', () => {
@@ -135,11 +164,34 @@ describe('statusDetail is redacted before it is stored', () => {
     expect(created.statusDetail).toContain('timed out');
     const stored = (await getShortcut('lh', ID))!;
     expect(stored.statusDetail).not.toContain(SENTINEL);
+    // The STORED document, not only what a read returns (reads redact too).
+    expect(store.get(key('lh', ID))!.statusDetail).not.toContain(SENTINEL);
+    expect(store.get(key('lh', ID))!.statusDetail).toContain('timed out');
 
     const updated = await updateShortcutStatus('lh', ID, 'error', detail);
     expect(updated!.statusDetail).not.toContain(SENTINEL);
     expect(updated!.statusDetail).toContain('timed out');
     expect((await getShortcut('lh', ID))!.statusDetail).not.toContain(SENTINEL);
+    expect(store.get(key('lh', ID))!.statusDetail).not.toContain(SENTINEL);
+  });
+
+  it('a row stored BEFORE redaction is returned redacted by listShortcuts and getShortcut', async () => {
+    // WHAT BREAKS IT: returning `resources` / `resource` as stored. The raw
+    // document below is what a row written by the previous code holds.
+    store.set(key('lh', ID), {
+      ...base, id: ID, kind: 'files', parentPath: '', fullPath: 'Files/partner', status: 'error',
+      statusDetail: detail, createdBy: ALICE.upn, createdAt: '2025-12-01T00:00:00.000Z', updatedAt: '2025-12-01T00:00:00.000Z',
+    });
+    const [listed] = await listShortcuts('lh');
+    const one = (await getShortcut('lh', ID))!;
+    for (const r of [listed, one]) {
+      expect(r.statusDetail).not.toContain(SENTINEL);
+      expect(r.statusDetail).toContain('https://acct.dfs.core.windows.net/fs');
+      expect(r.statusDetail).toContain('timed out');
+      expect(r.name).toBe('partner');
+    }
+    // The read does not rewrite the stored document.
+    expect(store.get(key('lh', ID))!.statusDetail).toContain(SENTINEL);
   });
 
   it('a padded stored credential name is still found by the ownership lookup', async () => {

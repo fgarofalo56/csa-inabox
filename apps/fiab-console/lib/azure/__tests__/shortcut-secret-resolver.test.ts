@@ -123,6 +123,8 @@ describe('purpose policy runs before ownership', () => {
       expect(err.message).toContain('loom-sc-');
       expect(err.message).not.toContain('loom-shortcut-');
       expect(err.message).toContain('Save to Key Vault in the shortcut wizard');
+      // A typed name outside the prefixes is refused, and the message says so.
+      expect(err.message).toContain('Naming any other Key Vault secret here is not supported yet (#4854).');
       expect(ownerRecord).not.toHaveBeenCalled();
       noCalls();
     },
@@ -291,5 +293,64 @@ describe('vault selection and the no-read check', () => {
     ownerRecord.mockResolvedValue(MINE);
     await expect(assertShortcutSecretUsable('loom-sc-x', ME)).resolves.toBeUndefined();
     noCalls();
+  });
+});
+
+/**
+ * Guidance follows the target type. Delta Sharing has no Save to Key Vault in
+ * the shortcut wizard, so its refusals point at Data shares instead.
+ *
+ * WHAT BREAKS EACH ONE: choosing the hint without the target type (every
+ * refusal ends in the Save to Key Vault hint), or appending the generic row
+ * hint to the share-provider refusal (the round-2 behaviour).
+ */
+describe('refusal guidance follows the target type', () => {
+  const DS_ME: ShortcutSecretOwner = { ...(ME as any), targetType: 'delta_sharing' };
+  const DS_ROW: ShortcutSecretOwner = { ...(ROW as any), targetType: 'delta_sharing' };
+
+  it('a typed Delta Sharing name is refused with the Data shares path and #4854', async () => {
+    const err = await resolveShortcutSecret('partner-token', DS_ME).catch((e) => e);
+    expect(err).toBeInstanceOf(KeyVaultSecretPolicyError);
+    expect(err.message).toContain('not supported yet (#4854)');
+    expect(err.message).toContain('Explore & query');
+    expect(err.message).toContain('Create lakehouse shortcut');
+    expect(err.message).toContain('loom-dsp-');
+    expect(err.message).not.toContain('Save to Key Vault');
+    noCalls();
+  });
+
+  it('a Delta Sharing row whose loom-sc- credential is missing points at Data shares', async () => {
+    ownerRecord.mockResolvedValue({ exists: false });
+    const err = await resolveShortcutSecret('loom-sc-gone', DS_ROW).catch((e) => e);
+    expect(err).toBeInstanceOf(ShortcutSecretOwnershipError);
+    expect(err.message).toMatch(/^Test uses the credential of the shortcut's owner\./);
+    expect(err.message).toContain('Delete the shortcut and re-create it from Data shares');
+    expect(err.message).not.toContain('Save to Key Vault');
+    noCalls();
+  });
+
+  it('the same refusal for an S3 row keeps the Save to Key Vault hint', async () => {
+    ownerRecord.mockResolvedValue({ exists: false });
+    const err = await resolveShortcutSecret('loom-sc-gone', { ...(ROW as any), targetType: 's3' }).catch((e) => e);
+    expect(err.message).toContain('Save to Key Vault in the shortcut wizard');
+    expect(err.message).not.toContain('Data shares');
+  });
+
+  it.each([['Delta Sharing row', DS_ROW], ['row with no target type', ROW]])(
+    'a %s whose provider is gone keeps the re-add advice, and only that', async (_l, owner) => {
+      const err = await resolveShortcutSecret('loom-dsp-someone-else', owner).catch((e) => e);
+      expect(err).toBeInstanceOf(ShortcutSecretOwnershipError);
+      expect(err.message).toMatch(/^Test uses the credential of the shortcut's owner\./);
+      expect(err.message).toContain('Re-add the provider under Data shares → Add provider, then retry.');
+      expect(err.message).not.toContain('Save to Key Vault');
+      noCalls();
+    },
+  );
+
+  it('an unidentified caller is told to sign in again, not to save a credential', async () => {
+    const err = await resolveShortcutSecret('loom-sc-x', { kind: 'principal', via: 'request' }).catch((e) => e);
+    expect(err.message).toMatch(/could not identify who is using/);
+    expect(err.message).toMatch(/Sign in again and retry\.$/);
+    expect(err.message).not.toContain('Save to Key Vault');
   });
 });

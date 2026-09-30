@@ -15,6 +15,13 @@ import { redactUrlSecrets } from '@/lib/azure/redact-url-secrets';
 const URL_IN_TEXT_RE = /\b([a-z][a-z0-9+.-]{1,15}):\/\/([^\s"'<>]+)/gi;
 
 /**
+ * A SAS parameter that starts the text or follows whitespace, a quote or
+ * punctuation (a bare token such as `sig=…` pasted without its URL).
+ * `redactUrlSecrets` covers the `?name=` / `&name=` forms.
+ */
+const BARE_SAS_PARAM_RE = /(^|[\s"'(<,;:=])((?:sig|signature|sv|se|sp|skoid|key)=)([^&\s"'<>]*)/gi;
+
+/**
  * Strip the query string, fragment and (for http/https) user-info from every
  * URL in `text`. For `abfss://container@account…` the part before `@` is a
  * container name, not a credential, so it is kept.
@@ -37,12 +44,14 @@ export function stripUrlQueryAndCredentials(text: string): string {
 
 /**
  * The ONE redactor for shortcut error text: URLs lose their query, fragment and
- * credentials, and any remaining `?sig=` / `&sig=`-style secret parameter
- * (a bare SAS outside a URL) has its value replaced (`redactUrlSecrets`).
+ * credentials, any remaining `?sig=` / `&sig=`-style secret parameter (a SAS
+ * outside a URL) has its value replaced (`redactUrlSecrets`), and so does a
+ * bare `sig=…` token with no `?` or `&` before it.
  */
 export function redactErrorText(text: string): string {
   if (!text) return text;
-  return redactUrlSecrets(stripUrlQueryAndCredentials(String(text)));
+  return redactUrlSecrets(stripUrlQueryAndCredentials(String(text)))
+    .replace(BARE_SAS_PARAM_RE, (_m, lead: string, name: string) => `${lead}${name}REDACTED`);
 }
 
 /**

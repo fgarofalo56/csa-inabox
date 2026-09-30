@@ -142,7 +142,42 @@ describe('Data shares → Shortcut into lakehouse', () => {
     });
     const res = await TEST(postReq({ lakehouseId: 'lh-item-1', id: 'r' }));
     expect(res.status).toBe(403);
+    // WHAT BREAKS IT: appending the generic row hint (Save to Key Vault, which
+    // Delta Sharing does not have) instead of the re-add advice.
+    const err = (await res.json()).error as string;
+    expect(err).toContain('Re-add the provider under Data shares → Add provider');
+    expect(err).not.toContain('Save to Key Vault');
     expect(vault).not.toHaveBeenCalled();
     expect(updateShortcutStatus).not.toHaveBeenCalled();
+  });
+
+  it('Test on a data-share row whose token is rejected says how to renew it under Data shares', async () => {
+    // WHAT BREAKS IT: the round-2 text ("Update the Key Vault secret with a
+    // fresh credential file"), an action Loom offers nowhere for loom-dsp-.
+    fetchSpy.mockResolvedValue(new Response('{}', { status: 401 }) as any);
+    (getShortcut as any).mockResolvedValue({
+      id: 'r', lakehouseId: 'lh-item-1', name: 'metrics', kind: 'files', targetType: 'delta_sharing',
+      targetUri: 'delta-sharing://agency_a/analytics/metrics', status: 'active',
+      credentialRef: { kind: 'deltaSharing', keyVaultSecret: 'loom-dsp-acme-corp' }, createdBy: 'me@contoso.com',
+    });
+    const res = await TEST(postReq({ lakehouseId: 'lh-item-1', id: 'r' }));
+    expect(res.status).toBe(502);
+    const j = await res.json();
+    expect(j.code).toBe('delta_sharing_auth_failure');
+    expect(j.error).toContain('remove the provider and add it again with that file (Add provider)');
+    expect(j.error).not.toContain('Update the Key Vault secret');
+  });
+
+  it('a typed Delta Sharing credential name is refused with the Data shares path, no read and no row', async () => {
+    // WHAT BREAKS IT: the Save to Key Vault hint for a target that has none.
+    const b = body('acme_corp');
+    const res = await CREATE(postReq({ ...b, credentialRef: { ...b.credentialRef, keyVaultSecret: 'partner-token' } }));
+    expect(res.status).toBe(403);
+    const err = (await res.json()).error as string;
+    expect(err).toContain('not supported yet (#4854)');
+    expect(err).toContain('Create lakehouse shortcut');
+    expect(err).not.toContain('Save to Key Vault');
+    expect(vault).not.toHaveBeenCalled();
+    expect(createShortcut).not.toHaveBeenCalled();
   });
 });

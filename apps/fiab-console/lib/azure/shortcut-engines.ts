@@ -110,6 +110,20 @@ export interface AbfssParts {
  *   onelake://<workspace>/<lakehouse>/<path>  (internal Loom OneLake, cross-workspace)
  *   internal://<container>/<path>  (internal Loom lakehouse, account-relative)
  */
+/**
+ * Escape `value` for placement inside `levels` nested T-SQL string literals.
+ * One level (`'…'`) doubles each quote. A literal inside `EXEC('…')` is two
+ * levels, so each quote becomes four: the outer literal decodes `''''` to
+ * `''`, which the inner literal decodes to `'`. Every value interpolated into
+ * a T-SQL literal in this file goes through here.
+ */
+export function sqlLiteralAt(value: string, levels: 1 | 2): string {
+  if (levels !== 1 && levels !== 2) throw new Error(`sqlLiteralAt: unsupported literal depth ${String(levels)}`);
+  let out = String(value);
+  for (let i = 0; i < levels; i++) out = escapeSqlLiteral(out);
+  return out;
+}
+
 export function parseAbfss(targetUri: string, internalAccount?: () => string): AbfssParts | null {
   const u = (targetUri || '').trim();
   let m = u.match(ABFSS_RE);
@@ -361,7 +375,7 @@ async function ensureServerlessDb(): Promise<void> {
   if (serverlessDbEnsured) return;
   await executeQuery(
     serverlessTarget('master'),
-    `IF NOT EXISTS (SELECT 1 FROM sys.databases WHERE name = '${serverlessDb()}') EXEC('CREATE DATABASE [${serverlessDb()}]');`,
+    `IF NOT EXISTS (SELECT 1 FROM sys.databases WHERE name = '${sqlLiteralAt(serverlessDb(), 1)}') EXEC('CREATE DATABASE [${sqlLiteralAt(serverlessDb(), 1)}]');`,
   );
   serverlessDbEnsured = true;
 }
@@ -701,21 +715,22 @@ export async function createTablesShortcut(args: {
     const obj = synapseObject(args.name);
     const cred = `loom_adls_sas_${args.name.replace(/[^a-z0-9_]+/gi, '_')}`.toLowerCase();
     const dsName = `${cred}_ds`;
-    // SECRET must NOT carry a leading '?'; escape single quotes for the T-SQL literal.
-    const sasSecret = escapeSqlLiteral(sas.trim().replace(/^\?+/, ''));
+    // SECRET must NOT carry a leading '?'.
+    const sasSecret = sqlLiteralAt(sas.trim().replace(/^\?+/, ''), 1);
     const location = `https://${account.split('.')[0]}.${getDfsSuffix()}/${container}`;
-    const key = escapeSqlLiteral((path || '').replace(/^\/+/, ''));
+    // BULK '…' sits inside EXEC('…'): two literal levels.
+    const key = sqlLiteralAt((path || '').replace(/^\/+/, ''), 2);
     const csvOpts = fmt === 'CSV' ? `, PARSER_VERSION = ''2.0'', HEADER_ROW = TRUE` : '';
     const ddl =
       `IF NOT EXISTS (SELECT 1 FROM sys.symmetric_keys WHERE name = '##MS_DatabaseMasterKey##') CREATE MASTER KEY;\n` +
-      `IF EXISTS (SELECT 1 FROM sys.external_data_sources WHERE name = '${dsName}') DROP EXTERNAL DATA SOURCE ${dsName};\n` +
-      `IF EXISTS (SELECT 1 FROM sys.database_scoped_credentials WHERE name = '${cred}') DROP DATABASE SCOPED CREDENTIAL ${cred};\n` +
+      `IF EXISTS (SELECT 1 FROM sys.external_data_sources WHERE name = '${sqlLiteralAt(dsName, 1)}') DROP EXTERNAL DATA SOURCE ${dsName};\n` +
+      `IF EXISTS (SELECT 1 FROM sys.database_scoped_credentials WHERE name = '${sqlLiteralAt(cred, 1)}') DROP DATABASE SCOPED CREDENTIAL ${cred};\n` +
       `CREATE DATABASE SCOPED CREDENTIAL ${cred} WITH IDENTITY = 'SHARED ACCESS SIGNATURE', SECRET = '${sasSecret}';\n` +
-      `CREATE EXTERNAL DATA SOURCE ${dsName} WITH (LOCATION = '${escapeSqlLiteral(location)}', CREDENTIAL = ${cred});\n` +
+      `CREATE EXTERNAL DATA SOURCE ${dsName} WITH (LOCATION = '${sqlLiteralAt(location, 1)}', CREDENTIAL = ${cred});\n` +
       `IF SCHEMA_ID('shortcuts') IS NULL EXEC('CREATE SCHEMA shortcuts');\n` +
-      `IF OBJECT_ID('${obj}','V') IS NOT NULL DROP VIEW ${obj};\n` +
-      `EXEC('CREATE VIEW ${obj} AS SELECT * FROM OPENROWSET(BULK ''${key}'', ` +
-      `DATA_SOURCE = ''${dsName}'', FORMAT = ''${fmt}''${csvOpts}) AS r');`;
+      `IF OBJECT_ID('${sqlLiteralAt(obj, 1)}','V') IS NOT NULL DROP VIEW ${obj};\n` +
+      `EXEC('CREATE VIEW ${sqlLiteralAt(obj, 1)} AS SELECT * FROM OPENROWSET(BULK ''${key}'', ` +
+      `DATA_SOURCE = ''${sqlLiteralAt(dsName, 2)}'', FORMAT = ''${sqlLiteralAt(fmt, 2)}''${csvOpts}) AS r');`;
     await ensureServerlessDb();
     await executeQuery(serverlessTarget(serverlessDb()), ddl);
     return { engine: 'synapse', engineObject: synapseQualified(obj) };
@@ -743,12 +758,13 @@ export async function createTablesShortcut(args: {
     // EXTERNAL DATA SOURCE (built by bindExternalSource). The BULK arg is the
     // object key relative to the data source LOCATION.
     if (args.external?.synapseDataSource) {
-      const key = escapeSqlLiteral((args.external.objectKey || ''));
+      // BULK '…' and DATA_SOURCE '…' sit inside EXEC('…'): two literal levels.
+      const key = sqlLiteralAt((args.external.objectKey || ''), 2);
       const ddl =
         `IF SCHEMA_ID('shortcuts') IS NULL EXEC('CREATE SCHEMA shortcuts');\n` +
-        `IF OBJECT_ID('${obj}','V') IS NOT NULL DROP VIEW ${obj};\n` +
-        `EXEC('CREATE VIEW ${obj} AS SELECT * FROM OPENROWSET(BULK ''${key}'', ` +
-        `DATA_SOURCE = ''${args.external.synapseDataSource}'', FORMAT = ''${fmt}''${csvOpts}) AS r');`;
+        `IF OBJECT_ID('${sqlLiteralAt(obj, 1)}','V') IS NOT NULL DROP VIEW ${obj};\n` +
+        `EXEC('CREATE VIEW ${sqlLiteralAt(obj, 1)} AS SELECT * FROM OPENROWSET(BULK ''${key}'', ` +
+        `DATA_SOURCE = ''${sqlLiteralAt(args.external.synapseDataSource, 2)}'', FORMAT = ''${sqlLiteralAt(fmt, 2)}''${csvOpts}) AS r');`;
       await ensureServerlessDb();
       await executeQuery(serverlessTarget(serverlessDb()), ddl);
       return { engine, engineObject: synapseQualified(obj) };
@@ -762,10 +778,11 @@ export async function createTablesShortcut(args: {
     const bulkUrl = `https://${parts.account}.dfs.core.windows.net/${parts.container}/${parts.path}`;
     // Idempotent external view: drop + recreate so re-creating a shortcut is an
     // upsert (matches the registry's deterministic id).
+    // BULK '…' sits inside EXEC('…'): two literal levels.
     const ddl =
       `IF SCHEMA_ID('shortcuts') IS NULL EXEC('CREATE SCHEMA shortcuts');\n` +
-      `IF OBJECT_ID('${obj}','V') IS NOT NULL DROP VIEW ${obj};\n` +
-      `EXEC('CREATE VIEW ${obj} AS SELECT * FROM OPENROWSET(BULK ''${bulkUrl}'', FORMAT = ''${fmt}''${csvOpts}) AS r');`;
+      `IF OBJECT_ID('${sqlLiteralAt(obj, 1)}','V') IS NOT NULL DROP VIEW ${obj};\n` +
+      `EXEC('CREATE VIEW ${sqlLiteralAt(obj, 1)} AS SELECT * FROM OPENROWSET(BULK ''${sqlLiteralAt(bulkUrl, 2)}'', FORMAT = ''${sqlLiteralAt(fmt, 2)}''${csvOpts}) AS r');`;
     await ensureServerlessDb();
     await executeQuery(serverlessTarget(serverlessDb()), ddl);
     return { engine, engineObject: synapseQualified(obj) };
@@ -827,7 +844,7 @@ export async function dropShortcutObject(args: {
     const obj = parts.length === 3 ? `${parts[1]}.${parts[2]}` : args.engineObject;
     await executeQuery(
       serverlessTarget(db),
-      `IF OBJECT_ID('${obj}','V') IS NOT NULL DROP VIEW ${obj};`,
+      `IF OBJECT_ID('${sqlLiteralAt(obj, 1)}','V') IS NOT NULL DROP VIEW ${obj};`,
     );
     return;
   }
@@ -1282,14 +1299,14 @@ export async function bindExternalSource(args: {
     const ddl =
       `IF NOT EXISTS (SELECT 1 FROM sys.symmetric_keys WHERE name = '##MS_DatabaseMasterKey##') ` +
       `CREATE MASTER KEY;\n` +
-      `IF EXISTS (SELECT 1 FROM sys.external_data_sources WHERE name = '${dsName}') ` +
+      `IF EXISTS (SELECT 1 FROM sys.external_data_sources WHERE name = '${sqlLiteralAt(dsName, 1)}') ` +
       `DROP EXTERNAL DATA SOURCE ${dsName};\n` +
-      `IF EXISTS (SELECT 1 FROM sys.database_scoped_credentials WHERE name = '${cred}') ` +
+      `IF EXISTS (SELECT 1 FROM sys.database_scoped_credentials WHERE name = '${sqlLiteralAt(cred, 1)}') ` +
       `DROP DATABASE SCOPED CREDENTIAL ${cred};\n` +
       `CREATE DATABASE SCOPED CREDENTIAL ${cred} ` +
-      `WITH IDENTITY = 'S3 Access Key', SECRET = '${escapeSqlLiteral(secret.trim())}';\n` +
+      `WITH IDENTITY = 'S3 Access Key', SECRET = '${sqlLiteralAt(secret.trim(), 1)}';\n` +
       `CREATE EXTERNAL DATA SOURCE ${dsName} ` +
-      `WITH (LOCATION = '${escapeSqlLiteral(obj.prefix)}', CREDENTIAL = ${cred});`;
+      `WITH (LOCATION = '${sqlLiteralAt(obj.prefix, 1)}', CREDENTIAL = ${cred});`;
     await ensureServerlessDb();
     await executeQuery(serverlessTarget(serverlessDb()), ddl);
     return { readUri: targetUri, synapse: { dataSource: dsName, scopedCredential: cred } };

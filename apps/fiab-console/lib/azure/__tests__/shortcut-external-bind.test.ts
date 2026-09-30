@@ -39,7 +39,7 @@ vi.mock('../databricks-client', () => ({
   deleteUcVolumesFile: vi.fn(async () => {}),
 }));
 
-import { bindExternalSource, createTablesShortcut, externalSourceGate, SECRET_SHAPE_MISMATCH } from '../shortcut-engines';
+import { bindExternalSource, createTablesShortcut, externalSourceGate, SECRET_SHAPE_MISMATCH, sqlLiteralAt } from '../shortcut-engines';
 import {
   getKeyVaultSecret,
   keyVaultConfigGate,
@@ -366,5 +366,108 @@ describe('bindExternalSource resolves through the shortcut-secret policy', () =>
     });
     expect((ok as any).readUri).toBe('s3://b/k');
     expect(getKeyVaultSecret).toHaveBeenCalledWith('loom-shortcut-item-1');
+  });
+});
+
+/**
+ * Values in nested dynamic SQL are escaped for each literal level.
+ *
+ * `EXEC('CREATE VIEW … OPENROWSET(BULK ''<value>'', …)')` puts <value> inside a
+ * literal that is itself inside a literal, so a quote in it must be doubled
+ * twice. These tests DECODE the statement the way T-SQL does — the EXEC
+ * literal first, then the inner literal — and assert the decoded value is the
+ * intended one, and that the EXEC literal closes exactly at `')`.
+ *
+ * WHAT BREAKS EACH ONE: escaping the value for one level only (or not at all).
+ * The EXEC literal then closes at the value's quote, so it no longer ends at
+ * `');` and the decoded BULK / DATA_SOURCE value is cut short.
+ */
+describe('nested dynamic SQL: values are escaped for each literal level', () => {
+  /** Read the T-SQL literal whose opening quote is at `open`; `''` is one quote. */
+  function readLiteral(s: string, open: number): { value: string; end: number } {
+    expect(s[open]).toBe("'");
+    let out = '';
+    for (let i = open + 1; i < s.length; i++) {
+      if (s[i] !== "'") { out += s[i]; continue; }
+      if (s[i + 1] === "'") { out += "'"; i++; continue; }
+      return { value: out, end: i + 1 };
+    }
+    throw new Error('unterminated literal');
+  }
+
+  /** Decode EXEC('…') in `ddl`, then the literal after each `marker` in the result. */
+  function decodeView(ddl: string) {
+    const at = ddl.indexOf("EXEC('CREATE VIEW");
+    expect(at).toBeGreaterThanOrEqual(0);
+    const outer = readLiteral(ddl, at + 'EXEC('.length);
+    // The EXEC literal must close exactly at the end of the statement.
+    expect(ddl.slice(outer.end)).toBe(');');
+    const inner = outer.value;
+    const lit = (marker: string) => {
+      const i = inner.indexOf(marker);
+      expect(i, `marker ${marker} in ${inner}`).toBeGreaterThanOrEqual(0);
+      return readLiteral(inner, i + marker.length).value;
+    };
+    return { inner, lit };
+  }
+
+  const viewDdl = () => ((executeQuery as any).mock.calls as any[][]).map((c) => c[1] as string)
+    .find((s) => s.includes("EXEC('CREATE VIEW"))!;
+
+  beforeEach(() => { process.env.LOOM_SYNAPSE_WORKSPACE = 'ws1'; });
+
+  it('sqlLiteralAt doubles each quote once per level', () => {
+    // WHAT BREAKS IT: a helper that ignores `levels`.
+    expect(sqlLiteralAt("o'k", 1)).toBe("o''k");
+    expect(sqlLiteralAt("o'k", 2)).toBe("o''''k");
+    expect(() => sqlLiteralAt('x', 3 as any)).toThrow(/literal depth/);
+  });
+
+  it('SAS Tables path: the object key inside BULK', async () => {
+    await createTablesShortcut({
+      lakehouseId: 'lh1', name: 'sasv', abfssUri: 'abfss://x@acct.dfs.core.windows.net/p', format: 'parquet',
+      external: { objectUri: '', adlsSas: { sas: 'sv=2024&sig=x', account: 'acct', container: 'data', path: "exports/o'neil.parquet" } } as any,
+    });
+    const ddl = viewDdl();
+    expect(ddl).toContain("BULK ''exports/o''''neil.parquet''");
+    const { lit } = decodeView(ddl);
+    expect(lit('BULK ')).toBe("exports/o'neil.parquet");
+    expect(lit('DATA_SOURCE = ')).toBe('loom_adls_sas_sasv_ds');
+    expect(lit('FORMAT = ')).toBe('PARQUET');
+  });
+
+  it('S3 over a Synapse data source: the object key inside BULK', async () => {
+    await createTablesShortcut({
+      lakehouseId: 'lh1', name: 's3v', abfssUri: '', format: 'parquet',
+      external: { objectUri: 's3://b/k', synapseDataSource: 'loom_s3_x_ds', objectKey: "in/o'k.parquet" } as any,
+    });
+    const ddl = viewDdl();
+    expect(ddl).toContain("BULK ''in/o''''k.parquet''");
+    const { lit } = decodeView(ddl);
+    expect(lit('BULK ')).toBe("in/o'k.parquet");
+    expect(lit('FORMAT = ')).toBe('PARQUET');
+  });
+
+  it('S3 over a Synapse data source: the data source name inside DATA_SOURCE', async () => {
+    await createTablesShortcut({
+      lakehouseId: 'lh1', name: 's3d', abfssUri: '', format: 'parquet',
+      external: { objectUri: 's3://b/k', synapseDataSource: "ds'x", objectKey: 'in/k.parquet' } as any,
+    });
+    const ddl = viewDdl();
+    expect(ddl).toContain("DATA_SOURCE = ''ds''''x''");
+    const { lit } = decodeView(ddl);
+    expect(lit('DATA_SOURCE = ')).toBe("ds'x");
+    expect(lit('BULK ')).toBe('in/k.parquet');
+  });
+
+  it('in-tenant ADLS: the https URL inside BULK', async () => {
+    await createTablesShortcut({
+      lakehouseId: 'lh1', name: 'adlsv', abfssUri: "abfss://c@acct.dfs.core.windows.net/dir/o'neil", format: 'delta',
+    } as any);
+    const ddl = viewDdl();
+    expect(ddl).toContain("BULK ''https://acct.dfs.core.windows.net/c/dir/o''''neil''");
+    const { lit } = decodeView(ddl);
+    expect(lit('BULK ')).toBe("https://acct.dfs.core.windows.net/c/dir/o'neil");
+    expect(lit('FORMAT = ')).toBe('DELTA');
   });
 });

@@ -52,6 +52,28 @@ describe('redactErrorText', () => {
     expect(out).toContain('sig=REDACTED');
   });
 
+  // The five shapes a SAS takes in error text. WHAT BREAKS IT: shape 5 (a bare
+  // `sig=` that starts the text, with no `?` or `&` before it) survives
+  // `redactUrlSecrets` alone, so dropping BARE_SAS_PARAM_RE turns that row red.
+  // Each row pairs the absence check with the text that must survive.
+  it.each([
+    ['https URL', `GET https://acct.blob.core.windows.net/c/p?sv=2024&sig=${SENTINEL} 403`, 'GET https://acct.blob.core.windows.net/c/p 403'],
+    ['host without a scheme', `acct.blob.core.windows.net/c?sv=2024&sig=${SENTINEL}`, 'acct.blob.core.windows.net/c?sv=REDACTED&sig=REDACTED'],
+    ['bare sv=…&sig=…', `token was sv=2024&sig=${SENTINEL}&se=2030`, 'token was sv=REDACTED&sig=REDACTED&se=REDACTED'],
+    ['URL user-info', `proxy https://user:${SENTINEL}@proxy.example.net/p`, 'proxy https://proxy.example.net/p'],
+    ['bare token starting with sig=', `sig=${SENTINEL}&se=2030 was rejected`, 'sig=REDACTED&se=REDACTED was rejected'],
+  ])('redacts a SAS given as %s', (_label, input, expected) => {
+    const out = redactErrorText(input);
+    expect(out).not.toContain(SENTINEL);
+    expect(out).toBe(expected);
+  });
+
+  it('leaves a word that merely ends in a parameter name alone', () => {
+    // WHAT BREAKS IT: a bare-token pattern with no leading anchor, which would
+    // rewrite `assign=` and `turnkey=` as if they were `sig=` / `key=`.
+    expect(redactErrorText('assign=keepme turnkey=keepme')).toBe('assign=keepme turnkey=keepme');
+  });
+
   it('networkFailureReason returns a symbol, never the message', () => {
     expect(networkFailureReason({ name: 'FetchTimeoutError', message: `https://x/?sig=${SENTINEL}` })).toBe('timeout');
     expect(networkFailureReason({ cause: { code: 'ENOTFOUND' }, message: 'x' })).toBe('ENOTFOUND');

@@ -14,6 +14,7 @@
  *   region     = AWS region                     (s3)
  *   account    = storage account                (adls)
  *   container  = filesystem/container           (adls)
+ *   lakehouseId = the lakehouse the wizard is creating the shortcut in (optional)
  *
  * Credentials are read from Key Vault by NAME (never passed in the URL, never
  * echoed). ADLS browses on the Console UAMI (no credential). Returns
@@ -41,9 +42,10 @@
  * sources: a resolved value is never interpolated into an error (parseAbfss),
  * and `region` cannot move the S3 request to another authority (listS3Objects).
  *
- * The browse tree has no lakehouse in its request, so the ownership check here
- * compares the principal only; the create and Test routes also compare the
- * lakehouse the credential was saved for.
+ * When the request names `lakehouseId`, the ownership check also compares the
+ * lakehouse the credential was saved for, as the create and Test routes do. The
+ * parameter can only narrow the check: it never grants a read the principal
+ * check refuses, so it needs no item authorization of its own.
  *
  * Auth: session-required. Runtime: nodejs, force-dynamic.
  * Per .claude/rules/no-vaporware.md — real S3/GCS/ADLS REST, no mock arrays.
@@ -122,9 +124,13 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
       if (sourceType === 's3') assertValidAwsRegion(s3Region);
 
       const claims = session.claims as { oid?: string; upn?: string; email?: string };
+      const lakehouseId = (sp.get('lakehouseId') || '').trim() || undefined;
       const secretValue = (await resolveShortcutSecret(
         kvSecret,
-        { kind: 'principal', via: 'request', oid: claims.oid, upn: claims.upn || claims.email },
+        {
+          kind: 'principal', via: 'request', oid: claims.oid, upn: claims.upn || claims.email,
+          lakehouseId, targetType: sourceType,
+        },
         { vault: 'shortcut' },
       )).trim();
       if (!secretValue) {
