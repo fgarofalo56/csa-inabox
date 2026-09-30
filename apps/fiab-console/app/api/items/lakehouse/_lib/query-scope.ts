@@ -198,11 +198,11 @@ function isCompatibilityCharacter(c: string): boolean {
  * more: `ß` as `ss`, and a compatibility character
  * ({@link isCompatibilityCharacter}) both as its plain form and as nothing.
  *
- * So: `ß` and `ẞ` read as `ss` and `ı` as `i`; every other character is
- * NFKD-decomposed and its combining marks (`Mn`, `Me`) removed, which removes
- * a mark written on its own too; and the result is lower-cased. NFKD, not
- * NFKC, so an accent written as a separate mark is removed rather than composed
- * into its letter. A part with a compatibility character has two readings: the
+ * So: every character is NFKD-decomposed; in the decomposition `ß` and `ẞ`
+ * read as `ss` and `ı` as `i`, and combining marks (`Mn`, `Me`) are removed,
+ * which removes a mark written on its own too; and the result is lower-cased.
+ * NFKD, not NFKC, so an accent written as a separate mark is removed rather
+ * than composed into its letter. A part with a compatibility character has two readings: the
  * plain one, and one with those characters removed. With more than one
  * compatibility character, the two readings fold all of them or remove all of
  * them, not a mix.
@@ -218,13 +218,11 @@ function nameReadings(part: string): { readings: string[] } | { unknown: string 
   let compatibility = false;
   for (const c of part) {
     if (/[\p{Cn}\p{Co}\p{Cs}]/u.test(c)) return { unknown: c };
-    const expanded = LETTER_EXPANSIONS[c];
-    if (expanded !== undefined) {
-      plain += expanded;
-      strict += expanded;
-      continue;
-    }
-    const folded = c.normalize('NFKD').replace(/[\p{Mn}\p{Me}]/gu, '');
+    // The letter expansions apply to the decomposition too: mathematical dotless i decomposes to ı.
+    const folded = [...c.normalize('NFKD')]
+      .map((d) => LETTER_EXPANSIONS[d] ?? d)
+      .join('')
+      .replace(/[\p{Mn}\p{Me}]/gu, '');
     plain += folded;
     if (isCompatibilityCharacter(c)) compatibility = true;
     else strict += folded;

@@ -351,6 +351,10 @@ describe('analyzeLakehouseQuery — refused queries name the construct', () => {
       'the system compatibility view [sys\u0131ndexes] (read as sysindexes)'],
     ['a dotted capital I inside a compatibility view', 'SELECT * FROM [SYS\u0130NDEXES]',
       'the system compatibility view [SYS\u0130NDEXES] (read as sysindexes)'],
+    // Mathematical dotless i decomposes to dotless i, which then reads as i. Accepted if the expansions
+    // applied only to the character as written (sys + dotless i + ndexes, no system name).
+    ['a mathematical dotless i inside a compatibility view', 'SELECT * FROM [sys\u{1d6a4}ndexes]',
+      'the system compatibility view [sys\u{1d6a4}ndexes] (read as sysindexes)'],
     // Code points whose comparison cannot be known, refused outright.
     ['an unassigned code point in a name', 'SELECT t.[a\u0378b] FROM t', 'the name part [a\\u{378}b]'],
     ['a private-use code point in a name', 'SELECT t.[a\ue000b] FROM t', 'the name part [a\\u{e000}b]'],
