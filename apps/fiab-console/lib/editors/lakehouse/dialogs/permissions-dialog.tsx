@@ -18,7 +18,7 @@ export function PermissionsDialog() {
   const ctx = useLakehouseCtx();
   const {
     permsOpen, setPermsOpen, permsTab, selectPermsTab,
-    permsBusy, permsError, sqlGate,
+    permsBusy, permsError, permsListRefused, sqlGate,
     permsRows, permsRoles, revokePerm, grantPerm,
     newPrincipalId, setNewPrincipalId, newPrincipalType, setNewPrincipalType, newRole, setNewRole,
     sqlGrants, revokeSqlGrant, grantSqlTable, grantSqlColumn,
@@ -36,6 +36,9 @@ export function PermissionsDialog() {
   // still loading.
   const isTenantAdmin = useIsTenantAdmin();
   const revokeReasonId = 'lh-perms-revoke-admin-reason';
+  // A grant goes to the same binding the listing reads, so when the listing
+  // was refused (409) the grant would be refused too: say so before the click.
+  const grantReasonId = 'lh-perms-grant-refused-reason';
 
   const renderPrincipalPicker = () => (
     <Field label="Principal (Entra user)" required>
@@ -129,7 +132,8 @@ export function PermissionsDialog() {
                       <TableHeaderCell>Action</TableHeaderCell>
                     </TableRow></TableHeader>
                     <TableBody>
-                      {permsRows.length === 0 && (
+                      {/* An empty list after a failed listing is unknown, not empty. */}
+                      {permsRows.length === 0 && !permsError && (
                         <TableRow><TableCell colSpan={4}><Caption1>No Storage Blob Data role assignments at the container scope.</Caption1></TableCell></TableRow>
                       )}
                       {permsRows.map((r) => (
@@ -194,8 +198,20 @@ export function PermissionsDialog() {
                     </Dropdown>
                   </Field>
                 </div>
-                <div style={{ marginTop: tokens.spacingVerticalM, display: 'flex', justifyContent: 'flex-end' }}>
-                  <Button appearance="primary" onClick={grantPerm} disabled={permsBusy || !newPrincipalId.trim()}>
+                <div style={{ marginTop: tokens.spacingVerticalM, display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end', gap: tokens.spacingHorizontalM }}>
+                  {permsListRefused && (
+                    <Caption1 id={grantReasonId} style={{ color: tokens.colorNeutralForeground3, minWidth: 0 }}>
+                      Grant role is unavailable because Loom could not list this lakehouse&apos;s role
+                      assignments (see the error above). Resolve that, then reopen Permissions.
+                    </Caption1>
+                  )}
+                  <Button
+                    appearance="primary"
+                    onClick={grantPerm}
+                    disabled={permsListRefused ? undefined : permsBusy || !newPrincipalId.trim()}
+                    disabledFocusable={permsListRefused}
+                    aria-describedby={permsListRefused ? grantReasonId : undefined}
+                  >
                     {permsBusy ? 'Working…' : 'Grant role'}
                   </Button>
                 </div>

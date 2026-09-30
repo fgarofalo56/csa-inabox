@@ -142,6 +142,8 @@ export interface LakehouseEditorCtx {
   setPermsBusy: (v: boolean) => void;
   permsError: string | null;
   setPermsError: (e: string | null) => void;
+  /** The last object-tab listing was refused with a 409; Grant role is disabled until a listing succeeds. */
+  permsListRefused: boolean;
   newPrincipalId: string;
   setNewPrincipalId: (v: string) => void;
   newPrincipalType: 'User' | 'Group' | 'ServicePrincipal';

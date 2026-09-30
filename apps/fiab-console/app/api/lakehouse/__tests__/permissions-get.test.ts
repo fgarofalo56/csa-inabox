@@ -6,7 +6,9 @@
  *   `resolveItemAccessByOid`. A caller who cannot reach it gets 404 (the same
  *   answer every other lakehouse route gives) and no backend listing runs.
  *   tab=object lists role assignments only on the item's own container.
- * - Without `lakehouseId`: only a tenant admin may list.
+ * - Without `lakehouseId`: tab=object is refused for every caller (400
+ *   `item_required`, the grant and the revoke answer the same); the SQL tabs
+ *   answer only a tenant admin.
  *
  * Every refusal reads the CALL ROW SET of the backend listing it withholds, and
  * is paired with a positive arm on the same request shape, so "nothing was
@@ -52,7 +54,7 @@ vi.mock('@/lib/auth/item-access', () => ({ resolveItemAccessByOid: vi.fn() }));
 
 import { GET } from '../permissions/route';
 import { getSession } from '@/lib/auth/session';
-import { listContainerRoleAssignments } from '@/lib/azure/adls-client';
+import { listContainerRoleAssignments, StorageAccountNotLocatedError } from '@/lib/azure/adls-client';
 import {
   dedicatedTarget, listSqlTables, listSqlColumns, listTableGrants, listRlsPolicies, listColumnDenyGrants,
 } from '@/lib/azure/synapse-permissions-client';
@@ -221,7 +223,8 @@ describe('GET /api/lakehouse/permissions?tab=object — the item container', () 
       (resolveItemAccessByOid as any).mockResolvedValue(null);
       return GET(getReq({ lakehouseId: LH, tab: 'table' }));
     }, 404, 'item_not_found'],
-    ['no lakehouseId from a non-admin', () => GET(getReq({ tab: 'object', container: CONTAINER })), 403, 'admin_only'],
+    ['tab=object without lakehouseId', () => GET(getReq({ tab: 'object', container: CONTAINER })), 400, 'item_required'],
+    ['a SQL tab without lakehouseId from a non-admin', () => GET(getReq({ tab: 'table' })), 403, 'admin_only'],
   ])('refusal envelope: %s', async (_l, call, status, code) => {
     (getSession as any).mockReturnValue(member);
     const res = await (call as () => Promise<Response>)();
@@ -232,26 +235,58 @@ describe('GET /api/lakehouse/permissions?tab=object — the item container', () 
   });
 });
 
-describe('GET /api/lakehouse/permissions — no lakehouseId', () => {
-  // FAILS IF a listing without an item is open to every session: 200 and the
-  // row set [['landing']].
-  it('refuses a caller who is not a tenant admin, with no listing', async () => {
-    (getSession as any).mockReturnValue(member);
+describe('GET /api/lakehouse/permissions?tab=object — no lakehouseId', () => {
+  // The object tab needs the item for every caller, as the grant and the
+  // revoke do, so no row is listed that a revoke could not act on. FAILS IF
+  // the tenant-admin form lists on the configured account again: the admin
+  // row then answers 200 with the row set [['landing', '']].
+  it.each([
+    ['a member', member],
+    ['a tenant admin', admin],
+  ])('%s is refused with 400 item_required, with no listing', async (_l, who) => {
+    (getSession as any).mockReturnValue(who);
     const res = await GET(getReq({ tab: 'object', container: CONTAINER }));
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(400);
     const body = await res.json();
+    expect([body.code, typeof body.remediation]).toEqual(['item_required', 'string']);
     expect(body.error).toContain('lakehouseId');
     expect(listingCalls()).toEqual(NONE);
+    expect((resolveItemAccessByOid as any).mock.calls).toEqual([]);
   });
 
-  // POSITIVE, same request from a tenant admin. FAILS IF the admin path is
-  // closed too (403), or it consults an item it was never given.
-  it('a tenant admin lists without an item', async () => {
+  // POSITIVE, the same admin naming the item. FAILS IF the refusal above is
+  // applied to every object-tab GET (400 here too).
+  it('a tenant admin who names the lakehouse lists on its bound account', async () => {
     (getSession as any).mockReturnValue(admin);
-    const res = await GET(getReq({ tab: 'object', container: CONTAINER }));
+    const res = await GET(getReq({ lakehouseId: LH, tab: 'object', container: CONTAINER }));
     expect(res.status).toBe(200);
-    expect(listingCalls()).toEqual({ ...NONE, rbac: [[CONTAINER, undefined]] });
-    expect((resolveItemAccessByOid as any).mock.calls).toEqual([]);
+    expect(listingCalls()).toEqual({ ...NONE, rbac: [[CONTAINER, ACCOUNT]] });
+  });
+});
+
+describe('GET /api/lakehouse/permissions?tab=object — a bound account Resource Graph cannot place', () => {
+  // FAILS IF the route does not map StorageAccountNotLocatedError: the answer
+  // is then the generic 502 with no `code` and no `remediation`.
+  it('answers 409 storage_account_not_located with the Reader remediation', async () => {
+    (getSession as any).mockReturnValue(member);
+    (listContainerRoleAssignments as any).mockRejectedValue(new StorageAccountNotLocatedError(ACCOUNT));
+    const res = await GET(getReq({ lakehouseId: LH, tab: 'object' }));
+    expect(res.status).toBe(409);
+    const j = await res.json();
+    expect([j.ok, j.code]).toEqual([false, 'storage_account_not_located']);
+    expect(j.remediation).toContain(`Reader on the subscription that holds storage account "${ACCOUNT}"`);
+    expect(j.error).toContain(ACCOUNT);
+  });
+
+  // CONTROL: any other listing failure keeps the generic answer. FAILS IF
+  // every error is mapped to the 409 (the status would be 409, with a code).
+  it('another listing failure is still the generic 502', async () => {
+    (getSession as any).mockReturnValue(member);
+    (listContainerRoleAssignments as any).mockRejectedValue(new Error('ARM 500'));
+    const res = await GET(getReq({ lakehouseId: LH, tab: 'object' }));
+    expect(res.status).toBe(502);
+    const j = await res.json();
+    expect([j.ok, j.error, j.code]).toEqual([false, 'ARM 500', undefined]);
   });
 });
 
