@@ -83,7 +83,7 @@ function quoteIdent(name: string, dialect: SqlDialect): string {
   // \x60 is the backtick. Written as an escape so no backtick sits inside a regex
   // inside a template expression: check-tid-boundary-chokepoint's lexer loses
   // its brace depth there and then no longer recognises this file's POST
-  // handler (the tracking issue is linked from PR #4841).
+  // handler (#4856).
   return `\`${clean.replace(/\x60/g, '')}\``;
 }
 

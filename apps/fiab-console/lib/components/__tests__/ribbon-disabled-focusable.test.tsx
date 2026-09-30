@@ -14,6 +14,7 @@
  *     (the native `disabled` attribute disappears).
  *   - enabled: `disabledFocusable` set without `disabled` graying the button
  *     out (it is documented as ignored when not disabled), or the handler lost.
+ *   - dropdown items: see the comment on that describe block.
  */
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -58,5 +59,38 @@ describe('Ribbon disabledFocusable', () => {
     expect(btn.getAttribute('aria-disabled')).not.toBe('true');
     fireEvent.click(btn);
     expect(spy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Ribbon dropdown items', () => {
+  // A Fluent MenuItem has no `disabledFocusable`: its `disabled` already renders
+  // aria-disabled and keeps the item focusable in the menu. Breaks if the
+  // Ribbon stops passing `disabled` for a disabled or unwired item (the item
+  // loses aria-disabled), or passes it for a live one.
+  it('a disabled item and an unwired item are aria-disabled, focusable and inert; a live item runs', async () => {
+    const off = vi.fn();
+    const live = vi.fn();
+    mount([{
+      label: 'More',
+      dropdownItems: [
+        { label: 'Admin item', disabled: true, onClick: off, title: 'Reason-5512' },
+        { label: 'Unwired item' },
+        { label: 'Live item', onClick: live },
+      ],
+    }]);
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    const adminItem = await screen.findByRole('menuitem', { name: 'Admin item' });
+    expect(adminItem.getAttribute('aria-disabled')).toBe('true');
+    expect(adminItem.hasAttribute('disabled')).toBe(false);
+    expect(adminItem.getAttribute('title')).toBe('Reason-5512');
+    adminItem.focus();
+    expect(document.activeElement).toBe(adminItem);
+    fireEvent.click(adminItem);
+    expect(off).not.toHaveBeenCalled();
+    expect(screen.getByRole('menuitem', { name: 'Unwired item' }).getAttribute('aria-disabled')).toBe('true');
+    const liveItem = screen.getByRole('menuitem', { name: 'Live item' });
+    expect(liveItem.getAttribute('aria-disabled')).not.toBe('true');
+    fireEvent.click(liveItem);
+    expect(live).toHaveBeenCalledTimes(1);
   });
 });
