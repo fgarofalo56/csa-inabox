@@ -50,6 +50,7 @@ vi.mock('@/lib/azure/lakehouse-abfss', async () => {
   const resolveLakehouseAbfss = vi.fn();
   return {
     lakehouseStorageWithheldMessage: actual.lakehouseStorageWithheldMessage,
+    lakehouseStorageWithheldFields: actual.lakehouseStorageWithheldFields,
     resolveLakehouseAbfss,
     resolveLakehouseStorage: async (...a: any[]) => {
       const b: any = await resolveLakehouseAbfss(...a);
@@ -434,5 +435,60 @@ describe('/api/lakehouse/history POST — the statement names exactly the checke
     expect(res.status).toBe(200);
     expect((executeStatement as any).mock.calls[0][1])
       .toBe(`SELECT * FROM delta.\`abfss://${CONTAINER}@loomdlz.dfs.core.windows.net/${TABLE}\` VERSION AS OF 4 LIMIT 100`);
+  });
+
+  // A `%` inside the root (so containment alone accepts it). FAILS IF the path
+  // is carried with it: POST would answer 200 and run a statement, GET would
+  // answer 200 and list. Both refuse before the item is looked up.
+  it('refuses a tablePath with a percent sign, on POST and GET, before scoping', async () => {
+    ready();
+    const pct = `${ROOT}/Tables/ord%2e%2eers`;
+    expect(pct.startsWith(`${ROOT}/`), 'the fixture must sit inside the root').toBe(true);
+    const post = await POST(postReq({ lakehouseId: LH, container: CONTAINER, tablePath: pct, version: 1, action: 'preview' }));
+    expect(post.status).toBe(400);
+    const get = await GET(getReq({ lakehouseId: LH, container: CONTAINER, tablePath: pct }));
+    expect(get.status).toBe(400);
+    expect((executeStatement as any).mock.calls).toEqual([]);
+    expect((listPaths as any).mock.calls).toEqual([]);
+    expect((resolveItemAccessByOid as any).mock.calls, 'refused before the item is even looked up').toEqual([]);
+  });
+});
+
+describe('/api/lakehouse/history — the request is confined to the bound container', () => {
+  // The lakehouse is bound in `landing`; the request names `bronze` with a
+  // table path inside the root. FAILS IF the container check is dropped from
+  // the scoping (the route would list `bronze/<root>/...`, listPaths row set
+  // 1, status 200).
+  it('GET answers 403 for another container and makes no storage call', async () => {
+    (getSession as any).mockReturnValue(MEMBER);
+    (listPaths as any).mockResolvedValue([]);
+    const res = await GET(getReq({ lakehouseId: LH, container: 'bronze', tablePath: TABLE }));
+    expect(res.status).toBe(403);
+    expect((listPaths as any).mock.calls).toEqual([]);
+  });
+
+  // Same for a preview. FAILS IF the container check is dropped: the statement
+  // would run against `bronze` (executeStatement row set 1, status 200).
+  it('POST preview answers 403 for another container and runs nothing', async () => {
+    (getSession as any).mockReturnValue(MEMBER);
+    (databricksConfigGate as any).mockReturnValue(null);
+    (listWarehouses as any).mockResolvedValue([{ id: 'wh1', name: 'w', state: 'RUNNING' }]);
+    (executeStatement as any).mockResolvedValue({ columns: ['id'], rows: [[1]], rowCount: 1, executionMs: 1, truncated: false });
+    const res = await POST(postReq({ lakehouseId: LH, container: 'bronze', tablePath: TABLE, version: 1, action: 'preview' }));
+    expect(res.status).toBe(403);
+    expect((executeStatement as any).mock.calls).toEqual([]);
+  });
+
+  // FAILS IF a root-shared 409 stops naming the page that resolves it
+  // (`fixHref` absent), or names it for root-unverified, which is retried.
+  it('a root-shared 409 carries the readiness link; root-unverified does not', async () => {
+    (getSession as any).mockReturnValue(MEMBER);
+    (resolveLakehouseAbfss as any).mockResolvedValue({ withheld: 'root-shared' });
+    const shared = await (await GET(getReq({ lakehouseId: LH, container: CONTAINER, tablePath: TABLE }))).json();
+    expect(shared).toMatchObject({ ok: false, reason: 'root-shared', fixHref: '/admin/readiness' });
+    (resolveLakehouseAbfss as any).mockResolvedValue({ withheld: 'root-unverified' });
+    const unverified = await (await GET(getReq({ lakehouseId: LH, container: CONTAINER, tablePath: TABLE }))).json();
+    expect(unverified.reason).toBe('root-unverified');
+    expect(unverified.fixHref).toBeUndefined();
   });
 });
