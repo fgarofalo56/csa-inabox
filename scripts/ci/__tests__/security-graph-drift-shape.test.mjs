@@ -1,35 +1,29 @@
 /**
- * THE DRIFT GATE'S COMPARISON, AND THE COUNTERFACTUAL THAT PROVES IT MOVED (#4128).
+ * THE DRIFT GATE'S COMPARISON — WHAT IT COMPARES, WHAT IT REFUSES, AND THE
+ * CENSUS THAT MOVED WITH THE COUNTS (#4128, #4275, #4798).
  *
  * `scripts/brain/extract-security-graph.mjs --check` is the job named
- * `brain security graph — committed artifact matches the tree`. Until #4128 it
- * compared `{graph, join}` and nothing else, so a change that moved the
- * POPULATION without moving the GRAPH went straight past it — while the
- * REQUIRED census in `no-estate-identifiers.test.ts` caught the same change and
- * went red. The advisory gate whose entire job is drift detection was the blind
- * one, and a triager reading it green would look for the vitest failure in the
- * wrong place.
+ * `brain security graph — committed artifact matches the tree`.
  *
- * ── THE ARM WITHOUT WHICH THIS CHANGE IS UNTESTABLE ──────────────────────
+ * ── #4798: THE COUNTS ARE NO LONGER COMMITTED ────────────────────────────
  *
- * A fix to a guard is indistinguishable from no fix at all unless something
- * demonstrates the guard newly catches a case it used to pass. So the pre-fix
- * comparison is reproduced VERBATIM below as {@link PARENT_NORM} and run over
- * the SAME artifact pair as the post-fix comparison:
+ * #4128 made this gate compare `meta.scanScopes[].filesMatched` and
+ * `meta.filesScanned`, so a zero-node file inside a scanned scope reddened it.
+ * #4798 reverses that on purpose: those tallies moved with every file added
+ * under a scanned root, so every open PR that touched the artifact conflicted
+ * with every other after each merge, and two PRs that each moved a tally by one
+ * merged cleanly to a wrong value. They are now RUN values
+ * (`build.ts#buildSecurityGraphExtraction` returns them apart from the
+ * artifact), `--check` REFUSES them if they reappear in the committed bytes
+ * (`runOnlyFieldsPresent`, pinned below), and the census they were a proxy for
+ * is taken here, against the generator's own enumeration, at the bottom of this
+ * file. The merge property itself is measured in
+ * `apps/fiab-console/lib/brain/security/extract/__tests__/merge-stability.test.ts`.
  *
- *     PARENT_NORM       -> the pair is EQUAL     (the blind spot is real)
- *     driftDifferences  -> the pair DIFFERS      (the fix closes it)
+ * ── AND THE ARM THAT KEEPS THE COMPARISON WHOLE ──────────────────────────
  *
- * Both arms, one process, one fixture. Measured end-to-end on the real CLI as
- * well, using `scripts/ci/__fixtures__/census-drift-probe.mjs` as the delta:
- * parent RC=0, tip RC=1, node and edge counts identical in both.
- *
- * ── AND THE ARM THAT KEEPS IT FIXED ──────────────────────────────────────
- *
- * The obvious fix — adding `meta.scanScopes` to the two compared fields — is a
- * NARROWER ENUMERATION, and this repo loses to the next name every time it
- * writes one: `meta.filesScanned` would still have been invisible. So the
- * comparison is keyed to shape (compare everything, exempt by declaration) and
+ * A guard keyed to an ENUMERATION of watched names is defeated by the next name.
+ * So the comparison covers everything, with no exemption at all since #4798, and
  * `a meta field invented later is compared without being named anywhere` asserts
  * exactly that, by inventing one.
  *
@@ -63,11 +57,17 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
-  VOLATILE_META_FIELDS,
+  CENSUS_SCOPES,
+  CENSUS_UNREAD,
+  RUN_ONLY_FIELDS,
   POPULATION_META_FIELDS,
-  comparableArtifact,
+  censusRefusals,
   driftDifferences,
+  gitCensus as checkCensus,
+  gitUnreadCensus,
   populationRefusals,
+  runOnlyFieldsPresent,
+  unreadCensusRefusals,
 } from '../../brain/_artifact-drift.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -79,26 +79,11 @@ const ARTIFACT = resolve(
   'apps/fiab-console/lib/brain/security/extract/__generated__/security-graph.json',
 );
 
-const VOLATILE_NAMES = VOLATILE_META_FIELDS.map((v) => v.field);
+const RUN_ONLY_META_NAMES = RUN_ONLY_FIELDS.filter((f) => f.where === 'meta').map((f) => f.field);
 
 /**
- * THE PRE-FIX COMPARISON, COPIED VERBATIM FROM THE PARENT COMMIT.
- *
- * `scripts/brain/extract-security-graph.mjs` at 6fb688aa, the last revision
- * before this change:
- *
- *     const norm = (x) => JSON.stringify({ graph: x.graph, join: x.join });
- *     if (norm(a) !== norm(artifact)) { ...exit 1... }
- *
- * Kept here so the counterfactual runs both arms in one process over one
- * fixture, rather than asking a reader to trust a transcript.
- */
-const PARENT_NORM = (x) => JSON.stringify({ graph: x.graph, join: x.join });
-
-/**
- * A minimal artifact shaped like the real one and satisfying the population
- * floor: two scan scopes whose counts reconcile with `filesScanned`, a non-empty
- * graph, and a `join.painted` row for the node.
+ * A minimal artifact in the COMMITTED shape: a non-empty graph, a
+ * `join.painted` row for the node, and two named scan scopes with no counts.
  *
  * The join row is not decoration. A first revision of this suite shipped
  * `join: { painted: [], unjoined: [] }`, and an empty array is never keyed — so
@@ -136,80 +121,101 @@ function baseArtifact() {
       },
       meta: {
         generatorVersion: 7,
-        generatedAt: '2026-08-27T00:00:00.000Z',
-        commit: '0d2d28f5b2773b4d8bc95f4b65df9da0076b537e',
-        inputsDigest: '0d3dccaf8dfc02fc',
-        filesScanned: 2056,
         scanScopes: [
-          { scope: 'app/**/route.ts (console BFF routes)', filesMatched: 1694, nodesEmitted: 706 },
-          {
-            scope: '.github/**, scripts/** (CI publication surfaces)',
-            filesMatched: 362,
-            nodesEmitted: 214,
-          },
+          { scope: 'app/**/route.ts (console BFF routes)' },
+          { scope: '.github/**, scripts/** (CI publication surfaces)' },
         ],
         skipped: [
-          { subject: '.github/workflows/', reason: '118 file(s) were seen and NOT read by this extractor.' },
+          { subject: '.github/** (*.yml)', reason: 'Files under a SCANNED root were seen and NOT read.' },
         ],
       },
     }),
   );
 }
 
-/**
- * THE COUNTERFACTUAL FIXTURE: the population moves, the graph does not.
- *
- * Exactly the delta `scripts/ci/__fixtures__/census-drift-probe.mjs` produces on
- * the real tree — one more `.mjs` inside the declared publication scope, and it
- * emits no node — measured as 362 -> 363 files matched, 2056 -> 2057 scanned,
- * 920 nodes / 174 edges unchanged.
- */
-function censusDriftPair() {
-  const committed = baseArtifact();
-  const current = baseArtifact();
-  current.meta.scanScopes[1].filesMatched = 363;
-  current.meta.filesScanned = 2057;
-  return { committed, current };
+/** The run that produced {@link baseArtifact}: counts that reconcile. */
+function baseRun() {
+  return {
+    generatedAt: '2026-08-27T00:00:00.000Z',
+    commit: '0d2d28f5b2773b4d8bc95f4b65df9da0076b537e',
+    inputsDigest: '0d3dccaf8dfc02fc',
+    filesScanned: 2056,
+    scanScopes: [
+      { scope: 'app/**/route.ts (console BFF routes)', filesMatched: 1694, nodesEmitted: 706 },
+      { scope: '.github/**, scripts/** (CI publication surfaces)', filesMatched: 362, nodesEmitted: 214 },
+    ],
+    unmodeledPublicationSurfaces: [],
+    nonSpawnSinks: 0,
+  };
 }
 
-// ── THE COUNTERFACTUAL: BOTH ARMS, SAME FIXTURE ────────────────────────────
+// ── #4798: A RUN-ONLY FIELD IN THE COMMITTED BYTES IS REFUSED ──────────────
 
-test('the fixture really is the #4128 shape — population moves, graph does not', () => {
-  const { committed, current } = censusDriftPair();
-  // Without this the two arms below would be measuring something else entirely.
-  assert.deepEqual(committed.graph, current.graph, 'the graph must be identical across the pair');
-  assert.deepEqual(committed.join, current.join, 'the join must be identical across the pair');
-  assert.notEqual(
-    committed.meta.scanScopes[1].filesMatched,
-    current.meta.scanScopes[1].filesMatched,
-    'the population must actually differ, or neither arm proves anything',
+test('a committed-shape artifact carries no run-only field (control)', () => {
+  // Without this the arms below could pass on a detector that reports
+  // everything.
+  assert.deepEqual(runOnlyFieldsPresent(baseArtifact()), []);
+});
+
+test('EVERY run-only field is reported at its exact path when it reappears', () => {
+  // The input that breaks this: dropping a row from RUN_ONLY_FIELDS, or a
+  // `runOnlyFieldsPresent` that stops walking `meta.scanScopes[]`.
+  assert.ok(RUN_ONLY_FIELDS.length >= 6, `the run-only table shrank to ${RUN_ONLY_FIELDS.length}`);
+  for (const { where, field } of RUN_ONLY_FIELDS) {
+    const artifact = baseArtifact();
+    let expected;
+    if (where === 'meta') {
+      artifact.meta[field] = 'x';
+      expected = `meta.${field}`;
+    } else {
+      artifact.meta.scanScopes[1][field] = 1;
+      expected = `meta.scanScopes[1].${field}`;
+    }
+    assert.deepEqual(runOnlyFieldsPresent(artifact), [expected], `${where}.${field}`);
+  }
+});
+
+test('the pre-#4798 committed meta is refused on all eight of its run-only paths', () => {
+  const legacy = baseArtifact();
+  const run = baseRun();
+  Object.assign(legacy.meta, {
+    generatedAt: run.generatedAt,
+    commit: run.commit,
+    inputsDigest: run.inputsDigest,
+    filesScanned: run.filesScanned,
+    scanScopes: run.scanScopes,
+  });
+  assert.deepEqual(
+    runOnlyFieldsPresent(legacy).sort(),
+    [
+      'meta.commit',
+      'meta.filesScanned',
+      'meta.generatedAt',
+      'meta.inputsDigest',
+      'meta.scanScopes[0].filesMatched',
+      'meta.scanScopes[0].nodesEmitted',
+      'meta.scanScopes[1].filesMatched',
+      'meta.scanScopes[1].nodesEmitted',
+    ],
   );
 });
 
-test('PARENT arm: the pre-fix comparison sees NO drift on that pair (the blind spot is real)', () => {
-  const { committed, current } = censusDriftPair();
-  assert.equal(
-    PARENT_NORM(committed),
-    PARENT_NORM(current),
-    'the pre-fix `{graph, join}` comparison should find these identical — if it does not, the ' +
-      'premise of #4128 is wrong and this fix is unnecessary',
-  );
-});
-
-test('TIP arm: the post-fix comparison DOES see drift on the same pair', () => {
-  const { committed, current } = censusDriftPair();
-  const differences = driftDifferences(committed, current);
-
-  assert.ok(differences.length > 0, 'the post-fix comparison must report drift the parent missed');
-  const paths = differences.map((d) => d.path);
-  assert.ok(
-    paths.some((p) => p.endsWith('filesMatched')),
-    `expected a filesMatched difference, got: ${paths.join(', ')}`,
-  );
-  assert.ok(
-    paths.includes('meta.filesScanned'),
-    `expected meta.filesScanned — the field an enumeration fix would still have missed, got: ${paths.join(', ')}`,
-  );
+test('the extractor REFUSES a committed run-only field before comparing (the call site, not only the helper)', () => {
+  // A helper that works but is never called is the gap this pins. The input
+  // that breaks it: deleting the `runOnlyFieldsPresent(a)` refusal from
+  // `main()`. Read from source because running the CLI needs a compiled tsc,
+  // and this lane installs nothing — a STRUCTURAL pin, weaker than a run, and
+  // disclosed as such. Comment lines are stripped first so a comment naming the
+  // call cannot satisfy it.
+  const source = readFileSync(resolve(REPO_ROOT, 'scripts/brain/extract-security-graph.mjs'), 'utf8')
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*(?:\/\/|\/\*|\*)/.test(line))
+    .join('\n');
+  const call = source.indexOf('runOnlyFieldsPresent(a)');
+  const compare = source.indexOf('driftDifferences(a, artifact');
+  assert.ok(call > 0, 'the --check path no longer calls runOnlyFieldsPresent on the committed artifact');
+  assert.ok(compare > call, 'the run-only refusal must run BEFORE the comparison');
+  assert.match(source.slice(call, compare), /process\.exit\(1\)/, 'the refusal must exit non-zero');
 });
 
 // ── ARRAYS OF IDENTIFIED THINGS ARE MATCHED BY KEY (#4275) ─────────────────
@@ -391,8 +397,8 @@ test('the fixture really is the #4275 shape — one node added, none of the othe
 
 test('PARENT arm: the index walk reports the untouched nodes and join rows as modified', () => {
   const { committed, current } = insertedNodePair();
-  const a = comparableArtifact(committed);
-  const b = comparableArtifact(current);
+  const a = committed;
+  const b = current;
   const paths = parentIndexDiff(a, b).map((d) => d.path);
 
   const fieldNoise = paths.filter((p) => /^graph\.nodes\[\d+\]\./.test(p));
@@ -532,7 +538,7 @@ test('REORDER is reported — a keyed walk that ignored position would call thes
 
   // BROKEN ARM: the pairing without an order comparison finds nothing at all.
   assert.deepEqual(
-    keyedWithoutOrder(comparableArtifact(committed), comparableArtifact(current)),
+    keyedWithoutOrder(committed, current),
     [],
     'if this finds something, the false green it stands for is not reproducible and this arm is ' +
       'no longer measuring anything',
@@ -589,8 +595,8 @@ test('the keyed walk NEVER reports equal on unequal bytes (the false-green invar
     const current = fiveNodeArtifact();
     mutate(current);
     assert.notEqual(
-      JSON.stringify(comparableArtifact(committed)),
-      JSON.stringify(comparableArtifact(current)),
+      JSON.stringify(committed),
+      JSON.stringify(current),
       `'${name}' did not change the bytes, so it cannot test anything`,
     );
     assert.ok(
@@ -623,7 +629,7 @@ test('REORDER of the REAL committed artifact is reported (the fixture is not car
     'no node may be added or removed, or this is not a reorder',
   );
 
-  assert.deepEqual(keyedWithoutOrder(comparableArtifact(committed), comparableArtifact(current)), []);
+  assert.deepEqual(keyedWithoutOrder(committed, current), []);
   assert.ok(
     driftDifferences(committed, current).length > 0,
     'a reorder of the real artifact must be reported as drift — otherwise `--check` prints "OK — ' +
@@ -660,19 +666,22 @@ test('when the KEYS move, the report does not get worse than the index walk (#42
     assert.notEqual(String(d.committed), '<absent>', 'a renumber is a modification, not a removal');
   }
   // Parity with the pre-fix walk is the bar: the index walk found the same ten.
-  assert.equal(parentIndexDiff(comparableArtifact(committed), comparableArtifact(current)).length, changedSinks);
+  assert.equal(parentIndexDiff(committed, current).length, changedSinks);
 });
 
 test('an id-less array is still walked by index, so the fallback did not go missing', () => {
-  // `meta.scanScopes` elements carry no `id`. Losing the walk entirely would make
-  // this pair compare equal, which is the regression key matching could cause.
+  // `meta.scanScopes` elements carry no `id`; their one string property `scope`
+  // is the single candidate key. Losing the walk entirely would make this pair
+  // compare equal, which is the regression key matching could cause. `weight`
+  // is a NUMERIC fixture field so it can never become a second candidate key.
   const committed = baseArtifact();
   const current = baseArtifact();
-  current.meta.scanScopes[1].nodesEmitted += 1;
+  for (const a of [committed, current]) for (const s of a.meta.scanScopes) s.weight = 1;
+  current.meta.scanScopes[1].weight += 1;
 
   assert.deepEqual(
     driftDifferences(committed, current).map((d) => d.path),
-    ['meta.scanScopes[scope=.github/**, scripts/** (CI publication surfaces)].nodesEmitted'],
+    ['meta.scanScopes[scope=.github/**, scripts/** (CI publication surfaces)].weight'],
   );
 });
 
@@ -736,12 +745,10 @@ test('duplicate ids REFUSE to key at all, rather than falling through to another
 // ── THE ANTI-ENUMERATION ARM ───────────────────────────────────────────────
 
 test('a meta field invented later is compared without being named anywhere', () => {
-  const { committed, current } = censusDriftPair();
+  const committed = baseArtifact();
+  const current = baseArtifact();
   const invented = 'aFieldNoExtractorHasEmittedYet';
   current.meta[invented] = 'some value';
-  // Reset the population delta so this arm is measuring the invented field alone.
-  current.meta.scanScopes[1].filesMatched = committed.meta.scanScopes[1].filesMatched;
-  current.meta.filesScanned = committed.meta.filesScanned;
 
   const paths = driftDifferences(committed, current).map((d) => d.path);
   assert.ok(
@@ -758,62 +765,76 @@ test('a meta field invented later is compared without being named anywhere', () 
   );
 });
 
-test('the volatile exemption set may never swallow a field this gate exists to watch', () => {
+test('the run-only set may never swallow a committed field this gate exists to watch', () => {
+  // The input that breaks this: adding `scanScopes`, `skipped` or
+  // `generatorVersion` to RUN_ONLY_FIELDS to make a red go away.
   assert.ok(POPULATION_META_FIELDS.length > 0, 'the protected list must not be empty');
   for (const field of POPULATION_META_FIELDS) {
     assert.ok(
-      !VOLATILE_NAMES.includes(field),
-      `'${field}' is what this gate watches — exempting it would silence the red rather than fix it`,
+      !RUN_ONLY_META_NAMES.includes(field),
+      `'${field}' is what this gate watches — declaring it run-only would silence the red rather than fix it`,
     );
     assert.ok(
       Object.prototype.hasOwnProperty.call(baseArtifact().meta, field),
       `'${field}' is not a field the artifact carries, so protecting it protects nothing`,
     );
   }
+  // And the real committed meta carries exactly the protected set — nothing
+  // run-only, nothing unprotected.
+  const real = JSON.parse(readFileSync(ARTIFACT, 'utf8')).artifact;
+  assert.deepEqual(Object.keys(real.meta).sort(), [...POPULATION_META_FIELDS].sort());
 });
 
-test('every exemption carries a stated reason', () => {
-  assert.ok(VOLATILE_META_FIELDS.length > 0, 'an empty exemption set would make this vacuous');
-  for (const { field, reason } of VOLATILE_META_FIELDS) {
+test('every run-only field carries a stated reason', () => {
+  assert.ok(RUN_ONLY_FIELDS.length > 0, 'an empty run-only set would make this vacuous');
+  for (const { where, field, reason } of RUN_ONLY_FIELDS) {
+    assert.ok(where === 'meta' || where === 'meta.scanScopes[]', `unknown location '${where}'`);
     assert.ok(typeof field === 'string' && field.length > 0);
     assert.ok(
       typeof reason === 'string' && reason.length > 60,
-      `'${field}' is exempt without a substantive reason, which is how a blind spot gets added back`,
+      `'${field}' is run-only without a substantive reason, which is how a population field gets dropped`,
     );
   }
 });
 
-test('the volatile fields are ignored, so the gate does not cry wolf', () => {
+test('a run-only field is NOT ignored by the comparison either (no exemption is left)', () => {
+  // Before #4798 `generatedAt`, `commit` and `inputsDigest` were EXEMPT here, so
+  // a committed artifact carrying stale values of them compared equal. They are
+  // now absent from the committed shape, so a side that carries one differs.
+  // The input that breaks this: restoring an exemption list in `driftDifferences`.
   const committed = baseArtifact();
   const current = baseArtifact();
-  current.meta.generatedAt = '2026-12-31T23:59:59.000Z';
-  current.meta.commit = 'f'.repeat(40);
-  current.meta.inputsDigest = 'ffffffffffffffff';
+  committed.meta.generatedAt = '2026-12-31T23:59:59.000Z';
+  committed.meta.inputsDigest = 'ffffffffffffffff';
 
   assert.deepEqual(
-    driftDifferences(committed, current),
-    [],
-    'a run-to-run difference in the exempt fields alone must not be reported as drift',
+    driftDifferences(committed, current).map((d) => d.path).sort(),
+    ['meta.generatedAt', 'meta.inputsDigest'],
   );
-  // Control: the same pair with a real change IS reported, so the assertion
-  // above is not passing because the comparator reports nothing at all.
-  current.meta.scanScopes[0].filesMatched += 1;
-  assert.ok(driftDifferences(committed, current).length > 0);
+  // Control: an identical pair reports nothing, so the assertion above is not
+  // passing because the comparator reports everything.
+  assert.deepEqual(driftDifferences(baseArtifact(), baseArtifact()), []);
 });
 
-test('comparableArtifact does not mutate its argument', () => {
-  // `--check` prints counts off the live artifact AFTER comparing; a helper that
-  // hollowed out its input would make those printed counts a lie (R7).
-  const artifact = baseArtifact();
-  comparableArtifact(artifact);
-  assert.equal(artifact.meta.inputsDigest, '0d3dccaf8dfc02fc');
-  assert.equal(artifact.meta.generatedAt, '2026-08-27T00:00:00.000Z');
+test('driftDifferences does not mutate its arguments', () => {
+  // `--check` prints counts off the live artifact AFTER comparing; a comparator
+  // that hollowed out its input would make those printed counts a lie (R7).
+  const committed = baseArtifact();
+  const current = baseArtifact();
+  current.meta.generatorVersion = 8;
+  const before = JSON.stringify([committed, current]);
+  driftDifferences(committed, current);
+  assert.equal(JSON.stringify([committed, current]), before);
 });
 
 // ── THE POPULATION FLOOR ───────────────────────────────────────────────────
 
 /**
  * Degenerate populations, each of which a comparison alone would certify.
+ *
+ * Each case mutates the artifact, the run, or both. Since #4798 the committed
+ * side carries no counts, so the count cases live on the run — which `--check`
+ * has for the side it just extracted.
  *
  * Kept as a table so the suite can assert its own size — a floor suite that has
  * been emptied passes every assertion it still contains, which is the exact
@@ -827,9 +848,25 @@ const FLOOR_CASES = [
     },
   },
   {
-    name: 'a declared scope that matched no file',
+    name: 'a scope with no name',
     mutate: (a) => {
-      a.meta.scanScopes[1].filesMatched = 0;
+      a.meta.scanScopes[0].scope = '';
+    },
+  },
+  {
+    name: 'a declared scope that matched no file on the run',
+    mutate: (a, r) => {
+      r.scanScopes[1].filesMatched = 0;
+    },
+  },
+  {
+    name: 'a declared scope the run has no count for',
+    mutate: (a, r) => {
+      r.scanScopes.pop();
+      // Reconcile the total to what is left, so the ONLY thing wrong is the
+      // missing count. Without this the total-mismatch refusal fires instead
+      // and the case passes with the missing-count check deleted (measured).
+      r.filesScanned = r.scanScopes[0].filesMatched;
     },
   },
   {
@@ -839,15 +876,15 @@ const FLOOR_CASES = [
     },
   },
   {
-    name: 'zero files scanned',
-    mutate: (a) => {
-      a.meta.filesScanned = 0;
+    name: 'zero files scanned on the run',
+    mutate: (a, r) => {
+      r.filesScanned = 0;
     },
   },
   {
-    name: 'scan scopes that do not reconcile with filesScanned',
-    mutate: (a) => {
-      a.meta.filesScanned = 9999;
+    name: 'scope counts that do not reconcile with the run total',
+    mutate: (a, r) => {
+      r.filesScanned = 9999;
     },
   },
   {
@@ -858,32 +895,51 @@ const FLOOR_CASES = [
   },
   {
     name: 'a filesMatched that is not a number',
-    mutate: (a) => {
-      a.meta.scanScopes[0].filesMatched = null;
+    mutate: (a, r) => {
+      r.scanScopes[0].filesMatched = null;
+    },
+  },
+  {
+    name: 'a run with no per-scope counts',
+    mutate: (a, r) => {
+      delete r.scanScopes;
     },
   },
 ];
 
 test('the floor case table is populated (an empty suite passes vacuously)', () => {
   assert.ok(
-    FLOOR_CASES.length >= 5,
+    FLOOR_CASES.length >= 8,
     `expected the degenerate-population cases to still be present, found ${FLOOR_CASES.length}`,
   );
 });
 
 test('a healthy artifact clears the floor (control — a floor that refuses everything is useless)', () => {
   assert.deepEqual(populationRefusals(baseArtifact(), 'fixture'), []);
+  assert.deepEqual(populationRefusals(baseArtifact(), 'fixture', baseRun()), []);
 });
 
 for (const { name, mutate } of FLOOR_CASES) {
   test(`the floor refuses: ${name}`, () => {
     const artifact = baseArtifact();
-    mutate(artifact);
-    const refusals = populationRefusals(artifact, 'fixture');
+    const run = baseRun();
+    mutate(artifact, run);
+    const refusals = populationRefusals(artifact, 'fixture', run);
     assert.ok(refusals.length > 0, `'${name}' must be refused, not certified`);
     for (const r of refusals) assert.ok(r.startsWith('fixture:'), 'each refusal names its side');
   });
 }
+
+test('the extractor floors the CURRENT side on its run (the call site, not only the helper)', () => {
+  // A run argument the CLI never passes would leave every count case above
+  // unreachable in `--check`. Structural pin, comment lines stripped; the input
+  // that breaks it is dropping `run` from that call.
+  const source = readFileSync(resolve(REPO_ROOT, 'scripts/brain/extract-security-graph.mjs'), 'utf8')
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*(?:\/\/|\/\*|\*)/.test(line))
+    .join('\n');
+  assert.match(source, /populationRefusals\(artifact, '[^']+', run\)/);
+});
 
 test('a null or non-object artifact is refused rather than compared', () => {
   for (const value of [null, 'a string', 42, []]) {
@@ -899,7 +955,6 @@ test('TWO empty populations compare EQUAL — which is why the floor runs first'
   for (const a of [committed, current]) {
     a.graph.nodes = [];
     a.meta.scanScopes = [];
-    a.meta.filesScanned = 0;
   }
 
   assert.deepEqual(driftDifferences(committed, current), [], 'two empty populations do compare equal');
@@ -909,16 +964,15 @@ test('TWO empty populations compare EQUAL — which is why the floor runs first'
 
 // ── THE REAL FIXTURE AND THE REAL ARTIFACT ─────────────────────────────────
 
-test('the census-drift fixture exists and emits NO node, so the counterfactual holds', () => {
-  assert.ok(existsSync(FIXTURE), 'the fixture the parent/tip counterfactual was measured on is gone');
+test('the census-drift fixture exists and emits NO node, so it is still a zero-node file', () => {
+  assert.ok(existsSync(FIXTURE), 'the zero-node fixture #4128 and #4798 were measured on is gone');
 
   const artifact = JSON.parse(readFileSync(ARTIFACT, 'utf8')).artifact;
   const fromFixture = artifact.graph.nodes.filter((n) => String(n.id).includes('census-drift-probe'));
   assert.deepEqual(
     fromFixture.map((n) => n.id),
     [],
-    'the fixture emitted a node, so it no longer moves the population WITHOUT moving the graph — ' +
-      'the counterfactual it anchors is void until it is inert again',
+    'the fixture emitted a node, so it no longer moves the population WITHOUT moving the graph',
   );
 });
 
@@ -1029,7 +1083,8 @@ test('the scan enumeration DROPS a gitignored file and KEEPS an unadded one (#42
 // compares NAMES only. It cannot tell you the artifact is current — a content
 // edit that moves the graph is invisible to it. Promoting the advisory job to
 // required is still the right end state and is left recorded on #4282, not
-// claimed here.
+// claimed here. (Update for #4798: the job is listed as required in
+// `tools/drain/required_contexts.json`, snapshot 2026-09-18.)
 //
 // The comparison is on the canonical path form node ids embed
 // (`extract/source-facts.ts#canonicalRepoPath`), which LOWERCASES: measured, 7
@@ -1141,8 +1196,8 @@ test('control: a path the tree does not carry IS reported missing', () => {
 });
 
 test('the scan roots this suite watches are the roots the extractor walks', () => {
-  // `ROUTE_ROOT` and `PUBLICATION_ROOTS` are `const`s local to that module's
-  // `main()`, so there is nothing to import and SCAN_ROOTS is a duplicate. The
+  // `ROUTE_ROOT` and `PUBLICATION_ROOTS` are module-level `const`s the extractor
+  // does not export, so SCAN_ROOTS is a duplicate. The
   // duplicate is checked against the extractor's SOURCE rather than assumed: a
   // root added there and not here would make this suite silently narrower.
   const source = readFileSync(resolve(REPO_ROOT, 'scripts/brain/extract-security-graph.mjs'), 'utf8');
@@ -1160,4 +1215,349 @@ test('the scan roots this suite watches are the roots the extractor walks', () =
   const routeRoot = /const ROUTE_ROOT = '([^']+)'/.exec(source);
   assert.ok(routeRoot, 'ROUTE_ROOT is no longer declared in the shape this check reads');
   assert.ok(SCAN_ROOTS.includes(routeRoot[1]), `the extractor walks '${routeRoot[1]}' and this suite does not`);
+});
+
+// ── THE CENSUS, MOVED WITH THE COUNTS (#4798) ──────────────────────────────
+//
+// Until #4798 `no-estate-identifiers.test.ts` recounted the scopes from the
+// filesystem and compared them to the COMMITTED `filesMatched`. That was the
+// only check independent of the generator's own walk: `build.ts`'s census
+// counts the files the CLI HANDED it, so a CLI that stopped handing some over
+// (a narrowed include regex, a new skip in the walk) narrows both of its sides
+// together. The count is no longer committed, so this counts the CLI's actual
+// enumeration — `enumerateScan`, the function `main()` calls — against a
+// census built here from `git ls-files` with this file's own predicates.
+//
+// Raw repo-relative paths, NOT `gitVisiblePaths()`: that one canonicalises
+// (lowercases) into a Set, which would merge two files differing only in case
+// and make a COUNT disagree for a reason that has nothing to do with the walk.
+
+/** Every path git carries under `roots` that still exists — raw spelling, no canonicalisation. */
+function gitCensus(roots) {
+  const raw = execFileSync(
+    'git',
+    ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...roots],
+    { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 },
+  );
+  return raw.split('\0').filter(Boolean).filter((rel) => existsSync(resolve(REPO_ROOT, rel)));
+}
+
+async function extractorEnumeration() {
+  process.env.LOOM_SECURITY_EXTRACT_IMPORT_ONLY = '1';
+  const { enumerateScan } = await import('../../brain/extract-security-graph.mjs');
+  const scan = enumerateScan(REPO_ROOT);
+  const rel = (files) => files.map((f) => relative(REPO_ROOT, f).split(sep).join('/')).sort();
+  return { routes: rel(scan.routeFiles), scripts: rel(scan.scriptFiles), unmodeled: scan.unmodeledPublicationSurfaces };
+}
+
+test('the extractor reads EVERY `app/**/route.ts` git carries (census against its own enumeration)', async () => {
+  // Breaks on: a skip added to `walk()` (e.g. `__tests__` or `[`-segments), a
+  // route predicate narrowed to `route.ts` while a `route.tsx` exists, or
+  // ROUTE_ROOT pointed at a subtree.
+  const census = gitCensus(['apps/fiab-console/app']).filter((p) => /\/route\.tsx?$/.test(p)).sort();
+  const { routes } = await extractorEnumeration();
+  assert.ok(census.length > 100, `the route census found only ${census.length} — the floor, or nothing below means anything`);
+  assert.deepEqual(routes, census);
+});
+
+test('the extractor reads EVERY JavaScript module git carries under each publication root', async () => {
+  // Breaks on: PUBLICATION_INCLUDE losing an extension, a root dropped from
+  // PUBLICATION_ROOTS, or a skip added to the walk. The roots are read from the
+  // COMMITTED artifact's scope string, so a root the artifact declares and the
+  // walk skips reddens here.
+  const artifact = JSON.parse(readFileSync(ARTIFACT, 'utf8')).artifact;
+  const publication = artifact.meta.scanScopes.find((s) => s.scope.includes('CI publication surfaces'));
+  const roots = [...publication.scope.matchAll(/([^\s,()]+)\/\*\*/g)].map((m) => m[1]);
+  assert.ok(roots.length > 1, `the publication scope names ${roots.length} root(s)`);
+
+  const census = gitCensus(roots).filter((p) => /\.(?:mjs|cjs|js)$/.test(p)).sort();
+  const { scripts } = await extractorEnumeration();
+  assert.ok(census.length > 100, `the script census found only ${census.length}`);
+  assert.deepEqual(scripts, census);
+});
+
+// ── THE CENSUS INSIDE `--check` (#4798, review round 2) ────────────────────
+//
+// The two tests above count `enumerateScan()` against git. They can't see a
+// file dropped AFTER that call. Review A measured one on the round-1 head: a
+// `.filter()` in `main()` between `enumerateScan()` and the builder, dropping
+// the zero-node fixture, left `--check` green, because both sides of the drift
+// comparison came from the filtered list. So `--check` now reconciles the
+// counts the builder RECEIVED (`run.scanScopes[].filesMatched`,
+// `run.filesScanned`) against `_artifact-drift.mjs#gitCensus`. The arms below
+// pin the helper. The end-to-end kill (that `main()` filter, and its
+// `console.log`-sink variant, both RED) needs a compiled extractor, so it was
+// run as a sandbox mutation and is recorded in the PR body, not here.
+
+/** A census that reconciles with {@link baseRun}: 1694 routes + 362 scripts = 2056. */
+function baseCensus() {
+  return [
+    { runScopeTokens: ['app/**/route.ts'], label: 'app/**/route.ts', files: 1694 },
+    { runScopeTokens: ['scripts/**', '.github/**'], label: 'scripts/**, .github/**', files: 362 },
+  ];
+}
+
+test('census: a run whose counts match git reconciles (control)', () => {
+  // Without this every refusal arm below could pass on a helper that refuses
+  // everything. It is also the SORTED-ROOTS control: the run names the scope
+  // '.github/**, scripts/**' and the census tokens are in the other order, so a
+  // prefix or order-sensitive match would refuse here. The first revision of
+  // this helper did exactly that against the real tree.
+  assert.equal(baseRun().scanScopes[1].scope.startsWith('.github/**'), true, 'the fixture must carry the sorted spelling');
+  assert.deepEqual(censusRefusals(baseRun(), baseCensus()), []);
+});
+
+test('census: ONE file dropped between enumeration and build is refused, naming the count', () => {
+  // The review's measured defect in helper form. The value that breaks this:
+  // any comparison that tolerates a shortfall (`>=` in place of `!==`), or one
+  // that compares only the total, because the total is moved too.
+  const run = baseRun();
+  run.scanScopes[1].filesMatched = 361;
+  run.filesScanned = 2055;
+  const refusals = censusRefusals(run, baseCensus());
+  assert.equal(refusals.length, 1, refusals.join('\n'));
+  assert.match(refusals[0], /received 361 file\(s\) but `git ls-files` lists 362/);
+  assert.match(refusals[0], /1 file\(s\) were dropped between the enumeration and the build/);
+});
+
+test('census: a count ABOVE git is refused as #4216, not as a drop', () => {
+  // Pins the MESSAGE branch as well as the refusal: a builder reading a file
+  // git does not carry is a different fault with a different fix.
+  const run = baseRun();
+  run.scanScopes[0].filesMatched = 1695;
+  run.filesScanned = 2057;
+  const refusals = censusRefusals(run, baseCensus());
+  assert.equal(refusals.length, 1, refusals.join('\n'));
+  assert.match(refusals[0], /#4216/);
+  assert.doesNotMatch(refusals[0], /were dropped/);
+});
+
+test('census: a per-scope shortfall that the other scope hides from the TOTAL is still refused', () => {
+  // A total-only reconciliation passes this: -1 in one scope and +1 in the
+  // other leaves 2056. The per-scope comparison is what refuses it.
+  const run = baseRun();
+  run.scanScopes[0].filesMatched = 1693;
+  run.scanScopes[1].filesMatched = 363;
+  assert.equal(run.scanScopes[0].filesMatched + run.scanScopes[1].filesMatched, run.filesScanned, 'the total must be unmoved');
+  assert.equal(censusRefusals(run, baseCensus()).length, 2);
+});
+
+test('census: a total that disagrees while every scope matches is refused', () => {
+  // A file reaching the builder outside every census scope moves the total and
+  // no scope. Deleting the total comparison makes this pass.
+  const run = baseRun();
+  run.filesScanned = 2057;
+  const refusals = censusRefusals(run, baseCensus());
+  assert.equal(refusals.length, 1, refusals.join('\n'));
+  assert.match(refusals[0], /2057 file\(s\) in total but the census lists 2056/);
+});
+
+test('census: a run scope the census cannot find, or can find twice, is refused', () => {
+  // Breaks on a match that takes the FIRST candidate, or skips a scope with no
+  // match. 'scripts/** only' carries one of the two tokens, so a match on ANY
+  // token instead of EVERY token would reconcile it against the wrong count.
+  const renamed = baseRun();
+  renamed.scanScopes[1].scope = 'scripts/** only (CI publication surfaces)';
+  assert.match(censusRefusals(renamed, baseCensus()).join('\n'), /0 run scope\(s\) are named by 'scripts\/\*\*, \.github\/\*\*'/);
+
+  const doubled = baseRun();
+  doubled.scanScopes.push({ ...doubled.scanScopes[1] });
+  assert.match(censusRefusals(doubled, baseCensus()).join('\n'), /2 run scope\(s\) are named by/);
+});
+
+test('census: an empty or zero census is refused, never read as reconciled', () => {
+  // Two empty things compare equal. Each input here would otherwise reconcile
+  // vacuously against a run that also counted nothing. The MESSAGE is pinned,
+  // not only the count: without the empty-census branch, `[]` is still refused
+  // by the total check, but with the false claim that a file reached the builder
+  // outside every scope (measured, round 2).
+  assert.match(censusRefusals(baseRun(), []).join('\n'), /independent census is empty/, 'an empty census');
+  assert.match(censusRefusals(baseRun(), null).join('\n'), /independent census is empty/, 'no census');
+  const zeroed = baseCensus();
+  zeroed[0].files = 0;
+  const run = baseRun();
+  run.scanScopes[0].filesMatched = 0;
+  run.filesScanned = 362;
+  assert.match(censusRefusals(run, zeroed).join('\n'), /emptied census/);
+});
+
+test('census: CENSUS_SCOPES spells the extractor\'s roots and predicates, lifted from its source', () => {
+  // The census is literal on purpose, so it cannot narrow along with the
+  // extractor. The cost is that it can DISAGREE with it, which is what this
+  // pins. Breaks on: a root added to PUBLICATION_ROOTS and not here, an
+  // extension added to PUBLICATION_INCLUDE and not here, or the route predicate
+  // changing on one side. Lifted from the source text, never transcribed.
+  const source = readFileSync(resolve(REPO_ROOT, 'scripts/brain/extract-security-graph.mjs'), 'utf8');
+  const pubRoots = [...(/const PUBLICATION_ROOTS = \[([^\]]*)\]/.exec(source)?.[1] ?? '').matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  const pubInclude = /const PUBLICATION_INCLUDE = (\/.+\/);/.exec(source)?.[1];
+  const routeRoot = /const ROUTE_ROOT = '([^']+)'/.exec(source)?.[1];
+  const routeInclude = /scanFiles\(repoRoot, ROUTE_ROOT, \(rel\) => (\/.+\/)\.test\(rel\)/.exec(source)?.[1];
+  assert.ok(pubRoots.length > 0 && pubInclude && routeRoot && routeInclude, 'the extractor no longer declares these in the shape read here');
+
+  const [route, publication] = CENSUS_SCOPES;
+  assert.deepEqual([...route.roots], [routeRoot]);
+  assert.equal(String(route.include), routeInclude);
+  assert.deepEqual([...publication.roots].sort(), [...pubRoots].sort());
+  assert.equal(String(publication.include), pubInclude);
+});
+
+test('census: gitCensus asks git the SAME question the extractor asks', () => {
+  // The census and `gitVisibleFiles` must share `git ls-files` flags, or they
+  // count different populations. Dropping `--others` here, for instance, would
+  // make a new untracked-but-not-ignored route a false drop. The flags are
+  // lifted from the extractor's call and compared with what gitCensus passes.
+  const source = readFileSync(resolve(REPO_ROOT, 'scripts/brain/extract-security-graph.mjs'), 'utf8');
+  const extractorArgs = /\['ls-files',([^\]]*?)'--', \.\.\.roots\]/.exec(source);
+  assert.ok(extractorArgs, 'the extractor no longer calls git ls-files in the shape read here');
+  const flags = ['ls-files', ...[...extractorArgs[1].matchAll(/'([^']+)'/g)].map((m) => m[1])];
+
+  let seen;
+  const fakeGit = (cmd, args) => {
+    seen = { cmd, args };
+    return ['apps/fiab-console/app/api/x/route.ts', 'scripts/a.mjs', 'scripts/b.yml', ''].join('\0');
+  };
+  const census = checkCensus(REPO_ROOT, CENSUS_SCOPES, fakeGit);
+  assert.equal(seen.cmd, 'git');
+  const dash = seen.args.indexOf('--');
+  assert.deepEqual(seen.args.slice(0, dash), flags);
+  assert.deepEqual(seen.args.slice(dash + 1).sort(), ['.github', 'apps/fiab-console/app', 'scripts']);
+  // The stub's paths do not exist on disk, so all three are dropped. That is
+  // the deleted-from-the-worktree exclusion, and it zeroes both scopes.
+  assert.deepEqual(census.map((c) => c.files), [0, 0]);
+});
+
+test('census: gitCensus on the real tree equals the extractor\'s enumeration, scope by scope', async () => {
+  // The positive half: on an unmutated tree the census must NOT refuse, or
+  // `--check` would be red on every PR. Breaks on a census predicate that
+  // counts `.yml`, a root typo, or a missing existence filter.
+  const census = checkCensus(REPO_ROOT);
+  const { routes, scripts } = await extractorEnumeration();
+  assert.ok(census[0].files > 100 && census[1].files > 100, JSON.stringify(census));
+  assert.deepEqual(census.map((c) => c.files), [routes.length, scripts.length]);
+});
+
+test('census: `--check` reconciles the RUN against the census before it compares (the call site)', () => {
+  // A helper that is never called is the gap round 1 shipped. Structural pin,
+  // comment lines stripped. The inputs that break it: dropping the call,
+  // passing it anything but the run, calling it after the comparison, or not
+  // exiting on a refusal. The end-to-end version of this was run as a sandbox
+  // mutation (PR body).
+  const source = readFileSync(resolve(REPO_ROOT, 'scripts/brain/extract-security-graph.mjs'), 'utf8')
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*(?:\/\/|\/\*|\*)/.test(line))
+    .join('\n');
+  const floor = source.indexOf("populationRefusals(artifact, 'the artifact just extracted");
+  const takeCensus = source.indexOf('gitCensus(REPO_ROOT)');
+  const call = source.indexOf('censusRefusals(run, census)');
+  const compare = source.indexOf('driftDifferences(a, artifact');
+  assert.ok(floor > 0 && takeCensus > floor, 'the census is no longer taken after the population floor');
+  assert.ok(call > takeCensus, '--check no longer reconciles the run against the census');
+  assert.ok(compare > call, 'the census reconciliation must run BEFORE the comparison');
+  assert.match(source.slice(call, compare), /process\.exit\(1\)/, 'a census refusal must exit non-zero');
+  // The unread census is taken with the lexed one and joins the same refusal
+  // list. Breaks on dropping either the census or its reconciliation.
+  const takeUnread = source.indexOf('gitUnreadCensus(REPO_ROOT)');
+  const unreadCall = source.indexOf('unreadCensusRefusals(run, unreadCensus)');
+  assert.ok(takeUnread > floor && takeUnread < call, 'the unread census is no longer taken beside the lexed one');
+  assert.ok(unreadCall >= call && unreadCall < compare, '--check no longer reconciles the unread counts before comparing');
+});
+
+// ── THE UNREAD SET (#4798, review round 3) ─────────────────────────────────
+//
+// `run.unmodeledPublicationSurfaces[].fileCount` is no longer committed, so a
+// filter dropping some `.yml`/`.sh` files would move nothing a reviewer or
+// `--check` could see. These pin the reconciliation that now covers it.
+
+/** Unread counts that reconcile with {@link unreadCensus}. */
+function runWithUnread() {
+  return {
+    ...baseRun(),
+    unmodeledPublicationSurfaces: [
+      { root: 'scripts/', fileCount: 192, extensions: ['.ps1', '.py', '.sh', '.yaml'] },
+      { root: '.github/', fileCount: 145, extensions: ['.py', '.sh', '.yaml', '.yml'] },
+    ],
+  };
+}
+function unreadCensus() {
+  return [
+    { root: 'scripts/', files: 192 },
+    { root: '.github/', files: 145 },
+  ];
+}
+
+test('unread census: counts that match git reconcile (control)', () => {
+  // Without this the refusal arms below could pass on a helper that refuses
+  // everything.
+  assert.deepEqual(unreadCensusRefusals(runWithUnread(), unreadCensus()), []);
+});
+
+test('unread census: ONE unread file dropped under a root is refused, naming the root and both counts', () => {
+  // A comparison that tolerates a shortfall, or skips a root, lets this pass.
+  const run = runWithUnread();
+  run.unmodeledPublicationSurfaces[1].fileCount = 144;
+  const refusals = unreadCensusRefusals(run, unreadCensus());
+  assert.equal(refusals.length, 1, refusals.join('\n'));
+  assert.match(refusals[0], /unread files under '\.github\/': the run counted 144 but `git ls-files` lists 145/);
+});
+
+test('unread census: a root missing from the run, or doubled, is refused', () => {
+  // Breaks on a match that takes the first entry, or skips a root with none.
+  const missing = runWithUnread();
+  missing.unmodeledPublicationSurfaces.pop();
+  assert.match(unreadCensusRefusals(missing, unreadCensus()).join('\n'), /0 unread-file count\(s\) in the run for '\.github\/'/);
+  const doubled = runWithUnread();
+  doubled.unmodeledPublicationSurfaces.push({ ...doubled.unmodeledPublicationSurfaces[0] });
+  assert.match(unreadCensusRefusals(doubled, unreadCensus()).join('\n'), /2 unread-file count\(s\) in the run for 'scripts\/'/);
+});
+
+test('unread census: a root the census does not cover is refused', () => {
+  // Every census root matches, and the run carries one more. Deleting the
+  // length comparison makes this pass.
+  const run = runWithUnread();
+  run.unmodeledPublicationSurfaces.push({ root: 'tools/', fileCount: 3, extensions: ['.sh'] });
+  assert.match(unreadCensusRefusals(run, unreadCensus()).join('\n'), /under 3 root\(s\) but the census covers 2/);
+});
+
+test('unread census: an empty census is refused, naming that it is empty', () => {
+  // Pins the MESSAGE: with the empty branch gone, `[]` is still refused, but only
+  // by the length check, with the false claim that a root reached the ledger
+  // outside the census.
+  assert.match(unreadCensusRefusals(runWithUnread(), []).join('\n'), /census of unread files is empty/);
+  assert.match(unreadCensusRefusals(runWithUnread(), null).join('\n'), /census of unread files is empty/);
+});
+
+test('unread census: CENSUS_UNREAD spells the extractor\'s unread roots and pattern, lifted from its source', () => {
+  // Breaks on an extension added to PUBLICATION_UNMODELED and not here, or a
+  // root added to PUBLICATION_ROOTS and not here.
+  const source = readFileSync(resolve(REPO_ROOT, 'scripts/brain/extract-security-graph.mjs'), 'utf8');
+  const pubRoots = [...(/const PUBLICATION_ROOTS = \[([^\]]*)\]/.exec(source)?.[1] ?? '').matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  const unmodeled = /const PUBLICATION_UNMODELED = (\/.+\/);/.exec(source)?.[1];
+  assert.ok(pubRoots.length > 0 && unmodeled, 'the extractor no longer declares these in the shape read here');
+  assert.deepEqual([...CENSUS_UNREAD.roots].sort(), [...pubRoots].sort());
+  assert.equal(String(CENSUS_UNREAD.include), unmodeled);
+});
+
+test('unread census: gitUnreadCensus asks git the SAME question the lexed census asks', () => {
+  // Both censuses go through one helper. Breaks if the unread census grows its
+  // own git call with different flags (dropping `--others`, say).
+  const calls = [];
+  const fakeGit = (cmd, args) => {
+    calls.push(args.slice(0, args.indexOf('--')));
+    return '';
+  };
+  checkCensus(REPO_ROOT, CENSUS_SCOPES, fakeGit);
+  gitUnreadCensus(REPO_ROOT, CENSUS_UNREAD, fakeGit);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[1], calls[0]);
+});
+
+test('unread census: gitUnreadCensus on the real tree equals the extractor\'s unread counts, root by root', async () => {
+  // The positive half: on an unmutated tree it must NOT refuse, or `--check`
+  // is red on every PR. Breaks on a pattern or root that disagrees with the
+  // extractor's walk.
+  const census = gitUnreadCensus(REPO_ROOT);
+  const { unmodeled } = await extractorEnumeration();
+  assert.ok(census.every((c) => c.files > 10), JSON.stringify(census));
+  const run = { unmodeledPublicationSurfaces: unmodeled };
+  assert.deepEqual(unreadCensusRefusals(run, census), []);
 });

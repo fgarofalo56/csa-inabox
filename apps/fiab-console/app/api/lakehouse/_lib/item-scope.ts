@@ -23,11 +23,11 @@
  * step can turn a refused input into an accepted one.
  */
 import { NextResponse } from 'next/server';
-import { apiBadRequest, apiConflict, apiForbidden, apiNotFound } from '@/lib/api/respond';
+import { apiBadRequest, apiConflict, apiError, apiForbidden, apiNotFound } from '@/lib/api/respond';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { resolveItemAccessByOid } from '@/lib/auth/item-access';
 import {
-  lakehouseStorageWithheldMessage,
+  lakehouseStorageWithheldFields,
   resolveLakehouseStorage,
   type LakehouseStorageWithheld,
 } from '@/lib/azure/lakehouse-abfss';
@@ -41,13 +41,16 @@ import type { WorkspaceItem } from '@/lib/types/workspace';
  * - `not-found`: 404, the same answer `authorizeLakehouse` gives, so the item
  *   read racing a delete is indistinguishable from any other missing item.
  * - `root-shared` / `root-unverified`: 409 with the resolver's ONE wording
- *   (`lakehouseStorageWithheldMessage`). Nothing is listed or written, and no
- *   other container is offered in the item's place.
+ *   (`lakehouseStorageWithheldMessage`), plus `reason` and, for `root-shared`,
+ *   `fixHref` (the readiness page that resolves it). Nothing is listed or
+ *   written, and no other container is offered in the item's place.
  */
 export function lakehouseStorageWithheldResponse(reason: LakehouseStorageWithheld): NextResponse | null {
   if (reason === 'not-found') return apiNotFound('lakehouse not found');
-  const message = lakehouseStorageWithheldMessage(reason);
-  return message ? apiConflict(message) : null;
+  const fields = lakehouseStorageWithheldFields(reason);
+  if (!fields) return null;
+  const { error, ...extra } = fields;
+  return apiError(error, 409, extra);
 }
 
 /**

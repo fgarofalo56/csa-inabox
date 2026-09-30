@@ -5,17 +5,22 @@
  * (lib/admin/env-checks/lakehouse-shared-roots.ts). Two or more lakehouses
  * resolve to one directory; the admin names the one whose data it is.
  *
- *   body: { itemId: string }
+ *   body: { itemId: string, dryRun?: true }
  *
  * WHAT IT DOES
  *   1. Re-reads every lakehouse and re-derives the group from the store — the
  *      client names only the keeper, never the group or any location.
- *   2. Every OTHER member (recycled ones too) gets a root of its own: its
+ *   2. Decides which OTHER members change: only those whose root overlaps the
+ *      kept root, and not one whose own recorded directory (a different one) is
+ *      marked for it. The rest are reported as `unchanged`, with the reason.
+ *      With `dryRun: true` it answers that plan and writes nothing; the confirm
+ *      dialog lists it.
+ *   3. Each member that changes (recycled ones too) gets a root of its own: its
  *      id-bearing item root, created with its ownership marker in the container
  *      auto-bind would use, and recorded on the item. The installer receipt's
  *      location fields are cleared on those members, since they name the
  *      common root and the resolver reads them first.
- *   3. The keeper's location is recorded on the keeper and its directory is
+ *   4. The keeper's location is recorded on the keeper and its directory is
  *      marked for it, so the resolver keeps it without reading other items.
  *
  * Nothing is copied or deleted: the common root and its files stay where
@@ -40,6 +45,8 @@ import {
   lakehouseContainerOrder,
   lakehouseItemRootPath,
   lakehouseRootLocation,
+  lakehouseRootsOverlap,
+  type LakehouseRootLocation,
 } from '@/lib/azure/backing-name';
 import { findSharedLakehouseRoots } from '@/lib/admin/env-checks/lakehouse-shared-roots';
 import { emitAuditEvent } from '@/lib/admin/audit-stream';
@@ -47,6 +54,8 @@ import type { WorkspaceItem } from '@/lib/types/workspace';
 
 interface Reassigned { id: string; name: string; container: string; root: string }
 interface Failed { id: string; name: string; error: string }
+/** A group member the keep leaves as it is, and why. */
+interface Unchanged { id: string; name: string; why: string }
 
 /** The installer receipt without the three fields that name a location. */
 function withoutReceiptLocation(state: Record<string, any>): Record<string, any> {
@@ -65,6 +74,7 @@ export const POST = withCapability('admin.env-config', 'Admin', async (req, { se
   }
   const itemId = typeof body?.itemId === 'string' ? body.itemId.trim() : '';
   if (!itemId) return apiBadRequest('itemId is required');
+  const dryRun = body?.dryRun === true;
 
   const rows = await listLakehouseRootFacts(undefined, { includeRecycled: true });
   const group = findSharedLakehouseRoots(rows).find((g) => g.ids.includes(itemId));
@@ -102,12 +112,58 @@ export const POST = withCapability('admin.env-config', 'Admin', async (req, { se
     );
   }
   const target = lakehouseContainerOrder(configured)[0];
+
+  // Which members change. Groups are joined transitively (a member whose
+  // container is not recorded overlaps a root in ANY container, so it can link
+  // two members that do not overlap each other), so each member is checked
+  // against the kept root itself:
+  //   - a member whose root does not overlap the kept root is left alone;
+  //   - a member whose own recorded directory, somewhere other than the kept
+  //     one, is marked for it is left alone: those files are its own.
+  // Only the rest are given a new root.
+  const keeperLoc: LakehouseRootLocation = { ...loc, account: '', container: keeperContainer };
+  const moving: typeof group.members = [];
+  const unchanged: Unchanged[] = [];
+  for (const m of group.members) {
+    if (m.id === itemId) continue;
+    const row = rows.find((r) => r.id === m.id);
+    const mLoc = row ? lakehouseRootLocation(row) : null;
+    if (!mLoc) {
+      unchanged.push({ id: m.id, name: m.name, why: 'its record could not be read' });
+      continue;
+    }
+    const mRoot = mLoc.segments.join('/');
+    if (!lakehouseRootsOverlap(keeperLoc, mLoc)) {
+      unchanged.push({ id: m.id, name: m.name, why: `its root ${mLoc.container ?? '(any container)'}/${mRoot} is not inside the kept root` });
+      continue;
+    }
+    const sameDirectory = (mLoc.container === null || mLoc.container === keeperContainer) && mRoot === keeperRoot;
+    if (!sameDirectory && mLoc.container) {
+      const own = await readLakehouseRootOwner(mLoc.container, mRoot).catch(() => null);
+      if (own?.exists && own.owner === m.id) {
+        unchanged.push({ id: m.id, name: m.name, why: `its directory ${mLoc.container}/${mRoot} is marked for it` });
+        continue;
+      }
+    }
+    moving.push(m);
+  }
+
+  if (dryRun) {
+    // The plan, for the confirm dialog: nothing is written.
+    return NextResponse.json({
+      ok: true,
+      dryRun: true,
+      kept: { id: keeper.id, name: keeper.name, container: keeperContainer, root: keeperRoot },
+      moving: moving.map((m) => ({ id: m.id, name: m.name })),
+      unchanged,
+    });
+  }
+
   const items = await itemsContainer();
   const reassigned: Reassigned[] = [];
   const failed: Failed[] = [];
 
-  for (const m of group.members) {
-    if (m.id === itemId) continue;
+  for (const m of moving) {
     try {
       const { resource } = await items.item(m.id, m.workspaceId).read<WorkspaceItem>();
       if (!resource) throw new Error('the item was not found');
@@ -163,7 +219,10 @@ export const POST = withCapability('admin.env-config', 'Admin', async (req, { se
     targetType: 'lakehouse',
     targetId: keeper.id,
     outcome: failed.length ? 'failure' : 'success',
-    detail: { container: keeperContainer, root: keeperRoot, reassigned: reassigned.map((r) => r.id), failed: failed.map((f) => f.id) },
+    detail: {
+      container: keeperContainer, root: keeperRoot,
+      reassigned: reassigned.map((r) => r.id), unchanged: unchanged.map((u) => u.id), failed: failed.map((f) => f.id),
+    },
     tenantId: (session.claims as { tid?: string }).tid || '',
   });
 
@@ -172,6 +231,7 @@ export const POST = withCapability('admin.env-config', 'Admin', async (req, { se
       ok: failed.length === 0,
       kept: { id: keeper.id, name: keeper.name, container: keeperContainer, root: keeperRoot, marked: keeperMarked },
       reassigned,
+      unchanged,
       failed,
     },
     { status: failed.length ? 502 : 200 },

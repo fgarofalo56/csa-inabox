@@ -10,8 +10,8 @@
  *
  * Fixture: two lakehouses named "Sales", created before item roots, neither
  * recording a root, so both derive `lakehouses/Sales`. The directory exists in
- * `bronze`. Configured containers are `bronze` and `landing`, so a new root is
- * created in `landing` (first in the lakehouse container order).
+ * `bronze`. Configured containers are `bronze`, `silver` and `landing`, so a new
+ * root is created in `landing` (first in the lakehouse container order).
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
@@ -35,7 +35,7 @@ vi.mock('@/lib/azure/cloud-endpoints', async (importOriginal) => ({
 
 vi.mock('@/lib/azure/adls-client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/azure/adls-client')>()),
-  configuredContainerNames: () => ['bronze', 'landing'],
+  configuredContainerNames: () => ['bronze', 'silver', 'landing'],
 }));
 
 /** Stored items keyed `<workspaceId>::<id>`, and every replace with its options. */
@@ -240,5 +240,88 @@ describe('POST /api/admin/lakehouse-roots/keep', () => {
     const res = await post({ itemId: 'lh-a' });
     expect(res.status).toBe(409);
     expect(REPLACES).toEqual([]);
+  });
+
+  // The reviewer's shape. A (bronze/lakehouses/Sales) and C (silver, recorded,
+  // its directory marked for C) do not overlap; B, unrecorded (container
+  // unknown), overlaps both and joins them into one group. Keeping A must move
+  // B only. FAILS IF C is moved (C's state would name `landing/...--lh-c`, and
+  // `reassigned` would list it), or if B is left on A's directory.
+  it('moves only the members that share the kept root, and leaves one with its own marked directory', async () => {
+    seed();
+    DOCS.set('ws-3::lh-c', {
+      id: 'lh-c', workspaceId: 'ws-3', itemType: 'lakehouse', displayName: 'Sales', createdAt: BEFORE,
+      state: { adlsContainer: 'silver', lakehouseRoot: 'lakehouses/Sales' }, _etag: '"c1"',
+    });
+    ROWS.push({ id: 'lh-c', workspaceId: 'ws-3', displayName: 'Sales', createdAt: BEFORE, adlsContainer: 'silver', lakehouseRoot: 'lakehouses/Sales' });
+    DIRS.set('silver/lakehouses/Sales', 'lh-c');
+    // Fixture: the three form ONE group, so the route has to split it itself.
+    const { findSharedLakehouseRoots } = await import('@/lib/admin/env-checks/lakehouse-shared-roots');
+    expect(findSharedLakehouseRoots(ROWS).map((g) => g.ids)).toEqual([['lh-a', 'lh-b', 'lh-c']]);
+
+    const res = await post({ itemId: 'lh-a' });
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.reassigned.map((r: any) => r.id)).toEqual(['lh-b']);
+    expect(body.unchanged.map((u: any) => u.id)).toEqual(['lh-c']);
+    expect(DOCS.get('ws-3::lh-c').state).toEqual({ adlsContainer: 'silver', lakehouseRoot: 'lakehouses/Sales' });
+    expect(DIRS.get('silver/lakehouses/Sales')).toBe('lh-c');
+    expect(CREATES).toEqual(['landing/lakehouses/Sales--lh-b lh-b']);
+  });
+
+  // Same shape, but C's silver directory carries NO marker, so only the
+  // overlap check tells C apart. FAILS IF members are moved without checking
+  // they overlap the kept root (C would be reassigned).
+  it('leaves a member whose root is not inside the kept root, even with no marker', async () => {
+    seed();
+    DOCS.set('ws-3::lh-c', {
+      id: 'lh-c', workspaceId: 'ws-3', itemType: 'lakehouse', displayName: 'Sales', createdAt: BEFORE,
+      state: { adlsContainer: 'silver', lakehouseRoot: 'lakehouses/Sales' }, _etag: '"c1"',
+    });
+    ROWS.push({ id: 'lh-c', workspaceId: 'ws-3', displayName: 'Sales', createdAt: BEFORE, adlsContainer: 'silver', lakehouseRoot: 'lakehouses/Sales' });
+    DIRS.set('silver/lakehouses/Sales', null);
+    const body = await (await post({ itemId: 'lh-a' })).json();
+    expect(body.reassigned.map((r: any) => r.id)).toEqual(['lh-b']);
+    expect(body.unchanged).toEqual([{ id: 'lh-c', name: 'Sales', why: 'its root silver/lakehouses/Sales is not inside the kept root' }]);
+  });
+
+  // D records `bronze/lakehouses/Sales/2024`, INSIDE the kept root, and that
+  // directory is marked for D: its files are its own. Only the marker check
+  // tells D apart (it does overlap). FAILS IF D is moved.
+  it('leaves an overlapping member whose own, different directory is marked for it', async () => {
+    seed();
+    DOCS.set('ws-4::lh-d', {
+      id: 'lh-d', workspaceId: 'ws-4', itemType: 'lakehouse', displayName: 'Sales 2024', createdAt: BEFORE,
+      state: { adlsContainer: 'bronze', lakehouseRoot: 'lakehouses/Sales/2024' }, _etag: '"d1"',
+    });
+    ROWS.push({ id: 'lh-d', workspaceId: 'ws-4', displayName: 'Sales 2024', createdAt: BEFORE, adlsContainer: 'bronze', lakehouseRoot: 'lakehouses/Sales/2024' });
+    DIRS.set('bronze/lakehouses/Sales/2024', 'lh-d');
+    const body = await (await post({ itemId: 'lh-a' })).json();
+    expect(body.reassigned.map((r: any) => r.id)).toEqual(['lh-b']);
+    expect(body.unchanged).toEqual([{ id: 'lh-d', name: 'Sales 2024', why: 'its directory bronze/lakehouses/Sales/2024 is marked for it' }]);
+    expect(DOCS.get('ws-4::lh-d').state.lakehouseRoot).toBe('lakehouses/Sales/2024');
+  });
+
+  // The confirm dialog's plan. FAILS IF a dry run writes anything (a create, a
+  // replace, a marker, an audit event), or if its plan differs from what the
+  // real request then does (moving lh-b, leaving lh-c).
+  it('answers the plan for a dry run and writes nothing', async () => {
+    seed();
+    DOCS.set('ws-3::lh-c', {
+      id: 'lh-c', workspaceId: 'ws-3', itemType: 'lakehouse', displayName: 'Sales', createdAt: BEFORE,
+      state: { adlsContainer: 'silver', lakehouseRoot: 'lakehouses/Sales' }, _etag: '"c1"',
+    });
+    ROWS.push({ id: 'lh-c', workspaceId: 'ws-3', displayName: 'Sales', createdAt: BEFORE, adlsContainer: 'silver', lakehouseRoot: 'lakehouses/Sales' });
+    DIRS.set('silver/lakehouses/Sales', 'lh-c');
+    const res = await post({ itemId: 'lh-a', dryRun: true });
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body).toMatchObject({ ok: true, dryRun: true, kept: { id: 'lh-a', container: 'bronze', root: 'lakehouses/Sales' } });
+    expect(body.moving).toEqual([{ id: 'lh-b', name: 'Sales' }]);
+    expect(body.unchanged.map((u: any) => u.id)).toEqual(['lh-c']);
+    expect(CREATES).toEqual([]);
+    expect(REPLACES).toEqual([]);
+    expect(STAMPS).toEqual([]);
+    expect(audit).not.toHaveBeenCalled();
   });
 });

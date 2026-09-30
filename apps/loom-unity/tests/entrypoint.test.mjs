@@ -11,7 +11,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -408,24 +408,100 @@ test('RC-12 warehouse: a non-identifier name is REFUSED, not interpolated', { sk
   assert.match(r.stderr, /not a valid Unity Catalog identifier/);
 });
 
-test('RC-12 warehouse: the LIST-namespaces defect is STATED, not left to be rediscovered', { skip: !shAvailable }, () => {
-  // MEASURED: GET <irc>/v1/catalogs/<wh>/namespaces answers 500 on this image for
-  // EVERY principal (including the metastore owner). A known ceiling stated on
-  // every boot beats a 500 rediscovered from a browser.
-  const r = render({ ...AUTHZ_WIRED, LOOM_ICEBERG_WAREHOUSE: 'loom' });
+test('RC-12 warehouse: WITHOUT the #3339 overlay jar, the LIST-namespaces defect is STATED truthfully', { skip: !shAvailable }, () => {
+  // UC_HOME points at an empty directory, so the overlay jar is absent and the
+  // plan is the upstream route's. MEASURED: that route answers 403 to every
+  // caller that is not metastore OWNER (the Console, live 2026-09-29) and 500 to
+  // the owner. The banner must say BOTH, not "500 for every principal".
+  const home = mkdtempSync(path.join(tmpdir(), 'loom-uc-home-')).replace(/\\/g, '/');
+  const r = render({ ...AUTHZ_WIRED, LOOM_ICEBERG_WAREHOUSE: 'loom', UC_HOME: home });
   assert.equal(r.status, 0, r.stderr);
+  // Breaks if the plan stops keying on the jar (e.g. always 'scoped').
+  assert.match(r.stdout, /iceberg-list-namespaces=upstream-owner-gate/);
   assert.match(r.stderr, /ICEBERG-LIST-NAMESPACES-DEFECT/);
-  assert.match(r.stderr, /Authorization filter not initialized/);
-  // It must name the CONTROL, not just the symptom — that is what makes it a
-  // diagnosis rather than a shrug. The control is the AUTHORIZATION FLAG.
+  // Breaks if the 403 half is dropped again — the Console's live status.
+  assert.match(r.stderr, /answers 403 to every caller that is not metastore OWNER/);
+  assert.match(r.stderr, /500 'Authorization filter not initialized' to the metastore owner/);
+  // The CONTROL, not just the symptom: the authorization flag.
   assert.match(r.stderr, /authorization DISABLED returns 200/);
-  // And it must NOT re-assert the cause we disproved on 2026-08-10. The overlay
-  // was blamed on a two-variable "control"; measured with one variable (overlay
-  // removed, authorization still enabled) the 500 is unchanged. An error string
-  // that names a cause the code never established is a deploy-integrity R7
-  // violation, so this assertion keeps the retraction from silently regressing.
+  // The 2026-08-10 retraction must not regress (deploy-integrity.md R7).
   assert.match(r.stderr, /NOT caused by the #1603 overlay/);
   assert.doesNotMatch(r.stderr, /Cause: the v0\.5\.1 unitycatalog-server overlay/);
+  // The false claim #4783 shipped. Paired with the positive 403 match above, so
+  // deleting the banner cannot satisfy it.
+  assert.doesNotMatch(r.stderr, /for EVERY principal/);
+});
+
+// A UC_HOME laid out like the image: the overlay jar on disk, and the classpath
+// file bin/start-uc-server boots from, which may or may not list it.
+function ucHomeWithOverlayJar({ onClasspath, entrySuffix = '', jarOnDisk = true }) {
+  const home = mkdtempSync(path.join(tmpdir(), 'loom-uc-home-')).replace(/\\/g, '/');
+  const jar = `${home}/lib-loom-override/loom-uc-3339-iceberg-authz.jar`;
+  mkdirSync(`${home}/lib-loom-override`);
+  if (jarOnDisk) writeFileSync(jar, 'x');
+  mkdirSync(`${home}/server/target`, { recursive: true });
+  const base = `${home}/server/target/classes:${home}/jars/unitycatalog-server.jar`;
+  writeFileSync(`${home}/server/target/classpath`, onClasspath ? `${jar}${entrySuffix}:${base}\n` : `${base}\n`);
+  return home;
+}
+
+test('RC-12 warehouse: WITH the #3339 overlay jar on the classpath, LIST-namespaces is stated as scoped and filtered', { skip: !shAvailable }, () => {
+  const home = ucHomeWithOverlayJar({ onClasspath: true });
+  const r = render({ ...AUTHZ_WIRED, LOOM_ICEBERG_WAREHOUSE: 'loom', UC_HOME: home });
+  assert.equal(r.status, 0, r.stderr);
+  // Breaks if the plan ignores the jar (stays 'upstream-owner-gate').
+  assert.match(r.stdout, /iceberg-list-namespaces=scoped/);
+  assert.match(r.stderr, /ICEBERG-LIST-NAMESPACES: .*served by this image's #3339 overlay/);
+  assert.match(r.stderr, /filtered to the schemas the caller may read/);
+  // Breaks if the banner goes back to describing a pre-gate: the route has none,
+  // a caller with no grants gets 200 and an empty list (harness rows M5/M5b).
+  assert.match(r.stderr, /there is no pre-gate/);
+  // Breaks if the scoped image still announces the defect. Paired with the
+  // positive match above.
+  assert.doesNotMatch(r.stderr, /ICEBERG-LIST-NAMESPACES-DEFECT/);
+});
+
+test('RC-12 warehouse: the #3339 jar on DISK but not on the classpath is the upstream route, and says so', { skip: !shAvailable }, () => {
+  // The harness's section-P image shape: the jar ships, the classpath the server
+  // boots from does not list it, and the route measured is upstream's (P1 403,
+  // P2 500). Breaks if the plan keys on the file again (-> 'scoped').
+  const home = ucHomeWithOverlayJar({ onClasspath: false });
+  const r = render({ ...AUTHZ_WIRED, LOOM_ICEBERG_WAREHOUSE: 'loom', UC_HOME: home });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /iceberg-list-namespaces=upstream-owner-gate/);
+  assert.match(r.stderr, /ICEBERG-LIST-NAMESPACES-DEFECT: the #3339 overlay jar .* is not on the server classpath/);
+  // Paired with the positive DEFECT match above.
+  assert.doesNotMatch(r.stderr, /served by this image's #3339 overlay/);
+});
+
+test('RC-12 warehouse: a classpath entry that only CONTAINS the #3339 jar path does not count', { skip: !shAvailable }, () => {
+  // The classpath lists `<jar>.off`, not the jar. Breaks if the plan matches a
+  // substring instead of a whole ':'-separated entry (-> 'scoped').
+  const home = ucHomeWithOverlayJar({ onClasspath: true, entrySuffix: '.off' });
+  const r = render({ ...AUTHZ_WIRED, LOOM_ICEBERG_WAREHOUSE: 'loom', UC_HOME: home });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /iceberg-list-namespaces=upstream-owner-gate/);
+});
+
+test('RC-12 warehouse: the #3339 jar LISTED on the classpath but absent from disk is the upstream route, and says so', { skip: !shAvailable }, () => {
+  // The classpath names the jar, but the file is not there, so the JVM cannot
+  // load the overlay class from it. Breaks if the plan stops checking the file
+  // (-> 'scoped'), or if the banner blames the classpath for a missing file.
+  const home = ucHomeWithOverlayJar({ onClasspath: true, jarOnDisk: false });
+  const r = render({ ...AUTHZ_WIRED, LOOM_ICEBERG_WAREHOUSE: 'loom', UC_HOME: home });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /iceberg-list-namespaces=upstream-owner-gate/);
+  assert.match(r.stderr, /ICEBERG-LIST-NAMESPACES-DEFECT: the #3339 overlay jar .* is absent from this image, so GET/);
+  // Paired with the positive DEFECT match above.
+  assert.doesNotMatch(r.stderr, /served by this image's #3339 overlay/);
+});
+
+test('RC-12 warehouse: no warehouse (the loom-unity app) announces nothing about LIST-namespaces', { skip: !shAvailable }, () => {
+  const r = render({ ...AUTHZ_WIRED });
+  assert.equal(r.status, 0, r.stderr);
+  // The plan line still renders, so this test cannot pass by the script dying early.
+  assert.match(r.stdout, /iceberg-list-namespaces=/);
+  assert.doesNotMatch(r.stderr, /ICEBERG-LIST-NAMESPACES/);
 });
 
 test('explicit IdP endpoints still win over the derived Entra ones', { skip: !shAvailable }, () => {

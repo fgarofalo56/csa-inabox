@@ -416,6 +416,12 @@ export interface RiskLane {
   readonly ratio: number;
   readonly incompleteDetectors: readonly string[];
   readonly detectorsRegistered: number;
+  /**
+   * True exactly when the lane WAS evaluated over a graph whose age was NOT
+   * checked (a local run with no image build date, #4798). The panel renders it
+   * as a warning, not as body text.
+   */
+  readonly ageUnchecked: boolean;
 }
 
 export interface HotLane {
@@ -584,7 +590,8 @@ export function buildSynapseOverlay(args: {
         args.risk === null
           ? 'The risk lane has not been loaded yet.'
           : args.risk.evaluated
-            ? `Security graph source: ${args.risk.graphSource}.`
+            ? `Security graph source: ${args.risk.graphSource}.` +
+              (args.risk.ageNote === undefined ? '' : ` ${args.risk.ageNote}`)
             : args.risk.reason,
       findings: riskFindings,
       painted,
@@ -600,6 +607,7 @@ export function buildSynapseOverlay(args: {
           : args.risk.evaluated
             ? args.risk.detectors.length
             : args.risk.registry.length,
+      ageUnchecked: args.risk?.evaluated === true && args.risk.ageChecked === false,
     },
     hot: {
       collected: snapshot.coverage.observed.collected,

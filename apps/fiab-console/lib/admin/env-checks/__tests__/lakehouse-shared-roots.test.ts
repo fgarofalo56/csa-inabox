@@ -123,20 +123,20 @@ describe('lakehouseSharedRootsCheck', () => {
     expect(r.groups).toBeUndefined();
   });
 
-  // FAILS IF includeIds is ignored (no names or ids in the detail, no groups),
-  // or if the detail lists bare ids without the item names.
-  it('names each member, with its id, when the caller asks for them', () => {
+  // FAILS IF includeIds is ignored (no groups), or if the members are listed in
+  // the detail as well as in the groups: the readiness page renders the groups
+  // as cards, so a named detail showed every member twice more.
+  it('returns the groups when the caller asks for them, and keeps the detail to the count', () => {
     const r = lakehouseSharedRootsCheck([SALES_A, SALES_B, ARCHIVE], { includeIds: true });
-    expect(r.detail).toContain('Sales (lh-a), Sales (lh-b)');
-    expect(r.detail).not.toContain('lh-c');
+    expect(r.detail).toBe('1 shared storage root(s) across 2 lakehouse(s) (of 3 checked).');
+    expect(r.detail).not.toContain('lh-a');
     expect(r.groups?.map((g) => g.ids)).toEqual([['lh-a', 'lh-b']]);
   });
 
-  // FAILS IF a recycled member is listed without saying so.
-  it('marks a recycled member in the detail', () => {
+  // FAILS IF a recycled member is returned without saying so.
+  it('marks a recycled member in the groups', () => {
     const r = lakehouseSharedRootsCheck([SALES_A, { ...SALES_B, recycled: { at: AFTER } }], { includeIds: true });
-    expect(r.detail).toContain('Sales (lh-b, recycled)');
-    expect(r.detail).toContain('Sales (lh-a)');
+    expect(r.groups?.[0].members.map((m) => [m.id, m.recycled])).toEqual([['lh-a', false], ['lh-b', true]]);
   });
 
   // The remediation text is what the admin acts on. FAILS IF it stops naming
@@ -176,7 +176,7 @@ describe('probeLakehouseSharedRoots', () => {
     const r = await probeLakehouseSharedRoots({ includeIds: true });
     expect(r.status).toBe('warn');
     expect(r.inconclusive).toBeUndefined();
-    expect(r.detail).toContain('Sales (lh-a), Sales (lh-b)');
+    expect(r.groups?.map((g) => g.ids)).toEqual([['lh-a', 'lh-b']]);
     expect(READ_OPTS).toEqual([{ includeRecycled: true }]);
   });
 });

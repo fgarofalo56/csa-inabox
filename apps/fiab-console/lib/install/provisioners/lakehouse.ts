@@ -82,6 +82,7 @@ import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import {
   KNOWN_CONTAINERS,
   createDirectory as adlsCreateDirectory,
+  getAccountName as adlsAccountName,
   listContainers as adlsListContainers,
   uploadFile as adlsUploadFile,
   pathToHttpsUrl,
@@ -89,7 +90,13 @@ import {
   type KnownContainer,
 } from '@/lib/azure/adls-client';
 import { executeQuery as synapseExec, serverlessTarget } from '@/lib/azure/synapse-sql-client';
-import { safeAdlsRelPath, lakehouseRootPath, lakehouseItemRootPath, lakehouseUsesItemRoot } from '@/lib/azure/backing-name';
+import {
+  safeAdlsRelPath,
+  lakehouseItemRootPath,
+  lakehouseRootFactsOfItem,
+  lakehouseRootLocation,
+  lakehouseUsesItemRoot,
+} from '@/lib/azure/backing-name';
 import { createShortcut, type ShortcutKind, type ShortcutTargetType } from '@/lib/azure/lakehouse-shortcuts';
 import { readRepoDataset } from '@/lib/apps/repo-datasets';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
@@ -604,14 +611,19 @@ async function provisionAzureNative(
 
   // Root path for this lakehouse inside the container. It must be the root the
   // resolver (`resolveLakehouseStorage`) reads for this item, and the resolver
-  // decides by the item's `createdAt`: a lakehouse created on or after
-  // LAKEHOUSE_ITEM_ROOT_SINCE uses a recorded root only when it is the item's
-  // own `lakehouseItemRootPath`, and an earlier one (or one with no
-  // `createdAt`) keeps `lakehouseRootPath`. Recording the name-only root for a
-  // new item would put its folders and seeded tables in a directory its editor
-  // then skips. So the era is read from the SAME document, and an unreadable
-  // item fails the install rather than guessing.
+  // decides a RECORDED location by the record, never by the item's age. So:
+  //   - an item that records a location (an earlier install's receipt, or the
+  //     binding auto-bind or a resolve wrote), or was created before
+  //     LAKEHOUSE_ITEM_ROOT_SINCE (it may have files under a name-only root it
+  //     never recorded), is resolved by the resolver itself, with persist, and
+  //     the install writes into the location it returns. A re-install or a
+  //     re-provision therefore keeps the recorded root, whatever `createdAt` is.
+  //   - an item created on or after the cutover that records nothing gets its
+  //     own `lakehouseItemRootPath` in the container chosen above.
+  // The item is read first; an unreadable item fails the install rather than
+  // guessing.
   let createdAt: unknown;
+  let recordsLocation = false;
   try {
     const { itemsContainer } = await import('@/lib/azure/cosmos-client');
     const { resource } = await (await itemsContainer()).item(input.cosmosItemId, input.workspaceId).read();
@@ -619,41 +631,77 @@ async function provisionAzureNative(
       return { status: 'failed', error: `Lakehouse item ${input.cosmosItemId} was not found in workspace ${input.workspaceId}; its storage root cannot be chosen.`, steps };
     }
     createdAt = (resource as { createdAt?: unknown }).createdAt;
+    recordsLocation = lakehouseRootLocation(
+      lakehouseRootFactsOfItem({ ...(resource as Record<string, unknown>), id: input.cosmosItemId }),
+    )?.recorded === true;
   } catch (e: any) {
     // The cause text is kept whole so runWithRetry can retry a transient (429/503/timeout).
     return { status: 'failed', error: `Could not read lakehouse item ${input.cosmosItemId} to choose its storage root: ${e?.message || String(e)}`, steps };
   }
-  const itemRootEra = lakehouseUsesItemRoot(createdAt);
-  const root = itemRootEra
-    ? lakehouseItemRootPath(input.displayName, input.cosmosItemId)
-    : lakehouseRootPath(input.displayName, input.cosmosItemId);
+  const lakehouseStorage = await import('@/lib/azure/lakehouse-abfss');
+  let root: string;
+  if (recordsLocation || !lakehouseUsesItemRoot(createdAt)) {
+    let resolved: Awaited<ReturnType<typeof lakehouseStorage.resolveLakehouseStorage>>;
+    try {
+      resolved = await lakehouseStorage.resolveLakehouseStorage(input.cosmosItemId, input.workspaceId, { persist: true });
+    } catch (e: any) {
+      return { status: 'failed', error: `Could not resolve the storage location of lakehouse item ${input.cosmosItemId}: ${e?.message || String(e)}`, steps };
+    }
+    if (!resolved.ok) {
+      const why = lakehouseStorage.lakehouseStorageWithheldMessage(resolved.reason)
+        || (resolved.reason === 'not-found'
+          ? `Lakehouse item ${input.cosmosItemId} was not found in workspace ${input.workspaceId}.`
+          : 'No DLZ ADLS Gen2 container is configured for lakehouse storage.');
+      return { status: 'failed', error: `${why} Nothing was written.`, steps };
+    }
+    const account = resolved.bound.abfss.match(/^abfss:\/\/[^@]+@([^.]+)\./i)?.[1]?.toLowerCase() || '';
+    let primary = '';
+    try {
+      primary = adlsAccountName().toLowerCase();
+    } catch {
+      primary = '';
+    }
+    if (!(KNOWN_CONTAINERS as readonly string[]).includes(resolved.bound.container) || !account || account !== primary) {
+      return {
+        status: 'failed',
+        error: `Lakehouse item ${input.cosmosItemId} records its storage at ${resolved.bound.abfss}, which is not a DLZ container this installer writes to. Nothing was written.`,
+        steps,
+      };
+    }
+    container = resolved.bound.container as KnownContainer;
+    root = resolved.bound.root;
+    steps.push(`Using the lakehouse's storage location ${container}/${root}.`);
+  } else {
+    root = lakehouseItemRootPath(input.displayName, input.cosmosItemId);
+  }
 
   // 1. Create the lakehouse root + every declared folder as real directories.
   try {
-    if (itemRootEra) {
-      // Same writer as open-time auto-bind: a conditional create that stamps
-      // this item's ownership marker, so the resolver's probe adopts it.
-      const { createOwnedLakehouseRoot, readLakehouseRootOwner } = await import('@/lib/azure/lakehouse-abfss');
-      try {
-        await createOwnedLakehouseRoot(container, root, input.cosmosItemId);
-        steps.push(`Created lakehouse root directory ${container}/${root}.`);
-      } catch (ce: any) {
-        if (ce?.statusCode !== 409 && ce?.statusCode !== 412) throw ce;
-        // The directory exists. A second install run of the same item reuses
-        // it; a directory marked for anything else is not written into.
-        const found = await readLakehouseRootOwner(container, root);
-        if (!found.exists || found.owner !== input.cosmosItemId) {
-          return {
-            status: 'failed',
-            error: `The lakehouse root ${container}/${root} already exists and is not marked for item ${input.cosmosItemId}; nothing was written to it.`,
-            steps,
-          };
-        }
-        steps.push(`Reused this item's lakehouse root directory ${container}/${root}.`);
-      }
-    } else {
-      await adlsCreateDirectory(container, root);
+    // Same writer as open-time auto-bind: a conditional create that stamps
+    // this item's ownership marker. A directory already there is used when it
+    // is this item's: marked for it, or unmarked (the item's own item root, or
+    // a root the resolver has just confirmed is this item's alone), and an
+    // unmarked one is marked now, as the resolver and auto-bind mark it. A
+    // directory marked for another item is not written into.
+    try {
+      await lakehouseStorage.createOwnedLakehouseRoot(container, root, input.cosmosItemId);
       steps.push(`Created lakehouse root directory ${container}/${root}.`);
+    } catch (ce: any) {
+      if (ce?.statusCode !== 409 && ce?.statusCode !== 412) throw ce;
+      const found = await lakehouseStorage.readLakehouseRootOwner(container, root);
+      // Gone again since the create was refused: report the create's own error.
+      if (!found.exists) throw ce;
+      if (!lakehouseStorage.mayAdoptRoot(found.owner, input.cosmosItemId)) {
+        return {
+          status: 'failed',
+          error: `The lakehouse root ${container}/${root} already exists and is marked for another item; nothing was written to it.`,
+          steps,
+        };
+      }
+      if (found.owner === null) {
+        await lakehouseStorage.stampLakehouseRootOwner(container, root, input.cosmosItemId, found);
+      }
+      steps.push(`Reused this item's lakehouse root directory ${container}/${root}.`);
     }
   } catch (e: any) {
     const msg = e?.message || String(e);

@@ -23,6 +23,7 @@ vi.mock('@/lib/azure/lakehouse-abfss', async () => {
   const actual: any = await vi.importActual('@/lib/azure/lakehouse-abfss');
   return {
     lakehouseStorageWithheldMessage: actual.lakehouseStorageWithheldMessage,
+    lakehouseStorageWithheldFields: actual.lakehouseStorageWithheldFields,
     resolveLakehouseStorage: (...a: any[]) => resolveLakehouseStorage(...a),
   };
 });

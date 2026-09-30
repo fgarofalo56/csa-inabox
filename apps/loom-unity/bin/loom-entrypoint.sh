@@ -763,12 +763,12 @@ bind_console_principal() {  bind_principal="$1"
 # external credential, exactly the authority these two calls need — and nothing
 # outside the container ever needs it.
 #
-# HONEST ABOUT WHAT THIS DOES NOT FIX. See announce_iceberg_list_ns_defect below:
-# LIST-namespaces is still the upstream metastore-OWNER route and still 500s with
-# authorization enabled. The other Iceberg REST read routes are readable by the
-# Console only because this image backports upstream's scoped Iceberg
-# authorization (#3339, Dockerfile stage 1b) AND the grants below include
-# USE SCHEMA; on the unpatched upstream image they demand metastore OWNER.
+# WHAT THE GRANTS DEPEND ON. The Iceberg REST read routes — config, namespace
+# GET, LIST-namespaces, the table routes — are readable by the Console only
+# because this image backports upstream's scoped Iceberg authorization (#3339,
+# Dockerfile stage 1b) AND the grants below include USE SCHEMA; on the unpatched
+# upstream image every one of them demands metastore OWNER (see
+# announce_iceberg_list_ns below for what that route answered before).
 # ---------------------------------------------------------------------------
 
 # The catalog name backing the Iceberg namespaces. Emitted by
@@ -803,53 +803,75 @@ announce_warehouse_plan() {
   esac
 }
 
-# The upstream defect that provisioning CANNOT fix, stated on every boot so it is
-# a KNOWN ceiling rather than a rediscovered 500.
+# LIST-namespaces: what this image does, stated on every boot so a 403 or a 500
+# on that route is never rediscovered from a browser.
 #
-# MEASURED on this image (authorization enabled, warehouse provisioned, namespace
-# present, every principal tried including the server's own metastore-OWNER admin
-# token):
-#   GET <irc>/v1/catalogs/<wh>/namespaces
-#     -> HTTP 500 {"error":{"message":"Authorization filter not initialized —
-#        ensure the request goes through UnityAccessDecorator.", ...}}
+# UPSTREAM (v0.5.0, measured; v0.6.0, the newest release on Maven Central on
+# 2026-09-29, source read, not run) serves GET <irc>/v1/catalogs/<wh>/namespaces
+# behind
+# `#authorize(#principal, #metastore, OWNER)`, so it answers:
+#   * 403 PERMISSION_DENIED to EVERY caller that is not metastore OWNER — the
+#     Console included, since the permissions API cannot grant OWNER. Measured
+#     live on 2026-09-29 after the first #3339 roll: /v1/config passed and this
+#     route was the Console's 403;
+#   * 500 {"error":{"message":"Authorization filter not initialized — ensure the
+#     request goes through UnityAccessDecorator.", ...}} to the metastore OWNER,
+#     the only caller that gets past the gate.
 #
-# ── CAUSE, CORRECTED 2026-08-10 ───────────────────────────────────────────────
-# This was previously announced as "a regression imported by the v0.5.1
-# unitycatalog-server overlay". THAT WAS WRONG, and the error message asserted a
-# cause nothing had established (deploy-integrity.md R7). The "control" behind it
-# changed TWO variables at once: it compared this image (overlay ON, authorization
-# ENABLED) against the bare upstream image (overlay OFF, authorization DISABLED),
-# then credited the difference to the overlay.
+# The 500 is an UPSTREAM defect in both releases, and fires only with
+# server.authorization enabled: listNamespaces calls SchemaService.listSchemas
+# IN-PROCESS, under the Iceberg route's request context, where UnityAccessDecorator
+# never installed the RESULT_FILTER attribute that AuthorizedService.
+# applyResponseFilter requires. It is NOT caused by the #1603 overlay (corrected
+# 2026-08-10: an earlier "control" moved two variables at once; with the overlay
+# stripped and authorization still enabled the 500 is unchanged, and the overlaid
+# classes are byte-identical in v0.5.0 and v0.5.1). With authorization disabled
+# the body is skipped and the route answers 200.
 #
-# Re-measured with ONE variable — this same image with the overlay stripped off
-# the classpath and authorization still ENABLED — the route answers the SAME 500.
-# And at byte level, AuthorizedService, SchemaService, IcebergRestCatalogService,
-# UnityAccessDecorator and ResultFilter are IDENTICAL in the released v0.5.0 and
-# v0.5.1 artifacts; the entire v0.5.0->v0.5.1 delta is PermissionService (one added
-# annotation, the #1603 fix), its synthetic sibling, AuthorizeExpressions and a
-# version string. The overlaid classes are not on this code path at all.
+# THIS IMAGE (#3339, Dockerfile stage 1b) replaces that route with upstream
+# #1813's: no pre-gate; the schemas are read from the repository directly and
+# each is kept only if the caller passes GET_SCHEMA on it (metastore or catalog
+# OWNER, or USE CATALOG plus USE SCHEMA or OWNER on the schema). A caller with
+# no grants gets 200 and an empty list.
 #
-# The real cause is an UPSTREAM defect present in BOTH v0.5.0 and v0.5.1 that
-# fires whenever server.authorization is enabled: AuthorizedService.applyResponseFilter
-# runs only `if (isAuthorizationEnabled())`, and then requires the RESULT_FILTER
-# request attribute that UnityAccessDecorator installs for @ResponseAuthorizeFilter
-# routes. IcebergRestCatalogService.listNamespaces reaches SchemaService.listSchemas
-# IN-PROCESS, under the Iceberg route's context, where that attribute was never set
-# — so it throws INTERNAL. With authorization DISABLED the whole body is skipped,
-# which is the only reason the bare image looked healthy. No OTHER Iceberg route
-# has this defect: namespace GET, table list and table load answer 200 to a caller
-# holding the grants (iceberg-e2e.sh J/K/N2; since #3339 that caller is the
-# Console's own principal). v0.6.0, the newest release on Maven Central
-# (2026-08-19), carries the same in-process listSchemas call in its source (read,
-# not run), so there is no release to bump to.
-#
-# The Console works around it by serving namespaces from the Unity schemas API on
-# this same server (lib/azure/iceberg-catalog-client.ts listNamespaces). An
-# external engine calling the catalog DIRECTLY still hits the 500 on that one
-# route.
-announce_iceberg_list_ns_defect() {
+# The plan below keys on the overlay jar being on the classpath file the server
+# boots from (bin/start-uc-server reads ${UC_HOME}/server/target/classpath), not
+# on the jar existing on disk: an image can carry the file and not load it (the
+# harness's section-P images do exactly that). What it cannot see is classpath
+# ORDER — the Dockerfile asserts the overlay is prepended ahead of the base
+# classes and resolves the class from that classpath at build time, so for an
+# image built by that Dockerfile, on the classpath means in effect.
+iceberg_list_ns_plan() {
+  ilp_jar="${UC_HOME}/lib-loom-override/loom-uc-3339-iceberg-authz.jar"
+  ilp_cp="${UC_HOME}/server/target/classpath"
+  # Whole-entry match on the ':'-joined file, so a jar whose path merely contains
+  # this one's does not count.
+  if [ -f "${ilp_jar}" ] && [ -f "${ilp_cp}" ]; then
+    case ":$(tr -d '\r\n' < "${ilp_cp}"):" in
+      *":${ilp_jar}:"*) echo "scoped"; return 0 ;;
+    esac
+  fi
+  echo "upstream-owner-gate"
+}
+
+announce_iceberg_list_ns() {
   [ -n "$(unity_warehouse)" ] || return 0
-  echo "[loom-unity] ICEBERG-LIST-NAMESPACES-DEFECT: GET <iceberg>/v1/catalogs/<warehouse>/namespaces answers HTTP 500 'Authorization filter not initialized' on this image, for EVERY principal including the metastore owner. Cause: an UPSTREAM defect in unitycatalog v0.5.0 AND v0.5.1 that fires whenever server.authorization is enabled — IcebergRestCatalogService.listNamespaces reaches SchemaService.listSchemas in-process, under a request context where UnityAccessDecorator never installed the RESULT_FILTER attribute that AuthorizedService.applyResponseFilter requires. It is NOT caused by the #1603 overlay this image applies: measured with the overlay removed and authorization still enabled, the same call returns the same 500, and the overlaid classes are byte-identical in both releases. The same call with authorization DISABLED returns 200, which is the only reason the bare upstream image looked healthy. No other Iceberg route has this defect. The Console serves namespaces from /api/2.1/unity-catalog/schemas instead; a DIRECT external-engine LIST-namespaces call still fails. See docs/fiab/parity/external-engine-federation.md." >&2
+  case "$(iceberg_list_ns_plan)" in
+    scoped)
+      echo "[loom-unity] ICEBERG-LIST-NAMESPACES: GET <iceberg>/v1/catalogs/<warehouse>/namespaces is served by this image's #3339 overlay (upstream #1813 policy): there is no pre-gate; it answers 200 with the list filtered to the schemas the caller may read, keeping a schema only if the caller is metastore or catalog OWNER or holds USE CATALOG plus USE SCHEMA or OWNER on it (a caller with no grants gets an empty list). The unpatched upstream route answers 403 to every caller that is not metastore OWNER and 500 'Authorization filter not initialized' to the metastore owner. See docs/fiab/parity/external-engine-federation.md." >&2
+      ;;
+    *)
+      # Name the half of the plan's condition that failed: a jar the classpath
+      # lists but the image does not carry is a different fault from a jar that
+      # ships but is not listed.
+      if [ -f "${UC_HOME}/lib-loom-override/loom-uc-3339-iceberg-authz.jar" ]; then
+        ilb_why="is not on the server classpath (${UC_HOME}/server/target/classpath)"
+      else
+        ilb_why="is absent from this image"
+      fi
+      echo "[loom-unity] ICEBERG-LIST-NAMESPACES-DEFECT: the #3339 overlay jar (${UC_HOME}/lib-loom-override/loom-uc-3339-iceberg-authz.jar) ${ilb_why}, so GET <iceberg>/v1/catalogs/<warehouse>/namespaces is upstream's: it answers 403 to every caller that is not metastore OWNER (the Console included) and 500 'Authorization filter not initialized' to the metastore owner. The 500 is an UPSTREAM defect in unitycatalog v0.5.0 AND v0.5.1 that fires whenever server.authorization is enabled — IcebergRestCatalogService.listNamespaces reaches SchemaService.listSchemas in-process, under a request context where UnityAccessDecorator never installed the RESULT_FILTER attribute that AuthorizedService.applyResponseFilter requires. It is NOT caused by the #1603 overlay this image applies: measured with the overlay removed and authorization still enabled, the same call returns the same 500. The same call with authorization DISABLED returns 200. apps/loom-unity/Dockerfile asserts that jar and its classpath entry, so this image was not built from it, or its classpath was changed after the build. See docs/fiab/parity/external-engine-federation.md." >&2
+      ;;
+  esac
 }
 
 # Block until the server has written its admin token AND is answering, then echo
@@ -1039,7 +1061,8 @@ if [ "${LOOM_UNITY_DRYRUN:-}" = "1" ]; then
   announce_bind_plan "$(console_bind_plan)"
   echo "warehouse-bind=$(warehouse_bind_plan)"
   announce_warehouse_plan "$(warehouse_bind_plan)"
-  announce_iceberg_list_ns_defect
+  echo "iceberg-list-namespaces=$(iceberg_list_ns_plan)"
+  announce_iceberg_list_ns
   echo "=== probes ==="
   echo "idp-reachability=$(idp_probe_plan)"
   exit 0
@@ -1072,7 +1095,7 @@ BIND_PLAN="$(console_bind_plan)"
 announce_bind_plan "${BIND_PLAN}"
 WAREHOUSE_PLAN="$(warehouse_bind_plan)"
 announce_warehouse_plan "${WAREHOUSE_PLAN}"
-announce_iceberg_list_ns_defect
+announce_iceberg_list_ns
 
 # ONE sequential background job, deliberately. The warehouse grant resolves its
 # grantee with upstream's getUserByEmail(<principal object id>), so it MUST run
