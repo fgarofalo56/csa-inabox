@@ -7,9 +7,9 @@
  * such a caller, and runs as before for a tenant admin.
  *
  * Each test names the change that turns it red:
- *   - reader sees a disabled item with the reason, and a click does nothing:
- *     the admin check removed (the item enabled for everyone), or the reason
- *     text dropped.
+ *   - reader sees a disabled item with the short reason visible and the full
+ *     sentence as its title, and a click does nothing: the admin check removed
+ *     (the item enabled for everyone), or either text dropped.
  *   - admin's Files shortcut item calls queryShortcut, and the Tables shortcut
  *     item writes its SELECT: the admin path disabled too.
  */
@@ -20,7 +20,7 @@ import { renderWithProviders } from '../../__tests__/test-helpers';
 import { LakehouseEditorContext } from '../lakehouse-editor-context';
 import type { LakehouseEditorCtx } from '../lakehouse-editor-context';
 import { SessionProvider } from '@/lib/components/session-context';
-import { ShortcutsPane, SHORTCUT_QUERY_ADMIN_ONLY } from '../panes/shortcuts-pane';
+import { ShortcutsPane, SHORTCUT_QUERY_ADMIN_ONLY, SHORTCUT_QUERY_ADMIN_ONLY_SUBTEXT } from '../panes/shortcuts-pane';
 
 const FILES_ROW = {
   id: 'sc-1', lakehouseId: 'lh-1', name: 'ext_files', kind: 'files', parentPath: '', fullPath: 'Files/ext_files',
@@ -67,7 +67,9 @@ describe('ShortcutsPane — Query (SQL) on a shortcut', () => {
     expect(item.getAttribute('aria-disabled')).toBe('true');
     // Still in the focus order, so a keyboard user reaches the reason.
     expect(item.getAttribute('tabindex')).not.toBeNull();
-    expect(item.textContent).toContain(SHORTCUT_QUERY_ADMIN_ONLY);
+    // The short reason is visible (part of the accessible name) and the full sentence is the title.
+    expect(item.textContent).toContain(SHORTCUT_QUERY_ADMIN_ONLY_SUBTEXT);
+    expect(item.getAttribute('title')).toBe(SHORTCUT_QUERY_ADMIN_ONLY);
     fireEvent.click(item);
     expect(queryShortcut).not.toHaveBeenCalled();
     expect(setSqlText).not.toHaveBeenCalled();
@@ -77,7 +79,8 @@ describe('ShortcutsPane — Query (SQL) on a shortcut', () => {
     const { queryShortcut } = mount(true, FILES_ROW);
     const item = await openQueryItem();
     expect(item.getAttribute('aria-disabled')).not.toBe('true');
-    expect(item.textContent).not.toContain(SHORTCUT_QUERY_ADMIN_ONLY);
+    expect(item.textContent).not.toContain(SHORTCUT_QUERY_ADMIN_ONLY_SUBTEXT);
+    expect(item.getAttribute('title')).toBeNull();
     fireEvent.click(item);
     expect(queryShortcut).toHaveBeenCalledTimes(1);
   });
