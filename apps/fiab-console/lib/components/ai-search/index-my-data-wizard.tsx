@@ -23,7 +23,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Button, Field, Input, Dropdown, Option, RadioGroup, Radio, Spinner, Badge,
-  MessageBar, MessageBarBody, MessageBarTitle, Body1Strong, Caption1, Divider, Link,
+  MessageBar, MessageBarBody, MessageBarTitle, Body1Strong, Caption1, Divider,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -88,8 +88,6 @@ interface Plan {
   searchConfigured: boolean;
   connection: { container: string; account: string; root: string; abfss: string; storageResourceId: string } | null;
   connectionGate: string | null;
-  /** A page that resolves `connectionGate`, when there is one (a lakehouse sharing its storage root). */
-  connectionGateHref?: string | null;
   tableChoices: string[];
   columns: PlanColumn[];
   fieldMapping: FieldMappingRow[];
@@ -281,12 +279,6 @@ export function IndexMyDataWizard({
           <MessageBarBody>
             <MessageBarTitle>Source path not resolved</MessageBarTitle>
             {plan.connectionGate}
-            {plan.connectionGateHref && (
-              <>
-                {' '}
-                <Link href={plan.connectionGateHref} data-testid="index-connection-gate-link">Open Admin &gt; Readiness</Link>
-              </>
-            )}
           </MessageBarBody>
         </MessageBar>
       )}

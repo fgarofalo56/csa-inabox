@@ -20,8 +20,7 @@
  * only — no mocks (no-vaporware).
  */
 import { NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { apiOk, apiError, apiUnauthorized, apiServerError } from '@/lib/api/respond';
+import { apiOk, apiError, apiServerError } from '@/lib/api/respond';
 import { resolveItemAccessByOid } from '@/lib/auth/item-access';
 import { readAppRuntime, saveAppRuntime, LOOM_APP_RUNTIME_TYPE } from '@/lib/apps/runtime-store';
 import {
@@ -32,14 +31,13 @@ import {
   listAppResourceKinds,
   type AppResourceKind,
 } from '@/lib/apps/app-resources';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
-  const { id } = await props.params;
-  const session = getSession();
-  if (!session) return apiUnauthorized();
+export const GET = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
+  const { id } = params;
   try {
     const access = await resolveItemAccessByOid(session, id, LOOM_APP_RUNTIME_TYPE);
     if (!access) return apiError('Item not found', 404, { code: 'not_found' });
@@ -53,12 +51,10 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
   } catch (e) {
     return apiServerError(e, 'failed to list app resources');
   }
-}
+});
 
-export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
-  const { id } = await props.params;
-  const session = getSession();
-  if (!session) return apiUnauthorized();
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const { id } = params;
   try {
     const access = await resolveItemAccessByOid(session, id, LOOM_APP_RUNTIME_TYPE);
     if (!access) return apiError('Item not found', 404, { code: 'not_found' });
@@ -133,12 +129,10 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     }
     return apiServerError(e, 'failed to attach resource');
   }
-}
+});
 
-export async function DELETE(req: NextRequest, props: { params: Promise<{ id: string }> }) {
-  const { id } = await props.params;
-  const session = getSession();
-  if (!session) return apiUnauthorized();
+export const DELETE = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const { id } = params;
   try {
     const access = await resolveItemAccessByOid(session, id, LOOM_APP_RUNTIME_TYPE);
     if (!access) return apiError('Item not found', 404, { code: 'not_found' });
@@ -160,4 +154,4 @@ export async function DELETE(req: NextRequest, props: { params: Promise<{ id: st
   } catch (e) {
     return apiServerError(e, 'failed to detach resource');
   }
-}
+});

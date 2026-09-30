@@ -14,19 +14,16 @@
  * Returns { ok, options:[{value,label}] } or an honest { ok:false, error/gate }.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem } from '../../items/_lib/item-crud';
 import { lakehouseStorageWithheldFields, resolveLakehouseStorage } from '@/lib/azure/lakehouse-abfss';
 import { scanLakehouseTables } from '@/lib/azure/synapse-catalog-client';
 import { apiServerError } from '@/lib/api/respond';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
+export const GET = withSession(async (req: NextRequest, { session }) => {
   const fromId = req.nextUrl.searchParams.get('fromId')?.trim() || '';
   if (!fromId) return NextResponse.json({ ok: false, error: 'fromId is required' }, { status: 400 });
 
@@ -70,4 +67,4 @@ export async function GET(req: NextRequest) {
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});

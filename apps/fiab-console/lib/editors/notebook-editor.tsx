@@ -37,11 +37,7 @@ import {
   Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   tokens,
 } from '@fluentui/react-components';
-import {
-  attachedLakehouseCaption,
-  readAttachedLakehouseResolution,
-  type AttachedLakehouseResolution,
-} from '@/lib/notebook/attached-lakehouse-status';
+import { attachedLakehouseCaption, readAttachedLakehouseResolution, type AttachedLakehouseResolution } from '@/lib/notebook/attached-lakehouse-status';
 import {
   Play20Regular, Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Notebook20Regular,
   History20Regular, ArrowUpload20Regular, Open20Regular, Library20Regular, Settings20Regular, Sparkle20Regular, BracesVariable20Regular,
@@ -2581,9 +2577,7 @@ export function NotebookEditor({ item, id }: Props) {
                             <Tooltip content={resolved.hint} relationship="description">
                               <Caption1 style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalXS, color: tokens.colorPaletteYellowForeground1, fontSize: tokens.fontSizeBase100 }}>
                                 <Info16Regular /> {attachedLakehouseCaption(resolved)}
-                                {resolved.fixHref && (
-                                  <Link href={resolved.fixHref} onClick={(e) => e.stopPropagation()} data-testid="nb-attached-lakehouse-fix-link">Resolve</Link>
-                                )}
+                                {resolved.fixHref && <Link href={resolved.fixHref} onClick={(e) => e.stopPropagation()} data-testid="nb-attached-lakehouse-fix-link">Resolve</Link>}
                               </Caption1>
                             </Tooltip>
                           )}
