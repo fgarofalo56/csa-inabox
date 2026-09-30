@@ -12,12 +12,30 @@
  * Azure-native backend (no Fabric dependency): the policy is written straight to
  * the storage account via ARM. A missing Storage Account Contributor role (403)
  * surfaces as an honest gate naming the role + bicep module — never a raw 5xx.
+ *
+ * Authorization (#4619). A PUT replaces the WHOLE management policy of ONE
+ * storage account, and a workspace's `storageAccountId` does not yet establish
+ * that the account belongs to that workspace alone. So PUT is TENANT-ADMIN for
+ * every account (`withTenantAdmin`, before the body is read), with a 403
+ * `admin_only` envelope that names this surface. It can become owner-scoped
+ * once a server-verified per-workspace account binding exists.
+ *
+ * Both verbs resolve the workspace through the canonical `resolveAdminWorkspace`
+ * ladder: the creator resolves on their own partition, a tenant admin resolves
+ * a workspace of the same tenant, and anyone else is a 404 before any ARM call
+ * (no ACL-member widening). GET is read-only; it also reports `accountScope`
+ * (`dedicated` | `shared`) as information about the binding. That field does
+ * not change who may write.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession, withTenantAdmin } from '@/lib/api/route-toolkit';
+import { resolveAdminWorkspace } from '@/lib/auth/workspace-guard';
+import type { TenantAdminRefusal } from '@/lib/auth/feature-gate';
 import { workspacesContainer } from '@/lib/azure/cosmos-client';
+import type { Workspace } from '@/lib/types/workspace';
 import {
+  getAccountName,
   getLifecyclePolicy,
   setLifecyclePolicy,
   LifecyclePolicyError,
@@ -27,7 +45,6 @@ import {
   type ConditionField,
   type LifecycleAction,
 } from '@/lib/azure/adls-client';
-import type { Workspace } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -54,16 +71,61 @@ function accountRefFromArmId(armId?: string): LifecycleAccountRef | undefined {
   return { account, resourceGroup, subscriptionId };
 }
 
-async function loadWorkspace(id: string, tenantId: string): Promise<Workspace | null> {
-  const c = await workspacesContainer();
+const GUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+/**
+ * A storage-account ARM id, whole-string anchored, so a suffix, query, fragment
+ * or nested path can never stand in for the account segment when GET reports
+ * `accountScope`.
+ */
+const STORAGE_ACCOUNT_ARM_ID_RE = new RegExp(
+  `^/subscriptions/(${GUID})/resourceGroups/([-\\w.()]{1,90})/providers/Microsoft\\.Storage/storageAccounts/([a-z0-9]{3,24})$`,
+  'i',
+);
+
+/** Keep in step with `LIFECYCLE_ADMIN_ONLY` in lib/util/admin-only-copy.ts. */
+const LIFECYCLE_REFUSAL: TenantAdminRefusal = {
+  reason:
+    'Lifecycle rules replace the whole management policy of a storage account, and Loom cannot yet '
+    + 'confirm that the account is used by this workspace alone, so only a tenant admin can change them.',
+  remediation: 'Ask a tenant admin to change these rules. You can still review them here.',
+};
+
+type AccountScope = 'dedicated' | 'shared';
+
+/**
+ * Classify the account a workspace's lifecycle policy lands on, for GET's
+ * `accountScope`. `dedicated` only when every check positively passes; any
+ * doubt — no binding, an id that does not parse, the deployment's shared
+ * account, another workspace binding the same account, or a failed lookup — is
+ * `shared`. `dedicated` means "not shared", not "owned by this workspace", so
+ * it grants nothing: PUT is tenant-admin either way.
+ */
+async function classifyAccount(ws: Workspace): Promise<AccountScope> {
+  const m = STORAGE_ACCOUNT_ARM_ID_RE.exec(ws.storageAccountId ?? '');
+  if (!m) return 'shared';
+  const account = m[3].toLowerCase();
   try {
-    const { resource } = await c.item(id, tenantId).read<Workspace>();
-    if (!resource || resource.tenantId !== tenantId) return null;
-    return resource;
-  } catch (e: any) {
-    if (e?.code === 404) return null;
-    throw e;
+    if (account === getAccountName().toLowerCase()) return 'shared';
+    const c = await workspacesContainer();
+    const { resources } = await c.items
+      .query<{ id: string; storageAccountId?: string }>({
+        query:
+          'SELECT c.id, c.storageAccountId FROM c WHERE c.id != @id '
+          + 'AND IS_STRING(c.storageAccountId) AND CONTAINS(LOWER(c.storageAccountId), @needle)',
+        parameters: [
+          { name: '@id', value: ws.id },
+          { name: '@needle', value: `/storageaccounts/${account}` },
+        ],
+      })
+      .fetchAll();
+    const alsoBound = resources.some(
+      (o) => accountRefFromArmId(o.storageAccountId)?.account?.toLowerCase() === account,
+    );
+    if (alsoBound) return 'shared';
+  } catch {
+    return 'shared';
   }
+  return 'dedicated';
 }
 
 /** Map a LifecyclePolicyError into the honest-gate JSON payload (HTTP 200). */
@@ -86,29 +148,30 @@ function gateResponse(e: LifecyclePolicyError) {
   });
 }
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest) => {
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
 
   try {
-    const ws = await loadWorkspace(workspaceId, session.claims.oid);
-    if (!ws) return NextResponse.json({ ok: false, error: 'Workspace not found' }, { status: 404 });
-    const ref = accountRefFromArmId(ws.storageAccountId);
+    const resolved = await resolveAdminWorkspace(workspaceId);
+    if (resolved.resp) return resolved.resp;
+    const ref = accountRefFromArmId(resolved.ws.storageAccountId);
     const rules = await getLifecyclePolicy(ref);
+    // Information about the binding; it does not change who may write.
+    const scope = await classifyAccount(resolved.ws);
     return NextResponse.json({
       ok: true,
       rules,
       ruleCount: rules.length,
       maxRules: MAX_RULES,
       account: ref?.account,
+      accountScope: scope,
     });
   } catch (e: any) {
     if (e instanceof LifecyclePolicyError) return gateResponse(e);
     return NextResponse.json({ ok: false, error: e?.message || 'Failed to read lifecycle policy' }, { status: 502 });
   }
-}
+});
 
 /** Validate one rule; returns an error string or null when valid. */
 function validateRule(r: any, index: number): string | null {
@@ -139,10 +202,9 @@ function validateRule(r: any, index: number): string | null {
   return null;
 }
 
-export async function PUT(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
-
+// 401 without a session; 403 `admin_only` for a non-admin before the body is
+// read; then the body is validated and the workspace resolved before ARM.
+export const PUT = withTenantAdmin(async (req: NextRequest) => {
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: 'Invalid JSON' }, { status: 400 }); }
 
@@ -172,9 +234,10 @@ export async function PUT(req: NextRequest) {
   }
 
   try {
-    const ws = await loadWorkspace(workspaceId, session.claims.oid);
-    if (!ws) return NextResponse.json({ ok: false, error: 'Workspace not found' }, { status: 404 });
-    const ref = accountRefFromArmId(ws.storageAccountId);
+    const resolved = await resolveAdminWorkspace(workspaceId);
+    if (resolved.resp) return resolved.resp;
+    // The workspace's binding, or the deployment default when it has none.
+    const ref = accountRefFromArmId(resolved.ws.storageAccountId);
     const clean: LifecycleRule[] = rules.map((r) => ({
       name: r.name,
       enabled: r.enabled,
@@ -191,4 +254,4 @@ export async function PUT(req: NextRequest) {
     if (e instanceof LifecyclePolicyError) return gateResponse(e);
     return NextResponse.json({ ok: false, error: e?.message || 'Failed to write lifecycle policy' }, { status: 502 });
   }
-}
+}, LIFECYCLE_REFUSAL);

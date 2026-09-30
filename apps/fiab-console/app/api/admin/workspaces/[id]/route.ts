@@ -7,6 +7,8 @@
  *       persist name/description/licenseMode/contacts/capacity/domain/
  *       storageAccountId/m365GroupId/m365SiteUrl. When `capacity` changes and a
  *       Fabric/Power BI group is bound, re-assign the capacity best-effort.
+ *       Setting, changing or clearing `storageAccountId` is tenant-admin only
+ *       (#4619); the owner may PATCH every other field.
  *
  * DELETE /api/admin/workspaces/{id} — tenant-admin cascade delete of ANY
  *       workspace (items → loom-search docs → the workspace doc), for cleaning
@@ -22,7 +24,8 @@
  * workspace required.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { isTenantAdmin } from '@/lib/auth/feature-gate';
+import { isTenantAdmin, requireTenantAdmin } from '@/lib/auth/feature-gate';
+import { WORKSPACE_STORAGE_ADMIN_ONLY } from '@/lib/util/admin-only-copy';
 import { resolveAdminWorkspace } from '@/lib/auth/workspace-guard';
 import { workspacesContainer, itemsContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, deleteLoomDoc, docForWorkspace } from '@/lib/azure/loom-search';
@@ -81,10 +84,25 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
   const params = await props.params;
   const resolved = await resolveAdminWorkspace(params.id);
   if (resolved.resp) return resolved.resp;
-  const { ws } = resolved;
+  const { session, ws } = resolved;
   let body: any;
   try { body = await req.json(); } catch { return err('Invalid JSON', 400, 'bad_json'); }
   try {
+    // #4619 — setting, changing or clearing the storage binding is a
+    // tenant-admin action, the same rule as PATCH /api/workspaces/[id].
+    // resolveAdminWorkspace admits the workspace OWNER as well as a tenant
+    // admin, so the gate is here. A body without the field, or one that
+    // re-sends the stored value (trimmed, compared with the trimmed stored
+    // value), is not a change and passes.
+    const storageAccountId: string | undefined = 'storageAccountId' in body
+      ? (typeof body.storageAccountId === 'string' && body.storageAccountId.trim() ? body.storageAccountId.trim() : undefined)
+      : ws.storageAccountId;
+    const currentStorage = typeof ws.storageAccountId === 'string' && ws.storageAccountId.trim()
+      ? ws.storageAccountId.trim() : undefined;
+    if ('storageAccountId' in body && storageAccountId !== currentStorage) {
+      const refused = requireTenantAdmin(session, WORKSPACE_STORAGE_ADMIN_ONLY);
+      if (refused) return refused;
+    }
     const capacityChanged = 'capacity' in body && (body.capacity?.trim() || undefined) !== ws.capacity;
 
     const next: Workspace = {
@@ -100,9 +118,7 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
             ? (body.contacts as unknown[]).map((c) => String(c).trim()).filter(Boolean).slice(0, 100)
             : ws.contacts)
         : ws.contacts,
-      storageAccountId: 'storageAccountId' in body
-        ? (typeof body.storageAccountId === 'string' && body.storageAccountId.trim() ? body.storageAccountId.trim() : undefined)
-        : ws.storageAccountId,
+      storageAccountId,
       m365GroupId: 'm365GroupId' in body
         ? (typeof body.m365GroupId === 'string' && body.m365GroupId.trim() ? body.m365GroupId.trim() : undefined)
         : ws.m365GroupId,
