@@ -264,7 +264,7 @@ export function LakehouseEditor({ item, id }: Props) {
   }, [containers]);
 
   // ── Domain hooks ──────────────────────────────────────────────────────────
-  const perms = useLakehousePermissions({ activeContainer, confirm });
+  const perms = useLakehousePermissions({ lakehouseId: id, activeContainer, confirm });
   const settings_ = useLakehouseSettings({ lakehouseId: isNewItem ? null : id, schemasEnabled, setSchemasEnabled, setActionStatus });
   const sec = useLakehouseSecondary({
     // Schemas and shortcuts belong to the lakehouse ITEM; an unsaved item has none.

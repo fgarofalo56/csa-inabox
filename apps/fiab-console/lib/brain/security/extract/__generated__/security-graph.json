@@ -14899,6 +14899,33 @@
           }
         },
         {
+          "id": "sec:authorizer:apps/fiab-console/app/api/lakehouse/permissions/route.ts#GET",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "GET /api/lakehouse/permissions",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "GET /api/lakehouse/permissions",
+            "params": [],
+            "resourceScoped": false,
+            "callerNamedResourceInputs": [],
+            "allowPaths": [
+              {
+                "id": "get:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": false,
+            "privilegedSinkKinds": []
+          }
+        },
+        {
           "id": "sec:authorizer:apps/fiab-console/app/api/lakehouse/permissions/route.ts#POST",
           "kind": "authorizer",
           "provenance": "declared",
@@ -49388,6 +49415,11 @@
         {
           "nodeId": "sec:verdict-call:apps/fiab-console/app/api/lakehouse/permissions/rls-test/route.ts#POST:requireTenantAdmin:2",
           "codeModuleId": "code:apps/fiab-console/app/api/lakehouse/permissions/rls-test/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/lakehouse/permissions/route.ts#GET",
+          "codeModuleId": "code:apps/fiab-console/app/api/lakehouse/permissions/route.ts",
           "deployedAs": "loom-console"
         },
         {

@@ -1872,7 +1872,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `lakehouse/path/route.ts` | POST DELETE | owner-scoped |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph |
 | `lakehouse/paths/route.ts` | GET | admin |  | AAS, ADLS, ARM, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Power BI |
 | `lakehouse/permissions/rls-test/route.ts` | POST | admin |  | ARM, Azure SQL, Managed Identity, Synapse SQL |
-| `lakehouse/permissions/route.ts` | GET POST DELETE | admin |  | ADLS, ARM, Azure RBAC, Azure SQL, Azure Storage, Managed Identity, Microsoft Graph, Resource Graph, Synapse SQL |
+| `lakehouse/permissions/route.ts` | GET POST DELETE | admin |  | ADLS, ARM, Azure RBAC, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Resource Graph, Synapse SQL |
 | `lakehouse/preview/route.ts` | GET | owner-scoped |  | ADLS, ARM, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
 | `lakehouse/references/paths/route.ts` | GET | owner-scoped |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph |
 | `lakehouse/references/route.ts` | GET POST | owner-scoped |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity |
