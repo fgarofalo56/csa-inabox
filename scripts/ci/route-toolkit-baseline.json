@@ -975,7 +975,6 @@
     "apps/fiab-console/app/api/thread/edges/route.ts": 1,
     "apps/fiab-console/app/api/thread/kql-query-to-dashboard-tile/route.ts": 1,
     "apps/fiab-console/app/api/thread/lakehouse-delta-tables/route.ts": 1,
-    "apps/fiab-console/app/api/thread/materialize-to-kql/route.ts": 1,
     "apps/fiab-console/app/api/thread/mirror-to-lakehouse/route.ts": 1,
     "apps/fiab-console/app/api/thread/model-tables/route.ts": 1,
     "apps/fiab-console/app/api/thread/open-in-report-builder/route.ts": 1,

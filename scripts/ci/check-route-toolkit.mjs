@@ -545,7 +545,6 @@ const TOUCH_EXEMPT = new Map([
   ['apps/fiab-console/app/api/items/ontology-sdk/[id]/publish/route.ts', '#2677: codemod-resistant prologue; one-line ReDoS trim swap only'],
   ['apps/fiab-console/app/api/items/report/[id]/native-query/route.ts', '#2677: codemod-resistant prologue; one-line ReDoS trim swap only'],
   ['apps/fiab-console/app/api/items/report/[id]/profile/route.ts', '#2677: codemod-resistant prologue; one-line ReDoS trim swap only'],
-  ['apps/fiab-console/app/api/thread/materialize-to-kql/route.ts', '#2677: codemod-resistant prologue; one-line ReDoS trim swap only'],
   ['apps/fiab-console/app/api/thread/promote-medallion/route.ts', '#2677: codemod-resistant prologue; one-line ReDoS trim swap only'],
   ['apps/fiab-console/app/api/items/[type]/[id]/business-metadata/route.ts', '#2657: bespoke err() 401 envelope, codemod-resistant — migrate with the items family'],
   // LU-5 S4 class sweep touched these two ONLY to route their Atlas typedef name

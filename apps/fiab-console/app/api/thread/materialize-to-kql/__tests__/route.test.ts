@@ -115,3 +115,86 @@ describe('materialize-to-kql route', () => {
     expect(j.message).toMatch(/query acceleration could not be enabled/);
   });
 });
+
+/**
+ * The table name becomes the `Tables/<name>` segment of the ADX storage
+ * location, so it must be ONE path segment. Each refusal case asserts 400, the
+ * message of the rule it trips, and that nothing downstream ran: no item load
+ * (Cosmos), no lakehouse-root resolution (storage binding), no ADX command.
+ *
+ * What breaks these (mutation arms run in a sandbox, see the PR body):
+ *  - deleting the `tableNameProblem` call → every refusal case reaches
+ *    `createExternalDeltaTable` and returns 200 (status 200 ≠ 400);
+ *  - moving the check below `resolveLakehouseAbfss` → the status still reads
+ *    400 but `resolveLakehouseAbfssMock` has been called, so the
+ *    `not.toHaveBeenCalled()` line fails;
+ *  - dropping the control-character rule → 'a\nb' becomes one segment and is
+ *    accepted (200);
+ *  - loosening `segs.length !== 1` → 'a/b', 'a\\b' and '../x' are accepted
+ *    ('.' and '..' still fail inside `pathSegments`, which is why those two
+ *    are separate rows and the separator rows exist at all);
+ *  - dropping the `segs[0] !== name` comparison → 'orders/' collapses to
+ *    ['orders'] and is accepted;
+ *  - dropping the `;?#%` rule → 'orders;x' is accepted.
+ */
+describe('materialize-to-kql table-name validation', () => {
+  const SEGMENT_MSG = /single folder name under Tables\//;
+  const cases: Array<[label: string, table: string, msg: RegExp]> = [
+    ['parent reference', '../x|bronze/Tables/x', SEGMENT_MSG],
+    ['bare parent', '..|bronze/Tables/x', SEGMENT_MSG],
+    ['forward slash', 'a/b|bronze/Tables/a/b', SEGMENT_MSG],
+    ['backslash', 'a\\b|bronze/Tables/a', SEGMENT_MSG],
+    ['trailing slash', 'orders/|bronze/Tables/orders', SEGMENT_MSG],
+    ['single dot', '.|bronze/Tables', SEGMENT_MSG],
+    ['empty name', '|bronze/Tables/orders', /table name is empty/],
+    ['whitespace-only name', '   |bronze/Tables/orders', /table name is empty/],
+    ['embedded newline', 'a\nb|bronze/Tables/a', /control character/],
+    ['embedded DEL (0x7F)', 'a\u007fb|bronze/Tables/a', /control character/],
+    ['embedded NUL', 'a\u0000b|bronze/Tables/a', /control character/],
+    ['connection-string separator', 'orders;x|bronze/Tables/orders', /";", "\?", "#" and "%"/],
+    ['percent escape', 'a%2Fb|bronze/Tables/a', /";", "\?", "#" and "%"/],
+  ];
+
+  it.each(cases)('refuses %s with 400 before any Cosmos / storage / ADX call', async (_label, table, msg) => {
+    loadOwnedItemMock.mockClear();
+    resolveLakehouseAbfssMock.mockClear();
+    const res = await POST(post({ from: FROM, values: { ...VALUES, table } }));
+    expect(res.status, `table=${JSON.stringify(table)}`).toBe(400);
+    const j = await res.json();
+    expect(j.ok).toBe(false);
+    expect(j.error).toMatch(msg);
+    expect(loadOwnedItemMock).not.toHaveBeenCalled();
+    expect(resolveLakehouseAbfssMock).not.toHaveBeenCalled();
+    expect(createExternalDeltaTableMock).not.toHaveBeenCalled();
+    expect(setQueryAccelerationPolicyMock).not.toHaveBeenCalled();
+  });
+
+  // POSITIVE CONTROLS — pair every refusal above with the thing still working.
+  // Breaks if the validator over-refuses (status ≠ 200) or if the name is
+  // rewritten instead of refused (e.g. swapping in a `[A-Za-z0-9_]`
+  // sanitizer turns 'sales-2024 v2' into 'sales_2024_v2', so the exact URI
+  // assertion fails).
+  it.each([
+    ['orders', 'orders'],
+    ['sales-2024 v2', 'sales-2024 v2'],
+    ['  orders  ', 'orders'], // surrounding whitespace is trimmed, as before
+  ])('accepts %j and binds <root>/Tables/%s', async (name, expected) => {
+    const res = await POST(post({ from: FROM, values: { ...VALUES, table: `${name}|bronze/Tables/${name}` } }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).ok).toBe(true);
+    expect(createExternalDeltaTableMock).toHaveBeenCalledTimes(1);
+    expect(createExternalDeltaTableMock.mock.calls[0][2]).toBe(
+      `abfss://bronze@acct.dfs.core.windows.net/lakehouses/sales/Tables/${expected}`,
+    );
+  });
+
+  // The ADX identifier side: the external table name is derived through
+  // `adxIdent`, so an accepted name with a space/hyphen still yields a plain
+  // `[A-Za-z0-9_]` identifier. Breaks if the raw name is passed as `extName`.
+  it('derives an [A-Za-z0-9_] external-table name from an accepted name', async () => {
+    await POST(post({ from: FROM, values: { ...VALUES, table: 'sales-2024 v2|x' } }));
+    const extName = createExternalDeltaTableMock.mock.calls[0][1] as string;
+    expect(extName).toBe('Sales_LH_sales_2024_v2');
+    expect(extName).toMatch(/^[A-Za-z0-9_]+$/);
+  });
+});
