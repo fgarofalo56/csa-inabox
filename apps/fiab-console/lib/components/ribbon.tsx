@@ -95,11 +95,10 @@ export interface RibbonDropdownItem {
    *  item renders disabled with a "not wired" tooltip (honest, per
    *  no-vaporware.md). */
   onClick?: () => void;
+  /** Grays the item out. A Fluent `MenuItem` that is `disabled` renders
+   *  `aria-disabled` and stays focusable in the menu, so a keyboard user can
+   *  still reach it and hear its `title`; no separate option is needed here. */
   disabled?: boolean;
-  /** With `disabled`: the item stays in the tab order (Fluent
-   *  `disabledFocusable`, rendered `aria-disabled`), so a keyboard user can
-   *  reach it and hear its `title`. It still does nothing when activated. */
-  disabledFocusable?: boolean;
   /** Optional tooltip — used to explain why an item is grayed out. */
   title?: string;
   icon?: ReactElement;
@@ -244,14 +243,12 @@ export function Ribbon({ tabs, defaultTabId, commandSearch }: Props) {
                           <MenuList>
                             {dropdownItems.map((mi, di) => {
                               const miDead = !mi.onClick && !mi.disabled;
-                              const miFocusableOff = !!mi.disabled && !!mi.disabledFocusable;
                               return (
                                 <MenuItem
                                   key={di}
                                   icon={mi.icon}
-                                  disabled={(mi.disabled || miDead) && !miFocusableOff}
-                                  disabledFocusable={miFocusableOff}
-                                  onClick={miDead || miFocusableOff ? undefined : mi.onClick}
+                                  disabled={mi.disabled || miDead}
+                                  onClick={miDead ? undefined : mi.onClick}
                                   title={
                                     mi.title ??
                                     (miDead ? `${mi.label} — not wired in this editor` : undefined)
