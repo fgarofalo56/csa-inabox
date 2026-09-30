@@ -79,7 +79,8 @@ import {
   executeParameterized,
 } from '@/lib/azure/azure-sql-client';
 import { sqlWithNoContainmentGuarantee } from '@/lib/sql/trusted-sql';
-import { executeStatement, databricksConfigGate, warehouseConfigGate } from '@/lib/azure/databricks-client';
+import { executeStatement, databricksConfigGate } from '@/lib/azure/databricks-client';
+import { withResolvedWarehouse } from '@/lib/azure/databricks-sql-warehouse';
 import { executePostgresQuery, postgresQueryGate } from '@/lib/azure/postgres-flex-client';
 import { queryItems } from '@/lib/azure/cosmos-data-client';
 import {
@@ -1873,19 +1874,16 @@ export async function buildConnectionExecutor(
             cfg.missing,
           );
         }
-        const whCfg = warehouseConfigGate();
-        if (whCfg) {
-          return connGate(
-            `No Databricks SQL warehouse is configured. Set ${whCfg.missing} on the Loom Console (the warehouse used to run report queries).`,
-            whCfg.missing,
-          );
-        }
-        const warehouseId = (process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID || '').trim();
+        // The SQL warehouse is not a gate (#3744): with a workspace bound the
+        // Console produces it (env pin → persisted → adopted/created
+        // `loom-default`). Resolved per run, so a failure surfaces at query
+        // time with its classified cause, never as "not configured".
         // conn.database carries an optional `catalog` or `catalog.schema` default namespace.
         const [catalog, schemaPart] = (conn.database || '').split('.');
         const schema = ref.mode === 'table' ? (ref.schema || schemaPart) : schemaPart;
         const run: SqlRunner = async (sql) => {
-          const r = await executeStatement(warehouseId, sql, catalog || undefined, schema || undefined);
+          // #4776 — a warehouse deleted out-of-band is invalidated and re-resolved once.
+          const r = await withResolvedWarehouse((id) => executeStatement(id, sql, catalog || undefined, schema || undefined));
           return { columns: r.columns, rows: rowsToRecords(r.columns, r.rows) };
         };
         const tableName = ref.mode === 'table' ? ref.table : 'Query';

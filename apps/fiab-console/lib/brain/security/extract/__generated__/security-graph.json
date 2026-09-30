@@ -4418,25 +4418,6 @@
           }
         },
         {
-          "id": "sec:verdict-call:apps/fiab-console/app/api/admin/gates/route.ts#GET:enforceCapability:3",
-          "kind": "verdict-call",
-          "provenance": "declared",
-          "label": "GET /api/admin/gates -> enforceCapability",
-          "facet": {
-            "kind": "verdict-call",
-            "callSite": "GET /api/admin/gates:3",
-            "symbol": "enforceCapability",
-            "returnsVerdictUnion": true,
-            "pathsToPrivilegedSink": 0,
-            "pathsConsumingAsRefusal": 0,
-            "consumption": "returned",
-            "allowlisted": false,
-            "allowlistPremiseTested": false,
-            "sinkPrivileged": false,
-            "sinkKind": "none"
-          }
-        },
-        {
           "id": "sec:authorizer:apps/fiab-console/app/api/admin/governance-catalog/reindex/route.ts#POST",
           "kind": "authorizer",
           "provenance": "declared",
@@ -46592,11 +46573,6 @@
         {
           "nodeId": "sec:verdict-call:apps/fiab-console/app/api/admin/gates/[id]/resolve/route.ts#POST:pdpCheck:6",
           "codeModuleId": "code:apps/fiab-console/app/api/admin/gates/[id]/resolve/route.ts",
-          "deployedAs": "loom-console"
-        },
-        {
-          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/admin/gates/route.ts#GET:enforceCapability:3",
-          "codeModuleId": "code:apps/fiab-console/app/api/admin/gates/route.ts",
           "deployedAs": "loom-console"
         },
         {

@@ -188,7 +188,7 @@ export function DataQualityEditor({ item, id }: { item: FabricItemType; id: stri
                     </Field>
                   )}
                   {backend === 'databricks' && (<>
-                    <Field label="SQL warehouse id" hint="Defaults to LOOM_DATABRICKS_SQL_WAREHOUSE_ID">
+                    <Field label="SQL warehouse id" hint="Defaults to the platform warehouse (LOOM_DATABRICKS_SQL_WAREHOUSE_ID, else the loom-default warehouse the Console creates)">
                       <Input value={state.warehouseId || ''} onChange={(_, d) => setState((p) => ({ ...p, warehouseId: d.value }))} />
                     </Field>
                     <Field label="Catalog"><Input value={state.catalog || ''} onChange={(_, d) => setState((p) => ({ ...p, catalog: d.value }))} /></Field>
