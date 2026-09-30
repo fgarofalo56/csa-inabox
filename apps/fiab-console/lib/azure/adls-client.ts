@@ -637,8 +637,9 @@ export async function uploadFile(
 export async function downloadFile(
   container: string,
   path: string,
+  account?: string,
 ): Promise<{ body: Buffer; contentType?: string; size: number }> {
-  const fs = getFileSystem(container);
+  const fs = getFileSystem(container, account);
   const file = fs.getFileClient(path);
   const buf = await file.readToBuffer();
   let contentType: string | undefined;
