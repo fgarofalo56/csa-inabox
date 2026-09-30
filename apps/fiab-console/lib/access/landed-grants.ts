@@ -18,14 +18,16 @@
  *   - {@link recordLandedGrants} writes every landed grant to the entitlement
  *     ledger with its role-assignment id (`sourceRef` = the request id), so the
  *     who-has-access report shows it.
- *   - {@link revokeLandedGrants} runs on denial: it revokes only the grants this
- *     request created, never access the principal already held, and reports
- *     every grant it could not revoke (with the reason) instead of claiming it.
+ *   - {@link revokeLandedGrants} runs on denial, and when a final approval
+ *     finds the request was decided otherwise while it granted: it revokes
+ *     only the grants the request (or that approval) created, never access the
+ *     principal already held, and reports every grant it could not revoke
+ *     (with the reason) instead of claiming it.
  */
 import type { SessionPayload } from '@/lib/auth/session';
 import type { AccessGrantResult, AccessPermission, AccessScopeType } from '@/lib/azure/access-policy-client';
 import { revokeContainerRoleAssignment, revokeStructuredGrant } from '@/lib/azure/rbac-client';
-import { recordAssignment, revokeAssignmentLedger } from '@/lib/access/assignment-ledger';
+import { assignmentId, recordAssignment, revokeAssignmentLedger } from '@/lib/access/assignment-ledger';
 import type { AccessRequestGrantResult } from '@/lib/types/access-request-workflow';
 
 /** The ledger `source` for grants made by an access request. */
@@ -80,10 +82,29 @@ export interface LandedGrantContext {
   expiresAt?: string | null;
 }
 
-/** Record every landed grant in the entitlement ledger. Best-effort, like the ledger itself. */
-export async function recordLandedGrants(ctx: LandedGrantContext, results: AccessRequestGrantResult[]): Promise<void> {
+/** The entitlement-ledger id of the row a request's grant on `r` is recorded under. */
+export function grantLedgerId(requesterId: string, r: { scopeType: string; scopeRef: string }): string {
+  return assignmentId(requesterId, r.scopeType, r.scopeRef, REQUEST_GRANT_SOURCE);
+}
+
+/** One landed grant and whether its ledger row was written. */
+export interface LedgerRecord {
+  scopeType: string;
+  scopeRef: string;
+  ledgerId: string;
+  recorded: boolean;
+}
+
+/**
+ * Record every landed grant in the entitlement ledger. Best-effort, like the
+ * ledger itself: a row that could not be written is returned with
+ * `recorded: false`, so a caller never says a grant is in the Access report
+ * when it is not.
+ */
+export async function recordLandedGrants(ctx: LandedGrantContext, results: AccessRequestGrantResult[]): Promise<LedgerRecord[]> {
+  const out: LedgerRecord[] = [];
   for (const r of landedGrants(results)) {
-    await recordAssignment({
+    const recorded = await recordAssignment({
       principalId: ctx.requesterId,
       principalUpn: ctx.requesterUpn,
       principalType: 'User',
@@ -99,7 +120,9 @@ export async function recordLandedGrants(ctx: LandedGrantContext, results: Acces
       roleAssignmentId: r.roleAssignmentId,
       expiresAt: ctx.expiresAt ?? null,
     });
+    out.push({ scopeType: r.scopeType, scopeRef: r.scopeRef, ledgerId: grantLedgerId(ctx.requesterId, r), recorded });
   }
+  return out;
 }
 
 /** A role-assignment DELETE that answered "not found" already has the outcome a revoke wants. */
@@ -120,14 +143,28 @@ const ALREADY_GONE = /\b404\b|NotFound|RoleAssignmentNotFound/i;
  * before whether it was created: an ADLS grant with no recorded role-assignment
  * id, or a scope this module has no revoke for (a Loom workspace role, an ADLS
  * path). Never throws.
+ *
+ * `opts.beforeEach` runs before every revoke attempt after the first (the
+ * caller renews its per-request lease there). When it returns false the loop
+ * stops: `aborted` is true and the created grants not yet attempted are in
+ * `notAttempted` (still live, ledger rows untouched).
  */
 export async function revokeLandedGrants(
   ctx: Pick<LandedGrantContext, 'requesterId' | 'requesterUpn' | 'permission'>,
   results: AccessRequestGrantResult[] | undefined,
   session: SessionPayload,
-): Promise<{ revoked: AccessRequestGrantResult[]; kept: AccessRequestGrantResult[] }> {
+  opts?: { beforeEach?: () => Promise<boolean> },
+): Promise<{
+  revoked: AccessRequestGrantResult[];
+  kept: AccessRequestGrantResult[];
+  notAttempted: AccessRequestGrantResult[];
+  aborted: boolean;
+}> {
   const revoked: AccessRequestGrantResult[] = [];
   const kept: AccessRequestGrantResult[] = [];
+  const notAttempted: AccessRequestGrantResult[] = [];
+  let aborted = false;
+  let attempted = false;
   const by = session.claims.upn || session.claims.oid;
   for (const r of landedGrants(results)) {
     if (r.created === false) continue;
@@ -140,6 +177,12 @@ export async function revokeLandedGrants(
       kept.push({ ...r, detail: 'Could not determine whether the requester held this role before the request, so it was left in place.' });
       continue;
     }
+    if (!aborted && attempted && opts?.beforeEach && !(await opts.beforeEach())) aborted = true;
+    if (aborted) {
+      notAttempted.push(r);
+      continue;
+    }
+    attempted = true;
     let failure: string | undefined;
     if (r.scopeType === 'adls-container') {
       try {
@@ -166,7 +209,7 @@ export async function revokeLandedGrants(
     await revokeAssignmentLedger(ctx.requesterId, r.scopeType, r.scopeRef, REQUEST_GRANT_SOURCE, by);
     revoked.push(r);
   }
-  return { revoked, kept };
+  return { revoked, kept, notAttempted, aborted };
 }
 
 /** Why `r` cannot be revoked automatically, or undefined when it can. */

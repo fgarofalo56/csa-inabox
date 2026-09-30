@@ -61,6 +61,7 @@ import {
 } from '@/lib/azure/cosmos-client';
 import { enforceAccessGrant, revokeStructuredGrant, revokeContainerRoleAssignment } from '@/lib/azure/rbac-client';
 import { makePartitionedContainer, makeSinkContainer, type FakeContainer } from './partitioned-cosmos-fake';
+import { assignmentId } from '@/lib/access/assignment-ledger';
 
 /** The partition key: the Entra TENANT, as tenantScopeId() resolves it. */
 const TENANT = 'tenant-1-tid';
@@ -256,6 +257,10 @@ describe('POST /api/access-requests/[id]/decision', () => {
     expect(store.doc.grantLeaseUntil).toBeUndefined();
     expect(store.doc.subscribedAt).toBeTruthy();
     expect(store.doc.enforcement.roleAssignmentId).toContain('roleAssignments/abc');
+    // The requester is told once the decision is recorded. The positive pair
+    // for the lost-race tests below, which assert no notice is sent.
+    const notes = (await (notificationsContainer as any)()).__writes;
+    expect(notes.map((n: any) => n.title)).toEqual(['Access granted: Gold sales']);
   });
 
   it('final approval grants on every bound output, one grant per scope', async () => {
@@ -396,7 +401,16 @@ describe('final tier — the scopes the approvers reviewed', () => {
     const j = await res.json();
     expect(res.status).toBe(409);
     expect(j.code).toBe('targets_changed');
-    expect(j.current).toEqual(TWO_TARGETS);
+    // Both lists carry source and declaredRef, so the dialog can render them.
+    expect(j.current).toEqual([
+      { scopeType: 'adls-container', scopeRef: 'gold', source: "output port 'gold-out'", declaredRef: 'gold' },
+      { scopeType: 'adls-container', scopeRef: 'silver', source: "output port 'silver-out'", declaredRef: 'silver' },
+    ]);
+    expect(j.reviewed).toEqual([{ scopeType: 'adls-container', scopeRef: 'gold', source: "output port 'gold-out'" }]);
+    expect(j.changes).toEqual([{
+      cause: 'scope_added', source: "output port 'silver-out'",
+      current: { scopeType: 'adls-container', scopeRef: 'silver', source: "output port 'silver-out'", declaredRef: 'silver' },
+    }]);
     expect(enforceAccessGrant).not.toHaveBeenCalled();
     expect(replaced).toBe(0);
     expect(store.doc.status).toBe('open');
@@ -656,7 +670,7 @@ describe('final tier — a store bound after the request was made', () => {
     const j = await res.json();
     expect(res.status).toBe(409);
     expect(j.code).toBe('targets_changed');
-    expect(j.current).toEqual([{ scopeType: 'adls-container', scopeRef: 'gold' }]);
+    expect(j.current).toEqual([{ scopeType: 'adls-container', scopeRef: 'gold', source: "output port 'gold-out'", declaredRef: 'gold' }]);
     expect(enforceAccessGrant).not.toHaveBeenCalled();
     expect(store.doc.status).toBe('open');
   });
@@ -688,8 +702,75 @@ describe('final tier — a store bound after the request was made', () => {
     (accessRequestWorkflowContainer as any).mockResolvedValue(container);
     const res = await POST(makeReq({ decision: 'approved' }), ctx('req-1'));
     expect(res.status).toBe(409);
-    expect((await res.json()).code).toBe('targets_changed');
+    const j = await res.json();
+    expect(j.code).toBe('targets_changed');
     expect(enforceAccessGrant).not.toHaveBeenCalled();
+    // Named by cause: breaks if the classifier read the missing declaredRef as a
+    // re-bound port (cause 'port_rebound', and the "nobody reviewed" sentence).
+    expect(j.changes.map((ch: any) => ch.cause)).toEqual(['predates_recording']);
+    expect(j.error).toContain("output port 'gold-out': this request predates target recording; deny it and ask the requester to re-request.");
+    expect(j.error).not.toContain('nobody reviewed');
+    expect(j.suggestedDenyReason).toMatch(/^This request was made before Loom recorded which storage it covers/);
+    expect(j.reviewed).toEqual([{ scopeType: 'adls-container', scopeRef: '', source: "output port 'gold-out'" }]);
+    expect(j.current).toEqual([{ scopeType: 'adls-container', scopeRef: 'gold', source: "output port 'gold-out'", declaredRef: 'gold' }]);
+  });
+});
+
+describe('final tier — targets_changed names each change by its cause', () => {
+  /** The product with its one port `gold-out` now naming `ref`. */
+  function portNames(ref: string) {
+    items = makePartitionedContainer({
+      partitionKeyPath: '/workspaceId',
+      seed: [...BOUND_STORES, productItem({ state: { lifecycleState: 'published', ports: { output: [{ name: 'gold-out', kind: 'adls', ref }] } } })],
+    });
+    (itemsContainer as any).mockResolvedValue(items);
+  }
+  async function approveWith(reviewed: any[]) {
+    const { container, store } = fakeArContainer(baseDoc({ tier: 'access-provider', grantTargets: reviewed }));
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    const res = await POST(makeReq({ decision: 'approved' }), ctx('req-1'));
+    expect(res.status).toBe(409);
+    expect(enforceAccessGrant).not.toHaveBeenCalled();
+    expect(store.doc.status).toBe('open');
+    return res.json();
+  }
+
+  it('port_unbound: a port bound when requested that names no bound store now', async () => {
+    // Reviewed gold (bound); the port now names 'nowhere', which no store holds.
+    // Breaks if the cause were derived from the current side alone ('declared_ref_changed').
+    portNames('nowhere');
+    const reviewed = { scopeType: 'adls-container', scopeRef: 'gold', source: "output port 'gold-out'", declaredRef: 'gold' };
+    const j = await approveWith([reviewed]);
+    expect(j.changes).toEqual([{
+      cause: 'port_unbound', source: "output port 'gold-out'", reviewed,
+      current: { scopeType: 'adls-container', scopeRef: '', source: "output port 'gold-out'", declaredRef: 'nowhere' },
+    }]);
+    expect(j.error).toContain("output port 'gold-out' was bound to adls-container 'gold' when this request was made and is bound to no store now.");
+    expect(j.error).toContain('Approving it would grant access nobody reviewed.');
+    expect(j.suggestedDenyReason).toMatch(/^The storage behind "Gold sales" changed after you requested access/);
+  });
+
+  it('port_rebound: a port bound when requested that is bound to a different store now', async () => {
+    // Reviewed gold; the port now names silver, which is bound. Breaks if a
+    // bound-to-bound change were reported as unbound or as a name change.
+    portNames('silver');
+    const reviewed = { scopeType: 'adls-container', scopeRef: 'gold', source: "output port 'gold-out'", declaredRef: 'gold' };
+    const j = await approveWith([reviewed]);
+    expect(j.changes.map((ch: any) => ch.cause)).toEqual(['port_rebound']);
+    expect(j.error).toContain("output port 'gold-out' was bound to adls-container 'gold' when this request was made and is bound to adls-container 'silver' now.");
+    expect(j.reviewed).toEqual([reviewed]);
+    expect(j.current).toEqual([{ scopeType: 'adls-container', scopeRef: 'silver', source: "output port 'gold-out'", declaredRef: 'silver' }]);
+  });
+
+  it('declared_ref_changed: a port unbound when requested that names a different store now', async () => {
+    // Reviewed: unbound, declared 'foo'. Now: still unbound, declared 'bar'.
+    // Breaks if the declared names were not compared (cause 'port_rebound').
+    portNames('bar');
+    const reviewed = { scopeType: 'adls-container', scopeRef: '', source: "output port 'gold-out'", declaredRef: 'foo' };
+    const j = await approveWith([reviewed]);
+    expect(j.changes.map((ch: any) => ch.cause)).toEqual(['declared_ref_changed']);
+    expect(j.error).toContain("output port 'gold-out' named adls-container 'foo' (not bound yet) when this request was made and names adls-container 'bar' (not bound yet) now.");
+    expect(j.current).toEqual([{ scopeType: 'adls-container', scopeRef: '', source: "output port 'gold-out'", declaredRef: 'bar' }]);
   });
 });
 
@@ -751,5 +832,260 @@ describe('final tier — one grant at a time per request', () => {
     expect(enforceAccessGrant).toHaveBeenCalledTimes(1);
     expect(store.doc.status).toBe('completed');
     expect(store.doc.grantLeaseUntil).toBeUndefined();
+  });
+});
+
+/**
+ * Wrap the request container so a test can act between the route's writes.
+ * `onReplace(fn)` runs `fn(doc, n)` before the n-th replace (1-based) reaches
+ * the store; `raw(patch)` writes the stored document unconditionally, as
+ * another decision's write would. Raw writes do not go through the hook.
+ */
+function instrument(container: FakeContainer) {
+  const origItem = container.item.bind(container);
+  let before: ((doc: any, n: number) => Promise<void> | void) | undefined;
+  let n = 0;
+  container.item = (id: string, pk?: string) => {
+    const h = origItem(id, pk);
+    return {
+      ...h,
+      replace: async (d: any, o?: any) => {
+        n += 1;
+        if (before) await before(d, n);
+        return h.replace(d, o);
+      },
+    };
+  };
+  return {
+    onReplace(fn: (doc: any, n: number) => Promise<void> | void) { before = fn; },
+    async raw(patch: Record<string, unknown>) {
+      const h = origItem('req-1', TENANT);
+      const { resource } = await h.read();
+      await h.replace({ ...resource, ...patch });
+    },
+  };
+}
+
+const GOLD_LEDGER_ID = assignmentId(REQUESTER_OID, 'adls-container', 'gold', 'direct');
+const activeGold = { status: 'active', roleName: 'Storage Blob Data Reader', roleAssignmentId: 'ra-gold', preexisting: false };
+
+describe('decisions that lose the request while granting or revoking', () => {
+  let notes: ReturnType<typeof makeSinkContainer>;
+  beforeEach(() => {
+    notes = makeSinkContainer();
+    (notificationsContainer as any).mockResolvedValue(notes);
+  });
+
+  it('a grant that outlasts its lease: a denial after +130 s wins, and the approval removes the grant it made', async () => {
+    // The measured scenario: the approval's grant is held open past the 120 s
+    // lease, a denial is recorded, then the grant completes. Breaks without
+    // compensation (the approval answers 409 and leaves 'ra-gold' live: 0
+    // revoke calls, ledger row 'active'), and without the conditioned write
+    // (the approval would overwrite the denial: status 'completed').
+    const assignments = ledger();
+    const { container, store } = fakeArContainer(baseDoc({ tier: 'access-provider' }));
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    (enforceAccessGrant as any).mockImplementation(async () => { await gate; return activeGold; });
+    (revokeContainerRoleAssignment as any).mockResolvedValue(undefined);
+
+    const approval = POST(makeReq({ decision: 'approved' }), ctx('req-1'));
+    await vi.waitFor(() => expect(enforceAccessGrant).toHaveBeenCalledTimes(1));
+
+    // Control: while the lease is live, the denial is refused.
+    const early = await POST(makeReq({ decision: 'denied', reason: 'no' }), ctx('req-1'));
+    expect(early.status).toBe(409);
+    expect((await early.json()).code).toBe('grant_in_progress');
+
+    const realNow = Date.now.bind(Date);
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + 130_000);
+    try {
+      const denial = await POST(makeReq({ decision: 'denied', reason: 'not needed' }), ctx('req-1'));
+      expect(denial.status).toBe(200);
+      expect(store.doc.status).toBe('denied');
+
+      release();
+      const res = await approval;
+      const j = await res.json();
+      expect(res.status).toBe(409);
+      expect(j.code).toBe('request_changed');
+      expect(j.requestStatus).toBe('denied');
+      expect(j.revoked).toEqual([expect.objectContaining({
+        scopeType: 'adls-container', scopeRef: 'gold', ledgerId: GOLD_LEDGER_ID, roleAssignmentId: 'ra-gold', recorded: true,
+      })]);
+      expect(j.kept).toEqual([]);
+    } finally {
+      clock.mockRestore();
+    }
+    expect(revokeContainerRoleAssignment).toHaveBeenCalledTimes(1);
+    expect(revokeContainerRoleAssignment).toHaveBeenCalledWith('ra-gold');
+    expect(store.doc.status).toBe('denied');
+    expect(store.doc.denialReason).toBe('not needed');
+    expect(store.doc.accessProviderApproval.decision).toBe('denied');
+    expect(assignments.__all().map((r: any) => [r.id, r.resourceRef, r.state])).toEqual([[GOLD_LEDGER_ID, 'gold', 'revoked']]);
+    expect(notes.__writes).toEqual([]);
+  });
+
+  it('a denial racing an approval: the approval leases first, so the denial is refused and revokes nothing', async () => {
+    // The approval's lease lands between the denial's read and its first write.
+    // Breaks without the denial's lease: it revokes 'ra-gold' first and only
+    // then finds the request changed (1 revoke call, code 'request_changed').
+    const { container, store } = fakeArContainer(baseDoc({
+      tier: 'access-provider',
+      grantResults: [{ scopeType: 'adls-container', scopeRef: 'gold', status: 'active', roleAssignmentId: 'ra-gold', created: true }],
+    }));
+    const io = instrument(container);
+    io.onReplace(async (_d, n) => {
+      if (n === 1) await io.raw({ grantLeaseUntil: new Date(Date.now() + 60_000).toISOString() });
+    });
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    const res = await POST(makeReq({ decision: 'denied', reason: 'no' }), ctx('req-1'));
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe('grant_in_progress');
+    expect(revokeContainerRoleAssignment).not.toHaveBeenCalled();
+    expect(store.doc.status).toBe('open');
+  });
+
+  it('a renewal that finds the request changed stops the approval before its next scope, and removes the grant it made', async () => {
+    // Two scopes; another decision records a denial while the first is granted.
+    // Breaks without the renewal between scopes: the second scope is granted too
+    // (2 grant calls) before the final write notices.
+    twoOutputProduct();
+    const assignments = ledger();
+    const { container, store } = fakeArContainer(baseDoc({ tier: 'access-provider', grantTargets: TWO_TARGETS }));
+    const io = instrument(container);
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    (enforceAccessGrant as any)
+      .mockImplementationOnce(async () => { await io.raw({ status: 'denied', denialReason: 'other approver' }); return activeGold; })
+      .mockResolvedValueOnce({ ...activeGold, roleAssignmentId: 'ra-silver' });
+
+    const res = await POST(makeReq({ decision: 'approved' }), ctx('req-1'));
+    const j = await res.json();
+    expect(res.status).toBe(409);
+    expect(j.code).toBe('request_changed');
+    expect(enforceAccessGrant).toHaveBeenCalledTimes(1);
+    expect(j.revoked.map((r: any) => [r.scopeRef, r.ledgerId])).toEqual([['gold', GOLD_LEDGER_ID]]);
+    expect(j.error).toContain('The access it had granted was removed: adls-container gold.');
+    expect(revokeContainerRoleAssignment).toHaveBeenCalledWith('ra-gold');
+    expect(store.doc.status).toBe('denied');
+    expect(store.doc.denialReason).toBe('other approver');
+    expect(assignments.__all().map((r: any) => [r.resourceRef, r.state])).toEqual([['gold', 'revoked']]);
+    expect(notes.__writes).toEqual([]);
+  });
+
+  it('a renewal that errors answers 503 grant_interrupted and removes the grant it made', async () => {
+    // Breaks if a thrown renewal were treated as success (200, grant kept) or
+    // reported as another decision's change (409 request_changed).
+    ledger();
+    const { container, store } = fakeArContainer(baseDoc({ tier: 'access-provider' }));
+    const io = instrument(container);
+    io.onReplace((_d, n) => { if (n === 2) throw new Error('Cosmos 503 ServiceUnavailable'); });
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    (enforceAccessGrant as any).mockResolvedValue(activeGold);
+    const res = await POST(makeReq({ decision: 'approved' }), ctx('req-1'));
+    const j = await res.json();
+    expect(res.status).toBe(503);
+    expect(j.code).toBe('grant_interrupted');
+    expect(j.error).toContain('could not renew its hold on the request (Cosmos 503 ServiceUnavailable)');
+    expect(revokeContainerRoleAssignment).toHaveBeenCalledWith('ra-gold');
+    expect(store.doc.status).toBe('open');
+    expect(notes.__writes).toEqual([]);
+  });
+
+  it('the final write is conditioned: a change between the last renewal and the write is kept, and the grant is removed', async () => {
+    // Another writer records a denial just before the approval's final write.
+    // Breaks if the final write were unconditioned: it overwrites the other
+    // writer (status 'completed', marker gone, 200) and sends "Access granted".
+    const { container, store } = fakeArContainer(baseDoc({ tier: 'access-provider' }));
+    const io = instrument(container);
+    io.onReplace(async (d) => {
+      if (d.status === 'completed' && !('grantLeaseUntil' in d)) {
+        await io.raw({ status: 'denied', denialReason: 'other writer', otherWriter: 'marker-7' });
+      }
+    });
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    (enforceAccessGrant as any).mockResolvedValue(activeGold);
+    ledger();
+    const res = await POST(makeReq({ decision: 'approved' }), ctx('req-1'));
+    const j = await res.json();
+    expect(res.status).toBe(409);
+    expect(j.code).toBe('request_changed');
+    expect(store.doc.otherWriter).toBe('marker-7');
+    expect(store.doc.status).toBe('denied');
+    expect(store.doc.denialReason).toBe('other writer');
+    expect(revokeContainerRoleAssignment).toHaveBeenCalledWith('ra-gold');
+    expect(notes.__writes).toEqual([]);
+  });
+
+  it('a revoke that fails in compensation is kept, and named as recorded only when its ledger row was written', async () => {
+    // Breaks if the "recorded in the Access report" text were unconditional:
+    // with the ledger upsert failing the row is not there to review.
+    const { container } = fakeArContainer(baseDoc({ tier: 'access-provider' }));
+    const io = instrument(container);
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    (enforceAccessGrant as any).mockImplementation(async () => { await io.raw({ status: 'denied' }); return activeGold; });
+    (revokeContainerRoleAssignment as any).mockRejectedValue(new Error('ARM 403 AuthorizationFailed'));
+
+    ledger();
+    const recorded = await (await POST(makeReq({ decision: 'approved' }), ctx('req-1'))).json();
+    expect(recorded.kept.map((r: any) => [r.scopeRef, r.recorded])).toEqual([['gold', true]]);
+    expect(recorded.error).toContain('They are recorded in the Access report; review them there.');
+
+    const { container: c2 } = fakeArContainer(baseDoc({ tier: 'access-provider' }));
+    const io2 = instrument(c2);
+    (accessRequestWorkflowContainer as any).mockResolvedValue(c2);
+    (enforceAccessGrant as any).mockImplementation(async () => { await io2.raw({ status: 'denied' }); return activeGold; });
+    const broken = ledger();
+    broken.items.upsert = async () => { throw new Error('ledger down'); };
+    const unrecorded = await (await POST(makeReq({ decision: 'approved' }), ctx('req-1'))).json();
+    expect(unrecorded.kept.map((r: any) => [r.scopeRef, r.recorded])).toEqual([['gold', false]]);
+    expect(unrecorded.error).not.toContain('recorded in the Access report');
+    expect(unrecorded.error).toContain('Review them in the Access report.');
+  });
+
+  it('a denial that loses its final write lists what it revoked', async () => {
+    // Breaks if the lost denial answered the bare request_changed body (no
+    // `revoked`), leaving the approver unaware 'ra-gold' was removed.
+    const { container, store } = fakeArContainer(baseDoc({
+      tier: 'access-provider',
+      grantResults: [{ scopeType: 'adls-container', scopeRef: 'gold', status: 'active', roleAssignmentId: 'ra-gold', created: true }],
+    }));
+    const io = instrument(container);
+    io.onReplace(async (d) => { if (d.status === 'denied') await io.raw({ otherWriter: 'marker-9' }); });
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    const res = await POST(makeReq({ decision: 'denied', reason: 'no' }), ctx('req-1'));
+    const j = await res.json();
+    expect(res.status).toBe(409);
+    expect(j.code).toBe('request_changed');
+    expect(j.revoked.map((r: any) => [r.scopeRef, r.ledgerId])).toEqual([['gold', GOLD_LEDGER_ID]]);
+    expect(j.error).toContain('the denial was not recorded. It had removed: adls-container gold.');
+    expect(revokeContainerRoleAssignment).toHaveBeenCalledWith('ra-gold');
+    expect(store.doc.otherWriter).toBe('marker-9');
+    expect(store.doc.status).toBe('open');
+  });
+
+  it('a denial whose renewal fails stops before its next revoke, and lists both what it removed and what it did not attempt', async () => {
+    // Breaks without the renewal between revokes: 'ra-silver' is revoked too
+    // (2 revoke calls) under a hold the denial no longer has.
+    const { container } = fakeArContainer(baseDoc({
+      tier: 'access-provider',
+      grantResults: [
+        { scopeType: 'adls-container', scopeRef: 'gold', status: 'active', roleAssignmentId: 'ra-gold', created: true },
+        { scopeType: 'adls-container', scopeRef: 'silver', status: 'active', roleAssignmentId: 'ra-silver', created: true },
+      ],
+    }));
+    const io = instrument(container);
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    (revokeContainerRoleAssignment as any).mockImplementation(async () => { await io.raw({ otherWriter: 'marker-11' }); });
+    const res = await POST(makeReq({ decision: 'denied', reason: 'no' }), ctx('req-1'));
+    const j = await res.json();
+    expect(res.status).toBe(409);
+    expect(j.code).toBe('request_changed');
+    expect(revokeContainerRoleAssignment).toHaveBeenCalledTimes(1);
+    expect(revokeContainerRoleAssignment).toHaveBeenCalledWith('ra-gold');
+    expect(j.revoked.map((r: any) => r.scopeRef)).toEqual(['gold']);
+    expect(j.kept.map((r: any) => [r.scopeRef, r.detail])).toEqual([['silver', 'Not attempted: the denial stopped before this revoke.']]);
+    expect(j.error).toContain('Not attempted, still in place: adls-container silver.');
   });
 });

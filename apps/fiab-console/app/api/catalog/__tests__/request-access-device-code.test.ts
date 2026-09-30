@@ -79,7 +79,7 @@ beforeEach(() => {
 });
 
 describe('#4805 (d) self-serve catalog access from a device-code session', () => {
-  it('a device-code session does NOT self-grant: no grant call, a governed request on the product\'s scope instead', async () => {
+  it('a device-code session is not granted on the spot: no grant call, a governed request on the product\'s scope instead', async () => {
     cookieValue = encodeSessionCookie(deviceCode());
     const res = await POST(selfServe(), { params: Promise.resolve({}) } as any);
     const body = await res.json();

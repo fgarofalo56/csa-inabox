@@ -303,3 +303,45 @@ describe('enforceAccessGrant — an empty scopeRef is refused, never defaulted',
     expect(grantSql()).toHaveLength(1);
   });
 });
+
+describe('enforceAccessGrant — warehouse scope must name the deployment pool', () => {
+  // dedicatedTarget() is mocked to { database: 'loompool' }.
+  it('a scopeRef naming another warehouse is refused, and no SQL runs on the deployment pool', async () => {
+    // Breaks if the arm ignored the named warehouse and granted on
+    // dedicatedTarget() regardless: it would probe and EXEC sp_addrolemember
+    // on 'loompool' and report active for a scope nobody named.
+    const res = await enforceAccessGrant({ ...warehouseInput('read'), scopeRef: 'otherpool' });
+    expect(res.status).toBe('error');
+    expect(res.detail).toContain("names warehouse 'otherpool'");
+    expect(res.detail).toContain('(loompool)');
+    expect(synapseExecute).not.toHaveBeenCalled();
+    expect(getPoolState).not.toHaveBeenCalled();
+  });
+
+  it('the deployment pool named in another case is granted (pool names are case-insensitive)', async () => {
+    // Pairs the refusal: breaks if the compare were case-sensitive, or if the
+    // refusal fired for every scope.
+    (synapseExecute as any).mockImplementation(async () => ({ rows: [[0]] }));
+    const res = await enforceAccessGrant({ ...warehouseInput('read'), scopeRef: ' LoomPool ' });
+    expect(res.status).toBe('active');
+    expect(grantSql()).toHaveLength(1);
+  });
+});
+
+describe('revokeStructuredGrant — kql-database needs a named database', () => {
+  it('an empty scopeRef is refused, and nothing is dropped on the default database', async () => {
+    // Breaks if the revoke fell back to defaultDatabase() ('loomdb' in this
+    // mock): it would run `.drop database loomdb viewers ...` and report revoked.
+    const res = await revokeStructuredGrant({ ...kqlInput('read'), scopeRef: '  ' });
+    expect(res).toEqual({ status: 'error', detail: 'A KQL database name is required for the revoke scope; nothing was revoked.' });
+    expect(dropDatabasePrincipal).not.toHaveBeenCalled();
+  });
+
+  it('a named database is revoked on that database', async () => {
+    // Pairs the refusal: breaks if the refusal fired for every input, or if the
+    // named database were replaced by the default one.
+    const res = await revokeStructuredGrant({ ...kqlInput('read'), scopeRef: 'salesdb' });
+    expect(res).toEqual({ status: 'revoked' });
+    expect(dropDatabasePrincipal).toHaveBeenCalledWith('salesdb', 'viewers', 'aaduser=alice@contoso.com');
+  });
+});

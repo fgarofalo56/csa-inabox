@@ -41,6 +41,7 @@ import {
   TIER_SEQUENCE, TIER_LABEL,
   type ApprovalTier, type ApprovalStatus, type AccessRequestEnforcement,
 } from '@/lib/types/access-request-workflow';
+import { useIsTenantAdmin } from '@/lib/components/session-context';
 
 // ── Local mirror of the server doc (only the fields the UI reads). ────────────
 interface ApprovalStep {
@@ -123,6 +124,20 @@ const scopeKey = (g: GrantScope, i: number) => `${i}:${g.scopeType}:${g.scopeRef
 
 /** Where kept grants and every live assignment are listed. */
 export const ACCESS_REPORT_HREF = '/admin/access-governance?tab=report';
+
+/** What a non-admin is told about kept grants, since only a tenant admin can open the report. */
+export const KEPT_GRANTS_ADMIN_NOTE = 'A tenant admin can review and remove the kept grants.';
+
+/**
+ * A final approval refused because the asset's storage no longer matches what
+ * was reviewed (409 `targets_changed`): both lists, and a denial reason the
+ * server suggests for the approver to send instead.
+ */
+interface TargetsChange {
+  reviewed: GrantScope[];
+  current: GrantScope[];
+  suggestedDenyReason?: string;
+}
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL },
@@ -240,6 +255,9 @@ export function AccessRequestInboxEditor() {
    * produce a conflict.
    */
   const [notice, setNotice] = useState<{ title: string; detail: string } | null>(null);
+  /** Set when a final approval is refused because the storage changed since review. */
+  const [targetsChange, setTargetsChange] = useState<TargetsChange | null>(null);
+  const isAdmin = useIsTenantAdmin();
 
   const load = useCallback(async (v: ViewKey) => {
     setLoading(true); setError(null); setGate(null);
@@ -305,6 +323,15 @@ export function AccessRequestInboxEditor() {
     setDlg({ req, decision });
     setReason('');
     setDlgError(null);
+    setTargetsChange(null);
+  };
+
+  /** Switch a refused approval to a denial, prefilled with the reason the server suggested. */
+  const denyInstead = () => {
+    if (!dlg) return;
+    setDlg({ req: dlg.req, decision: 'denied' });
+    setReason(targetsChange?.suggestedDenyReason || '');
+    setDlgError(null);
   };
 
   const isFinalTier = dlg?.req.tier === 'access-provider';
@@ -323,6 +350,9 @@ export function AccessRequestInboxEditor() {
       if (!j.ok) {
         // Honest gate / grant error — keep the dialog open with the precise reason.
         setDlgError(j.warning || j.error || `HTTP ${r.status}`);
+        setTargetsChange(j.code === 'targets_changed'
+          ? { reviewed: j.reviewed || [], current: j.current || [], suggestedDenyReason: j.suggestedDenyReason }
+          : null);
         return;
       }
       if (j.warning && dlg.decision === 'denied') {
@@ -449,9 +479,13 @@ export function AccessRequestInboxEditor() {
             <MessageBarActions
               containerAction={<Button appearance="transparent" size="small" aria-label="Dismiss" icon={<DismissCircle20Regular />} onClick={() => setNotice(null)} />}
             >
-              <Button as="a" href={ACCESS_REPORT_HREF} appearance="primary" size="small">
-                Open the Access report
-              </Button>
+              {isAdmin ? (
+                <Button as="a" href={ACCESS_REPORT_HREF} appearance="primary" size="small">
+                  Open the Access report
+                </Button>
+              ) : notice.detail.includes(KEPT_GRANTS_ADMIN_NOTE) ? null : (
+                <Caption1>{KEPT_GRANTS_ADMIN_NOTE}</Caption1>
+              )}
             </MessageBarActions>
           </MessageBar>
         )}
@@ -680,7 +714,31 @@ export function AccessRequestInboxEditor() {
                       <MessageBarTitle>Action needs attention</MessageBarTitle>
                       {dlgError}
                     </MessageBarBody>
+                    {targetsChange && dlg?.decision === 'approved' && (
+                      <MessageBarActions>
+                        <Button appearance="primary" size="small" icon={<DismissCircle20Regular />} onClick={denyInstead}>
+                          Deny with this reason
+                        </Button>
+                      </MessageBarActions>
+                    )}
                   </MessageBar>
+                )}
+
+                {targetsChange && (
+                  <div className={s.detailRow} aria-label="Storage reviewed and bound now">
+                    <span className={s.kv}>
+                      <Caption1 className={s.kvLabel}>Reviewed when requested</Caption1>
+                      {targetsChange.reviewed.length ? targetsChange.reviewed.map((g, i) => (
+                        <Text key={scopeKey(g, i)}>{scopeLabel(g)}{g.source ? ` (${g.source})` : ''}</Text>
+                      )) : <Text>—</Text>}
+                    </span>
+                    <span className={s.kv}>
+                      <Caption1 className={s.kvLabel}>Bound now</Caption1>
+                      {targetsChange.current.length ? targetsChange.current.map((g, i) => (
+                        <Text key={scopeKey(g, i)}>{scopeLabel(g)}{g.source ? ` (${g.source})` : ''}</Text>
+                      )) : <Text>—</Text>}
+                    </span>
+                  </div>
                 )}
 
                 {dlg?.decision === 'approved' && isFinalTier && (

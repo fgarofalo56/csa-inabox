@@ -116,9 +116,10 @@ export interface AccessRequestDoc {
   /** Owner recorded on the requested item, when it names one (never from the request body). */
   ownerUpn?: string;
   /**
-   * Set while a final approval is granting on this request (ISO-8601 expiry);
-   * any other decision is refused until it passes or the result is written
-   * (app/api/access-requests/[id]/decision/route.ts).
+   * Set while a decision holds this request (ISO-8601 expiry): a final
+   * approval while it grants, or a denial while it revokes. It is renewed
+   * between scopes; any other decision is refused until it passes or the
+   * result is written (app/api/access-requests/[id]/decision/route.ts).
    */
   grantLeaseUntil?: string;
 }

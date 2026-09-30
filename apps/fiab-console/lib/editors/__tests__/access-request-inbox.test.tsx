@@ -16,14 +16,30 @@
  *     the label ignores `declaredRef` (the row would read just the type).
  *   - Two scope rows with the same type, store and source render without a
  *     duplicate-key warning. Breaks if the key drops the row index.
+ *   - The Access-report link is offered only to a tenant admin. Breaks if the
+ *     link renders for a non-admin (the link would be found), or if the
+ *     non-admin line is dropped (its text would be missing) or shown twice
+ *     beside a server warning that already says it (two matches).
+ *   - A final approval refused with 409 `targets_changed` shows both lists and
+ *     offers a denial prefilled with the server's suggested reason. Breaks if a
+ *     list is not rendered (its rows would be missing), if the button is not
+ *     offered, or if Deny sends any other reason than the suggested one.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
+import type { ReactElement } from 'react';
 
 const fetchMock = vi.fn();
 vi.mock('@/lib/client-fetch', () => ({ clientFetch: (...a: unknown[]) => fetchMock(...a) }));
 
-import { AccessRequestInboxEditor } from '../access-request-inbox';
+import { AccessRequestInboxEditor, KEPT_GRANTS_ADMIN_NOTE } from '../access-request-inbox';
+import { SessionProvider } from '@/lib/components/session-context';
+
+function asUser(ui: ReactElement, isTenantAdmin: boolean) {
+  return render(
+    <SessionProvider value={{ authenticated: true, user: null, isTenantAdmin, loading: false }}>{ui}</SessionProvider>,
+  );
+}
 
 function jsonRes(body: unknown, status = 200): Response {
   return { status, ok: status < 400, json: async () => body } as unknown as Response;
@@ -55,7 +71,7 @@ afterEach(() => { vi.restoreAllMocks(); });
 describe('after a decision that returns a warning', () => {
   it('a denial that kept grants closes the dialog and links the Access report', async () => {
     serve(request(), { ok: true, status: 'denied', warning: KEPT });
-    render(<AccessRequestInboxEditor />);
+    asUser(<AccessRequestInboxEditor />, true);
     await screen.findByText('Sales product');
     fireEvent.click(screen.getByRole('button', { name: /^Deny — close with a reason$/ }));
     expect(await screen.findByText('Deny request')).toBeInTheDocument();
@@ -86,6 +102,93 @@ describe('after a decision that returns a warning', () => {
     expect(await within(dialog).findByText(pending)).toBeInTheDocument();
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Open the Access report' })).not.toBeInTheDocument();
+  });
+});
+
+describe('the Access report is offered only to a tenant admin', () => {
+  async function denyAs(isTenantAdmin: boolean, warning: string) {
+    serve(request(), { ok: true, status: 'denied', warning });
+    asUser(<AccessRequestInboxEditor />, isTenantAdmin);
+    await screen.findByText('Sales product');
+    fireEvent.click(screen.getByRole('button', { name: /^Deny — close with a reason$/ }));
+    fireEvent.change(await screen.findByPlaceholderText('Why is this request denied?'), { target: { value: 'no' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Deny$/ }));
+    await screen.findByText(/Request for Sales product denied — some access was kept/);
+  }
+
+  it('a non-admin sees who can act instead of the link', async () => {
+    await denyAs(false, KEPT);
+    expect(screen.queryByRole('link', { name: 'Open the Access report' })).not.toBeInTheDocument();
+    expect(screen.getByText(KEPT_GRANTS_ADMIN_NOTE)).toBeInTheDocument();
+  });
+
+  it('a non-admin is not told twice when the warning already says it', async () => {
+    await denyAs(false, `${KEPT}. ${KEPT_GRANTS_ADMIN_NOTE}`);
+    expect(screen.queryByRole('link', { name: 'Open the Access report' })).not.toBeInTheDocument();
+    // Positive pair: the sentence is on the page exactly once, inside the warning.
+    expect(screen.getAllByText((content) => content.includes(KEPT_GRANTS_ADMIN_NOTE))).toHaveLength(1);
+  });
+});
+
+describe('a final approval refused because the storage changed', () => {
+  const SUGGESTED = 'The storage behind "Sales product" changed after you requested access, so this request cannot be approved as reviewed. Please request access again.';
+  const REFUSAL = {
+    ok: false,
+    code: 'targets_changed',
+    error: '"Sales product" is not bound to the storage that was reviewed. Approving it would grant access nobody reviewed.',
+    changes: [{ cause: 'port_rebound' }],
+    reviewed: [{ scopeType: 'adls-container', scopeRef: 'gold', source: "output port 'gold-out'", declaredRef: 'gold' }],
+    current: [{ scopeType: 'adls-container', scopeRef: 'silver', source: "output port 'gold-out'", declaredRef: 'silver' }],
+    suggestedDenyReason: SUGGESTED,
+  };
+
+  it('shows what was reviewed and what is bound now, and denies with the suggested reason', async () => {
+    fetchMock.mockImplementation(async (url: string, init?: any) => {
+      if (url === '/api/access-requests/r1/decision' && init?.method === 'POST') {
+        return JSON.parse(init.body).decision === 'denied' ? jsonRes({ ok: true, status: 'denied' }) : jsonRes(REFUSAL, 409);
+      }
+      if (url === '/api/access-requests?tier=manager&status=open') return jsonRes({ ok: true, requests: [request({ tier: 'access-provider' })] });
+      return jsonRes({ ok: true, requests: [] });
+    });
+    asUser(<AccessRequestInboxEditor />, false);
+    await screen.findByText('Sales product');
+    fireEvent.click(screen.getByRole('button', { name: /^Approve — advance to the next tier$/ }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Approve & grant$/ }));
+
+    expect(await within(dialog).findByText(REFUSAL.error)).toBeInTheDocument();
+    const lists = within(dialog).getByLabelText('Storage reviewed and bound now');
+    expect(within(lists).getByText('Reviewed when requested')).toBeInTheDocument();
+    expect(within(lists).getByText("adls-container · gold (output port 'gold-out')")).toBeInTheDocument();
+    expect(within(lists).getByText('Bound now')).toBeInTheDocument();
+    expect(within(lists).getByText("adls-container · silver (output port 'gold-out')")).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Deny with this reason' }));
+    expect(await within(dialog).findByDisplayValue(SUGGESTED)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Deny$/ }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    const posts = fetchMock.mock.calls
+      .filter(([u, i]) => u === '/api/access-requests/r1/decision' && i?.method === 'POST')
+      .map(([, i]) => JSON.parse(i.body));
+    expect(posts).toEqual([{ decision: 'approved' }, { decision: 'denied', reason: SUGGESTED }]);
+  });
+
+  it('offers no prefilled denial for any other refusal', async () => {
+    // Breaks if the button were shown for every failed approval.
+    fetchMock.mockImplementation(async (url: string, init?: any) => {
+      if (url === '/api/access-requests/r1/decision' && init?.method === 'POST') return jsonRes({ ok: false, code: 'grant_in_progress', error: 'Another decision is granting.' }, 409);
+      if (url === '/api/access-requests?tier=manager&status=open') return jsonRes({ ok: true, requests: [request({ tier: 'access-provider' })] });
+      return jsonRes({ ok: true, requests: [] });
+    });
+    asUser(<AccessRequestInboxEditor />, false);
+    await screen.findByText('Sales product');
+    fireEvent.click(screen.getByRole('button', { name: /^Approve — advance to the next tier$/ }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Approve & grant$/ }));
+    expect(await within(dialog).findByText('Another decision is granting.')).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Deny with this reason' })).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText('Storage reviewed and bound now')).not.toBeInTheDocument();
   });
 });
 

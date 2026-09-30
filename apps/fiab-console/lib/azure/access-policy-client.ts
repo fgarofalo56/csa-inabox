@@ -28,7 +28,6 @@ import { grantContainerRole, revokeContainerRoleAssignment } from './adls-client
 import { dedicatedTarget, executeQuery as synapseExecute } from './synapse-sql-client';
 import { getPoolState, resumePool } from './synapse-pool-arm';
 import {
-  defaultDatabase,
   kustoConfigGate,
   addDatabasePrincipal,
   dropDatabasePrincipal,
@@ -151,6 +150,17 @@ export async function enforceAccessGrant(input: AccessGrantInput): Promise<Acces
       try { target = dedicatedTarget(); }
       catch {
         return { status: 'pending', detail: 'The Azure-native warehouse is not configured: set LOOM_SYNAPSE_WORKSPACE and LOOM_SYNAPSE_DEDICATED_POOL to enforce warehouse grants.' };
+      }
+      // The grant runs on this deployment's dedicated pool, so the scope must
+      // name that pool (as a warehouse item's recorded scope does). Any other
+      // name is refused rather than granted on the pool regardless.
+      // Azure SQL pool names are case-insensitive.
+      const named = input.scopeRef.trim();
+      if (named.toLowerCase() !== String(target.database || '').trim().toLowerCase()) {
+        return {
+          status: 'error',
+          detail: `The grant scope names warehouse '${named}', which is not this deployment's dedicated SQL pool (${target.database}); nothing was granted.`,
+        };
       }
       // The Dedicated SQL pool may be provisioned start-paused (cost control).
       // A grant needs an Online pool to connect over TDS; if it's paused, kick
@@ -314,8 +324,10 @@ export async function revokeStructuredGrant(input: AccessGrantInput): Promise<St
       const gate = kustoConfigGate();
       if (gate) return { status: 'skipped', detail: `ADX not configured (${gate.missing}).` };
       const roleName = ADX_ROLE[input.permission];
-      const db = (input.scopeRef || defaultDatabase() || '').trim();
-      if (!db) return { status: 'skipped', detail: 'No KQL database to revoke the role on.' };
+      // Like the grant: the scope must name the database. An empty scopeRef is
+      // refused rather than read as the deployment's default database.
+      const db = (input.scopeRef || '').trim();
+      if (!db) return { status: 'error', detail: 'A KQL database name is required for the revoke scope; nothing was revoked.' };
       const principal = adxPrincipalToken(input);
       if ('gate' in principal) return { status: 'skipped', detail: principal.gate };
       await dropDatabasePrincipal(db, roleName, principal.token);

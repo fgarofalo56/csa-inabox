@@ -81,7 +81,7 @@ export const POST = withSession(async (req, { session: s }) => {
   // The identity a self-serve grant is made for: the session's UPN only, never
   // the email claim. The warehouse grant creates its database user from this
   // name and the ADX grant uses it as the principal, so without a UPN the
-  // request takes the governed path instead of self-granting.
+  // request takes the governed path instead of being granted on the spot.
   const sessionUpn = (s.claims.upn || '').trim();
   const now = new Date().toISOString();
   // Minted up front so a grant that lands before the request is routed for
