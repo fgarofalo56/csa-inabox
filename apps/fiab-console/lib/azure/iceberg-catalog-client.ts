@@ -660,27 +660,30 @@ export function isListNamespacesDefect(e: unknown): boolean {
  * `GET /v1/{prefix}/namespaces` — with a disclosed fallback to the Unity
  * Catalog schemas API on the SAME server when the shipped image cannot serve it.
  *
- * MEASURED, in Docker against the real `apps/loom-unity` image (authorization
- * enabled, warehouse provisioned, namespace present, every principal tried
- * INCLUDING the server's own metastore-OWNER service token):
+ * WHAT THE UPSTREAM ROUTE DOES (unitycatalog v0.5.0 and v0.5.1, authorization
+ * enabled; measured in Docker by apps/loom-unity/tests/authz/iceberg-e2e.sh,
+ * section P, and live on 2026-09-29):
  *
  *   GET <irc>/v1/catalogs/loom/namespaces
+ *     -> 403 PERMISSION_DENIED to every caller that is not metastore OWNER — the
+ *        Console included; that was the Console's live 403 (#3339)
  *     -> 500 {"error":{"message":"Authorization filter not initialized —
  *             ensure the request goes through UnityAccessDecorator.", ... }}
+ *        to the metastore OWNER, the one caller that gets past the gate
  *
- * and the CONTROL, the identical call against the BARE upstream
- * `unitycatalog/unitycatalog:v0.5.0` image with no Loom overlay:
+ * The 500 is upstream's own: `IcebergRestCatalogService.listNamespaces` calls
+ * `SchemaService.listSchemas` IN-PROCESS, under the Iceberg route's request
+ * context, which carries no `RESULT_FILTER` attribute, so
+ * `applyResponseFilter` throws INTERNAL. It is NOT caused by the #1603 overlay
+ * the loom-unity Dockerfile applies — an earlier reading of a two-variable
+ * control said so, and the single-variable controls (overlay stripped,
+ * authorization still on: same 500; authorization off: 200) refuted it.
  *
- *   -> 200 {"namespaces":[["default"]],"next-page-token":null}
- *
- * So the 500 is a regression Loom imports with the v0.5.1 `unitycatalog-server`
- * overlay its Dockerfile applies (to fix upstream #1603): v0.5.1 added
- * `@ResponseAuthorizeFilter` + `AuthorizedService.applyResponseFilter`, and
- * `IcebergRestCatalogService.listNamespaces` calls `SchemaService.listSchemas`
- * IN-PROCESS, so it runs under the Iceberg route's request context — which
- * carries no `RESULT_FILTER` attribute — and `applyResponseFilter` throws
- * INTERNAL. Every OTHER Iceberg route was measured working on the same image
- * (namespace GET, table list, table load, register: 200).
+ * The loom-unity image now serves this route itself (#3339 overlay, upstream
+ * #1813's policy): 200, filtered to the schemas the caller may read. So on a
+ * current image the native path answers and this fallback does not fire. It is
+ * kept, keyed to the exact 500 signature, for an image without that overlay; a
+ * 403 is never caught here and propagates.
  *
  * An Iceberg namespace on this server IS a Unity Catalog schema — upstream's own
  * implementation of this route is literally `listSchemas(catalog)` mapped to

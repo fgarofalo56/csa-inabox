@@ -96,10 +96,16 @@ bash apps/loom-unity/tests/authz/iceberg-e2e.sh                      # builds th
 LOOM_E2E_SKIP_BUILD=1 bash apps/loom-unity/tests/authz/iceberg-e2e.sh <image>   # an existing image
 ```
 
-Two columns, one harness, measured 2026-09-29. **Pre-fix** is the image built
-from `main` before #3339 (only the #1603 overlay): **24/35 PASS**, and the 11
-failures are exactly the rows marked ❌. **#3339** is the image built from this
-tree: **35/35 PASS**. Nothing else differs between the two runs.
+Three images, measured 2026-09-29 with `LOOM_E2E_SKIP_BUILD=1` against the
+42-row revision of the harness (commit 950f465). **Pre-fix** is the image built
+from `main` before #3339 (only the #1603 overlay): **25/42 PASS**. **#4783** is
+the image that carried only the first #3339 change: **36/42** — it fails the
+LIST-namespaces rows (H, H1, H2, M5, M5b) and the boot-banner row A4, and
+nothing else. **#3339** is the image built at 950f465: **42/42 PASS**. The
+harness then gained four rows (H2b, Px, Pb, I3a); the image built from this tree
+passes **46/46**, and the pre-fix and #4783 images were not re-run against the
+46-row revision. The table's two value columns are pre-fix and this tree;
+nothing else differs between the runs.
 
 | # | Call | Principal | Pre-fix | #3339 | What it means |
 |---|---|---|---|---|---|
@@ -108,9 +114,14 @@ tree: **35/35 PASS**. Nothing else differs between the two runs.
 | E | `/v1/config?warehouse=<absent>` | Console, exchanged | 403 ❌ | **404** | The warehouse is now a resource key, resolved before the policy runs, so an absent one is a 404 rather than a denial. (The 2026-08-08 "200" was the wrong principal.) |
 | F | config body declares `prefix=catalogs/loom` | Console, exchanged | ❌ (403 body) | ✅ | The handshake an external engine needs. |
 | G | `/v1/namespaces` (unprefixed) | admin | 500 | 500 | **Half of the live 500.** There is no such route: upstream's are `/v1/catalogs/{catalog}/…`. Because `UnityAccessDecorator` is bound as a **route decorator over the whole `/api/2.1/unity-catalog/` prefix**, an unmatched path still enters it, `findServiceMethod` returns null, and it dies `"Couldn't unwrap service."` — a 500, not a 404. The Loom client sent exactly this path. |
-| H | `/v1/catalogs/loom/namespaces` | admin (metastore OWNER) | 500 | 500 | **The other half, and the worse one.** Even the CORRECT route fails, for *every* principal: `{"error":{"message":"Authorization filter not initialized — ensure the request goes through UnityAccessDecorator.","code":500}}`. #3339 leaves this route as upstream ships it (see Residual). |
-| I1 | `/v1/catalogs/loom/namespaces`, **same image**, `server.authorization` **DISABLED** | anonymous | 200 | 200 | **The control that names the cause.** One variable moved — the authorization flag — and the status moves with it. |
-| I2 | `/v1/catalogs/loom/namespaces`, **same image with the #1603 overlay STRIPPED off the classpath**, authorization still **ENABLED** | admin | 500 | 500 | **The control that EXONERATES the overlay.** The other variable moved on its own, and the status does not budge — same body, byte for byte. Paired with I3 (the permission GET reverts to 500 on that stripped image), which proves the strip really took. |
+| H / H1 | `/v1/catalogs/loom/namespaces` | Console, exchanged | **403** ❌ | **200, `[["default"]]`** | **The live 403 after #4783 rolled** (2026-09-29). Upstream gates this route on metastore OWNER; #4783 scoped the other read routes and left this one, so the #4783 image still answers 403 here. #3339 now serves it with upstream #1813's policy. There is no pre-gate: each schema is kept only if the caller passes `GET_SCHEMA` on it (metastore or catalog OWNER, or `USE CATALOG` plus `USE SCHEMA` or OWNER on the schema), so a caller without grants gets 200 and an empty list (M5), not 403. H1 checks the list is the real one. |
+| H2 / H2b | same | admin (metastore OWNER) | **500** ❌ | **200, `[["default"]]`** | The one caller that got past upstream's gate hit upstream's in-process defect: `{"error":{"message":"Authorization filter not initialized — ensure the request goes through UnityAccessDecorator.","code":500}}`. The #4783 image answers the same 500. |
+| Px / P0 | `/v1/config?warehouse=loom` on **this image with the #3339 jar stripped off the classpath** | Console, exchanged | 403 | 403 | Proves the strip took: the Iceberg routes are upstream's again. Px first checks the Console's exchange returned a token on that image, so the 403 cannot be a rejected bearer (row C). P1–P2b and I1–I3 run on stripped images, so the upstream controls survive the fix. |
+| Pb | boot banner of the stripped image | — | — | `ICEBERG-LIST-NAMESPACES-DEFECT` | The stripped image still has the #3339 jar on disk but not on the server classpath; the banner reads the classpath, so it announces the upstream route. |
+| P1 | `/v1/catalogs/loom/namespaces`, stripped image | Console, exchanged | 403 | 403 | Upstream's route refuses a caller that holds only catalog grants — the live 403, reproduced. |
+| P2 / P2b | same, stripped image | admin (metastore OWNER) | 500 | 500 | Upstream's owner-path 500, with its signature (P2b). |
+| I1 | same, stripped image, `server.authorization` **DISABLED** | anonymous | 200 | 200 | **The control that names the cause of P2's 500.** One variable moved — the authorization flag — and the status moves with it. |
+| I2 | same, **both** the #3339 and the #1603 jars stripped, authorization still **ENABLED** | admin | 500 | 500 | **The control that EXONERATES the #1603 overlay.** The other variable moved on its own, and the status does not budge — same body, byte for byte. Paired with I3 (the permission GET reverts to 500 on that stripped image), which proves the strip really took; I3a checks the Console's exchange returned a token there first. |
 | J | `/v1/catalogs/loom/namespaces/default` | Console, exchanged | **403** ❌ | **200** | Needs `USE CATALOG` + `USE SCHEMA`; the entrypoint now grants `USE SCHEMA` at catalog level. |
 | K | `/v1/catalogs/loom/namespaces/default/tables` | Console, exchanged | **403** ❌ | **200** | **An authenticated Iceberg read, as the Console's own principal, against a warehouse the platform provisioned by itself.** |
 | N1 | `GET …/tables/t_plain` (a Delta table, no Iceberg metadata) | Console, exchanged | 403 ❌ | **404** | The 404 is the handler's own answer, so the table gate passed. |
@@ -118,6 +129,7 @@ tree: **35/35 PASS**. Nothing else differs between the two runs.
 | K2 | table list contains `t_uniform` | Console, exchanged | ❌ (403) | ✅ | The list filter keeps what the caller may read. |
 | M1–M3b | config, namespace, both tables | registered principal with **no grants** | 403 | **403** | Still refused: the fix is scoped to grants, not to "any authenticated principal". |
 | M4 / M4b | table list | registered principal with **no grants** | 403 ❌ | **200, `t_uniform` hidden** | Upstream #1813's list semantics: the list answers, filtered to what the caller may read — here, nothing. |
+| M5 / M5b | namespace list | registered principal with **no grants** | 403 ❌ | **200, `[]`** | The same list semantics for namespaces: the list answers and `default` is filtered out. Paired with H1, which proves there was a `default` to filter. |
 
 Each assertion's breaking value is written beside it in
 `tests/authz/iceberg-e2e.sh`. The harness is run by hand, not by any CI
@@ -147,11 +159,29 @@ workflow.
   `server.authorization` is enabled. `AuthorizedService.applyResponseFilter` runs
   its body only `if (isAuthorizationEnabled())`, then requires the `RESULT_FILTER`
   request attribute that `UnityAccessDecorator` installs for
-  `@ResponseAuthorizeFilter` routes. `IcebergRestCatalogService.listNamespaces`
+  `@ResponseAuthorizeFilter` routes. Upstream's `IcebergRestCatalogService.listNamespaces`
   reaches `SchemaService.listSchemas` **in-process**, under the Iceberg route's
   context, where that attribute was never set — so it throws `INTERNAL`. With
   authorization disabled the body is skipped entirely, which is the only reason
   the bare image ever looked healthy.
+- **"LIST-namespaces answers 500 for every principal" was WRONG**, and #4783
+  shipped it — in the boot banner, row H of this table, and the Residual below.
+  Measured on upstream's route with authorization on (rows P1/P2): a caller that
+  is not metastore OWNER gets **403**, and only the OWNER reaches the handler and
+  its 500. The Console is not OWNER, so after #4783 rolled the Console got a 403
+  on `/api/catalog/iceberg/namespaces`, and the browser spec accepted that 403
+  as a `pre-fix-403` verdict instead of failing. All three are corrected: the
+  route is fixed (rows H–H2, M5), the banner names the 403/500 split for an image
+  without the fix, and the spec fails on any 403 (Verification receipt).
+- **Removing the in-process call is not what removes the owner's 500 on this
+  image.** Measured by mutation on a sandbox copy: with the #3339 route
+  otherwise intact and the in-process `SchemaService.listSchemas` call put back
+  (and the Dockerfile's build-time check removed so it would build), all 42 rows
+  of the 42-row harness stay green — the route's own `@ResponseAuthorizeFilter` makes the decorator
+  install the filter attribute the in-process call was missing. The repository
+  read is kept because it is what #1813 does, and the Dockerfile refuses to build
+  a class that makes the in-process call; that check, not the harness, is the
+  witness for it.
 - **"403 = absent object" is wrong** (row E): an absent warehouse was never the
   cause. But the 2026-08-08 replacement, "it is an unexchanged bearer (row C)",
   was wrong too — see the next bullet.
@@ -189,7 +219,9 @@ workflow.
    Unity schemas API on the same server when the image returns the exact
    `Authorization filter not initialized` signature — disclosed as `via:
    "unity-schemas"` in the response, keyed to that string alone so no other 500 is
-   masked.
+   masked. Since #3339's second change the native route answers, so on a current
+   image this fallback does not fire; it stays for an image without that change.
+   A 403 is never caught by it.
 4. **The Iceberg read routes are authorized by catalog grants, not metastore
    OWNER** (#3339, `apps/loom-unity/Dockerfile` stage 1b +
    `apps/loom-unity/uc-patch/`). The image recompiles upstream v0.5.0's
@@ -198,20 +230,47 @@ workflow.
    not yet in any release): `/v1/config` needs `USE CATALOG` (or catalog OWNER),
    namespace GET needs `USE CATALOG` + `USE SCHEMA`, and the table routes use
    upstream's own `GET_TABLE` policy; the table list filters out tables the
-   caller cannot read. The entrypoint adds `USE SCHEMA` to the Console's catalog
-   grants. Measured in `iceberg-e2e.sh`: the Console reads D/J/K/N, and a
-   registered principal with **no** grants is still refused (rows M). This ends
+   caller cannot read. The namespace list (the second #3339 change) takes
+   #1813's version of that route: no pre-gate, a read of the schema repository,
+   and the list filtered per schema by `GET_SCHEMA` with the warehouse as the
+   catalog key. Both list routes fail closed when the per-request result filter
+   is absent, matching upstream `applyResponseFilter`: with authorization
+   enabled they answer 500 rather than an unfiltered list. The harness cannot
+   reach that branch while the routes carry `@ResponseAuthorizeFilter`, so it
+   is witnessed by a mutation pair on sandbox copies instead: with the
+   annotation removed from `listNamespaces`, the owner's list (H2) answers 500
+   "Result filter not installed…"; with the annotation removed AND the branch
+   reverted to filter-if-present, H2 answers 200. The `listTables` branch has
+   the same shape and was not mutated separately. The
+   entrypoint adds `USE SCHEMA` to the Console's catalog grants. Measured in
+   `iceberg-e2e.sh`: the Console reads D/H/J/K/N, and a registered principal with
+   **no** grants is still refused on the single-object routes and sees empty
+   lists (rows M). This ends
    the image's "packaging, not a fork" stance for exactly one class, by operator
    decision; the patch is deleted when an upstream release carrying #1813 is
    adopted.
 
 ### Residual — stated, not rounded up
 
-- **The native IRC LIST-namespaces route is still broken** in the shipped image,
-  and the previously-proposed fix for it **does not exist**. The Console works
-  around it; an **external engine calling the catalog directly** (Trino, Spark,
-  DuckDB) still gets a 500 on that one route. The other read routes answer a
-  granted caller (rows J/K/N) — with one more upstream defect, below.
+- **LIST-namespaces is fixed in this tree, not yet live.** Until an image
+  carrying #3339's second change rolls, the estate answers that route 403 to the
+  Console and to any external engine (Trino, Spark, DuckDB) that is not metastore
+  OWNER, and 500 to the OWNER. The other read routes already answer a granted
+  caller (rows J/K/N) — with one more upstream defect, below.
+
+  The earlier text said the fix was "either an upstream fix or **narrowing the
+  v0.5.1 overlay**". The overlay was narrowed — to the three classes that
+  actually differ — and it changed nothing about this route, as rows I1/I2
+  predict: the overlaid classes were never on this code path. Upstream has
+  **nothing to bump to**: `io.unitycatalog:unitycatalog-server` publishes
+  **0.6.0 as its newest release** on Maven Central (checked 2026-09-29 against
+  `maven-metadata.xml`), and its source carries the same in-process
+  `listSchemas` call (read, not run). So #3339 backports #1813's version of the
+  route into the one upstream class it already recompiles (What this lane
+  changed, item 4). The boot banner says which version the image serves
+  (`ICEBERG-LIST-NAMESPACES` with the #3339 jar, `ICEBERG-LIST-NAMESPACES-DEFECT`
+  without it), and `tests/authz/iceberg-e2e.sh` asserts both: rows A4, H–H2 and
+  M5 on this image, rows P/I1/I2/I3 on stripped images.
 
 - **Iceberg `HEAD` tableExists never answers on its error path.** Measured
   2026-09-29: a `HEAD .../tables/<t>` whose handler throws (absent table, or a
@@ -220,26 +279,6 @@ workflow.
   while `GET` on the same path answers 404. A client that probes existence with
   `HEAD` waits for its timeout instead of reading a 404. Not fixed here, and not
   asserted by the harness (it prints the status as information).
-
-  The earlier text said the fix was "either an upstream fix or **narrowing the
-  v0.5.1 overlay**". **The overlay has now been narrowed — to the three classes
-  that actually differ — and it changed nothing about this route**, exactly as
-  rows I1/I2 predict: the overlaid classes were never on this code path. There is
-  no narrowing that can fix it, because there is nothing to narrow *away*.
-
-  What remains is genuinely an upstream change, and there is currently **nothing
-  to bump to**: `io.unitycatalog:unitycatalog-server` publishes **0.6.0 as its
-  newest release** on Maven Central (checked 2026-09-29 against
-  `maven-metadata.xml`), and its source carries the same in-process
-  `listSchemas` call (read, not run). A fix requires upstream
-  to either annotate the Iceberg route so `UnityAccessDecorator` installs a
-  `ResultFilter`, or have `listNamespaces` call a repository method that does not
-  response-filter. #3339 does recompile one upstream class (below), but it leaves
-  `listNamespaces` exactly as upstream ships it: scoping that route needs #1813's
-  repository rewrite, not an annotation, and changing its body is a separate
-  behavioural change. It is not a hidden ceiling: it is announced on every boot
-  (`ICEBERG-LIST-NAMESPACES-DEFECT`) and asserted by
-  `tests/authz/iceberg-e2e.sh` rows H/I1/I2/I3.
 
 - **The overlay is now three classes instead of 419** (`apps/loom-unity/Dockerfile`).
   Only `PermissionService`, `PermissionService$1` and `AuthorizeExpressions`
@@ -976,10 +1015,15 @@ Commercial-only result is not a completed result. Gov additionally carries the
   engine picker, narrow-width (900px) captures, and measured timings at
   `test-results/receipts/external-engine-federation-timings.json`.
 
-The spec reports a deliberate three-way verdict on the data path — `working` /
-`pre-fix-403` / `regressed` — so a run against a console image that predates the
-RC-1 fix is recorded honestly instead of being smoothed into a pass or thrown as
-a false regression.
+The spec names what it saw on the data path — `working` / `refused` /
+`auth-upstream` / `empty-catalog` / `gated` / `regressed` — and every verdict
+but `working` and `gated` fails the run. Until 2026-09-29 it accepted a 403 as
+`pre-fix-403`; after #4783 rolled, that let the live 403 on the namespace list
+pass as a receipt, so a 403 now fails. Its precondition asserts a configured
+Unity backend (`oss` on the sovereign boundaries) rather than `oss` everywhere,
+because a Commercial estate with Databricks bound is configured for Databricks
+Unity; the OSS-only authorization check is skipped there, and the skip is
+annotated on the run.
 
 **This surface is NOT A+ and this doc does not claim it is.** 37 ❌ is the real
 count, computed from the tables above — and across four re-grades rows have moved
