@@ -723,15 +723,36 @@ test('attempts: a 429 then a 200 [] records the TWO reads made', async () => {
   assert.equal(r.failure?.attempts.length, 2);
 });
 
-/** A fetch that never answers: it settles ONLY when the caller's signal aborts. */
+/**
+ * A fetch that never answers: it settles ONLY when the caller's signal aborts.
+ *
+ * It holds a REF'D timer while pending, as a real in-flight request holds its
+ * socket. AbortSignal.timeout's own timer is unref'd, so without this the event
+ * loop has nothing keeping it alive; on Node 20 the runner then cancels the
+ * file with "Promise resolution is still pending but the event loop has already
+ * resolved" (measured in CI at 1cf3079b2; Node 24 happened to pass).
+ */
 function blackHole(seen) {
   return (url, init) => {
     seen.push(init?.signal);
     return new Promise((_, reject) => {
+      const keepAlive = setInterval(() => {}, 1000);
       // No signal -> TypeError here -> the attempt fails with a message the
       // assertions below do not accept. That is how a removed signal goes RED
       // rather than hanging.
-      init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true });
+      try {
+        init.signal.addEventListener(
+          'abort',
+          () => {
+            clearInterval(keepAlive);
+            reject(init.signal.reason);
+          },
+          { once: true },
+        );
+      } catch (e) {
+        clearInterval(keepAlive);
+        throw e;
+      }
     });
   };
 }
@@ -910,8 +931,9 @@ test('workflow: the record and the result reach the notifier', () => {
   assert.equal(step.env?.FAILURE_B64?.v, '${{ needs.pin-age.outputs.failure_b64 }}');
   // `--result` must be pin-age's result. RED if it were `job.status` of the
   // notify job (which is "success" while it runs, so shouldFile would skip).
-  assert.equal(step.env?.PIN_AGE_RESULT?.v, '${{ needs.pin-age.result }}');
-  assert.match(norm(step.run.v), /--result "\$PIN_AGE_RESULT"/);
+  // Inline expression, never a shell variable: RED on `--result "$X"` (the
+  // #3844 ratchet's bare-variable shape) and on `${{ job.status }}`.
+  assert.match(norm(step.run.v), /--result "\$\{\{ needs\.pin-age\.result \}\}"/);
   // Never on the self-hosted runner this alarm is about.
   for (const [name, job] of Object.entries(jobs)) assert.equal(job['runs-on']?.v, 'ubuntu-latest', name);
 });

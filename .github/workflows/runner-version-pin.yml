@@ -123,7 +123,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           FAILURE_B64: ${{ needs.pin-age.outputs.failure_b64 }}
-          PIN_AGE_RESULT: ${{ needs.pin-age.result }}
+        # --result is the expression itself, not a shell variable: the #3844
+        # ratchet in gov-deploy-lanes.test.mjs rejects a bare `$VAR`, which
+        # expands to nothing when unset and makes the filer post nothing.
         run: |
           set -euo pipefail
           record="$RUNNER_TEMP/runner-version-pin-failure.json"
@@ -131,5 +133,5 @@ jobs:
             printf '%s' "$FAILURE_B64" | base64 -d > "$record"
           fi
           node .github/scripts/deploy-notify-failure.mjs \
-            --workflow runner-version-pin --result "$PIN_AGE_RESULT" \
+            --workflow runner-version-pin --result "${{ needs.pin-age.result }}" \
             --failure-json "$record"
