@@ -21,7 +21,7 @@ import { screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
 import { renderWithProviders, installFetchMock } from '../../__tests__/test-helpers';
 import { LakehouseEditorContext } from '../lakehouse-editor-context';
 import type { LakehouseEditorCtx } from '../lakehouse-editor-context';
-import { ShortcutsPane } from '../panes/shortcuts-pane';
+import { ShortcutsPane, SHORTCUT_QUERY_ADMIN_ONLY_READER, SHORTCUT_TEST_HINT } from '../panes/shortcuts-pane';
 import { SchemasPane } from '../panes/schemas-pane';
 import { InteropPane } from '../panes/interop-pane';
 import { TablesPane } from '../panes/tables-pane';
@@ -432,6 +432,50 @@ describe('ShortcutsPane row menu — read-only role', () => {
     fireEvent.click(await rowMenuTrigger());
     fireEvent.click(await menuItem('Delete'));
     await waitFor(() => expect(ctx.deleteShortcutRow).toHaveBeenCalledWith(BROKEN));
+  });
+});
+
+// Both gates at once: no SessionProvider, so the caller is not a tenant admin.
+describe('ShortcutsPane row menu — read-only role, not a tenant admin', () => {
+  it('closes Query (SQL), Test and Delete, each with a visible reason, and points at Test only where Test is open', async () => {
+    const ctx = shortcutsCtx();
+    const { calls } = mount(<ShortcutsPane />, ctx, 'read');
+    await probeSettled(calls);
+    fireEvent.click(await rowMenuTrigger());
+    const query = await menuItem('Query (SQL)');
+    const test = await menuItem('Test');
+    const del = await menuItem('Delete');
+    // Breaks if Test or Delete loses disabled={readOnly}, or Query (SQL) opens without the admin check.
+    for (const el of [query, test, del]) {
+      await waitFor(() => expect(el.getAttribute('aria-disabled')).toBe('true'));
+    }
+    fireEvent.click(query);
+    fireEvent.click(test);
+    fireEvent.click(del);
+    expect(ctx.queryShortcut).not.toHaveBeenCalled();
+    expect(ctx.setSqlText).not.toHaveBeenCalled();
+    expect(ctx.testShortcut).not.toHaveBeenCalled();
+    expect(ctx.deleteShortcutRow).not.toHaveBeenCalled();
+    // Breaks if the Test pointer is shown whatever the role (Test is closed here);
+    // the positive half pins that the admin-only reason itself is still there.
+    expect(query.textContent).toContain(SHORTCUT_QUERY_ADMIN_ONLY_READER);
+    expect(query.textContent).not.toContain(SHORTCUT_TEST_HINT);
+    // Breaks if the read-only reason is left only in the hover title.
+    expect(test.textContent).toContain(LAKEHOUSE_READ_ONLY_TITLE);
+    expect(del.textContent).toContain(LAKEHOUSE_READ_ONLY_TITLE);
+  });
+
+  it('for a role that can edit, Query (SQL) points at Test and Test and Delete carry no read-only reason', async () => {
+    const ctx = shortcutsCtx();
+    const { calls } = mount(<ShortcutsPane />, ctx, 'write');
+    await probeSettled(calls);
+    fireEvent.click(await rowMenuTrigger());
+    const query = await menuItem('Query (SQL)');
+    // Breaks if the pointer is dropped for every role, or the read-only branch is taken for a writer.
+    expect(query.textContent).toContain(SHORTCUT_TEST_HINT);
+    // Breaks if the read-only subText is shown whatever the role.
+    expect((await menuItem('Test')).textContent).not.toContain(LAKEHOUSE_READ_ONLY_TITLE);
+    expect((await menuItem('Delete')).textContent).not.toContain(LAKEHOUSE_READ_ONLY_TITLE);
   });
 });
 
