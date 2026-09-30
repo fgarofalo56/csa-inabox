@@ -4807,6 +4807,45 @@ ARMS: list[tuple[str, str, str, str]] = [
         "        elif parts[-1] == entry:",
         "        elif entry in parts:",
     ),
+    #
+    # CH1 to CH4 (#4811) pin the re-pin CHAIN walk in `resolve_repin_chain`.
+    # Before #4811 the gate walked exactly one hop: a PR updated from main
+    # twice lost a verdict that measured every byte it still carries, and a
+    # second APPROVE had to be solicited for a content-free push. Witnesses
+    # live in `__tests__/test_repin_chain.py` (fixture repos, real git).
+    (
+        ("CH1 the chain walk stops after ONE hop -- exactly the pre-#4811 "
+         "gate. A two-hop content-free chain re-pins to the SECOND update's "
+         "first parent instead of the approved commit, so an APPROVE of the "
+         "reviewed bytes reads stale"),
+        "gates.py",
+        "        transferred.append(hop)\n",
+        "        transferred.append(hop)\n        break\n",
+    ),
+    (
+        ("CH2 the content check is dropped, so a merge whose tree is NOT the "
+         "auto-merge of its parents (an evil merge that authored content) "
+         "transfers, and a verdict older than that content is counted live"),
+        "gates.py",
+        "    if automerge_tree != head_tree:",
+        "    if False:",
+    ),
+    (
+        ("CH3 the main-ancestry check is dropped, so a clean merge of a branch "
+         "that is NOT on the base tip transfers -- importing content no "
+         "reviewer of this PR measured, under a verdict that predates it"),
+        "gates.py",
+        "    if hop.base_side_on_main is not True:",
+        "    if False:",
+    ),
+    (
+        ("CH4 the hop bound is not enforced, so a walk that exhausts its "
+         "facts (longer than the bound, or facts that end before a content "
+         "commit) falls through with no pin and the refusal never reads"),
+        "gates.py",
+        "        return _chain_refused(transferred, max_hops)",
+        "        pass",
+    ),
 ]
 
 
