@@ -12,7 +12,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
-  analyzeLakehouseQuery, confineQueryLocation, REFUSED_WORD_NAMES, type ItemStorageLocation,
+  analyzeLakehouseQuery, confineQueryLocation, REFUSED_FUNCTION_NAMES, REFUSED_WORD_NAMES, type ItemStorageLocation,
 } from '../_lib/query-scope';
 import { LAKEHOUSE_COLUMNS_SQL } from '@/lib/components/shared/entity-diagram-sources';
 import { lexTsql } from '@/lib/sql/tsql-lexer';
@@ -173,6 +173,122 @@ describe('analyzeLakehouseQuery — every refused word, written out', () => {
   }
   it('every word in the classifier has a row above', () => {
     expect([...REFUSED_WORD_NAMES].sort()).toEqual([...WORDS].sort());
+  });
+});
+
+describe('analyzeLakehouseQuery — metadata and security functions', () => {
+  const METADATA_WHY = 'non-admin queries may not call metadata functions';
+  const PRINCIPAL_WHY = 'non-admin queries may not call functions that return logins, users, roles or permissions';
+
+  // The calls named in review, each with the arguments it was written with. Each row breaks if its
+  // function is dropped from the list, or if the call rule stops firing (the construct would then be
+  // missing, or a later rule would name something else).
+  const NAMED: Array<[string, string, string]> = [
+    ['SELECT DB_NAME(5)', 'the metadata function DB_NAME', METADATA_WHY],
+    ["SELECT DB_ID('x')", 'the metadata function DB_ID', METADATA_WHY],
+    ['SELECT OBJECT_NAME(1, 5)', 'the metadata function OBJECT_NAME', METADATA_WHY],
+    ['SELECT OBJECT_SCHEMA_NAME(1, 5)', 'the metadata function OBJECT_SCHEMA_NAME', METADATA_WHY],
+    ["SELECT HAS_DBACCESS('x')", 'the metadata function HAS_DBACCESS', METADATA_WHY],
+    ["SELECT DATABASEPROPERTYEX('x', 'Status')", 'the metadata function DATABASEPROPERTYEX', METADATA_WHY],
+    ["SELECT OBJECT_ID('db.s.t')", 'the metadata function OBJECT_ID', METADATA_WHY],
+    ['SELECT SUSER_SNAME()', 'the security function SUSER_SNAME', PRINCIPAL_WHY],
+    ['SELECT SUSER_NAME()', 'the security function SUSER_NAME', PRINCIPAL_WHY],
+    // Position and spelling: in a WHERE clause, lower case, qualified, bracketed.
+    ["SELECT a FROM t WHERE a = DB_ID('x')", 'the metadata function DB_ID', METADATA_WHY],
+    ['select db_name(5)', 'the metadata function db_name', METADATA_WHY],
+    ["SELECT dbo.OBJECT_ID('x')", 'the metadata function OBJECT_ID', METADATA_WHY],
+    ['SELECT [DB_NAME](5)', 'the metadata function DB_NAME', METADATA_WHY],
+    // The fullwidth twin gets its ASCII twin's verdict, shown with the name it reads as.
+    [`SELECT [${fullwidth('DB_NAME')}](5)`, `the metadata function [${fullwidth('DB_NAME')}] (read as DB_NAME)`, METADATA_WHY],
+    [`SELECT [${fullwidth('suser_sname')}]()`, `the security function [${fullwidth('suser_sname')}] (read as SUSER_SNAME)`, PRINCIPAL_WHY],
+    // Written without parentheses, these words are the function.
+    ['SELECT CURRENT_USER', 'the security function CURRENT_USER', PRINCIPAL_WHY],
+    ['SELECT SESSION_USER', 'the security function SESSION_USER', PRINCIPAL_WHY],
+    ['SELECT a FROM t WHERE owner = SYSTEM_USER', 'the security function SYSTEM_USER', PRINCIPAL_WHY],
+    ['SELECT user', 'the security function user', PRINCIPAL_WHY],
+  ];
+  for (const [sql, construct, why] of NAMED) {
+    it(`refuses ${sql}, naming ${construct}`, () => {
+      const out = analyze(sql);
+      expect(out.ok).toBe(false);
+      if (out.ok) return;
+      expect(out.construct).toBe(construct);
+      expect(out.status).toBe(400);
+      expect(out.error).toContain(`${asSentence(construct)} is not accepted: ${why}`);
+      expect(out.remediation).toContain('INFORMATION_SCHEMA');
+    });
+  }
+
+  // A LITERAL list of every function refused when called: removing one from the classifier turns
+  // exactly its row red. The completeness check below makes sure a function ADDED to a list gets a row.
+  const METADATA = [
+    'SERVERPROPERTY', 'DB_ID', 'DB_NAME', 'DATABASEPROPERTYEX', 'DATABASEPROPERTY', 'ORIGINAL_DB_NAME',
+    'HAS_DBACCESS', 'APP_NAME', 'VERSION',
+    'OBJECT_ID', 'OBJECT_NAME', 'OBJECT_SCHEMA_NAME', 'OBJECT_DEFINITION', 'OBJECTPROPERTY', 'OBJECTPROPERTYEX',
+    'ASSEMBLYPROPERTY', 'TYPE_ID', 'TYPE_NAME', 'TYPEPROPERTY', 'COL_NAME', 'COL_LENGTH', 'COLUMNPROPERTY',
+    'INDEX_COL', 'INDEXKEY_PROPERTY', 'INDEXPROPERTY', 'STATS_DATE',
+    'FILE_ID', 'FILE_IDEX', 'FILE_NAME', 'FILEGROUP_ID', 'FILEGROUP_NAME', 'FILEGROUPPROPERTY', 'FILEPROPERTY',
+    'FULLTEXTCATALOGPROPERTY', 'FULLTEXTSERVICEPROPERTY', 'APPLOCK_MODE', 'APPLOCK_TEST', 'SCOPE_IDENTITY',
+  ];
+  const PRINCIPAL = [
+    'CERTENCODED', 'CERTPRIVATEKEY', 'PWDCOMPARE', 'PWDENCRYPT', 'HAS_PERMS_BY_NAME', 'PERMISSIONS',
+    'IS_MEMBER', 'IS_ROLEMEMBER', 'IS_SRVROLEMEMBER', 'LOGINPROPERTY', 'ORIGINAL_LOGIN',
+    'SUSER_ID', 'SUSER_SID', 'SUSER_SNAME', 'SUSER_NAME', 'USER_ID', 'USER_NAME',
+  ];
+  const NILADIC = ['CURRENT_USER', 'SESSION_USER', 'SYSTEM_USER', 'USER'];
+  for (const [fn, kind, why] of [
+    ...METADATA.map((f) => [f, 'metadata', METADATA_WHY] as const),
+    ...PRINCIPAL.map((f) => [f, 'security', PRINCIPAL_WHY] as const),
+  ]) {
+    it(`refuses a call to ${fn}`, () => {
+      const out = analyze(`SELECT ${fn}(1) FROM t`);
+      expect(out.ok).toBe(false);
+      if (out.ok) return;
+      expect(out.construct).toBe(`the ${kind} function ${fn}`);
+      expect(out.error).toContain(why);
+    });
+  }
+  it('every function in the classifier has a row above', () => {
+    expect([...REFUSED_FUNCTION_NAMES.metadata].sort()).toEqual([...METADATA].sort());
+    expect([...REFUSED_FUNCTION_NAMES.principal].sort()).toEqual([...PRINCIPAL].sort());
+    expect([...REFUSED_FUNCTION_NAMES.niladic].sort()).toEqual([...NILADIC].sort());
+  });
+
+  // Common functions, one row each: a row breaks if its function is added to either list.
+  const COMMON: Array<[string, string]> = [
+    ['COUNT', 'SELECT COUNT(*) FROM t'],
+    ['SUM', 'SELECT SUM(a) FROM t'],
+    ['CAST', 'SELECT CAST(a AS int) FROM t'],
+    ['CONVERT', 'SELECT CONVERT(varchar(10), a) FROM t'],
+    ['DATEADD', 'SELECT DATEADD(day, 1, a) FROM t'],
+    ['GETDATE', 'SELECT GETDATE()'],
+    ['ISNULL', 'SELECT ISNULL(a, 0) FROM t'],
+    ['COALESCE', 'SELECT COALESCE(a, b, 0) FROM t'],
+    ['LEN', 'SELECT LEN(a) FROM t'],
+    ['UPPER', 'SELECT UPPER(a) FROM t'],
+    // PARSENAME only splits a string; it is on the metadata page and deliberately not listed.
+    ['PARSENAME', "SELECT PARSENAME('a.b.c', 1)"],
+    // The serverless OPENROWSET row functions.
+    ['filename and filepath', `SELECT r.filename(), r.filepath(1) FROM OPENROWSET(BULK '${IN}/*.parquet', FORMAT='PARQUET') AS r`],
+  ];
+  for (const [label, sql] of COMMON) {
+    it(`accepts ${label}`, () => {
+      expect(analyze(sql)).toEqual({ ok: true, locations: sql.includes('OPENROWSET') ? [`${IN}/*.parquet`] : [] });
+    });
+  }
+
+  it('accepts columns named like the functions when they are not called', () => {
+    // Breaks if the call rule ignores whether `(` follows, or if the word rule for USER and its
+    // siblings applies to a bracketed name or a later name part.
+    const sql = 'SELECT db_name, t.object_id, [suser_sname], [user], t.user, t.[CURRENT_USER] FROM t';
+    expect(analyze(sql)).toEqual({ ok: true, locations: [] });
+  });
+
+  it('a bare USER is told it can be bracketed or qualified', () => {
+    // Breaks if the word rule stops offering the column forms that are accepted above.
+    const out = analyze('SELECT user FROM t');
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.remediation).toContain('write it in brackets, as [user], or qualify it, as t.user');
   });
 });
 
