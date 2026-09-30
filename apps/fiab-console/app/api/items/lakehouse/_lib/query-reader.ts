@@ -36,9 +36,10 @@ const READER_USE_MESSAGE = /^Changed database context to 'master'\.?$/;
 /**
  * The serverless `master` target, on the reader path's own pool.
  *
- * `poolPrefix` lets a second surface that runs classifier-accepted text (the
- * serverless SQL pool editor, `sql-pool-reader:`) keep a pool of its own too,
- * so no surface shares a pooled connection with another.
+ * `poolPrefix` lets another surface that runs classifier-accepted text (the
+ * serverless SQL pool editor, `sql-pool-reader:`; Direct Lake raw SQL,
+ * `direct-lake-reader:`) keep a pool of its own too, so no surface shares a
+ * pooled connection with another.
  */
 export function readerTarget(poolPrefix: string = READER_POOL_PREFIX): SynapseTarget {
   const base = serverlessTarget(READER_DATABASE);

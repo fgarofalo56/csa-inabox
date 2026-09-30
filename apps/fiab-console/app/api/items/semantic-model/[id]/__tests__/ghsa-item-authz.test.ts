@@ -325,10 +325,22 @@ describe('GHSA-hf73-rp4q-66pf — direct-lake RAW T-SQL is gated harder than the
     );
   });
 
-  it('an OWNER still runs raw SQL', async () => {
-    const res = await dlPost(sqlReq(), ctx());
+  it('an OWNER still runs raw SQL (a SELECT: an owner who is not a tenant admin is classified, #4619)', async () => {
+    // Breaks if the loadOwnedItem lookup refuses its own owner (404) or the
+    // classifier refuses a plain SELECT (400). Nothing names a location, so no
+    // lakehouse root is resolved.
+    const res = await dlPost(req('', { sql: 'SELECT 1 AS a' }), ctx());
     expect(res.status).toBe(200);
-    expect(synapseExecuteQuery).toHaveBeenCalled();
+    expect(synapseExecuteQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it('an OWNER who is not a tenant admin cannot run DDL: the classifier refuses it and nothing runs', async () => {
+    // Breaks if the raw branch skips the classifier for non-admins (200 and one
+    // executeQuery call). The route's own DirectLake scope spec covers the rest.
+    const res = await dlPost(sqlReq(), ctx());
+    expect(res.status).toBe(400);
+    expect((await res.json()).code).toBe('query_construct_not_accepted');
+    expect(synapseExecuteQuery).not.toHaveBeenCalled();
   });
 
   it('the TABLE preview branch is unaffected — a Viewer still previews, with no item lookup', async () => {
