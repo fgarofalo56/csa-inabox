@@ -1,5 +1,5 @@
 /**
- * GET /api/items/lakehouse/[id]/abfss?workspaceId=...
+ * GET /api/items/lakehouse/[id]/abfss
  *
  * Resolve an attached lakehouse to the canonical
  *   abfss://<container>@<account>.dfs.<suffix>/<root>
@@ -11,27 +11,45 @@
  *   { ok: true, resolved: true, abfss, container, root }   — resolvable
  *   { ok: true, resolved: false, hint }                    — honest gate: no
  *     provisioning record yet / no storage env configured (names the env var).
+ *   { ok: true, resolved: false, reason, hint, fixHref? } — the resolver
+ *     withheld the location (`root-shared` / `root-unverified`); `hint` is its
+ *     one wording, `lakehouseStorageWithheldMessage`, and `fixHref` the page
+ *     that resolves `root-shared`.
+ *
+ * AUTHORIZATION. The lakehouse is authorized through `resolveItemAccessByOid`
+ * (read access suffices — this only reports a path). An id the caller cannot
+ * open answers 404, like a missing one. The resolver reads the item from its
+ * own `workspaceId`; a `?workspaceId=` query parameter from older callers is
+ * not used.
  *
  * Azure-native: the path comes from the lakehouse's provisioned DLZ ADLS Gen2
  * coordinates (no Microsoft Fabric / OneLake dependency).
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { resolveLakehouseAbfss } from '@/lib/azure/lakehouse-abfss';
+import { withSession } from '@/lib/api/route-toolkit';
+import { apiNotFound } from '@/lib/api/respond';
+import { lakehouseStorageWithheldFields, resolveLakehouseStorage } from '@/lib/azure/lakehouse-abfss';
+import { authorizeLakehouse } from '../../../../lakehouse/_lib/item-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
+export const GET = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
+  const id = String(params?.id || '').trim();
+  const access = await authorizeLakehouse(session, id);
+  if (access instanceof NextResponse) return access;
 
   try {
-    const r = await resolveLakehouseAbfss((await ctx.params).id, workspaceId);
-    if (r) {
-      return NextResponse.json({ ok: true, resolved: true, abfss: r.abfss, container: r.container, root: r.root });
+    const r = await resolveLakehouseStorage(id, access.item.workspaceId);
+    if (r.ok) {
+      const b = r.bound;
+      return NextResponse.json({ ok: true, resolved: true, abfss: b.abfss, container: b.container, root: b.root });
+    }
+    if (r.reason === 'not-found') return apiNotFound('lakehouse not found');
+    const withheld = lakehouseStorageWithheldFields(r.reason);
+    if (withheld) {
+      const { error, ...rest } = withheld;
+      return NextResponse.json({ ok: true, resolved: false, ...rest, hint: error });
     }
     return NextResponse.json({
       ok: true,
@@ -46,4 +64,4 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});

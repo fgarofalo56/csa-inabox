@@ -50,12 +50,20 @@ async function buildAutoMountPreamble(
   try {
     const lakehouses = (attached || []).filter((a) => a && a.kind === 'lakehouse' && a.id);
     if (lakehouses.length === 0) return '';
-    const { resolveLakehouseAbfss } = await import('@/lib/azure/lakehouse-abfss');
+    const { resolveLakehouseStorage, lakehouseStorageWithheldMessage } = await import('@/lib/azure/lakehouse-abfss');
     const { buildLakehouseMountPreamble, resolveAttachedLakehouses } = await import('@/lib/notebook/lakehouse-mount-preamble');
-    // Concurrent, in attachment order (see resolveAttachedLakehouses).
+    // Concurrent, in attachment order (see resolveAttachedLakehouses). A
+    // lakehouse the resolver declines to open with a reason (its storage root
+    // is also used by another item, or could not be confirmed as its own) is
+    // passed on with that reason, so the notebook says why the name is missing.
     const resolved = await resolveAttachedLakehouses(
       lakehouses,
-      (lakehouseId) => resolveLakehouseAbfss(lakehouseId, workspaceId),
+      async (lakehouseId) => {
+        const r = await resolveLakehouseStorage(lakehouseId, workspaceId);
+        if (r.ok) return r.bound;
+        const withheld = lakehouseStorageWithheldMessage(r.reason);
+        return withheld ? { withheld } : null;
+      },
     );
     return buildLakehouseMountPreamble(resolved);
   } catch { return ''; }

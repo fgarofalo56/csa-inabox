@@ -294,7 +294,9 @@ describe('#4619 — updateOwnedItem refuses a rewritten server-derived scope', (
   it('refuses a change to EVERY key in SERVER_DERIVED_SCOPE_KEYS', async () => {
     // Positive control on the POPULATION: an emptied or truncated list would
     // make the loop below assert nothing while still passing.
-    expect(SERVER_DERIVED_SCOPE_KEYS).toEqual(['provisioning', 'storageAccount']);
+    expect(SERVER_DERIVED_SCOPE_KEYS).toEqual([
+      'provisioning', 'storageAccount', 'lakehouseRoot', 'adlsContainer', 'ownedContainers',
+    ]);
 
     for (const key of SERVER_DERIVED_SCOPE_KEYS) {
       await expect(
@@ -423,20 +425,22 @@ describe('#4619 — PATCH /api/items/[type]/[id] refuses it AND carries it', () 
     // here rather than relying on the helper-level or cosmos-twin spec.
     //
     // The body below is the traced payload: it drops BOTH guarded keys (the
-    // assert permits omission) and supplies, in the SAME request, the
-    // `ownedContainers` that `resolveLakehouseAbfss`'s deterministic branch 3
-    // would then steer on.
+    // assert permits omission). It used to ALSO supply `ownedContainers`, which
+    // `resolveLakehouseAbfss`'s branch 3 steers on; that key is server-owned now
+    // (a change is refused by the arm after this one), so the body omits it and
+    // it is carried like the other two.
     //
     // FAILS IF `carryServerDerivedScope` comes off this route: `replaced[0].state`
-    // then carries NEITHER key — `provisioning` is `undefined` rather than
-    // SERVER_SCOPE and `storageAccount` is `undefined` rather than 'dlzacct' —
-    // because the wholesale replace drops what the body left out. The two stored
-    // -document assertions are the ones that go red, and they do so independently
-    // of environment: no `LOOM_*_URL` is set here, so after the mutation the
-    // reader returns `null` rather than a bronze root, which is why the
-    // mechanism is asserted first and the reader second.
+    // then carries NONE of the three — `provisioning` is `undefined` rather than
+    // SERVER_SCOPE, `storageAccount` is `undefined` rather than 'dlzacct', and
+    // `ownedContainers` is `undefined` rather than ['gold'] — because the
+    // wholesale replace drops what the body left out. The stored-document
+    // assertions are the ones that go red, and they do so independently of
+    // environment: no `LOOM_*_URL` is set here, so after the mutation the reader
+    // returns `null` rather than a root, which is why the mechanism is asserted
+    // first and the reader second.
     const res = await GENERIC_ITEM_PATCH(
-      patchReq({ state: { ownedContainers: ['bronze'], notes: 'edited' } }),
+      patchReq({ state: { notes: 'edited' } }),
       patchCtx,
     );
     expect(res.status).toBe(200);
@@ -444,14 +448,35 @@ describe('#4619 — PATCH /api/items/[type]/[id] refuses it AND carries it', () 
     // The edit LANDED — this is the paired positive, so the arm cannot be
     // satisfied by the route refusing the whole request.
     expect(replaced[0].state.notes).toBe('edited');
-    expect(replaced[0].state.ownedContainers).toEqual(['bronze']);
-    // ... and BOTH omitted server-derived keys survived the wholesale replace.
+    // ... and ALL omitted server-derived keys survived the wholesale replace.
+    expect(replaced[0].state.ownedContainers).toEqual(['gold']);
     expect(replaced[0].state.provisioning).toEqual(SERVER_SCOPE);
     expect(replaced[0].state.storageAccount).toBe('dlzacct');
-    // The stored document agrees, and the reader still derives from the receipt
-    // rather than from the container this very request supplied.
+    // The stored document agrees, and the reader still derives from the receipt.
     expect((await resolveLakehouseAbfss(LH_ID, WS))?.abfss).toBe(SERVER_SCOPE.secondaryIds.adlsRoot);
     expect((await resolveLakehouseAbfss(LH_ID, WS))?.container).toBe('gold');
+  });
+
+  it.each([
+    ['lakehouseRoot', 'lakehouses/Sales'],
+    ['adlsContainer', 'bronze'],
+    ['ownedContainers', ['bronze']],
+  ] as const)('refuses a request that sets state.%s, and persists nothing', async (key, value) => {
+    // The lakehouse storage binding is written by the server only (auto-bind on
+    // create, the resolver's persist). FAILS IF `key` leaves
+    // SERVER_DERIVED_SCOPE_KEYS (or `assertNoServerOwnedStateChange` comes off
+    // this route): status becomes 200, `replaced` becomes 1, and the stored
+    // document carries `value`.
+    const res = await GENERIC_ITEM_PATCH(
+      patchReq({ state: { ...lakehouseDoc().state, [key]: value } }),
+      patchCtx,
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json()).code).toBe('server_owned_state');
+    expect(replaced).toHaveLength(0);
+    const before = (lakehouseDoc().state as Record<string, unknown>)[key];
+    expect(DOCS.get(dkey(LH_ID, WS)).state[key]).toEqual(before);
+    expect(before).not.toEqual(value);
   });
 });
 

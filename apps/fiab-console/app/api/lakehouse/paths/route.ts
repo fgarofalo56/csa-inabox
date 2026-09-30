@@ -1,20 +1,30 @@
 /**
  * GET /api/lakehouse/paths
- *   ?container=&prefix=                          — list an explicit container path
- *   ?lakehouseId=&workspaceId=&prefix=           — list a LAKEHOUSE's own root (#3904)
+ *   ?lakehouseId=&prefix=[&container=]           — list inside a LAKEHOUSE's own root (#3904)
+ *   ?container=&prefix=                          — storage browse, tenant admins only
  *
  * Flat directory listing of an ADLS Gen2 path.
  *
- * ITEM-BOUND LISTING (#3904). Without `container` the route resolves the
+ * ITEM-BOUND LISTING (#3904). With `lakehouseId` the route resolves the
  * caller's lakehouse to the container + root the provisioner actually wrote to,
- * via `resolveLakehouseAbfss` — the SAME resolver `/api/lakehouse/tables` uses.
+ * via `resolveLakehouseStorage` — the SAME resolver `/api/lakehouse/tables` uses.
  * The editor used to open on `containers[0]` (`bronze`) and list the container
  * ROOT, i.e. a different container and a path the lakehouse never occupied, so
  * first open 404'd. The response echoes the resolved `container` + `root` so the
  * client adopts the binding rather than deriving a second opinion. The
- * lakehouse is authorized through `resolveItemAccessByOid` (404, not 403, so an
- * id cannot be probed for existence across tenants) exactly as the tables route
- * does — the id is caller-supplied and must never become an existence oracle.
+ * lakehouse is authorized through `resolveItemAccessByOid` (404, not 403, so a
+ * response never distinguishes a missing item from one the caller cannot
+ * open) exactly as the tables route does.
+ *
+ * A `container` / `prefix` sent WITH `lakehouseId` is confined to that item's
+ * container and root by `scopePathToRoot` (`../_lib/item-scope`): compared
+ * segment by segment, `.`/`..` refused, and the listed path rebuilt from the
+ * resolved root. Anything else answers 403 and no storage call is made.
+ *
+ * STORAGE BROWSE. `container` WITHOUT `lakehouseId` lists a deployment container
+ * with no item behind it, so it is limited to tenant admins (`isTenantAdmin`)
+ * and refused before any storage call for everyone else. Its callers are named
+ * at the branch below.
  *
  * ERROR TRANSLATION (#3904). A listing failure is CLASSIFIED here and answered
  * with an honest remediation. It used to forward `e?.message` verbatim, which
@@ -39,10 +49,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { KNOWN_CONTAINERS, listPaths, type KnownContainer, type PathEntry } from '@/lib/azure/adls-client';
 import { listPathsAsUser, AdlsUserTokenError } from '@/lib/azure/adls-user-client';
 import { oboMode } from '@/lib/azure/data-access-mode';
-import { resolveLakehouseAbfss } from '@/lib/azure/lakehouse-abfss';
-import { resolveItemAccessByOid } from '@/lib/auth/item-access';
+import { resolveLakehouseStorage } from '@/lib/azure/lakehouse-abfss';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { withSession } from '@/lib/api/route-toolkit';
-import { apiError } from '@/lib/api/respond';
+import { apiBadRequest, apiConflict, apiError, apiForbidden } from '@/lib/api/respond';
+import {
+  authorizeLakehouse, lakehouseStorageWithheldResponse, pathSegments, scopePathToRoot,
+} from '../_lib/item-scope';
 import { logSafe } from '@/lib/util/log-safe';
 import { trimSlashes } from '@/lib/util/trim';
 
@@ -188,21 +201,27 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
   let container = sp.get('container')?.trim() || '';
   let prefix = trimSlashes(sp.get('prefix') || '');
   // The lakehouse's own root inside the container — echoed so the client binds
-  // to it instead of re-deriving one. Null when the caller named a container
-  // directly (a deliberate browse of something other than this item's root).
+  // to it instead of re-deriving one. Null only on the tenant-admin storage
+  // browse below, which is not tied to an item.
   let root: string | null = null;
 
-  // ── Item-bound resolution (#3904) ───────────────────────────────────────
-  if (!container && lakehouseId) {
-    const access = await resolveItemAccessByOid(session, lakehouseId, 'lakehouse');
+  if (lakehouseId) {
+    // ── Item-bound listing (#3904) ────────────────────────────────────────
     // 404, not 403: never confirm an id the caller may not see.
-    if (!access) return apiError('lakehouse not found', 404);
+    const access = await authorizeLakehouse(session, lakehouseId);
+    if (access instanceof NextResponse) return access;
 
-    // `persist: true` (#4759): a root the resolver has to PROBE for is written
-    // back onto the item so the next open reads it directly. Opted in here, and
-    // only here, because this branch has already run resolveItemAccessByOid.
-    const bound = await resolveLakehouseAbfss(lakehouseId, access.item.workspaceId, { persist: true });
-    if (!bound) {
+    // `persist` (#4759): a root the resolver has to PROBE for is written back
+    // onto the item so the next open reads it directly. Opted in for every
+    // caller who can see the item, whatever their role: the value written is
+    // derived on the server from the item's own id and name and the probe
+    // result, never from the request, and the write is a conditional replace
+    // on the item's etag (IfMatch), so it cannot overwrite a concurrent edit.
+    // A viewer opening the item first records the same root an editor would.
+    const resolved = await resolveLakehouseStorage(lakehouseId, access.item.workspaceId, { persist: true });
+    if (!resolved.ok) {
+      const withheld = lakehouseStorageWithheldResponse(resolved.reason);
+      if (withheld) return withheld;
       // Honest gate, not an error: there is no configured storage to browse.
       // Mirrors /api/lakehouse/tables' `{ ok: true, tables: [], gate }`.
       return NextResponse.json({
@@ -210,15 +229,40 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
         identity: 'service', gate: STORAGE_NOT_CONFIGURED,
       });
     }
-    container = bound.container;
-    root = bound.root;
-    // No explicit prefix → list the lakehouse's own root. An explicit prefix is
-    // honoured as given (it is already container-absolute in every caller).
-    if (!prefix) prefix = bound.root;
+    const bound = resolved.bound;
+    // A container or prefix the caller names must lie inside THIS item's
+    // container + root, compared segment by segment; no prefix lists the root.
+    const scoped = scopePathToRoot(bound, container, prefix, false);
+    if (!scoped.ok) {
+      if (scoped.reason === 'invalid') return apiBadRequest(scoped.message);
+      if (scoped.reason === 'root-unusable') return apiConflict(scoped.message);
+      return apiForbidden(scoped.message);
+    }
+    container = scoped.container;
+    prefix = scoped.path;
+    root = scoped.rootSegments.join('/');
+  } else if (container) {
+    // ── Storage browse, not tied to an item ───────────────────────────────
+    // Lists any path in a deployment container, so it is limited to tenant
+    // admins. Every lakehouse editor surface passes `lakehouseId`; the callers
+    // of this form are the governance policy path picker, the Foundry ADLS
+    // picker, the shortcut wizard's source browser and the mirrored-item
+    // security-role picker.
+    if (!isTenantAdmin(session)) {
+      return apiForbidden(
+        'Listing a storage container directly is limited to tenant admins. Open the lakehouse and browse '
+        + 'from its editor.',
+      );
+    }
+    if (prefix && !pathSegments(prefix)) {
+      return apiBadRequest(
+        'invalid prefix: expected a relative path inside the container, with no leading "/" and no "." or ".." segments',
+      );
+    }
   }
 
   if (!container) {
-    return apiError('container is required', 400);
+    return apiError('container or lakehouseId is required', 400);
   }
   if (!(KNOWN_CONTAINERS as readonly string[]).includes(container)) {
     return apiError(`unknown container: ${container}`, 404);
