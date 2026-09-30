@@ -100,15 +100,17 @@ export function useLakehousePermissions({ activeContainer, confirm }: Params) {
   }, [activeContainer, newPrincipalId, newPrincipalType, newRole, loadPerms]);
 
   const revokePerm = useCallback(async (armId: string) => {
+    if (!activeContainer) return;
     setPermsBusy(true); setPermsError(null);
     try {
-      const r = await clientFetch(`/api/lakehouse/permissions?id=${encodeURIComponent(armId)}`, { method: 'DELETE' });
+      const qs = new URLSearchParams({ tab: 'object', container: activeContainer, id: armId });
+      const r = await clientFetch(`/api/lakehouse/permissions?${qs.toString()}`, { method: 'DELETE' });
       const j = await parseJsonOrError<{ ok: boolean; error?: string }>(r, 'Revoke permission');
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       await loadPerms();
     } catch (e: any) { setPermsError(e?.message || String(e)); }
     finally { setPermsBusy(false); }
-  }, [loadPerms]);
+  }, [activeContainer, loadPerms]);
 
   // ── SQL-plane callbacks ───────────────────────────────────────────────────
   const loadSqlPerms = useCallback(async (t: PermsTab) => {
