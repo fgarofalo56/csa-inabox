@@ -86,7 +86,8 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   // The item form writes to the item's BOUND storage account. The report form
   // and the tenant-admin storage form carry none and use the container's
   // configured account.
-  const account = 'account' in scoped && scoped.account ? scoped.account : undefined;
+  const boundAccount: unknown = 'account' in scoped ? scoped.account : undefined;
+  const account = typeof boundAccount === 'string' && boundAccount ? boundAccount : undefined;
 
   if (!file || typeof file === 'string') {
     return NextResponse.json(
