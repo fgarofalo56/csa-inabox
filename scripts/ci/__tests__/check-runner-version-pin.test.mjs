@@ -35,6 +35,16 @@ import {
   FAILURE_KINDS,
   buildFailureRecord,
   SPLIT_TOKEN_SEAM,
+  DEPRECATION_WINDOW_DAYS,
+  RETRY_WAIT_CAP_MS,
+  FETCH_TIMEOUT_MS,
+  evaluateDeprecation,
+  readDeprecation,
+  isRateLimited,
+  requestedWaitMs,
+  fetchJsonWithRetry,
+  worstCaseFetchMs,
+  deprecationsUrl,
 } from '../check-runner-version-pin.mjs';
 import { parseWorkflow } from '../_workflow-yaml.mjs';
 
@@ -190,7 +200,8 @@ test('the script scan sees every literal form, and skips references', () => {
 test('the outage itself: 2.328.0 on 2026-09-29 is FAIL, superseded 350 days', () => {
   const r = evaluateAge({ pin: '2.328.0', releases: RELEASES, now: OUTAGE });
   // RED if the fail threshold were missing, or age were measured from the pin's
-  // own release date (411 days) or from the latest release (33 days -> warn).
+  // own release date (411 days) or from the latest release (33 days -- also a
+  // fail at 30, so the ageDays assertion is what catches that one).
   assert.equal(r.verdict, 'fail', r.message);
   assert.equal(r.supersededBy, '2.329.0');
   assert.equal(r.ageDays, 350);
@@ -198,25 +209,28 @@ test('the outage itself: 2.328.0 on 2026-09-29 is FAIL, superseded 350 days', ()
 
 test('the clock starts at the OLDEST newer release, and a patch release starts it', () => {
   // pin 2.335.0 on the outage date: oldest newer = 2.335.1 (a PATCH, 112 days)
-  // -> fail. If the code measured from the LATEST newer (2.337.0, 34 days) it
-  // would say warn; if it skipped patch releases it would pick 2.336.0 (71
-  // days). Only the correct rule gives fail + 2.335.1 + 112.
+  // -> fail. If the code measured from the LATEST newer (2.337.0, 34 days) the
+  // verdict would still be fail at 30, so supersededBy/ageDays are what catch
+  // it; if it skipped patch releases it would pick 2.336.0 (71 days). Only the
+  // correct rule gives fail + 2.335.1 + 112.
   const r = evaluateAge({ pin: '2.335.0', releases: RELEASES, now: OUTAGE });
   assert.equal(r.verdict, 'fail', r.message);
   assert.equal(r.supersededBy, '2.335.1');
   assert.equal(r.ageDays, 112);
 });
 
-test('thresholds: ok through day 30, warn 31..60, fail from day 61', () => {
+test('thresholds: ok through day 14, warn 15..30, fail from day 31', () => {
   const t0 = Date.parse('2026-08-26T14:33:29Z'); // v2.337.0 published; pin 2.336.0
   const at = (days) => evaluateAge({ pin: '2.336.0', releases: RELEASES, now: t0 + days * DAY + 1000 });
-  assert.equal(WARN_DAYS, 30);
-  assert.equal(FAIL_DAYS, 60);
+  // RED if FAIL_DAYS went back to 60 (review A-2: the alarm fired 30 days after
+  // GitHub's documented stop-queuing point), or WARN_DAYS back to 30.
+  assert.equal(WARN_DAYS, 14);
+  assert.equal(FAIL_DAYS, 30);
   // Each boundary pair is RED under an off-by-one (`>=` for `>`) on that threshold.
-  assert.equal(at(30).verdict, 'ok');
-  assert.equal(at(31).verdict, 'warn');
-  assert.equal(at(60).verdict, 'warn');
-  assert.equal(at(61).verdict, 'fail');
+  assert.equal(at(14).verdict, 'ok');
+  assert.equal(at(15).verdict, 'warn');
+  assert.equal(at(30).verdict, 'warn');
+  assert.equal(at(31).verdict, 'fail');
 });
 
 test('the latest release is ok; drafts and prereleases do not start the clock', () => {
@@ -282,32 +296,134 @@ test('fetchReleases does not retry a 404, and returns the body on 200', async ()
   assert.equal(body.length, RELEASES.length);
 });
 
-test('fetchReleases retries the rate-limit statuses 429 and 403', async () => {
-  // RED if either status is dropped from the retry set (calls = 1): a
+/** A minimal Response-shaped object with real header lookup. */
+const res = (status, headers = {}, body = null) => ({
+  ok: status >= 200 && status < 300,
+  status,
+  headers: new Headers(headers),
+  json: async () => body,
+});
+
+test('fetchReleases retries a 429 and a RATE-LIMIT 403, and not a bare 403', async () => {
+  // RED if either rate-limit shape is dropped from the retry set (calls = 1): a
   // rate-limited read would then fail the alarm on its first attempt (review #4).
-  for (const status of [429, 403]) {
+  const rateLimited = [
+    ['429', () => res(429)],
+    ['403 with x-ratelimit-remaining: 0', () => res(403, { 'x-ratelimit-remaining': '0' })],
+    ['403 with retry-after', () => res(403, { 'retry-after': '1' })],
+  ];
+  for (const [label, make] of rateLimited) {
     let calls = 0;
     await assert.rejects(
       fetchReleases({
         fetchImpl: async () => {
           calls += 1;
-          return { ok: false, status };
+          return make();
         },
         backoffMs: 1,
+        sleep: async () => {},
       }),
-      new RegExp(`HTTP ${status}`),
+      /HTTP 403|HTTP 429/,
     );
-    assert.equal(calls, 3, `status ${status} must be retried`);
+    assert.equal(calls, 3, `${label} must be retried`);
   }
+  // Review A-4: a 403 GitHub did NOT mark as a rate limit (policy, SSO, a bad
+  // token) is a permission refusal. RED if it were retried (calls 3) -- the
+  // record would then call a deterministic refusal transient.
+  let calls = 0;
+  const err = await fetchReleases({
+    fetchImpl: async () => {
+      calls += 1;
+      return res(403, { 'x-ratelimit-remaining': '4999' });
+    },
+    backoffMs: 1,
+  }).then(
+    () => null,
+    (e) => e,
+  );
+  assert.equal(calls, 1);
+  assert.equal(err.forbiddenStatus, 403);
+  assert.equal(err.rejectedStatus, null);
   // Recovery: a 429 followed by a 200 returns the body. RED if the loop gave
   // up after the first rate-limited response.
   let n = 0;
   const body = await fetchReleases({
-    fetchImpl: async () => (++n === 1 ? { ok: false, status: 429 } : { ok: true, status: 200, json: async () => RELEASES }),
+    fetchImpl: async () => (++n === 1 ? res(429) : res(200, {}, RELEASES)),
     backoffMs: 1,
+    sleep: async () => {},
   });
   assert.equal(body.length, RELEASES.length);
   assert.equal(n, 2);
+});
+
+test('isRateLimited: only a 429, or a 403 GitHub marks as a rate limit', () => {
+  // Each row names the input that breaks it: RED if a bare 403 counted (row 4),
+  // or if either rate-limit header were ignored (rows 2, 3).
+  assert.equal(isRateLimited(res(429)), true);
+  assert.equal(isRateLimited(res(403, { 'x-ratelimit-remaining': '0' })), true);
+  assert.equal(isRateLimited(res(403, { 'retry-after': '30' })), true);
+  assert.equal(isRateLimited(res(403, { 'x-ratelimit-remaining': '12' })), false);
+  assert.equal(isRateLimited(res(404, { 'x-ratelimit-remaining': '0' })), false);
+});
+
+test('requestedWaitMs honours retry-after and x-ratelimit-reset, capped at 60 s', () => {
+  const now = Date.parse('2026-09-29T12:00:00Z');
+  assert.equal(RETRY_WAIT_CAP_MS, 60_000);
+  // Seconds form. RED if retry-after were ignored (null).
+  assert.equal(requestedWaitMs(res(429, { 'retry-after': '7' }), now), 7000);
+  // Capped. RED if the cap were dropped (3,600,000 -- past the job's 10 minutes).
+  assert.equal(requestedWaitMs(res(429, { 'retry-after': '3600' }), now), 60_000);
+  // HTTP-date form, 20 s ahead.
+  assert.equal(requestedWaitMs(res(429, { 'retry-after': new Date(now + 20_000).toUTCString() }), now), 20_000);
+  // x-ratelimit-reset (epoch seconds), only when the quota is exhausted.
+  const reset = String((now + 45_000) / 1000);
+  assert.equal(requestedWaitMs(res(403, { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': reset }), now), 45_000);
+  // RED if a reset header were honoured while quota remains (it is not a request to wait).
+  assert.equal(requestedWaitMs(res(403, { 'x-ratelimit-remaining': '9', 'x-ratelimit-reset': reset }), now), null);
+  // A reset in the past waits 0, never a negative sleep.
+  assert.equal(requestedWaitMs(res(429, { 'retry-after': new Date(now - 5000).toUTCString() }), now), 0);
+  assert.equal(requestedWaitMs(res(429), now), null);
+});
+
+test('fetchJsonWithRetry waits what GitHub asked for before the retry, not the fixed backoff', async () => {
+  const waits = [];
+  let n = 0;
+  const body = await fetchJsonWithRetry({
+    url: 'https://example.invalid/x',
+    label: 'test API',
+    headers: {},
+    fetchImpl: async () => (++n === 1 ? res(429, { 'retry-after': '7' }) : res(200, {}, { ok: 1 })),
+    backoffMs: 1,
+    sleep: async (ms) => waits.push(ms),
+  });
+  assert.deepEqual(body, { ok: 1 });
+  // RED if retry-after were ignored: the wait would be the 1 ms backoff.
+  assert.deepEqual(waits, [7000]);
+  // Without a header the fixed backoff is used (positive pair): 1 ms, then 2 ms.
+  const waits2 = [];
+  await assert.rejects(
+    fetchJsonWithRetry({
+      url: 'https://example.invalid/x',
+      label: 'test API',
+      headers: {},
+      fetchImpl: async () => res(503),
+      backoffMs: 1,
+      sleep: async (ms) => waits2.push(ms),
+    }),
+    /after 3 attempt\(s\): HTTP 503/,
+  );
+  assert.deepEqual(waits2, [1, 2]);
+});
+
+test('the worst case for both online reads fits inside the pin-age job timeout', () => {
+  // Lifted from the workflow, not transcribed. RED if RETRY_WAIT_CAP_MS,
+  // FETCH_TIMEOUT_MS or FETCH_ATTEMPTS grew so the reads could outlast the job
+  // (it would end CANCELLED, failure() false, and file nothing), or if the job's
+  // timeout-minutes were cut below 7.
+  const minutes = Number(wf().jobs['pin-age']['timeout-minutes'].v);
+  assert.equal(worstCaseFetchMs(), 2 * (3 * 30_000 + 2 * 60_000));
+  assert.equal(FETCH_TIMEOUT_MS, 30_000);
+  assert.ok(worstCaseFetchMs() < minutes * 60_000, `${worstCaseFetchMs()} ms must be < ${minutes} min`);
 });
 
 // ---------------------------------------------------------------------------
@@ -369,7 +485,7 @@ function repoFixture(version, scriptText = 'RUNNER_VERSION="${RUNNER_VERSION:-}"
   return root;
 }
 
-async function runMain({ version, fetchImpl, now = OUTAGE, online = true, scriptText, timeoutMs }) {
+async function runMain({ version, fetchImpl, now = OUTAGE, online = true, scriptText, timeoutMs, token = '', sleep }) {
   const root = repoFixture(version, scriptText);
   const failureJson = join(root, 'failure.json');
   const out = [];
@@ -381,6 +497,11 @@ async function runMain({ version, fetchImpl, now = OUTAGE, online = true, script
     now: () => now,
     backoffMs: 1,
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    ...(sleep === undefined ? {} : { sleep }),
+    // Injected, never read from the environment: CI may or may not export a
+    // GITHUB_TOKEN, and the deprecations branch must not depend on which.
+    token,
+    repo: 'owner/repo',
     log: (s) => out.push(`OUT ${s}`),
     error: (s) => out.push(`ERR ${s}`),
   });
@@ -426,7 +547,7 @@ test('main --online: an unreadable releases API exits 1 and says nothing was est
   );
 });
 
-test('main --online: a pin superseded past 60 days exits 1 with ::error', async () => {
+test('main --online: a pin superseded past 30 days exits 1 with ::error', async () => {
   const r = await runMain({ version: '2.335.0', fetchImpl: okFetch });
   // RED if the fail-verdict branch returns 0 (review X3). That is the alarm.
   assert.equal(r.code, 1, r.out);
@@ -436,32 +557,37 @@ test('main --online: a pin superseded past 60 days exits 1 with ::error', async 
   );
   assert.equal(r.failure?.class, 'defect');
   assert.match(r.failure?.remediation ?? '', /RUNNER_VERSION and ARG RUNNER_SHA256/);
-  // The ONE kind allowed to say "past the alarm threshold". RED if the
-  // superseded verdict were filed under any other kind.
+  // RED if the superseded verdict were filed under any other kind.
   assert.equal(r.failure?.signalId, 'runner-version-pin.pin-superseded');
-  assert.match(r.failure?.whyStopped ?? '', /past the alarm threshold/);
+  assert.match(r.failure?.whyStopped ?? '', /superseded for more than 30 days, GitHub's documented update window/);
+  // No token was given, so the verdict is the heuristic's, and the record says
+  // so. RED if the label were dropped from the finding.
+  assert.match(r.failure?.established[0].line ?? '', /\[verdict source: heuristic -- .*no token/);
   // One read, one attempt. RED if attempts were taken from FETCH_ATTEMPTS
   // rather than from the reads actually made (length 3).
   assert.equal(r.failure?.attempts.length, 1);
 });
 
-test('main --online: a pin 45 days superseded exits 0 with ::warning, and writes no failure', async () => {
-  // v2.337.0 published 2026-08-26T14:33:29Z; +45 days. Pin 2.336.0.
-  const now = Date.parse('2026-08-26T14:33:29Z') + 45 * DAY + 1000;
+test('main --online: a pin 20 days superseded exits 0 with ::warning, and writes no failure', async () => {
+  // v2.337.0 published 2026-08-26T14:33:29Z; +20 days. Pin 2.336.0.
+  const now = Date.parse('2026-08-26T14:33:29Z') + 20 * DAY + 1000;
   const r = await runMain({ version: '2.336.0', fetchImpl: okFetch, now });
-  // RED if warn were mapped to 1 (every warn day would fire the tracking
-  // issue) or if the warning line were dropped (the 30-day breach goes silent).
+  // RED if warn were mapped to 1, or if the warning line were dropped.
   assert.equal(r.code, 0, r.out);
-  assert.match(r.out, /OUT ::warning file=.*superseded for 45 day/);
+  assert.match(r.out, /OUT ::warning file=.*superseded for 20 day/);
   assert.equal(r.failure, null, 'a warn must not produce a failure record');
 });
 
-test('main --online: the latest release exits 0 with OK (positive control)', async () => {
+test('main --online: the latest release exits 0 with OK (positive control), labelled heuristic', async () => {
   const r = await runMain({ version: '2.337.0', fetchImpl: okFetch });
   // RED if main() returned 1 unconditionally -- which would satisfy both
   // exit-1 tests above while being useless.
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /OUT \[runner-version-pin\] OK \(online\): pin 2\.337\.0 is the latest release/);
+  // A green heuristic verdict must never read as an authoritative one. RED if
+  // the HEURISTIC warning or the source tag were dropped.
+  assert.match(r.out, /OUT ::warning::runner-version-pin: verdict is HEURISTIC/);
+  assert.match(r.out, /\[verdict source: heuristic -- GitHub's runner deprecations API was not read: no token/);
 });
 
 test('main: the offline floor fails before any network read', async () => {
@@ -480,8 +606,7 @@ test('main: the offline floor fails before any network read', async () => {
   // A's nit #2: this used to be filed as "superseded". RED if the offline
   // branch wrote any kind other than the Dockerfile one.
   assert.equal(r.failure?.signalId, 'runner-version-pin.dockerfile-pin-invalid');
-  assert.doesNotMatch(r.failure?.whyStopped ?? '', /alarm threshold/);
-  assert.match(r.failure?.whyStopped ?? '', /below the known registration floor/);
+  assertNotTheAlarm(r.failure, /below the known registration floor/);
 });
 
 test('R7: a MALFORMED Dockerfile pin is dockerfile-pin-invalid, before any network read', async () => {
@@ -536,9 +661,14 @@ test('the failure record renders a CLASSIFIED tracking-issue body through the re
 
 const payloadFetch = (payload) => async () => ({ ok: true, status: 200, json: async () => payload });
 
-/** Every record that is NOT the alarm must not claim the alarm. Paired with a positive match. */
+/**
+ * Every record that is NOT the alarm must not tell the operator to bump the pin.
+ * Paired with a positive match on what it does say. (Round 4: the old anchor,
+ * the phrase "alarm threshold", no longer appears in any kind, so a check on it
+ * could not fail. The remediation is what an operator acts on.)
+ */
 function assertNotTheAlarm(failure, positive) {
-  assert.doesNotMatch(failure?.whyStopped ?? '', /alarm threshold/, `${failure?.signalId} must not claim the alarm`);
+  assert.doesNotMatch(failure?.remediation ?? '', /^Bump ARG RUNNER_VERSION/, `${failure?.signalId} must not say to bump the pin`);
   assert.match(failure?.whyStopped ?? '', positive, `${failure?.signalId} whyStopped must say what happened`);
 }
 
@@ -626,13 +756,18 @@ test('R7: every FAILURE_KINDS class and remediationKind exists in the failure ta
   // Positive control on the table itself: RED if a kind were deleted.
   assert.deepEqual(kinds.sort(), [
     'dockerfile-pin-invalid',
+    'pin-deprecation-scheduled',
     'pin-not-released',
     'pin-superseded',
     'provision-default-disagrees',
+    'releases-forbidden',
     'releases-rejected',
     'releases-unreadable',
     'releases-unusable',
   ]);
+  // Review A-4: a refused token is a PERMISSION fault. RED if releases-forbidden
+  // were classed transient (retryable) or config.
+  assert.equal(FAILURE_KINDS['releases-forbidden'].class, 'permission');
   for (const kind of kinds) {
     const row = FAILURE_KINDS[kind];
     // RED on an invented class such as 'stale', or 'unknown' (which the
@@ -647,10 +782,11 @@ test('R7: every FAILURE_KINDS class and remediationKind exists in the failure ta
     // claimed retryable:true, or a defect claimed a re-run could fix it.
     assert.equal(row.retryable, row.class === 'transient', `${kind}: retryable disagrees with class ${row.class}`);
   }
-  // Exactly one kind claims the alarm. RED if any other row's whyStopped says it.
+  // Exactly the two stale-pin kinds tell the operator to bump. RED if any other
+  // row's remediation says it (a mangled payload filed as "bump the pin").
   assert.deepEqual(
-    kinds.filter((k) => /alarm threshold/.test(FAILURE_KINDS[k].whyStopped)),
-    ['pin-superseded'],
+    kinds.filter((k) => /^Bump ARG RUNNER_VERSION/.test(FAILURE_KINDS[k].remediation)),
+    ['pin-deprecation-scheduled', 'pin-superseded'],
   );
 });
 
@@ -731,12 +867,27 @@ test('attempts: a 429 then a 200 [] records the TWO reads made', async () => {
  * loop has nothing keeping it alive; on Node 20 the runner then cancels the
  * file with "Promise resolution is still pending but the event loop has already
  * resolved" (measured in CI at 1cf3079b2; Node 24 happened to pass).
+ *
+ * The keep-alive is CAPPED at KEEP_ALIVE_CAP_MS (review A-5). Uncapped, a
+ * regression whose signal never aborts held the file's process open forever:
+ * node:test cancelled the two timeout tests at 10 s, and then the ref'd interval
+ * kept the process alive until an outer kill (the reviewer's arm N20, killed at
+ * 200 s). check-node-test-suites.mjs has no per-file timeout, so in CI that
+ * would hang the lane instead of failing it. The cap outlives node:test's 10 s
+ * per-test timeout, so the cancel still fires first and the file exits 1.
  */
+const KEEP_ALIVE_CAP_MS = 15_000;
 function blackHole(seen) {
   return (url, init) => {
     seen.push(init?.signal);
     return new Promise((_, reject) => {
       const keepAlive = setInterval(() => {}, 1000);
+      const cap = setTimeout(() => clearInterval(keepAlive), KEEP_ALIVE_CAP_MS);
+      cap.unref();
+      const release = () => {
+        clearInterval(keepAlive);
+        clearTimeout(cap);
+      };
       // No signal -> TypeError here -> the attempt fails with a message the
       // assertions below do not accept. That is how a removed signal goes RED
       // rather than hanging.
@@ -744,13 +895,13 @@ function blackHole(seen) {
         init.signal.addEventListener(
           'abort',
           () => {
-            clearInterval(keepAlive);
+            release();
             reject(init.signal.reason);
           },
           { once: true },
         );
       } catch (e) {
-        clearInterval(keepAlive);
+        release();
         throw e;
       }
     });
@@ -893,6 +1044,31 @@ test('workflow: the check step re-raises the measured exit code', () => {
   const iNode = lines.findIndex((l) => l.startsWith('node scripts/ci/check-runner-version-pin.mjs'));
   assert.ok(iNode > 0 && lines[iNode - 1] === 'set +e', 'set +e must directly precede the checker');
   assert.ok(lines.indexOf('rc=$?') > iNode, 'rc=$? must follow the checker');
+  // Review A-3: `exit "$rc"` is one of TWO ways to keep the result. The other
+  // way to discard it is continue-on-error, which lets the job conclude success
+  // on a failed check, so failure() is false and notify never files. RED on the
+  // reviewer's N7a (`continue-on-error: true` on this step) and N7b (on the
+  // pin-age job). The exit "$rc" assertion above is the positive pair.
+  assert.equal(check['continue-on-error'], undefined, 'the check step must not carry continue-on-error');
+  assert.equal(jobs['pin-age']['continue-on-error'], undefined, 'the pin-age job must not carry continue-on-error');
+});
+
+test('workflow: no job or step anywhere carries continue-on-error', () => {
+  const { jobs } = wf();
+  const sites = [];
+  for (const [name, job] of Object.entries(jobs)) {
+    if (job['continue-on-error'] !== undefined) sites.push(`job ${name}`);
+    for (const [i, s] of (job.steps ?? []).entries()) {
+      if (s['continue-on-error'] !== undefined) sites.push(`${name} step[${i}]`);
+    }
+  }
+  // Positive control: the walk reached both jobs and their steps. RED if the
+  // parse shape changed so this loop saw nothing (2 jobs, 4 steps today).
+  assert.deepEqual(Object.keys(jobs).sort(), ['notify', 'pin-age']);
+  assert.equal(Object.values(jobs).reduce((n, j) => n + (j.steps?.length ?? 0), 0), 4);
+  // RED on continue-on-error at any job or step, including notify's: a
+  // swallowed notifier failure is an alarm that never reaches anyone.
+  assert.deepEqual(sites, []);
 });
 
 test('workflow: issues:write is held ONLY by the notify job', () => {
@@ -936,4 +1112,256 @@ test('workflow: the record and the result reach the notifier', () => {
   assert.match(norm(step.run.v), /--result "\$\{\{ needs\.pin-age\.result \}\}"/);
   // Never on the self-hosted runner this alarm is about.
   for (const [name, job] of Object.entries(jobs)) assert.equal(job['runs-on']?.v, 'ubuntu-latest', name);
+});
+
+// ---------------------------------------------------------------------------
+// Round 4: GitHub's deprecation schedule (review A-1, the blocker)
+// ---------------------------------------------------------------------------
+//
+// Fixtures are the RESPONSES measured on 2026-09-29 from
+// GET /repos/fgarofalo56/csa-inabox/actions/runners/deprecations/{version}
+// with X-GitHub-Api-Version 2026-03-10 -- not transcribed from the docs.
+
+const DEP_2_328 = { runner_version: '2.328.0', runtime_deprecates_at: '2025-12-16T17:40:26Z' };
+const DEP_2_337 = { runner_version: '2.337.0', runtime_deprecates_at: null };
+const NOT_FOUND = { message: 'Not Found', status: '404' };
+const TOKEN = 'not-a-real-token';
+
+/** Routes the two endpoints main() reads; records every URL and header set it was asked for. */
+function apiRouter({ deprecation, releases = () => res(200, {}, RELEASES) }) {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, headers: init?.headers ?? {} });
+    if (url.includes('/actions/runners/deprecations/')) return deprecation(url);
+    if (url.includes('/repos/actions/runner/releases')) return releases(url);
+    throw new Error(`unexpected URL ${url}`);
+  };
+  const depCalls = () => calls.filter((c) => c.url.includes('/deprecations/'));
+  return { fetchImpl, calls, depCalls };
+}
+
+test('evaluateDeprecation: the measured 2.328.0 schedule is PAST at the outage; the measured 2.337.0 one is clear', () => {
+  const past = evaluateDeprecation({ pin: '2.328.0', schedule: DEP_2_328, now: OUTAGE });
+  // RED if the past-date branch were removed (the verdict would be warn or ok).
+  assert.equal(past.verdict, 'fail');
+  assert.equal(past.kind, 'pin-deprecation-scheduled');
+  assert.match(past.message, /already PAST \(runtime_deprecates_at 2025-12-16T17:40:26\.000Z\)/);
+  // null runtime, registration ABSENT (as measured): nothing scheduled. RED if an
+  // absent field were read as a date (Date.parse(undefined) is NaN -> unusable).
+  const clear = evaluateDeprecation({ pin: '2.337.0', schedule: DEP_2_337, now: OUTAGE });
+  assert.equal(clear.verdict, 'ok');
+  assert.match(clear.message, /GitHub schedules no deprecation for 2\.337\.0/);
+});
+
+test('evaluateDeprecation: fails INSIDE 30 days, warns outside, on either date field', () => {
+  assert.equal(DEPRECATION_WINDOW_DAYS, 30);
+  const date = Date.parse('2026-11-01T00:00:00Z');
+  const at = (now, field = 'runtime_deprecates_at') =>
+    evaluateDeprecation({ pin: '2.337.0', schedule: { runner_version: '2.337.0', [field]: '2026-11-01T00:00:00Z' }, now });
+  // Boundary pair: exactly 30 days out fails, one second earlier warns. RED if
+  // the window were `<` (30 days -> warn) or dropped (both warn).
+  assert.equal(at(date - 30 * DAY).verdict, 'fail');
+  assert.equal(at(date - 30 * DAY - 1000).verdict, 'warn');
+  // registration_deprecates_at alone is enough. RED if only the runtime field were read.
+  assert.equal(at(date - 10 * DAY, 'registration_deprecates_at').verdict, 'fail');
+  assert.equal(at(date - 10 * DAY, 'registration_deprecates_at').kind, 'pin-deprecation-scheduled');
+  // The SOONER of two dates decides. Runtime is 100 days out, registration 5:
+  // RED if the later date were used (verdict warn).
+  const both = evaluateDeprecation({
+    pin: '2.337.0',
+    schedule: {
+      runner_version: '2.337.0',
+      runtime_deprecates_at: new Date(date + 100 * DAY).toISOString(),
+      registration_deprecates_at: new Date(date + 5 * DAY).toISOString(),
+    },
+    now: date,
+  });
+  assert.equal(both.verdict, 'fail');
+  assert.match(both.message, /registration_deprecates_at is 5 day\(s\) away/);
+});
+
+test('evaluateDeprecation: a body it cannot trust is UNUSABLE, never a pass', () => {
+  // Each row is RED if that shape were read as "nothing scheduled" (ok).
+  const rows = [
+    ['an array', []],
+    ['null', null],
+    ['another version', { runner_version: '2.336.0', runtime_deprecates_at: null }],
+    ['a non-date', { runner_version: '2.337.0', runtime_deprecates_at: 'soon' }],
+    ['the 404 body', NOT_FOUND],
+  ];
+  for (const [label, schedule] of rows) {
+    assert.equal(evaluateDeprecation({ pin: '2.337.0', schedule, now: OUTAGE }).verdict, 'unusable', label);
+  }
+});
+
+test('incident replay: the 30-day rules fire a month ahead of GitHub\'s runtime date; the old 60-day rule fired 27 hours ahead', () => {
+  // Daily cron 14:23Z, from 2.329.0's release until 2.328.0's measured runtime
+  // deprecation. For each rule, find the first run that FAILS.
+  const deadline = Date.parse(DEP_2_328.runtime_deprecates_at);
+  const firstFail = (pred) => {
+    for (let t = Date.parse('2025-10-15T14:23:00Z'); t < deadline; t += DAY) if (pred(t)) return t;
+    return null;
+  };
+  const heuristic30 = firstFail((t) => evaluateAge({ pin: '2.328.0', releases: RELEASES, now: t }).verdict === 'fail');
+  const heuristic60 = firstFail((t) => evaluateAge({ pin: '2.328.0', releases: RELEASES, now: t, failDays: 60 }).verdict === 'fail');
+  const api = firstFail((t) => evaluateDeprecation({ pin: '2.328.0', schedule: DEP_2_328, now: t }).verdict === 'fail');
+  const leadHours = (t) => Math.floor((deadline - t) / 3_600_000);
+  // The reviewer's arithmetic, re-derived: 60 days first fails 2025-12-15, 27 h
+  // before the deadline. RED if the fixture or the clock rule moved.
+  assert.equal(new Date(heuristic60).toISOString(), '2025-12-15T14:23:00.000Z');
+  assert.equal(leadHours(heuristic60), 27);
+  // The new heuristic: first fails 2025-11-15, 31 days ahead. RED if FAIL_DAYS
+  // went back to 60 (this would equal heuristic60).
+  assert.equal(new Date(heuristic30).toISOString(), '2025-11-15T14:23:00.000Z');
+  assert.ok(leadHours(heuristic30) > 30 * 24, `heuristic lead ${leadHours(heuristic30)} h`);
+  // The API rule: first run inside 30 days of the date. RED if the window were dropped
+  // (it would first fail only after the deadline, so firstFail returns null).
+  assert.equal(new Date(api).toISOString(), '2025-11-17T14:23:00.000Z');
+  assert.ok(leadHours(api) >= 29 * 24, `api lead ${leadHours(api)} h`);
+});
+
+test('main --online, API readable: a deprecation inside 30 days fails as pin-deprecation-scheduled', async () => {
+  const now = Date.parse('2026-10-01T00:00:00Z');
+  const { fetchImpl, depCalls } = apiRouter({
+    deprecation: () => res(200, {}, { runner_version: '2.337.0', runtime_deprecates_at: '2026-10-11T00:00:00Z' }),
+  });
+  const r = await runMain({ version: '2.337.0', fetchImpl, now, token: TOKEN });
+  // Pin 2.337.0 is the latest release, so the heuristic alone says ok: only the
+  // API signal can produce this exit 1. RED if main ignored the API verdict.
+  assert.equal(r.code, 1, r.out);
+  assert.equal(r.failure?.signalId, 'runner-version-pin.pin-deprecation-scheduled');
+  assert.equal(r.failure?.class, 'defect');
+  assert.match(r.failure?.established[0].line ?? '', /runtime_deprecates_at is 10 day\(s\) away, within 30/);
+  assert.match(r.failure?.established[0].line ?? '', /\[verdict source: deprecations API \+ release-age heuristic\]/);
+  // The request carried the token and the measured API version. RED if either
+  // were dropped (the endpoint answers 401 without a token).
+  assert.equal(depCalls().length, 1);
+  assert.equal(depCalls()[0].headers.Authorization, `Bearer ${TOKEN}`);
+  assert.equal(depCalls()[0].headers['X-GitHub-Api-Version'], '2026-03-10');
+  assert.equal(depCalls()[0].url, deprecationsUrl('owner/repo', '2.337.0'));
+});
+
+test('main --online, API readable: the measured null schedule passes, AUTHORITATIVELY', async () => {
+  const { fetchImpl } = apiRouter({ deprecation: () => res(200, {}, DEP_2_337) });
+  const r = await runMain({ version: '2.337.0', fetchImpl, token: TOKEN });
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /OK \(online\): GitHub schedules no deprecation for 2\.337\.0; pin 2\.337\.0 is the latest release \[verdict source: deprecations API/);
+  // RED if an API verdict were still labelled heuristic.
+  assert.doesNotMatch(r.out, /verdict is HEURISTIC/);
+});
+
+test('main --online, API readable: a far-off deprecation warns and files nothing', async () => {
+  const { fetchImpl } = apiRouter({
+    deprecation: () => res(200, {}, { runner_version: '2.337.0', runtime_deprecates_at: '2027-06-01T00:00:00Z' }),
+  });
+  const r = await runMain({ version: '2.337.0', fetchImpl, token: TOKEN });
+  // RED if a scheduled-but-distant date failed the run, or went unmentioned.
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /OUT ::warning file=.*GitHub has scheduled a deprecation for 2\.337\.0/);
+  assert.equal(r.failure, null);
+});
+
+test('main --online: both signals failing keep one finding each, the API one first', async () => {
+  // 2.335.0 is 112 days superseded at the outage (heuristic fail) AND its
+  // schedule is past. RED if either finding were dropped.
+  const { fetchImpl } = apiRouter({
+    deprecation: () => res(200, {}, { runner_version: '2.335.0', runtime_deprecates_at: '2026-09-01T00:00:00Z' }),
+  });
+  const r = await runMain({ version: '2.335.0', fetchImpl, token: TOKEN });
+  assert.equal(r.code, 1, r.out);
+  assert.deepEqual(
+    r.failure?.established.map((e) => e.signal),
+    ['pin-deprecation-scheduled', 'pin-superseded'],
+  );
+});
+
+test('main --online, deprecations 404: the version is unknown to GitHub, stated, and the verdict is heuristic', async () => {
+  const { fetchImpl, depCalls } = apiRouter({ deprecation: () => res(404, {}, NOT_FOUND) });
+  const r = await runMain({ version: '2.337.0', fetchImpl, token: TOKEN });
+  // 2.337.0 IS a release, so the heuristic passes; the 404 is not a pass by
+  // itself -- it is named. RED if a 404 read as "nothing scheduled" (the
+  // HEURISTIC line would be missing), or were retried (3 calls).
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /verdict is HEURISTIC.*GitHub has no deprecation schedule for 2\.337\.0 \(HTTP 404; it answers 404 for a version it does not know\)/);
+  assert.equal(depCalls().length, 1);
+  // And an unpublished pin still fails, on the release list: the 404 cannot
+  // rescue a tarball that would not download.
+  const ghost = await runMain({ version: '2.338.0', fetchImpl, token: TOKEN });
+  assert.equal(ghost.code, 1, ghost.out);
+  assert.equal(ghost.failure?.signalId, 'runner-version-pin.pin-not-released');
+});
+
+test('main --online, deprecations 403: a refused token is named, not retried, and the verdict is heuristic', async () => {
+  // A bare 403 (no rate-limit headers) is what a token without Administration:
+  // read gets. RED if it were retried (3 calls), read as a pass without the
+  // label, or filed as a failure (exit 1 on a pin that is the latest release).
+  const { fetchImpl, depCalls } = apiRouter({ deprecation: () => res(403, { 'x-ratelimit-remaining': '4999' }) });
+  const r = await runMain({ version: '2.337.0', fetchImpl, token: TOKEN });
+  assert.equal(r.code, 0, r.out);
+  assert.equal(depCalls().length, 1);
+  assert.match(r.out, /verdict is HEURISTIC.*the token was refused \(HTTP 403\); GitHub documents this endpoint under the "Administration" repository permission \(read\)/);
+  // The heuristic still decides: a stale pin fails even with the API refused.
+  const stale = await runMain({ version: '2.335.0', fetchImpl, token: TOKEN });
+  assert.equal(stale.code, 1);
+  assert.equal(stale.failure?.signalId, 'runner-version-pin.pin-superseded');
+  assert.match(stale.failure?.established[0].line ?? '', /\[verdict source: heuristic -- .*HTTP 403/);
+});
+
+test('main --online, deprecations rate-limited: retried, then named, and the verdict is heuristic', async () => {
+  const waits = [];
+  const { fetchImpl, depCalls } = apiRouter({ deprecation: () => res(429, { 'retry-after': '2' }) });
+  const r = await runMain({ version: '2.337.0', fetchImpl, token: TOKEN, sleep: async (ms) => waits.push(ms) });
+  assert.equal(r.code, 0, r.out);
+  // RED if a 429 on this endpoint were not retried (1 call), or retry-after ignored.
+  assert.equal(depCalls().length, 3);
+  assert.deepEqual(waits, [2000, 2000]);
+  assert.match(r.out, /verdict is HEURISTIC.*could not read the runner deprecations API after 3 attempt\(s\): HTTP 429/);
+});
+
+test('main --online, no token: the deprecations endpoint is not called, and the verdict says why', async () => {
+  const { fetchImpl, depCalls } = apiRouter({ deprecation: () => res(200, {}, DEP_2_337) });
+  const r = await runMain({ version: '2.337.0', fetchImpl, token: '' });
+  // RED if an unauthenticated call were made (it answers 401 -- measured).
+  assert.equal(depCalls().length, 0);
+  assert.match(r.out, /verdict is HEURISTIC.*no token in GITHUB_TOKEN or GH_TOKEN/);
+});
+
+test('main --online, a 200 for the wrong version: unusable, so heuristic -- never a pass', async () => {
+  const { fetchImpl } = apiRouter({ deprecation: () => res(200, {}, DEP_2_328) });
+  const r = await runMain({ version: '2.337.0', fetchImpl, token: TOKEN });
+  // RED if a body about another version were trusted.
+  assert.match(r.out, /verdict is HEURISTIC.*answered for runner_version '2\.328\.0', not the pin '2\.337\.0'/);
+});
+
+test('main --online, releases 403 not rate-limited: releases-forbidden (permission), one attempt', async () => {
+  const { fetchImpl } = apiRouter({
+    deprecation: () => res(200, {}, DEP_2_337),
+    releases: () => res(403, { 'x-ratelimit-remaining': '4999' }),
+  });
+  const r = await runMain({ version: '2.337.0', fetchImpl, token: TOKEN });
+  assert.equal(r.code, 1, r.out);
+  // Review A-4. RED if this were filed as releases-unreadable (transient,
+  // retryable:true) -- the class the code did not establish.
+  assert.equal(r.failure?.signalId, 'runner-version-pin.releases-forbidden');
+  assert.equal(r.failure?.class, 'permission');
+  assert.equal(r.failure?.retryable, false);
+  assert.equal(r.failure?.attempts.length, 1);
+  assertNotTheAlarm(r.failure, /refused the token/);
+});
+
+test('readDeprecation never throws: every outcome is a source plus a reason', async () => {
+  // RED if a network error escaped as an exception (main would crash rather
+  // than fall back to the heuristic).
+  const out = await readDeprecation({
+    version: '2.337.0',
+    repo: 'owner/repo',
+    token: TOKEN,
+    fetchImpl: async () => {
+      throw new Error('getaddrinfo ENOTFOUND api.github.com');
+    },
+    backoffMs: 1,
+    sleep: async () => {},
+  });
+  assert.equal(out.source, 'unavailable');
+  assert.match(out.reason, /after 3 attempt\(s\): getaddrinfo ENOTFOUND/);
 });

@@ -166,14 +166,27 @@ loudly and exits non-zero** — it never silently skips.
 > `scripts/ci/check-runner-version-pin.mjs` guards it. On every PR
 > (`loom-guardrails.yml`) it checks the pin is well-formed and at or above the last
 > reported minimum. Daily, in its own workflow (`runner-version-pin.yml`,
-> GitHub-hosted), it warns once the pin has been superseded for 30 days, which is
-> GitHub's documented update window, and fails at 60. A failure opens or updates
-> the issue "deploy: runner-version-pin is failing", and the issue names which
-> failure it was. Only `runner-version-pin.pin-superseded` means the pin is
-> stale: bump it and rebuild the image under a new tag. The `releases-*` kinds
-> mean the releases API could not be read, refused the read, or gave an unusable
-> answer, so the pin's age was not established. Follow the issue's remediation
-> line; do not bump the pin on one of those.
+> GitHub-hosted), it reads two signals and fails on either:
+>
+> - **GitHub's deprecation schedule** for the pinned version
+>   (`GET /repos/{owner}/{repo}/actions/runners/deprecations/{version}`). It fails
+>   when `runtime_deprecates_at` or `registration_deprecates_at` is past or less
+>   than 30 days away. GitHub documents this endpoint under the "Administration"
+>   repository permission, which a workflow `GITHUB_TOKEN` cannot be granted, so
+>   in the daily run the read is expected to be refused. The run then says, on
+>   every line, that its verdict is **heuristic**, and why.
+> - **The release-age heuristic.** GitHub's docs say a runner that is not updated
+>   within 30 days of a new release will not be queued jobs. The check warns once
+>   the pin has been superseded for more than 14 days (a notice only) and fails
+>   at more than 30.
+>
+> A failure opens or updates the issue "deploy: runner-version-pin is failing",
+> and the issue names which failure it was. `runner-version-pin.pin-deprecation-scheduled`
+> and `runner-version-pin.pin-superseded` mean the pin is stale: bump it and
+> rebuild the image under a new tag. The `releases-*` kinds mean the releases
+> API could not be read, refused the token, or gave an unusable answer, so the
+> pin's age was not established. Follow the issue's remediation line; do not
+> bump the pin on one of those.
 
 The durable IaC mirror is
 `platform/fiab/bicep/modules/admin-plane/gh-runner-job.bicep` (see the `// TODO`

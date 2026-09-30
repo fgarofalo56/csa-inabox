@@ -9,9 +9,20 @@ name: runner-version-pin
 # loom-aca]` workflow stranded. The pin had been superseded for 350 days with
 # nothing watching it. Each execution is a fresh replica that must REGISTER
 # before any self-update could run, so a pin below GitHub's minimum can never
-# come up. GitHub publishes no machine-readable minimum; it documents a 30-day
-# update window. This workflow warns once the pin has been superseded for more
-# than 30 days and FAILS at more than 60 (the reasoning is in the script header).
+# come up.
+#
+# WHAT IT READS. Two signals, and either one failing fails the run:
+#   - GitHub's deprecation schedule for the pinned version,
+#     GET /repos/{owner}/{repo}/actions/runners/deprecations/{version}. It fails
+#     when a runtime or registration deprecation date is past or within 30 days.
+#     GitHub documents that endpoint under the "Administration" repository
+#     permission, which this workflow's GITHUB_TOKEN cannot be granted, so the
+#     read is expected to be refused here. It is still attempted every run, and
+#     the refusal is printed as the reason the verdict is "heuristic".
+#   - The release-age heuristic: GitHub's docs say a runner that is not updated
+#     within 30 days of a new release will not be queued jobs. It warns once the
+#     pin has been superseded for more than 14 days and FAILS at more than 30.
+# The reasoning, and what each failure kind means, is in the script header.
 #
 # WHY ITS OWN WORKFLOW. It was first placed as a step in deploy-staleness.yml,
 # which had failed 56 of 56 recorded runs. A red step inside a workflow that is
@@ -24,7 +35,7 @@ name: runner-version-pin
 # alarm matters. This must never run on `loom-aca`.
 #
 # NOT a required PR check: the verdict is a function of the calendar, not of a
-# diff, so as a required context it would red every open PR on day 61. The
+# diff, so as a required context it would red every open PR on day 31. The
 # pull_request trigger is path-filtered to the files that decide the verdict,
 # and never files an issue.
 
@@ -70,10 +81,12 @@ jobs:
 
       # Exit code measured directly, not through a pipe: the default shell is
       # `bash -e {0}` with NO pipefail, so `node … | tee` would report tee's 0.
-      # Each fetch attempt is bounded at 30 s by the checker, so a hung API ends
-      # as a classified transient failure well inside timeout-minutes, not as a
-      # cancelled job that files nothing.
-      - name: Check the pin against the actions/runner releases
+      # Each fetch attempt is bounded at 30 s by the checker and each retry wait
+      # at 60 s, so both reads together end within 420 s: a hung API ends as a
+      # classified failure inside timeout-minutes, not as a cancelled job that
+      # files nothing. No continue-on-error, on this step or this job: either
+      # one would turn a failed check into a green job, and notify would never run.
+      - name: Check the pin against GitHub's deprecation schedule and the releases
         id: check
         shell: bash
         env:
