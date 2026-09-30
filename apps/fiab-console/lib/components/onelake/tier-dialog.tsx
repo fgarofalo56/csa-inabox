@@ -1,17 +1,25 @@
 'use client';
 
 import { clientFetch } from '@/lib/client-fetch';
+import { isAdminOnlyRefusal, refusalText, type RefusalEnvelope } from '@/lib/util/admin-refusal';
+import { AdminOnlyNotice, useTenantAdminGate } from '@/lib/components/shared/admin-only-notice';
+import { TIER_CHANGE_ADMIN_ONLY } from '@/lib/util/admin-only-copy';
 /**
  * TierDialog — change the OneLake / ADLS Gen2 access tier of a single blob.
  *
  * Three tiers: Hot / Cool / Cold (Archive is read-only here — rehydration takes
  * hours and is handled outside the browser). The dialog:
- *   - fetches the current tier live from GET /api/onelake/tier on open;
+ *   - fetches the current tier live from GET /api/onelake/tier on open (any
+ *     role on the lakehouse can read it);
  *   - offers a RadioGroup of Hot / Cool / Cold;
  *   - shows an early-deletion-penalty MessageBar when downgrading
  *     (Cool min 30 d, Cold min 90 d);
  *   - shows a Copy-Blob notice when upgrading from a cooler tier;
  *   - PUTs the change and reports the real method used (set | copy).
+ *
+ * Changing the tier (PUT) is tenant-admin only for now (#4619): a non-admin
+ * sees the current tier, the controls disabled, and the reason. A 403
+ * `admin_only` answer renders the envelope's reason and remediation.
  *
  * No mock data, no Fabric dependency — backed by the Azure blob data-plane in
  * adls-client.ts. The OneLake-native tier surface in Fabric is preview, so the
@@ -52,6 +60,12 @@ export type BlobAccessTier = 'Hot' | 'Cool' | 'Cold';
 interface TierDialogProps {
   open: boolean;
   onOpenChange: (v: boolean) => void;
+  /**
+   * The lakehouse the file belongs to. The route checks the caller's access
+   * to this item and that `path` lies under its storage root (#4619); without
+   * it only a tenant admin is served.
+   */
+  lakehouseId?: string;
   container: string;
   /** Full blob path within the container (e.g. "Files/data/x.parquet"). */
   path: string;
@@ -63,7 +77,16 @@ function tierOrder(t: string): number {
   return t === 'Hot' ? 2 : t === 'Cool' ? 1 : t === 'Cold' ? 0 : -1;
 }
 
-export function TierDialog({ open, onOpenChange, container, path, onTierChanged }: TierDialogProps) {
+/** GET query string; `lakehouseId` first so the route can item-scope the read. */
+export function tierQuery(lakehouseId: string | undefined, container: string, path: string): string {
+  const qs = new URLSearchParams();
+  if (lakehouseId) qs.set('lakehouseId', lakehouseId);
+  qs.set('container', container);
+  qs.set('path', path);
+  return qs.toString();
+}
+
+export function TierDialog({ open, onOpenChange, lakehouseId, container, path, onTierChanged }: TierDialogProps) {
   const s = useStyles();
   const [currentTier, setCurrentTier] = useState<BlobAccessTier | 'Archive' | null>(null);
   const [loading, setLoading] = useState(false);
@@ -71,6 +94,9 @@ export function TierDialog({ open, onOpenChange, container, path, onTierChanged 
   const [selectedTier, setSelectedTier] = useState<BlobAccessTier>('Hot');
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const adminGate = useTenantAdminGate();
+  const [refused, setRefused] = useState<RefusalEnvelope | null>(null);
+  const cannotWrite = !adminGate.allowed;
 
   // Fetch the current tier whenever the dialog opens for a file.
   useEffect(() => {
@@ -78,20 +104,21 @@ export function TierDialog({ open, onOpenChange, container, path, onTierChanged 
     setCurrentTier(null);
     setLoadError(null);
     setResult(null);
+    setRefused(null);
     setLoading(true);
-    clientFetch(`/api/onelake/tier?container=${encodeURIComponent(container)}&path=${encodeURIComponent(path)}`)
-      .then((r) => r.json())
-      .then((j) => {
+    clientFetch(`/api/onelake/tier?${tierQuery(lakehouseId, container, path)}`)
+      .then(async (r) => ({ status: r.status, j: await r.json() }))
+      .then(({ status, j }) => {
         if (j.ok && j.tier) {
           setCurrentTier(j.tier);
           if (['Hot', 'Cool', 'Cold'].includes(j.tier)) setSelectedTier(j.tier as BlobAccessTier);
         } else {
-          setLoadError(j.error || 'Could not read the current tier.');
+          setLoadError(refusalText(j, status) || 'Could not read the current tier.');
         }
       })
       .catch((e) => setLoadError(String(e)))
       .finally(() => setLoading(false));
-  }, [open, container, path]);
+  }, [open, lakehouseId, container, path]);
 
   const isArchive = currentTier === 'Archive';
   const isDowngrade = !!currentTier && tierOrder(selectedTier) < tierOrder(currentTier);
@@ -99,18 +126,21 @@ export function TierDialog({ open, onOpenChange, container, path, onTierChanged 
   const isSame = currentTier === selectedTier;
 
   const submit = async () => {
-    if (!container || !path || isSame || isArchive) return;
+    if (!container || !path || isSame || isArchive || cannotWrite) return;
     setBusy(true);
     setResult(null);
+    setRefused(null);
     try {
       const r = await clientFetch('/api/onelake/tier', {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ container, path, tier: selectedTier }),
+        body: JSON.stringify({ ...(lakehouseId ? { lakehouseId } : {}), container, path, tier: selectedTier }),
       });
       const j = await r.json();
-      if (!j.ok) {
-        setResult({ ok: false, message: j.error || `HTTP ${r.status}` });
+      if (isAdminOnlyRefusal(j)) {
+        setRefused(j);
+      } else if (!j.ok) {
+        setResult({ ok: false, message: refusalText(j, r.status) });
       } else {
         setResult({
           ok: true,
@@ -159,11 +189,17 @@ export function TierDialog({ open, onOpenChange, container, path, onTierChanged 
                 </MessageBar>
               )}
 
+              {refused ? (
+                <AdminOnlyNotice reason={refused.reason} remediation={refused.remediation} />
+              ) : adminGate.refused && (
+                <AdminOnlyNotice {...TIER_CHANGE_ADMIN_ONLY} />
+              )}
+
               <Field label="Select new tier" required>
                 <RadioGroup
                   value={selectedTier}
                   onChange={(_, d) => { setSelectedTier(d.value as BlobAccessTier); setResult(null); }}
-                  disabled={loading || busy || isArchive}
+                  disabled={loading || busy || isArchive || cannotWrite}
                 >
                   <Radio value="Hot" label="Hot — highest storage cost, lowest access cost; no minimum retention" />
                   <Radio value="Cool" label="Cool — lower storage cost; 30-day minimum retention" />
@@ -200,7 +236,7 @@ export function TierDialog({ open, onOpenChange, container, path, onTierChanged 
             <Button appearance="subtle" disabled={busy} onClick={() => onOpenChange(false)}>Cancel</Button>
             <Button
               appearance="primary"
-              disabled={busy || loading || !!loadError || isSame || isArchive}
+              disabled={busy || loading || !!loadError || isSame || isArchive || cannotWrite}
               onClick={submit}
             >
               {busy ? <Spinner size="tiny" /> : `Set to ${selectedTier}`}
