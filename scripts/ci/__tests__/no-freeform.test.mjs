@@ -613,13 +613,13 @@ test('the measured population is real: hundreds of sites, and not everything is 
   const total = Object.values(current).reduce((a, b) => a + b, 0);
   assert.ok(files.length > 1000, `only ${files.length} tracked .tsx enumerated`);
   assert.ok(sites > 1800, `only ${sites} free-text sites extracted`);
-  // 178 is MIN_LIVE_SITES in check-no-freeform.mjs, and the two must move
+  // 170 is MIN_LIVE_SITES in check-no-freeform.mjs, and the two must move
   // TOGETHER or one of them stops meaning anything. Both are the same control —
   // "the detector still detects" — and this one was 200 while the guard's was
   // 200, which is how it went red the moment console-ui-w2 removed real sites
   // (211 -> 187) rather than when the classifier broke. Lower BOTH in the same
   // PR that removes sites; never lower this one alone.
-  assert.ok(total > 178, `only ${total} violations classified`);
+  assert.ok(total > 170, `only ${total} violations classified`);
   // A classifier that flagged every free-text box would be useless in the other
   // direction: `<Input>` for a display name is correct and there are thousands.
   assert.ok(total < sites / 4, `${total}/${sites} sites flagged — the classifier is no longer discriminating`);

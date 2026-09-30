@@ -501,8 +501,10 @@ const MIN_FREETEXT_SITES = 1800;
  *  Deliberately NOT zero — a ratchet only fails on a RISE. Lower it in the SAME
  *  PR that actually removes the sites. Kept at roughly the same proportional
  *  headroom the 200/211 pair had (~95%), so an ordinary fix does not trip it
- *  but a detector COLLAPSE — the failure this floor exists for — still does. */
-const MIN_LIVE_SITES = 178;
+ *  but a detector COLLAPSE — the failure this floor exists for — still does.
+ *  Lowered 178 -> 170 in #4838, which removed the access-request inbox scope
+ *  input: the measured population was 178 there (~95% headroom kept). */
+const MIN_LIVE_SITES = 170;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PART 1 — raw-JSON-config surfaces (unchanged behaviour, HARD ZERO)
