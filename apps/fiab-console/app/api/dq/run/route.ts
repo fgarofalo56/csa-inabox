@@ -11,19 +11,18 @@
  * the backend isn't wired. No Fabric dependency.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { runDqRules, dqRunConfigGate, type DqRunBackend } from '@/lib/azure/data-quality-client';
 import { appendDqRun, type DqRunRecord } from '@/lib/azure/dq-run-store';
 import { apiServerError } from '@/lib/api/respond';
+import { WarehouseResolutionError, warehouseErrorBody, warehouseErrorStatus } from '@/lib/azure/databricks-sql-warehouse';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const BACKENDS: DqRunBackend[] = ['kusto', 'databricks', 'synapse'];
 
-export async function POST(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session: s }) => {
   const tenantId = s.claims.oid;
   const body = await req.json().catch(() => ({}));
 
@@ -69,6 +68,11 @@ export async function POST(req: NextRequest) {
     const history = await appendDqRun(tenantId, rec);
     return NextResponse.json({ ok: true, run: rec, history });
   } catch (e: any) {
+    // A classified warehouse-resolution failure (databricks backend) keeps its
+    // kind, remediation and entitlement — never a generic 500.
+    if (e instanceof WarehouseResolutionError) {
+      return NextResponse.json(warehouseErrorBody(e), { status: warehouseErrorStatus(e) });
+    }
     return apiServerError(e);
   }
-}
+});

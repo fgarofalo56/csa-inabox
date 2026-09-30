@@ -22,7 +22,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Tab, TabList, Button, Dropdown, Option, Input, Label, Field, Spinner, Badge,
   Body1, Caption1, Subtitle2, Text,
-  MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
+  MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions, Link,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -93,7 +93,7 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
   const [rt, setRt] = useState<RuntimeState>({});
   const [live, setLive] = useState<LiveApp | null>(null);
   const [loading, setLoading] = useState(!isNew);
-  const [banner, setBanner] = useState<{ intent: 'success' | 'error' | 'warning' | 'info'; text: string } | null>(null);
+  const [banner, setBanner] = useState<{ intent: 'success' | 'error' | 'warning' | 'info'; text: string; href?: string } | null>(null);
 
   // Source-tab working state
   const [sourceMode, setSourceMode] = useState<SourceMode>('template');
@@ -292,7 +292,7 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
           : { intent: 'success', text: `${j.resource?.label || attachKind} attached — grant ${g?.status}. Env applies on the next Deploy.` });
         await loadItem(); // bindings gained the injected env rows
       } else {
-        setBanner({ intent: 'error', text: j.error || `HTTP ${r.status}` });
+        setBanner({ intent: 'error', text: j.error || `HTTP ${r.status}`, ...(typeof j.fixHref === 'string' ? { href: j.fixHref } : {}) });
       }
     } catch (e: any) { setBanner({ intent: 'error', text: e?.message || String(e) }); }
     finally { setResBusy(false); }
@@ -523,6 +523,11 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
         {banner && (
           <MessageBar intent={banner.intent}>
             <MessageBarBody><span className={s.err}>{banner.text}</span></MessageBarBody>
+            {banner.href && (
+              <MessageBarActions>
+                <Link href={banner.href} data-testid="app-runtime-banner-link">Open Admin &gt; Readiness</Link>
+              </MessageBarActions>
+            )}
           </MessageBar>
         )}
         {infraGate}

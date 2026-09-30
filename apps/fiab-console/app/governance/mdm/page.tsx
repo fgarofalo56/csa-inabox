@@ -24,7 +24,7 @@ import {
   Spinner, Button, Badge, Body1, Caption1, Subtitle2, Text,
   TabList, Tab, Field, Input, Dropdown, Option, Textarea,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBar, MessageBarBody,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { Add24Regular, ArrowSync24Regular, Delete20Regular, Edit20Regular, Play20Regular, CheckmarkCircle20Regular, DatabasePerson24Regular } from '@fluentui/react-icons';
@@ -33,6 +33,8 @@ import { Section } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
+import { HonestGate } from '@/lib/components/shared/honest-gate';
+import { surfaceGateFrom, type SurfaceGate } from '@/lib/gates/surface-gate';
 
 type MatchType = 'exact' | 'fuzzy';
 type Strategy = 'most-recent' | 'most-complete' | 'source-priority' | 'max' | 'min';
@@ -354,7 +356,7 @@ function MatchTab({ models }: { models: MdmModel[] }) {
   const [busy, setBusy] = useState(false);
   const [candidates, setCandidates] = useState<MatchCandidate[] | null>(null);
   const [approved, setApproved] = useState<Set<string>>(new Set());
-  const [gate, setGate] = useState<{ missing: string; error: string } | null>(null);
+  const [gate, setGate] = useState<SurfaceGate | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const loadApproved = useCallback(async (id: string) => {
@@ -372,7 +374,7 @@ function MatchTab({ models }: { models: MdmModel[] }) {
     try {
       const r = await clientFetch('/api/mdm/match', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ modelId, minScore: parseInt(minScore, 10) }) });
       const j = await r.json();
-      if (r.status === 503 && j.code === 'not_configured') { setGate({ missing: j.missing, error: j.error }); return; }
+      { const g = surfaceGateFrom(j); if (g) { setGate(g); return; } }
       if (!j.ok) { setError(j.error || 'Match failed'); return; }
       setCandidates(j.candidates || []);
     } catch (e: any) { setError(e?.message || String(e)); } finally { setBusy(false); }
@@ -422,7 +424,7 @@ function MatchTab({ models }: { models: MdmModel[] }) {
         </Field>
         <Field label="Min score %" style={{ minWidth: 140 }}><Input type="number" value={minScore} onChange={(_, d) => setMinScore(d.value)} /></Field>
       </div>
-      {gate && <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalM }}><MessageBarBody><MessageBarTitle>Databricks not configured</MessageBarTitle>{gate.error} Set <code>{gate.missing}</code> on the Console (admin-plane bicep).</MessageBarBody></MessageBar>}
+      {gate && <HonestGate gateId={gate.gateId} surface="MDM" missing={gate.missing} detail={gate.error} classified={gate.classified} onResolved={run} />}
       {error && <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalM }}><MessageBarBody>{error}</MessageBarBody></MessageBar>}
       {candidates && <>
         <MessageBar intent="info" style={{ marginBottom: tokens.spacingVerticalM }}><MessageBarBody>
@@ -441,7 +443,7 @@ function GoldenTab({ models }: { models: MdmModel[] }) {
   const [busy, setBusy] = useState(false);
   const [merging, setMerging] = useState(false);
   const [data, setData] = useState<{ columns: string[]; rows: unknown[][]; goldenTable?: string } | null>(null);
-  const [gate, setGate] = useState<{ missing: string; error: string } | null>(null);
+  const [gate, setGate] = useState<SurfaceGate | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
 
@@ -450,7 +452,7 @@ function GoldenTab({ models }: { models: MdmModel[] }) {
     setBusy(true); setError(null); setGate(null); setData(null);
     try {
       const r = await clientFetch(`/api/mdm/golden-records?modelId=${encodeURIComponent(modelId)}&limit=200`); const j = await r.json();
-      if (r.status === 503 && j.code === 'not_configured') { setGate({ missing: j.missing, error: j.error }); return; }
+      { const g = surfaceGateFrom(j); if (g) { setGate(g); return; } }
       if (!j.ok) { setError(`${j.error || 'Failed'}${j.hint ? ` — ${j.hint}` : ''}`); return; }
       setData({ columns: j.columns || [], rows: j.rows || [], goldenTable: j.goldenTable });
     } catch (e: any) { setError(e?.message || String(e)); } finally { setBusy(false); }
@@ -461,7 +463,7 @@ function GoldenTab({ models }: { models: MdmModel[] }) {
     try {
       const r = await clientFetch('/api/mdm/merge', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ modelId }) });
       const j = await r.json();
-      if (r.status === 503 && j.code === 'not_configured') { setGate({ missing: j.missing, error: j.error }); return; }
+      { const g = surfaceGateFrom(j); if (g) { setGate(g); return; } }
       if (!j.ok) { setError(j.error || 'Merge failed'); return; }
       setInfo(j.run?.detail || 'Merge complete.');
       await load();
@@ -489,7 +491,7 @@ function GoldenTab({ models }: { models: MdmModel[] }) {
           </Dropdown>
         </Field>
       </div>
-      {gate && <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalM }}><MessageBarBody><MessageBarTitle>Databricks not configured</MessageBarTitle>{gate.error} Set <code>{gate.missing}</code> on the Console (admin-plane bicep).</MessageBarBody></MessageBar>}
+      {gate && <HonestGate gateId={gate.gateId} surface="MDM" missing={gate.missing} detail={gate.error} classified={gate.classified} onResolved={load} />}
       {info && <MessageBar intent="success" style={{ marginBottom: tokens.spacingVerticalM }}><MessageBarBody>{info}</MessageBarBody></MessageBar>}
       {error && <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalM }}><MessageBarBody>{error}</MessageBarBody></MessageBar>}
       {data && <>

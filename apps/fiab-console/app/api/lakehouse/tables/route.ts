@@ -29,7 +29,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { scanLakehouseTables } from '@/lib/azure/synapse-catalog-client';
 import { resolveItemAccessByOid } from '@/lib/auth/item-access';
-import { resolveLakehouseAbfss } from '@/lib/azure/lakehouse-abfss';
+import { lakehouseStorageWithheldFields, resolveLakehouseStorage } from '@/lib/azure/lakehouse-abfss';
 import { runWithWorkspaceContext } from '@/lib/azure/workspace-credential-factory';
 import { apiServerError } from '@/lib/api/respond';
 import { withSession } from '@/lib/api/route-toolkit';
@@ -59,15 +59,25 @@ export const GET = withSession(async (req: NextRequest, { session: s }) => {
 
   // Resolve the lakehouse's REAL ADLS root (container + rootPath). Use the
   // item's own authoritative workspaceId (not the query param) for the read.
-  const root = await resolveLakehouseAbfss(lakehouseId, access.item.workspaceId);
-  if (!root) {
+  const resolved = await resolveLakehouseStorage(lakehouseId, access.item.workspaceId);
+  if (!resolved.ok) {
+    if (resolved.reason === 'not-found') {
+      return NextResponse.json({ ok: false, error: 'lakehouse not found' }, { status: 404 });
+    }
+    // A withheld location is the same honest-empty shape as unconfigured
+    // storage, carrying the resolver's one wording (and, for root-shared, the
+    // page that resolves it): nothing is scanned.
+    const withheld = lakehouseStorageWithheldFields(resolved.reason);
     return NextResponse.json({
       ok: true,
       tables: [],
       gate:
-        'No lakehouse storage configured — set LOOM_{BRONZE,SILVER,GOLD,LANDING}_URL (deployed by the DLZ Bicep) and grant the Console UAMI Storage Blob Data Reader on the container.',
+        withheld?.error
+        ?? 'No lakehouse storage configured — set LOOM_{BRONZE,SILVER,GOLD,LANDING}_URL (deployed by the DLZ Bicep) and grant the Console UAMI Storage Blob Data Reader on the container.',
+      ...(withheld?.fixHref ? { fixHref: withheld.fixHref } : {}),
     });
   }
+  const root = resolved.bound;
 
   try {
     // I3 pilot: establish the ambient workspace identity context so the

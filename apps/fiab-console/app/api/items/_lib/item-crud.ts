@@ -25,7 +25,7 @@ import { reconcileThreadEdgesOnDelete, restoreThreadEdgesForItem } from '@/lib/t
 import { labelRank } from '@/lib/governance/label-propagation';
 import { recordItemVersion } from '@/lib/versions/item-version-store';
 import { cosmosIdFromLoomId } from './loom-content-id';
-import { autoBindOnCreate } from '@/lib/azure/auto-bind';
+import { autoBindOnCreate, stripLakehouseCreateState } from '@/lib/azure/auto-bind';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
 import { emitLoomEvent } from '@/lib/events/webhook-emitter';
@@ -894,7 +894,11 @@ export async function createOwnedItem(
   // F16 — inherit the sensitivity label from the upstream source this item is
   // built from (override allowed via an explicit state.sensitivityLabel).
   const baseState = state && typeof state === 'object' ? { ...state } : {};
-  const inheritedState = await applyLabelInheritance(baseState, session.claims.oid);
+  const labelledState = await applyLabelInheritance(baseState, session.claims.oid);
+  // A new lakehouse never keeps the keys that say where an item's files are:
+  // a caller that copies `state` from another item would otherwise hand the new
+  // item the source's container and root. Its own root comes from auto-bind.
+  const inheritedState = itemType === 'lakehouse' ? stripLakehouseCreateState(labelledState) : labelledState;
   const item: WorkspaceItem = {
     id: crypto.randomUUID(),
     workspaceId,

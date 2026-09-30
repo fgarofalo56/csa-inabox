@@ -82,7 +82,10 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
     return apiError(plan.embeddingGate || 'Azure OpenAI embeddings are not configured.', 503, { code: 'embedding_not_configured' });
   }
   if (!plan.connection) {
-    return apiError(plan.connectionGate || 'Could not resolve the source connection.', 503, { code: 'connection_unresolved' });
+    return apiError(plan.connectionGate || 'Could not resolve the source connection.', 503, {
+      code: 'connection_unresolved',
+      ...(plan.connectionGateHref ? { fixHref: plan.connectionGateHref } : {}),
+    });
   }
 
   const { names, connection, embedding } = plan;

@@ -35,15 +35,36 @@
  *
  * No mock principals. Every row originates from ARM, the DFS ACL, Cosmos, or
  * UC — or the surface shows a precise infra gate (no-vaporware.md).
+ *
+ * Authorization (#4619): every verb is TENANT-ADMIN (`withTenantAdmin`, the
+ * gate runs before the query or body is read).
+ *   - POST (grant) and DELETE (revoke) change Azure RBAC on a container of the
+ *     deployment's shared lake account — the same gate as the lakehouse
+ *     permissions POST. A refused caller never reaches `grantContainerRole` /
+ *     `revokeContainerRoleAssignment`.
+ *   - GET lists the RBAC principals, ACL entries and workspace roles on a
+ *     shared container. The Secure tab's principal search already needs the
+ *     `admin.permissions` capability, so the read matches the write.
+ * POST and GET refuse a `container` that is not a valid storage container name.
+ * DELETE accepts `id` only when it is, in full and with nothing before or after
+ * it, a role-assignment id at a container scope of THIS deployment's lake
+ * account, AND it is one of the assignments `listContainerRoleAssignments`
+ * currently returns for that container; the id revoked is the listed one, not
+ * the caller's string. (`revokeContainerRoleAssignmentInScope`, being added
+ * for the lakehouse permissions route, answers the same question; the two
+ * should converge on one helper.)
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withTenantAdmin } from '@/lib/api/route-toolkit';
+import type { TenantAdminRefusal } from '@/lib/auth/feature-gate';
+import { isValidContainerName } from '@/app/api/storage/_lib/validate';
 import {
   listContainerRoleAssignments,
   grantContainerRole,
   revokeContainerRoleAssignment,
   getAcl,
+  getAccountName,
   listKnownBlobDataRoles,
   KNOWN_CONTAINERS,
   type ContainerRoleAssignment,
@@ -204,10 +225,65 @@ function rbacGate(): NextResponse {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+/** What the 403 says for a non-admin on any verb of this route. */
+const SECURE_TAB_REFUSAL: TenantAdminRefusal = {
+  reason:
+    'The OneLake Secure tab lists, grants and revokes Azure RBAC on the deployment\'s shared lake '
+    + 'containers. Those assignments apply to the whole container, not to one item, so this surface '
+    + 'is restricted to tenant admins.',
+};
 
+const GUID = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
+/**
+ * A resource-group name, per ARM's rule: 1 to 90 characters of Unicode letters
+ * (`\p{L}`), Unicode decimal digits (`\p{Nd}`), `_`, `-`, `.`, `(`, `)`, not
+ * ending in a period, so `.` and `..` are refused. Its own pattern with the `u`
+ * flag, and NOT folded into the id pattern below: that one is case-insensitive,
+ * and `iu` together folds some non-ASCII characters into ASCII classes (U+212A
+ * KELVIN SIGN matches `[a-z]` and a literal `k`), which would widen the account
+ * and the fixed segments. Kept on one line; the test lifts it from this source.
+ */
+const RESOURCE_GROUP_NAME_RE = /^[-\p{L}\p{Nd}_.()]{0,89}[-\p{L}\p{Nd}_()]$/u;
+/**
+ * A role-assignment id at a CONTAINER scope, in full. Anchored at both ends (JS
+ * `$` without the `m` flag matches only at the end of the input), and no
+ * character class admits `/` beyond the literal separators, or `?` / `#`.
+ * Captures: 1 resource group (checked by RESOURCE_GROUP_NAME_RE), 2 account,
+ * 3 container.
+ */
+const CONTAINER_ROLE_ASSIGNMENT_ID_RE = new RegExp(
+  `^/subscriptions/${GUID}/resourceGroups/([^/?#]{1,90})`
+  + '/providers/Microsoft\\.Storage/storageAccounts/([a-z0-9]{3,24})'
+  + '/blobServices/default/containers/([a-z0-9-]{3,63})'
+  + `/providers/Microsoft\\.Authorization/roleAssignments/${GUID}$`,
+  // Case-insensitive: ARM does not guarantee the casing of the fixed segments.
+  // The captured account and container are checked separately below, and
+  // `isValidContainerName` refuses an upper-case container.
+  'i',
+);
+
+/**
+ * The container a revoke targets, or the reason `id` is refused. Shape and
+ * account are checked here; membership in the container's current assignments
+ * is checked by the caller against a live list.
+ */
+function parseRevokeTarget(id: string): { container: string } | { error: string } {
+  const m = CONTAINER_ROLE_ASSIGNMENT_ID_RE.exec(id);
+  if (!m || !RESOURCE_GROUP_NAME_RE.test(m[1])) {
+    return { error: 'id must be a full role-assignment id at a container scope of this deployment\'s lake account' };
+  }
+  const [, , account, container] = m;
+  if (account.toLowerCase() !== getAccountName().toLowerCase()) {
+    return { error: 'id names a storage account other than this deployment\'s lake account' };
+  }
+  if (!isValidContainerName(container)) {
+    return { error: 'id names a container that is not a valid storage container name' };
+  }
+  return { container };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+export const GET = withTenantAdmin(async (req: NextRequest) => {
   const sp = req.nextUrl.searchParams;
   const container = sp.get('container');
   const workspaceId = sp.get('workspaceId');
@@ -217,6 +293,12 @@ export async function GET(req: NextRequest) {
   if (!container) {
     // Bare GET — let the UI populate its container picker before a selection.
     return NextResponse.json({ ok: true, knownContainers, needsContainer: true });
+  }
+  if (!isValidContainerName(container)) {
+    return NextResponse.json(
+      { ok: false, error: 'container must be a storage container name: 3-63 lowercase letters, digits or single hyphens' },
+      { status: 400 },
+    );
   }
 
   const gates: { acl?: string; uc?: string; workspace?: string } = {};
@@ -307,17 +389,22 @@ export async function GET(req: NextRequest) {
     knownContainers,
     gates,
   });
-}
+}, SECURE_TAB_REFUSAL);
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
+// Tenant-admin: 401 without a session, then the 403 `admin_only` envelope —
+// before the body is read, so a refused caller never grants.
+export const POST = withTenantAdmin(async (req: NextRequest) => {
   const body = await req.json().catch(() => ({}));
   const { container, principalId, role, principalType } = body || {};
   if (!container || !principalId || !role) {
     return NextResponse.json(
       { ok: false, error: 'container, principalId and role are required' },
+      { status: 400 },
+    );
+  }
+  if (typeof container !== 'string' || !isValidContainerName(container)) {
+    return NextResponse.json(
+      { ok: false, error: 'container must be a storage container name: 3-63 lowercase letters, digits or single hyphens' },
       { status: 400 },
     );
   }
@@ -335,12 +422,13 @@ export async function POST(req: NextRequest) {
     // Re-granting an identical (principal, role, scope) triple 409s — surface it.
     return NextResponse.json({ ok: false, error: msg }, { status: e?.status || 502 });
   }
-}
+}, SECURE_TAB_REFUSAL);
 
-export async function DELETE(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const id = req.nextUrl.searchParams.get('id');
+// Tenant-admin, same gate as POST: a refused caller never revokes. The id must
+// name a CURRENT blob-data role assignment on a container of this deployment's
+// lake account; anything else is refused before any ARM call.
+export const DELETE = withTenantAdmin(async (req: NextRequest) => {
+  const id = (req.nextUrl.searchParams.get('id') || '').trim();
   if (!id) {
     return NextResponse.json(
       { ok: false, error: 'id (full ARM role-assignment id) required' },
@@ -348,9 +436,22 @@ export async function DELETE(req: NextRequest) {
     );
   }
   try {
-    await revokeContainerRoleAssignment(id);
+    // Inside the try: `getAccountName` throws when no lake account is configured.
+    const target = parseRevokeTarget(id);
+    if ('error' in target) return NextResponse.json({ ok: false, error: target.error }, { status: 400 });
+    const current = await listContainerRoleAssignments(target.container);
+    const listed = current.find((r) => typeof r.id === 'string' && r.id.toLowerCase() === id.toLowerCase());
+    if (!listed) {
+      return NextResponse.json(
+        { ok: false, error: `no blob-data role assignment with that id exists on container "${target.container}"` },
+        { status: 404 },
+      );
+    }
+    await revokeContainerRoleAssignment(listed.id);
     return NextResponse.json({ ok: true });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: String(e?.message || e) }, { status: e?.status || 502 });
+    const msg = String(e?.message || e);
+    if (/LOOM_SUBSCRIPTION_ID|LOOM_DLZ_RG/.test(msg)) return rbacGate();
+    return NextResponse.json({ ok: false, error: msg }, { status: e?.status || 502 });
   }
-}
+}, SECURE_TAB_REFUSAL);

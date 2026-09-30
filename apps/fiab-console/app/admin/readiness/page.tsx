@@ -30,6 +30,12 @@ import { AdminShell } from '@/lib/components/admin-shell';
 import { EmptyState } from '@/lib/components/empty-state';
 import { SplitPane } from '@/lib/components/shared/split-pane';
 import { GateFixitDialog } from '@/lib/components/shared/honest-gate';
+import {
+  LakehouseKeepResultBar,
+  LakehouseSharedRootsPanel,
+  type KeepResult,
+  type SharedRootGroupView,
+} from '@/lib/components/admin/lakehouse-shared-roots-panel';
 import { clientFetch, CROSS_SUB_FETCH_TIMEOUT_MS } from '@/lib/client-fetch';
 import { getGate } from '@/lib/gates/registry';
 import {
@@ -440,16 +446,31 @@ const useStyles = makeStyles({
 
 interface WorkloadGroup { key: string; title: string; glyph: string; nodes: CapabilityNode[]; state?: ReadinessState; }
 
+/** An item-store check the readiness route returns beside the gate graph. */
+interface StorageCheck {
+  id: string;
+  title: string;
+  status: string;
+  detail: string;
+  remediation?: string;
+  inconclusive?: boolean;
+  /** Lakehouses sharing a storage root: each group, with the "Keep root for" action. */
+  groups?: SharedRootGroupView[];
+}
+
 export default function AdminReadinessPage() {
   const s = useStyles();
   const [report, setReport] = useState<ReadinessReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [probeError, setProbeError] = useState<string | null>(null);
+  const [storageChecks, setStorageChecks] = useState<StorageCheck[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [workloadFilter, setWorkloadFilter] = useState<string | null>(null);
   const [fixGateId, setFixGateId] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
+  /** The outcome of the last "Keep root for ..." (shared lakehouse storage check). */
+  const [keepResult, setKeepResult] = useState<KeepResult | null>(null);
 
   /**
    * `refresh` re-runs every live probe instead of reading the 30 s probe cache.
@@ -471,6 +492,7 @@ export default function AdminReadinessPage() {
       if (j?.ok) {
         setReport(j as ReadinessReport);
         setProbeError(j.probeError || null);
+        setStorageChecks(Array.isArray(j.storageChecks) ? (j.storageChecks as StorageCheck[]) : []);
       } else {
         setError(j?.error || j?.remediation || `load failed (${r.status})`);
       }
@@ -582,6 +604,31 @@ export default function AdminReadinessPage() {
           </MessageBarBody>
         </MessageBar>
       )}
+      {/* The last keep's outcome, OUTSIDE the storage checks: a keep that
+          resolves the last group makes its check pass, and the check (with its
+          panel) is then no longer rendered. */}
+      {keepResult && <LakehouseKeepResultBar result={keepResult} onDismiss={() => setKeepResult(null)} />}
+      {storageChecks.filter((c) => c.status !== 'pass').map((c) => (
+        <MessageBar
+          key={c.id}
+          intent="warning"
+          layout="multiline"
+          style={{ marginBottom: tokens.spacingVerticalM }}
+          data-testid={`readiness-storage-check-${c.id}`}
+        >
+          <MessageBarBody>
+            <MessageBarTitle>{c.title}</MessageBarTitle>
+            {c.detail}
+            {c.remediation ? <> {c.remediation}</> : null}
+            {c.groups?.length ? (
+              <LakehouseSharedRootsPanel
+                groups={c.groups}
+                onResolved={(r) => { setKeepResult(r); void reload(true); }}
+              />
+            ) : null}
+          </MessageBarBody>
+        </MessageBar>
+      ))}
 
       {loading && !report ? (
         <div className={s.loading}><Spinner size="small" /><Caption1>Evaluating capabilities + probing backends…</Caption1></div>

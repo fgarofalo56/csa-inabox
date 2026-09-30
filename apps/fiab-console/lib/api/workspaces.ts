@@ -29,6 +29,7 @@
  * `listFolders`, `createFolder` — every one of them.
  */
 import { clientFetch, describeNonJsonResponse } from '@/lib/client-fetch';
+import { isAdminOnlyRefusal, refusalText, type RefusalEnvelope } from '@/lib/util/admin-refusal';
 
 export interface Workspace {
   id: string;
@@ -112,6 +113,11 @@ async function errorFromResponse(res: Response): Promise<Error> {
   try { parsed = raw ? JSON.parse(raw) : undefined; } catch { parsed = undefined; }
   if (parsed && typeof parsed === 'object') {
     const o = parsed as Record<string, unknown>;
+    // #4619 — a tenant-admin refusal carries `error: 'forbidden'`, a bare token;
+    // its reason and remediation are the words the user needs.
+    if (isAdminOnlyRefusal(o as RefusalEnvelope)) {
+      return new Error(`${refusalText(o as RefusalEnvelope)} (HTTP ${res.status})`);
+    }
     const reason = typeof o.error === 'string' && o.error
       ? o.error
       : typeof o.message === 'string' && o.message ? o.message : '';

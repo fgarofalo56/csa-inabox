@@ -20,7 +20,7 @@ import { NextResponse } from 'next/server';
 import { withTenantAdmin, type SessionContext } from '@/lib/api/route-toolkit';
 import { apiServerError } from '@/lib/api/respond';
 import { tenantScopeId } from '@/lib/auth/session';
-import { allGateStatuses } from '@/lib/gates/registry';
+import { allGateStatuses, gateAdminDiagnostic } from '@/lib/gates/registry';
 import { ENV_CHECKS } from '@/lib/admin/env-checks';
 import { resolveCurrentVersion, readBuildMarker } from '@/lib/updates/current-version';
 import { detectLoomCloud } from '@/lib/azure/cloud-endpoints';
@@ -95,13 +95,18 @@ async function buildBundle(session: SessionContext<Record<string, string>>['sess
     cloud: detectLoomCloud(),
   };
 
-  // Gate registry — one cheap in-process pass (no network).
-  const gates: GatePosture[] = allGateStatuses().map((g) => ({
-    id: g.id,
-    status: g.status,
-    missing: g.missing ?? [],
-    availability: g.availability,
-  }));
+  // Gate registry — one cheap in-process pass (no network). This route is
+  // withTenantAdmin, so it may carry a producer's admin-only diagnostic (#4776).
+  const gates: GatePosture[] = allGateStatuses().map((g) => {
+    const diagnostic = gateAdminDiagnostic(g.id);
+    return {
+      id: g.id,
+      status: g.status,
+      missing: g.missing ?? [],
+      availability: g.availability,
+      ...(diagnostic ? { diagnostic } : {}),
+    };
+  });
 
   // Masked env posture over every ENV_CHECKS-referenced var.
   const env = buildEnvPosture(ENV_CHECKS, process.env);

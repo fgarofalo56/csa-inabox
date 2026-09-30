@@ -24,9 +24,20 @@ vi.mock('@/lib/api/route-toolkit', () => ({
 const resolveLakehouseAbfssMock = vi.fn();
 const scanLakehouseTablesMock = vi.fn();
 
-vi.mock('@/lib/azure/lakehouse-abfss', () => ({
-  resolveLakehouseAbfss: (...a: unknown[]) => resolveLakehouseAbfssMock(...a),
-}));
+// `resolveLakehouseStorage` delegates to the mock: a bound value is
+// `{ ok: true, bound }`, null is `no-storage`, and `{ withheld: <reason> }` is
+// that withheld reason. The withheld wording is the REAL one.
+vi.mock('@/lib/azure/lakehouse-abfss', async () => {
+  const actual: any = await vi.importActual('@/lib/azure/lakehouse-abfss');
+  return {
+    lakehouseStorageWithheldFields: actual.lakehouseStorageWithheldFields,
+    resolveLakehouseStorage: async (...a: unknown[]) => {
+      const b: any = await resolveLakehouseAbfssMock(...a);
+      if (b && typeof b === 'object' && 'withheld' in b) return { ok: false, reason: b.withheld };
+      return b ? { ok: true, bound: b } : { ok: false, reason: 'no-storage' };
+    },
+  };
+});
 vi.mock('@/lib/azure/synapse-catalog-client', () => ({
   scanLakehouseTables: (...a: unknown[]) => scanLakehouseTablesMock(...a),
 }));
@@ -139,6 +150,22 @@ describe('GET /api/marketplace/sharing/publishable-tables', () => {
     // no-vaporware: a gate names the exact remediation and never fakes a list.
     expect(body.error).toContain('LOOM_{BRONZE,SILVER,GOLD,LANDING}_URL');
     expect(body.tables).toBeUndefined();
+  });
+
+  // A lakehouse whose location is withheld is not "unconfigured storage".
+  // FAILS IF the route words root-shared as the LOOM_*_URL gate, drops the
+  // readiness check title the resolver names, or drops the link to it.
+  it('answers a shared storage root with the true reason and the readiness link', async () => {
+    const { LAKEHOUSE_SHARED_ROOTS_CHECK_TITLE } = await import('@/lib/admin/env-checks/lakehouse-shared-roots');
+    resolveLakehouseAbfssMock.mockResolvedValue({ withheld: 'root-shared' });
+    const { GET } = await import('../publishable-tables/route');
+    const res = await GET(req('?lakehouseId=lh-1&workspaceId=ws-1'), undefined as any);
+    const body = await res.json();
+    expect(res.status).toBe(409);
+    expect(body.error).not.toContain('LOOM_');
+    expect(body.error).toContain(LAKEHOUSE_SHARED_ROOTS_CHECK_TITLE);
+    expect(body.fixHref).toBe('/admin/readiness');
+    expect(scanLakehouseTablesMock).not.toHaveBeenCalled();
   });
 
   it('400s without both ids rather than scanning something arbitrary', async () => {
