@@ -1,7 +1,7 @@
 'use client';
 import {
   Caption1, Body1, Spinner, Badge, Button, tokens,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBar, MessageBarBody, MessageBarTitle, Link,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Breadcrumb, BreadcrumbItem, BreadcrumbButton, BreadcrumbDivider,
   Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
@@ -16,11 +16,15 @@ import { Fragment } from 'react';
 import { useStyles, formatBytes, leafName, FileGlyph } from '../shared';
 import type { ListingError } from '../shared';
 import { useLakehouseCtx } from '../lakehouse-editor-context';
+import { useLakehouseReadOnly, LAKEHOUSE_READ_ONLY_TITLE } from '../hooks/use-lakehouse-access';
 import { relativeToRoot } from '../lakehouse-binding';
 
 export function FilesPane() {
   const s = useStyles();
   const ctx = useLakehouseCtx();
+  // A read-only role can browse, preview and download; the controls that write stay
+  // focusable but inert, and say why.
+  const readOnly = useLakehouseReadOnly(ctx.id, ctx.isNewItem);
   const {
     activeContainer, currentPrefix, rootPrefix, goToPrefix, onUploadClick, onFolderUploadClick,
     onNewFolder, refreshActive,
@@ -85,13 +89,16 @@ export function FilesPane() {
             );
           })}
         </Breadcrumb>
-        <Button appearance="primary" icon={<ArrowUpload20Regular />} disabled={!activeContainer} onClick={onUploadClick}>
+        <Button appearance="primary" icon={<ArrowUpload20Regular />} disabled={!activeContainer} disabledFocusable={readOnly}
+          title={readOnly ? LAKEHOUSE_READ_ONLY_TITLE : undefined} onClick={onUploadClick}>
           {uploading ? `Uploading (${runningUploads.length})…` : 'Upload file'}
         </Button>
-        <Button appearance="outline" icon={<FolderArrowUp20Regular />} disabled={!activeContainer || uploading} onClick={onFolderUploadClick}>
+        <Button appearance="outline" icon={<FolderArrowUp20Regular />} disabled={!activeContainer || uploading} disabledFocusable={readOnly}
+          title={readOnly ? LAKEHOUSE_READ_ONLY_TITLE : undefined} onClick={onFolderUploadClick}>
           Upload folder
         </Button>
-        <Button appearance="outline" icon={<FolderAdd20Regular />} disabled={!activeContainer} onClick={onNewFolder}>
+        <Button appearance="outline" icon={<FolderAdd20Regular />} disabled={!activeContainer} disabledFocusable={readOnly}
+          title={readOnly ? LAKEHOUSE_READ_ONLY_TITLE : undefined} onClick={onNewFolder}>
           New folder
         </Button>
         <Button appearance="outline" icon={<ArrowSync20Regular />} disabled={!activeContainer} onClick={refreshActive}>
@@ -182,6 +189,11 @@ export function FilesPane() {
               {listing.remediation && (
                 <span style={{ display: 'block', marginTop: tokens.spacingVerticalXS }}>
                   {listing.remediation}
+                </span>
+              )}
+              {listing.fixHref && (
+                <span style={{ display: 'block', marginTop: tokens.spacingVerticalXS }}>
+                  <Link href={listing.fixHref} data-testid="lakehouse-listing-fix-link">Open Admin &gt; Readiness</Link>
                 </span>
               )}
             </MessageBarBody>
@@ -282,7 +294,8 @@ export function FilesPane() {
                             </MenuItem>
                           )}
                           {!entry.isDirectory && (
-                            <MenuItem icon={<TableSimple20Regular />} onClick={() => onLoadToTables(entry)}>
+                            <MenuItem icon={<TableSimple20Regular />} disabled={readOnly}
+                              title={readOnly ? LAKEHOUSE_READ_ONLY_TITLE : undefined} onClick={() => onLoadToTables(entry)}>
                               Load to Tables (Delta)
                             </MenuItem>
                           )}
@@ -301,7 +314,8 @@ export function FilesPane() {
                               Change tier…
                             </MenuItem>
                           )}
-                          <MenuItem icon={<Delete20Regular />} onClick={() => ctx.onDelete(entry)}>
+                          <MenuItem icon={<Delete20Regular />} disabled={readOnly}
+                            title={readOnly ? LAKEHOUSE_READ_ONLY_TITLE : undefined} onClick={() => ctx.onDelete(entry)}>
                             Delete
                           </MenuItem>
                         </MenuList>

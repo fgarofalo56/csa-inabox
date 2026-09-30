@@ -45,6 +45,12 @@ export interface LakehouseJobClaims {
    * kick-off accepted. Absent when the statement is built entirely server-side.
    */
   codeHash?: string;
+  /**
+   * The storage account the kick-off scoped the path on (the item's BOUND
+   * account). A poll that builds the Spark URI uses this rather than the
+   * deployment's primary account. Absent on the tenant-admin form.
+   */
+  account?: string;
 }
 
 function jobKey(): Buffer {
@@ -68,12 +74,17 @@ export function hashJobCode(code: string): string {
 /**
  * Mint the handle for a job. `nowMs` is injectable for tests; production callers
  * omit it.
+ *
+ * Throws when `scope.oid` is empty: a handle is bound to the principal that
+ * started the job, and a session without an object id names no principal, so
+ * there is nothing to bind it to. Callers refuse such a session before minting.
  */
 export function mintLakehouseJobHandle(
   scope: LakehouseJobScope,
   claims: LakehouseJobClaims,
   nowMs: number = Date.now(),
 ): string {
+  if (!scope.oid) throw new Error('a lakehouse job handle needs the signed-in user object id');
   const body: Record<string, unknown> = {
     i: scope.lakehouseId,
     u: scope.purpose,
@@ -86,6 +97,7 @@ export function mintLakehouseJobHandle(
     at: nowMs,
   };
   if (claims.codeHash) body.h = claims.codeHash;
+  if (claims.account) body.a = claims.account;
   const payload = Buffer.from(JSON.stringify(body), 'utf-8').toString('base64url');
   const sig = crypto.createHmac('sha256', jobKey()).update(payload).digest('base64url');
   return `${LAKEHOUSE_JOB_PREFIX}${payload}.${sig}`;
@@ -94,8 +106,8 @@ export function mintLakehouseJobHandle(
 /**
  * Verify a caller-supplied handle against the scope THIS request authorized and
  * return the recorded job, or null for ANY failure: missing, malformed, a bad
- * signature, a different item / purpose / principal, or older than
- * {@link LAKEHOUSE_JOB_TTL_MS}. Never throws.
+ * signature, a different item / purpose / principal, an empty principal in the
+ * polling scope, or older than {@link LAKEHOUSE_JOB_TTL_MS}. Never throws.
  *
  * The scope fields are both signed and re-compared: the signature alone would
  * accept a handle minted for another item, and the comparison alone would be
@@ -106,6 +118,7 @@ export function verifyLakehouseJobHandle(
   handle: unknown,
   nowMs: number = Date.now(),
 ): LakehouseJobClaims | null {
+  if (!scope.oid) return null;
   const raw = typeof handle === 'string' ? handle.trim() : '';
   if (!raw.startsWith(LAKEHOUSE_JOB_PREFIX)) return null;
   const rest = raw.slice(LAKEHOUSE_JOB_PREFIX.length);
@@ -137,6 +150,7 @@ export function verifyLakehouseJobHandle(
   if (typeof b.s !== 'number' || !Number.isInteger(b.s)) return null;
   if (b.t !== null && (typeof b.t !== 'number' || !Number.isInteger(b.t))) return null;
   if (typeof b.c !== 'string' || typeof b.f !== 'string') return null;
+  if (b.a !== undefined && (typeof b.a !== 'string' || !b.a)) return null;
   return {
     pool: b.p,
     sessionId: b.s,
@@ -144,6 +158,7 @@ export function verifyLakehouseJobHandle(
     container: b.c,
     path: b.f,
     ...(typeof b.h === 'string' ? { codeHash: b.h } : {}),
+    ...(typeof b.a === 'string' ? { account: b.a } : {}),
   };
 }
 

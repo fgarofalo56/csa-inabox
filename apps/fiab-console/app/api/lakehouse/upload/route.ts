@@ -28,7 +28,8 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { KNOWN_CONTAINERS, uploadFile, type KnownContainer } from '@/lib/azure/adls-client';
+import { KNOWN_CONTAINERS, pathToHttpsUrlFor, uploadFile, type KnownContainer } from '@/lib/azure/adls-client';
+import { httpsToAbfss } from '@/lib/azure/cloud-endpoints';
 import { detectSparkFormat, renderReadSnippet } from '@/lib/azure/spark-format-detect';
 import { withSession } from '@/lib/api/route-toolkit';
 import { scopeItem } from '../_lib/refusal-envelope';
@@ -82,6 +83,11 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
       );
   if (scoped instanceof NextResponse) return scoped;
   const { container, path } = scoped;
+  // The item form writes to the item's BOUND storage account. The report form
+  // and the tenant-admin storage form carry none and use the container's
+  // configured account.
+  const boundAccount: unknown = 'account' in scoped ? scoped.account : undefined;
+  const account = typeof boundAccount === 'string' && boundAccount ? boundAccount : undefined;
 
   if (!file || typeof file === 'string') {
     return NextResponse.json(
@@ -122,15 +128,18 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
       path,
       buf,
       contentType,
+      account,
     );
     const accountFromEnv =
       process.env[`LOOM_${container.toUpperCase()}_URL`] || '';
     const accountName = accountFromEnv
       .replace(/^https?:\/\//, '')
       .split('.')[0] || '';
-    const abfssPath = accountName
-      ? `abfss://${container}@${accountName}.dfs.core.windows.net/${path}`
-      : `${container}/${path}`;
+    const abfssPath = account
+      ? httpsToAbfss(pathToHttpsUrlFor(account, container, path))
+      : accountName
+        ? `abfss://${container}@${accountName}.dfs.core.windows.net/${path}`
+        : `${container}/${path}`;
     return NextResponse.json(
       {
         ok: true,

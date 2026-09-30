@@ -9,10 +9,14 @@ import {
 import { ArrowSync20Regular, Add20Regular, Delete20Regular, Database20Regular } from '@fluentui/react-icons';
 import { useStyles } from '../shared';
 import { useLakehouseCtx } from '../lakehouse-editor-context';
+import { useLakehouseReadOnly, LAKEHOUSE_READ_ONLY_TITLE } from '../hooks/use-lakehouse-access';
 
 export function SchemasPane() {
   const s = useStyles();
   const ctx = useLakehouseCtx();
+  // Schema DDL needs Edit; a read-only role still sees the list.
+  const readOnly = useLakehouseReadOnly(ctx.id, ctx.isNewItem);
+  const roTitle = readOnly ? LAKEHOUSE_READ_ONLY_TITLE : undefined;
   const {
     shortcutLakehouseId, schemasEnabled, schemas, schemasBusy, schemasError, schemasNotice,
     loadSchemas, deleteSchema,
@@ -28,7 +32,7 @@ export function SchemasPane() {
           Multi-schema namespace — <code>workspace.lakehouse.schema.table</code>. <strong>dbo</strong> is the default (immutable).
         </Caption1>
         <Button appearance="primary" icon={<Add20Regular />}
-          disabled={!schemasEnabled || !shortcutLakehouseId}
+          disabled={!schemasEnabled || !shortcutLakehouseId} disabledFocusable={readOnly} title={roTitle}
           onClick={() => { setNewSchemaName(''); setNewSchemaDesc(''); setNewSchemaOpen(true); }}
           style={{ marginLeft: 'auto' }}>
           New schema
@@ -98,7 +102,7 @@ export function SchemasPane() {
                   <TableCell>
                     {!sc.isDefault && (
                       <Button size="small" appearance="subtle" icon={<Delete20Regular />}
-                        disabled={schemasBusy} onClick={() => deleteSchema(sc.name)}>
+                        disabled={schemasBusy} disabledFocusable={readOnly} title={roTitle} onClick={() => deleteSchema(sc.name)}>
                         Delete
                       </Button>
                     )}
@@ -138,7 +142,7 @@ export function SchemasPane() {
             </DialogContent>
             <DialogActions>
               <Button appearance="secondary" onClick={() => setNewSchemaOpen(false)} disabled={newSchemaBusy}>Cancel</Button>
-              <Button appearance="primary" onClick={createSchema}
+              <Button appearance="primary" onClick={createSchema} disabledFocusable={readOnly} title={roTitle}
                 disabled={newSchemaBusy || !newSchemaName.trim() || !/^[A-Za-z0-9_]+$/.test(newSchemaName) || newSchemaName.trim().toLowerCase() === 'dbo'}>
                 {newSchemaBusy ? 'Creating…' : 'Create'}
               </Button>

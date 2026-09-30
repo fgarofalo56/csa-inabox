@@ -11,9 +11,10 @@
  *   { ok: true, resolved: true, abfss, container, root }   — resolvable
  *   { ok: true, resolved: false, hint }                    — honest gate: no
  *     provisioning record yet / no storage env configured (names the env var).
- *   { ok: true, resolved: false, reason, hint }            — the resolver
+ *   { ok: true, resolved: false, reason, hint, fixHref? } — the resolver
  *     withheld the location (`root-shared` / `root-unverified`); `hint` is its
- *     one wording, `lakehouseStorageWithheldMessage`.
+ *     one wording, `lakehouseStorageWithheldMessage`, and `fixHref` the page
+ *     that resolves `root-shared`.
  *
  * AUTHORIZATION. The lakehouse is authorized through `resolveItemAccessByOid`
  * (read access suffices — this only reports a path). An id the caller cannot
@@ -27,7 +28,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { withSession } from '@/lib/api/route-toolkit';
 import { apiNotFound } from '@/lib/api/respond';
-import { lakehouseStorageWithheldMessage, resolveLakehouseStorage } from '@/lib/azure/lakehouse-abfss';
+import { lakehouseStorageWithheldFields, resolveLakehouseStorage } from '@/lib/azure/lakehouse-abfss';
 import { authorizeLakehouse } from '../../../../lakehouse/_lib/item-scope';
 
 export const runtime = 'nodejs';
@@ -45,9 +46,10 @@ export const GET = withSession<{ id: string }>(async (_req: NextRequest, { sessi
       return NextResponse.json({ ok: true, resolved: true, abfss: b.abfss, container: b.container, root: b.root });
     }
     if (r.reason === 'not-found') return apiNotFound('lakehouse not found');
-    const withheld = lakehouseStorageWithheldMessage(r.reason);
+    const withheld = lakehouseStorageWithheldFields(r.reason);
     if (withheld) {
-      return NextResponse.json({ ok: true, resolved: false, reason: r.reason, hint: withheld });
+      const { error, ...rest } = withheld;
+      return NextResponse.json({ ok: true, resolved: false, ...rest, hint: error });
     }
     return NextResponse.json({
       ok: true,

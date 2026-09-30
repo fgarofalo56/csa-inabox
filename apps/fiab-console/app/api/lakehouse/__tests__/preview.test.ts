@@ -28,6 +28,7 @@ vi.mock('@/lib/azure/lakehouse-abfss', async () => {
   const resolveLakehouseAbfss = vi.fn();
   return {
     lakehouseStorageWithheldMessage: actual.lakehouseStorageWithheldMessage,
+    lakehouseStorageWithheldFields: actual.lakehouseStorageWithheldFields,
     listLakehouseRootFacts: vi.fn(async () => []),
     resolveLakehouseAbfss,
     resolveLakehouseStorage: async (...a: any[]) => {
@@ -86,6 +87,17 @@ describe('preview — item form', () => {
     expect(res.status).toBe(200);
     expect(queried()).toHaveLength(1);
     expect(queried()[0]).toContain(`https://primary.dfs.core.windows.net/${CONTAINER}/${INSIDE}`);
+  });
+
+  it('previews on the item\'s bound storage account, not the deployment default', async () => {
+    (resolveLakehouseAbfss as any).mockImplementation(async () => (
+      { abfss: `abfss://${CONTAINER}@extacct.dfs.core.windows.net/${ROOT}`, container: CONTAINER, root: ROOT }));
+    const res = await GET(req(`lakehouseId=${LH}&container=${CONTAINER}&path=${encodeURIComponent(INSIDE)}`));
+    expect(res.status).toBe(200);
+    // Breaks if the item form drops the bound account and reads the primary
+    // account (`primary`, what pathToHttpsUrl answers).
+    expect(queried()[0]).toContain(`https://extacct.dfs.core.windows.net/${CONTAINER}/${INSIDE}`);
+    expect(queried()[0]).not.toContain('primary.dfs');
   });
 
   it('requires access to the lakehouse item (404; nothing queried)', async () => {

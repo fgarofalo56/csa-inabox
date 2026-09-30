@@ -7,11 +7,11 @@
  * `annotations`, `source`. It carries no room for the three things a PRODUCER
  * must say and a CONSUMER must be able to refuse on:
  *
- *   1. WHEN it was produced, from WHICH inputs. A graph baked into a container
- *      image describes the source tree as it was at image-build time. A
- *      consumer that renders a 200-day-old artifact as a current verdict is
- *      committing the stale-read defect, and nothing in `SecurityGraph` lets it
- *      even ask. -> {@link ExtractionMeta}.
+ *   1. WHICH EXTRACTOR produced it. A consumer must be able to refuse a graph
+ *      whose facets were derived by different predicates than today's
+ *      detectors read. -> {@link ExtractionMeta}. (When and from which inputs a
+ *      run happened is {@link ExtractionRun}, which is deliberately NOT
+ *      committed — see there for why, #4798.)
  *   2. WHICH ESTATE OBJECT each finding belongs to. The security side is keyed
  *      by SOURCE coordinates (`lib/api/route-toolkit.ts#withTenantAdmin`); the
  *      waste side is keyed by ARM ids (`azure:/subscriptions/...`). The two id
@@ -101,10 +101,23 @@ export interface SecurityGraphJoin {
   readonly unjoined: readonly UnjoinedNode[];
 }
 
-/** What one scan scope matched and produced. */
+/**
+ * One declared scan scope, as COMMITTED: its name and nothing that counts.
+ *
+ * The counts live on {@link ScanScopeCount} in {@link ExtractionRun}, which is
+ * never written to the committed file (#4798). A per-scope `filesMatched` moves
+ * whenever ANY file is added under the scope, so two PRs that each add an
+ * unrelated file both rewrote the same line and every open PR conflicted after
+ * each merge. Worse, two PRs that each moved it by one merged CLEANLY to a value
+ * that was wrong for both files together.
+ */
 export interface ScanScopeReport {
   /** e.g. `apps/fiab-console/app/api/**\/route.ts`. */
   readonly scope: string;
+}
+
+/** What one scan scope matched and produced on ONE extractor run. Never committed. */
+export interface ScanScopeCount extends ScanScopeReport {
   readonly filesMatched: number;
   readonly nodesEmitted: number;
 }
@@ -149,6 +162,15 @@ export interface SkippedSubject {
   readonly reason: string;
 }
 
+/**
+ * The COMMITTED meta. Every field here is a property of what the graph says, and
+ * none is a tree-wide tally, a clock or a sha (#4798).
+ *
+ * The rule a new field must satisfy: two PRs that each add one unrelated file
+ * under a scanned scope must leave it either untouched or changed on DIFFERENT
+ * lines. A count over the whole scope fails that by construction, and belongs on
+ * {@link ExtractionRun}.
+ */
 export interface ExtractionMeta {
   /**
    * Bumped whenever the extraction SEMANTICS change.
@@ -158,22 +180,34 @@ export interface ExtractionMeta {
    * current predicates had run over it.
    */
   readonly generatorVersion: number;
-  /** ISO-8601. The basis of the staleness refusal in `artifact.ts`. */
+  readonly scanScopes: readonly ScanScopeReport[];
+  readonly skipped: readonly SkippedSubject[];
+}
+
+/**
+ * What ONE extractor run measured. Printed by the CLI, used for the population
+ * floor in `--check`, and NEVER written to the committed file (#4798).
+ *
+ * Until #4798 all of this sat in `meta`. `inputsDigest`, `generatedAt` and
+ * `commit` differ on every run; `filesScanned`, the per-scope counts, the unread
+ * file counts and the non-spawn sink total move whenever any file is added under
+ * a scanned root. So every PR that touched the artifact conflicted with every
+ * other one after each merge, and each resolution was a content push that
+ * voided every review verdict on it.
+ */
+export interface ExtractionRun {
+  /** ISO-8601 wall clock of this run. */
   readonly generatedAt: string;
   /** The commit the scan ran against, when the generator could determine one. */
   readonly commit: string | null;
-  /**
-   * A digest over (path, text) of every scanned file.
-   *
-   * Lets CI re-run the extractor and prove the committed artifact still matches
-   * the tree — the drift check that keeps a stale artifact from surviving a
-   * merge. The RUNTIME cannot recompute it (no checkout in the container), which
-   * is precisely why the runtime falls back to the age check instead.
-   */
+  /** A digest over (path, text) of every scanned file. See `build.ts#inputsDigest`. */
   readonly inputsDigest: string;
   readonly filesScanned: number;
-  readonly scanScopes: readonly ScanScopeReport[];
-  readonly skipped: readonly SkippedSubject[];
+  readonly scanScopes: readonly ScanScopeCount[];
+  /** What was seen under a scanned root and not read, WITH the counts. */
+  readonly unmodeledPublicationSurfaces: readonly UnmodeledSurface[];
+  /** Publication sinks that are not spawn stdio — the population C4's expression arm runs over. */
+  readonly nonSpawnSinks: number;
 }
 
 /**
@@ -189,4 +223,10 @@ export interface SecurityGraphArtifact {
   readonly graph: SecurityGraph;
   readonly join: SecurityGraphJoin;
   readonly meta: ExtractionMeta;
+}
+
+/** The committed artifact plus what the run that produced it measured. */
+export interface SecurityGraphExtraction {
+  readonly artifact: SecurityGraphArtifact;
+  readonly run: ExtractionRun;
 }

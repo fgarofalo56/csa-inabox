@@ -3,13 +3,15 @@
 // (sha256 9dcc3791ae86f77ef85b15d483b33bf320b6f10eb2165021150fb9fd963260b6, asserted at build)
 // with ONLY the authorization of the read endpoints changed, backported from upstream
 // unitycatalog commit da911fad3951 "[Server] Authorize the Iceberg REST catalog endpoints"
-// (#1813). Upstream v0.5.0 and v0.6.0 gate every Iceberg REST route on metastore OWNER, which
-// the catalog permissions API cannot grant, so a principal holding real catalog grants was
-// denied /v1/config. Every changed site is marked "#3339". Method bodies are untouched except
-// listTables, which now runs the response filter its new @ResponseAuthorizeFilter requires.
-// listNamespaces is deliberately NOT changed (still metastore OWNER): v0.5.0 lists it through
-// the in-process SchemaService, and scoping it needs #1813's repository rewrite, not an
-// annotation. Drop this file when an upstream release that carries #1813 is adopted.
+// (#1813). Upstream v0.5.0 (and v0.6.0, source read, not run) gates every Iceberg REST route on
+// metastore OWNER, which the catalog permissions API cannot grant, so a principal holding real
+// catalog grants was denied /v1/config. Every changed site is marked "#3339". Method bodies are
+// untouched except listTables and listNamespaces, which now run the response filter their new
+// @ResponseAuthorizeFilter requires, and fail closed when the per-request result filter is
+// absent, matching upstream AuthorizedService.applyResponseFilter. listNamespaces also reads the
+// schema repository directly, as #1813 does, instead of calling SchemaService.listSchemas
+// in-process (that call failed with 500 "Authorization filter not initialized"). Drop this file
+// when an upstream release that carries #1813 is adopted.
 package io.unitycatalog.server.service;
 
 import static io.unitycatalog.server.model.SecurableType.CATALOG;
@@ -33,18 +35,21 @@ import io.unitycatalog.server.auth.annotation.AuthorizeResourceKey;
 import io.unitycatalog.server.auth.annotation.ResponseAuthorizeFilter;
 import io.unitycatalog.server.auth.decorator.ResultFilter;
 import io.unitycatalog.server.auth.decorator.UnityAccessDecorator;
+import io.unitycatalog.server.exception.BaseException;
+import io.unitycatalog.server.exception.ErrorCode;
 import io.unitycatalog.server.exception.IcebergRestExceptionHandler;
 import io.unitycatalog.server.model.ListSchemasResponse;
 import io.unitycatalog.server.model.ListTablesResponse;
 import io.unitycatalog.server.model.SchemaInfo;
+import io.unitycatalog.server.model.SecurableType;
 import io.unitycatalog.server.model.TableInfo;
 import io.unitycatalog.server.persist.Repositories;
+import io.unitycatalog.server.persist.SchemaRepository;
 import io.unitycatalog.server.persist.TableRepository;
 import io.unitycatalog.server.service.iceberg.MetadataService;
 import io.unitycatalog.server.service.iceberg.TableConfigService;
 import io.unitycatalog.server.utils.JsonUtils;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -101,6 +106,7 @@ public class IcebergRestCatalogService {
   private final TableConfigService tableConfigService;
   private final MetadataService metadataService;
   private final TableRepository tableRepository;
+  private final SchemaRepository schemaRepository; // #3339: listNamespaces reads it directly
   private final SessionFactory sessionFactory;
 
   public IcebergRestCatalogService(
@@ -112,6 +118,7 @@ public class IcebergRestCatalogService {
     this.tableConfigService = tableConfigService;
     this.metadataService = metadataService;
     this.tableRepository = repositories.getTableRepository();
+    this.schemaRepository = repositories.getSchemaRepository(); // #3339
     this.sessionFactory = repositories.getSessionFactory();
   }
 
@@ -139,32 +146,44 @@ public class IcebergRestCatalogService {
 
   @Get("/v1/catalogs/{catalog}/namespaces")
   @ProducesJson
-  @AuthorizeExpression("#authorize(#principal, #metastore, OWNER)")
+  @AuthorizeExpression(GET_SCHEMA) // #3339
+  @ResponseAuthorizeFilter // #3339
   @AuthorizeResourceKey(METASTORE)
   public ListNamespacesResponse listNamespaces(
-      @Param("catalog") String catalog, @Param("parent") Optional<String> parent)
-      throws JsonProcessingException {
-    List<Namespace> namespaces;
-    if (parent.isPresent() && !parent.get().isEmpty()) {
-      // nested namespaces is not supported, so child namespaces will be empty
-      namespaces = Collections.emptyList();
-    } else {
-      String respContent =
-          schemaService
-              .listSchemas(catalog, Optional.of(Integer.MAX_VALUE), Optional.empty())
-              .aggregate()
-              .join()
-              .contentUtf8();
-      ListSchemasResponse resp =
-          JsonUtils.getInstance().readValue(respContent, ListSchemasResponse.class);
-      assert resp.getSchemas() != null;
-      namespaces =
-          resp.getSchemas().stream()
-              .map(schemaInfo -> Namespace.of(schemaInfo.getName()))
-              .collect(Collectors.toList());
+      @Param("catalog") @AuthorizeResourceKey(CATALOG) String catalog, // #3339
+      @Param("parent") Optional<String> parent) {
+    // #3339: read the schemas from the repository, as upstream #1813 does, instead of calling
+    // SchemaService.listSchemas in-process. That in-process call ran the SchemaService's own
+    // response filter under THIS route's request context, which (before #3339) carried no filter,
+    // so it failed with 500 "Authorization filter not initialized" for every caller that got past
+    // the gate.
+    List<SchemaInfo> schemas = new ArrayList<>();
+    if (parent.isEmpty() || parent.get().isEmpty()) {
+      // Follow the repository's page token to the end: this endpoint returns the whole listing.
+      Optional<String> pageToken = Optional.empty();
+      do {
+        ListSchemasResponse resp =
+            schemaRepository.listSchemas(catalog, Optional.empty(), pageToken);
+        assert resp.getSchemas() != null;
+        schemas.addAll(resp.getSchemas());
+        String next = resp.getNextPageToken();
+        pageToken = next == null || next.isEmpty() ? Optional.empty() : Optional.of(next);
+      } while (pageToken.isPresent());
     }
+    // else: nested namespaces are not supported, so child namespaces are empty (v0.5.0 behaviour,
+    // kept; upstream #1813 additionally 404s an absent parent).
 
-    return ListNamespacesResponse.builder().addAll(namespaces).build();
+    // #3339: drop the schemas the caller cannot read, per schema, with the GET_SCHEMA policy
+    // (upstream #1813: applyResponseFilter(SCHEMA, schemas)). Run on the empty list too, so the
+    // decorator sees the filter was called.
+    applyResponseFilter(SCHEMA, schemas);
+
+    return ListNamespacesResponse.builder()
+        .addAll(
+            schemas.stream()
+                .map(schemaInfo -> Namespace.of(schemaInfo.getName()))
+                .collect(Collectors.toList()))
+        .build();
   }
 
   @Get("/v1/catalogs/{catalog}/namespaces/{namespace}")
@@ -284,16 +303,8 @@ public class IcebergRestCatalogService {
     }
 
     // #3339: drop the tables the caller cannot read, per table, with the same GET_TABLE policy as
-    // loadTable (upstream #1813 does this through AuthorizedService.applyResponseFilter, which
-    // this v0.5.0 class does not extend). With authorization enabled, UnityAccessDecorator wraps
-    // every /api route and sets this attribute before the method runs; it is absent only when
-    // authorization is disabled and there is no decorator. Skipping the filter cannot fail open:
-    // if the decorator were present and the filter not run, its afterRequest answers 403.
-    ResultFilter resultFilter =
-        ServiceRequestContext.current().attr(UnityAccessDecorator.RESULT_FILTER_ATTR);
-    if (resultFilter != null) {
-      resultFilter.filter(TABLE, icebergTables);
-    }
+    // loadTable (upstream #1813 does this through AuthorizedService.applyResponseFilter).
+    applyResponseFilter(TABLE, icebergTables);
 
     List<TableIdentifier> filteredTables =
         icebergTables.stream()
@@ -306,5 +317,28 @@ public class IcebergRestCatalogService {
     return org.apache.iceberg.rest.responses.ListTablesResponse.builder()
         .addAll(filteredTables)
         .build();
+  }
+
+  // #3339: this v0.5.0 class does not extend AuthorizedService, so it carries upstream's
+  // applyResponseFilter contract itself. With authorization enabled, UnityAccessDecorator sets the
+  // per-request result filter for every @ResponseAuthorizeFilter route before the method runs; if
+  // it is absent, fail closed with the same error code upstream raises (INTERNAL, a 500) rather
+  // than return the list unfiltered. The message deliberately differs from upstream's text: the
+  // Console falls back to the Unity schemas API on upstream's exact message, and that fallback
+  // must not hide this failure. With authorization disabled there is no decorator and nothing to
+  // filter. serverProperties is AuthorizedService's protected field, reachable from this package.
+  private <T> void applyResponseFilter(SecurableType securableType, List<T> items) {
+    if (!schemaService.serverProperties.isAuthorizationEnabled()) {
+      return;
+    }
+    ResultFilter resultFilter =
+        ServiceRequestContext.current().attr(UnityAccessDecorator.RESULT_FILTER_ATTR);
+    if (resultFilter == null) {
+      throw new BaseException(
+          ErrorCode.INTERNAL,
+          "Result filter not installed for this Iceberg list request while authorization is"
+              + " enabled.");
+    }
+    resultFilter.filter(securableType, items);
   }
 }

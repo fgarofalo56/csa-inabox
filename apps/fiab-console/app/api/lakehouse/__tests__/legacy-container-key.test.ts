@@ -63,6 +63,22 @@ describe('legacyContainerKeyFor', () => {
     (listLakehouseRootFacts as any).mockRejectedValue(new Error('down'));
     expect(await legacyContainerKeyFor(LH, WS)).toBeNull();
   });
+
+  // A recycled lakehouse can be restored, so a container it records is still
+  // shared. The mock answers the recycled row only when asked for recycled
+  // items, as the real query does. FAILS IF the list is read without
+  // `includeRecycled: true`: the recycled lh-2 is then invisible and the answer
+  // is 'gold' instead of null.
+  it('returns null when a recycled item records the same container', async () => {
+    const rows = [{ id: LH, adlsContainer: 'gold' }, { id: 'lh-2', adlsContainer: 'gold', recycled: true }];
+    (listLakehouseRootFacts as any).mockImplementation(async (_items: unknown, opts?: { includeRecycled?: boolean }) =>
+      (opts?.includeRecycled ? rows : rows.filter((r) => !r.recycled)));
+    expect(await legacyContainerKeyFor(LH, WS)).toBeNull();
+    expect((listLakehouseRootFacts as any).mock.calls[0][1]).toEqual({ includeRecycled: true });
+    // Positive arm: with the recycled row gone the container is this item's alone.
+    rows.pop();
+    expect(await legacyContainerKeyFor(LH, WS)).toBe('gold');
+  });
 });
 
 describe('recordedContainerOf', () => {

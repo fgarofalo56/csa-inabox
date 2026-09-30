@@ -9,7 +9,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { withSession } from '@/lib/api/route-toolkit';
-import { apiBadRequest } from '@/lib/api/respond';
+import { apiBadRequest, apiOk } from '@/lib/api/respond';
 import { authorizeLakehouse } from '../_lib/item-scope';
 
 export const runtime = 'nodejs';
@@ -20,5 +20,5 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
   if (!lakehouseId) return apiBadRequest('lakehouseId is required');
   const access = await authorizeLakehouse(session, lakehouseId);
   if (access instanceof NextResponse) return access;
-  return NextResponse.json({ ok: true, lakehouseId, canWrite: access.canWrite });
+  return apiOk({ lakehouseId, canWrite: access.canWrite });
 });

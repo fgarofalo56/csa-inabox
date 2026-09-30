@@ -29,19 +29,22 @@ interface Props {
   container: string;
   prefix: string;
   openPrefixes: Record<string, PathEntry[] | 'loading' | ListingError>;
+  /** The listing route's `note` for an empty level, by the same key; shown instead of "(empty)". */
+  notes?: Record<string, string>;
   loadRefPaths: (refId: string, container: string, prefix: string) => Promise<void>;
   selectRefFile: (ref: ReferenceLakehouse, container: string, entry: PathEntry) => Promise<void>;
 }
 
 export function RefTreeChildren({
-  ref_, container, prefix, openPrefixes, loadRefPaths, selectRefFile,
+  ref_, container, prefix, openPrefixes, notes, loadRefPaths, selectRefFile,
 }: Props) {
-  const state = openPrefixes[`ref::${ref_.id}::${container}::${prefix}`];
+  const key = `ref::${ref_.id}::${container}::${prefix}`;
+  const state = openPrefixes[key];
   const base = `ref-${ref_.id}-${container}-${prefix}`;
   const child = (p: string) => (
     <RefTreeChildren
       ref_={ref_} container={container} prefix={p}
-      openPrefixes={openPrefixes} loadRefPaths={loadRefPaths} selectRefFile={selectRefFile}
+      openPrefixes={openPrefixes} notes={notes} loadRefPaths={loadRefPaths} selectRefFile={selectRefFile}
     />
   );
 
@@ -61,7 +64,7 @@ export function RefTreeChildren({
     </TreeItem>
   );
   if (state.length === 0) return (
-    <TreeItem itemType="leaf" value={`${base}-empty`}><TreeItemLayout><Caption1>(empty)</Caption1></TreeItemLayout></TreeItem>
+    <TreeItem itemType="leaf" value={`${base}-empty`}><TreeItemLayout><Caption1>{notes?.[key] || '(empty)'}</Caption1></TreeItemLayout></TreeItem>
   );
 
   return (

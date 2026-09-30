@@ -68,7 +68,7 @@ import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
 import { QueryErrorBar } from '@/lib/components/ui/query-error-bar';
 import { DeltaPreviewGrid, type ColStat } from '../components/delta-preview-grid';
 import {
-  useStyles, leafName, collectEntries, formatCell, parseJsonOrError, FileGlyph,
+  useStyles, leafName, collectEntries, formatCell, parseJsonOrError, FileGlyph, maintainTableDef,
 } from './shared';
 import type {
   PathEntry, ListingError, ReferenceLakehouse, PreviewResponse, UploadItem, MipLabelOption,
@@ -83,6 +83,7 @@ import { useLakehouseSettings } from './hooks/use-lakehouse-settings';
 import { useLakehouseShortcuts } from './hooks/use-lakehouse-shortcuts';
 import { useLakehouseSecondary } from './hooks/use-lakehouse-secondary';
 import { useLakehouseBinding } from './hooks/use-lakehouse-binding';
+import { useLakehouseReadOnly, LAKEHOUSE_READ_ONLY_TITLE } from './hooks/use-lakehouse-access';
 // ── Panes ────────────────────────────────────────────────────────────────────
 import { FilesPane } from './panes/files-pane';
 import { TablesPane } from './panes/tables-pane';
@@ -109,6 +110,10 @@ export function LakehouseEditor({ item, id }: Props) {
     queryFn: () => getItem('lakehouse', id),
     enabled: !isNewItem,
   });
+  // True only when /api/lakehouse/access answered canWrite:false. The actions
+  // that need edit rights are disabled with LAKEHOUSE_READ_ONLY_TITLE, and a
+  // read-only MessageBar says so above the tabs.
+  const readOnly = useLakehouseReadOnly(id, isNewItem);
   const lhContentRaw = (itemQ.data?.state as any)?.content as LakehouseContent | undefined;
   const lhContent = lhContentRaw?.kind === 'lakehouse' ? lhContentRaw : undefined;
   const bundleFolders = lhContent?.folders ?? [];
@@ -229,7 +234,10 @@ export function LakehouseEditor({ item, id }: Props) {
         // class, never on the wording, and no RequestId reaches here.
         [key]: j.ok
           ? (j.paths as PathEntry[])
-          : { error: j.error || `HTTP ${r.status}`, remediation: j.remediation, code: j.code, kind: j.kind },
+          : {
+            error: j.error || `HTTP ${r.status}`, remediation: j.remediation, code: j.code, kind: j.kind,
+            ...(typeof j.fixHref === 'string' ? { fixHref: j.fixHref } : {}),
+          },
       }));
     } catch (e: any) {
       setOpenPrefixes((p) => ({ ...p, [key]: { error: e?.message || String(e) } }));
@@ -280,7 +288,8 @@ export function LakehouseEditor({ item, id }: Props) {
   const lakehouseName: string =
     (itemQ.data?.displayName) || (settings_.settings.displayName) || activeContainer || id;
   const maintainColumns = useMemo(() => {
-    const def = bundleDeltaTables.find((t) => t.name === maintainTable || leafName(t.name) === maintainTable);
+    // Matches both keys the Tables pane sets: a bundle table's name, and `<schema>/<table>`.
+    const def = maintainTableDef(bundleDeltaTables, maintainTable);
     return def?.ddl ? parseDdlColumns(def.ddl) : [];
   }, [bundleDeltaTables, maintainTable]);
 
@@ -444,9 +453,9 @@ export function LakehouseEditor({ item, id }: Props) {
   }, [activeContainer, router]);
 
   const onLoadToTables = useCallback((entry: PathEntry) => {
-    if (!activeContainer || entry.isDirectory) return;
+    if (!activeContainer || entry.isDirectory || readOnly) return;
     setLttEntry(entry); setLttOpen(true);
-  }, [activeContainer]);
+  }, [activeContainer, readOnly]);
 
   const uploadOne = useCallback(async (targetPath: string, file: File): Promise<string | null> => {
     if (!activeContainer) return 'No active container';
@@ -460,7 +469,7 @@ export function LakehouseEditor({ item, id }: Props) {
       if (ct.includes('application/json')) { try { j = await r.json(); } catch {} }
       if (!j) { try { bodyText = (await r.text()).slice(0, 240); } catch {} }
       if (!r.ok || j?.ok === false) {
-        return j?.error
+        return (j?.error ? [j.error, j.remediation].filter(Boolean).join(' ') : '')
           || (r.status === 413 ? `${leafName(targetPath)}: file too large. Max 4 GB.`
           : r.status === 502 ? `${leafName(targetPath)}: upstream storage error (502).`
           : r.status === 401 ? 'Sign in expired. Reload and re-authenticate.'
@@ -528,6 +537,7 @@ export function LakehouseEditor({ item, id }: Props) {
   const onDrop = useCallback(async (e: React.DragEvent) => {
     e.preventDefault(); setIsDragOver(false);
     if (!activeContainer) return;
+    if (readOnly) { setActionError(LAKEHOUSE_READ_ONLY_TITLE); return; }
     const dtItems = Array.from(e.dataTransfer.items || []) as DataTransferItem[];
     const entries = dtItems
       .filter((it) => it.kind === 'file')
@@ -540,7 +550,7 @@ export function LakehouseEditor({ item, id }: Props) {
       items = (Array.from(e.dataTransfer.files || []) as File[]).map((f) => ({ relativePath: f.name, file: f }));
     }
     if (items.length) await uploadItems(items);
-  }, [activeContainer, uploadItems]);
+  }, [activeContainer, uploadItems, readOnly]);
 
   const onNewFolder = useCallback(async () => {
     if (!activeContainer) return;
@@ -699,12 +709,12 @@ export function LakehouseEditor({ item, id }: Props) {
   // F6 keyboard shortcut
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key !== 'F6' || lttOpen || !activeContainer || !activePath || activePath.isDirectory) return;
+      if (e.key !== 'F6' || lttOpen || readOnly || !activeContainer || !activePath || activePath.isDirectory) return;
       e.preventDefault(); setLttEntry(activePath); setLttOpen(true);
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [activeContainer, activePath, lttOpen]);
+  }, [activeContainer, activePath, lttOpen, readOnly]);
 
   // ── Derived listings ──────────────────────────────────────────────────────
   // "No folder selected" means the LAKEHOUSE root (#3904), not the container root.
@@ -724,16 +734,20 @@ export function LakehouseEditor({ item, id }: Props) {
   const writeTitle = isReferenceLakehouse
     ? 'Read-only — reference lakehouse (write operations disabled)'
     : !canFileAction ? 'Select a container first' : undefined;
+  // Actions that change the lakehouse also close when the caller's role is
+  // read-only. Refresh and the navigation items stay open: they change nothing.
+  const editBlocked = writeBlocked || readOnly;
+  const editTitle = readOnly ? LAKEHOUSE_READ_ONLY_TITLE : writeTitle;
   const notebookHref = activeContainer ? `/items/notebook/new?lakehouse=${encodeURIComponent(activeContainer)}` : '/items/notebook/new';
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Refresh', actions: [{ label: 'Refresh', icon: <ArrowSync20Regular />, onClick: writeBlocked ? undefined : refreshActive, disabled: writeBlocked, title: writeTitle }] },
       { label: 'Get data', actions: [{ label: 'Get data', disabled: writeBlocked, title: writeTitle, dropdownItems: [
-        { label: uploading ? `Uploading (${runningUploads.length})…` : 'Upload', icon: <ArrowUpload20Regular />, onClick: writeBlocked ? undefined : onUploadClick, disabled: writeBlocked, title: writeTitle },
-        { label: 'Upload folder', icon: <FolderArrowUp20Regular />, onClick: writeBlocked ? undefined : onFolderUploadClick, disabled: writeBlocked, title: writeTitle },
-        { label: 'New folder', icon: <FolderAdd20Regular />, onClick: writeBlocked ? undefined : onNewFolder, disabled: writeBlocked, title: writeTitle },
-        { label: 'New shortcut', icon: <LinkMultiple20Regular />, onClick: writeBlocked ? undefined : () => { setTab('shortcuts'); sc_.openShortcutWizard(); }, disabled: writeBlocked, title: writeTitle },
+        { label: uploading ? `Uploading (${runningUploads.length})…` : 'Upload', icon: <ArrowUpload20Regular />, onClick: editBlocked ? undefined : onUploadClick, disabled: editBlocked, title: editTitle },
+        { label: 'Upload folder', icon: <FolderArrowUp20Regular />, onClick: editBlocked ? undefined : onFolderUploadClick, disabled: editBlocked, title: editTitle },
+        { label: 'New folder', icon: <FolderAdd20Regular />, onClick: editBlocked ? undefined : onNewFolder, disabled: editBlocked, title: editTitle },
+        { label: 'New shortcut', icon: <LinkMultiple20Regular />, onClick: editBlocked ? undefined : () => { setTab('shortcuts'); sc_.openShortcutWizard(); }, disabled: editBlocked, title: editTitle },
         { label: 'New dataflow', icon: <Database20Regular />, onClick: () => router.push('/items/dataflow/new') },
         { label: 'New pipeline', icon: <Database20Regular />, onClick: () => router.push('/items/data-pipeline/new') },
         { label: 'New notebook', icon: <BookOpen20Regular />, onClick: () => router.push(notebookHref) },
@@ -752,13 +766,13 @@ export function LakehouseEditor({ item, id }: Props) {
         { label: 'Preview', icon: <Eye20Regular />, onClick: hasFile ? () => { if (activePath) { selectFile(activePath); setTab('preview'); } } : undefined, disabled: !hasFile },
         { label: 'Query this file', icon: <Play20Regular />, onClick: hasFile ? () => { if (activePath) { selectFile(activePath); setTab('sql'); } } : undefined, disabled: !hasFile },
       ] },
-      { label: 'Tables', actions: [{ label: 'Load to table', onClick: hasFile ? () => { if (activePath) onLoadToTables(activePath); } : undefined, disabled: !hasFile, title: hasFile ? 'Load this file into a managed Delta table (F6)' : 'Select a file first' }] },
+      { label: 'Tables', actions: [{ label: 'Load to table', onClick: hasFile && !readOnly ? () => { if (activePath) onLoadToTables(activePath); } : undefined, disabled: !hasFile || readOnly, title: readOnly ? LAKEHOUSE_READ_ONLY_TITLE : hasFile ? 'Load this file into a managed Delta table (F6)' : 'Select a file first' }] },
       { label: 'Protect', actions: [{ label: 'Download with label', onClick: hasFile ? () => { if (activePath) openLabelDialog(activePath); } : undefined, disabled: !hasFile, title: hasFile ? 'Stamp a MIP sensitivity label on download' : 'Select a file first' }] },
       { label: 'Manage', actions: [
         { label: 'Settings', icon: <Info20Regular />, onClick: writeBlocked ? undefined : settings_.openSettings, disabled: writeBlocked, title: writeTitle },
         { label: 'Permissions', icon: <LinkMultiple20Regular />, onClick: activeContainer ? perms.openPerms : undefined, disabled: !activeContainer, title: !activeContainer ? 'Select a container first' : undefined },
         { label: 'Share', icon: <Add20Regular />, onClick: activeContainer ? () => { sec.setShareError(null); sec.setShareSuccess(null); sec.setShareOpen(true); } : undefined, disabled: !activeContainer, title: !activeContainer ? 'Select a container first' : undefined },
-        { label: 'Maintain…', icon: <Wrench20Regular />, onClick: (tab === 'tables' && maintainTable) ? () => setMaintainOpen(true) : undefined, disabled: !(tab === 'tables' && maintainTable), title: !(tab === 'tables' && maintainTable) ? 'Select a table in the Tables tab first' : 'OPTIMIZE / VACUUM / ZORDER BY' },
+        { label: 'Maintain…', icon: <Wrench20Regular />, onClick: (tab === 'tables' && maintainTable && !readOnly) ? () => setMaintainOpen(true) : undefined, disabled: readOnly || !(tab === 'tables' && maintainTable), title: readOnly ? LAKEHOUSE_READ_ONLY_TITLE : !(tab === 'tables' && maintainTable) ? 'Select a table in the Tables tab first' : 'OPTIMIZE / VACUUM / ZORDER BY' },
         { label: 'OneLake security', icon: <ShieldTask20Regular />, onClick: () => setTab('security'), title: 'Manage OneLake data-access roles + row/column security for this lakehouse' },
         ...(interopTabOn ? [{ label: 'Interop (Iceberg)', icon: <DatabaseLink20Regular />, onClick: () => setTab('interop'), title: 'Expose Delta tables to Trino / Spark / DuckDB / Snowflake as Apache Iceberg — zero copy, same files' }] : []),
         ...(connectTabOn ? [{ label: 'Connect (ADBC / Flight)', icon: <PlugConnected20Regular />, onClick: () => setTab('connect'), title: 'Mint a short-lived access ticket and get ADBC / Arrow Flight SQL / JDBC snippets — Arrow batches, not row-by-row ODBC' }] : []),
@@ -766,7 +780,7 @@ export function LakehouseEditor({ item, id }: Props) {
       { label: 'AI', actions: [{ label: 'Add to data agent', icon: <Sparkle20Regular />, onClick: () => { void sec.openAddToAgent(); }, title: 'Ground a data agent on this lakehouse (Fabric "Add to AI skill")' }] },
     ] },
   ], [
-    writeBlocked, writeTitle, canFileAction, uploading, runningUploads.length,
+    writeBlocked, writeTitle, editBlocked, editTitle, readOnly, canFileAction, uploading, runningUploads.length,
     onUploadClick, onFolderUploadClick, onNewFolder, refreshActive, sc_.openShortcutWizard, router,
     notebookHref, hasFile, activePath, selectFile, onLoadToTables, openLabelDialog,
     activeContainer, perms.openPerms, settings_.openSettings, tab, maintainTable,
@@ -1018,7 +1032,7 @@ export function LakehouseEditor({ item, id }: Props) {
                         <TreeItem key={`refc-${ref.id}-${c}`} itemType="branch" value={`refc-${ref.id}-${c}`} onClick={() => sec.loadRefPaths(ref.id, c, '')}>
                           <TreeItemLayout iconBefore={<Database20Regular />}>{c}</TreeItemLayout>
                           <Tree><RefTreeChildren ref_={ref} container={c} prefix=""
-                            openPrefixes={sec.refOpenPrefixes} loadRefPaths={sec.loadRefPaths}
+                            openPrefixes={sec.refOpenPrefixes} notes={sec.refPathNotes} loadRefPaths={sec.loadRefPaths}
                             selectRefFile={sec.selectRefFile} /></Tree>
                         </TreeItem>
                       ))}
@@ -1053,6 +1067,16 @@ export function LakehouseEditor({ item, id }: Props) {
               message="Explore this lakehouse in a notebook, query it through the SQL analytics endpoint, or stream it into an eventhouse endpoint — all on Azure, no Fabric required."
               learnMoreHref="https://learn.microsoft.com/azure/synapse-analytics/spark/apache-spark-delta-lake-overview"
             />
+            {/* Visible reason for the actions closed below: the ribbon shows the
+                same text only as a tooltip, so it is stated here once. */}
+            {readOnly && (
+              <MessageBar intent="info" data-testid="lakehouse-read-only">
+                <MessageBarBody>
+                  <MessageBarTitle>Read-only access</MessageBarTitle>
+                  {LAKEHOUSE_READ_ONLY_TITLE} Browsing, preview, query and download still work.
+                </MessageBarBody>
+              </MessageBar>
+            )}
             {/* Reference preview inline banner */}
             {sec.refSelection && (
               <div style={{ borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, background: tokens.colorNeutralBackground2 }}>

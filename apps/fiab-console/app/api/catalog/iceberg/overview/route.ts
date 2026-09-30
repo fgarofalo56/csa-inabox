@@ -162,7 +162,8 @@ export const GET = withTenantAdmin(async (req, { session }) => {
     };
     try {
       // Uses the resolved variant so the surface still lists namespaces when the
-      // catalog image returns its known LIST-namespaces 500 (see
+      // catalog image returns upstream's LIST-namespaces 500 — an image without
+      // the #3339 namespace-list change (see
       // iceberg-catalog-client.listNamespacesResolved for the measurement).
       const nsList = await listNamespacesResolved();
       const found = (nsList.namespaces || []).map((levels) => namespaceToDotted(levels)).slice(0, limit);

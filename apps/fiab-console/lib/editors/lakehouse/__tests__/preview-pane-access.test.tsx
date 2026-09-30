@@ -111,4 +111,19 @@ describe('PreviewPane — live transform preview availability', () => {
     expect(last().previewSource).toMatchObject({ lakehouseId: 'lh-1' });
     expect(last().previewUnavailableReason).toBeNull();
   });
+
+  it('still offers the source when the access request itself rejects (network failure)', async () => {
+    // The handler throws, so the mocked fetch REJECTS and the query lands in its
+    // error state -- the `q.isError` branch of useLakehouseAccess, which the
+    // 200 {ok:false} case above never reaches (its queryFn resolves to null).
+    const { calls } = installFetchMock({
+      '/api/lakehouse/access': () => { throw new TypeError('Failed to fetch'); },
+    });
+    mount();
+    await probeSettled(calls);
+    // Breaks if the hook's error branch reports canWrite:false: the pane would
+    // then withhold the source and show the read-only reason.
+    expect(last().previewSource).toMatchObject({ lakehouseId: 'lh-1' });
+    expect(last().previewUnavailableReason).toBeNull();
+  });
 });
