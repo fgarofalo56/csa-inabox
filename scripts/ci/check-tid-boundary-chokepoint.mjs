@@ -661,7 +661,9 @@ const NON_AUTHORIZER_BODY_PINS = new Map([
   // #4805 re-pinned these four: each body gained ONLY an early device-code
   // refusal (a least-privilege DENY for non-interactive sign-in, never a grant);
   // none reads a workspace document, so every reason above still holds.
-  ['lib/auth/feature-gate.ts:requireTenantAdmin', 'c93fb0999096'],
+  // requireTenantAdmin also carries #4788's optional `refusal` text override
+  // (it rewords the 403 only), so its pin is the digest of the merged body.
+  ['lib/auth/feature-gate.ts:requireTenantAdmin', 'f4c06a6a9c09'],
   ['lib/auth/feature-gate.ts:enforceCapability', 'e9e7b6f8ad80'],
   ['lib/auth/feature-gate.ts:isTenantAdmin', '4284fea3226f'],
   ['lib/auth/feature-gate.ts:checkCapability', 'cc57f264b504'],
