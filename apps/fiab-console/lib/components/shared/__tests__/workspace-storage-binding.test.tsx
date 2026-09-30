@@ -8,7 +8,9 @@
  *     pane's OneLake tab, the drawer's StorageBindingSection);
  *   - show the binding read-only, with the reason, instead of a picker;
  *   - still let an admin set, change and clear it, and send the field only
- *     when an admin changed it.
+ *     when an admin changed it;
+ *   - in the drawer, bind through the picker only: a failed or empty account
+ *     list renders a guided MessageBar, never a free-text ARM-id input.
  *
  * Every load-bearing assertion names the input that breaks it. The routes are
  * the enforcement point and have their own suites.
@@ -286,5 +288,63 @@ describe('Workspace settings drawer, StorageBindingSection (#4619)', () => {
     fireEvent.click(saveBinding());
     await waitFor(() => expect(screen.getByText(/SERVER-REASON-3c1/)).toBeTruthy());
     expect(screen.queryByText(/^forbidden \(HTTP 403\)$/)).toBeNull();
+  });
+
+  // The binding is picker-only. The free-text ARM-id box only ever rendered
+  // when the account list could NOT be read, so these fixtures fail the list:
+  // with a successful list, restoring the box would change nothing on screen.
+  const LIST_FAILED: Route = {
+    body: { ok: false, error: 'LIST-ERROR-3d', hint: 'LIST-HINT-3d or enter the storage URI manually.' },
+  };
+
+  for (const admin of [false, true]) {
+    it(`a failed account list renders no free-text ARM-id input (${admin ? 'admin' : 'non-admin'})`, async () => {
+      // Breaks if the manual fallback returns: a textbox (the ARM-id Input)
+      // would render and the /subscriptions/ placeholder would be present.
+      // Also breaks if the route's hint, which offers that manual entry, is
+      // shown instead of the error detail.
+      const calls = stubFetch({ ...DRAWER_ROUTES, '/api/storage/accounts': LIST_FAILED });
+      render(withSession(admin, drawer()));
+      const bar = await screen.findByTestId('storage-accounts-unavailable');
+      expect(bar.textContent).toContain('LIST-ERROR-3d');
+      expect(bar.textContent).not.toContain('LIST-HINT-3d');
+      expect(screen.queryAllByRole('textbox')).toHaveLength(0);
+      expect(screen.queryByPlaceholderText(/subscriptions/)).toBeNull();
+      expect(saveBinding().disabled).toBe(true);
+      fireEvent.click(saveBinding());
+      expect(writes(calls, 'PATCH')).toHaveLength(0);
+    });
+  }
+
+  it('Retry re-reads the account list and brings the picker back (positive pair)', async () => {
+    // Pairs the absence test above: breaks if the guided state is a dead end,
+    // i.e. Retry does not re-fetch, so no combobox appears and nothing can be
+    // bound once the list is readable again.
+    const routes: Record<string, Route> = { ...DRAWER_ROUTES, '/api/storage/accounts': LIST_FAILED };
+    const calls = stubFetch(routes);
+    render(withSession(true, drawer()));
+    await screen.findByTestId('storage-accounts-unavailable');
+    routes['/api/storage/accounts'] = { body: ACCOUNTS };
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.getByRole('combobox')).toBeTruthy());
+    expect(calls.filter((c) => c.url.includes('/api/storage/accounts'))).toHaveLength(2);
+    await pick(screen.getByRole('combobox'), /^lakeb/);
+    fireEvent.click(saveBinding());
+    await waitFor(() => expect(writes(calls, 'PATCH')).toHaveLength(1));
+    expect(writes(calls, 'PATCH')[0].body).toEqual({ storageAccountId: ACCT_B });
+  });
+
+  it('an empty account list explains itself and still offers "Not bound"', async () => {
+    // Breaks if the empty list renders a bare picker with no explanation
+    // (the empty-state bar is missing), or if it drops the picker entirely,
+    // so an admin could not clear a stale binding.
+    const calls = stubFetch({ ...DRAWER_ROUTES, '/api/storage/accounts': { body: { ok: true, accounts: [] } } });
+    render(withSession(true, drawer()));
+    expect((await screen.findByTestId('storage-accounts-empty')).textContent).toMatch(/deployment-default/);
+    expect(screen.queryAllByRole('textbox')).toHaveLength(0);
+    await pick(screen.getByRole('combobox'), /^Not bound/);
+    fireEvent.click(saveBinding());
+    await waitFor(() => expect(writes(calls, 'PATCH')).toHaveLength(1));
+    expect(writes(calls, 'PATCH')[0].body).toEqual({ storageAccountId: '' });
   });
 });
