@@ -15,8 +15,8 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | --- | ---: |
 | Total routes | 1696 |
 | Public (no session) | 59 |
-| Session-only | 620 |
-| Owner-scoped | 692 |
+| Session-only | 618 |
+| Owner-scoped | 694 |
 | Admin | 325 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 499 |
@@ -1774,7 +1774,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/stream-analytics-job/[name]/state/route.ts` | POST | session-only |  | ADX, ARM, Azure SQL, Azure Storage, Event Hubs, IoT Hub, PostgreSQL, Service Bus, Stream Analytics |
 | `items/stream-analytics-job/[name]/test/route.ts` | POST | session-only |  | ADX, ARM, Azure SQL, Azure Storage, Event Hubs, IoT Hub, PostgreSQL, Service Bus, Stream Analytics |
 | `items/stream-analytics-job/route.ts` | GET | session-only |  | ADX, ARM, Azure SQL, Azure Storage, Event Hubs, IoT Hub, PostgreSQL, Service Bus, Stream Analytics |
-| `items/synapse-dedicated-sql-pool/[id]/cancel/route.ts` | POST | session-only |  | Azure SQL |
+| `items/synapse-dedicated-sql-pool/[id]/cancel/route.ts` | POST | owner-scoped |  | Azure SQL, Cosmos, Microsoft Graph |
 | `items/synapse-dedicated-sql-pool/[id]/clone/route.ts` | POST | owner-scoped |  | ARM, Azure SQL, Cosmos, Managed Identity, Microsoft Graph, Resource Graph, Synapse, Synapse SQL |
 | `items/synapse-dedicated-sql-pool/[id]/connection/route.ts` | GET | session-only |  | ADLS, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Databricks, Event Hubs / Service Bus, Key Vault, PostgreSQL, Synapse, Synapse SQL |
 | `items/synapse-dedicated-sql-pool/[id]/model/route.ts` | — | public |  | — |
@@ -1830,7 +1830,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/vector-store/[id]/search/route.ts` | POST | session-only | ● | AI Search, AML, ARM, Azure AI Services, Azure OpenAI, PostgreSQL |
 | `items/vector-store/[id]/sync/route.ts` | GET POST | session-only |  | AI Search, AML, ARM, Azure AI Services, Azure OpenAI, Azure SQL, Azure Storage, Cosmos, Managed Identity, Synapse SQL |
 | `items/vector-store/route.ts` | GET POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, ARM, Azure SQL, Azure Storage, Compute, Cosmos, Managed Identity, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Synapse |
-| `items/warehouse/[id]/cancel/route.ts` | POST | session-only |  | Azure SQL |
+| `items/warehouse/[id]/cancel/route.ts` | POST | owner-scoped |  | Azure SQL, Cosmos, Microsoft Graph |
 | `items/warehouse/[id]/clone/route.ts` | POST | owner-scoped | ● | ADLS, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Resource Graph, Synapse, Synapse SQL |
 | `items/warehouse/[id]/copy-into/route.ts` | GET POST | owner-scoped |  | ADLS, ARM, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Resource Graph, Synapse, Synapse SQL |
 | `items/warehouse/[id]/iqy/route.ts` | POST | session-only |  | — |

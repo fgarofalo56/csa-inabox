@@ -24,6 +24,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { makeItem, installFetchMock } from './test-helpers';
 import { SessionProvider } from '@/lib/components/session-context';
+import { analyzeLakehouseQuery } from '@/app/api/items/lakehouse/_lib/query-scope';
 
 const nav = vi.hoisted(() => ({ search: '' }));
 vi.mock('next/navigation', () => ({
@@ -136,6 +137,19 @@ describe('SqlAnalyticsEndpointEditor — query scope', () => {
     expect(text).toContain('Query failed (Msg 208)');
     expect(text).not.toContain('Query not run');
     expect(intents()).toContain('error');
+  });
+
+  it('opens on SQL the route accepts from a caller who is not a tenant admin', async () => {
+    // Breaks if the opening SQL uses anything the route's classifier refuses
+    // for a non-admin (e.g. SUSER_NAME(), a `sys.` view): the editor would open
+    // on a query its own users cannot run. The posted body is read from the
+    // real click, and the verdict from the real classifier.
+    const { calls } = mount(false);
+    await clickRun();
+    await waitFor(() => expect(calls.some((c) => c.url.includes('/query'))).toBe(true), { timeout: 5000 });
+    const posted = postedQuery(calls);
+    expect(posted.sql).toContain('SELECT');
+    expect(analyzeLakehouseQuery(posted.sql, { database: 'master' })).toEqual({ ok: true, locations: [] });
   });
 
   it('disables the templates the route refuses for a caller who is not a tenant admin, with the reason, and keeps them focusable', async () => {
