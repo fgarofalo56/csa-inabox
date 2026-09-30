@@ -311,13 +311,16 @@ export function useLakehouseSecondary({
   const [shareError, setShareError] = useState<string | null>(null);
   const [shareSuccess, setShareSuccess] = useState<string | null>(null);
 
+  // Share is the Permissions grant under another name: it names the lakehouse,
+  // and the server grants on the container and storage account the item is
+  // bound to. An unsaved item has neither, so nothing is sent.
   const grantShare = useCallback(async () => {
-    if (!activeContainer || !sharePrincipal.trim()) return;
+    if (isNewItem || !id || !activeContainer || !sharePrincipal.trim()) return;
     setShareBusy(true); setShareError(null); setShareSuccess(null);
     try {
       const r = await clientFetch('/api/lakehouse/permissions', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ container: activeContainer, principalId: sharePrincipal.trim(), principalType: sharePrincipalType, role: shareRole }),
+        body: JSON.stringify({ tab: 'object', lakehouseId: id, container: activeContainer, principalId: sharePrincipal.trim(), principalType: sharePrincipalType, role: shareRole }),
       });
       const j = await parseJsonOrError<{ ok: boolean; error?: string }>(r, 'Share');
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
@@ -325,7 +328,7 @@ export function useLakehouseSecondary({
       setSharePrincipal('');
     } catch (e: any) { setShareError(e?.message || String(e)); }
     finally { setShareBusy(false); }
-  }, [activeContainer, sharePrincipal, sharePrincipalType, shareRole]);
+  }, [isNewItem, id, activeContainer, sharePrincipal, sharePrincipalType, shareRole]);
 
   // ── Data Agent ────────────────────────────────────────────────────────────
   const [daOpen, setDaOpen] = useState(false);

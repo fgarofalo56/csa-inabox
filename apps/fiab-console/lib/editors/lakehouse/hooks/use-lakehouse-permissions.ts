@@ -92,13 +92,16 @@ export function useLakehousePermissions({ lakehouseId, activeContainer, confirm 
     loadPerms();
   }, [lakehouseId, loadPerms]);
 
+  // The object-tab writes name the lakehouse too: the server grants and revokes
+  // on the container and storage account the item is bound to, the same ones
+  // the listing above reads.
   const grantPerm = useCallback(async () => {
-    if (!activeContainer || !newPrincipalId.trim()) return;
+    if (!lakehouseId || !activeContainer || !newPrincipalId.trim()) return;
     setPermsBusy(true); setPermsError(null);
     try {
       const r = await clientFetch('/api/lakehouse/permissions', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ container: activeContainer, principalId: newPrincipalId.trim(), principalType: newPrincipalType, role: newRole }),
+        body: JSON.stringify({ tab: 'object', lakehouseId, container: activeContainer, principalId: newPrincipalId.trim(), principalType: newPrincipalType, role: newRole }),
       });
       const j = await parseJsonOrError<{ ok: boolean; error?: string }>(r, 'Grant permission');
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
@@ -106,20 +109,20 @@ export function useLakehousePermissions({ lakehouseId, activeContainer, confirm 
       await loadPerms();
     } catch (e: any) { setPermsError(e?.message || String(e)); }
     finally { setPermsBusy(false); }
-  }, [activeContainer, newPrincipalId, newPrincipalType, newRole, loadPerms]);
+  }, [lakehouseId, activeContainer, newPrincipalId, newPrincipalType, newRole, loadPerms]);
 
   const revokePerm = useCallback(async (armId: string) => {
-    if (!activeContainer) return;
+    if (!lakehouseId || !activeContainer) return;
     setPermsBusy(true); setPermsError(null);
     try {
-      const qs = new URLSearchParams({ tab: 'object', container: activeContainer, id: armId });
+      const qs = new URLSearchParams({ tab: 'object', lakehouseId, container: activeContainer, id: armId });
       const r = await clientFetch(`/api/lakehouse/permissions?${qs.toString()}`, { method: 'DELETE' });
       const j = await parseJsonOrError<{ ok: boolean; error?: string }>(r, 'Revoke permission');
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       await loadPerms();
     } catch (e: any) { setPermsError(e?.message || String(e)); }
     finally { setPermsBusy(false); }
-  }, [activeContainer, loadPerms]);
+  }, [lakehouseId, activeContainer, loadPerms]);
 
   // ── SQL-plane callbacks ───────────────────────────────────────────────────
   const loadSqlPerms = useCallback(async (t: PermsTab) => {
