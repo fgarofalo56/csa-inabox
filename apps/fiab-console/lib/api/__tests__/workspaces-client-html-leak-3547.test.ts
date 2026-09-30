@@ -160,8 +160,12 @@ describe("#3547 — the BFF's own JSON reason is still preferred", () => {
   });
 
   it('#4619: any other 403 still surfaces its own `error` (positive pair)', async () => {
-    // Breaks if every 403 were treated as admin_only: this envelope has no
-    // reason, so the message would fall to the generic tenant-admin sentence.
+    // Breaks if a non-admin_only refusal lost its `error`, for example if every
+    // refusal were rendered from reason + remediation only: this envelope has
+    // neither, so the message would become the generic tenant-admin sentence.
+    // NOT a witness for the branch condition alone: widening it to every
+    // refusal still routes through `refusalText`, which falls back to `error`,
+    // so this message is unchanged. The empty-envelope test above kills that.
     stub(403, JSON.stringify({ ok: false, error: 'read_only' }), 'application/json');
     const msg = await messageFrom(() => updateWorkspace('ws-1', { name: 'x' }));
     expect(msg).toBe('read_only (HTTP 403)');
