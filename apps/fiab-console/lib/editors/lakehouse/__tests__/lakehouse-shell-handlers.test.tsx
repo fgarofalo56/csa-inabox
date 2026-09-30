@@ -5,7 +5,9 @@
  * the SHELL puts in that context. This file mounts the real shell, replaces the
  * Files pane with a pane that captures the context, and calls the shell's own
  * handlers: drag-and-drop upload, F6, Load to Tables, the upload error text,
- * the Maintain dialog's column list, and the reference tree's empty-level note.
+ * the Maintain dialog's column list, the permissions reads (the hook and the
+ * dialog's predicate editor both name this lakehouse), and the reference
+ * tree's empty-level note.
  *
  * What breaks each case is named at the assertion.
  */
@@ -30,6 +32,10 @@ vi.mock('@/lib/editors/lakehouse/panes/files-pane', async () => {
 // The wizard's own dialog is tested elsewhere; here only "did the shell open it".
 vi.mock('@/lib/editors/components/load-to-table-wizard', () => ({
   LoadToTableWizard: ({ open, path }: any) => (open ? <div data-testid="ltt-open">{path}</div> : null),
+}));
+// The permissions dialog's RLS predicate editor renders Monaco; a textarea is enough here.
+vi.mock('@/lib/components/editor/monaco-textarea', () => ({
+  MonacoTextarea: () => <textarea aria-label="predicate" />,
 }));
 
 const ROOT = 'lakehouses/Contoso Sales';
@@ -179,6 +185,52 @@ describe('lakehouse shell: Maintain column list', () => {
     await act(async () => { cap.ctx.setMaintainTable('orders'); });
     // Positive: the bare name still finds the first bundle table.
     await waitFor(() => expect(cap.ctx.maintainColumns).toEqual(['order_id']));
+  });
+});
+
+describe('lakehouse shell: permissions reads name this lakehouse', () => {
+  const TABLES = [{ objectId: 7, schema: 'dbo', name: 'orders', type: 'U' }];
+  const permissions: Handler = (url) => {
+    const q = new URL(url, 'http://x').searchParams;
+    if (q.get('list') === 'tables') return { ok: true, tables: TABLES };
+    if (q.get('list') === 'columns') return { ok: true, columns: [{ columnId: 3, name: 'region', dataType: 'varchar' }] };
+    return { ok: true, assignments: [], knownRoles: [], grants: [], policies: [] };
+  };
+  /** Query params of every permissions GET, in call order. */
+  const reads = (calls: Array<{ url: string; init?: RequestInit }>) =>
+    calls
+      .filter((c) => c.url.includes('/api/lakehouse/permissions?') && (c.init?.method ?? 'GET') === 'GET')
+      .map((c) => Object.fromEntries(new URL(c.url, 'http://x').searchParams));
+
+  it('opening Manage permissions reads the container roles through this item', async () => {
+    const { calls } = mount(true, { '/api/lakehouse/permissions': permissions });
+    await settled(true, calls);
+    await act(async () => { cap.ctx.openPerms(); });
+    // Fixture witness: the open fired the container-role read for the bound container.
+    await waitFor(() => expect(reads(calls).some((q) => q.container === 'landing')).toBe(true));
+    // Breaks if the shell hands the permissions hook any id but its own
+    // (e.g. `lakehouseId: ''`): every read would then carry that value.
+    expect(reads(calls).map((q) => q.lakehouseId)).toEqual(reads(calls).map(() => 'lh-h'));
+  });
+
+  it("the Row tab's predicate editor reads its column list through this item", async () => {
+    const { calls } = mount(true, { '/api/lakehouse/permissions': permissions });
+    await settled(true, calls);
+    await act(async () => { cap.ctx.openPerms(); });
+    await act(async () => { cap.ctx.selectPermsTab('row'); });
+    // Anchor on the editor, not the fixed RLS form above it: both have a Table
+    // picker, and the fixed form's column read comes from the hook, not the dialog.
+    let root: HTMLElement | null = (await screen.findByText('Custom WHERE predicate', {}, { timeout: 5000 })).parentElement;
+    while (root && !root.querySelector('[role="combobox"]')) root = root.parentElement;
+    const before = reads(calls).filter((q) => q.list === 'columns').length;
+    const tableDd = root!.querySelector('[role="combobox"]') as HTMLElement;
+    fireEvent.click(tableDd);
+    fireEvent.click(await screen.findByRole('option', { name: 'dbo.orders' }));
+    // Fixture witness: picking the table fired exactly the editor's column read.
+    await waitFor(() => expect(reads(calls).filter((q) => q.list === 'columns').length).toBe(before + 1));
+    const read = reads(calls).filter((q) => q.list === 'columns')[before];
+    // Breaks if the dialog passes the editor any id but ctx.id (e.g. `lakehouseId=""`).
+    expect([read.objectId, read.lakehouseId]).toEqual(['7', 'lh-h']);
   });
 });
 
