@@ -65,7 +65,7 @@ import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
 import { QueryErrorBar } from '@/lib/components/ui/query-error-bar';
 import { DeltaPreviewGrid, type ColStat } from '../components/delta-preview-grid';
 import {
-  useStyles, leafName, collectEntries, formatCell, parseJsonOrError, FileGlyph, maintainTableDef,
+  useStyles, leafName, collectEntries, formatCell, parseJsonOrError, FileGlyph, maintainTableDef, templateDfsSuffix,
 } from './shared';
 import type {
   PathEntry, ListingError, ReferenceLakehouse, PreviewResponse, UploadItem, MipLabelOption,
@@ -358,7 +358,7 @@ export function LakehouseEditor({ item, id }: Props) {
       return;
     }
     if (!activeContainer) return;
-    const bulkUrl = `https://__account__.dfs.core.windows.net/${activeContainer}/${entry.name}`;
+    const bulkUrl = `https://__account__.${templateDfsSuffix(containers)}/${activeContainer}/${entry.name}`;
     setSqlText(
       `SELECT TOP 100 *\nFROM OPENROWSET(BULK '${bulkUrl}', FORMAT = 'PARQUET') AS r;\n-- Note: the BFF rewrites the host. Use the Preview tab for an authenticated run.`,
     );
@@ -395,7 +395,7 @@ export function LakehouseEditor({ item, id }: Props) {
       }
     } catch (e: any) { setPreview({ ok: false, error: e?.message || String(e) }); }
     finally { setPreviewLoading(false); }
-  }, [activeContainer, loadPaths, id]);
+  }, [activeContainer, loadPaths, id, containers]);
 
   const previewTable = useCallback((relPath: string) => {
     setPreviewMode('table');
@@ -435,7 +435,7 @@ export function LakehouseEditor({ item, id }: Props) {
     const ext = entry.name.split('.').pop()?.toLowerCase();
     const isDelta = ext === 'delta' || entry.name.endsWith('_delta_log');
     const fmt = isDelta ? 'delta' : ext === 'parquet' ? 'parquet' : ext === 'csv' ? 'csv' : ext === 'json' ? 'json' : 'parquet';
-    const bulk = `abfss://${activeContainer}@__accountname__.dfs.core.windows.net/${entry.name}`;
+    const bulk = `abfss://${activeContainer}@__accountname__.${templateDfsSuffix(containers)}/${entry.name}`;
     const code = [
       `# Auto-generated from Lakehouse — ${activeContainer}/${entry.name}`,
       `df = spark.read.format("${fmt}")${fmt === 'csv' ? '.option("header", "true").option("inferSchema", "true")' : ''}.load("${bulk}")`,
@@ -448,7 +448,7 @@ export function LakehouseEditor({ item, id }: Props) {
       }));
     } catch {}
     router.push(`/items/notebook/new?lakehouse=${encodeURIComponent(activeContainer)}&path=${encodeURIComponent(entry.name)}`);
-  }, [activeContainer, router]);
+  }, [activeContainer, router, containers]);
 
   const onLoadToTables = useCallback((entry: PathEntry) => {
     if (!activeContainer || entry.isDirectory || readOnly) return;

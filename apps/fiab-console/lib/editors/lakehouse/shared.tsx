@@ -323,9 +323,25 @@ function maintainTableDef<T extends { name: string; schema?: string }>(tables: T
   return tables.find((t) => (t.schema || 'dbo').toLowerCase() === schema && leafName(t.name) === table);
 }
 
+/**
+ * The DFS host suffix for the editor's generated SQL and notebook templates
+ * (`https://__account__.<suffix>/...`), read from a container URL the server
+ * returned. Those URLs are produced by the deploy for the active cloud, so this
+ * is `dfs.core.usgovcloudapi.net` in GCC-High and IL5. The browser cannot read
+ * the server's cloud setting, so with no container URL it answers the
+ * placeholder `__dfs_suffix__` rather than guessing a cloud.
+ */
+function templateDfsSuffix(containers: Array<{ url?: string }> | null | undefined): string {
+  for (const c of containers || []) {
+    const m = /^https:\/\/[^./]+\.(dfs\.[^/]+)/i.exec(String(c?.url ?? ''));
+    if (m) return m[1].toLowerCase();
+  }
+  return '__dfs_suffix__';
+}
+
 export {
   useStyles, formatBytes, leafName, collectEntries, formatCell, parseJsonOrError,
-  fileVisual, FileGlyph, maintainTableDef,
+  fileVisual, FileGlyph, maintainTableDef, templateDfsSuffix,
 };
 export type {
   ContainerInfo, PathEntry, ListingError, ReferenceLakehouse, RefSelection, PreviewResponse,

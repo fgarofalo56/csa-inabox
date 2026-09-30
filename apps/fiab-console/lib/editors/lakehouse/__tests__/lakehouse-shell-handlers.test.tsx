@@ -234,6 +234,19 @@ describe('lakehouse shell: permissions reads name this lakehouse', () => {
   });
 });
 
+describe('lakehouse shell: query template host', () => {
+  it("selecting a file writes a query template on the container URL's cloud host", async () => {
+    const { calls } = mount(true, {
+      '/api/lakehouse/containers': () => ({ ok: true, containers: [{ name: 'landing', url: 'https://govacct.dfs.core.usgovcloudapi.net/landing' }] }),
+    });
+    await settled(true, calls);
+    await act(async () => { await cap.ctx.selectFile(FILE); });
+    // Breaks if the template keeps the Commercial literal (dfs.core.windows.net)
+    // or the shell stops handing the helper its container list (__dfs_suffix__).
+    await waitFor(() => expect(cap.ctx.sqlText).toContain(`https://__account__.dfs.core.usgovcloudapi.net/landing/${FILE.name}`));
+  });
+});
+
 describe('lakehouse shell: reference tree', () => {
   it('an empty reference level shows the route note, not "(empty)"', async () => {
     const { calls } = mount(true, {
