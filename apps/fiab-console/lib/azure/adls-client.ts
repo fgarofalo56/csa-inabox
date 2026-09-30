@@ -952,13 +952,90 @@ export class StorageAccountNotLocatedError extends Error {
   constructor(account: string) {
     super(
       `Loom could not find storage account "${account}" through Azure Resource Graph, so it did not read or `
-      + 'change role assignments there. The Console identity may not be able to read the subscription that '
-      + 'holds the account, the account may no longer exist, or the Resource Graph query may have failed.',
+      + 'change role assignments there. The Console identity may not be able to read the account, the '
+      + 'account may no longer exist, or the Resource Graph query may have failed.',
     );
     this.name = 'StorageAccountNotLocatedError';
     this.account = account;
-    this.remediation =
-      `Grant the Console identity Reader on the subscription that holds storage account "${account}", then retry.`;
+    this.remediation = storageRoleAdminRemediation(account);
+  }
+}
+
+/** The bicep module that grants the Console identity its role on a storage account. */
+export const STORAGE_RBAC_ADMIN_BICEP = 'platform/fiab/bicep/modules/landing-zone/storage-rbac-admin.bicep';
+
+/**
+ * The remediation for a storage account whose role assignments the Console
+ * identity cannot read, create or delete. Listing, granting and revoking
+ * container roles need one role on the account: Role Based Access Control
+ * Administrator, constrained by an ABAC condition to the three Storage Blob
+ * Data roles. The role includes read access to the account, which is also what
+ * Resource Graph needs to locate it. {@link STORAGE_RBAC_ADMIN_BICEP} grants
+ * exactly this on the platform's own storage account.
+ */
+export function storageRoleAdminRemediation(account: string): string {
+  return (
+    'Grant the Console identity Role Based Access Control Administrator on storage account '
+    + `"${account}", constrained (ABAC condition) to assigning only Storage Blob Data Reader, `
+    + 'Storage Blob Data Contributor or Storage Blob Data Owner. That role also lets Loom locate the '
+    + `account. The platform grants it with ${STORAGE_RBAC_ADMIN_BICEP}: deploy that module to the `
+    + `account's resource group with storageAccountName="${account}" and consolePrincipalId set to the `
+    + 'Console identity, then retry.'
+  );
+}
+
+/** The role-assignment operations on a container that can be refused. */
+export type StorageRoleOperation = 'list' | 'grant' | 'revoke';
+
+/**
+ * Azure Resource Manager answered 403 to a role-assignment read, create or
+ * delete on a storage account. The lakehouse permissions routes answer it with
+ * a 403 that carries `code` and `remediation`, instead of the raw ARM error.
+ */
+export class StorageRoleDeniedError extends Error {
+  readonly code: 'storage_role_read_denied' | 'storage_role_write_denied';
+  readonly account: string;
+  readonly operation: StorageRoleOperation;
+  readonly remediation: string;
+  readonly status = 403 as const;
+  constructor(account: string, operation: StorageRoleOperation, armMessage?: string) {
+    const what = operation === 'list'
+      ? 'listing role assignments'
+      : operation === 'grant' ? 'creating a role assignment' : 'deleting a role assignment';
+    const outcome = operation === 'list' ? 'Nothing was listed.'
+      : operation === 'grant' ? 'Nothing was granted.' : 'Nothing was removed.';
+    super(
+      `Azure refused ${what} on storage account "${account}" for the Console identity (HTTP 403). ${outcome}`
+      + (armMessage ? ` Azure said: ${armMessage}` : ''),
+    );
+    this.name = 'StorageRoleDeniedError';
+    this.code = operation === 'list' ? 'storage_role_read_denied' : 'storage_role_write_denied';
+    this.account = account;
+    this.operation = operation;
+    this.remediation = storageRoleAdminRemediation(account);
+  }
+}
+
+/** The storage account named in an ARM id (`.../storageAccounts/<name>/...`), or ''. */
+function storageAccountOfArmId(id: string): string {
+  return /\/storageAccounts\/([^/]+)/i.exec(id)?.[1] ?? '';
+}
+
+/**
+ * `armCall` for a role-assignment request on `account`: a 403 from ARM becomes
+ * a {@link StorageRoleDeniedError}; any other failure is rethrown unchanged.
+ */
+async function roleAssignmentCall<T>(
+  url: string,
+  init: RequestInit,
+  account: string,
+  operation: StorageRoleOperation,
+): Promise<T> {
+  try {
+    return await armCall<T>(url, init);
+  } catch (e: any) {
+    if (e?.status === 403) throw new StorageRoleDeniedError(account, operation, e?.message);
+    throw e;
   }
 }
 
@@ -1040,9 +1117,12 @@ async function armCall<T = any>(url: string, init: RequestInit = {}): Promise<T>
 
 /** Role assignments at one container's scope, on `account` (default: the configured account). */
 export async function listContainerRoleAssignments(container: string, account?: string): Promise<ContainerRoleAssignment[]> {
-  const scope = await resolveStorageScope(container, account);
+  // An empty `account` means the configured account, as it does for the grant
+  // (`account || getAccountName()` there).
+  const target = account || getAccountName();
+  const scope = await resolveStorageScope(container, target);
   const url = `${armBase()}${scope}/providers/Microsoft.Authorization/roleAssignments?api-version=2022-04-01&$filter=atScope()`;
-  const res = await armCall<{ value: any[] }>(url);
+  const res = await roleAssignmentCall<{ value: any[] }>(url, {}, target, 'list');
   const out: ContainerRoleAssignment[] = [];
   for (const r of (res.value || [])) {
     const roleDef = r.properties?.roleDefinitionId || '';
@@ -1107,7 +1187,7 @@ export async function grantContainerRole(
       ? crypto.randomUUID()
       : `${Date.now()}-${Math.random().toString(16).slice(2)}-${Math.random().toString(16).slice(2)}`;
   const url = `${armBase()}${scope}/providers/Microsoft.Authorization/roleAssignments/${guid}?api-version=2022-04-01`;
-  const res = await armCall<any>(url, {
+  const res = await roleAssignmentCall<any>(url, {
     method: 'PUT',
     body: JSON.stringify({
       properties: {
@@ -1116,7 +1196,7 @@ export async function grantContainerRole(
         principalType,
       },
     }),
-  });
+  }, target, 'grant');
   return {
     id: res.id,
     principalId,
@@ -1128,7 +1208,7 @@ export async function grantContainerRole(
 
 export async function revokeContainerRoleAssignment(roleAssignmentArmId: string): Promise<void> {
   const url = `${armBase()}${roleAssignmentArmId}?api-version=2022-04-01`;
-  await armCall<void>(url, { method: 'DELETE' });
+  await roleAssignmentCall<void>(url, { method: 'DELETE' }, storageAccountOfArmId(roleAssignmentArmId), 'revoke');
 }
 
 // ============================================================

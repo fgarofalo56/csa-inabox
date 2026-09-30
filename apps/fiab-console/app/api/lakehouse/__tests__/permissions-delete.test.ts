@@ -59,6 +59,7 @@ import { isContainerRoleAssignmentId } from '../_lib/container-role-assignment';
 import { getSession } from '@/lib/auth/session';
 import {
   listContainerRoleAssignments, revokeContainerRoleAssignment, grantContainerRole, StorageAccountNotLocatedError,
+  StorageRoleDeniedError,
 } from '@/lib/azure/adls-client';
 import { dedicatedTarget, dropRlsPolicy } from '@/lib/azure/synapse-permissions-client';
 import { resolveLakehouseAbfss } from '@/lib/azure/lakehouse-abfss';
@@ -258,6 +259,18 @@ describe('object-tab writes act on the item\'s bound storage account', () => {
     expect((resolveItemAccessByOid as any).mock.calls).toEqual([]);
   });
 
+  // Breaks on the Round 7 grammar ("a container role needs the lakehouse they
+  // belong to"). The write remediation names Share, since Share grants too;
+  // the Listing one does not (permissions-get.test.ts).
+  it.each([
+    ['POST', 'Granting', () => POST(postReq(grantBody({ lakehouseId: undefined })))],
+    ['DELETE', 'Revoking', () => DELETE(delReq(new URLSearchParams({ tab: 'object', container: CONTAINER, id: LISTED }).toString()))],
+  ])('%s item_required text: "it belongs to", and the remediation names Share', async (_v, verb, call) => {
+    const j = await (await (call as () => Promise<Response>)()).json();
+    expect(j.error).toMatch(new RegExp(`^${verb} a container role needs the lakehouse it belongs to \\(lakehouseId\\), `));
+    expect(j.remediation).toBe('Open the lakehouse and use its Permissions dialog or Share, so the request names the item.');
+  });
+
   // A binding whose account cannot be read is a 409 on every write. Breaks if
   // the route falls back to the configured account: 200 and a grant or revoke
   // row. `loom-lake` has a hyphen, which no storage account name has.
@@ -278,8 +291,8 @@ describe('object-tab writes act on the item\'s bound storage account', () => {
     expect(writeCalls()).toEqual(NO_WRITES);
   });
 
-  // A bound account Resource Graph cannot place is a 409 with the Reader
-  // remediation on both writes. Breaks if POST's or DELETE's catch does not
+  // A bound account Resource Graph cannot place is a 409 with the role
+  // administrator remediation on both writes. Breaks if POST's or DELETE's catch does not
   // map StorageAccountNotLocatedError: that verb answers the generic 502 with
   // no `code`. The grant mock throws it (grantContainerRole resolves the
   // account's coordinates first); for the revoke, the membership listing does.
@@ -297,10 +310,45 @@ describe('object-tab writes act on the item\'s bound storage account', () => {
     expect(res.status).toBe(409);
     const j = await res.json();
     expect([j.ok, j.code]).toEqual([false, 'storage_account_not_located']);
-    expect(j.remediation).toContain(`Reader on the subscription that holds storage account "${BOUND}"`);
+    expect(j.remediation).toContain(`Role Based Access Control Administrator on storage account "${BOUND}"`);
     // Nothing was revoked; the failing call is the one the verb makes first.
     expect(writeCalls().revoke).toEqual([]);
     expect({ list: writeCalls().list.length, grant: writeCalls().grant.length }).toEqual(reached);
+  });
+
+  // A role create or delete that Azure refuses (a 403 from ARM, which
+  // adls-client turns into StorageRoleDeniedError) is a coded 403 with the
+  // remediation. Breaks if POST's or DELETE's catch does not map it: the answer
+  // is then the error's bare 403 with no `code` and no `remediation`.
+  it.each([
+    ['POST', () => {
+      (grantContainerRole as any).mockRejectedValue(new StorageRoleDeniedError(BOUND, 'grant', 'denied'));
+      return POST(postReq(grantBody()));
+    }, { grant: 1, revoke: 0 }],
+    ['DELETE', () => {
+      (revokeContainerRoleAssignment as any).mockRejectedValue(new StorageRoleDeniedError(BOUND, 'revoke', 'denied'));
+      return DELETE(delReq(objectQs(LISTED)));
+    }, { grant: 0, revoke: 1 }],
+  ])('%s answers 403 storage_role_write_denied when Azure refuses the role write', async (_v, call, reached) => {
+    const res = await (call as () => Promise<Response>)();
+    expect(res.status).toBe(403);
+    const j = await res.json();
+    expect([j.ok, j.code]).toEqual([false, 'storage_role_write_denied']);
+    expect(j.remediation).toContain(`Role Based Access Control Administrator on storage account "${BOUND}"`);
+    expect(j.remediation).toContain('platform/fiab/bicep/modules/landing-zone/storage-rbac-admin.bicep');
+    expect({ grant: writeCalls().grant.length, revoke: writeCalls().revoke.length }).toEqual(reached);
+  });
+
+  // CONTROL: another write failure is not given that code. Breaks if the
+  // route maps every error with a status to storage_role_write_denied.
+  it('a grant failure with another status keeps its own status and no code', async () => {
+    const err: any = new Error('ARM 500');
+    err.status = 500;
+    (grantContainerRole as any).mockRejectedValue(err);
+    const res = await POST(postReq(grantBody()));
+    expect(res.status).toBe(500);
+    const j = await res.json();
+    expect([j.ok, j.error, j.code]).toEqual([false, 'ARM 500', undefined]);
   });
 
   // Breaks if the write skips the item check: 200 and a grant row.

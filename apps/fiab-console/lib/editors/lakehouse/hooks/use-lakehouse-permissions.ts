@@ -27,10 +27,17 @@ export function useLakehousePermissions({ lakehouseId, activeContainer, confirm 
   const [permsRoles, setPermsRoles] = useState<PermRole[]>([]);
   const [permsBusy, setPermsBusy] = useState(false);
   const [permsError, setPermsError] = useState<string | null>(null);
-  // True when the last object-tab listing was refused with a 409 (the item's
-  // storage binding or its account could not be used). A grant would be
-  // refused for the same reason, so the dialog disables Grant role and says why.
+  // True when the last object-tab listing was refused with a `code` (the route's
+  // coded refusals: 409 binding or account unusable, 404 item_not_found, 403
+  // outside_item_root or a denied role read, ...). A grant names the same item,
+  // container and account, so it would be refused for the same reason; the
+  // dialog disables Grant role and says why. A failure without a code (a 502,
+  // a network error) leaves Grant role enabled.
   const [permsListRefused, setPermsListRefused] = useState(false);
+  // True when the last object-tab listing failed for any reason. The dialog
+  // shows its "no role assignments" sentence only when the listing succeeded,
+  // so a later grant or revoke error does not hide it.
+  const [permsListFailed, setPermsListFailed] = useState(false);
   const [newPrincipalId, setNewPrincipalId] = useState('');
   const [newPrincipalType, setNewPrincipalType] = useState<'User' | 'Group' | 'ServicePrincipal'>('User');
   const [newRole, setNewRole] = useState('Storage Blob Data Reader');
@@ -78,12 +85,12 @@ export function useLakehousePermissions({ lakehouseId, activeContainer, confirm 
   // A refusal's `remediation` is shown with its `error`, in the same MessageBar.
   const loadPerms = useCallback(async () => {
     if (!activeContainer) return;
-    setPermsBusy(true); setPermsError(null); setPermsListRefused(false);
+    setPermsBusy(true); setPermsError(null); setPermsListRefused(false); setPermsListFailed(false);
     try {
       const r = await clientFetch(readUrl({ container: activeContainer }));
-      const j = await parseJsonOrError<{ ok: boolean; error?: string; remediation?: string; assignments?: PermAssignment[]; knownRoles?: PermRole[] }>(r, 'List permissions');
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; code?: string; remediation?: string; assignments?: PermAssignment[]; knownRoles?: PermRole[] }>(r, 'List permissions');
       if (!j.ok) {
-        if (r.status === 409) setPermsListRefused(true);
+        if (j.code) setPermsListRefused(true);
         throw new Error([j.error || `HTTP ${r.status}`, j.remediation].filter(Boolean).join(' '));
       }
       setPermsRows(j.assignments || []);
@@ -91,6 +98,7 @@ export function useLakehousePermissions({ lakehouseId, activeContainer, confirm 
     } catch (e: any) {
       // Rows from an earlier listing are not this container's current rows.
       setPermsRows([]);
+      setPermsListFailed(true);
       setPermsError(e?.message || String(e));
     }
     finally { setPermsBusy(false); }
@@ -271,7 +279,7 @@ export function useLakehousePermissions({ lakehouseId, activeContainer, confirm 
   return {
     permsOpen, setPermsOpen, openPerms,
     permsRows, setPermsRows, permsRoles, setPermsRoles,
-    permsBusy, setPermsBusy, permsError, setPermsError, permsListRefused,
+    permsBusy, setPermsBusy, permsError, setPermsError, permsListRefused, permsListFailed,
     newPrincipalId, setNewPrincipalId,
     newPrincipalType, setNewPrincipalType,
     newRole, setNewRole,

@@ -29,7 +29,8 @@
  * same bound account the GET lists, so a row the dialog shows is the row a
  * revoke removes, and a grant appears in the next listing. A binding whose
  * account cannot be read answers 409 on every verb; nothing falls back to the
- * configured account.
+ * configured account. When Azure refuses the role-assignment read, create or
+ * delete itself, the answer is a 403 with a `code` and the role to grant.
  *
  * The SQL-plane tabs read the one shared dedicated pool's catalogue:
  * `lakehouseId` decides who may list, not which objects are listed, because
@@ -62,6 +63,7 @@ import {
   grantContainerRole,
   listKnownBlobDataRoles,
   StorageAccountNotLocatedError,
+  StorageRoleDeniedError,
   type ContainerRoleAssignment,
 } from '@/lib/azure/adls-client';
 import { revokeContainerRoleAssignmentInScope } from '../_lib/container-role-assignment';
@@ -118,25 +120,31 @@ function containerMismatch(container: string, own: string): NextResponse {
 
 /** The 400 for an object-tab request that does not name its lakehouse. */
 function itemRequired(verb: 'Listing' | 'Granting' | 'Revoking'): NextResponse {
-  const subject = verb === 'Listing' ? 'container role assignments need' : 'a container role needs';
+  const subject = verb === 'Listing' ? 'container role assignments needs the lakehouse they belong to'
+    : 'a container role needs the lakehouse it belongs to';
   const action = verb === 'Listing' ? 'listed' : verb === 'Granting' ? 'granted' : 'removed';
   const reach = verb === 'Listing' ? 'reads' : 'acts on';
   return refuse(
     400,
-    `${verb} ${subject} the lakehouse they belong to (lakehouseId), so Loom ${reach} the storage `
-    + `account that lakehouse is bound to. Nothing was ${action}.`,
+    `${verb} ${subject} (lakehouseId), so Loom ${reach} the storage account that lakehouse is bound to. `
+    + `Nothing was ${action}.`,
     'item_required',
-    'Open the lakehouse and use its Permissions dialog or Share, so the request names the item.',
+    verb === 'Listing'
+      ? 'Open the lakehouse and use its Permissions dialog, so the request names the item.'
+      : 'Open the lakehouse and use its Permissions dialog or Share, so the request names the item.',
   );
 }
 
 /**
  * The error response for a failure inside a handler. A bound storage account
- * that Resource Graph could not place is a 409 with its remediation; anything
- * else keeps its own status (502 when it has none).
+ * that Resource Graph could not place is a 409, and a role-assignment read,
+ * create or delete that Azure refused is a 403 (`storage_role_read_denied` /
+ * `storage_role_write_denied`); both carry the remediation. Anything else keeps
+ * its own status (502 when it has none).
  */
 function failure(e: any): NextResponse {
   if (e instanceof StorageAccountNotLocatedError) return refuse(409, e.message, e.code, e.remediation);
+  if (e instanceof StorageRoleDeniedError) return refuse(403, e.message, e.code, e.remediation);
   return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
 }
 

@@ -18,7 +18,7 @@ export function PermissionsDialog() {
   const ctx = useLakehouseCtx();
   const {
     permsOpen, setPermsOpen, permsTab, selectPermsTab,
-    permsBusy, permsError, permsListRefused, sqlGate,
+    permsBusy, permsError, permsListRefused, permsListFailed, sqlGate,
     permsRows, permsRoles, revokePerm, grantPerm,
     newPrincipalId, setNewPrincipalId, newPrincipalType, setNewPrincipalType, newRole, setNewRole,
     sqlGrants, revokeSqlGrant, grantSqlTable, grantSqlColumn,
@@ -132,8 +132,9 @@ export function PermissionsDialog() {
                       <TableHeaderCell>Action</TableHeaderCell>
                     </TableRow></TableHeader>
                     <TableBody>
-                      {/* An empty list after a failed listing is unknown, not empty. */}
-                      {permsRows.length === 0 && !permsError && (
+                      {/* An empty list after a failed listing is unknown, not empty. A grant or
+                          revoke error after a successful empty listing leaves the list known. */}
+                      {permsRows.length === 0 && !permsListFailed && (
                         <TableRow><TableCell colSpan={4}><Caption1>No Storage Blob Data role assignments at the container scope.</Caption1></TableCell></TableRow>
                       )}
                       {permsRows.map((r) => (
