@@ -95,6 +95,11 @@ describe('analyzeLakehouseQuery — accepted queries', () => {
       'SELECT * FROM [master ].dbo.orders', []],
     ['a bracketed fn_-prefixed column that is not called (refusing every bracketed fn_ name breaks it)',
       'SELECT [fn_total], t.[fn_total] FROM t', []],
+    // A last name part may use non-ASCII letters, unless it folds into a system name.
+    ['a non-ASCII column name, bare and qualified (refusing every non-ASCII last part breaks it)',
+      'SELECT [caf\u00e9], t.[caf\u00e9], [na\u00efve] FROM t', []],
+    ['a fullwidth table name that folds to an ordinary name (folding to "any non-ASCII is refused" breaks it)',
+      'SELECT * FROM [\uff4f\uff52\uff44\uff45\uff52\uff53]', []],
   ];
   for (const [label, sql, locations] of cases) {
     it(`accepts ${label}`, () => {
@@ -236,6 +241,30 @@ describe('analyzeLakehouseQuery — refused queries name the construct', () => {
     ['a name part with a zero-width space', 'SELECT * FROM [sy\u200bs].x', 'the name part [sy\\u{200b}s]'],
     ['a name part with a leading space', 'SELECT * FROM [ sys].x', 'the name part [ sys]'],
     ['a name part of spaces only', 'SELECT * FROM [  ].x', 'the name part [  ]'],
+    ['a name part with a zero-width joiner', 'SELECT * FROM [sys\u200dprocesses]', 'the name part [sys\\u{200d}processes]'],
+    // A qualifier (every part before the last) is plain ASCII.
+    ['a fullwidth sys schema', 'SELECT * FROM [\uff53\uff59\uff53].[dm_exec_requests_history]', 'the qualifier [\\u{ff53}\\u{ff59}\\u{ff53}]'],
+    ['a long-s sys schema', 'SELECT * FROM [\u017fys].objects', 'the qualifier [\\u{17f}ys]'],
+    // The qualifier is not the first part here: accepted if only the first part were checked.
+    ['a long-s sys schema after the database', 'SELECT * FROM master.[\u017fys].objects', 'the qualifier [\\u{17f}ys]'],
+    ['a sys schema with a combining grapheme joiner', 'SELECT * FROM [sy\u034fs].objects', 'the qualifier [sy\\u{34f}s]'],
+    ['a non-ASCII table alias used as a qualifier', 'SELECT [caf\u00e9].x FROM t AS [caf\u00e9]', 'the qualifier [caf\\u{e9}]'],
+    // A last part that is not plain ASCII and folds into a system name.
+    ['a fullwidth compatibility view', 'SELECT * FROM [\uff53\uff59\uff53processes]',
+      'the name part [\\u{ff53}\\u{ff59}\\u{ff53}processes], read as sysprocesses'],
+    // NFKC would compose e + U+0301 into one non-ASCII letter and lose the e.
+    ['a compatibility view with a combining accent', 'SELECT * FROM [sysprocesse\u0301s]',
+      'the name part [sysprocesse\\u{301}s], read as sysprocesses'],
+    ['a long-s compatibility view', 'SELECT * FROM [\u017fysobjects]', 'the name part [\\u{17f}ysobjects], read as sysobjects'],
+    ['a fullwidth sys as the last part', 'SELECT t.[\uff53\uff59\uff53] FROM t', 'the name part [\\u{ff53}\\u{ff59}\\u{ff53}], read as sys'],
+    ['a fullwidth global temporary table', 'SELECT * FROM [\uff03\uff03shared]', 'the name part [\\u{ff03}\\u{ff03}shared], read as ##shared'],
+    ['a fullwidth fn_ function called', 'SELECT * FROM [\uff46\uff4e_dblog](NULL, NULL)', 'the name part [\\u{ff46}\\u{ff4e}_dblog], read as fn_dblog'],
+    ['a fullwidth sp_ name', 'SELECT t.[\uff53\uff50_who] FROM t', 'the name part [\\u{ff53}\\u{ff50}_who], read as sp_who'],
+    ['a fullwidth xp_ name', 'SELECT t.[\uff58\uff50_dirtree] FROM t', 'the name part [\\u{ff58}\\u{ff50}_dirtree], read as xp_dirtree'],
+    // Upper-case fullwidth letters: accepted if the ASCII form were not lower-cased before the prefix and sys checks.
+    ['an upper-case fullwidth fn_ function called', 'SELECT * FROM [\uff26\uff2e_DBLOG](NULL, NULL)',
+      'the name part [\\u{ff26}\\u{ff2e}_DBLOG], read as fn_dblog'],
+    ['an upper-case fullwidth sys as the last part', 'SELECT t.[\uff33\uff39\uff33] FROM t', 'the name part [\\u{ff33}\\u{ff39}\\u{ff33}], read as sys'],
     // variables, functions and storage-shaped strings outside BULK
     ['a system variable', 'SELECT @@VERSION', 'the variable @@VERSION'],
     ['the :: function syntax', "SELECT * FROM ::fn_trace_gettable('x', default)", 'the :: function syntax'],

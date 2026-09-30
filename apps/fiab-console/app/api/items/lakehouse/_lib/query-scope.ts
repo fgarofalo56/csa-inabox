@@ -17,7 +17,10 @@
  *     start with the database the query runs in, nothing in the `sys` schema,
  *     no system compatibility view, no global temporary table. Each part is
  *     compared as the server compares it: trailing spaces removed, and a part
- *     with any other whitespace or control character is refused.
+ *     with any other whitespace or control character is refused. A qualifier
+ *     (every part before the last) is plain ASCII. A last part that is not
+ *     plain ASCII is refused when, with width, accents and other non-ASCII
+ *     characters set aside, it reads as a system name.
  *   - `OPENROWSET` is allow-list only: `BULK` is required, each location is a
  *     literal string, and each option is on the read-only list below.
  *   - LOCATIONS are confined by `confineQueryLocation`: a literal `https://` or
@@ -202,6 +205,29 @@ function normalizeNamePart(raw: string): string | null {
 /** A name part with every character outside printable ASCII written as \u{…}, for a message. */
 function shownNamePart(raw: string): string {
   return [...raw].map((c) => (/^[\x21-\x7e]$/.test(c) || c === ' ' ? c : `\\u{${c.codePointAt(0)!.toString(16)}}`)).join('');
+}
+
+/**
+ * The ASCII letters a name part keeps once compatibility forms are folded
+ * (fullwidth letters, `ſ`), accents are separated from their letters, and
+ * everything still outside ASCII is dropped; lower-cased. A collation that
+ * ignores width, accents or some characters cannot see more than this.
+ */
+function asciiSkeleton(part: string): string {
+  return part.normalize('NFKD').replace(/[^\x00-\x7f]/g, '').toLowerCase();
+}
+
+/**
+ * For a last name part that is not plain ASCII: the system name it folds into
+ * (the `sys` schema, a compatibility view, or a `##`, `fn_`, `sp_` or `xp_`
+ * name), or null. A plain ASCII part is left to the rules that compare it as
+ * written, so `t.sp_rating` and an uncalled `[fn_total]` stay accepted.
+ */
+function foldedSystemName(part: string): string | null {
+  if (/^[\x00-\x7f]*$/.test(part)) return null;
+  const s = asciiSkeleton(part);
+  if (s === 'sys' || COMPATIBILITY_VIEWS.has(s.toUpperCase()) || /^(?:##|fn_|sp_|xp_)/.test(s)) return s;
+  return null;
 }
 
 /**
@@ -485,6 +511,16 @@ function checkName(c: Scope, rawParts: string[], database: string, databaseLabel
   if (parts.length >= 4) {
     return refuse(c, `the four-part name ${shown}`, 'names that reach another server are not accepted');
   }
+  // Every part before the last (a database, schema or table qualifier) is plain ASCII.
+  const qualifier = parts.slice(0, -1).find((p) => /[^\x00-\x7f]/.test(p));
+  if (qualifier !== undefined) {
+    return refuse(c,
+      `the qualifier [${shownNamePart(qualifier)}]`,
+      'a database, schema or table qualifier is written in ASCII; only the last part of a name may use other letters',
+      'Write the qualifier in ASCII (for example dbo.t or t.col), or give the table an ASCII alias. '
+      + c.s.selectRemediation,
+    );
+  }
   // `sys` as a schema: `sys.x`, or `db.sys.x`. The last part is never a schema.
   if (parts.slice(0, -1).some((p) => p.toLowerCase() === 'sys')) {
     return refuse(c, 
@@ -494,7 +530,8 @@ function checkName(c: Scope, rawParts: string[], database: string, databaseLabel
       + 'A tenant admin can read the sys catalog.',
     );
   }
-  const view = parts.find((p) => COMPATIBILITY_VIEWS.has(p.toUpperCase()));
+  // ASCII case only: a part that is not plain ASCII is compared through foldedSystemName below.
+  const view = parts.find((p) => COMPATIBILITY_VIEWS.has(p.replace(/[a-z]+/g, (s) => s.toUpperCase())));
   if (view !== undefined) {
     return refuse(c, 
       `the system compatibility view ${view}`,
@@ -509,6 +546,15 @@ function checkName(c: Scope, rawParts: string[], database: string, databaseLabel
   const last = parts[parts.length - 1];
   if (called && /^fn_/i.test(last)) {
     return refuse(c, `the system function ${last}`, c.why.admin);
+  }
+  const folded = foldedSystemName(last);
+  if (folded !== null) {
+    return refuse(c,
+      `the name part [${shownNamePart(last)}], read as ${folded}`,
+      'with letter width, accents and other non-ASCII characters set aside it names a system object',
+      'If it is a column or table of yours, write its name in ASCII or without those characters. '
+      + c.s.selectRemediation,
+    );
   }
   if (parts.length === 3 && parts[0].toLowerCase() !== database) {
     return refuse(c, 
