@@ -51,6 +51,7 @@ import { SparkObservabilityPane } from '@/lib/panes/spark-observability';
 import { RefreshSummaryPane } from '@/lib/panes/refresh-summary';
 import { MetricChart } from '@/lib/components/monitor/metric-chart';
 import { KqlChart, type KqlChartType } from '@/lib/components/monitor/kql-chart';
+import { CostTagNotice, PartialBreakdownNotice, breakdownEmptyText, shortSub } from '@/lib/components/monitor/cost-tag-notice';
 import { Section } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { LoomChart } from '@/lib/components/charts/loom-chart';
@@ -1478,6 +1479,8 @@ interface CostSummary {
   byLocation: CostBreakdownRow[];
   byTag: CostBreakdownRow[];
   tagKey: string;
+  /** Subscriptions whose tag query failed; an empty `byTag` then means "could not load". */
+  tagQueryErrors?: { subscription: string; error: string }[];
   daily: { date: string; cost: number }[];
   anomalies: CostAnomaly[];
   budgets: CostBudget[];
@@ -1495,12 +1498,11 @@ const COST_TIMEFRAMES: { value: string; label: string }[] = [
   { value: 'Last7Days', label: 'Last 7 days' },
 ];
 
-const shortSub = (s: string) => (s.length > 12 ? `${s.slice(0, 8)}…${s.slice(-4)}` : s);
 
 /** Dimensions the unified "Cost breakdown" table can group + sort + filter by. */
 type GroupDim = 'service' | 'resourceGroup' | 'subscription' | 'resource' | 'resourceType' | 'location' | 'tag';
 
-function CostTab({ onUnauth }: { onUnauth: () => void }) {
+export function CostTab({ onUnauth }: { onUnauth: () => void }) {
   const styles = useStyles();
   const [data, setData] = useState<CostSummary | null>(null);
   const [gate, setGate] = useState<Gate | null>(null);
@@ -1767,7 +1769,7 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
                 {c.rows.length ? (
                   <LoomChart type="donut" rows={c.rows} height={240} />
                 ) : (
-                  <span className={styles.anomalyMeta}>No cost recorded.</span>
+                  <span className={styles.anomalyMeta}>{breakdownEmptyText({ gated: !!gate, failed: !!err, partial: !!data.subscriptionErrors?.length, omitted: data.subscriptionErrors?.length ?? 0 })}</span>
                 )}
               </div>
             ))}
@@ -1795,14 +1797,10 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
           </div>
         }
       >
+        {groupDim !== 'tag' && <PartialBreakdownNotice errors={data?.subscriptionErrors} dimension={activeGroup.label.toLowerCase()} onRetry={() => setTick((t) => t + 1)} />}
+        {groupDim === 'tag' && activeGroup.rows.length > 0 && <CostTagNotice summary={data} onRetry={() => setTick((t) => t + 1)} />}
         {groupDim === 'tag' && activeGroup.rows.length === 0 ? (
-          <MessageBar intent="warning">
-            <MessageBarBody>
-              No cost-allocation tags found for tag key <strong>{data?.tagKey || 'Environment'}</strong>. Tag your
-              Azure resources with this key (or set <strong>LOOM_COST_TAG_KEY</strong> to a tag your estate already
-              uses) to break spend down by tag value.
-            </MessageBarBody>
-          </MessageBar>
+          <CostTagNotice summary={data} loading={loading} gated={!!gate} onRetry={() => setTick((t) => t + 1)} />
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)', gap: tokens.spacingHorizontalL, alignItems: 'start' }}>
             <LoomDataTable
@@ -1810,7 +1808,7 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
               rows={activeGroup.rows}
               getRowId={(r) => r.key}
               loading={loading}
-              empty={gate ? 'Grant Cost Management Reader to see this breakdown.' : 'No cost recorded.'}
+              empty={breakdownEmptyText({ gated: !!gate, failed: !!err, partial: !!data?.subscriptionErrors?.length })}
               ariaLabel={`Cost by ${activeGroup.label}`}
             />
             {total > 0 && activeGroup.rows.length > 0 && (
@@ -1829,14 +1827,9 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
           carries no such tag key. */}
       {data && (
         <Section title={`Cost allocation by tag · ${data.tagKey}`}>
+          {data.byTag.length > 0 && <CostTagNotice summary={data} onRetry={() => setTick((t) => t + 1)} />}
           {data.byTag.length === 0 ? (
-            <MessageBar intent="warning">
-              <MessageBarBody>
-                No cost-allocation tags found. Loom groups spend by the <strong>{data.tagKey}</strong> tag value; set{' '}
-                <strong>LOOM_COST_TAG_KEY</strong> to a tag your Azure estate already applies (e.g. CostCenter,
-                Project, Owner) to see chargeback by tag.
-              </MessageBarBody>
-            </MessageBar>
+            <CostTagNotice summary={data} onRetry={() => setTick((t) => t + 1)} />
           ) : (
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)', gap: tokens.spacingHorizontalL, alignItems: 'start' }}>
               <LoomDataTable
