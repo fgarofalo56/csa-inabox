@@ -93,6 +93,8 @@ import {
   warehouseErrorStatus,
   withResolvedWarehouse,
   redactIdentifiers,
+  QUOTE_CAP,
+  REDACT_WINDOW,
   type WarehouseFailureKind,
   __testing,
 } from '../databricks-sql-warehouse';
@@ -956,6 +958,106 @@ describe('round 3 (#4776 re-review)', () => {
     // …and the domain + trailing 64 local chars of an over-long local part (no
     // boundary lookbehind, so a long run is not left wholly intact).
     expect(redactIdentifiers(`${'a'.repeat(100)}@contoso.com`)).toBe(`${'a'.repeat(36)}<principal>`);
+  });
+
+  describe('round 7: an identifier crossing the SCAN WINDOW end, behind earlier redactions, never leaks a fragment', () => {
+    const GUID = '5e7a1c09-3b2d-4f6e-9a81-c4d2e7f0a1b3';
+    const UPN = 'loom.console-sp@fabrikam.onmicrosoft.com';
+    // Eight distinct GUIDs: each redacts to `<id>`, so together they shrink the text by 8 × 32 = 256.
+    const EIGHT_GUIDS = Array.from({ length: 8 }, (_, i) => `${String(i).repeat(8)}-1111-2222-3333-444444444444`);
+    // One 300-digit number: redacts to `<id>`, shrinking the text by 296.
+    const BIG_NUMBER = ['9'.repeat(300)];
+    const windows8 = (id: string) => Array.from({ length: id.length - 7 }, (_, i) => id.slice(i, i + 8));
+    /**
+     * A response with `shrinkers` first, then plain words, then `ident` starting
+     * at exactly `offset` of the NORMALISED quote, then more words.
+     */
+    function behind(shrinkers: string[], ident: string, offset: number): Error & { status: number } {
+      const head = `${shrinkers.join(' ')} `;
+      const need = offset - head.length;
+      // `need % 5` extra w's glued onto the first word, then whole `word ` units:
+      // exactly `need` characters, single-spaced, ending in a space.
+      const pad = `${'w'.repeat(need % 5)}${'word '.repeat(Math.floor(need / 5))}`;
+      expect(pad.length).toBe(need);
+      const msg = `${head}${pad}${ident} is not allowed ${'trailing words '.repeat(40)}`.trim();
+      // Arithmetic pinned inline: already whitespace-normalised (so normalisation
+      // cannot shift the offset), and the identifier sits exactly where claimed.
+      expect(msg).toBe(msg.replace(/\s+/g, ' ').trim());
+      expect(msg.indexOf(ident)).toBe(offset);
+      return Object.assign(new Error(msg), { status: 403 });
+    }
+    const cases: Array<[string, string, string, string[]]> = [
+      ['GUID', GUID, 'eight earlier GUIDs', EIGHT_GUIDS],
+      ['GUID', GUID, 'one 300-digit number', BIG_NUMBER],
+      ['UPN', UPN, 'eight earlier GUIDs', EIGHT_GUIDS],
+      ['UPN', UPN, 'one 300-digit number', BIG_NUMBER],
+    ];
+    for (const [kind, id, label, shrinkers] of cases) {
+      it(`${kind} at offset 640 behind ${label}: no 8-char fragment in message, route body or self-audit`, async () => {
+        const err0 = behind(shrinkers, id, 640);
+        // The fixture reaches the vulnerable branch: the identifier crosses the
+        // window end, and the window REDACTED (by the source's own patterns)
+        // fits under the cap, so everything up to the window end is shown.
+        expect(err0.message.length).toBeGreaterThan(REDACT_WINDOW);
+        expect(640 + id.length).toBeGreaterThan(REDACT_WINDOW);
+        expect(redactIdentifiers(err0.message.slice(0, REDACT_WINDOW)).length).toBeLessThanOrEqual(QUOTE_CAP);
+
+        const err = classifyWarehouseFailure('create', err0);
+        // Breaks on round 6's code: the window cut the identifier, its head
+        // (`5e7a1c09-3b2d-4f` / `loom.console-sp@`) matched no pattern, and it
+        // was shown under the cap.
+        for (const w of windows8(id)) {
+          expect(err.message, `message fragment ${w}`).not.toContain(w);
+          expect(JSON.stringify(warehouseErrorBody(err)), `route body fragment ${w}`).not.toContain(w);
+        }
+        // Positive half: the quote is present, the earlier identifiers are
+        // redacted (not dropped), it ends in an ellipsis with no space before it,
+        // and the admin diagnostic keeps the raw head of the identifier.
+        expect(err.message).toMatch(/<id> .*word word/);
+        expect(err.message).toMatch(/\S…$/);
+        expect(err.kind).toBe('permission');
+        expect(err.diagnostic).toContain(id.slice(0, REDACT_WINDOW - 640));
+        expect(REDACT_WINDOW - 640).toBeGreaterThanOrEqual(8);
+
+        // End to end: the published failure and the self-audit gate detail.
+        h.dbx.createWarehouse.mockRejectedValue(behind(shrinkers, id, 640));
+        meReturns({ displayName: 'sp', entitlements: [], groups: [] });
+        await resolveDatabricksSqlWarehouseId().catch(() => undefined);
+        const f = readRuntimeFailure(WAREHOUSE_ENV_VAR)!;
+        const detail = gateStatus('svc-databricks-sql')!.check.detail;
+        for (const w of windows8(id)) {
+          expect(f.message, `published fragment ${w}`).not.toContain(w);
+          expect(detail, `self-audit detail fragment ${w}`).not.toContain(w);
+        }
+        expect(detail).toMatch(/failed \(permission\)/);
+        expect(f.message).toMatch(/word word/);
+      });
+    }
+
+    it('the quote never ends in "space …" when the scan window ends on a space (nit)', () => {
+      // `zzzzzzzz` starts at 656, so the window's last character (655) is a space.
+      const err0 = behind(EIGHT_GUIDS, 'zzzzzzzz', REDACT_WINDOW);
+      expect(err0.message.charAt(REDACT_WINDOW - 1)).toBe(' ');
+      const err = classifyWarehouseFailure('create', err0);
+      // Breaks without trimEnd() before the ellipsis: the quote ends `word …`.
+      expect(err.message).not.toMatch(/\s…$/);
+      expect(err.message).toMatch(/word…$/);
+    });
+
+    it('a GUID or 12+ digit id glued to a word character is still redacted', () => {
+      // Breaks with `\b` on either pattern: no boundary between `_` and the id.
+      expect(redactIdentifiers(`sp_${GUID}`)).toBe('sp_<id>');
+      expect(redactIdentifiers(`${GUID}_x`)).toBe('<id>_x');
+      expect(redactIdentifiers('sp_123456789012')).toBe('sp_<id>');
+      expect(redactIdentifiers('123456789012_x')).toBe('<id>_x');
+      // Positive control on the floor: 11 digits glued or not are left alone.
+      expect(redactIdentifiers('sp_12345678901')).toBe('sp_12345678901');
+      // Through the public message too.
+      const err = classifyWarehouseFailure('create', httpErr('createWarehouse', 403, `principal sp_${GUID} denied`));
+      expect(err.message).toContain('sp_<id> denied');
+      expect(err.message).not.toContain(GUID.slice(0, 8));
+      expect(err.diagnostic).toContain(GUID);
+    });
   });
 
   it('round 5 (N2) control: a quote with no identifier-shaped token is not rewritten and adds no diagnostic', () => {

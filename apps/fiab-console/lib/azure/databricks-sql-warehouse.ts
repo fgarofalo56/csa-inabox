@@ -305,54 +305,81 @@ function normalizedQuote(e: ErrShape): string {
  * id), an e-mail / UPN, and a 12+ digit numeric id. The UNREDACTED quote goes to
  * the admin-only `diagnostic`. Pattern-based: whether a real Databricks refusal
  * names the principal has NOT been measured, so this errs toward redacting.
+ *
+ * Round 7: the GUID and digit patterns carry NO `\b`. A word boundary never
+ * holds between two word characters, so `sp_<guid>` or `<guid>_x` was left
+ * whole. Without it an identifier glued to a word character is still redacted,
+ * with the cost that a 12+ digit run inside a longer token is also replaced.
+ * Both stay linear: the GUID pattern is fixed-length (36), and `\d{12,}`
+ * either fails within 12 characters of its start or consumes the whole run.
  */
 const IDENTIFIER_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
-  [/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '<id>'],
+  [/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '<id>'],
   // Linear, not quadratic (round 6): every part is length-bounded (local
   // ≤ 64, labels ≤ 63, ≤ 10 labels), so the work per start position is bounded
   // and a long run costs O(64·n) instead of the round-5 unbounded `+`, which
   // rescanned the whole run from every position (measured ≈ 2.7 s at 40k).
   [/[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){1,10}/g, '<principal>'],
-  [/\b\d{12,}\b/g, '<id>'],
+  [/\d{12,}/g, '<id>'],
 ];
 
 export function redactIdentifiers(text: string): string {
   return IDENTIFIER_PATTERNS.reduce((acc, [re, to]) => acc.replace(re, to), text);
 }
 
-/** Characters shown in `message` from a quoted response. */
-const QUOTE_CAP = 400;
+/** Characters shown in `message` from a quoted response. Exported for the straddle tests' arithmetic. */
+export const QUOTE_CAP = 400;
 /**
  * Redaction runs over this much of the response BEFORE the cut, so an
  * identifier straddling the 400-char cut is matched whole (a GUID is 36 chars;
  * 256 covers any realistic UPN). The window also bounds the regex input, so a
  * huge response (e.g. a proxy's HTML error page) cannot make redaction costly.
  */
-const REDACT_WINDOW = QUOTE_CAP + 256;
+export const REDACT_WINDOW = QUOTE_CAP + 256;
 
 /**
- * #4776 (round 6) — REDACT FIRST, THEN CUT. `said` is the public quote for
- * `message`: redacted over the bounded window, then cut to QUOTE_CAP backing
- * off to the previous space so no token is split, and — only when the text has
- * no space to back off to — dropping the trailing run of identifier characters
- * so no partial identifier is left. `rawDiagnostic` (admin-only) is the
- * UNREDACTED window, set only when redaction actually changed something.
+ * Every character any IDENTIFIER_PATTERNS match can contain (GUID: hex and
+ * `-`; digits; e-mail local part, `@`, and domain labels). A trailing run of
+ * these is the only place a partial identifier can sit at a cut.
+ */
+const ID_TAIL = /[A-Za-z0-9._%+@-]+$/;
+
+/**
+ * #4776 (round 7) — REDACT FIRST, THEN CUT, and never scan half a token.
+ *
+ * The 400-char cap counts characters AFTER redaction, and every redaction
+ * shortens the text, so a quote whose early identifiers were redacted can show
+ * text all the way up to the scan window's end (character 656). An identifier
+ * crossing that window end was cut in half by the window itself; its head
+ * matched no pattern and was shown (round 6's defect). So when the response is
+ * longer than the window, the trailing run of identifier characters is dropped
+ * from the scanned text BEFORE redacting: what is scanned then ends at a
+ * non-identifier character, every identifier in it is whole, and the dropped
+ * run is never shown.
+ *
+ * `said` is the public quote for `message`. If the redacted text is over
+ * QUOTE_CAP it is cut there, backing off to the previous space, or — when there
+ * is no space to back off to — dropping the trailing identifier-character run.
+ * Whitespace is trimmed before the ellipsis. `rawDiagnostic` (admin-only) is
+ * the UNREDACTED window, dropped run included, set only when redaction
+ * replaced something.
  */
 function quoteParts(e: ErrShape, label: string): { said: string; rawDiagnostic?: string } {
   const full = normalizedQuote(e);
   const window = full.slice(0, REDACT_WINDOW);
-  const redacted = redactIdentifiers(window);
   const truncated = full.length > REDACT_WINDOW;
-  const rawDiagnostic = redacted !== window
+  const scanned = truncated ? window.replace(ID_TAIL, '') : window;
+  const redacted = redactIdentifiers(scanned);
+  const rawDiagnostic = redacted !== scanned
     ? `${label}: ${window}${truncated ? '…' : ''}`
     : undefined;
   if (redacted.length <= QUOTE_CAP) {
-    return { said: truncated ? `${redacted}…` : redacted, rawDiagnostic };
+    return { said: truncated ? `${redacted.trimEnd()}…` : redacted, rawDiagnostic };
   }
   let cut = redacted.slice(0, QUOTE_CAP);
   if (/\S/.test(redacted.charAt(QUOTE_CAP))) {
     const space = cut.lastIndexOf(' ');
-    cut = space > 0 ? cut.slice(0, space) : cut.replace(/[A-Za-z0-9._%+@-]+$/, '');
+    cut = space > 0 ? cut.slice(0, space) : cut.replace(ID_TAIL, '');
   }
   return { said: `${cut.trimEnd()}…`, rawDiagnostic };
 }
