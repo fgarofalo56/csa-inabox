@@ -159,3 +159,34 @@ describe('GetDataGallery upload (host item)', () => {
     expect(await screen.findByText(/read-only\. Ask a workspace Admin or Member for edit access\./i)).toBeTruthy();
   });
 });
+
+/**
+ * "Via connection" storage path — browsed with the shared ADLS picker, not typed.
+ *
+ * The picker offers any storage account the caller can list, and the report
+ * resolver reads the host in the picked URI, so the hint must not claim the
+ * picker is limited to the connection's account.
+ */
+describe('GetDataGallery storage via connection', () => {
+  beforeEach(() => {
+    installFetchMock({ '/api/connections': () => ({ ok: true, connections: [] }) });
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it('shows the location as a read-only receipt with a Browse button, and a hint that matches what it browses', async () => {
+    renderGallery();
+    fireEvent.click(await screen.findByLabelText(/Get data from Azure Data Lake Storage Gen2/i));
+    fireEvent.click(await screen.findByRole('tab', { name: /Via connection/i }));
+    const receipt = await screen.findByLabelText('Delta folder or file (selected)');
+    // Breaks if the picker is replaced by a typed Input again (no readOnly receipt).
+    expect((receipt as HTMLInputElement).readOnly).toBe(true);
+    expect(screen.getByRole('button', { name: /^Browse$/ })).toBeTruthy();
+    // Breaks on the earlier hint, which promised a restriction the picker does not apply.
+    expect(screen.getByText('Browse any storage account you can list. The report reads exactly the location you pick.')).toBeTruthy();
+    expect(screen.queryByText(/storage account the connection reads/i)).toBeNull();
+  });
+});
