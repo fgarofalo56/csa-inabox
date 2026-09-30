@@ -108,7 +108,7 @@ const READER_DATABASE = 'master';
 
 const DEFAULT_SQL =
   `-- SQL analytics endpoint — read-only T-SQL over the lake (Azure-native serverless; no Fabric).\n`
-  + `SELECT 1 AS smoke, SYSDATETIMEOFFSET() AS server_time, SUSER_NAME() AS upn;`;
+  + `SELECT 1 AS smoke, SYSDATETIMEOFFSET() AS server_time;`;
 
 // Custom objects on a lake database live OUTSIDE [dbo] ([dbo] is reserved for
 // Spark-managed lake tables). Consumption objects default to [reports].

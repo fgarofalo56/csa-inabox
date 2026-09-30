@@ -114,7 +114,7 @@ const ADMIN_ONLY_ENTRIES = ['New view', 'New procedure', 'New function', 'Bytes 
 
 const DEFAULT_SQL =
   `-- Synapse Serverless SQL — Azure-native analytics endpoint (no Fabric needed).\n`
-  + `SELECT 1 AS smoke, SYSDATETIMEOFFSET() AS server_time, SUSER_NAME() AS upn;`;
+  + `SELECT 1 AS smoke, SYSDATETIMEOFFSET() AS server_time;`;
 
 // Custom objects on a lake database must live OUTSIDE [dbo] ([dbo] is reserved
 // for Spark-managed lake tables). Templates default to [reports].
