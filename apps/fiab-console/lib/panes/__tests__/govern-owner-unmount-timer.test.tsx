@@ -38,7 +38,7 @@
  * (test 2), and — without unmounting — the timer DOES fire and re-read (test 3),
  * so "no second owner read" cannot be satisfied by a timer that never existed.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } from 'vitest';
 import { render, act, cleanup } from '@testing-library/react';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import type { ReactNode } from 'react';
@@ -86,9 +86,9 @@ async function flush() {
   });
 }
 
-let setSpy: ReturnType<typeof vi.spyOn>;
-let clearSpy: ReturnType<typeof vi.spyOn>;
-let consoleError: ReturnType<typeof vi.spyOn>;
+let setSpy: MockInstance<typeof setTimeout>;
+let clearSpy: MockInstance<typeof clearTimeout>;
+let consoleError: MockInstance<typeof console.error>;
 
 /** Ids of every setTimeout(…, 1500) call recorded so far (the re-read timer). */
 function refreshTimerIds(): unknown[] {
