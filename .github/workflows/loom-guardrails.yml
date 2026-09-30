@@ -445,6 +445,48 @@ jobs:
       - name: console-corpus-staged (the console image ships its Copilot corpus — #2929)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-console-corpus-staged.mjs
+      # copilot-quality-evals.yml runs on a PR only when the PR changes what
+      # that run executes (operator decision 2026-09-30), so a docs/PRPs-only PR
+      # no longer reaches its first two steps. Both READ docs/ + PRPs/, and a
+      # docs-only diff can fail either one:
+      #   - stage-copilot-corpus.sh walks them under `set -euo pipefail`. A
+      #     tracked directory named `*.md` exits 123, and the same stager runs in
+      #     the console build/deploy lanes on main, so there is where it would
+      #     first fail;
+      #   - lint-eval-sets.mjs resolves every eval `expectedChunks` path/anchor
+      #     against doc headings.
+      # They run here on every PR: no secrets, no Azure, no network, and safe on
+      # a fork PR. Two ADJACENT steps, not one `a && b`, so a stager failure
+      # cannot hide a lint result:
+      #   1. the stager writes into apps/fiab-console/copilot-corpus/
+      #      (gitignored except .gitkeep) and leaves it there;
+      #   2. the lint runs against that staged manifest (corpus membership, as
+      #      copilot-quality-evals.yml runs it, not the weaker repo-tree-only
+      #      mode). It fails if no manifest was staged. Then `git clean -X`
+      #      puts the dir back to its checked-out state, on failure too (trap),
+      #      so no later guard walks ~2500 staged copies.
+      # Both are pinned by
+      # scripts/ci/__tests__/copilot-evals-trigger-contract.test.mjs (d).
+      - name: copilot-corpus-stages (the Copilot corpus stager survives this diff's docs/ + PRPs/)
+        if: ${{ !cancelled() }}
+        run: bash scripts/csa-loom/stage-copilot-corpus.sh
+      - name: copilot-eval-sets-lint (every eval expectedChunks anchor resolves in the corpus staged above)
+        if: ${{ !cancelled() }}
+        run: |
+          CORPUS=apps/fiab-console/copilot-corpus
+          trap 'git clean -fdqX -- "$CORPUS"' EXIT
+          node scripts/csa-loom/lint-eval-sets.mjs
+          if [ ! -f "$CORPUS/.corpus-manifest.json" ]; then
+            echo "::error::no staged manifest at $CORPUS/.corpus-manifest.json, so the lint above checked the repo tree only, not corpus membership (see the copilot-corpus-stages step)"
+            exit 1
+          fi
+          git clean -fdqX -- "$CORPUS"
+          LEFT="$(git status --porcelain --ignored -- "$CORPUS")"
+          if [ -n "$LEFT" ]; then
+            echo "::error::staged corpus files are still in $CORPUS after cleanup; later guards would read them:"
+            printf '%s\n' "$LEFT"
+            exit 1
+          fi
       - name: afd-endpoint-discovery (no CDN endpoint addressed by a name CI never discovered — #2828)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-afd-endpoint-discovery.mjs

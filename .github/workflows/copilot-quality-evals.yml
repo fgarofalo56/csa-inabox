@@ -29,10 +29,11 @@ name: copilot-quality-evals
 #
 # WHAT THIS RUN CAN AND CANNOT MEASURE (#3085): the console indexes the corpus
 # BAKED INTO ITS IMAGE, and the staging step here never leaves the runner — so
-# on a docs-only PR the scores are produced against the DEPLOYED corpus, not
-# the diff. Until the checkout's corpus can be shipped to an ephemeral index,
-# the "Corpus provenance" step states both commits and says plainly when they
-# differ, so no one reads a corpus-PR verdict as a verdict on the corpus.
+# on a docs-only push to main the scores are produced against the DEPLOYED
+# corpus, not the diff. Until the checkout's corpus can be shipped to an
+# ephemeral index, the "Corpus provenance" step states both commits and says
+# plainly when they differ, so no one reads a corpus-change verdict as a
+# verdict on the corpus.
 #
 # CONCURRENCY (#3083): the job carries a SECOND, repo-wide concurrency group so
 # only ONE 153-turn sweep runs estate-wide at a time. Per-ref
@@ -86,14 +87,25 @@ on:
     # parse-reindex-poll, eval-regression-lib): an edit to a helper changes
     # what runs exactly as an edit to its caller does.
     #
-    # COVERAGE GIVEN UP, stated rather than implied: lint-eval-sets.mjs checks
-    # every eval-set `expectedChunks` path/anchor against docs/** and PRPs/**,
-    # and this workflow is its only CI caller. A PR that deletes or re-heads a
-    # referenced doc no longer runs that lint pre-merge; it surfaces on main,
-    # on the next `push` run whose diff matches the push filter above, or at
-    # the latest on the nightly schedule.
+    # WHAT A docs/PRPs PR RUN USED TO CATCH, AND WHERE IT IS CAUGHT NOW. Two
+    # steps of this workflow read docs/** and PRPs/** from the checkout, so a
+    # docs-only diff could fail them before merge:
+    #   - stage-copilot-corpus.sh walks docs/ and PRPs/ under
+    #     `set -euo pipefail` (`find | xargs sha256sum`): a tracked directory
+    #     named `*.md` exits 123, and the same stager runs in the console
+    #     build/deploy lanes on main;
+    #   - lint-eval-sets.mjs resolves every eval-set `expectedChunks`
+    #     path/anchor against docs/** and PRPs/**.
+    # Both now run on EVERY pull_request in loom-guardrails.yml (no paths
+    # filter, no secrets, no Azure), in the steps `copilot-corpus-stages` and
+    # `copilot-eval-sets-lint`. So narrowing this filter does not drop them.
     #
-    # Pinned by scripts/ci/__tests__/copilot-evals-trigger-contract.test.mjs.
+    # `PRPs/archive/**` is a stager source root and has never been in either
+    # filter here. That gap predates this change and is out of its scope; the
+    # guardrails stager step does walk it.
+    #
+    # Pinned by scripts/ci/__tests__/copilot-evals-trigger-contract.test.mjs,
+    # including that the two guardrails steps exist and run on every PR.
     paths:
       - 'content/evals/**'
       - 'scripts/csa-loom/stage-copilot-corpus.sh'
@@ -564,9 +576,9 @@ jobs:
           # content/evals/**, and it structurally CANNOT measure them: the
           # console indexes the corpus BAKED INTO ITS IMAGE
           # (apps/fiab-console/Dockerfile:139), and the staging step above never
-          # leaves the runner. So a docs-only PR is scored against the corpus of
-          # the last built image — the gate can go RED on a corpus fix and GREEN
-          # on a corpus regression.
+          # leaves the runner. So a docs-only push is scored against the corpus
+          # of the last built image — the gate can go RED on a corpus fix and
+          # GREEN on a corpus regression.
           #
           # Shipping the checkout's corpus to the console for the run (an
           # ephemeral index) or building a throwaway image is the real fix and
