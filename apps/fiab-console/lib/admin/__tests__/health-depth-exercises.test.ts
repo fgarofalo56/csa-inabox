@@ -36,6 +36,25 @@ const dbxMock = {
 };
 vi.mock('@/lib/azure/databricks-client', () => dbxMock);
 
+// #3744 — the probe resolves its warehouse through the platform resolver. The
+// REAL error class is kept (importActual) so the probe's `instanceof` branch is
+// exercised against the class the resolver actually throws.
+const whMock = {
+  resolveDatabricksSqlWarehouseId: vi.fn(async () => ({ id: 'wh1', source: 'created', detail: "Created the 'loom-default' SQL warehouse (wh1)." }) as any),
+  // #4776 — the probe's statement runs through the self-healing wrapper. The
+  // spy resolves through the SAME resolver mock, so the id it hands the probe
+  // is the resolver's unless a test overrides it.
+  withResolvedWarehouse: vi.fn(async (fn: (id: string) => Promise<unknown>) => fn((await whMock.resolveDatabricksSqlWarehouseId()).id)),
+};
+vi.mock('@/lib/azure/databricks-sql-warehouse', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/azure/databricks-sql-warehouse')>('@/lib/azure/databricks-sql-warehouse');
+  return {
+    ...actual,
+    resolveDatabricksSqlWarehouseId: whMock.resolveDatabricksSqlWarehouseId,
+    withResolvedWarehouse: (fn: (id: string) => Promise<unknown>) => whMock.withResolvedWarehouse(fn),
+  };
+});
+
 const renderMock = { renderPaginatedReport: vi.fn(async () => ({ datasetCount: 1, pageCount: 1, page: { sections: [{ rows: [{ cells: [1] }] }] } })) };
 vi.mock('@/lib/azure/paginated-report-renderer', () => renderMock);
 
@@ -65,6 +84,8 @@ describe('W-B deep exercises', () => {
     dbxMock.databricksConfigGate.mockReturnValue(null);
     dbxMock.listWarehouses.mockResolvedValue([{ id: 'wh1', state: 'RUNNING' }] as any);
     dbxMock.runWarehouseStatement.mockResolvedValue({ rows: [[1]], rowCount: 1 } as any);
+    whMock.resolveDatabricksSqlWarehouseId.mockResolvedValue({ id: 'wh1', source: 'created', detail: "Created the 'loom-default' SQL warehouse (wh1)." } as any);
+    whMock.withResolvedWarehouse.mockImplementation(async (fn: (id: string) => Promise<unknown>) => fn((await whMock.resolveDatabricksSqlWarehouseId()).id));
     renderMock.renderPaginatedReport.mockResolvedValue({ datasetCount: 1, pageCount: 1, page: { sections: [{ rows: [{ cells: [1] }] }] } } as any);
     process.env.LOOM_SYNAPSE_WORKSPACE = 'ws';
     delete process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID;
@@ -123,10 +144,58 @@ describe('W-B deep exercises', () => {
     const r = await run('databricks-sql');
     expect(r.status).toBe('gate');
   });
-  it('databricks runs SELECT 1 on a discovered warehouse', async () => {
+  it('databricks runs SELECT 1 on the resolver-produced warehouse', async () => {
     const r = await run('databricks-sql');
     expect(r.status).toBe('pass');
+    // The list mock ALSO returns 'wh1' here, so the id assertion alone cannot
+    // tell resolver from list — the next test (list → 'some-other-wh') is the
+    // one that kills a probe that bypasses the resolver. This one pins that
+    // the resolver's detail is carried into the pass receipt.
     expect(dbxMock.runWarehouseStatement).toHaveBeenCalledWith('SELECT 1 AS loom_health', { warehouseId: 'wh1' });
+    expect(r.detail).toMatch(/Created the 'loom-default' SQL warehouse/);
+  });
+  it('databricks does NOT pick an arbitrary listed warehouse (resolver id wins)', async () => {
+    dbxMock.listWarehouses.mockResolvedValue([{ id: 'some-other-wh', state: 'RUNNING' }] as any);
+    await run('databricks-sql');
+    expect(dbxMock.runWarehouseStatement).toHaveBeenCalledWith('SELECT 1 AS loom_health', { warehouseId: 'wh1' });
+  });
+  it('#4776: the SELECT 1 runs through the self-healing wrapper and reports the id it ACTUALLY ran on', async () => {
+    // The wrapper re-resolved after the first id turned out to be gone: it hands
+    // the probe 'wh-healed'. Breaks if the probe calls runWarehouseStatement with
+    // the explicit id it resolved first (0 wrapper calls, and 'wh1' in the
+    // statement and the receipt), or if the receipt names the stale id.
+    whMock.withResolvedWarehouse.mockImplementationOnce(async (fn: (id: string) => Promise<unknown>) => fn('wh-healed'));
+    const r = await run('databricks-sql');
+    expect(whMock.withResolvedWarehouse).toHaveBeenCalledTimes(1);
+    expect(dbxMock.runWarehouseStatement).toHaveBeenCalledWith('SELECT 1 AS loom_health', { warehouseId: 'wh-healed' });
+    expect(r.status).toBe('pass');
+    // Positive: the receipt names the id the query ACTUALLY ran on.
+    expect(r.detail).toMatch(/SELECT 1 executed on wh-healed/);
+    // Round 5: it states only what happened. Breaks if the first lookup's
+    // detail — which names the OLD warehouse — is appended again after a heal.
+    expect(r.detail).not.toMatch(/Created the 'loom-default' SQL warehouse \(wh1\)/);
+    expect(r.detail).toMatch(/first lookup's SQL warehouse wh1 was reported gone/);
+  });
+  it('#4776 control: with NO heal, the receipt keeps the first lookup\'s detail (one id, as before)', async () => {
+    const r = await run('databricks-sql');
+    // Breaks if the heal wording fires when the first id served the query.
+    expect(r.detail).toMatch(/Databricks SQL warehouse wh1 executed SELECT 1/);
+    expect(r.detail).toMatch(/Created the 'loom-default' SQL warehouse \(wh1\)/);
+    expect(r.detail).not.toMatch(/reported gone/);
+  });
+  it('databricks reports a classified resolver failure as fail, not as a config gate', async () => {
+    const { WarehouseResolutionError } = await import('@/lib/azure/databricks-sql-warehouse');
+    whMock.resolveDatabricksSqlWarehouseId.mockRejectedValueOnce(new WarehouseResolutionError({
+      kind: 'permission', step: 'create', status: 403,
+      message: 'Databricks refused the Console identity\'s create call (HTTP 403 PERMISSION_DENIED): nope',
+      remediation: 'grant allow-cluster-create', entitlement: 'allow-cluster-create',
+    }));
+    const r = await run('databricks-sql');
+    // Breaks if a refused call is downgraded to 'gate' (the "not configured" lie).
+    expect(r.status).toBe('fail');
+    expect(r.detail).toMatch(/\(permission\)/);
+    expect(r.detail).toMatch(/allow-cluster-create/);
+    expect(dbxMock.runWarehouseStatement).not.toHaveBeenCalled();
   });
 
   // ── report-render ──

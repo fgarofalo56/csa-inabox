@@ -12,31 +12,36 @@
  *
  * Read-scoped to the same admin capability as env-config (the registry names
  * every deployment env var, an estate-level concern).
+ *
+ * Route-toolkit: withCapability('admin.env-config', 'Admin') — the hand-rolled
+ * getSession() + enforceCapability prologue is now structural (#4776 touched
+ * this route, so the boy-scout rule migrated it).
  */
 import { NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { enforceCapability } from '@/lib/auth/feature-gate';
-import { GATES, allGateStatuses } from '@/lib/gates/registry';
+import { withCapability } from '@/lib/api/route-toolkit';
+import { GATES, allGateStatuses, gateAdminDiagnostic } from '@/lib/gates/registry';
 import { envWriteAvailability } from '@/lib/admin/env-apply';
 import { detectLoomCloud } from '@/lib/azure/cloud-endpoints';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  const session = getSession();
-  const gate = await enforceCapability(session, 'admin.env-config', 'Admin');
-  if (gate) return gate;
-
+export const GET = withCapability('admin.env-config', 'Admin', async () => {
   const statuses = allGateStatuses();
   const byId = new Map(statuses.map((s) => [s.id, s]));
   const gates = GATES.map((g) => {
     const st = byId.get(g.id);
+    const diagnostic = gateAdminDiagnostic(g.id);
     return {
       ...g,
       status: st?.status ?? 'blocked',
       missing: st?.missing ?? [],
       detail: st?.check.detail,
+      // #4776 — a runtime producer's admin-only diagnostic (e.g. what SCIM Me
+      // measured about the Console identity). Never in `detail`, which the
+      // non-admin self-audit readers share; attached here because this route
+      // is admin-capability gated.
+      ...(diagnostic ? { diagnostic } : {}),
       portalSteps: st?.check.portalSteps,
       fixScript: st?.check.fixScript,
       // X2 — availability in the ACTIVE cloud + the fallback note (present when
@@ -67,4 +72,4 @@ export async function GET() {
     writeError,
     cloud: detectLoomCloud(),
   });
-}
+});
