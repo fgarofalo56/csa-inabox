@@ -4839,12 +4839,75 @@ ARMS: list[tuple[str, str, str, str]] = [
         "    if False:",
     ),
     (
-        ("CH4 the hop bound is not enforced, so a walk that exhausts its "
-         "facts (longer than the bound, or facts that end before a content "
-         "commit) falls through with no pin and the refusal never reads"),
+        ("CH4 the `else` site of the bound is bypassed, so facts that end "
+         "before a content commit fall through and pin at the last hop's "
+         "parent -- a commit whose facts were never read. (Over-the-bound "
+         "walks are ALSO refused after the loop since round 2; that site is "
+         "CH5.)"),
         "gates.py",
-        "        return _chain_refused(transferred, max_hops)",
-        "        pass",
+        "    else:\n        return _chain_refused(transferred, max_hops)\n",
+        "    else:\n        pass\n",
+    ),
+    #
+    # CH5 to CH10: round 2 of #4843's review. Each names the finding it pins.
+    (
+        ("CH5 (A2) the bound is checked only when the facts run out, so more "
+         "than `max_hops` base updates FOLLOWED by a content commit still pin "
+         "-- 21 hops down, past the bound the docstring promises"),
+        "gates.py",
+        "    if len(transferred) > max_hops:\n        # THE BOUND HOLDS",
+        "    if False:\n        # THE BOUND HOLDS",
+    ),
+    (
+        ("CH6 (B1, R7) the chain walk stops naming the commit under test, so "
+         "the one-hop wording says `head has 1 parent(s)` about a commit two "
+         "hops below the head -- a false statement about which commit refused"),
+        "gates.py",
+        '        subject=f"commit {hop.sha[:12]}",\n',
+        "",
+    ),
+    (
+        ("CH7 (B2) the 2+3 detail names the re-pin only when it succeeds, so "
+         "a refused walk and a walk that never ran print the same line"),
+        "merge_gate.py",
+        "    else:\n        # The REFUSAL is said out loud too.",
+        "    elif False:\n        # The REFUSAL is said out loud too.",
+    ),
+    (
+        ("CH8 (B3) an unreadable pin date is not refused, so `resolve_repin` "
+         "returns ok=True with an EMPTY date and every verdict compares "
+         "against the empty string"),
+        "merge_gate.py",
+        "    if not date:",
+        "    if False:",
+    ),
+    (
+        ("CH9 (B5) the pin date is formatted in LOCAL time, so on any non-UTC "
+         "box it is shifted by the zone offset and verdicts go live or stale "
+         "by hours. Killable on a UTC runner only through the child-process "
+         "TZ test"),
+        "merge_gate.py",
+        "_dt.datetime.fromtimestamp(epoch, _dt.timezone.utc)",
+        "_dt.datetime.fromtimestamp(epoch)",
+    ),
+    (
+        ("CH10 (A1) the PR-head fetch moves back BELOW gate 1's merge-base, so "
+         "an unfetched head makes gate 1 read `cannot resolve base` (#4648)"),
+        "merge_gate.py",
+        ('    rc, _, err = sh(["git", "fetch", "--quiet", "origin", f"pull/{number}/head"])\n'
+         '    if rc != 0:\n'
+         '        print(f"WARNING: git fetch pull/{number}/head failed: {err[:200]} - gate 1 "\n'
+         '              "and the re-pin will refuse on any commit they cannot read",\n'
+         '              file=sys.stderr)\n'
+         '    rc, out, err = sh(["git", "merge-base", origin_main_sha, head])\n'
+         '    base_sha = out.strip() if rc == 0 else ""\n'),
+        ('    rc, out, err = sh(["git", "merge-base", origin_main_sha, head])\n'
+         '    base_sha = out.strip() if rc == 0 else ""\n'
+         '    rc, _, err = sh(["git", "fetch", "--quiet", "origin", f"pull/{number}/head"])\n'
+         '    if rc != 0:\n'
+         '        print(f"WARNING: git fetch pull/{number}/head failed: {err[:200]} - gate 1 "\n'
+         '              "and the re-pin will refuse on any commit they cannot read",\n'
+         '              file=sys.stderr)\n'),
     ),
 ]
 

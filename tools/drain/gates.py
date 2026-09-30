@@ -5472,8 +5472,16 @@ def verdict_transfers_across_base_update(
     approved_head: str,
     automerge_tree: str | None,
     head_tree: str,
+    subject: str = "head",
 ) -> tuple[bool, str]:
     """Does a verdict measured at `approved_head` still describe `head_tree`?
+
+    `subject` NAMES the commit under test in every reason this returns. It is
+    "head" for the one-hop caller, whose subject IS the PR head. The chain walk
+    (#4811) asks the same question of commits BELOW the head, and a reason that
+    said "head has 1 parent(s)" about a mid-chain commit would state as fact
+    something false about which commit refused (R7) -- so the walk passes
+    "commit <sha12>".
 
     THE PROBLEM THIS EXISTS FOR. Verdict liveness is a TIMESTAMP proxy
     (`parse_verdicts`: `when >= head_date`), so ANY new head -- including one
@@ -5517,7 +5525,7 @@ def verdict_transfers_across_base_update(
     resolution is new content that nobody has reviewed.
     """
     if not head_tree:
-        return False, "cannot resolve the head tree - unmeasurable, not a pass"
+        return False, f"cannot resolve the tree of {subject} - unmeasurable, not a pass"
     if not approved_head:
         return False, "no approved head to transfer FROM - unmeasurable, not a pass"
     parents = list(head_parents or [])
@@ -5527,7 +5535,7 @@ def verdict_transfers_across_base_update(
         # refuse. Three is an octopus merge, which `merge-tree` two-arg form
         # cannot model, so it is refused rather than approximated.
         return False, (
-            f"head has {len(parents)} parent(s), not 2 - only a two-parent "
+            f"{subject} has {len(parents)} parent(s), not 2 - only a two-parent "
             f"merge can be a pure base update"
         )
     if approved_head not in parents:
@@ -5535,7 +5543,7 @@ def verdict_transfers_across_base_update(
         # this one. It may still be reachable, but "reachable" is not the
         # question: a commit between them could have authored anything.
         return False, (
-            f"approved head {approved_head[:12]} is not a parent of this head "
+            f"approved head {approved_head[:12]} is not a parent of {subject} "
             f"(parents {[p[:12] for p in parents]}) - nothing to transfer"
         )
     if not automerge_tree:
@@ -5543,18 +5551,18 @@ def verdict_transfers_across_base_update(
         # merge conflicts, and a conflicted merge that nevertheless produced a
         # head means a human resolved it -- unreviewed content by definition.
         return False, (
-            "the auto-merge of the two parents produced no tree (conflict, or "
-            "the caller could not resolve it) - unmeasurable, not a pass"
+            f"the auto-merge of the two parents of {subject} produced no tree "
+            "(conflict, or the caller could not resolve it) - unmeasurable, not a pass"
         )
     if automerge_tree != head_tree:
         return False, (
-            f"head tree {head_tree[:12]} != auto-merge of its parents "
-            f"{automerge_tree[:12]} - this head carries content the merge did "
+            f"{subject} tree {head_tree[:12]} != auto-merge of its parents "
+            f"{automerge_tree[:12]} - {subject} carries content the merge did "
             f"not produce, so it was NOT reviewed"
         )
     other = [p for p in parents if p != approved_head]
     return True, (
-        f"head is exactly the auto-merge of {approved_head[:12]} and "
+        f"{subject} is exactly the auto-merge of {approved_head[:12]} and "
         f"{(other[0] if other else approved_head)[:12]} (tree {head_tree[:12]}) "
         f"- no content was authored, so the verdict measured these bytes"
     )
@@ -5621,7 +5629,8 @@ def base_update_hop_transfers(hop: BaseUpdateHop) -> tuple[bool, str]:
     """
     parents = list(hop.parents)
     ok, why = verdict_transfers_across_base_update(
-        parents, parents[0] if parents else "", hop.automerge_tree, hop.tree
+        parents, parents[0] if parents else "", hop.automerge_tree, hop.tree,
+        subject=f"commit {hop.sha[:12]}",
     )
     if not ok:
         return False, why
@@ -5670,8 +5679,8 @@ def resolve_repin_chain(hops: list[BaseUpdateHop], max_hops: int = REPIN_MAX_HOP
     - the head itself is not a transferring hop -- nothing to re-pin;
     - two consecutive hops are not first-parent linked -- a caller that skipped
       a commit could skip exactly the one that authored content;
-    - every hop supplied transfers and there are more than `max_hops` of them
-      -- the bound;
+    - more than `max_hops` hops transfer -- the bound -- whether the facts
+      then run out or a content-bearing commit follows;
     - every hop supplied transfers and there are not -- the facts ran out
       before a content-bearing commit was reached, which is a truncated walk,
       not a pin.
@@ -5695,6 +5704,14 @@ def resolve_repin_chain(hops: list[BaseUpdateHop], max_hops: int = REPIN_MAX_HOP
             break
         transferred.append(hop)
     else:
+        return _chain_refused(transferred, max_hops)
+    if len(transferred) > max_hops:
+        # THE BOUND HOLDS EVEN WHEN A CONTENT COMMIT FOLLOWS. The collector in
+        # `merge_gate` stops reading at `max_hops + 1`, so through it this line
+        # is unreachable -- but the pure resolver is the decision, and a caller
+        # that supplies more facts than the bound must not get a pin the bound
+        # says it cannot have. Without it, 21 base updates then a content
+        # commit re-pinned 21 hops down.
         return _chain_refused(transferred, max_hops)
     if not transferred:
         return RepinChain(False, "", (), terminal_why)

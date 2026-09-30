@@ -875,6 +875,18 @@ def collect(repo: str, number: int) -> dict:
     rc, out, err = sh(["git", "fetch", "--quiet", "origin", base_ref])
     if rc != 0:
         print(f"WARNING: git fetch origin {base_ref} failed: {err[:200]}", file=sys.stderr)
+    # FETCH THE PR HEAD BEFORE ANYTHING READS IT. Both the merge-base below
+    # (gate 1) and the re-pin walk read `head` from the LOCAL store, and the
+    # update-branch merges that make a head are built SERVER-SIDE, so without
+    # this they read `bad object`: gate 1 then reports "cannot resolve base"
+    # (#4648, which READS exactly like a stale base), every hop of the walk is
+    # unmeasurable, and real APPROVEs read as predating the head. A failed
+    # fetch is not fatal: both readers then refuse, the strict direction.
+    rc, _, err = sh(["git", "fetch", "--quiet", "origin", f"pull/{number}/head"])
+    if rc != 0:
+        print(f"WARNING: git fetch pull/{number}/head failed: {err[:200]} - gate 1 "
+              "and the re-pin will refuse on any commit they cannot read",
+              file=sys.stderr)
     rc, out, err = sh(["git", "merge-base", origin_main_sha, head])
     base_sha = out.strip() if rc == 0 else ""
     if rc != 0:
@@ -892,16 +904,8 @@ def collect(repo: str, number: int) -> dict:
     # parents[0] is the PR-side head: `update-branch` merges main INTO the PR
     # branch, so the branch tip is the first parent. That is CHECKED rather
     # than trusted -- a reversed merge puts the PR side second, whose ancestry
-    # on main fails, so it refuses rather than pinning wrongly.
-    #
-    # FETCH THE PR HEAD FIRST. The update-branch merges are built SERVER-SIDE,
-    # so without this the walk reads `bad object`, every hop is unmeasurable,
-    # and real APPROVEs read as predating the head. A failed fetch is not
-    # fatal: the walk then refuses, which is the strict direction.
-    rc, _, err = sh(["git", "fetch", "--quiet", "origin", f"pull/{number}/head"])
-    if rc != 0:
-        print(f"WARNING: git fetch pull/{number}/head failed: {err[:200]} - the "
-              "re-pin will refuse on any commit it cannot read", file=sys.stderr)
+    # on main fails, so it refuses rather than pinning wrongly. The PR head was
+    # fetched above, before gate 1's merge-base.
     repin = resolve_repin(head, origin_main_sha)
 
     open_issues = gh_json(
@@ -1637,6 +1641,13 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None,
         # sha, tree, both parents -- so a human can re-run each `merge-tree`
         # and audit the transfer (#4811).
         detail += f" | RE-PINNED to {repin['date']}: {repin['why']}"
+    else:
+        # The REFUSAL is said out loud too. Printed only on success, a gate that
+        # re-pinned nothing looked identical to one whose walk never ran, and a
+        # reviewer asking "why is my APPROVE stale after update-branch?" had
+        # nothing in the output to read. The reason names the commit that ended
+        # the walk and which test it failed.
+        detail += f" | NOT re-pinned: {repin.get('why') or 'no reason recorded'}"
     record("2+3 verdicts (conjunction, pinned to head)", ok, detail)
 
     # The closing scan is computed HERE, above 3b, because 3b needs the issue

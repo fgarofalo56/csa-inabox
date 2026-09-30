@@ -27,7 +27,8 @@ shared by every test:
     12:00  H2   update-branch #2
     14:00  H3   update-branch #3
 
-Mutation arms CH1-CH4 in `mutate_gates.py` point at the code these witness.
+Mutation arms CH1-CH10 in `mutate_gates.py` point at the code these witness
+(CH5-CH10 from round 2 of #4843's review).
 """
 from __future__ import annotations
 
@@ -381,8 +382,14 @@ def test_f_a_chain_longer_than_the_bound_refuses(chain):
     COUNT and not about this chain: the same head with a bound of three
     transfers, and a two-hop head with a bound of two transfers.
 
-    BREAKS IF the bound stops refusing (arm CH4): the walk then pins at V with
-    `ok=True` although it never read V's facts.
+    BREAKS IF the bound is off by one, or is removed at BOTH of its sites. It
+    is enforced twice since round 2 -- in the loop's `else` when the facts run
+    out, and after the loop -- so removing ONE site does not turn this red:
+    arm CH4 (the `else` site) is killed by
+    `test_facts_that_end_before_a_content_commit_refuse`, and CH5 (the
+    after-loop site) by `test_the_bound_holds_when_a_content_commit_follows`.
+    Said here so this test is not counted as CH4's witness (measured: green
+    under CH4 alone, round 2).
     """
     chain.merge(chain.main[0], T_H1)
     h2 = chain.merge(chain.main[1], T_H2)
@@ -490,3 +497,214 @@ def test_facts_that_end_before_a_content_commit_refuse():
     assert not got.ok, got
     assert "facts end after 1" in got.why, got.why
     assert not gates.resolve_repin_chain([]).ok
+
+
+# --- Round 2 (#4843 review) -------------------------------------------------
+
+def test_the_reason_names_the_commit_that_ended_the_walk_not_the_head(chain):
+    """B1 (R7). V -> H1 -> H2: the walk ends at V, a one-parent commit two hops
+    BELOW the head. The reason must name V, not call it "head".
+
+    BREAKS IF the chain walk stops passing `subject` (the one-hop wording then
+    reads "head has 1 parent(s)" -- about a commit that is not the head, which
+    is the false statement B1 found). Arm CH6.
+    """
+    chain.merge(chain.main[0], T_H1)
+    h2 = chain.merge(chain.main[1], T_H2)
+    repin = merge_gate.resolve_repin(h2, chain.base_tip)
+    assert repin["ok"], repin["why"]
+    pin = repin["pin"]
+    assert pin == chain.v, (pin[:12], chain.v[:12])
+    assert f"{pin[:12]} has 1 parent(s)" in repin["why"], repin["why"]
+    # Paired absence: the head's name is not attached to V's fact.
+    assert "head has 1 parent(s)" not in repin["why"], repin["why"]
+
+
+def test_a_refused_re_pin_is_named_in_the_gate_detail(chain):
+    """B2. A plain push on V: nothing transfers, and the 2+3 detail must SAY so
+    and why -- otherwise "no re-pin" and "the walk never ran" read the same.
+
+    BREAKS IF `run_gates` prints the re-pin reason only on success (arm CH7).
+    The positive half: a transferring chain prints RE-PINNED and not the
+    refusal, so the two lines are not merely both always present.
+    """
+    head = chain.commit("pr.txt", "pushed fix\n", T_H1)
+    refused = merge_gate.resolve_repin(head, chain.base_tip)
+    assert not refused["ok"], refused
+    detail = _verdict_gate(refused, T_H1, APPROVED_AT)["detail"]
+    assert f"NOT re-pinned: commit {head[:12]} has 1 parent(s)" in detail, detail
+    assert "RE-PINNED" not in detail, detail
+
+    chain.fresh_branch("t-b2-positive")
+    h1 = chain.merge(chain.main[0], T_H1)
+    ok = merge_gate.resolve_repin(h1, chain.base_tip)
+    ok_detail = _verdict_gate(ok, T_H1, APPROVED_AT)["detail"]
+    assert "RE-PINNED" in ok_detail, ok_detail
+    assert "NOT re-pinned" not in ok_detail, ok_detail
+
+
+def test_a_reversed_parent_merge_does_not_transfer(chain):
+    """A3. The SAME content merged the other way round: main's tip first, the
+    PR commit V second (`git checkout main && git merge V`). Its tree equals
+    the forward merge's, so only parent ORDER differs -- and parents[0] is the
+    side the walk treats as the PR, so the reversed merge must refuse: its
+    second parent V is not on main.
+
+    BREAKS IF the ancestry check is dropped (arm CH3) or the walk picks the
+    PR side by anything but first-parent position. The positive half is the
+    forward merge of the same two commits, which transfers.
+    """
+    forward = chain.merge(chain.base_tip, T_H1)
+    fwd = merge_gate.resolve_repin(forward, chain.base_tip)
+    assert fwd["ok"], fwd["why"]
+    assert fwd["pin"] == chain.v
+
+    chain.git("checkout", "--quiet", "-B", "t-a3-reversed", chain.base_tip)
+    reversed_head = chain.merge(chain.v, T_H1)
+    assert chain.tree(reversed_head) == chain.tree(forward), (
+        "fixture: the reversed merge should carry the same bytes, so that ONLY "
+        "parent order distinguishes it")
+    rev = merge_gate.resolve_repin(reversed_head, chain.base_tip)
+    assert not rev["ok"], rev
+    assert f"second parent {chain.v[:12]} is NOT an ancestor" in rev["why"], rev["why"]
+
+
+def test_an_unreadable_pin_date_refuses(chain, monkeypatch):
+    """B3. The chain resolves, but the pin's committer date cannot be read.
+    That is an unmeasurable re-pin, and it must refuse rather than hand
+    `run_gates` an `ok` repin with an empty date.
+
+    The failure is injected at the ONE git call that reads the date (`show -s`)
+    and nowhere else, so the walk itself runs for real.
+
+    BREAKS IF `resolve_repin` stops checking the date (arm CH8 -- the `if not
+    date:` guard becomes `if False:` and the result is ok=True, date="").
+    """
+    chain.merge(chain.main[0], T_H1)
+    h2 = chain.merge(chain.main[1], T_H2)
+    assert merge_gate.resolve_repin(h2, chain.base_tip)["ok"]   # positive half
+
+    real_sh = merge_gate.sh
+
+    def sh_without_show(argv, *a, **kw):
+        if argv[:3] == ["git", "show", "-s"]:
+            return 128, "", "fatal: injected - cannot read the pin"
+        return real_sh(argv, *a, **kw)
+
+    monkeypatch.setattr(merge_gate, "sh", sh_without_show)
+    got = merge_gate.resolve_repin(h2, chain.base_tip)
+    assert not got["ok"], got
+    assert got["date"] == "", got
+    assert "pin's date could not be read" in got["why"], got["why"]
+
+
+def test_the_pin_date_is_utc_whatever_the_local_timezone(chain):
+    """B5. `commit_date_utc` must produce UTC regardless of the box's zone.
+    On a UTC runner a LOCAL-time conversion gives the same string, so an
+    in-process test cannot tell them apart there. This runs the real function
+    in a CHILD Python with `TZ=IST-5:30` (POSIX form, which both glibc and the
+    Windows CRT honour), so local time is 5h30 ahead of UTC on every OS.
+
+    The child ALSO prints the local conversion of the same epoch -- the
+    positive control that TZ took effect. If it did not, the control assert
+    fails loudly rather than the test passing blind.
+
+    BREAKS IF `fromtimestamp` loses its `timezone.utc` argument (arm CH9):
+    the child then prints 13:30 for an 08:00Z commit.
+    """
+    epoch = int(_dt.datetime.strptime(T_V, "%Y-%m-%dT%H:%M:%SZ")
+                .replace(tzinfo=_dt.timezone.utc).timestamp())
+    drain_dir = os.path.dirname(os.path.abspath(merge_gate.__file__))
+    script = (
+        "import sys, datetime\n"
+        f"sys.path.insert(0, {drain_dir!r})\n"
+        "import merge_gate\n"
+        f"merge_gate.REPO_ROOT = {str(chain.repo)!r}\n"
+        f"print(merge_gate.commit_date_utc({chain.v!r}))\n"
+        f"print(datetime.datetime.fromtimestamp({epoch})"
+        ".strftime('%Y-%m-%dT%H:%M:%S'))\n"
+    )
+    env = {**os.environ, "TZ": "IST-5:30"}
+    done = subprocess.run([sys.executable, "-c", script], env=env,
+                          capture_output=True, text=True, encoding="utf-8",
+                          errors="replace")
+    assert done.returncode == 0, done.stderr
+    got, local = done.stdout.strip().splitlines()[-2:]
+    assert local == "2026-09-10T13:30:00", (
+        f"control: TZ did not take effect in the child (local={local}) - this "
+        "test would be blind to a local-time conversion")
+    assert got == T_V, f"pin date {got}, expected {T_V} (13:30Z is local time)"
+
+
+def test_the_pr_head_is_fetched_before_gate_one_reads_it():
+    """A1. In `collect`, the `git fetch origin pull/<n>/head` must come BEFORE
+    the `git merge-base <tip> <head>` that gate 1 reads, and before the re-pin
+    walk -- both read the head from the local store (#4648).
+
+    A STRUCTURAL pin, read from the AST (so a comment cannot satisfy it), not
+    a behavioural one: `collect` has no harness, it calls `gh` a dozen times.
+    Disclosed as such (`assertion-design.md` #5): it proves the ORDER of the
+    calls, not that the fetch succeeds.
+
+    BREAKS IF the fetch moves back below the merge-base (arm CH10), or is
+    deleted (the lookup then finds nothing).
+    """
+    import ast
+    import pathlib
+
+    tree = ast.parse(pathlib.Path(merge_gate.__file__).read_text(encoding="utf-8"))
+    collect = next(n for n in tree.body
+                   if isinstance(n, ast.FunctionDef) and n.name == "collect")
+
+    def first_line(pred):
+        lines = [n.lineno for n in ast.walk(collect)
+                 if isinstance(n, ast.Call) and pred(n)]
+        return min(lines) if lines else None
+
+    def git_argv(call):
+        arg = call.args[0] if call.args else None
+        if not (isinstance(arg, ast.List) and arg.elts
+                and isinstance(arg.elts[0], ast.Constant) and arg.elts[0].value == "git"):
+            return None
+        return arg.elts
+
+    def is_pull_fetch(call):
+        elts = git_argv(call)
+        return bool(elts) and any(
+            isinstance(e, ast.JoinedStr) and any(
+                isinstance(v, ast.Constant) and "pull/" in str(v.value)
+                for v in e.values) for e in elts)
+
+    def is_gate1_merge_base(call):
+        elts = git_argv(call)
+        return bool(elts) and len(elts) > 2 and getattr(elts[1], "value", None) == "merge-base" \
+            and getattr(elts[2], "value", None) != "--is-ancestor"
+
+    def is_repin(call):
+        return getattr(call.func, "id", None) == "resolve_repin"
+
+    fetch, mb, rp = (first_line(is_pull_fetch), first_line(is_gate1_merge_base),
+                     first_line(is_repin))
+    assert None not in (fetch, mb, rp), (fetch, mb, rp)
+    assert fetch < mb, f"pull-head fetch at line {fetch} is after gate 1's merge-base at {mb}"
+    assert fetch < rp, f"pull-head fetch at line {fetch} is after the re-pin at {rp}"
+
+
+def test_the_bound_holds_when_a_content_commit_follows():
+    """A2. Three content-free hops, THEN a content commit, with a bound of 2.
+    The walk reaches a real pin, but only by crossing more hops than the bound
+    allows -- it must refuse.
+
+    BREAKS IF the bound is checked only when the facts run out (arm CH5): this
+    chain then pins at `v` with ok=True. Positive half: the same facts with a
+    bound of 3 pin at `v`.
+    """
+    content = gates.BaseUpdateHop("v" * 40, ("0" * 40,), None, "t" * 40, None)
+    hops = [_hop("a" * 40, "b" * 40), _hop("b" * 40, "c" * 40),
+            _hop("c" * 40, "v" * 40), content]
+    over = gates.resolve_repin_chain(hops, max_hops=2)
+    assert not over.ok, over
+    assert "longer than 2 hop(s)" in over.why, over.why
+    at = gates.resolve_repin_chain(hops, max_hops=3)
+    assert at.ok, at.why
+    assert at.pin == "v" * 40
