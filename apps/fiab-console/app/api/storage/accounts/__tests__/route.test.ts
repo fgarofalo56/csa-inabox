@@ -4,9 +4,12 @@
  * none). Each assertion names the input that breaks it.
  */
 import { describe, it, expect, vi } from 'vitest';
+import { NextRequest } from 'next/server';
 
-vi.mock('@/lib/auth/session', () => ({ getSession: () => ({ claims: { oid: 'u', tid: 't' } }) }));
+let session: any = { claims: { oid: 'u', tid: 't' } };
+vi.mock('@/lib/auth/session', () => ({ getSession: () => session }));
 let fail: Error | null = null;
+let listed = 0;
 vi.mock('@/lib/azure/storage-discovery', async () => {
   class StorageDiscoveryError extends Error {
     status: number;
@@ -15,6 +18,7 @@ vi.mock('@/lib/azure/storage-discovery', async () => {
   return {
     StorageDiscoveryError,
     listStorageAccounts: async () => {
+      listed += 1;
       if (fail) throw fail;
       return [{ id: '/subscriptions/s/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/lakea', name: 'lakea' }];
     },
@@ -24,12 +28,14 @@ vi.mock('@/lib/azure/storage-discovery', async () => {
 import { GET } from '../route';
 import { StorageDiscoveryError } from '@/lib/azure/storage-discovery';
 
+const call = () => GET(new NextRequest('http://localhost/api/storage/accounts'), { params: Promise.resolve({}) } as any);
+
 describe('GET /api/storage/accounts', () => {
   it('a Reader refusal answers ok:false with its error and a role-only hint', async () => {
     // Breaks if the hint again offers manual entry ("manually"), or stops
     // naming the role and the permission the listing needs.
     fail = new (StorageDiscoveryError as any)('AuthorizationFailed', 403);
-    const res = await GET();
+    const res = await call();
     expect(res.status).toBe(200);
     const j = await res.json();
     expect(j.ok).toBe(false);
@@ -42,9 +48,22 @@ describe('GET /api/storage/accounts', () => {
   it('a successful listing returns the accounts (positive pair)', async () => {
     // Breaks if the route stopped returning the discovered accounts.
     fail = null;
-    const res = await GET();
+    const res = await call();
     const j = await res.json();
     expect(j.ok).toBe(true);
     expect(j.accounts.map((a: any) => a.name)).toEqual(['lakea']);
+  });
+
+  it('401 without a session, before any listing', async () => {
+    // Breaks if the session check is dropped: the listing would run (listed
+    // grows) and answer 200 with the accounts.
+    session = null;
+    fail = null;
+    const before = listed;
+    const res = await call();
+    expect(res.status).toBe(401);
+    expect((await res.json()).ok).toBe(false);
+    expect(listed).toBe(before);
+    session = { claims: { oid: 'u', tid: 't' } };
   });
 });

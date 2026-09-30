@@ -2533,7 +2533,7 @@ silently downgrading the route.
 
 ## Backend signals (derived)
 
-462 module(s) ORIGINATE a backend label — the derivation read an
+464 module(s) ORIGINATE a backend label — the derivation read an
 Azure identifier out of them. Every other route/module below inherits through the
 call graph. Nothing in this section is a Loom module name someone typed: the
 modules are derived, and only the Microsoft-owned identifier vocabulary is seeded.
@@ -3216,6 +3216,7 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/migrate/migrate-client.ts` | Loom service |
 | `apps/fiab-console/lib/monitor/monitor-alert-editor.tsx` | Azure Monitor |
 | `apps/fiab-console/lib/panes/cmk.tsx` | Azure Storage, Key Vault |
+| `apps/fiab-console/lib/panes/workspace-settings.tsx` | Azure Storage |
 | `apps/fiab-console/lib/parity/parity-issue.ts` | GitHub |
 | `apps/fiab-console/lib/perf/apply-change.ts` | ADX, Synapse |
 | `apps/fiab-console/lib/pipeline/connector-catalog.ts` | ADLS, ADX, Azure SQL, Azure Storage, Cosmos, Databricks, Dataverse, PostgreSQL, Synapse SQL |
@@ -3230,3 +3231,4 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/setup/wire-existing.ts` | Resource Graph |
 | `apps/fiab-console/lib/telemetry/rum-ingest.ts` | Azure Monitor |
 | `apps/fiab-console/lib/versions/item-version-store.ts` | Cosmos |
+| `apps/fiab-console/lib/wizards/workspace-create.tsx` | Azure Storage |
