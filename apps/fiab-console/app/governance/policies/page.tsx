@@ -62,6 +62,11 @@ interface DlpMeta {
 
 const KINDS = ['DLP', 'Masking', 'RLS', 'Retention', 'Access'] as const;
 
+/** Why Access-policy controls are unavailable to a caller who is not a tenant admin. */
+const ACCESS_ADMIN_REASON =
+  'Access policies are managed by tenant admins. Ask a tenant admin to add or change one, or request ' +
+  'access to a data product from the catalog.';
+
 const useStyles = makeStyles({
   empty: { padding: tokens.spacingVerticalXXL, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, textAlign: 'center' },
   rule: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, maxWidth: '360px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
@@ -128,7 +133,11 @@ export default function PoliciesPage() {
   // enforced, shadow-evaluated (default), or off. Null until the mode loads.
   const [pdpMode, setPdpMode] = useState<'shadow' | 'enforce' | 'off' | null>(null);
   const [actionErr, setActionErr] = useState<string | null>(null);
-
+  // Access policies are managed by tenant admins. `null` until the list loads;
+  // the server enforces this on every write, the page mirrors it.
+  const [canManageAccess, setCanManageAccess] = useState<boolean | null>(null);
+  const [listWarnings, setListWarnings] = useState<string[]>([]);
+  const accessLocked = canManageAccess === false;
   // ── DLP (F22) — violations, last-scan, trigger-scan, restrict-access ────────
   const [dlpMeta, setDlpMeta] = useState<DlpMeta | null>(null);
   const [violations, setViolations] = useState<DlpViolation[]>([]);
@@ -299,6 +308,8 @@ export default function PoliciesPage() {
       }
       if (!j.ok) { setError(j.error); return; }
       setPolicies(j.policies || []);
+      setCanManageAccess(j.canManageAccess === true);
+      setListWarnings(Array.isArray(j.warnings) ? j.warnings.map(String) : []);
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setLoading(false); }
   }, []);
@@ -570,15 +581,30 @@ export default function PoliciesPage() {
     },
     {
       key: 'enabled', label: 'Enabled', sortable: true, filterable: false, width: 100, getValue: (p) => (p.enabled ? 1 : 0),
-      render: (p) => <span onClick={(e) => e.stopPropagation()}><Switch checked={p.enabled} onChange={() => toggle(p)} /></span>,
+      render: (p) => {
+        const locked = p.kind === 'Access' && accessLocked;
+        const sw = <Switch checked={p.enabled} disabled={locked} onChange={() => toggle(p)}
+          aria-label={locked ? `${p.name}: access policies are managed by tenant admins` : `Enable ${p.name}`} />;
+        return (
+          <span onClick={(e) => e.stopPropagation()}>
+            {locked ? <Tooltip relationship="description" content={ACCESS_ADMIN_REASON}>{sw}</Tooltip> : sw}
+          </span>
+        );
+      },
     },
     {
       key: 'actions', label: '', sortable: false, filterable: false, width: 110,
-      render: (p) => (
-        <span onClick={(e) => e.stopPropagation()}>
-          <Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={() => remove(p.id)}>Delete</Button>
-        </span>
-      ),
+      render: (p) => {
+        const locked = p.kind === 'Access' && accessLocked;
+        return (
+          <span onClick={(e) => e.stopPropagation()}>
+            <Tooltip relationship="description" content={locked ? ACCESS_ADMIN_REASON : 'Delete this policy'}>
+              <Button size="small" appearance="subtle" icon={<Delete20Regular />}
+                disabledFocusable={locked} onClick={() => remove(p.id)}>Delete</Button>
+            </Tooltip>
+          </span>
+        );
+      },
     },
   ];
 
@@ -643,6 +669,15 @@ export default function PoliciesPage() {
       {(error || actionErr) && (
         <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalM }}>
           <MessageBarBody><MessageBarTitle>Error</MessageBarTitle>{error || actionErr}</MessageBarBody>
+        </MessageBar>
+      )}
+
+      {listWarnings.length > 0 && (
+        <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalM }} data-testid="policies-list-warning">
+          <MessageBarBody>
+            <MessageBarTitle>Some policies could not be listed</MessageBarTitle>
+            {listWarnings.join(' ')}
+          </MessageBarBody>
         </MessageBar>
       )}
 
@@ -828,12 +863,25 @@ export default function PoliciesPage() {
             <DialogContent>
               <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM }}>
                 <Field label="Name"><Input value={draftName} onChange={(_, d) => setDraftName(d.value)} /></Field>
-                <Field label="Kind">
+                <Field label="Kind"
+                  hint={accessLocked ? 'Access is available to tenant admins only.' : undefined}>
                   <Dropdown value={draftKind} selectedOptions={[draftKind]}
                             onOptionSelect={(_, d) => setDraftKind(d.optionValue as any)}>
-                    {KINDS.map((k) => <Option key={k} value={k}>{k}</Option>)}
+                    {KINDS.map((k) => (
+                      <Option key={k} value={k} text={k} disabled={k === 'Access' && accessLocked}>
+                        {k === 'Access' && accessLocked ? 'Access (tenant admins only)' : k}
+                      </Option>
+                    ))}
                   </Dropdown>
                 </Field>
+                {accessLocked && (
+                  <MessageBar intent="info" data-testid="access-policy-admin-only">
+                    <MessageBarBody>
+                      <MessageBarTitle>Access policies are managed by tenant admins</MessageBarTitle>
+                      {ACCESS_ADMIN_REASON} You can create DLP, masking, RLS and retention policies here.
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
                 {/* Scope — selectable dropdowns (type + target) */}
                 <div style={{ display: 'flex', gap: tokens.spacingHorizontalM }}>
                   <Field label="Applies to" style={{ flex: 1 }}>
@@ -1018,7 +1066,9 @@ export default function PoliciesPage() {
             </DialogContent>
             <DialogActions>
               <Button appearance="secondary" onClick={() => setOpen(false)}>Cancel</Button>
-              <Button appearance="primary" onClick={create} disabled={busy || !draftName.trim()}>
+              <Button appearance="primary" onClick={create} disabled={busy || !draftName.trim()}
+                disabledFocusable={draftKind === 'Access' && accessLocked}
+                title={draftKind === 'Access' && accessLocked ? ACCESS_ADMIN_REASON : undefined}>
                 {busy ? 'Creating…' : 'Create'}
               </Button>
             </DialogActions>

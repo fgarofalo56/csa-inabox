@@ -10,9 +10,16 @@
  *      approver → access-provider in the Governance → Access requests inbox; the
  *      final approval provisions a real Azure RBAC grant on the backing store.
  *
- * Body: { assetId, assetName, itemType, ownerUpn?, permission, justification?,
- *         scopeType?, scopeRef? }
- * Returns: { ok, message, requestId } | { ok:false, error }
+ * The asset is loaded on the server (lib/access/request-asset.ts): an unknown,
+ * unpublished or not-visible asset is a 404, the access model is the asset's
+ * own, and the grant scope is derived from the asset's bound output. The body
+ * names WHICH asset and HOW MUCH access is requested — nothing else about the
+ * grant is read from it.
+ *
+ * Body: { assetId, permission?, justification?, ownerUpn? }
+ *   (assetName / itemType / accessModel / scopeType / scopeRef are accepted for
+ *    compatibility with older callers and ignored.)
+ * Returns: { ok, message, requestId } | { ok, granted:true, … } | { ok:false, error }
  */
 import { NextResponse } from 'next/server';
 import { withSession } from '@/lib/api/route-toolkit';
@@ -20,8 +27,11 @@ import { tenantScopeId } from '@/lib/auth/session';
 import {
   auditLogContainer, notificationsContainer, accessRequestWorkflowContainer,
 } from '@/lib/azure/cosmos-client';
-import { inferScopeType, type AccessRequestDoc } from '@/lib/types/access-request-workflow';
-import { enforceAccessGrant, type AccessScopeType } from '@/lib/azure/access-policy-client';
+import type { AccessRequestDoc } from '@/lib/types/access-request-workflow';
+import { enforceAccessGrant, type AccessPermission } from '@/lib/azure/access-policy-client';
+import {
+  ASSET_NOT_FOUND, SELF_SERVE_PERMISSION, deriveRequestTargets, resolveRequestableAsset,
+} from '@/lib/access/request-asset';
 import crypto from 'node:crypto';
 import { apiServerError } from '@/lib/api/respond';
 
@@ -29,35 +39,39 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const PERMS = new Set(['read', 'write', 'admin']);
-const SCOPE_TYPES = new Set<AccessScopeType>(['adls-container', 'warehouse', 'kql-database', 'workspace', 'item', 'collection']);
-// Per-product access model the owner sets at publish time (see PublishTab):
+// Per-product access model the owner sets at publish time (see PublishTab),
+// read from the product on the server:
 //   governed   — multi-tier approval → real RBAC on final approval (DEFAULT)
-//   self-serve — attempt an immediate real RBAC grant; fall back to governed
+//   self-serve — immediate real grant at the product's self-serve role (Read);
+//                anything more, or a grant that does not land, is governed
 //   request    — record the request + notify the owner; provisioning is manual
-const ACCESS_MODELS = new Set(['governed', 'self-serve', 'request']);
 
 export const POST = withSession(async (req, { session: s }) => {
 
   const body = await req.json().catch(() => ({} as any));
   const assetId = String(body?.assetId || '').trim();
-  const assetName = String(body?.assetName || assetId).trim();
-  const itemType = String(body?.itemType || '').trim();
   const ownerUpn = body?.ownerUpn ? String(body.ownerUpn).trim() : '';
-  const permission = PERMS.has(body?.permission) ? body.permission : 'read';
+  const permission: AccessPermission = PERMS.has(body?.permission) ? body.permission : 'read';
   const justification = String(body?.justification || '').trim().slice(0, 1000);
-  // The grant scope: explicit if the caller supplies it, else inferred from the
-  // item type (lakehouse → adls-container, warehouse → Synapse SQL, etc.). The
-  // backing container/db (scopeRef) can be supplied here OR confirmed by the
-  // access provider at the final approval tier.
-  const scopeType: AccessScopeType =
-    SCOPE_TYPES.has(body?.scopeType) ? body.scopeType : inferScopeType(itemType);
-  let scopeRef = String(body?.scopeRef || '').trim().slice(0, 200);
-  const accessModel = ACCESS_MODELS.has(body?.accessModel) ? body.accessModel : 'governed';
-  // Logical 'item' scope defaults its grant target to the asset itself (#51):
-  // enforceAccessGrant resolves the item's workspace and grants a Loom-native
-  // workspace role, so an empty scopeRef must not reach the final tier.
-  if (scopeType === 'item' && !scopeRef) scopeRef = assetId;
   if (!assetId) return NextResponse.json({ ok: false, error: 'assetId is required' }, { status: 400 });
+
+  let asset;
+  try {
+    asset = await resolveRequestableAsset(s, assetId);
+  } catch (e: any) {
+    return apiServerError(e);
+  }
+  if (!asset) return NextResponse.json({ ok: false, error: ASSET_NOT_FOUND }, { status: 404 });
+
+  const assetName = asset.name;
+  const itemType = asset.item.itemType;
+  const targets = deriveRequestTargets(asset.item, permission);
+  const { scopeType, scopeRef } = targets[0];
+  // Self-serve covers the product's self-serve role only; a request for more
+  // than that is decided by the governed workflow.
+  const accessModel = asset.accessModel === 'self-serve' && permission !== SELF_SERVE_PERMISSION
+    ? 'governed'
+    : asset.accessModel;
 
   const requester = s.claims.upn || s.claims.email || s.claims.oid;
   const now = new Date().toISOString();
@@ -68,29 +82,34 @@ export const POST = withSession(async (req, { session: s }) => {
   // falls through to the governed approval workflow so the request is never lost.
   if (accessModel === 'self-serve' && scopeRef) {
     try {
-      const grant = await enforceAccessGrant({
-        principalId: s.claims.oid,
-        principalName: requester,
-        principalType: 'User',
-        scopeType,
-        scopeRef,
-        permission: permission as any,
-      });
-      if (grant.status === 'active') {
+      const grants = [];
+      for (const t of targets) {
+        grants.push(await enforceAccessGrant({
+          principalId: s.claims.oid,
+          principalName: requester,
+          principalType: 'User',
+          scopeType: t.scopeType,
+          scopeRef: t.scopeRef,
+          permission: SELF_SERVE_PERMISSION,
+        }));
+      }
+      if (grants.every((g) => g.status === 'active')) {
+        const roles = grants.map((g, i) => g.roleName || targets[i].scopeType).join(', ');
         try {
           const audit = await auditLogContainer();
           await audit.items.create({
             id: crypto.randomUUID(), itemId: assetId, itemType,
             action: 'access-granted',
-            summary: `${requester} self-served ${permission} access to ${assetName} (${grant.roleName || scopeType}).`,
+            summary: `${requester} self-served ${SELF_SERVE_PERMISSION} access to ${assetName} (${roles}).`,
             upn: requester, at: now,
           });
         } catch { /* audit best-effort */ }
         return NextResponse.json({
           ok: true,
           granted: true,
-          roleAssignmentId: grant.roleAssignmentId,
-          message: `Self-serve access to "${assetName}" granted immediately (${grant.roleName || scopeType}).`,
+          permission: SELF_SERVE_PERMISSION,
+          roleAssignmentId: grants[0].roleAssignmentId,
+          message: `Self-serve ${SELF_SERVE_PERMISSION} access to "${assetName}" granted immediately (${roles}).`,
         });
       }
     } catch { /* fall through to governed workflow */ }
@@ -121,7 +140,9 @@ export const POST = withSession(async (req, { session: s }) => {
       body:
         `Your request for ${permission} access to ${assetName} was recorded` +
         (ownerUpn ? ` and routed to the owner (${ownerUpn}).` : '.') +
-        ' It now awaits manager approval in Governance → Access requests.',
+        (accessModel === 'request'
+          ? ' The owner provisions access for this asset.'
+          : ' It now awaits manager approval in Governance → Access requests.'),
       severity: 'info',
       link: itemType ? `/items/${itemType}/${assetId}` : null,
       read: false,
@@ -151,6 +172,7 @@ export const POST = withSession(async (req, { session: s }) => {
         itemType,
         scopeType,
         scopeRef,
+        grantTargets: targets.map((t) => ({ scopeType: t.scopeType, scopeRef: t.scopeRef, source: t.source })),
         permission,
         justification,
         requesterId: s.claims.oid,
@@ -166,6 +188,7 @@ export const POST = withSession(async (req, { session: s }) => {
     return NextResponse.json({
       ok: true,
       requestId: savedReqId,
+      accessModel,
       message:
         accessModel === 'request'
           ? `Access request for "${assetName}" recorded${ownerUpn ? ` and the owner (${ownerUpn})` : ' and the owner'} was notified. Provisioning is handled manually by the owner.`

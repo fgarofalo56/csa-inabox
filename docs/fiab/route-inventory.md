@@ -15,9 +15,9 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | --- | ---: |
 | Total routes | 1695 |
 | Public (no session) | 59 |
-| Session-only | 644 |
-| Owner-scoped | 680 |
-| Admin | 312 |
+| Session-only | 642 |
+| Owner-scoped | 681 |
+| Admin | 313 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 499 |
 | Areas | 122 |
@@ -605,7 +605,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `catalog/metastores/route.ts` | GET POST | session-only | ● | ADLS, ADX, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Databricks, Fabric, PostgreSQL, Purview, Resource Graph, Synapse |
 | `catalog/permissions/route.ts` | GET POST DELETE | session-only |  | Azure Monitor, Cosmos, Fabric |
 | `catalog/register/route.ts` | POST | owner-scoped |  | Azure Monitor, Cosmos, Fabric, Microsoft Graph, Purview |
-| `catalog/request-access/route.ts` | POST | session-only |  | ADLS, ADX, ARM, Azure RBAC, Azure SQL, Azure Storage, Cosmos, Fabric, Managed Identity, Resource Graph, Synapse, Synapse SQL |
+| `catalog/request-access/route.ts` | POST | owner-scoped |  | ADLS, ADX, ARM, Azure RBAC, Azure SQL, Azure Storage, Cosmos, Fabric, Managed Identity, Microsoft Graph, Resource Graph, Synapse, Synapse SQL |
 | `catalog/search/route.ts` | GET | owner-scoped |  | Azure Monitor, Cosmos, Fabric, Microsoft Graph, Purview |
 | `catalog/shortcut/route.ts` | GET POST DELETE | session-only | ● | Fabric, Purview |
 | `catalog/unity/capabilities/route.ts` | GET | session-only | ● | — |
@@ -1038,7 +1038,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `governance/labels/library/route.ts` | GET POST | admin | ● | Cosmos |
 | `governance/lineage/route.ts` | GET | session-only |  | Azure Cache for Redis, Cosmos |
 | `governance/pdp-mode/route.ts` | GET | session-only |  | — |
-| `governance/policies/route.ts` | GET POST PUT DELETE | session-only | ● | ADLS, ADX, ARM, Azure RBAC, Azure SQL, Azure Storage, Cosmos, Fabric, Managed Identity, Resource Graph, Synapse, Synapse SQL |
+| `governance/policies/route.ts` | GET POST PUT DELETE | admin | ● | ADLS, ADX, ARM, Azure RBAC, Azure SQL, Azure Storage, Cosmos, Fabric, Managed Identity, Resource Graph, Synapse, Synapse SQL |
 | `governance/policy-code/engine-rules/route.ts` | GET | admin |  | Cosmos |
 | `governance/purview/status/route.ts` | GET | session-only |  | ARM, Purview, Resource Graph |
 | `governance/scans/register-existing/route.ts` | POST | admin | ● | ADLS, ADX, ARM, Azure SQL, Azure Storage, Cosmos, PostgreSQL, Purview, Resource Graph, Synapse, Synapse SQL |
@@ -2424,7 +2424,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 ## Authorization resolvers (derived)
 
-190 function(s) across 85 module(s) reach an owner / workspace-ACL
+191 function(s) across 86 module(s) reach an owner / workspace-ACL
 decision. Derived by `scripts/ci/_route-auth-scope.mjs` from the seeds above —
 nothing here is hand-maintained. A change to this list in a diff means the
 authorization surface moved.
@@ -2463,6 +2463,7 @@ authorization surface moved.
 | `apps/fiab-console/app/api/notebook/_lib/notebook-access.ts` | `loadAccessibleNotebook` |
 | `apps/fiab-console/app/api/sqldb/_shared.ts` | `guardSqlDbRequest`, `loadWs` |
 | `apps/fiab-console/app/api/storage/_lib/authorize.ts` | `authorizeStorageAccount`, `boundByAccessibleLakehouse` |
+| `apps/fiab-console/lib/access/request-asset.ts` | `resolveRequestableAsset` |
 | `apps/fiab-console/lib/activation/run-service.ts` | `executeActivationRun` |
 | `apps/fiab-console/lib/admin/service-probes.ts` | `getExerciseRunState`, `startExerciseRun` |
 | `apps/fiab-console/lib/api/route-toolkit.ts` | `withWorkspaceOwner` |

@@ -289,9 +289,11 @@ describe('Governance policies, new Access policy, ADLS container', () => {
   // or if the options are not the listed containers (no `landing` option, and
   // the preview never reads "on landing").
   it('offers the listed containers and uses the chosen one', async () => {
+    // A tenant admin (`canManageAccess: true`): Access policies are managed by
+    // tenant admins, so this is the caller for whom the Access form opens.
     installStatusFetch({
       '/api/lakehouse/containers': () => ({ body: { ok: true, containers: [{ name: 'bronze' }, { name: 'landing' }] } }),
-      '/api/governance/policies': () => ({ body: { ok: true, policies: [] } }),
+      '/api/governance/policies': () => ({ body: { ok: true, policies: [], canManageAccess: true } }),
     });
     const { default: PoliciesPage } = await import('@/app/governance/policies/page');
     wrap(<PoliciesPage />);
@@ -308,5 +310,28 @@ describe('Governance policies, new Access policy, ADLS container', () => {
     fireEvent.click(container);
     fireEvent.click(await screen.findByRole('option', { name: 'landing' }, { timeout: 5000 }));
     expect(await within(dlg).findByText(/ Read on landing$/, {}, { timeout: 5000 })).toBeInTheDocument();
+  }, 20000);
+
+  // A caller who is not a tenant admin sees the Access kind, disabled, with the
+  // reason on screen. FAILS IF the lock is dropped (the option reads plain
+  // "Access" and is selectable), or if the reason is hidden (no
+  // `access-policy-admin-only` bar). The DLP option staying enabled is the
+  // positive pair: a lock applied to every kind would disable it too.
+  it('shows Access disabled with the reason for a caller who is not a tenant admin', async () => {
+    installStatusFetch({
+      '/api/lakehouse/containers': () => ({ body: { ok: true, containers: [{ name: 'bronze' }] } }),
+      '/api/governance/policies': () => ({ body: { ok: true, policies: [], canManageAccess: false } }),
+    });
+    const { default: PoliciesPage } = await import('@/app/governance/policies/page');
+    wrap(<PoliciesPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /^New policy$/ }, { timeout: 10000 }));
+    const bar = await screen.findByTestId('access-policy-admin-only', {}, { timeout: 5000 });
+    expect(bar.textContent).toContain('Access policies are managed by tenant admins');
+    const kind = await screen.findByRole('combobox', { name: /^Kind$/ }, { timeout: 5000 });
+    fireEvent.click(kind);
+    const access = await screen.findByRole('option', { name: 'Access (tenant admins only)' }, { timeout: 5000 });
+    expect(access).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('option', { name: 'DLP' })).not.toHaveAttribute('aria-disabled', 'true');
   }, 20000);
 });

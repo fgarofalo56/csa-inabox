@@ -898,6 +898,7 @@ export async function removePrincipalFromPathAcl(
 
 import { armBase, armScope, dfsUrl } from './cloud-endpoints';
 import { discoverResourceCoordsByName } from './resource-graph-coords';
+import { armScopeSegment, assertContainerRoleAssignmentId } from './arm-scope-segment';
 
 const ARM_SCOPE = armScope();
 // I5: the ARM-plane credential also rides the factory's shared chain
@@ -963,9 +964,17 @@ async function resolveStorageScope(container: string): Promise<string> {
   // `blobServices/default/containers/<name>` sub-resource path on the
   // storage account ARM id. Coordinates are resolved by name (self-heal) so a
   // wrong env RG never breaks the Permissions surface.
+  //
+  // Each name is validated as exactly one ARM path segment and percent-encoded
+  // (see arm-scope-segment.ts). The container is checked FIRST, before any
+  // coordinate lookup, so a malformed name is refused without an ARM call.
+  const containerSeg = armScopeSegment(container, 'container');
   const { sub, rg } = await resolveStorageCoords();
   const account = getAccountName();
-  return `/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.Storage/storageAccounts/${account}/blobServices/default/containers/${container}`;
+  return `/subscriptions/${armScopeSegment(sub, 'subscription id')}`
+    + `/resourceGroups/${armScopeSegment(rg, 'resource group')}`
+    + `/providers/Microsoft.Storage/storageAccounts/${armScopeSegment(account, 'storage account')}`
+    + `/blobServices/default/containers/${containerSeg}`;
 }
 
 async function armCall<T = any>(url: string, init: RequestInit = {}): Promise<T> {
@@ -1043,9 +1052,11 @@ export async function grantContainerRole(
 
   // Self-heal coords (see resolveStorageCoords): the role-definition id must be
   // scoped to the SAME subscription the account lives in, not the env default.
-  const { sub } = await resolveStorageCoords();
+  // The scope is resolved first so a malformed container name is refused before
+  // any other lookup.
   const scope = await resolveStorageScope(container);
-  const roleDefinitionId = `/subscriptions/${sub}/providers/Microsoft.Authorization/roleDefinitions/${roleGuid}`;
+  const { sub } = await resolveStorageCoords();
+  const roleDefinitionId = `/subscriptions/${armScopeSegment(sub, 'subscription id')}/providers/Microsoft.Authorization/roleDefinitions/${roleGuid}`;
   // ARM role-assignment names are random GUIDs. Use crypto.randomUUID() so
   // re-grants get distinct ids; the principalId+role pair would 409 anyway
   // if it already exists at the scope.
@@ -1053,7 +1064,7 @@ export async function grantContainerRole(
     typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
       ? crypto.randomUUID()
       : `${Date.now()}-${Math.random().toString(16).slice(2)}-${Math.random().toString(16).slice(2)}`;
-  const url = `${armBase()}${scope}/providers/Microsoft.Authorization/roleAssignments/${guid}?api-version=2022-04-01`;
+  const url = `${armBase()}${scope}/providers/Microsoft.Authorization/roleAssignments/${armScopeSegment(guid, 'role-assignment name')}?api-version=2022-04-01`;
   const res = await armCall<any>(url, {
     method: 'PUT',
     body: JSON.stringify({
@@ -1073,8 +1084,15 @@ export async function grantContainerRole(
   };
 }
 
+/**
+ * Delete a container-scoped Storage role assignment. The id must be a
+ * role assignment at a container scope on the configured storage account
+ * (the only kind `grantContainerRole` creates and `listContainerRoleAssignments`
+ * returns); any other id is refused without an ARM call.
+ */
 export async function revokeContainerRoleAssignment(roleAssignmentArmId: string): Promise<void> {
-  const url = `${armBase()}${roleAssignmentArmId}?api-version=2022-04-01`;
+  const id = assertContainerRoleAssignmentId(roleAssignmentArmId, getAccountName());
+  const url = `${armBase()}${id}?api-version=2022-04-01`;
   await armCall<void>(url, { method: 'DELETE' });
 }
 

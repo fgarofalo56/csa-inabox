@@ -1,23 +1,23 @@
 /**
  * POST /api/access-requests/[id]/decision — advance the F16 approval workflow.
  *
- * Body: { decision: 'approved' | 'denied', reason?: string,
- *         scopeType?, scopeRef? }   (scope overrides only honored at final tier)
+ * Body: { decision: 'approved' | 'denied', reason?: string }
  *
  * State machine (tier advances on approval; denial closes at any tier):
  *   open · manager         + approved → privacy        (open)
  *   open · privacy         + approved → approver        (open)
  *   open · approver        + approved → access-provider (open)
- *   open · access-provider + approved → enforceAccessGrant():
+ *   open · access-provider + approved → enforceAccessGrant() on every scope:
  *        active  → status: completed, subscribedAt set, requester notified,
  *                  enforcement.roleAssignmentId = REAL ARM role assignment id.
  *        pending → stays at access-provider (honest infra/config gate surfaced).
  *        error   → stays at access-provider, 502 with the grant error.
  *   open · ANY tier        + denied   → status: denied, deniedAt, denialReason.
  *
- * The access provider may CONFIRM/OVERRIDE the grant scope (scopeType/scopeRef)
- * at the final tier — exactly as a real access provider binds the request to a
- * concrete backing container / database before granting.
+ * The grant scope is derived at the final tier from the requested asset's own
+ * record (lib/access/request-asset.ts) — its bound output ports, or the item
+ * itself — so it reflects what the asset is bound to when access is granted.
+ * An access-package leg keeps the scope its package defines.
  *
  * Every decision writes an audit-log entry (itemId = requestId). No Fabric
  * dependency: the grant is a real Azure ARM Storage / Synapse SQL / ADX
@@ -51,10 +51,11 @@ import { withApprovalAuthority } from '@/lib/api/route-toolkit';
 import {
   accessRequestWorkflowContainer, auditLogContainer, notificationsContainer,
 } from '@/lib/azure/cosmos-client';
-import { enforceAccessGrant, type AccessScopeType } from '@/lib/azure/rbac-client';
+import { enforceAccessGrant } from '@/lib/azure/rbac-client';
 import {
   TIER_APPROVAL_KEY, TIER_LABEL,
-  type AccessRequestDoc, type ApprovalStep, type ApprovalTier,
+  type AccessRequestDoc, type AccessRequestEnforcement, type AccessRequestGrantResult,
+  type AccessRequestGrantTarget, type ApprovalStep, type ApprovalTier,
 } from '@/lib/types/access-request-workflow';
 import crypto from 'node:crypto';
 import { apiServerError } from '@/lib/api/respond';
@@ -63,11 +64,30 @@ import { effectiveStages, nextStage, actorMayApprove } from '@/lib/access/approv
 import { checkSelfApproval } from '@/lib/access/approval-authority';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { computeExpiry } from '@/lib/access/expiry';
+import { deriveRequestTargets, loadCatalogItem } from '@/lib/access/request-asset';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const SCOPE_TYPES = new Set<AccessScopeType>(['adls-container', 'warehouse', 'kql-database', 'workspace', 'item', 'collection']);
+/** One enforcement summary over every per-scope grant: active only when all are. */
+function summarizeGrants(results: AccessRequestGrantResult[]): AccessRequestEnforcement {
+  if (results.length === 1) {
+    const { scopeType: _t, scopeRef: _r, ...only } = results[0];
+    return only;
+  }
+  const status = results.some((r) => r.status === 'error') ? 'error'
+    : results.some((r) => r.status === 'pending') ? 'pending' : 'active';
+  const roles = results.map((r) => r.roleName).filter(Boolean);
+  const details = results
+    .filter((r) => r.status !== 'active' && r.detail)
+    .map((r) => `${r.scopeType} ${r.scopeRef}: ${r.detail}`);
+  return {
+    status,
+    ...(roles.length ? { roleName: Array.from(new Set(roles)).join(', ') } : {}),
+    ...(results[0].roleAssignmentId ? { roleAssignmentId: results[0].roleAssignmentId } : {}),
+    ...(details.length ? { detail: details.join(' ') } : {}),
+  };
+}
 
 export const POST = withApprovalAuthority<{ id: string }>(async (req, { session: s, params }) => {
   const { id } = params;
@@ -154,11 +174,27 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
       if (!isFinal) {
         doc.tier = nxt;
       } else {
-        // FINAL tier — the access provider may confirm/override the grant scope.
-        if (SCOPE_TYPES.has(body?.scopeType)) doc.scopeType = body.scopeType;
-        if (typeof body?.scopeRef === 'string' && body.scopeRef.trim()) {
-          doc.scopeRef = String(body.scopeRef).trim().slice(0, 200);
+        // FINAL tier — the grant scope comes from the asset, never the body.
+        // An access-package leg keeps the scope its package defines; every
+        // other request re-derives it from the asset's current record, so the
+        // grant follows what the asset is bound to at approval time.
+        let targets: AccessRequestGrantTarget[];
+        if (doc.packageId) {
+          targets = [{ scopeType: doc.scopeType, scopeRef: doc.scopeRef }];
+        } else {
+          const item = await loadCatalogItem(doc.assetId);
+          if (!item) {
+            return NextResponse.json(
+              { ok: false, error: `"${doc.assetName}" no longer exists, so there is nothing to grant. Deny the request to close it.`, code: 'asset_not_found' },
+              { status: 409 },
+            );
+          }
+          targets = deriveRequestTargets(item, doc.permission)
+            .map((t) => ({ scopeType: t.scopeType, scopeRef: t.scopeRef, source: t.source }));
+          doc.grantTargets = targets;
         }
+        doc.scopeType = targets[0].scopeType;
+        doc.scopeRef = targets[0].scopeRef;
         if (doc.activationRequired) {
           // W3 (PIM) — final approval yields an ELIGIBLE assignment (no RBAC yet);
           // the requester activates it for a bounded window from the Access report.
@@ -192,39 +228,47 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
             createdAt: now,
           });
         } else {
-        // Provision the REAL Azure RBAC grant on the backing data store.
-        const grant = await enforceAccessGrant({
-          principalId: doc.requesterId,
-          principalName: doc.requesterUpn,
-          principalType: 'User',
-          scopeType: doc.scopeType,
-          scopeRef: doc.scopeRef,
-          permission: doc.permission,
-        });
+        // Provision the REAL Azure RBAC grant on every backing scope.
+        const results: AccessRequestGrantResult[] = [];
+        for (const t of targets) {
+          const r = await enforceAccessGrant({
+            principalId: doc.requesterId,
+            principalName: doc.requesterUpn,
+            principalType: 'User',
+            scopeType: t.scopeType,
+            scopeRef: t.scopeRef,
+            permission: doc.permission,
+          });
+          results.push({ ...r, scopeType: t.scopeType, scopeRef: t.scopeRef });
+        }
+        const grant = summarizeGrants(results);
         doc.enforcement = grant;
+        if (targets.length > 1) doc.grantResults = results;
         if (grant.status === 'active') {
           doc.status = 'completed';
           doc.subscribedAt = now;
           // W3 — apply the package's grant lifetime (if any) as the expiry.
           const grantExpiry = computeExpiry(new Date(now), { lifetimeDays: doc.grantLifetimeDays });
-          // Entitlement ledger (access-governance W1): record the effective grant
-          // so the who-has-access report reflects it. Best-effort (never throws).
-          await recordAssignment({
-            principalId: doc.requesterId,
-            principalUpn: doc.requesterUpn,
-            principalType: 'User',
-            tenantId,
-            resourceType: doc.scopeType,
-            resourceRef: doc.scopeRef,
-            resourceName: doc.assetName,
-            role: grant.roleName || doc.scopeType,
-            permission: doc.permission,
-            source: 'direct',
-            sourceRef: doc.id,
-            grantedBy: s.claims.upn || s.claims.oid,
-            roleAssignmentId: grant.roleAssignmentId,
-            expiresAt: grantExpiry,
-          });
+          // Entitlement ledger (access-governance W1): record each effective
+          // grant so the who-has-access report reflects it. Best-effort.
+          for (const r of results) {
+            await recordAssignment({
+              principalId: doc.requesterId,
+              principalUpn: doc.requesterUpn,
+              principalType: 'User',
+              tenantId,
+              resourceType: r.scopeType,
+              resourceRef: r.scopeRef,
+              resourceName: doc.assetName,
+              role: r.roleName || r.scopeType,
+              permission: doc.permission,
+              source: 'direct',
+              sourceRef: doc.id,
+              grantedBy: s.claims.upn || s.claims.oid,
+              roleAssignmentId: r.roleAssignmentId,
+              expiresAt: grantExpiry,
+            });
+          }
           // Notify the requester they're now a subscriber.
           const nc = await notificationsContainer();
           await nc.items.create({

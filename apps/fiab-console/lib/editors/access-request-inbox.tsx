@@ -30,7 +30,7 @@ import {
   TabList, Tab, type SelectTabData, type SelectTabEvent,
   Table, TableHeader, TableHeaderCell, TableRow, TableBody, TableCell,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
-  Textarea, Input, Dropdown, Option, Field, Checkbox,
+  Textarea, Field, Checkbox,
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions, Tooltip,
 } from '@fluentui/react-components';
 import {
@@ -56,6 +56,9 @@ interface AccessRequest {
   itemType: string;
   scopeType: string;
   scopeRef: string;
+  /** Scopes derived from the asset on the server (catalog requests). */
+  grantTargets?: { scopeType: string; scopeRef: string; source?: string }[];
+  packageId?: string;
   permission: 'read' | 'write' | 'admin';
   justification: string;
   requesterUpn: string;
@@ -89,7 +92,11 @@ interface BulkDecisionResult {
   results: { id: string; ok: boolean; status: number; error?: string }[];
 }
 
-const SCOPE_TYPES = ['adls-container', 'warehouse', 'kql-database', 'workspace', 'item', 'collection'];
+/** Every scope a request's grant binds to (the asset-derived list when present). */
+function grantScopes(r: AccessRequest): { scopeType: string; scopeRef: string; source?: string }[] {
+  if (r.grantTargets && r.grantTargets.length > 0) return r.grantTargets;
+  return r.scopeType ? [{ scopeType: r.scopeType, scopeRef: r.scopeRef }] : [];
+}
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL },
@@ -198,8 +205,6 @@ export function AccessRequestInboxEditor() {
   const [bulk, setBulk] = useState<{ decision: 'approved' | 'denied'; ids: string[] } | null>(null);
   const [bulkResult, setBulkResult] = useState<BulkDecisionResult | null>(null);
   const [reason, setReason] = useState('');
-  const [scopeType, setScopeType] = useState('adls-container');
-  const [scopeRef, setScopeRef] = useState('');
   const [busy, setBusy] = useState(false);
   const [dlgError, setDlgError] = useState<string | null>(null);
 
@@ -266,8 +271,6 @@ export function AccessRequestInboxEditor() {
   const openDialog = (req: AccessRequest, decision: 'approved' | 'denied') => {
     setDlg({ req, decision });
     setReason('');
-    setScopeType(req.scopeType || 'adls-container');
-    setScopeRef(req.scopeRef || '');
     setDlgError(null);
   };
 
@@ -279,10 +282,6 @@ export function AccessRequestInboxEditor() {
     try {
       const payload: Record<string, unknown> = { decision: dlg.decision };
       if (reason.trim()) payload.reason = reason.trim();
-      if (dlg.decision === 'approved' && isFinalTier) {
-        payload.scopeType = scopeType;
-        if (scopeRef.trim()) payload.scopeRef = scopeRef.trim();
-      }
       const r = await clientFetch(`/api/access-requests/${dlg.req.id}/decision`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(payload),
@@ -304,7 +303,7 @@ export function AccessRequestInboxEditor() {
     } catch (e: any) {
       setDlgError(e?.message || String(e));
     } finally { setBusy(false); }
-  }, [dlg, reason, isFinalTier, scopeType, scopeRef, load, view, loadCounts]);
+  }, [dlg, reason, load, view, loadCounts]);
 
   // ── AG-14 bulk approve/deny ────────────────────────────────────────────────
   // Selection is per-view and clears whenever the tier tab or the row set
@@ -539,7 +538,9 @@ export function AccessRequestInboxEditor() {
                               </span>
                               <span className={s.kv}>
                                 <Caption1 className={s.kvLabel}>Grant scope</Caption1>
-                                <Text>{r.scopeType}{r.scopeRef ? ` · ${r.scopeRef}` : ''}</Text>
+                                {grantScopes(r).map((g) => (
+                                  <Text key={`${g.scopeType}:${g.scopeRef}`}>{g.scopeType}{g.scopeRef ? ` · ${g.scopeRef}` : ''}</Text>
+                                ))}
                               </span>
                               <span className={s.kv}>
                                 <Caption1 className={s.kvLabel}>Current tier</Caption1>
@@ -630,24 +631,22 @@ export function AccessRequestInboxEditor() {
                     <MessageBar intent="info">
                       <MessageBarBody>
                         Final approval provisions a <strong>real Azure RBAC role assignment</strong> on the
-                        backing store and subscribes the requester. Confirm the scope below.
+                        backing store and subscribes the requester.
                       </MessageBarBody>
                     </MessageBar>
-                    <Field label="Scope type">
-                      <Dropdown
-                        value={scopeType}
-                        selectedOptions={[scopeType]}
-                        onOptionSelect={(_, d) => d.optionValue && setScopeType(d.optionValue)}
-                      >
-                        {SCOPE_TYPES.map((t) => <Option key={t} value={t}>{t}</Option>)}
-                      </Dropdown>
-                    </Field>
-                    <Field
-                      label="Backing container / database"
-                      hint="ADLS container name, Synapse pool/db, or ADX database the grant binds to."
-                    >
-                      <Input value={scopeRef} onChange={(_, d) => setScopeRef(d.value)} placeholder="e.g. gold" />
-                    </Field>
+                    <span className={s.kv}>
+                      <Caption1 className={s.kvLabel}>Grant scope</Caption1>
+                      {dlg && grantScopes(dlg.req).map((g) => (
+                        <Text key={`${g.scopeType}:${g.scopeRef}`}>
+                          {g.scopeType}{g.scopeRef ? ` · ${g.scopeRef}` : ''}{g.source ? ` (${g.source})` : ''}
+                        </Text>
+                      ))}
+                      <Caption1>
+                        {dlg?.req.packageId
+                          ? 'Defined by the access package.'
+                          : 'Derived from the asset’s bound outputs when you approve.'}
+                      </Caption1>
+                    </span>
                   </>
                 )}
 

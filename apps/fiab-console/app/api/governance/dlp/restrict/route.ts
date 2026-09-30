@@ -37,6 +37,8 @@ import { revokeStructuredGrant, denySchemaAccess, type PrincipalType } from '@/l
 import { loadDlpMeta, saveDlpMeta, type DlpRestriction } from '../_lib/meta';
 import { trimSlashes } from '@/lib/util/trim';
 import { withSession } from '@/lib/api/route-toolkit';
+import { tenantScopeId } from '@/lib/auth/session';
+import { accessPoliciesDocId } from '@/lib/governance/access-policy-doc';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -158,30 +160,39 @@ export const POST = withSession(async (req: NextRequest, { session: s }) => {
     );
   }
 
-  // Cosmos item-permissions update (a): mark matching Access policies restricted.
+  // Cosmos item-permissions update (a): mark matching Access policies restricted,
+  // in the tenant Access-policy doc and in the caller's own policies doc (which
+  // holds Access policies recorded before the tenant doc existed).
   let policiesUpdated = 0;
-  try {
-    const c = await tenantSettingsContainer();
-    const docId = `policies:${tenantId}`;
-    const { resource: pdoc } = await c.item(docId, tenantId).read<any>();
-    if (pdoc && Array.isArray(pdoc.items)) {
-      for (const p of pdoc.items) {
-        if (p.kind === 'Access' && p.principalId === principalId &&
-            (p.scopeType === scopeType) &&
-            (scopeType === 'warehouse' || p.scopeRef === scopeRef)) {
-          p.enabled = false;
-          p.dlpRestricted = true;
-          p.dlpRestrictedAt = new Date().toISOString();
-          if (p.enforcement) p.enforcement = { ...p.enforcement, status: 'pending', detail: 'Revoked by DLP restrict-access.' };
-          policiesUpdated++;
+  const accessScope = tenantScopeId(s);
+  for (const [docId, pk] of [
+    [accessPoliciesDocId(accessScope), accessScope],
+    [`policies:${tenantId}`, tenantId],
+  ] as const) {
+    try {
+      const c = await tenantSettingsContainer();
+      const { resource: pdoc } = await c.item(docId, pk).read<any>();
+      let updatedHere = 0;
+      if (pdoc && Array.isArray(pdoc.items)) {
+        for (const p of pdoc.items) {
+          if (p.kind === 'Access' && p.principalId === principalId &&
+              (p.scopeType === scopeType) &&
+              (scopeType === 'warehouse' || p.scopeRef === scopeRef)) {
+            p.enabled = false;
+            p.dlpRestricted = true;
+            p.dlpRestrictedAt = new Date().toISOString();
+            if (p.enforcement) p.enforcement = { ...p.enforcement, status: 'pending', detail: 'Revoked by DLP restrict-access.' };
+            updatedHere++;
+          }
+        }
+        if (updatedHere > 0) {
+          pdoc.updatedAt = new Date().toISOString();
+          await c.item(docId, pk).replace(pdoc);
+          policiesUpdated += updatedHere;
         }
       }
-      if (policiesUpdated > 0) {
-        pdoc.updatedAt = new Date().toISOString();
-        await c.item(docId, tenantId).replace(pdoc);
-      }
-    }
-  } catch { /* policy doc update best-effort — meta record below is authoritative */ }
+    } catch { /* policy doc update best-effort — meta record below is authoritative */ }
+  }
 
   // Cosmos item-permissions update (b): append the authoritative restriction record.
   const restriction: DlpRestriction = {

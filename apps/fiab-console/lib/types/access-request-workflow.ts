@@ -95,6 +95,30 @@ export interface AccessRequestDoc {
    *  requester activates it for a bounded window instead. */
   activationRequired?: boolean;
   activationWindowHours?: number | null;
+  // ── asset-derived scope (catalog requests) ───────────────────────────────────
+  /**
+   * Every scope the grant binds to, derived from the requested asset on the
+   * server (lib/access/request-asset.ts). `scopeType`/`scopeRef` above carry the
+   * first one for display. Absent on access-package legs, whose scope comes
+   * from the package definition.
+   */
+  grantTargets?: AccessRequestGrantTarget[];
+  /** Per-scope outcome of the final-tier grant. */
+  grantResults?: AccessRequestGrantResult[];
+}
+
+/** One scope an access request's grant binds to. */
+export interface AccessRequestGrantTarget {
+  scopeType: AccessScopeType;
+  scopeRef: string;
+  /** Where the scope came from (an output port, a data asset, the item itself). */
+  source?: string;
+}
+
+/** The final-tier grant outcome for one scope. */
+export interface AccessRequestGrantResult extends AccessRequestEnforcement {
+  scopeType: AccessScopeType;
+  scopeRef: string;
 }
 
 /** Map a tier to the doc field that records its decision. */
@@ -114,7 +138,8 @@ export const TIER_APPROVAL_KEY: Record<ApprovalTier, keyof AccessRequestDoc> = {
  * enforced by resolveWorkspaceRole. (#51 live finding 2026-07-16: the old
  * default of 'adls-container' sent data-product grants into
  * grantContainerRole('') → 502 at the final approval tier.)
- * The access provider can still override the scope at the final tier.
+ * Catalog requests no longer use this: their scope is derived from the asset's
+ * own record (lib/access/request-asset.ts).
  */
 export function inferScopeType(itemType: string): AccessScopeType {
   const t = (itemType || '').toLowerCase();
