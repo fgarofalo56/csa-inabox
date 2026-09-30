@@ -28,7 +28,7 @@ import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
 import { composePreflight, type PreflightResult } from '@/lib/azure/attach-preflight';
 import { isAttachedServiceKind, armTypeToKind, type AttachedServiceKind } from '@/lib/azure/attached-service-kinds';
 import { decodeLandingZoneId } from '@/lib/azure/landing-zone-id';
-import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { escapeKqlLiteral, LiteralEscapeError } from '@/lib/sql/quoting';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -50,7 +50,7 @@ interface ArgIdRow {
 
 /** ARG query fetching properties for a specific set of resource ids. */
 function buildIdQuery(ids: string[]): string {
-  const list = ids.map((i) => `'${escapeSqlLiteral(i)}'`).join(',');
+  const list = ids.map((i) => `'${escapeKqlLiteral(i)}'`).join(',');
   return `resources | where id in~ (${list}) | project id, type, kind, properties`;
 }
 
@@ -81,6 +81,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const ids = requested.map((s) => (s?.armResourceId || '').trim()).filter(Boolean);
   if (ids.length === 0) return apiError('no valid armResourceId in services', 400);
+  // The ids are carried in a KQL string literal (Resource Graph). Build the
+  // query once up front so an id the literal cannot carry is a 400 here, not
+  // an empty ARG result reported as "not visible".
+  try {
+    buildIdQuery(ids);
+  } catch (e) {
+    if (e instanceof LiteralEscapeError) return apiError(`armResourceId: ${e.message}`, 400);
+    throw e;
+  }
 
   // Reachability + posture from ARG (UAMI first — Loom's perspective — then the
   // caller's delegated token). ARG can silently return zero for one identity

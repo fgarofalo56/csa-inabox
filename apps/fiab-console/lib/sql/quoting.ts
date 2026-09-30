@@ -56,15 +56,130 @@ export function escapeSqlLiteral(value: string): string {
   return value.replace(/'/g, "''");
 }
 
+// ---------------------------------------------------------------------------
+// Engines whose literal grammar is NOT the T-SQL one.
+//
+// Doubling the quote is the T-SQL / ANSI / OData / DAX rule. Two engines Loom
+// sends text to read a single-quoted literal differently:
+//
+//   Databricks / Spark SQL — a regular literal processes backslash escape
+//   sequences (`\\`, `\'`, `\n`, `\t`, `\r`, `\0`, …; `\<other char>` becomes
+//   `<other char>`), and adjacent literals are chained, so `'a''b'` reads as
+//   `ab`, not `a'b`. A raw literal `r'…'` has no escape character.
+//   https://learn.microsoft.com/azure/databricks/sql/language-manual/data-types/string-type
+//
+//   KQL — a single-quoted literal escapes the enclosing quote and the backslash
+//   itself with a backslash (`\'`, `\\`, plus `\t`, `\n`, `\r`), and adjacent
+//   literals are concatenated, so `'a''b'` again reads as `ab`. A verbatim
+//   literal `@'…'` is the exception: there the quote IS doubled (see
+//   lib/azure/kql-escape.ts `kqlVerbatimSingle`).
+//   https://learn.microsoft.com/kusto/query/scalar-data-types/string
+//
+// For both, the backslash MUST be escaped before the quote: escaping the quote
+// first and the backslash second would turn the `\'` just written into `\\'`.
+//
+// Both helpers assume the engine's default parser settings. Spark's legacy
+// `spark.sql.parser.escapedStringLiterals=true` switches escape processing off;
+// Databricks SQL warehouses and Loom's Spark pools leave it at the default.
+// ---------------------------------------------------------------------------
+
+/** The engine a {@link LiteralEscapeError} was raised for. */
+export type LiteralEngine = 'spark-sql' | 'kql';
+
 /**
- * Quote a full SQL string literal: doubles embedded quotes AND wraps. Handles
- * the common scalar types (numbers/booleans inline, null/undefined → `NULL`).
- * The T-SQL family emits the unicode `N'…'` form; other dialects emit `'…'`.
+ * Raised when a value holds a character the target literal grammar cannot carry
+ * safely: NUL, or a C0 control / DEL other than tab, LF and CR (which both
+ * engines carry as `\t`, `\n`, `\r`). Callers that surface build errors as a 400
+ * catch this by type. The message names the code point and its offset, never the
+ * value itself, so it is safe to return to the client and to log.
+ */
+export class LiteralEscapeError extends Error {
+  readonly engine: LiteralEngine;
+  readonly codePoint: number;
+  readonly index: number;
+  constructor(engine: LiteralEngine, codePoint: number, index: number) {
+    const hex = codePoint.toString(16).toUpperCase().padStart(4, '0');
+    super(`value contains control character U+${hex} at offset ${index}, which a ${engine} string literal cannot carry`);
+    this.name = 'LiteralEscapeError';
+    this.engine = engine;
+    this.codePoint = codePoint;
+    this.index = index;
+  }
+}
+
+// NUL, C0 controls except TAB (09) / LF (0A) / CR (0D), and DEL.
+const UNCARRIABLE_CONTROL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
+
+function refuseControlChars(value: string, engine: LiteralEngine): void {
+  const m = UNCARRIABLE_CONTROL.exec(value);
+  if (m) throw new LiteralEscapeError(engine, m[0].charCodeAt(0), m.index);
+}
+
+/** Backslash first, then the quote, then the three carriable controls. */
+function backslashEscape(value: string): string {
+  return value
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\t/g, '\\t')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r');
+}
+
+/**
+ * Escape a string for the INSIDE of a regular single-quoted Databricks / Spark
+ * SQL literal (`'…'`, not `r'…'`). Returns the inner text only; the caller
+ * wraps it. `\` → `\\`, `'` → `\'`, TAB/LF/CR → `\t`/`\n`/`\r`.
+ *
+ * @throws {LiteralEscapeError} on NUL or another uncarriable control character.
+ */
+export function escapeSparkSqlLiteral(value: string): string {
+  const s = String(value);
+  refuseControlChars(s, 'spark-sql');
+  return backslashEscape(s);
+}
+
+/**
+ * Escape a string for the INSIDE of a regular single-quoted KQL literal (`'…'`
+ * or the obfuscated `h'…'`) — Azure Data Explorer, Log Analytics / Azure
+ * Monitor, and Azure Resource Graph all share this grammar. Returns the inner
+ * text only. `\` → `\\`, `'` → `\'`, TAB/LF/CR → `\t`/`\n`/`\r`.
+ *
+ * NOT for verbatim literals (`@'…'`), whose rule is quote doubling.
+ *
+ * @throws {LiteralEscapeError} on NUL or another uncarriable control character.
+ */
+export function escapeKqlLiteral(value: string): string {
+  const s = String(value);
+  refuseControlChars(s, 'kql');
+  return backslashEscape(s);
+}
+
+/**
+ * The inner-literal escape for a {@link SqlDialect}: the Spark SQL rule for
+ * `databricks-sql`, the T-SQL / ANSI doubling rule ({@link escapeSqlLiteral})
+ * for every other dialect. For sites that already choose their own wrapper.
+ *
+ * @throws {LiteralEscapeError} for `databricks-sql` on an uncarriable control character.
+ */
+export function escapeLiteralFor(value: string, dialect?: SqlDialect): string {
+  return dialect === 'databricks-sql' ? escapeSparkSqlLiteral(value) : escapeSqlLiteral(value);
+}
+
+/**
+ * Quote a full SQL string literal: escapes per dialect AND wraps. Handles the
+ * common scalar types (numbers/booleans inline, null/undefined → `NULL`).
+ * The T-SQL family emits the unicode `N'…'` form; `databricks-sql` escapes with
+ * the Spark SQL backslash rule ({@link escapeSparkSqlLiteral}); other dialects
+ * double the quote and emit `'…'`.
  *
  * Prefer this in NEW code. The existing migration kept each call site's own
  * wrapper (`'…'` vs `N'…'`) and only centralised the inner escape via
  * {@link escapeSqlLiteral}, because the N-prefix choice was not uniformly
  * dialect-driven in the legacy code and byte-parity was the priority.
+ *
+ * KQL is not a {@link SqlDialect}; build KQL literals with {@link escapeKqlLiteral}.
+ *
+ * @throws {LiteralEscapeError} for `databricks-sql` on an uncarriable control character.
  */
 export function quoteLiteral(
   value: string | number | boolean | null | undefined,
@@ -73,7 +188,7 @@ export function quoteLiteral(
   if (value === null || value === undefined) return 'NULL';
   if (typeof value === 'number') return Number.isFinite(value) ? String(value) : 'NULL';
   if (typeof value === 'boolean') return value ? '1' : '0';
-  const inner = escapeSqlLiteral(String(value));
+  const inner = escapeLiteralFor(String(value), dialect);
   return dialect === 'tsql' || dialect === 'synapse' ? `N'${inner}'` : `'${inner}'`;
 }
 

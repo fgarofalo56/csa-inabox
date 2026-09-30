@@ -20,7 +20,7 @@ describe('btick', () => {
   it('back-tick-quotes a plain identifier', () => {
     expect(btick('main')).toBe('`main`');
   });
-  it('doubles embedded back-ticks (injection-safe)', () => {
+  it('doubles embedded back-ticks', () => {
     expect(btick('ev`il')).toBe('`ev``il`');
   });
   it('rejects empty / oversized identifiers', () => {
@@ -30,8 +30,17 @@ describe('btick', () => {
 });
 
 describe('sqlString', () => {
-  it('escapes single quotes', () => {
-    expect(sqlString("a'b")).toBe("'a''b'");
+  it('escapes single quotes by the Spark SQL rule', () => {
+    // Breaks under T-SQL doubling: 'a''b'.
+    expect(sqlString("a'b")).toBe("'a\\'b'");
+  });
+  it('escapes the backslash before the quote', () => {
+    // Breaks if the backslash is not escaped: 'C:\' leaves the literal open.
+    expect(sqlString('C:\\')).toBe("'C:\\\\'");
+  });
+  it('refuses a control character with UcBuildError', () => {
+    // Breaks if LiteralEscapeError is not mapped to the module's build error.
+    expect(() => sqlString('a\u0000b')).toThrow(UcBuildError);
   });
 });
 
@@ -69,7 +78,8 @@ describe('buildUcColumnMask', () => {
       maskSchema: 'security', maskMode: 'literal', maskLiteral: "***'**", allowedGroup: 'hr',
     });
     expect(r.functionName).toBe('`main`.`security`.`loom_mask_ssn`');
-    expect(r.functionSql).toContain("ELSE '***''**'");
+    // Breaks under doubling: ELSE '***''**'.
+    expect(r.functionSql).toContain("ELSE '***\\'**'");
     expect(r.alterSql).toContain('SET MASK `main`.`security`.`loom_mask_ssn`');
   });
 
@@ -88,7 +98,7 @@ describe('buildUcColumnMask', () => {
     })).toThrow(UcBuildError);
   });
 
-  it('rejects an injection-shaped column type', () => {
+  it('rejects a column type that is not a single type name', () => {
     expect(() => buildUcColumnMask({
       catalog: 'main', schema: 's', tableName: 't',
       columnName: 'c', columnType: 'STRING; DROP TABLE x',
@@ -153,12 +163,14 @@ describe('information_schema reads', () => {
     expect(sql).toContain("schema_name <> 'information_schema'");
   });
   it('escapes the schema filter in tables read', () => {
-    expect(ucListTablesInSchema('main', "s'x")).toContain("table_schema = 's''x'");
+    // Spark SQL rule. Breaks under doubling: 's''x'.
+    expect(ucListTablesInSchema('main', "s'x")).toContain("table_schema = 's\\'x'");
   });
   it('escapes schema + table filters in columns read', () => {
     const sql = ucListColumnsForTable('main', 'sales', "o'rders");
     expect(sql).toContain("table_schema = 'sales'");
-    expect(sql).toContain("table_name = 'o''rders'");
+    // Breaks under doubling: 'o''rders'.
+    expect(sql).toContain("table_name = 'o\\'rders'");
   });
   it('clamps the sample LIMIT', () => {
     expect(ucSelectSample('c', 's', 't', 5)).toBe('SELECT * FROM `c`.`s`.`t` LIMIT 5;');

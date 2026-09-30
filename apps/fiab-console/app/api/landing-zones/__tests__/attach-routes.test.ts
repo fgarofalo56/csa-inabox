@@ -125,3 +125,61 @@ describe('brownfield attach routes', () => {
     expect(res.status).toBe(401);
   });
 });
+
+/**
+ * The ARG query carries each armResourceId in a KQL string literal, which uses
+ * backslash escapes (escapeKqlLiteral), not T-SQL quote doubling.
+ */
+describe('attach routes: ARG id literal follows the KQL rule', () => {
+  // A quote and a trailing backslash: under doubling the query would read
+  // `'…c''1\'`, where KQL takes `\'` as an escaped quote and never closes.
+  const ODD_ID = "/subscriptions/s/resourceGroups/r/providers/Microsoft.Kusto/clusters/c'1\\";
+
+  beforeEach(() => {
+    getSessionMock.mockReturnValue({ claims: { oid: 'admin-oid', tid: 'tenant-1', upn: 'a@x.com' } });
+    enforceMock.mockResolvedValue(null);
+    createMock.mockClear();
+  });
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+  function captureArg() {
+    const fetchMock = vi.fn(async (..._a: any[]) => new Response(JSON.stringify({ data: [] }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    return () => fetchMock.mock.calls.map((c) => JSON.parse(String((c[1] as RequestInit).body)).query as string);
+  }
+
+  it.each([
+    ['preflight', '../[id]/attach/preflight/route'],
+    ['attach', '../[id]/attach/route'],
+  ])('%s: sends the id with the quote and the backslash escaped', async (_n, mod) => {
+    const queries = captureArg();
+    const { POST } = await import(mod);
+    const req = new NextRequest('https://x/api/landing-zones/hub/attach', {
+      method: 'POST', body: JSON.stringify({ services: [{ armResourceId: ODD_ID, kind: 'adx' }] }),
+    });
+    await POST(req, { params: { id: 'hub' } });
+    const qs = queries();
+    expect(qs.length).toBeGreaterThan(0);
+    // Breaks if the route goes back to escapeSqlLiteral: `c''1\` is what it sends.
+    expect(qs[0]).toContain("id in~ ('/subscriptions/s/resourceGroups/r/providers/Microsoft.Kusto/clusters/c\\'1\\\\')");
+  });
+
+  it.each([
+    ['preflight', '../[id]/attach/preflight/route'],
+    ['attach', '../[id]/attach/route'],
+  ])('%s: an id with a control character is a 400 and no ARG call is made', async (_n, mod) => {
+    const queries = captureArg();
+    const { POST } = await import(mod);
+    const req = new NextRequest('https://x/api/landing-zones/hub/attach', {
+      method: 'POST', body: JSON.stringify({ services: [{ armResourceId: `${ADX_ID}\u0000`, kind: 'adx' }] }),
+    });
+    const res = await POST(req, { params: { id: 'hub' } });
+    // Breaks if the up-front buildIdQuery check is removed: the literal error
+    // would surface from inside the ARG helper instead of as a 400 here.
+    expect(res.status).toBe(400);
+    const j = await res.json();
+    expect(j.error).toMatch(/^armResourceId: .*U\+0000/);
+    expect(queries()).toHaveLength(0);
+    expect(createMock).not.toHaveBeenCalled();
+  });
+});

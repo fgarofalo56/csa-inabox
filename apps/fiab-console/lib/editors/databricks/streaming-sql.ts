@@ -24,14 +24,14 @@
  * scheduled refresh auto-creates a backing Databricks job), so this shares
  * DBX-3's DLT backing exactly as the PRP specifies.
  *
- * SQL-injection posture: identifiers are back-tick quoted via
+ * Quoting: identifiers are back-tick quoted via
  * `quoteIdent(name,'databricks-sql')`; string literals (ADLS paths, timezone,
- * cron) are escaped via `escapeSqlLiteral`. `query` / `condition` are
+ * cron) are escaped via `escapeSparkSqlLiteral`. `query` / `condition` are
  * analyst-authored SQL fragments (same trust model as the SQL editor) emitted
  * verbatim.
  */
 
-import { escapeSqlLiteral, quoteIdent } from '@/lib/sql/quoting';
+import { escapeSparkSqlLiteral, quoteIdent } from '@/lib/sql/quoting';
 import {
   DLT_FILE_FORMATS,
   DLT_EXPECTATION_ACTIONS,
@@ -111,7 +111,7 @@ export interface CreateMaterializedViewSpec {
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 function sqlString(value: string): string {
-  return `'${escapeSqlLiteral(value)}'`;
+  return `'${escapeSparkSqlLiteral(value)}'`;
 }
 
 /** Back-tick quote a `catalog.schema.name`, dropping empty parts. */

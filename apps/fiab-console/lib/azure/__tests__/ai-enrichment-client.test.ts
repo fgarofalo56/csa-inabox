@@ -52,11 +52,15 @@ describe('ai-enrichment: identifier + expression safety', () => {
     expect(quoteColumn('`c`')).toBe('`c`');
     expect(() => quoteColumn('')).toThrow();
   });
-  it('builds each builtin ai_* expression and escapes literals', () => {
+  it('builds each builtin ai_* expression and escapes literals by the Spark SQL rule', () => {
     expect(buildAiSqlExpr('sentiment', '`c`')).toBe('ai_analyze_sentiment(`c`)');
     expect(buildAiSqlExpr('summarize', '`c`')).toBe('ai_summarize(`c`)');
-    expect(buildAiSqlExpr('classify', '`c`', { labels: ["a'b", 'c'] })).toBe("ai_classify(`c`, ARRAY('a''b', 'c'))");
-    expect(buildAiSqlExpr('translate', '`c`', { targetLang: "O'Brien" })).toBe("ai_translate(`c`, 'O''Brien')");
+    // Databricks SQL reads `\'` as a quote. Breaks under T-SQL doubling:
+    // ARRAY('a''b', 'c') / 'O''Brien'.
+    expect(buildAiSqlExpr('classify', '`c`', { labels: ["a'b", 'c'] })).toBe("ai_classify(`c`, ARRAY('a\\'b', 'c'))");
+    expect(buildAiSqlExpr('translate', '`c`', { targetLang: "O'Brien" })).toBe("ai_translate(`c`, 'O\\'Brien')");
+    // Breaks if the backslash is not escaped first: 'C:\' leaves the literal open.
+    expect(buildAiSqlExpr('translate', '`c`', { targetLang: 'C:\\' })).toBe("ai_translate(`c`, 'C:\\\\')");
     expect(buildAiSqlExpr('extract', '`c`', { fields: ['co'] })).toBe("ai_extract(`c`, ARRAY('co'))");
     expect(() => buildAiSqlExpr('custom_prompt', '`c`')).toThrow(/no Databricks ai_\* builtin/);
   });
@@ -89,7 +93,8 @@ describe('ai-enrichment: CTAS builders', () => {
       pairs: [{ source: "it's fine", output: 'ok' }, { source: 'b', output: 'good' }],
     });
     expect(sql).toContain('CREATE TABLE `main`.`sales`.`out` USING DELTA AS');
-    expect(sql).toContain("('it''s fine', 'ok')");
+    // Spark SQL rule. Breaks under doubling: ('it''s fine', 'ok').
+    expect(sql).toContain("('it\\'s fine', 'ok')");
     expect(sql).toContain('AS t(source_value, `ai_result`)');
     expect(() => buildValuesCtas({ catalog: 'm', schema: 's', destTable: 'd', outputColumn: 'o', pairs: [] })).toThrow(/no enriched rows/);
   });

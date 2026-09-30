@@ -50,7 +50,7 @@ import {
   type AiFnOptions,
 } from '@/lib/azure/ai-functions-client';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
-import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { escapeSparkSqlLiteral, LiteralEscapeError } from '@/lib/sql/quoting';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -82,13 +82,13 @@ const DBX_FN: Partial<Record<AiFn, (col: string, o: AiFnOptions) => string>> = {
   summarize: (col) => `ai_summarize(${col})`,
   classify: (col, o) =>
     `ai_classify(${col}, ARRAY(${(o.labels && o.labels.length ? o.labels : ['positive', 'negative', 'neutral'])
-      .map((l) => `'${escapeSqlLiteral(String(l))}'`)
+      .map((l) => `'${escapeSparkSqlLiteral(String(l))}'`)
       .join(', ')}))`,
   translate: (col, o) =>
-    `ai_translate(${col}, '${escapeSqlLiteral(String(o.targetLang || 'English'))}')`,
+    `ai_translate(${col}, '${escapeSparkSqlLiteral(String(o.targetLang || 'English'))}')`,
   extract: (col, o) =>
     `ai_extract(${col}, ARRAY(${(o.fields && o.fields.length ? o.fields : ['entity'])
-      .map((f) => `'${escapeSqlLiteral(String(f))}'`)
+      .map((f) => `'${escapeSparkSqlLiteral(String(f))}'`)
       .join(', ')}))`,
   fix_grammar: (col) => `ai_fix_grammar(${col})`,
   generate_response: (col) => `ai_gen(${col})`,
@@ -204,7 +204,18 @@ export async function POST(
     }
     const colExpr = quoteIdent(column);
     const tableExpr = table.includes('`') || table.includes('.') ? table : quoteIdent(table);
-    const sql = `SELECT ${colExpr}, ${dbxExpr(colExpr, opts)} AS ai_result FROM ${tableExpr} LIMIT ${limit}`;
+    // Labels / fields / target language become Databricks string literals
+    // (Spark SQL grammar). escapeSparkSqlLiteral refuses a control character
+    // the literal cannot carry; that is a 400 on the request, not a 500.
+    let sql: string;
+    try {
+      sql = `SELECT ${colExpr}, ${dbxExpr(colExpr, opts)} AS ai_result FROM ${tableExpr} LIMIT ${limit}`;
+    } catch (e) {
+      if (e instanceof LiteralEscapeError) {
+        return NextResponse.json({ ok: false, error: `options: ${e.message}` }, { status: 400 });
+      }
+      throw e;
+    }
     try {
       const result = await executeStatement(warehouseId, sql, catalog, schema);
       return NextResponse.json({ ok: true, engine: 'databricks', fn, column, sql, ...result });

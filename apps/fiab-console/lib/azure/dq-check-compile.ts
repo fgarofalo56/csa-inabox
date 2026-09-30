@@ -31,7 +31,7 @@
  */
 
 import { bracket } from '@/lib/sql/quoting';
-import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { escapeSqlLiteral, escapeSparkSqlLiteral } from '@/lib/sql/quoting';
 import type { GeneratedFile } from '@/lib/transform/transform-codegen';
 import { generateTransformProject } from '@/lib/transform/transform-codegen';
 import {
@@ -100,6 +100,17 @@ function quoteIdentFor(dialect: CheckDialect, name: string): string {
   return bracket(s); // tsql — central `[...]` identifier quoting (sql-quoting guard RULE B)
 }
 
+/**
+ * Single-quoted string literal in the check's dialect. Spark SQL (Databricks)
+ * reads backslash escape sequences inside `'…'`, so it takes the backslash rule
+ * (escapeSparkSqlLiteral); T-SQL and DuckDB double the quote (escapeSqlLiteral).
+ * A value Spark cannot carry throws LiteralEscapeError, which compileChecks
+ * records as a skipped check.
+ */
+function literalFor(dialect: CheckDialect, value: string): string {
+  return `'${dialect === 'spark' ? escapeSparkSqlLiteral(value) : escapeSqlLiteral(value)}'`;
+}
+
 /** dbt singular-test file basename → the check id (the parse join key). */
 export function checkTestName(checkId: string): string {
   return `dqchk_${String(checkId || '').replace(/[^A-Za-z0-9_]+/g, '_')}`.slice(0, 120);
@@ -159,7 +170,7 @@ export function buildCheckSql(dialect: CheckDialect, check: DqCheck, ref: string
     case 'accepted_values': {
       const values = val.split(',').map((v) => v.trim()).filter(Boolean);
       if (!values.length) return { skip: 'accepted_values needs a comma-separated list' };
-      const list = values.map((v) => `'${escapeSqlLiteral(v)}'`).join(', ');
+      const list = values.map((v) => literalFor(dialect, v)).join(', ');
       const cast = dialect === 'spark' ? `CAST(${C} AS STRING)` : dialect === 'duckdb' ? `CAST(${C} AS VARCHAR)` : `CAST(${C} AS NVARCHAR(4000))`;
       return { sql: `SELECT * FROM ${ref} WHERE ${C} IS NOT NULL AND ${cast} NOT IN (${list})` };
     }
@@ -182,7 +193,7 @@ export function buildCheckSql(dialect: CheckDialect, check: DqCheck, ref: string
     }
     case 'regex': {
       if (!val) return { skip: 'regex needs a pattern' };
-      const pat = `'${escapeSqlLiteral(val)}'`;
+      const pat = literalFor(dialect, val);
       if (dialect === 'spark') return { sql: `SELECT * FROM ${ref} WHERE ${C} IS NOT NULL AND NOT (CAST(${C} AS STRING) RLIKE ${pat})` };
       if (dialect === 'duckdb') return { sql: `SELECT * FROM ${ref} WHERE ${C} IS NOT NULL AND NOT regexp_matches(CAST(${C} AS VARCHAR), ${pat})` };
       return { skip: 'regex is unsupported on the Synapse/T-SQL engine — run these checks on Databricks or DuckDB' };

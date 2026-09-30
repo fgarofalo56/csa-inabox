@@ -26,7 +26,7 @@ import { databricksConfigGate, listWarehouses, executeStatement } from '@/lib/az
 import { getAccountName } from '@/lib/azure/adls-client';
 import { toAbfss } from '@/lib/azure/delta-source-uri';
 import { listDeltaVersions, cleanTablePath, isKnownContainer } from '@/lib/azure/delta-history';
-import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { escapeSparkSqlLiteral } from '@/lib/sql/quoting';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -101,7 +101,7 @@ export async function POST(req: NextRequest) {
   const abfss = toAbfss({ account, container, path: tablePath }).replace(/`/g, '');
   const asOf = mode === 'version'
     ? `VERSION AS OF ${version}`
-    : `TIMESTAMP AS OF '${escapeSqlLiteral(timestamp)}'`;
+    : `TIMESTAMP AS OF '${escapeSparkSqlLiteral(timestamp)}'`;
   const sql = `SELECT * FROM delta.\`${abfss}\` ${asOf} LIMIT 100`;
   try {
     const result = await executeStatement(warehouseId, sql);

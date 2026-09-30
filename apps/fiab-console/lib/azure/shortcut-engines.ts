@@ -52,7 +52,7 @@ import type {
   ShortcutEngine,
   ShortcutCredentialRef,
 } from './lakehouse-shortcuts';
-import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { escapeSparkSqlLiteral, escapeSqlLiteral } from '@/lib/sql/quoting';
 
 /** An honest-gate result — the control rendered, but a credential/resource is missing. */
 export interface EngineGate {
@@ -681,7 +681,8 @@ export async function createTablesShortcut(args: {
       };
     }
     const [cat, sch, tbl] = obj.split('.');
-    const loc = escapeSqlLiteral(`${credPath}#${ds.share}.${ds.schema}.${ds.table}`);
+    // Databricks SQL literal: backslash-escaped (Spark SQL rule), not doubled.
+    const loc = escapeSparkSqlLiteral(`${credPath}#${ds.share}.${ds.schema}.${ds.table}`);
     const ddl =
       `CREATE SCHEMA IF NOT EXISTS ${cat}.${sch};\n` +
       `CREATE TABLE IF NOT EXISTS ${cat}.${sch}.${tbl} USING deltaSharing LOCATION '${loc}';`;
@@ -804,7 +805,8 @@ export async function createTablesShortcut(args: {
   const [cat, sch, tbl] = obj.split('.');
   // For external S3/GCS sources the LOCATION is the object URI (covered by the
   // UC external location created in bindExternalSource); otherwise it's abfss.
-  const location = escapeSqlLiteral((args.external?.objectUri || args.abfssUri));
+  // Databricks SQL literal: backslash-escaped (Spark SQL rule), not doubled.
+  const location = escapeSparkSqlLiteral((args.external?.objectUri || args.abfssUri));
   const ddl =
     `CREATE SCHEMA IF NOT EXISTS ${cat}.${sch};\n` +
     `CREATE TABLE IF NOT EXISTS ${cat}.${sch}.${tbl} ` +
