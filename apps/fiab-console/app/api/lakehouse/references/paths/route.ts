@@ -11,14 +11,15 @@
  * in the UI is the affordance, not the guarantee).
  *
  * Item scope: the referenced lakehouse is authorized for read with the
- * caller's own access to it (`scopeReferencePath`), and the prefix is confined
- * to that item's root in its own container. An empty prefix lists the root.
+ * caller's own access to it (`scopeReferenceListing`), and the prefix is confined
+ * to that item's root in its own container. An empty prefix lists the root;
+ * a container the item has no storage in lists nothing (`paths: []` + `note`).
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { listPaths } from '@/lib/azure/adls-client';
 import { apiError } from '@/lib/api/respond';
 import { withSession } from '@/lib/api/route-toolkit';
-import { scopeReferencePath } from '../../_lib/reference-scope';
+import { scopeReferenceListing } from '../../_lib/reference-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -36,8 +37,15 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
   if (!refId) return err('refId is required', 400, 'missing_refId');
 
   try {
-    const scoped = await scopeReferencePath(session, refId, container, prefix, false);
+    const scoped = await scopeReferenceListing(session, refId, container, prefix);
     if (scoped instanceof NextResponse) return scoped;
+    if ('otherContainer' in scoped) {
+      // The references tree shows a node per container; only the bound one has content.
+      return NextResponse.json({
+        ok: true, refId, account: scoped.account || '', container, prefix: '', paths: [],
+        note: `This lakehouse stores its files in the ${scoped.boundContainer} container.`,
+      });
+    }
 
     const limit = Number.isFinite(maxResults) && maxResults > 0 ? Math.min(maxResults, 1000) : 200;
     const paths = await listPaths(scoped.container, scoped.path, limit, scoped.account);

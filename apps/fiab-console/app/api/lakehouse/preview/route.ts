@@ -12,7 +12,7 @@
  *
  *   REFERENCE FORM (`refId`) — Reference-Lakehouse federation (F8): read access
  *   to the REFERENCED lakehouse item; the path must sit below that item's root,
- *   and its storage account comes from the item (`scopeReferencePath`).
+ *   and its storage account is the host of that item's binding (`scopeReferencePath`).
  *
  *   STORAGE FORM (neither) — names a container + path on the primary account
  *   directly. Only a tenant admin may use it.
@@ -24,7 +24,7 @@ import { executeQuery, serverlessTarget } from '@/lib/azure/synapse-sql-client';
 import { classifyTransientSynapseError } from '@/lib/azure/synapse-transient';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
 import { withSession } from '@/lib/api/route-toolkit';
-import { scopeItemPath } from '../_lib/item-scope';
+import { scopeItem } from '../_lib/refusal-envelope';
 import { scopeReferencePath } from '../_lib/reference-scope';
 
 export const runtime = 'nodejs';
@@ -106,7 +106,7 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
     if (scoped instanceof NextResponse) return scoped;
     ({ container, path, account } = scoped);
   } else {
-    const scoped = await scopeItemPath(
+    const scoped = await scopeItem(
       session,
       { lakehouseId, container: rawContainer, rawPath },
       { knownContainers: KNOWN_CONTAINERS },

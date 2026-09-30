@@ -93,31 +93,33 @@ describe('table-stats — kick-off', () => {
     });
   });
 
-  it('requires lakehouseId (400; no Spark session)', async () => {
+  it('requires lakehouseId (400 bad_request; no Spark session)', async () => {
     const res = await GET(req(`container=${CONTAINER}&path=${encodeURIComponent(INSIDE)}`));
-    expect(res.status).toBe(400);
+    const j = await res.json();
+    expect([res.status, j.code, typeof j.remediation]).toEqual([400, 'bad_request', 'string']);
     expect(createLivySessionAsync).not.toHaveBeenCalled();
   });
 
-  it('requires access to the lakehouse item (404; no Spark session)', async () => {
+  it('requires access to the lakehouse item (404 item_not_found; no Spark session)', async () => {
     (resolveItemAccessByOid as any).mockResolvedValue(null);
     const res = await GET(req(`lakehouseId=${LH}&container=${CONTAINER}&path=${encodeURIComponent(INSIDE)}`));
-    expect(res.status).toBe(404);
+    expect([res.status, (await res.json()).code]).toEqual([404, 'item_not_found']);
     expect(createLivySessionAsync).not.toHaveBeenCalled();
   });
 
   it.each([
-    ['another lakehouse root', 'lakehouses/Other--lh-x/Tables/orders', 403],
-    ['a dot-dot segment', `${ROOT}/../Other--lh-x/t`, 400],
-  ])('confines the file to the item root: %s', async (_label, path, status) => {
+    ['another lakehouse root', 'lakehouses/Other--lh-x/Tables/orders', 403, 'outside_item_root'],
+    ['a dot-dot segment', `${ROOT}/../Other--lh-x/t`, 400, 'bad_request'],
+  ])('confines the file to the item root: %s', async (_label, path, status, code) => {
     const res = await GET(req(`lakehouseId=${LH}&container=${CONTAINER}&path=${encodeURIComponent(path)}`));
-    expect(res.status).toBe(status);
+    expect([res.status, (await res.json()).code]).toEqual([status, code]);
     expect(createLivySessionAsync).not.toHaveBeenCalled();
   });
 
   it('400 for a pool name that is not a Spark pool name', async () => {
     const res = await GET(req(`lakehouseId=${LH}&container=${CONTAINER}&path=${encodeURIComponent(INSIDE)}&pool=${encodeURIComponent('../x')}`));
-    expect(res.status).toBe(400);
+    const j = await res.json();
+    expect([res.status, j.code, typeof j.remediation]).toEqual([400, 'bad_request', 'string']);
     expect(createLivySessionAsync).not.toHaveBeenCalled();
   });
 });
@@ -125,7 +127,9 @@ describe('table-stats — kick-off', () => {
 describe('table-stats — poll', () => {
   it('404 for a raw "<pool>:<session>:<stmt>" job id; nothing read from Livy', async () => {
     const res = await GET(req(`lakehouseId=${LH}&jobId=${encodeURIComponent('loompool:9:4')}`));
-    expect(res.status).toBe(404);
+    const j = await res.json();
+    // Breaks if the unknown-job refusal loses its code (it is a 404 like item_not_found).
+    expect([res.status, j.code, typeof j.remediation]).toEqual([404, 'job_not_found', 'string']);
     expect(getLivyStatement).not.toHaveBeenCalled();
   });
 
@@ -139,7 +143,7 @@ describe('table-stats — poll', () => {
   it('refuses a handle minted for another lakehouse item (404)', async () => {
     const jobId = mintLakehouseJobHandle({ ...SCOPE, lakehouseId: 'lh-other' }, { pool: 'loompool', sessionId: 9, stmtId: 4, container: CONTAINER, path: INSIDE });
     const res = await GET(req(`lakehouseId=${LH}&jobId=${encodeURIComponent(jobId)}`));
-    expect(res.status).toBe(404);
+    expect([res.status, (await res.json()).code]).toEqual([404, 'job_not_found']);
     expect(getLivyStatement).not.toHaveBeenCalled();
   });
 
@@ -149,11 +153,11 @@ describe('table-stats — poll', () => {
     expect(res.status).toBe(404);
   });
 
-  it('requires access to the lakehouse item on every poll (404)', async () => {
+  it('requires access to the lakehouse item on every poll (404 item_not_found)', async () => {
     (resolveItemAccessByOid as any).mockResolvedValue(null);
     const jobId = mintLakehouseJobHandle(SCOPE, { pool: 'loompool', sessionId: 9, stmtId: 4, container: CONTAINER, path: INSIDE });
     const res = await GET(req(`lakehouseId=${LH}&jobId=${encodeURIComponent(jobId)}`));
-    expect(res.status).toBe(404);
+    expect([res.status, (await res.json()).code]).toEqual([404, 'item_not_found']);
     expect(getLivyStatement).not.toHaveBeenCalled();
   });
 

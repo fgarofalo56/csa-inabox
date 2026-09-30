@@ -315,6 +315,8 @@ export interface LakehouseEditorCtx {
   schemas: SchemaRow[] | null;
   schemasBusy: boolean;
   schemasError: string | null;
+  /** The route's note after a delete (e.g. the Spark schema was kept). */
+  schemasNotice: string | null;
   newSchemaOpen: boolean;
   setNewSchemaOpen: (v: boolean) => void;
   newSchemaName: string;

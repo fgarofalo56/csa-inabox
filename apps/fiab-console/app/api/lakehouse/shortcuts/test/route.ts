@@ -7,37 +7,62 @@
  * via a SELECT TOP 1. Powers the list's Status chip + the Test action.
  *
  * Body: { lakehouseId, id }
- * Auth: session-required. Design: docs/fiab/design/lakehouse-shortcuts.md.
+ * Auth: session-required. `lakehouseId` is the lakehouse ITEM, authorized
+ * through `authorizeItem` with edit rights, because a test rewrites the row's
+ * status and, for a Delta Sharing Tables shortcut, its credential file. The row
+ * is read under the item id, or under the earlier container key when this item
+ * is the one lakehouse bound to that container (`_lib/shortcut-rows`), and
+ * written back under the same key. Refusals carry a `code` and a `remediation`.
+ * Design: docs/fiab/design/lakehouse-shortcuts.md.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getAccountName } from '@/lib/azure/adls-client';
-import { getShortcut, updateShortcutStatus } from '@/lib/azure/lakehouse-shortcuts';
+import { updateShortcutStatus } from '@/lib/azure/lakehouse-shortcuts';
 import { resolveAndTestAdls, testEngineObject, refreshDeltaSharingCredential } from '@/lib/azure/shortcut-engines';
 import { getKeyVaultSecret } from '@/lib/azure/shortcut-credentials';
 import { parseAbfss as parseExternalAbfss, listAdlsWithSas, ShortcutSourceError } from '@/lib/azure/shortcut-client';
 import { headDriveItem, parseSharepointUri, graphDriveConfigGate } from '@/lib/azure/graph-drive-client';
 import { withSession } from '@/lib/api/route-toolkit';
 import { stripTrailingSlashes } from '@/lib/util/path-strings';
+import { authorizeItem } from '../../_lib/refusal-envelope';
+import { findShortcutRow } from '../../_lib/shortcut-rows';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+const READ_ONLY_MESSAGE =
+  'Your role on this lakehouse is read-only, so Loom did not re-test its shortcuts. A workspace '
+  + 'Member/Admin, or an item grant that includes Edit, can run the test.';
 
 function sanitize(e: any): string {
   return (e?.message || String(e)).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500);
 }
 
-export const POST = withSession(async (req: NextRequest) => {
+export const POST = withSession(async (req: NextRequest, { session }) => {
 
   const body = await req.json().catch(() => ({}));
   const lakehouseId = (body?.lakehouseId || '').toString().trim();
   const id = (body?.id || '').toString().trim();
   if (!lakehouseId || !id) {
-    return NextResponse.json({ ok: false, error: 'lakehouseId and id are required' }, { status: 400 });
+    return NextResponse.json({
+      ok: false, error: 'lakehouseId and id are required', code: 'bad_request',
+      remediation: 'Refresh the shortcut list and run Test from it.',
+    }, { status: 400 });
   }
 
-  const sc = await getShortcut(lakehouseId, id);
-  if (!sc) return NextResponse.json({ ok: false, error: 'shortcut not found', code: 'not_found' }, { status: 404 });
+  const access = await authorizeItem(session, lakehouseId, { write: true, readOnlyMessage: READ_ONLY_MESSAGE });
+  if (access instanceof NextResponse) return access;
+
+  const found = await findShortcutRow(lakehouseId, access.item.workspaceId, id);
+  if (!found) {
+    return NextResponse.json({
+      ok: false, error: 'shortcut not found', code: 'not_found',
+      remediation: 'Refresh the shortcut list; the shortcut may have been deleted.',
+    }, { status: 404 });
+  }
+  // The registry key the row is stored under; status is written back there.
+  const { row: sc, key } = found;
 
   // Delta Sharing: re-validate by listing shares with the stored bearer token.
   // A 401/403 means the token is expired/invalid — the "broken" state the Retry
@@ -47,7 +72,7 @@ export const POST = withSession(async (req: NextRequest) => {
   // prove the table reads with a real SELECT.
   if (sc.targetType === 'delta_sharing') {
     if (!sc.credentialRef?.keyVaultSecret) {
-      const updated = await updateShortcutStatus(lakehouseId, id, 'pending',
+      const updated = await updateShortcutStatus(key, id, 'pending',
         'Delta Sharing shortcut has no credential — re-create it with a Key Vault credentialRef.');
       return NextResponse.json({ ok: true, data: updated });
     }
@@ -86,17 +111,17 @@ export const POST = withSession(async (req: NextRequest) => {
       // Tables shortcut on Databricks: push the (possibly refreshed) token to the
       // UC Volume credential file and prove the UC table still reads.
       if (sc.kind === 'tables' && sc.engine === 'databricks' && sc.engineObject) {
-        await refreshDeltaSharingCredential(lakehouseId, sc.name, {
+        await refreshDeltaSharingCredential(key, sc.name, {
           endpoint: profile.endpoint, bearerToken: profile.bearerToken,
           expirationTime: profile.expirationTime, shareCredentialsVersion: profile.shareCredentialsVersion,
         });
         await testEngineObject(sc.engine, sc.engineObject);
       }
-      const updated = await updateShortcutStatus(lakehouseId, id, 'active', undefined);
+      const updated = await updateShortcutStatus(key, id, 'active', undefined);
       return NextResponse.json({ ok: true, data: updated });
     } catch (e: any) {
       const msg = sanitize(e);
-      const updated = await updateShortcutStatus(lakehouseId, id, 'error', msg);
+      const updated = await updateShortcutStatus(key, id, 'error', msg);
       return NextResponse.json({ ok: false, error: msg, code: e?.code || 'delta_sharing_unreachable', data: updated }, { status: 502 });
     }
   }
@@ -105,17 +130,17 @@ export const POST = withSession(async (req: NextRequest) => {
   // Synapse external view). Prove it with a real SELECT TOP 1 against the engine.
   if (sc.targetType === 's3' || sc.targetType === 'gcs') {
     if (!sc.engineObject || !sc.engine || sc.engine === 'none') {
-      const updated = await updateShortcutStatus(lakehouseId, id, 'pending',
+      const updated = await updateShortcutStatus(key, id, 'pending',
         `${sc.targetType.toUpperCase()} shortcut has no engine binding yet — re-create it with a Key Vault credentialRef.`);
       return NextResponse.json({ ok: true, data: updated });
     }
     try {
       await testEngineObject(sc.engine, sc.engineObject);
-      const updated = await updateShortcutStatus(lakehouseId, id, 'active', undefined);
+      const updated = await updateShortcutStatus(key, id, 'active', undefined);
       return NextResponse.json({ ok: true, data: updated });
     } catch (e: any) {
       const msg = sanitize(e);
-      const updated = await updateShortcutStatus(lakehouseId, id, 'error', msg);
+      const updated = await updateShortcutStatus(key, id, 'error', msg);
       return NextResponse.json({ ok: false, error: msg, code: e?.code || 'engine_unreachable', data: updated }, { status: 502 });
     }
   }
@@ -126,21 +151,21 @@ export const POST = withSession(async (req: NextRequest) => {
   if (sc.targetType === 'sharepoint') {
     const gate = graphDriveConfigGate();
     if (gate) {
-      const updated = await updateShortcutStatus(lakehouseId, id, 'pending', gate.hint.followUp);
+      const updated = await updateShortcutStatus(key, id, 'pending', gate.hint.followUp);
       return NextResponse.json({ ok: false, code: gate.code, error: gate.hint.followUp, hint: gate.hint.followUp, data: updated }, { status: 503 });
     }
     const parsed = parseSharepointUri(sc.targetUri);
     if (!parsed) {
-      const updated = await updateShortcutStatus(lakehouseId, id, 'error', `Invalid SharePoint target: ${sc.targetUri}`);
+      const updated = await updateShortcutStatus(key, id, 'error', `Invalid SharePoint target: ${sc.targetUri}`);
       return NextResponse.json({ ok: false, code: 'bad_target', error: `Invalid SharePoint target: ${sc.targetUri}`, data: updated }, { status: 400 });
     }
     try {
       await headDriveItem(parsed.driveId, parsed.path);
-      const updated = await updateShortcutStatus(lakehouseId, id, 'active', undefined);
+      const updated = await updateShortcutStatus(key, id, 'active', undefined);
       return NextResponse.json({ ok: true, data: updated });
     } catch (e: any) {
       const msg = sanitize(e);
-      const updated = await updateShortcutStatus(lakehouseId, id, 'error', msg);
+      const updated = await updateShortcutStatus(key, id, 'error', msg);
       return NextResponse.json({ ok: false, error: msg, code: e?.code || 'graph_drive_error', data: updated }, { status: e?.status || 502 });
     }
   }
@@ -160,12 +185,12 @@ export const POST = withSession(async (req: NextRequest) => {
       if (sc.kind === 'tables' && sc.engine && sc.engine !== 'none' && sc.engineObject) {
         await testEngineObject(sc.engine, sc.engineObject);
       }
-      const updated = await updateShortcutStatus(lakehouseId, id, 'active', undefined);
+      const updated = await updateShortcutStatus(key, id, 'active', undefined);
       return NextResponse.json({ ok: true, data: updated });
     } catch (e: any) {
       const msg = sanitize(e);
       const code = e instanceof ShortcutSourceError ? e.code : e?.code || 'adls_sas_error';
-      const updated = await updateShortcutStatus(lakehouseId, id, 'error', msg);
+      const updated = await updateShortcutStatus(key, id, 'error', msg);
       return NextResponse.json({ ok: false, error: msg, code, data: updated }, { status: (e instanceof ShortcutSourceError ? e.status : 502) || 502 });
     }
   }
@@ -176,7 +201,7 @@ export const POST = withSession(async (req: NextRequest) => {
   try {
     if (sc.targetType === 'dataverse') {
       if (!sc.abfssUri) {
-        const updated = await updateShortcutStatus(lakehouseId, id, 'pending',
+        const updated = await updateShortcutStatus(key, id, 'pending',
           'Dataverse shortcut has no resolved storage path yet — re-create it with a Key Vault credentialRef.');
         return NextResponse.json({ ok: true, data: updated });
       }
@@ -184,11 +209,11 @@ export const POST = withSession(async (req: NextRequest) => {
     } else {
       await resolveAndTestAdls(sc.targetType, sc.targetUri, getAccountName);
     }
-    const updated = await updateShortcutStatus(lakehouseId, id, 'active', undefined);
+    const updated = await updateShortcutStatus(key, id, 'active', undefined);
     return NextResponse.json({ ok: true, data: updated });
   } catch (e: any) {
     const msg = sanitize(e);
-    const updated = await updateShortcutStatus(lakehouseId, id, 'error', msg);
+    const updated = await updateShortcutStatus(key, id, 'error', msg);
     return NextResponse.json({ ok: false, error: msg, code: e?.code || 'unreachable', data: updated }, { status: 502 });
   }
 });

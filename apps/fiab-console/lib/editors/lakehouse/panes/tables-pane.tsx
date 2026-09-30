@@ -266,6 +266,10 @@ export function TablesPane() {
                                           Query
                                         </Button>
                                         <Button size="small" appearance="outline" icon={<TableSimple20Regular />}
+                                          disabled={schemaName.toLowerCase() === 'dbo'}
+                                          title={schemaName.toLowerCase() === 'dbo'
+                                            ? 'Tables in the default dbo schema stay in dbo. Create the table in a named schema to move it later.'
+                                            : 'Move this table to another schema of this lakehouse'}
                                           onClick={() => openMoveTable(tableName, schemaName)}>
                                           Move to schema…
                                         </Button>
@@ -276,7 +280,9 @@ export function TablesPane() {
                                         <Button size="small" appearance="outline" icon={<Wrench20Regular />}
                                           disabled={!activeContainer}
                                           title={!activeContainer ? 'Select a container first' : 'OPTIMIZE / VACUUM / ZORDER BY'}
-                                          onClick={() => { setMaintainTable(t.name); setMaintainOpen(true); }}>
+                                          // The maintenance route resolves `<item root>/Tables/<tableName>`, so it takes
+                                          // the path relative to Tables/, never the full listing path.
+                                          onClick={() => { setMaintainTable(`${schemaName}/${tableName}`); setMaintainOpen(true); }}>
                                           Maintain…
                                         </Button>
                                       </span>

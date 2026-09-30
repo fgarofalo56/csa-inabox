@@ -1,6 +1,6 @@
 /**
  * POST /api/lakehouse/upload (multipart/form-data)
- * Fields: lakehouseId | reportId, container, path, file
+ * Fields: lakehouseId | reportId (+ reportItemType), container, path, file
  *
  * Accepts ANY file type readable by Apache Spark (parquet, delta, orc, avro,
  * json, csv, tsv, xml, geojson, geoparquet, shapefile, geotiff, raster, plain
@@ -14,15 +14,16 @@
  *   the item are required; the file must sit strictly below the item's own
  *   root in its own container (`scopeItemPath`).
  *
- *   REPORT FORM (`reportId`) — what the report Get Data gallery sends. Edit
- *   rights on the report are required, and the file must be
- *   `landing/report-uploads/<reportId>/<file name>` (`scopeReportUpload`).
+ *   REPORT FORM (`reportId`) — what the shared Get Data gallery sends, from a
+ *   report, a semantic model or a paginated report (`reportItemType`, default
+ *   `report`). Edit rights on that item are required, and the file must be
+ *   `landing/report-uploads/<item id>/<file name>` (`scopeReportUpload`).
  *
  *   STORAGE FORM (neither) — names a container + path directly. Only a tenant
  *   admin may use it; everyone else is refused before any storage call.
  *
- * Returns 4xx with structured { ok:false, error } JSON on validation
- * failures. Never returns HTML — the caller can therefore safely parse the
+ * Returns 4xx with structured { ok:false, error, code, remediation } JSON on
+ * validation failures. Never returns HTML — the caller can therefore safely parse the
  * body as JSON.
  */
 
@@ -30,7 +31,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { KNOWN_CONTAINERS, uploadFile, type KnownContainer } from '@/lib/azure/adls-client';
 import { detectSparkFormat, renderReadSnippet } from '@/lib/azure/spark-format-detect';
 import { withSession } from '@/lib/api/route-toolkit';
-import { scopeItemPath } from '../_lib/item-scope';
+import { scopeItem } from '../_lib/refusal-envelope';
 import { scopeReportUpload } from '../_lib/report-upload';
 
 export const runtime = 'nodejs';
@@ -52,28 +53,29 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
     form = await req.formData();
   } catch (e: any) {
     return NextResponse.json(
-      { ok: false, error: 'invalid multipart body', detail: e?.message },
+      { ok: false, error: 'invalid multipart body', detail: e?.message, code: 'bad_request', remediation: 'Send the file as multipart/form-data and retry.' },
       { status: 400 },
     );
   }
 
   const lakehouseId = (form.get('lakehouseId') || '').toString().trim();
   const reportId = (form.get('reportId') || '').toString().trim();
+  const reportItemType = (form.get('reportItemType') || 'report').toString().trim();
   const rawContainer = (form.get('container') || '').toString().trim();
   const rawPath = (form.get('path') || '').toString();
   const file = form.get('file');
 
   if (!rawPath) {
     return NextResponse.json(
-      { ok: false, error: 'path is required' },
+      { ok: false, error: 'path is required', code: 'bad_request', remediation: 'Name the target path and retry.' },
       { status: 400 },
     );
   }
 
   // Decide the target before touching the file body.
   const scoped = reportId && !lakehouseId
-    ? await scopeReportUpload(session, reportId, rawContainer, rawPath)
-    : await scopeItemPath(
+    ? await scopeReportUpload(session, reportId, rawContainer, rawPath, reportItemType)
+    : await scopeItem(
         session,
         { lakehouseId, container: rawContainer, rawPath },
         { write: true, readOnlyMessage: READ_ONLY_MESSAGE, knownContainers: KNOWN_CONTAINERS },
@@ -83,7 +85,7 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
 
   if (!file || typeof file === 'string') {
     return NextResponse.json(
-      { ok: false, error: 'file part is required' },
+      { ok: false, error: 'file part is required', code: 'bad_request', remediation: 'Attach the file as the "file" part and retry.' },
       { status: 400 },
     );
   }

@@ -386,6 +386,13 @@ export function MoveTableDialog() {
     moveTableName, moveTableFrom, moveTableTo, setMoveTableTo,
     moveTableBusy, moveTableStatus, moveTableError, submitMoveTable, schemas,
   } = ctx;
+  // Only schemas that own a Spark database of this item can receive a table;
+  // the default dbo schema and schemas registered before per-schema databases cannot.
+  const movable = (sch: { name: string; sparkDatabase?: string; legacy?: boolean }) =>
+    !!sch.sparkDatabase && !sch.legacy && sch.name.toLowerCase() !== 'dbo';
+  const targets = (schemas || []).filter((sch) => movable(sch) && sch.name !== moveTableFrom);
+  const fromDb = (schemas || []).find((sch) => sch.name === moveTableFrom)?.sparkDatabase || moveTableFrom;
+  const toDb = (schemas || []).find((sch) => sch.name === moveTableTo)?.sparkDatabase || '<schema database>';
 
   return (
     <Dialog open={moveTableOpen} onOpenChange={(_, d) => setMoveTableOpen(d.open)}>
@@ -399,22 +406,26 @@ export function MoveTableDialog() {
             <Field label="From schema">
               <Input value={moveTableFrom} readOnly />
             </Field>
-            <Field label="To schema" required hint="Pick the destination schema. Create new schemas in the Schemas tab.">
+            <Field label="To schema" required
+              hint={targets.length === 0
+                ? 'No other schema can receive this table yet. Create a schema in the Schemas tab first.'
+                : 'Pick the destination schema. Create new schemas in the Schemas tab.'}>
               <Dropdown
                 selectedOptions={moveTableTo ? [moveTableTo] : []}
                 value={moveTableTo}
                 placeholder="Select a schema"
+                disabled={targets.length === 0}
                 onOptionSelect={(_, d) => setMoveTableTo(d.optionValue || '')}
               >
-                {(schemas || []).filter((sch) => sch.name !== moveTableFrom).map((sch) => (
-                  <Option key={sch.name} value={sch.name}>{`${sch.name}${sch.isDefault ? ' (default)' : ''}`}</Option>
+                {targets.map((sch) => (
+                  <Option key={sch.name} value={sch.name}>{sch.name}</Option>
                 ))}
               </Dropdown>
             </Field>
             <MessageBar intent="info">
               <MessageBarBody>
-                Runs <code>ALTER TABLE {moveTableFrom}.{moveTableName} RENAME TO {moveTableTo || '<schema>'}.{moveTableName}</code> on the Spark pool.
-                The table stays queryable via its new 4-part name.
+                Runs <code>ALTER TABLE {fromDb}.{moveTableName} RENAME TO {toDb}.{moveTableName}</code> on the Spark pool.
+                Each schema is its own Spark database in this lakehouse.
               </MessageBarBody>
             </MessageBar>
             {moveTableStatus && <MessageBar intent="success"><MessageBarBody>{moveTableStatus}</MessageBarBody></MessageBar>}

@@ -14,7 +14,7 @@ export function SchemasPane() {
   const s = useStyles();
   const ctx = useLakehouseCtx();
   const {
-    shortcutLakehouseId, schemasEnabled, schemas, schemasBusy, schemasError,
+    shortcutLakehouseId, schemasEnabled, schemas, schemasBusy, schemasError, schemasNotice,
     loadSchemas, deleteSchema,
     newSchemaOpen, setNewSchemaOpen, newSchemaName, setNewSchemaName,
     newSchemaDesc, setNewSchemaDesc, newSchemaBusy, newSchemaError, createSchema,
@@ -52,6 +52,9 @@ export function SchemasPane() {
       {schemasError && (
         <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Schemas error</MessageBarTitle>{schemasError}</MessageBarBody></MessageBar>
       )}
+      {schemasNotice && !schemasError && (
+        <MessageBar intent="info"><MessageBarBody>{schemasNotice}</MessageBarBody></MessageBar>
+      )}
       {schemasBusy && schemas === null && <Spinner size="small" label="Loading schemas…" labelPosition="after" />}
       {schemas !== null && (
         <div className={s.tableWrap}>
@@ -59,6 +62,7 @@ export function SchemasPane() {
             <TableHeader>
               <TableRow>
                 <TableHeaderCell>Schema</TableHeaderCell>
+                <TableHeaderCell>Spark database</TableHeaderCell>
                 <TableHeaderCell>Status</TableHeaderCell>
                 <TableHeaderCell>Description</TableHeaderCell>
                 <TableHeaderCell></TableHeaderCell>
@@ -68,11 +72,22 @@ export function SchemasPane() {
               {schemas.map((sc) => (
                 <TableRow key={sc.name}>
                   <TableCell>
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', flexWrap: 'wrap', minWidth: 0, gap: tokens.spacingHorizontalS }}>
                       <Database20Regular />
                       <strong>{sc.name}</strong>
                       {sc.isDefault && <Badge appearance="tint" color="informative" size="small">default</Badge>}
+                      {sc.legacy && (
+                        <Badge appearance="tint" color="warning" size="small"
+                          title="Registered before lakehouse schemas had their own Spark databases. It can be removed from the list, not moved into.">
+                          earlier format
+                        </Badge>
+                      )}
                     </span>
+                  </TableCell>
+                  <TableCell>
+                    {sc.sparkDatabase
+                      ? <code style={{ fontSize: tokens.fontSizeBase100, overflowWrap: 'anywhere' }}>{sc.sparkDatabase}</code>
+                      : <Caption1>—</Caption1>}
                   </TableCell>
                   <TableCell>
                     {sc.status === 'active' && <Badge appearance="tint" color="success" size="small">active</Badge>}
@@ -115,7 +130,8 @@ export function SchemasPane() {
               <MessageBar intent="info">
                 <MessageBarBody>
                   Runs <code>CREATE SCHEMA IF NOT EXISTS</code> on the Synapse Spark pool via Livy and adds it to the catalog.
-                  Tables placed here are addressable as <code>{shortcutLakehouseId}.{newSchemaName || '<schema>'}.&lt;table&gt;</code>.
+                  Each schema gets its own Spark database in this lakehouse; the list shows its name once created, and
+                  notebooks address its tables as <code>&lt;spark database&gt;.&lt;table&gt;</code>.
                 </MessageBarBody>
               </MessageBar>
               {newSchemaError && <MessageBar intent="error"><MessageBarBody>{newSchemaError}</MessageBarBody></MessageBar>}
@@ -123,7 +139,7 @@ export function SchemasPane() {
             <DialogActions>
               <Button appearance="secondary" onClick={() => setNewSchemaOpen(false)} disabled={newSchemaBusy}>Cancel</Button>
               <Button appearance="primary" onClick={createSchema}
-                disabled={newSchemaBusy || !newSchemaName.trim() || !/^[A-Za-z0-9_]+$/.test(newSchemaName) || newSchemaName === 'dbo'}>
+                disabled={newSchemaBusy || !newSchemaName.trim() || !/^[A-Za-z0-9_]+$/.test(newSchemaName) || newSchemaName.trim().toLowerCase() === 'dbo'}>
                 {newSchemaBusy ? 'Creating…' : 'Create'}
               </Button>
             </DialogActions>

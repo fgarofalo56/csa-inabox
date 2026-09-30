@@ -5,9 +5,18 @@ import {
   abfssUrl,
   readExprFor,
   buildLoadToTablePySpark,
+  loadTargetTableName,
   parseLoadRowCount,
   SUPPORTED_LOAD_FORMATS,
 } from '../load-to-table-codegen';
+
+describe('loadTargetTableName', () => {
+  it('qualifies the table with the database when one is given, and not otherwise', () => {
+    // Breaks if the database is dropped (bare name) or always prefixed (".sales").
+    expect(loadTargetTableName({ tableName: 'sales', database: 'lh_0123456789ab_dbo' })).toBe('lh_0123456789ab_dbo.sales');
+    expect(loadTargetTableName({ tableName: 'sales' })).toBe('sales');
+  });
+});
 
 describe('validateLoadTableName', () => {
   it('accepts valid names', () => {
@@ -101,6 +110,36 @@ describe('buildLoadToTablePySpark', () => {
     expect(() => buildLoadToTablePySpark({
       container: 'bronze', account: 'a', path: 'x.csv', tableName: 'Bad-Name', writeMode: 'overwrite', format: 'csv',
     })).toThrow();
+  });
+  it('registers <database>.<table> and creates the database first when a database is given', () => {
+    const code = buildLoadToTablePySpark({
+      container: 'landing', account: 'a', path: 'x.csv', tableName: 'sales', writeMode: 'overwrite', format: 'csv',
+      database: 'lh_0123456789ab_dbo',
+    });
+    // Breaks if the bare name is still registered, or the CREATE comes after the write.
+    expect(code).toContain('.saveAsTable("lh_0123456789ab_dbo.sales")');
+    expect(code).not.toContain('.saveAsTable("sales")');
+    const create = code.indexOf('spark.sql("CREATE DATABASE IF NOT EXISTS `lh_0123456789ab_dbo`")');
+    expect(create).toBeGreaterThan(-1);
+    expect(create).toBeLessThan(code.indexOf('.saveAsTable('));
+    expect(code).toContain('LOOM_LOAD_RESULT rows={_loom_rows} table=lh_0123456789ab_dbo.sales');
+  });
+  it.each([
+    ['a quote', 'db"x'],
+    ['a backtick', 'db`x'],
+    ['a dot', 'db.x'],
+    ['upper case', 'DB'],
+    ['129 chars', `d${'b'.repeat(128)}`],
+  ])('refuses a database name with %s', (_label, database) => {
+    expect(() => buildLoadToTablePySpark({
+      container: 'landing', account: 'a', path: 'x.csv', tableName: 'sales', writeMode: 'overwrite', format: 'csv', database,
+    })).toThrow(/Invalid Spark database name/);
+  });
+  it('accepts a 128-char database name (the metastore limit)', () => {
+    expect(() => buildLoadToTablePySpark({
+      container: 'landing', account: 'a', path: 'x.csv', tableName: 'sales', writeMode: 'overwrite', format: 'csv',
+      database: `d${'b'.repeat(127)}`,
+    })).not.toThrow();
   });
   it('covers every supported format without throwing', () => {
     for (const format of SUPPORTED_LOAD_FORMATS) {

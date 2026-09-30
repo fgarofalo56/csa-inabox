@@ -132,6 +132,54 @@ describe('InteropPane — configured catalog', () => {
   });
 });
 
+describe('InteropPane — namespace', () => {
+  const WITH_DEFAULT = { ...CONFIGURED, defaultNamespace: 'lh_0123456789ab' };
+
+  it('shows the lakehouse default namespace for a table with no state', async () => {
+    installFetchMock({ '/api/lakehouse/interop': () => WITH_DEFAULT });
+    mount();
+    // Breaks if the fallback goes back to the container name ('gold (default)').
+    await waitFor(() => expect(screen.getByText('lh_0123456789ab (default)')).toBeInTheDocument());
+    expect(screen.queryByText('gold (default)')).toBeNull();
+  });
+
+  it('offers the lakehouse namespace when the catalog name is taken, and re-sends with it', async () => {
+    let puts = 0;
+    const { calls } = installFetchMock({
+      '/api/lakehouse/interop': (_u, init) => {
+        if (init?.method !== 'PUT') return WITH_DEFAULT;
+        puts += 1;
+        return puts === 1
+          ? {
+            ...WITH_DEFAULT, ok: true, pool: 'loompool',
+            catalogNote: 'The catalog already has gold.customers pointing at a different table.',
+            catalogCode: 'catalog_name_taken',
+            catalogRemediation: 'Register the table under lh_0123456789ab.',
+            suggestedNamespace: 'lh_0123456789ab',
+          }
+          : { ...WITH_DEFAULT, ok: true, pool: 'loompool' };
+      },
+    });
+    mount();
+    await waitFor(() => expect(screen.getByLabelText('Expose customers as Iceberg')).toBeInTheDocument());
+    fireEvent.click(screen.getByLabelText('Expose customers as Iceberg'));
+
+    // Breaks if the pane ignores catalogCode (no offer is rendered).
+    await waitFor(() => expect(screen.getByText('Catalog name in use')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Register as lh_0123456789ab.customers' }));
+
+    await waitFor(() => {
+      const bodies = calls.filter((c) => c.init?.method === 'PUT').map((c) => JSON.parse(String(c.init!.body)));
+      // Breaks if the retry omits the offered namespace.
+      expect(bodies).toEqual([
+        { lakehouseId: 'lh-1', tableName: 'customers', iceberg: true },
+        { lakehouseId: 'lh-1', tableName: 'customers', iceberg: true, namespace: 'lh_0123456789ab' },
+      ]);
+    });
+    await waitFor(() => expect(screen.queryByText('Catalog name in use')).toBeNull());
+  });
+});
+
 describe('InteropPane — honest gate (catalog not deployed)', () => {
   const GATED = {
     ...CONFIGURED,

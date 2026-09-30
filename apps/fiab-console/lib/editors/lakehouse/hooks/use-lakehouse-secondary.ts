@@ -111,6 +111,7 @@ export function useLakehouseSecondary({
   const [schemas, setSchemas] = useState<SchemaRow[] | null>(null);
   const [schemasBusy, setSchemasBusy] = useState(false);
   const [schemasError, setSchemasError] = useState<string | null>(null);
+  const [schemasNotice, setSchemasNotice] = useState<string | null>(null);
   const [newSchemaOpen, setNewSchemaOpen] = useState(false);
   const [newSchemaName, setNewSchemaName] = useState('');
   const [newSchemaDesc, setNewSchemaDesc] = useState('');
@@ -153,8 +154,9 @@ export function useLakehouseSecondary({
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ lakehouseId: schemaItemId, name: newSchemaName.trim(), description: newSchemaDesc.trim() || undefined }),
       });
-      const j = await parseJsonOrError<{ ok: boolean; error?: string; hint?: string }>(r, 'Create schema');
-      if (!j.ok && r.status !== 503) throw new Error(j.hint || j.error || `HTTP ${r.status}`);
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; hint?: string; remediation?: string; note?: string }>(r, 'Create schema');
+      if (!j.ok && r.status !== 503) throw new Error(j.hint || [j.error || `HTTP ${r.status}`, j.remediation].filter(Boolean).join(' '));
+      setSchemasNotice(j.ok && j.note ? j.note : null);
       setNewSchemaOpen(false); setNewSchemaName(''); setNewSchemaDesc('');
       await loadSchemas();
     } catch (e: any) { setNewSchemaError(e?.message || String(e)); }
@@ -163,21 +165,27 @@ export function useLakehouseSecondary({
 
   const deleteSchema = useCallback(async (name: string) => {
     if (!schemaItemId) return;
+    const row = (schemas || []).find((s) => s.name === name);
     const ok = await confirm({
       title: `Delete schema "${name}"?`,
-      body: 'This runs DROP SCHEMA … CASCADE and removes the catalog entry. This cannot be undone.',
-      danger: true, confirmLabel: 'Drop schema',
+      body: row?.sparkDatabase && !row.legacy
+        ? `This removes the schema from this lakehouse and drops its Spark database ${row.sparkDatabase} `
+          + 'with every table in it (DROP SCHEMA … CASCADE). This cannot be undone.'
+        : 'This removes the schema from this lakehouse\'s list. It was registered before lakehouse schemas had '
+          + 'their own Spark databases, so Loom does not drop any Spark schema for it.',
+      danger: true, confirmLabel: 'Delete schema',
     });
     if (!ok) return;
-    setSchemasBusy(true); setSchemasError(null);
+    setSchemasBusy(true); setSchemasError(null); setSchemasNotice(null);
     try {
       const r = await clientFetch(`/api/lakehouse/schemas?lakehouseId=${encodeURIComponent(schemaItemId)}&name=${encodeURIComponent(name)}`, { method: 'DELETE' });
-      const j = await parseJsonOrError<{ ok: boolean; error?: string }>(r, 'Delete schema');
-      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; remediation?: string; note?: string; data?: { sparkSchemaKept?: boolean } }>(r, 'Delete schema');
+      if (!j.ok) throw new Error([j.error || `HTTP ${r.status}`, j.remediation].filter(Boolean).join(' '));
+      if (j.note) setSchemasNotice(j.note);
       await loadSchemas();
     } catch (e: any) { setSchemasError(e?.message || String(e)); }
     finally { setSchemasBusy(false); }
-  }, [schemaItemId, loadSchemas, confirm]);
+  }, [schemaItemId, schemas, loadSchemas, confirm]);
 
   const openMoveTable = useCallback((tableName: string, fromSchema: string) => {
     setMoveTableName(tableName); setMoveTableFrom(fromSchema || 'dbo');
@@ -194,9 +202,13 @@ export function useLakehouseSecondary({
         method: 'PATCH', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ lakehouseId: schemaItemId, tableName: moveTableName.trim(), fromSchema: moveTableFrom, toSchema: moveTableTo.trim() }),
       });
-      const j = await parseJsonOrError<{ ok: boolean; error?: string; hint?: string; data?: { namespace?: string } }>(r, 'Move table');
-      if (!j.ok) throw new Error(j.hint || j.error || `HTTP ${r.status}`);
-      setMoveTableStatus(`Moved to ${moveTableTo.trim()} — queryable as ${j.data?.namespace || `${schemaItemId}.${moveTableTo.trim()}.${moveTableName.trim()}`}`);
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; hint?: string; remediation?: string; data?: { sparkTable?: string } }>(r, 'Move table');
+      if (!j.ok) throw new Error(j.hint || [j.error || `HTTP ${r.status}`, j.remediation].filter(Boolean).join(' '));
+      setMoveTableStatus(
+        j.data?.sparkTable
+          ? `Moved to ${moveTableTo.trim()}. In a notebook, query it as ${j.data.sparkTable}.`
+          : `Moved to ${moveTableTo.trim()}.`,
+      );
       if (activeContainer) await loadPaths(activeContainer, tablesPrefix);
     } catch (e: any) { setMoveTableError(e?.message || String(e)); }
     finally { setMoveTableBusy(false); }
@@ -365,7 +377,7 @@ export function useLakehouseSecondary({
     historyPreviewVersion, historyPreviewResult, historyPreviewLoading,
     loadHistory, restoreToVersion, previewAsOf, openTableHistory,
     // Schemas
-    schemas, schemasBusy, schemasError,
+    schemas, schemasBusy, schemasError, schemasNotice,
     newSchemaOpen, setNewSchemaOpen,
     newSchemaName, setNewSchemaName,
     newSchemaDesc, setNewSchemaDesc,

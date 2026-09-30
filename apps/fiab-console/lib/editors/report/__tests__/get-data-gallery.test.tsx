@@ -79,3 +79,83 @@ describe('GetDataGallery (report Get data popup)', () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * Upload path — the gallery is shared by the report, semantic-model and
+ * paginated-report editors, and an upload is stored with (and authorized
+ * against) whichever item the gallery is open in.
+ */
+describe('GetDataGallery upload (host item)', () => {
+  let calls: Array<{ url: string; init?: RequestInit }>;
+  let uploadReply: Record<string, unknown>;
+
+  beforeEach(() => {
+    uploadReply = {
+      ok: true, filename: 'a.csv', container: 'landing', path: 'report-uploads/x/a.csv',
+      abfssPath: 'abfss://landing@acct.dfs.core.windows.net/report-uploads/x/a.csv',
+      sparkFormat: { format: 'csv' },
+    };
+    ({ calls } = installFetchMock({
+      '/api/connections': () => ({ ok: true, connections: [] }),
+      '/api/lakehouse/upload': () => uploadReply,
+    }));
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  async function openUploadTab() {
+    fireEvent.click(await screen.findByLabelText(/Get data from Azure Data Lake Storage Gen2/i));
+    fireEvent.click(await screen.findByRole('tab', { name: /Upload a file/i }));
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    expect(input).toBeTruthy();
+    fireEvent.change(input, { target: { files: [new File(['a,b\n1,2\n'], 'a.csv', { type: 'text/csv' })] } });
+  }
+  const uploadCalls = () => calls.filter((c) => c.url.includes('/api/lakehouse/upload'));
+  const formOf = (i = 0) => uploadCalls()[i].init!.body as FormData;
+
+  it.each([
+    ['semantic-model', 'sm-1'],
+    ['paginated-report', 'pr-1'],
+  ] as const)('a %s host uploads under its own id and type', async (hostItemType, id) => {
+    renderGallery({ reportId: id, hostItemType });
+    await openUploadTab();
+    // Positive arm: the upload lands and is shown.
+    expect(await screen.findByText('a.csv')).toBeTruthy();
+    expect(uploadCalls()).toHaveLength(1);
+    // Breaks if the gallery drops reportItemType (the route would then look the id up as a report).
+    expect(formOf().get('reportItemType')).toBe(hostItemType);
+    expect(formOf().get('reportId')).toBe(id);
+    expect(formOf().get('path')).toBe(`report-uploads/${id}/a.csv`);
+    expect(screen.queryByText(/Save the report first/i)).toBeNull();
+    // The live preview runs the report connector-preview route, so it is offered to report hosts only.
+    expect(screen.queryByRole('button', { name: /Preview data/i })).toBeNull();
+  });
+
+  it('a report host (the default) sends reportItemType=report and offers the live preview', async () => {
+    renderGallery({ reportId: 'rep-1' });
+    await openUploadTab();
+    expect(await screen.findByText('a.csv')).toBeTruthy();
+    expect(formOf().get('reportItemType')).toBe('report');
+    // Positive arm for the preview gate above: breaks if the preview is hidden for every host.
+    expect(screen.getByRole('button', { name: /Preview data/i })).toBeTruthy();
+  });
+
+  it('an unsaved semantic model is asked to save the semantic model, and nothing is sent', async () => {
+    renderGallery({ reportId: 'new', hostItemType: 'semantic-model' });
+    await openUploadTab();
+    expect(await screen.findByText(/Save the semantic model first/i)).toBeTruthy();
+    expect(screen.queryByText(/Save the report first/i)).toBeNull();
+    expect(uploadCalls()).toEqual([]);
+  });
+
+  it('a refusal shows the error and its remediation', async () => {
+    uploadReply = { ok: false, error: 'Your role on this semantic model is read-only.', code: 'read_only', remediation: 'Ask a workspace Admin or Member for edit access.' };
+    renderGallery({ reportId: 'sm-1', hostItemType: 'semantic-model' });
+    await openUploadTab();
+    // Breaks if the remediation is dropped from the message.
+    expect(await screen.findByText(/read-only\. Ask a workspace Admin or Member for edit access\./i)).toBeTruthy();
+  });
+});

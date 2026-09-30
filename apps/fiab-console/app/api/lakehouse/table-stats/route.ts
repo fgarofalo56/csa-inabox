@@ -41,8 +41,7 @@ import {
   createLivySessionAsync, getLivySession, submitLivyStatement, getLivyStatement,
 } from '@/lib/azure/synapse-dev-client';
 import { withSession } from '@/lib/api/route-toolkit';
-import { apiBadRequest, apiNotFound } from '@/lib/api/respond';
-import { authorizeLakehouse, scopeItemPath } from '../_lib/item-scope';
+import { authorizeItem, scopeItem } from '../_lib/refusal-envelope';
 import {
   SPARK_POOL_NAME_RE, mintLakehouseJobHandle, verifyLakehouseJobHandle, type LakehouseJobScope,
 } from '../_lib/job-handle';
@@ -179,6 +178,10 @@ function parseStatsOutput(output: any): { columns: string[]; stats: Record<strin
 
 const DEAD_SESSION = new Set(['error', 'dead', 'killed', 'shutting_down', 'success']);
 
+function badRequest(error: string, remediation: string): NextResponse {
+  return NextResponse.json({ ok: false, error, code: 'bad_request', remediation }, { status: 400 });
+}
+
 export const GET = withSession(async (req: NextRequest, { session }) => {
   const g = gate(); if (g) return g;
 
@@ -190,18 +193,26 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
   const poolParam = sp.get('pool')?.trim() || '';
 
   if (!lakehouseId) {
-    return apiBadRequest('lakehouseId is required: column statistics run on a file of a lakehouse item.');
+    return badRequest(
+      'lakehouseId is required: column statistics run on a file of a lakehouse item.',
+      'Reopen the lakehouse and open the file from its explorer, so the request names the item.',
+    );
   }
   const scope: LakehouseJobScope = { lakehouseId, purpose: 'table-stats', oid: session.claims.oid };
 
   try {
     // ---- Poll mode -----------------------------------------------------
     if (jobId) {
-      const access = await authorizeLakehouse(session, lakehouseId);
+      const access = await authorizeItem(session, lakehouseId);
       if (access instanceof NextResponse) return access;
       const job = verifyLakehouseJobHandle(scope, jobId);
       // One answer for a malformed, expired, or other-item handle.
-      if (!job) return apiNotFound('column statistics job not found; open the file again to start a new one.');
+      if (!job) {
+        return NextResponse.json({
+          ok: false, error: 'column statistics job not found; open the file again to start a new one.',
+          code: 'job_not_found', remediation: 'Open the file again to start a new statistics run.',
+        }, { status: 404 });
+      }
       const { pool, sessionId } = job;
 
       // No statement yet — the pool was warming at kick-off. Submit once idle,
@@ -244,13 +255,16 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
 
     // ---- Kick-off mode -------------------------------------------------
     if (!path) {
-      return NextResponse.json({ ok: false, error: 'path is required' }, { status: 400 });
+      return badRequest('path is required', 'Open a file from the lakehouse explorer and retry.');
     }
     const pool = poolParam || DEFAULT_POOL;
     if (!SPARK_POOL_NAME_RE.test(pool)) {
-      return apiBadRequest('pool must be a Spark pool name: a letter, then letters or digits, 15 characters at most.');
+      return badRequest(
+        'pool must be a Spark pool name: a letter, then letters or digits, 15 characters at most.',
+        'Pick a Spark pool from the list, or leave it empty to use the default pool.',
+      );
     }
-    const scoped = await scopeItemPath(
+    const scoped = await scopeItem(
       session,
       { lakehouseId, container, rawPath: path },
       { knownContainers: KNOWN_CONTAINERS },

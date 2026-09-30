@@ -7,6 +7,7 @@
  * `submitLivyBatch`, each paired with the positive arm on the same fixture.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 
 vi.mock('@/lib/auth/session', () => ({ getSession: vi.fn() }));
 vi.mock('@/lib/azure/synapse-dev-client', () => ({
@@ -48,6 +49,8 @@ function access(canWrite = true) {
   return { item: { id: LH, workspaceId: 'ws-1', itemType: 'lakehouse' }, role: canWrite ? 'Member' : 'Viewer', via: 'workspace', canWrite };
 }
 const submittedCode = (): string | null => (submitLivyBatch as any).mock.calls[0]?.[0]?.code ?? null;
+/** Written out here rather than imported, so a change to the helper cannot also change the expectation. */
+const itemDb = (id: string) => `lh_${createHash('sha256').update(id, 'utf8').digest('hex').slice(0, 12)}_dbo`;
 
 let savedWs: string | undefined;
 
@@ -80,10 +83,37 @@ describe('POST /api/lakehouse/load-to-table', () => {
     expect(code).toContain(`.option("path", "abfss://${CONTAINER}@${HOST}/${ROOT}/Tables/sales")`);
   });
 
+  it('registers the table in the lakehouse item own Spark database', async () => {
+    const res = await POST(bodyReq(base));
+    const j = await res.json();
+    expect(res.status).toBe(200);
+    const db = itemDb(LH);
+    // Breaks if the bare table name is registered, or the database is not derived from the item id.
+    expect(j.job.sparkTable).toBe(`${db}.sales`);
+    const code = submittedCode()!;
+    expect(code).toContain(`.saveAsTable("${db}.sales")`);
+    expect(code).toContain('CREATE DATABASE IF NOT EXISTS `' + db + '`');
+    expect(code).not.toContain('.saveAsTable("sales")');
+  });
+
+  it('two lakehouses loading the same table name register it in different databases', async () => {
+    await POST(bodyReq(base));
+    (resolveItemAccessByOid as any).mockResolvedValue({ ...access(true), item: { id: 'lh-two', workspaceId: 'ws-1', itemType: 'lakehouse' } });
+    (resolveLakehouseAbfss as any).mockResolvedValue({ abfss: `abfss://${CONTAINER}@${HOST}/lakehouses/Two--lh-two`, container: CONTAINER, root: 'lakehouses/Two--lh-two' });
+    await POST(bodyReq({ ...base, lakehouseId: 'lh-two', path: 'lakehouses/Two--lh-two/Files/sales.csv' }));
+    const codes = (submitLivyBatch as any).mock.calls.map((c: any[]) => c[0].code as string);
+    expect(codes).toHaveLength(2);
+    // Breaks if both loads register the same name; the two databases differ by construction.
+    expect(itemDb(LH)).not.toBe(itemDb('lh-two'));
+    expect(codes[0]).toContain(`.saveAsTable("${itemDb(LH)}.sales")`);
+    expect(codes[1]).toContain(`.saveAsTable("${itemDb('lh-two')}.sales")`);
+  });
+
   it('requires lakehouseId (400; nothing submitted)', async () => {
     const { lakehouseId: _omit, ...rest } = base;
     const res = await POST(bodyReq(rest));
     expect(res.status).toBe(400);
+    expect((await res.json()).code).toBe('bad_request');
     expect(submitLivyBatch).not.toHaveBeenCalled();
     expect(resolveItemAccessByOid).not.toHaveBeenCalled();
   });
@@ -92,6 +122,9 @@ describe('POST /api/lakehouse/load-to-table', () => {
     (resolveItemAccessByOid as any).mockResolvedValue(access(false));
     const res = await POST(bodyReq(base));
     expect(res.status).toBe(403);
+    const j = await res.json();
+    expect(j.code).toBe('read_only');
+    expect(j.remediation).toMatch(/Edit/);
     expect(submitLivyBatch).not.toHaveBeenCalled();
   });
 
@@ -99,18 +132,22 @@ describe('POST /api/lakehouse/load-to-table', () => {
     (resolveItemAccessByOid as any).mockResolvedValue(null);
     const res = await POST(bodyReq(base));
     expect(res.status).toBe(404);
+    expect((await res.json()).code).toBe('item_not_found');
     expect(submitLivyBatch).not.toHaveBeenCalled();
   });
 
   it.each([
-    ['a sibling root sharing the prefix', { path: `${ROOT}-archive/Files/sales.csv` }, 403],
-    ['another lakehouse root', { path: 'lakehouses/Other--lh-x/Files/sales.csv' }, 403],
-    ['another container', { container: 'gold' }, 403],
-    ['a dot-dot segment', { path: `${ROOT}/../Other--lh-x/sales.csv` }, 400],
-    ['an absolute path', { path: `/${INSIDE}` }, 400],
-  ])('confines the source to the item root: %s', async (_label, over, status) => {
+    ['a sibling root sharing the prefix', { path: `${ROOT}-archive/Files/sales.csv` }, 403, 'outside_item_root'],
+    ['another lakehouse root', { path: 'lakehouses/Other--lh-x/Files/sales.csv' }, 403, 'outside_item_root'],
+    ['another container', { container: 'gold' }, 403, 'outside_item_root'],
+    ['a dot-dot segment', { path: `${ROOT}/../Other--lh-x/sales.csv` }, 400, 'bad_request'],
+    ['an absolute path', { path: `/${INSIDE}` }, 400, 'bad_request'],
+  ])('confines the source to the item root: %s', async (_label, over, status, code) => {
     const res = await POST(bodyReq({ ...base, ...over }));
     expect(res.status).toBe(status);
+    const j = await res.json();
+    expect(j.code).toBe(code);
+    expect(typeof j.remediation).toBe('string');
     expect(submitLivyBatch).not.toHaveBeenCalled();
   });
 
@@ -118,6 +155,7 @@ describe('POST /api/lakehouse/load-to-table', () => {
     (resolveLakehouseAbfss as any).mockResolvedValue(null);
     const res = await POST(bodyReq(base));
     expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe('no_storage_binding');
     expect(submitLivyBatch).not.toHaveBeenCalled();
   });
 });

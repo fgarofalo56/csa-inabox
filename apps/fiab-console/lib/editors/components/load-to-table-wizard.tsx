@@ -82,7 +82,11 @@ export interface LoadToTableWizardProps {
   /** Path within the container, e.g. "Files/sales.csv". */
   path: string;
   /** Called after the Spark job is accepted; receives the Livy job id + table. */
-  onJobSubmitted?: (info: { jobId: string; tableName: string; rowCount: number | null }) => void;
+  onJobSubmitted?: (info: {
+    jobId: string; tableName: string; rowCount: number | null;
+    /** `<spark database>.<table>` — the name to query it by in a notebook. */
+    sparkTable?: string;
+  }) => void;
 }
 
 const FORMAT_LABELS: Record<LoadFormat, string> = {
@@ -158,8 +162,15 @@ export function LoadToTableWizard(props: LoadToTableWizardProps) {
       const j = ct.includes('application/json')
         ? await r.json()
         : { ok: false, error: `HTTP ${r.status}: ${(await r.text()).slice(0, 200)}` };
-      if (!j.ok) { setSubmitError(j.error || `HTTP ${r.status}`); setSubmitting(false); return; }
-      props.onJobSubmitted?.({ jobId: j.job.id, tableName, rowCount: j.job.rowCount ?? null });
+      if (!j.ok) {
+        setSubmitError([j.error || `HTTP ${r.status}`, j.remediation].filter(Boolean).join(' '));
+        setSubmitting(false);
+        return;
+      }
+      props.onJobSubmitted?.({
+        jobId: j.job.id, tableName, rowCount: j.job.rowCount ?? null,
+        ...(typeof j.job.sparkTable === 'string' ? { sparkTable: j.job.sparkTable } : {}),
+      });
       onOpenChange(false);
     } catch (e: any) {
       setSubmitError(e?.message || String(e));
@@ -221,9 +232,9 @@ export function LoadToTableWizard(props: LoadToTableWizardProps) {
                     </MessageBar>
                   )}
                   <Body1>
-                    This creates a managed Delta table under <code>{container}/Tables/</code> by
+                    This creates a managed Delta table under this lakehouse&rsquo;s <code>Tables/</code> folder by
                     running a Spark job. It will appear in the Tables tab and be queryable from a
-                    notebook.
+                    notebook under this lakehouse&rsquo;s own Spark database.
                   </Body1>
                 </>
               )}

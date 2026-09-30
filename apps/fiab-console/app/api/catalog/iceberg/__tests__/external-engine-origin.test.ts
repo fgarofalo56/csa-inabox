@@ -49,11 +49,18 @@ vi.mock('@/lib/auth/item-access', () => ({
     item: { id: 'lh-1', workspaceId: 'ws-1', itemType: 'lakehouse' }, role: 'Viewer', via: 'workspace', canWrite: false,
   }),
 }));
-vi.mock('@/lib/azure/lakehouse-abfss', () => ({
-  resolveLakehouseAbfss: async () => ({
+vi.mock('@/lib/azure/lakehouse-abfss', () => {
+  const bound = {
     abfss: 'abfss://bronze@loomlake.dfs.core.windows.net/lakehouses/Sales--lh-1', container: 'bronze', root: 'lakehouses/Sales--lh-1',
-  }),
-}));
+  };
+  return {
+    resolveLakehouseAbfss: async () => bound,
+    // The item binding resolves through `resolveLakehouseStorage`; the lakehouse
+    // list feeds the earlier container-keyed interop lookup.
+    resolveLakehouseStorage: async () => ({ ok: true, bound }),
+    listLakehouseRootFacts: async () => [],
+  };
+});
 vi.mock('@/lib/azure/iceberg-catalog-client', async (orig) => ({
   ...(await orig<any>()),
   listNamespacesResolved: async () => [],

@@ -262,7 +262,8 @@ export function LakehouseEditor({ item, id }: Props) {
   const perms = useLakehousePermissions({ activeContainer, confirm });
   const settings_ = useLakehouseSettings({ lakehouseId: isNewItem ? null : id, schemasEnabled, setSchemasEnabled, setActionStatus });
   const sec = useLakehouseSecondary({
-    id, isNewItem, activeContainer, shortcutLakehouseId: activeContainer || id,
+    // Schemas and shortcuts belong to the lakehouse ITEM; an unsaved item has none.
+    id, isNewItem, activeContainer, shortcutLakehouseId: isNewItem ? '' : id,
     schemasEnabled, setSchemasEnabled, loadPaths, confirm, itemQ, maintainTable, tab,
     tablesPrefix,
   });
@@ -275,7 +276,7 @@ export function LakehouseEditor({ item, id }: Props) {
 
   // ── Derived values (need hook results) ───────────────────────────────────
   const isReferenceLakehouse = (itemQ.data?.state as any)?.isReference === true;
-  const shortcutLakehouseId = activeContainer || id;
+  const shortcutLakehouseId = isNewItem ? '' : id;
   const lakehouseName: string =
     (itemQ.data?.displayName) || (settings_.settings.displayName) || activeContainer || id;
   const maintainColumns = useMemo(() => {
@@ -1151,6 +1152,7 @@ export function LakehouseEditor({ item, id }: Props) {
               lakehouseId={id}
               container={activeContainer || ''}
               tableName={maintainTable}
+              tablesPrefix={tablesPrefix}
               columns={maintainColumns}
             />
             <TierDialog
@@ -1169,13 +1171,13 @@ export function LakehouseEditor({ item, id }: Props) {
                 lakehouseId={id}
                 container={activeContainer || ''}
                 path={lttEntry.name}
-                onJobSubmitted={({ jobId, tableName }) => {
+                onJobSubmitted={({ jobId, tableName, sparkTable }) => {
                   const sessId = jobId.split('.')[0];
                   if (activeContainer) recordLoadToTable({ lakehouseName, container: activeContainer, tableName });
                   dispatchToast(
                     <Toast>
                       <ToastTitle action={<Link href="/monitor">View in Monitor</Link>}>
-                        Load to table started · job {sessId} — table &ldquo;{tableName}&rdquo;
+                        Load to table started · job {sessId} — table &ldquo;{sparkTable || tableName}&rdquo;
                       </ToastTitle>
                     </Toast>,
                     { intent: 'success' },

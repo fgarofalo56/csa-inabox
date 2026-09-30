@@ -15,6 +15,11 @@
  *
  * Refusals read the CALL ROW SET of `executeStatement` / Cosmos `upsert`, and
  * each is paired with a positive arm on the same fixture.
+ *
+ * Earlier settings: the `lakehouse-<container>` doc is read only when no other
+ * item records the container (`listLakehouseRootFacts` decides that here),
+ * from the caller's partition and then the workspace owner's. The Cosmos
+ * `item(id, partition)` call rows are the witness.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -22,7 +27,7 @@ vi.mock('@/lib/auth/session', () => ({ getSession: vi.fn() }));
 
 const upsert = vi.fn();
 const itemRead = vi.fn();
-const itemFn = vi.fn((id: string, _pk: string) => ({ read: () => itemRead(id) }));
+const itemFn = vi.fn((id: string, pk: string) => ({ read: () => itemRead(id, pk) }));
 vi.mock('@/lib/azure/cosmos-client', () => ({
   tenantSettingsContainer: vi.fn(async () => ({
     item: itemFn,
@@ -53,12 +58,17 @@ vi.mock('@/lib/azure/lakehouse-abfss', async () => {
   };
 });
 vi.mock('@/lib/auth/item-access', () => ({ resolveItemAccessByOid: vi.fn() }));
+vi.mock('@/lib/auth/workspace-access', async () => {
+  const actual: any = await vi.importActual('@/lib/auth/workspace-access');
+  return { ...actual, readWorkspaceById: vi.fn() };
+});
 
 import { GET, PUT } from '../settings/route';
 import { LAKEHOUSE_IDENT_RE } from '../_lib/identifiers';
 import { getSession } from '@/lib/auth/session';
-import { resolveLakehouseAbfss } from '@/lib/azure/lakehouse-abfss';
+import { listLakehouseRootFacts, resolveLakehouseAbfss } from '@/lib/azure/lakehouse-abfss';
 import { resolveItemAccessByOid } from '@/lib/auth/item-access';
+import { readWorkspaceById } from '@/lib/auth/workspace-access';
 
 const sess = { claims: { oid: 'tenant-1', upn: 'u@x' } };
 function getReq(qs: string) { return { nextUrl: new URL(`http://x/api/lakehouse/settings?${qs}`) } as any; }
@@ -86,6 +96,8 @@ beforeEach(() => {
   databricksConfigGate.mockReturnValue(null);
   listWarehouses.mockResolvedValue([{ id: 'wh-1', state: 'RUNNING' }]);
   executeStatement.mockResolvedValue({ rows: [] });
+  (listLakehouseRootFacts as any).mockResolvedValue([]);
+  (readWorkspaceById as any).mockResolvedValue({ id: 'ws-1', tenantId: 'tenant-1' });
 });
 
 describe('PUT /api/lakehouse/settings — Expose as Iceberg', () => {
@@ -210,17 +222,19 @@ describe('PUT /api/lakehouse/settings — liquid clustering', () => {
 });
 
 describe('/api/lakehouse/settings — item scope', () => {
-  it('PUT requires lakehouseId (400; nothing saved or run)', async () => {
+  it('PUT requires lakehouseId (400 bad_request; nothing saved or run)', async () => {
     const res = await PUT(putReq({ container: CONTAINER, icebergExpose: { enabled: true, tableName: 'orders' } }));
-    expect(res.status).toBe(400);
+    const j = await res.json();
+    expect([res.status, j.code, typeof j.remediation]).toEqual([400, 'bad_request', 'string']);
     expect(upsert).not.toHaveBeenCalled();
     expect(executeStatement).not.toHaveBeenCalled();
     expect(resolveItemAccessByOid).not.toHaveBeenCalled();
   });
 
-  it('GET requires lakehouseId (400; nothing read)', async () => {
+  it('GET requires lakehouseId (400 bad_request; nothing read)', async () => {
     const res = await GET(getReq(`container=${CONTAINER}`));
-    expect(res.status).toBe(400);
+    const j = await res.json();
+    expect([res.status, j.code, typeof j.remediation]).toEqual([400, 'bad_request', 'string']);
     expect(itemFn).not.toHaveBeenCalled();
   });
 
@@ -228,8 +242,8 @@ describe('/api/lakehouse/settings — item scope', () => {
     (resolveItemAccessByOid as any).mockResolvedValue(null);
     const put = await PUT(putReq({ lakehouseId: LH, icebergExpose: { enabled: true, tableName: 'orders' } }));
     const get = await GET(getReq(`lakehouseId=${LH}`));
-    expect(put.status).toBe(404);
-    expect(get.status).toBe(404);
+    expect([put.status, (await put.json()).code]).toEqual([404, 'item_not_found']);
+    expect([get.status, (await get.json()).code]).toEqual([404, 'item_not_found']);
     expect(upsert).not.toHaveBeenCalled();
     expect(executeStatement).not.toHaveBeenCalled();
     expect(itemFn).not.toHaveBeenCalled();
@@ -238,7 +252,8 @@ describe('/api/lakehouse/settings — item scope', () => {
   it('PUT requires edit rights (403 for a read-only role); GET still reads', async () => {
     (resolveItemAccessByOid as any).mockResolvedValue(access(false));
     const put = await PUT(putReq({ lakehouseId: LH, icebergExpose: { enabled: true, tableName: 'orders' } }));
-    expect(put.status).toBe(403);
+    const pj = await put.json();
+    expect([put.status, pj.code, typeof pj.remediation]).toEqual([403, 'read_only', 'string']);
     expect(upsert).not.toHaveBeenCalled();
     expect(executeStatement).not.toHaveBeenCalled();
     // Positive arm: the same read-only role can read the settings.
@@ -246,10 +261,10 @@ describe('/api/lakehouse/settings — item scope', () => {
     expect(get.status).toBe(200);
   });
 
-  it('409 when the item has no storage binding; nothing saved', async () => {
+  it('409 no_storage_binding when the item has no storage binding; nothing saved', async () => {
     (resolveLakehouseAbfss as any).mockResolvedValue(null);
     const res = await PUT(putReq({ lakehouseId: LH }));
-    expect(res.status).toBe(409);
+    expect([res.status, (await res.json()).code]).toEqual([409, 'no_storage_binding']);
     expect(upsert).not.toHaveBeenCalled();
   });
 });
@@ -263,9 +278,10 @@ describe('/api/lakehouse/settings — identifier validation', () => {
     for (const n of ['orders', '_t1', 'dbo', 'player_id', ''.padEnd(128, 'a')]) expect(LAKEHOUSE_IDENT_RE.test(n)).toBe(true);
   });
 
-  it.each(badNames)('400 for icebergExpose.tableName %j; nothing saved or run', async (name) => {
+  it.each(badNames)('400 bad_request for icebergExpose.tableName %j; nothing saved or run', async (name) => {
     const res = await PUT(putReq({ lakehouseId: LH, icebergExpose: { enabled: true, tableName: name } }));
-    expect(res.status).toBe(400);
+    const j = await res.json();
+    expect([res.status, j.code, typeof j.remediation]).toEqual([400, 'bad_request', 'string']);
     expect(upsert).not.toHaveBeenCalled();
     expect(executeStatement).not.toHaveBeenCalled();
   });
@@ -282,9 +298,9 @@ describe('/api/lakehouse/settings — identifier validation', () => {
     expect(executeStatement).not.toHaveBeenCalled();
   });
 
-  it.each(['a`', 'a) DROP', 'a.b', '1a'])('400 for a clustering column %j', async (col) => {
+  it.each(['a`', 'a) DROP', 'a.b', '1a'])('400 bad_request for a clustering column %j', async (col) => {
     const res = await PUT(putReq({ lakehouseId: LH, liquidClustering: { tableName: 'events', columns: ['ok_col', col] } }));
-    expect(res.status).toBe(400);
+    expect([res.status, (await res.json()).code]).toEqual([400, 'bad_request']);
     expect(upsert).not.toHaveBeenCalled();
     expect(executeStatement).not.toHaveBeenCalled();
   });
@@ -322,6 +338,48 @@ describe('GET /api/lakehouse/settings — Iceberg endpoint surfaced on load', ()
     const fromItem = await (await GET(getReq(`lakehouseId=${LH}`))).json();
     // Breaks if the read order is swapped.
     expect(fromItem.settings.displayName).toBe('item');
+  });
+
+  it('a member sees the container-keyed settings the workspace owner saved', async () => {
+    (readWorkspaceById as any).mockResolvedValue({ id: 'ws-1', tenantId: 'owner-1' });
+    const ownerDoc = { id: `lakehouse-${CONTAINER}`, tenantId: 'owner-1', container: CONTAINER, displayName: 'owner' };
+    itemRead.mockImplementation(async (id: string, pk: string) => {
+      if (id === `lakehouse-${CONTAINER}` && pk === 'owner-1') return { resource: ownerDoc };
+      throw { code: 404 };
+    });
+    const j = await (await GET(getReq(`lakehouseId=${LH}`))).json();
+    // Breaks if the owner's partition is not read: displayName would be undefined.
+    expect(j.settings.displayName).toBe('owner');
+    expect(j.settings.id).toBe(`lakehouse-item-${LH}`);
+    // Breaks if the order changes, or the caller's own doc is skipped.
+    expect(itemFn.mock.calls).toEqual([
+      [`lakehouse-item-${LH}`, 'tenant-1'],
+      [`lakehouse-${CONTAINER}`, 'tenant-1'],
+      [`lakehouse-${CONTAINER}`, 'owner-1'],
+    ]);
+  });
+
+  it('reads the owner partition once when the caller is the owner', async () => {
+    await GET(getReq(`lakehouseId=${LH}`));
+    expect(itemFn.mock.calls).toEqual([
+      [`lakehouse-item-${LH}`, 'tenant-1'],
+      [`lakehouse-${CONTAINER}`, 'tenant-1'],
+    ]);
+  });
+
+  it('does not read container-keyed settings when another item records the container', async () => {
+    (listLakehouseRootFacts as any).mockResolvedValue([{ id: 'lh-other', adlsContainer: CONTAINER }]);
+    (readWorkspaceById as any).mockResolvedValue({ id: 'ws-1', tenantId: 'owner-1' });
+    itemRead.mockImplementation(async (id: string) => {
+      if (id === `lakehouse-${CONTAINER}`) return { resource: { id, container: CONTAINER, displayName: 'legacy' } };
+      throw { code: 404 };
+    });
+    const j = await (await GET(getReq(`lakehouseId=${LH}`))).json();
+    // Breaks if the container doc is read without the single-item check.
+    expect(itemFn.mock.calls).toEqual([[`lakehouse-item-${LH}`, 'tenant-1']]);
+    expect(j.settings.displayName).toBeUndefined();
+    // Positive arm: the defaults are still returned.
+    expect(j.settings.timeTravelDays).toBe(7);
   });
 
   it('returns no icebergEndpoint when the persisted table name is not a valid identifier', async () => {

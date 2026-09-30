@@ -30,7 +30,7 @@ import { useQuery } from '@tanstack/react-query';
 import {
   Badge, Button, Caption1, Spinner, Subtitle2, Switch, Tab, TabList, Tooltip,
   Table, TableBody, TableCell, TableHeader, TableHeaderCell, TableRow,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBar, MessageBarActions, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -113,6 +113,10 @@ export function InteropPane() {
   const [engine, setEngine] = useState<ConnectSnippet['id']>('spark');
   const [busyTable, setBusyTable] = useState<string | null>(null);
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
+  // A catalog name held by another table, with the namespace the route offers instead.
+  const [conflict, setConflict] = useState<{
+    table: string; note: string; remediation: string; suggestedNamespace?: string;
+  } | null>(null);
 
   const interopQ = useQuery({
     queryKey: ['lakehouse-interop', lakehouseId],
@@ -143,29 +147,31 @@ export function InteropPane() {
   }, [liveTables, interopQ.data, stateByTable]);
 
   const catalog = interopQ.data?.catalog;
+  const defaultNamespace = interopQ.data?.defaultNamespace || '';
   const snippets = useMemo(() => {
     const sel = selectedTable ? stateByTable.get(selectedTable.toLowerCase()) : null;
     return buildConnectSnippets({
       catalogUri: catalog?.uri || '',
       warehouse: catalog?.warehouse || 'loom',
-      namespace: sel?.namespace || container || 'default',
+      namespace: sel?.namespace || defaultNamespace || 'default',
       table: sel?.icebergTableName || (selectedTable ?? undefined),
       catalogAlias: 'loom',
     });
-  }, [catalog, container, selectedTable, stateByTable]);
+  }, [catalog, defaultNamespace, selectedTable, stateByTable]);
 
   const active = snippets.find((x) => x.id === engine) || snippets[0];
 
-  const toggle = useCallback(async (table: string, next: boolean) => {
+  const toggle = useCallback(async (table: string, next: boolean, namespace?: string) => {
     setBusyTable(table);
     setActionError(null);
+    setConflict(null);
     try {
       const res = await clientFetch('/api/lakehouse/interop', {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ lakehouseId, tableName: table, iceberg: next }),
+        body: JSON.stringify({ lakehouseId, tableName: table, iceberg: next, ...(namespace ? { namespace } : {}) }),
       });
-      const json = (await res.json().catch(() => ({}))) as InteropResponse & { catalogNote?: string };
+      const json = (await res.json().catch(() => ({}))) as InteropResponse;
       if (!res.ok || json?.ok !== true) {
         throw new Error(json?.error || `Could not update interop for ${table} (HTTP ${res.status})`);
       }
@@ -174,7 +180,15 @@ export function InteropPane() {
           ? `Iceberg metadata job submitted for ${table} on pool ${json.pool || 'default'} — the table stays Delta ✓ and becomes Iceberg ✓ once the job completes.`
           : `Iceberg metadata generation disabled for ${table}. Delta readability is unchanged.`,
       );
-      if (json.catalogNote) setActionStatus(json.catalogNote);
+      if (json.catalogNote && json.catalogCode !== 'catalog_name_taken') setActionStatus(json.catalogNote);
+      if (json.catalogCode === 'catalog_name_taken') {
+        setConflict({
+          table,
+          note: json.catalogNote || '',
+          remediation: json.catalogRemediation || '',
+          suggestedNamespace: json.suggestedNamespace,
+        });
+      }
       setSelectedTable(table);
       await interopQ.refetch();
     } catch (e) {
@@ -240,6 +254,27 @@ export function InteropPane() {
             <MessageBarTitle>Lake storage not configured</MessageBarTitle>
             {interopQ.data.accountGate}
           </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {conflict && (
+        <MessageBar intent="warning" layout="multiline">
+          <MessageBarBody>
+            <MessageBarTitle>Catalog name in use</MessageBarTitle>
+            {conflict.note} {conflict.remediation}
+          </MessageBarBody>
+          {conflict.suggestedNamespace && (
+            <MessageBarActions>
+              <Button
+                appearance="primary"
+                size="small"
+                disabled={busyTable === conflict.table}
+                onClick={() => { void toggle(conflict.table, true, conflict.suggestedNamespace); }}
+              >
+                Register as {conflict.suggestedNamespace}.{stateByTable.get(conflict.table.toLowerCase())?.icebergTableName || conflict.table}
+              </Button>
+            </MessageBarActions>
+          )}
         </MessageBar>
       )}
 
@@ -340,7 +375,7 @@ export function InteropPane() {
                       </div>
                     </TableCell>
                     <TableCell>
-                      <span className={s.mono}>{state?.namespace || `${container} (default)`}</span>
+                      <span className={s.mono}>{state?.namespace || (defaultNamespace ? `${defaultNamespace} (default)` : '—')}</span>
                     </TableCell>
                     <TableCell>
                       <Switch

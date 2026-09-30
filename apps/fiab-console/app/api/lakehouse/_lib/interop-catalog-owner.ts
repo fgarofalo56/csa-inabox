@@ -12,9 +12,19 @@ import { trimTrailingSlashes } from '@/lib/util/trim';
 
 export type CatalogEntryOwner = 'absent' | 'ours' | 'other';
 
+/**
+ * `scheme://authority` lower-cased, the path kept as written: storage account
+ * hosts are case-insensitive, ADLS Gen2 paths are not.
+ */
+function canonicalLocation(uri: string): string {
+  const trimmed = trimTrailingSlashes(uri);
+  const m = /^([A-Za-z][A-Za-z0-9+.-]*:\/\/[^/]*)(.*)$/.exec(trimmed);
+  return m ? `${m[1].toLowerCase()}${m[2]}` : trimmed;
+}
+
 function under(location: string, tableRootUri: string): boolean {
-  const root = trimTrailingSlashes(tableRootUri).toLowerCase();
-  const loc = trimTrailingSlashes(location).toLowerCase();
+  const root = canonicalLocation(tableRootUri);
+  const loc = canonicalLocation(location);
   return loc === root || loc.startsWith(`${root}/`);
 }
 

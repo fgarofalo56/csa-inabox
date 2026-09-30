@@ -20,9 +20,14 @@
  * is written under that root's `Tables/` folder (the one the item's Tables tab
  * lists). The storage account comes from the item binding.
  *
+ * Metastore namespace: the table is registered in the item's own default-schema
+ * Spark database (`sparkDatabaseFor(lakehouseId, 'dbo')`, created if needed), so
+ * two lakehouses can each load a table called `sales`. Tables loaded before this
+ * namespace existed stay registered where they were; they are not moved.
+ *
  * Response:
- *   { ok: true, job: { id, state, poolName, tableName, rowCount: number|null, output? } }
- *   { ok: false, error }
+ *   { ok: true, job: { id, state, poolName, tableName, sparkTable, rowCount: number|null, output? } }
+ *   { ok: false, error, code?, remediation? }
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getAccountName } from '@/lib/azure/adls-client';
@@ -36,13 +41,15 @@ import {
   SUPPORTED_LOAD_FORMATS,
   type LoadFormat,
   buildLoadToTablePySpark,
+  loadTargetTableName,
   validateLoadTableName,
   parseLoadRowCount,
 } from '@/lib/azure/load-to-table-codegen';
 import { withSession } from '@/lib/api/route-toolkit';
-import { apiBadRequest, apiConflict, apiForbidden } from '@/lib/api/respond';
 import { scopePathToRoot } from '../_lib/item-scope';
-import { abfssHost, authorizeAndBind } from '../_lib/item-binding';
+import { abfssHost } from '../_lib/item-binding';
+import { authorizeAndBindItem, pathScopeRefusal } from '../_lib/refusal-envelope';
+import { sparkDatabaseFor } from '../_lib/spark-namespace';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -81,14 +88,22 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   if (!tableName) missing.push('tableName');
   if (!poolName) missing.push('poolName');
   if (missing.length) {
-    return NextResponse.json({ ok: false, error: `Missing: ${missing.join(', ')}` }, { status: 400 });
+    return NextResponse.json(
+      { ok: false, error: `Missing: ${missing.join(', ')}`, code: 'bad_request', remediation: 'Fill in the named fields in the wizard and retry.' },
+      { status: 400 },
+    );
   }
 
   const nameErr = validateLoadTableName(tableName!);
-  if (nameErr) return NextResponse.json({ ok: false, error: nameErr }, { status: 400 });
+  if (nameErr) {
+    return NextResponse.json(
+      { ok: false, error: nameErr, code: 'bad_name', remediation: 'Pick a table name that follows the rule in the message.' },
+      { status: 400 },
+    );
+  }
 
   // ---- item scope: edit rights, source inside the item root ---------------
-  const scope = await authorizeAndBind(session, lakehouseId, {
+  const scope = await authorizeAndBindItem(session, lakehouseId, {
     write: true,
     readOnlyMessage:
       'Your role on this lakehouse is read-only, so Loom did not load the table. A workspace '
@@ -96,11 +111,7 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   });
   if (scope instanceof NextResponse) return scope;
   const source = scopePathToRoot(scope.bound, (container || '').trim(), path!, true);
-  if (!source.ok) {
-    if (source.reason === 'invalid') return apiBadRequest(source.message);
-    if (source.reason === 'root-unusable') return apiConflict(source.message);
-    return apiForbidden(source.message);
-  }
+  if (!source.ok) return pathScopeRefusal(source);
 
   const format = resolveFormat(body.format, source.path);
   if (!format) {
@@ -167,6 +178,10 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   }
 
   // ---- build + submit the PySpark job ------------------------------------
+  // The table is registered in this item's own Spark database, derived from
+  // the authorized item id — never from the request.
+  const database = sparkDatabaseFor(lakehouseId, 'dbo');
+  const sparkTable = loadTargetTableName({ tableName: tableName!, database });
   let code: string;
   try {
     code = buildLoadToTablePySpark({
@@ -177,6 +192,7 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
       writeMode,
       format,
       tablesRoot: scope.rootSegments.join('/'),
+      database,
     });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 400 });
@@ -246,6 +262,7 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
       state: finalState,
       poolName,
       tableName,
+      sparkTable,
       writeMode,
       format,
       rowCount,

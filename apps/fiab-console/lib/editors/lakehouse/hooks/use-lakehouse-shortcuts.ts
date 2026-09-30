@@ -193,18 +193,22 @@ export function useLakehouseShortcuts({
     for (const sc of bundleShortcuts) await registerBundleShortcut(sc);
   }, [bundleShortcuts, registerBundleShortcut]);
 
+  // Test and Delete name the open lakehouse item, not the row's registry key: a
+  // row saved before item keys carries the container name there, and the routes
+  // resolve such a row from the item.
   const testShortcut = useCallback(async (row: ShortcutRow) => {
+    if (!shortcutLakehouseId) return;
     setShortcutsBusy(true); setShortcutsError(null);
     try {
       const r = await clientFetch('/api/lakehouse/shortcuts/test', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ lakehouseId: row.lakehouseId, id: row.id }),
+        body: JSON.stringify({ lakehouseId: shortcutLakehouseId, id: row.id }),
       });
       await parseJsonOrError<{ ok: boolean; error?: string }>(r, 'Test shortcut');
       await loadShortcuts();
     } catch (e: any) { setShortcutsError(e?.message || String(e)); }
     finally { setShortcutsBusy(false); }
-  }, [loadShortcuts]);
+  }, [shortcutLakehouseId, loadShortcuts]);
 
   const deleteShortcutRow = useCallback(async (row: ShortcutRow) => {
     const ok = await confirm({
@@ -212,16 +216,16 @@ export function useLakehouseShortcuts({
       body: 'This drops the registry pointer and any external table — it never deletes the underlying source data.',
       danger: true, confirmLabel: 'Delete shortcut',
     });
-    if (!ok) return;
+    if (!ok || !shortcutLakehouseId) return;
     setShortcutsBusy(true); setShortcutsError(null);
     try {
-      const r = await clientFetch(`/api/lakehouse/shortcuts?lakehouseId=${encodeURIComponent(row.lakehouseId)}&id=${encodeURIComponent(row.id)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/lakehouse/shortcuts?lakehouseId=${encodeURIComponent(shortcutLakehouseId)}&id=${encodeURIComponent(row.id)}`, { method: 'DELETE' });
       const j = await parseJsonOrError<{ ok: boolean; error?: string }>(r, 'Delete shortcut');
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       await loadShortcuts();
     } catch (e: any) { setShortcutsError(e?.message || String(e)); }
     finally { setShortcutsBusy(false); }
-  }, [loadShortcuts, confirm]);
+  }, [shortcutLakehouseId, loadShortcuts, confirm]);
 
   const queryShortcut = useCallback((sc: ShortcutRow) => {
     const toBulk = (uri?: string): string | null => {

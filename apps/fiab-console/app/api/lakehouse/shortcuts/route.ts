@@ -7,9 +7,12 @@
  *   DELETE /api/lakehouse/shortcuts?lakehouseId=<id>&id=<id> → drop engine obj + row
  *
  * Item scope: `lakehouseId` is the lakehouse ITEM, authorized through
- * `authorizeLakehouse` (404 when the caller cannot reach it). GET needs read
+ * `authorizeItem` (404 when the caller cannot reach it). GET needs read
  * access; POST and DELETE change the lakehouse and need edit rights. The
- * shortcut registry is keyed by the item id.
+ * shortcut registry is keyed by the item id; rows saved under the earlier
+ * container-name key are listed and deleted through `_lib/shortcut-rows` when
+ * this item is the one lakehouse bound to that container. Every refusal carries
+ * a stable `code` and a `remediation`.
  *
  * Runtime: nodejs, force-dynamic.
  * Design: docs/fiab/design/lakehouse-shortcuts.md.
@@ -18,10 +21,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAccountName } from '@/lib/azure/adls-client';
 import {
-  listShortcuts,
   createShortcut,
   deleteShortcut,
-  getShortcut,
   type ShortcutTargetType,
   type ShortcutKind,
   type ShortcutCredentialRef,
@@ -40,7 +41,8 @@ import {
 import { parseAbfss as parseExternalAbfss, listAdlsWithSas, ShortcutSourceError } from '@/lib/azure/shortcut-client';
 import { getKeyVaultSecret } from '@/lib/azure/shortcut-credentials';
 import { withSession } from '@/lib/api/route-toolkit';
-import { authorizeLakehouse } from '../_lib/item-scope';
+import { authorizeItem } from '../_lib/refusal-envelope';
+import { findShortcutRow, listShortcutsForItem } from '../_lib/shortcut-rows';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -51,6 +53,13 @@ const READ_ONLY_MESSAGE =
 
 const TARGET_TYPES: ShortcutTargetType[] = ['adls', 'internal', 's3', 'gcs', 'dataverse', 'delta_sharing'];
 const KINDS: ShortcutKind[] = ['files', 'tables'];
+
+/** A 400 with the stable `bad_request` code and the step that corrects it. */
+function badRequest(error: string, remediation: string): NextResponse {
+  return NextResponse.json({ ok: false, error, code: 'bad_request', remediation }, { status: 400 });
+}
+
+const REOPEN_REMEDIATION = 'Open the lakehouse from its workspace and retry.';
 
 function isGate(x: unknown): x is EngineGate {
   return !!x && typeof x === 'object' && (x as EngineGate).gated === true;
@@ -64,12 +73,12 @@ function sanitize(e: any): string {
 export const GET = withSession(async (req: NextRequest, { session }) => {
 
   const lakehouseId = req.nextUrl.searchParams.get('lakehouseId')?.trim();
-  if (!lakehouseId) return NextResponse.json({ ok: false, error: 'lakehouseId is required' }, { status: 400 });
+  if (!lakehouseId) return badRequest('lakehouseId is required', REOPEN_REMEDIATION);
 
   try {
-    const access = await authorizeLakehouse(session, lakehouseId);
+    const access = await authorizeItem(session, lakehouseId);
     if (access instanceof NextResponse) return access;
-    const data = await listShortcuts(lakehouseId);
+    const data = await listShortcutsForItem(lakehouseId, access.item.workspaceId);
     return NextResponse.json({ ok: true, data });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: sanitize(e), code: e?.code }, { status: 502 });
@@ -107,19 +116,21 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   const format = body?.format as ('delta' | 'parquet' | 'csv' | 'json' | undefined);
   const credentialRef = body?.credentialRef as ShortcutCredentialRef | undefined;
 
-  if (!lakehouseId) return NextResponse.json({ ok: false, error: 'lakehouseId is required' }, { status: 400 });
-  if (!name) return NextResponse.json({ ok: false, error: 'name is required' }, { status: 400 });
+  if (!lakehouseId) return badRequest('lakehouseId is required', REOPEN_REMEDIATION);
+  if (!name) return badRequest('name is required', 'Enter a name for the shortcut.');
   if (!/^[A-Za-z0-9 _.-]{1,128}$/.test(name)) {
-    return NextResponse.json({ ok: false, error: 'name must be 1-128 chars (letters, digits, space, _ . -)' }, { status: 400 });
+    return badRequest('name must be 1-128 chars (letters, digits, space, _ . -)', 'Rename the shortcut using letters, digits, spaces, _ . or -.');
   }
-  if (!KINDS.includes(kind)) return NextResponse.json({ ok: false, error: `kind must be one of ${KINDS.join(', ')}` }, { status: 400 });
+  if (!KINDS.includes(kind)) {
+    return badRequest(`kind must be one of ${KINDS.join(', ')}`, 'Create the shortcut under Files or Tables.');
+  }
   if (!TARGET_TYPES.includes(targetType)) {
-    return NextResponse.json({ ok: false, error: `targetType must be one of ${TARGET_TYPES.join(', ')}` }, { status: 400 });
+    return badRequest(`targetType must be one of ${TARGET_TYPES.join(', ')}`, 'Pick a source from the New shortcut wizard.');
   }
-  if (!targetUri) return NextResponse.json({ ok: false, error: 'targetUri is required' }, { status: 400 });
+  if (!targetUri) return badRequest('targetUri is required', 'Choose the target location in the New shortcut wizard.');
 
   // Authorize the item before any credential read, probe or engine call.
-  const access = await authorizeLakehouse(session, lakehouseId, { write: true, readOnlyMessage: READ_ONLY_MESSAGE });
+  const access = await authorizeItem(session, lakehouseId, { write: true, readOnlyMessage: READ_ONLY_MESSAGE });
   if (access instanceof NextResponse) return access;
 
   const createdBy = session.claims.upn;
@@ -352,13 +363,17 @@ export const DELETE = withSession(async (req: NextRequest, { session }) => {
   const lakehouseId = req.nextUrl.searchParams.get('lakehouseId')?.trim();
   const id = req.nextUrl.searchParams.get('id')?.trim();
   if (!lakehouseId || !id) {
-    return NextResponse.json({ ok: false, error: 'lakehouseId and id are required' }, { status: 400 });
+    return badRequest('lakehouseId and id are required', 'Refresh the shortcut list and delete the shortcut from it.');
   }
 
   try {
-    const access = await authorizeLakehouse(session, lakehouseId, { write: true, readOnlyMessage: READ_ONLY_MESSAGE });
+    const access = await authorizeItem(session, lakehouseId, { write: true, readOnlyMessage: READ_ONLY_MESSAGE });
     if (access instanceof NextResponse) return access;
-    const existing = await getShortcut(lakehouseId, id);
+    // The row and the registry key it is stored under (the item id, or the
+    // earlier container key for a row saved before item keys).
+    const found = await findShortcutRow(lakehouseId, access.item.workspaceId, id);
+    const key = found?.key ?? lakehouseId;
+    const existing = found?.row ?? null;
     if (existing) {
       // Drop the engine object (external table) — NEVER the underlying bytes.
       await dropShortcutObject({ engine: existing.engine, engineObject: existing.engineObject }).catch(() => {
@@ -368,19 +383,19 @@ export const DELETE = withSession(async (req: NextRequest, { session }) => {
       // credential — drop them too (deterministic names). Best-effort; never
       // deletes source bytes.
       if ((existing.targetType === 's3' || existing.targetType === 'gcs') && existing.engine === 'databricks') {
-        await dropExternalBinding(lakehouseId, existing.name, existing.credentialRef?.storageCredentialName).catch(() => {
+        await dropExternalBinding(key, existing.name, existing.credentialRef?.storageCredentialName).catch(() => {
           /* best-effort */
         });
       }
       // Delta Sharing Tables shortcuts wrote a credential file to a UC Volume —
       // remove it (best-effort). Never touches the shared source data.
       if (existing.targetType === 'delta_sharing' && existing.engine === 'databricks') {
-        await dropDeltaSharingCredential(lakehouseId, existing.name).catch(() => {
+        await dropDeltaSharingCredential(key, existing.name).catch(() => {
           /* best-effort */
         });
       }
     }
-    await deleteShortcut(lakehouseId, id);
+    await deleteShortcut(key, id);
     return NextResponse.json({ ok: true, data: { id } });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: sanitize(e), code: e?.code }, { status: 502 });

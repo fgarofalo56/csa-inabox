@@ -3,7 +3,8 @@
  *
  *   ITEM FORM (`lakehouseId`)  — edit rights on the lakehouse; the file must sit
  *                                strictly below the item's own root.
- *   REPORT FORM (`reportId`)   — edit rights on the report; the file must be
+ *   REPORT FORM (`reportId`)   — edit rights on the report (or the semantic model /
+ *                                paginated report named by `reportItemType`); the file must be
  *                                landing/report-uploads/<reportId>/<file name>.
  *   STORAGE FORM (neither)     — tenant admin only.
  *
@@ -157,6 +158,51 @@ describe('upload — report form (reportId)', () => {
   it('400 for a dot-dot segment', async () => {
     const res = await POST(req({ reportId: REPORT, container: CONTAINER, path: `report-uploads/${REPORT}/../rep-2/a.csv` }));
     expect(res.status).toBe(400);
+    expect(uploads()).toEqual([]);
+  });
+
+  it.each([
+    ['semantic-model', 'sm-1'],
+    ['paginated-report', 'pr-1'],
+  ])('uploads for a %s host after authorizing that item with its own type', async (itemType, id) => {
+    const path = `report-uploads/${id}/a.csv`;
+    const res = await POST(req({ reportId: id, reportItemType: itemType, container: CONTAINER, path }));
+    expect(res.status).toBe(201);
+    expect(uploads()).toEqual([[CONTAINER, path]]);
+    // Breaks if the route ignores reportItemType and looks the id up as a report.
+    expect((resolveItemAccessByOid as any).mock.calls.map((c: any[]) => [c[1], c[2]])).toEqual([[id, itemType]]);
+  });
+
+  it('requires edit rights on a semantic-model host (403 read_only; nothing written)', async () => {
+    (resolveItemAccessByOid as any).mockResolvedValue(access('semantic-model', 'sm-1', false));
+    const res = await POST(req({ reportId: 'sm-1', reportItemType: 'semantic-model', container: CONTAINER, path: 'report-uploads/sm-1/a.csv' }));
+    expect(res.status).toBe(403);
+    const j = await res.json();
+    expect(j.code).toBe('read_only');
+    expect(j.error).toContain('semantic model');
+    expect(uploads()).toEqual([]);
+  });
+
+  it('refuses an item type that does not host the gallery (400; no lookup, nothing written)', async () => {
+    const res = await POST(req({ reportId: 'lh-x', reportItemType: 'lakehouse', container: CONTAINER, path: 'report-uploads/lh-x/a.csv' }));
+    expect(res.status).toBe(400);
+    expect((await res.json()).code).toBe('bad_request');
+    expect(resolveItemAccessByOid).not.toHaveBeenCalled();
+    expect(uploads()).toEqual([]);
+  });
+
+  it.each([
+    ['outside the folder', { path: 'report-uploads/rep-2/a.csv' }, 403, 'outside_upload_folder'],
+    ['a read-only role', { readOnly: true }, 403, 'read_only'],
+    ['no access to the item', { missing: true }, 404, 'item_not_found'],
+  ])('report-form refusal carries code and remediation: %s', async (_label, over: any, status, code) => {
+    if (over.readOnly) (resolveItemAccessByOid as any).mockResolvedValue(access('report', REPORT, false));
+    if (over.missing) (resolveItemAccessByOid as any).mockResolvedValue(null);
+    const res = await POST(req({ reportId: REPORT, container: CONTAINER, path: over.path ?? target }));
+    expect(res.status).toBe(status);
+    const j = await res.json();
+    expect(j.code).toBe(code);
+    expect(typeof j.remediation).toBe('string');
     expect(uploads()).toEqual([]);
   });
 });

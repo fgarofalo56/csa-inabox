@@ -61,25 +61,30 @@ describe('GET /api/lakehouse/references/paths', () => {
     expect(res.status).toBe(200);
     expect(j.paths).toHaveLength(1);
     // Breaks if an empty prefix lists the container top level ('').
-    expect(listed()).toEqual([[CONTAINER, ROOT, undefined]]);
+    expect(listed()).toEqual([[CONTAINER, ROOT, 'acct']]);
     expect((resolveItemAccessByOid as any).mock.calls[0].slice(1)).toEqual([REF, 'lakehouse']);
   });
 
   it('lists a folder inside the referenced item root', async () => {
     await GET(req(`refId=${REF}&container=${CONTAINER}&prefix=${encodeURIComponent(`${ROOT}/Tables`)}`));
-    expect(listed()).toEqual([[CONTAINER, `${ROOT}/Tables`, undefined]]);
+    expect(listed()).toEqual([[CONTAINER, `${ROOT}/Tables`, 'acct']]);
   });
 
-  it('routes a reference with its own storage account to that account', async () => {
-    (resolveItemAccessByOid as any).mockResolvedValue(refAccess({ storageAccount: 'extacct' }));
-    await GET(req(`refId=${REF}&container=${CONTAINER}&prefix=`));
-    expect(listed()).toEqual([[CONTAINER, ROOT, 'extacct']]);
+  it('lists from the storage account of the referenced item binding, not a separate state field', async () => {
+    // The binding host and state.storageAccount differ, so the listing names the account it used.
+    // Breaks if the account is read from item state ('stateacct') or dropped (undefined).
+    (resolveItemAccessByOid as any).mockResolvedValue(refAccess({ storageAccount: 'stateacct' }));
+    (resolveLakehouseAbfss as any).mockResolvedValue({ abfss: `abfss://${CONTAINER}@boundacct.dfs.core.windows.net/${ROOT}`, container: CONTAINER, root: ROOT });
+    const res = await GET(req(`refId=${REF}&container=${CONTAINER}&prefix=`));
+    expect((await res.json()).account).toBe('boundacct');
+    expect(listed()).toEqual([[CONTAINER, ROOT, 'boundacct']]);
   });
 
   it('requires access to the referenced lakehouse item (404; nothing listed)', async () => {
     (resolveItemAccessByOid as any).mockResolvedValue(null);
     const res = await GET(req(`refId=${REF}&container=${CONTAINER}&prefix=`));
     expect(res.status).toBe(404);
+    expect((await res.json()).code).toBe('item_not_found');
     expect(listed()).toEqual([]);
   });
 
@@ -91,12 +96,29 @@ describe('GET /api/lakehouse/references/paths', () => {
   ])('confines the prefix to the referenced item root: %s', async (_label, prefix, status) => {
     const res = await GET(req(`refId=${REF}&container=${CONTAINER}&prefix=${encodeURIComponent(prefix)}`));
     expect(res.status).toBe(status);
+    const j = await res.json();
+    expect(j.code).toBe(status === 400 ? 'bad_request' : 'outside_item_root');
+    expect(typeof j.remediation).toBe('string');
     expect(listed()).toEqual([]);
   });
 
-  it('confines the listing to the referenced item container (403 for another container)', async () => {
+  it('lists nothing for a container the referenced item has no storage in (200, empty, with a note)', async () => {
     const res = await GET(req(`refId=${REF}&container=gold&prefix=`));
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(200);
+    const j = await res.json();
+    // Breaks if another container is listed (a listPaths call on gold) or refused (a 403 turns the tree node into an error).
+    expect(j).toMatchObject({ ok: true, container: 'gold', prefix: '', paths: [] });
+    expect(j.note).toContain(CONTAINER);
+    expect(listed()).toEqual([]);
+    // Positive arm on the same fixture: the bound container is still listed.
+    await GET(req(`refId=${REF}&container=${CONTAINER}&prefix=`));
+    expect(listed()).toEqual([[CONTAINER, ROOT, 'acct']]);
+  });
+
+  it('a prefix in another container is not listed either', async () => {
+    const res = await GET(req(`refId=${REF}&container=gold&prefix=${encodeURIComponent(`${ROOT}/Tables`)}`));
+    expect(res.status).toBe(200);
+    expect((await res.json()).paths).toEqual([]);
     expect(listed()).toEqual([]);
   });
 

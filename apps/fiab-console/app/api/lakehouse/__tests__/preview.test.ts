@@ -68,7 +68,7 @@ beforeEach(() => {
   savedAdmin = process.env.LOOM_TENANT_ADMIN_OID;
   process.env.LOOM_TENANT_ADMIN_OID = ADMIN_OID;
   (getSession as any).mockReturnValue({ claims: { oid: 'oid-member', upn: 'm@x' } });
-  (resolveItemAccessByOid as any).mockImplementation(async (_s: any, id: string) => access(id, id === REF ? { storageAccount: 'extacct' } : {}));
+  (resolveItemAccessByOid as any).mockImplementation(async (_s: any, id: string) => access(id, id === REF ? { storageAccount: 'stateacct' } : {}));
   (resolveLakehouseAbfss as any).mockImplementation(async (id: string) => (id === REF
     ? { abfss: `abfss://${CONTAINER}@extacct.dfs.core.windows.net/${REF_ROOT}`, container: CONTAINER, root: REF_ROOT }
     : { abfss: `abfss://${CONTAINER}@primary.dfs.core.windows.net/${ROOT}`, container: CONTAINER, root: ROOT }));
@@ -102,6 +102,8 @@ describe('preview — item form', () => {
   ])('confines the path to the item root: %s', async (_label, path, status) => {
     const res = await GET(req(`lakehouseId=${LH}&container=${CONTAINER}&path=${encodeURIComponent(path)}`));
     expect(res.status).toBe(status);
+    // Breaks if the item-form refusal loses its code (scopeItemPath instead of scopeItem).
+    expect((await res.json()).code).toBe(status === 400 ? 'bad_request' : 'outside_item_root');
     expect(queried()).toEqual([]);
   });
 });
@@ -110,8 +112,10 @@ describe('preview — reference form', () => {
   it('previews a file inside the referenced item root, on its own storage account', async () => {
     const res = await GET(req(`refId=${REF}&container=${CONTAINER}&path=${encodeURIComponent(REF_INSIDE)}`));
     expect(res.status).toBe(200);
-    // Breaks if the account is taken from the request or the primary account is used.
+    // The binding host (extacct) and state.storageAccount (stateacct) differ on purpose.
+    // Breaks if the account is taken from the request, from item state, or the primary account is used.
     expect(queried()[0]).toContain(`https://extacct.dfs.core.windows.net/${CONTAINER}/${REF_INSIDE}`);
+    expect(queried()[0]).not.toContain('stateacct');
   });
 
   it('requires access to the referenced lakehouse item (404)', async () => {
@@ -124,6 +128,16 @@ describe('preview — reference form', () => {
   it('confines the path to the referenced item root (403 for the primary root)', async () => {
     const res = await GET(req(`refId=${REF}&container=${CONTAINER}&path=${encodeURIComponent(INSIDE)}`));
     expect(res.status).toBe(403);
+    const j = await res.json();
+    expect(j.code).toBe('outside_item_root');
+    expect(typeof j.remediation).toBe('string');
+    expect(queried()).toEqual([]);
+  });
+
+  it('refuses another container in the reference form (403; preview does not list empty)', async () => {
+    const res = await GET(req(`refId=${REF}&container=gold&path=${encodeURIComponent(REF_INSIDE)}`));
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('outside_item_root');
     expect(queried()).toEqual([]);
   });
 

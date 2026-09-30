@@ -14,8 +14,17 @@
  *       TABLE so the Delta table is readable by Iceberg V2 readers (OneLake
  *       "Iceberg endpoint" parity, Azure-native).
  *
+ * Earlier settings: before settings were keyed by the item, they were saved
+ * as `lakehouse-<container>`. GET reads that doc only when the container is
+ * bound to this lakehouse item alone (`legacyContainerKeyFor`), first from the
+ * caller's own partition and then from the workspace owner's, so members and
+ * viewers of the item see the settings the owner saved. A doc another member
+ * saved under the container key stays in that member's partition.
+ *
+ * Refusals carry a `code` and a `remediation`.
+ *
  * Item scope: the storage container and root come from the item's own binding
- * (`authorizeAndBind`), and every table these statements name sits under
+ * (`authorizeAndBindItem`), and every table these statements name sits under
  * `<root>/Tables/`. Table, schema and column names must match
  * `LAKEHOUSE_IDENT_RE` (400 otherwise) and are quoted with
  * `quoteIdent(..., 'databricks-sql')` where they enter SQL.
@@ -34,10 +43,12 @@ import {
   executeStatement,
 } from '@/lib/azure/databricks-client';
 import { withSession } from '@/lib/api/route-toolkit';
-import { apiBadRequest } from '@/lib/api/respond';
 import { quoteIdent } from '@/lib/sql/quoting';
 import { hostHasSuffix } from '@/lib/util/host-match';
-import { abfssHost, authorizeAndBind } from '../_lib/item-binding';
+import { readWorkspaceById } from '@/lib/auth/workspace-access';
+import { abfssHost } from '../_lib/item-binding';
+import { authorizeAndBindItem } from '../_lib/refusal-envelope';
+import { legacyContainerKeyFor } from '../_lib/legacy-container-key';
 import { IDENT_RULE_TEXT, isLakehouseIdent, lakehouseTableName } from '../_lib/identifiers';
 
 export const runtime = 'nodejs';
@@ -98,6 +109,24 @@ interface LakehouseSettingsDoc {
 function docId(lakehouseId: string) { return `lakehouse-item-${lakehouseId}`; }
 /** The earlier per-container doc id, read as a fallback so saved settings carry over. */
 function legacyDocId(container: string) { return `lakehouse-${container}`; }
+
+const ITEM_REQUIRED = 'lakehouseId is required: settings belong to a lakehouse item.';
+const REOPEN_REMEDIATION = 'Reopen the lakehouse and open Settings from it, so the request names the item.';
+
+function badRequest(error: string, remediation: string): NextResponse {
+  return NextResponse.json({ ok: false, error, code: 'bad_request', remediation }, { status: 400 });
+}
+
+/** The oid of the workspace owner (the workspace doc's partition key), or null when unknown. */
+async function workspaceOwnerOid(workspaceId: string): Promise<string | null> {
+  try {
+    const ws = await readWorkspaceById(workspaceId);
+    const oid = typeof ws?.tenantId === 'string' ? ws.tenantId.trim() : '';
+    return oid || null;
+  } catch {
+    return null;
+  }
+}
 
 type IcebergEndpoint = {
   abfss: string;
@@ -218,26 +247,38 @@ async function pickWarehouse(usePreferredId: boolean) {
 
 export const GET = withSession(async (req: NextRequest, { session }) => {
   const lakehouseId = (req.nextUrl.searchParams.get('lakehouseId') || '').trim();
-  if (!lakehouseId) return apiBadRequest('lakehouseId is required: settings belong to a lakehouse item.');
+  if (!lakehouseId) return badRequest(ITEM_REQUIRED, REOPEN_REMEDIATION);
   const tenantId = session.claims.oid;
 
   try {
-    const scope = await authorizeAndBind(session, lakehouseId);
+    const scope = await authorizeAndBindItem(session, lakehouseId);
     if (scope instanceof NextResponse) return scope;
     const loc: ItemLocation = { ...scope.bound, root: scope.rootSegments.join('/'), host: abfssHost(scope.bound.abfss) };
     const container = loc.container;
 
     const c = await tenantSettingsContainer();
-    const readDoc = async (id: string): Promise<LakehouseSettingsDoc | undefined> => {
+    const readDoc = async (id: string, partition: string): Promise<LakehouseSettingsDoc | undefined> => {
       try {
-        const r = await c.item(id, tenantId).read<LakehouseSettingsDoc>();
+        const r = await c.item(id, partition).read<LakehouseSettingsDoc>();
         return r.resource;
       } catch (e: any) {
         if (e?.code !== 404) throw e;
         return undefined;
       }
     };
-    const resource = (await readDoc(docId(lakehouseId))) || (await readDoc(legacyDocId(container)));
+    let resource = await readDoc(docId(lakehouseId), tenantId);
+    if (!resource) {
+      // Earlier container-keyed settings, only when this item is the one
+      // lakehouse bound to the container.
+      const legacyKey = await legacyContainerKeyFor(lakehouseId, scope.item.workspaceId);
+      if (legacyKey) {
+        resource = await readDoc(legacyDocId(legacyKey), tenantId);
+        if (!resource) {
+          const owner = await workspaceOwnerOid(scope.item.workspaceId);
+          if (owner && owner !== tenantId) resource = await readDoc(legacyDocId(legacyKey), owner);
+        }
+      }
+    }
 
     // If the persisted doc has an Iceberg-expose selection whose names are
     // valid, surface the table path + Iceberg metadata-folder URLs so the
@@ -273,16 +314,18 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
 export const PUT = withSession(async (req: NextRequest, { session }) => {
   const body = await req.json().catch(() => ({}));
   const lakehouseId = typeof body?.lakehouseId === 'string' ? body.lakehouseId.trim() : '';
-  if (!lakehouseId) return apiBadRequest('lakehouseId is required: settings belong to a lakehouse item.');
+  if (!lakehouseId) return badRequest(ITEM_REQUIRED, REOPEN_REMEDIATION);
   const tenantId = session.claims.oid;
 
+  const NAME_REMEDIATION = 'Use a table, schema or column name that starts with a letter or underscore '
+    + 'and has only letters, digits and underscores, then save again.';
   const lcParsed = parseLiquidClustering(body.liquidClustering);
-  if (!lcParsed.ok) return apiBadRequest(lcParsed.error);
+  if (!lcParsed.ok) return badRequest(lcParsed.error, NAME_REMEDIATION);
   const ieParsed = parseIcebergExpose(body.icebergExpose);
-  if (!ieParsed.ok) return apiBadRequest(ieParsed.error);
+  if (!ieParsed.ok) return badRequest(ieParsed.error, NAME_REMEDIATION);
 
   try {
-    const scope = await authorizeAndBind(session, lakehouseId, {
+    const scope = await authorizeAndBindItem(session, lakehouseId, {
       write: true,
       readOnlyMessage:
         'Your role on this lakehouse is read-only, so Loom did not save its settings. A workspace '
