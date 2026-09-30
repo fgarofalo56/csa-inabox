@@ -1,9 +1,15 @@
 /**
- * GET /api/lakehouse/download?container=&path=[&labelId=&labelName=&labelMethod=]
+ * GET /api/lakehouse/download?lakehouseId=&container=&path=[&labelId=&labelName=&labelMethod=]
  *
  * Streams a file's bytes from ADLS Gen2 to the browser with a
  * Content-Disposition: attachment header so the lakehouse explorer's
  * right-click "Download" command works (Fabric lakehouse explorer parity).
+ *
+ * The file is resolved through the lakehouse item (`scopeItemPath` in
+ * `../_lib/item-scope`): `lakehouseId` is authorized (404 when the caller
+ * cannot reach it) and `container` + `path` must lie strictly below that
+ * item's storage root. Without `lakehouseId` only a tenant admin may name a
+ * storage path directly.
  *
  * MIP sensitivity-label stamp (F5):
  *   For supported document types (PDF + Office Open XML) the proxy stamps the
@@ -32,6 +38,7 @@ import { getLabelForAdlsPath, type MipLabelInfo } from '@/lib/azure/purview-mip-
 import { isMipSupportedType, stampMipLabel } from '@/lib/azure/mip-file-inject';
 import { contentDisposition } from '@/lib/api/content-disposition';
 import { withSession } from '@/lib/api/route-toolkit';
+import { scopeItemPath } from '../_lib/item-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -77,14 +84,20 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
   const limited = await enforceRateLimit(session, 'export');
   if (limited) return limited;
 
-  const container = req.nextUrl.searchParams.get('container') || '';
-  const path = req.nextUrl.searchParams.get('path') || '';
-  if (!container || !path) {
-    return NextResponse.json({ ok: false, error: 'container and path are required' }, { status: 400 });
+  const rawContainer = req.nextUrl.searchParams.get('container') || '';
+  const rawPath = req.nextUrl.searchParams.get('path') || '';
+  if (!rawPath) {
+    return NextResponse.json({ ok: false, error: 'path is required' }, { status: 400 });
   }
-  if (!(KNOWN_CONTAINERS as readonly string[]).includes(container)) {
-    return NextResponse.json({ ok: false, error: `unknown container: ${container}` }, { status: 404 });
-  }
+  // The file must lie inside the caller's own lakehouse root (or, with no
+  // lakehouseId, the caller must be a tenant admin). See ../_lib/item-scope.
+  const scoped = await scopeItemPath(
+    session,
+    { lakehouseId: req.nextUrl.searchParams.get('lakehouseId') || '', container: rawContainer, rawPath },
+    { knownContainers: KNOWN_CONTAINERS },
+  );
+  if (scoped instanceof NextResponse) return scoped;
+  const { container, path } = scoped;
 
   try {
     const { body, contentType } = await downloadFile(container, path);

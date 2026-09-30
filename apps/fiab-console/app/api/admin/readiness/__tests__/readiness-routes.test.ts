@@ -45,6 +45,13 @@ vi.mock('@/lib/admin/self-audit', () => ({
   runSelfAudit: (...a: any[]) => runSelfAudit(...a),
 }));
 
+// The lakehouse item read behind the shared-roots check. Default: no rows, so
+// every other case sees a passing check and no Cosmos I/O.
+const listLakehouseRootFacts = vi.fn(async (): Promise<unknown[]> => []);
+vi.mock('@/lib/azure/lakehouse-abfss', () => ({
+  listLakehouseRootFacts: () => listLakehouseRootFacts(),
+}));
+
 describe('GET /api/admin/readiness', () => {
   beforeEach(() => {
     enforceCapability.mockClear();
@@ -114,6 +121,74 @@ describe('GET /api/admin/readiness', () => {
     const j = await fresh.json();
     expect(j.probesRefreshed).toBe(true);
     expect(runSelfAudit.mock.calls.length).toBe(afterWarm + 1);
+  });
+
+  describe('storageChecks: lakehouses sharing a storage root', () => {
+    /** Two older lakehouses named "Sales", no recorded binding: both derive `lakehouses/Sales`. */
+    const OLDER = '2026-09-01T00:00:00.000Z';
+    const SHARED = [
+      { id: 'lh-a', displayName: 'Sales', createdAt: OLDER },
+      { id: 'lh-b', displayName: 'Sales', createdAt: OLDER },
+    ];
+
+    // FAILS IF the route stops returning the check (storageChecks undefined or
+    // empty), if it asks for the count-only form (`includeIds: false`: no
+    // groups), or if the check's title drifts from the constant the
+    // storage resolver's message names (a hand-typed title here would not catch
+    // that, so the expected value is the imported constant).
+    it('reports the shared group WITH item ids, under the title the resolver names', async () => {
+      listLakehouseRootFacts.mockResolvedValueOnce(SHARED);
+      const { LAKEHOUSE_SHARED_ROOTS_CHECK_ID, LAKEHOUSE_SHARED_ROOTS_CHECK_TITLE } =
+        await import('@/lib/admin/env-checks/lakehouse-shared-roots');
+      const { GET } = await import('../route');
+      const j = await (await GET(req())).json();
+      const check = (j.storageChecks as any[]).find((c) => c.id === LAKEHOUSE_SHARED_ROOTS_CHECK_ID);
+      expect(check?.status).toBe('warn');
+      expect(check?.title).toBe(LAKEHOUSE_SHARED_ROOTS_CHECK_TITLE);
+      // The members are listed ONCE, by the groups; the detail is the count.
+      expect(check?.detail).toContain('1 shared storage root(s) across 2 lakehouse(s)');
+      expect(check?.detail).not.toContain('lh-a');
+      expect(check?.inconclusive).toBeUndefined();
+      // The page renders the group from `groups`, with a link per member and
+      // the "Keep root for" action. FAILS IF the route drops the groups (the
+      // panel would have nothing to act on).
+      expect(check?.groups?.[0]?.members?.map((m: any) => [m.id, m.name, m.href])).toEqual([
+        ['lh-a', 'Sales', '/items/lakehouse/lh-a'],
+        ['lh-b', 'Sales', '/items/lakehouse/lh-b'],
+      ]);
+    });
+
+    // The positive half of the arm above: with one lakehouse there is no group,
+    // so the check passes. FAILS IF the route hard-codes a warn.
+    it('passes when no two lakehouses share a root', async () => {
+      listLakehouseRootFacts.mockResolvedValueOnce([SHARED[0]]);
+      const { GET } = await import('../route');
+      const j = await (await GET(req())).json();
+      expect(j.storageChecks.map((c: any) => c.status)).toEqual(['pass']);
+    });
+
+    // FAILS IF a failed item read fails the whole readiness response (status
+    // not 200 / ok not true) or is reported as a pass.
+    it('keeps the report when the item read fails, and marks the check inconclusive', async () => {
+      listLakehouseRootFacts.mockRejectedValueOnce(Object.assign(new Error('read failed'), { code: 503 }));
+      const { GET } = await import('../route');
+      const res = await GET(req());
+      expect(res.status).toBe(200);
+      const j = await res.json();
+      expect(j.ok).toBe(true);
+      expect(j.storageChecks[0]).toMatchObject({ status: 'warn', inconclusive: true });
+    });
+  });
+});
+
+describe('the storage resolver names the registered readiness title', () => {
+  // FAILS IF lakehouseStorageWithheldMessage('root-shared') names any heading
+  // other than the one the readiness check is registered under (the pre-fix
+  // text said "Lakehouse storage roots", which no readiness entry carries).
+  it('root-shared message quotes LAKEHOUSE_SHARED_ROOTS_CHECK_TITLE', async () => {
+    const { LAKEHOUSE_SHARED_ROOTS_CHECK_TITLE } = await import('@/lib/admin/env-checks/lakehouse-shared-roots');
+    const actual = await vi.importActual<typeof import('@/lib/azure/lakehouse-abfss')>('@/lib/azure/lakehouse-abfss');
+    expect(actual.lakehouseStorageWithheldMessage('root-shared')).toContain(`"${LAKEHOUSE_SHARED_ROOTS_CHECK_TITLE}"`);
   });
 });
 
