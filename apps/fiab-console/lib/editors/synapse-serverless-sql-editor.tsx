@@ -109,6 +109,9 @@ const READER_DATABASE = 'master';
 /** Why a control is unavailable to a caller who is not a tenant admin. */
 const ADMIN_ONLY_TEMPLATE = SQL_POOL_ADMIN_ONLY_TEMPLATE;
 
+/** The ribbon entries disabled for a caller who is not a tenant admin, named in the scope note. */
+const ADMIN_ONLY_ENTRIES = ['New view', 'New procedure', 'New function', 'Bytes processed', 'Cost cap'] as const;
+
 const DEFAULT_SQL =
   `-- Synapse Serverless SQL — Azure-native analytics endpoint (no Fabric needed).\n`
   + `SELECT 1 AS smoke, SYSDATETIMEOFFSET() AS server_time, SUSER_NAME() AS upn;`;
@@ -392,16 +395,16 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
       // DDL templates and the sys-catalog cost scripts are refused for a caller
       // who is not a tenant admin, so they are disabled with the reason.
       { label: 'New', actions: [
-        { label: 'New view', onClick: isAdmin ? () => newScript(TEMPLATE_VIEW) : undefined, disabled: !isAdmin, title: isAdmin ? undefined : ADMIN_ONLY_TEMPLATE },
-        { label: 'New procedure', onClick: isAdmin ? () => newScript(TEMPLATE_PROC) : undefined, disabled: !isAdmin, title: isAdmin ? undefined : ADMIN_ONLY_TEMPLATE },
-        { label: 'New function', onClick: isAdmin ? () => newScript(TEMPLATE_FUNC) : undefined, disabled: !isAdmin, title: isAdmin ? undefined : ADMIN_ONLY_TEMPLATE },
+        { label: 'New view', onClick: isAdmin ? () => newScript(TEMPLATE_VIEW) : undefined, disabled: !isAdmin, disabledFocusable: true, title: isAdmin ? undefined : ADMIN_ONLY_TEMPLATE },
+        { label: 'New procedure', onClick: isAdmin ? () => newScript(TEMPLATE_PROC) : undefined, disabled: !isAdmin, disabledFocusable: true, title: isAdmin ? undefined : ADMIN_ONLY_TEMPLATE },
+        { label: 'New function', onClick: isAdmin ? () => newScript(TEMPLATE_FUNC) : undefined, disabled: !isAdmin, disabledFocusable: true, title: isAdmin ? undefined : ADMIN_ONLY_TEMPLATE },
       ]},
       { label: 'Cost', actions: [
-        { label: 'Bytes processed', disabled: !isAdmin, title: isAdmin ? undefined : ADMIN_ONLY_TEMPLATE, onClick: isAdmin ? () => newScript(
+        { label: 'Bytes processed', disabled: !isAdmin, disabledFocusable: true, title: isAdmin ? undefined : ADMIN_ONLY_TEMPLATE, onClick: isAdmin ? () => newScript(
           `-- Serverless bytes-processed cost telemetry.\n`
           + `SELECT type, data_processed_mb FROM sys.dm_external_data_processed;`,
         ) : undefined },
-        { label: 'Cost cap', disabled: !isAdmin, title: isAdmin ? undefined : ADMIN_ONLY_TEMPLATE, onClick: isAdmin ? () => newScript(
+        { label: 'Cost cap', disabled: !isAdmin, disabledFocusable: true, title: isAdmin ? undefined : ADMIN_ONLY_TEMPLATE, onClick: isAdmin ? () => newScript(
           `-- View / set the serverless cost-control (bytes) policy.\n`
           + `SELECT * FROM sys.configurations WHERE name LIKE '%cost%' OR name LIKE '%limit%';\n`
           + `-- Set a daily cap (workspace admin): EXEC sp_set_data_processed_limit @type=N'daily', @limit_TB=1;`,
@@ -440,7 +443,7 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
               detail="Set LOOM_SYNAPSE_WORKSPACE on the Console container app (admin-plane bicep deploys the Synapse workspace + Serverless endpoint). No Microsoft Fabric or Power BI workspace is required — this is the Azure-native default."
             />
           )}
-          <SqlPoolQueryScopeNote />
+          <SqlPoolQueryScopeNote adminOnlyEntries={ADMIN_ONLY_ENTRIES} />
           <div className={s.toolbar}>
             <Badge appearance="filled" color="brand" icon={<Server16Regular />}>Serverless</Badge>
             <div className={s.connect}>

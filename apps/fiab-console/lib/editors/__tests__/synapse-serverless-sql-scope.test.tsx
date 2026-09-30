@@ -27,7 +27,10 @@
  *     admin the picker is enabled and `salesdb` is sent (the positive half).
  *   - the New view / procedure / function and Cost entries: disabled with the
  *     reason for a non-admin, enabled for an admin. Breaks if either side loses
- *     its `isAdmin` condition.
+ *     its `isAdmin` condition. For the non-admin they are `aria-disabled` and
+ *     focusable (breaks if the Ribbon or the editor drops `disabledFocusable`),
+ *     inert when clicked, and named in the visible scope note (breaks if the
+ *     editor stops passing `adminOnlyEntries`).
  */
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -196,12 +199,37 @@ describe('SynapseServerlessSqlEditor — query scope', () => {
     expect(postedQuery(calls).database).toBe('salesdb');
   });
 
-  it('disables the DDL templates and cost scripts for a caller who is not a tenant admin, with the reason', async () => {
+  it('disables the DDL templates and cost scripts for a caller who is not a tenant admin, with the reason, and keeps them focusable', async () => {
     mount(false);
+    const sqlBefore = Array.from(document.querySelectorAll('textarea')).map((t) => t.value);
     for (const label of ADMIN_ONLY_ENTRIES) {
       const btn = await screen.findByRole('button', { name: label }, { timeout: 5000 });
-      expect(btn.hasAttribute('disabled')).toBe(true);
+      // aria-disabled, not native `disabled`: a native-disabled button leaves the
+      // tab order and its reason can only be read by hovering. Breaks if the
+      // Ribbon drops `disabledFocusable` or the editor stops setting it.
+      expect(btn.getAttribute('aria-disabled')).toBe('true');
+      expect(btn.hasAttribute('disabled')).toBe(false);
+      btn.focus();
+      expect(document.activeElement).toBe(btn);
       expect(btn.getAttribute('title') || '').toContain('Tenant admins only');
+      // Still inert: activating it opens no template. The editor passes no
+      // handler for this caller, so this does not pin the Ribbon side;
+      // `lib/components/__tests__/ribbon-disabled-focusable.test.tsx` pins that a
+      // focusable-disabled entry WITH a handler stays inert.
+      fireEvent.click(btn);
+    }
+    expect(Array.from(document.querySelectorAll('textarea')).map((t) => t.value)).toEqual(sqlBefore);
+  });
+
+  it('names those entries in the visible scope note, not only in their tooltips', async () => {
+    mount(false);
+    const named = await screen.findByTestId('sql-pool-admin-only-entries', {}, { timeout: 5000 });
+    // Breaks if the editor stops passing `adminOnlyEntries`, or drops one.
+    for (const label of ADMIN_ONLY_ENTRIES) expect(named.textContent).toContain(label);
+    expect(named.textContent).toContain('tenant admins only');
+    // Every entry the note names is one the ribbon actually disables.
+    for (const label of ADMIN_ONLY_ENTRIES) {
+      expect((await screen.findByRole('button', { name: label })).getAttribute('aria-disabled')).toBe('true');
     }
   });
 
@@ -210,6 +238,7 @@ describe('SynapseServerlessSqlEditor — query scope', () => {
     for (const label of ADMIN_ONLY_ENTRIES) {
       const btn = await screen.findByRole('button', { name: label }, { timeout: 5000 });
       expect(btn.hasAttribute('disabled')).toBe(false);
+      expect(btn.getAttribute('aria-disabled')).not.toBe('true');
       expect(btn.getAttribute('title') || '').not.toContain('Tenant admins only');
     }
   });

@@ -96,6 +96,10 @@ export interface RibbonDropdownItem {
    *  no-vaporware.md). */
   onClick?: () => void;
   disabled?: boolean;
+  /** With `disabled`: the item stays in the tab order (Fluent
+   *  `disabledFocusable`, rendered `aria-disabled`), so a keyboard user can
+   *  reach it and hear its `title`. It still does nothing when activated. */
+  disabledFocusable?: boolean;
   /** Optional tooltip — used to explain why an item is grayed out. */
   title?: string;
   icon?: ReactElement;
@@ -107,6 +111,12 @@ export interface RibbonAction {
    *  disabled with a "not wired" tooltip (honest, per no-vaporware.md). */
   onClick?: () => void;
   disabled?: boolean;
+  /** With `disabled`: the button stays in the tab order (Fluent
+   *  `disabledFocusable`, rendered `aria-disabled` rather than `disabled`), so
+   *  a keyboard user can reach it and hear its `title`, which says why it is
+   *  unavailable. It still does nothing when activated. Ignored when not
+   *  disabled. */
+  disabledFocusable?: boolean;
   /** Leading Fluent icon. */
   icon?: ReactElement;
   /** Optional tooltip — e.g. explains why an action is grayed out. */
@@ -198,7 +208,11 @@ export function Ribbon({ tabs, defaultTabId, commandSearch }: Props) {
             <div className={styles.group}>
               <div className={styles.groupRow}>
                 {g.actions.map((a, ai) => {
-                  const { label, onClick, disabled, dropdownItems, ...rest } = a;
+                  const { label, onClick, disabled, disabledFocusable, dropdownItems, ...rest } = a;
+                  // A disabled action that asked to stay focusable renders
+                  // `aria-disabled` and keeps its tab stop; any other disabled
+                  // action keeps the native `disabled` it always had.
+                  const focusableOff = !!disabled && !!disabledFocusable;
                   // Dropdown action: chevron opens a Fluent Menu. Each menu
                   // item must navigate to a real surface (no toasts / dead
                   // entries). Items with neither onClick nor disabled render
@@ -210,7 +224,8 @@ export function Ribbon({ tabs, defaultTabId, commandSearch }: Props) {
                           <Button
                             appearance="subtle"
                             size="small"
-                            disabled={disabled}
+                            disabled={disabled && !focusableOff}
+                            disabledFocusable={focusableOff}
                             // #3673 (same discard, mirrored): this read
                             //   title={disabled ? rest.title : undefined}
                             // which threw the tooltip away on an ENABLED
@@ -229,12 +244,14 @@ export function Ribbon({ tabs, defaultTabId, commandSearch }: Props) {
                           <MenuList>
                             {dropdownItems.map((mi, di) => {
                               const miDead = !mi.onClick && !mi.disabled;
+                              const miFocusableOff = !!mi.disabled && !!mi.disabledFocusable;
                               return (
                                 <MenuItem
                                   key={di}
                                   icon={mi.icon}
-                                  disabled={mi.disabled || miDead}
-                                  onClick={miDead ? undefined : mi.onClick}
+                                  disabled={(mi.disabled || miDead) && !miFocusableOff}
+                                  disabledFocusable={miFocusableOff}
+                                  onClick={miDead || miFocusableOff ? undefined : mi.onClick}
                                   title={
                                     mi.title ??
                                     (miDead ? `${mi.label} — not wired in this editor` : undefined)
@@ -262,8 +279,9 @@ export function Ribbon({ tabs, defaultTabId, commandSearch }: Props) {
                       key={ai}
                       appearance="subtle"
                       size="small"
-                      onClick={onClick}
-                      disabled={dead || disabled}
+                      onClick={focusableOff ? undefined : onClick}
+                      disabled={(dead || disabled) && !focusableOff}
+                      disabledFocusable={focusableOff}
                       // #3673 — this branch used to read
                       //   title={dead ? `${label} — not wired…` : undefined}
                       // so an action that set `disabled: true` AND supplied a

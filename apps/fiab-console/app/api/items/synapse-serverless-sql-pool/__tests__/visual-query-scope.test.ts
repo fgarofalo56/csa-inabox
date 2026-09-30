@@ -130,6 +130,13 @@ describe('visual query on the serverless SQL pool item', () => {
     expect(ranAnything()).toBe(0);
   });
 
+  it('a tenant admin posting a non-item id (Warp\'s former ambient `synapse-serverless`) is a 404 and nothing runs (breaks if admins or that id skip the item guard)', async () => {
+    admin.isTenantAdmin.mockReturnValue(true);
+    const res = await POST(req({ describe: { table: 'orders' } }), ctx('synapse-serverless-sql-pool', 'synapse-serverless'));
+    expect(res.status).toBe(404);
+    expect(ranAnything()).toBe(0);
+  });
+
   it('a non-admin describe runs in master on the SQL pool editor pool with the prefix; the request database is ignored', async () => {
     const res = await POST(req({ describe: { schema: 'dbo', table: 'orders' }, database: 'salesdb' }), ctx('synapse-serverless-sql-pool'));
     expect(res.status).toBe(200);

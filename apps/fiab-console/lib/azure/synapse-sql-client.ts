@@ -184,29 +184,50 @@ export interface QueryResult {
 const MAX_ROWS = 5_000;
 
 /**
-/**
- * In-process registry of in-flight TDS requests, keyed by a caller-supplied
- * queryId. A separate /cancel route looks the request up and calls
- * `Request.cancel()`, which sends the TDS ATTENTION packet (tedious) to abort
- * the batch on the server. Same-process only — sufficient for Loom's
- * single-instance Container App. On scale-out a cancel may land on a different
- * replica (no entry → found:false); the client shows "Cancel sent" and the
+ * In-process registry of in-flight TDS requests. A separate /cancel route looks
+ * the request up and calls `Request.cancel()`, which sends the TDS ATTENTION
+ * packet (tedious) to abort the batch on the server. Same-process only:
+ * sufficient for Loom's single-instance Container App. On scale-out a cancel may
+ * land on a different replica (no entry, so nothing is cancelled) and the
  * original query completes on its own replica.
+ *
+ * Cancel keys are namespaced and item-scoped for all SQL cancel routes. A
+ * running query is registered under its route family, the caller's oid, the
+ * route item's id and the caller-supplied queryId together (`SqlCancelKey`),
+ * and each route builds the key with its own family literal. So a cancel
+ * reaches only a query the same caller started on the same item through the
+ * same route family. The key is JSON-encoded, so no field can be spelled to
+ * collide with another key. `__tests__/synapse-sql-cancel-registry.test.ts`
+ * drives this registry directly.
  */
+export type SqlCancelFamily = 'serverless-sql-pool' | 'dedicated-sql-pool' | 'warehouse';
+
+export interface SqlCancelKey {
+  family: SqlCancelFamily;
+  oid: string;
+  itemId: string;
+  queryId: string;
+}
+
+function cancelRegistryKey(key: SqlCancelKey): string {
+  return JSON.stringify([key.family, key.oid, key.itemId, key.queryId]);
+}
+
 const activeRequests = new Map<string, sql.Request>();
 
 /**
- * Cancel an in-flight query by its caller-supplied queryId. Sends a TDS
- * ATTENTION packet via mssql `Request.cancel()`. Returns true if a matching
- * in-flight request was found on this process, false otherwise.
+ * Cancel an in-flight query by its full cancel key. Sends a TDS ATTENTION
+ * packet via mssql `Request.cancel()`. Returns true if a request registered
+ * under exactly that key was found on this process, false otherwise.
  */
-export function cancelActiveQuery(queryId: string): boolean {
-  const req = activeRequests.get(queryId);
+export function cancelActiveQuery(key: SqlCancelKey): boolean {
+  const k = cancelRegistryKey(key);
+  const req = activeRequests.get(k);
   if (!req) return false;
   try {
     req.cancel();
   } finally {
-    activeRequests.delete(queryId);
+    activeRequests.delete(k);
   }
   return true;
 }
@@ -233,11 +254,12 @@ function bindParams(req: sql.Request, parameters?: SynapseQueryParam[]): void {
   }
 }
 
-export async function executeQuery(target: SynapseTarget, sqlText: string, timeoutMs = 60_000, parameters?: SynapseQueryParam[], queryId?: string): Promise<QueryResult> {
+export async function executeQuery(target: SynapseTarget, sqlText: string, timeoutMs = 60_000, parameters?: SynapseQueryParam[], cancelKey?: SqlCancelKey): Promise<QueryResult> {
   const started = Date.now();
   const pool = await getPool(target);
   const req = pool.request();
-  if (queryId) activeRequests.set(queryId, req);
+  const registered = cancelKey ? cancelRegistryKey(cancelKey) : undefined;
+  if (registered) activeRequests.set(registered, req);
 
   // Capture TDS info/warning messages (PRINT, RAISERROR with severity ≤ 10).
   // These are how Synapse surfaces non-fatal diagnostics; the editor shows
@@ -279,7 +301,7 @@ export async function executeQuery(target: SynapseTarget, sqlText: string, timeo
       recordsAffected: affected,
     };
   } finally {
-    if (queryId) activeRequests.delete(queryId);
+    if (registered) activeRequests.delete(registered);
   }
 }
 
@@ -374,12 +396,13 @@ export async function executeQueryAsUser(
   userOid: string,
   timeoutMs = 60_000,
   parameters?: SynapseQueryParam[],
-  queryId?: string,
+  cancelKey?: SqlCancelKey,
 ): Promise<QueryResult> {
   const started = Date.now();
   const pool = await getUserPool(target, userSqlToken, userOid);
   const req = pool.request();
-  if (queryId) activeRequests.set(queryId, req);
+  const registered = cancelKey ? cancelRegistryKey(cancelKey) : undefined;
+  if (registered) activeRequests.set(registered, req);
 
   const messages: string[] = [];
   req.on('info', (info: any) => {
@@ -415,7 +438,7 @@ export async function executeQueryAsUser(
       recordsAffected: affected,
     };
   } finally {
-    if (queryId) activeRequests.delete(queryId);
+    if (registered) activeRequests.delete(registered);
   }
 }
 
