@@ -118,6 +118,22 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
     account = scoped.account ?? undefined;
   }
 
+  // The BULK URL below is built from the path as-is, with no per-segment
+  // encoding, and the reader decodes percent sequences. A '%' in a segment could
+  // therefore decode to '/' or '..' after the root check above has passed, so
+  // this route refuses it rather than re-encoding every path. A file whose name
+  // contains '%' can still be downloaded.
+  if (path.includes('%')) {
+    return NextResponse.json(
+      {
+        ok: false,
+        code: 'bad_request',
+        error: "Preview can't read a path that contains '%'. Download the file instead, or rename it without '%'.",
+      },
+      { status: 400 },
+    );
+  }
+
   const fmt = detectFormat(path, explicit);
   const bulkPath = normalizeBulkPath(path, fmt);
   const url = account ? pathToHttpsUrlFor(account, container, bulkPath) : pathToHttpsUrl(container, bulkPath);
