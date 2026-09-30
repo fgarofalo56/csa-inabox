@@ -2539,7 +2539,7 @@ silently downgrading the route.
 
 ## Backend signals (derived)
 
-460 module(s) ORIGINATE a backend label — the derivation read an
+459 module(s) ORIGINATE a backend label — the derivation read an
 Azure identifier out of them. Every other route/module below inherits through the
 call graph. Nothing in this section is a Loom module name someone typed: the
 modules are derived, and only the Microsoft-owned identifier vocabulary is seeded.
@@ -2851,7 +2851,6 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/app/api/items/stream-analytics-job/[name]/test/route.ts` | Stream Analytics |
 | `apps/fiab-console/app/api/items/user-data-function/[id]/invoke/route.ts` | Fabric |
 | `apps/fiab-console/app/api/lakehouse/_lib/container-role-assignment.ts` | Azure RBAC |
-| `apps/fiab-console/app/api/lakehouse/table-stats/route.ts` | ADLS |
 | `apps/fiab-console/app/api/lakehouse/upload/route.ts` | ADLS |
 | `apps/fiab-console/app/api/landing-zones/[id]/attach/preflight/route.ts` | Resource Graph |
 | `apps/fiab-console/app/api/landing-zones/[id]/attach/route.ts` | Resource Graph |
