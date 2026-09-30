@@ -122,8 +122,11 @@ jobs:
       - name: loom-unity diagnostics (replica state + recent logs)
         run: |
           set -euo pipefail
-          # READ-ONLY. Every call below is a `show` / `list` / `query`; nothing
-          # here creates, updates, restarts or deletes anything.
+          # READ-ONLY with respect to Azure resource configuration: every call
+          # below is a `show` / `list` / `query`. Side effects that remain:
+          # `logs show` requests a log-stream token (a POST) and may send one
+          # HTTP request to the app, and `az extension add` changes only this
+          # runner.
           #
           # The earlier form of this step inspected only the ACTIVE revision. In
           # Single revision mode a revision that fails to provision never becomes
@@ -180,8 +183,6 @@ jobs:
           az containerapp env storage list -n "$CAE_NAME" -g "$RG" -o table 2>/dev/null || true
           echo "--- app volume config ---"
           az containerapp show -n loom-unity -g "$RG" --query "properties.template.{volumes:volumes,mounts:containers[0].volumeMounts,image:containers[0].image}" -o json || true
-          echo "--- system log stream (kind system) ---"
-          az containerapp logs show -n loom-unity -g "$RG" --type system --tail 40 --format text 2>/dev/null | tail -40 || true
           echo "--- current image + env on the RUNNING revision ---"
           LR=$(az containerapp show -n loom-unity -g "$RG" --query properties.latestRevisionName -o tsv | tr -d '\r')
           az containerapp revision show -n loom-unity -g "$RG" --revision "$LR" \
@@ -207,14 +208,19 @@ jobs:
             echo "=== newest revision $TARGET: replicas ==="
             diag "replica list $TARGET" az containerapp replica list -n loom-unity -g "$RG" --revision "$TARGET" \
               --query "[].{name:name,created:properties.createdTime,state:properties.runningState,details:properties.runningStateDetails,containers:properties.containers[].{n:name,ready:ready,started:started,restarts:restartCount,state:runningState,details:runningStateDetails}}" -o json
-            echo "=== newest revision $TARGET: system log stream ==="
-            # `timeout` bounds a stream that never closes (exit 124 is reported).
-            diag "logs show --type system $TARGET" timeout 120 az containerapp logs show -n loom-unity -g "$RG" --revision "$TARGET" --type system --tail 100 --format text
             echo "=== newest revision $TARGET: console log stream ==="
+            # `timeout` bounds a stream that never closes (exit 124 is reported).
+            # A revision with no replica fails here with "Could not find a
+            # replica", which `diag` prints.
             diag "logs show --type console $TARGET" timeout 120 az containerapp logs show -n loom-unity -g "$RG" --revision "$TARGET" --type console --tail 100 --format text
           else
             echo "::warning::could not resolve any loom-unity revision name, so the per-revision sections did not run (see the warnings above for why)."
           fi
+          echo "=== system log stream (APP-level: every revision, not one) ==="
+          # az rejects --revision / --replica / --container (and --format) with
+          # --type system, so this stream cannot be narrowed to one revision.
+          # The per-revision system records are in the Log Analytics section.
+          diag "logs show --type system" timeout 120 az containerapp logs show -n loom-unity -g "$RG" --type system --tail 100
 
           echo "=== registry pull identity: roles it holds on its registry ==="
           # A revision whose registry identity cannot pull never starts, and the
@@ -229,13 +235,22 @@ jobs:
             REG_ACR_ID=$(val az acr list --query "[?loginServer=='$REG_SERVER'].id | [0]" -o tsv)
             REG_PRINCIPAL=""
             case "${REG_IDENT:-}" in
-              /subscriptions/*|/SUBSCRIPTIONS/*) REG_PRINCIPAL=$(val az identity show --ids "$REG_IDENT" --query principalId -o tsv) ;;
+              /subscriptions/*|/SUBSCRIPTIONS/*)
+                REG_KIND="user-assigned"
+                REG_PRINCIPAL=$(val az identity show --ids "$REG_IDENT" --query principalId -o tsv) ;;
+              "") REG_KIND="none (username/password or anonymous pull)" ;;
+              *) REG_KIND="${REG_IDENT} (not a user-assigned identity; role check not implemented for it)" ;;
             esac
-            echo "registry=$REG_SERVER identity=${REG_IDENT##*/} principalId=${REG_PRINCIPAL:-<unresolved>} acr=${REG_ACR_ID##*/}"
+            echo "registry=$REG_SERVER identityKind=$REG_KIND identity=${REG_IDENT##*/} principalId=${REG_PRINCIPAL:-<unresolved>} acr=${REG_ACR_ID##*/}"
             if [ -n "$REG_ACR_ID" ] && [ -n "$REG_PRINCIPAL" ]; then
-              diag "role assignment list" az role assignment list --scope "$REG_ACR_ID" --include-inherited \
+              REG_ROLES=$(val az role assignment list --scope "$REG_ACR_ID" --include-inherited \
                 --fill-principal-name false \
-                --query "[?principalId=='$REG_PRINCIPAL'].{role:roleDefinitionName,scope:scope}" -o table
+                --query "[?principalId=='$REG_PRINCIPAL'].[roleDefinitionName, scope]" -o tsv)
+              if [ -n "$REG_ROLES" ]; then
+                printf '%s\n' "$REG_ROLES" | sed 's/^/  role| /'
+              else
+                echo "  0 role assignments visible for this principal at or above the registry. Group-inherited assignments and assignments the deploy principal cannot read are not shown, so this does NOT prove AcrPull is absent."
+              fi
             else
               echo "  (registry id or principal id unresolved — role check not run)"
             fi
@@ -244,8 +259,10 @@ jobs:
           echo "=== activity log: FAILED operations on loom-unity, last 7 days ==="
           APP_ID=$(val az containerapp show -n loom-unity -g "$RG" --query id -o tsv)
           if [ -n "$APP_ID" ]; then
-            diag "activity-log list" az monitor activity-log list --resource-id "$APP_ID" --offset 7d --status Failed \
-              --query "[].{time:eventTimestamp,operation:operationName.value,status:status.value,subStatus:subStatus.value,message:properties.statusMessage}" -o json
+            # Filtered client-side: whether the service honours a status term in
+            # the activity-log $filter is not documented.
+            diag "activity-log list" az monitor activity-log list --resource-id "$APP_ID" --offset 7d --max-events 200 \
+              --query "[?status.value=='Failed'].{time:eventTimestamp,operation:operationName.value,status:status.value,subStatus:subStatus.value,message:properties.statusMessage}" -o json
           fi
 
           echo "=== Log Analytics: the workspace the environment ACTUALLY logs to ==="
@@ -279,22 +296,44 @@ jobs:
           echo "LAW=${LAW:-<unresolved>}"
           if [ -n "$LAW" ]; then
             diag "extension add log-analytics" az extension add -n log-analytics -y --only-show-errors
-            # Every loom-unity record from a revision OTHER than the one serving
-            # traffic, last 7 days — so a failed revision is shown even when it
-            # has since been removed from the revision list.
+            # la_q LABEL TABLE APPCOL WHERE WINDOW LINE_EXPR
+            # Prints the matched-row count, then the NEWEST 150 rows (shown
+            # oldest-first) as one `line` column: `-o tsv` sorts dict keys, so a
+            # multi-column projection would come out in a different order.
+            la_q() {
+              la_base="$2 | where TimeGenerated > ago($5) | where $3 == 'loom-unity' | where $4"
+              echo "--- $1 ---"
+              la_n=$(val az monitor log-analytics query -w "$LAW" -o tsv --query "[0].Count" --analytics-query "$la_base | count")
+              echo "rows matched: ${la_n:-<query failed, see warning above>}"
+              if [ -n "$la_n" ] && [ "$la_n" != "0" ]; then
+                diag "LA rows $1" az monitor log-analytics query -w "$LAW" -o tsv --query "[].line" --analytics-query \
+                  "$la_base | top 150 by TimeGenerated desc | order by TimeGenerated asc | project line=$6"
+              fi
+            }
+            # Custom-table columns beyond the documented ones are read through
+            # column_ifexists, so a workspace without them still answers.
+            CL_SYS="strcat(format_datetime(TimeGenerated,'yyyy-MM-dd HH:mm:ss'),' ',RevisionName_s,' ',column_ifexists('ReplicaName_s',''),' ',column_ifexists('Reason_s',''),' ',Log_s)"
+            RS_SYS="strcat(format_datetime(TimeGenerated,'yyyy-MM-dd HH:mm:ss'),' ',RevisionName,' ',ReplicaName,' ',Reason,' ',Log)"
+            CL_CON="strcat(format_datetime(TimeGenerated,'yyyy-MM-dd HH:mm:ss'),' ',RevisionName_s,' ',column_ifexists('ReplicaName_s',''),' ',Log_s)"
+            RS_CON="strcat(format_datetime(TimeGenerated,'yyyy-MM-dd HH:mm:ss'),' ',RevisionName,' ',ReplicaName,' ',Log)"
             SERVING="${LREADY:-}"
-            echo "--- ContainerAppSystemLogs_CL (custom table) ---"
-            diag "LA query ContainerAppSystemLogs_CL" az monitor log-analytics query -w "$LAW" -o tsv --analytics-query \
-              "ContainerAppSystemLogs_CL | where TimeGenerated > ago(7d) | where ContainerAppName_s == 'loom-unity' | where RevisionName_s != '$SERVING' | order by TimeGenerated asc | project TimeGenerated, RevisionName_s, ReplicaName_s, Reason_s, Log_s | take 150"
-            echo "--- ContainerAppSystemLogs (resource-specific table) ---"
-            diag "LA query ContainerAppSystemLogs" az monitor log-analytics query -w "$LAW" -o tsv --analytics-query \
-              "ContainerAppSystemLogs | where TimeGenerated > ago(7d) | where ContainerAppName == 'loom-unity' | where RevisionName != '$SERVING' | order by TimeGenerated asc | project TimeGenerated, RevisionName, ReplicaName, Reason, Log | take 150"
-            echo "--- ContainerAppConsoleLogs_CL (custom table) ---"
-            diag "LA query ContainerAppConsoleLogs_CL" az monitor log-analytics query -w "$LAW" -o tsv --analytics-query \
-              "ContainerAppConsoleLogs_CL | where TimeGenerated > ago(7d) | where ContainerAppName_s == 'loom-unity' | where RevisionName_s != '$SERVING' | order by TimeGenerated asc | project TimeGenerated, RevisionName_s, Log_s | take 150"
-            echo "--- ContainerAppConsoleLogs (resource-specific table) ---"
-            diag "LA query ContainerAppConsoleLogs" az monitor log-analytics query -w "$LAW" -o tsv --analytics-query \
-              "ContainerAppConsoleLogs | where TimeGenerated > ago(7d) | where ContainerAppName == 'loom-unity' | where RevisionName != '$SERVING' | order by TimeGenerated asc | project TimeGenerated, RevisionName, Log | take 150"
+            if [ -n "$SERVING" ]; then
+              echo "filter: A) revisions other than the serving one ($SERVING), 7 days; B) the serving revision, 1 hour"
+              OTHER_CL="RevisionName_s != '$SERVING'"; OTHER_RS="RevisionName != '$SERVING'"
+            else
+              echo "filter: serving revision UNRESOLVED, so A) covers every revision, 7 days, and B) is skipped"
+              OTHER_CL="isnotempty(RevisionName_s)"; OTHER_RS="isnotempty(RevisionName)"
+            fi
+            la_q "A system, custom table ContainerAppSystemLogs_CL" ContainerAppSystemLogs_CL ContainerAppName_s "$OTHER_CL" 7d "$CL_SYS"
+            la_q "A system, resource-specific ContainerAppSystemLogs" ContainerAppSystemLogs ContainerAppName "$OTHER_RS" 7d "$RS_SYS"
+            la_q "A console, custom table ContainerAppConsoleLogs_CL" ContainerAppConsoleLogs_CL ContainerAppName_s "$OTHER_CL" 7d "$CL_CON"
+            la_q "A console, resource-specific ContainerAppConsoleLogs" ContainerAppConsoleLogs ContainerAppName "$OTHER_RS" 7d "$RS_CON"
+            if [ -n "$SERVING" ]; then
+              la_q "B system, custom table, serving revision" ContainerAppSystemLogs_CL ContainerAppName_s "RevisionName_s == '$SERVING'" 1h "$CL_SYS"
+              la_q "B system, resource-specific, serving revision" ContainerAppSystemLogs ContainerAppName "RevisionName == '$SERVING'" 1h "$RS_SYS"
+              la_q "B console, custom table, serving revision" ContainerAppConsoleLogs_CL ContainerAppName_s "RevisionName_s == '$SERVING'" 1h "$CL_CON"
+              la_q "B console, resource-specific, serving revision" ContainerAppConsoleLogs ContainerAppName "RevisionName == '$SERVING'" 1h "$RS_CON"
+            fi
           fi
 
       - name: Front Door WAF — recent blocks (operator browser 'request is blocked')
