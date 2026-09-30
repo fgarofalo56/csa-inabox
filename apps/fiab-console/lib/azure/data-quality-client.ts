@@ -29,6 +29,7 @@ import {
   databricksConfigGate,
   type DbxQueryParam,
 } from './databricks-client';
+import { resolveWarehouseIdOrThrow } from './databricks-sql-warehouse';
 import {
   executeQuery as synapseExecuteQuery,
   serverlessTarget,
@@ -604,7 +605,7 @@ export interface DqRunOptions {
   backend: DqRunBackend;
   /** Kusto database OR Synapse SQL database (serverless 'master' default). */
   database?: string;
-  /** Databricks SQL Warehouse id (defaults to LOOM_DATABRICKS_SQL_WAREHOUSE_ID). */
+  /** Databricks SQL Warehouse id (defaults to the platform warehouse — env pin, else the Console-produced `loom-default`). */
   warehouseId?: string;
   /** Three-part-name catalog (Databricks Unity Catalog / Synapse). */
   catalog?: string;
@@ -626,12 +627,9 @@ export interface DqRunResult extends DqScoreResult {
 export function dqRunConfigGate(backend: DqRunBackend): { missing: string } | null {
   if (backend === 'kusto') return kustoConfigGate();
   if (backend === 'databricks') {
-    const g = databricksConfigGate();
-    if (g) return g;
-    if (!process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID) {
-      return { missing: 'LOOM_DATABRICKS_SQL_WAREHOUSE_ID' };
-    }
-    return null;
+    // Only the workspace can be missing: the SQL warehouse is produced by the
+    // Console (#3744) and a failed resolution throws its classified cause.
+    return databricksConfigGate();
   }
   if (backend === 'synapse') {
     if (!process.env.LOOM_SYNAPSE_WORKSPACE) return { missing: 'LOOM_SYNAPSE_WORKSPACE' };
@@ -796,8 +794,7 @@ export async function runDqRules(tenantId: string, opts: DqRunOptions): Promise<
   let scorer: (rule: DqRule) => Promise<{ percentage: number | null; detail: string }>;
 
   if (opts.backend === 'databricks') {
-    const warehouseId = (opts.warehouseId || process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID || '').trim();
-    if (!warehouseId) throw new Error('No Databricks SQL Warehouse — set LOOM_DATABRICKS_SQL_WAREHOUSE_ID or pass warehouseId');
+    const warehouseId = await resolveWarehouseIdOrThrow(opts.warehouseId);
     target = `databricks:${warehouseId}`;
     scorer = (rule) => scoreRuleDatabricks(rule, warehouseId, opts.catalog, opts.schema);
   } else if (opts.backend === 'synapse') {
