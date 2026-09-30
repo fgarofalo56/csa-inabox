@@ -36,7 +36,8 @@ export function SqlRefusalOrError({ result }: { result: SqlFailure }) {
   const notRun = !!result.code && NOT_RUN_CODES.has(result.code);
   return (
     <MessageBar intent={notRun ? 'warning' : 'error'} layout="multiline">
-      <MessageBarBody>
+      {/* A refused name can be one long unbroken token; let it wrap rather than widen the bar. */}
+      <MessageBarBody style={{ overflowWrap: 'anywhere' }}>
         <MessageBarTitle>{notRun ? 'Query not run' : 'Query failed'}</MessageBarTitle>
         {result.error} {result.code && <Caption1>· {result.code}</Caption1>}
         {result.remediation && (
