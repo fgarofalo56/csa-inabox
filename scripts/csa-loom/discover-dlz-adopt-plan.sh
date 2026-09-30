@@ -41,7 +41,16 @@
 # The admin coordinates are OPTIONAL and are used only as a FALLBACK for the two
 # deploy-planner services that can legitimately sit outside the landing zone —
 # see the `#4665` block near the bottom. Supplying them never changes a lookup
-# the DLZ already answered.
+# the DLZ already answered. They are all-or-nothing: supplying exactly one of
+# the two exits 2 (see the guard below the argument loop).
+#
+# EXTRAS. Two adopted services carry more than a name, as `extra` fields that
+# main.bicep reads with adoptExtra():
+#   eventhubs.extra.schemaGroup      → LOOM_EH_SCHEMA_GROUP
+#   databricks.extra.hostname        → LOOM_DATABRICKS_HOSTNAME (pre-existing)
+#   databricks.extra.sqlWarehouseId  → LOOM_DATABRICKS_SQL_WAREHOUSE_ID
+# Each is omitted — never guessed — when it cannot be established, and the
+# stderr line says WHICH of "absent" or "could not read" it was.
 set -euo pipefail
 
 DLZ_SUB=""; DLZ_RG=""; ADMIN_SUB=""; ADMIN_RG=""
@@ -54,6 +63,33 @@ while [ $# -gt 0 ]; do
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
+
+# ── HALF AN ADMIN COORDINATE IS A CALLER DEFECT, NOT "NO ADMIN RG" ───────────
+#
+# The #4665 fallback below needs BOTH halves. Before this guard, a caller that
+# passed `--admin-rg <name>` with an EMPTY `--admin-subscription` had the whole
+# fallback skipped in silence, and the plan came out byte-identical to "the
+# admin RG holds nothing". That is not hypothetical: deploy-fiab-commercial.yml
+# bound the subscription to `steps.topology_guard.outputs.deploy_sub`, whose
+# documented value on EVERY scheduled run is '' ("inherit the login
+# subscription"), so the nightly reconcile passed
+#   --admin-subscription "" --admin-rg rg-csa-loom-admin-centralus
+# and never adopted Service Bus or Batch — measured on run 36428134174
+# (2026-09-28, `ADMIN_SUB: ` empty in the step env; adopted only
+# adf,databricks,eventhubs,storage-adls,synapse) while sb-loom-k6mvh5sm6z7do and
+# batchloomk6mvh5sm6z7do sat in that admin RG. Each such run re-rendered
+# LOOM_SERVICEBUS_NAMESPACE and LOOM_BATCH_ACCOUNT to ''.
+#
+# It FAILS rather than warns because no legitimate caller supplies one half:
+# all four deploy workflows pass both, the three sovereign lanes refuse an
+# empty subscription before calling this, and the Commercial lane now reads
+# the guard's `target_sub`, which the guard refuses to leave empty. Reaching
+# here means a caller regressed, and a warning would let that regression strip
+# two env vars off the console on every run (deploy-integrity R6/R7).
+if { [ -n "$ADMIN_RG" ] && [ -z "$ADMIN_SUB" ]; } || { [ -z "$ADMIN_RG" ] && [ -n "$ADMIN_SUB" ]; }; then
+  echo "::error::[discover-dlz-adopt] admin coordinates are HALF-supplied (--admin-rg='${ADMIN_RG}', --admin-subscription is $( [ -n "$ADMIN_SUB" ] && echo set || echo EMPTY )). The admin-RG fallback needs both, and skipping it would silently drop the servicebus/batch adopt keys — so the plan would carry neither, and LOOM_SERVICEBUS_NAMESPACE / LOOM_BATCH_ACCOUNT would render '' on a deploy that applies the console env. Pass both or neither. In a deploy workflow the subscription must be a RESOLVED literal (the topology guard's target_sub), never deploy_sub, which is '' on every scheduled run." >&2
+  exit 2
+fi
 
 if [ -z "$DLZ_SUB" ] || [ -z "$DLZ_RG" ]; then
   # Not an error: the caller may have no DLZ yet (greenfield/tenant first run).
@@ -238,21 +274,272 @@ if [ -n "$ADMIN_SUB" ] && [ -n "$ADMIN_RG" ]; then
   fi
 fi
 
+PY="$(command -v python || command -v python3 || true)"
+
+# ── Event Hubs SCHEMA GROUP on the adopted namespace → LOOM_EH_SCHEMA_GROUP ──
+#
+# WHY. admin-plane/main.bicep's ONLY source for LOOM_EH_SCHEMA_GROUP is
+# `eventsConfig.?loomEhSchemaGroup ?? ''`, and main.bicep never passed
+# eventsConfig at all — so the var rendered '' on every estate, including the
+# Commercial one whose adopted namespace evhns-loom-default-centralus carries
+# the `loom-schemas` group landing-zone/eventhubs.bicep creates. The console then
+# silently used its in-process Avro validator instead of the service-enforced
+# registry the namespace was built with.
+#
+# CHOICE, deterministic and stated: `loom-schemas` if present (the name
+# eventhubs.bicep's `schemaGroupName` defaults to); else the ONLY group if there
+# is exactly one; else none. Several groups with no `loom-schemas` among them is
+# ambiguous and adopts NONE — picking `[0]` would be a coin flip.
+#
+# UNREADABLE IS NOT ABSENT. Read directly rather than through q(), whose
+# `2>/dev/null || true` turns an authorization failure into "no groups".
+EH_SCHEMA_GROUP=""
+if [ -n "$EH" ]; then
+  SG_ERR="$(mktemp)"; SG_RC=0
+  SG_LIST="$(az eventhubs namespace schema-registry list --subscription "$DLZ_SUB" -g "$DLZ_RG" \
+               --namespace-name "$EH" --query "[].name" -o tsv 2>"$SG_ERR")" || SG_RC=$?
+  if [ "$SG_RC" -ne 0 ]; then
+    # The remediation is named only when az's own stderr names the cause; a
+    # non-zero exit alone does not establish that RBAC refused the read.
+    if grep -q 'AuthorizationFailed' "$SG_ERR"; then
+      sg_fix="az reports AuthorizationFailed, so the deploy identity lacks read on the namespace: grant it Reader on the namespace."
+    else
+      sg_fix="The cause was NOT established from the az exit alone; the az stderr below is the evidence."
+    fi
+    echo "::warning::[discover-dlz-adopt] could NOT list schema groups on Event Hubs namespace '$EH' (az exit $SG_RC) — that is UNKNOWN, not 'none'. The plan carries no schemaGroup, so LOOM_EH_SCHEMA_GROUP would render '' if this run applies the console env (the console then uses its in-process Avro validator). $sg_fix az stderr:" >&2
+    sed 's/^/  /' "$SG_ERR" >&2 || true
+  else
+    SG_LIST="$(printf '%s\n' "$SG_LIST" | tr -d '\r' | sed '/^[[:space:]]*$/d')"
+    SG_N="$(printf '%s' "$SG_LIST" | grep -c . || true)"
+    if grep -qxF 'loom-schemas' <<<"$SG_LIST"; then
+      EH_SCHEMA_GROUP="loom-schemas"
+      echo "[discover-dlz-adopt] eventhubs schema group = loom-schemas (the preferred name; $SG_N group(s) on '$EH')" >&2
+    elif [ "$SG_N" -eq 1 ]; then
+      EH_SCHEMA_GROUP="$SG_LIST"
+      echo "[discover-dlz-adopt] eventhubs schema group = $EH_SCHEMA_GROUP (the ONLY group on '$EH'; no 'loom-schemas' present)" >&2
+    elif [ "$SG_N" -eq 0 ]; then
+      echo "::notice::[discover-dlz-adopt] Event Hubs namespace '$EH' was read and holds NO schema groups — the plan carries no schemaGroup, so LOOM_EH_SCHEMA_GROUP would render '' if this run applies the console env (the console then uses its in-process Avro validator)." >&2
+    else
+      echo "::warning::[discover-dlz-adopt] Event Hubs namespace '$EH' holds $SG_N schema groups ($(printf '%s' "$SG_LIST" | tr '\n' ' ')) and none is 'loom-schemas', so there is no unambiguous one to bind. Adopting NONE rather than guessing — name it in LOOM_ADOPT_JSON (eventhubs.extra.schemaGroup) to choose." >&2
+    fi
+  fi
+  rm -f "$SG_ERR"
+fi
+
+# ── Databricks SQL WAREHOUSE (loom-default | loom-governance) → LOOM_DATABRICKS_SQL_WAREHOUSE_ID ──
+#
+# WHY. admin-plane/main.bicep declares `loomDatabricksSqlWarehouseId` and emits
+# it as LOOM_DATABRICKS_SQL_WAREHOUSE_ID, but main.bicep never passed it, so the
+# env var rendered '' on every estate.
+#
+# TWO NAMES are written in this repo, and they differ by writer, not by cloud:
+#   loom-default     csa-loom-post-deploy-bootstrap.yml (called by the
+#                    Commercial, GCC, GCC-High and IL5 deploy lanes) and
+#                    csa-loom-grant-delta-sharing.yml reuse a warehouse of this
+#                    exact name, and create it when none exists.
+#   loom-governance  gov-provision-dbx-sql.yml and gov-provision-dbx-sql-invnet.yml
+#                    (the apps/loom-dbx-init image), both Azure Government only.
+#                    They reuse the first warehouse whose name starts with `loom`;
+#                    failing that, the first warehouse of ANY name. They create
+#                    `loom-governance` only when the workspace lists no warehouse
+#                    at all.
+# So a Gov workspace can be bound by those writers to a warehouse under another
+# name. This lookup does not adopt it (it adopts only the two names), so in that
+# case the plan carries no warehouse id.
+# PREFERENCE, deterministic and stated in the output: `loom-default` if the
+# workspace lists one, else `loom-governance`. `loom-default` wins because the
+# bootstrap re-wires the console to it on every run, so preferring the other
+# would make this reconcile and the bootstrap overwrite each other. Each name
+# must match EXACTLY ONE warehouse; two of the preferred name adopts NONE
+# (it does not fall through to the next name — a duplicate is a defect to
+# surface, not a reason to pick a different warehouse).
+#
+# THREE STATES, never collapsed (deploy-integrity R7):
+#   found                  → its id is adopted.
+#   API answered, no match → '' and a ::notice:: — a measured negative
+#                            (no warehouse by either name exists on this workspace).
+#   API refused/unreachable→ '' and a ::warning:: naming the HTTP code. This is
+#                            UNKNOWN and is never reported as "no warehouse".
+#                            A 403 whose body names network access ("Unauthorized
+#                            network access to workspace") is this state. The
+#                            warning calls it a network-layer refusal rather than
+#                            blaming RBAC. It names controls that CAN produce it
+#                            (public network access Disabled, a workspace IP
+#                            access list, and the account-level context-based
+#                            ingress policies Azure Databricks documents) as an
+#                            OPEN list, and does not assert which one refused:
+#                            this lookup reads none of those settings.
+#                            A 403 whose body names an IP ACL ("Source IP address:
+#                            <ip> is blocked by Databricks IP ACL for workspace:
+#                            <id>") is reported as an IP access list refusal,
+#                            because the body says so. Any other 401/403 is
+#                            reported with its cause NOT established; workspace
+#                            membership is named only as one cause that can
+#                            produce it.
+# It never fails the script: a warehouse is an optional binding, and a blank id
+# is the pre-PR state. The console's health probe falls back to a listed
+# warehouse (a RUNNING one first) when the id is blank, but other readers do
+# not: the report navigator and the Databricks data-quality runs, among others,
+# gate on it. In a boundary where Databricks SQL is unavailable the API answers
+# with no match or an error, both of which degrade to ''.
+#
+# The AAD token never reaches argv or the log: it is handed to curl as a config
+# file on STDIN (`--config -`).
+DBX_AAD_RESOURCE="2ff814a6-3304-4ab8-85cb-cd0e6f879c1d"
+dbx_sql_warehouse_id() { # dbx_sql_warehouse_id <workspace host> → id or '' on stdout
+  local host="$1" tok err body code rc=0 pick why rest ambig_note
+  err="$(mktemp)"; body="$(mktemp)"
+  tok="$(az account get-access-token --resource "$DBX_AAD_RESOURCE" --query accessToken -o tsv 2>"$err")" || rc=$?
+  tok="$(printf '%s' "$tok" | tr -d '\r\n')"
+  if [ "$rc" -ne 0 ] || [ -z "$tok" ]; then
+    echo "::warning::[discover-dlz-adopt] could NOT obtain an Azure Databricks AAD token (az exit $rc), so whether a 'loom-default' or 'loom-governance' SQL warehouse exists on '$host' is UNKNOWN — not 'absent'. The plan carries no sqlWarehouseId, so LOOM_DATABRICKS_SQL_WAREHOUSE_ID would render '' if this run applies the console env. az stderr:" >&2
+    sed 's/^/  /' "$err" >&2 || true
+    rm -f "$err" "$body"; return 0
+  fi
+  rc=0
+  code="$(printf 'header = "Authorization: Bearer %s"\n' "$tok" \
+            | curl -sS --config - --max-time 30 -o "$body" -w '%{http_code}' \
+                   "https://$host/api/2.0/sql/warehouses" 2>"$err")" || rc=$?
+  tok=""
+  code="$(printf '%s' "${code:-}" | tr -d '\r\n')"
+  if [ "$code" != "200" ]; then
+    if grep -qi 'network access' "$body"; then
+      why="The response body names network access, so the workspace refused this runner at the NETWORK layer. Workspace controls that can produce that refusal include public network access set to Disabled (only a private-endpoint path is admitted), or a workspace IP access list that does not allow this runner's egress IP; Azure Databricks also documents account-level context-based ingress policies. Which one refused it was NOT established, nor whether a recent public-access change had yet taken effect: this lookup reads none of those settings. Producing the id from inside the VNet (the console creating and binding the warehouse itself) is tracked in #3744."
+    elif grep -qi 'IP ACL' "$body"; then
+      why="The response body names an IP ACL, so an IP access list refused this runner's egress IP. Which IP access list, and what it admits, was NOT established: this lookup reads no IP access list, and the body below is the evidence. Producing the id from inside the VNet (the console creating and binding the warehouse itself) is tracked in #3744."
+    elif [ "${code:-000}" = "000" ]; then
+      why="HTTP 000 means curl received no HTTP response; the curl exit and stderr below say why."
+    elif [ "$code" = "401" ] || [ "$code" = "403" ]; then
+      why="The body names neither network access nor an IP ACL, so the cause of this refusal was NOT established by this lookup; the body below is the evidence. One cause that produces a 401/403 here is a deploy identity that is not a user of that workspace (Contributor on the workspace resource provisions it as a workspace admin on first sign-in)."
+    else
+      why="The cause was NOT established by this lookup; the body below is the evidence."
+    fi
+    echo "::warning::[discover-dlz-adopt] the Databricks SQL Warehouses API on '$host' did NOT answer 200 (HTTP ${code:-000}, curl exit $rc), so whether a 'loom-default' or 'loom-governance' warehouse exists is UNKNOWN — not 'absent'. The plan carries no sqlWarehouseId, so LOOM_DATABRICKS_SQL_WAREHOUSE_ID would render '' if this run applies the console env. $why Detail:" >&2
+    { sed 's/^/  /' "$err"; head -c 300 "$body" | sed 's/^/  /'; echo; } >&2 || true
+    rm -f "$err" "$body"; return 0
+  fi
+  if [ -z "$PY" ]; then
+    echo "::warning::[discover-dlz-adopt] the SQL Warehouses API answered but no python is on PATH to read it — the warehouse is UNKNOWN. The plan carries no sqlWarehouseId, so LOOM_DATABRICKS_SQL_WAREHOUSE_ID would render '' if this run applies the console env." >&2
+    rm -f "$err" "$body"; return 0
+  fi
+  # Every parse path prints ONE verdict token and exits 0 — a body of the wrong
+  # SHAPE (a JSON array, a non-object warehouse) is caught like a non-JSON body,
+  # so a surprising answer degrades to a ::warning:: instead of tripping `set -e`.
+  # Verdicts: ID:<name>:<id> | AMBIG:<name>:<count> | NONE | ERR:<why>. The FIRST
+  # name in PREFER with any match decides; a later name is never consulted then.
+  pick="$("$PY" -c '
+import json, sys
+PREFER = ("loom-default", "loom-governance")
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+    ws = d.get("warehouses") or []
+    by = {n: [str(w["id"]) for w in ws if w.get("name") == n and w.get("id")] for n in PREFER}
+except Exception as e:
+    print("ERR:" + type(e).__name__); sys.exit(0)
+for n in PREFER:
+    ids = by[n]
+    if len(ids) == 1:
+        print("ID:" + n + ":" + ids[0]); break
+    if ids:
+        print("AMBIG:" + n + ":" + str(len(ids))); break
+else:
+    print("NONE")
+' "$body" | tr -d '\r')" || pick="ERR:python-exit"
+  rm -f "$err" "$body"
+  case "$pick" in
+    ID:*)
+      rest="${pick#ID:}"
+      printf '%s' "${rest#*:}"
+      echo "[discover-dlz-adopt] databricks SQL warehouse '${rest%%:*}' = ${rest#*:} (preference: loom-default, then loom-governance)" >&2 ;;
+    NONE)
+      echo "::notice::[discover-dlz-adopt] the Databricks SQL Warehouses API on '$host' answered 200 and lists NO warehouse named 'loom-default' or 'loom-governance' — the plan carries no sqlWarehouseId, so LOOM_DATABRICKS_SQL_WAREHOUSE_ID would render '' if this run applies the console env. This lookup adopts only those two names: a warehouse under any other name is not adopted, even one a writer bound to the console (the Azure Government writers reuse the first listed warehouse of any name when none starts with 'loom'). A later deploy can bind a warehouse only once one named 'loom-default' or 'loom-governance' exists." >&2 ;;
+    AMBIG:*)
+      rest="${pick#AMBIG:}"
+      ambig_note=""
+      [ "${rest%%:*}" = "loom-default" ] && ambig_note=" csa-loom-post-deploy-bootstrap.yml does NOT refuse a duplicate 'loom-default': it binds the first one listed. So if this run applies the console env it blanks the id that bootstrap bound, until the duplicate is removed (#4784)."
+      echo "::warning::[discover-dlz-adopt] '$host' lists ${rest#*:} warehouses named '${rest%%:*}'; adopting NONE rather than guessing (and not falling back to a lower-preference name).$ambig_note" >&2 ;;
+    ERR:python-exit)
+      # The interpreter itself exited non-zero, so nothing is known about the
+      # body — the message must not describe it.
+      echo "::warning::[discover-dlz-adopt] the SQL Warehouses API on '$host' answered 200, but python ($PY) exited non-zero while reading the body, so the body was never parsed — the warehouse is UNKNOWN. The plan carries no sqlWarehouseId, so LOOM_DATABRICKS_SQL_WAREHOUSE_ID would render '' if this run applies the console env." >&2 ;;
+    *)
+      echo "::warning::[discover-dlz-adopt] the SQL Warehouses API on '$host' answered 200 with a body that is not the documented JSON ($pick) — the warehouse is UNKNOWN. The plan carries no sqlWarehouseId, so LOOM_DATABRICKS_SQL_WAREHOUSE_ID would render '' if this run applies the console env." >&2 ;;
+  esac
+  return 0
+}
+DBX_WH=""
+if [ -n "$DBX_N" ] && [ -n "$DBX_H" ]; then
+  DBX_WH="$(dbx_sql_warehouse_id "$DBX_H")"
+fi
+
+# ENCODING. Every value below is a string DISCOVERED from Azure, so it is
+# JSON-encoded, never spliced into a quoted template: a double quote or a
+# backslash in a name would otherwise compose an invalid plan (the validity
+# check at the bottom then refuses it and the deploy stops). With python on PATH
+# (every hosted runner) each object is built by ONE `json.dumps` call. Without
+# python the fallback escapes backslash and double quote in bash, and ONLY
+# those two: a control character would still compose an invalid plan, and the
+# validity check needs python too. That fallback is NOT exercised by
+# scripts/ci/__tests__/adopt-plan-extras.test.mjs, which always runs with
+# python on PATH; forcing it on a sandbox copy passed that suite once, which is
+# a one-off measurement, not coverage.
+json_esc() { # json_esc <value> → the value with backslash and double quote escaped (no-python fallback)
+  local v="$1"
+  v="${v//\\/\\\\}"; v="${v//\"/\\\"}"
+  printf '%s' "$v"
+}
+
+# `extra` objects. Keys are emitted only when their value was ESTABLISHED, so
+# adoptExtra() returns '' for anything this run could not measure.
+json_obj() { # json_obj key value [key value …] → {"k":"v",…} over the non-empty pairs, or ''
+  if [ -n "$PY" ]; then
+    "$PY" -c '
+import json, sys
+a = sys.argv[1:]
+d = {a[i]: a[i + 1] for i in range(0, len(a) - 1, 2) if a[i + 1]}
+sys.stdout.write(json.dumps(d, separators=(",", ":")) if d else "")
+' "$@" || { echo "::error::[discover-dlz-adopt] python could not JSON-encode an adopt extra — refusing to compose the plan" >&2; exit 1; }
+    return 0
+  fi
+  local out="" k v
+  while [ $# -ge 2 ]; do
+    k="$1"; v="$2"; shift 2
+    [ -n "$v" ] || continue
+    out="${out:+$out,}\"$(json_esc "$k")\":\"$(json_esc "$v")\""
+  done
+  [ -n "$out" ] && printf '{%s}' "$out"
+  return 0
+}
+EH_EXTRA="$(json_obj schemaGroup "$EH_SCHEMA_GROUP")"
+DBX_EXTRA="$(json_obj hostname "$DBX_H" sqlWarehouseId "$DBX_WH")"
+
 entries=""
 add() { # add <key> <name> <rg> <sub> [extraJson]
   [ -n "${2:-}" ] || return 0
   local extra="${5:-}"
   local one
-  one="$(printf '"%s":{"mode":"adopt","target":{"name":"%s","rg":"%s","sub":"%s"}%s}' \
-        "$1" "$2" "$3" "$4" "${extra:+,\"extra\":$extra}")"
+  if [ -n "$PY" ]; then
+    one="$("$PY" -c '
+import json, sys
+k, n, rg, sub, x = sys.argv[1:6]
+o = {"mode": "adopt", "target": {"name": n, "rg": rg, "sub": sub}}
+if x:
+    o["extra"] = json.loads(x)
+sys.stdout.write(json.dumps(k) + ":" + json.dumps(o, separators=(",", ":")))
+' "$1" "$2" "$3" "$4" "$extra")" \
+      || { echo "::error::[discover-dlz-adopt] python could not JSON-encode the '$1' adopt entry — refusing to compose the plan" >&2; exit 1; }
+  else
+    one="$(printf '"%s":{"mode":"adopt","target":{"name":"%s","rg":"%s","sub":"%s"}%s}' \
+          "$(json_esc "$1")" "$(json_esc "$2")" "$(json_esc "$3")" "$(json_esc "$4")" "${extra:+,\"extra\":$extra}")"
+  fi
   entries="${entries:+$entries,}$one"
   echo "[discover-dlz-adopt] adopt $1 = $2 (rg=$3)" >&2
 }
 
 add "storage-adls" "$SA"    "$DLZ_RG"    "$DLZ_SUB"
-add "eventhubs"    "$EH"    "$DLZ_RG"    "$DLZ_SUB"
+add "eventhubs"    "$EH"    "$DLZ_RG"    "$DLZ_SUB" "$EH_EXTRA"
 add "synapse"      "$SYN"   "$DLZ_RG"    "$DLZ_SUB"
-add "databricks"   "$DBX_N" "$DLZ_RG"    "$DLZ_SUB" "${DBX_H:+{\"hostname\":\"$DBX_H\"}}"
+add "databricks"   "$DBX_N" "$DLZ_RG"    "$DLZ_SUB" "$DBX_EXTRA"
 add "adf"          "$ADF"   "$DLZ_RG"    "$DLZ_SUB"
 add "servicebus"   "$SB"    "$SB_RG"     "$SB_SUB"
 add "batch"        "$BATCH" "$BATCH_RG"  "$BATCH_SUB"
@@ -265,9 +552,14 @@ fi
 
 PLAN="{$entries}"
 # Never emit a document the param file cannot parse: a malformed plan would take
-# `json()` down inside bicep compilation and fail the whole deploy.
-if command -v python >/dev/null 2>&1; then
-  printf '%s' "$PLAN" | python -c 'import json,sys; json.load(sys.stdin)' \
-    || { echo "::error::[discover-dlz-adopt] composed an INVALID adopt plan — refusing to emit it"; exit 1; }
+# `json()` down inside bicep compilation and fail the whole deploy. The check
+# uses the same interpreter as the encoding ($PY, which also accepts python3),
+# and its refusal goes to STDERR: the caller captures stdout as the plan, so a
+# message on stdout would never reach the log.
+if [ -n "$PY" ]; then
+  printf '%s' "$PLAN" | "$PY" -c 'import json,sys; json.load(sys.stdin)' \
+    || { echo "::error::[discover-dlz-adopt] composed an INVALID adopt plan — refusing to emit it" >&2; exit 1; }
+else
+  echo "::warning::[discover-dlz-adopt] no python on PATH, so the composed adopt plan was NOT validity-checked before it was emitted." >&2
 fi
 printf '%s\n' "$PLAN"

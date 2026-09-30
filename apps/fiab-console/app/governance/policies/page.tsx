@@ -472,7 +472,7 @@ export default function PoliciesPage() {
       body.principalType = accPicked.type;
       body.scopeType = accScope;
       if (accScope === 'adls-container') {
-        if (!accContainer.trim()) { setActionErr('Enter the ADLS container the grant applies to.'); return; }
+        if (!accContainer.trim()) { setActionErr('Select the ADLS container the grant applies to.'); return; }
         body.scopeRef = accContainer.trim();
       } else if (accScope === 'kql-database') {
         if (!accKqlDb) { setActionErr('Pick the KQL database the grant applies to.'); return; }
@@ -987,7 +987,12 @@ export default function PoliciesPage() {
                     {accScope === 'adls-container' && (
                       <Field label="ADLS container"
                         hint="The data-lake container the grant applies to — Loom enforces it as real Storage RBAC.">
-                        <Input value={accContainer} placeholder="bronze" onChange={(_, d) => setAccContainer(d.value)} />
+                        <Dropdown placeholder={containers.length ? 'Select…' : 'No containers found'} disabled={!containers.length}
+                          value={accContainer} selectedOptions={accContainer ? [accContainer] : []}
+                          onOptionSelect={(_, d) => setAccContainer(d.optionValue || '')}
+                          data-testid="access-adls-container">
+                          {containers.map((c) => <Option key={c} value={c}>{c}</Option>)}
+                        </Dropdown>
                       </Field>
                     )}
                     {accScope === 'kql-database' && (

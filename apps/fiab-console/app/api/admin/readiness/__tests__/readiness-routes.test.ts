@@ -145,9 +145,16 @@ describe('GET /api/admin/readiness', () => {
       const check = (j.storageChecks as any[]).find((c) => c.id === LAKEHOUSE_SHARED_ROOTS_CHECK_ID);
       expect(check?.status).toBe('warn');
       expect(check?.title).toBe(LAKEHOUSE_SHARED_ROOTS_CHECK_TITLE);
-      expect(check?.detail).toContain('lh-a');
-      expect(check?.detail).toContain('lh-b');
+      expect(check?.detail).toContain('Sales (lh-a)');
+      expect(check?.detail).toContain('Sales (lh-b)');
       expect(check?.inconclusive).toBeUndefined();
+      // The page renders the group from `groups`, with a link per member and
+      // the "Keep root for" action. FAILS IF the route drops the groups (the
+      // panel would have nothing to act on).
+      expect(check?.groups?.[0]?.members?.map((m: any) => [m.id, m.name, m.href])).toEqual([
+        ['lh-a', 'Sales', '/items/lakehouse/lh-a'],
+        ['lh-b', 'Sales', '/items/lakehouse/lh-b'],
+      ]);
     });
 
     // The positive half of the arm above: with one lakehouse there is no group,
