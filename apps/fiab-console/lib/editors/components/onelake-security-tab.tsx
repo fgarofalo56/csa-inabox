@@ -49,6 +49,8 @@ const useStyles = makeStyles({
     ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover },
   },
   step: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: '280px' },
+  typedRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap', minWidth: 0 },
+  typedInput: { flex: 1, minWidth: 0 },
   stepNum: {
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
     width: '22px', height: '22px', borderRadius: '50%',
@@ -209,20 +211,42 @@ export function OneLakeSecurityTab({ itemId, itemType, container, workspaceId, f
       }
       setTreeEntries(out);
     } catch (e: any) {
-      if (e?.refused) { setListRefused(e.message); setPathMode('all'); }
+      // Keep the user's choice of scope: a refusal is shown, and folders can
+      // be typed instead. The scope is never widened on the user's behalf.
+      if (e?.refused) setListRefused(e.message);
       else setTreeErr(e?.message || String(e));
     }
     finally { setTreeLoading(false); }
   }, [effContainer, itemId, itemType]);
 
   useEffect(() => {
-    if (wizardOpen && step === 2 && pathMode === 'selected' && treeEntries.length === 0) loadTree();
+    if (wizardOpen && step === 2 && pathMode === 'selected' && treeEntries.length === 0 && !listRefused) loadTree();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wizardOpen, step, pathMode]);
 
   const togglePath = useCallback((p: string, checked: boolean) => {
     setSelectedPaths((prev) => (checked ? Array.from(new Set([...prev, p])) : prev.filter((x) => x !== p)));
   }, []);
+
+  // Typed folder entry: the way to narrow a role when the folders cannot be
+  // listed for this caller. A role path is item-relative and starts with
+  // Tables/ or Files/ (the same shape the picker produces: `/Tables/<t>`).
+  const [typedPath, setTypedPath] = useState('');
+  const typedNormalized = useMemo(() => {
+    const parts = typedPath.trim().split('/').map((x) => x.trim()).filter(Boolean);
+    return parts.length ? `/${parts.join('/')}` : '';
+  }, [typedPath]);
+  const typedValid = /^\/(Tables|Files)(\/[^/]+)*$/.test(typedNormalized) && !typedNormalized.split('/').includes('..');
+  const addTypedPath = useCallback(() => {
+    if (!typedValid) return;
+    togglePath(typedNormalized, true);
+    setTypedPath('');
+  }, [typedValid, typedNormalized, togglePath]);
+  // Folders offered as checkboxes: the listed ones, plus any typed ones.
+  const pathChoices = useMemo(
+    () => Array.from(new Set([...treeEntries.map((e) => e.name), ...selectedPaths])),
+    [treeEntries, selectedPaths],
+  );
 
   // ---- Step 3: members ------------------------------------------------
   //
@@ -713,28 +737,38 @@ export function OneLakeSecurityTab({ itemId, itemType, container, workspaceId, f
                   <div><span className={s.stepNum}>2</span><Subtitle2 style={{ display: 'inline' }}>Folders &amp; tables</Subtitle2></div>
                   <RadioGroup value={pathMode} onChange={(_, d) => setPathMode(d.value as any)}>
                     <Radio value="all" label="All folders (DefaultReader-equivalent)" />
-                    <Radio value="selected" label="Selected folders / tables" disabled={!!listRefused} />
+                    <Radio value="selected" label="Selected folders / tables" />
                   </RadioGroup>
-                  {listRefused && (
-                    <MessageBar intent="warning" data-testid="security-list-refused">
-                      <MessageBarBody>
-                        <MessageBarTitle>Selected folders is not available to you</MessageBarTitle>
-                        {listRefused} This role can still be created for all folders; a tenant admin can narrow it
-                        to specific folders later.
-                      </MessageBarBody>
-                    </MessageBar>
-                  )}
                   {pathMode === 'all' && defaultSpansAll && (
                     <MessageBar intent="warning"><MessageBarBody>{DEFAULT_WARNING}</MessageBarBody></MessageBar>
                   )}
                   {pathMode === 'selected' && (
                     <>
                       {treeLoading && <Spinner size="tiny" label="Listing folders…" />}
+                      {listRefused && (
+                        <MessageBar intent="warning" data-testid="security-list-refused">
+                          <MessageBarBody>
+                            <MessageBarTitle>Folders could not be listed for you</MessageBarTitle>
+                            {listRefused} Type the folders this role covers below.
+                          </MessageBarBody>
+                        </MessageBar>
+                      )}
                       {treeErr && <MessageBar intent="error"><MessageBarBody>{treeErr}</MessageBarBody></MessageBar>}
-                      {!treeLoading && treeEntries.length === 0 && !treeErr && <Caption1>No Tables/ or Files/ folders found in {effContainer}.</Caption1>}
+                      {!treeLoading && treeEntries.length === 0 && !treeErr && !listRefused && <Caption1>No Tables/ or Files/ folders found in {effContainer}.</Caption1>}
+                      <Field label="Add a folder by name"
+                        hint="Starts with Tables/ or Files/, for example Tables/sales."
+                        validationState={typedPath.trim() && !typedValid ? 'error' : 'none'}
+                        validationMessage={typedPath.trim() && !typedValid ? 'Start with Tables/ or Files/.' : undefined}>
+                        <div className={s.typedRow}>
+                          <Input value={typedPath} placeholder="Tables/sales" className={s.typedInput}
+                            onChange={(_, d) => setTypedPath(d.value)}
+                            onKeyDown={(ev) => { if (ev.key === 'Enter') { ev.preventDefault(); addTypedPath(); } }} />
+                          <Button appearance="secondary" disabled={!typedValid} onClick={addTypedPath}>Add</Button>
+                        </div>
+                      </Field>
                       <div className={s.pickList}>
-                        {treeEntries.map((e) => (
-                          <Checkbox key={e.name} checked={selectedPaths.includes(e.name)} label={e.name} onChange={(_, d) => togglePath(e.name, !!d.checked)} />
+                        {pathChoices.map((p) => (
+                          <Checkbox key={p} checked={selectedPaths.includes(p)} label={p} onChange={(_, d) => togglePath(p, !!d.checked)} />
                         ))}
                       </div>
                     </>
@@ -784,7 +818,9 @@ export function OneLakeSecurityTab({ itemId, itemType, container, workspaceId, f
               )}
               {step === 3 && (
                 <Button appearance="primary" icon={busy ? <Spinner size="extra-tiny" /> : <CheckmarkCircle20Filled />}
-                  disabled={busy || !nameValid || members.length === 0}
+                  // Next already holds step 2 on an empty selection; this is the
+                  // same rule at the point the role is created.
+                  disabled={busy || !nameValid || members.length === 0 || (pathMode === 'selected' && selectedPaths.length === 0)}
                   onClick={submitRole}>Create role</Button>
               )}
             </DialogActions>

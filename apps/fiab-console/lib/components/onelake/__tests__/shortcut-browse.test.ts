@@ -5,7 +5,9 @@
  * branch of the helpers directly.
  */
 import { describe, expect, it } from 'vitest';
-import { shortcutBrowseCrumbs, shortcutBrowseOutcome, shortcutBrowseUrl } from '../shortcut-browse';
+import {
+  SHORTCUT_CONTAINER_REFUSED, shortcutBrowseCrumbs, shortcutBrowseOutcome, shortcutBrowseUrl,
+} from '../shortcut-browse';
 
 describe('shortcutBrowseUrl', () => {
   // FAILS IF a picked lakehouse is listed by container (the admin-only form),
@@ -40,13 +42,17 @@ describe('shortcutBrowseOutcome', () => {
       .toEqual({ kind: 'error', message: 'No storage yet for Sales.' });
   });
 
-  // FAILS IF the 403 hint is added for a lakehouse listing, or dropped for a
-  // container listing.
-  it('adds the pick-a-lakehouse hint only to a refused container listing', () => {
-    const refused = { ok: false, error: 'Admins only.' };
-    expect(shortcutBrowseOutcome(403, refused, '', 'bronze', 'raw'))
-      .toEqual({ kind: 'error', message: 'Admins only. Go back and pick a source lakehouse to browse its files instead.' });
-    expect(shortcutBrowseOutcome(403, refused, 'lh-src', '', ''))
+  // FAILS IF a refused container listing shows the route's text (its
+  // "Open the lakehouse" step would then sit beside, or replace, the wizard's
+  // "Go back and pick" step), or if a refused lakehouse listing loses the
+  // route's text in favour of the container one.
+  it('a refused container listing shows only the wizard instruction', () => {
+    const refused = { ok: false, error: 'Admins only. Open the lakehouse and browse from its editor.' };
+    const out = shortcutBrowseOutcome(403, refused, '', 'bronze', 'raw');
+    expect(out).toEqual({ kind: 'error', message: SHORTCUT_CONTAINER_REFUSED });
+    expect(SHORTCUT_CONTAINER_REFUSED).toMatch(/Go back and pick a source lakehouse/);
+    expect(SHORTCUT_CONTAINER_REFUSED).not.toMatch(/Open the lakehouse/);
+    expect(shortcutBrowseOutcome(403, { ok: false, error: 'Admins only.' }, 'lh-src', '', ''))
       .toEqual({ kind: 'error', message: 'Admins only.' });
     expect(shortcutBrowseOutcome(500, {}, '', 'bronze', 'raw'))
       .toEqual({ kind: 'error', message: 'Could not list bronze/raw (HTTP 500).' });
