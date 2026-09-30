@@ -186,6 +186,48 @@ describe('GET /api/lakehouse/permissions?tab=object — the item container', () 
     (resolveLakehouseAbfss as any).mockResolvedValue(null);
     const res = await GET(getReq({ lakehouseId: LH, tab: 'object', container: CONTAINER }));
     expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe('no_storage_binding');
+    expect(listingCalls()).toEqual(NONE);
+  });
+
+  // FAILS IF an unreadable account falls back to the configured one: 200 and
+  // the row set [['landing', undefined]]. `loom-lake` has a hyphen, which no
+  // storage account name has, so `boundAccountOf` cannot read it.
+  it('answers 409 when the bound account cannot be read, with no listing', async () => {
+    (getSession as any).mockReturnValue(member);
+    (resolveLakehouseAbfss as any).mockResolvedValue({
+      abfss: `abfss://${CONTAINER}@loom-lake.dfs.core.windows.net/${ROOT}`,
+      container: CONTAINER,
+      root: ROOT,
+    });
+    const res = await GET(getReq({ lakehouseId: LH, tab: 'object' }));
+    expect(res.status).toBe(409);
+    const j = await res.json();
+    expect(j.code).toBe('storage_account_unreadable');
+    expect(typeof j.remediation).toBe('string');
+    expect(listingCalls()).toEqual(NONE);
+  });
+
+  // Each refusal carries the lakehouse routes' `code` and `remediation`. FAILS
+  // IF a refusal goes back to `{ ok:false, error }` only (the code is then
+  // undefined), or carries another refusal's code.
+  it.each([
+    ['a container other than the bound one', () => GET(getReq({ lakehouseId: LH, tab: 'object', container: 'gold' })), 403, 'outside_item_root'],
+    ['a lakehouse the caller cannot reach', () => {
+      (resolveItemAccessByOid as any).mockResolvedValue(null);
+      return GET(getReq({ lakehouseId: LH, tab: 'object' }));
+    }, 404, 'item_not_found'],
+    ['a SQL tab on a lakehouse the caller cannot reach', () => {
+      (resolveItemAccessByOid as any).mockResolvedValue(null);
+      return GET(getReq({ lakehouseId: LH, tab: 'table' }));
+    }, 404, 'item_not_found'],
+    ['no lakehouseId from a non-admin', () => GET(getReq({ tab: 'object', container: CONTAINER })), 403, 'admin_only'],
+  ])('refusal envelope: %s', async (_l, call, status, code) => {
+    (getSession as any).mockReturnValue(member);
+    const res = await (call as () => Promise<Response>)();
+    expect(res.status).toBe(status);
+    const j = await res.json();
+    expect([j.ok, j.code, typeof j.remediation, typeof j.error]).toEqual([false, code, 'string', 'string']);
     expect(listingCalls()).toEqual(NONE);
   });
 });

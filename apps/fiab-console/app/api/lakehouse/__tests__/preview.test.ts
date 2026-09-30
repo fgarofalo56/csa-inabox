@@ -148,7 +148,36 @@ describe('preview — a percent sign in the path', () => {
     // Breaks if the '%' refusal is removed: the route answers 200 and queries a
     // BULK URL whose decoded path leaves the root.
     expect(res.status).toBe(400);
-    expect((await res.json()).code).toBe('bad_request');
+    const j = await res.json();
+    expect(j.code).toBe('bad_request');
+    // The next step is Download, the one action that reads such a file; the
+    // editor has no rename. Breaks if `remediation` is dropped, or it points at
+    // a rename again.
+    expect(j.remediation).toMatch(/Download/);
+    expect(`${j.error} ${j.remediation}`).not.toMatch(/rename/i);
+    expect(queried()).toEqual([]);
+  });
+
+  // Every CASES path contains '%2', so a check narrowed to '%2' would pass them
+  // all. These two carry a '%' that is NOT followed by '2': a lone '%', and '%5C'
+  // (an encoded backslash).
+  const NOT_PERCENT_TWO: Array<[string, string]> = [
+    ['a lone percent sign', `${ROOT}/Files/100%.csv`],
+    ['an encoded backslash (%5C)', `${ROOT}/Files/a%5Cb.parquet`],
+  ];
+
+  it.each(NOT_PERCENT_TWO)('fixture witness: %s has a percent sign but no "%2"', (_l, p) => {
+    // Breaks if the fixture gains a '%2' (the narrowed check would then refuse
+    // it too, and the refusal test below could not tell the two checks apart)
+    // or loses its '%' (the positive arm would then cover it instead).
+    expect([p.includes('%'), p.includes('%2')]).toEqual([true, false]);
+  });
+
+  it.each(NOT_PERCENT_TWO)('item form: %s is refused too (400, nothing queried)', async (_l, p) => {
+    const res = await GET(req(`lakehouseId=${LH}&container=${CONTAINER}&path=${encodeURIComponent(p)}`));
+    // Breaks if the refusal is narrowed to '%2' (or to any fixed sequence): the
+    // route answers 200 and queries the path.
+    expect(res.status).toBe(400);
     expect(queried()).toEqual([]);
   });
 

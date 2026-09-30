@@ -121,14 +121,15 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
   // The BULK URL below is built from the path as-is, with no per-segment
   // encoding, and the reader decodes percent sequences. A '%' in a segment could
   // therefore decode to '/' or '..' after the root check above has passed, so
-  // this route refuses it rather than re-encoding every path. A file whose name
-  // contains '%' can still be downloaded.
+  // this route refuses any '%' (not only '%2...') rather than re-encoding every
+  // path. A file whose name contains '%' can still be downloaded.
   if (path.includes('%')) {
     return NextResponse.json(
       {
         ok: false,
         code: 'bad_request',
-        error: "Preview can't read a path that contains '%'. Download the file instead, or rename it without '%'.",
+        error: "Preview can't read a path that contains '%'.",
+        remediation: 'Download the file to read it instead: Download is not limited this way.',
       },
       { status: 400 },
     );
