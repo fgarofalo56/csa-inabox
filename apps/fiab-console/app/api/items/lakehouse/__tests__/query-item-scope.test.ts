@@ -80,10 +80,10 @@ beforeEach(() => {
 });
 
 describe('POST /api/items/lakehouse/[id]/query — confined to the item root', () => {
-  it('a reader runs the entity-diagram column query unchanged', async () => {
+  it('a reader runs the entity-diagram column query unchanged after the USE [master] prefix', async () => {
     const res = await POST(req({ sql: LAKEHOUSE_COLUMNS_SQL }), ctx);
     expect(res.status).toBe(200);
-    expect(synapse.executeQuery).toHaveBeenCalledWith(expect.anything(), LAKEHOUSE_COLUMNS_SQL);
+    expect(synapse.executeQuery).toHaveBeenCalledWith(expect.anything(), `USE [master]; ${LAKEHOUSE_COLUMNS_SQL}`);
   });
 
   it('a metadata query does not read the storage binding', async () => {
@@ -115,7 +115,7 @@ describe('POST /api/items/lakehouse/[id]/query — confined to the item root', (
     const res = await POST(req({ sql }), ctx);
     expect(res.status).toBe(200);
     expect(storage.resolveLakehouseStorage).toHaveBeenCalledWith('lh-1', 'ws-1');
-    expect(synapse.executeQuery).toHaveBeenCalledWith(expect.anything(), sql);
+    expect(synapse.executeQuery).toHaveBeenCalledWith(expect.anything(), `USE [master]; ${sql}`);
   });
 
   it('a location outside the item root is a 403, before Synapse', async () => {
@@ -198,5 +198,66 @@ describe('POST /api/items/lakehouse/[id]/query — the SQL tab runs in a server-
     const res = await POST(req({ sql: 'SELECT 1' }), ctx);
     expect(res.status).toBe(200);
     expect(synapse.serverlessTarget).toHaveBeenCalledWith('lakedb');
+  });
+});
+
+describe('POST /api/items/lakehouse/[id]/query — the reader path has its own pool and frames its batch', () => {
+  // The mocked serverlessTarget keys a pool as `k:<database>`; the reader path
+  // must prefix that key, so its pool is never the one serverlessTarget('master')
+  // returns to every other route.
+  function sent(): { target: { cacheKey: string; database: string }; sql: string } {
+    const call = synapse.executeQuery.mock.calls[0] as unknown[];
+    return { target: call[0] as { cacheKey: string; database: string }, sql: call[1] as string };
+  }
+
+  it('a caller who is not a tenant admin runs on the lakehouse-reader pool, not the shared master pool', async () => {
+    // Breaks if the reader path uses serverlessTarget(database) directly: the
+    // key would be 'k:master', the pool every route targeting master shares.
+    const res = await POST(req({ sql: 'SELECT 1' }), ctx);
+    expect(res.status).toBe(200);
+    expect(sent().target.cacheKey).toBe('lakehouse-reader:k:master');
+    expect(sent().target.database).toBe('master');
+  });
+
+  it('a caller who is not a tenant admin sends a batch that starts with USE [master];', async () => {
+    // Breaks if the prefix is dropped (the batch would be exactly 'SELECT 1')
+    // or names another database.
+    await POST(req({ sql: 'SELECT 1' }), ctx);
+    expect(sent().sql).toBe('USE [master]; SELECT 1');
+  });
+
+  it('the USE prefix sits on the caller\'s first line, so error line numbers still match', async () => {
+    // Breaks if the prefix ends in a line break: the batch would have one more line than the text.
+    await POST(req({ sql: 'SELECT 1\nFROM t' }), ctx);
+    expect(sent().sql.split('\n')).toHaveLength(2);
+  });
+
+  it('a tenant admin keeps the shared pool and the text exactly as written', async () => {
+    // Breaks if the admin path is routed through the reader pool or given the prefix.
+    admin.isTenantAdmin.mockReturnValue(true);
+    await POST(req({ sql: 'SELECT 1' }), ctx);
+    expect(sent().target.cacheKey).toBe('k:master');
+    expect(sent().sql).toBe('SELECT 1');
+  });
+
+  it('the server\'s message for the added USE is not shown to a reader; the caller\'s own messages are', async () => {
+    // Breaks if the filter is removed (both messages returned) or drops every message (none returned).
+    synapse.executeQuery.mockResolvedValueOnce({
+      columns: [], rows: [], rowCount: 0, executionMs: 1, truncated: false,
+      messages: ["Changed database context to 'master'.", 'note from the query'],
+    } as any);
+    const res = await POST(req({ sql: 'SELECT 1' }), ctx);
+    expect((await res.json()).messages).toEqual(['note from the query']);
+  });
+
+  it('a tenant admin sees every message the server returned', async () => {
+    // Breaks if the filter also runs for tenant admins, whose own USE produces this message.
+    admin.isTenantAdmin.mockReturnValue(true);
+    synapse.executeQuery.mockResolvedValueOnce({
+      columns: [], rows: [], rowCount: 0, executionMs: 1, truncated: false,
+      messages: ["Changed database context to 'master'."],
+    } as any);
+    const res = await POST(req({ sql: 'SELECT 1' }), ctx);
+    expect((await res.json()).messages).toEqual(["Changed database context to 'master'."]);
   });
 });

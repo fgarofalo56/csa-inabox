@@ -88,6 +88,13 @@ describe('analyzeLakehouseQuery — accepted queries', () => {
       `SELECT * FROM OPENROWSET(BULK '${IN}/a.csv', FORMAT='CSV', PARSER_VERSION='2.0', ESCAPECHAR = '${BS}${BS}') AS r`, [`${IN}/a.csv`]],
     ['a negative MAXERRORS (lexing -1 as two tokens without the minus rule breaks it)',
       `SELECT * FROM OPENROWSET(BULK '${IN}/a.csv', FORMAT='CSV', MAXERRORS = -1) AS r`, [`${IN}/a.csv`]],
+    // Name parts compared as the server compares them.
+    ['bracketed names with a space between words (refusing every space in a name part breaks it)',
+      'SELECT [Order Details].[Unit Price] FROM [Order Details]', []],
+    ['the query database with a trailing space (comparing the raw part breaks it)',
+      'SELECT * FROM [master ].dbo.orders', []],
+    ['a bracketed fn_-prefixed column that is not called (refusing every bracketed fn_ name breaks it)',
+      'SELECT [fn_total], t.[fn_total] FROM t', []],
   ];
   for (const [label, sql, locations] of cases) {
     it(`accepts ${label}`, () => {
@@ -197,6 +204,10 @@ describe('analyzeLakehouseQuery — refused queries name the construct', () => {
     ['a three-part column reference', 'SELECT dbo.t.col FROM dbo.t', 'the three-part name dbo.t.col'],
     ['a four-part name', 'SELECT * FROM srv.master.dbo.t', 'the four-part name srv.master.dbo.t'],
     ['a global temporary table', 'SELECT * FROM ##shared', 'the global temporary table ##shared'],
+    // `##` in a later name part: accepted if only the first part were checked.
+    ['a global temporary table after a schema', 'SELECT * FROM dbo.[##shared]', 'the global temporary table dbo.##shared'],
+    // Read as a three-part name if only the first part were checked.
+    ['a global temporary table in tempdb', 'SELECT * FROM tempdb..##shared', 'the global temporary table tempdb..##shared'],
     // the sys catalog
     ['a dm_ view', 'SELECT TOP 50 * FROM sys.dm_exec_requests_history ORDER BY start_time DESC',
       'the sys schema object sys.dm_exec_requests_history'],
@@ -211,6 +222,20 @@ describe('analyzeLakehouseQuery — refused queries name the construct', () => {
     ['an unqualified fn_ function', 'SELECT * FROM fn_dblog(NULL, NULL)', 'the system function fn_dblog'],
     ['a compatibility view without a schema', 'SELECT * FROM sysprocesses', 'the system compatibility view sysprocesses'],
     ['a compatibility view with an empty schema', 'SELECT * FROM master..sysobjects', 'the system compatibility view sysobjects'],
+    // Trailing spaces in a name part are ignored by the server, so they are removed before every comparison.
+    ['a bracketed sys schema with a trailing space', 'SELECT * FROM [sys ].[dm_exec_requests]', 'the sys schema object sys.dm_exec_requests'],
+    ['a quoted sys schema with a trailing space', 'SELECT * FROM "sys ".x', 'the sys schema object sys.x'],
+    ['a compatibility view with a trailing space', 'SELECT * FROM [sysprocesses ]', 'the system compatibility view sysprocesses'],
+    ['a three-part sys name with a trailing space', 'SELECT * FROM master.[sys ].objects', 'the sys schema object master.sys.objects'],
+    ['a global temporary table in brackets with a trailing space', 'SELECT * FROM [##shared ]', 'the global temporary table ##shared'],
+    ['a bracketed fn_ function called', 'SELECT * FROM [fn_dblog](NULL, NULL)', 'the system function fn_dblog'],
+    ['a bracketed fn_ function with an empty schema', 'SELECT * FROM master..[fn_dblog ](NULL, NULL)', 'the system function fn_dblog'],
+    // Any other whitespace or control character in a name part is refused, shown escaped.
+    ['a name part with a non-breaking space', 'SELECT * FROM [sys\u00a0].x', 'the name part [sys\\u{a0}]'],
+    ['a name part with a tab', 'SELECT * FROM [sys\t].x', 'the name part [sys\\u{9}]'],
+    ['a name part with a zero-width space', 'SELECT * FROM [sy\u200bs].x', 'the name part [sy\\u{200b}s]'],
+    ['a name part with a leading space', 'SELECT * FROM [ sys].x', 'the name part [ sys]'],
+    ['a name part of spaces only', 'SELECT * FROM [  ].x', 'the name part [  ]'],
     // variables, functions and storage-shaped strings outside BULK
     ['a system variable', 'SELECT @@VERSION', 'the variable @@VERSION'],
     ['the :: function syntax', "SELECT * FROM ::fn_trace_gettable('x', default)", 'the :: function syntax'],
@@ -263,6 +288,18 @@ describe('analyzeLakehouseQuery — refused queries name the construct', () => {
     expect(out.remediation).toContain('t.Open');
     // And the bracketed form it names is accepted.
     expect(analyze('SELECT [Open], [Close] FROM t')).toEqual({ ok: true, locations: [] });
+  });
+
+  it('a word refused in every position is offered only the bracketed form', () => {
+    // Breaks if the hint offers t.EXEC / t.fn_x, which are themselves refused.
+    for (const [sql, word] of [["SELECT 1 EXEC('x')", 'EXEC'], ['SELECT fn_dblog(NULL, NULL)', 'fn_dblog']]) {
+      const out = analyze(sql);
+      expect(out.ok).toBe(false);
+      if (out.ok) return;
+      expect(out.remediation).toContain(`[${word}]`);
+      expect(out.remediation).not.toContain(`t.${word}`);
+      expect(analyze(`SELECT t.${word} FROM t`).ok).toBe(false);
+    }
   });
 
   it('a three-part column reference is told to use table.column, not that dbo is a database', () => {

@@ -15,7 +15,9 @@
  *     (column names, aliases, built-in functions).
  *   - NAMES are checked by shape: at most three parts, a three-part name must
  *     start with the database the query runs in, nothing in the `sys` schema,
- *     no system compatibility view, no global temporary table.
+ *     no system compatibility view, no global temporary table. Each part is
+ *     compared as the server compares it: trailing spaces removed, and a part
+ *     with any other whitespace or control character is refused.
  *   - `OPENROWSET` is allow-list only: `BULK` is required, each location is a
  *     literal string, and each option is on the read-only list below.
  *   - LOCATIONS are confined by `confineQueryLocation`: a literal `https://` or
@@ -103,10 +105,38 @@ function refuse(construct: string, why: string, remediation = SELECT_REMEDIATION
   };
 }
 
-/** Remediation for a refused word that could also be a column or table name. */
-function bracketHint(word: string): string {
-  return `If ${word} is a column or table name, write it in brackets, as [${word}], or qualify it, as t.${word}. `
-    + SELECT_REMEDIATION;
+/**
+ * Remediation for a refused word that could also be a column or table name.
+ * `qualify` is false for a word refused even as a later name part, so the hint
+ * offers only the form that is accepted.
+ */
+function bracketHint(word: string, qualify = true): string {
+  const forms = qualify ? `write it in brackets, as [${word}], or qualify it, as t.${word}` : `write it in brackets, as [${word}]`;
+  return `If ${word} is a column or table name, ${forms}. ` + SELECT_REMEDIATION;
+}
+
+/**
+ * A name part as the server compares it, or null when it is not accepted.
+ * SQL Server ignores trailing spaces in an identifier, so `[sys ]` names the
+ * `sys` schema; trailing spaces are removed before any comparison. A leading
+ * space, a part made only of spaces, and any whitespace or control character
+ * other than a space between other characters are not accepted, so no
+ * character the server might also ignore can make two names compare unequal
+ * here and equal there.
+ */
+function normalizeNamePart(raw: string): string | null {
+  if (raw === '') return '';
+  const value = raw.replace(/ +$/, '');
+  if (value === '' || value.startsWith(' ')) return null;
+  for (const c of value) {
+    if (c !== ' ' && /[\s\p{C}\p{Z}]/u.test(c)) return null;
+  }
+  return value;
+}
+
+/** A name part with every character outside printable ASCII written as \u{…}, for a message. */
+function shownNamePart(raw: string): string {
+  return [...raw].map((c) => (/^[\x21-\x7e]$/.test(c) || c === ' ' ? c : `\\u{${c.codePointAt(0)!.toString(16)}}`)).join('');
 }
 
 const WHY = {
@@ -382,9 +412,24 @@ function readOpenrowset(
 
 /**
  * Check one dotted name (1 to n parts, `''` for an omitted part as in `db..t`).
+ * Every comparison uses the parts as the server compares them
+ * ({@link normalizeNamePart}). `called` is true when `(` follows the name.
  * Returns a refusal or null.
  */
-function checkName(parts: string[], database: string, databaseLabel: string): QueryRefusal | null {
+function checkName(rawParts: string[], database: string, databaseLabel: string, called: boolean): QueryRefusal | null {
+  const parts: string[] = [];
+  for (const raw of rawParts) {
+    const part = normalizeNamePart(raw);
+    if (part === null) {
+      return refuse(
+        `the name part [${shownNamePart(raw)}]`,
+        'a name part may contain a space only between other characters, and no other whitespace or control character',
+        'Write the name without leading spaces, tabs, line breaks, non-breaking spaces or control characters. '
+        + SELECT_REMEDIATION,
+      );
+    }
+    parts.push(part);
+  }
   const shown = parts.join('.');
   if (parts.length >= 4) {
     return refuse(`the four-part name ${shown}`, 'names that reach another server are not accepted');
@@ -405,6 +450,14 @@ function checkName(parts: string[], database: string, databaseLabel: string): Qu
       WHY.catalog,
       'For table and column metadata, query INFORMATION_SCHEMA.TABLES or INFORMATION_SCHEMA.COLUMNS.',
     );
+  }
+  if (parts.some((p) => p.startsWith('##'))) {
+    return refuse(`the global temporary table ${shown}`, WHY.database);
+  }
+  // A bracketed or quoted `fn_` name called as a function; the bare word is refused earlier.
+  const last = parts[parts.length - 1];
+  if (called && /^fn_/i.test(last)) {
+    return refuse(`the system function ${last}`, WHY.admin);
   }
   if (parts.length === 3 && parts[0].toLowerCase() !== database) {
     return refuse(
@@ -484,12 +537,14 @@ export function analyzeLakehouseQuery(sql: string, opts: { database: string }): 
         continue;
       }
       const why = REFUSED_WORDS[w];
-      if (why && (!laterPart || REFUSED_IN_ANY_POSITION.has(w))) return refuse(t.text, why, bracketHint(t.text));
+      if (why && (!laterPart || REFUSED_IN_ANY_POSITION.has(w))) {
+        return refuse(t.text, why, bracketHint(t.text, !REFUSED_IN_ANY_POSITION.has(w)));
+      }
       if (/^(SP|XP)_/.test(w) && !laterPart) {
         return refuse(`the system procedure ${t.text}`, WHY.dynamic, bracketHint(t.text));
       }
-      if (/^FN_/.test(w)) return refuse(`the system function ${t.text}`, WHY.admin, bracketHint(t.text));
-      if (w.startsWith('##')) return refuse(`the global temporary table ${t.text}`, WHY.database);
+      if (/^FN_/.test(w)) return refuse(`the system function ${t.text}`, WHY.admin, bracketHint(t.text, false));
+      // A `##` name, bare or bracketed, is refused by checkName below.
     }
 
     // Dotted names: collect the chain that starts here.
@@ -501,7 +556,7 @@ export function analyzeLakehouseQuery(sql: string, opts: { database: string }): 
         if (isPunct(tokens[j + 1], '.')) { parts.push(''); j += 1; continue; }
         break;
       }
-      const refused = checkName(parts, database, opts.database);
+      const refused = checkName(parts, database, opts.database, isPunct(tokens[j], '('));
       if (refused) return refused;
     }
     i += 1;

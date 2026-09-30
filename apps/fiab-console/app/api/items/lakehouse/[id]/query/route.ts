@@ -18,7 +18,9 @@
  *     and a shared Viewer runs the editor's SQL tab and the entity-diagram
  *     column enrichment through it.
  *   - The SQL tab runs in a server-chosen database, never one named by the
- *     request. For a caller who is not a tenant admin it is always `master`.
+ *     request. For a caller who is not a tenant admin it is always `master`,
+ *     on a connection pool used by that path alone and with the batch starting
+ *     `USE [master];` (`../../_lib/query-reader.ts`).
  *     A tenant admin runs in the database the item records (`state.sqlDatabase`
  *     or `state.sqlEndpointDatabase`, both server-owned state keys that a
  *     client write cannot set), else `master`.
@@ -51,12 +53,10 @@ import { resolveLakehouseStorage } from '@/lib/azure/lakehouse-abfss';
 import { lakehouseStorageWithheldResponse } from '@/app/api/lakehouse/_lib/item-scope';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { analyzeLakehouseQuery, confineQueryLocation, type QueryRefusal } from '../../_lib/query-scope';
+import { READER_DATABASE, readerTarget, readerBatch, withoutReaderUseMessage } from '../../_lib/query-reader';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-/** The database every caller who is not a tenant admin runs in. */
-const READER_DATABASE = 'master';
 
 /**
  * The Serverless database a TENANT ADMIN's query runs in. Serverless exposes
@@ -166,10 +166,15 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   }
 
   try {
-    const result = await executeQuery(serverlessTarget(database), sqlText);
+    // A caller who is not a tenant admin runs on the reader path's own pool,
+    // and the batch starts with USE [master] (`_lib/query-reader.ts`).
+    const result = admin
+      ? await executeQuery(serverlessTarget(database), sqlText)
+      : await executeQuery(readerTarget(), readerBatch(sqlText));
     return NextResponse.json({
       ok: true,
       ...result,
+      messages: admin ? result.messages : withoutReaderUseMessage(result.messages),
       endpoint: `${process.env.LOOM_SYNAPSE_WORKSPACE}-ondemand.${getSynapseSqlSuffix()}`,
       database,
       executedBy: session.claims.upn,
