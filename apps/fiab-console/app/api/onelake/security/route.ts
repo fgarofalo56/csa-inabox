@@ -235,15 +235,24 @@ const SECURE_TAB_REFUSAL: TenantAdminRefusal = {
 
 const GUID = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
 /**
+ * A resource-group name, per ARM's rule: 1 to 90 characters of Unicode letters
+ * (`\p{L}`), Unicode decimal digits (`\p{Nd}`), `_`, `-`, `.`, `(`, `)`, not
+ * ending in a period, so `.` and `..` are refused. Its own pattern with the `u`
+ * flag, and NOT folded into the id pattern below: that one is case-insensitive,
+ * and `iu` together folds some non-ASCII characters into ASCII classes (U+212A
+ * KELVIN SIGN matches `[a-z]` and a literal `k`), which would widen the account
+ * and the fixed segments. Kept on one line; the test lifts it from this source.
+ */
+const RESOURCE_GROUP_NAME_RE = /^[-\p{L}\p{Nd}_.()]{0,89}[-\p{L}\p{Nd}_()]$/u;
+/**
  * A role-assignment id at a CONTAINER scope, in full. Anchored at both ends (JS
  * `$` without the `m` flag matches only at the end of the input), and no
  * character class admits `/` beyond the literal separators, or `?` / `#`.
- * Captures: 1 account, 2 container. The resource-group segment follows ARM's
- * naming rule: 1 to 90 of letters, digits, `_`, `-`, `.`, `(`, `)`, and it
- * does not end in a period, so `.` and `..` are refused.
+ * Captures: 1 resource group (checked by RESOURCE_GROUP_NAME_RE), 2 account,
+ * 3 container.
  */
 const CONTAINER_ROLE_ASSIGNMENT_ID_RE = new RegExp(
-  `^/subscriptions/${GUID}/resourceGroups/[-\\w.()]{0,89}[-\\w()]`
+  `^/subscriptions/${GUID}/resourceGroups/([^/?#]{1,90})`
   + '/providers/Microsoft\\.Storage/storageAccounts/([a-z0-9]{3,24})'
   + '/blobServices/default/containers/([a-z0-9-]{3,63})'
   + `/providers/Microsoft\\.Authorization/roleAssignments/${GUID}$`,
@@ -260,10 +269,10 @@ const CONTAINER_ROLE_ASSIGNMENT_ID_RE = new RegExp(
  */
 function parseRevokeTarget(id: string): { container: string } | { error: string } {
   const m = CONTAINER_ROLE_ASSIGNMENT_ID_RE.exec(id);
-  if (!m) {
+  if (!m || !RESOURCE_GROUP_NAME_RE.test(m[1])) {
     return { error: 'id must be a full role-assignment id at a container scope of this deployment\'s lake account' };
   }
-  const [, account, container] = m;
+  const [, , account, container] = m;
   if (account.toLowerCase() !== getAccountName().toLowerCase()) {
     return { error: 'id names a storage account other than this deployment\'s lake account' };
   }

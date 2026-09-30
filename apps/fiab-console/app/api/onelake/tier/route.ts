@@ -19,7 +19,8 @@
  *   - PUT is TENANT-ADMIN for now (`withTenantAdmin`, before the body is read).
  *     The confinement below relies on the lakehouse root recorded in the item's
  *     state, which is not yet server-owned. PUT becomes item-scoped once #4777's
- *     server-owned roots land. An admin's PUT still runs every check below.
+ *     server-owned roots land; #4808 tracks that change. An admin's PUT still
+ *     runs every check below.
  *   - GET is ITEM-scoped, the same model as `/api/lakehouse/path`:
  *   1. The path must be a plain container-relative path
  *      (`lib/util/blob-rel-path.ts`) in a known lake container.
@@ -187,7 +188,8 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
 });
 
 // 401 without a session; 403 `admin_only` for a non-admin before the body is
-// read. PUT becomes item-scoped once #4777's server-owned roots land; until
+// read. PUT becomes item-scoped once #4777's server-owned roots land (tracked
+// in #4808); until
 // then the root `resolveTierTarget` confines to is read from item state, so
 // only a tenant admin may write. The admin's request is still validated and
 // confined by `resolveTierTarget` before any of `getBlobTier` / `setBlobTier`

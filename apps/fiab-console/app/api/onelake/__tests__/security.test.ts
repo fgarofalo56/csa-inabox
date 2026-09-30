@@ -18,6 +18,8 @@
  * roles on the shared deployment containers, which no single item owns.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 vi.mock('@/lib/auth/session', () => ({ getSession: vi.fn() }));
 vi.mock('@azure/identity', () => {
@@ -350,9 +352,13 @@ describe('DELETE /api/onelake/security', () => {
     ['dots and parentheses inside', 'rg.dlz_(1)'],
     ['a single character', 'r'],
     ['90 characters', 'r'.repeat(90)],
+    ['accented letters', 'rg-données'],
+    ['CJK letters', '资源组'],
+    ['non-ASCII decimal digits', 'rg-١٢٣'],
   ])('accepts a resource group with %s (positive pair for the name rule)', async (_l, rg) => {
-    // Breaks if the tightened segment refused a legal ARM name: the answer
-    // would be 400 instead of the revoke.
+    // Breaks if the segment refused a legal ARM name: the answer would be 400
+    // instead of the revoke. The last three break on the ASCII-only `\w`
+    // class the segment used before, which Azure's Unicode rule does not share.
     const id = VALID.replace('/resourceGroups/rg-dlz/', `/resourceGroups/${rg}/`);
     expect(id).not.toBe(VALID);
     (getSession as any).mockReturnValue(adminSess);
@@ -361,5 +367,45 @@ describe('DELETE /api/onelake/security', () => {
     const res = await del(id);
     expect(res.status).toBe(200);
     expect(revokeContainerRoleAssignment).toHaveBeenCalledWith(id);
+  });
+
+  it.each([
+    ['a space in the resource group', VALID.replace('/resourceGroups/rg-dlz/', '/resourceGroups/rg dlz/')],
+    ['a percent-encoded slash in the resource group', VALID.replace('/resourceGroups/rg-dlz/', '/resourceGroups/rg%2Fdlz/')],
+    // U+212A KELVIN SIGN folds to "k" under the `iu` flags together. The id
+    // pattern is `i` only, so it is not an ASCII letter to the account class.
+    ['a KELVIN SIGN in the account name', `${scopeOf('acctla\u212Ae', 'bronze')}/providers/Microsoft.Authorization/roleAssignments/${RA}`],
+  ])('400 on an id with %s', async (_l, id) => {
+    // Breaks if the Unicode rule were applied by adding `u` to the whole id
+    // pattern (the KELVIN SIGN would then parse as "acctlake" and be listed),
+    // or if the resource-group segment admitted a space or a "%".
+    // The account fixture is written as an escape on purpose: an ASCII "K"
+    // matches `[a-z]` under `i` and lower-cases to the real account.
+    (getSession as any).mockReturnValue(adminSess);
+    (listContainerRoleAssignments as any).mockResolvedValue([{ id, principalId: 'p' }]);
+    (revokeContainerRoleAssignment as any).mockResolvedValue(undefined);
+    const res = await del(id);
+    expect(res.status).toBe(400);
+    expect(listContainerRoleAssignments).not.toHaveBeenCalled();
+    expect(revokeContainerRoleAssignment).not.toHaveBeenCalled();
+  });
+
+  it('the resource-group name rule, lifted from the route source', () => {
+    // The pattern is read out of route.ts at runtime rather than transcribed,
+    // so this probe cannot disagree with the implementation. Breaks if the
+    // literal is renamed or split (the lift finds nothing), or if the rule
+    // changes on any row below.
+    const src = readFileSync(fileURLToPath(new URL('../security/route.ts', import.meta.url)), 'utf8');
+    const lifted = /const RESOURCE_GROUP_NAME_RE = \/(.+)\/([a-z]*);/.exec(src);
+    expect(lifted).not.toBeNull();
+    const re = new RegExp(lifted![1], lifted![2]);
+    expect(re.flags).toContain('u');
+    const table: Array<[string, boolean]> = [
+      ['rg-dlz', true], ['r', true], ['r'.repeat(90), true], ['rg.dlz_(1)', true],
+      ['rg-données', true], ['资源组', true], ['rg-١٢٣', true], ['RG-Upper', true],
+      ['', false], ['.', false], ['..', false], ['rg-dlz.', false], ['r'.repeat(91), false],
+      ['a/b', false], ['a b', false], ['rg%2F', false], ['rg?x', false], ['rg#x', false],
+    ];
+    for (const [name, ok] of table) expect([name, re.test(name)]).toEqual([name, ok]);
   });
 });

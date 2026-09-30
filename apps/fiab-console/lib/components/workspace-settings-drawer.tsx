@@ -1138,8 +1138,10 @@ export function StorageBindingSection({ workspace }: { workspace: Workspace }) {
   const [error, setError] = useState<string | null>(null);
   // #4619 — setting, changing or clearing the binding is tenant-admin only on
   // PATCH, so a non-admin sees it read-only and never sends the field. The
-  // binding is picker-only: there is no free-text ARM-id fallback.
-  const canBind = useTenantAdminGate().allowed;
+  // binding is picker-only: there is no free-text ARM-id fallback. `allowed`
+  // enables the controls; `refused` shows the notice only once the admin probe
+  // has answered, so an admin never sees it flash.
+  const { allowed: canBind, refused: bindRefused } = useTenantAdminGate();
   const nextBinding = selected.trim();
   const bindingChanged = nextBinding !== (workspace.storageAccountId ?? '').trim();
 
@@ -1210,6 +1212,9 @@ export function StorageBindingSection({ workspace }: { workspace: Workspace }) {
             workspace uses the deployment-default account. Accounts the console identity
             can read appear here to bind.
           </MessageBarBody>
+          <MessageBarActions>
+            <Button size="small" onClick={() => setReload((n) => n + 1)}>Retry</Button>
+          </MessageBarActions>
         </MessageBar>
       )}
       {accounts === null && (
@@ -1225,7 +1230,7 @@ export function StorageBindingSection({ workspace }: { workspace: Workspace }) {
           </MessageBarActions>
         </MessageBar>
       )}
-      {!canBind && (
+      {bindRefused && (
         <AdminOnlyNotice {...WORKSPACE_STORAGE_ADMIN_ONLY} />
       )}
       {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}

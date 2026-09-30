@@ -74,21 +74,27 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 // ── Lifecycle rules ──────────────────────────────────────────────────────────
 
 const RULE = { name: 'cool-30', enabled: true, conditionField: 'daysAfterModificationGreaterThan', conditionDays: 30, actions: ['tierToCool'] };
+// A paused rule, so its row carries Reactivate instead of Pause.
+const PAUSED = { name: 'arch-90', enabled: false, conditionField: 'daysAfterModificationGreaterThan', conditionDays: 90, actions: ['tierToArchive'] };
 
 function lifecycleGet(accountScope: 'shared' | 'dedicated') {
-  return { body: { ok: true, rules: [RULE], ruleCount: 1, maxRules: 10, account: 'acct', accountScope } };
+  return { body: { ok: true, rules: [RULE, PAUSED], ruleCount: 2, maxRules: 10, account: 'acct', accountScope } };
 }
 
 describe('LifecycleRulesPanel — saving rules is tenant-admin only on every account', () => {
-  it.each(['shared', 'dedicated'] as const)('%s account + non-admin: notice shown, Add / Pause / Delete disabled', async (scope) => {
-    // Breaks if `readOnly` is dropped from the controls' `disabled` (Delete
-    // enabled), if the gate keys on `accountScope` again (the dedicated row
-    // would be enabled, the round-2 shape), or the notice is not rendered.
+  it.each(['shared', 'dedicated'] as const)('%s account + non-admin: notice shown, Add / Edit / Pause / Reactivate / Delete disabled', async (scope) => {
+    // Breaks if `readOnly` is dropped from any row control's `disabled` (that
+    // button would be enabled: Edit opens the rule dialog, Reactivate PUTs),
+    // if the gate keys on `accountScope` again (the dedicated row would be
+    // enabled, the round-2 shape), or the notice is not rendered.
     stubFetch({ '/api/onelake/lifecycle': lifecycleGet(scope) });
     render(withSession(false, <LifecycleRulesPanel workspaceId="ws1" />));
     const del = await screen.findByRole('button', { name: 'Delete cool-30' });
     expect(del).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Edit cool-30' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Pause cool-30' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Reactivate arch-90' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Edit arch-90' })).toBeDisabled();
     // The Tooltip is relationship="label", so it names the Add button.
     expect(screen.getByRole('button', { name: 'Add a lifecycle rule' })).toBeDisabled();
     expect(screen.getByRole('button', { name: /Create from template/ })).toBeDisabled();
@@ -96,10 +102,12 @@ describe('LifecycleRulesPanel — saving rules is tenant-admin only on every acc
   });
 
   it('tenant admin: controls enabled, no notice (positive pair)', async () => {
-    // Breaks if the gate ignores the admin flag (Delete stays disabled).
+    // Breaks if the gate ignores the admin flag (a row control stays disabled).
     stubFetch({ '/api/onelake/lifecycle': lifecycleGet('shared') });
     render(withSession(true, <LifecycleRulesPanel workspaceId="ws1" />));
     expect(await screen.findByRole('button', { name: 'Delete cool-30' })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Edit cool-30' })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Reactivate arch-90' })).not.toBeDisabled();
     expect(screen.queryByTestId('admin-only-notice')).toBeNull();
   });
 

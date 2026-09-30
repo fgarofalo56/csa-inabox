@@ -48,10 +48,11 @@ export const TIER_CHANGE_ADMIN_ONLY: AdminOnlyCopy = {
 };
 
 /**
- * A workspace's storage account (`storageAccountId` on POST /api/workspaces
- * and PATCH /api/workspaces/[id]). The binding decides which account the
+ * A workspace's storage account (`storageAccountId` on POST /api/workspaces,
+ * PATCH /api/workspaces/[id], POST /api/admin/workspaces and PATCH
+ * /api/admin/workspaces/[id]). The binding decides which account the
  * workspace's lifecycle and metrics surfaces act on, so setting or changing it
- * is a tenant-admin action. The route answers with this text.
+ * is a tenant-admin action. The routes answer with this text.
  */
 export const WORKSPACE_STORAGE_ADMIN_ONLY: AdminOnlyCopy = {
   reason: 'Setting or changing a workspace\'s storage account is limited to tenant admins.',

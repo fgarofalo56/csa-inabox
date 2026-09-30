@@ -10,7 +10,12 @@
  *   - still let an admin set, change and clear it, and send the field only
  *     when an admin changed it;
  *   - in the drawer, bind through the picker only: a failed or empty account
- *     list renders a guided MessageBar, never a free-text ARM-id input.
+ *     list renders a guided MessageBar, never a free-text ARM-id input;
+ *   - on every surface, a failed list shows the route's `error`, never its
+ *     `hint` (which offers a manual entry none of them has), with a Retry that
+ *     re-reads the list; the pane keeps its picker so an admin can still clear;
+ *   - show the admin notice only once standing is known (`refused`), so it
+ *     never flashes for an admin while the check is loading.
  *
  * Every load-bearing assertion names the input that breaks it. The routes are
  * the enforcement point and have their own suites.
@@ -60,13 +65,18 @@ function stubFetch(routes: Record<string, Route>): Call[] {
   return calls;
 }
 
-function withSession(isTenantAdmin: boolean, node: ReactNode) {
+function withSession(isTenantAdmin: boolean, node: ReactNode, loading = false) {
   return (
-    <SessionProvider value={{ authenticated: true, user: null, isTenantAdmin, loading: false }}>
+    <SessionProvider value={{ authenticated: true, user: null, isTenantAdmin, loading }}>
       {node}
     </SessionProvider>
   );
 }
+
+/** A failed account list, with a hint that offers the manual entry no surface has. */
+const LIST_FAILED: Route = {
+  body: { ok: false, error: 'LIST-ERROR-3d', hint: 'LIST-HINT-3d or enter the storage URI manually.' },
+};
 
 async function pick(combobox: HTMLElement, option: RegExp) {
   fireEvent.click(combobox);
@@ -142,6 +152,24 @@ describe('WorkspaceCreateWizard — storage account (#4619)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create workspace' }));
     await waitFor(() => expect(screen.getByText(/SERVER-REASON-3c1/)).toBeTruthy());
   });
+
+  it('a failed list shows its error, not the manual-entry hint, and Retry re-reads it', async () => {
+    // Breaks if the wizard shows the route's hint (LIST-HINT-3d offers a manual
+    // entry the wizard has none of), or has no working Retry: the second
+    // listing would never be read, so lakeb could not be picked.
+    const routes: Record<string, Route> = { ...WIZARD_ROUTES, '/api/storage/accounts': LIST_FAILED };
+    const calls = stubFetch(routes);
+    render(withSession(true, wizard()));
+    await toAdvanced();
+    const bar = await screen.findByTestId('wizard-storage-accounts-unavailable');
+    expect(bar.textContent).toContain('LIST-ERROR-3d');
+    expect(bar.textContent).not.toContain('LIST-HINT-3d');
+    routes['/api/storage/accounts'] = { body: ACCOUNTS };
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.getByRole('combobox', { name: /OneLake storage account/ })).toBeTruthy());
+    expect(calls.filter((c) => c.url.includes('/api/storage/accounts'))).toHaveLength(2);
+    await pick(screen.getByRole('combobox', { name: /OneLake storage account/ }), /^lakeb/);
+  });
 });
 
 // ── Settings pane, OneLake tab ───────────────────────────────────────────────
@@ -216,6 +244,46 @@ describe('Workspace settings pane, OneLake tab — storage binding (#4619)', () 
     await pick(screen.getByRole('combobox'), /^lakeb/);
     fireEvent.click(saveBinding());
     await waitFor(() => expect(screen.getByText(/SERVER-REASON-3c1/)).toBeTruthy());
+  });
+
+  it('a failed list shows its error, not the manual-entry hint, and an admin can still clear', async () => {
+    // Breaks if the pane shows the route's hint (LIST-HINT-3d offers a manual
+    // entry the pane has none of), or hides the picker on failure, so an admin
+    // could not clear the binding back to the deployment default.
+    const calls = stubFetch({ ...PANE_ROUTES, '/api/storage/accounts': LIST_FAILED });
+    render(withSession(true, pane()));
+    const bar = await screen.findByTestId('pane-storage-accounts-unavailable');
+    expect(bar.textContent).toContain('LIST-ERROR-3d');
+    expect(bar.textContent).not.toContain('LIST-HINT-3d');
+    await waitFor(() => expect(screen.getByRole('combobox').getAttribute('aria-disabled')).not.toBe('true'));
+    await pick(screen.getByRole('combobox'), /^Deployment default/);
+    fireEvent.click(saveBinding());
+    await waitFor(() => expect(writes(calls, 'PATCH')).toHaveLength(1));
+    expect(writes(calls, 'PATCH')[0].body).toEqual({ storageAccountId: '' });
+  });
+
+  it('Retry on a failed list re-reads it and offers the accounts (positive pair)', async () => {
+    // Breaks if the pane has no Retry, or Retry does not re-fetch: lakeb would
+    // never be offered.
+    const routes: Record<string, Route> = { ...PANE_ROUTES, '/api/storage/accounts': LIST_FAILED };
+    const calls = stubFetch(routes);
+    render(withSession(true, pane()));
+    await screen.findByTestId('pane-storage-accounts-unavailable');
+    routes['/api/storage/accounts'] = { body: ACCOUNTS };
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByTestId('pane-storage-accounts-unavailable')).toBeNull());
+    expect(calls.filter((c) => c.url.includes('/api/storage/accounts'))).toHaveLength(2);
+    await waitFor(() => expect(screen.getByRole('combobox').getAttribute('aria-disabled')).not.toBe('true'));
+    await pick(screen.getByRole('combobox'), /^lakeb/);
+  });
+
+  it('the admin notice does not flash while the admin check is loading', async () => {
+    // Breaks if the notice is keyed on `!allowed` instead of `refused`.
+    stubFetch(PANE_ROUTES);
+    render(withSession(false, pane(), true));
+    await waitFor(() => expect(screen.getByRole('combobox')).toBeTruthy());
+    expect(screen.queryByTestId('admin-only-notice')).toBeNull();
+    expect(saveBinding().disabled).toBe(true);
   });
 });
 
@@ -293,10 +361,6 @@ describe('Workspace settings drawer, StorageBindingSection (#4619)', () => {
   // The binding is picker-only. The free-text ARM-id box only ever rendered
   // when the account list could NOT be read, so these fixtures fail the list:
   // with a successful list, restoring the box would change nothing on screen.
-  const LIST_FAILED: Route = {
-    body: { ok: false, error: 'LIST-ERROR-3d', hint: 'LIST-HINT-3d or enter the storage URI manually.' },
-  };
-
   for (const admin of [false, true]) {
     it(`a failed account list renders no free-text ARM-id input (${admin ? 'admin' : 'non-admin'})`, async () => {
       // Breaks if the manual fallback returns: a textbox (the ARM-id Input)
@@ -346,5 +410,32 @@ describe('Workspace settings drawer, StorageBindingSection (#4619)', () => {
     fireEvent.click(saveBinding());
     await waitFor(() => expect(writes(calls, 'PATCH')).toHaveLength(1));
     expect(writes(calls, 'PATCH')[0].body).toEqual({ storageAccountId: '' });
+  });
+
+  it('Retry on the empty-list message re-reads the list (positive pair)', async () => {
+    // Breaks if the empty-list message has no Retry, or its Retry does not
+    // re-fetch: the second listing (with lakeb) would never be read.
+    const routes: Record<string, Route> = { ...DRAWER_ROUTES, '/api/storage/accounts': { body: { ok: true, accounts: [] } } };
+    const calls = stubFetch(routes);
+    render(withSession(true, drawer()));
+    await screen.findByTestId('storage-accounts-empty');
+    routes['/api/storage/accounts'] = { body: ACCOUNTS };
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByTestId('storage-accounts-empty')).toBeNull());
+    expect(calls.filter((c) => c.url.includes('/api/storage/accounts'))).toHaveLength(2);
+    await pick(screen.getByRole('combobox'), /^lakeb/);
+  });
+
+  it('the admin notice does not flash while the admin check is loading', async () => {
+    // Breaks if the notice is keyed on `!allowed` instead of `refused`: while
+    // loading, allowed is false, so the notice would render for an admin.
+    // The picker and Save stay disabled until standing is known.
+    stubFetch(DRAWER_ROUTES);
+    render(withSession(false, drawer(), true));
+    await waitFor(() => expect(screen.getByRole('combobox')).toBeTruthy());
+    expect(screen.queryByTestId('admin-only-notice')).toBeNull();
+    const combo = screen.getByRole('combobox');
+    expect(combo.hasAttribute('disabled') || combo.getAttribute('aria-disabled') === 'true').toBe(true);
+    expect(saveBinding().disabled).toBe(true);
   });
 });

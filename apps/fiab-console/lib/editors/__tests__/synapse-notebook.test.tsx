@@ -214,5 +214,64 @@ describe('SynapseNotebookEditor (F15 authoring)', () => {
       const body = JSON.parse(String(log.calls.find((c) => c.init?.method === 'POST')!.init!.body));
       expect(body).toEqual({ name: BOUND, itemId: ID });
     });
+
+    it('non-admin: the locked field carries a caption saying why; an admin sees none (pair)', async () => {
+      // Breaks if the caption is dropped (a non-admin sees a locked field with
+      // no reason), or shown to an admin, whose field is editable.
+      mount(false);
+      await waitFor(() => expect((screen.getByLabelText('New notebook name') as HTMLInputElement).value).toBe(BOUND), { timeout: 5000 });
+      expect(screen.getByTestId('notebook-name-locked').textContent).toMatch(/Only a tenant admin can choose another name/);
+      expect(screen.queryByTestId('notebook-unbound-notice')).toBeNull();
+      cleanup();
+      mount(true);
+      await screen.findByLabelText('New notebook name', {}, { timeout: 5000 });
+      expect(screen.queryByTestId('notebook-name-locked')).toBeNull();
+    });
+
+    const mountAt = (isTenantAdmin: boolean, itemId: string) => render(
+      <SessionProvider value={{ authenticated: true, user: null, isTenantAdmin, loading: false }}>
+        <SynapseNotebookEditor item={makeItem('synapse-notebook', 'Synapse notebook')} id={itemId} />
+      </SessionProvider>,
+    );
+
+    it.each([
+      // An id with fewer than 16 alphanumerics carries no binding token.
+      ['an older item whose id is too short', 'nb-1', () => ({ id: 'nb-1', displayName: 'Sales nb', workspaceId: 'ws1' }), /older item/],
+      ['an item with no workspace', ID, () => ({ id: ID, displayName: 'Sales nb' }), /not recorded in a workspace/],
+      ['an item lookup that fails', ID, () => { throw new Error('lookup down'); }, /could not be looked up/],
+    ])('non-admin, %s: a guided notice explains the empty locked field and Create stays off', async (_l, itemId, lookup, reason) => {
+      // Breaks if a non-admin with no bound name is left at an empty, locked
+      // field and a disabled Create with nothing on screen saying why (the
+      // notice is missing), or if the notice names the wrong cause.
+      log = installFetchMock({
+        '/api/synapse/notebooks': () => ({ ok: true, notebooks: [] }),
+        '/api/items/synapse-spark-pool/list': () => ({ ok: true, pools: [] }),
+        '/api/synapse/environments': () => ({ ok: true, environments: [] }),
+        '/api/cosmos-items/synapse-notebook/': lookup,
+      });
+      mountAt(false, itemId);
+      const notice = await screen.findByTestId('notebook-unbound-notice', {}, { timeout: 5000 });
+      expect(notice.textContent).toMatch(reason);
+      expect((screen.getByLabelText('New notebook name') as HTMLInputElement).value).toBe('');
+      expect(screen.getByRole('button', { name: 'Create notebook' })).toBeDisabled();
+      expect(screen.queryByTestId('notebook-name-locked')).toBeNull();
+    });
+
+    it('a tenant admin on an older short-id item gets no notice and can name the notebook (positive pair)', async () => {
+      // Breaks if the notice keys on the missing name alone: an admin, who may
+      // type any name, would be told they cannot create.
+      log = installFetchMock({
+        '/api/synapse/notebooks': () => ({ ok: true, notebooks: [] }),
+        '/api/items/synapse-spark-pool/list': () => ({ ok: true, pools: [] }),
+        '/api/synapse/environments': () => ({ ok: true, environments: [] }),
+        '/api/cosmos-items/synapse-notebook/': () => ({ id: 'nb-1', displayName: 'Sales nb', workspaceId: 'ws1' }),
+      });
+      mountAt(true, 'nb-1');
+      const input = await screen.findByLabelText('New notebook name', {}, { timeout: 5000 });
+      await new Promise((r) => setTimeout(r, 30));
+      expect(screen.queryByTestId('notebook-unbound-notice')).toBeNull();
+      fireEvent.change(input, { target: { value: 'admin_nb' } });
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Create notebook' })).not.toBeDisabled());
+    });
   });
 });

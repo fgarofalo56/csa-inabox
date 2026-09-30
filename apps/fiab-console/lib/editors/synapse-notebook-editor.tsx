@@ -243,7 +243,7 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
   if (id === 'new') {
     return (
       <NewItemCreateGate item={item} createLabel="Create Synapse notebook"
-        intro="A Synapse notebook is a multi-cell Spark notebook that runs on a Synapse Big Data pool. Create the item first; its notebook is then published to the workspace under the item's name." />
+        intro="A Synapse notebook is a multi-cell Spark notebook that runs on a Synapse Big Data pool. Create the item first; its notebook can then be published to the workspace under the item's name, on Create or Save in the editor." />
     );
   }
   return <SynapseNotebookAuthoring item={item} id={id} />;
@@ -293,6 +293,12 @@ function SynapseNotebookAuthoring({ item, id }: { item: FabricItemType; id: stri
   const [newName, setNewName] = useState('');
   // #4619 — the name this item publishes under (a non-admin may write only that).
   const [boundName, setBoundName] = useState<string | null>(null);
+  // Why `boundName` is what it is, so a non-admin is told rather than left at
+  // an empty locked field: 'pending' until the item lookup answers; 'no-token'
+  // when the item id is too short to carry a binding (an older item);
+  // 'no-workspace' when the item record names no workspace; 'unknown' when the
+  // lookup itself failed, so nothing was established either way.
+  const [bindState, setBindState] = useState<'pending' | 'bound' | 'no-token' | 'no-workspace' | 'unknown'>('pending');
 
   // Right-side tool drawers — shared with the other notebook flavours.
   const [variablesOpen, setVariablesOpen] = useState(false);
@@ -526,10 +532,13 @@ function SynapseNotebookAuthoring({ item, id }: { item: FabricItemType; id: stri
       try {
         // Resolve the owning workspace, then pull the Cosmos-backed cells.
         const lookup = await clientFetch(`/api/cosmos-items/synapse-notebook/${encodeURIComponent(id)}`);
-        if (!lookup.ok) return;
+        if (!lookup.ok) { if (!cancelled) setBindState('unknown'); return; }
         const item = await lookup.json();
-        if (cancelled || !item?.workspaceId) return;
-        setBoundName(boundNotebookName(item.displayName, id));
+        if (cancelled) return;
+        if (!item?.workspaceId) { setBindState('no-workspace'); return; }
+        const bound = boundNotebookName(item.displayName, id);
+        setBoundName(bound);
+        setBindState(bound ? 'bound' : 'no-token');
         const r = await clientFetch(`/api/items/synapse-notebook/${encodeURIComponent(id)}?workspaceId=${encodeURIComponent(item.workspaceId)}`);
         const j = await r.json();
         if (cancelled || !j?.ok) return;
@@ -543,7 +552,11 @@ function SynapseNotebookAuthoring({ item, id }: { item: FabricItemType; id: stri
         setAttachedEnv((props?.metadata?.a365ComputeOptions?.name as string) ?? null);
         setSessionId(null); setSessionState('none'); setDirty(false);
         setBanner({ intent: 'info', text: 'Loaded notebook cells from the installed app bundle. Open a workspace notebook on the left to edit the published copy.' });
-      } catch { /* fall back to the empty starter cell */ }
+      } catch {
+        // Fall back to the empty starter cell. If the lookup never answered,
+        // the binding is unknown rather than absent.
+        if (!cancelled) setBindState((st) => (st === 'pending' ? 'unknown' : st));
+      }
     })();
     return () => { cancelled = true; };
   }, [id]);
@@ -1281,6 +1294,26 @@ function SynapseNotebookAuthoring({ item, id }: { item: FabricItemType; id: stri
                 <Button size="small" icon={<Add20Regular />} onClick={createNotebook}
                   disabled={!(adminGate.allowed && newName.trim()) && !boundName} aria-label="Create notebook" />
               </div>
+              {adminGate.refused && boundName && (
+                <Caption1 data-testid="notebook-name-locked" style={{ display: 'block', marginBottom: tokens.spacingVerticalS }}>
+                  Named after this item. Only a tenant admin can choose another name.
+                </Caption1>
+              )}
+              {adminGate.refused && !boundName && bindState !== 'pending' && bindState !== 'bound' && (
+                <MessageBar intent="warning" data-testid="notebook-unbound-notice" style={{ marginBottom: tokens.spacingVerticalS }}>
+                  <MessageBarBody>
+                    <MessageBarTitle>No notebook name for this item</MessageBarTitle>
+                    {bindState === 'no-token'
+                      ? 'This is an older item whose id is too short to name a notebook after, so only a tenant admin can create one here. '
+                        + 'Create a new Synapse notebook item from the workspace to author your own, or ask a tenant admin to create this one.'
+                      : bindState === 'no-workspace'
+                        ? 'This item is not recorded in a workspace, so it has no notebook name to publish under and only a tenant admin can create one here. '
+                          + 'Create a new Synapse notebook item from a workspace, or ask a tenant admin to create this one.'
+                        : 'The item could not be looked up, so the notebook name it publishes under is not known and Create stays off. '
+                          + 'Reload the editor to try again; if it persists, ask a tenant admin to create this notebook.'}
+                  </MessageBarBody>
+                </MessageBar>
+              )}
               <Tree aria-label="Workspace notebooks" defaultOpenItems={['nb']}>
                 <TreeItem itemType="branch" value="nb">
                   <TreeItemLayout iconBefore={<Book20Regular />}>

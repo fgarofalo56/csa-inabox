@@ -27,7 +27,7 @@ import {
   Title3, Subtitle2, Body1, Body1Strong, Caption1,
   Button, Input, Textarea, Dropdown, Option, Field, Checkbox, Badge,
   Spinner, Divider, Tag, TagGroup, mergeClasses,
-  MessageBar, MessageBarBody, MessageBarTitle, Listbox,
+  MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions, Listbox,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -567,6 +567,7 @@ function AdvancedStep(props: {
   const [domains, setDomains] = useState<DomainOpt[] | null>(null);
   const [storage, setStorage] = useState<StorageOpt[] | null>(null);
   const [storageGate, setStorageGate] = useState<string | null>(null);
+  const [storageReload, setStorageReload] = useState(0);
 
   useEffect(() => {
     fetch('/api/admin/domains').then((r) => r.json())
@@ -582,14 +583,20 @@ function AdvancedStep(props: {
         }
       })
       .catch(() => setDomains([]));
+  }, []);
+
+  useEffect(() => {
+    setStorage(null); setStorageGate(null);
     fetch('/api/storage/accounts').then((r) => r.json())
       .then((j) => {
         if (j?.ok && Array.isArray(j.accounts)) {
           setStorage(j.accounts.map((a: any) => ({ id: a.id, name: a.name, isHns: a.isHns, sku: a.sku, resourceGroup: a.resourceGroup, location: a.location })));
-        } else { setStorage([]); setStorageGate(j?.hint || j?.error || 'Could not list storage accounts.'); }
+        // The route's `hint` offers a manual entry this step does not have, so
+        // only its `error` detail is shown (#4619).
+        } else { setStorage([]); setStorageGate(j?.error || 'Could not list storage accounts.'); }
       })
       .catch((e) => { setStorage([]); setStorageGate(String(e?.message || e)); });
-  }, []);
+  }, [storageReload]);
 
   const domainName = useMemo(() => domains?.find((d) => d.id === domain)?.name, [domains, domain]);
   const storageName = useMemo(() => storage?.find((sx) => sx.id === storageAccountId)?.name, [storage, storageAccountId]);
@@ -630,10 +637,15 @@ function AdvancedStep(props: {
               </Caption1>
             </>
           ) : storageGate ? (
-            <MessageBar intent="warning">
+            <MessageBar intent="warning" data-testid="wizard-storage-accounts-unavailable">
               <MessageBarBody>
-                {storageGate} Grant the Console UAMI Reader on the subscription to list accounts; the deployment-default account is used otherwise.
+                Storage accounts could not be listed ({storageGate}), so this workspace will use the
+                deployment-default account. Listing needs the Reader role on the subscription for the
+                console identity (<code>Microsoft.Storage/storageAccounts/read</code>).
               </MessageBarBody>
+              <MessageBarActions>
+                <Button size="small" onClick={() => setStorageReload((n) => n + 1)}>Retry</Button>
+              </MessageBarActions>
             </MessageBar>
           ) : (
             <Dropdown
