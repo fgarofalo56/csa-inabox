@@ -20,10 +20,12 @@ name: copilot-quality-evals
 #   4. sticky PR comment with the per-surface score/delta table + uploads the
 #      run artifact (the NEXT run downloads it as the delta baseline).
 #
-# Change gating: the corpus paths below ARE the change filter — CI runners are
-# fresh, so stage-copilot-corpus.sh has no incremental baseline to diff against
-# (its .corpus-manifest.json 'copied' count is always the full tree here); the
-# nightly schedule runs unconditionally with --strict-missing.
+# Change gating: on `push` to main the corpus paths below ARE the change filter
+# — CI runners are fresh, so stage-copilot-corpus.sh has no incremental
+# baseline to diff against (its .corpus-manifest.json 'copied' count is always
+# the full tree here); the nightly schedule runs unconditionally with
+# --strict-missing. The `pull_request` filter is NARROWER on purpose (operator
+# decision 2026-09-30) — see the comment on that trigger.
 #
 # WHAT THIS RUN CAN AND CANNOT MEASURE (#3085): the console indexes the corpus
 # BAKED INTO ITS IMAGE, and the staging step here never leaves the runner — so
@@ -71,12 +73,39 @@ on:
       - '.github/workflows/copilot-quality-evals.yml'
   pull_request:
     branches: [main]
+    # Operator decision 2026-09-30 ("path-filter the evals"): a PR run fires
+    # ONLY on what a PR run executes FROM THE CHECKOUT. The sweep itself scores
+    # the DEPLOYED console and the DEPLOYED evaluator image (#3085 — the corpus
+    # and the eval sets are both baked into images), so a docs/** or PRPs/**
+    # change is not measured by it; triggering on those only queued sweeps in
+    # the repo-wide `copilot-quality-evals-estate` group, where GitHub keeps one
+    # pending run and cancels the rest at zero steps — an advisory red on the
+    # drain's merge gate that measured nothing.
+    #
+    # Scripts are listed WITH their local imports (redact-secrets,
+    # parse-reindex-poll, eval-regression-lib): an edit to a helper changes
+    # what runs exactly as an edit to its caller does.
+    #
+    # COVERAGE GIVEN UP, stated rather than implied: lint-eval-sets.mjs checks
+    # every eval-set `expectedChunks` path/anchor against docs/** and PRPs/**,
+    # and this workflow is its only CI caller. A PR that deletes or re-heads a
+    # referenced doc no longer runs that lint pre-merge; it surfaces on main,
+    # on the next `push` run whose diff matches the push filter above, or at
+    # the latest on the nightly schedule.
+    #
+    # Pinned by scripts/ci/__tests__/copilot-evals-trigger-contract.test.mjs.
     paths:
-      - 'docs/**'
-      - 'PRPs/active/**'
-      - 'PRPs/completed/csa-loom-pillar/**'
       - 'content/evals/**'
       - 'scripts/csa-loom/stage-copilot-corpus.sh'
+      - 'scripts/csa-loom/lint-eval-sets.mjs'
+      - 'scripts/csa-loom/check-eval-regression.mjs'
+      - 'scripts/csa-loom/eval-regression-lib.mjs'
+      - 'scripts/ci/reindex-loom-docs.sh'
+      - 'scripts/ci/parse-reindex-poll.mjs'
+      - 'scripts/ci/classify-reindex-result.mjs'
+      - 'scripts/ci/redact-secrets.mjs'
+      - 'scripts/ci/run-outcome.mjs'
+      - '.github/workflows/copilot-quality-evals.yml'
   schedule:
     # Nightly full run (UTC). Offset from the Function's own 07:00 timer so the
     # two runs don't share a burst window against the AOAI judge TPM.
@@ -531,7 +560,7 @@ jobs:
           CHECKOUT_COMMIT: ${{ steps.stage.outputs.corpus_commit }}
         run: |
           set -uo pipefail
-          # #3085 — this workflow is PATH-TRIGGERED on docs/**, PRPs/** and
+          # #3085 — on push this workflow is PATH-TRIGGERED on docs/**, PRPs/** and
           # content/evals/**, and it structurally CANNOT measure them: the
           # console indexes the corpus BAKED INTO ITS IMAGE
           # (apps/fiab-console/Dockerfile:139), and the staging step above never
