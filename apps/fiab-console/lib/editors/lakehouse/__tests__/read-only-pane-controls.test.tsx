@@ -487,6 +487,31 @@ function plannedTablesCtx() {
   return { ...tablesCtx(), schemasEnabled: false, liveTables: [], openPrefixes: {}, bundleDeltaTables: [PLANNED_TABLE] };
 }
 
+describe('TablesPane planned-table menu — same-named tables in two schemas', () => {
+  it("each row's Maintain… opens its own table", async () => {
+    const ctx = {
+      ...plannedTablesCtx(),
+      bundleDeltaTables: [PLANNED_TABLE, { ...PLANNED_TABLE, schema: 'sales', ddl: 'CREATE TABLE orders (id INT, region STRING)' }],
+    };
+    const errs: string[] = [];
+    const spy = vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => { errs.push(a.map(String).join(' ')); });
+    const { calls } = mount(<TablesPane />, ctx, 'write');
+    await probeSettled(calls);
+    const triggers = await screen.findAllByText('…', {}, { timeout: 5000 });
+    // Fixture witness: two rows render, one per table.
+    expect(triggers).toHaveLength(2);
+    fireEvent.click(triggers[1].closest('button') as HTMLElement);
+    fireEvent.click(await menuItem('Maintain…'));
+    // Breaks if the row sets the name alone ('orders'), which the lookup reads
+    // as the dbo table.
+    await waitFor(() => expect(ctx.setMaintainTable).toHaveBeenCalledWith('sales/orders'));
+    // Breaks if the rows are keyed by name alone (React reports two children
+    // with the same key).
+    expect(errs.filter((e) => e.includes('same key'))).toEqual([]);
+    spy.mockRestore();
+  });
+});
+
 describe('TablesPane planned-table menu — read-only role', () => {
   it('closes Maintain… and leaves History open', async () => {
     const ctx = plannedTablesCtx();

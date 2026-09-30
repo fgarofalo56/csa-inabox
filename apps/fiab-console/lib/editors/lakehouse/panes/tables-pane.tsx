@@ -12,7 +12,7 @@ import {
   CheckmarkCircle20Filled, ErrorCircle20Filled, Clock20Regular,
 } from '@fluentui/react-icons';
 import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
-import { useStyles, formatBytes, leafName, templateDfsSuffix } from '../shared';
+import { useStyles, formatBytes, leafName, templateDfsSuffix, bundleTableKey } from '../shared';
 import { useLakehouseCtx } from '../lakehouse-editor-context';
 import { useLakehouseReadOnly, LAKEHOUSE_READ_ONLY_TITLE, LAKEHOUSE_READ_ONLY_SUBTEXT } from '../hooks/use-lakehouse-access';
 import type { LiveCatalogTable } from '../types';
@@ -164,7 +164,7 @@ export function TablesPane() {
                       </TableHeader>
                       <TableBody>
                         {bundleDeltaTables.map((t) => (
-                          <TableRow key={t.name}>
+                          <TableRow key={bundleTableKey(t)}>
                             <TableCell><strong>{t.name}</strong></TableCell>
                             <TableCell><code style={{ fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{t.ddl}</code></TableCell>
                             <TableCell className={s.cell}>{t.sampleRows?.length ?? 0}</TableCell>
@@ -191,7 +191,7 @@ export function TablesPane() {
                                       disabled={!activeContainer || readOnly}
                                       title={readOnly ? LAKEHOUSE_READ_ONLY_TITLE : !activeContainer ? 'Select a container first' : 'OPTIMIZE / VACUUM / ZORDER BY'}
                                       subText={readOnly ? LAKEHOUSE_READ_ONLY_SUBTEXT : undefined}
-                                      onClick={() => { setMaintainTable(t.name); setMaintainOpen(true); }}>
+                                      onClick={() => { setMaintainTable(t.schema ? `${t.schema}/${leafName(t.name)}` : t.name); setMaintainOpen(true); }}>
                                       Maintain…
                                     </MenuItem>
                                   </MenuList>

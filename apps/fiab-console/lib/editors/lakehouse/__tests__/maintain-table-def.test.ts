@@ -10,7 +10,7 @@
  * What breaks each case is named at the assertion.
  */
 import { describe, it, expect } from 'vitest';
-import { maintainTableDef } from '../shared';
+import { maintainTableDef, bundleTableKey } from '../shared';
 
 const ORDERS_SALES = { name: 'orders', schema: 'sales', ddl: 'CREATE TABLE orders (id INT)' };
 const ORDERS_DBO = { name: 'orders', ddl: 'CREATE TABLE orders (order_id INT)' };
@@ -40,6 +40,19 @@ describe('maintainTableDef', () => {
     expect(maintainTableDef([CUSTOMERS], 'Tables/customers')).toBe(CUSTOMERS);
     // Breaks if the leaf arm is removed.
     expect(maintainTableDef([CUSTOMERS], 'customers')).toBe(CUSTOMERS);
+  });
+
+  it('a bare name shared across schemas means the dbo table, whatever the order', () => {
+    // Breaks if the bare-name arm takes the first name match: with the sales
+    // table listed first it would return ORDERS_SALES.
+    expect(maintainTableDef([ORDERS_SALES, ORDERS_DBO], 'orders')).toBe(ORDERS_DBO);
+    // Positive: with no dbo table, the bare name still finds the other one.
+    expect(maintainTableDef([ORDERS_SALES], 'orders')).toBe(ORDERS_SALES);
+  });
+
+  it('bundleTableKey tells same-named tables apart by schema', () => {
+    // Breaks if the key is the name alone ('orders' for both).
+    expect([bundleTableKey(ORDERS_DBO), bundleTableKey(ORDERS_SALES)]).toEqual(['dbo/orders', 'sales/orders']);
   });
 
   it('returns nothing for an empty key or an unknown table', () => {

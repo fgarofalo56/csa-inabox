@@ -314,13 +314,25 @@ async function parseJsonOrError<T extends { ok?: boolean; error?: string }>(
  */
 function maintainTableDef<T extends { name: string; schema?: string }>(tables: T[], key: string): T | undefined {
   if (!key) return undefined;
-  const exact = tables.find((t) => t.name === key || leafName(t.name) === key);
+  // A bare name can match tables in several schemas; it means the dbo one
+  // (a table with no schema is dbo), and only then any other.
+  const byName = tables.filter((t) => t.name === key || leafName(t.name) === key);
+  const exact = byName.find((t) => (t.schema || 'dbo').toLowerCase() === 'dbo') ?? byName[0];
   if (exact) return exact;
   const slash = key.indexOf('/');
   if (slash <= 0) return undefined;
   const schema = key.slice(0, slash).toLowerCase();
   const table = key.slice(slash + 1);
   return tables.find((t) => (t.schema || 'dbo').toLowerCase() === schema && leafName(t.name) === table);
+}
+
+/**
+ * A bundle table's identity within the lakehouse: `<schema>/<name>`, where a
+ * table with no schema is `dbo`. Two tables may share a name across schemas, so
+ * React keys, tree values and the Maintain key use this, never the name alone.
+ */
+function bundleTableKey(t: { name: string; schema?: string }): string {
+  return `${t.schema || 'dbo'}/${t.name}`;
 }
 
 /**
@@ -341,7 +353,7 @@ function templateDfsSuffix(containers: Array<{ url?: string }> | null | undefine
 
 export {
   useStyles, formatBytes, leafName, collectEntries, formatCell, parseJsonOrError,
-  fileVisual, FileGlyph, maintainTableDef, templateDfsSuffix,
+  fileVisual, FileGlyph, maintainTableDef, templateDfsSuffix, bundleTableKey,
 };
 export type {
   ContainerInfo, PathEntry, ListingError, ReferenceLakehouse, RefSelection, PreviewResponse,

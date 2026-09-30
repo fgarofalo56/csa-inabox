@@ -65,7 +65,7 @@ import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
 import { QueryErrorBar } from '@/lib/components/ui/query-error-bar';
 import { DeltaPreviewGrid, type ColStat } from '../components/delta-preview-grid';
 import {
-  useStyles, leafName, collectEntries, formatCell, parseJsonOrError, FileGlyph, maintainTableDef, templateDfsSuffix,
+  useStyles, leafName, collectEntries, formatCell, parseJsonOrError, FileGlyph, maintainTableDef, templateDfsSuffix, bundleTableKey,
 } from './shared';
 import type {
   PathEntry, ListingError, ReferenceLakehouse, PreviewResponse, UploadItem, MipLabelOption,
@@ -131,7 +131,7 @@ export function LakehouseEditor({ item, id }: Props) {
     const rows = seeded.flatMap((name) => {
       const csvPath = recordedCsvPath(name);
       if (!csvPath) return [];
-      const def = bundleDeltaTables.find((t) => t.name === name || leafName(t.name) === name);
+      const def = maintainTableDef(bundleDeltaTables, name);
       return [{ name, container, csvPath, rowCount: def?.sampleRows?.length ?? null }];
     });
     return rows.length ? rows : null;
@@ -926,7 +926,7 @@ export function LakehouseEditor({ item, id }: Props) {
                     {bundleDeltaTables.length > 0 && (
                       <TreeItem itemType="branch" value="bundle-tables">
                         <TreeItemLayout iconBefore={<TableSimple20Regular />}>Delta tables ({bundleDeltaTables.length})</TreeItemLayout>
-                        <Tree>{bundleDeltaTables.map((t) => (<TreeItem key={t.name} itemType="leaf" value={`bt-${t.name}`} onClick={() => setTab('tables')}><TreeItemLayout iconBefore={<DocumentTable20Regular />}>{t.name}</TreeItemLayout></TreeItem>))}</Tree>
+                        <Tree>{bundleDeltaTables.map((t) => (<TreeItem key={bundleTableKey(t)} itemType="leaf" value={`bt-${bundleTableKey(t)}`} onClick={() => setTab('tables')}><TreeItemLayout iconBefore={<DocumentTable20Regular />}>{t.name}</TreeItemLayout></TreeItem>))}</Tree>
                       </TreeItem>
                     )}
                     {bundleShortcuts.length > 0 && (
