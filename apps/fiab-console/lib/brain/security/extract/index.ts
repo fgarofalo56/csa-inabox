@@ -39,7 +39,13 @@
  *                                                 why" and frequently must.
  */
 
-export { buildSecurityGraphArtifact, GENERATOR_VERSION, inputsDigest } from './build';
+export {
+  buildSecurityGraphArtifact,
+  buildSecurityGraphExtraction,
+  GENERATOR_VERSION,
+  inputsDigest,
+  serializeArtifact,
+} from './build';
 export { extractRouteNodes, parseAllowlistPrefixes } from './route-nodes';
 export { extractPublicationNodes, parseDeclaredSinkCount } from './publications';
 export {
@@ -49,14 +55,19 @@ export {
   DEPLOYABLE_UNITS,
   pathOfNodeId,
 } from './join';
-export { ageInDays, MAX_ARTIFACT_AGE_DAYS, resolveSecurityGraph } from './artifact';
+export { MAX_ARTIFACT_AGE_DAYS, ageInDays, resolveSecurityGraph } from './artifact';
+export { IMAGE_BUILD_DATE_FILE, IMAGE_CONTEXT_MARKERS, readImageBuildDate } from './build-date';
 export { extractedArtifact, loadExtractedSecurityGraph } from './runtime';
-export type { SecurityGraphSource } from './artifact';
+export type { ResolveOptions, SecurityGraphSource } from './artifact';
+export type { ImageBuildDate } from './build-date';
 export type {
   ExtractionMeta,
+  ExtractionRun,
   PaintedNode,
+  ScanScopeCount,
   ScanScopeReport,
   SecurityGraphArtifact,
+  SecurityGraphExtraction,
   SecurityGraphJoin,
   SkippedSubject,
   SourceFile,
