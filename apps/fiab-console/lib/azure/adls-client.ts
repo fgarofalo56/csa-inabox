@@ -1022,6 +1022,8 @@ export async function grantContainerRole(
   principalId: string,
   roleNameOrId: string,
   principalType: 'User' | 'Group' | 'ServicePrincipal' = 'User',
+  /** The storage account the container is on (default: the configured account). */
+  account?: string,
 ): Promise<ContainerRoleAssignment> {
   // ALLOW-LIST ONLY. This used to be `BLOB_DATA_ROLES[x] || x`, so an
   // unrecognised name fell through and was used as a RAW role-definition GUID.
@@ -1046,8 +1048,10 @@ export async function grantContainerRole(
 
   // Self-heal coords (see resolveStorageCoords): the role-definition id must be
   // scoped to the SAME subscription the account lives in, not the env default.
-  const { sub } = await resolveStorageCoords();
-  const scope = await resolveStorageScope(container);
+  // Both are resolved for `account`, so a lakehouse bound to another account is
+  // granted on that account's container.
+  const { sub } = await resolveStorageCoords(account);
+  const scope = await resolveStorageScope(container, account);
   const roleDefinitionId = `/subscriptions/${sub}/providers/Microsoft.Authorization/roleDefinitions/${roleGuid}`;
   // ARM role-assignment names are random GUIDs. Use crypto.randomUUID() so
   // re-grants get distinct ids; the principalId+role pair would 409 anyway

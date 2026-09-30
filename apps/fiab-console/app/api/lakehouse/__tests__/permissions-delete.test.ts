@@ -1,15 +1,24 @@
 /**
  * Contract tests for the write verbs of /api/lakehouse/permissions.
  *
- * DELETE uses the same tenant-admin rule as POST, with the same 403 body. For
- * tab=object the role-assignment id must (1) have the shape of an assignment at
- * the named container's scope and (2) be one of the assignments listed on that
- * container; the id handed to `revokeContainerRoleAssignment` is the listed one.
+ * DELETE uses the same tenant-admin rule as POST, with the same 403 body. The
+ * object-tab writes name the lakehouse (`lakehouseId`) and act on the
+ * container AND the storage account that item is bound to — the same account
+ * the GET lists on. For a revoke, the role-assignment id must (1) have the
+ * shape of an assignment at the item container's scope and (2) be one of the
+ * assignments listed on that container ON THAT ACCOUNT; the id handed to
+ * `revokeContainerRoleAssignment` is the listed one.
+ *
+ * The fixture binds the lakehouse on `otheracct`, which is NOT the configured
+ * account (`loomlake01`). The listing mock answers per account: `otheracct`
+ * holds LISTED, the configured account holds CONFIGURED_LISTED on a container
+ * of the same name. So a write that ignores the item's account is caught by
+ * the account it reaches, not only by an argument count.
  *
  * Every refusal reads the CALL ROW SET of `listContainerRoleAssignments` /
- * `revokeContainerRoleAssignment` / `dropRlsPolicy`, and is paired with a
- * positive arm on the same fixture, so "nothing was revoked" cannot be satisfied
- * by a route that never revokes anything.
+ * `revokeContainerRoleAssignment` / `grantContainerRole` / `dropRlsPolicy`, and
+ * is paired with a positive arm on the same fixture, so "nothing was revoked"
+ * cannot be satisfied by a route that never revokes anything.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
@@ -27,6 +36,23 @@ vi.mock('@/lib/azure/synapse-permissions-client', async () => {
   const actual: any = await vi.importActual('@/lib/azure/synapse-permissions-client');
   return { ...actual, dedicatedTarget: vi.fn(), dropRlsPolicy: vi.fn() };
 });
+// Same resolver shape as permissions-get.test.ts: a bound value is
+// `{ ok: true, bound }`, null is `no-storage`.
+vi.mock('@/lib/azure/lakehouse-abfss', async () => {
+  const actual: any = await vi.importActual('@/lib/azure/lakehouse-abfss');
+  const resolveLakehouseAbfss = vi.fn();
+  return {
+    lakehouseStorageWithheldMessage: actual.lakehouseStorageWithheldMessage,
+    lakehouseStorageWithheldFields: actual.lakehouseStorageWithheldFields,
+    resolveLakehouseAbfss,
+    resolveLakehouseStorage: async (...a: any[]) => {
+      const b: any = await resolveLakehouseAbfss(...a);
+      if (b && typeof b === 'object' && 'withheld' in b) return { ok: false, reason: b.withheld };
+      return b ? { ok: true, bound: b } : { ok: false, reason: 'no-storage' };
+    },
+  };
+});
+vi.mock('@/lib/auth/item-access', () => ({ resolveItemAccessByOid: vi.fn() }));
 
 import { DELETE, POST } from '../permissions/route';
 import { isContainerRoleAssignmentId } from '../_lib/container-role-assignment';
@@ -35,18 +61,32 @@ import {
   listContainerRoleAssignments, revokeContainerRoleAssignment, grantContainerRole,
 } from '@/lib/azure/adls-client';
 import { dedicatedTarget, dropRlsPolicy } from '@/lib/azure/synapse-permissions-client';
+import { resolveLakehouseAbfss } from '@/lib/azure/lakehouse-abfss';
+import { resolveItemAccessByOid } from '@/lib/auth/item-access';
 
 const ADMIN_OID = 'oid-tenant-admin';
 const admin = { claims: { oid: ADMIN_OID, upn: 'admin@x' } };
 const member = { claims: { oid: 'oid-member', upn: 'member@x' } };
 
+const LH = 'lh-perm';
 const SUB = '11111111-2222-3333-4444-555555555555';
 const GUID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+const GUID_CONFIGURED = 'cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee';
 const CONTAINER = 'landing';
-const scopeOf = (c: string) =>
-  `/subscriptions/${SUB}/resourceGroups/rg-loom/providers/Microsoft.Storage/storageAccounts/loomlake01/blobServices/default/containers/${c}`;
-const assignmentOn = (c: string, g = GUID) => `${scopeOf(c)}/providers/Microsoft.Authorization/roleAssignments/${g}`;
+const ROOT = 'lakehouses/Sales--lh-perm';
+/** The account the lakehouse is bound to. */
+const BOUND = 'otheracct';
+/** The deployment's configured account, which the lakehouse is NOT on. */
+const CONFIGURED = 'loomlake01';
+const scopeOf = (c: string, acct = BOUND) =>
+  `/subscriptions/${SUB}/resourceGroups/rg-loom/providers/Microsoft.Storage/storageAccounts/${acct}/blobServices/default/containers/${c}`;
+const assignmentOn = (c: string, g = GUID, acct = BOUND) =>
+  `${scopeOf(c, acct)}/providers/Microsoft.Authorization/roleAssignments/${g}`;
+/** Listed on the item's container on the BOUND account. */
 const LISTED = assignmentOn(CONTAINER);
+/** Listed on the same-named container on the CONFIGURED account. */
+const CONFIGURED_LISTED = assignmentOn(CONTAINER, GUID_CONFIGURED, CONFIGURED);
+const READER = 'Storage Blob Data Reader';
 
 function delReq(qs: string) {
   return { nextUrl: new URL(`http://x/api/lakehouse/permissions?${qs}`), json: async () => ({}) } as any;
@@ -54,8 +94,20 @@ function delReq(qs: string) {
 function postReq(body: any) {
   return { nextUrl: new URL('http://x/api/lakehouse/permissions'), json: async () => body } as any;
 }
-const objectQs = (id: string, container = CONTAINER) =>
-  new URLSearchParams({ tab: 'object', container, id }).toString();
+const objectQs = (id: string, extra: Record<string, string> = {}) =>
+  new URLSearchParams({ tab: 'object', lakehouseId: LH, container: CONTAINER, id, ...extra }).toString();
+const grantBody = (extra: Record<string, unknown> = {}) =>
+  ({ tab: 'object', lakehouseId: LH, container: CONTAINER, principalId: 'p1', role: READER, ...extra });
+
+/** Every backend call a write can make, one row set per mock. */
+function writeCalls() {
+  return {
+    list: (listContainerRoleAssignments as any).mock.calls,
+    revoke: (revokeContainerRoleAssignment as any).mock.calls,
+    grant: (grantContainerRole as any).mock.calls,
+  };
+}
+const NO_WRITES = { list: [], revoke: [], grant: [] };
 
 let savedAdminOid: string | undefined;
 let savedAdminGroup: string | undefined;
@@ -67,9 +119,25 @@ beforeEach(() => {
   process.env.LOOM_TENANT_ADMIN_OID = ADMIN_OID;
   delete process.env.LOOM_TENANT_ADMIN_GROUP_ID;
   (getSession as any).mockReturnValue(admin);
-  (listContainerRoleAssignments as any).mockResolvedValue([
-    { id: LISTED, principalId: 'p1', principalType: 'User', roleName: 'Storage Blob Data Reader' },
-  ]);
+  (resolveItemAccessByOid as any).mockResolvedValue({
+    item: { id: LH, workspaceId: 'ws-1', itemType: 'lakehouse' },
+    role: 'Admin',
+    via: 'workspace',
+    canWrite: true,
+  });
+  (resolveLakehouseAbfss as any).mockResolvedValue({
+    abfss: `abfss://${CONTAINER}@${BOUND}.dfs.core.windows.net/${ROOT}`,
+    container: CONTAINER,
+    root: ROOT,
+  });
+  // Per account: the bound account's container holds LISTED; the configured
+  // account's container of the same name (the default, no account) holds
+  // CONFIGURED_LISTED.
+  (listContainerRoleAssignments as any).mockImplementation(async (_c: string, acct?: string) => (
+    acct === BOUND
+      ? [{ id: LISTED, principalId: 'p1', principalType: 'User', roleName: READER }]
+      : [{ id: CONFIGURED_LISTED, principalId: 'p9', principalType: 'User', roleName: READER }]
+  ));
   (revokeContainerRoleAssignment as any).mockResolvedValue(undefined);
   (grantContainerRole as any).mockResolvedValue({ id: LISTED });
   (dedicatedTarget as any).mockReturnValue({ server: 's', database: 'd' });
@@ -83,19 +151,32 @@ afterEach(() => {
   else process.env.LOOM_TENANT_ADMIN_GROUP_ID = savedAdminGroup;
 });
 
+describe('fixture', () => {
+  // The two listed ids differ only by account and GUID, and each is a
+  // well-formed assignment on the container, so only the ACCOUNT the listing
+  // runs on decides which one a revoke finds. Breaks if the fixture's ids
+  // collapse to one account (the account tests below would then prove nothing).
+  it('lists a different assignment on the bound and the configured account', () => {
+    expect([BOUND === CONFIGURED, LISTED === CONFIGURED_LISTED]).toEqual([false, false]);
+    expect([isContainerRoleAssignmentId(LISTED, CONTAINER), isContainerRoleAssignmentId(CONFIGURED_LISTED, CONTAINER)])
+      .toEqual([true, true]);
+  });
+});
+
 describe('DELETE /api/lakehouse/permissions — tenant admin, like POST', () => {
-  it('a tenant admin revokes a listed assignment on the container (positive arm)', async () => {
+  it('a tenant admin revokes an assignment listed on the item\'s bound account (positive arm)', async () => {
     const res = await DELETE(delReq(objectQs(LISTED)));
     expect(res.status).toBe(200);
-    // Breaks if the route stops calling revoke, or revokes some other id.
-    expect((revokeContainerRoleAssignment as any).mock.calls).toEqual([[LISTED]]);
-    expect((listContainerRoleAssignments as any).mock.calls).toEqual([[CONTAINER]]);
+    // Breaks if the membership listing ignores the item's account: the listing
+    // row becomes [landing] / [landing, undefined], LISTED is not found there,
+    // and the answer is 404 with no revoke row.
+    expect(writeCalls()).toEqual({ ...NO_WRITES, list: [[CONTAINER, BOUND]], revoke: [[LISTED]] });
   });
 
   it('requires tenant-admin; 403 with the same body shape POST returns, nothing listed or revoked', async () => {
     (getSession as any).mockReturnValue(member);
     const del = await DELETE(delReq(objectQs(LISTED)));
-    const post = await POST(postReq({ tab: 'object', container: CONTAINER, principalId: 'p1', role: 'Storage Blob Data Reader' }));
+    const post = await POST(postReq(grantBody()));
     expect(del.status).toBe(403);
     expect(post.status).toBe(403);
     const dj = await del.json();
@@ -114,9 +195,8 @@ describe('DELETE /api/lakehouse/permissions — tenant admin, like POST', () => 
     // is gone. Breaks if `hint` is added back to the shared refusal body.
     expect(dj).not.toHaveProperty('hint');
     expect(pj).not.toHaveProperty('hint');
-    expect((revokeContainerRoleAssignment as any).mock.calls).toEqual([]);
-    expect((listContainerRoleAssignments as any).mock.calls).toEqual([]);
-    expect((grantContainerRole as any).mock.calls).toEqual([]);
+    expect(writeCalls()).toEqual(NO_WRITES);
+    expect((resolveItemAccessByOid as any).mock.calls).toEqual([]);
   });
 
   it('requires tenant-admin on the SQL-plane tabs too (tab=row drops nothing)', async () => {
@@ -133,18 +213,104 @@ describe('DELETE /api/lakehouse/permissions — tenant admin, like POST', () => 
   });
 });
 
-describe('DELETE /api/lakehouse/permissions?tab=object — role-assignment id validation', () => {
-  it('400 when container is missing; nothing listed or revoked', async () => {
-    const res = await DELETE(delReq(new URLSearchParams({ tab: 'object', id: LISTED }).toString()));
+describe('object-tab writes act on the item\'s bound storage account', () => {
+  // Breaks if the grant ignores the item's account: the row ends in
+  // `undefined` (or has four arguments), which grants on the configured
+  // account's container of the same name.
+  it('a grant is made on the bound account\'s container', async () => {
+    const res = await POST(postReq(grantBody()));
+    expect(res.status).toBe(200);
+    expect(writeCalls()).toEqual({ ...NO_WRITES, grant: [[CONTAINER, 'p1', READER, 'User', BOUND]] });
+  });
+
+  // Breaks if the grant still needs the caller's container: with none named
+  // the row would be [] (400) instead of the bound container.
+  it('a grant with no container named uses the item\'s container', async () => {
+    const res = await POST(postReq(grantBody({ container: undefined })));
+    expect(res.status).toBe(200);
+    expect(writeCalls().grant).toEqual([[CONTAINER, 'p1', READER, 'User', BOUND]]);
+  });
+
+  // The configured account holds an assignment with this id on a container of
+  // the same name. Breaks if the revoke lists the configured account: the id is
+  // found there, the answer is 200 and the revoke row is [CONFIGURED_LISTED].
+  it('a revoke of an id listed only on the configured account is refused (404), nothing revoked', async () => {
+    const res = await DELETE(delReq(objectQs(CONFIGURED_LISTED)));
+    expect(res.status).toBe(404);
+    expect(writeCalls()).toEqual({ ...NO_WRITES, list: [[CONTAINER, BOUND]] });
+  });
+
+  // Breaks if a write without an item is accepted: a 200 and a grant or revoke
+  // row on the configured account. Positive arm: the same request with
+  // `lakehouseId` (the first test in this describe, and the DELETE positive
+  // arm above).
+  it.each([
+    ['POST', () => POST(postReq(grantBody({ lakehouseId: undefined })))],
+    ['DELETE', () => DELETE(delReq(new URLSearchParams({ tab: 'object', container: CONTAINER, id: LISTED }).toString()))],
+  ])('%s without lakehouseId is refused (400 item_required), nothing listed, granted or revoked', async (_v, call) => {
+    const res = await call();
     expect(res.status).toBe(400);
-    expect((listContainerRoleAssignments as any).mock.calls).toEqual([]);
-    expect((revokeContainerRoleAssignment as any).mock.calls).toEqual([]);
+    const j = await res.json();
+    expect(j.code).toBe('item_required');
+    expect(j.error).toMatch(/lakehouseId/);
+    expect(typeof j.remediation).toBe('string');
+    expect(writeCalls()).toEqual(NO_WRITES);
+    expect((resolveItemAccessByOid as any).mock.calls).toEqual([]);
+  });
+
+  // A binding whose account cannot be read is a 409 on every write. Breaks if
+  // the route falls back to the configured account: 200 and a grant or revoke
+  // row. `loom-lake` has a hyphen, which no storage account name has.
+  it.each([
+    ['POST', () => POST(postReq(grantBody()))],
+    ['DELETE', () => DELETE(delReq(objectQs(CONFIGURED_LISTED)))],
+  ])('%s answers 409 when the bound account cannot be read, with no write', async (_v, call) => {
+    (resolveLakehouseAbfss as any).mockResolvedValue({
+      abfss: `abfss://${CONTAINER}@loom-lake.dfs.core.windows.net/${ROOT}`,
+      container: CONTAINER,
+      root: ROOT,
+    });
+    const res = await call();
+    expect(res.status).toBe(409);
+    const j = await res.json();
+    expect(j.code).toBe('storage_account_unreadable');
+    expect(typeof j.remediation).toBe('string');
+    expect(writeCalls()).toEqual(NO_WRITES);
+  });
+
+  // Breaks if the write skips the item check: 200 and a grant row.
+  it('a grant on a lakehouse the admin cannot reach answers 404, with no grant', async () => {
+    (resolveItemAccessByOid as any).mockResolvedValue(null);
+    const res = await POST(postReq(grantBody()));
+    expect(res.status).toBe(404);
+    expect((await res.json()).code).toBe('item_not_found');
+    expect(writeCalls()).toEqual(NO_WRITES);
+  });
+
+  // Breaks if the named container is not compared with the binding: 200 and a
+  // grant or revoke on `gold`.
+  it.each([
+    ['POST', () => POST(postReq(grantBody({ container: 'gold' })))],
+    ['DELETE', () => DELETE(delReq(objectQs(assignmentOn('gold'), { container: 'gold' })))],
+  ])('%s naming another container is refused (403 outside_item_root)', async (_v, call) => {
+    const res = await call();
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('outside_item_root');
+    expect(writeCalls()).toEqual(NO_WRITES);
+  });
+});
+
+describe('DELETE /api/lakehouse/permissions?tab=object — role-assignment id validation', () => {
+  it('400 when id is missing; nothing listed or revoked', async () => {
+    const res = await DELETE(delReq(new URLSearchParams({ tab: 'object', lakehouseId: LH, container: CONTAINER }).toString()));
+    expect(res.status).toBe(400);
+    expect(writeCalls()).toEqual(NO_WRITES);
   });
 
   it.each([
     ['an assignment on a different container', assignmentOn('bronze')],
     ['a subscription-scope assignment', `/subscriptions/${SUB}/providers/Microsoft.Authorization/roleAssignments/${GUID}`],
-    ['a storage-account-scope assignment', `/subscriptions/${SUB}/resourceGroups/rg-loom/providers/Microsoft.Storage/storageAccounts/loomlake01/providers/Microsoft.Authorization/roleAssignments/${GUID}`],
+    ['a storage-account-scope assignment', `/subscriptions/${SUB}/resourceGroups/rg-loom/providers/Microsoft.Storage/storageAccounts/${BOUND}/providers/Microsoft.Authorization/roleAssignments/${GUID}`],
     ['a container scope with a dot-dot segment', `${scopeOf(CONTAINER)}/../bronze/providers/Microsoft.Authorization/roleAssignments/${GUID}`],
     ['a non-GUID assignment name', `${scopeOf(CONTAINER)}/providers/Microsoft.Authorization/roleAssignments/not-a-guid`],
     ['a trailing query string', `${LISTED}?api-version=2022-04-01`],
@@ -152,8 +318,7 @@ describe('DELETE /api/lakehouse/permissions?tab=object — role-assignment id va
   ])('400 for %s; nothing listed or revoked', async (_label, id) => {
     const res = await DELETE(delReq(objectQs(id)));
     expect(res.status).toBe(400);
-    expect((listContainerRoleAssignments as any).mock.calls).toEqual([]);
-    expect((revokeContainerRoleAssignment as any).mock.calls).toEqual([]);
+    expect(writeCalls()).toEqual(NO_WRITES);
   });
 
   it('404 for a well-formed id that is not listed on the container; nothing revoked', async () => {
@@ -163,8 +328,7 @@ describe('DELETE /api/lakehouse/permissions?tab=object — role-assignment id va
     expect(isContainerRoleAssignmentId(unlisted, CONTAINER)).toBe(true);
     const res = await DELETE(delReq(objectQs(unlisted)));
     expect(res.status).toBe(404);
-    expect((listContainerRoleAssignments as any).mock.calls).toEqual([[CONTAINER]]);
-    expect((revokeContainerRoleAssignment as any).mock.calls).toEqual([]);
+    expect(writeCalls()).toEqual({ ...NO_WRITES, list: [[CONTAINER, BOUND]] });
   });
 
   it('revokes the id as listed, not the caller spelling of it', async () => {

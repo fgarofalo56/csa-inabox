@@ -11,8 +11,9 @@
  * id. The list is compared exactly, so a surface that issues no reads at all
  * fails too (an empty list is not the expected list).
  *
- * Writes (POST / DELETE) are asserted to stay on their existing URLs: they are
- * tenant-admin routes and take no item id.
+ * Writes (POST / DELETE) are tenant-admin routes. The object-tab writes name
+ * the item too, so the server acts on the account the item is bound to; that
+ * is asserted in permissions-writes-name-item.test.tsx.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { renderHook, act, render, cleanup } from '@testing-library/react';
@@ -73,15 +74,15 @@ describe('useLakehousePermissions — reads name the lakehouse', () => {
     ]);
   });
 
-  // The write verbs are tenant-admin routes and are NOT item-scoped: a change
-  // that routes a DELETE through the read URL would add `lakehouseId` here.
-  // FAILS IF the revoke URL changes shape.
-  it('a revoke stays on the tenant-admin DELETE URL', async () => {
+  // The object-tab revoke names the item, so the server revokes on the account
+  // the item is bound to (the account the listing read). FAILS IF the DELETE
+  // drops `lakehouseId` (the map loses that key) or names another item.
+  it('a revoke names the lakehouse on the DELETE URL', async () => {
     const confirm = vi.fn(async () => true);
     const { result } = renderHook(() => useLakehousePermissions({ lakehouseId: LH, activeContainer: 'landing', confirm }));
     await act(async () => { await result.current.revokePerm('/subscriptions/s/ra/1'); });
     const del = calls.filter((c) => c.method === 'DELETE').map((c) => Object.fromEntries(new URL(c.url, 'http://x').searchParams));
-    expect(del).toEqual([{ tab: 'object', container: 'landing', id: '/subscriptions/s/ra/1' }]);
+    expect(del).toEqual([{ tab: 'object', lakehouseId: LH, container: 'landing', id: '/subscriptions/s/ra/1' }]);
     // The reload after the revoke is a read, and names the item.
     expect(reads()).toEqual([{ container: 'landing', lakehouseId: LH }]);
   });
