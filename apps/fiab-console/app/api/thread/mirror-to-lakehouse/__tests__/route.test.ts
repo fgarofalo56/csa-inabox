@@ -21,8 +21,8 @@
  *    the folder the route has always used for it (a re-weave would then create
  *    duplicate rows instead of upserting the existing ones);
  *  - dropping the item-id fallback → an unnamed mirror derives `mirrors/`;
- *  - using the raw name with no derivation → every derivation row except the
- *    'sales-2024.v2' row fails;
+ *  - using the raw name with no derivation → every derivation, fallback and
+ *    non-string row except the 'sales-2024.v2' row fails;
  *  - dropping the `typeof from.name === 'string'` guard → a number / object /
  *    boolean name derives its own folder instead of the display name's;
  *  - widening the allowed set to keep "\" → 'a\\b' derives `mirrors/a\b`,

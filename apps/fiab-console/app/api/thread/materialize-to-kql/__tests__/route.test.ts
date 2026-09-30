@@ -242,13 +242,14 @@ describe('materialize-to-kql table-name validation', () => {
  *
  * What breaks these (sandbox arms, see the PR body):
  *  - loading the target with `allowReadRoles: true` (the previous behaviour)
- *    → the reader is admitted and reaches ADX (200 ≠ 403);
+ *    → the reader is admitted and reaches ADX (200 ≠ 403), and the writer
+ *    test counts zero write-scoped loads;
  *  - running the write check after `resolveLakehouseStorage` → still 403, but
  *    the storage resolver has been called (the `not.toHaveBeenCalled` line);
  *  - write-loading a fixed 'kql-database' type → the eventhouse writer gets
  *    null from the write load and a 403 (≠ 200);
  *  - dropping the read-scoped visibility load → an invisible target reads 403
- *    instead of 404.
+ *    instead of 404, and the writer test counts two write-scoped loads.
  */
 describe('materialize-to-kql target-database access', () => {
   type Role = 'writer' | 'reader' | 'none';
