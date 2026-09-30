@@ -658,7 +658,7 @@ const NON_AUTHORIZER_BODY_PINS = new Map([
   ['lib/auth/workspace-access.ts:listAccessibleWorkspaces', '6b7f66ea5819'],
   ['lib/auth/workspace-access.ts:ambientAccessOptsFor', '2068414aa6c6'],
   ['lib/auth/workspace-denial.ts:workspaceDenialResponse', '174876032ce1'],
-  ['lib/auth/feature-gate.ts:requireTenantAdmin', 'a142fcaad130'],
+  ['lib/auth/feature-gate.ts:requireTenantAdmin', '7431745bc687'],
   ['lib/auth/feature-gate.ts:enforceCapability', '3bf4e9b55806'],
   ['lib/auth/feature-gate.ts:isTenantAdmin', '150938bad034'],
   ['lib/auth/feature-gate.ts:checkCapability', 'dfcb5d1dbb8d'],
