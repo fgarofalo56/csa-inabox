@@ -27,7 +27,10 @@
  *     goes from 1 to 2;
  *   - dropping the `build_rc` check: the build-fail cases run the job create;
  *   - building `gh-aca-runner` again (round-5 image-name fix): the
- *     `--image gh-actions-runner:` assertions.
+ *     `--image gh-actions-runner:` assertions;
+ *   - a non-empty script default for RUNNER_VERSION or RUNNER_SHA256, which
+ *     would override half of the Dockerfile's version+checksum pair: the
+ *     no-`--build-arg` default case.
  *
  * NOT COVERED, disclosed: the provision script's trap-only path (a signal
  * between acquire and step 2) has no reachable failing command to drive it; the
@@ -91,8 +94,9 @@ exit 0
  * @param {number} [o.buildRc]    exit code of the stub `az acr build`
  * @param {number} [o.releaseRc]  exit code of every stub lease `release`
  * @param {boolean} [o.dropDockerignore]  delete apps/fiab-console/.dockerignore
+ * @param {Record<string,string>} [o.env]  extra fixture env, applied last
  */
-function run(script, { buildRc = 0, releaseRc = 0, dropDockerignore = false } = {}) {
+function run(script, { buildRc = 0, releaseRc = 0, dropDockerignore = false, env: extraEnv = {} } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'provflow-'));
   const scripts = join(root, 'scripts', 'csa-loom');
   const bin = join(root, 'bin');
@@ -136,7 +140,7 @@ exec bash "$HERE/scripts/csa-loom/${script}"
     CONSOLE_UAMI_ID: '/subscriptions/fixture/resourceGroups/rg-fixture/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-fixture',
     LOOM_URL: 'https://loom.fixture.invalid',
     LOOM_AUTOMATION_OID: '11111111-1111-1111-1111-111111111111',
-  });
+  }, extraEnv);
 
   const r = spawnSync('bash', [join(root, 'drive.sh')], { encoding: 'utf8', env, timeout: 60_000 });
   const read = (f) => (existsSync(join(logs, f)) ? readFileSync(join(logs, f), 'utf8') : '');
@@ -180,6 +184,25 @@ test('provision: builds and deploys the image REPOSITORY the live job pulls (gh-
   assert.match(r.az, /^acr build .*--image gh-actions-runner:latest /m, why(r));
   assert.match(r.az, /^containerapp job create .*--image acrfixture\.azurecr\.io\/gh-actions-runner:latest /m, why(r));
   assert.doesNotMatch(r.az, /--image (\S+\/)?gh-aca-runner:/, 'the job NAME is not the image repository');
+});
+
+test('provision: by default passes NO --build-arg, so the Dockerfile ARG pair is what builds', () => {
+  // The Dockerfile pairs RUNNER_VERSION with its RUNNER_SHA256. A script default
+  // that passes RUNNER_VERSION alone (the pre-#4801 shape) overrides only half
+  // of that pair and fails the image's sha256 check. Breaks if the script
+  // defaults RUNNER_VERSION or RUNNER_SHA256 to a non-empty value.
+  const r = run(PROVISION);
+  assert.equal(r.status, 0, why(r));
+  assert.match(r.az, /^acr build /m, 'positive control: the build line was recorded');
+  assert.doesNotMatch(r.az, /--build-arg/, why(r));
+});
+
+test('provision: an override passes BOTH build-args together', () => {
+  // Pairs with the default case: the build-arg plumbing still works when asked.
+  // Breaks if either --build-arg is dropped from BUILD_ARG_FLAGS.
+  const r = run(PROVISION, { env: { RUNNER_VERSION: '9.9.9', RUNNER_SHA256: 'f'.repeat(64) } });
+  assert.equal(r.status, 0, why(r));
+  assert.match(r.az, /^acr build .*--build-arg RUNNER_VERSION=9\.9\.9 --build-arg RUNNER_SHA256=f{64} /m, why(r));
 });
 
 test('provision: build FAILS -> exits with the build rc and a FATAL naming step 1/3; job untouched', () => {
