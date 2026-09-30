@@ -20,7 +20,19 @@ const recordThreadEdgeMock = vi.fn(async () => {});
 vi.mock('@/lib/thread/thread-edges', () => ({ recordThreadEdge: (...a: any[]) => recordThreadEdgeMock(...a) }));
 
 const resolveLakehouseAbfssMock = vi.fn();
-vi.mock('@/lib/azure/lakehouse-abfss', () => ({ resolveLakehouseAbfss: (...a: any[]) => resolveLakehouseAbfssMock(...a) }));
+// `resolveLakehouseStorage` delegates to the mock: a bound value is ok, null is
+// `no-storage`, `{ withheld: <reason> }` is that reason. Real withheld wording.
+vi.mock('@/lib/azure/lakehouse-abfss', async () => {
+  const actual: any = await vi.importActual('@/lib/azure/lakehouse-abfss');
+  return {
+    lakehouseStorageWithheldFields: actual.lakehouseStorageWithheldFields,
+    resolveLakehouseStorage: async (...a: any[]) => {
+      const b: any = await resolveLakehouseAbfssMock(...a);
+      if (b && typeof b === 'object' && 'withheld' in b) return { ok: false, reason: b.withheld };
+      return b ? { ok: true, bound: b } : { ok: false, reason: 'no-storage' };
+    },
+  };
+});
 
 import { POST } from '../route';
 
@@ -97,5 +109,25 @@ describe('promote-medallion route', () => {
     resolveLakehouseAbfssMock.mockResolvedValueOnce(null);
     const res = await POST(post({ from: FROM, values: VALUES }));
     expect(res.status).toBe(503);
+  });
+
+  // A withheld location is not "no storage configured". FAILS IF the source or
+  // the target is worded as the LOOM_*_URL gate, loses the readiness check
+  // title the resolver names, or loses the link. Nothing is scaffolded.
+  it.each([
+    ['source', 'lh-1'],
+    ['target', 'lh-2'],
+  ])('a shared storage root on the %s answers the true reason and the readiness link', async (_label, sharedId) => {
+    const { LAKEHOUSE_SHARED_ROOTS_CHECK_TITLE } = await import('@/lib/admin/env-checks/lakehouse-shared-roots');
+    const bound = resolveLakehouseAbfssMock.getMockImplementation()!;
+    resolveLakehouseAbfssMock.mockImplementation(async (id: string, ...rest: any[]) =>
+      (id === sharedId ? { withheld: 'root-shared' } : bound(id, ...rest)));
+    const res = await POST(post({ from: FROM, values: VALUES }));
+    const j = await res.json();
+    expect(res.status).toBe(409);
+    expect(j.error).not.toContain('LOOM_');
+    expect(j.error).toContain(LAKEHOUSE_SHARED_ROOTS_CHECK_TITLE);
+    expect(j.fixHref).toBe('/admin/readiness');
+    expect(createOwnedItemMock.mock.calls.some((c) => c[1] === 'notebook')).toBe(false);
   });
 });

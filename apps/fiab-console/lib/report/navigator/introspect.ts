@@ -58,8 +58,14 @@ import {
 import {
   executeStatement,
   databricksConfigGate,
-  warehouseConfigGate,
 } from '@/lib/azure/databricks-client';
+import {
+  resolveWarehouseIdOrThrow,
+  withResolvedWarehouse,
+  WarehouseResolutionError,
+  warehouseErrorBody,
+  warehouseErrorStatus,
+} from '@/lib/azure/databricks-sql-warehouse';
 import { executePostgresQuery, postgresQueryGate } from '@/lib/azure/postgres-flex-client';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
@@ -393,15 +399,26 @@ export async function introspectDatabricks(
 ): Promise<NavigatorObject[] | NextResponse> {
   const cfg = databricksConfigGate();
   if (cfg) return gate(`Databricks SQL is not configured for this deployment. Set ${cfg.missing} on the Loom Console.`, cfg.missing);
-  const wh = warehouseConfigGate();
-  if (wh) return gate(`No Databricks SQL warehouse is configured. Set ${wh.missing} on the Loom Console.`, wh.missing);
-  const warehouseId = (process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID || '').trim();
+  // The SQL warehouse is produced by the Console (#3744) — a failed resolution
+  // returns its classified cause (permission / network / quota / unknown).
+  // Resolved up front for that classified response; each statement then runs
+  // through withResolvedWarehouse so a warehouse deleted out-of-band is
+  // invalidated and re-resolved once (#4776).
+  try {
+    await resolveWarehouseIdOrThrow();
+  } catch (e) {
+    if (e instanceof WarehouseResolutionError) {
+      return NextResponse.json(warehouseErrorBody(e), { status: warehouseErrorStatus(e) });
+    }
+    throw e;
+  }
+  const run = (sql: string) => withResolvedWarehouse((id) => executeStatement(id, sql));
   const [defCatalog, defSchema] = (conn.database || '').split('.');
   const catalog = (reqCatalog || defCatalog || '').trim();
   const schema = (reqSchema || defSchema || '').trim();
 
   if (level === 'catalog') {
-    const r = await executeStatement(warehouseId, 'SHOW CATALOGS');
+    const r = await run('SHOW CATALOGS');
     return r.rows.map((row) => {
       const name = colVal(r.columns, row, ['catalog', 'catalogName'], 0);
       return { name, kind: 'catalog' as const, hasChildren: true, selectable: false };
@@ -410,7 +427,7 @@ export async function introspectDatabricks(
 
   if (level === 'schema') {
     const sql = catalog ? `SHOW SCHEMAS IN ${bq(catalog)}` : 'SHOW SCHEMAS';
-    const r = await executeStatement(warehouseId, sql);
+    const r = await run(sql);
     return r.rows.map((row) => {
       const name = colVal(r.columns, row, ['databaseName', 'namespace', 'schemaName'], 0);
       return { name, kind: 'schema' as const, hasChildren: true, selectable: false };
@@ -425,7 +442,7 @@ export async function introspectDatabricks(
       'catalog',
     );
   }
-  const r = await executeStatement(warehouseId, `SHOW TABLES IN ${bq(catalog)}.${bq(schema)}`);
+  const r = await run(`SHOW TABLES IN ${bq(catalog)}.${bq(schema)}`);
   return r.rows.map((row) => {
     const name = colVal(r.columns, row, ['tableName'], 1);
     return {

@@ -35,8 +35,36 @@ vi.mock('@/lib/azure/aca-managed-identity', () => ({
 // ---- Mock the ADLS client (record uploads + dirs). ----
 const adlsUploads: Array<{ container: string; path: string; size: number; contentType: string }> = [];
 const adlsDirs: string[] = [];
+// The installer reads the item's createdAt to choose its root (see
+// lakehouse-provisioner-item-root.test.ts). An item created before
+// LAKEHOUSE_ITEM_ROOT_SINCE is resolved through the resolver
+// (lakehouse-provisioner-recorded-root.test.ts runs that against the real one);
+// here it answers the name-only root this spec asserts on, and the root create
+// goes to the same storage fake as every folder.
+vi.mock('@/lib/azure/cosmos-client', () => ({
+  itemsContainer: vi.fn(async () => ({
+    item: (id: string) => ({ read: async () => ({ resource: { id, createdAt: '2026-01-01T00:00:00.000Z' } }) }),
+  })),
+}));
+vi.mock('@/lib/azure/lakehouse-abfss', async () => {
+  const { lakehouseRootPath } = await import('@/lib/azure/backing-name');
+  return {
+    resolveLakehouseStorage: async (id: string) => {
+      const root = lakehouseRootPath('Test Lakehouse', id);
+      return { ok: true, bound: { abfss: `abfss://landing@fakeacct.dfs.core.windows.net/${root}`, container: 'landing', root } };
+    },
+    lakehouseStorageWithheldMessage: () => null,
+    createOwnedLakehouseRoot: async (c: string, p: string) => {
+      await (await import('@/lib/azure/adls-client')).createDirectory(c as any, p);
+    },
+    readLakehouseRootOwner: async () => ({ exists: false }),
+    stampLakehouseRootOwner: async () => true,
+    mayAdoptRoot: (owner: string | null, id: string) => owner === id || owner === null,
+  };
+});
 vi.mock('@/lib/azure/adls-client', () => ({
   KNOWN_CONTAINERS: ['bronze', 'silver', 'gold', 'landing', 'csv-imports'],
+  getAccountName: vi.fn(() => 'fakeacct'),
   listContainers: vi.fn(async () => [{ name: 'landing' }, { name: 'bronze' }]),
   createDirectory: vi.fn(async (container: string, path: string) => { adlsDirs.push(`${container}/${path}`); return { ok: true }; }),
   uploadFile: vi.fn(async (container: string, path: string, body: Buffer, contentType: string) => {

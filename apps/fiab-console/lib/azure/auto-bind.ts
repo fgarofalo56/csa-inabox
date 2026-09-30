@@ -84,6 +84,7 @@
  * component.
  */
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { withoutLakehouseCreateState } from './backing-name';
 
 /** The item facts a provider needs. Deliberately not the whole `WorkspaceItem`. */
 export interface AutoBindContext {
@@ -769,6 +770,10 @@ export function autoBindWireStatus(outcome: AutoBindOutcome): {
  *
  * NEVER throws: item creation must not fail because Azure hiccuped. Returns the
  * outcome for logging, or null when the deadline won the race.
+ *
+ * For a lakehouse it first clears the storage-location keys a create body may
+ * have carried ({@link clearServerOwnedLakehouseKeysOnCreate}), so the binding
+ * that follows is the one auto-bind establishes for THIS item.
  */
 export async function autoBindOnCreate(
   item: WorkspaceItem,
@@ -777,6 +782,7 @@ export async function autoBindOnCreate(
   const timeoutMs = opts.timeoutMs ?? 8000;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
+    await clearServerOwnedLakehouseKeysOnCreate(item);
     const work = autoBindOnOpen(item, undefined, opts).then((r) => r.outcome);
     const deadline = new Promise<null>((resolve) => {
       timer = setTimeout(() => resolve(null), timeoutMs);
@@ -818,6 +824,55 @@ export async function persistAutoBindPatch(
       updatedAt: new Date().toISOString(),
     };
     await items.item(itemId, workspaceId).replace<WorkspaceItem>(next);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A new lakehouse's `state` without the keys that say where an item's files are
+ * (`LAKEHOUSE_CREATE_CLEARED_STATE_KEYS`: the location keys, the installer
+ * receipt `provisioning`, `storageAccount`) and without a `state.autoBind`
+ * record. Several create paths copy `state` from a request body or from another
+ * item (`createOwnedItem` callers such as promotion, branch-out and the Copilot
+ * orchestrator, and the bundle import), so those keys describe the SOURCE's
+ * location, not the new item's. Pure: returns a new object.
+ */
+export function stripLakehouseCreateState(state: Record<string, unknown> | null | undefined): Record<string, unknown> {
+  return withoutLakehouseCreateState(state, [AUTO_BIND_STATE_KEY]).state;
+}
+
+/**
+ * On a lakehouse CREATE, drop the keys {@link stripLakehouseCreateState} drops.
+ * `createOwnedItem` already strips them before the document is written; this
+ * hook covers the create routes that write the document themselves and then
+ * call `autoBindOnCreate`. Clearing them makes the bind that follows start from
+ * the item itself.
+ *
+ * Mutates `item.state` in memory (the caller returns that object) and, only
+ * when something was removed, persists the removal. Never throws.
+ */
+export async function clearServerOwnedLakehouseKeysOnCreate(item: WorkspaceItem): Promise<boolean> {
+  if (item?.itemType !== 'lakehouse' || !item.state || typeof item.state !== 'object') return false;
+  const { state: next, removed: keys } = withoutLakehouseCreateState(
+    item.state as Record<string, unknown>,
+    [AUTO_BIND_STATE_KEY],
+  );
+  if (keys.length === 0) return false;
+  item.state = next;
+  try {
+    const { itemsContainer } = await import('@/lib/azure/cosmos-client');
+    const items = await itemsContainer();
+    const { resource } = await items.item(item.id, item.workspaceId).read<WorkspaceItem>();
+    if (!resource) return false;
+    const stored: Record<string, unknown> = { ...((resource.state as Record<string, unknown>) || {}) };
+    for (const k of keys) delete stored[k];
+    await items.item(item.id, item.workspaceId).replace<WorkspaceItem>({
+      ...resource,
+      state: stored,
+      updatedAt: new Date().toISOString(),
+    });
     return true;
   } catch {
     return false;

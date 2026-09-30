@@ -184,7 +184,13 @@ function ThreadWizard({
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || j?.ok === false) {
-        setResult({ ok: false, error: j?.error || j?.hint || `HTTP ${r.status}` });
+        // A route that names the page resolving its refusal (`fixHref`) gets
+        // that page as the result link.
+        setResult({
+          ok: false,
+          error: j?.error || j?.hint || `HTTP ${r.status}`,
+          ...(typeof j?.fixHref === 'string' ? { link: j.fixHref, linkLabel: 'Open Admin > Readiness' } : {}),
+        });
         return;
       }
       setResult({ ok: true, message: j.message || 'Woven successfully.', link: j.link, linkLabel: j.linkLabel || 'Open' });
@@ -217,7 +223,7 @@ function ThreadWizard({
           <MessageBarBody className={styles.result}>
             <MessageBarTitle>{result.ok ? 'Woven' : 'Could not weave'}</MessageBarTitle>
             {result.ok ? result.message : result.error}
-            {result.ok && result.link && (
+            {result.link && (
               <a className={styles.link} href={result.link}>{result.linkLabel} <Open16Regular /></a>
             )}
           </MessageBarBody>

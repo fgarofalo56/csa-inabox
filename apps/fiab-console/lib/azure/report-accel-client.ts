@@ -55,7 +55,6 @@ import type {
 } from '@/lib/azure/wells-to-sql';
 import {
   runWarehouseStatement,
-  warehouseConfigGate,
   databricksConfigGate,
   type DbxQueryParam,
 } from '@/lib/azure/databricks-client';
@@ -69,9 +68,17 @@ import {
 
 // ── Config / gate ────────────────────────────────────────────────────────────
 
-/** True when a Databricks SQL warehouse (Photon) is configured for the accel path. */
+/**
+ * True when a Databricks SQL warehouse (Photon) is configured for the accel path.
+ *
+ * Opt-in: BOTH the workspace AND an explicit warehouse pin are required. The pin
+ * is read directly rather than via `warehouseConfigGate()`, which (#3744) now
+ * passes on a bound workspace alone because the Console can produce
+ * `loom-default` — routing report visuals onto a Console-created warehouse is a
+ * cost + behaviour change this path does not opt into by default (PR #4776).
+ */
 export function reportAccelConfigured(): boolean {
-  return !databricksConfigGate() && !warehouseConfigGate();
+  return !databricksConfigGate() && !!(process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID || '').trim();
 }
 
 /** Honest gate copy naming the exact env vars the Databricks-SQL accel needs. */

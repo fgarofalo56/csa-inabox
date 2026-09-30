@@ -29,7 +29,7 @@
  * AAS / Power BI XMLA is an OPT-IN alternative (`LOOM_SEMANTIC_RLS_BACKEND=xmla`,
  * or `auto` when ONLY an AAS/PBI engine is present). The honest config-gate is
  * returned ONLY when there is NO native SQL endpoint at all, and it names the
- * Azure env vars (LOOM_SYNAPSE_DEDICATED_POOL / LOOM_DATABRICKS_SQL_WAREHOUSE_ID)
+ * Azure env vars (LOOM_SYNAPSE_DEDICATED_POOL / LOOM_DATABRICKS_HOSTNAME)
  * — never a Fabric / Power BI workspace as the default.
  *
  * The `SemanticModelSecurityTab` editor needs NO change: it already renders the
@@ -70,7 +70,14 @@ import {
 } from '@/lib/azure/aas-roles';
 import { dedicatedTarget, executeQuery as synapseExecute, type QueryResult } from '@/lib/azure/synapse-sql-client';
 import { listRlsPolicies, sqlBracket, sqlString } from '@/lib/azure/synapse-permissions-client';
-import { executeStatement } from '@/lib/azure/databricks-client';
+import { executeStatement, databricksConfigGate } from '@/lib/azure/databricks-client';
+import {
+  resolveWarehouseIdOrThrow,
+  withResolvedWarehouse,
+  WarehouseResolutionError,
+  warehouseErrorBody,
+  warehouseErrorStatus,
+} from '@/lib/azure/databricks-sql-warehouse';
 import { loadOwnedItem, updateOwnedItem } from '../../../_lib/item-crud';
 import { cosmosIdFromLoomId } from '../../../_lib/pbi-content-fallback';
 import type { WorkspaceItem } from '@/lib/types/workspace';
@@ -88,6 +95,7 @@ import {
   type MetaPerm,
 } from '@/lib/azure/rls-compiler';
 import { withSession } from '@/lib/api/route-toolkit';
+import { isGovCloud } from '@/lib/azure/cloud-boundary';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -113,7 +121,8 @@ type RlsBackendKind = 'synapse' | 'databricks' | 'xmla' | 'none';
  * Resolve the RLS/OLS backend. `LOOM_SEMANTIC_RLS_BACKEND` ∈
  * auto|synapse|databricks|xmla (default `auto`):
  *   auto → synapse  if LOOM_SYNAPSE_DEDICATED_POOL (+ LOOM_SYNAPSE_WORKSPACE)
- *        → databricks if LOOM_DATABRICKS_SQL_WAREHOUSE_ID
+ *        → databricks if LOOM_DATABRICKS_SQL_WAREHOUSE_ID or a bound workspace (#3744),
+ *                     and NOT in Azure Government (no Unity Catalog there)
  *        → xmla      if an AAS / Power BI XMLA engine is configured (opt-in)
  *        → none      (honest Azure-native gate)
  * The DEFAULT path NEVER resolves to the AAS/Fabric gate — only when there is no
@@ -122,14 +131,21 @@ type RlsBackendKind = 'synapse' | 'databricks' | 'xmla' | 'none';
 function resolveRlsBackend(): RlsBackendKind {
   const pref = (process.env.LOOM_SEMANTIC_RLS_BACKEND || 'auto').trim().toLowerCase();
   const hasSynapse = !!process.env.LOOM_SYNAPSE_DEDICATED_POOL && !!process.env.LOOM_SYNAPSE_WORKSPACE;
-  const hasDbx = !!process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID;
+  // A bound Databricks workspace IS a Databricks SQL endpoint: the warehouse is
+  // the env pin or the one the Console produces (#3744). Whether that warehouse
+  // can actually be produced is answered when a statement runs, with the
+  // classified cause — not guessed here.
+  const hasDbx = !!process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID || !databricksConfigGate();
   const hasXmla = aasConfigGate() === null;
   if (pref === 'synapse') return hasSynapse ? 'synapse' : 'none';
   if (pref === 'databricks') return hasDbx ? 'databricks' : 'none';
   if (pref === 'xmla') return hasXmla ? 'xmla' : 'none';
   // auto — Azure-native SQL endpoints win; XMLA is the last-resort opt-in.
+  // The Databricks RLS deploy is a Unity Catalog ROW FILTER, and Unity Catalog
+  // is not available in Azure Government — so `auto` never infers Databricks
+  // there (an explicit LOOM_SEMANTIC_RLS_BACKEND=databricks is still honoured).
   if (hasSynapse) return 'synapse';
-  if (hasDbx) return 'databricks';
+  if (hasDbx && !isGovCloud()) return 'databricks';
   if (hasXmla) return 'xmla';
   return 'none';
 }
@@ -142,7 +158,7 @@ function nativeGate(): { missing: string; detail: string } {
       'No Azure-native SQL endpoint is configured for row-/object-level security. ' +
       'Set LOOM_SYNAPSE_DEDICATED_POOL (with LOOM_SYNAPSE_WORKSPACE) to enforce ' +
       'RLS/OLS via a Synapse dedicated SQL pool SECURITY POLICY + inline TVF, or ' +
-      'set LOOM_DATABRICKS_SQL_WAREHOUSE_ID to enforce it via a Unity Catalog ROW ' +
+      'set LOOM_DATABRICKS_HOSTNAME (the Console then produces the SQL warehouse) to enforce it via a Unity Catalog ROW ' +
       'FILTER + COLUMN MASK. No Fabric / Power BI workspace is required. ' +
       '(Azure Analysis Services / Power BI XMLA is an OPT-IN alternative — set ' +
       'LOOM_SEMANTIC_RLS_BACKEND=xmla with LOOM_AAS_SERVER or ' +
@@ -418,7 +434,19 @@ export const PUT = withSession<{ id: string }>(async (req: NextRequest, { sessio
   const statements: string[] = [];
   let deployOk = true;
 
-  const warehouseId = process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID || '';
+  if (engine === 'databricks') {
+    try {
+      // Resolved up front for the classified response; each DDL step then runs
+      // through withResolvedWarehouse (a deleted warehouse is re-resolved once, #4776).
+      await resolveWarehouseIdOrThrow();
+    } catch (e) {
+      if (e instanceof WarehouseResolutionError) {
+        // Roles ARE persisted above; only the deploy could not run.
+        return NextResponse.json({ ...warehouseErrorBody(e), persisted: true }, { status: warehouseErrorStatus(e) });
+      }
+      throw e;
+    }
+  }
   for (const step of artifact.steps) {
     statements.push(step.sql);
     const head = step.sql.split('\n')[0].slice(0, 120);
@@ -426,7 +454,7 @@ export const PUT = withSession<{ id: string }>(async (req: NextRequest, { sessio
       if (engine === 'synapse') {
         await synapseExecute(dedicatedTarget(), step.sql);
       } else {
-        await executeStatement(warehouseId, step.sql, dbxCatalog(), dbxSchema());
+        await withResolvedWarehouse((id) => executeStatement(id, step.sql, dbxCatalog(), dbxSchema()));
       }
       if (step.kind === 'policy' || step.kind === 'rowfilter') counts.policies++;
       else if (step.kind === 'function') counts.functions++;
@@ -554,7 +582,7 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest, { sessi
     const predicate = tr.sql.replace(/current_user\(\)/gi, sparkString(effectiveUserName));
     const tableFq = `${bq(dbxCatalog())}.${bq(dbxSchema())}.${bq(table)}`;
     const stmt = `SELECT * FROM ${tableFq} WHERE (${predicate}) LIMIT 100;`;
-    const qr = await executeStatement(process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID || '', stmt, dbxCatalog(), dbxSchema());
+    const qr = await withResolvedWarehouse((id) => executeStatement(id, stmt, dbxCatalog(), dbxSchema()));
     const objs = rowsToObjects(qr);
     return NextResponse.json({
       ok: true,
@@ -567,6 +595,9 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest, { sessi
       ...(tr.warnings.length ? { warnings: tr.warnings } : {}),
     });
   } catch (e: any) {
+    if (e instanceof WarehouseResolutionError) {
+      return NextResponse.json(warehouseErrorBody(e), { status: warehouseErrorStatus(e) });
+    }
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
 });

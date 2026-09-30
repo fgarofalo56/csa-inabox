@@ -3211,7 +3211,7 @@ function DataUriPickDialog({ open, onClose, onPick }: {
               <Tab value="datastore">Datastore path</Tab>
             </TabList>
             {source === 'adls'
-              ? <AdlsBrowsePanel open={open} onPick={onPick} />
+              ? <AdlsBrowsePanel open={open} onPick={onPick} onUseDatastore={() => setSource('datastore')} />
               : <DatastoreBrowsePanel onPick={onPick} />}
           </DialogContent>
           <DialogActions><Button appearance="secondary" onClick={onClose}>Close</Button></DialogActions>
@@ -3221,20 +3221,15 @@ function DataUriPickDialog({ open, onClose, onPick }: {
   );
 }
 
-/**
- * AdlsBrowsePanel — ADLS Gen2 file browser body. Lists the real DLZ containers
- * (/api/lakehouse/containers) then walks paths (/api/lakehouse/paths); selecting
- * a file → uri_file, a folder → uri_folder. Emits the abfss URI. Honest gate
- * when no container is reachable — and the sibling "Datastore path" tab stays
- * usable in that state, so the gate is not a dead end for the whole dialog.
- */
-function AdlsBrowsePanel({ open, onPick }: {
-  open: boolean;
-  onPick: (uri: string, dataType: 'uri_file' | 'uri_folder') => void;
+/** AdlsBrowsePanel — lists DLZ containers, walks paths, emits abfss (file → uri_file, folder → uri_folder). Container
+ *  listing is tenant-admin only: a 403 shows its reason plus a jump to the "Datastore path" tab, so the dialog stays usable. */
+function AdlsBrowsePanel({ open, onPick, onUseDatastore }: {
+  open: boolean; onPick: (uri: string, dataType: 'uri_file' | 'uri_folder') => void; onUseDatastore: () => void;
 }) {
   const s = useStyles();
   const [containers, setContainers] = useState<{ name: string; url: string }[] | null>(null);
   const [gate, setGate] = useState<string | null>(null);
+  const [refused, setRefused] = useState<string | null>(null);
   const [container, setContainer] = useState<string>('');
   const [account, setAccount] = useState<string>('');
   const [prefix, setPrefix] = useState('');
@@ -3244,7 +3239,7 @@ function AdlsBrowsePanel({ open, onPick }: {
 
   useEffect(() => {
     if (!open) return;
-    setContainer(''); setPrefix(''); setEntries([]); setErr(null); setGate(null);
+    setContainer(''); setPrefix(''); setEntries([]); setErr(null); setGate(null); setRefused(null);
     (async () => {
       const r = await clientFetch('/api/lakehouse/containers');
       const j = await r.json();
@@ -3259,7 +3254,8 @@ function AdlsBrowsePanel({ open, onPick }: {
     setLoading(true); setErr(null);
     const r = await clientFetch(`/api/lakehouse/paths?container=${encodeURIComponent(c)}&prefix=${encodeURIComponent(p)}`);
     const j = await r.json();
-    if (!j.ok) setErr(j.error || 'List failed'); else setEntries(j.paths || []);
+    if (r.status === 403) { setRefused(j.error || `Listing ${c} was refused (HTTP 403).`); setContainer(''); }
+    else if (!j.ok) setErr(j.error || 'List failed'); else setEntries(j.paths || []);
     setLoading(false);
   }, []);
 
@@ -3282,6 +3278,10 @@ function AdlsBrowsePanel({ open, onPick }: {
             be registered against a workspace datastore while this is unreachable.
           </Caption1>
         </>
+      ) : refused ? (
+        <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Container browsing is not available to you</MessageBarTitle>
+          {refused}{' '}<Button size="small" appearance="primary" onClick={onUseDatastore}>Use Datastore path</Button>
+        </MessageBarBody></MessageBar>
       ) : !container ? (
         containers === null ? <TableSkeleton rows={4} /> : (
           <div className={s.tableWrap}>
