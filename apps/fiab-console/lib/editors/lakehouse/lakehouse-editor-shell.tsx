@@ -230,7 +230,10 @@ export function LakehouseEditor({ item, id }: Props) {
         // class, never on the wording, and no RequestId reaches here.
         [key]: j.ok
           ? (j.paths as PathEntry[])
-          : { error: j.error || `HTTP ${r.status}`, remediation: j.remediation, code: j.code, kind: j.kind },
+          : {
+            error: j.error || `HTTP ${r.status}`, remediation: j.remediation, code: j.code, kind: j.kind,
+            ...(typeof j.fixHref === 'string' ? { fixHref: j.fixHref } : {}),
+          },
       }));
     } catch (e: any) {
       setOpenPrefixes((p) => ({ ...p, [key]: { error: e?.message || String(e) } }));

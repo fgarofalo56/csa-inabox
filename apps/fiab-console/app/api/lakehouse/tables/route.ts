@@ -29,7 +29,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { scanLakehouseTables } from '@/lib/azure/synapse-catalog-client';
 import { resolveItemAccessByOid } from '@/lib/auth/item-access';
-import { lakehouseStorageWithheldMessage, resolveLakehouseStorage } from '@/lib/azure/lakehouse-abfss';
+import { lakehouseStorageWithheldFields, resolveLakehouseStorage } from '@/lib/azure/lakehouse-abfss';
 import { runWithWorkspaceContext } from '@/lib/azure/workspace-credential-factory';
 import { apiServerError } from '@/lib/api/respond';
 import { withSession } from '@/lib/api/route-toolkit';
@@ -65,13 +65,16 @@ export const GET = withSession(async (req: NextRequest, { session: s }) => {
       return NextResponse.json({ ok: false, error: 'lakehouse not found' }, { status: 404 });
     }
     // A withheld location is the same honest-empty shape as unconfigured
-    // storage, carrying the resolver's one wording: nothing is scanned.
+    // storage, carrying the resolver's one wording (and, for root-shared, the
+    // page that resolves it): nothing is scanned.
+    const withheld = lakehouseStorageWithheldFields(resolved.reason);
     return NextResponse.json({
       ok: true,
       tables: [],
       gate:
-        lakehouseStorageWithheldMessage(resolved.reason)
+        withheld?.error
         ?? 'No lakehouse storage configured — set LOOM_{BRONZE,SILVER,GOLD,LANDING}_URL (deployed by the DLZ Bicep) and grant the Console UAMI Storage Blob Data Reader on the container.',
+      ...(withheld?.fixHref ? { fixHref: withheld.fixHref } : {}),
     });
   }
   const root = resolved.bound;

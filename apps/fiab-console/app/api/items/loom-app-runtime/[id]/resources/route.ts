@@ -121,6 +121,16 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     });
     return apiOk({ resource, resources: readAppRuntime(updated).resources || [] });
   } catch (e) {
+    // A lakehouse whose storage location is withheld: the true reason, and the
+    // page that resolves it, not a generic server error.
+    const { LakehouseStorageWithheldError } = await import('@/lib/azure/lakehouse-abfss');
+    if (e instanceof LakehouseStorageWithheldError) {
+      return apiError(e.message, 409, {
+        code: 'lakehouse_storage_withheld',
+        reason: e.reason,
+        ...(e.fixHref ? { fixHref: e.fixHref } : {}),
+      });
+    }
     return apiServerError(e, 'failed to attach resource');
   }
 }

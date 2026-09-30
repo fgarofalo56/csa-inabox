@@ -564,14 +564,25 @@ export async function attachLakehouseItemResource(
   displayName: string,
   addedBy?: string,
 ): Promise<AttachResult> {
-  const { resolveLakehouseAbfss } = await import('@/lib/azure/lakehouse-abfss');
-  const resolved = await resolveLakehouseAbfss(itemId, workspaceId);
-  if (!resolved) {
+  const { resolveLakehouseStorage, lakehouseStorageWithheldFields, LakehouseStorageWithheldError } = await import('@/lib/azure/lakehouse-abfss');
+  const storage = await resolveLakehouseStorage(itemId, workspaceId);
+  if (!storage.ok) {
+    // A withheld location says why, and where it is resolved; the storage-setup
+    // text is only for storage that is not configured, or an item that is gone.
+    const withheld = lakehouseStorageWithheldFields(storage.reason);
+    if (withheld) {
+      throw new LakehouseStorageWithheldError(
+        `Lakehouse "${displayName}": ${withheld.error}`, withheld.reason, withheld.fixHref ?? null,
+      );
+    }
     throw new Error(
-      `Could not resolve real storage for lakehouse "${displayName}" — the deployment has no configured ` +
-      'ADLS containers (set LOOM_ADLS_ACCOUNT / the layer URLs), or the item was deleted.',
+      storage.reason === 'not-found'
+        ? `Could not resolve real storage for lakehouse "${displayName}" — the item was not found.`
+        : `Could not resolve real storage for lakehouse "${displayName}" — the deployment has no configured `
+          + 'ADLS containers (set LOOM_ADLS_ACCOUNT / the layer URLs).',
     );
   }
+  const resolved = storage.bound;
   const account = resolved.abfss.match(/@([^.]+)\./)?.[1] || '';
   const slug = envSlug(displayName);
   const envVars: LoomAppEnvVar[] = [

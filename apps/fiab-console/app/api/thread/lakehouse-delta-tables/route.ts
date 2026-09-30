@@ -16,7 +16,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem } from '../../items/_lib/item-crud';
-import { resolveLakehouseAbfss } from '@/lib/azure/lakehouse-abfss';
+import { lakehouseStorageWithheldFields, resolveLakehouseStorage } from '@/lib/azure/lakehouse-abfss';
 import { scanLakehouseTables } from '@/lib/azure/synapse-catalog-client';
 import { apiServerError } from '@/lib/api/respond';
 
@@ -33,8 +33,13 @@ export async function GET(req: NextRequest) {
   const lake = await loadOwnedItem(fromId, 'lakehouse', session.claims.oid, { allowReadRoles: true });
   if (!lake) return NextResponse.json({ ok: false, error: 'lakehouse not found' }, { status: 404 });
 
-  const root = await resolveLakehouseAbfss(fromId, lake.workspaceId);
-  if (!root) {
+  const resolved = await resolveLakehouseStorage(fromId, lake.workspaceId);
+  if (!resolved.ok) {
+    if (resolved.reason === 'not-found') return NextResponse.json({ ok: false, error: 'lakehouse not found' }, { status: 404 });
+    // A withheld location carries the resolver's one wording (and the page that
+    // resolves it); only `no-storage` is the storage-configuration gate.
+    const withheld = lakehouseStorageWithheldFields(resolved.reason);
+    if (withheld) return NextResponse.json({ ok: false, ...withheld });
     return NextResponse.json({
       ok: false,
       gate: { missing: 'LOOM_{BRONZE,SILVER,GOLD,LANDING}_URL' },
@@ -43,6 +48,7 @@ export async function GET(req: NextRequest) {
         'DLZ Bicep) and grant the Console UAMI Storage Blob Data Reader on the container.',
     });
   }
+  const root = resolved.bound;
 
   try {
     const tables = await scanLakehouseTables({ containers: [root.container], rootPrefix: root.root });
