@@ -104,10 +104,12 @@ function tableNameProblem(name: string): string | null {
   if (!name) return 'invalid table selection: the table name is empty';
   if (CONTROL_CHAR_RE.test(name)) return 'invalid table name: it contains a control character';
   // `pathSegments` treats "\" as a separator, refuses "." / ".." / NUL / an
-  // absolute form, and collapses doubled or trailing separators — so the
-  // result must be exactly the input, as ONE segment, to be accepted.
+  // absolute form, and collapses doubled or trailing separators. Requiring its
+  // first segment to EQUAL the input is what makes this "one segment": any
+  // separator in the input is absent from every segment, so a multi-segment
+  // or collapsed input can never compare equal.
   const segs = pathSegments(name);
-  if (!segs || segs.length !== 1 || segs[0] !== name) {
+  if (!segs || segs[0] !== name) {
     return 'invalid table name: expected a single folder name under Tables/ — no "/" or "\\", and not "." or ".."';
   }
   if (CONN_STRING_META_RE.test(name)) {

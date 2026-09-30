@@ -128,14 +128,16 @@ describe('materialize-to-kql route', () => {
  *  - moving the check below `resolveLakehouseAbfss` → the status still reads
  *    400 but `resolveLakehouseAbfssMock` has been called, so the
  *    `not.toHaveBeenCalled()` line fails;
- *  - dropping the control-character rule → 'a\nb' becomes one segment and is
- *    accepted (200);
- *  - loosening `segs.length !== 1` → 'a/b', 'a\\b' and '../x' are accepted
- *    ('.' and '..' still fail inside `pathSegments`, which is why those two
- *    are separate rows and the separator rows exist at all);
- *  - dropping the `segs[0] !== name` comparison → 'orders/' collapses to
- *    ['orders'] and is accepted;
- *  - dropping the `;?#%` rule → 'orders;x' is accepted.
+ *  - dropping the control-character rule → 'a\nb' and 'a\u007fb' become one
+ *    segment and are accepted (200); 'a\u0000b' is still refused by
+ *    `pathSegments` but with the segment message, so its message assertion
+ *    fails (that row pins the MESSAGE, not the status);
+ *  - not calling `pathSegments` (treating the name as one segment) → '.',
+ *    '..', '../x', 'a/b', 'a\\b' and 'orders/' are accepted;
+ *  - dropping the `segs[0] !== name` comparison → 'a/b', 'a\\b' and
+ *    'orders/' are accepted ('.', '..' and '../x' are still refused inside
+ *    `pathSegments`, which is why those rows exist separately);
+ *  - dropping the `;?#%` rule → 'orders;x' and 'a%2Fb' are accepted.
  */
 describe('materialize-to-kql table-name validation', () => {
   const SEGMENT_MSG = /single folder name under Tables\//;
