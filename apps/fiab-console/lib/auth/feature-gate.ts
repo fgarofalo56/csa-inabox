@@ -71,9 +71,11 @@ function tenantAdminGroupIds(): string[] {
  * bootstrap). Tenant admins bypass all permission checks.
  *
  * A session from the CLI / VS Code device-code sign-in is NEVER a tenant admin
- * (operator decision 2026-09-30, lib/auth/device-code-policy.ts): this is the
- * one place tenant-admin standing is derived, so every bypass and every
- * tenant-admin tier check built on it refuses such a session. */
+ * (operator decision 2026-09-30, lib/auth/device-code-policy.ts). Every live
+ * tenant-admin check derives its standing from this function, so every bypass
+ * and tenant-admin tier check built on it refuses such a session. (The oid-only
+ * `isDomainTenantAdmin` in lib/azure/domain-hierarchy.ts is a second derivation
+ * with NO production caller; if one is ever added it must take the session.) */
 export function isTenantAdmin(session: SessionPayload): boolean {
   if (isDeviceCodeSession(session)) return false;
   const adminGroups = tenantAdminGroupIds();
