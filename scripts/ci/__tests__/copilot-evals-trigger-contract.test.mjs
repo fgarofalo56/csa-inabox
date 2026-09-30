@@ -18,39 +18,41 @@
  *   (c) `schedule` (and `workflow_dispatch`) are still present;
  *   (d) the two checks a docs/PRPs-only PR used to get from this workflow
  *       (the corpus stager and the eval-set lint, both of which READ docs/ and
- *       PRPs/) run on EVERY pull_request in loom-guardrails.yml instead.
+ *       PRPs/) run on EVERY pull_request in loom-guardrails.yml instead, in
+ *       their own ADVISORY job `copilot-corpus-lint` (operator decision
+ *       2026-09-30: not inside the required `guardrails` job, and not a
+ *       required context).
  *
  * The paths under test are LIFTED FROM THE YAML at runtime. The expected sets
  * are LITERALS on purpose: an expectation derived from the file under test
  * could not disagree with it.
  *
- * WHAT THE (a) SEAM CHECK DETECTS -- exactly these forms, each with a fixture
- * positive control below and a sandbox mutation arm in the PR:
- *   in the workflow (outside `on:`, on non-comment lines), any relative path
- *   with a directory part and a .mjs/.cjs/.js/.sh/.py/.ps1 extension,
- *   WHATEVER launches it: `node scripts/x.mjs`, `node ./scripts/x.mjs`,
- *   `node --flag scripts/x.mjs`, `python scripts/x.py`, `./scripts/x.sh`,
- *   `"$GITHUB_WORKSPACE/scripts/x.mjs"`, `"${{ github.workspace }}/scripts/…"`;
- *   a local `uses: ./path` (action dir or reusable workflow), whose own file is
- *   lifted the same way;
- *   in a JS file: `from './x'`, side-effect `import './x'`, `import('./x')`,
- *   `require('./x')`, plus any repo-relative path token on a non-comment line;
- *   in a shell file: any path under a variable assigned from the script's own
- *   dirname (`$(dirname "$0")`, `$(dirname "${BASH_SOURCE[0]}")`,
- *   `${BASH_SOURCE%/*}`, with a `/../..` suffix resolved), the same dirname
- *   expressions used inline (so `. "$(dirname "$0")/lib.sh"` and
- *   `source "$HERE/lib.sh"` are both seen), plus any repo-relative path token
- *   on a non-comment line.
- * Deliberately conservative: a non-comment MENTION of such a path counts as an
- * execution, so the failure mode is a false red, never a false green.
- *
- * WHAT IT DOES NOT DETECT (not witnessed -- do not read a green run as
- * covering these): a path assembled from a variable that is not a dirname of
- * the script (`S=scripts/ci; node $S/x.mjs`); a bare filename run after `cd` or
- * under `working-directory:`; Python `import` and PowerShell dot-sourcing
- * inside a lifted .py/.ps1; computed JS specifiers (`new URL(...)`,
- * `path.join(__dirname, ...)`); and DATA files a script reads (other than the
- * content/evals/** glob, which the filter covers wholesale).
+ * WHAT THE (a) SEAM CHECK WITNESSES -- CLOSED WORLD. It witnesses EXACTLY the
+ * forms below, each with a fixture positive control below and a sandbox
+ * mutation arm in the PR. Every other form is UNWITNESSED BY DESIGN: a green
+ * run says nothing about it. (Measured examples of unwitnessed forms, all
+ * GREEN on a sandbox: `$(dirname "$(readlink -f "$0")")`, `dirname -- "$0"`,
+ * a template-literal `import(`./x`)`, `npx tsx scripts/x.ts`, an
+ * extensionless `bash scripts/x`, and `npm --prefix … run <script>`.)
+ *   1. In the workflow, outside `on:`, on non-comment lines: a relative path
+ *      with a directory part and a .mjs/.cjs/.js/.sh/.py/.ps1 extension,
+ *      optionally led by `./`, `$GITHUB_WORKSPACE/`, `${GITHUB_WORKSPACE}/` or
+ *      `${{ github.workspace }}/`, whatever command precedes it.
+ *   2. A local `uses: ./path` (action dir or reusable workflow); its own file
+ *      is then read by forms 1 and 5-7.
+ *   3. In a JS file: `from '<rel>'`, `import '<rel>'`, `import('<rel>')` and
+ *      `require('<rel>')` with a single- or double-quoted relative specifier.
+ *   4. In a JS file: form 1's path token on a non-comment line.
+ *   5. In a shell file: a path after EXACTLY one of these three expressions for
+ *      the script's own directory -- `$(dirname "$0")`,
+ *      `$(dirname "${BASH_SOURCE[0]}")`, `${BASH_SOURCE%/*}` -- used inline.
+ *   6. In a shell file: a path after `$VAR/` or `${VAR}/`, where VAR was
+ *      assigned from one of those three expressions (a literal `/../..`
+ *      suffix after the expression is resolved).
+ *   7. In a shell file: form 1's path token on a non-comment line.
+ * Forms 5-7 match the path wherever it appears, so `.`/`source`/`bash`/`node`
+ * in front all count. A MENTION counts as an execution: a non-comment line
+ * naming such a path is required to be covered even if it only echoes it.
  *
  * No YAML library is installed at the repo root, so the workflows are read by
  * small indentation parsers. Each has a POSITIVE CONTROL on a literal fixture,
@@ -104,9 +106,24 @@ const EXPECTED_DIRECT_SCRIPTS = [
   'scripts/ci/run-outcome.mjs',
 ];
 
-/** (d) The exact command lines loom-guardrails.yml must run. */
-const STAGE_CMD = 'bash scripts/csa-loom/stage-copilot-corpus.sh';
+/** (d) The advisory job, and the exact command lines it must run. */
+const ADVISORY_JOB = 'copilot-corpus-lint';
+const STAGE_CMD = 'bash scripts/csa-loom/stage-copilot-corpus.sh || rc=$?';
 const LINT_CMD = 'node scripts/csa-loom/lint-eval-sets.mjs';
+const STAGE_FAIL_IF = 'if [ "$rc" -ne 0 ]; then';
+const NO_MANIFEST_IF = 'if [ ! -f "$CORPUS/.corpus-manifest.json" ]; then';
+
+/**
+ * (d) Shapes that discard a failing step under the runner's `bash -e`. One
+ * regex per shape (no alternation), each with a positive control in (d).
+ */
+const SWALLOWS = [
+  ['`set +e` (or a flag cluster containing e)', /\bset\s+\+[a-z]*e/, 'set +eu'],
+  ['`set +o errexit`', /\bset\s+\+o\s+errexit\b/, 'set +o errexit'],
+  ['`|| true`', /\|\|\s*true\b/, 'cmd || true'],
+  ['`|| :`', /\|\|\s*:/, 'cmd || :'],
+  ['`exit 0` (including a trap ending in it)', /\bexit\s+0\b/, `trap 'git clean -fdqX -- "$CORPUS"; exit 0' EXIT`],
+];
 
 const SCRIPT_EXT = 'mjs|cjs|js|sh|py|ps1';
 const sorted = (xs) => [...xs].sort();
@@ -217,6 +234,54 @@ function parseSteps(text) {
   return steps;
 }
 
+/**
+ * Split the top-level `jobs:` block into { key: { keys, text } }. Job keys sit
+ * at 2 spaces and a job's own keys at 4; `text` is the job's lines, for
+ * parseSteps. Comment lines are kept in `text` but never read as keys.
+ */
+function parseJobs(text) {
+  const lines = text.split(/\r?\n/);
+  const start = lines.findIndex((l) => /^jobs:\s*(#.*)?$/.test(l));
+  const jobs = {};
+  if (start < 0) return jobs;
+  let cur = null;
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^\S/.test(line) && !/^#/.test(line)) break;
+    let m;
+    if ((m = /^ {2}([\w-]+):\s*(#.*)?$/.exec(line))) {
+      cur = { keys: [], lines: [] };
+      jobs[m[1]] = cur;
+      continue;
+    }
+    if (!cur) continue;
+    cur.lines.push(line);
+    if (!isComment(line) && (m = /^ {4}([\w-]+):/.exec(line))) cur.keys.push(m[1]);
+  }
+  for (const j of Object.values(jobs)) j.text = j.lines.join('\n');
+  return jobs;
+}
+
+/**
+ * The lines of the shell `if` that opens with `head`, through its matching
+ * `fi` (nested multi-line `if`s are counted; a one-line `if …; fi` is not).
+ * Returns null if `head` is absent or never closed.
+ */
+function ifBlock(lines, head) {
+  const i = lines.indexOf(head);
+  if (i < 0) return null;
+  let depth = 0;
+  for (let j = i + 1; j < lines.length; j++) {
+    const l = lines[j];
+    if (/^if\s/.test(l) && !/;\s*fi$/.test(l)) depth++;
+    else if (l === 'fi') {
+      if (depth === 0) return lines.slice(i, j + 1);
+      depth--;
+    }
+  }
+  return null;
+}
+
 /** Exact match, or a `dir/**` glob prefix. */
 function isCovered(file, paths) {
   return paths.some((p) => (p.endsWith('/**') ? file.startsWith(p.slice(0, -2)) : p === file));
@@ -257,10 +322,17 @@ function localUses(text) {
   return out;
 }
 
-/** The file a local `uses:` target actually loads. */
+/** The file a local `uses:` target actually loads (tried by READING, not by an existence check). */
 function usesFile(target) {
   if (/\.ya?ml$/.test(target)) return target;
-  for (const f of ['action.yml', 'action.yaml']) if (existsSync(join(REPO, target, f))) return `${target}/${f}`;
+  for (const f of ['action.yml', 'action.yaml']) {
+    try {
+      readFileSync(join(REPO, target, f));
+      return `${target}/${f}`;
+    } catch {
+      // not this name; try the next
+    }
+  }
   return `${target}/action.yml`;
 }
 
@@ -308,9 +380,16 @@ function shellRefs(rel, src) {
 function localDeps(rel, seen = new Set()) {
   if (seen.has(rel)) return seen;
   seen.add(rel);
-  const abs = join(REPO, rel);
-  if (!existsSync(abs) || statSync(abs).isDirectory()) return seen;
-  const src = readFileSync(abs, 'utf8');
+  // One read, no existence pre-check (a check-then-read is a file-system race,
+  // CodeQL js/file-system-race). A missing file or a directory throws, and a
+  // file that does not exist loads nothing -- it is still in `seen`, so the
+  // coverage check below still requires it.
+  let src;
+  try {
+    src = readFileSync(join(REPO, rel), 'utf8');
+  } catch {
+    return seen;
+  }
   let refs = [];
   if (/\.(mjs|cjs|js)$/.test(rel)) refs = jsRefs(rel, src);
   else if (/\.sh$/.test(rel)) refs = shellRefs(rel, src);
@@ -520,32 +599,111 @@ test('(c) the nightly schedule and workflow_dispatch are still present', () => {
   assert.equal(ON.workflow_dispatch?.present, true, 'workflow_dispatch removed');
 });
 
-test('(d) loom-guardrails stages the corpus and lints the eval sets on EVERY pull_request', () => {
-  // What narrowing (a) moved here. Breaks on: a branches/paths filter added to
-  // guardrails' pull_request trigger; either command line deleted, commented
-  // out, or suffixed (`|| true`); the lint step no longer directly after the
-  // stager (it reads the manifest the stager leaves); `continue-on-error`,
-  // `shell:` (the default `bash -e` is what fails the step) or a `set +e` on
-  // either step; the `!cancelled()` guard dropped (an earlier red guard would
-  // then skip them); the lint step losing its no-manifest check.
-  // NOT checked: a job-level `if:` or `needs:` on the guardrails job.
+test('(d) job-parser + helper positive controls: literal fixtures give their known values', () => {
+  // Breaks if parseJobs loses a job, reads a comment or a block-scalar line as
+  // a job or a job key, or leaks one job's steps into another; if ifBlock stops
+  // at a nested `fi` or counts a one-line `if …; fi`; or if any SWALLOWS regex
+  // stops matching its own sample (which would make (d) blind to it).
+  const fixture = [
+    'on:',
+    '  pull_request:',
+    'jobs:',
+    '  a:',
+    '    runs-on: x',
+    '    steps:',
+    '      - run: node scripts/a.mjs',
+    '  # a comment between jobs',
+    '  b:',
+    '    needs: a',
+    '    if: false',
+    '    steps:',
+    '      - run: |',
+    '          echo "  fake:"',
+    '          node scripts/b.mjs',
+  ].join('\n');
+  const jobs = parseJobs(fixture);
+  assert.deepEqual(Object.keys(jobs), ['a', 'b']);
+  assert.deepEqual(jobs.a.keys, ['runs-on', 'steps']);
+  assert.deepEqual(jobs.b.keys, ['needs', 'if', 'steps']);
+  assert.deepEqual(parseSteps(jobs.a.text).map((s) => s.runLines), [['node scripts/a.mjs']]);
+  assert.deepEqual(parseSteps(jobs.b.text).map((s) => s.runLines), [['echo "  fake:"', 'node scripts/b.mjs']]);
+
+  const sh = ['if [ x ]; then', 'if [ -d y ]; then z; fi', 'if [ w ]; then', 'a', 'fi', 'exit 1', 'fi', 'after'];
+  assert.deepEqual(ifBlock(sh, 'if [ x ]; then'), sh.slice(0, 7));
+  assert.equal(ifBlock(sh, 'if [ missing ]; then'), null);
+
+  for (const [what, re, sample] of SWALLOWS) assert.ok(re.test(sample), `SWALLOWS regex for ${what} does not match its own sample`);
+  for (const [what, re] of SWALLOWS) {
+    for (const clean of ['exit "$rc"', 'exit 1', 'set -euo pipefail', 'rc=0']) assert.ok(!re.test(clean), `SWALLOWS ${what} matches the clean line ${clean}`);
+  }
+});
+
+test('(d) the corpus stager + eval-set lint run on EVERY pull_request, in an ADVISORY job', () => {
+  // What narrowing (a) moved to loom-guardrails.yml. WITNESSES EXACTLY THESE,
+  // each named with the input that breaks it; anything else is unwitnessed:
+  //   - guardrails' `pull_request:` carries ANY key (types/branches/paths/...);
+  //   - job `copilot-corpus-lint` missing, or carrying a job-level `if:`,
+  //     `needs:` or `continue-on-error:`;
+  //   - either command run from a step of the REQUIRED `guardrails` job
+  //     (operator decision 2026-09-30: advisory, not required);
+  //   - `copilot-corpus-lint` listed in tools/drain/required_contexts.json (the
+  //     snapshot; live branch protection is not read here);
+  //   - either command line deleted, commented out or altered; the lint step
+  //     not directly after the stager step;
+  //   - `if: ${{ !cancelled() }}` dropped, or `continue-on-error:` / `shell:`
+  //     added, on either step;
+  //   - any SWALLOWS shape anywhere in either step;
+  //   - the stager's failure branch losing `exit "$rc"` or its ::error:: line,
+  //     or `rc=0` not set before the stager runs;
+  //   - the lint's no-manifest branch losing `exit 1`.
   const g = parseOnBlock(GTEXT);
   assert.ok(g?.pull_request, `${GUARDRAILS_REL} lost its pull_request trigger`);
-  const filters = g.pull_request.keys.filter((k) => ['branches', 'branches-ignore', 'paths', 'paths-ignore'].includes(k));
-  assert.deepEqual(filters, [], `guardrails' pull_request is filtered (${filters.join(', ')}) — it would no longer run on every PR`);
+  assert.deepEqual(g.pull_request.keys, [], `guardrails' pull_request carries keys (${g.pull_request.keys.join(', ')}) — it would no longer run on every PR event`);
 
-  const steps = parseSteps(GTEXT);
+  const jobs = parseJobs(GTEXT);
+  // Positive control: the required job must be FOUND, or the "not in guardrails" check below is vacuous.
+  assert.ok(jobs.guardrails && parseSteps(jobs.guardrails.text).length > 100, 'parseJobs did not find the guardrails job and its steps');
+  const inRequired = parseSteps(jobs.guardrails.text)
+    .filter((s) => s.runLines.some((l) => l.includes('stage-copilot-corpus.sh') || l.includes('lint-eval-sets.mjs')))
+    .map((s) => s.name);
+  assert.deepEqual(inRequired, [], 'the stager / eval lint must NOT run in the REQUIRED guardrails job (operator decision 2026-09-30)');
+
+  const job = jobs[ADVISORY_JOB];
+  assert.ok(job, `${GUARDRAILS_REL} has no job ${ADVISORY_JOB}`);
+  for (const k of ['if', 'needs', 'continue-on-error']) {
+    assert.ok(!job.keys.includes(k), `${ADVISORY_JOB} must not set job-level ${k}: it could skip or mute the job`);
+  }
+
+  // A read, not an existence check: a missing snapshot throws and fails the test.
+  const required = JSON.parse(readFileSync(join(REPO, 'tools/drain/required_contexts.json'), 'utf8')).contexts;
+  assert.ok(required.includes('guardrails'), 'positive control: the required-contexts snapshot does not list guardrails, so it is not the file this reads');
+  assert.ok(!required.includes(ADVISORY_JOB), `${ADVISORY_JOB} is listed as REQUIRED; the operator decided it is advisory`);
+
+  const steps = parseSteps(job.text);
   const iStage = steps.findIndex((s) => s.runLines.includes(STAGE_CMD));
   const iLint = steps.findIndex((s) => s.runLines.includes(LINT_CMD));
-  assert.ok(iStage >= 0, `no guardrails step runs exactly \`${STAGE_CMD}\``);
-  assert.ok(iLint >= 0, `no guardrails step runs exactly \`${LINT_CMD}\``);
+  assert.ok(iStage >= 0, `no ${ADVISORY_JOB} step runs exactly \`${STAGE_CMD}\``);
+  assert.ok(iLint >= 0, `no ${ADVISORY_JOB} step runs exactly \`${LINT_CMD}\``);
   assert.equal(iLint, iStage + 1, 'the lint step must directly follow the stager step: it lints the manifest the stager leaves');
-  for (const s of [steps[iStage], steps[iLint]]) {
+  const stage = steps[iStage];
+  const lint = steps[iLint];
+  for (const s of [stage, lint]) {
     assert.equal(s.if, '${{ !cancelled() }}', `${s.name}: must carry if: \${{ !cancelled() }}`);
     for (const k of ['continue-on-error', 'shell']) assert.ok(!s.keys.includes(k), `${s.name}: must not set ${k}`);
-    const swallow = s.runLines.filter((l) => /^set\s+\+e\b|\|\|\s*(true|:)\s*$/.test(l));
-    assert.deepEqual(swallow, [], `${s.name}: a line would discard the result`);
+    for (const [what, re] of SWALLOWS) {
+      assert.deepEqual(s.runLines.filter((l) => re.test(l)), [], `${s.name}: ${what} would discard the step's failure`);
+    }
   }
-  assert.ok(steps[iLint].runLines.some((l) => l.includes('! -f "$CORPUS/.corpus-manifest.json"')),
-    'the lint step must fail when no staged manifest exists (otherwise it silently degrades to repo-tree-only)');
+
+  const rc0 = stage.runLines.indexOf('rc=0');
+  assert.ok(rc0 >= 0 && rc0 < stage.runLines.indexOf(STAGE_CMD), 'rc=0 must be set before the stager runs');
+  const fail = ifBlock(stage.runLines, STAGE_FAIL_IF);
+  assert.ok(fail, `the stager step has no \`${STAGE_FAIL_IF}\` … fi branch`);
+  assert.ok(fail.includes('exit "$rc"'), 'the stager failure branch must exit with the stager\'s own code');
+  assert.ok(fail.some((l) => l.includes('::error::scripts/csa-loom/stage-copilot-corpus.sh exited $rc')),
+    'the stager failure branch must name the stager and its exit code in an ::error:: annotation');
+
+  const noManifest = ifBlock(lint.runLines, NO_MANIFEST_IF);
+  assert.ok(noManifest, 'the lint step must check for the staged manifest (otherwise it silently degrades to repo-tree-only)');
+  assert.ok(noManifest.includes('exit 1'), 'the no-manifest branch must `exit 1`');
 });

@@ -97,15 +97,19 @@ on:
     #   - lint-eval-sets.mjs resolves every eval-set `expectedChunks`
     #     path/anchor against docs/** and PRPs/**.
     # Both now run on EVERY pull_request in loom-guardrails.yml (no paths
-    # filter, no secrets, no Azure), in the steps `copilot-corpus-stages` and
-    # `copilot-eval-sets-lint`. So narrowing this filter does not drop them.
+    # filter, no secrets, no Azure), in the job `copilot-corpus-lint`. That job
+    # is ADVISORY by operator decision (2026-09-30): it is not in branch
+    # protection or tools/drain/required_contexts.json, although the drain's
+    # merge gate (4c) still treats a red advisory check as a NO-GO. So narrowing
+    # this filter does not drop them.
     #
     # `PRPs/archive/**` is a stager source root and has never been in either
     # filter here. That gap predates this change and is out of its scope; the
-    # guardrails stager step does walk it.
+    # `copilot-corpus-lint` stager step does walk it.
     #
     # Pinned by scripts/ci/__tests__/copilot-evals-trigger-contract.test.mjs,
-    # including that the two guardrails steps exist and run on every PR.
+    # including that the `copilot-corpus-lint` job exists, stays advisory and
+    # runs on every PR.
     paths:
       - 'content/evals/**'
       - 'scripts/csa-loom/stage-copilot-corpus.sh'
