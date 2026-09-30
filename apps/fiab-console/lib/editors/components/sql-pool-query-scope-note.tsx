@@ -45,8 +45,20 @@ export function SqlScopeFollowUp() {
   );
 }
 
-/** Rendered only for a caller who is not a tenant admin. */
-export function SqlPoolQueryScopeNote() {
+/** "A, B and C" — the ribbon entry list as one readable phrase. */
+export function joinEntries(entries: readonly string[]): string {
+  if (entries.length <= 1) return entries.join('');
+  return `${entries.slice(0, -1).join(', ')} and ${entries[entries.length - 1]}`;
+}
+
+/**
+ * Rendered only for a caller who is not a tenant admin.
+ *
+ * `adminOnlyEntries` names the ribbon entries this editor disables for that
+ * caller. They are named here in visible text, so the reason does not depend on
+ * hovering or focusing a disabled button to read its tooltip.
+ */
+export function SqlPoolQueryScopeNote({ adminOnlyEntries = [] }: { adminOnlyEntries?: readonly string[] }) {
   const s = useStyles();
   const isAdmin = useIsTenantAdmin();
   if (isAdmin) return null;
@@ -58,6 +70,12 @@ export function SqlPoolQueryScopeNote() {
         their full URL in OPENROWSET(BULK &apos;https://&lt;account&gt;.dfs.&lt;suffix&gt;/&lt;container&gt;/&lt;lakehouse root&gt;/…&apos;),
         and the INFORMATION_SCHEMA views. Queries run in master; the Connect to database applies
         to tenant admins only, who can also run other statements.
+        {adminOnlyEntries.length > 0 && (
+          <span data-testid="sql-pool-admin-only-entries">
+            {' '}{joinEntries(adminOnlyEntries)} in the ribbon are available to tenant admins only,
+            because the statements they open would not be run for you.
+          </span>
+        )}
         <SqlScopeFollowUp />
       </MessageBarBody>
     </MessageBar>

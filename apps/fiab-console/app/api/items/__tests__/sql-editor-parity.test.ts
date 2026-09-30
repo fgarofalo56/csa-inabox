@@ -1,16 +1,16 @@
 /**
  * BFF gate + contract tests for the SQL-editor-parity cancel routes:
  *   - POST /api/items/databricks-sql-warehouse/[id]/cancel
- *   - POST /api/items/synapse-dedicated-sql-pool/[id]/cancel
- *   - (the serverless SQL pool cancel route is item-guarded and keyed to the
- *     caller and item; it is tested with its query route in
- *     `synapse-serverless-sql-pool/__tests__/cancel-scope.test.ts`)
- *   - POST /api/items/warehouse/[id]/cancel
+ *   - (the Synapse SQL cancel routes, serverless SQL pool, dedicated SQL pool
+ *     and warehouse, are item-guarded and keyed to the route family, the caller
+ *     and the item; they are tested with their query routes against the real
+ *     cancel registry in `synapse-serverless-sql-pool/__tests__/cancel-scope.test.ts`
+ *     and `__tests__/sql-cancel-scope.test.ts`)
  *
  * Asserts the auth gate (401), input validation (400), the Databricks
  * config-gate (503), and that the happy path delegates to the real
- * cancel helpers (databricks-client.cancelStatement / cancelByClientId,
- * synapse-sql-client.cancelActiveQuery) with the right args. Also unit-tests
+ * cancel helpers (databricks-client.cancelStatement / cancelByClientId)
+ * with the right args. Also unit-tests
  * the run-selection helper getRunSql. The clients are stubbed; their own REST
  * contracts are covered elsewhere.
  *
@@ -32,9 +32,10 @@
  * is where the authorization assertions and their mutation receipts live. This
  * file stays the CONTRACT test: which helper is called, with which args.
  *
- * THE OTHER THREE cancel routes are UNCHANGED and still called without a ctx,
- * deliberately: they are not in this pass's set, and quietly passing them a ctx
- * would read as coverage they do not have.
+ * THE SYNAPSE SQL cancel routes moved out of this file when they were
+ * item-scoped: their tests now drive the real registry through the real query
+ * routes (see the list above), which is the claim a contract stub here could
+ * not witness.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -44,7 +45,6 @@ vi.mock('@/lib/azure/databricks-client', () => ({
   cancelByClientId: vi.fn(),
   databricksConfigGate: vi.fn(),
 }));
-vi.mock('@/lib/azure/synapse-sql-client', () => ({ cancelActiveQuery: vi.fn() }));
 
 // GHSA-v2g8-gp3r-rg4r — the dbx cancel route's Layer 1 reaches the workspace
 // ladder and Cosmos. Both are stubbed to ADMIT so this file keeps testing the
@@ -68,12 +68,9 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
 }));
 
 import { POST as dbxCancel } from '../databricks-sql-warehouse/[id]/cancel/route';
-import { POST as dedicatedCancel } from '../synapse-dedicated-sql-pool/[id]/cancel/route';
-import { POST as warehouseCancel } from '../warehouse/[id]/cancel/route';
 import { getSession } from '@/lib/auth/session';
 import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import { cancelStatement, cancelByClientId, databricksConfigGate } from '@/lib/azure/databricks-client';
-import { cancelActiveQuery } from '@/lib/azure/synapse-sql-client';
 // Relative import (not the @ alias) so this resolves to the pure, Fluent-free
 // run-selection helper regardless of which checkout the test runner is rooted at.
 import { getRunSql } from '../../../../lib/components/editor/sql-run-selection';
@@ -135,44 +132,6 @@ describe('POST databricks-sql-warehouse/[id]/cancel', () => {
     expect(j.ok).toBe(true);
     expect(j.statementId).toBe('stmt-7');
     expect(cancelByClientId).toHaveBeenCalledWith('cq-1');
-  });
-});
-
-describe.each([
-  ['dedicated', dedicatedCancel],
-  ['warehouse', warehouseCancel],
-] as const)('POST %s/[id]/cancel (TDS ATTENTION)', (_name, handler) => {
-  it('401 without session', async () => {
-    (getSession as any).mockReturnValue(null);
-    const res = await handler(bodyReq({ queryId: 'q1' }));
-    expect(res.status).toBe(401);
-  });
-
-  it('400 without queryId', async () => {
-    (getSession as any).mockReturnValue({ user: 'u' });
-    const res = await handler(bodyReq({}));
-    expect(res.status).toBe(400);
-  });
-
-  it('delegates to cancelActiveQuery with the queryId', async () => {
-    (getSession as any).mockReturnValue({ user: 'u' });
-    (cancelActiveQuery as any).mockReturnValue(true);
-    const res = await handler(bodyReq({ queryId: 'q-99' }));
-    const j = await res.json();
-    expect(res.status).toBe(200);
-    expect(j.ok).toBe(true);
-    expect(j.canceled).toBe(true);
-    expect(cancelActiveQuery).toHaveBeenCalledWith('q-99');
-  });
-
-  it('reports canceled:false when the request is not in-flight on this replica', async () => {
-    (getSession as any).mockReturnValue({ user: 'u' });
-    (cancelActiveQuery as any).mockReturnValue(false);
-    const res = await handler(bodyReq({ queryId: 'gone' }));
-    const j = await res.json();
-    expect(res.status).toBe(200);
-    expect(j.ok).toBe(true);
-    expect(j.canceled).toBe(false);
   });
 });
 

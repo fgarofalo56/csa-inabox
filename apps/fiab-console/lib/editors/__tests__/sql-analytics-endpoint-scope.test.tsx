@@ -16,7 +16,8 @@
  *     "What to do:" line, or the Results caption keeping "Query failed".
  *   - ribbon templates: a non-admin's New view / Grant access left enabled, or an
  *     admin's disabled. The REAL Ribbon renders here so the reason (`title`) is
- *     read from what the product shows.
+ *     read from what the product shows. For a non-admin they stay focusable
+ *     (`aria-disabled`) and are named in the visible scope note.
  */
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -137,20 +138,36 @@ describe('SqlAnalyticsEndpointEditor — query scope', () => {
     expect(intents()).toContain('error');
   });
 
-  it('disables the templates the route refuses for a caller who is not a tenant admin, with the reason', async () => {
+  it('disables the templates the route refuses for a caller who is not a tenant admin, with the reason, and keeps them focusable', async () => {
     mount(false);
-    for (const label of ['New view', 'New procedure', 'New function', 'Grant access', 'Row-level security']) {
+    for (const label of ADMIN_ONLY_ENTRIES) {
       const btn = await screen.findByRole('button', { name: label }, { timeout: 5000 });
-      expect(btn.hasAttribute('disabled')).toBe(true);
+      // aria-disabled, not native `disabled` (breaks if the editor stops setting
+      // `disabledFocusable`, or the Ribbon drops it).
+      expect(btn.getAttribute('aria-disabled')).toBe('true');
+      expect(btn.hasAttribute('disabled')).toBe(false);
+      btn.focus();
+      expect(document.activeElement).toBe(btn);
       expect(btn.getAttribute('title') || '').toContain('Tenant admins only');
     }
   });
 
+  it('names those entries in the visible scope note, not only in their tooltips', async () => {
+    mount(false);
+    const named = await screen.findByTestId('sql-pool-admin-only-entries', {}, { timeout: 5000 });
+    // Breaks if the editor stops passing `adminOnlyEntries`, or drops one.
+    for (const label of ADMIN_ONLY_ENTRIES) expect(named.textContent).toContain(label);
+    expect(named.textContent).toContain('tenant admins only');
+  });
+
   it('leaves those templates enabled for a tenant admin', async () => {
     mount(true);
-    for (const label of ['New view', 'New procedure', 'New function', 'Grant access', 'Row-level security']) {
+    for (const label of ADMIN_ONLY_ENTRIES) {
       const btn = await screen.findByRole('button', { name: label }, { timeout: 5000 });
       expect(btn.hasAttribute('disabled')).toBe(false);
+      expect(btn.getAttribute('aria-disabled')).not.toBe('true');
     }
   });
 });
+
+const ADMIN_ONLY_ENTRIES = ['New view', 'New procedure', 'New function', 'Grant access', 'Row-level security'];

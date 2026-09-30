@@ -54,15 +54,18 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
   }),
 }));
 
-/** The in-flight registry: the key each executeQuery was handed. */
+/** The in-flight registry: the key each executeQuery was handed, serialized
+ *  field by field so a key missing a field is a different entry. The real
+ *  registry is driven directly in `lib/azure/__tests__/synapse-sql-cancel-registry.test.ts`. */
 const inFlight = vi.hoisted(() => new Set<string>());
+const ser = vi.hoisted(() => (k: any) => JSON.stringify([k?.family, k?.oid, k?.itemId, k?.queryId]));
 const synapse = vi.hoisted(() => ({
-  executeQuery: vi.fn(async (_t: any, _b: string, _ms?: number, _p?: any, key?: string) => {
-    if (key) inFlight.add(key); // still running: the test cancels it
+  executeQuery: vi.fn(async (_t: any, _b: string, _ms?: number, _p?: any, key?: any) => {
+    if (key) inFlight.add(ser(key)); // still running: the test cancels it
     return { columns: ['a'], rows: [[1]], rowCount: 1, executionMs: 1, truncated: false, messages: [] };
   }),
   executeQueryAsUser: vi.fn(),
-  cancelActiveQuery: vi.fn((key: string) => inFlight.delete(key)),
+  cancelActiveQuery: vi.fn((key: any) => inFlight.delete(ser(key))),
   serverlessTarget: vi.fn((database = 'master') => ({ server: 's', database, cacheKey: `k:${database}` })),
   serverlessEndpoint: () => 's.sql.azuresynapse.net',
   getSynapseSqlSuffix: () => 'sql.azuresynapse.net',
@@ -120,10 +123,9 @@ describe('serverless SQL pool cancel', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ ok: true, canceled: true, found: true });
     expect(inFlight.size).toBe(0);
-    // The key carries the caller, the item and the queryId, not the bare queryId.
+    // The key carries this family, the caller, the item and the queryId, not the bare queryId.
     const key = synapse.cancelActiveQuery.mock.calls[0][0];
-    expect(key).not.toBe('q-1');
-    expect(JSON.parse(key)).toEqual(['sql-pool-query', 'oid-a', 'pool-1', 'q-1']);
+    expect(key).toEqual({ family: 'serverless-sql-pool', oid: 'oid-a', itemId: 'pool-1', queryId: 'q-1' });
   });
 
   it('a caller the item guard refuses gets its 404 and the registry is not consulted (breaks if cancel skips the guard)', async () => {

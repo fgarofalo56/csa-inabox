@@ -34,8 +34,11 @@
  * routes. An item-level share (`resolveItemAccessByOid`'s item-grant step) is
  * NOT admitted here, so a caller whose only access is a share of the SQL pool,
  * endpoint or geo item gets 404. If the guard ever admits item-level grantees,
- * this set must shrink to the lakehouses that caller can read; the route test
- * "an item-level share alone does not admit the caller" fails first.
+ * this set must shrink to the lakehouses that caller can read. Two tests fail
+ * first: the route test "an item-level share alone does not admit the caller",
+ * and, against the real guard and the real item-grant resolver with a grant
+ * the resolver is shown to accept, "an item-level grant with no workspace role
+ * does not admit the caller" in `lib/auth/__tests__/authorize-item-workspace.test.ts`.
  *
  * WHY FOUR ITEM TYPES. Three other editors reach this handler with their OWN
  * item id, so the guard accepts those item types too and the same classifier
@@ -60,6 +63,7 @@ import { resolveLakehouseStorage } from '@/lib/azure/lakehouse-abfss';
 import { apiServerError } from '@/lib/api/respond';
 import { mapWithConcurrency } from '@/lib/util/concurrency';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import type { SqlCancelKey } from '@/lib/azure/synapse-sql-client';
 import {
   guardSynapseItemRequest,
   type SynapseItemGuardResult,
@@ -96,13 +100,13 @@ export const SQL_POOL_READER_POOL_PREFIX = 'sql-pool-reader:';
 /**
  * The key a running query is registered under in the Synapse client's
  * in-process cancel registry, for the query and cancel routes of this item
- * family. It carries the caller's oid and the route item's id with the
- * caller-supplied `queryId`, so a cancel reaches only the caller's own query on
- * that item. JSON-encoded, so no oid, id or queryId can be spelled to collide
- * with another triple.
+ * family. It carries this family's namespace, the caller's oid and the route
+ * item's id with the caller-supplied `queryId`, so a cancel reaches only the
+ * caller's own query on that item, started through this family's query route
+ * (see `SqlCancelKey` in `lib/azure/synapse-sql-client.ts`).
  */
-export function sqlPoolQueryKey(oid: string, itemId: string, queryId: string): string {
-  return JSON.stringify(['sql-pool-query', oid, itemId, queryId]);
+export function sqlPoolQueryKey(oid: string, itemId: string, queryId: string): SqlCancelKey {
+  return { family: 'serverless-sql-pool', oid, itemId, queryId };
 }
 
 /**

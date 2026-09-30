@@ -80,7 +80,11 @@ const DEDICATED_ENGINES = new Set(['warehouse', 'synapse-dedicated-sql-pool']);
 function quoteIdent(name: string, dialect: SqlDialect): string {
   const clean = (name || '').trim();
   if (dialect === 'tsql') return `[${clean.replace(/[[\]]/g, '')}]`;
-  return `\`${clean.replace(/`/g, '')}\``;
+  // \x60 is the backtick. Written as an escape so no backtick sits inside a regex
+  // inside a template expression: check-tid-boundary-chokepoint's lexer loses
+  // its brace depth there and then no longer recognises this file's POST
+  // handler (the tracking issue is linked from PR #4841).
+  return `\`${clean.replace(/\x60/g, '')}\``;
 }
 
 /** Build a zero-row "describe" query so the canvas can enumerate a table's columns. */
@@ -146,8 +150,15 @@ export const POST = withSession<{ type: string; id: string }>(async (req: NextRe
   const generatedSql = sql;
 
   // Non-admin serverless: the generated text passes the query route's
-  // classifier and root confinement before anything runs.
-  if (serverless && !admin && serverlessItem) {
+  // classifier and root confinement before anything runs. Without the item
+  // record there is no root set to confine to, so nothing runs (fails closed).
+  if (serverless && !admin) {
+    if (!serverlessItem) {
+      return NextResponse.json(
+        { ok: false, error: 'The serverless SQL pool item could not be read, so the query was not run.' },
+        { status: 500 },
+      );
+    }
     const refused = await confineToWorkspaceLakehouses(sql, serverlessItem);
     if (refused) return refused;
   }

@@ -49,6 +49,9 @@ import { useSharedEditorStyles } from './shared-styles';
 import { useIsTenantAdmin } from '@/lib/components/session-context';
 import { SqlRefusalOrError, isSqlRefusal, type SqlFailure } from './lakehouse/panes/sql-pane';
 import { SqlPoolQueryScopeNote, SQL_POOL_ADMIN_ONLY_TEMPLATE } from './components/sql-pool-query-scope-note';
+
+/** The ribbon entries disabled for a caller who is not a tenant admin, named in the scope note. */
+const ADMIN_ONLY_ENTRIES = ['New view', 'New procedure', 'New function', 'Grant access', 'Row-level security'] as const;
 // UX-baseline shared components (SC-6/8/9/10): teaching banner, item-view tab
 // strip, ribbon command-search registration, and the schema entity-diagram —
 // each fed by this editor's OWN real serverless-SQL objects (no mocks).
@@ -368,13 +371,13 @@ export function SqlAnalyticsEndpointEditor({ item, id }: { item: FabricItemType;
       // Templates the query route refuses for a caller who is not a tenant
       // admin are disabled for that caller, with the reason.
       { label: 'New', actions: [
-        { label: 'New view', onClick: isAdmin ? () => newScript(TEMPLATE_VIEW) : undefined, disabled: !isAdmin, title: isAdmin ? undefined : SQL_POOL_ADMIN_ONLY_TEMPLATE },
-        { label: 'New procedure', onClick: isAdmin ? () => newScript(TEMPLATE_PROC) : undefined, disabled: !isAdmin, title: isAdmin ? undefined : SQL_POOL_ADMIN_ONLY_TEMPLATE },
-        { label: 'New function', onClick: isAdmin ? () => newScript(TEMPLATE_FUNC) : undefined, disabled: !isAdmin, title: isAdmin ? undefined : SQL_POOL_ADMIN_ONLY_TEMPLATE },
+        { label: 'New view', onClick: isAdmin ? () => newScript(TEMPLATE_VIEW) : undefined, disabled: !isAdmin, disabledFocusable: true, title: isAdmin ? undefined : SQL_POOL_ADMIN_ONLY_TEMPLATE },
+        { label: 'New procedure', onClick: isAdmin ? () => newScript(TEMPLATE_PROC) : undefined, disabled: !isAdmin, disabledFocusable: true, title: isAdmin ? undefined : SQL_POOL_ADMIN_ONLY_TEMPLATE },
+        { label: 'New function', onClick: isAdmin ? () => newScript(TEMPLATE_FUNC) : undefined, disabled: !isAdmin, disabledFocusable: true, title: isAdmin ? undefined : SQL_POOL_ADMIN_ONLY_TEMPLATE },
       ]},
       { label: 'Security', actions: [
-        { label: 'Grant access', onClick: isAdmin ? () => newScript(TEMPLATE_GRANT) : undefined, disabled: !isAdmin, title: isAdmin ? 'Object-level GRANT / DENY on a consumption view' : SQL_POOL_ADMIN_ONLY_TEMPLATE },
-        { label: 'Row-level security', onClick: isAdmin ? () => newScript(TEMPLATE_RLS) : undefined, disabled: !isAdmin, title: isAdmin ? 'Predicate function + security policy (row-level security)' : SQL_POOL_ADMIN_ONLY_TEMPLATE },
+        { label: 'Grant access', onClick: isAdmin ? () => newScript(TEMPLATE_GRANT) : undefined, disabled: !isAdmin, disabledFocusable: true, title: isAdmin ? 'Object-level GRANT / DENY on a consumption view' : SQL_POOL_ADMIN_ONLY_TEMPLATE },
+        { label: 'Row-level security', onClick: isAdmin ? () => newScript(TEMPLATE_RLS) : undefined, disabled: !isAdmin, disabledFocusable: true, title: isAdmin ? 'Predicate function + security policy (row-level security)' : SQL_POOL_ADMIN_ONLY_TEMPLATE },
       ]},
     ]},
   ], [isAdmin, loading, run, runSelection, objectsLoading, loadObjects, newScript]);
@@ -458,7 +461,7 @@ export function SqlAnalyticsEndpointEditor({ item, id }: { item: FabricItemType;
               </MessageBarBody>
             </MessageBar>
           )}
-          <SqlPoolQueryScopeNote />
+          <SqlPoolQueryScopeNote adminOnlyEntries={ADMIN_ONLY_ENTRIES} />
           {/* SC-8 — item-view tab strip: T-SQL query editor ⇄ schema diagram,
               one-for-one with the Fabric SQL-endpoint Data/Model views. */}
           <ItemTabStrip
