@@ -42,11 +42,9 @@ import {
 import {
   ArrowSync20Regular, ArrowUpload20Regular, Database20Regular, Delete20Regular,
   DocumentTable20Regular, Eye20Regular, Folder20Regular, FolderAdd20Regular, Play20Regular,
-  BookOpen20Regular, TableSimple20Regular, TableSimple20Filled,
-  ArrowDownload20Regular, Info20Regular, LinkMultiple20Regular,
-  Add20Regular, CloudLink20Regular, ErrorCircle20Filled,
-  FolderArrowUp20Regular, ShieldTask20Regular,
-  Wrench20Regular, History20Regular, Copy20Regular, Sparkle20Regular,
+  TableSimple20Regular, TableSimple20Filled, Info20Regular, LinkMultiple20Regular,
+  Add20Regular, CloudLink20Regular, ErrorCircle20Filled, ShieldTask20Regular,
+  History20Regular, Copy20Regular, Sparkle20Regular,
   MoreHorizontal20Regular, DatabaseLink20Regular, PlugConnected20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from '../item-editor-chrome';
@@ -62,7 +60,6 @@ import { LoadToTableWizard } from '../components/load-to-table-wizard';
 import { OneLakeSecurityTab } from '../components/onelake-security-tab';
 import { ConnectTab } from '@/lib/components/shared/connect-tab';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
-import type { RibbonTab } from '@/lib/components/ribbon';
 import { useJobsStore } from '@/lib/state/jobs-store';
 import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
 import { QueryErrorBar } from '@/lib/components/ui/query-error-bar';
@@ -95,7 +92,7 @@ import { ShortcutsPane } from './panes/shortcuts-pane';
 import { InteropPane } from './panes/interop-pane';
 // ── Dialogs ──────────────────────────────────────────────────────────────────
 import { LakehouseContextDialogs } from './dialogs/lakehouse-dialogs';
-import { checkVariablesRibbonAction } from './dialogs/check-variables-dialog';
+import { useLakehouseRibbon } from './lakehouse-ribbon';
 
 interface Props { item: FabricItemType; id: string }
 
@@ -267,7 +264,7 @@ export function LakehouseEditor({ item, id }: Props) {
   }, [containers]);
 
   // ── Domain hooks ──────────────────────────────────────────────────────────
-  const perms = useLakehousePermissions({ activeContainer, confirm });
+  const perms = useLakehousePermissions({ lakehouseId: id, activeContainer, confirm });
   const settings_ = useLakehouseSettings({ lakehouseId: isNewItem ? null : id, schemasEnabled, setSchemasEnabled, setActionStatus });
   const sec = useLakehouseSecondary({
     // Schemas and shortcuts belong to the lakehouse ITEM; an unsaved item has none.
@@ -727,66 +724,15 @@ export function LakehouseEditor({ item, id }: Props) {
     return openPrefixes[cacheKey(activeContainer, currentPrefix)] ?? null;
   }, [openPrefixes, activeContainer, currentPrefix, cacheKey]);
 
-  // ── Ribbon ────────────────────────────────────────────────────────────────
-  const canFileAction = !!activeContainer;
-  const hasFile = !!activePath && !activePath.isDirectory;
-  const writeBlocked = !canFileAction || isReferenceLakehouse;
-  const writeTitle = isReferenceLakehouse
-    ? 'Read-only — reference lakehouse (write operations disabled)'
-    : !canFileAction ? 'Select a container first' : undefined;
-  // Actions that change the lakehouse also close when the caller's role is
-  // read-only. Refresh and the navigation items stay open: they change nothing.
-  const editBlocked = writeBlocked || readOnly;
-  const editTitle = readOnly ? LAKEHOUSE_READ_ONLY_TITLE : writeTitle;
-  const notebookHref = activeContainer ? `/items/notebook/new?lakehouse=${encodeURIComponent(activeContainer)}` : '/items/notebook/new';
-
-  const ribbon: RibbonTab[] = useMemo(() => [
-    { id: 'home', label: 'Home', groups: [
-      { label: 'Refresh', actions: [{ label: 'Refresh', icon: <ArrowSync20Regular />, onClick: writeBlocked ? undefined : refreshActive, disabled: writeBlocked, title: writeTitle }] },
-      { label: 'Get data', actions: [{ label: 'Get data', disabled: writeBlocked, title: writeTitle, dropdownItems: [
-        { label: uploading ? `Uploading (${runningUploads.length})…` : 'Upload', icon: <ArrowUpload20Regular />, onClick: editBlocked ? undefined : onUploadClick, disabled: editBlocked, title: editTitle },
-        { label: 'Upload folder', icon: <FolderArrowUp20Regular />, onClick: editBlocked ? undefined : onFolderUploadClick, disabled: editBlocked, title: editTitle },
-        { label: 'New folder', icon: <FolderAdd20Regular />, onClick: editBlocked ? undefined : onNewFolder, disabled: editBlocked, title: editTitle },
-        { label: 'New shortcut', icon: <LinkMultiple20Regular />, onClick: editBlocked ? undefined : () => { setTab('shortcuts'); sc_.openShortcutWizard(); }, disabled: editBlocked, title: editTitle },
-        { label: 'New dataflow', icon: <Database20Regular />, onClick: () => router.push('/items/dataflow/new') },
-        { label: 'New pipeline', icon: <Database20Regular />, onClick: () => router.push('/items/data-pipeline/new') },
-        { label: 'New notebook', icon: <BookOpen20Regular />, onClick: () => router.push(notebookHref) },
-        { label: 'Copy activity', icon: <ArrowDownload20Regular />, onClick: () => router.push('/items/copy-job/new') },
-      ]}] },
-      { label: 'Analyze data', actions: [{ label: 'Analyze data', dropdownItems: [
-        { label: 'SQL endpoint', icon: <Database20Regular />, onClick: () => setTab('sql') },
-        { label: 'New notebook', icon: <BookOpen20Regular />, onClick: () => router.push(notebookHref) },
-        { label: 'Existing notebook', icon: <BookOpen20Regular />, onClick: () => router.push('/items/notebook/new') },
-      ]}] },
-      { label: 'Data model', actions: [
-        { label: 'New semantic model', icon: <TableSimple20Regular />, onClick: () => setSemanticModelGateOpen(true), title: 'DirectLake semantic model requires Power BI / Fabric capacity — see the dialog for the Azure-native path' },
-        checkVariablesRibbonAction({ workspaceId: itemQ.data?.workspaceId, onOpen: () => { void sec.openCheckVariables(); } }),
-      ] },
-      { label: 'Query', actions: [
-        { label: 'Preview', icon: <Eye20Regular />, onClick: hasFile ? () => { if (activePath) { selectFile(activePath); setTab('preview'); } } : undefined, disabled: !hasFile },
-        { label: 'Query this file', icon: <Play20Regular />, onClick: hasFile ? () => { if (activePath) { selectFile(activePath); setTab('sql'); } } : undefined, disabled: !hasFile },
-      ] },
-      { label: 'Tables', actions: [{ label: 'Load to table', onClick: hasFile && !readOnly ? () => { if (activePath) onLoadToTables(activePath); } : undefined, disabled: !hasFile || readOnly, title: readOnly ? LAKEHOUSE_READ_ONLY_TITLE : hasFile ? 'Load this file into a managed Delta table (F6)' : 'Select a file first' }] },
-      { label: 'Protect', actions: [{ label: 'Download with label', onClick: hasFile ? () => { if (activePath) openLabelDialog(activePath); } : undefined, disabled: !hasFile, title: hasFile ? 'Stamp a MIP sensitivity label on download' : 'Select a file first' }] },
-      { label: 'Manage', actions: [
-        { label: 'Settings', icon: <Info20Regular />, onClick: writeBlocked ? undefined : settings_.openSettings, disabled: writeBlocked, title: writeTitle },
-        { label: 'Permissions', icon: <LinkMultiple20Regular />, onClick: activeContainer ? perms.openPerms : undefined, disabled: !activeContainer, title: !activeContainer ? 'Select a container first' : undefined },
-        { label: 'Share', icon: <Add20Regular />, onClick: activeContainer ? () => { sec.setShareError(null); sec.setShareSuccess(null); sec.setShareOpen(true); } : undefined, disabled: !activeContainer, title: !activeContainer ? 'Select a container first' : undefined },
-        { label: 'Maintain…', icon: <Wrench20Regular />, onClick: (tab === 'tables' && maintainTable && !readOnly) ? () => setMaintainOpen(true) : undefined, disabled: readOnly || !(tab === 'tables' && maintainTable), title: readOnly ? LAKEHOUSE_READ_ONLY_TITLE : !(tab === 'tables' && maintainTable) ? 'Select a table in the Tables tab first' : 'OPTIMIZE / VACUUM / ZORDER BY' },
-        { label: 'OneLake security', icon: <ShieldTask20Regular />, onClick: () => setTab('security'), title: 'Manage OneLake data-access roles + row/column security for this lakehouse' },
-        ...(interopTabOn ? [{ label: 'Interop (Iceberg)', icon: <DatabaseLink20Regular />, onClick: () => setTab('interop'), title: 'Expose Delta tables to Trino / Spark / DuckDB / Snowflake as Apache Iceberg — zero copy, same files' }] : []),
-        ...(connectTabOn ? [{ label: 'Connect (ADBC / Flight)', icon: <PlugConnected20Regular />, onClick: () => setTab('connect'), title: 'Mint a short-lived access ticket and get ADBC / Arrow Flight SQL / JDBC snippets — Arrow batches, not row-by-row ODBC' }] : []),
-      ] },
-      { label: 'AI', actions: [{ label: 'Add to data agent', icon: <Sparkle20Regular />, onClick: () => { void sec.openAddToAgent(); }, title: 'Ground a data agent on this lakehouse (Fabric "Add to AI skill")' }] },
-    ] },
-  ], [
-    writeBlocked, writeTitle, editBlocked, editTitle, readOnly, canFileAction, uploading, runningUploads.length,
-    onUploadClick, onFolderUploadClick, onNewFolder, refreshActive, sc_.openShortcutWizard, router,
-    notebookHref, hasFile, activePath, selectFile, onLoadToTables, openLabelDialog,
-    activeContainer, perms.openPerms, settings_.openSettings, tab, maintainTable,
-    sec.openAddToAgent, sec.setShareOpen, sec.setShareError, sec.setShareSuccess,
-    sec.openCheckVariables, itemQ.data?.workspaceId, interopTabOn, connectTabOn,
-  ]);
+  // ── Ribbon (lakehouse-ribbon.tsx) ─────────────────────────────────────────
+  const ribbon = useLakehouseRibbon({
+    activeContainer, activePath, isReferenceLakehouse, readOnly, uploading, runningUploadCount: runningUploads.length, tab,
+    maintainTable, workspaceId: itemQ.data?.workspaceId, interopTabOn, connectTabOn, router, setTab, refreshActive,
+    onUploadClick, onFolderUploadClick, onNewFolder, openShortcutWizard: sc_.openShortcutWizard, selectFile, onLoadToTables,
+    openLabelDialog, setSemanticModelGateOpen, openCheckVariables: sec.openCheckVariables, openSettings: settings_.openSettings,
+    openPerms: perms.openPerms, setShareError: sec.setShareError, setShareSuccess: sec.setShareSuccess,
+    setShareOpen: sec.setShareOpen, setMaintainOpen, openAddToAgent: sec.openAddToAgent,
+  });
 
   // ── Tree renderers ────────────────────────────────────────────────────────
 
@@ -1182,6 +1128,7 @@ export function LakehouseEditor({ item, id }: Props) {
             <TierDialog
               open={tierDlgOpen}
               onOpenChange={setTierDlgOpen}
+              lakehouseId={id}
               container={activeContainer || ''}
               path={tierDlgEntry?.name ?? ''}
               onTierChanged={(newTier) => { if (tierDlgEntry) onTierChanged(tierDlgEntry, newTier); }}

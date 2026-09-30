@@ -74,6 +74,7 @@ const audited: any[] = [];
 vi.mock('@/lib/admin/audit-stream', () => ({ emitAuditEvent: (ev: any) => { audited.push(ev); } }));
 
 import { POST } from '../route';
+import { WORKSPACE_STORAGE_ADMIN_ONLY } from '@/lib/util/admin-only-copy';
 
 function req(body: any) {
   return new Request('https://console.test/api/workspaces', {
@@ -90,7 +91,14 @@ beforeEach(() => {
   audited.length = 0;
   domainExistsScopes.length = 0;
   session = { claims: { oid: 'tenant-1', tid: 'tid-1', upn: 'u@example.com' } };
+  // The real isTenantAdmin runs: `admin-oid` is the bootstrap admin, the
+  // default session above is not.
+  delete process.env.LOOM_TENANT_ADMIN_GROUP_ID;
+  process.env.LOOM_TENANT_ADMIN_OID = 'admin-oid';
 });
+
+const ADMIN = { claims: { oid: 'admin-oid', tid: 'tid-1', upn: 'a@example.com' } };
+const ACCOUNT = '/subscriptions/s/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/lake';
 
 describe('POST /api/workspaces — wizard field contract', () => {
   // #3753 — the domains registry is per-TENANT (keyed tenantScopeId() since
@@ -107,12 +115,14 @@ describe('POST /api/workspaces — wizard field contract', () => {
   });
 
   it('persists licenseMode, contacts and storageAccountId from the wizard body', async () => {
+    // storageAccountId is a tenant-admin field (#4619), so this runs as one.
+    session = ADMIN;
     const res = await POST(req({
       name: 'Finance Analytics',
       description: 'FP&A',
       licenseMode: 'PremiumPerUser',
       contacts: ['a@example.com', ' b@example.com '],
-      storageAccountId: '/subscriptions/s/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/lake',
+      storageAccountId: ACCOUNT,
       domain: 'default',
     }));
     expect(res.status).toBe(201);
@@ -158,5 +168,43 @@ describe('POST /api/workspaces — wizard field contract', () => {
     session = { claims: { oid: 'tenant-1', tid: 'tid-1', upn: 'u@example.com' } };
     expect((await POST(req({}))).status).toBe(400);
     expect((await POST(req({ name: 'X', domain: 'nope' }))).status).toBe(400);
+  });
+});
+
+describe('POST /api/workspaces — storageAccountId is set by a tenant admin (#4619)', () => {
+  it.each([
+    ['a full account id', ACCOUNT],
+    ['a padded account id', `  ${ACCOUNT}  `],
+  ])('403 admin_only for a non-admin naming %s, and nothing is written', async (_l, storageAccountId) => {
+    // Breaks if the gate is dropped (201, and `created` holds a doc bound to
+    // the named account) or moved after the create (a doc is written).
+    const res = await POST(req({ name: 'Mine', storageAccountId }));
+    expect(res.status).toBe(403);
+    const j = await res.json();
+    expect(j.code).toBe('admin_only');
+    expect(j.reason).toBe(WORKSPACE_STORAGE_ADMIN_ONLY.reason);
+    expect(created).toHaveLength(0);
+    expect(bindingCalls).toHaveLength(0);
+  });
+
+  it.each([
+    ['omits it', {}],
+    ['sends an empty string', { storageAccountId: '' }],
+    ['sends only spaces', { storageAccountId: '   ' }],
+  ])('a non-admin who %s still creates on the deployment default (positive pair)', async (_l, extra) => {
+    // Breaks if the gate fired on any body (201 would become 403), or if an
+    // empty value were stored instead of left unset.
+    const res = await POST(req({ name: 'Mine', ...extra }));
+    expect(res.status).toBe(201);
+    expect(created).toHaveLength(1);
+    expect(created[0].storageAccountId).toBeUndefined();
+  });
+
+  it('a tenant admin binds the named account, trimmed (positive pair)', async () => {
+    // Breaks if admins were refused too, or the value stopped being trimmed.
+    session = ADMIN;
+    const res = await POST(req({ name: 'Bound', storageAccountId: `  ${ACCOUNT}  ` }));
+    expect(res.status).toBe(201);
+    expect(created[0].storageAccountId).toBe(ACCOUNT);
   });
 });

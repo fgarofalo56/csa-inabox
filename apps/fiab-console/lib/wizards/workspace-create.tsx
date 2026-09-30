@@ -27,7 +27,7 @@ import {
   Title3, Subtitle2, Body1, Body1Strong, Caption1,
   Button, Input, Textarea, Dropdown, Option, Field, Checkbox, Badge,
   Spinner, Divider, Tag, TagGroup, mergeClasses,
-  MessageBar, MessageBarBody, MessageBarTitle, Listbox,
+  MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions, Listbox,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -37,6 +37,9 @@ import {
 } from '@fluentui/react-icons';
 import { isGovCloud } from '@/lib/azure/cloud-endpoints';
 import type { Workspace, WorkspaceLicenseMode } from '@/lib/types/workspace';
+import { useTenantAdminGate } from '@/lib/components/shared/admin-only-notice';
+import { WORKSPACE_STORAGE_ADMIN_ONLY } from '@/lib/util/admin-only-copy';
+import { refusalText } from '@/lib/util/admin-refusal';
 
 interface FabricCapacityOpt { id: string; displayName: string; sku: string; region?: string; state?: string; }
 interface DomainOpt { id: string; name: string; }
@@ -139,6 +142,10 @@ export function WorkspaceCreateWizard({ open, onClose, onCreated, isAdmin }: Pro
   const [domain, setDomain] = useState('');
   const [storageAccountId, setStorageAccountId] = useState('');
   const [provisionBackingRg, setProvisionBackingRg] = useState(false);
+  // #4619 — binding a storage account is a tenant-admin action on both create
+  // routes. A non-admin creates on the deployment default and never sends it.
+  const canBindStorage = useTenantAdminGate().allowed;
+  const boundStorage = canBindStorage ? storageAccountId : '';
 
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -183,14 +190,14 @@ export function WorkspaceCreateWizard({ open, onClose, onCreated, isAdmin }: Pro
         licenseMode,
         capacity: capacity || undefined,
         domain: domain || undefined,
-        storageAccountId: storageAccountId || undefined,
+        storageAccountId: boundStorage || undefined,
         provisionBackingRg,
       };
       const r = await fetch(url, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
       });
       const j = await r.json();
-      if (!r.ok || j?.ok === false) { setError(j?.error || `HTTP ${r.status}`); return; }
+      if (!r.ok || j?.ok === false) { setError(refusalText(j, r.status)); return; }
       // Admin route returns { ok, workspace }; user route returns the ws doc directly.
       const ws: Workspace = (j.workspace ?? j) as Workspace;
       onCreated(ws);
@@ -308,7 +315,8 @@ export function WorkspaceCreateWizard({ open, onClose, onCreated, isAdmin }: Pro
                   <>
                     <AdvancedStep
                       domain={domain} onDomain={setDomain}
-                      storageAccountId={storageAccountId} onStorage={setStorageAccountId}
+                      storageAccountId={boundStorage} onStorage={setStorageAccountId}
+                      canBindStorage={canBindStorage}
                       provisionBackingRg={provisionBackingRg} onProvisionBackingRg={setProvisionBackingRg}
                       name={name}
                     />
@@ -322,7 +330,7 @@ export function WorkspaceCreateWizard({ open, onClose, onCreated, isAdmin }: Pro
                       <ReviewCell label="Contacts" value={contacts.length ? `${contacts.length} assigned` : 'Creator only'} />
                       <ReviewCell label="Capacity" value={capacity ? capacity.split('/').pop() || capacity : 'None (Azure-native)'} />
                       <ReviewCell label="Domain" value={domain || 'None'} />
-                      <ReviewCell label="OneLake storage" value={storageAccountId ? (storageAccountId.split('/').pop() || 'Custom') : 'Deployment default'} />
+                      <ReviewCell label="OneLake storage" value={boundStorage ? (boundStorage.split('/').pop() || 'Custom') : 'Deployment default'} />
                       <ReviewCell label="Backing resource group" value={provisionBackingRg ? 'Provision dedicated RG' : 'Shared'} />
                     </div>
                   </>
@@ -549,15 +557,17 @@ function CapacityStep({ value, onChange, required }: { value: string; onChange: 
 function AdvancedStep(props: {
   domain: string; onDomain: (v: string) => void;
   storageAccountId: string; onStorage: (v: string) => void;
+  canBindStorage: boolean;
   provisionBackingRg: boolean; onProvisionBackingRg: (v: boolean) => void;
   name: string;
 }) {
   const styles = useStyles();
-  const { domain, onDomain, storageAccountId, onStorage, provisionBackingRg, onProvisionBackingRg } = props;
+  const { domain, onDomain, storageAccountId, onStorage, canBindStorage, provisionBackingRg, onProvisionBackingRg } = props;
 
   const [domains, setDomains] = useState<DomainOpt[] | null>(null);
   const [storage, setStorage] = useState<StorageOpt[] | null>(null);
   const [storageGate, setStorageGate] = useState<string | null>(null);
+  const [storageReload, setStorageReload] = useState(0);
 
   useEffect(() => {
     fetch('/api/admin/domains').then((r) => r.json())
@@ -573,14 +583,20 @@ function AdvancedStep(props: {
         }
       })
       .catch(() => setDomains([]));
+  }, []);
+
+  useEffect(() => {
+    setStorage(null); setStorageGate(null);
     fetch('/api/storage/accounts').then((r) => r.json())
       .then((j) => {
         if (j?.ok && Array.isArray(j.accounts)) {
           setStorage(j.accounts.map((a: any) => ({ id: a.id, name: a.name, isHns: a.isHns, sku: a.sku, resourceGroup: a.resourceGroup, location: a.location })));
-        } else { setStorage([]); setStorageGate(j?.hint || j?.error || 'Could not list storage accounts.'); }
+        // The route's `hint` offers a manual entry this step does not have, so
+        // only its `error` detail is shown (#4619).
+        } else { setStorage([]); setStorageGate(j?.error || 'Could not list storage accounts.'); }
       })
       .catch((e) => { setStorage([]); setStorageGate(String(e?.message || e)); });
-  }, []);
+  }, [storageReload]);
 
   const domainName = useMemo(() => domains?.find((d) => d.id === domain)?.name, [domains, domain]);
   const storageName = useMemo(() => storage?.find((sx) => sx.id === storageAccountId)?.name, [storage, storageAccountId]);
@@ -613,11 +629,23 @@ function AdvancedStep(props: {
         )}
 
         <Field label="OneLake storage account" hint="ADLS Gen2 account backing this workspace's OneLake files. Leave as default to use the deployment DLZ account.">
-          {storageGate ? (
-            <MessageBar intent="warning">
+          {!canBindStorage ? (
+            <>
+              <Body1Strong data-testid="storage-readonly">Deployment default</Body1Strong>
+              <Caption1 className={styles.railHint} data-testid="storage-admin-reason">
+                {WORKSPACE_STORAGE_ADMIN_ONLY.reason} {WORKSPACE_STORAGE_ADMIN_ONLY.remediation}
+              </Caption1>
+            </>
+          ) : storageGate ? (
+            <MessageBar intent="warning" data-testid="wizard-storage-accounts-unavailable">
               <MessageBarBody>
-                {storageGate} Grant the Console UAMI Reader on the subscription to list accounts; the deployment-default account is used otherwise.
+                Storage accounts could not be listed ({storageGate}), so this workspace will use the
+                deployment-default account. Listing needs the Reader role on the subscription for the
+                console identity (<code>Microsoft.Storage/storageAccounts/read</code>).
               </MessageBarBody>
+              <MessageBarActions>
+                <Button size="small" onClick={() => setStorageReload((n) => n + 1)}>Retry</Button>
+              </MessageBarActions>
             </MessageBar>
           ) : (
             <Dropdown

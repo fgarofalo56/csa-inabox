@@ -38,12 +38,15 @@ import {
 } from '@/lib/admin/env-checks';
 // Pure host/cloud resolver (zero server-only imports) — safe in client bundles.
 import { detectLoomCloud } from '@/lib/azure/cloud-endpoints';
+// Pure, zero-import leaf — runtime-produced values/failures (#3744). Empty in a browser.
+import { readRuntimeFailure, readRuntimeValue } from '@/lib/azure/runtime-produced-env';
 
 export type { Avail, ServiceAvailability } from '@/lib/admin/env-checks';
 
 export * from './types';
 import {
   type GateDef,
+  type GateFixit,
   type GateMeta,
   type GateRequiredSetting,
   type GateStatus,
@@ -97,10 +100,55 @@ function settingsFor(spec: EnvSpec, meta: GateMeta | undefined): GateRequiredSet
   return out;
 }
 
+/**
+ * #3744 — for a spec whose vars the Console produces at runtime, the gate's
+ * `remediation` and `fixit` are what the LAST ATTEMPT measured, not the static
+ * pre-attempt text. Defined as enumerable getters so every SERVER-SIDE consumer
+ * that reads a GateDef (readiness nodes, /api/admin/gates JSON, Copilot's gate
+ * tools) sees the live value with no change on its side.
+ *
+ * NOT the browser: the runtime store is per-process and empty in a client
+ * bundle, so a client component's `getGate()` returns the static def. A
+ * surface that has the route's classified failure passes it to
+ * `<HonestGate classified={...}>`, which applies the same rule (#4776).
+ *
+ *  - no failure recorded → the spec's own remediation + its declared Fix-it;
+ *  - a classified failure → that failure's remediation (permission / network /
+ *    quota / unknown — never "set LOOM_X" for a value the platform owns);
+ *  - a PERMISSION failure → Fix-it becomes `role-grant` carrying the exact
+ *    entitlement grant, because an entitlement only a workspace admin can give
+ *    is the one thing the Console cannot do itself (ux-baseline.md G2: a
+ *    Fix-it action, not a paragraph).
+ */
+function withRuntimeProducedOverlay(def: GateDef, spec: EnvSpec): GateDef {
+  const vars = spec.runtimeProduced || [];
+  const lastFailure = () => {
+    for (const k of vars) {
+      const f = readRuntimeFailure(k);
+      if (f && !readRuntimeValue(k)) return f;
+    }
+    return undefined;
+  };
+  const staticRemediation = def.remediation;
+  const staticFixit = def.fixit;
+  Object.defineProperty(def, 'remediation', {
+    enumerable: true,
+    get: () => lastFailure()?.remediation || staticRemediation,
+  });
+  Object.defineProperty(def, 'fixit', {
+    enumerable: true,
+    get: (): GateFixit => {
+      const f = lastFailure();
+      return f?.kind === 'permission' ? { kind: 'role-grant', grantNote: f.remediation } : staticFixit;
+    },
+  });
+  return def;
+}
+
 /** The complete gate registry — one entry per ENV_CHECKS spec, enriched. */
 export const GATES: GateDef[] = ENV_CHECKS.map((spec) => {
   const meta = GATE_META[spec.id];
-  return {
+  const def: GateDef = {
     id: spec.id,
     title: spec.title,
     category: spec.category,
@@ -117,6 +165,7 @@ export const GATES: GateDef[] = ENV_CHECKS.map((spec) => {
     legacyCodes: meta?.legacyCodes || [],
     availability: spec.availability,
   };
+  return spec.runtimeProduced?.length ? withRuntimeProducedOverlay(def, spec) : def;
 });
 
 const GATES_BY_ID = new Map(GATES.map((g) => [g.id, g]));
@@ -128,6 +177,26 @@ export function getGate(id: string): GateDef | undefined {
 /** Map a bespoke legacy error code (e.g. 'adls_not_configured') to its gate. */
 export function gateForLegacyCode(code: string): GateDef | undefined {
   return GATES.find((g) => g.legacyCodes.includes(code));
+}
+
+const SPECS_BY_ID = new Map(ENV_CHECKS.map((s) => [s.id, s]));
+
+/**
+ * #4776 — ADMIN-ONLY. The diagnostic a runtime producer recorded on its last
+ * failure for this gate (e.g. what SCIM Me measured about the Console identity:
+ * display name, application id, entitlements, groups), or undefined.
+ *
+ * This is deliberately NOT part of `gateStatus()` / `evalEnv` detail, because
+ * that detail reaches NON-admin readers (GET /api/admin/self-audit, the Copilot
+ * self-audit tool). Call it only from an admin-capability route:
+ * /api/admin/gates, /api/admin/readiness and the diagnostics bundle.
+ */
+export function gateAdminDiagnostic(id: string): string | undefined {
+  for (const k of SPECS_BY_ID.get(id)?.runtimeProduced || []) {
+    const f = readRuntimeFailure(k);
+    if (f?.diagnostic && !readRuntimeValue(k)) return f.diagnostic;
+  }
+  return undefined;
 }
 
 // ── X2 — availability-gate convention ────────────────────────────────────────

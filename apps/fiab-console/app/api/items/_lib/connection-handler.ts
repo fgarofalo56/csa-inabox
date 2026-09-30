@@ -28,6 +28,12 @@
 
 import { NextResponse } from 'next/server';
 import { databricksConfigGate, getWarehouse } from '@/lib/azure/databricks-client';
+import {
+  resolveWarehouseIdOrThrow,
+  WarehouseResolutionError,
+  warehouseErrorBody,
+  warehouseErrorStatus,
+} from '@/lib/azure/databricks-sql-warehouse';
 import { dedicatedTarget, serverlessTarget } from '@/lib/azure/synapse-sql-client';
 import { synapseSqlJdbcHostCert } from '@/lib/azure/cloud-endpoints';
 
@@ -87,19 +93,16 @@ export async function handleConnectionDetails(
           { status: 503 },
         );
       }
-      // Fall back to the pinned warehouse when an explicit id is not supplied.
-      const wid = warehouseId || process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID;
-      if (!wid) {
-        return NextResponse.json(
-          {
-            ok: false,
-            code: 'not_configured',
-            missing: 'warehouseId',
-            error:
-              'warehouseId query param or LOOM_DATABRICKS_SQL_WAREHOUSE_ID required.',
-          },
-          { status: 400 },
-        );
+      // Fall back to the platform warehouse when an explicit id is not
+      // supplied: the env pin, else the one the Console produces (#3744).
+      let wid: string;
+      try {
+        wid = await resolveWarehouseIdOrThrow(warehouseId);
+      } catch (e) {
+        if (e instanceof WarehouseResolutionError) {
+          return NextResponse.json(warehouseErrorBody(e), { status: warehouseErrorStatus(e) });
+        }
+        throw e;
       }
       let warehouse;
       try {

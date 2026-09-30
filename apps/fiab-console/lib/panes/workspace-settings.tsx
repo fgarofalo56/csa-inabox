@@ -22,7 +22,7 @@ import {
   Drawer, DrawerHeader, DrawerHeaderTitle, DrawerBody,
   TabList, Tab, Button, Input, Textarea, Dropdown, Option, Field, Badge,
   Spinner, Body1, Caption1, Subtitle2, Divider, Link,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { Dismiss24Regular, Search16Regular, Open16Regular } from '@fluentui/react-icons';
@@ -31,6 +31,9 @@ import { WorkspaceImageEditor } from '@/lib/components/workspace-image-editor';
 import { WorkspaceIdentityPanel } from '@/lib/panes/workspace-identity-panel';
 import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
 import type { Workspace, WorkspaceLicenseMode } from '@/lib/types/workspace';
+import { AdminOnlyNotice, useTenantAdminGate } from '@/lib/components/shared/admin-only-notice';
+import { WORKSPACE_STORAGE_ADMIN_ONLY } from '@/lib/util/admin-only-copy';
+import { refusalText } from '@/lib/util/admin-refusal';
 
 interface WsRef { id: string; name: string }
 interface FabricCapacityOpt { id: string; displayName: string; sku: string; region?: string; state?: string; }
@@ -69,7 +72,7 @@ async function patchWorkspace(id: string, patch: Record<string, unknown>, isAdmi
   const url = isAdmin ? `/api/admin/workspaces/${encodeURIComponent(id)}` : `/api/workspaces/${encodeURIComponent(id)}`;
   const r = await fetch(url, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) });
   const j = await r.json();
-  if (!r.ok || j?.ok === false) throw new Error(j?.error || `HTTP ${r.status}`);
+  if (!r.ok || j?.ok === false) throw new Error(refusalText(j, r.status));
   return (j.workspace ?? j) as Workspace;
 }
 
@@ -429,15 +432,20 @@ interface StorageMetrics {
   containers?: Array<{ name: string; usedBytes: number }>;
 }
 
-function OneLakeTab({ ws, isAdmin, onSaved }: { ws: Workspace; isAdmin?: boolean; onSaved: (w: Workspace) => void }) {
+export function OneLakeTab({ ws, isAdmin, onSaved }: { ws: Workspace; isAdmin?: boolean; onSaved: (w: Workspace) => void }) {
   const styles = useStyles();
   const [metrics, setMetrics] = useState<StorageMetrics | null>(null);
   const [mLoading, setMLoading] = useState(true);
   const [storage, setStorage] = useState<StorageOpt[] | null>(null);
   const [storageGate, setStorageGate] = useState<string | null>(null);
+  const [storageReload, setStorageReload] = useState(0);
   const [selected, setSelected] = useState(ws.storageAccountId || '');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // `allowed` enables the controls; `refused` shows the notice only once the
+  // admin probe has answered, so an admin never sees it flash.
+  const { allowed: canBind, refused: bindRefused } = useTenantAdminGate();
+  const bindingChanged = selected.trim() !== (ws.storageAccountId || '').trim();
 
   useEffect(() => { setSelected(ws.storageAccountId || ''); }, [ws.id, ws.storageAccountId]);
 
@@ -448,19 +456,30 @@ function OneLakeTab({ ws, isAdmin, onSaved }: { ws: Workspace; isAdmin?: boolean
       .then((j) => { if (!cancelled) setMetrics(j); })
       .catch((e) => { if (!cancelled) setMetrics({ ok: false, error: String(e?.message || e) }); })
       .finally(() => { if (!cancelled) setMLoading(false); });
+    return () => { cancelled = true; };
+  }, [ws.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setStorage(null); setStorageGate(null);
     clientFetch('/api/storage/accounts').then((r) => r.json())
       .then((j) => {
         if (cancelled) return;
         if (j?.ok && Array.isArray(j.accounts)) setStorage(j.accounts.map((a: any) => ({ id: a.id, name: a.name, isHns: a.isHns, resourceGroup: a.resourceGroup })));
-        else { setStorage([]); setStorageGate(j?.hint || j?.error || 'Could not list storage accounts.'); }
+        // The route's `hint` offers a manual entry this tab does not have, so
+        // only its `error` detail is shown (#4619).
+        else { setStorage([]); setStorageGate(j?.error || 'Could not list storage accounts.'); }
       })
       .catch((e) => { if (!cancelled) { setStorage([]); setStorageGate(String(e?.message || e)); } });
     return () => { cancelled = true; };
-  }, [ws.id]);
+  }, [ws.id, storageReload]);
 
   const saveBinding = async () => {
+    // #4619 — the binding is tenant-admin only on PATCH. Send the field only
+    // when an admin changed it; an empty value then means "clear".
+    if (!canBind || !bindingChanged) return;
     setBusy(true); setErr(null);
-    try { onSaved(await patchWorkspace(ws.id, { storageAccountId: selected || '' }, isAdmin)); }
+    try { onSaved(await patchWorkspace(ws.id, { storageAccountId: selected.trim() }, isAdmin)); }
     catch (e: any) { setErr(e?.message || String(e)); }
     finally { setBusy(false); }
   };
@@ -513,29 +532,38 @@ function OneLakeTab({ ws, isAdmin, onSaved }: { ws: Workspace; isAdmin?: boolean
 
       <Divider />
       <Subtitle2>Storage account binding</Subtitle2>
-      {storageGate ? (
-        <MessageBar intent="warning">
-          <MessageBarBody>{storageGate} The deployment-default ADLS account is used otherwise.</MessageBarBody>
+      {storageGate && (
+        <MessageBar intent="warning" data-testid="pane-storage-accounts-unavailable">
+          <MessageBarBody>
+            Storage accounts could not be listed ({storageGate}), so only the current binding and
+            the deployment default can be chosen here. Listing needs the Reader role on the
+            subscription for the console identity (<code>Microsoft.Storage/storageAccounts/read</code>).
+          </MessageBarBody>
+          <MessageBarActions>
+            <Button size="small" onClick={() => setStorageReload((n) => n + 1)}>Retry</Button>
+          </MessageBarActions>
         </MessageBar>
-      ) : (
-        <Field label="ADLS Gen2 account">
-          <Dropdown
-            placeholder={storage === null ? 'Loading…' : 'Deployment default'}
-            disabled={storage === null}
-            value={selectedName || (selected ? selected.split('/').pop() : 'Deployment default')}
-            selectedOptions={selected ? [selected] : ['']}
-            onOptionSelect={(_e, d) => setSelected(d.optionValue || '')}
-          >
-            <Option value="">Deployment default</Option>
-            {(storage || []).map((sx) => (
-              <Option key={sx.id} value={sx.id} text={sx.name}>
-                {sx.name} ({sx.isHns ? 'ADLS Gen2' : 'Blob'}){sx.resourceGroup ? ` — ${sx.resourceGroup}` : ''}
-              </Option>
-            ))}
-          </Dropdown>
-        </Field>
       )}
-      <ApplyButton busy={busy} error={err} onApply={saveBinding} label="Save binding" />
+      {/* The picker stays on a failed list, so an admin can still clear the
+          binding back to the deployment default. */}
+      <Field label="ADLS Gen2 account">
+        <Dropdown
+          placeholder={storage === null ? 'Loading…' : 'Deployment default'}
+          disabled={storage === null || !canBind}
+          value={selectedName || (selected ? selected.split('/').pop() : 'Deployment default')}
+          selectedOptions={selected ? [selected] : ['']}
+          onOptionSelect={(_e, d) => { if (canBind) setSelected(d.optionValue || ''); }}
+        >
+          <Option value="">Deployment default</Option>
+          {(storage || []).map((sx) => (
+            <Option key={sx.id} value={sx.id} text={sx.name}>
+              {sx.name} ({sx.isHns ? 'ADLS Gen2' : 'Blob'}){sx.resourceGroup ? ` — ${sx.resourceGroup}` : ''}
+            </Option>
+          ))}
+        </Dropdown>
+      </Field>
+      {bindRefused && <AdminOnlyNotice {...WORKSPACE_STORAGE_ADMIN_ONLY} />}
+      <ApplyButton busy={busy} error={err} onApply={saveBinding} disabled={!canBind || !bindingChanged} label="Save binding" />
     </div>
   );
 }

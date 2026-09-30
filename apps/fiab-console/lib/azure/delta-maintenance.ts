@@ -27,6 +27,7 @@
  */
 import { buildIcebergEmitPySpark, buildIcebergDisablePySpark } from './iceberg-metadata';
 import { trimSlashes } from '@/lib/util/trim';
+import { dfsSuffix } from './cloud-endpoints';
 
 /** Vacuum retention options surfaced in the UI (hours). Fixed allowlist —
  * never a free-form number, per the no-freeform-config rule. */
@@ -136,11 +137,14 @@ export function validateMaintenanceRequest(body: any): ValidationResult {
   };
 }
 
-/** Build the abfss URI for a Delta table stored under `<container>/Tables/<name>`. */
+/**
+ * Build the abfss URI for a Delta table stored under `<container>/Tables/<name>`,
+ * on the active cloud's DFS host (`dfsSuffix`).
+ */
 export function buildAbfssUri(container: string, account: string, tableName: string, tablesRoot?: string): string {
   const clean = trimSlashes(tableName);
   const root = trimSlashes(tablesRoot || '');
-  return `abfss://${container}@${account}.dfs.core.windows.net/${root ? `${root}/` : ''}Tables/${clean}`;
+  return `abfss://${container}@${account}.${dfsSuffix()}/${root ? `${root}/` : ''}Tables/${clean}`;
 }
 
 /** Human-readable list of operations the request will run (used in receipts + UI). */

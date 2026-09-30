@@ -26,7 +26,7 @@ import {
   Drawer, DrawerHeader, DrawerHeaderTitle, DrawerBody,
   Tab, TabList,
   Button, Tooltip, Field, Input, Textarea, Dropdown, Option,
-  MessageBar, MessageBarBody, Spinner, Divider, Subtitle2, Caption1, Text,
+  MessageBar, MessageBarBody, MessageBarActions, Spinner, Divider, Subtitle2, Caption1, Text,
   Dialog, DialogTrigger, DialogSurface, DialogBody, DialogTitle,
   DialogContent, DialogActions,
   Badge, Checkbox, RadioGroup, Radio,
@@ -42,6 +42,8 @@ import { NetworkingPane } from '@/lib/panes/networking';
 import { GitIntegrationPane } from '@/lib/panes/git-integration';
 import { SparkComputePane } from '@/lib/panes/spark-compute';
 import { LifecycleRulesPanel } from '@/lib/components/onelake/lifecycle-rules';
+import { AdminOnlyNotice, useTenantAdminGate } from '@/lib/components/shared/admin-only-notice';
+import { WORKSPACE_STORAGE_ADMIN_ONLY } from '@/lib/util/admin-only-copy';
 import { CmkPane } from '@/lib/panes/cmk';
 import { PowerBiTree } from '@/lib/components/powerbi/powerbi-tree';
 import { useBiBackend } from '@/lib/components/platform-config';
@@ -1125,39 +1127,48 @@ function SourceControlPanel({ workspaceId, binding }: { workspaceId: string; bin
 
 interface StorageAccountOption { id: string; name: string; isHns: boolean; location?: string; }
 
-function StorageBindingSection({ workspace }: { workspace: Workspace }) {
+export function StorageBindingSection({ workspace }: { workspace: Workspace }) {
   const styles = useStyles();
   const [accounts, setAccounts] = useState<StorageAccountOption[] | null | 'loading'>('loading');
   const [accountsError, setAccountsError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string>(workspace.storageAccountId ?? '');
-  const [manual, setManual] = useState<string>('');
+  const [reload, setReload] = useState(0);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // #4619 — setting, changing or clearing the binding is tenant-admin only on
+  // PATCH, so a non-admin sees it read-only and never sends the field. The
+  // binding is picker-only: there is no free-text ARM-id fallback. `allowed`
+  // enables the controls; `refused` shows the notice only once the admin probe
+  // has answered, so an admin never sees it flash.
+  const { allowed: canBind, refused: bindRefused } = useTenantAdminGate();
+  const nextBinding = selected.trim();
+  const bindingChanged = nextBinding !== (workspace.storageAccountId ?? '').trim();
 
   useEffect(() => {
+    setAccounts('loading'); setAccountsError(null);
     clientFetch('/api/storage/accounts').then((r) => r.json())
       .then((d: any) => {
         if (d?.ok && Array.isArray(d.accounts)) {
           setAccounts(d.accounts.map((a: any) => ({ id: a.id, name: a.name, isHns: a.isHns, location: a.location })));
         } else {
           setAccounts(null);
-          setAccountsError(d?.hint || d?.error || 'Could not list storage accounts.');
+          // The route's `hint` offers a manual entry this section no longer
+          // has, so only its `error` detail is shown.
+          setAccountsError(d?.error || null);
         }
       })
       .catch((e) => { setAccounts(null); setAccountsError(String(e?.message || e)); });
-  }, []);
+  }, [reload]);
 
-  const currentName = useMemo(() => {
-    const id = selected || manual;
-    return id ? id.split('/').pop() : undefined;
-  }, [selected, manual]);
+  const currentName = useMemo(() => (selected ? selected.split('/').pop() : undefined), [selected]);
 
   const save = async () => {
+    if (!canBind || !bindingChanged) return;
     setSaving(true); setError(null); setSaved(false);
     try {
-      const storageAccountId = (selected || manual).trim();
-      await updateWorkspace(workspace.id, { storageAccountId: storageAccountId || undefined });
+      // An empty value is sent as '' so an admin's "Not bound" clears it.
+      await updateWorkspace(workspace.id, { storageAccountId: nextBinding });
       setSaved(true);
       window.dispatchEvent(new CustomEvent('loom:item-saved', { detail: { label: 'workspace' } }));
     } catch (e: any) {
@@ -1181,9 +1192,10 @@ function StorageBindingSection({ workspace }: { workspace: Workspace }) {
       {Array.isArray(accounts) && (
         <Field label="Storage account">
           <Dropdown
+            disabled={!canBind}
             value={currentName ? `${currentName}` : 'Not bound (deployment default)'}
             selectedOptions={[selected]}
-            onOptionSelect={(_, d) => { setSelected(d.optionValue || ''); setManual(''); }}>
+            onOptionSelect={(_, d) => { if (!canBind) return; setSelected(d.optionValue || ''); }}>
             <Option value="">Not bound (deployment default)</Option>
             {accounts.map((a) => (
               <Option key={a.id} value={a.id} text={a.name}>
@@ -1193,25 +1205,38 @@ function StorageBindingSection({ workspace }: { workspace: Workspace }) {
           </Dropdown>
         </Field>
       )}
+      {Array.isArray(accounts) && accounts.length === 0 && (
+        <MessageBar intent="info" data-testid="storage-accounts-empty">
+          <MessageBarBody>
+            No storage accounts are visible to the console in this subscription, so the
+            workspace uses the deployment-default account. Accounts the console identity
+            can read appear here to bind.
+          </MessageBarBody>
+          <MessageBarActions>
+            <Button size="small" onClick={() => setReload((n) => n + 1)}>Retry</Button>
+          </MessageBarActions>
+        </MessageBar>
+      )}
       {accounts === null && (
-        <>
-          <MessageBar intent="warning">
-            <MessageBarBody>
-              Reader role on the subscription is required to list storage accounts
-              (<code>Microsoft.Storage/storageAccounts/read</code>). {accountsError} You
-              can paste the storage account ARM resource id manually below.
-            </MessageBarBody>
-          </MessageBar>
-          <Field label="Storage account ARM resource id">
-            <Input value={manual} onChange={(_, d) => { setManual(d.value); setSelected(''); }}
-              placeholder="/subscriptions/…/resourceGroups/…/providers/Microsoft.Storage/storageAccounts/…" />
-          </Field>
-        </>
+        <MessageBar intent="warning" data-testid="storage-accounts-unavailable">
+          <MessageBarBody>
+            Storage accounts could not be listed{accountsError ? <> ({accountsError})</> : null}, so the
+            binding cannot be changed here and the workspace keeps its current binding. Listing
+            needs the Reader role on the subscription for the console identity
+            (<code>Microsoft.Storage/storageAccounts/read</code>).
+          </MessageBarBody>
+          <MessageBarActions>
+            <Button size="small" onClick={() => setReload((n) => n + 1)}>Retry</Button>
+          </MessageBarActions>
+        </MessageBar>
+      )}
+      {bindRefused && (
+        <AdminOnlyNotice {...WORKSPACE_STORAGE_ADMIN_ONLY} />
       )}
       {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
       {saved && <MessageBar intent="success"><MessageBarBody>Binding saved.</MessageBarBody></MessageBar>}
       <div className={styles.row}>
-        <Button appearance="primary" onClick={save} disabled={saving}>
+        <Button appearance="primary" onClick={save} disabled={saving || !canBind || !bindingChanged}>
           {saving ? 'Saving…' : 'Save binding'}
         </Button>
       </div>

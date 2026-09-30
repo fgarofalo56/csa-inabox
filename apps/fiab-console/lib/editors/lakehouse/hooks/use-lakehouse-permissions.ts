@@ -8,11 +8,19 @@ import type {
 } from '../types';
 
 interface Params {
+  /** The lakehouse item; every permissions read is authorized against it. */
+  lakehouseId: string;
   activeContainer: string | null;
   confirm: (opts: { title: string; body: string; danger?: boolean; confirmLabel?: string }) => Promise<boolean>;
 }
 
-export function useLakehousePermissions({ activeContainer, confirm }: Params) {
+export function useLakehousePermissions({ lakehouseId, activeContainer, confirm }: Params) {
+  // The permissions GET is scoped to one lakehouse, so every read names it.
+  const readUrl = useCallback(
+    (q: Record<string, string>) =>
+      `/api/lakehouse/permissions?${new URLSearchParams({ ...q, lakehouseId }).toString()}`,
+    [lakehouseId],
+  );
   // ── RBAC (Object tab) ────────────────────────────────────────────────────
   const [permsOpen, setPermsOpen] = useState(false);
   const [permsRows, setPermsRows] = useState<PermAssignment[]>([]);
@@ -67,14 +75,14 @@ export function useLakehousePermissions({ activeContainer, confirm }: Params) {
     if (!activeContainer) return;
     setPermsBusy(true); setPermsError(null);
     try {
-      const r = await clientFetch(`/api/lakehouse/permissions?container=${encodeURIComponent(activeContainer)}`);
+      const r = await clientFetch(readUrl({ container: activeContainer }));
       const j = await parseJsonOrError<{ ok: boolean; error?: string; assignments?: PermAssignment[]; knownRoles?: PermRole[] }>(r, 'List permissions');
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setPermsRows(j.assignments || []);
       setPermsRoles(j.knownRoles || []);
     } catch (e: any) { setPermsError(e?.message || String(e)); }
     finally { setPermsBusy(false); }
-  }, [activeContainer]);
+  }, [activeContainer, readUrl]);
 
   const openPerms = useCallback(() => {
     setPermsOpen(true);
@@ -118,33 +126,33 @@ export function useLakehousePermissions({ activeContainer, confirm }: Params) {
     setPermsBusy(true); setPermsError(null); setSqlGate(null);
     try {
       if (t === 'row') {
-        const r = await clientFetch('/api/lakehouse/permissions?tab=row');
+        const r = await clientFetch(readUrl({ tab: 'row' }));
         const j = await r.json();
         if (j.gate) { setSqlGate({ missing: j.missing, hint: j.hint }); return; }
         if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
         setRlsPolicies(j.policies || []);
       } else {
-        const r = await clientFetch(`/api/lakehouse/permissions?tab=${t}`);
+        const r = await clientFetch(readUrl({ tab: t }));
         const j = await r.json();
         if (j.gate) { setSqlGate({ missing: j.missing, hint: j.hint }); return; }
         if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
         setSqlGrants(j.grants || []);
       }
-      const tr = await clientFetch(`/api/lakehouse/permissions?tab=${t}&list=tables`);
+      const tr = await clientFetch(readUrl({ tab: t, list: 'tables' }));
       const tj = await tr.json();
       if (tj.gate) { setSqlGate({ missing: tj.missing, hint: tj.hint }); return; }
       if (tj.ok) setSqlTables(tj.tables || []);
     } catch (e: any) { setPermsError(e?.message || String(e)); }
     finally { setPermsBusy(false); }
-  }, []);
+  }, [readUrl]);
 
   const loadSqlColumns = useCallback(async (objectId: number) => {
     try {
-      const r = await clientFetch(`/api/lakehouse/permissions?tab=column&list=columns&objectId=${objectId}`);
+      const r = await clientFetch(readUrl({ tab: 'column', list: 'columns', objectId: String(objectId) }));
       const j = await r.json();
       if (j.ok) setSqlCols(j.columns || []);
     } catch { /* surfaced when the grant is attempted */ }
-  }, []);
+  }, [readUrl]);
 
   const selectPermsTab = useCallback((t: PermsTab) => {
     setPermsTab(t);
@@ -213,7 +221,7 @@ export function useLakehousePermissions({ activeContainer, confirm }: Params) {
     try {
       let columnIds: number[] = [];
       if (g.column) {
-        const cr = await clientFetch(`/api/lakehouse/permissions?tab=column&list=columns&objectId=${tbl.objectId}`);
+        const cr = await clientFetch(readUrl({ tab: 'column', list: 'columns', objectId: String(tbl.objectId) }));
         const cj = await cr.json();
         const hit = (cj.columns || []).find((c: any) => c.name === g.column);
         if (hit) columnIds = [hit.columnId];
@@ -227,7 +235,7 @@ export function useLakehousePermissions({ activeContainer, confirm }: Params) {
       await loadSqlPerms(g.column ? 'column' : 'table');
     } catch (e: any) { setPermsError(e?.message || String(e)); }
     finally { setPermsBusy(false); }
-  }, [sqlTables, loadSqlPerms]);
+  }, [sqlTables, loadSqlPerms, readUrl]);
 
   const dropRls = useCallback(async (p: RlsPolicy) => {
     setPermsBusy(true); setPermsError(null);

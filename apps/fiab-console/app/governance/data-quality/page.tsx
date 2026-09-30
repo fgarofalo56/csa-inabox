@@ -23,7 +23,7 @@ import {
   Spinner, Button, Badge, Body1, Caption1, Subtitle2, Text,
   TabList, Tab, Field, Input, Dropdown, Option, Textarea, Switch,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBar, MessageBarBody,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { Add24Regular, ArrowSync24Regular, Delete20Regular, Edit20Regular, Play20Regular, Beaker24Regular } from '@fluentui/react-icons';
@@ -32,6 +32,8 @@ import { Section } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { HonestGate } from '@/lib/components/shared/honest-gate';
+import { surfaceGateFrom, type SurfaceGate } from '@/lib/gates/surface-gate';
 
 type CheckType = 'not-null' | 'unique' | 'range' | 'regex' | 'freshness';
 interface DqRule {
@@ -263,7 +265,7 @@ function RunTab() {
   const [tables, setTables] = useState('');
   const [busy, setBusy] = useState(false);
   const [run, setRun] = useState<DqRun | null>(null);
-  const [gate, setGate] = useState<{ missing: string; error: string } | null>(null);
+  const [gate, setGate] = useState<SurfaceGate | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function doRun() {
@@ -279,7 +281,10 @@ function RunTab() {
     try {
       const r = await clientFetch('/api/dq/run', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
       const j = await r.json();
-      if (r.status === 503 && j.code === 'not_configured') { setGate({ missing: j.missing, error: j.error }); return; }
+      // #4776 — a not-configured engine AND a classified warehouse failure
+      // (403 permission / 503 network / 502 unknown) render the HonestGate.
+      const g = surfaceGateFrom(j);
+      if (g) { setGate(g); return; }
       if (!j.ok) { setError(j.error || 'Run failed'); return; }
       setRun(j.run);
     } catch (e: any) { setError(e?.message || String(e)); } finally { setBusy(false); }
@@ -303,7 +308,7 @@ function RunTab() {
           </Dropdown>
         </Field>
         {backend === 'kusto' && <Field label="ADX database" style={{ minWidth: 200 }}><Input value={database} onChange={(_, d) => setDatabase(d.value)} placeholder="(LOOM_KUSTO_DEFAULT_DB)" /></Field>}
-        {backend === 'databricks' && <Field label="SQL Warehouse id" style={{ minWidth: 220 }}><Input value={warehouseId} onChange={(_, d) => setWarehouseId(d.value)} placeholder="(LOOM_DATABRICKS_SQL_WAREHOUSE_ID)" /></Field>}
+        {backend === 'databricks' && <Field label="SQL Warehouse id" style={{ minWidth: 220 }}><Input value={warehouseId} onChange={(_, d) => setWarehouseId(d.value)} placeholder="(default: the platform warehouse)" /></Field>}
         {backend === 'synapse' && (
           <Field label="Pool" style={{ minWidth: 180 }}>
             <Dropdown selectedOptions={[synapsePool]} value={synapsePool === 'dedicated' ? 'Dedicated' : 'Serverless'} onOptionSelect={(_, d) => setSynapsePool((d.optionValue as any) || 'serverless')}>
@@ -317,7 +322,7 @@ function RunTab() {
         <Field label="Tables (comma-sep, optional)" style={{ flex: 1, minWidth: 220 }}><Input value={tables} onChange={(_, d) => setTables(d.value)} placeholder="all enabled rules if blank" /></Field>
       </div>
 
-      {gate && <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalM }}><MessageBarBody><MessageBarTitle>Engine not configured</MessageBarTitle>{gate.error} Set the <code style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{gate.missing}</code> app setting on the Console (admin-plane bicep).</MessageBarBody></MessageBar>}
+      {gate && <HonestGate gateId={gate.gateId} surface="Data quality run" missing={gate.missing} detail={gate.error} classified={gate.classified} onResolved={doRun} />}
       {error && <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalM }}><MessageBarBody>{error}</MessageBarBody></MessageBar>}
 
       {run && (<>
@@ -367,7 +372,7 @@ function MonitorsTab() {
   const s = useStyles();
   const [table, setTable] = useState(''); const [catalog, setCatalog] = useState(''); const [schema, setSchema] = useState('');
   const [data, setData] = useState<any>(null); const [busy, setBusy] = useState(false);
-  const [gate, setGate] = useState<{ missing: string; error: string } | null>(null);
+  const [gate, setGate] = useState<SurfaceGate | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [rules, setRules] = useState<DqRule[]>([]);
   const [ruleId, setRuleId] = useState('');
@@ -383,7 +388,8 @@ function MonitorsTab() {
     if (schema.trim()) qs.set('schema', schema.trim());
     try {
       const r = await clientFetch(`/api/dq/monitors?${qs}`); const j = await r.json();
-      if (r.status === 503 && j.code === 'not_configured') { setGate({ missing: j.missing, error: j.error }); return; }
+      const g = surfaceGateFrom(j);
+      if (g) { setGate(g); return; }
       if (!j.ok) { setError(j.error || 'Failed'); return; }
       setData(j);
     } catch (e: any) { setError(e?.message || String(e)); } finally { setBusy(false); }
@@ -393,11 +399,21 @@ function MonitorsTab() {
     try {
       const r = await clientFetch('/api/dq/monitors', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ table: table.trim(), catalog: catalog.trim() || undefined, schema: schema.trim() || undefined, ...payload }) });
       const j = await r.json();
-      if (!j.ok && j.error) setError(j.error);
+      // #4776 — a classified warehouse failure on apply/drop is the HonestGate,
+      // not a silent no-op; a constraint the DDL rejected shows its detail.
+      const g = surfaceGateFrom(j);
+      if (g) { setGate(g); return; }
+      if (!j.ok) setError(j.error || j.result?.detail || `Action failed (HTTP ${r.status})`);
       await load();
     } catch (e: any) { setError(e?.message || String(e)); } finally { setBusy(false); }
   }
 
+  // The constraints half answers inside an ok:true body: an array, a classified
+  // warehouse failure (rendered as the gate), or `{ error }` (rendered as an
+  // error). Only an ARRAY may read as "no constraints".
+  const constraintsGate = surfaceGateFrom(data?.constraints);
+  const constraintsError: string | null =
+    !constraintsGate && data?.constraints && !Array.isArray(data.constraints) ? String(data.constraints.error || 'Could not list constraints') : null;
   const constraints: DeltaConstraint[] = Array.isArray(data?.constraints) ? data.constraints : [];
   const monitor = data?.monitor && !data.monitor.error ? data.monitor : null;
   const refreshes: any[] = Array.isArray(data?.refreshes) ? data.refreshes : [];
@@ -412,7 +428,7 @@ function MonitorsTab() {
         <Button appearance="primary" onClick={load} disabled={busy || !table.trim()} style={{ alignSelf: 'flex-end' }}>Load</Button>
       </div>
 
-      {gate && <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalM }}><MessageBarBody><MessageBarTitle>Databricks not configured</MessageBarTitle>{gate.error} Set <code style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{gate.missing}</code> on the Console (admin-plane bicep).</MessageBarBody></MessageBar>}
+      {gate && <HonestGate gateId={gate.gateId} surface="Data quality monitors" missing={gate.missing} detail={gate.error} classified={gate.classified} onResolved={load} />}
       {error && <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalM }}><MessageBarBody>{error}</MessageBarBody></MessageBar>}
 
       {data && <>
@@ -425,7 +441,11 @@ function MonitorsTab() {
           </Field>
           <Button onClick={() => ruleId && action({ action: 'apply-constraint', ruleId })} disabled={busy || !ruleId} style={{ alignSelf: 'flex-end' }}>Apply constraint</Button>
         </div>
-        {constraints.length === 0 ? <Caption1>No Delta CHECK constraints on this table yet.</Caption1> : (
+        {constraintsGate ? (
+          <HonestGate gateId={constraintsGate.gateId} surface="Delta constraints" missing={constraintsGate.missing} detail={constraintsGate.error} classified={constraintsGate.classified} onResolved={load} />
+        ) : constraintsError ? (
+          <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalM }}><MessageBarBody>{constraintsError}</MessageBarBody></MessageBar>
+        ) : constraints.length === 0 ? <Caption1>No Delta CHECK constraints on this table yet.</Caption1> : (
           <LoomDataTable<DeltaConstraint> columns={[
             { key: 'name', label: 'Constraint', sortable: true, filterable: true, getValue: (c) => c.name, render: (c) => <Body1>{c.name}</Body1> },
             { key: 'expr', label: 'Expression', filterable: true, getValue: (c) => c.expression, render: (c) => <Caption1 style={{ fontFamily: 'monospace', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{c.expression}</Caption1> },

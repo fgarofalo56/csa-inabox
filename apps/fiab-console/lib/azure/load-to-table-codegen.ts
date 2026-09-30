@@ -7,7 +7,8 @@
  * Kept side-effect free so it can be unit-tested without Azure.
  *
  * The generated job writes Delta files to
- *   abfss://<container>@<account>.dfs.core.windows.net/Tables/<table>
+ *   abfss://<container>@<account>.<dfs host suffix>/Tables/<table>
+ * where the suffix is the active cloud's (`dfsSuffix`).
  * AND registers the table in the Spark metastore via saveAsTable(..., path=…),
  * so the new table:
  *   - appears in the Lakehouse editor's Tables tab (it lists `Tables/` dirs)
@@ -19,6 +20,7 @@
  */
 
 import { trimSlashes } from '@/lib/util/trim';
+import { dfsSuffix } from './cloud-endpoints';
 
 export const LOAD_TABLE_NAME_RE = /^[a-z][a-z0-9_]{0,63}$/;
 
@@ -81,10 +83,13 @@ export function suggestTableName(path: string): string {
   return base.slice(0, 64);
 }
 
-/** Build the abfss:// URL for a path inside an ADLS Gen2 container. */
+/**
+ * Build the abfss:// URL for a path inside an ADLS Gen2 container, on the
+ * active cloud's DFS host (`dfs.core.usgovcloudapi.net` in GCC-High/IL5/DoD).
+ */
 export function abfssUrl(account: string, container: string, path: string): string {
   const clean = path.replace(/^\/+/, '');
-  return `abfss://${container}@${account}.dfs.core.windows.net/${clean}`;
+  return `abfss://${container}@${account}.${dfsSuffix()}/${clean}`;
 }
 
 /** The Spark read expression for a given native format against a source URL. */

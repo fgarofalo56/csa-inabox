@@ -11,6 +11,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { renderHook, act, cleanup } from '@testing-library/react';
 import { useLakehouseShortcuts } from '../hooks/use-lakehouse-shortcuts';
 import type { ShortcutRow } from '../types';
+import { refusalFieldsFor } from '@/app/api/lakehouse/_lib/refusal-envelope';
 
 afterEach(() => {
   cleanup();
@@ -95,13 +96,22 @@ function installTestAnswer(status: number, body: Record<string, unknown>): Call[
 // The Test result reaches the user. Before this, the hook parsed the answer and
 // discarded it, so a refusal read as a successful Test. Each case FAILS IF the
 // hook ignores `ok:false` (shortcutsError stays null) or drops `remediation`.
+function readOnlyBody() {
+  const error = 'Your role on this lakehouse is read-only, so Loom did not re-test its shortcuts. A workspace '
+    + 'Member/Admin, or an item grant that includes Edit, can run the test.';
+  const fields = refusalFieldsFor(403, error, { readOnlyMessage: error });
+  // Breaks if the helper stops classifying this text as read-only (the fixture
+  // would silently lose its code and remediation).
+  expect(fields?.code).toBe('read_only');
+  return { ok: false, error, ...fields! };
+}
 describe('useLakehouseShortcuts: Test shows a refused or failed result', () => {
   it.each([
-    // Shaped like the refusal-envelope read-only answer.
-    ['a 403 (read-only role)', 403, {
-      ok: false, code: 'read_only', error: 'Your role on this lakehouse is read-only, so Loom did not test the shortcut.',
-      remediation: 'Ask a workspace Admin or Member for Edit on this lakehouse.',
-    }],
+    // The read-only answer, built by the same refusal-envelope helper the route
+    // uses (code + remediation), over the route's own message text (verbatim
+    // from shortcuts/test/route.ts; a route file cannot export it). A change to
+    // the helper's remediation therefore moves this fixture with it.
+    ['a 403 (read-only role)', 403, readOnlyBody()],
     // Verbatim from app/api/lakehouse/shortcuts/test/route.ts (row not found).
     ['a 404 (shortcut not found)', 404, {
       ok: false, error: 'shortcut not found', code: 'not_found',

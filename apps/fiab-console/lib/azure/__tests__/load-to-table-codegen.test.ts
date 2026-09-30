@@ -52,6 +52,18 @@ describe('abfssUrl', () => {
       'abfss://bronze@acct.dfs.core.windows.net/Files/x.csv',
     );
   });
+  it('names the GCC-High DFS host when LOOM_CLOUD is gcc-high', () => {
+    const prev = process.env.LOOM_CLOUD;
+    process.env.LOOM_CLOUD = 'gcc-high';
+    try {
+      // Breaks if the suffix is hard-coded to `.dfs.core.windows.net`.
+      expect(abfssUrl('govacct', 'bronze', '/Files/x.csv')).toBe(
+        'abfss://bronze@govacct.dfs.core.usgovcloudapi.net/Files/x.csv',
+      );
+    } finally {
+      if (prev === undefined) delete process.env.LOOM_CLOUD; else process.env.LOOM_CLOUD = prev;
+    }
+  });
 });
 
 describe('readExprFor', () => {

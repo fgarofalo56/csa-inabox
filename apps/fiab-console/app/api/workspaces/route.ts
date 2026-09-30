@@ -8,6 +8,8 @@ import { domainExists, DEFAULT_DOMAIN_ID } from '@/lib/azure/domain-registry';
 import { emitAuditEvent } from '@/lib/admin/audit-stream';
 import type { Workspace, WorkspaceLicenseMode } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
+import { WORKSPACE_STORAGE_ADMIN_ONLY } from '@/lib/util/admin-only-copy';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -78,6 +80,16 @@ export async function POST(req: NextRequest) {
   const { name, description, capacity, domain } = body || {};
   if (!name || typeof name !== 'string') return err('name is required', 400, 'missing_name');
 
+  // #4619 — the storage account a workspace binds to is chosen by a tenant
+  // admin. A non-admin create without one gets the deployment default; naming
+  // one answers 403 admin_only before anything is written.
+  const storageAccountId =
+    typeof body?.storageAccountId === 'string' && body.storageAccountId.trim() ? body.storageAccountId.trim() : undefined;
+  if (storageAccountId) {
+    const refused = requireTenantAdmin(session, WORKSPACE_STORAGE_ADMIN_ONLY);
+    if (refused) return refused;
+  }
+
   // A workspace is bound to a governance domain (t158). When the caller doesn't
   // pick one (the picker only lists domains they administer, which a fresh
   // tenant has none of), fall back to the `default` starter domain — the
@@ -120,7 +132,7 @@ export async function POST(req: NextRequest) {
     description: description?.trim() || undefined,
     capacity: capacity?.trim() || undefined,
     domain: domainId,
-    storageAccountId: typeof body?.storageAccountId === 'string' && body.storageAccountId.trim() ? body.storageAccountId.trim() : undefined,
+    storageAccountId,
     licenseMode,
     contacts: contacts && contacts.length ? contacts : undefined,
     createdBy: session.claims.upn || session.claims.email || session.claims.oid,

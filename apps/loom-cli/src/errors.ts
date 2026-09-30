@@ -13,4 +13,15 @@ export function LoomApiErrorGuard(e: unknown): e is LoomApiError {
   return e instanceof LoomApiError;
 }
 
+/**
+ * The lines the CLI prints for an API error: the status, code and message; the
+ * wait before retrying when the server sent one; and the route's `hint`.
+ */
+export function formatApiError(e: LoomApiError): string {
+  const lines = [`API error (${e.status}${e.code ? ` ${e.code}` : ''}): ${e.message}`];
+  if (e.retryAfter) lines.push(`Try again in ${e.retryAfter} second${e.retryAfter === 1 ? '' : 's'}.`);
+  if (e.hint) lines.push(`Hint: ${e.hint}`);
+  return lines.join('\n') + '\n';
+}
+
 export { LoomApiError };
