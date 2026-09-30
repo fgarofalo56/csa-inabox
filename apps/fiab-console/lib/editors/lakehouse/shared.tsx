@@ -84,6 +84,8 @@ interface ListingError {
   remediation?: string;
   code?: string;
   kind?: ListFailureKind;
+  /** A page that resolves this failure (the readiness page, for a lakehouse sharing its storage root). */
+  fixHref?: string;
 }
 
 /**

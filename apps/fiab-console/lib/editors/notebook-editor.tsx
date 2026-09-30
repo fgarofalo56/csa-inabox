@@ -32,11 +32,12 @@ import {
   Subtitle2, Caption1, Badge, Button, Spinner, Input, Tooltip, Divider,
   Tree, TreeItem, TreeItemLayout, Select,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
-  MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
+  MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions, Link,
   Menu, MenuTrigger, MenuList, MenuItem, MenuPopover, Field, Switch,
   Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   tokens,
 } from '@fluentui/react-components';
+import { attachedLakehouseCaption, readAttachedLakehouseResolution, type AttachedLakehouseResolution } from '@/lib/notebook/attached-lakehouse-status';
 import {
   Play20Regular, Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Notebook20Regular,
   History20Regular, ArrowUpload20Regular, Open20Regular, Library20Regular, Settings20Regular, Sparkle20Regular, BracesVariable20Regular,
@@ -183,7 +184,7 @@ export function NotebookEditor({ item, id }: Props) {
   // Issue #655: resolved abfss path per attached lakehouse id, surfaced in the
   // Data items list so the user sees the REAL path the auto-mount preamble uses
   // (and can copy it). { abfss } when resolvable, { hint } for an honest gate.
-  const [resolvedPaths, setResolvedPaths] = useState<Record<string, { abfss?: string; hint?: string }>>({});
+  const [resolvedPaths, setResolvedPaths] = useState<Record<string, AttachedLakehouseResolution>>({});
   // Phase 3: History drawer
   const [historyOpen, setHistoryOpen] = useState(false);
   // Copilot chat pane (docked right drawer, ~25% width)
@@ -1008,11 +1009,8 @@ export function NotebookEditor({ item, id }: Props) {
           const r = await clientFetch(`/api/items/lakehouse/${encodeURIComponent(lh.id)}/abfss?workspaceId=${encodeURIComponent(workspaceId)}`);
           const j = await r.json().catch(() => ({}));
           if (cancelled) return;
-          if (j?.ok && j.resolved && j.abfss) {
-            setResolvedPaths((prev) => ({ ...prev, [lh.id]: { abfss: j.abfss } }));
-          } else if (j?.ok) {
-            setResolvedPaths((prev) => ({ ...prev, [lh.id]: { hint: j.hint || 'Path not resolved.' } }));
-          }
+          const read = readAttachedLakehouseResolution(j);
+          if (read) setResolvedPaths((prev) => ({ ...prev, [lh.id]: read }));
         } catch { /* leave unresolved — chip shows neither path nor false gate */ }
       }
     })();
@@ -2578,7 +2576,8 @@ export function NotebookEditor({ item, id }: Props) {
                           {!resolved?.abfss && resolved?.hint && (
                             <Tooltip content={resolved.hint} relationship="description">
                               <Caption1 style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalXS, color: tokens.colorPaletteYellowForeground1, fontSize: tokens.fontSizeBase100 }}>
-                                <Info16Regular /> path not configured
+                                <Info16Regular /> {attachedLakehouseCaption(resolved)}
+                                {resolved.fixHref && <Link href={resolved.fixHref} onClick={(e) => e.stopPropagation()} data-testid="nb-attached-lakehouse-fix-link">Resolve</Link>}
                               </Caption1>
                             </Tooltip>
                           )}

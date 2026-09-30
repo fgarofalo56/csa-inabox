@@ -41,6 +41,43 @@ describe('buildLakehouseMountPreamble', () => {
     expect(out).toContain("'ok':");
     expect(out).not.toContain("'bad':");
   });
+
+  it('keeps a plain dict when nothing is withheld', () => {
+    const out = buildLakehouseMountPreamble([
+      { displayName: 'ok', abfss: 'abfss://c@a.dfs.core.windows.net/r' },
+    ]);
+    // BREAKS IF the withheld branch is taken with an empty withheld list: the
+    // class wrapper would appear and the plain `loom_lakehouses = {` would not.
+    expect(out).toContain('loom_lakehouses = {');
+    expect(out).not.toContain('_LoomLakehouses');
+  });
+
+  it('says why a withheld lakehouse is missing: a KeyError carrying the reason, and a printed line', () => {
+    const reason = 'Its storage root is also used by another lakehouse.';
+    const out = buildLakehouseMountPreamble([
+      { displayName: 'ok', abfss: 'abfss://c@a.dfs.core.windows.net/r' },
+      { displayName: 'Sales', abfss: '', withheld: reason },
+    ]);
+    // BREAKS IF withheld entries are dropped like any other empty-path entry
+    // (the pre-change filter): none of these lines would be emitted.
+    expect(out).toContain('class _LoomLakehouses(dict):');
+    expect(out).toContain(`        'Sales': '${reason}',`);
+    expect(out).toContain("raise KeyError(str(key) + ': ' + self._withheld[key])");
+    expect(out).toContain(`print('Lakehouse Sales was not mounted: ${reason}')`);
+    // The mounted one is still a real entry. BREAKS IF the valid entries are
+    // lost when a withheld one is present.
+    expect(out).toContain("loom_lakehouses = _LoomLakehouses({");
+    expect(out).toContain("    'ok': 'abfss://c@a.dfs.core.windows.net/r',");
+    // BREAKS IF a withheld entry is written as a mount with an empty path.
+    expect(out).not.toContain("'Sales': '',");
+  });
+
+  it('emits the explanation even when every attached lakehouse is withheld', () => {
+    const out = buildLakehouseMountPreamble([{ displayName: 'Only', abfss: '', withheld: 'why' }]);
+    // BREAKS IF the early return still checks only mounted entries: out is ''.
+    expect(out).toContain("print('Lakehouse Only was not mounted: why')");
+    expect(out).toContain('loom_lakehouses = _LoomLakehouses({');
+  });
 });
 
 // #4759 — the notebook run route resolves attached lakehouses through
@@ -107,6 +144,19 @@ describe('resolveAttachedLakehouses', () => {
     ]);
     // BREAKS IF the kind/id filter is dropped: `wh` and `undefined` would be resolved too.
     expect([...calls].sort()).toEqual(['boom', 'ok1', 'ok2']);
+  });
+
+  it('passes a withheld reason through with no path, in attachment order', async () => {
+    const out = await resolveAttachedLakehouses(
+      [lh('a', 'A'), lh('b', 'B')],
+      async (id) => (id === 'a' ? { withheld: 'root in use' } : { abfss: 'abfss://b' }),
+    );
+    // BREAKS IF `{ withheld }` is read as a path (abfss undefined) or skipped
+    // like null: the first element would differ or be missing.
+    expect(out).toEqual([
+      { displayName: 'A', abfss: '', withheld: 'root in use' },
+      { displayName: 'B', abfss: 'abfss://b' },
+    ]);
   });
 
   it('returns nothing for no attached sources', async () => {

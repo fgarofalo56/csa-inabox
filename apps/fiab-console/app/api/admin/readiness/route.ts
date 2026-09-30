@@ -26,6 +26,7 @@ import { runRuntimeProducers } from '@/lib/admin/gate-registry';
 import { buildReadiness, GATE_PROBE_MAP, type ProbeLite } from '@/lib/admin/readiness';
 import { getOrComputeCached } from '@/lib/azure/query-result-cache';
 import { detectLoomCloud } from '@/lib/azure/cloud-endpoints';
+import { probeLakehouseSharedRoots } from '@/lib/admin/env-checks/lakehouse-shared-roots';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -83,7 +84,14 @@ export const GET = withCapability('admin.env-config', 'Admin', async (req) => {
   // the probes) BEFORE reading gate statuses: the produced-value store is
   // per-process, and the probe result below may be served from a cache that
   // another replica filled, so nothing else guarantees this replica ran them.
-  const [, { probes, probeError, stale }] = await Promise.all([runRuntimeProducers(), collectProbes(refresh)]);
+  const [, { probes, probeError, stale }, sharedRoots] = await Promise.all([
+    runRuntimeProducers(),
+    collectProbes(refresh),
+    // Item ids are included here because this route is admin-only: the admin
+    // needs to know WHICH lakehouses share a root to act on the group. The
+    // probe never throws; a failed read comes back as an inconclusive warn.
+    probeLakehouseSharedRoots({ includeIds: true }),
+  ]);
   const statuses = allGateStatuses();
   const report = buildReadiness(
     { gates: GATES, statuses, probes },
@@ -107,5 +115,7 @@ export const GET = withCapability('admin.env-config', 'Admin', async (req) => {
     probesStale: stale ?? false,
     /** true when this response re-ran every probe instead of reading the cache. */
     probesRefreshed: refresh,
+    /** Item-store checks that are not tied to one gate (lakehouse storage roots). */
+    storageChecks: [sharedRoots],
   });
 });
