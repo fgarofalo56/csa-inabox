@@ -5001,6 +5001,18 @@ const ADMIN_SHAPE_UNSCOPED = new Map([
         '(revokeContainerRoleAssignmentInScope).',
     },
   ],
+  [
+    'app/api/items/lakehouse/[id]/query/route.ts:POST',
+    {
+      verdict: 'ORG-WIDE',
+      requires: ['guardAdxItemRequest(', 'isTenantAdmin(', 'confineToItem('],
+      why:
+        'ORG-WIDE (function scope). Every caller is first authorized against the lakehouse item by ' +
+        'guardAdxItemRequest, which carries the workspace ladder. isTenantAdmin only decides whether ' +
+        'the SQL text also passes confineToItem (the item-root classifier); a tenant admin runs the ' +
+        'text unchanged. No workspace document is read on the admin branch.',
+    },
+  ],
 ]);
 
 /**

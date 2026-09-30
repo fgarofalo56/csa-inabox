@@ -4,41 +4,29 @@
  * Runs T-SQL for a Lakehouse SQL analytics endpoint. In this deployment a
  * Lakehouse is an ADLS Gen2 medallion container (bronze/silver/gold/landing)
  * whose tabular SQL surface is Synapse Serverless (OPENROWSET over the lake
- * files + Delta tables) — the same backend the Files/Preview tab uses.
- *
- * Previously the editor POSTed to
- *   /api/items/synapse-serverless-sql-pool/<lakehouseId>/query
- * which is the wrong item type. Even though that route ignores the id, the
- * mismatch was fragile and meant the lakehouse had no SQL route of its own.
- * This route is the lakehouse's own SQL analytics endpoint, calling the real
- * Synapse Serverless TDS client (no mock data).
+ * files + Delta tables) — the same backend the Files/Preview tab uses. This is
+ * the lakehouse's own SQL route, calling the real Synapse Serverless TDS client
+ * (no mock data).
  *
  * Body: { sql: string }
- * Auth: authorized against the lakehouse ITEM (see below).
  *
- * SECURITY — GHSA-v2g8-gp3r-rg4r. The handler signature was
- * `POST(req, _ctx: { params: Promise<{ id: string }> })` — it took the route
- * context and ignored it, so `[id]` was never read and `getSession()` was the
- * only check: any signed-in user, in any tenant, could execute T-SQL on the
- * shared Synapse Serverless endpoint as the Console's identity. The `database`
- * also came from the body.
- *
- * The caller is now authorized against the lakehouse item via
- * `_lib/adx-item-scope.ts::guardAdxItemRequest` (the canonical
- * `authorizeItemWorkspace` ladder — owner → tenant-admin → shared-ACL — with the
- * workspace resolved FROM THE ITEM, and a fail-closed 404 for an id naming no
- * lakehouse), and the target database is resolved from that item.
- * `allowReadRoles` IS passed: the Serverless SQL analytics endpoint is
- * read-only, so a shared Viewer running a preview is a legitimate caller and
- * refusing them would break the editor's Preview and the entity-diagram column
- * enrichment.
- *
- * KNOWN RESIDUAL, stated rather than implied fixed: the SQL TEXT itself is still
- * unbounded — `OPENROWSET` can address any path the Console's identity can read
- * on the shared lake. That is the same shape as every other T-SQL surface in the
- * console (warehouse/[id]/query, synapse-serverless-sql-pool/[id]/query) and is
- * NOT closed here; this change closes the missing caller authorization, which is
- * what the advisory names.
+ * Item scope:
+ *   - The caller is authorized against the lakehouse ITEM through
+ *     `_lib/adx-item-scope.ts::guardAdxItemRequest` (owner → tenant admin →
+ *     shared ACL, with the workspace resolved from the item, and a 404 for an id
+ *     naming no lakehouse). Read roles are accepted: the endpoint is read-only,
+ *     and a shared Viewer runs the editor's SQL tab and the entity-diagram
+ *     column enrichment through it.
+ *   - The target database is resolved from the item, never from the request.
+ *   - For a caller who is not a tenant admin, the SQL text passes
+ *     `../../_lib/query-scope.ts` before it runs: SELECT statements only, and
+ *     every OPENROWSET(BULK …) location must be a literal URL inside this
+ *     item's container and root. A construct the classifier does not accept is
+ *     a 400 that names it; a location outside the item root is a 403. Tenant
+ *     admins run SQL unchanged, as on the other lakehouse routes.
+ *   - Objects inside the item's own database (views, external tables) are not
+ *     re-checked here; a per-item serverless database rooted at the item root
+ *     is the durable form of this boundary and is tracked separately.
  *
  * Background:
  *  - Fabric lakehouse SQL analytics endpoint: a read-only T-SQL endpoint over
@@ -51,6 +39,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { serverlessTarget, executeQuery, getSynapseSqlSuffix } from '@/lib/azure/synapse-sql-client';
 import { guardAdxItemRequest } from '../../../_lib/adx-item-scope';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
+import { apiServerError } from '@/lib/api/respond';
+import { resolveLakehouseStorage } from '@/lib/azure/lakehouse-abfss';
+import { lakehouseStorageWithheldResponse } from '@/app/api/lakehouse/_lib/item-scope';
+import type { WorkspaceItem } from '@/lib/types/workspace';
+import { analyzeLakehouseQuery, confineQueryLocation, type QueryRefusal } from '../../_lib/query-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -67,6 +61,50 @@ function lakehouseSqlDatabase(state: Record<string, unknown> | undefined): strin
     if (typeof v === 'string' && v.trim()) return v.trim();
   }
   return 'master';
+}
+
+function refusalResponse(r: QueryRefusal): NextResponse {
+  return NextResponse.json(
+    { ok: false, error: r.error, code: r.code, construct: r.construct, remediation: r.remediation },
+    { status: r.status },
+  );
+}
+
+/**
+ * Confine a non-admin caller's SQL to this item's storage root, or return the
+ * response that refuses it. The item's storage binding is read only when the
+ * query names a location, so a metadata query never waits on it.
+ */
+async function confineToItem(sqlText: string, item: WorkspaceItem, database: string): Promise<NextResponse | null> {
+  const analysis = analyzeLakehouseQuery(sqlText, { database });
+  if (!analysis.ok) return refusalResponse(analysis);
+  if (analysis.locations.length === 0) return null;
+  let storage: Awaited<ReturnType<typeof resolveLakehouseStorage>>;
+  try {
+    storage = await resolveLakehouseStorage(item.id, item.workspaceId);
+  } catch (e) {
+    // Fail closed with a structured body: an unread binding confirms nothing.
+    return apiServerError(e);
+  }
+  if (!storage.ok) {
+    const withheld = lakehouseStorageWithheldResponse(storage.reason);
+    if (withheld) return withheld;
+    return NextResponse.json(
+      {
+        ok: false,
+        error:
+          'Loom has no lakehouse storage binding for this item, so the files this query names cannot be '
+          + 'confirmed as this lakehouse\'s own. Re-run the item provision and retry.',
+        code: 'lakehouse_storage_unbound',
+      },
+      { status: 409 },
+    );
+  }
+  for (const location of analysis.locations) {
+    const confined = confineQueryLocation(location, storage.bound);
+    if (!confined.ok) return refusalResponse(confined);
+  }
+  return null;
 }
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
@@ -88,6 +126,12 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const database = lakehouseSqlDatabase(item.state);
   if (!sqlText) return NextResponse.json({ ok: false, error: 'sql is required' }, { status: 400 });
   if (sqlText.length > 65_536) return NextResponse.json({ ok: false, error: 'sql too large (>64KB)' }, { status: 413 });
+
+  // Item scope for the SQL text itself; tenant admins run SQL unchanged.
+  if (!isTenantAdmin(session)) {
+    const refused = await confineToItem(sqlText, item, database);
+    if (refused) return refused;
+  }
 
   // Honest infra-gate: the lakehouse SQL endpoint requires a configured
   // Synapse Serverless workspace. Name the exact env var if it's missing,

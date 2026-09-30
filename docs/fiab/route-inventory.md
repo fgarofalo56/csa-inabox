@@ -16,8 +16,8 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | Total routes | 1696 |
 | Public (no session) | 59 |
 | Session-only | 632 |
-| Owner-scoped | 692 |
-| Admin | 313 |
+| Owner-scoped | 691 |
+| Admin | 314 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 499 |
 | Areas | 122 |
@@ -1521,7 +1521,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/lakehouse-shortcut/route.ts` | GET POST DELETE | owner-scoped | ● | ADLS, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Key Vault, Managed Identity, Microsoft Graph, Synapse SQL |
 | `items/lakehouse/[id]/abfss/route.ts` | GET | owner-scoped |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph |
 | `items/lakehouse/[id]/assist/route.ts` | — | public |  | — |
-| `items/lakehouse/[id]/query/route.ts` | POST | owner-scoped | ● | ARM, Azure SQL, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
+| `items/lakehouse/[id]/query/route.ts` | POST | admin | ● | ADLS, ARM, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
 | `items/lakehouse/route.ts` | GET | session-only |  | Cosmos |
 | `items/linked-service/route.ts` | — | public |  | — |
 | `items/logic-app/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | AI Search, ARM, Cosmos, Logic Apps, Microsoft Graph, Purview |
