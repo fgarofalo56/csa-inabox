@@ -1729,16 +1729,20 @@ jobs:
   #   1. The stager writes into apps/fiab-console/copilot-corpus/ (gitignored
   #      except .gitkeep) and leaves it there. The stager discards
   #      sha256sum's stderr, so when it fails this step names the exit code
-  #      and then CANDIDATE paths, each worded "may be the cause": files named
-  #      *.md that are a directory, a broken symlink or unreadable. It looks
-  #      only where the stager hashes, using the stager's own SOURCES and
-  #      EXCLUDE_FIND, which it reads out of the script at runtime so the two
-  #      cannot drift. At most 20 are listed, then a count of the rest.
+  #      and then CANDIDATE paths, each worded "may be the cause": inputs that
+  #      are not readable regular files (a directory, a broken symlink, an
+  #      unreadable file). The inputs come from `stage-copilot-corpus.sh
+  #      --list-inputs`, which runs the stager's OWN roots, exclusions and
+  #      find and writes nothing. This step does not parse the script. If the
+  #      listing itself fails, it says the cause was not determined and names
+  #      no path. At most 20 are listed, then a count of the rest.
   #   2. The lint runs against that staged manifest (corpus membership, as
   #      copilot-quality-evals.yml runs it). It fails if no manifest was
   #      staged. Then `git clean -X` restores the dir, on failure too (trap).
   #
-  # Pinned by scripts/ci/__tests__/copilot-evals-trigger-contract.test.mjs (d).
+  # Pinned by scripts/ci/__tests__/copilot-evals-trigger-contract.test.mjs:
+  # (d) the job's shape, (e) both step bodies EXECUTED under `bash -e`, and
+  # (f) the stager's --list-inputs (exact list, no writes) and default mode.
   copilot-corpus-lint:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1755,28 +1759,31 @@ jobs:
           rc=0
           bash scripts/csa-loom/stage-copilot-corpus.sh || rc=$?
           if [ "$rc" -ne 0 ]; then
-            echo "::error::scripts/csa-loom/stage-copilot-corpus.sh exited $rc. It hashes every *.md under its source roots with find | xargs sha256sum under set -euo pipefail, and discards sha256sum's stderr, so it may have printed no reason above. Likely cause: a path it hashes that is not a readable regular file."
+            echo "::error::scripts/csa-loom/stage-copilot-corpus.sh exited $rc. It hashes every *.md under its source roots with find | xargs sha256sum under set -euo pipefail, and discards sha256sum's stderr, so it may have printed no reason above. Likely cause: an input it hashes that is not a readable regular file."
             STAGER=scripts/csa-loom/stage-copilot-corpus.sh
-            mapfile -t roots < <(sed -n '/^SOURCES="/,/^"/p' "$STAGER" | sed -n 's#^[$]ROOT/\([^|]*\)|.*#\1#p')
-            EXCLUDE_FIND=()
-            eval "$(sed -n '/^EXCLUDE_FIND=(/,/^)/p' "$STAGER")"
-            if [ "${#roots[@]}" -eq 0 ] || [ "${#EXCLUDE_FIND[@]}" -eq 0 ]; then
-              echo "::error::could not read SOURCES / EXCLUDE_FIND from $STAGER (roots=${#roots[@]}, excludes=${#EXCLUDE_FIND[@]}), so no candidate path is named. Reproduce with: bash -x $STAGER"
+            inputs="$(mktemp)"
+            lrc=0
+            bash "$STAGER" --list-inputs > "$inputs" || lrc=$?
+            if [ "$lrc" -ne 0 ]; then
+              echo "::error::could not list the stager's inputs ($STAGER --list-inputs exited $lrc); cause not determined, and no candidate path is named."
               exit "$rc"
             fi
             cands=()
-            for d in "${roots[@]}"; do
-              if [ ! -d "$d" ]; then continue; fi
-              while IFS= read -r p; do cands+=("$d/${p#./}"); done < <(cd "$d" && find . -name '*.md' "${EXCLUDE_FIND[@]}" \( -xtype d -o -xtype l -o \( -type f ! -readable \) \) -print)
-            done
+            total=0
+            while IFS= read -r -d '' p; do
+              total=$((total + 1))
+              if [ ! -f "$p" ] || [ ! -r "$p" ]; then cands+=("$p"); fi
+            done < "$inputs"
+            rm -f "$inputs"
             if [ "${#cands[@]}" -eq 0 ]; then
-              echo "::error::no candidate found: nothing the stager hashes (roots ${roots[*]}, its EXCLUDE_FIND applied) is a directory, a broken symlink or an unreadable file named *.md, so the cause was NOT determined here. Reproduce with: bash -x $STAGER"
+              echo "::error::no candidate found: all $total input(s) the stager lists ($STAGER --list-inputs) are readable regular files, so the cause was NOT determined here. Reproduce with: bash -x $STAGER"
             else
               for p in "${cands[@]:0:20}"; do
-                kind="an unreadable file"
+                kind="not a regular file"
+                if [ -f "$p" ] && [ ! -r "$p" ]; then kind="an unreadable file"; fi
                 if [ -d "$p" ]; then kind="a directory"; fi
                 if [ -L "$p" ] && [ ! -e "$p" ]; then kind="a broken symlink"; fi
-                echo "::error::may be the cause: ${p//%/%25} is $kind, named *.md, in a tree the stager hashes. Rename it or change its extension."
+                echo "::error::may be the cause: ${p//%/%25} is $kind, and the stager lists it as an input ($STAGER --list-inputs). Rename it or change its extension."
               done
               if [ "${#cands[@]}" -gt 20 ]; then echo "::error::$(( ${#cands[@]} - 20 )) more candidate path(s) not listed (the first 20 are shown)."; fi
             fi

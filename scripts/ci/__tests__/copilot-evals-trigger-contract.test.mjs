@@ -66,10 +66,11 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync, statSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { readFileSync, existsSync, statSync, lstatSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { dirname, resolve, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -729,18 +730,20 @@ test('(d) the corpus stager + eval-set lint run on EVERY pull_request, in an ADV
 // loom-guardrails.yml at runtime (parseSteps' runRaw) and executed under
 // `bash -e` -- the runner's default shell for a `run:` step -- in a throwaway
 // git repo with STUB scripts in place of the stager and the lint:
-//   - the stager stub is `exit <rc>` followed by a stager's text, so the
-//     diagnostic reads its SOURCES / EXCLUDE_FIND out of that text, exactly as
-//     it does in CI;
+//   - the stager stub exits <rc> in its DEFAULT mode and, given
+//     `--list-inputs`, runs the stager text that follows it (the real one, an
+//     edited real one, or a hand-written list), exactly as CI would run it;
 //   - the lint stub is `process.exit(<rc>)`.
 // It witnesses EXACTLY the cases below: the step's exit code, the ::error:: /
 // "may be the cause" lines it prints, and (lint) that the corpus dir is clean
-// afterwards. Any edit that makes a failing step exit 0 turns a case RED
-// whatever its spelling -- an extra `rc=0`, `exit "$rc"` under `if false`, a
-// trap ending in `exit 00`, an ERR trap `exit $((0))`, a bare `exit` -- which
-// is why this replaced growing the SWALLOWS list. Not witnessed here: the
-// broken-symlink and unreadable-file wording (only the directory case runs;
-// symlinks and permission bits are not portable to the Windows runs).
+// afterwards. Any edit that makes a failing step exit 0 INSIDE THIS FIXTURE
+// turns a case RED whatever its spelling -- an extra `rc=0`, `exit "$rc"` under
+// `if false`, a trap ending in `exit 00`, an ERR trap `exit $((0))`, a bare
+// `exit`. An edit that exits 0 only under conditions the fixture does not
+// reproduce (e.g. only when a real-repo file exists) is NOT witnessed. Not
+// witnessed either: the broken-symlink and unreadable-file wording (only the
+// directory case runs; symlinks and permission bits are not portable to the
+// Windows runs).
 //
 // BASH: `bash` on Linux/macOS. On Windows the bare name resolves to WSL's
 // System32 bash first, which cannot see this process's temp paths, so Git
@@ -759,19 +762,20 @@ const BASH = findBash();
 const SKIP_BEHAVIOUR = BASH ? false : 'win32 without Git Bash (set CONTRACT_TEST_BASH); WSL bash cannot see the temp paths. CI runs this on Linux.';
 
 const REAL_STAGER = readFileSync(join(REPO, STAGER_REL), 'utf8');
-const stubStager = (rc, body = REAL_STAGER) => `#!/usr/bin/env bash\necho "stub stager: exit ${rc}" >&2\nexit ${rc}\n${body}`;
-// A stager whose roots and exclusions DIFFER from the real one: if the
-// diagnostic transcribed the real list instead of reading this file, C3 goes RED.
-const SYNTHETIC_STAGER_BODY = [
-  'SOURCES="',
-  '$ROOT/docs|docs',
-  '$ROOT/zz-root|zz-root',
-  '"',
-  'EXCLUDE_FIND=(',
-  "  -not -path './zz-fixture-only/*'",
-  ')',
-  '',
-].join('\n');
+/** Default mode exits <rc>; `--list-inputs` falls through to `body` (by default the REAL stager). */
+const stubStager = (rc, body = REAL_STAGER) =>
+  `#!/usr/bin/env bash\nif [ "\${1:-}" != "--list-inputs" ]; then echo "stub stager: exit ${rc}" >&2; exit ${rc}; fi\n${body}`;
+
+/** The real stager with reviewer A's round-4 M6 and M7 edits applied (each anchor must match exactly once). */
+function stagerWithM6M7() {
+  const m6From = '$ROOT/PRPs/archive|PRPs/archive';
+  const m7After = "  -not -path './fiab/audit/*'\n)\n";
+  assert.equal(REAL_STAGER.split(m6From).length - 1, 1, 'M6 anchor ($ROOT/PRPs/archive|…) not found exactly once in the real stager');
+  assert.equal(REAL_STAGER.split(m7After).length - 1, 1, 'M7 anchor (end of EXCLUDE_FIND) not found exactly once in the real stager');
+  return REAL_STAGER
+    .replace(m6From, '${ROOT}/PRPs/archive|PRPs/archive')
+    .replace(m7After, `${m7After}EXCLUDE_FIND+=( -not -path './fiab/zz-new/*' )\n`);
+}
 
 function stepBodies() {
   const job = parseJobs(GTEXT)[ADVISORY_JOB];
@@ -854,15 +858,16 @@ test('(e) the stager step, EXECUTED: a failing stager fails the step with its ow
     assert.doesNotMatch(r.out, /::error::/, 'C0: no ::error:: when the stager passed');
   });
 
-  // C1: real SOURCES / EXCLUDE_FIND. docs/zz-real.md is a candidate;
-  // docs/fiab/audit/zz-ex.md is under a subtree the stager EXCLUDES, so it
-  // must never be blamed (the round-3 R7 defect).
+  // C1: the REAL stager's --list-inputs. docs/zz-real.md is a listed input
+  // and a directory -> named. docs/fiab/audit/zz-ex.md is under a subtree the
+  // stager EXCLUDES, so it is not listed and must never be blamed (the
+  // round-3 R7 defect).
   withFixture({ stager: stubStager(7), dirs: ['docs/zz-real.md', 'docs/fiab/audit/zz-ex.md'] }, (root) => {
     const r = runStep(root, stage);
     assert.equal(r.code, 7, `C1: the step must exit with the stager's own code:\n${r.out}`);
     assert.match(r.out, /::error::scripts\/csa-loom\/stage-copilot-corpus\.sh exited 7\./);
     assert.deepEqual(causeLines(r.out), [
-      '::error::may be the cause: docs/zz-real.md is a directory, named *.md, in a tree the stager hashes. Rename it or change its extension.',
+      '::error::may be the cause: docs/zz-real.md is a directory, and the stager lists it as an input (scripts/csa-loom/stage-copilot-corpus.sh --list-inputs). Rename it or change its extension.',
     ]);
     assert.ok(!r.out.includes('zz-ex.md'), `C1: blamed a path the stager excludes:\n${r.out}`);
   });
@@ -875,15 +880,17 @@ test('(e) the stager step, EXECUTED: a failing stager fails the step with its ow
     assert.deepEqual(causeLines(r.out), []);
   });
 
-  // C3: a stager with DIFFERENT roots and exclusions. The diagnostic must use
-  // THIS file's lists: it searches zz-root/ (a root the real stager does not
-  // have) and does not exclude fiab/audit/, but does exclude zz-fixture-only/.
-  // A transcribed copy of the real lists would miss zz-root/n.md and skip
-  // docs/fiab/audit/b.md.
-  withFixture({ stager: stubStager(9, SYNTHETIC_STAGER_BODY), dirs: ['docs/zz-fixture-only/a.md', 'docs/fiab/audit/b.md', 'zz-root/n.md'] }, (root) => {
+  // C3: the diagnostic uses EXACTLY what --list-inputs prints, nothing it
+  // derives itself. This stager lists zz-root/n.md and docs/fiab/audit/b.md
+  // (both directories, both named, in that order) and not
+  // docs/zz-fixture-only/a.md (a directory too, never named). A diagnostic
+  // that searched the tree itself would name a.md and, with the real
+  // exclusions, skip b.md.
+  const listed = "printf '%s\\0' zz-root/n.md docs/fiab/audit/b.md\nexit 0\n";
+  withFixture({ stager: stubStager(9, listed), dirs: ['docs/zz-fixture-only/a.md', 'docs/fiab/audit/b.md', 'zz-root/n.md'] }, (root) => {
     const r = runStep(root, stage);
     assert.equal(r.code, 9, `C3:\n${r.out}`);
-    assert.deepEqual(causeLines(r.out).map((l) => l.split(' ')[4]), ['docs/fiab/audit/b.md', 'zz-root/n.md']);
+    assert.deepEqual(causeLines(r.out).map((l) => l.split(' ')[4]), ['zz-root/n.md', 'docs/fiab/audit/b.md']);
   });
 
   // C4: the 20-line cap. 22 candidates -> 20 lines + a count of the other 2.
@@ -895,12 +902,29 @@ test('(e) the stager step, EXECUTED: a failing stager fails the step with its ow
     assert.match(r.out, /::error::2 more candidate path\(s\) not listed \(the first 20 are shown\)\./);
   });
 
-  // C5: the stager's SOURCES / EXCLUDE_FIND cannot be read -> no path named.
-  withFixture({ stager: stubStager(5, ''), dirs: ['docs/zz-real.md'] }, (root) => {
+  // C5: --list-inputs itself fails -> "cause not determined", NO path named,
+  // and the step still exits with the STAGER's code (not the lister's). The
+  // lister prints docs/zz-real.md (a real directory, so a candidate) BEFORE
+  // failing: a diagnostic that used a failed listing anyway would name it.
+  withFixture({ stager: stubStager(5, "printf '%s\\0' docs/zz-real.md\nexit 4\n"), dirs: ['docs/zz-real.md'] }, (root) => {
     const r = runStep(root, stage);
     assert.equal(r.code, 5, `C5:\n${r.out}`);
-    assert.match(r.out, /::error::could not read SOURCES \/ EXCLUDE_FIND from scripts\/csa-loom\/stage-copilot-corpus\.sh/);
+    assert.match(r.out, /::error::could not list the stager's inputs \(scripts\/csa-loom\/stage-copilot-corpus\.sh --list-inputs exited 4\); cause not determined/);
     assert.deepEqual(causeLines(r.out), []);
+  });
+
+  // C6: reviewer A's round-4 M6 + M7 edits, applied to the REAL stager:
+  //   M6  `${ROOT}/PRPs/archive` (the stager still hashes PRPs/archive)
+  //   M7  `EXCLUDE_FIND+=( -not -path './fiab/zz-new/*' )` (it now skips docs/fiab/zz-new)
+  // The round-4 parser of the script's text got both wrong; --list-inputs
+  // EXECUTES the edited roots and exclusions, so it reflects both. Must name
+  // PRPs/archive/zz-arch.md and must NOT name
+  // docs/fiab/zz-new/zz-n.md.
+  withFixture({ stager: stubStager(7, stagerWithM6M7()), dirs: ['PRPs/archive/zz-arch.md', 'docs/fiab/zz-new/zz-n.md'] }, (root) => {
+    const r = runStep(root, stage);
+    assert.equal(r.code, 7, `C6:\n${r.out}`);
+    assert.deepEqual(causeLines(r.out).map((l) => l.split(' ')[4]), ['PRPs/archive/zz-arch.md']);
+    assert.ok(!r.out.includes('zz-n.md'), `C6: named a path the M7-edited stager excludes:\n${r.out}`);
   });
 });
 
@@ -928,4 +952,133 @@ test('(e) the lint step, EXECUTED: a failing lint or a missing manifest fails th
     assert.equal(r.code, 3, `L2:\n${r.out}`);
     assert.equal(corpusLeft(root), '', 'L2: the EXIT trap must clean up on failure too');
   });
+});
+
+// ── (f) the STAGER's own contract: --list-inputs, and the default mode ──────
+//
+// Run on the REAL stager (copied into a throwaway tree, so ROOT is that tree),
+// under the same bash as (e). WITNESSES EXACTLY:
+//   (f1) `--list-inputs` exits 0, prints EXACTLY the expected inputs (the
+//        literal below: every *.md, directories named *.md included, under the
+//        four source roots, minus ./fiab/{parity-gap,prp,audit}/*), and
+//        changes NOTHING in the tree or in $TMPDIR (a full before/after
+//        snapshot: every path, its type, size and content hash);
+//   (f2) the DEFAULT mode's output, against an oracle computed here from the
+//        fixture's own bytes: the staged files (exact bytes), the
+//        .corpus-hashes.tsv lines (as a set -- `sort` order is
+//        locale-dependent), the .corpus-manifest.json (parsed; key order and
+//        whitespace are not compared), the staged eval sets, and the summary
+//        line, on a first run and on a no-change second run.
+// Not witnessed: writes outside the tree and $TMPDIR; the incremental
+// delete/change paths (the round-5 byte-identity proof in the PR covers them).
+const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
+
+/** { relPath: 'd' | 'l' | `f:<size>:<sha256>` } for everything under `root`. */
+function snapshot(root) {
+  const out = {};
+  const walk = (rel) => {
+    for (const name of readdirSync(join(root, rel))) {
+      const r = rel ? `${rel}/${name}` : name;
+      const st = lstatSync(join(root, r));
+      if (st.isSymbolicLink()) out[r] = 'l';
+      else if (st.isDirectory()) { out[r] = 'd'; walk(r); }
+      else out[r] = `f:${st.size}:${sha256(readFileSync(join(root, r)))}`;
+    }
+  };
+  walk('');
+  return out;
+}
+
+const STAGER_FIXTURE_FILES = {
+  'docs/ok.md': '# ok\n',
+  'docs/sub/deep.md': '# deep\n\nbody\n',
+  'docs/notes.txt': 'not markdown\n',
+  'docs/fiab/audit/skip-audit.md': '# excluded\n',
+  'docs/fiab/prp/skip-prp.md': '# excluded\n',
+  'docs/fiab/parity-gap/skip-gap.md': '# excluded\n',
+  'PRPs/active/a.md': '# a\n',
+  'PRPs/archive/b.md': '# b\n',
+  'PRPs/completed/csa-loom-pillar/c.md': '# c\n',
+  'PRPs/other/not-a-root.md': '# not a source root\n',
+  'content/evals/set.jsonl': '{"id":"x"}\n',
+  'content/evals/_schema.json': '{}\n',
+};
+/** What the stager reads from STAGER_FIXTURE_FILES: a LITERAL, not derived from the stager. */
+const EXPECTED_INPUT_FILES = ['PRPs/active/a.md', 'PRPs/archive/b.md', 'PRPs/completed/csa-loom-pillar/c.md', 'docs/ok.md', 'docs/sub/deep.md'];
+
+function stagerFixture(extraDirs = []) {
+  const root = mkdtempSync(join(tmpdir(), 'cc-stager-'));
+  const put = (rel, body) => {
+    mkdirSync(dirname(join(root, rel)), { recursive: true });
+    writeFileSync(join(root, rel), body);
+  };
+  put(STAGER_REL, REAL_STAGER);
+  for (const [rel, body] of Object.entries(STAGER_FIXTURE_FILES)) put(rel, body);
+  for (const d of extraDirs) mkdirSync(join(root, d), { recursive: true });
+  return root;
+}
+
+function runStager(root, args, tmp) {
+  // GIT_DIR points nowhere, so `git rev-parse HEAD` fails and sourceCommit is
+  // deterministically "unknown" whatever repo the temp dir happens to sit in.
+  const env = { ...process.env, TMPDIR: tmp, TMP: tmp, TEMP: tmp, GIT_DIR: join(root, '.no-such-git') };
+  const r = spawnSync(BASH, [`${root.replace(/\\/g, '/')}/${STAGER_REL}`, ...args], { cwd: root, env, encoding: 'buffer', timeout: 120000 });
+  assert.equal(r.error, undefined, `could not run ${BASH}: ${r.error}`);
+  return { code: r.status, stdout: r.stdout, stderr: r.stderr.toString('utf8') };
+}
+
+test('(f1) stage-copilot-corpus.sh --list-inputs prints exactly its inputs and writes NOTHING', { skip: SKIP_BEHAVIOUR }, () => {
+  // Breaks on: a listed path the stager excludes (docs/fiab/*/skip-*.md), a
+  // non-root path (PRPs/other), a non-.md file, a missing input, the
+  // directory-named-*.md input missing (docs/d.md: `find -name` matches it,
+  // and it is exactly the case the diagnostic exists for); and on ANY write --
+  // the corpus dir, a manifest, a mktemp file.
+  const root = stagerFixture(['docs/d.md']);
+  const tmp = mkdtempSync(join(tmpdir(), 'cc-stager-tmp-'));
+  try {
+    const before = snapshot(root);
+    const r = runStager(root, ['--list-inputs'], tmp);
+    assert.equal(r.code, 0, `--list-inputs exited ${r.code}: ${r.stderr}`);
+    const listed = r.stdout.toString('utf8').split('\0').filter(Boolean).sort();
+    assert.deepEqual(listed, [...EXPECTED_INPUT_FILES, 'docs/d.md'].sort());
+    assert.deepEqual(snapshot(root), before, '--list-inputs changed the tree');
+    assert.deepEqual(readdirSync(tmp), [], '--list-inputs wrote into $TMPDIR');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('(f2) stage-copilot-corpus.sh default mode: staged files, hashes, manifest and summary match an independent oracle', { skip: SKIP_BEHAVIOUR }, () => {
+  // Breaks on any change to what the default mode stages or records: a file
+  // dropped or added, a byte changed, a hash-line / manifest key losing its
+  // `<destsub>/` prefix, a wrong fileCount or sourceCommit, the eval sets not
+  // copied, or a changed summary line -- on a first run or a no-change rerun.
+  const root = stagerFixture();
+  const tmp = mkdtempSync(join(tmpdir(), 'cc-stager-tmp-'));
+  try {
+    const dest = join(root, CORPUS_REL);
+    const hashOf = Object.fromEntries(EXPECTED_INPUT_FILES.map((p) => [p, sha256(Buffer.from(STAGER_FIXTURE_FILES[p]))]));
+    const n = EXPECTED_INPUT_FILES.length;
+    const check = (run, summary) => {
+      const r = runStager(root, [], tmp);
+      assert.equal(r.code, 0, `${run}: default mode exited ${r.code}: ${r.stderr}`);
+      assert.equal(r.stdout.toString('utf8'), `${summary}\n`, `${run}: summary line`);
+      const staged = Object.entries(snapshot(dest)).filter(([p, t]) => t.startsWith('f:') && !p.startsWith('.corpus-') && !p.startsWith('evals/')).map(([p]) => p).sort();
+      assert.deepEqual(staged, [...EXPECTED_INPUT_FILES].sort(), `${run}: staged file set`);
+      for (const p of EXPECTED_INPUT_FILES) assert.equal(readFileSync(join(dest, p), 'utf8'), STAGER_FIXTURE_FILES[p], `${run}: bytes of ${p}`);
+      const tsv = readFileSync(join(dest, '.corpus-hashes.tsv'), 'utf8').split('\n').filter(Boolean).sort();
+      assert.deepEqual(tsv, EXPECTED_INPUT_FILES.map((p) => `${p}\t${hashOf[p]}`).sort(), `${run}: .corpus-hashes.tsv`);
+      assert.deepEqual(JSON.parse(readFileSync(join(dest, '.corpus-manifest.json'), 'utf8')), { sourceCommit: 'unknown', fileCount: n, files: hashOf }, `${run}: manifest`);
+      for (const e of ['set.jsonl', '_schema.json']) {
+        assert.equal(readFileSync(join(dest, 'evals', e), 'utf8'), STAGER_FIXTURE_FILES[`content/evals/${e}`], `${run}: staged eval ${e}`);
+      }
+    };
+    const tail = '(commit unknown) → apps/fiab-console/copilot-corpus/';
+    check('run 1', `staged corpus incrementally: copied=${n} skipped=0 deleted=0 total=${n} evals=2 ${tail}`);
+    check('run 2 (no change)', `staged corpus incrementally: copied=0 skipped=${n} deleted=0 total=${n} evals=2 ${tail}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
