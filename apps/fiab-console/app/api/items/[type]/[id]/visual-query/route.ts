@@ -28,10 +28,22 @@
  * Synapse path needs LOOM_SYNAPSE_WORKSPACE; if unset, the underlying client
  * throws a precise "Missing env var: LOOM_SYNAPSE_WORKSPACE" surfaced to the UI
  * MessageBar — never a "bind a Fabric workspace" gate.
+ *
+ * ITEM SCOPE FOR `synapse-serverless-sql-pool` — the same as the serverless SQL
+ * pool query route (`../../../synapse-serverless-sql-pool/[id]/query/route.ts`),
+ * because this route runs generated SQL on the same shared serverless endpoint:
+ *   - the caller is authorized on the route ITEM (`guardSqlPoolQueryItem`: read
+ *     roles accepted, 404 for an id naming no item) before the body is read;
+ *   - a TENANT ADMIN's generated SQL runs unchanged in the requested `database`;
+ *   - anyone else's passes the same classifier and lakehouse-root confinement
+ *     (`confineToWorkspaceLakehouses`), and runs in `master` on the SQL pool
+ *     editor's own pool with the `USE [master];` prefix, whatever `database`
+ *     the request names. The response's `generatedSql` is the text as compiled.
+ * The other engine types are unchanged by this.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import { pdpCheck } from '@/lib/auth/pdp/enforce';
 import {
   dedicatedTarget,
@@ -46,6 +58,14 @@ import { getUserSqlToken } from '@/lib/azure/sql-user-token-store';
 import { executeStatement, getWarehouse } from '@/lib/azure/databricks-client';
 import { compileGraph, type VqGraph, type SqlDialect } from '@/lib/editors/visual-query-compiler';
 import { isSqlLoginFailure, sqlLoginGateBody } from '@/lib/azure/sql-login-gate';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
+import type { WorkspaceItem } from '@/lib/types/workspace';
+import { readerTarget, readerBatch } from '@/app/api/items/lakehouse/_lib/query-reader';
+import {
+  guardSqlPoolQueryItem,
+  confineToWorkspaceLakehouses,
+  SQL_POOL_READER_POOL_PREFIX,
+} from '@/app/api/items/synapse-serverless-sql-pool/_lib/query-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -71,11 +91,8 @@ function describeSql(schema: string | undefined, table: string, dialect: SqlDial
   return dialect === 'tsql' ? `SELECT TOP 0 * FROM ${ref}` : `SELECT * FROM ${ref} LIMIT 0`;
 }
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ type: string; id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
-  const { type, id } = await ctx.params;
+export const POST = withSession<{ type: string; id: string }>(async (req: NextRequest, { session, params }) => {
+  const { type, id } = params;
   // PDP gate (default-off / shadow-ready). Visual query reads item data.
   const blocked = await pdpCheck(session, { level: 'item', id, itemType: type }, 'read');
   if (blocked) return blocked;
@@ -86,8 +103,21 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ type: stri
     );
   }
 
+  // The serverless SQL pool item: authorize the caller on the item first, the
+  // same guard as its query route (see the header).
+  const serverless = type === 'synapse-serverless-sql-pool';
+  let serverlessItem: WorkspaceItem | null = null;
+  if (serverless) {
+    const guard = await guardSqlPoolQueryItem(id);
+    if (guard.res) return guard.res;
+    serverlessItem = guard.ctx.item;
+  }
+  const admin = serverless && isTenantAdmin(session);
+
   const body = await req.json().catch(() => ({} as any));
   const dialect: SqlDialect = type === 'databricks-sql-warehouse' ? 'sparksql' : 'tsql';
+  // Read by the tenant-admin serverless target and the other engines only; a
+  // serverless caller who is not a tenant admin runs on `readerTarget` (master).
   const database = (body?.database || 'master').toString();
   const warehouseId = (body?.warehouseId || '').toString().trim();
   const catalog = body?.catalog ? String(body.catalog) : undefined;
@@ -114,6 +144,13 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ type: stri
   }
 
   const generatedSql = sql;
+
+  // Non-admin serverless: the generated text passes the query route's
+  // classifier and root confinement before anything runs.
+  if (serverless && !admin && serverlessItem) {
+    const refused = await confineToWorkspaceLakehouses(sql, serverlessItem);
+    if (refused) return refused;
+  }
 
   try {
     let result: QueryResult;
@@ -142,7 +179,11 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ type: stri
       }
       result = await executeQuery(dedicatedTarget(), sql);
     } else {
-      // synapse-serverless-sql-pool — honor the F10 data-access mode.
+      // synapse-serverless-sql-pool — honor the F10 data-access mode. A tenant
+      // admin runs in the requested database; anyone else in master on the SQL
+      // pool editor's own pool, with the `USE [master];` prefix.
+      const target = admin ? serverlessTarget(database) : readerTarget(SQL_POOL_READER_POOL_PREFIX);
+      const batch = admin ? sql : readerBatch(sql);
       const accessMode = await resolveAccessMode(id, type);
       if (accessMode === 'user') {
         const userToken = await getUserSqlToken(session.claims.oid);
@@ -157,9 +198,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ type: stri
             { status: 403 },
           );
         }
-        result = await executeQueryAsUser(serverlessTarget(database), sql, userToken, session.claims.oid);
+        result = await executeQueryAsUser(target, batch, userToken, session.claims.oid);
       } else {
-        result = await executeQuery(serverlessTarget(database), sql);
+        result = await executeQuery(target, batch);
       }
     }
 
@@ -188,4 +229,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ type: stri
       { status: 502 },
     );
   }
-}
+});

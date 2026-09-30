@@ -18,7 +18,11 @@
  * The cosmos mock answers the guard's typed item lookup ONLY for the item's
  * own type, the way Cosmos does, and the lakehouse listing only for the
  * workspace partition it was asked for, so a route that listed another
- * workspace's lakehouses would find none and refuse the in-root query.
+ * workspace's lakehouses would find none and refuse the in-root query. It
+ * also evaluates the listing's recycled-item predicate: a lakehouse whose
+ * `state._recycled` is set is dropped ONLY when the query text carries
+ * `NOT IS_DEFINED(c.state._recycled)`, so a listing that loses that predicate
+ * returns the recycled lakehouse and its root is accepted.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -37,7 +41,7 @@ vi.mock('@/lib/auth/feature-gate', async () => ({
 
 const db = vi.hoisted(() => ({
   item: null as any,
-  lakehouses: [] as Array<{ id: string }>,
+  lakehouses: [] as Array<{ id: string; state?: Record<string, unknown> }>,
   listThrows: false,
   listPartitions: [] as string[],
 }));
@@ -53,7 +57,10 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
             if (db.listThrows) throw new Error('cosmos unavailable');
             db.listPartitions.push(opts?.partitionKey);
             const inWorkspace = opts?.partitionKey === 'ws-1' && params['@w'] === 'ws-1';
-            return { resources: inWorkspace ? db.lakehouses : [] };
+            // Cosmos evaluates the predicate; this mock evaluates the one clause it is written against.
+            const excludesRecycled = /NOT IS_DEFINED\(c\.state\._recycled\)/.test(spec.query);
+            const live = db.lakehouses.filter((l) => !excludesRecycled || l.state?._recycled == null);
+            return { resources: inWorkspace ? live.map((l) => ({ id: l.id })) : [] };
           }
           const hit = db.item && params['@id'] === db.item.id && params['@t'] === db.item.itemType;
           return { resources: hit ? [db.item] : [] };
@@ -61,6 +68,14 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
       }),
     },
   }),
+}));
+
+// Not called by the route today: the guard reads workspace roles only. If a change made the
+// guard consult item-level grants, this mock answers as an item share would.
+const itemAccess = vi.hoisted(() => ({ resolveItemAccessByOid: vi.fn(async (..._a: any[]) => null as any) }));
+vi.mock('@/lib/auth/item-access', async () => ({
+  ...(await vi.importActual<any>('@/lib/auth/item-access')),
+  resolveItemAccessByOid: itemAccess.resolveItemAccessByOid,
 }));
 
 const storage = vi.hoisted(() => ({ resolveLakehouseStorage: vi.fn() }));
@@ -96,10 +111,17 @@ const POOL: any = { id: 'pool-1', itemType: 'synapse-serverless-sql-pool', works
 
 const LH1 = { abfss: 'abfss://gold@acct1.dfs.core.windows.net/lakehouses/sales-1', container: 'gold', root: 'lakehouses/sales-1' };
 const LH2 = { abfss: 'abfss://silver@acct1.dfs.core.windows.net/lakehouses/ops-2', container: 'silver', root: 'lakehouses/ops-2' };
+/** A recycled lakehouse's root: its files remain until purge, but it is not listed. */
+const LH3 = { abfss: 'abfss://gold@acct1.dfs.core.windows.net/lakehouses/old-3', container: 'gold', root: 'lakehouses/old-3' };
 const ROOTS: Record<string, any> = {
   'lh-1': { ok: true, bound: LH1 },
   'lh-2': { ok: true, bound: LH2 },
+  'lh-3': { ok: true, bound: LH3 },
 };
+/** Under LH3, the recycled lakehouse. */
+const IN_RECYCLED = 'https://acct1.dfs.core.windows.net/gold/lakehouses/old-3/Tables/orders';
+/** Under LH1, a live lakehouse in the same container as LH3. */
+const IN_FIRST = 'https://acct1.dfs.core.windows.net/gold/lakehouses/sales-1/Tables/orders';
 
 /** Under LH2, the SECOND listed lakehouse: a route that only checks the first root refuses it. */
 const IN_SECOND = 'https://acct1.dfs.core.windows.net/silver/lakehouses/ops-2/Tables/orders';
@@ -190,6 +212,25 @@ describe('item authorization', () => {
     expect(ranAnything()).toBe(0);
   });
 
+  it('an item-level share alone does not admit the caller: 404, nothing listed, nothing runs (breaks if the guard admits item grants)', async () => {
+    // The root set is every lakehouse in the item's workspace, which is right only for a
+    // caller with a workspace role (query-scope.ts, "THAT SET IS RIGHT ONLY BECAUSE ...").
+    // Here the workspace ladder refuses and an item share would admit; a guard that
+    // consulted item grants would return 200 and read the workspace's lakehouse roots.
+    guard.authorizeItemWorkspace.mockResolvedValue(
+      Response.json({ ok: false, error: 'item not found' }, { status: 404 }) as any,
+    );
+    itemAccess.resolveItemAccessByOid.mockResolvedValue({ item: { ...POOL }, role: 'ItemViewer', via: 'item-grant', canWrite: false });
+    const res = await POST(req({ sql: bulk(IN_SECOND) }), ctx());
+    expect(res.status).toBe(404);
+    expect(ranAnything()).toBe(0);
+    expect(db.listPartitions).toEqual([]);
+    expect(storage.resolveLakehouseStorage).not.toHaveBeenCalled();
+    // Positive half: the same query from a workspace member runs.
+    guard.authorizeItemWorkspace.mockResolvedValue(null as any);
+    expect((await POST(req({ sql: bulk(IN_SECOND) }), ctx())).status).toBe(200);
+  });
+
   it('a geo-dataset id is accepted: the geo editors post here with their own id (breaks if only the pool type is guarded)', async () => {
     db.item = { ...POOL, id: 'geo-1', itemType: 'geo-dataset' };
     const res = await POST(req({ sql: 'SELECT 1 AS a' }), ctx('geo-1'));
@@ -278,6 +319,22 @@ describe('a caller who is not a tenant admin', () => {
     await POST(req({ sql: 'SELECT 1 AS a', parameters: [{ name: 'p', value: 'x' }] }), ctx());
     expect(synapse.executeQuery).toHaveBeenCalledTimes(1);
     expect(synapse.executeQuery.mock.calls[0][3]).toEqual([]);
+  });
+
+  it('a recycled lakehouse contributes no root; a live one in the same container still does (breaks if the listing drops the recycled predicate)', async () => {
+    db.lakehouses = [{ id: 'lh-1' }, { id: 'lh-3', state: { _recycled: { at: '2026-09-01T00:00:00Z' } } }];
+    const refused = await POST(req({ sql: bulk(IN_RECYCLED) }), ctx());
+    // With the predicate gone the mock lists lh-3, its root resolves, and this is a 200.
+    expect(refused.status).toBe(403);
+    const j = await refused.json();
+    expect(j).toMatchObject({ code: 'query_location_outside_root', construct: IN_RECYCLED });
+    expect(j.remediation).not.toContain(LH3.abfss);
+    expect(storage.resolveLakehouseStorage.mock.calls.map((c: any[]) => c[0])).toEqual(['lh-1']);
+    expect(ranAnything()).toBe(0);
+    // Positive half, same listing: the live sibling's root is accepted and runs.
+    const ok = await POST(req({ sql: bulk(IN_FIRST) }), ctx());
+    expect(ok.status).toBe(200);
+    expect(synapse.executeQuery).toHaveBeenCalledTimes(1);
   });
 
   it('a lakehouse whose root cannot be confirmed contributes no root, and the reason says so', async () => {
