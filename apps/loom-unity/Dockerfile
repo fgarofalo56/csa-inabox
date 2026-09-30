@@ -264,7 +264,9 @@ RUN set -eu; \
     CLASSES="$(cd /build/classes && find . -type f | sort)"; \
     [ "${CLASSES}" = "./${REL}.class" ] || { echo "FATAL: the #3339 patch compiled to an unexpected class set (expected exactly ./${REL}.class): ${CLASSES}" >&2; exit 1; }; \
     javap -v -cp /build/classes io.unitycatalog.server.service.IcebergRestCatalogService | grep -q '#authorizeAny(#principal, #catalog, OWNER, USE_CATALOG)' || { echo "FATAL: the compiled #3339 class does not carry the scoped GET_CATALOG expression" >&2; exit 1; }; \
-    ! javap -c -p -cp /build/classes io.unitycatalog.server.service.IcebergRestCatalogService | grep -q 'SchemaService.listSchemas' || { echo "FATAL: the compiled #3339 class still calls SchemaService.listSchemas in-process; #3339 reads the schema repository, as upstream #1813 does" >&2; exit 1; }; \
+    JAVAP_V="$(javap -v -p -cp /build/classes io.unitycatalog.server.service.IcebergRestCatalogService)" || { echo "FATAL: javap could not read the compiled #3339 class, so the in-process-call check below cannot run" >&2; exit 1; }; \
+    [ -n "${JAVAP_V}" ] || { echo "FATAL: javap printed nothing for the compiled #3339 class" >&2; exit 1; }; \
+    ! printf '%s\n' "${JAVAP_V}" | grep -q 'SchemaService.listSchemas' || { echo "FATAL: the compiled #3339 class references SchemaService.listSchemas (a call or a method reference, read from the constant pool); #3339 reads the schema repository, as upstream #1813 does" >&2; exit 1; }; \
     jar --create --file /build/override/loom-uc-3339-iceberg-authz.jar -C /build/classes .; \
     ENTRIES="$(jar --list --file /build/override/loom-uc-3339-iceberg-authz.jar | grep -c '\.class$')"; \
     [ "${ENTRIES}" -eq 1 ] || { echo "FATAL: the #3339 overlay carries ${ENTRIES} classes, expected exactly 1" >&2; exit 1; }

@@ -76,7 +76,9 @@
  *   'regressed'      — anything else. Thrown.
  *
  * 'gated' (a 503 honest gate: the estate does not deploy the catalog) is the only
- * non-200 state that does not throw. The verdict string is written to the
+ * non-200 state that does not throw. No Console endpoint says ahead of the call
+ * whether the estate deploys the catalog, so a deployed-but-unbound catalog also
+ * lands here; failing that case is tracked in #4813. The verdict string is written to the
  * receipt so a human can see which it was.
  */
 import { test, expect, type Page, type APIResponse } from '@playwright/test';
@@ -226,7 +228,8 @@ test('federation precondition: Unity capabilities report a configured Unity back
     // DISCLOSED SKIP: the route reports `authorization` for the OSS backend only
     // (capabilities/route.ts), so there is no posture to assert on databricks.
     // The Iceberg data path below does not depend on this backend: it always
-    // calls the loom-unity iceberg-catalog app.
+    // calls the loom-unity iceberg-catalog app, and no Console endpoint reports
+    // that catalog's authorization mode — tracked in #4813.
     test.info().annotations.push({
       type: 'federation-auth-skipped',
       description: `backend=${body.backend}: the OSS authorization-posture check does not apply and was not run`,
@@ -315,27 +318,35 @@ test('Iceberg REST Catalog: namespaces list resolves through the native route', 
     // known 500 (lib/azure/iceberg-catalog-client.ts, listNamespacesResolved).
     expect(body.via, 'LIST-namespaces was served by the Unity-schemas FALLBACK, not the Iceberg route').toBe('irc');
     // The catalog image provisions the `default` namespace in the warehouse on
-    // boot. Breaks on a 200 whose list is EMPTY: the response filter removed
-    // every schema, i.e. the caller holds USE CATALOG but not the grant that
-    // makes `default` readable, and an external engine would see nothing.
+    // boot. Breaks on a 200 whose list lacks it. The route has no pre-gate: it
+    // keeps a schema only if the caller passes GET_SCHEMA on it (metastore or
+    // catalog OWNER, or USE CATALOG plus USE SCHEMA or OWNER on the schema), so a
+    // caller missing that grant gets 200 and an EMPTY list, never a 403
+    // (harness rows M5/M5b), and an external engine would see nothing.
     const names = (body.namespaces ?? []).map((ns: { name: string }) => ns.name);
-    expect(names, `LIST-namespaces answered 200 without the provisioned 'default' namespace: ${bodyText.slice(0, 300)}`).toContain('default');
+    expect(names, `LIST-namespaces answered 200 without the provisioned 'default' namespace — `
+      + `an empty list means the caller lacks a grant that makes 'default' readable `
+      + `(GET_SCHEMA on it): ${bodyText.slice(0, 300)}`).toContain('default');
   } else if (verdict === 'refused') {
     // Breaks the run on ANY 403 — the status the live estate returned for this
     // call after #4783 rolled (#3339), while the old 'pre-fix-403' verdict let
     // it through.
+    // The message names candidate sources only; this run does not establish
+    // which one produced the 403.
     throw new Error(
-      `The Iceberg catalog REFUSED the namespace list (403). The token exchange and transport `
-      + `worked; the catalog's authorization for LIST-namespaces denied the call.
+      `The namespace list answered 403. This run does not establish where the 403 came from.
 
 Upstream said: ${bodyText.slice(0, 600)}
 
 `
-      + `Upstream unitycatalog v0.5.0 gates this route on metastore OWNER; the loom-unity image `
-      + `carries a #3339 overlay that serves it with upstream #1813's policy (USE CATALOG, `
-      + `list filtered per schema). A 403 here means the deployed catalog image does not carry `
-      + `that overlay, or the Console's catalog grant is missing. The catalog's boot log states `
-      + `which (ICEBERG-LIST-NAMESPACES vs ICEBERG-LIST-NAMESPACES-DEFECT).`,
+      + `Candidate sources, not an exhaustive list: the catalog refusing the credential it was `
+      + `sent (an unexchanged or rejected bearer is also a 403); the /v1/config handshake the `
+      + `client performs before the list; or a catalog image without the #3339 namespace-list `
+      + `change, whose upstream route answers 403 to every caller that is not metastore OWNER. `
+      + `On an image with that change the route has no pre-gate: a caller without grants gets `
+      + `200 and an empty list, not 403. The iceberg-catalog boot log distinguishes the image `
+      + `state: ICEBERG-LIST-NAMESPACES (the change is on the server classpath) vs `
+      + `ICEBERG-LIST-NAMESPACES-DEFECT (it is not).`,
     );
   } else if (verdict === 'auth-upstream') {
     // A REAL failure — the federation path does not work — but a precisely
@@ -377,7 +388,8 @@ Upstream said: ${bodyText.slice(0, 600)}
     );
   }
   // Only 'gated' falls through: an estate that does not deploy the catalog says so
-  // with a 503 honest gate. Every other non-200 verdict has thrown above.
+  // with a 503 honest gate. Every other non-200 verdict has thrown above. A
+  // deployed catalog the Console failed to bind also answers 'gated'; #4813.
 });
 
 // ---------------------------------------------------------------------------

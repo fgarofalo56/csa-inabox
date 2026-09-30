@@ -30,10 +30,13 @@
 # the Console's live 403 (2026-09-29). The second change scopes it too, per #1813:
 # GET_SCHEMA, the schemas read from the repository, and the list filtered.
 #
-# Measured 2026-09-29 (LOOM_E2E_SKIP_BUILD=1 on each image): the image from
-# before #3339 fails 17 rows (D E F H H1 H2 J K N1 N2 N2b K2 M4 M4b M5 M5b A4);
-# the #4783 image, which carries only the first #3339 change, fails 6 (A4 H H1
-# H2 M5 M5b); this image passes all 42. Section M proves the fix did not open the surface
+# Measured 2026-09-29 (LOOM_E2E_SKIP_BUILD=1 on each image) with the 42-row
+# revision of this harness (commit 950f465): the image from before #3339 fails
+# 17 rows (D E F H H1 H2 J K N1 N2 N2b K2 M4 M4b M5 M5b A4); the #4783 image,
+# which carries only the first #3339 change, fails 6 (A4 H H1 H2 M5 M5b); the
+# image at 950f465 passes all 42. Rows H2b, Px, Pb and I3a were added after
+# that; this tree's image passes all 46, and the two older images were not
+# re-run against the 46-row revision. Section M proves the fix did not open the surface
 # to everyone: a second, registered principal with NO grants is still refused,
 # and both lists are filtered to nothing for it. Section P keeps the pre-fix
 # behaviour measured, on THIS image with the #3339 jar stripped.
@@ -317,6 +320,13 @@ esac
 # by the Dockerfile's javap check, not by this harness.
 check "H2 IRC    /v1/catalogs/loom/namespaces        [admin]  " "200" \
   "$(status "$UC_PORT" "$LISTNS_PATH" "$ADMIN")"
+# H2b: the owner's list is the real one too. Breaks on a 200 whose body is not
+# [["default"]] (an empty or error body under a 200).
+H2BODY="$(body "$UC_PORT" "$LISTNS_PATH" "$ADMIN")"
+case "$H2BODY" in
+  *'"namespaces":[["default"]]'*) check "H2b …and lists [[\"default\"]]                 [admin]  " "yes" "yes" ;;
+  *) check "H2b …and lists [[\"default\"]]                 [admin]  " "yes" "no ($H2BODY)" ;;
+esac
 
 echo "== J-L. the receipt: the Console's own principal reads the Iceberg surface =="
 # Breaks (-> 403) on the pre-fix image (metastore OWNER), and on the fixed image
@@ -508,6 +518,21 @@ if build_stripped "$PRE_IMAGE" loom-uc-3339-iceberg-authz.jar; then
   if start_control "$PRE" "$PRE_PORT" "$PRE_IMAGE" enable; then
     PRE_CONSOLE="$(exchange "$PRE_PORT" "$RAW")"
     PRE_ADMIN="$(docker exec "$PRE" sh -c 'cat /home/unitycatalog/etc/conf/token.txt' | tr -d '\r\n')"
+    # Px: P0 and P1 are authorization 403s only if the Console's bearer was
+    # exchanged; a raw or empty bearer is also a 403 (row C). Breaks (-> no) if
+    # the exchange on the stripped image returns nothing.
+    check "Px console token exchange succeeds on the stripped image" "yes" \
+      "$([ -n "$PRE_CONSOLE" ] && echo yes || echo no)"
+    # Pb: the boot banner reads the classpath the server boots from, not the jar
+    # on disk. This image still carries the #3339 jar file but does not load it,
+    # so it must announce the upstream route. Breaks (-> scoped banner) if the
+    # banner keys on the file again.
+    PRE_LOG="$(docker logs "$PRE" 2>&1)"
+    case "$PRE_LOG" in
+      *"ICEBERG-LIST-NAMESPACES-DEFECT"*) check "Pb stripped image announces the upstream route" "yes" "yes" ;;
+      *"served by this image's #3339 overlay"*) check "Pb stripped image announces the upstream route" "yes" "no (scoped banner)" ;;
+      *) check "Pb stripped image announces the upstream route" "yes" "no (no banner)" ;;
+    esac
     # P0: proves the strip took. Breaks (-> 200) if the #3339 class is still on
     # the classpath, in which case P1-P3 would not be testing upstream's route.
     check "P0 strip took: /v1/config is upstream's again  [console]" "403" \
@@ -551,6 +576,10 @@ if build_stripped "$NOOVL_IMAGE" loom-uc-3339-iceberg-authz.jar loom-uc-1603-fix
     check "I2 upstream route, #1603 ALSO stripped      [admin]  " "500" \
       "$(status "$NOOVL_PORT" "$LISTNS_PATH" "$NOOVL_ADMIN")"
     NOOVL_CONSOLE="$(exchange "$NOOVL_PORT" "$RAW")"
+    # I3a: I3's 500 is the permission route's own defect only if the bearer was
+    # exchanged. Breaks (-> no) if the exchange returns nothing.
+    check "I3a console token exchange succeeds on the both-stripped image" "yes" \
+      "$([ -n "$NOOVL_CONSOLE" ] && echo yes || echo no)"
     check "I3 …and #1603 IS back once stripped (500)  [console]" "500" \
       "$(status "$NOOVL_PORT" /api/2.1/unity-catalog/permissions/catalog/unity "$NOOVL_CONSOLE")"
   else

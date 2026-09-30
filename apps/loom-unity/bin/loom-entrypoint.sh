@@ -806,8 +806,9 @@ announce_warehouse_plan() {
 # LIST-namespaces: what this image does, stated on every boot so a 403 or a 500
 # on that route is never rediscovered from a browser.
 #
-# UPSTREAM (v0.5.0 and v0.6.0, the newest release on Maven Central, 2026-08-19)
-# serves GET <irc>/v1/catalogs/<wh>/namespaces behind
+# UPSTREAM (v0.5.0, measured; v0.6.0, the newest release on Maven Central on
+# 2026-09-29, source read, not run) serves GET <irc>/v1/catalogs/<wh>/namespaces
+# behind
 # `#authorize(#principal, #metastore, OWNER)`, so it answers:
 #   * 403 PERMISSION_DENIED to EVERY caller that is not metastore OWNER — the
 #     Console included, since the permissions API cannot grant OWNER. Measured
@@ -828,28 +829,39 @@ announce_warehouse_plan() {
 # the body is skipped and the route answers 200.
 #
 # THIS IMAGE (#3339, Dockerfile stage 1b) replaces that route with upstream
-# #1813's: USE CATALOG on the catalog plus USE SCHEMA (or OWNER) per schema, the
-# schemas read from the repository directly, and the list filtered to what the
-# caller may read — a caller with no grants gets 200 and an empty list. The plan
-# below keys on the overlay jar being present. That is sufficient because this
-# script and the jar ship in the same image, and the build refuses to produce a
-# jar whose class still makes the in-process call (Dockerfile stage 1b).
+# #1813's: no pre-gate; the schemas are read from the repository directly and
+# each is kept only if the caller passes GET_SCHEMA on it (metastore or catalog
+# OWNER, or USE CATALOG plus USE SCHEMA or OWNER on the schema). A caller with
+# no grants gets 200 and an empty list.
+#
+# The plan below keys on the overlay jar being on the classpath file the server
+# boots from (bin/start-uc-server reads ${UC_HOME}/server/target/classpath), not
+# on the jar existing on disk: an image can carry the file and not load it (the
+# harness's section-P images do exactly that). What it cannot see is classpath
+# ORDER — the Dockerfile asserts the overlay is prepended ahead of the base
+# classes and resolves the class from that classpath at build time, so for an
+# image built by that Dockerfile, on the classpath means in effect.
 iceberg_list_ns_plan() {
-  if [ -f "${UC_HOME}/lib-loom-override/loom-uc-3339-iceberg-authz.jar" ]; then
-    echo "scoped"
-  else
-    echo "upstream-owner-gate"
+  ilp_jar="${UC_HOME}/lib-loom-override/loom-uc-3339-iceberg-authz.jar"
+  ilp_cp="${UC_HOME}/server/target/classpath"
+  # Whole-entry match on the ':'-joined file, so a jar whose path merely contains
+  # this one's does not count.
+  if [ -f "${ilp_jar}" ] && [ -f "${ilp_cp}" ]; then
+    case ":$(tr -d '\r\n' < "${ilp_cp}"):" in
+      *":${ilp_jar}:"*) echo "scoped"; return 0 ;;
+    esac
   fi
+  echo "upstream-owner-gate"
 }
 
 announce_iceberg_list_ns() {
   [ -n "$(unity_warehouse)" ] || return 0
   case "$(iceberg_list_ns_plan)" in
     scoped)
-      echo "[loom-unity] ICEBERG-LIST-NAMESPACES: GET <iceberg>/v1/catalogs/<warehouse>/namespaces is served by this image's #3339 overlay (upstream #1813 policy): it needs USE CATALOG on the catalog plus USE SCHEMA or OWNER per schema, and answers 200 with the list filtered to the schemas the caller may read (a caller with no grants gets an empty list). The unpatched upstream route answers 403 to every caller that is not metastore OWNER and 500 'Authorization filter not initialized' to the metastore owner. See docs/fiab/parity/external-engine-federation.md." >&2
+      echo "[loom-unity] ICEBERG-LIST-NAMESPACES: GET <iceberg>/v1/catalogs/<warehouse>/namespaces is served by this image's #3339 overlay (upstream #1813 policy): there is no pre-gate; it answers 200 with the list filtered to the schemas the caller may read, keeping a schema only if the caller is metastore or catalog OWNER or holds USE CATALOG plus USE SCHEMA or OWNER on it (a caller with no grants gets an empty list). The unpatched upstream route answers 403 to every caller that is not metastore OWNER and 500 'Authorization filter not initialized' to the metastore owner. See docs/fiab/parity/external-engine-federation.md." >&2
       ;;
     *)
-      echo "[loom-unity] ICEBERG-LIST-NAMESPACES-DEFECT: the #3339 overlay jar is absent (${UC_HOME}/lib-loom-override/loom-uc-3339-iceberg-authz.jar), so GET <iceberg>/v1/catalogs/<warehouse>/namespaces is upstream's: it answers 403 to every caller that is not metastore OWNER (the Console included) and 500 'Authorization filter not initialized' to the metastore owner. The 500 is an UPSTREAM defect in unitycatalog v0.5.0 AND v0.5.1 that fires whenever server.authorization is enabled — IcebergRestCatalogService.listNamespaces reaches SchemaService.listSchemas in-process, under a request context where UnityAccessDecorator never installed the RESULT_FILTER attribute that AuthorizedService.applyResponseFilter requires. It is NOT caused by the #1603 overlay this image applies: measured with the overlay removed and authorization still enabled, the same call returns the same 500. The same call with authorization DISABLED returns 200. apps/loom-unity/Dockerfile asserts that jar, so this image was not built from it. See docs/fiab/parity/external-engine-federation.md." >&2
+      echo "[loom-unity] ICEBERG-LIST-NAMESPACES-DEFECT: the #3339 overlay jar (${UC_HOME}/lib-loom-override/loom-uc-3339-iceberg-authz.jar) is not on the server classpath (${UC_HOME}/server/target/classpath), so GET <iceberg>/v1/catalogs/<warehouse>/namespaces is upstream's: it answers 403 to every caller that is not metastore OWNER (the Console included) and 500 'Authorization filter not initialized' to the metastore owner. The 500 is an UPSTREAM defect in unitycatalog v0.5.0 AND v0.5.1 that fires whenever server.authorization is enabled — IcebergRestCatalogService.listNamespaces reaches SchemaService.listSchemas in-process, under a request context where UnityAccessDecorator never installed the RESULT_FILTER attribute that AuthorizedService.applyResponseFilter requires. It is NOT caused by the #1603 overlay this image applies: measured with the overlay removed and authorization still enabled, the same call returns the same 500. The same call with authorization DISABLED returns 200. apps/loom-unity/Dockerfile asserts that jar and its classpath entry, so this image was not built from it, or its classpath was changed after the build. See docs/fiab/parity/external-engine-federation.md." >&2
       ;;
   esac
 }
