@@ -30,10 +30,12 @@ FROM ubuntu:22.04
 # The build FAILS loudly via `sha256sum -c` if the downloaded tarball does not
 # match. Both are overridable at build time, e.g.:
 #   az acr build --build-arg RUNNER_VERSION=2.x.y --build-arg RUNNER_SHA256=<hex> ...
-# For an arm64 build, pass the matching linux-arm64 hash, e.g. v2.328.0:
-#   RUNNER_SHA256=b801b9809c4d9301932bccadf57ca13533073b2aa9fa9b8e625a8db905b5d8eb
-ARG RUNNER_VERSION=2.328.0
-ARG RUNNER_SHA256=01066fad3a2893e63e6ca880ae3a1fad5bf9329d60e77ee15f2b97c148c3cd4e
+# For an arm64 build, pass the matching linux-arm64 hash, e.g. v2.337.0:
+#   RUNNER_SHA256=9b1dc70626422526e3c94767cf024896beb15da5342a3f4819bf2feac13e0393
+# GitHub refuses registration below a moving minimum runner version. On
+# 2026-09-29 that minimum was 2.329.0, and a 2.328.0 image could not register.
+ARG RUNNER_VERSION=2.337.0
+ARG RUNNER_SHA256=70920811a4f8ad4328818682bca5c6469c1c942fab52448868071d0063816613
 ARG TARGETARCH=amd64
 
 ENV DEBIAN_FRONTEND=noninteractive \
