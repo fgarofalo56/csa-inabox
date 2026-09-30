@@ -101,6 +101,12 @@ describe('SynapseServerlessSqlEditor — query scope', () => {
     const intents = Array.from(document.querySelectorAll('[data-intent]')).map((n) => n.getAttribute('data-intent'));
     expect(intents).toContain('warning');
     expect(intents).not.toContain('error');
+    // A failed run opens the Messages tab, so the Results-tab caption renders
+    // only after the user switches back. Breaks if the caption keeps
+    // "Query failed" for a refusal.
+    fireEvent.click(screen.getByRole('tab', { name: /^Results/ }));
+    await waitFor(() => expect(document.body.textContent).toContain('Query not run — see the'), { timeout: 5000 });
+    expect(document.body.textContent).not.toContain('Query failed');
   });
 
   it('keeps a query that ran and failed as an error, "Query failed", with no remediation line', async () => {
@@ -113,6 +119,10 @@ describe('SynapseServerlessSqlEditor — query scope', () => {
     expect(text).not.toContain('What to do:');
     const intents = Array.from(document.querySelectorAll('[data-intent]')).map((n) => n.getAttribute('data-intent'));
     expect(intents).toContain('error');
+    // Breaks if the Results-tab caption says "Query not run" for every failure.
+    fireEvent.click(screen.getByRole('tab', { name: /^Results/ }));
+    await waitFor(() => expect(document.body.textContent).toContain('Query failed — see the'), { timeout: 5000 });
+    expect(document.body.textContent).not.toContain('Query not run');
   });
 
   it('opens on SQL the route accepts from a caller who is not a tenant admin', async () => {

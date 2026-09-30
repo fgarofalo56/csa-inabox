@@ -184,33 +184,39 @@ export async function workspaceLakehouseRoots(workspaceId: string): Promise<Work
   return out;
 }
 
-function outsideRemediation(roots: WorkspaceLakehouseRoots): string {
+function outsideRemediation(roots: WorkspaceLakehouseRoots, surface: QueryScopeSurface): string {
   const shown = roots.bounds.slice(0, ROOTS_SHOWN).map((b) => b.abfss);
   const more = roots.bounds.length > shown.length ? ` (and ${roots.bounds.length - shown.length} more)` : '';
   const where = shown.length
     ? `Read files under a lakehouse root in this workspace: ${shown.join(', ')}${more}, `
       + 'or the https://<account>.dfs.<suffix>/<container>/<root>/ form of one. '
-    : 'No lakehouse in this workspace has a storage root this editor can confirm. ';
+    : `No lakehouse in this workspace has a storage root ${surface.place} can confirm. `;
   return where + 'To read a lakehouse in another workspace, open that lakehouse and query it from its SQL tab.';
 }
 
-function outsideReason(roots: WorkspaceLakehouseRoots): string {
+function outsideReason(roots: WorkspaceLakehouseRoots, surface: QueryScopeSurface): string {
   const notes: string[] = [];
   if (roots.unconfirmed > 0) {
     notes.push(`${roots.unconfirmed} lakehouse${roots.unconfirmed === 1 ? '' : 's'} in this workspace could not be confirmed and ${roots.unconfirmed === 1 ? 'was' : 'were'} not counted`);
   }
   if (roots.truncated) notes.push(`only the first ${MAX_LAKEHOUSES} lakehouses were checked`);
-  const base = 'it is not inside the storage root of any lakehouse in this workspace that this editor could confirm';
+  const base = `it is not inside the storage root of any lakehouse in this workspace that ${surface.place} could confirm`;
   return notes.length ? `${base} (${notes.join('; ')})` : base;
 }
 
 /**
  * Confine a non-admin caller's SQL, or return the response that refuses it.
  * Roots are resolved only when the query names a location, so a metadata
- * query never waits on them.
+ * query never waits on them. `surface` words the refusals; the Direct Lake
+ * raw-SQL path (`app/api/items/semantic-model/_lib/direct-lake-scope.ts`)
+ * passes its own, and the rules are the same.
  */
-export async function confineToWorkspaceLakehouses(sqlText: string, item: WorkspaceItem): Promise<NextResponse | null> {
-  const analysis = analyzeLakehouseQuery(sqlText, { database: 'master', surface: SQL_POOL_EDITOR });
+export async function confineToWorkspaceLakehouses(
+  sqlText: string,
+  item: WorkspaceItem,
+  surface: QueryScopeSurface = SQL_POOL_EDITOR,
+): Promise<NextResponse | null> {
+  const analysis = analyzeLakehouseQuery(sqlText, { database: 'master', surface });
   if (!analysis.ok) return refusalResponse(analysis);
   if (analysis.locations.length === 0) return null;
 
@@ -236,7 +242,7 @@ export async function confineToWorkspaceLakehouses(sqlText: string, item: Worksp
       { status: 409 },
     );
   }
-  const opts = { surface: SQL_POOL_EDITOR, outside: outsideReason(roots), remediation: outsideRemediation(roots) };
+  const opts = { surface, outside: outsideReason(roots, surface), remediation: outsideRemediation(roots, surface) };
   for (const location of analysis.locations) {
     const confined = confineQueryLocationToRoots(location, roots.bounds, opts);
     if (!confined.ok) return refusalResponse(confined);
