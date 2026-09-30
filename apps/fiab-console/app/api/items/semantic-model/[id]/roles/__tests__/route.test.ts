@@ -52,7 +52,7 @@ const updateOwnedItemMock = vi.fn(
   },
 );
 vi.mock('@/app/api/items/_lib/item-crud', () => ({
-  loadOwnedItem: (...a: any[]) => loadOwnedItemMock(...(a as [string, string, string])),
+  loadOwnedItem: (...a: any[]) => loadOwnedItemMock(...(a as [string, string])),
   updateOwnedItem: (...a: any[]) => updateOwnedItemMock(...(a as [string, string, string, any])),
 }));
 
@@ -91,7 +91,24 @@ vi.mock('@/lib/azure/synapse-sql-client', async (importOriginal) => ({
 
 vi.mock('@/lib/azure/databricks-client', () => ({
   executeStatement: vi.fn(async () => ({ columns: [], rows: [] }) as any),
+  // Mirrors the real gate: only the workspace host decides it.
+  databricksConfigGate: () => (process.env.LOOM_DATABRICKS_HOSTNAME ? null : { missing: 'LOOM_DATABRICKS_HOSTNAME' }),
 }));
+
+// #3744 — the warehouse is produced by the platform resolver; the REAL error
+// class and body shaper are kept so the route's instanceof branch is real.
+const resolveWarehouseMock = vi.fn(async () => 'wh-resolved');
+const withResolvedMock = vi.fn(async (fn: (id: string) => Promise<unknown>) => fn(await resolveWarehouseMock()));
+vi.mock('@/lib/azure/databricks-sql-warehouse', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/azure/databricks-sql-warehouse')>('@/lib/azure/databricks-sql-warehouse');
+  return {
+    ...actual,
+    resolveWarehouseIdOrThrow: (...a: unknown[]) => resolveWarehouseMock(...(a as [])),
+    // #4776 — statements now run through the self-healing wrapper; it resolves
+    // through the SAME mock so a rejected resolution still reaches the route.
+    withResolvedWarehouse: (fn: (id: string) => Promise<unknown>) => withResolvedMock(fn),
+  };
+});
 
 import { GET, PUT, POST } from '../route';
 
@@ -151,6 +168,9 @@ beforeEach(() => {
   vi.stubEnv('LOOM_SYNAPSE_DEDICATED_POOL', 'loompool');
   vi.stubEnv('LOOM_SYNAPSE_WORKSPACE', 'syn-loom');
   vi.stubEnv('LOOM_DATABRICKS_SQL_WAREHOUSE_ID', '');
+  vi.stubEnv('LOOM_DATABRICKS_HOSTNAME', '');
+  resolveWarehouseMock.mockResolvedValue('wh-resolved');
+  withResolvedMock.mockImplementation(async (fn: (id: string) => Promise<unknown>) => fn(await resolveWarehouseMock()));
 });
 afterEach(() => vi.unstubAllEnvs());
 
@@ -282,5 +302,111 @@ describe('#2649 controls — the fix must not rewrite ids it has no business tou
     getSessionMock.mockReturnValueOnce(null as any);
     const res = await GET(getReq(LOOM_ID), params(LOOM_ID));
     expect(res.status).toBe(401);
+  });
+});
+
+describe('#3744 — a bound Databricks workspace is a native RLS endpoint (the warehouse is produced)', () => {
+  beforeEach(() => {
+    vi.stubEnv('LOOM_SYNAPSE_DEDICATED_POOL', '');
+    vi.stubEnv('LOOM_SYNAPSE_WORKSPACE', '');
+    vi.stubEnv('LOOM_DATABRICKS_HOSTNAME', 'adb-1.azuredatabricks.net');
+  });
+
+  it('GET picks databricks with the hostname bound and NO warehouse env', async () => {
+    seedItem();
+    const res = await GET(getReq(LOOM_ID), params(LOOM_ID));
+    // Breaks if hasDbx is reverted to env-only: backend would be 'none' → 501.
+    expect(res.status).toBe(200);
+    expect((await res.json()).backend).toBe('databricks');
+  });
+
+  // PR #4776 — Unity Catalog (the ROW FILTER target) is not in Azure Government,
+  // so `auto` must not infer Databricks there. Breaks if `&& !isGovCloud()` is
+  // dropped from the auto branch: the same env as the test above yields
+  // 200 + backend 'databricks' instead of the 501 native gate.
+  it('Gov (LOOM_CLOUD=gcc-high): auto does NOT pick databricks from a bound workspace', async () => {
+    vi.stubEnv('LOOM_CLOUD', 'gcc-high');
+    seedItem();
+    const res = await GET(getReq(LOOM_ID), params(LOOM_ID));
+    const j = await res.json();
+    expect(j.backend).not.toBe('databricks');
+    expect(res.status).toBe(501);
+  });
+
+  it('Gov (LOOM_CLOUD=il5): auto does NOT pick databricks even with a warehouse pin', async () => {
+    vi.stubEnv('LOOM_CLOUD', 'il5');
+    vi.stubEnv('LOOM_DATABRICKS_SQL_WAREHOUSE_ID', 'wh-pinned');
+    seedItem();
+    const res = await GET(getReq(LOOM_ID), params(LOOM_ID));
+    expect((await res.json()).backend).not.toBe('databricks');
+    expect(res.status).toBe(501);
+  });
+
+  it('Gov control: an EXPLICIT LOOM_SEMANTIC_RLS_BACKEND=databricks is still honoured', async () => {
+    // Pins the guard's scope to `auto`: breaks if it is moved onto hasDbx itself.
+    vi.stubEnv('LOOM_CLOUD', 'gcc-high');
+    vi.stubEnv('LOOM_SEMANTIC_RLS_BACKEND', 'databricks');
+    seedItem();
+    const res = await GET(getReq(LOOM_ID), params(LOOM_ID));
+    expect(res.status).toBe(200);
+    expect((await res.json()).backend).toBe('databricks');
+  });
+
+  it('PUT deploys on the RESOLVED warehouse id', async () => {
+    seedItem();
+    const { executeStatement } = await import('@/lib/azure/databricks-client');
+    const res = await PUT(putReq(LOOM_ID, { roles: [{
+      name: 'West', modelPermission: 'read',
+      tablePermissions: [{ name: 'dbo.Sales', filterExpression: '[Region] = "West"' }],
+      members: [{ memberName: 'ops@contoso.com' }],
+    }] }), params(LOOM_ID));
+    expect(res.status).toBe(200);
+    // Breaks if the route reads process.env again: it would pass '' as the warehouse.
+    expect((executeStatement as any).mock.calls[0][0]).toBe('wh-resolved');
+  });
+
+  it('#4776: each DDL step runs through the self-healing wrapper (a re-resolved id reaches executeStatement)', async () => {
+    seedItem();
+    const { executeStatement } = await import('@/lib/azure/databricks-client');
+    // The wrapper re-resolved after the first id turned out to be gone.
+    withResolvedMock.mockImplementation(async (fn: (id: string) => Promise<unknown>) => fn('wh-healed'));
+    const res = await PUT(putReq(LOOM_ID, { roles: [{
+      name: 'West', modelPermission: 'read',
+      tablePermissions: [{ name: 'dbo.Sales', filterExpression: '[Region] = "West"' }],
+      members: [{ memberName: 'ops@contoso.com' }],
+    }] }), params(LOOM_ID));
+    expect(res.status).toBe(200);
+    // Breaks if the loop calls executeStatement with the id it resolved up front
+    // ('wh-resolved') instead of going through withResolvedWarehouse.
+    const ids = (executeStatement as any).mock.calls.map((c: unknown[]) => c[0]);
+    expect(ids.length).toBeGreaterThan(0);
+    expect(new Set(ids)).toEqual(new Set(['wh-healed']));
+  });
+
+  it('#4776: test-as-role runs its SELECT through the self-healing wrapper', async () => {
+    seedItem([{ name: 'West', members: [], tablePermissions: [{ table: 'Sales', filterExpression: '[Region] = "West"' }] }]);
+    const { executeStatement } = await import('@/lib/azure/databricks-client');
+    withResolvedMock.mockImplementation(async (fn: (id: string) => Promise<unknown>) => fn('wh-healed'));
+    const res = await POST(testReq(LOOM_ID, { roleName: 'West', effectiveUserName: 'ops@contoso.com' }), params(LOOM_ID));
+    expect(res.status).toBe(200);
+    // Breaks if the SELECT goes back to executeStatement(await resolveWarehouseIdOrThrow(), …): 'wh-resolved'.
+    expect((executeStatement as any).mock.calls.map((c: unknown[]) => c[0])).toEqual(['wh-healed']);
+  });
+
+  it('PUT reports a classified resolution failure (403 permission), roles still persisted', async () => {
+    seedItem();
+    const { WarehouseResolutionError } = await import('@/lib/azure/databricks-sql-warehouse');
+    resolveWarehouseMock.mockRejectedValueOnce(new WarehouseResolutionError({
+      kind: 'permission', step: 'create', status: 403, message: 'refused', remediation: 'grant allow-cluster-create', entitlement: 'allow-cluster-create',
+    }));
+    const res = await PUT(putReq(LOOM_ID, { roles: [{
+      name: 'West', modelPermission: 'read',
+      tablePermissions: [{ name: 'dbo.Sales', filterExpression: '[Region] = "West"' }],
+      members: [{ memberName: 'ops@contoso.com' }],
+    }] }), params(LOOM_ID));
+    // Breaks if the failure is swallowed into per-step "FAILED" lines under a 200.
+    expect(res.status).toBe(403);
+    const j = await res.json();
+    expect(j).toMatchObject({ ok: false, kind: 'permission', entitlement: 'allow-cluster-create', persisted: true });
   });
 });

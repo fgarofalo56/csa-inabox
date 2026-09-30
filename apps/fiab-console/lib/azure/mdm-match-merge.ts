@@ -30,6 +30,7 @@
  */
 
 import { executeStatement, databricksConfigGate } from './databricks-client';
+import { resolveWarehouseIdOrThrow } from './databricks-sql-warehouse';
 
 export type SurvivorshipStrategy = 'most-recent' | 'most-complete' | 'source-priority' | 'max' | 'min';
 export type MatchType = 'exact' | 'fuzzy';
@@ -74,18 +75,20 @@ export const SURVIVORSHIP_STRATEGIES: SurvivorshipStrategy[] = [
 ];
 export const MATCH_TYPES: MatchType[] = ['exact', 'fuzzy'];
 
-/** Honest gate: MDM runs on the workspace Databricks SQL Warehouse. */
+/**
+ * Honest gate: MDM runs on the workspace Databricks SQL Warehouse. Only the
+ * WORKSPACE can be missing — the warehouse is produced by the Console
+ * (`resolveWarehouseIdOrThrow`, #3744), and a failed resolution throws its
+ * classified cause at call time rather than reading as "not configured".
+ */
 export function mdmConfigGate(): { missing: string } | null {
   const g = databricksConfigGate();
   if (g) return g;
-  if (!process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID) return { missing: 'LOOM_DATABRICKS_SQL_WAREHOUSE_ID' };
   return null;
 }
 
-function warehouse(explicit?: string): string {
-  const w = (explicit || process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID || '').trim();
-  if (!w) throw new Error('No Databricks SQL Warehouse — set LOOM_DATABRICKS_SQL_WAREHOUSE_ID');
-  return w;
+function warehouse(explicit?: string): Promise<string> {
+  return resolveWarehouseIdOrThrow(explicit);
 }
 
 function safeIdent(seg: string): string {
@@ -167,7 +170,7 @@ LIMIT ${Math.max(1, Math.floor(limit))}`;
 /** Run match → scored candidate pairs (real Spark SQL on the warehouse). */
 export async function runMatch(model: MdmModel, minScore = 80, warehouseId?: string): Promise<{ sql: string; candidates: MatchCandidate[] }> {
   const sql = buildMatchSql(model, minScore);
-  const r = await executeStatement(warehouse(warehouseId), sql, model.catalog, model.schema);
+  const r = await executeStatement(await warehouse(warehouseId), sql, model.catalog, model.schema);
   const idx = (n: string) => r.columns.findIndex((c) => c.toLowerCase() === n);
   const ia = idx('id_a'), ib = idx('id_b'), sa = idx('source_a'), sb = idx('source_b'), sc = idx('score');
   const candidates = r.rows.map((row) => ({
@@ -343,7 +346,7 @@ export interface MdmMergeResult {
 
 /** Execute the survivorship merge → write golden records to the Delta table. */
 export async function runMerge(model: MdmModel, warehouseId?: string, crosswalk: CrosswalkPair[] = []): Promise<MdmMergeResult> {
-  const wh = warehouse(warehouseId);
+  const wh = await warehouse(warehouseId);
   const sql = buildGoldenRecordSql(model, crosswalk);
   await executeStatement(wh, sql, model.catalog, model.schema);
   const G = fq(model.goldenTable, model.catalog, model.schema);
@@ -369,7 +372,7 @@ export interface GoldenRecordPage {
 export async function listGoldenRecords(model: MdmModel, limit = 200, warehouseId?: string): Promise<GoldenRecordPage> {
   const G = fq(model.goldenTable, model.catalog, model.schema);
   const r = await executeStatement(
-    warehouse(warehouseId),
+    await warehouse(warehouseId),
     `SELECT * FROM ${G} LIMIT ${Math.max(1, Math.floor(limit))}`,
     model.catalog,
     model.schema,

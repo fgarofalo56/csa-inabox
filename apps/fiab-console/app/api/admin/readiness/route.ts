@@ -21,7 +21,8 @@
  */
 import { NextResponse } from 'next/server';
 import { withCapability } from '@/lib/api/route-toolkit';
-import { GATES, allGateStatuses } from '@/lib/gates/registry';
+import { GATES, allGateStatuses, gateAdminDiagnostic } from '@/lib/gates/registry';
+import { runRuntimeProducers } from '@/lib/admin/gate-registry';
 import { buildReadiness, GATE_PROBE_MAP, type ProbeLite } from '@/lib/admin/readiness';
 import { getOrComputeCached } from '@/lib/azure/query-result-cache';
 import { detectLoomCloud } from '@/lib/azure/cloud-endpoints';
@@ -79,22 +80,34 @@ async function collectProbes(refresh: boolean): Promise<{ probes: ProbeLite[]; p
 
 export const GET = withCapability('admin.env-config', 'Admin', async (req) => {
   const refresh = ['1', 'true'].includes((req.nextUrl.searchParams.get('refresh') || '').toLowerCase());
-  const statuses = allGateStatuses();
-  const [{ probes, probeError, stale }, sharedRoots] = await Promise.all([
+  // #4776 — run the runtime producers in THIS replica (bounded, in parallel with
+  // the probes) BEFORE reading gate statuses: the produced-value store is
+  // per-process, and the probe result below may be served from a cache that
+  // another replica filled, so nothing else guarantees this replica ran them.
+  const [, { probes, probeError, stale }, sharedRoots] = await Promise.all([
+    runRuntimeProducers(),
     collectProbes(refresh),
     // Item ids are included here because this route is admin-only: the admin
     // needs to know WHICH lakehouses share a root to act on the group. The
     // probe never throws; a failed read comes back as an inconclusive warn.
     probeLakehouseSharedRoots({ includeIds: true }),
   ]);
+  const statuses = allGateStatuses();
   const report = buildReadiness(
     { gates: GATES, statuses, probes },
     { generatedAt: new Date().toISOString(), cloud: detectLoomCloud() },
+  );
+  // #4776 — admin-only producer diagnostics keyed by gate id (e.g. what SCIM Me
+  // measured about the Console identity). Never part of the gate detail above,
+  // which non-admin readers share; this route is admin-capability gated.
+  const diagnostics = Object.fromEntries(
+    GATES.map((g) => [g.id, gateAdminDiagnostic(g.id)] as const).filter(([, d]) => !!d),
   );
 
   return NextResponse.json({
     ok: true,
     ...report,
+    diagnostics,
     probed: probes.length,
     probeError,
     // true when the probes were served from an expired cache while a background
