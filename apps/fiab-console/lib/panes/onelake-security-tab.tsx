@@ -460,6 +460,20 @@ export function OneLakeSecurityTab({ lakehouseId }: { lakehouseId: string }) {
 // Max predicate length — re-exported from the shared sanitizer.
 const MAX_CHARS = RLS_WHERE_MAX;
 
+/**
+ * The text shown for a refused RLS test or save. A tenant-admin refusal from
+ * `requireTenantAdmin` carries `error: 'forbidden'` with the sentence in
+ * `reason`; the permissions write refusal carries it in `error`. Either way the
+ * next step in `remediation` is shown after it.
+ */
+export function rlsRefusalText(
+  j: { gate?: boolean; missing?: string; reason?: string; error?: string; remediation?: string } | null | undefined,
+  status: number,
+): string {
+  if (j?.gate) return `Synapse Dedicated SQL pool not configured (${j.missing}).`;
+  return [j?.reason || j?.error || `HTTP ${status}`, j?.remediation].filter(Boolean).join(' ');
+}
+
 /** Client-side wrapper over the shared validator — returns an error string or null. */
 export function validateRlsPredicate(s: string): string | null {
   const v = validateWhereClause(s);
@@ -642,7 +656,7 @@ export function OnelakeRlsPredicateEditor({ tables, defaultIdentity, onSaved }: 
       });
       const j = await r.json();
       if (!j.ok) {
-        setTestError(j.gate ? `Synapse Dedicated SQL pool not configured (${j.missing}).` : j.error || `HTTP ${r.status}`);
+        setTestError(rlsRefusalText(j, r.status));
         return;
       }
       setTestResult({
@@ -673,7 +687,7 @@ export function OnelakeRlsPredicateEditor({ tables, defaultIdentity, onSaved }: 
       });
       const j = await r.json();
       if (!j.ok) {
-        setSaveError(j.gate ? `Synapse Dedicated SQL pool not configured (${j.missing}).` : j.error || `HTTP ${r.status}`);
+        setSaveError(rlsRefusalText(j, r.status));
         return;
       }
       setSaveReceipt({ policyName: j.policyName, functionName: j.functionName });
