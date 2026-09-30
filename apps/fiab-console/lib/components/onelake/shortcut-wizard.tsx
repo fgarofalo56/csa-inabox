@@ -1143,6 +1143,8 @@ interface RemoteBrowseTreeProps {
   container?: string;
   /** KV secret name (s3/gcs/dataverse). */
   kvSecret?: string;
+  /** Lakehouse being edited; browse checks a saved credential against it only when sent. */
+  lakehouseId?: string;
   /** Called when the user clicks a folder or file in the tree. */
   onSelect: (path: string, isDirectory: boolean) => void;
   selectedPath?: string;
@@ -1162,7 +1164,7 @@ function fmtBytes(n?: number): string {
  * expand; clicking any node selects it as the shortcut target sub-path.
  */
 export function RemoteBrowseTree(props: RemoteBrowseTreeProps) {
-  const { sourceType, bucket, region, account, container, kvSecret, onSelect, selectedPath } = props;
+  const { sourceType, bucket, region, account, container, kvSecret, lakehouseId, onSelect, selectedPath } = props;
   const [childrenByPrefix, setChildrenByPrefix] = useState<Record<string, RemoteEntryUi[]>>({});
   const [loading, setLoading] = useState<Set<string>>(new Set());
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -1180,11 +1182,7 @@ export function RemoteBrowseTree(props: RemoteBrowseTreeProps) {
     setErrors((e) => { const n = { ...e }; delete n[prefix]; return n; });
     try {
       const qs = new URLSearchParams({ sourceType, prefix });
-      if (bucket) qs.set('bucket', bucket);
-      if (region) qs.set('region', region);
-      if (account) qs.set('account', account);
-      if (container) qs.set('container', container);
-      if (kvSecret) qs.set('kvSecret', kvSecret);
+      for (const [k, v] of Object.entries({ bucket, region, account, container, kvSecret, lakehouseId })) if (v) qs.set(k, v);
       const r = await clientFetch(`/api/lakehouse/shortcuts/browse?${qs.toString()}`);
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) throw new Error(j?.error || j?.hint || `HTTP ${r.status}`);
@@ -1194,14 +1192,14 @@ export function RemoteBrowseTree(props: RemoteBrowseTreeProps) {
     } finally {
       setLoading((s) => { const n = new Set(s); n.delete(prefix); return n; });
     }
-  }, [sourceType, bucket, region, account, container, kvSecret]);
+  }, [sourceType, bucket, region, account, container, kvSecret, lakehouseId]);
 
   // Root load when the inputs become ready (and reset when they change).
   useEffect(() => {
     setChildrenByPrefix({}); setErrors({}); setOpenItems(new Set());
     if (ready) fetchLevel('');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, sourceType, bucket, region, account, container, kvSecret]);
+  }, [ready, sourceType, bucket, region, account, container, kvSecret, lakehouseId]);
 
   const renderLevel = (prefix: string): React.ReactNode => {
     if (errors[prefix]) {
