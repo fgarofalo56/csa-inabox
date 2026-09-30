@@ -30,7 +30,12 @@ import { AdminShell } from '@/lib/components/admin-shell';
 import { EmptyState } from '@/lib/components/empty-state';
 import { SplitPane } from '@/lib/components/shared/split-pane';
 import { GateFixitDialog } from '@/lib/components/shared/honest-gate';
-import { LakehouseSharedRootsPanel, type SharedRootGroupView } from '@/lib/components/admin/lakehouse-shared-roots-panel';
+import {
+  LakehouseKeepResultBar,
+  LakehouseSharedRootsPanel,
+  type KeepResult,
+  type SharedRootGroupView,
+} from '@/lib/components/admin/lakehouse-shared-roots-panel';
 import { clientFetch, CROSS_SUB_FETCH_TIMEOUT_MS } from '@/lib/client-fetch';
 import { getGate } from '@/lib/gates/registry';
 import {
@@ -464,6 +469,8 @@ export default function AdminReadinessPage() {
   const [workloadFilter, setWorkloadFilter] = useState<string | null>(null);
   const [fixGateId, setFixGateId] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
+  /** The outcome of the last "Keep root for ..." (shared lakehouse storage check). */
+  const [keepResult, setKeepResult] = useState<KeepResult | null>(null);
 
   /**
    * `refresh` re-runs every live probe instead of reading the 30 s probe cache.
@@ -597,6 +604,10 @@ export default function AdminReadinessPage() {
           </MessageBarBody>
         </MessageBar>
       )}
+      {/* The last keep's outcome, OUTSIDE the storage checks: a keep that
+          resolves the last group makes its check pass, and the check (with its
+          panel) is then no longer rendered. */}
+      {keepResult && <LakehouseKeepResultBar result={keepResult} onDismiss={() => setKeepResult(null)} />}
       {storageChecks.filter((c) => c.status !== 'pass').map((c) => (
         <MessageBar
           key={c.id}
@@ -610,7 +621,10 @@ export default function AdminReadinessPage() {
             {c.detail}
             {c.remediation ? <> {c.remediation}</> : null}
             {c.groups?.length ? (
-              <LakehouseSharedRootsPanel groups={c.groups} onResolved={() => void reload(true)} />
+              <LakehouseSharedRootsPanel
+                groups={c.groups}
+                onResolved={(r) => { setKeepResult(r); void reload(true); }}
+              />
             ) : null}
           </MessageBarBody>
         </MessageBar>
