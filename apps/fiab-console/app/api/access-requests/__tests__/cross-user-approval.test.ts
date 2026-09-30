@@ -102,7 +102,7 @@ const ORIGINAL_ADMIN_OID = process.env.LOOM_TENANT_ADMIN_OID;
 
 beforeEach(() => {
   vi.resetAllMocks();
-  wf = makePartitionedContainer({ partitionKeyPath: '/tenantId' });
+  wf = makePartitionedContainer({ partitionKeyPath: '/tenantId', etags: true });
   // Empty but REACHABLE: no approval policy names anyone, and no capability
   // grant exists. So authority comes only from tenant-admin, which is what the
   // bystander tests rely on. A container that THREW would take the

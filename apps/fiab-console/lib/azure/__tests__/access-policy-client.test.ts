@@ -219,3 +219,87 @@ describe('enforceAccessGrant — whether the principal already held the role', (
     expect(addDatabasePrincipal).toHaveBeenCalledOnce();
   });
 });
+
+describe('enforceAccessGrant — ADX membership probe compares the principal exactly', () => {
+  const viewerRow = (objectId: string, fqn: string) => ({ role: 'Database Viewer', principalType: 'AAD User', displayName: 'x', objectId, fqn });
+
+  it('a row for jalice@ does not count as alice@ holding the role', async () => {
+    // Breaks with a substring compare: 'aaduser=jalice@contoso.com' contains
+    // 'alice@contoso.com', which would report preexisting and skip `.add`.
+    (showDatabasePrincipals as any).mockResolvedValue([viewerRow('oid-other', 'aaduser=jalice@contoso.com')]);
+    const res = await enforceAccessGrant(kqlInput('read'));
+    expect(res).toMatchObject({ status: 'active', preexisting: false });
+    expect(addDatabasePrincipal).toHaveBeenCalledOnce();
+    expect(addDatabasePrincipal).toHaveBeenCalledWith('loomdb', 'viewers', 'aaduser=alice@contoso.com');
+  });
+
+  it('a row for malice@ does not count as alice@ holding the role', async () => {
+    // Same substring defect, a different prefix; breaks on `fqn.includes(upn)`.
+    (showDatabasePrincipals as any).mockResolvedValue([viewerRow('oid-other', 'aaduser=malice@contoso.com;tenant-1')]);
+    const res = await enforceAccessGrant(kqlInput('read'));
+    expect(res).toMatchObject({ status: 'active', preexisting: false });
+    expect(addDatabasePrincipal).toHaveBeenCalledOnce();
+  });
+
+  it('an object id that only CONTAINS the principal id does not count', async () => {
+    // Breaks on `fqn.includes(id)`: 'aaduser=oid-10;tenant-1' contains 'oid-1'.
+    (showDatabasePrincipals as any).mockResolvedValue([viewerRow('oid-10', 'aaduser=oid-10;tenant-1')]);
+    const res = await enforceAccessGrant(kqlInput('read'));
+    expect(res).toMatchObject({ status: 'active', preexisting: false });
+    expect(addDatabasePrincipal).toHaveBeenCalledOnce();
+  });
+
+  it('an exact UPN row (any case) with a different object id counts as held, so nothing is granted', async () => {
+    // The positive half: breaks if the exact compare were dropped altogether
+    // (every probe answering "not held"), or made case-sensitive.
+    (showDatabasePrincipals as any).mockResolvedValue([viewerRow('', 'AADUser=Alice@Contoso.com')]);
+    const res = await enforceAccessGrant(kqlInput('read'));
+    expect(res).toMatchObject({ status: 'active', preexisting: true });
+    expect(addDatabasePrincipal).not.toHaveBeenCalled();
+  });
+
+  it('the same UPN under a different principal kind does not count', async () => {
+    // Breaks if the kind prefix were ignored: a group named like the user is not the user.
+    (showDatabasePrincipals as any).mockResolvedValue([viewerRow('', 'aadgroup=alice@contoso.com')]);
+    const res = await enforceAccessGrant(kqlInput('read'));
+    expect(res).toMatchObject({ status: 'active', preexisting: false });
+    expect(addDatabasePrincipal).toHaveBeenCalledOnce();
+  });
+});
+
+describe('enforceAccessGrant — an empty scopeRef is refused, never defaulted', () => {
+  it('kql-database: an empty scopeRef returns an error and grants nothing on the default database', async () => {
+    // Breaks if the arm fell back to defaultDatabase() ('loomdb' in this mock):
+    // the grant would run `.add database loomdb viewers ...` and report active.
+    const res = await enforceAccessGrant({ ...kqlInput('read'), scopeRef: '' });
+    expect(res.status).toBe('error');
+    expect(res.detail).toMatch(/KQL database name is required/);
+    expect(addDatabasePrincipal).not.toHaveBeenCalled();
+    expect(showDatabasePrincipals).not.toHaveBeenCalled();
+  });
+
+  it('kql-database: a named database is still granted on that database', async () => {
+    // Pairs the refusal: breaks if the refusal fired for every input.
+    (showDatabasePrincipals as any).mockResolvedValue([]);
+    const res = await enforceAccessGrant({ ...kqlInput('read'), scopeRef: 'salesdb' });
+    expect(res.status).toBe('active');
+    expect(addDatabasePrincipal).toHaveBeenCalledWith('salesdb', 'viewers', 'aaduser=alice@contoso.com');
+  });
+
+  it('warehouse: an empty scopeRef returns an error and runs no SQL against the deployment pool', async () => {
+    // Breaks if the arm ignored scopeRef and used dedicatedTarget() ('loompool'):
+    // it would probe and then EXEC sp_addrolemember there.
+    const res = await enforceAccessGrant({ ...warehouseInput('read'), scopeRef: '  ' });
+    expect(res.status).toBe('error');
+    expect(res.detail).toMatch(/warehouse \(dedicated SQL pool\) is required/);
+    expect(synapseExecute).not.toHaveBeenCalled();
+  });
+
+  it('warehouse: a named pool is still granted', async () => {
+    // Pairs the refusal above.
+    (synapseExecute as any).mockImplementation(async () => ({ rows: [[0]] }));
+    const res = await enforceAccessGrant(warehouseInput('read'));
+    expect(res.status).toBe('active');
+    expect(grantSql()).toHaveLength(1);
+  });
+});

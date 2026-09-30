@@ -56,8 +56,12 @@ interface AccessRequest {
   itemType: string;
   scopeType: string;
   scopeRef: string;
-  /** Scopes derived from the asset on the server (catalog requests). */
-  grantTargets?: { scopeType: string; scopeRef: string; source?: string }[];
+  /**
+   * Scopes derived from the asset on the server (catalog requests). `declaredRef`
+   * is the store the port named when the request was made; an empty `scopeRef`
+   * beside it is a port whose store is not bound yet.
+   */
+  grantTargets?: GrantScope[];
   packageId?: string;
   permission: 'read' | 'write' | 'admin';
   justification: string;
@@ -92,11 +96,33 @@ interface BulkDecisionResult {
   results: { id: string; ok: boolean; status: number; error?: string }[];
 }
 
+interface GrantScope { scopeType: string; scopeRef: string; source?: string; declaredRef?: string }
+
 /** Every scope a request's grant binds to (the asset-derived list when present). */
-function grantScopes(r: AccessRequest): { scopeType: string; scopeRef: string; source?: string }[] {
+function grantScopes(r: AccessRequest): GrantScope[] {
   if (r.grantTargets && r.grantTargets.length > 0) return r.grantTargets;
   return r.scopeType ? [{ scopeType: r.scopeType, scopeRef: r.scopeRef }] : [];
 }
+
+/**
+ * One scope as a line of text. A scope with no store yet shows the store its
+ * port declared, so an approver can tell which store the grant will land on
+ * once it is bound.
+ */
+export function scopeLabel(g: GrantScope): string {
+  if (g.scopeRef) return `${g.scopeType} · ${g.scopeRef}`;
+  if (g.declaredRef) return `${g.scopeType} · declared '${g.declaredRef}', not bound yet`;
+  return g.scopeType;
+}
+
+/**
+ * React key for a scope row. Two ports can share a type and store, so the
+ * index keeps the keys unique.
+ */
+const scopeKey = (g: GrantScope, i: number) => `${i}:${g.scopeType}:${g.scopeRef}:${g.source ?? ''}`;
+
+/** Where kept grants and every live assignment are listed. */
+export const ACCESS_REPORT_HREF = '/admin/access-governance?tab=report';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL },
@@ -207,6 +233,13 @@ export function AccessRequestInboxEditor() {
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [dlgError, setDlgError] = useState<string | null>(null);
+  /**
+   * A decision that took effect but left something to act on — a denial that
+   * kept grants it could not revoke. Shown on the page, not in the dialog: the
+   * request is already closed, so a dialog still offering Deny would only
+   * produce a conflict.
+   */
+  const [notice, setNotice] = useState<{ title: string; detail: string } | null>(null);
 
   const load = useCallback(async (v: ViewKey) => {
     setLoading(true); setError(null); setGate(null);
@@ -290,6 +323,14 @@ export function AccessRequestInboxEditor() {
       if (!j.ok) {
         // Honest gate / grant error — keep the dialog open with the precise reason.
         setDlgError(j.warning || j.error || `HTTP ${r.status}`);
+        return;
+      }
+      if (j.warning && dlg.decision === 'denied') {
+        // The denial is recorded; the warning names grants it kept. Close the
+        // dialog and keep the warning on the page with a link to the report.
+        setDlg(null);
+        setNotice({ title: `Request for ${dlg.req.assetName} denied — some access was kept`, detail: j.warning });
+        await Promise.all([load(view), loadCounts()]);
         return;
       }
       if (j.warning) {
@@ -394,6 +435,22 @@ export function AccessRequestInboxEditor() {
             <MessageBarActions>
               <Button as="a" href="/admin/permissions" appearance="primary" size="small">
                 Fix it — open Feature permissions
+              </Button>
+            </MessageBarActions>
+          </MessageBar>
+        )}
+
+        {notice && (
+          <MessageBar intent="warning" className={s.err} layout="multiline">
+            <MessageBarBody>
+              <MessageBarTitle>{notice.title}</MessageBarTitle>
+              {notice.detail}
+            </MessageBarBody>
+            <MessageBarActions
+              containerAction={<Button appearance="transparent" size="small" aria-label="Dismiss" icon={<DismissCircle20Regular />} onClick={() => setNotice(null)} />}
+            >
+              <Button as="a" href={ACCESS_REPORT_HREF} appearance="primary" size="small">
+                Open the Access report
               </Button>
             </MessageBarActions>
           </MessageBar>
@@ -538,8 +595,8 @@ export function AccessRequestInboxEditor() {
                               </span>
                               <span className={s.kv}>
                                 <Caption1 className={s.kvLabel}>Grant scope</Caption1>
-                                {grantScopes(r).map((g) => (
-                                  <Text key={`${g.scopeType}:${g.scopeRef}`}>{g.scopeType}{g.scopeRef ? ` · ${g.scopeRef}` : ''}</Text>
+                                {grantScopes(r).map((g, i) => (
+                                  <Text key={scopeKey(g, i)}>{scopeLabel(g)}</Text>
                                 ))}
                               </span>
                               <span className={s.kv}>
@@ -636,9 +693,9 @@ export function AccessRequestInboxEditor() {
                     </MessageBar>
                     <span className={s.kv}>
                       <Caption1 className={s.kvLabel}>Grant scope</Caption1>
-                      {dlg && grantScopes(dlg.req).map((g) => (
-                        <Text key={`${g.scopeType}:${g.scopeRef}`}>
-                          {g.scopeType}{g.scopeRef ? ` · ${g.scopeRef}` : ''}{g.source ? ` (${g.source})` : ''}
+                      {dlg && grantScopes(dlg.req).map((g, i) => (
+                        <Text key={scopeKey(g, i)}>
+                          {scopeLabel(g)}{g.source ? ` (${g.source})` : ''}
                         </Text>
                       ))}
                       <Caption1>

@@ -81,11 +81,15 @@ function ctx(id: string) {
  * creating routes lay it out: partition key = tenant, requester = someone else.
  */
 function fakeArContainer(doc: any) {
-  const container = makePartitionedContainer({ partitionKeyPath: '/tenantId', seed: [doc] });
+  const container = makePartitionedContainer({ partitionKeyPath: '/tenantId', seed: [doc], etags: true });
+  // `store.doc` is read at assertion time: with etags on, a read returns a copy
+  // and each write stores a new object, so the stored doc is looked up fresh.
   return {
     container,
-    get store() {
-      return { doc: container.__all()[0] };
+    store: {
+      get doc() {
+        return container.__all()[0];
+      },
     },
   };
 }
@@ -245,9 +249,11 @@ describe('POST /api/access-requests/[id]/decision', () => {
     }));
     expect(store.doc.scopeRef).toBe(PRODUCT_CONTAINER);
     expect(store.doc.grantTargets).toEqual([
-      { scopeType: 'adls-container', scopeRef: PRODUCT_CONTAINER, source: "output port 'gold-out'" },
+      { scopeType: 'adls-container', scopeRef: PRODUCT_CONTAINER, source: "output port 'gold-out'", declaredRef: PRODUCT_CONTAINER },
     ]);
     expect(store.doc.status).toBe('completed');
+    // The grant lease is released with the result.
+    expect(store.doc.grantLeaseUntil).toBeUndefined();
     expect(store.doc.subscribedAt).toBeTruthy();
     expect(store.doc.enforcement.roleAssignmentId).toContain('roleAssignments/abc');
   });
@@ -571,6 +577,26 @@ describe('denial, warehouse and KQL: only what the request provably created is r
     expect(store.doc.revokedGrants.map((r: any) => r.scopeRef)).toEqual(['gold']);
     expect(j.warning).toMatch(/adls-container silver \(Revoke failed: ARM 403/);
   });
+
+  it('a grant with no revoke path is kept with that reason, not an unknown-state or failure reason', async () => {
+    // Breaks if the unknown-state branch ran first (the item grant would read
+    // "Could not determine whether…"), or if the ADLS grant with no recorded id
+    // were reported as a failed revoke ("Revoke failed: No automatic revoke…").
+    const { container, store } = fakeArContainer(baseDoc({ tier: 'access-provider', grantResults: [
+      { scopeType: 'item', scopeRef: 'dp-1', status: 'active', roleName: 'Viewer' },
+      { scopeType: 'adls-container', scopeRef: 'gold', status: 'active', created: true },
+    ] }));
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    const res = await POST(makeReq({ decision: 'denied', reason: 'no' }), ctx('req-1'));
+    const j = await res.json();
+    expect(res.status).toBe(200);
+    expect(j.warning).toMatch(/item dp-1 \(No automatic revoke exists for item grants/);
+    expect(j.warning).toMatch(/adls-container gold \(No role-assignment id was recorded for this grant/);
+    expect(j.warning).not.toMatch(/Could not determine|Revoke failed/);
+    expect(revokeContainerRoleAssignment).not.toHaveBeenCalled();
+    expect(store.doc.revokedGrants).toBeUndefined();
+    expect(store.doc.status).toBe('denied');
+  });
 });
 
 describe('final tier — a store bound after the request was made', () => {
@@ -613,5 +639,117 @@ describe('final tier — a store bound after the request was made', () => {
     expect(res.status).toBe(409);
     expect((await res.json()).code).toBe('targets_changed');
     expect(enforceAccessGrant).not.toHaveBeenCalled();
+  });
+
+  it('a port re-pointed at another store since the request answers 409 targets_changed and grants nothing', async () => {
+    // At request time `gold-out` named 'foo', which no store in the workspace
+    // held (recorded unbound, declaredRef 'foo'). The owner has since pointed
+    // the same port at the bound container 'gold'. Breaks if the empty reviewed
+    // scope were matched on type + source alone: the approval would grant on
+    // 'gold', a store the approvers never saw named (1 grant call, status 200).
+    const { container, store } = fakeArContainer(baseDoc({
+      tier: 'access-provider',
+      grantTargets: [{ scopeType: 'adls-container', scopeRef: '', source: "output port 'gold-out'", declaredRef: 'foo' }],
+    }));
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    const res = await POST(makeReq({ decision: 'approved' }), ctx('req-1'));
+    const j = await res.json();
+    expect(res.status).toBe(409);
+    expect(j.code).toBe('targets_changed');
+    expect(j.current).toEqual([{ scopeType: 'adls-container', scopeRef: 'gold' }]);
+    expect(enforceAccessGrant).not.toHaveBeenCalled();
+    expect(store.doc.status).toBe('open');
+  });
+
+  it('a port still naming the store it named at request time is granted once that store is bound (200)', async () => {
+    // The positive pair: declaredRef 'gold' then, 'gold' now and bound. Breaks
+    // if the declaredRef compare refused every unbound-then-bound port (409).
+    const { container, store } = fakeArContainer(baseDoc({
+      tier: 'access-provider',
+      grantTargets: [{ scopeType: 'adls-container', scopeRef: '', source: "output port 'gold-out'", declaredRef: 'gold' }],
+    }));
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    (enforceAccessGrant as any).mockResolvedValue({ status: 'active', roleName: 'Storage Blob Data Reader', roleAssignmentId: 'ra-gold', preexisting: false });
+    const res = await POST(makeReq({ decision: 'approved' }), ctx('req-1'));
+    expect(res.status).toBe(200);
+    expect(enforceAccessGrant).toHaveBeenCalledTimes(1);
+    expect((enforceAccessGrant as any).mock.calls[0][0]).toMatchObject({ scopeType: 'adls-container', scopeRef: 'gold' });
+    expect(store.doc.status).toBe('completed');
+  });
+
+  it('an unbound port target recorded without declaredRef (before it was recorded) is refused, not granted', async () => {
+    // Disclosed behaviour: such a request cannot show which store the port
+    // named, so it is not approved onto whatever the port names now. Breaks if
+    // a missing declaredRef were treated as matching any current store.
+    const { container } = fakeArContainer(baseDoc({
+      tier: 'access-provider',
+      grantTargets: [{ scopeType: 'adls-container', scopeRef: '', source: "output port 'gold-out'" }],
+    }));
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    const res = await POST(makeReq({ decision: 'approved' }), ctx('req-1'));
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe('targets_changed');
+    expect(enforceAccessGrant).not.toHaveBeenCalled();
+  });
+});
+
+describe('final tier — one grant at a time per request', () => {
+  it('two concurrent final approvals: exactly one grants, the other answers 409 grant_in_progress', async () => {
+    // Breaks without the lease: both approvals pass the open/tier checks, both
+    // call the grant client (2 calls), and the later write wins.
+    const { container, store } = fakeArContainer(baseDoc({ tier: 'access-provider' }));
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    (enforceAccessGrant as any).mockImplementation(async () => {
+      await gate;
+      return { status: 'active', roleName: 'Storage Blob Data Reader', roleAssignmentId: 'ra-gold', preexisting: false };
+    });
+
+    const settled: Response[] = [];
+    const a = POST(makeReq({ decision: 'approved' }), ctx('req-1')).then((r: Response) => { settled.push(r); return r; });
+    const b = POST(makeReq({ decision: 'approved' }), ctx('req-1')).then((r: Response) => { settled.push(r); return r; });
+    // One approval holds the lease and waits in the grant; the other must
+    // already have been refused.
+    await vi.waitFor(() => expect(settled).toHaveLength(1));
+    const refused = settled[0];
+    expect(refused.status).toBe(409);
+    expect((await refused.json()).code).toBe('grant_in_progress');
+    release();
+    const statuses = (await Promise.all([a, b])).map((r) => r.status).sort();
+    expect(statuses).toEqual([200, 409]);
+    expect(enforceAccessGrant).toHaveBeenCalledTimes(1);
+    expect(store.doc.status).toBe('completed');
+    expect(store.doc.grantLeaseUntil).toBeUndefined();
+  });
+
+  it('a denial while a grant lease is held is refused, and revokes nothing', async () => {
+    // Breaks if the lease check applied to approvals only: the denial would
+    // revoke before the in-flight grant is recorded, and then be overwritten.
+    const live = new Date(Date.now() + 60_000).toISOString();
+    const { container, store } = fakeArContainer(baseDoc({
+      tier: 'access-provider', grantLeaseUntil: live,
+      grantResults: [{ scopeType: 'adls-container', scopeRef: 'gold', status: 'active', roleAssignmentId: 'ra-gold', created: true }],
+    }));
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    const res = await POST(makeReq({ decision: 'denied', reason: 'no' }), ctx('req-1'));
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe('grant_in_progress');
+    expect(revokeContainerRoleAssignment).not.toHaveBeenCalled();
+    expect(store.doc.status).toBe('open');
+  });
+
+  it('an expired lease does not block the approval', async () => {
+    // Pairs the refusal: breaks if any recorded lease blocked regardless of its
+    // expiry (a crashed approval would then hold the request forever).
+    const stale = new Date(Date.now() - 60_000).toISOString();
+    const { container, store } = fakeArContainer(baseDoc({ tier: 'access-provider', grantLeaseUntil: stale }));
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    (enforceAccessGrant as any).mockResolvedValue({ status: 'active', roleName: 'Storage Blob Data Reader', roleAssignmentId: 'ra-gold', preexisting: false });
+    const res = await POST(makeReq({ decision: 'approved' }), ctx('req-1'));
+    expect(res.status).toBe(200);
+    expect(enforceAccessGrant).toHaveBeenCalledTimes(1);
+    expect(store.doc.status).toBe('completed');
+    expect(store.doc.grantLeaseUntil).toBeUndefined();
   });
 });

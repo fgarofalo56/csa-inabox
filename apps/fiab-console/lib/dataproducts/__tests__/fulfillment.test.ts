@@ -16,9 +16,9 @@ describe('resolveGrantTargets', () => {
       },
     });
     expect(t).toEqual([
-      { scopeType: 'adls-container', scopeRef: 'curated', permission: 'read', source: "output port 'lake'" },
-      { scopeType: 'warehouse', scopeRef: 'salesdb', permission: 'read', source: "output port 'sql'" },
-      { scopeType: 'kql-database', scopeRef: 'events', permission: 'read', source: "output port 'adx'" },
+      { scopeType: 'adls-container', scopeRef: 'curated', permission: 'read', source: "output port 'lake'", declaredRef: 'curated' },
+      { scopeType: 'warehouse', scopeRef: 'salesdb', permission: 'read', source: "output port 'sql'", declaredRef: 'salesdb' },
+      { scopeType: 'kql-database', scopeRef: 'events', permission: 'read', source: "output port 'adx'", declaredRef: 'events' },
     ]);
   });
 

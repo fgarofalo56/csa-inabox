@@ -170,7 +170,7 @@ describe('POST /api/catalog/request-access — access model comes from the produ
       scopeType: 'adls-container', scopeRef: PRODUCT_CONTAINER,
     });
     expect(docs[0].grantTargets).toEqual([
-      { scopeType: 'adls-container', scopeRef: PRODUCT_CONTAINER, source: "output port 'gold-out'" },
+      { scopeType: 'adls-container', scopeRef: PRODUCT_CONTAINER, source: "output port 'gold-out'", declaredRef: PRODUCT_CONTAINER },
     ]);
   });
 
@@ -369,7 +369,31 @@ describe('POST /api/catalog/request-access — output ports are checked against 
     expect(enforceAccessGrant).not.toHaveBeenCalled();
     expect(j.granted).toBeUndefined();
     const [doc] = wf.__all();
-    expect(doc.grantTargets).toEqual([{ scopeType: 'adls-container', scopeRef: '', source: "output port 'x-out'" }]);
+    // declaredRef records what the port named, so a later approval can tell
+    // whether the port still names it (decision/route.ts `reviewedMatches`).
+    expect(doc.grantTargets).toEqual([{ scopeType: 'adls-container', scopeRef: '', source: "output port 'x-out'", declaredRef: 'someone-elses' }]);
+  });
+
+  it('a self-serve product with one bound port and one unbound KQL port grants on the bound store only', async () => {
+    // Per-target empty-scope guard. Breaks if the loop sent the unbound KQL
+    // target to the grant client (2 calls, the second with scopeRef '') — or if
+    // the first target's scopeRef alone gated the whole loop.
+    seedItems([...BOUND_STORES, product('self-k', { accessModel: 'self-serve', ports: { output: [
+      { name: 'gold-out', kind: 'adls', ref: PRODUCT_CONTAINER },
+      { name: 'kql-out', kind: 'adx', ref: 'nodb' },
+    ] } })]);
+    (accessAssignmentsContainer as any).mockResolvedValue(makePartitionedContainer({ partitionKeyPath: '/principalId' }));
+    const res = await post({ assetId: 'self-k', permission: 'read' });
+    const j = await res.json();
+    expect(res.status).toBe(200);
+    expect(enforceAccessGrant).toHaveBeenCalledTimes(1);
+    expect((enforceAccessGrant as any).mock.calls[0][0]).toMatchObject({ scopeType: 'adls-container', scopeRef: PRODUCT_CONTAINER });
+    // The KQL port is not granted, so the request is filed for approval.
+    expect(j.granted).toBeUndefined();
+    const [doc] = wf.__all();
+    expect(doc.grantTargets.map((t: any) => [t.scopeType, t.scopeRef, t.declaredRef])).toEqual([
+      ['adls-container', PRODUCT_CONTAINER, PRODUCT_CONTAINER], ['kql-database', '', 'nodb'],
+    ]);
   });
 
   it('the same port naming a bound container is granted (positive pair)', async () => {
@@ -392,5 +416,33 @@ describe('POST /api/catalog/request-access — output ports are checked against 
     const res = await post({ assetId: 'self-z', permission: 'read' });
     expect((await res.json()).granted).toBeUndefined();
     expect(enforceAccessGrant).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/catalog/request-access — the identity a self-serve grant is made for', () => {
+  it('a session with an email but no UPN grants nothing and files the request for approval', async () => {
+    // Breaks if the grant principal fell back to the email claim: the grant
+    // client would be called once with principalName 'alice.alt@contoso.com'.
+    (getSession as any).mockReturnValue({
+      claims: { oid: USER.oid, tid: TENANT, email: 'alice.alt@contoso.com' }, exp: Date.now() / 1000 + 3600,
+    });
+    const res = await post({ assetId: 'self-1', permission: 'read' });
+    const j = await res.json();
+    expect(res.status).toBe(200);
+    expect(enforceAccessGrant).not.toHaveBeenCalled();
+    expect(j.granted).toBeUndefined();
+    const docs = wf.__all();
+    expect(docs).toHaveLength(1);
+    expect(docs[0]).toMatchObject({ assetId: 'self-1', status: 'open', tier: 'manager', requesterUpn: 'alice.alt@contoso.com' });
+  });
+
+  it('the same session with a UPN is granted, with the UPN as the principal name (positive pair)', async () => {
+    // Breaks if the UPN gate refused every session, or the name came from elsewhere.
+    (getSession as any).mockReturnValue({
+      claims: { ...USER, email: 'alice.alt@contoso.com' }, exp: Date.now() / 1000 + 3600,
+    });
+    const res = await post({ assetId: 'self-1', permission: 'read' });
+    expect((await res.json()).granted).toBe(true);
+    expect((enforceAccessGrant as any).mock.calls[0][0]).toMatchObject({ principalName: USER.upn });
   });
 });

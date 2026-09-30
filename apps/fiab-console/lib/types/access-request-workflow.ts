@@ -115,6 +115,12 @@ export interface AccessRequestDoc {
   revokedGrants?: AccessRequestGrantResult[];
   /** Owner recorded on the requested item, when it names one (never from the request body). */
   ownerUpn?: string;
+  /**
+   * Set while a final approval is granting on this request (ISO-8601 expiry);
+   * any other decision is refused until it passes or the result is written
+   * (app/api/access-requests/[id]/decision/route.ts).
+   */
+  grantLeaseUntil?: string;
 }
 
 /** One scope an access request's grant binds to. */
@@ -123,6 +129,13 @@ export interface AccessRequestGrantTarget {
   scopeRef: string;
   /** Where the scope came from (an output port, a data asset, the item itself). */
   source?: string;
+  /**
+   * For an output-port target: the store the port named when the request was
+   * made (the owner's text, before it is checked against the workspace). A
+   * port target that was not bound yet is approved later only onto a store
+   * the port still names — so the approver's view and the grant agree.
+   */
+  declaredRef?: string;
 }
 
 /** The grant outcome for one scope. */

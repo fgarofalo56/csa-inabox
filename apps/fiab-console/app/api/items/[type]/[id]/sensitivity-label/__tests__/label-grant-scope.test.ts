@@ -240,3 +240,34 @@ describe('"self" means the caller\'s identity: the name comes from the session',
     expect((enforceAccessGrant as any).mock.calls[0][0].principalName).toBe('victim@contoso.com');
   });
 });
+
+describe('a session with no UPN: the email claim is never used as the grant name', () => {
+  const withUpn = getSessionMock.getMockImplementation()!;
+  beforeEach(() => {
+    getSessionMock.mockImplementation(() => ({
+      claims: { oid: CALLER, email: 'caller.alt@contoso.com', name: 'Caller' }, exp: Date.now() / 1000 + 3600,
+    }) as any);
+  });
+  afterEach(() => { getSessionMock.mockImplementation(withUpn); });
+  const kql = () => makeItem('kql-database', { provisioning: { status: 'created', secondaryIds: { database: 'kql-own' } } });
+
+  it('a self grant with no name anywhere is refused: 400 no_session_upn, no grant, nothing written', async () => {
+    // Breaks if the name fell back to the email claim: 200, and one grant for
+    // principalName 'caller.alt@contoso.com'.
+    item = kql();
+    const r = await PATCH(req({ labelId: LABEL.id, principalId: CALLER, principalType: 'User' }), ctx('kql-database'));
+    expect(r.status).toBe(400);
+    expect((await r.json()).code).toBe('no_session_upn');
+    expect(enforceAccessGrant).not.toHaveBeenCalled();
+    expect(replaceMock).not.toHaveBeenCalled();
+  });
+
+  it('naming the email claim with the own oid is "another principal": 403 for a non-admin', async () => {
+    // Breaks if the email counted as the caller's own name: 200 with no admin check.
+    item = kql();
+    const r = await PATCH(req({ ...self, principalName: 'caller.alt@contoso.com' }), ctx('kql-database'));
+    expect(r.status).toBe(403);
+    expect(enforceCapability).toHaveBeenCalledWith(expect.anything(), 'admin.permissions', 'Admin');
+    expect(enforceAccessGrant).not.toHaveBeenCalled();
+  });
+});

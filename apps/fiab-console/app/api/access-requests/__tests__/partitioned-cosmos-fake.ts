@@ -32,6 +32,14 @@ export interface FakeContainerOptions {
   partitionKeyPath: string;
   /** Seed documents. */
   seed?: any[];
+  /**
+   * Model Cosmos optimistic concurrency: every stored doc carries an `_etag`
+   * that changes on each write, a point read returns a COPY (so two readers do
+   * not share one object), and `replace(doc, { accessCondition: { type:
+   * 'IfMatch', condition } })` throws a 412 when the stored etag differs.
+   * Off by default, so the suites written against by-reference reads keep them.
+   */
+  etags?: boolean;
 }
 
 type Cond = (doc: any, params: Record<string, any>) => boolean;
@@ -165,7 +173,7 @@ function parseQuery(sql: string): ParsedQuery {
 export interface FakeContainer {
   item(id: string, pk?: string): {
     read<T = any>(): Promise<{ resource: T | undefined }>;
-    replace<T = any>(doc: T): Promise<{ resource: T }>;
+    replace<T = any>(doc: T, options?: { accessCondition?: { type: string; condition: string } }): Promise<{ resource: T }>;
     delete(): Promise<{ resource: any }>;
   };
   items: {
@@ -184,7 +192,9 @@ export interface FakeContainer {
 
 export function makePartitionedContainer(opts: FakeContainerOptions): FakeContainer {
   const pkField = opts.partitionKeyPath.replace(/^\//, '');
-  const docs: any[] = [...(opts.seed || [])];
+  let etagSeq = 0;
+  const stamp = (doc: any) => (opts.etags ? { ...doc, _etag: `"etag-${++etagSeq}"` } : doc);
+  const docs: any[] = (opts.seed || []).map(stamp);
 
   const pkOf = (doc: any) => doc?.[pkField];
 
@@ -193,17 +203,23 @@ export function makePartitionedContainer(opts: FakeContainerOptions): FakeContai
       return {
         async read<T = any>(): Promise<{ resource: T | undefined }> {
           const found = docs.find((d) => d.id === id && (pk === undefined || pkOf(d) === pk));
-          return { resource: found as T | undefined };
+          return { resource: (opts.etags && found ? structuredClone(found) : found) as T | undefined };
         },
-        async replace<T = any>(next: T): Promise<{ resource: T }> {
+        async replace<T = any>(next: T, options?: { accessCondition?: { type: string; condition: string } }): Promise<{ resource: T }> {
           const i = docs.findIndex((d) => d.id === id && (pk === undefined || pkOf(d) === pk));
           if (i < 0) {
             const err: any = new Error('NotFound');
             err.code = 404;
             throw err;
           }
-          docs[i] = next;
-          return { resource: next };
+          const cond = options?.accessCondition;
+          if (opts.etags && cond?.type === 'IfMatch' && cond.condition !== docs[i]._etag) {
+            const err: any = new Error('PreconditionFailed');
+            err.code = 412;
+            throw err;
+          }
+          docs[i] = stamp(next);
+          return { resource: docs[i] };
         },
         async delete() {
           const i = docs.findIndex((d) => d.id === id && (pk === undefined || pkOf(d) === pk));
@@ -219,14 +235,16 @@ export function makePartitionedContainer(opts: FakeContainerOptions): FakeContai
     },
     items: {
       async create<T = any>(doc: T): Promise<{ resource: T }> {
-        docs.push(doc);
-        return { resource: doc };
+        const stored = stamp(doc);
+        docs.push(stored);
+        return { resource: stored };
       },
       async upsert<T = any>(doc: T): Promise<{ resource: T }> {
+        const stored = stamp(doc);
         const i = docs.findIndex((d) => d.id === (doc as any).id && pkOf(d) === pkOf(doc));
-        if (i >= 0) docs[i] = doc;
-        else docs.push(doc);
-        return { resource: doc };
+        if (i >= 0) docs[i] = stored;
+        else docs.push(stored);
+        return { resource: stored };
       },
       query<T = any>(
         spec: { query: string; parameters?: { name: string; value: any }[] } | string,

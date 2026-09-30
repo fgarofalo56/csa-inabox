@@ -460,17 +460,27 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ type: s
     // warehouse grant creates its database user from `principalName`, and the ADX
     // grant uses a `principalName` that contains '@' as the principal. So a self
     // grant always uses the session's own UPN, and a body `principalName` that is
-    // not that UPN names someone else.
+    // not that UPN names someone else. The UPN claim only — never the email
+    // claim, which can differ from the name the store resolves — and a self
+    // grant from a session with no UPN is refused rather than guessed.
     let rbac: import('@/lib/azure/access-policy-client').AccessGrantResult | undefined;
     let grant: import('@/lib/azure/label-protection').LabelRbacGrant | undefined;
     const principalId = typeof body?.principalId === 'string' ? body.principalId.trim() : '';
     if (principalId) {
       const principalType = (body?.principalType === 'Group' || body?.principalType === 'ServicePrincipal')
         ? body.principalType : 'User';
-      const sessionUpn = (session.claims.upn || session.claims.email || '').trim();
+      const sessionUpn = (session.claims.upn || '').trim();
       const bodyName = typeof body?.principalName === 'string' ? body.principalName.trim() : '';
-      const isSelf = principalType === 'User' && principalId === session.claims.oid
-        && (!bodyName || (!!sessionUpn && bodyName.toLowerCase() === sessionUpn.toLowerCase()));
+      const ownOid = principalType === 'User' && principalId === session.claims.oid;
+      if (ownOid && !sessionUpn && !bodyName) {
+        return err(
+          'This session carries no user principal name, so a grant for your own account cannot be made from it. '
+            + 'Sign in with your organizational account, or ask an administrator to grant the access.',
+          400,
+          'no_session_upn',
+        );
+      }
+      const isSelf = ownOid && !!sessionUpn && (!bodyName || bodyName.toLowerCase() === sessionUpn.toLowerCase());
       if (!isSelf) {
         const gate = await enforceCapability(session, LABEL_GRANT_CAPABILITY, LABEL_GRANT_ROLE);
         if (gate) return gate;

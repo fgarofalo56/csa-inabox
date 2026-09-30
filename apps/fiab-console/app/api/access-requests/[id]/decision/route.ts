@@ -24,6 +24,13 @@
  * with 409 `targets_changed` and the request stays open.
  * An access-package leg keeps the scope its package defines.
  *
+ * One grant at a time per request: the final approval takes a short lease on
+ * the request document (an etag-conditioned write of `grantLeaseUntil`) before
+ * it grants, and releases it with the final write. A second decision on the
+ * same request while the lease is held is refused with 409 `grant_in_progress`.
+ * Separate requests for the same principal and scope are not serialized with
+ * each other.
+ *
  * Every decision writes an audit-log entry (itemId = requestId). No Fabric
  * dependency: the grant is a real Azure ARM Storage / Synapse SQL / ADX
  * data-plane assignment via lib/azure/rbac-client.
@@ -82,7 +89,9 @@ export const dynamic = 'force-dynamic';
  * (order-insensitive, one-to-one). A reviewed scope with an EMPTY scopeRef was
  * a store not yet bound when the request was made; it is satisfied by a current
  * scope of the same type from the same source (the same item, or the same
- * output port), which is that store as Loom has since recorded it. Every other
+ * output port) that also names the same store the port named then
+ * (`declaredRef`), which is that store as Loom has since recorded it. A port
+ * re-pointed at another store since the request is a change. Every other
  * reviewed scope must reappear exactly.
  */
 function reviewedMatches(current: AccessRequestGrantTarget[], reviewed: AccessRequestGrantTarget[]): boolean {
@@ -91,13 +100,68 @@ function reviewedMatches(current: AccessRequestGrantTarget[], reviewed: AccessRe
   for (const t of current) {
     let i = open.findIndex((r) => !!r.scopeRef && r.scopeType === t.scopeType && r.scopeRef === t.scopeRef);
     if (i < 0) {
-      i = open.findIndex((r) => !r.scopeRef && r.scopeType === t.scopeType && (r.source || '') === (t.source || ''));
+      i = open.findIndex((r) => !r.scopeRef && r.scopeType === t.scopeType
+        && (r.source || '') === (t.source || '')
+        && (r.declaredRef || '') === (t.declaredRef || ''));
     }
     if (i < 0) return false;
     open.splice(i, 1);
   }
   return true;
 }
+
+/** How long a final approval holds the request while it grants. */
+const GRANT_LEASE_MS = 120_000;
+
+type RequestContainer = Awaited<ReturnType<typeof accessRequestWorkflowContainer>>;
+
+/**
+ * Take the per-request grant lease: write `grantLeaseUntil` onto the document as
+ * it was read, conditioned on the etag of that read. Returns the etag of the
+ * leased document, or null when another write got there first (412).
+ */
+async function takeGrantLease(
+  c: RequestContainer, id: string, pk: string, asRead: AccessRequestDoc, etag: string | undefined,
+): Promise<string | null> {
+  if (!etag) {
+    throw new Error('The access request was read without an etag, so its grant could not be serialized; nothing was granted.');
+  }
+  try {
+    const { resource } = await c.item(id, pk).replace(
+      { ...asRead, grantLeaseUntil: new Date(Date.now() + GRANT_LEASE_MS).toISOString() },
+      { accessCondition: { type: 'IfMatch', condition: etag } },
+    );
+    return String((resource as any)?._etag || '');
+  } catch (e: any) {
+    if (isPreconditionFailed(e)) return null;
+    throw e;
+  }
+}
+
+function grantInProgress() {
+  return NextResponse.json(
+    {
+      ok: false,
+      code: 'grant_in_progress',
+      error: 'Another approval of this request is granting access right now. Reload in a minute to see its result.',
+    },
+    { status: 409 },
+  );
+}
+
+function requestChanged(grantsMade: boolean) {
+  return NextResponse.json(
+    {
+      ok: false,
+      code: 'request_changed',
+      error: 'This request was changed by another decision while this one was being made. Reload it and decide again.'
+        + (grantsMade ? ' Access this approval granted is recorded in the Access report.' : ''),
+    },
+    { status: 409 },
+  );
+}
+
+const isPreconditionFailed = (e: any) => e?.code === 412 || e?.statusCode === 412;
 
 /** One enforcement summary over every per-scope grant: active only when all are. */
 function summarizeGrants(results: AccessRequestGrantResult[]): AccessRequestEnforcement {
@@ -139,10 +203,16 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
   try {
     const c = await accessRequestWorkflowContainer();
     let doc: AccessRequestDoc;
+    // The document as read (before this decision changes it) and its etag: the
+    // grant lease below is written from these.
+    let asRead: AccessRequestDoc;
+    let readEtag: string | undefined;
     try {
       const { resource } = await c.item(id, tenantId).read<AccessRequestDoc>();
       if (!resource) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
       doc = resource;
+      asRead = { ...resource };
+      readEtag = (resource as any)._etag;
     } catch (e: any) {
       if (e?.code === 404) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
       throw e;
@@ -153,6 +223,12 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
         { ok: false, error: `request is already ${doc.status} and can no longer be actioned` },
         { status: 409 },
       );
+    }
+    // A final approval is granting on this request: no other decision (a second
+    // approval, or a denial that would revoke before the grant is recorded)
+    // until it has written its result.
+    if (doc.grantLeaseUntil && Date.parse(doc.grantLeaseUntil) > Date.now()) {
+      return grantInProgress();
     }
 
     // ── Separation of duties. Absolute — it holds even for a tenant admin, so
@@ -188,6 +264,10 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
     let httpStatus = 200;
     let ok = true;
     let warning: string | undefined;
+    /** Etag of the leased document, once the final approval has taken the grant lease. */
+    let leaseEtag: string | undefined;
+    /** True once this decision has made a grant (so a lost final write says where it is recorded). */
+    let grantsMade = false;
 
     if (decision === 'denied') {
       doc.status = 'denied';
@@ -234,7 +314,10 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
             );
           }
           targets = (await deriveRequestTargets(item, doc.permission))
-            .map((t) => ({ scopeType: t.scopeType, scopeRef: t.scopeRef, source: t.source }));
+            .map((t) => ({
+              scopeType: t.scopeType, scopeRef: t.scopeRef, source: t.source,
+              ...(t.declaredRef ? { declaredRef: t.declaredRef } : {}),
+            }));
           // The approvers decided on the scopes recorded when the request was
           // made (`grantTargets`; a request recorded before those existed shows
           // its single `scopeType`/`scopeRef`). If the asset's bindings have
@@ -298,6 +381,17 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
             createdAt: now,
           });
         } else {
+        // One grant at a time per request (see the header): the membership
+        // check and the grant for each scope below run under this lease.
+        const leased = await takeGrantLease(c, id, tenantId, asRead, readEtag);
+        if (leased === null) {
+          // Another write got there first. Say which, from what is stored now.
+          const { resource: latest } = await c.item(id, tenantId).read<AccessRequestDoc>();
+          return latest?.grantLeaseUntil && Date.parse(latest.grantLeaseUntil) > Date.now()
+            ? grantInProgress()
+            : requestChanged(false);
+        }
+        leaseEtag = leased;
         // Provision the REAL Azure RBAC grant on every backing scope.
         const fresh: AccessRequestGrantResult[] = [];
         for (const t of targets) {
@@ -320,6 +414,7 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
             permission: doc.permission,
           });
           fresh.push(grantResult(r, t.scopeType, t.scopeRef));
+          if (r.status === 'active') grantsMade = true;
         }
         // A retry keeps the record of grants an earlier attempt created.
         const results = mergeGrantResults(doc.grantResults, fresh);
@@ -374,7 +469,20 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
       }
     }
 
-    await c.item(id, tenantId).replace(doc);
+    // Written over the document this decision read (or leased) only: a 412
+    // means another decision changed it first, and this one is not recorded.
+    // Writing the result releases the grant lease.
+    delete (doc as any).grantLeaseUntil;
+    const writeEtag = leaseEtag || readEtag;
+    if (!writeEtag) {
+      throw new Error('The access request was read without an etag, so the decision was not recorded.');
+    }
+    try {
+      await c.item(id, tenantId).replace(doc, { accessCondition: { type: 'IfMatch', condition: writeEtag } });
+    } catch (e: any) {
+      if (isPreconditionFailed(e)) return requestChanged(grantsMade);
+      throw e;
+    }
 
     // Audit trail — one entry per decision (itemId = requestId).
     const al = await auditLogContainer();

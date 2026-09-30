@@ -78,6 +78,11 @@ export const POST = withSession(async (req, { session: s }) => {
     : asset.accessModel;
 
   const requester = s.claims.upn || s.claims.email || s.claims.oid;
+  // The identity a self-serve grant is made for: the session's UPN only, never
+  // the email claim. The warehouse grant creates its database user from this
+  // name and the ADX grant uses it as the principal, so without a UPN the
+  // request takes the governed path instead of self-granting.
+  const sessionUpn = (s.claims.upn || '').trim();
   const now = new Date().toISOString();
   // Minted up front so a grant that lands before the request is routed for
   // approval is recorded against the request that will carry it.
@@ -92,7 +97,7 @@ export const POST = withSession(async (req, { session: s }) => {
   // A CLI / VS Code device-code session never self-grants (#4805, operator
   // decision 2026-09-30): its request takes the governed path instead, so an
   // approver decides and nothing outlives the session unreviewed.
-  if (accessModel === 'self-serve' && scopeRef && !isDeviceCodeSession(s)) {
+  if (accessModel === 'self-serve' && scopeRef && sessionUpn && !isDeviceCodeSession(s)) {
     const results: AccessRequestGrantResult[] = [];
     try {
       for (const t of targets) {
@@ -104,7 +109,7 @@ export const POST = withSession(async (req, { session: s }) => {
         }
         const r = await enforceAccessGrant({
           principalId: s.claims.oid,
-          principalName: requester,
+          principalName: sessionUpn,
           principalType: 'User',
           scopeType: t.scopeType,
           scopeRef: t.scopeRef,
@@ -229,7 +234,10 @@ export const POST = withSession(async (req, { session: s }) => {
         itemType,
         scopeType,
         scopeRef,
-        grantTargets: targets.map((t) => ({ scopeType: t.scopeType, scopeRef: t.scopeRef, source: t.source })),
+        grantTargets: targets.map((t) => ({
+          scopeType: t.scopeType, scopeRef: t.scopeRef, source: t.source,
+          ...(t.declaredRef ? { declaredRef: t.declaredRef } : {}),
+        })),
         ...(partialResults ? { grantResults: partialResults } : {}),
         ...(ownerUpn ? { ownerUpn } : {}),
         permission,

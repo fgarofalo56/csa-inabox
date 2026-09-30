@@ -116,8 +116,10 @@ const ALREADY_GONE = /\b404\b|NotFound|RoleAssignmentNotFound/i;
  *   created unknown → left in place and returned in `kept`, because revoking
  *                     it could remove access held before the request.
  *
- * A scope with no revoke path (an ADLS grant with no recorded id, or a Loom
- * workspace role) is also returned in `kept`. Never throws.
+ * A grant with no revoke path is returned in `kept` with that reason, checked
+ * before whether it was created: an ADLS grant with no recorded role-assignment
+ * id, or a scope this module has no revoke for (a Loom workspace role, an ADLS
+ * path). Never throws.
  */
 export async function revokeLandedGrants(
   ctx: Pick<LandedGrantContext, 'requesterId' | 'requesterUpn' | 'permission'>,
@@ -129,19 +131,24 @@ export async function revokeLandedGrants(
   const by = session.claims.upn || session.claims.oid;
   for (const r of landedGrants(results)) {
     if (r.created === false) continue;
+    const noPath = noRevokePath(r);
+    if (noPath) {
+      kept.push({ ...r, detail: noPath });
+      continue;
+    }
     if (r.created !== true) {
       kept.push({ ...r, detail: 'Could not determine whether the requester held this role before the request, so it was left in place.' });
       continue;
     }
     let failure: string | undefined;
-    if (r.scopeType === 'adls-container' && r.roleAssignmentId) {
+    if (r.scopeType === 'adls-container') {
       try {
-        await revokeContainerRoleAssignment(r.roleAssignmentId);
+        await revokeContainerRoleAssignment(r.roleAssignmentId!);
       } catch (e: any) {
         const msg = (e?.message || String(e)).slice(0, 300);
         if (!ALREADY_GONE.test(msg)) failure = msg;
       }
-    } else if (r.scopeType === 'warehouse' || r.scopeType === 'kql-database') {
+    } else {
       const out = await revokeStructuredGrant({
         principalId: ctx.requesterId,
         principalName: ctx.requesterUpn,
@@ -151,8 +158,6 @@ export async function revokeLandedGrants(
         permission: ctx.permission,
       });
       if (out.status !== 'revoked') failure = out.detail || `revoke ${out.status}`;
-    } else {
-      failure = 'No automatic revoke exists for this scope.';
     }
     if (failure) {
       kept.push({ ...r, detail: `Revoke failed: ${failure}` });
@@ -162,4 +167,15 @@ export async function revokeLandedGrants(
     revoked.push(r);
   }
   return { revoked, kept };
+}
+
+/** Why `r` cannot be revoked automatically, or undefined when it can. */
+function noRevokePath(r: AccessRequestGrantResult): string | undefined {
+  if (r.scopeType === 'adls-container') {
+    return r.roleAssignmentId
+      ? undefined
+      : 'No role-assignment id was recorded for this grant, so it could not be revoked automatically.';
+  }
+  if (r.scopeType === 'warehouse' || r.scopeType === 'kql-database') return undefined;
+  return `No automatic revoke exists for ${r.scopeType} grants, so it was left in place.`;
 }

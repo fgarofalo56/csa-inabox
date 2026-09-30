@@ -12335,13 +12335,13 @@
           }
         },
         {
-          "id": "sec:verdict-call:apps/fiab-console/app/api/items/[type]/[id]/sensitivity-label/route.ts#PATCH:enforceCapability:71",
+          "id": "sec:verdict-call:apps/fiab-console/app/api/items/[type]/[id]/sensitivity-label/route.ts#PATCH:enforceCapability:81",
           "kind": "verdict-call",
           "provenance": "declared",
           "label": "PATCH /api/items/[type]/[id]/sensitivity-label -> enforceCapability",
           "facet": {
             "kind": "verdict-call",
-            "callSite": "PATCH /api/items/[type]/[id]/sensitivity-label:71",
+            "callSite": "PATCH /api/items/[type]/[id]/sensitivity-label:81",
             "symbol": "enforceCapability",
             "returnsVerdictUnion": true,
             "pathsToPrivilegedSink": 1,
@@ -48764,7 +48764,7 @@
           "deployedAs": "loom-console"
         },
         {
-          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/items/[type]/[id]/sensitivity-label/route.ts#PATCH:enforceCapability:71",
+          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/items/[type]/[id]/sensitivity-label/route.ts#PATCH:enforceCapability:81",
           "codeModuleId": "code:apps/fiab-console/app/api/items/[type]/[id]/sensitivity-label/route.ts",
           "deployedAs": "loom-console"
         },
