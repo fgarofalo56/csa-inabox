@@ -133,6 +133,9 @@ jobs:
       - name: kv-secret-purpose (every Key Vault read declares its name-space)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-kv-secret-purpose.mjs
+      - name: shortcut-secret-resolver (only the resolver imports getKeyVaultSecret / getShortcutSecretValue, and does not re-export them)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-shortcut-secret-resolver.mjs
       - name: containerlog-query-scope (a log query must not be able to count its own output)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-containerlog-query-scope.mjs

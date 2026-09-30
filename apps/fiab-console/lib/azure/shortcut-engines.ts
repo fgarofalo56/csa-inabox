@@ -27,10 +27,12 @@ import {
   writeUcVolumesFile,
   deleteUcVolumesFile,
 } from './databricks-client';
-import {
-  getKeyVaultSecret,
-  keyVaultConfigGate,
-} from './shortcut-credentials';
+import { keyVaultConfigGate } from './shortcut-credentials';
+// Shortcut credentials are resolved ONLY through the resolver, which applies the
+// `shortcut-credential` purpose policy and the ownership check before any vault
+// call (`scripts/ci/check-shortcut-secret-resolver.mjs` enforces the import).
+import { resolveShortcutSecret, type ShortcutSecretOwner } from './shortcut-secret-resolver';
+import { networkFailureReason } from './shortcut-error-hygiene';
 // The UC storage-credential + external-location calls come from the AUDITED
 // facade, NOT from shortcut-credentials directly: that module's private
 // transport writes no Loom audit row, and creating a storage credential is the
@@ -108,6 +110,20 @@ export interface AbfssParts {
  *   onelake://<workspace>/<lakehouse>/<path>  (internal Loom OneLake, cross-workspace)
  *   internal://<container>/<path>  (internal Loom lakehouse, account-relative)
  */
+/**
+ * Escape `value` for placement inside `levels` nested T-SQL string literals.
+ * One level (`'…'`) doubles each quote. A literal inside `EXEC('…')` is two
+ * levels, so each quote becomes four: the outer literal decodes `''''` to
+ * `''`, which the inner literal decodes to `'`. Every value interpolated into
+ * a T-SQL literal in this file goes through here.
+ */
+export function sqlLiteralAt(value: string, levels: 1 | 2): string {
+  if (levels !== 1 && levels !== 2) throw new Error(`sqlLiteralAt: unsupported literal depth ${String(levels)}`);
+  let out = String(value);
+  for (let i = 0; i < levels; i++) out = escapeSqlLiteral(out);
+  return out;
+}
+
 export function parseAbfss(targetUri: string, internalAccount?: () => string): AbfssParts | null {
   const u = (targetUri || '').trim();
   let m = u.match(ABFSS_RE);
@@ -359,7 +375,7 @@ async function ensureServerlessDb(): Promise<void> {
   if (serverlessDbEnsured) return;
   await executeQuery(
     serverlessTarget('master'),
-    `IF NOT EXISTS (SELECT 1 FROM sys.databases WHERE name = '${serverlessDb()}') EXEC('CREATE DATABASE [${serverlessDb()}]');`,
+    `IF NOT EXISTS (SELECT 1 FROM sys.databases WHERE name = '${sqlLiteralAt(serverlessDb(), 1)}') EXEC('CREATE DATABASE [${sqlLiteralAt(serverlessDb(), 1)}]');`,
   );
   serverlessDbEnsured = true;
 }
@@ -699,21 +715,22 @@ export async function createTablesShortcut(args: {
     const obj = synapseObject(args.name);
     const cred = `loom_adls_sas_${args.name.replace(/[^a-z0-9_]+/gi, '_')}`.toLowerCase();
     const dsName = `${cred}_ds`;
-    // SECRET must NOT carry a leading '?'; escape single quotes for the T-SQL literal.
-    const sasSecret = escapeSqlLiteral(sas.trim().replace(/^\?+/, ''));
+    // SECRET must NOT carry a leading '?'.
+    const sasSecret = sqlLiteralAt(sas.trim().replace(/^\?+/, ''), 1);
     const location = `https://${account.split('.')[0]}.${getDfsSuffix()}/${container}`;
-    const key = escapeSqlLiteral((path || '').replace(/^\/+/, ''));
+    // BULK '…' sits inside EXEC('…'): two literal levels.
+    const key = sqlLiteralAt((path || '').replace(/^\/+/, ''), 2);
     const csvOpts = fmt === 'CSV' ? `, PARSER_VERSION = ''2.0'', HEADER_ROW = TRUE` : '';
     const ddl =
       `IF NOT EXISTS (SELECT 1 FROM sys.symmetric_keys WHERE name = '##MS_DatabaseMasterKey##') CREATE MASTER KEY;\n` +
-      `IF EXISTS (SELECT 1 FROM sys.external_data_sources WHERE name = '${dsName}') DROP EXTERNAL DATA SOURCE ${dsName};\n` +
-      `IF EXISTS (SELECT 1 FROM sys.database_scoped_credentials WHERE name = '${cred}') DROP DATABASE SCOPED CREDENTIAL ${cred};\n` +
+      `IF EXISTS (SELECT 1 FROM sys.external_data_sources WHERE name = '${sqlLiteralAt(dsName, 1)}') DROP EXTERNAL DATA SOURCE ${dsName};\n` +
+      `IF EXISTS (SELECT 1 FROM sys.database_scoped_credentials WHERE name = '${sqlLiteralAt(cred, 1)}') DROP DATABASE SCOPED CREDENTIAL ${cred};\n` +
       `CREATE DATABASE SCOPED CREDENTIAL ${cred} WITH IDENTITY = 'SHARED ACCESS SIGNATURE', SECRET = '${sasSecret}';\n` +
-      `CREATE EXTERNAL DATA SOURCE ${dsName} WITH (LOCATION = '${location}', CREDENTIAL = ${cred});\n` +
+      `CREATE EXTERNAL DATA SOURCE ${dsName} WITH (LOCATION = '${sqlLiteralAt(location, 1)}', CREDENTIAL = ${cred});\n` +
       `IF SCHEMA_ID('shortcuts') IS NULL EXEC('CREATE SCHEMA shortcuts');\n` +
-      `IF OBJECT_ID('${obj}','V') IS NOT NULL DROP VIEW ${obj};\n` +
-      `EXEC('CREATE VIEW ${obj} AS SELECT * FROM OPENROWSET(BULK ''${key}'', ` +
-      `DATA_SOURCE = ''${dsName}'', FORMAT = ''${fmt}''${csvOpts}) AS r');`;
+      `IF OBJECT_ID('${sqlLiteralAt(obj, 1)}','V') IS NOT NULL DROP VIEW ${obj};\n` +
+      `EXEC('CREATE VIEW ${sqlLiteralAt(obj, 1)} AS SELECT * FROM OPENROWSET(BULK ''${key}'', ` +
+      `DATA_SOURCE = ''${sqlLiteralAt(dsName, 2)}'', FORMAT = ''${sqlLiteralAt(fmt, 2)}''${csvOpts}) AS r');`;
     await ensureServerlessDb();
     await executeQuery(serverlessTarget(serverlessDb()), ddl);
     return { engine: 'synapse', engineObject: synapseQualified(obj) };
@@ -741,12 +758,13 @@ export async function createTablesShortcut(args: {
     // EXTERNAL DATA SOURCE (built by bindExternalSource). The BULK arg is the
     // object key relative to the data source LOCATION.
     if (args.external?.synapseDataSource) {
-      const key = escapeSqlLiteral((args.external.objectKey || ''));
+      // BULK '…' and DATA_SOURCE '…' sit inside EXEC('…'): two literal levels.
+      const key = sqlLiteralAt((args.external.objectKey || ''), 2);
       const ddl =
         `IF SCHEMA_ID('shortcuts') IS NULL EXEC('CREATE SCHEMA shortcuts');\n` +
-        `IF OBJECT_ID('${obj}','V') IS NOT NULL DROP VIEW ${obj};\n` +
-        `EXEC('CREATE VIEW ${obj} AS SELECT * FROM OPENROWSET(BULK ''${key}'', ` +
-        `DATA_SOURCE = ''${args.external.synapseDataSource}'', FORMAT = ''${fmt}''${csvOpts}) AS r');`;
+        `IF OBJECT_ID('${sqlLiteralAt(obj, 1)}','V') IS NOT NULL DROP VIEW ${obj};\n` +
+        `EXEC('CREATE VIEW ${sqlLiteralAt(obj, 1)} AS SELECT * FROM OPENROWSET(BULK ''${key}'', ` +
+        `DATA_SOURCE = ''${sqlLiteralAt(args.external.synapseDataSource, 2)}'', FORMAT = ''${sqlLiteralAt(fmt, 2)}''${csvOpts}) AS r');`;
       await ensureServerlessDb();
       await executeQuery(serverlessTarget(serverlessDb()), ddl);
       return { engine, engineObject: synapseQualified(obj) };
@@ -760,10 +778,11 @@ export async function createTablesShortcut(args: {
     const bulkUrl = `https://${parts.account}.dfs.core.windows.net/${parts.container}/${parts.path}`;
     // Idempotent external view: drop + recreate so re-creating a shortcut is an
     // upsert (matches the registry's deterministic id).
+    // BULK '…' sits inside EXEC('…'): two literal levels.
     const ddl =
       `IF SCHEMA_ID('shortcuts') IS NULL EXEC('CREATE SCHEMA shortcuts');\n` +
-      `IF OBJECT_ID('${obj}','V') IS NOT NULL DROP VIEW ${obj};\n` +
-      `EXEC('CREATE VIEW ${obj} AS SELECT * FROM OPENROWSET(BULK ''${bulkUrl}'', FORMAT = ''${fmt}''${csvOpts}) AS r');`;
+      `IF OBJECT_ID('${sqlLiteralAt(obj, 1)}','V') IS NOT NULL DROP VIEW ${obj};\n` +
+      `EXEC('CREATE VIEW ${sqlLiteralAt(obj, 1)} AS SELECT * FROM OPENROWSET(BULK ''${sqlLiteralAt(bulkUrl, 2)}'', FORMAT = ''${sqlLiteralAt(fmt, 2)}''${csvOpts}) AS r');`;
     await ensureServerlessDb();
     await executeQuery(serverlessTarget(serverlessDb()), ddl);
     return { engine, engineObject: synapseQualified(obj) };
@@ -825,7 +844,7 @@ export async function dropShortcutObject(args: {
     const obj = parts.length === 3 ? `${parts[1]}.${parts[2]}` : args.engineObject;
     await executeQuery(
       serverlessTarget(db),
-      `IF OBJECT_ID('${obj}','V') IS NOT NULL DROP VIEW ${obj};`,
+      `IF OBJECT_ID('${sqlLiteralAt(obj, 1)}','V') IS NOT NULL DROP VIEW ${obj};`,
     );
     return;
   }
@@ -1040,6 +1059,14 @@ export interface ExternalBinding {
   sharepoint?: { driveId: string; path: string };
 }
 
+/**
+ * Appended to every "the stored credential has the wrong shape" error. The
+ * message describes the EXPECTED shape only: the resolved value (or any slice
+ * of it) is never part of an error, because these messages reach API responses
+ * and the registry's `statusDetail`.
+ */
+export const SECRET_SHAPE_MISMATCH = 'The stored value does not have that shape; re-save the credential.';
+
 export async function bindExternalSource(args: {
   lakehouseId: string;
   name: string;
@@ -1047,8 +1074,15 @@ export async function bindExternalSource(args: {
   targetUri: string;
   /** Optional — SharePoint/OneDrive resolves on the UAMI via Graph (no KV secret). */
   credentialRef?: ShortcutCredentialRef;
+  /**
+   * On whose behalf `credentialRef.keyVaultSecret` is resolved — the shortcut
+   * item, or the principal writing the registry row. Required so no caller can
+   * resolve a credential without naming an owner (see shortcut-secret-resolver).
+   */
+  owner: ShortcutSecretOwner;
 }): Promise<ExternalBinding | EngineGate> {
-  const { lakehouseId, name, targetType, targetUri, credentialRef } = args;
+  const { lakehouseId, name, targetType, targetUri, credentialRef, owner } = args;
+  const readSecret = (secretName: string) => resolveShortcutSecret(secretName, owner);
 
   // --- SharePoint / OneDrive: resolve the drive item on the UAMI via Graph. ---
   // No per-shortcut Key Vault credential — Microsoft Graph is the data plane, on
@@ -1085,7 +1119,7 @@ export async function bindExternalSource(args: {
   // the token is expired/invalid (the "broken" state — fix the KV secret + Retry).
   // Learn: https://learn.microsoft.com/azure/databricks/delta-sharing/read-data-open
   if (targetType === 'delta_sharing') {
-    const raw = (await getKeyVaultSecret(secretName)).trim();
+    const raw = (await readSecret(secretName)).trim();
     let profile: { shareCredentialsVersion?: number; endpoint?: string; bearerToken?: string; expirationTime?: string };
     try {
       profile = JSON.parse(raw);
@@ -1119,8 +1153,13 @@ export async function bindExternalSource(args: {
     try {
       testRes = await fetchWithTimeout(sharesUrl, { headers: { Authorization: `Bearer ${profile.bearerToken}` } });
     } catch (netErr: any) {
+      // The endpoint comes from the stored credential file, so neither it nor a
+      // transport message that may embed it is echoed — only a symbolic reason.
       throw Object.assign(
-        new Error(`Delta Sharing endpoint unreachable: ${sharesUrl} — ${netErr?.message || netErr}`),
+        new Error(
+          `Delta Sharing endpoint in the credential file '${secretName}' is unreachable ` +
+          `(${networkFailureReason(netErr)}). Check the endpoint in the credential file, then Retry.`,
+        ),
         { code: 'delta_sharing_unreachable' },
       );
     }
@@ -1137,7 +1176,9 @@ export async function bindExternalSource(args: {
     }
     if (!testRes.ok) {
       throw Object.assign(
-        new Error(`Delta Sharing endpoint returned HTTP ${testRes.status}: ${sharesUrl}`),
+        new Error(
+          `Delta Sharing endpoint in the credential file '${secretName}' returned HTTP ${testRes.status}.`,
+        ),
         { code: 'delta_sharing_unreachable' },
       );
     }
@@ -1164,13 +1205,14 @@ export async function bindExternalSource(args: {
   // that lake — granted as part of Synapse Link setup).
   // Learn: https://learn.microsoft.com/power-apps/maker/data-platform/azure-synapse-link-data-lake
   if (targetType === 'dataverse') {
-    const linkedPath = (await getKeyVaultSecret(secretName)).trim();
+    const linkedPath = (await readSecret(secretName)).trim();
     const parts = parseAbfss(linkedPath);
     if (!parts) {
       throw Object.assign(
         new Error(
           `Dataverse Synapse-Link secret '${secretName}' must contain the linked ADLS Gen2 path ` +
-          `(abfss://<container>@<acct>.dfs.core.windows.net/... or the https DFS form); got: ${linkedPath.slice(0, 80)}`,
+          '(abfss://<container>@<acct>.dfs.core.windows.net/... or the https DFS form). ' +
+          SECRET_SHAPE_MISMATCH,
         ),
         { code: 'bad_dataverse_secret' },
       );
@@ -1204,7 +1246,7 @@ export async function bindExternalSource(args: {
           '(Synapse Serverless has no native GCS connector).',
       };
     }
-    const secret = await getKeyVaultSecret(secretName);
+    const secret = await readSecret(secretName);
     let sa: { client_email?: string; private_key_id?: string; private_key?: string };
     try {
       sa = JSON.parse(secret);
@@ -1221,14 +1263,14 @@ export async function bindExternalSource(args: {
   }
 
   // S3 — prefer UC (IAM role) when Databricks is configured; else Synapse (access keys).
-  const secret = await getKeyVaultSecret(secretName);
+  const secret = await readSecret(secretName);
   if (engine === 'databricks') {
     const roleArn = secret.trim();
     if (!/^arn:aws[a-z-]*:iam::\d+:role\//i.test(roleArn)) {
       throw Object.assign(
         new Error(
           `S3 secret '${secretName}' must be an AWS IAM role ARN for the Databricks UC engine ` +
-          `(arn:aws:iam::<acct>:role/<name>); got: ${roleArn.slice(0, 60)}`,
+          '(arn:aws:iam::<acct>:role/<name>). ' + SECRET_SHAPE_MISMATCH,
         ),
         { code: 'bad_s3_secret' },
       );
@@ -1257,14 +1299,14 @@ export async function bindExternalSource(args: {
     const ddl =
       `IF NOT EXISTS (SELECT 1 FROM sys.symmetric_keys WHERE name = '##MS_DatabaseMasterKey##') ` +
       `CREATE MASTER KEY;\n` +
-      `IF EXISTS (SELECT 1 FROM sys.external_data_sources WHERE name = '${dsName}') ` +
+      `IF EXISTS (SELECT 1 FROM sys.external_data_sources WHERE name = '${sqlLiteralAt(dsName, 1)}') ` +
       `DROP EXTERNAL DATA SOURCE ${dsName};\n` +
-      `IF EXISTS (SELECT 1 FROM sys.database_scoped_credentials WHERE name = '${cred}') ` +
+      `IF EXISTS (SELECT 1 FROM sys.database_scoped_credentials WHERE name = '${sqlLiteralAt(cred, 1)}') ` +
       `DROP DATABASE SCOPED CREDENTIAL ${cred};\n` +
       `CREATE DATABASE SCOPED CREDENTIAL ${cred} ` +
-      `WITH IDENTITY = 'S3 Access Key', SECRET = '${escapeSqlLiteral(secret.trim())}';\n` +
+      `WITH IDENTITY = 'S3 Access Key', SECRET = '${sqlLiteralAt(secret.trim(), 1)}';\n` +
       `CREATE EXTERNAL DATA SOURCE ${dsName} ` +
-      `WITH (LOCATION = '${obj.prefix}', CREDENTIAL = ${cred});`;
+      `WITH (LOCATION = '${sqlLiteralAt(obj.prefix, 1)}', CREDENTIAL = ${cred});`;
     await ensureServerlessDb();
     await executeQuery(serverlessTarget(serverlessDb()), ddl);
     return { readUri: targetUri, synapse: { dataSource: dsName, scopedCredential: cred } };
