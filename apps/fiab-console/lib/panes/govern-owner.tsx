@@ -21,7 +21,7 @@ import { clientFetch } from '@/lib/client-fetch';
  * structural cross-owner-isolation guarantee.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Spinner, Badge, Button, Caption1, Body1, Subtitle2, Text,
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
@@ -134,18 +134,27 @@ export function GovernOwnerPane() {
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [gate, setGate] = useState<RefreshGate | null>(null);
+  // Unmount safety. The on-open refresh schedules a delayed re-read; if the
+  // pane unmounts first, that timer (and any fetch still in flight) must not
+  // touch state. An uncleared timer here outlived the vitest jsdom teardown
+  // and failed the required `vitest (node 20)` check with
+  // `ReferenceError: window is not defined` (job 109925057459).
+  const aliveRef = useRef(true);
+  const reloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(async () => {
+    if (!aliveRef.current) return;
     setError(null);
     try {
       const r = await clientFetch('/api/governance/govern/owner');
       const j = await r.json();
+      if (!aliveRef.current) return;
       if (!j.ok) { setError(j.error || 'Failed to load posture'); return; }
       setData(j as OwnerPosture);
     } catch (e: any) {
-      setError(e?.message || String(e));
+      if (aliveRef.current) setError(e?.message || String(e));
     } finally {
-      setLoading(false);
+      if (aliveRef.current) setLoading(false);
     }
   }, []);
 
@@ -157,6 +166,7 @@ export function GovernOwnerPane() {
     try {
       const r = await clientFetch('/api/governance/govern/refresh', { method: 'POST' });
       const j = await r.json();
+      if (!aliveRef.current) return;
       if (j.ok === false && j.gate === 'not_configured') {
         setGate({ missingEnvVar: j.missingEnvVar, bicepModule: j.bicepModule, message: j.message, gateReason: j.gateReason });
       } else {
@@ -166,16 +176,38 @@ export function GovernOwnerPane() {
       /* dispatch failure is non-fatal — live compute still serves data */
     } finally {
       // The Function writes to Cosmos asynchronously; re-read shortly after to
-      // surface fresh aggregates without blocking the initial render.
-      setTimeout(() => { void load(); setRefreshing(false); }, 1500);
+      // surface fresh aggregates without blocking the initial render. Never
+      // schedule once unmounted. Replace (not stack) a pending re-read: the
+      // Refresh button is disabled until the timer fires, so a click cannot
+      // overlap one — but React StrictMode (reactStrictMode: true) runs the
+      // mount effect twice, so two on-open refreshes resolve while mounted and
+      // both reach this line. Without the replace, the first timer's id is
+      // overwritten and the cleanup can never clear it.
+      if (aliveRef.current) {
+        if (reloadTimerRef.current !== null) clearTimeout(reloadTimerRef.current);
+        reloadTimerRef.current = setTimeout(() => {
+          reloadTimerRef.current = null;
+          if (!aliveRef.current) return;
+          void load();
+          setRefreshing(false);
+        }, 1500);
+      }
     }
   }, [load]);
 
   useEffect(() => {
+    aliveRef.current = true;
     // Initial render reads cached/live posture immediately (not blocked on the
     // Function), then the on-open refresh runs in the background.
     void load();
     void refresh();
+    return () => {
+      aliveRef.current = false;
+      if (reloadTimerRef.current !== null) {
+        clearTimeout(reloadTimerRef.current);
+        reloadTimerRef.current = null;
+      }
+    };
   }, [load, refresh]);
 
   const k = data?.kpis;
