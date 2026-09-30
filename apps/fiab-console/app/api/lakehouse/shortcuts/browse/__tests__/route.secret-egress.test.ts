@@ -35,9 +35,10 @@ vi.mock('@/lib/auth/session', () => ({
 const VAULT_VALUE = 'SENTINEL-VAULT-VALUE-NOT-A-REAL-SECRET';
 
 /** The metadata read the resolver makes: one version, tagged as saved by `oid`. */
-function versionsFor(oid: string, lakehouseId?: string) {
+function versionsFor(oid: string, lakehouseId?: string, tid?: string) {
   const tags: Record<string, string> = { 'loom-owner-oid': oid, 'loom-purpose': 'shortcut-credential' };
   if (lakehouseId) tags['loom-lakehouse'] = lakehouseId;
+  if (tid) tags['loom-owner-tid'] = tid;
   return new Response(JSON.stringify({
     value: [{ id: 'x', attributes: { enabled: true, created: 1 }, tags }],
   }), { status: 200 });
@@ -69,10 +70,10 @@ vi.mock('@/lib/azure/adls-client', () => ({
 vi.mock('@/lib/azure/lakehouse-shortcuts', () => ({ listShortcutSecretBindings: vi.fn(async () => []) }));
 
 /** Default vault behaviour: metadata says user-1 saved it; the value read returns `value`. */
-function vault(value: string, ownerOid = 'user-1', lakehouseId?: string) {
+function vault(value: string, ownerOid = 'user-1', lakehouseId?: string, ownerTid?: string) {
   return async (url: any) => {
     const u = String(url);
-    if (u.includes('/versions')) return versionsFor(ownerOid, lakehouseId);
+    if (u.includes('/versions')) return versionsFor(ownerOid, lakehouseId, ownerTid);
     if (u.includes('/secrets/')) return new Response(JSON.stringify({ value }), { status: 200 });
     return new Response('{}', { status: 200 });
   };
@@ -259,6 +260,25 @@ describe('the legitimate browse flow still works', () => {
     expect(valueReads()).toEqual([]);
 
     const ok = await GET(req('sourceType=dataverse&kvSecret=loom-sc-abc&lakehouseId=lh-a'));
+    expect(ok.status).toBe(200);
+    expect(valueReads()).toEqual(['https://loomkv.vault.azure.net/secrets/loom-sc-abc?api-version=7.4']);
+  });
+
+  it('refuses a credential recorded for the same oid in another tenant, without reading it', async () => {
+    // WHAT BREAKS IT: browse resolving without the session's tid (`tid:
+    // claims.tid` dropped from the owner), so the tenant comparison is skipped
+    // and the value is read (200). The session tid is 't1'; the same fixture
+    // recorded under 't1' is read, which pins that the refusal comes from the
+    // tenant and not from the oid.
+    const path = 'abfss://dataverse@contoso.dfs.core.windows.net/exports/tables';
+    fetchWithTimeoutMock.mockImplementation(vault(path, 'user-1', undefined, 't2'));
+    const res = await GET(req('sourceType=dataverse&kvSecret=loom-sc-abc'));
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toMatch(/saved by another user/);
+    expect(valueReads()).toEqual([]);
+
+    fetchWithTimeoutMock.mockImplementation(vault(path, 'user-1', undefined, 't1'));
+    const ok = await GET(req('sourceType=dataverse&kvSecret=loom-sc-abc'));
     expect(ok.status).toBe(200);
     expect(valueReads()).toEqual(['https://loomkv.vault.azure.net/secrets/loom-sc-abc?api-version=7.4']);
   });

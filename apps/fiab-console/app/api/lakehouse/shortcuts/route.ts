@@ -133,7 +133,7 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   // A `loom-sc-` credential's owner is the mint record written by
   // POST /api/lakehouse/shortcuts/credentials (see shortcut-secret-resolver).
   const secretOwner: ShortcutSecretOwner = {
-    kind: 'principal', via: 'request', oid: createdByOid, upn: createdBy, lakehouseId, targetType,
+    kind: 'principal', via: 'request', oid: createdByOid, upn: createdBy, tid: tenantId, lakehouseId, targetType,
   };
 
   // Every path below may persist `credentialRef` on a registry row (active,

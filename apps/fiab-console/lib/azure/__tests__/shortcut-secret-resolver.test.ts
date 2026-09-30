@@ -155,6 +155,38 @@ describe('loom-sc- — the mint record decides', () => {
     noCalls();
   });
 
+  // Tenant: an object id is unique only within its tenant. WHAT BREAKS THESE:
+  // dropping the tid comparison turns the same-oid/different-tid case green
+  // (the oids match); requiring tid on both sides turns the "one side has no
+  // tid" case red; comparing tid case-sensitively turns the mixed-case one red.
+  it('refuses the same oid from a different tenant, without reading it', async () => {
+    ownerRecord.mockResolvedValue({ exists: true, owner: { oid: 'oid-me', upn: 'me@contoso.com', tid: 'tid-a', lakehouseId: 'lh-1' } });
+    const err = await resolveShortcutSecret('loom-sc-x', { ...ME, tid: 'tid-b' } as ShortcutSecretOwner).catch((e) => e);
+    expect(err).toBeInstanceOf(ShortcutSecretOwnershipError);
+    expect(err.message).toMatch(/saved by another user/);
+    noCalls();
+  });
+
+  it('accepts the same oid from the same tenant (compared case-insensitively)', async () => {
+    ownerRecord.mockResolvedValue({ exists: true, owner: { oid: 'oid-me', upn: 'me@contoso.com', tid: 'TID-A', lakehouseId: 'lh-1' } });
+    await expect(resolveShortcutSecret('loom-sc-x', { ...ME, tid: 'tid-a' } as ShortcutSecretOwner)).resolves.toBe('resolved-value');
+    expect(vault).toHaveBeenCalledWith('loom-sc-x');
+  });
+
+  it('applies the tenant on the UPN fallback too', async () => {
+    ownerRecord.mockResolvedValue({ exists: true, owner: { upn: 'me@contoso.com', tid: 'tid-a' } });
+    await expect(resolveShortcutSecret('loom-sc-x', { kind: 'principal', via: 'request', upn: 'me@contoso.com', tid: 'tid-b' }))
+      .rejects.toBeInstanceOf(ShortcutSecretOwnershipError);
+    noCalls();
+  });
+
+  it('skips the tenant comparison when only one side carries a tid', async () => {
+    ownerRecord.mockResolvedValue({ exists: true, owner: { oid: 'oid-me', tid: 'tid-a' } });
+    await expect(resolveShortcutSecret('loom-sc-x', ME)).resolves.toBe('resolved-value');
+    ownerRecord.mockResolvedValue({ exists: true, owner: { oid: 'oid-me' } });
+    await expect(resolveShortcutSecret('loom-sc-x', { ...ME, tid: 'tid-b' } as ShortcutSecretOwner)).resolves.toBe('resolved-value');
+  });
+
   it('falls back to UPN when the caller has no oid (a stored row created before oids were recorded)', async () => {
     await expect(resolveShortcutSecret('loom-sc-x', { kind: 'principal', via: 'row', upn: 'ME@contoso.com', lakehouseId: 'lh-1' }))
       .resolves.toBe('resolved-value');

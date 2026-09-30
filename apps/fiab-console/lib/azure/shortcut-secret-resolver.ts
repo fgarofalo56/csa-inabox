@@ -28,7 +28,8 @@
  *                          records the saving principal (oid, UPN, tenant) and
  *                          the lakehouse as Key Vault secret tags
  *                          (`putShortcutSecret(name, value, owner)`); the
- *                          principal must match, and so must the lakehouse when
+ *                          principal must match (tenant too, when both sides
+ *                          carry one), and so must the lakehouse when
  *                          both sides name one. A name with NO record (saved
  *                          before records existed) falls back to the earliest
  *                          registry row that binds it (`createdBy` of that row,
@@ -65,6 +66,8 @@ export type ShortcutSecretOwner =
       kind: 'principal';
       oid?: string | null;
       upn?: string | null;
+      /** Entra tenant id of the principal, when known. Compared only when the record also has one. */
+      tid?: string | null;
       /** The lakehouse the read is for, when known (the registry partition key). */
       lakehouseId?: string | null;
       /** `request`: the caller supplied the name. `row`: a stored row's creator (Test). */
@@ -162,11 +165,18 @@ export function firstBinding(rows: ShortcutSecretBinding[]): ShortcutSecretBindi
 
 const lower = (v: string | null | undefined) => String(v || '').trim().toLowerCase();
 
-/** Does `who` match the recorded principal? oid when both sides carry one, else UPN. */
+/**
+ * Does `who` match the recorded principal? The tenant must agree when both
+ * sides carry one (an object id is unique only within its tenant); then oid
+ * when both sides carry one, else UPN.
+ */
 function samePrincipal(
-  recorded: { oid?: string | null; upn?: string | null },
-  who: { oid?: string | null; upn?: string | null },
+  recorded: { oid?: string | null; upn?: string | null; tid?: string | null },
+  who: { oid?: string | null; upn?: string | null; tid?: string | null },
 ): boolean {
+  const rt = lower(recorded.tid);
+  const wt = lower(who.tid);
+  if (rt && wt && rt !== wt) return false;
   const ro = lower(recorded.oid);
   const wo = lower(who.oid);
   if (ro && wo) return ro === wo;
@@ -248,7 +258,7 @@ async function assertShortcutSecretOwned(name: string, owner: ShortcutSecretOwne
   }
 
   // loom-sc-: the mint record decides; a legacy name falls back to the registry.
-  const who = { oid: owner.oid, upn: owner.upn };
+  const who = { oid: owner.oid, upn: owner.upn, tid: owner.tid };
   if (!lower(who.oid) && !lower(who.upn)) {
     refuse(name, owner, {
       request: `Loom could not identify who is using Key Vault secret '${name}', so it did not read it.`,

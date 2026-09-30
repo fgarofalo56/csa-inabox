@@ -182,6 +182,7 @@ export function ShortcutWizardDialog() {
                         bucket={extCreds.bucket}
                         region={extCreds.region}
                         kvSecret={extCreds.secretName}
+                        lakehouseId={shortcutLakehouseId}
                         onSelect={(path) => setExtCreds((c) => ({ ...c, selectedPath: path }))}
                         selectedPath={extCreds.selectedPath}
                       />

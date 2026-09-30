@@ -123,12 +123,12 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
       const s3Region = sourceType === 's3' ? ((sp.get('region') || 'us-east-1').trim()) : '';
       if (sourceType === 's3') assertValidAwsRegion(s3Region);
 
-      const claims = session.claims as { oid?: string; upn?: string; email?: string };
+      const claims = session.claims as { oid?: string; upn?: string; email?: string; tid?: string };
       const lakehouseId = (sp.get('lakehouseId') || '').trim() || undefined;
       const secretValue = (await resolveShortcutSecret(
         kvSecret,
         {
-          kind: 'principal', via: 'request', oid: claims.oid, upn: claims.upn || claims.email,
+          kind: 'principal', via: 'request', oid: claims.oid, upn: claims.upn || claims.email, tid: claims.tid,
           lakehouseId, targetType: sourceType,
         },
         { vault: 'shortcut' },

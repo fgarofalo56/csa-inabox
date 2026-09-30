@@ -153,8 +153,33 @@ describe('POST /api/lakehouse/shortcuts — credential checks', () => {
     }));
     expect(res.status).toBe(200);
     expect(bindExternalSource).toHaveBeenCalledWith(expect.objectContaining({
-      owner: { kind: 'principal', via: 'request', oid: 'oid-me', upn: 'me@contoso.com', lakehouseId: 'bronze', targetType: 's3' },
+      owner: { kind: 'principal', via: 'request', oid: 'oid-me', upn: 'me@contoso.com', tid: 't1', lakehouseId: 'bronze', targetType: 's3' },
     }));
+  });
+
+  it('refuses a credential recorded for the same oid in another tenant, before binding, with no row', async () => {
+    // WHAT BREAKS IT: the create route building the owner without the session's
+    // tid, so the tenant comparison is skipped and the bind runs. The session
+    // tid is 't1'; the same record under 't1' binds (the test above).
+    ownerRecord.mockResolvedValue({ exists: true, owner: { oid: 'oid-me', tid: 't2', lakehouseId: 'bronze' } });
+    const res = await CREATE(postReq({
+      lakehouseId: 'bronze', name: 'p', kind: 'files', targetType: 's3', targetUri: 's3://b/k',
+      credentialRef: { kind: 'awsKeys', keyVaultSecret: 'loom-sc-mine' },
+    }));
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('shortcut_secret_not_owned');
+    expect(bindExternalSource).not.toHaveBeenCalled();
+    expect(createShortcut).not.toHaveBeenCalled();
+    expect(vault).not.toHaveBeenCalled();
+
+    ownerRecord.mockResolvedValue({ exists: true, owner: { oid: 'oid-me', tid: 't1', lakehouseId: 'bronze' } });
+    (bindExternalSource as any).mockResolvedValue({ readUri: 's3://b/k' });
+    const ok = await CREATE(postReq({
+      lakehouseId: 'bronze', name: 'p', kind: 'files', targetType: 's3', targetUri: 's3://b/k',
+      credentialRef: { kind: 'awsKeys', keyVaultSecret: 'loom-sc-mine' },
+    }));
+    expect(ok.status).toBe(200);
+    expect(bindExternalSource).toHaveBeenCalledTimes(1);
   });
 
   it('a SAS-probe error never carries URL query parameters into the response or the stored row', async () => {
