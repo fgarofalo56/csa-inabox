@@ -1156,6 +1156,7 @@ export function LakehouseEditor({ item, id }: Props) {
             <TierDialog
               open={tierDlgOpen}
               onOpenChange={setTierDlgOpen}
+              lakehouseId={id}
               container={activeContainer || ''}
               path={tierDlgEntry?.name ?? ''}
               onTierChanged={(newTier) => { if (tierDlgEntry) onTierChanged(tierDlgEntry, newTier); }}

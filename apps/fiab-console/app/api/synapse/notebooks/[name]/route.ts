@@ -19,10 +19,25 @@
  *
  * Learn (dev-plane artifact REST, list/PUT/DELETE):
  *   https://learn.microsoft.com/rest/api/synapse/data-plane/notebook
+ *
+ * Authorization (#4619): PUT and DELETE write to (or remove from) the
+ * DEPLOYMENT-DEFAULT Synapse workspace, which every Synapse notebook item
+ * shares, and PUT also writes a backup blob into the shared silver container.
+ * They are ITEM-SCOPED: the editor sends `?itemId=` for the notebook item it
+ * is editing, and `authorizeNotebookWrite` requires a write role on that item
+ * and a name bound to it (lib/notebook/synapse-notebook-binding). A tenant
+ * admin may write any name; a non-admin with no `itemId` gets the `admin_only`
+ * 403. The check runs after the name is validated and before the body is read.
+ * GET stays session-scoped. Every verb refuses a name outside NAME_RE
+ * (letters, digits, `_` — so no separator, dot segment, or control character
+ * can reach the ADLS backup path or the dev-plane URL), and a malformed
+ * percent-escape is a 400, not a thrown `URIError`.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
+import { authorizeNotebookWrite } from '@/lib/notebook/synapse-notebook-write';
+import { NOTEBOOK_NAME_RE as NAME_RE } from '@/lib/notebook/synapse-notebook-binding';
 import {
   synapseConfigGate, listNotebooks, upsertNotebook, deleteNotebook,
   type SynapseNotebook,
@@ -32,8 +47,6 @@ import { logSafe } from '@/lib/util/log-safe';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-const NAME_RE = /^[A-Za-z0-9_]{1,260}$/;
 
 /**
  * Best-effort .ipynb backup of the published notebook to ADLS silver, so the
@@ -75,12 +88,26 @@ function gate() {
   return null;
 }
 
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ name: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+/**
+ * The notebook name from the route segment, or null when it is not a valid
+ * notebook name (including a malformed percent-escape, which would otherwise
+ * throw and surface as a 500).
+ */
+function notebookName(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  let name: string;
+  try {
+    name = decodeURIComponent(raw).trim();
+  } catch {
+    return null;
+  }
+  return NAME_RE.test(name) ? name : null;
+}
+
+export const GET = withSession<{ name: string }>(async (_req: NextRequest, { params }) => {
   const g = gate(); if (g) return g;
-  const name = decodeURIComponent((await ctx.params).name).trim();
-  if (!NAME_RE.test(name)) return NextResponse.json({ ok: false, error: 'invalid notebook name' }, { status: 400 });
+  const name = notebookName(params.name);
+  if (!name) return NextResponse.json({ ok: false, error: 'invalid notebook name' }, { status: 400 });
   try {
     const all = await listNotebooks();
     const nb = all.find((n) => n.name === name);
@@ -89,14 +116,16 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ name: stri
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
 
-export async function PUT(req: NextRequest, ctx: { params: Promise<{ name: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+// Item-scoped (see header): a refused caller never reaches `upsertNotebook`
+// or `uploadFile`.
+export const PUT = withSession<{ name: string }>(async (req: NextRequest, { params, session }) => {
   const g = gate(); if (g) return g;
-  const name = decodeURIComponent((await ctx.params).name).trim();
-  if (!NAME_RE.test(name)) return NextResponse.json({ ok: false, error: 'name must be 1-260 chars: letters, digits, _' }, { status: 400 });
+  const name = notebookName(params.name);
+  if (!name) return NextResponse.json({ ok: false, error: 'name must be 1-260 chars: letters, digits, _' }, { status: 400 });
+  const denied = await authorizeNotebookWrite(session, name, req.nextUrl?.searchParams.get('itemId'));
+  if (denied) return denied;
   const body = await req.json().catch(() => ({}));
   const properties = body?.properties as SynapseNotebook['properties'] | undefined;
   if (!properties || typeof properties !== 'object') {
@@ -109,18 +138,19 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ name: strin
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
 
-export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ name: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+// Item-scoped, same check as PUT: a refused caller never reaches `deleteNotebook`.
+export const DELETE = withSession<{ name: string }>(async (req: NextRequest, { params, session }) => {
   const g = gate(); if (g) return g;
-  const name = decodeURIComponent((await ctx.params).name).trim();
-  if (!NAME_RE.test(name)) return NextResponse.json({ ok: false, error: 'invalid notebook name' }, { status: 400 });
+  const name = notebookName(params.name);
+  if (!name) return NextResponse.json({ ok: false, error: 'invalid notebook name' }, { status: 400 });
+  const denied = await authorizeNotebookWrite(session, name, req.nextUrl?.searchParams.get('itemId'));
+  if (denied) return denied;
   try {
     await deleteNotebook(name);
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});

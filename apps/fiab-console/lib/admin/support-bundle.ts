@@ -121,6 +121,8 @@ export interface GatePosture {
   status: string;
   missing: string[];
   availability?: string;
+  /** #4776 — admin-only producer diagnostic (e.g. SCIM Me about the Console identity). The bundle route is withTenantAdmin. */
+  diagnostic?: string;
 }
 export interface ProbeResult {
   name: string;

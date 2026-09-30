@@ -1,6 +1,8 @@
 'use client';
 
 import { clientFetch } from '@/lib/client-fetch';
+import { boundNotebookName, itemIdQuery } from '@/lib/notebook/synapse-notebook-binding';
+import { refusalText } from '@/lib/util/admin-refusal';
 /**
  * Synapse Notebook editor — the heavy-designer surface that brings the Synapse
  * Studio "Develop → Notebooks" experience into Loom 1:1: a multi-cell Spark
@@ -49,6 +51,8 @@ import {
   ChevronDown16Regular, ChevronRight16Regular, Keyboard20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { NewItemCreateGate } from './new-item-gate';
+import { useTenantAdminGate } from '@/lib/components/shared/admin-only-notice';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { loomDocUrl } from '@/lib/learn/content';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -69,11 +73,12 @@ import {
 } from '@/lib/components/notebook/session-config-dialog';
 import {
   type EditorCell, type CellKind, type CellOutput, type CellComment,
-  KIND_LABEL, KIND_MAGIC, LANG_TO_KIND,
+  KIND_LABEL, LANG_TO_KIND,
   toSharedCell, mergeSharedChange, buildRichFromTable,
   parseRunReference, buildRunPreamble, clampProgress,
-  metaToComments, commentsToMeta, SPARK_SNIPPETS,
+  SPARK_SNIPPETS,
 } from './synapse-notebook-cell-adapter';
+import { uid, isConfigureCell, ipynbToCells, cellsToIpynb } from './synapse-notebook-ipynb';
 
 /** Shaped AML schedule row returned by /api/notebook/[id]/schedule. */
 interface AmlScheduleRow {
@@ -221,118 +226,32 @@ function useStyles() {
   return useMemo(() => ({ ...shared, ...local }), [shared, local]);
 }
 
-// ── IPYNB ⇄ editor-cell mapping ───────────────────────────────────────────────
-// EditorCell / CellKind / CellOutput and the KIND_* maps live in the shared
-// ./synapse-notebook-cell-adapter so this editor renders on the shared CodeCell /
-// RichDisplay / MarkdownCell stack (imported at the top of the file). The IPYNB
-// (de)serialisation + magic round-trip helpers below stay here.
-
-function uid(): string {
-  return (typeof crypto !== 'undefined' && crypto.randomUUID)
-    ? crypto.randomUUID() : `c-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-}
-
-// Client-side mirror of the server's parseConfigureMagic detection — only the
-// "is this a %%configure cell?" check. The server does the authoritative parse
-// (and validates the JSON body) when the cell is sent to /execute.
-function isConfigureCell(source: string): boolean {
-  const first = source.split('\n').find((l) => l.trim() !== '')?.trim().toLowerCase() || '';
-  return first.split(/\s+/)[0].startsWith('%%configure');
-}
-
-// Synapse magic %%sql / %%spark etc. carry per-cell language in IPYNB source.
-function detectKind(metaTags: unknown, source: string): CellKind {
-  const head = source.split('\n')[0]?.trim().toLowerCase() || '';
-  if (head.startsWith('%%sql')) return 'sql';
-  if (head.startsWith('%%spark')) return 'spark';
-  if (head.startsWith('%%sparkr') || head.startsWith('%%r')) return 'sparkr';
-  if (head.startsWith('%%csharp')) return 'csharp';
-  return 'pyspark';
-}
-
-function tagsOf(meta: any): string[] {
-  return Array.isArray(meta?.tags) ? meta.tags.map((t: unknown) => String(t)) : [];
-}
-
-// Synapse persists per-cell language as a leading %%magic in the IPYNB source.
-// We strip it for clean editing and re-stamp it on save so language round-trips.
-function stripMagic(source: string, kind: CellKind): string {
-  if (kind === 'pyspark') return source;
-  const lines = source.split('\n');
-  const head = lines[0]?.trim().toLowerCase() || '';
-  if (head.startsWith('%%')) return lines.slice(1).join('\n');
-  return source;
-}
-function withMagic(source: string, kind: CellKind): string {
-  if (kind === 'pyspark') return source;
-  const magic = KIND_MAGIC[kind];
-  const head = source.split('\n')[0]?.trim().toLowerCase() || '';
-  if (head.startsWith(magic.toLowerCase())) return source;
-  return `${magic}\n${source}`;
-}
-
-function ipynbToCells(props: any): EditorCell[] {
-  const raw: any[] = Array.isArray(props?.cells) ? props.cells : [];
-  const out: EditorCell[] = raw.map((c) => {
-    const src = Array.isArray(c?.source) ? c.source.join('') : (typeof c?.source === 'string' ? c.source : '');
-    const isMd = c?.cell_type === 'markdown';
-    const outputs: any[] = Array.isArray(c?.outputs) ? c.outputs : [];
-    const textOut = outputs
-      .map((o) => {
-        if (o?.text) return Array.isArray(o.text) ? o.text.join('') : String(o.text);
-        const d = o?.data?.['text/plain'];
-        return Array.isArray(d) ? d.join('') : (d ? String(d) : '');
-      })
-      .filter(Boolean).join('\n');
-    const tags = tagsOf(c?.metadata);
-    const lang: CellKind = isMd ? 'pyspark' : detectKind(c?.metadata?.tags, src);
-    return {
-      id: uid(),
-      type: isMd ? 'markdown' : 'code',
-      lang,
-      source: isMd ? src : stripMagic(src, lang),
-      output: textOut ? { status: 'ok', text: textOut } : undefined,
-      isParameters: !isMd && tags.includes('parameters'),
-      collapsed: !!(c?.metadata?.jupyter?.source_hidden),
-      outputCollapsed: !!(c?.metadata?.jupyter?.outputs_hidden),
-      comments: metaToComments(c?.metadata),
-    };
-  });
-  return out.length ? out : [{ id: uid(), type: 'code', lang: 'pyspark', source: '' }];
-}
-
-function cellsToIpynb(cells: EditorCell[], pool: string | null, env?: string | null): any {
-  return {
-    nbformat: 4,
-    nbformat_minor: 2,
-    bigDataPool: pool ? { referenceName: pool, type: 'BigDataPoolReference' } : undefined,
-    metadata: {
-      language_info: { name: 'python' },
-      kernelspec: { name: 'synapse_pyspark', display_name: 'Synapse PySpark' },
-      // Synapse stores the attached Spark configuration ("environment") here.
-      ...(env ? { a365ComputeOptions: { id: env, name: env } } : {}),
-    },
-    cells: cells.map((c) => ({
-      cell_type: c.type === 'markdown' ? 'markdown' : 'code',
-      metadata: {
-        ...(c.type === 'code' ? { tags: c.isParameters ? ['parameters'] : [] } : {}),
-        ...((c.collapsed || c.outputCollapsed) ? { jupyter: { ...(c.collapsed ? { source_hidden: true } : {}), ...(c.outputCollapsed ? { outputs_hidden: true } : {}) } } : {}),
-        ...(commentsToMeta(c.comments) ? { loomComments: commentsToMeta(c.comments) } : {}),
-      },
-      source: (c.type === 'code' ? withMagic(c.source, c.lang) : c.source)
-        .split('\n').map((l, i, a) => (i < a.length - 1 ? l + '\n' : l)),
-      ...(c.type === 'code' ? { outputs: [], execution_count: null } : {}),
-    })),
-  };
-}
+// IPYNB ⇄ editor-cell mapping lives in ./synapse-notebook-ipynb (pure, like
+// ./synapse-notebook-cell-adapter, which owns EditorCell / CellKind / KIND_*).
 
 // Markdown rendering uses the shared GFM renderer (tables / fenced code / lists /
 // blockquotes / HR) — lib/notebook/render-markdown, imported at the top of the file.
 
 interface SparkPoolLite { name: string; properties?: { nodeSize?: string; sparkVersion?: string } }
 
+/**
+ * `/items/synapse-notebook/new` has no Loom item yet, so there is no id to
+ * bind a notebook name to and every write route would answer "not found".
+ * Create the item first (the shared create gate), then author under its id.
+ */
 export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: string }) {
+  if (id === 'new') {
+    return (
+      <NewItemCreateGate item={item} createLabel="Create Synapse notebook"
+        intro="A Synapse notebook is a multi-cell Spark notebook that runs on a Synapse Big Data pool. Create the item first; its notebook can then be published to the workspace under the item's name, on Create or Save in the editor." />
+    );
+  }
+  return <SynapseNotebookAuthoring item={item} id={id} />;
+}
+
+function SynapseNotebookAuthoring({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  const adminGate = useTenantAdminGate();
 
   // Notebook catalog (workspace artifacts) + the open notebook.
   const [notebooks, setNotebooks] = useState<{ name: string; language?: string; pool?: string }[]>([]);
@@ -372,6 +291,14 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
 
   // New-notebook name field.
   const [newName, setNewName] = useState('');
+  // #4619 — the name this item publishes under (a non-admin may write only that).
+  const [boundName, setBoundName] = useState<string | null>(null);
+  // Why `boundName` is what it is, so a non-admin is told rather than left at
+  // an empty locked field: 'pending' until the item lookup answers; 'no-token'
+  // when the item id is too short to carry a binding (an older item);
+  // 'no-workspace' when the item record names no workspace; 'unknown' when the
+  // lookup itself failed, so nothing was established either way.
+  const [bindState, setBindState] = useState<'pending' | 'bound' | 'no-token' | 'no-workspace' | 'unknown'>('pending');
 
   // Right-side tool drawers — shared with the other notebook flavours.
   const [variablesOpen, setVariablesOpen] = useState(false);
@@ -605,15 +532,19 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
       try {
         // Resolve the owning workspace, then pull the Cosmos-backed cells.
         const lookup = await clientFetch(`/api/cosmos-items/synapse-notebook/${encodeURIComponent(id)}`);
-        if (!lookup.ok) return;
+        if (!lookup.ok) { if (!cancelled) setBindState('unknown'); return; }
         const item = await lookup.json();
-        if (cancelled || !item?.workspaceId) return;
+        if (cancelled) return;
+        if (!item?.workspaceId) { setBindState('no-workspace'); return; }
+        const bound = boundNotebookName(item.displayName, id);
+        setBoundName(bound);
+        setBindState(bound ? 'bound' : 'no-token');
         const r = await clientFetch(`/api/items/synapse-notebook/${encodeURIComponent(id)}?workspaceId=${encodeURIComponent(item.workspaceId)}`);
         const j = await r.json();
         if (cancelled || !j?.ok) return;
         const props = j.notebook?.properties || {};
         if (!Array.isArray(props.cells) || props.cells.length === 0) return;
-        setOpenName(j.notebook?.name || item.displayName || 'notebook');
+        setOpenName(boundNotebookName(item.displayName, id) ?? j.notebook?.name ?? 'notebook');
         setCells(ipynbToCells(props));
         // #3171 — a saved binding wins, but its ABSENCE must not wipe the pool
         // the server auto-bound on probe; a fresh notebook has no bigDataPool.
@@ -621,7 +552,11 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
         setAttachedEnv((props?.metadata?.a365ComputeOptions?.name as string) ?? null);
         setSessionId(null); setSessionState('none'); setDirty(false);
         setBanner({ intent: 'info', text: 'Loaded notebook cells from the installed app bundle. Open a workspace notebook on the left to edit the published copy.' });
-      } catch { /* fall back to the empty starter cell */ }
+      } catch {
+        // Fall back to the empty starter cell. If the lookup never answered,
+        // the binding is unknown rather than absent.
+        if (!cancelled) setBindState((st) => (st === 'pending' ? 'unknown' : st));
+      }
     })();
     return () => { cancelled = true; };
   }, [id]);
@@ -643,32 +578,34 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
   }, []);
 
   const createNotebook = useCallback(async () => {
-    const name = newName.trim();
+    // A non-admin may create only the item's bound name, so their typed name
+    // is never used; a tenant admin may name any notebook.
+    const name = (adminGate.allowed ? newName.trim() : '') || boundName || '';
     if (!name) return;
     setBanner(null);
     try {
       const r = await clientFetch('/api/synapse/notebooks', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({ name, itemId: id }),
       });
       const j = await r.json();
-      if (!j?.ok) { setBanner({ intent: 'error', text: j?.error || 'Create failed' }); return; }
+      if (!j?.ok) { setBanner({ intent: 'error', text: refusalText(j, r.status) }); return; }
       setNewName('');
       await refreshList();
       await openNotebook(name);
     } catch (e: any) { setBanner({ intent: 'error', text: e?.message || String(e) }); }
-  }, [newName, refreshList, openNotebook]);
+  }, [newName, boundName, id, refreshList, openNotebook, adminGate.allowed]);
 
   const save = useCallback(async () => {
     if (!openName) { setBanner({ intent: 'info', text: 'Open or create a notebook first.' }); return; }
     setSaving(true); setBanner(null);
     try {
-      const r = await clientFetch(`/api/synapse/notebooks/${encodeURIComponent(openName)}`, {
+      const r = await clientFetch(`/api/synapse/notebooks/${encodeURIComponent(openName)}${itemIdQuery(id)}`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ properties: cellsToIpynb(cells, attachedPool, attachedEnv) }),
       });
       const j = await r.json();
-      if (!j?.ok) { setBanner({ intent: 'error', text: j?.error || 'Save failed' }); }
+      if (!j?.ok) { setBanner({ intent: 'error', text: refusalText(j, r.status) }); }
       else {
         setDirty(false);
         const backup = j.adlsBackup;
@@ -680,18 +617,18 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
       }
     } catch (e: any) { setBanner({ intent: 'error', text: e?.message || String(e) }); }
     finally { setSaving(false); }
-  }, [openName, cells, attachedPool, attachedEnv, refreshList]);
+  }, [openName, cells, attachedPool, attachedEnv, refreshList, id]);
 
   const deleteOpen = useCallback(async () => {
     if (!openName) return;
     try {
-      const r = await clientFetch(`/api/synapse/notebooks/${encodeURIComponent(openName)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/synapse/notebooks/${encodeURIComponent(openName)}${itemIdQuery(id)}`, { method: 'DELETE' });
       const j = await r.json();
-      if (!j?.ok) { setBanner({ intent: 'error', text: j?.error || 'Delete failed' }); return; }
+      if (!j?.ok) { setBanner({ intent: 'error', text: refusalText(j, r.status) }); return; }
       setOpenName(null); setCells([{ id: uid(), type: 'code', lang: 'pyspark', source: '' }]); setDirty(false);
       refreshList();
     } catch (e: any) { setBanner({ intent: 'error', text: e?.message || String(e) }); }
-  }, [openName, refreshList]);
+  }, [openName, refreshList, id]);
 
   // ── IPYNB export (R4-SYN-10) — download the open notebook as a standard .ipynb.
   //    Client-side Blob; the same shape cellsToIpynb publishes to the workspace. ─
@@ -1344,14 +1281,39 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
           ) : (
             <>
               <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, marginBottom: tokens.spacingVerticalS }}>
+                {/* A non-admin can create only the item's bound name, so the
+                    field shows it read-only; a tenant admin types any name. */}
                 <Input
-                  size="small" placeholder="new notebook name" value={newName}
-                  onChange={(_, d) => setNewName(d.value)}
+                  size="small" placeholder={boundName ?? 'new notebook name'}
+                  value={adminGate.allowed ? newName : (boundName ?? '')}
+                  readOnly={!adminGate.allowed}
+                  onChange={(_, d) => { if (adminGate.allowed) setNewName(d.value); }}
                   onKeyDown={(e) => { if (e.key === 'Enter') createNotebook(); }}
                   aria-label="New notebook name"
                 />
-                <Button size="small" icon={<Add20Regular />} onClick={createNotebook} disabled={!newName.trim()} aria-label="Create notebook" />
+                <Button size="small" icon={<Add20Regular />} onClick={createNotebook}
+                  disabled={!(adminGate.allowed && newName.trim()) && !boundName} aria-label="Create notebook" />
               </div>
+              {adminGate.refused && boundName && (
+                <Caption1 data-testid="notebook-name-locked" style={{ display: 'block', marginBottom: tokens.spacingVerticalS }}>
+                  Named after this item. Only a tenant admin can choose another name.
+                </Caption1>
+              )}
+              {adminGate.refused && !boundName && bindState !== 'pending' && bindState !== 'bound' && (
+                <MessageBar intent="warning" data-testid="notebook-unbound-notice" style={{ marginBottom: tokens.spacingVerticalS }}>
+                  <MessageBarBody>
+                    <MessageBarTitle>No notebook name for this item</MessageBarTitle>
+                    {bindState === 'no-token'
+                      ? 'This is an older item whose id is too short to name a notebook after, so only a tenant admin can create one here. '
+                        + 'Create a new Synapse notebook item from the workspace to author your own, or ask a tenant admin to create this one.'
+                      : bindState === 'no-workspace'
+                        ? 'This item is not recorded in a workspace, so it has no notebook name to publish under and only a tenant admin can create one here. '
+                          + 'Create a new Synapse notebook item from a workspace, or ask a tenant admin to create this one.'
+                        : 'The item could not be looked up, so the notebook name it publishes under is not known and Create stays off. '
+                          + 'Reload the editor to try again; if it persists, ask a tenant admin to create this notebook.'}
+                  </MessageBarBody>
+                </MessageBar>
+              )}
               <Tree aria-label="Workspace notebooks" defaultOpenItems={['nb']}>
                 <TreeItem itemType="branch" value="nb">
                   <TreeItemLayout iconBefore={<Book20Regular />}>
