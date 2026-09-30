@@ -52,6 +52,14 @@
  * durable form of this boundary is a per-item serverless database whose external
  * data source is rooted at the item root, with relative `BULK` paths only; that
  * is tracked separately.
+ *
+ * SECOND SURFACE. The serverless SQL pool editor
+ * (`POST /api/items/synapse-serverless-sql-pool/[id]/query`) runs the same
+ * classifier for a caller who is not a tenant admin. It passes its own
+ * {@link QueryScopeSurface}, so its refusals are worded for that editor, and
+ * confines each location with {@link confineQueryLocationToRoots} against the
+ * roots of the lakehouses in its workspace instead of one item root. The rules
+ * are the same on both surfaces.
  */
 import { lexTsql, type TsqlToken } from '@/lib/sql/tsql-lexer';
 import { scopePathToRoot } from '@/app/api/lakehouse/_lib/item-scope';
@@ -81,26 +89,83 @@ export interface ItemStorageLocation {
   root: string;
 }
 
-const LEAD =
-  'The lakehouse SQL tab runs read-only SELECT queries over this lakehouse\'s own files. ';
+/**
+ * The surface a query runs from, as its refusals name it. The rules are the
+ * same on every surface; only the wording differs, so a refusal on the
+ * serverless SQL pool editor does not talk about "this lakehouse".
+ */
+export interface QueryScopeSurface {
+  /** The sentence every refusal opens with, ending in a space. */
+  lead: string;
+  /** The surface as a subject: "the SQL tab". */
+  name: string;
+  /** The surface as a place: "this tab". */
+  place: string;
+  /** The files a query may read: "this lakehouse's files". */
+  files: string;
+  /** What to write instead, ending with what a tenant admin can do. */
+  selectRemediation: string;
+  /** Why the OPENROWSET `DATA_SOURCE` option is refused. */
+  dataSource: string;
+}
 
-const SELECT_REMEDIATION =
-  'Write a SELECT (optionally with a WITH clause) that reads this lakehouse through '
-  + "OPENROWSET(BULK 'https://<account>.dfs.<suffix>/<container>/<lakehouse root>/…'). "
-  + 'A tenant admin can run other statements.';
+/** The lakehouse SQL tab (`POST /api/items/lakehouse/[id]/query`), the default surface. */
+export const LAKEHOUSE_SQL_TAB: QueryScopeSurface = {
+  lead: 'The lakehouse SQL tab runs read-only SELECT queries over this lakehouse\'s own files. ',
+  name: 'the SQL tab',
+  place: 'this tab',
+  files: 'this lakehouse\'s files',
+  selectRemediation:
+    'Write a SELECT (optionally with a WITH clause) that reads this lakehouse through '
+    + "OPENROWSET(BULK 'https://<account>.dfs.<suffix>/<container>/<lakehouse root>/…'). "
+    + 'A tenant admin can run other statements.',
+  dataSource:
+    'this lakehouse has no external data source of its own; name each file by its full URL under the lakehouse root',
+};
+
+/** The reason for each refused construct class, worded for one surface. */
+function reasons(s: QueryScopeSurface) {
+  return {
+    dynamic: `dynamic SQL is not run from ${s.place}`,
+    ddl: `statements that create, change or remove objects are not run from ${s.place}`,
+    dml: `statements that change data are not run from ${s.place}`,
+    perms: `permission statements are not run from ${s.place}`,
+    database: `the query runs in the database ${s.place} chooses`,
+    session: `variables and session options are not accepted in ${s.place}`,
+    external: `external data access goes through OPENROWSET(BULK …) on ${s.files} only`,
+    admin: `server administration is not run from ${s.place}`,
+    control: `control flow and transactions are not accepted in ${s.place}`,
+    cursor: `cursors are not accepted in ${s.place}`,
+    broker: `Service Broker statements are not run from ${s.place}`,
+    catalog: `${s.name} reads ${s.files} and the INFORMATION_SCHEMA views, not the server catalog`,
+    select: `only SELECT statements are run from ${s.place}`,
+  } as const;
+}
+
+type Why = keyof ReturnType<typeof reasons>;
+
+/** The surface and its reasons, passed to every rule. */
+interface Scope {
+  s: QueryScopeSurface;
+  why: Record<Why, string>;
+}
+
+function scopeFor(s: QueryScopeSurface): Scope {
+  return { s, why: reasons(s) };
+}
 
 /** Upper-case the first character, so every refusal reads as a sentence. */
 function sentence(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-function refuse(construct: string, why: string, remediation = SELECT_REMEDIATION): QueryRefusal {
+function refuse(c: Scope, construct: string, why: string, remediation = c.s.selectRemediation): QueryRefusal {
   return {
     ok: false,
     status: 400,
     code: 'query_construct_not_accepted',
     construct,
-    error: `${LEAD}${sentence(construct)} is not accepted: ${why}.`,
+    error: `${c.s.lead}${sentence(construct)} is not accepted: ${why}.`,
     remediation,
   };
 }
@@ -110,9 +175,9 @@ function refuse(construct: string, why: string, remediation = SELECT_REMEDIATION
  * `qualify` is false for a word refused even as a later name part, so the hint
  * offers only the form that is accepted.
  */
-function bracketHint(word: string, qualify = true): string {
+function bracketHint(c: Scope, word: string, qualify = true): string {
   const forms = qualify ? `write it in brackets, as [${word}], or qualify it, as t.${word}` : `write it in brackets, as [${word}]`;
-  return `If ${word} is a column or table name, ${forms}. ` + SELECT_REMEDIATION;
+  return `If ${word} is a column or table name, ${forms}. ` + c.s.selectRemediation;
 }
 
 /**
@@ -139,21 +204,6 @@ function shownNamePart(raw: string): string {
   return [...raw].map((c) => (/^[\x21-\x7e]$/.test(c) || c === ' ' ? c : `\\u{${c.codePointAt(0)!.toString(16)}}`)).join('');
 }
 
-const WHY = {
-  dynamic: 'dynamic SQL is not run from this tab',
-  ddl: 'statements that create, change or remove objects are not run from this tab',
-  dml: 'statements that change data are not run from this tab',
-  perms: 'permission statements are not run from this tab',
-  database: 'the query runs in the database this tab chooses',
-  session: 'variables and session options are not accepted in this tab',
-  external: 'external data access goes through OPENROWSET(BULK …) on this lakehouse\'s files only',
-  admin: 'server administration is not run from this tab',
-  control: 'control flow and transactions are not accepted in this tab',
-  cursor: 'cursors are not accepted in this tab',
-  broker: 'Service Broker statements are not run from this tab',
-  catalog: 'the SQL tab reads this lakehouse\'s files and the INFORMATION_SCHEMA views, not the server catalog',
-} as const;
-
 /**
  * Words refused wherever they appear outside a string, comment or quoted
  * identifier, unless they are a later part of a dotted name.
@@ -167,72 +217,72 @@ const WHY = {
  * its leading word belongs here. A GOTO label (`name:`) has no leading keyword;
  * it runs nothing by itself.
  */
-const REFUSED_WORDS: Record<string, string> = {
-  EXEC: WHY.dynamic,
-  EXECUTE: WHY.dynamic,
-  SP_EXECUTESQL: WHY.dynamic,
-  CREATE: WHY.ddl,
-  ALTER: WHY.ddl,
-  DROP: WHY.ddl,
-  TRUNCATE: WHY.ddl,
-  EXTERNAL: WHY.ddl,
-  CREDENTIAL: WHY.ddl,
-  ENABLE: WHY.ddl,
-  DISABLE: WHY.ddl,
-  ADD: WHY.ddl,
-  RENAME: WHY.ddl,
-  INSERT: WHY.dml,
-  UPDATE: WHY.dml,
-  DELETE: WHY.dml,
-  MERGE: WHY.dml,
-  INTO: WHY.dml,
-  WRITETEXT: WHY.dml,
-  UPDATETEXT: WHY.dml,
-  READTEXT: WHY.dml,
-  GRANT: WHY.perms,
-  REVOKE: WHY.perms,
-  DENY: WHY.perms,
-  SETUSER: WHY.perms,
-  REVERT: WHY.perms,
-  USE: WHY.database,
-  DECLARE: WHY.session,
-  SET: WHY.session,
-  OPENDATASOURCE: WHY.external,
-  OPENQUERY: WHY.external,
-  OPENXML: WHY.external,
-  BULK: WHY.external,
-  DATA_SOURCE: WHY.external,
-  DBCC: WHY.admin,
-  BACKUP: WHY.admin,
-  RESTORE: WHY.admin,
-  KILL: WHY.admin,
-  SHUTDOWN: WHY.admin,
-  RECONFIGURE: WHY.admin,
-  CHECKPOINT: WHY.admin,
-  DISK: WHY.admin,
-  EXPLAIN: WHY.admin,
-  WAITFOR: WHY.control,
-  RAISERROR: WHY.control,
-  THROW: WHY.control,
-  PRINT: WHY.control,
-  IF: WHY.control,
-  WHILE: WHY.control,
-  BEGIN: WHY.control,
-  BREAK: WHY.control,
-  CONTINUE: WHY.control,
-  GOTO: WHY.control,
-  RETURN: WHY.control,
-  COMMIT: WHY.control,
-  ROLLBACK: WHY.control,
-  SAVE: WHY.control,
-  TRAN: WHY.control,
-  TRANSACTION: WHY.control,
-  OPEN: WHY.cursor,
-  CLOSE: WHY.cursor,
-  DEALLOCATE: WHY.cursor,
-  SEND: WHY.broker,
-  RECEIVE: WHY.broker,
-  CONVERSATION: WHY.broker,
+const REFUSED_WORDS: Record<string, Why> = {
+  EXEC: 'dynamic',
+  EXECUTE: 'dynamic',
+  SP_EXECUTESQL: 'dynamic',
+  CREATE: 'ddl',
+  ALTER: 'ddl',
+  DROP: 'ddl',
+  TRUNCATE: 'ddl',
+  EXTERNAL: 'ddl',
+  CREDENTIAL: 'ddl',
+  ENABLE: 'ddl',
+  DISABLE: 'ddl',
+  ADD: 'ddl',
+  RENAME: 'ddl',
+  INSERT: 'dml',
+  UPDATE: 'dml',
+  DELETE: 'dml',
+  MERGE: 'dml',
+  INTO: 'dml',
+  WRITETEXT: 'dml',
+  UPDATETEXT: 'dml',
+  READTEXT: 'dml',
+  GRANT: 'perms',
+  REVOKE: 'perms',
+  DENY: 'perms',
+  SETUSER: 'perms',
+  REVERT: 'perms',
+  USE: 'database',
+  DECLARE: 'session',
+  SET: 'session',
+  OPENDATASOURCE: 'external',
+  OPENQUERY: 'external',
+  OPENXML: 'external',
+  BULK: 'external',
+  DATA_SOURCE: 'external',
+  DBCC: 'admin',
+  BACKUP: 'admin',
+  RESTORE: 'admin',
+  KILL: 'admin',
+  SHUTDOWN: 'admin',
+  RECONFIGURE: 'admin',
+  CHECKPOINT: 'admin',
+  DISK: 'admin',
+  EXPLAIN: 'admin',
+  WAITFOR: 'control',
+  RAISERROR: 'control',
+  THROW: 'control',
+  PRINT: 'control',
+  IF: 'control',
+  WHILE: 'control',
+  BEGIN: 'control',
+  BREAK: 'control',
+  CONTINUE: 'control',
+  GOTO: 'control',
+  RETURN: 'control',
+  COMMIT: 'control',
+  ROLLBACK: 'control',
+  SAVE: 'control',
+  TRAN: 'control',
+  TRANSACTION: 'control',
+  OPEN: 'cursor',
+  CLOSE: 'cursor',
+  DEALLOCATE: 'cursor',
+  SEND: 'broker',
+  RECEIVE: 'broker',
+  CONVERSATION: 'broker',
 };
 
 /**
@@ -334,18 +384,19 @@ function statementStartOk(t: TsqlToken | undefined): boolean {
  * the index after its closing `)` and the locations it names, or a refusal.
  */
 function readOpenrowset(
+  c: Scope,
   tokens: TsqlToken[],
   i: number,
 ): { next: number; locations: string[] } | QueryRefusal {
   const locations: string[] = [];
   let j = i + 1;
   if (!isPunct(tokens[j], '(')) {
-    return refuse('OPENROWSET without an argument list', WHY.external);
+    return refuse(c, 'OPENROWSET without an argument list', c.why.external);
   }
   j += 1;
   if (upper(tokens[j]) !== 'BULK') {
     const what = tokens[j]?.text ?? 'end of input';
-    return refuse(`OPENROWSET(${what} …)`, 'only the OPENROWSET(BULK …) file form is accepted');
+    return refuse(c, `OPENROWSET(${what} …)`, 'only the OPENROWSET(BULK …) file form is accepted');
   }
   j += 1;
   const readLocation = (t: TsqlToken | undefined): string | null =>
@@ -355,18 +406,18 @@ function readOpenrowset(
     for (;;) {
       const loc = readLocation(tokens[j]);
       if (loc === null) {
-        return refuse('an OPENROWSET(BULK …) location that is not a literal string', 'each file location must be written out as a quoted URL');
+        return refuse(c, 'an OPENROWSET(BULK …) location that is not a literal string', 'each file location must be written out as a quoted URL');
       }
       locations.push(loc);
       j += 1;
       if (isPunct(tokens[j], ',')) { j += 1; continue; }
       if (isPunct(tokens[j], ')')) { j += 1; break; }
-      return refuse('an OPENROWSET(BULK …) location built from an expression', 'each file location must be written out as a quoted URL');
+      return refuse(c, 'an OPENROWSET(BULK …) location built from an expression', 'each file location must be written out as a quoted URL');
     }
   } else {
     const loc = readLocation(tokens[j]);
     if (loc === null) {
-      return refuse('an OPENROWSET(BULK …) location that is not a literal string', 'each file location must be written out as a quoted URL');
+      return refuse(c, 'an OPENROWSET(BULK …) location that is not a literal string', 'each file location must be written out as a quoted URL');
     }
     locations.push(loc);
     j += 1;
@@ -375,24 +426,24 @@ function readOpenrowset(
     if (isPunct(tokens[j], ')')) return { next: j + 1, locations };
     if (!isPunct(tokens[j], ',')) {
       const what = tokens[j]?.text ?? 'end of input';
-      return refuse(`'${what}' inside OPENROWSET(BULK …)`, 'each file location must be written out as a quoted URL, followed only by name = value options');
+      return refuse(c, `'${what}' inside OPENROWSET(BULK …)`, 'each file location must be written out as a quoted URL, followed only by name = value options');
     }
     j += 1;
     const name = upper(tokens[j]);
     if (!name) {
-      return refuse(`'${tokens[j]?.text ?? 'end of input'}' inside OPENROWSET(BULK …)`, 'options are written as name = value');
+      return refuse(c, `'${tokens[j]?.text ?? 'end of input'}' inside OPENROWSET(BULK …)`, 'options are written as name = value');
     }
     if (!OPENROWSET_OPTIONS.has(name)) {
-      return refuse(
+      return refuse(c, 
         `the OPENROWSET option ${tokens[j].text}`,
         name === 'DATA_SOURCE'
-          ? 'this lakehouse has no external data source of its own; name each file by its full URL under the lakehouse root'
+          ? c.s.dataSource
           : 'only the read-only file-format options are accepted',
       );
     }
     j += 1;
     if (!isPunct(tokens[j], '=')) {
-      return refuse(`the OPENROWSET option ${name} without a value`, 'options are written as name = value');
+      return refuse(c, `the OPENROWSET option ${name} without a value`, 'options are written as name = value');
     }
     j += 1;
     // A negative number is lexed as `-` then the number (`MAXERRORS = -1`).
@@ -404,7 +455,7 @@ function readOpenrowset(
       || (v.kind === 'word' && (upper(v) === 'TRUE' || upper(v) === 'FALSE'))
     );
     if (!valueOk) {
-      return refuse(`the value of OPENROWSET option ${name}`, 'an option value is a literal string, number, TRUE or FALSE, and never a storage location');
+      return refuse(c, `the value of OPENROWSET option ${name}`, 'an option value is a literal string, number, TRUE or FALSE, and never a storage location');
     }
     j += 1;
   }
@@ -416,73 +467,78 @@ function readOpenrowset(
  * ({@link normalizeNamePart}). `called` is true when `(` follows the name.
  * Returns a refusal or null.
  */
-function checkName(rawParts: string[], database: string, databaseLabel: string, called: boolean): QueryRefusal | null {
+function checkName(c: Scope, rawParts: string[], database: string, databaseLabel: string, called: boolean): QueryRefusal | null {
   const parts: string[] = [];
   for (const raw of rawParts) {
     const part = normalizeNamePart(raw);
     if (part === null) {
-      return refuse(
+      return refuse(c, 
         `the name part [${shownNamePart(raw)}]`,
         'a name part may contain a space only between other characters, and no other whitespace or control character',
         'Write the name without leading spaces, tabs, line breaks, non-breaking spaces or control characters. '
-        + SELECT_REMEDIATION,
+        + c.s.selectRemediation,
       );
     }
     parts.push(part);
   }
   const shown = parts.join('.');
   if (parts.length >= 4) {
-    return refuse(`the four-part name ${shown}`, 'names that reach another server are not accepted');
+    return refuse(c, `the four-part name ${shown}`, 'names that reach another server are not accepted');
   }
   // `sys` as a schema: `sys.x`, or `db.sys.x`. The last part is never a schema.
   if (parts.slice(0, -1).some((p) => p.toLowerCase() === 'sys')) {
-    return refuse(
+    return refuse(c, 
       `the sys schema object ${shown}`,
-      WHY.catalog,
+      c.why.catalog,
       'For table and column metadata, query INFORMATION_SCHEMA.TABLES or INFORMATION_SCHEMA.COLUMNS. '
       + 'A tenant admin can read the sys catalog.',
     );
   }
   const view = parts.find((p) => COMPATIBILITY_VIEWS.has(p.toUpperCase()));
   if (view !== undefined) {
-    return refuse(
+    return refuse(c, 
       `the system compatibility view ${view}`,
-      WHY.catalog,
+      c.why.catalog,
       'For table and column metadata, query INFORMATION_SCHEMA.TABLES or INFORMATION_SCHEMA.COLUMNS.',
     );
   }
   if (parts.some((p) => p.startsWith('##'))) {
-    return refuse(`the global temporary table ${shown}`, WHY.database);
+    return refuse(c, `the global temporary table ${shown}`, c.why.database);
   }
   // A bracketed or quoted `fn_` name called as a function; the bare word is refused earlier.
   const last = parts[parts.length - 1];
   if (called && /^fn_/i.test(last)) {
-    return refuse(`the system function ${last}`, WHY.admin);
+    return refuse(c, `the system function ${last}`, c.why.admin);
   }
   if (parts.length === 3 && parts[0].toLowerCase() !== database) {
-    return refuse(
+    return refuse(c, 
       `the three-part name ${shown}`,
       `a three-part name must start with the database this query runs in (${databaseLabel})`,
       `Name a table as schema.table, and a column as table.column (for example t.col, not dbo.t.col). `
-      + SELECT_REMEDIATION,
+      + c.s.selectRemediation,
     );
   }
   return null;
 }
 
 /**
- * Classify caller-authored T-SQL for the lakehouse SQL tab. `database` is the
- * database the query runs in.
+ * Classify caller-authored T-SQL. `database` is the database the query runs
+ * in; `surface` words the refusals for the surface running it (the lakehouse
+ * SQL tab when omitted). The rules do not depend on `surface`.
  */
-export function analyzeLakehouseQuery(sql: string, opts: { database: string }): QueryAnalysis | QueryRefusal {
+export function analyzeLakehouseQuery(
+  sql: string,
+  opts: { database: string; surface?: QueryScopeSurface },
+): QueryAnalysis | QueryRefusal {
+  const c = scopeFor(opts.surface ?? LAKEHOUSE_SQL_TAB);
   const lexed = lexTsql(sql);
   if (!lexed.ok) {
-    return refuse(`the text at character ${lexed.pos + 1}`, `it could not be read as T-SQL (${lexed.reason})`);
+    return refuse(c, `the text at character ${lexed.pos + 1}`, `it could not be read as T-SQL (${lexed.reason})`);
   }
   const tokens = lexed.tokens;
-  if (tokens.length === 0) return refuse('an empty query', 'there is no statement to run');
+  if (tokens.length === 0) return refuse(c, 'an empty query', 'there is no statement to run');
   if (!statementStartOk(tokens[0])) {
-    return refuse(`a statement starting with ${tokens[0].text}`, 'only SELECT statements are run from this tab');
+    return refuse(c, `a statement starting with ${tokens[0].text}`, c.why.select);
   }
 
   const database = opts.database.trim().toLowerCase();
@@ -496,24 +552,24 @@ export function analyzeLakehouseQuery(sql: string, opts: { database: string }): 
         let k = i + 1;
         while (isPunct(tokens[k], ';')) k += 1;
         if (k < tokens.length && !statementStartOk(tokens[k])) {
-          return refuse(`a statement starting with ${tokens[k].text}`, 'only SELECT statements are run from this tab');
+          return refuse(c, `a statement starting with ${tokens[k].text}`, c.why.select);
         }
         i = k;
         continue;
       }
       if (t.value === ':' && isPunct(tokens[i + 1], ':')) {
-        return refuse('the :: function syntax', WHY.admin);
+        return refuse(c, 'the :: function syntax', c.why.admin);
       }
       i += 1;
       continue;
     }
 
     if (t.kind === 'variable') {
-      return refuse(`the variable ${t.text}`, WHY.session);
+      return refuse(c, `the variable ${t.text}`, c.why.session);
     }
 
     if ((t.kind === 'string' || t.kind === 'quoted-ident') && looksLikeStorage(t.value)) {
-      return refuse(
+      return refuse(c, 
         `the storage location ${t.text}`,
         'a storage location is accepted only as the literal BULK argument of OPENROWSET',
       );
@@ -524,7 +580,7 @@ export function analyzeLakehouseQuery(sql: string, opts: { database: string }): 
     if (t.kind === 'word') {
       const w = t.value.toUpperCase();
       if (w === 'OPENROWSET') {
-        const call = readOpenrowset(tokens, i);
+        const call = readOpenrowset(c, tokens, i);
         if ('status' in call) return call;
         locations.push(...call.locations);
         i = call.next;
@@ -532,18 +588,18 @@ export function analyzeLakehouseQuery(sql: string, opts: { database: string }): 
       }
       if (w === 'FETCH') {
         const prev = upper(tokens[i - 1]);
-        if (prev !== 'ROW' && prev !== 'ROWS') return refuse('FETCH', WHY.cursor, bracketHint(t.text));
+        if (prev !== 'ROW' && prev !== 'ROWS') return refuse(c, 'FETCH', c.why.cursor, bracketHint(c, t.text));
         i += 1;
         continue;
       }
       const why = REFUSED_WORDS[w];
       if (why && (!laterPart || REFUSED_IN_ANY_POSITION.has(w))) {
-        return refuse(t.text, why, bracketHint(t.text, !REFUSED_IN_ANY_POSITION.has(w)));
+        return refuse(c, t.text, c.why[why], bracketHint(c, t.text, !REFUSED_IN_ANY_POSITION.has(w)));
       }
       if (/^(SP|XP)_/.test(w) && !laterPart) {
-        return refuse(`the system procedure ${t.text}`, WHY.dynamic, bracketHint(t.text));
+        return refuse(c, `the system procedure ${t.text}`, c.why.dynamic, bracketHint(c, t.text));
       }
-      if (/^FN_/.test(w)) return refuse(`the system function ${t.text}`, WHY.admin, bracketHint(t.text, false));
+      if (/^FN_/.test(w)) return refuse(c, `the system function ${t.text}`, c.why.admin, bracketHint(c, t.text, false));
       // A `##` name, bare or bracketed, is refused by checkName below.
     }
 
@@ -556,7 +612,7 @@ export function analyzeLakehouseQuery(sql: string, opts: { database: string }): 
         if (isPunct(tokens[j + 1], '.')) { parts.push(''); j += 1; continue; }
         break;
       }
-      const refused = checkName(parts, database, opts.database, isPunct(tokens[j], '('));
+      const refused = checkName(c, parts, database, opts.database, isPunct(tokens[j], '('));
       if (refused) return refused;
     }
     i += 1;
@@ -603,29 +659,27 @@ function decodeLocation(raw: string): { ok: true; decoded: string } | { ok: fals
   return { ok: true, decoded };
 }
 
+/** A full `https://<host>/<container>/<path>` location. */
+const HTTPS_LOCATION = /^https:\/\/([^/]+)\/([^/]+)\/(.*)$/i;
+/** A full `abfss://<container>@<host>/<path>` location. */
+const ABFSS_LOCATION = /^abfss:\/\/([^@/]+)@([^/]+)\/(.*)$/i;
+
+/** A location's verdict against one storage binding: accepted, or the reason it is not. */
+type LocationVerdict = { ok: true } | { ok: false; why: string };
+
 /**
- * Confine one `OPENROWSET(BULK …)` location to the item's storage: its own
- * account (dfs or blob endpoint of the binding's cloud suffix), its container,
- * and strictly under its root — through the same `scopePathToRoot` (strict)
- * the lakehouse routes use. `*` wildcards are accepted only below the root.
+ * Is `raw` inside `bound`: its own account (dfs or blob endpoint of the
+ * binding's cloud suffix), its container, and strictly under its root —
+ * through the same `scopePathToRoot` (strict) the lakehouse routes use. `*`
+ * wildcards are accepted only below the root.
  *
  * Spaces and non-ASCII letters are accepted as written or percent-encoded.
  * Backslashes, `?`, `#`, ports, user info, empty segments, `.`/`..` segments,
  * segments that start or end with a space or end with `.`, and escapes for any
  * other character are refused rather than normalised.
  */
-export function confineQueryLocation(raw: string, bound: ItemStorageLocation): { ok: true } | QueryRefusal {
-  const outside = (why: string): QueryRefusal => ({
-    ok: false,
-    status: 403,
-    code: 'query_location_outside_root',
-    construct: raw,
-    error: `${LEAD}The location '${raw}' is not accepted: ${why}.`,
-    remediation:
-      `Read files under ${bound.abfss} (or its https://<account>.dfs.<suffix>/${bound.container}/${bound.root}/ form). `
-      + 'A space or a non-ASCII letter in a file name can be written as itself. '
-      + 'To read another lakehouse, open that lakehouse and query it there.',
-  });
+function locationVerdict(raw: string, bound: ItemStorageLocation): LocationVerdict {
+  const outside = (why: string): LocationVerdict => ({ ok: false, why });
 
   const read = decodeLocation(raw);
   if (!read.ok) return outside(read.why);
@@ -638,8 +692,8 @@ export function confineQueryLocation(raw: string, bound: ItemStorageLocation): {
   let urlHost: string;
   let container: string;
   let rest: string;
-  const https = /^https:\/\/([^/]+)\/([^/]+)\/(.*)$/i.exec(raw);
-  const abfss = /^abfss:\/\/([^@/]+)@([^/]+)\/(.*)$/i.exec(raw);
+  const https = HTTPS_LOCATION.exec(raw);
+  const abfss = ABFSS_LOCATION.exec(raw);
   if (https) {
     [, urlHost, container, rest] = https;
     const h = urlHost.toLowerCase();
@@ -678,3 +732,61 @@ export function confineQueryLocation(raw: string, bound: ItemStorageLocation): {
   }
   return { ok: true };
 }
+
+function locationRefusal(s: QueryScopeSurface, raw: string, why: string, remediation: string): QueryRefusal {
+  return {
+    ok: false,
+    status: 403,
+    code: 'query_location_outside_root',
+    construct: raw,
+    error: `${s.lead}The location '${raw}' is not accepted: ${why}.`,
+    remediation,
+  };
+}
+
+/**
+ * Confine one `OPENROWSET(BULK …)` location to the item's own storage binding
+ * (see {@link locationVerdict} for what is accepted).
+ */
+export function confineQueryLocation(raw: string, bound: ItemStorageLocation): { ok: true } | QueryRefusal {
+  const v = locationVerdict(raw, bound);
+  if (v.ok) return v;
+  return locationRefusal(
+    LAKEHOUSE_SQL_TAB,
+    raw,
+    v.why,
+    `Read files under ${bound.abfss} (or its https://<account>.dfs.<suffix>/${bound.container}/${bound.root}/ form). `
+    + 'A space or a non-ASCII letter in a file name can be written as itself. '
+    + 'To read another lakehouse, open that lakehouse and query it there.',
+  );
+}
+
+/**
+ * Confine one `OPENROWSET(BULK …)` location to a SET of storage roots: it is
+ * accepted when it is inside at least one of `bounds`, by the same
+ * {@link locationVerdict} a single item root uses. With no bounds nothing is
+ * accepted.
+ *
+ * A location that could not be inside ANY root (an escape that is not
+ * accepted, or not a full https:// / abfss:// URL) is refused with that
+ * reason; any other is refused with `opts.outside`, because the reason one
+ * particular root gave would describe a root the caller did not choose.
+ */
+export function confineQueryLocationToRoots(
+  raw: string,
+  bounds: readonly ItemStorageLocation[],
+  opts: { surface: QueryScopeSurface; outside: string; remediation: string },
+): { ok: true } | QueryRefusal {
+  const read = decodeLocation(raw);
+  if (!read.ok) return locationRefusal(opts.surface, raw, read.why, opts.remediation);
+  if (!HTTPS_LOCATION.test(raw) && !ABFSS_LOCATION.test(raw)) {
+    return locationRefusal(
+      opts.surface, raw, 'it is not a full https:// or abfss:// URL with a container and a path', opts.remediation,
+    );
+  }
+  for (const bound of bounds) {
+    if (locationVerdict(raw, bound).ok) return { ok: true };
+  }
+  return locationRefusal(opts.surface, raw, opts.outside, opts.remediation);
+}
+

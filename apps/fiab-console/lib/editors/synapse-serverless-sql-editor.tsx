@@ -49,6 +49,8 @@ import {
 import { downloadBlob, resultsToCsv, resultsToJson } from './components/result-export';
 import { PreviewTable } from '@/lib/components/shared/preview-table';
 import { useSharedEditorStyles } from './shared-styles';
+import { useIsTenantAdmin } from '@/lib/components/session-context';
+import { SqlRefusalOrError, type SqlFailure } from './lakehouse/panes/sql-pane';
 
 const useLocalStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
@@ -87,6 +89,18 @@ interface QueryResponse {
   error?: string;
   code?: string;
   sqlNumber?: number;
+  /** Set when the route chose not to run the query; says what to do instead. */
+  remediation?: string;
+  construct?: string;
+}
+
+/**
+ * The route refuses a query before running it with a `remediation` (see
+ * `app/api/items/synapse-serverless-sql-pool/_lib/query-scope.ts`). A query
+ * that ran and failed carries a server error and no remediation.
+ */
+function isRefusal(r: QueryResponse): boolean {
+  return !r.ok && typeof r.remediation === 'string' && r.remediation.length > 0;
 }
 
 const DEFAULT_SQL =
@@ -140,6 +154,9 @@ const TSQL_KEYWORDS = [
 
 export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  // Only a tenant admin runs ad-hoc SQL in the chosen database; anyone else's
+  // query is checked and run in master by the route (see the scope bar below).
+  const isAdmin = useIsTenantAdmin();
   // A paired editor (e.g. opened from a mirror's "SQL analytics endpoint" link)
   // may pass ?database=<db> to land directly on that database so its views are
   // visible without manually picking it from the connect-to dropdown.
@@ -411,6 +428,17 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
               detail="Set LOOM_SYNAPSE_WORKSPACE on the Console container app (admin-plane bicep deploys the Synapse workspace + Serverless endpoint). No Microsoft Fabric or Power BI workspace is required — this is the Azure-native default."
             />
           )}
+          {!isAdmin && (
+            <MessageBar intent="info" layout="multiline" data-testid="sql-pool-query-scope">
+              <MessageBarBody className={s.errorText}>
+                <MessageBarTitle>What you can query here</MessageBarTitle>
+                Read-only SELECT queries over the files of the lakehouses in this workspace, named by
+                their full URL in OPENROWSET(BULK &apos;https://&lt;account&gt;.dfs.&lt;suffix&gt;/&lt;container&gt;/&lt;lakehouse root&gt;/…&apos;),
+                and the INFORMATION_SCHEMA views. Queries run in master; the Connect to database applies
+                to tenant admins only, who can also run other statements.
+              </MessageBarBody>
+            </MessageBar>
+          )}
           <div className={s.toolbar}>
             <Badge appearance="filled" color="brand" icon={<Server16Regular />}>Serverless</Badge>
             <div className={s.connect}>
@@ -461,7 +489,7 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
               !result ? (
                 <Caption1>Click <strong>Run</strong> (or Ctrl+Enter) to execute. Results appear here.</Caption1>
               ) : !result.ok ? (
-                <Caption1>Query failed — see the <strong>Messages</strong> tab.</Caption1>
+                <Caption1>{isRefusal(result) ? 'Query not run' : 'Query failed'} — see the <strong>Messages</strong> tab.</Caption1>
               ) : result.isDdl || columns.length === 0 ? (
                 <Caption1>Command(s) completed — see the <strong>Messages</strong> tab.</Caption1>
               ) : (
@@ -513,6 +541,8 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
             {!loading && resultTab === 'messages' && (
               !result ? (
                 <Caption1>Messages (PRINT, RAISERROR, DDL receipts and errors) appear here after you Run.</Caption1>
+              ) : isRefusal(result) ? (
+                <SqlRefusalOrError result={result as SqlFailure} />
               ) : !result.ok ? (
                 <MessageBar intent="error">
                   <MessageBarBody className={s.errorText}>
