@@ -4994,6 +4994,18 @@ const ADMIN_SHAPE_UNSCOPED = new Map([
         'does not read the admin flag.',
     },
   ],
+  [
+    'app/api/lakehouse/permissions/route.ts:DELETE',
+    {
+      verdict: 'ORG-WIDE',
+      requires: ['isTenantAdmin(', 'revokeContainerRoleAssignmentInScope('],
+      why:
+        'ORG-WIDE (function scope). Tenant-admin-or-403, same as POST in this file; no workspace or ' +
+        'item is resolved. The object tab revokes only an id that is shaped as a role assignment on ' +
+        'the named container AND appears in that container\'s listing ' +
+        '(revokeContainerRoleAssignmentInScope).',
+    },
+  ],
 ]);
 
 /**
