@@ -264,7 +264,8 @@ export function LakehouseEditor({ item, id }: Props) {
   }, [containers]);
 
   // ── Domain hooks ──────────────────────────────────────────────────────────
-  const perms = useLakehousePermissions({ lakehouseId: id, activeContainer, confirm });
+  // An unsaved item has no id to authorize reads against; the ribbon closes Permissions too.
+  const perms = useLakehousePermissions({ lakehouseId: isNewItem ? '' : id, activeContainer, confirm });
   const settings_ = useLakehouseSettings({ lakehouseId: isNewItem ? null : id, schemasEnabled, setSchemasEnabled, setActionStatus });
   const sec = useLakehouseSecondary({
     // Schemas and shortcuts belong to the lakehouse ITEM; an unsaved item has none.
@@ -726,7 +727,7 @@ export function LakehouseEditor({ item, id }: Props) {
 
   // ── Ribbon (lakehouse-ribbon.tsx) ─────────────────────────────────────────
   const ribbon = useLakehouseRibbon({
-    activeContainer, activePath, isReferenceLakehouse, readOnly, uploading, runningUploadCount: runningUploads.length, tab,
+    activeContainer, activePath, isReferenceLakehouse, isNewItem, readOnly, uploading, runningUploadCount: runningUploads.length, tab,
     maintainTable, workspaceId: itemQ.data?.workspaceId, interopTabOn, connectTabOn, router, setTab, refreshActive,
     onUploadClick, onFolderUploadClick, onNewFolder, openShortcutWizard: sc_.openShortcutWizard, selectFile, onLoadToTables,
     openLabelDialog, setSemanticModelGateOpen, openCheckVariables: sec.openCheckVariables, openSettings: settings_.openSettings,
