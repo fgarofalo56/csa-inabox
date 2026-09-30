@@ -75,6 +75,9 @@ const DEFAULTS: Record<string, RateLimits> = {
   feedback: { ratePerSec: 0.2, burst: 5 },   // authed bug / feature reports
   'feedback-anon': { ratePerSec: 0.05, burst: 5 }, // anonymous auto-error reports
   'access-request': { ratePerSec: 0.02, burst: 3 }, // anonymous sign-in-boundary onboarding requests
+  // Device-code sign-in STARTS, per IP (#4805, operator decision 2026-09-30):
+  // 5 starts, refilling one per 2 minutes — i.e. 5 per 10 minutes sustained.
+  'cli-session': { ratePerSec: 1 / 120, burst: 5 },
 };
 
 /** Tier-2 durable fixed-window budgets (Cosmos). windowSec + max requests per
@@ -94,6 +97,7 @@ const DURABLE_DEFAULTS: Record<string, DurableLimit> = {
   feedback: { windowSec: 3600, max: 30 },         // authed: 30 reports / hr / user
   'feedback-anon': { windowSec: 3600, max: 5 },   // anonymous: 5 auto-errors / hr / IP
   'access-request': { windowSec: 3600, max: 8 },  // anonymous: 8 onboarding requests / hr / IP (and / email)
+  'cli-session': { windowSec: 600, max: 5 },      // device-code sign-in starts: 5 / 10 min / IP, across replicas
 };
 
 const MAX_BUCKETS = 5000;

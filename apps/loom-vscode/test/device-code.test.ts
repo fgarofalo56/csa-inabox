@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ndjsonLines, runDeviceCodeLogin, DeviceCodeError } from '../src/auth/device-code';
+import { ndjsonLines, runDeviceCodeLogin, DeviceCodeError, describeDeviceCodeError } from '../src/auth/device-code';
 
 /** Build a ReadableStream<Uint8Array> from raw string chunks. */
 function streamFrom(chunks: string[]): ReadableStream<Uint8Array> {
@@ -107,5 +107,46 @@ describe('runDeviceCodeLogin', () => {
     }).catch((e) => e);
     expect(err).toBeInstanceOf(DeviceCodeError);
     expect((err as DeviceCodeError).status).toBe(0);
+  });
+});
+
+// #4805 — the sign-in start is rate-limited per network. The notification must
+// carry the sentence, the wait and the remediation, not "rate_limited".
+describe('runDeviceCodeLogin: a rate-limited sign-in start', () => {
+  const body = {
+    ok: false,
+    error: 'rate_limited',
+    code: 'rate_limited',
+    message: 'Too many device-code sign-in attempts from this network.',
+    hint: 'Wait, then run the sign-in again.',
+    retryAfter: 120,
+  };
+
+  it('describes the 429 as message + wait (from retryAfter) + hint', async () => {
+    // Header 7 vs body 120: RED if the header wins, if the wait is dropped, or
+    // if the token "rate_limited" is shown instead of the message.
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(body), { status: 429, headers: { 'content-type': 'application/json', 'Retry-After': '7' } }),
+    );
+    const err = await runDeviceCodeLogin('https://loom.example.com', () => {}, {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(DeviceCodeError);
+    expect(err).toMatchObject({ status: 429, code: 'rate_limited', retryAfter: 120 });
+    expect(describeDeviceCodeError(err)).toBe(
+      'Too many device-code sign-in attempts from this network. Try again in 120 seconds. Wait, then run the sign-in again.',
+    );
+  });
+
+  it('falls back to the Retry-After header when the body carries no wait', async () => {
+    // RED if the header fallback is removed.
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: false, error: 'rate_limited' }), { status: 429, headers: { 'Retry-After': '45' } }),
+    );
+    const err = await runDeviceCodeLogin('https://loom.example.com', () => {}, {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    }).catch((e) => e);
+    expect(err.retryAfter).toBe(45);
+    expect(describeDeviceCodeError(err)).toBe('rate_limited Try again in 45 seconds.');
   });
 });
