@@ -27,10 +27,11 @@ import {
   writeUcVolumesFile,
   deleteUcVolumesFile,
 } from './databricks-client';
-import {
-  getKeyVaultSecret,
-  keyVaultConfigGate,
-} from './shortcut-credentials';
+import { keyVaultConfigGate } from './shortcut-credentials';
+// Shortcut credentials are resolved ONLY through the resolver, which applies the
+// `shortcut-credential` purpose policy and the ownership check before any vault
+// call (`scripts/ci/check-shortcut-secret-resolver.mjs` enforces the import).
+import { resolveShortcutSecret, type ShortcutSecretOwner } from './shortcut-secret-resolver';
 // The UC storage-credential + external-location calls come from the AUDITED
 // facade, NOT from shortcut-credentials directly: that module's private
 // transport writes no Loom audit row, and creating a storage credential is the
@@ -1040,6 +1041,26 @@ export interface ExternalBinding {
   sharepoint?: { driveId: string; path: string };
 }
 
+/**
+ * Appended to every "the stored credential has the wrong shape" error. The
+ * message describes the EXPECTED shape only: the resolved value (or any slice
+ * of it) is never part of an error, because these messages reach API responses
+ * and the registry's `statusDetail`.
+ */
+export const SECRET_SHAPE_MISMATCH = 'The stored value does not have that shape; re-save the credential.';
+
+/**
+ * A symbolic reason for a failed outbound fetch — a Node error code (e.g.
+ * ENOTFOUND), `timeout`, or `network error`. Never the error message, which can
+ * carry the request URL.
+ */
+export function networkFailureReason(e: any): string {
+  const code = e?.cause?.code ?? e?.code;
+  if (typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,40}$/.test(code)) return code;
+  if (e?.name === 'FetchTimeoutError' || e?.name === 'AbortError' || e?.name === 'TimeoutError') return 'timeout';
+  return 'network error';
+}
+
 export async function bindExternalSource(args: {
   lakehouseId: string;
   name: string;
@@ -1047,8 +1068,15 @@ export async function bindExternalSource(args: {
   targetUri: string;
   /** Optional — SharePoint/OneDrive resolves on the UAMI via Graph (no KV secret). */
   credentialRef?: ShortcutCredentialRef;
+  /**
+   * On whose behalf `credentialRef.keyVaultSecret` is resolved — the shortcut
+   * item, or the principal writing the registry row. Required so no caller can
+   * resolve a credential without naming an owner (see shortcut-secret-resolver).
+   */
+  owner: ShortcutSecretOwner;
 }): Promise<ExternalBinding | EngineGate> {
-  const { lakehouseId, name, targetType, targetUri, credentialRef } = args;
+  const { lakehouseId, name, targetType, targetUri, credentialRef, owner } = args;
+  const readSecret = (secretName: string) => resolveShortcutSecret(secretName, owner);
 
   // --- SharePoint / OneDrive: resolve the drive item on the UAMI via Graph. ---
   // No per-shortcut Key Vault credential — Microsoft Graph is the data plane, on
@@ -1085,7 +1113,7 @@ export async function bindExternalSource(args: {
   // the token is expired/invalid (the "broken" state — fix the KV secret + Retry).
   // Learn: https://learn.microsoft.com/azure/databricks/delta-sharing/read-data-open
   if (targetType === 'delta_sharing') {
-    const raw = (await getKeyVaultSecret(secretName)).trim();
+    const raw = (await readSecret(secretName)).trim();
     let profile: { shareCredentialsVersion?: number; endpoint?: string; bearerToken?: string; expirationTime?: string };
     try {
       profile = JSON.parse(raw);
@@ -1119,8 +1147,13 @@ export async function bindExternalSource(args: {
     try {
       testRes = await fetchWithTimeout(sharesUrl, { headers: { Authorization: `Bearer ${profile.bearerToken}` } });
     } catch (netErr: any) {
+      // The endpoint comes from the stored credential file, so neither it nor a
+      // transport message that may embed it is echoed — only a symbolic reason.
       throw Object.assign(
-        new Error(`Delta Sharing endpoint unreachable: ${sharesUrl} — ${netErr?.message || netErr}`),
+        new Error(
+          `Delta Sharing endpoint in the credential file '${secretName}' is unreachable ` +
+          `(${networkFailureReason(netErr)}). Check the endpoint in the credential file, then Retry.`,
+        ),
         { code: 'delta_sharing_unreachable' },
       );
     }
@@ -1137,7 +1170,9 @@ export async function bindExternalSource(args: {
     }
     if (!testRes.ok) {
       throw Object.assign(
-        new Error(`Delta Sharing endpoint returned HTTP ${testRes.status}: ${sharesUrl}`),
+        new Error(
+          `Delta Sharing endpoint in the credential file '${secretName}' returned HTTP ${testRes.status}.`,
+        ),
         { code: 'delta_sharing_unreachable' },
       );
     }
@@ -1164,13 +1199,14 @@ export async function bindExternalSource(args: {
   // that lake — granted as part of Synapse Link setup).
   // Learn: https://learn.microsoft.com/power-apps/maker/data-platform/azure-synapse-link-data-lake
   if (targetType === 'dataverse') {
-    const linkedPath = (await getKeyVaultSecret(secretName)).trim();
+    const linkedPath = (await readSecret(secretName)).trim();
     const parts = parseAbfss(linkedPath);
     if (!parts) {
       throw Object.assign(
         new Error(
           `Dataverse Synapse-Link secret '${secretName}' must contain the linked ADLS Gen2 path ` +
-          `(abfss://<container>@<acct>.dfs.core.windows.net/... or the https DFS form); got: ${linkedPath.slice(0, 80)}`,
+          '(abfss://<container>@<acct>.dfs.core.windows.net/... or the https DFS form). ' +
+          SECRET_SHAPE_MISMATCH,
         ),
         { code: 'bad_dataverse_secret' },
       );
@@ -1204,7 +1240,7 @@ export async function bindExternalSource(args: {
           '(Synapse Serverless has no native GCS connector).',
       };
     }
-    const secret = await getKeyVaultSecret(secretName);
+    const secret = await readSecret(secretName);
     let sa: { client_email?: string; private_key_id?: string; private_key?: string };
     try {
       sa = JSON.parse(secret);
@@ -1221,14 +1257,14 @@ export async function bindExternalSource(args: {
   }
 
   // S3 — prefer UC (IAM role) when Databricks is configured; else Synapse (access keys).
-  const secret = await getKeyVaultSecret(secretName);
+  const secret = await readSecret(secretName);
   if (engine === 'databricks') {
     const roleArn = secret.trim();
     if (!/^arn:aws[a-z-]*:iam::\d+:role\//i.test(roleArn)) {
       throw Object.assign(
         new Error(
           `S3 secret '${secretName}' must be an AWS IAM role ARN for the Databricks UC engine ` +
-          `(arn:aws:iam::<acct>:role/<name>); got: ${roleArn.slice(0, 60)}`,
+          '(arn:aws:iam::<acct>:role/<name>). ' + SECRET_SHAPE_MISMATCH,
         ),
         { code: 'bad_s3_secret' },
       );

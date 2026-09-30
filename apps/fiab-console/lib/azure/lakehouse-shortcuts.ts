@@ -129,6 +129,37 @@ export async function getShortcut(lakehouseId: string, id: string): Promise<Lake
   }
 }
 
+/** A registry row that references a Key Vault secret, reduced to the fields that record who bound it. */
+export interface ShortcutSecretBinding {
+  lakehouseId: string;
+  id: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+/**
+ * Every registry row, in ANY lakehouse, whose `credentialRef.keyVaultSecret`
+ * names `secretName` (Key Vault names are case-insensitive, so the comparison
+ * is too). Cross-partition by design: the question is "who else has bound this
+ * credential", and the answer must not depend on which lakehouse is asking.
+ *
+ * Returns only ownership fields — never the credentialRef or target.
+ */
+export async function listShortcutSecretBindings(secretName: string): Promise<ShortcutSecretBinding[]> {
+  const n = (secretName || '').trim().toLowerCase();
+  if (!n) return [];
+  const c = await lakehouseShortcutsContainer();
+  const { resources } = await c.items
+    .query<ShortcutSecretBinding>({
+      query:
+        'SELECT c.lakehouseId, c.id, c.createdBy, c.createdAt FROM c ' +
+        'WHERE IS_STRING(c.credentialRef.keyVaultSecret) AND LOWER(c.credentialRef.keyVaultSecret) = @n',
+      parameters: [{ name: '@n', value: n }],
+    })
+    .fetchAll();
+  return resources;
+}
+
 /** Create (upsert) a shortcut from a definition. Fills derived + audit fields. */
 export async function createShortcut(def: ShortcutDef): Promise<LakehouseShortcut> {
   const parentPath = trimSlashes((def.parentPath || ''));

@@ -13,8 +13,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAccountName } from '@/lib/azure/adls-client';
 import { getShortcut, updateShortcutStatus } from '@/lib/azure/lakehouse-shortcuts';
-import { resolveAndTestAdls, testEngineObject, refreshDeltaSharingCredential } from '@/lib/azure/shortcut-engines';
-import { getKeyVaultSecret } from '@/lib/azure/shortcut-credentials';
+import { resolveAndTestAdls, testEngineObject, refreshDeltaSharingCredential, networkFailureReason } from '@/lib/azure/shortcut-engines';
+import {
+  resolveShortcutSecret,
+  isShortcutSecretRefusal,
+  type ShortcutSecretOwner,
+} from '@/lib/azure/shortcut-secret-resolver';
 import { parseAbfss as parseExternalAbfss, listAdlsWithSas, ShortcutSourceError } from '@/lib/azure/shortcut-client';
 import { headDriveItem, parseSharepointUri, graphDriveConfigGate } from '@/lib/azure/graph-drive-client';
 import { withSession } from '@/lib/api/route-toolkit';
@@ -38,6 +42,10 @@ export const POST = withSession(async (req: NextRequest) => {
 
   const sc = await getShortcut(lakehouseId, id);
   if (!sc) return NextResponse.json({ ok: false, error: 'shortcut not found', code: 'not_found' }, { status: 404 });
+  // The stored credential is resolved on behalf of the principal who CREATED
+  // this row: a row may only keep using a credential its creator owns, whoever
+  // presses Test.
+  const secretOwner: ShortcutSecretOwner = { kind: 'principal', upn: sc.createdBy };
 
   // Delta Sharing: re-validate by listing shares with the stored bearer token.
   // A 401/403 means the token is expired/invalid — the "broken" state the Retry
@@ -52,7 +60,7 @@ export const POST = withSession(async (req: NextRequest) => {
       return NextResponse.json({ ok: true, data: updated });
     }
     try {
-      const raw = (await getKeyVaultSecret(sc.credentialRef.keyVaultSecret)).trim();
+      const raw = (await resolveShortcutSecret(sc.credentialRef.keyVaultSecret, secretOwner)).trim();
       let profile: { endpoint?: string; bearerToken?: string; expirationTime?: string; shareCredentialsVersion?: number };
       try {
         profile = JSON.parse(raw);
@@ -69,7 +77,20 @@ export const POST = withSession(async (req: NextRequest) => {
         );
       }
       const sharesUrl = stripTrailingSlashes(profile.endpoint) + '/shares';
-      const testRes = await fetch(sharesUrl, { headers: { Authorization: `Bearer ${profile.bearerToken}` } });
+      let testRes: Response;
+      try {
+        testRes = await fetch(sharesUrl, { headers: { Authorization: `Bearer ${profile.bearerToken}` } });
+      } catch (netErr: any) {
+        // The endpoint comes from the stored credential file: report a symbolic
+        // reason, never the URL or a transport message that may carry it.
+        throw Object.assign(
+          new Error(
+            `Delta Sharing endpoint in the credential file '${sc.credentialRef.keyVaultSecret}' is unreachable ` +
+            `(${networkFailureReason(netErr)}).`,
+          ),
+          { code: 'delta_sharing_unreachable' },
+        );
+      }
       if (testRes.status === 401 || testRes.status === 403) {
         throw Object.assign(
           new Error(
@@ -81,7 +102,12 @@ export const POST = withSession(async (req: NextRequest) => {
         );
       }
       if (!testRes.ok) {
-        throw Object.assign(new Error(`Delta Sharing endpoint unreachable (HTTP ${testRes.status}): ${sharesUrl}`), { code: 'delta_sharing_unreachable' });
+        throw Object.assign(
+          new Error(
+            `Delta Sharing endpoint in the credential file '${sc.credentialRef.keyVaultSecret}' returned HTTP ${testRes.status}.`,
+          ),
+          { code: 'delta_sharing_unreachable' },
+        );
       }
       // Tables shortcut on Databricks: push the (possibly refreshed) token to the
       // UC Volume credential file and prove the UC table still reads.
@@ -97,6 +123,9 @@ export const POST = withSession(async (req: NextRequest) => {
     } catch (e: any) {
       const msg = sanitize(e);
       const updated = await updateShortcutStatus(lakehouseId, id, 'error', msg);
+      if (isShortcutSecretRefusal(e)) {
+        return NextResponse.json({ ok: false, error: msg, code: (e as { code?: string }).code || 'shortcut_secret_refused', data: updated }, { status: 403 });
+      }
       return NextResponse.json({ ok: false, error: msg, code: e?.code || 'delta_sharing_unreachable', data: updated }, { status: 502 });
     }
   }
@@ -153,7 +182,7 @@ export const POST = withSession(async (req: NextRequest) => {
     (sc.credentialRef.kind === 'sas' || sc.credentialRef.kind === 'accountKey')
   ) {
     try {
-      const sas = (await getKeyVaultSecret(sc.credentialRef.keyVaultSecret)).trim();
+      const sas = (await resolveShortcutSecret(sc.credentialRef.keyVaultSecret, secretOwner)).trim();
       if (!sas) throw Object.assign(new Error(`Key Vault secret '${sc.credentialRef.keyVaultSecret}' is empty — re-save the SAS.`), { code: 'kv_secret_empty' });
       const parts = parseExternalAbfss(sc.abfssUri || sc.targetUri);
       await listAdlsWithSas({ account: parts.account, container: parts.container, path: parts.path, sasToken: sas, maxResults: 1 });
@@ -164,8 +193,11 @@ export const POST = withSession(async (req: NextRequest) => {
       return NextResponse.json({ ok: true, data: updated });
     } catch (e: any) {
       const msg = sanitize(e);
-      const code = e instanceof ShortcutSourceError ? e.code : e?.code || 'adls_sas_error';
       const updated = await updateShortcutStatus(lakehouseId, id, 'error', msg);
+      if (isShortcutSecretRefusal(e)) {
+        return NextResponse.json({ ok: false, error: msg, code: (e as { code?: string }).code || 'shortcut_secret_refused', data: updated }, { status: 403 });
+      }
+      const code = e instanceof ShortcutSourceError ? e.code : e?.code || 'adls_sas_error';
       return NextResponse.json({ ok: false, error: msg, code, data: updated }, { status: (e instanceof ShortcutSourceError ? e.status : 502) || 502 });
     }
   }

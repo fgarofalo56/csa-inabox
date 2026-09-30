@@ -15,6 +15,7 @@ vi.mock('@/lib/azure/lakehouse-shortcuts', () => ({
   createShortcut: vi.fn(),
   deleteShortcut: vi.fn(),
   getShortcut: vi.fn(),
+  listShortcutSecretBindings: vi.fn(),
 }));
 vi.mock('@/lib/azure/shortcut-engines', () => ({
   resolveAndTestAdls: vi.fn(),
@@ -29,7 +30,7 @@ vi.mock('@/lib/azure/shortcut-engines', () => ({
 import { GET, POST, DELETE } from '../shortcuts/route';
 import { getSession } from '@/lib/auth/session';
 import {
-  listShortcuts, createShortcut, deleteShortcut, getShortcut,
+  listShortcuts, createShortcut, deleteShortcut, getShortcut, listShortcutSecretBindings,
 } from '@/lib/azure/lakehouse-shortcuts';
 import {
   resolveAndTestAdls, createTablesShortcut, dropShortcutObject, externalSourceGate, bindExternalSource,
@@ -44,6 +45,7 @@ const sess = { claims: { upn: 'u@x', tid: 't1' } };
 beforeEach(() => {
   vi.resetAllMocks();
   (externalSourceGate as any).mockReturnValue(null);
+  (listShortcutSecretBindings as any).mockResolvedValue([]);
 });
 
 describe('GET /api/lakehouse/shortcuts', () => {
@@ -135,7 +137,7 @@ describe('POST /api/lakehouse/shortcuts', () => {
     const res = await POST(postReq({
       lakehouseId: 'lh', name: 'ds', kind: 'files', targetType: 'delta_sharing',
       targetUri: 'delta-sharing://share/schema/table',
-      credentialRef: { kind: 'deltaSharing', keyVaultSecret: 'ds-cred' },
+      credentialRef: { kind: 'deltaSharing', keyVaultSecret: 'loom-sc-ds-cred' },
     }));
     const j = await res.json();
     expect(res.status).toBe(200);

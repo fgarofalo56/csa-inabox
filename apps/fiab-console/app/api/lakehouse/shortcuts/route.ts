@@ -33,7 +33,12 @@ import {
   type ExternalBinding,
 } from '@/lib/azure/shortcut-engines';
 import { parseAbfss as parseExternalAbfss, listAdlsWithSas, ShortcutSourceError } from '@/lib/azure/shortcut-client';
-import { getKeyVaultSecret } from '@/lib/azure/shortcut-credentials';
+import {
+  resolveShortcutSecret,
+  assertShortcutSecretUsable,
+  isShortcutSecretRefusal,
+  type ShortcutSecretOwner,
+} from '@/lib/azure/shortcut-secret-resolver';
 import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
@@ -49,6 +54,15 @@ function isGate(x: unknown): x is EngineGate {
 /** Strip any HTML and collapse whitespace so a firewall/gateway page never leaks raw. */
 function sanitize(e: any): string {
   return (e?.message || String(e)).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500);
+}
+
+/**
+ * 403 for a credential the shortcut-secret policy or ownership check refused.
+ * Nothing is persisted: a refused name must not become a registry row, because
+ * the first row that binds a name records who owns it.
+ */
+function secretRefused(e: any) {
+  return NextResponse.json({ ok: false, code: e?.code || 'shortcut_secret_refused', error: sanitize(e) }, { status: 403 });
 }
 
 export const GET = withSession(async (req: NextRequest, { session }) => {
@@ -108,6 +122,22 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
 
   const createdBy = session.claims.upn;
   const tenantId = (session.claims as any).tid || (session.claims as any).tenantId;
+  // The credential is resolved on behalf of the principal whose name this
+  // request records as the row's `createdBy` — the same identity, so the row
+  // written below is what records ownership of a not-yet-bound credential.
+  const secretOwner: ShortcutSecretOwner = { kind: 'principal', upn: createdBy };
+
+  // Every path below may persist `credentialRef` on a registry row (active,
+  // pending, or error) — several without ever resolving it. Check the name
+  // up-front so no row records a credential the caller may not use.
+  if (credentialRef?.keyVaultSecret) {
+    try {
+      await assertShortcutSecretUsable(credentialRef.keyVaultSecret, secretOwner);
+    } catch (e: any) {
+      if (isShortcutSecretRefusal(e)) return secretRefused(e);
+      return NextResponse.json({ ok: false, code: 'shortcut_secret_check_failed', error: sanitize(e) }, { status: 502 });
+    }
+  }
 
   const isExternal =
     targetType === 's3' || targetType === 'gcs' || targetType === 'dataverse' ||
@@ -141,8 +171,9 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
     // --- External ADLS Gen2 + SAS: resolve the SAS, run a REAL signed list. ---
     let sas: string;
     try {
-      sas = (await getKeyVaultSecret(credentialRef!.keyVaultSecret!)).trim();
+      sas = (await resolveShortcutSecret(credentialRef!.keyVaultSecret!, secretOwner)).trim();
     } catch (e: any) {
+      if (isShortcutSecretRefusal(e)) return secretRefused(e);
       return NextResponse.json(
         {
           ok: false,
@@ -194,6 +225,7 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
         targetType: targetType as 's3' | 'gcs' | 'dataverse' | 'delta_sharing' | 'sharepoint',
         targetUri,
         credentialRef,
+        owner: secretOwner,
       });
       if (isGate(result)) {
         // Engine for this source isn't configured — persist pending, 503 honestly.
@@ -207,6 +239,7 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
       binding = result;
       abfssUri = result.readUri;
     } catch (e: any) {
+      if (isShortcutSecretRefusal(e)) return secretRefused(e);
       if (e?.code === 'bad_target' || /^bad_/.test(e?.code || '')) {
         return NextResponse.json({ ok: false, error: sanitize(e), code: e.code }, { status: 400 });
       }

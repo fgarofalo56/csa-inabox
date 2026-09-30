@@ -183,7 +183,12 @@ async function registerTablesObject(opts: {
       kind: sourceType === 'gcs' ? 'gcsServiceAccount' : 'awsKeys',
       keyVaultSecret: secretRef,
     };
-    const bind = await bindExternalSource({ lakehouseId: lakehouseNs, name: engName, targetType, targetUri: resolved.targetUri, credentialRef });
+    // The credential is resolved as THIS item's: the resolver accepts only the
+    // `loom-shortcut-<id>` name this route minted for it.
+    const bind = await bindExternalSource({
+      lakehouseId: lakehouseNs, name: engName, targetType, targetUri: resolved.targetUri, credentialRef,
+      owner: { kind: 'item', itemId: id },
+    });
     if (isGate(bind)) return bind;
     const m = bind.readUri.match(/^(?:s3a?|gs):\/\/[^/]+\/?(.*)$/i);
     return createTablesShortcut({
