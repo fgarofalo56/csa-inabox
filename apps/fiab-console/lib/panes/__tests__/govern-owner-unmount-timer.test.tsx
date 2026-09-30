@@ -18,11 +18,14 @@
  *     clear the stored timer id (the cleanup's `clearTimeout` deleted) — the id
  *     returned for the 1500ms timer is never passed to clearTimeout.
  *   - `ownerCalls` unchanged after advancing: the original defect (no cleanup
- *     AND no alive guard in the callback). The fired callback calls load(),
- *     which calls clientFetch('/api/governance/govern/owner') — count 1 → 2.
- *     DISCLOSED: with ONLY the cleanup removed this assertion stays green,
- *     because the callback's alive guard still stops load(); the clearTimeout
- *     assertion above is what kills that mutant.
+ *     and no alive guard anywhere). The fired callback calls load(), which
+ *     calls clientFetch('/api/governance/govern/owner') — count 1 → 2
+ *     (measured with the clearSpy line removed from a sandbox copy, so this
+ *     assertion was the first one reached).
+ *     DISCLOSED: with ONLY the cleanup's clearTimeout removed — or that plus the
+ *     callback's alive guard — this assertion stays green, because load()'s own
+ *     alive guard still returns before the fetch. Those mutants are killed by
+ *     the clearTimeout assertion above, not by this one.
  *   - `timersAfterUnmount` empty (in-flight test): a `finally` that schedules
  *     the re-read without checking the pane is still mounted. The refresh POST
  *     resolves after unmount, so an unguarded `finally` arms a fresh 1500ms
