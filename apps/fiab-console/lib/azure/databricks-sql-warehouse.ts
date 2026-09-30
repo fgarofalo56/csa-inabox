@@ -291,9 +291,9 @@ function isTransport(e: ErrShape): boolean {
 const NETWORK_REFUSAL = /unauthorized network access to workspace/i;
 const QUOTA_CODES = new Set(['QUOTA_EXCEEDED', 'RESOURCE_EXHAUSTED', 'RESOURCE_LIMIT_EXCEEDED']);
 
-function quoteOf(e: ErrShape): string {
-  const s = (e.message || String(e)).replace(/\s+/g, ' ').trim();
-  return s.length > 400 ? `${s.slice(0, 400)}…` : s;
+/** The quoted response, whitespace-normalised and NOT yet cut or redacted. */
+function normalizedQuote(e: ErrShape): string {
+  return (e.message || String(e)).replace(/\s+/g, ' ').trim();
 }
 
 /**
@@ -308,12 +308,53 @@ function quoteOf(e: ErrShape): string {
  */
 const IDENTIFIER_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   [/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '<id>'],
-  [/[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g, '<principal>'],
+  // Linear, not quadratic (round 6): the local part may only START at a
+  // boundary (the lookbehind fails in O(1) inside a run, so a long run is not
+  // rescanned from every position) and every part is length-bounded (local
+  // ≤ 64, labels ≤ 63, ≤ 10 labels), so backtracking per start is bounded.
+  [/(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){1,10}/g, '<principal>'],
   [/\b\d{12,}\b/g, '<id>'],
 ];
 
 export function redactIdentifiers(text: string): string {
   return IDENTIFIER_PATTERNS.reduce((acc, [re, to]) => acc.replace(re, to), text);
+}
+
+/** Characters shown in `message` from a quoted response. */
+const QUOTE_CAP = 400;
+/**
+ * Redaction runs over this much of the response BEFORE the cut, so an
+ * identifier straddling the 400-char cut is matched whole (a GUID is 36 chars;
+ * 256 covers any realistic UPN). The window also bounds the regex input, so a
+ * huge response (e.g. a proxy's HTML error page) cannot make redaction costly.
+ */
+const REDACT_WINDOW = QUOTE_CAP + 256;
+
+/**
+ * #4776 (round 6) — REDACT FIRST, THEN CUT. `said` is the public quote for
+ * `message`: redacted over the bounded window, then cut to QUOTE_CAP backing
+ * off to the previous space so no token is split, and — only when the text has
+ * no space to back off to — dropping the trailing run of identifier characters
+ * so no partial identifier is left. `rawDiagnostic` (admin-only) is the
+ * UNREDACTED window, set only when redaction actually changed something.
+ */
+function quoteParts(e: ErrShape, label: string): { said: string; rawDiagnostic?: string } {
+  const full = normalizedQuote(e);
+  const window = full.slice(0, REDACT_WINDOW);
+  const redacted = redactIdentifiers(window);
+  const truncated = full.length > REDACT_WINDOW;
+  const rawDiagnostic = redacted !== window
+    ? `${label}: ${window}${truncated ? '…' : ''}`
+    : undefined;
+  if (redacted.length <= QUOTE_CAP) {
+    return { said: truncated ? `${redacted}…` : redacted, rawDiagnostic };
+  }
+  let cut = redacted.slice(0, QUOTE_CAP);
+  if (/\S/.test(redacted.charAt(QUOTE_CAP))) {
+    const space = cut.lastIndexOf(' ');
+    cut = space > 0 ? cut.slice(0, space) : cut.replace(/[A-Za-z0-9._%+@-]+$/, '');
+  }
+  return { said: `${cut.trimEnd()}…`, rawDiagnostic };
 }
 
 function joinDiagnostics(...parts: Array<string | undefined>): string | undefined {
@@ -330,10 +371,8 @@ export function classifyWarehouseFailure(step: WarehouseStep, err: unknown): War
   const e = (err || {}) as ErrShape;
   const status = typeof e.status === 'number' ? e.status : undefined;
   const code = errorCode(e);
-  const raw = quoteOf(e);
-  const said = redactIdentifiers(raw);
-  // The unredacted quote is admin-only (see redactIdentifiers).
-  const rawDiagnostic = said !== raw ? `Unredacted ${step} response: ${raw}` : undefined;
+  // Redacted-then-cut public quote; the unredacted window is admin-only (see quoteParts).
+  const { said, rawDiagnostic } = quoteParts(e, `Unredacted ${step} response`);
   const classified = (init: ConstructorParameters<typeof WarehouseResolutionError>[0]) =>
     new WarehouseResolutionError(rawDiagnostic ? { ...init, diagnostic: rawDiagnostic } : init);
   const host = hostKey() || '(workspace)';
@@ -659,15 +698,14 @@ async function measuredPermissionError(base: WarehouseResolutionError): Promise<
   try {
     me = await getCurrentIdentity();
   } catch (e: unknown) {
-    const scimRaw = quoteOf((e || {}) as ErrShape);
-    const scimSaid = redactIdentifiers(scimRaw);
+    const scim = quoteParts((e || {}) as ErrShape, 'Unredacted SCIM Me error');
     return new WarehouseResolutionError({
       kind: base.kind,
       step: base.step,
       status: base.status,
       entitlement: base.entitlement,
-      diagnostic: joinDiagnostics(base.diagnostic, scimSaid !== scimRaw ? `Unredacted SCIM Me error: ${scimRaw}` : undefined),
-      message: base.message + ` Could not read the identity's entitlements to confirm (SCIM Me failed: ${scimSaid}).`,
+      diagnostic: joinDiagnostics(base.diagnostic, scim.rawDiagnostic),
+      message: base.message + ` Could not read the identity's entitlements to confirm (SCIM Me failed: ${scim.said}).`,
       remediation: base.remediation,
     });
   }

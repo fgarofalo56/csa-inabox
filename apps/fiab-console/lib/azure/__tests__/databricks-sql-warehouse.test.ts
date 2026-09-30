@@ -92,6 +92,7 @@ import {
   warehouseErrorBody,
   warehouseErrorStatus,
   withResolvedWarehouse,
+  redactIdentifiers,
   type WarehouseFailureKind,
   __testing,
 } from '../databricks-sql-warehouse';
@@ -855,6 +856,103 @@ describe('round 3 (#4776 re-review)', () => {
     expect(f.diagnostic).toContain(APP);
     expect(f.diagnostic).toContain(UPN);
     expect(f.diagnostic).toMatch(/SCIM Me: identity sp/);
+  });
+
+  describe('round 6: an identifier STRADDLING the 400-char quote cap never leaks a fragment', () => {
+    const GUID = '5e7a1c09-3b2d-4f6e-9a81-c4d2e7f0a1b3';
+    const UPN = 'loom.console-sp@fabrikam.onmicrosoft.com';
+    /** e.message with `ident` starting at exactly `offset` — spaces + plain words only before it. */
+    function straddle(ident: string, offset: number): Error & { status: number } {
+      const pad = 'word '.repeat(Math.ceil(offset / 5)).slice(0, offset - 1) + ' ';
+      // Arithmetic pinned inline, so a mis-sized pad cannot silently move the identifier.
+      expect(pad.length).toBe(offset);
+      const msg = `${pad}${ident} is not allowed ${'trailing words '.repeat(40)}`.trim();
+      expect(msg.indexOf(ident)).toBe(offset);
+      return Object.assign(new Error(msg), { status: 403 });
+    }
+    /** Every 8-char window of the identifier (so any prefix of 8+ chars is covered too). */
+    const windows8 = (id: string) => Array.from({ length: id.length - 7 }, (_, i) => id.slice(i, i + 8));
+    const cases: Array<[string, string, number]> = [
+      ['GUID', GUID, 370], ['GUID', GUID, 380], ['GUID', GUID, 390], ['UPN', UPN, 380],
+    ];
+    for (const [kind, id, offset] of cases) {
+      it(`${kind} starting at offset ${offset}: no 8-char fragment in message or route body; whole identifier in diagnostic`, () => {
+        const err = classifyWarehouseFailure('create', straddle(id, offset));
+        // Breaks on cut-then-redact (round 5): the cut splits the identifier, the
+        // half no longer matches its pattern, and its prefix lands in `message`.
+        for (const w of windows8(id)) {
+          expect(err.message, `fragment ${w}`).not.toContain(w);
+          expect(JSON.stringify(warehouseErrorBody(err)), `route body fragment ${w}`).not.toContain(w);
+        }
+        // Positive half: the quote is still there, cut with an ellipsis, cause readable.
+        expect(err.message).toMatch(/word word/);
+        expect(err.message).toMatch(/…/);
+        expect(err.kind).toBe('permission');
+        // The admin-only diagnostic keeps the WHOLE identifier.
+        expect(err.diagnostic).toContain(id);
+      });
+    }
+
+    it('end to end (GUID at 380): the published failure and the self-audit gate detail carry no fragment', async () => {
+      h.dbx.createWarehouse.mockRejectedValue(straddle(GUID, 380));
+      meReturns({ displayName: 'sp', entitlements: [], groups: [] });
+      await resolveDatabricksSqlWarehouseId().catch(() => undefined);
+      const f = readRuntimeFailure(WAREHOUSE_ENV_VAR)!;
+      const detail = gateStatus('svc-databricks-sql')!.check.detail;
+      for (const w of windows8(GUID)) {
+        expect(f.message, `published fragment ${w}`).not.toContain(w);
+        expect(detail, `self-audit detail fragment ${w}`).not.toContain(w);
+      }
+      expect(detail).toMatch(/failed \(permission\)/);
+      expect(f.diagnostic).toContain(GUID);
+    });
+
+    it('the SCIM Me failure path redacts before cutting too (UPN at 380)', async () => {
+      h.dbx.createWarehouse.mockRejectedValue(httpErr('createWarehouse', 403, '{"error_code":"PERMISSION_DENIED","message":"no"}'));
+      const scimErr = straddle(UPN, 380);
+      h.dbx.dbxFetch.mockResolvedValue(new Response(scimErr.message, { status: 500 }));
+      const err = await resolveDatabricksSqlWarehouseId().catch((e) => e);
+      expect(err.message).toMatch(/Could not read the identity's entitlements to confirm/);
+      for (const w of windows8(UPN)) expect(err.message, `SCIM fragment ${w}`).not.toContain(w);
+      expect(err.diagnostic).toContain(UPN);
+    });
+
+    it('the redaction input is BOUNDED: an identifier far past the window is never scanned', () => {
+      // 100k chars in: outside the 656-char window, so it is neither redacted
+      // nor copied to the diagnostic. Breaks if redaction runs over the whole
+      // response (the diagnostic would then be set, carrying the far GUID).
+      const err = classifyWarehouseFailure('create', straddle(GUID, 100_000));
+      expect(err.diagnostic).toBeUndefined();
+      expect(err.message).not.toContain(GUID.slice(0, 8));
+      expect(err.message.length).toBeLessThan(1_000);
+    });
+
+    it('a response with no space before the cap drops the trailing identifier-character run instead of splitting it', () => {
+      const err = classifyWarehouseFailure('create', Object.assign(new Error(`${'x'.repeat(390)}${GUID.replace(/-/g, '')}tail`), { status: 403 }));
+      // The 32-hex run is not a GUID (no dashes) so nothing is redacted; the cap
+      // lands inside one 420+ char token, and the fallback strips that run.
+      expect(err.message).not.toContain(GUID.replace(/-/g, '').slice(0, 8));
+      expect(err.message).toMatch(/…/);
+    });
+  });
+
+  it('round 6: redaction is linear — 40k-char adversarial inputs each finish well under the ceiling', () => {
+    const shapes: Record<string, string> = {
+      'letter run, no @': 'a'.repeat(40_000),
+      'letter run ending in @': `${'a'.repeat(39_999)}@`,
+      'digit run': '1'.repeat(40_000),
+      'hex-dash run': '0a1b-'.repeat(8_000),
+    };
+    for (const [name, input] of Object.entries(shapes)) {
+      const t0 = performance.now();
+      redactIdentifiers(input);
+      const ms = performance.now() - t0;
+      // Generous ceiling. The round-5 unanchored e-mail pattern was quadratic
+      // (measured ≈ 2.7 s at 40k); a linear pattern is a few ms.
+      expect(ms, `${name}: ${ms.toFixed(1)} ms`).toBeLessThan(500);
+    }
+    // Positive half: the bounded pattern still redacts an ordinary address.
+    expect(redactIdentifiers('by x.y-z@contoso.com.')).toBe('by <principal>.');
   });
 
   it('round 5 (N2) control: a quote with no identifier-shaped token is not rewritten and adds no diagnostic', () => {
