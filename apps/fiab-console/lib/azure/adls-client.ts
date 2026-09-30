@@ -932,6 +932,36 @@ export function listKnownBlobDataRoles(): Array<{ name: string; id: string }> {
   return Object.entries(BLOB_DATA_ROLES).map(([name, id]) => ({ name, id }));
 }
 
+/** The configured account, or null when no LOOM_*_URL names one. */
+function configuredAccountOrNull(): string | null {
+  try { return getAccountName(); } catch { return null; }
+}
+
+/**
+ * Resource Graph did not place a storage account that is not the configured
+ * one. `LOOM_SUBSCRIPTION_ID` / `LOOM_DLZ_RG` describe the configured account
+ * only, so a scope built from them for any other account would name a
+ * subscription or resource group that account is not in. This is thrown
+ * instead; the lakehouse permissions routes answer it with a 409 that carries
+ * `remediation`.
+ */
+export class StorageAccountNotLocatedError extends Error {
+  readonly code = 'storage_account_not_located' as const;
+  readonly account: string;
+  readonly remediation: string;
+  constructor(account: string) {
+    super(
+      `Loom could not find storage account "${account}" through Azure Resource Graph, so it did not read or `
+      + 'change role assignments there. The Console identity may not be able to read the subscription that '
+      + 'holds the account, the account may no longer exist, or the Resource Graph query may have failed.',
+    );
+    this.name = 'StorageAccountNotLocatedError';
+    this.account = account;
+    this.remediation =
+      `Grant the Console identity Reader on the subscription that holds storage account "${account}", then retry.`;
+  }
+}
+
 /**
  * Resolve the storage account's REAL ARM coordinates ({sub, rg}).
  *
@@ -940,14 +970,24 @@ export function listKnownBlobDataRoles(): Array<{ name: string; id: string }> {
  * `rg-csa-loom-dlz-…` name) that the DLZ storage account does NOT live in — so
  * an ARM call built from env 404s ("Resource group '…' could not be found").
  * We discover where the account ACTUALLY lives BY NAME via Azure Resource Graph
- * (cached per-process), and only fall back to env when discovery returns
- * nothing. ARG is authoritative, so this fixes the wrong-RG case transparently.
+ * (cached per-process). ARG is authoritative, so this fixes the wrong-RG case
+ * transparently.
+ *
+ * The env fallback applies to the configured account only, since that is the
+ * account those values describe. Any other account (a lakehouse bound
+ * elsewhere) that ARG does not place throws {@link StorageAccountNotLocatedError}.
  */
 async function resolveStorageCoords(account: string = getAccountName()): Promise<{ sub: string; rg: string }> {
   const coords = await discoverResourceCoordsByName({
     resourceType: 'Microsoft.Storage/storageAccounts',
     name: account,
   }).catch(() => null);
+  if (coords?.subscriptionId && coords.resourceGroup) {
+    return { sub: coords.subscriptionId, rg: coords.resourceGroup };
+  }
+  if (account.toLowerCase() !== configuredAccountOrNull()?.toLowerCase()) {
+    throw new StorageAccountNotLocatedError(account);
+  }
   const sub = coords?.subscriptionId || process.env.LOOM_SUBSCRIPTION_ID;
   const rg = coords?.resourceGroup || process.env.LOOM_DLZ_RG;
   if (!sub || !rg) {
@@ -966,8 +1006,12 @@ async function resolveStorageScope(container: string, account: string = getAccou
   // storage account ARM id. Coordinates are resolved by name (self-heal) so a
   // wrong env RG never breaks the Permissions surface. `account` defaults to the
   // configured account; a lakehouse bound elsewhere passes its own.
-  const { sub, rg } = await resolveStorageCoords(account);
-  return `/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.Storage/storageAccounts/${account}/blobServices/default/containers/${container}`;
+  return containerScope(await resolveStorageCoords(account), account, container);
+}
+
+/** The ARM scope of one container on `account`, from coordinates already resolved for that account. */
+function containerScope(coords: { sub: string; rg: string }, account: string, container: string): string {
+  return `/subscriptions/${coords.sub}/resourceGroups/${coords.rg}/providers/Microsoft.Storage/storageAccounts/${account}/blobServices/default/containers/${container}`;
 }
 
 async function armCall<T = any>(url: string, init: RequestInit = {}): Promise<T> {
@@ -1048,11 +1092,13 @@ export async function grantContainerRole(
 
   // Self-heal coords (see resolveStorageCoords): the role-definition id must be
   // scoped to the SAME subscription the account lives in, not the env default.
-  // Both are resolved for `account`, so a lakehouse bound to another account is
+  // The coordinates are resolved once, for `account`, and used for both the
+  // scope and the role definition, so a lakehouse bound to another account is
   // granted on that account's container.
-  const { sub } = await resolveStorageCoords(account);
-  const scope = await resolveStorageScope(container, account);
-  const roleDefinitionId = `/subscriptions/${sub}/providers/Microsoft.Authorization/roleDefinitions/${roleGuid}`;
+  const target = account || getAccountName();
+  const coords = await resolveStorageCoords(target);
+  const scope = containerScope(coords, target, container);
+  const roleDefinitionId = `/subscriptions/${coords.sub}/providers/Microsoft.Authorization/roleDefinitions/${roleGuid}`;
   // ARM role-assignment names are random GUIDs. Use crypto.randomUUID() so
   // re-grants get distinct ids; the principalId+role pair would 409 anyway
   // if it already exists at the scope.

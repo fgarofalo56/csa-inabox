@@ -12,7 +12,11 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-const rec = vi.hoisted(() => ({ urls: [] as string[], bodies: [] as string[], discovered: [] as string[] }));
+const rec = vi.hoisted(() => ({
+  urls: [] as string[], bodies: [] as string[], discovered: [] as string[],
+  /** Account names Resource Graph does not place (discovery answers null). */
+  missing: new Set<string>(),
+}));
 
 vi.mock('@/lib/azure/workspace-credential-factory', () => ({
   workspaceScopedCredential: () => ({ getToken: async () => ({ token: 't', expiresOnTimestamp: Date.now() + 60_000 }) }),
@@ -20,6 +24,7 @@ vi.mock('@/lib/azure/workspace-credential-factory', () => ({
 vi.mock('@/lib/azure/resource-graph-coords', () => ({
   discoverResourceCoordsByName: async ({ name }: { name: string }) => {
     rec.discovered.push(name);
+    if (rec.missing.has(name)) return null;
     return { subscriptionId: `sub-${name}`, resourceGroup: `rg-${name}` };
   },
 }));
@@ -34,16 +39,25 @@ vi.mock('@/lib/azure/fetch-with-timeout', () => ({
 const PRIMARY = 'primaryacct';
 const BOUND = 'boundacct';
 const saved = process.env.LOOM_BRONZE_URL;
+const savedSub = process.env.LOOM_SUBSCRIPTION_ID;
+const savedRg = process.env.LOOM_DLZ_RG;
 
 beforeEach(() => {
   vi.resetModules();
   rec.urls.length = 0;
   rec.bodies.length = 0;
   rec.discovered.length = 0;
+  rec.missing.clear();
   process.env.LOOM_BRONZE_URL = `https://${PRIMARY}.dfs.core.windows.net/bronze`;
+  // The env coordinates describe the configured account. Set on every test so
+  // a fallback that used them for another account would have values to use.
+  process.env.LOOM_SUBSCRIPTION_ID = 'env-sub';
+  process.env.LOOM_DLZ_RG = 'env-rg';
 });
 afterEach(() => {
   if (saved === undefined) delete process.env.LOOM_BRONZE_URL; else process.env.LOOM_BRONZE_URL = saved;
+  if (savedSub === undefined) delete process.env.LOOM_SUBSCRIPTION_ID; else process.env.LOOM_SUBSCRIPTION_ID = savedSub;
+  if (savedRg === undefined) delete process.env.LOOM_DLZ_RG; else process.env.LOOM_DLZ_RG = savedRg;
 });
 
 describe('listContainerRoleAssignments account', () => {
@@ -85,7 +99,10 @@ describe('grantContainerRole account', () => {
     expect(JSON.parse(rec.bodies[0]).properties.roleDefinitionId).toMatch(
       new RegExp(`^/subscriptions/sub-${BOUND}/providers/Microsoft\\.Authorization/roleDefinitions/`),
     );
-    expect(rec.discovered.every((n) => n === BOUND) && rec.discovered.length > 0).toBe(true);
+    // The account's coordinates are resolved ONCE and used for both the role
+    // definition and the scope. The discovery mock has no cache, so this
+    // breaks if the grant resolves them twice: [BOUND, BOUND].
+    expect(rec.discovered).toEqual([BOUND]);
   });
 
   it('grants on the configured account when none is given', async () => {
@@ -94,5 +111,45 @@ describe('grantContainerRole account', () => {
     await grantContainerRole('landing', 'p1', 'Storage Blob Data Reader', 'User');
     expect(rec.urls[0]).toContain(`/storageAccounts/${PRIMARY}/blobServices/default/containers/landing/`);
     expect(JSON.parse(rec.bodies[0]).properties.roleDefinitionId).toMatch(new RegExp(`^/subscriptions/sub-${PRIMARY}/`));
+  });
+});
+
+describe('an account Resource Graph does not place', () => {
+  // LOOM_SUBSCRIPTION_ID / LOOM_DLZ_RG are set (beforeEach), so a fallback that
+  // built the scope from them for BOUND would have values, would call ARM, and
+  // would resolve. Each case below breaks on that: the call resolves instead of
+  // rejecting, and rec.urls gains the env-built URL.
+  const notLocated = {
+    name: 'StorageAccountNotLocatedError',
+    code: 'storage_account_not_located',
+    account: BOUND,
+    remediation: expect.stringContaining(`Reader on the subscription that holds storage account "${BOUND}"`),
+  };
+
+  it('the listing refuses with a named error and calls no ARM', async () => {
+    rec.missing.add(BOUND);
+    const { listContainerRoleAssignments } = await import('../adls-client');
+    await expect(listContainerRoleAssignments('landing', BOUND)).rejects.toMatchObject(notLocated);
+    expect(rec.discovered).toEqual([BOUND]);
+    expect(rec.urls).toEqual([]);
+  });
+
+  it('the grant refuses with a named error and calls no ARM', async () => {
+    rec.missing.add(BOUND);
+    const { grantContainerRole } = await import('../adls-client');
+    await expect(grantContainerRole('landing', 'p1', 'Storage Blob Data Reader', 'User', BOUND)).rejects.toMatchObject(notLocated);
+    expect(rec.urls).toEqual([]);
+    expect(rec.bodies).toEqual([]);
+  });
+
+  it('the configured account still uses the env coordinates (control)', async () => {
+    // The env values describe the configured account, so the fallback stays
+    // for it. Breaks if the named error is thrown for every missing account
+    // (this call would reject), or if the fallback is removed.
+    rec.missing.add(PRIMARY);
+    const { listContainerRoleAssignments } = await import('../adls-client');
+    await listContainerRoleAssignments('landing');
+    expect(rec.urls).toHaveLength(1);
+    expect(rec.urls[0]).toContain(`/subscriptions/env-sub/resourceGroups/env-rg/providers/Microsoft.Storage/storageAccounts/${PRIMARY}/`);
   });
 });

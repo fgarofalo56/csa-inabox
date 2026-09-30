@@ -1,9 +1,10 @@
 /**
  * Every permissions READ the lakehouse surfaces make names the lakehouse item.
  *
- * GET /api/lakehouse/permissions is scoped to one lakehouse: without
- * `lakehouseId` only a tenant admin is answered, so a surface that drops the id
- * works for an admin and is refused for every item member.
+ * GET /api/lakehouse/permissions is scoped to one lakehouse: the object tab
+ * refuses a read without `lakehouseId` (400 `item_required`) and the SQL tabs
+ * answer only a tenant admin without it, so a surface that drops the id fails
+ * for every item member.
  *
  * The assertion is on the FULL query of every GET issued, as a list of
  * parameter maps, so the value that breaks it is concrete: a read URL built

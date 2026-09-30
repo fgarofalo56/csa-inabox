@@ -58,7 +58,7 @@ import { DELETE, POST } from '../permissions/route';
 import { isContainerRoleAssignmentId } from '../_lib/container-role-assignment';
 import { getSession } from '@/lib/auth/session';
 import {
-  listContainerRoleAssignments, revokeContainerRoleAssignment, grantContainerRole,
+  listContainerRoleAssignments, revokeContainerRoleAssignment, grantContainerRole, StorageAccountNotLocatedError,
 } from '@/lib/azure/adls-client';
 import { dedicatedTarget, dropRlsPolicy } from '@/lib/azure/synapse-permissions-client';
 import { resolveLakehouseAbfss } from '@/lib/azure/lakehouse-abfss';
@@ -276,6 +276,31 @@ describe('object-tab writes act on the item\'s bound storage account', () => {
     expect(j.code).toBe('storage_account_unreadable');
     expect(typeof j.remediation).toBe('string');
     expect(writeCalls()).toEqual(NO_WRITES);
+  });
+
+  // A bound account Resource Graph cannot place is a 409 with the Reader
+  // remediation on both writes. Breaks if POST's or DELETE's catch does not
+  // map StorageAccountNotLocatedError: that verb answers the generic 502 with
+  // no `code`. The grant mock throws it (grantContainerRole resolves the
+  // account's coordinates first); for the revoke, the membership listing does.
+  it.each([
+    ['POST', () => {
+      (grantContainerRole as any).mockRejectedValue(new StorageAccountNotLocatedError(BOUND));
+      return POST(postReq(grantBody()));
+    }, { list: 0, grant: 1 }],
+    ['DELETE', () => {
+      (listContainerRoleAssignments as any).mockRejectedValue(new StorageAccountNotLocatedError(BOUND));
+      return DELETE(delReq(objectQs(LISTED)));
+    }, { list: 1, grant: 0 }],
+  ])('%s answers 409 storage_account_not_located when the bound account cannot be placed', async (_v, call, reached) => {
+    const res = await (call as () => Promise<Response>)();
+    expect(res.status).toBe(409);
+    const j = await res.json();
+    expect([j.ok, j.code]).toEqual([false, 'storage_account_not_located']);
+    expect(j.remediation).toContain(`Reader on the subscription that holds storage account "${BOUND}"`);
+    // Nothing was revoked; the failing call is the one the verb makes first.
+    expect(writeCalls().revoke).toEqual([]);
+    expect({ list: writeCalls().list.length, grant: writeCalls().grant.length }).toEqual(reached);
   });
 
   // Breaks if the write skips the item check: 200 and a grant row.
