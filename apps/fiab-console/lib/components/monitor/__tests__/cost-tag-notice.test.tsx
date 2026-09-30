@@ -158,6 +158,17 @@ describe('breakdownEmptyText (#4771 R8, B-2)', () => {
     expect(breakdownEmptyText({ gated: true, failed: true, partial: true })).toMatch(/^Grant/);
     expect(breakdownEmptyText({ gated: false, failed: true, partial: true })).toMatch(/^The cost read did not complete/);
   });
+
+  it('with `omitted`, a partial read names the count itself instead of pointing at a notice (#4771 R9)', () => {
+    // Breaks if the count is dropped, the plural is wrong, or the text still
+    // points at a notice the donut site does not have.
+    expect(breakdownEmptyText({ gated: false, failed: false, partial: true, omitted: 1 }))
+      .toBe('No cost recorded in the subscriptions that answered. 1 subscription did not answer, so this is not a complete answer.');
+    expect(breakdownEmptyText({ gated: false, failed: false, partial: true, omitted: 3 })).toContain('3 subscriptions did not answer');
+    // `omitted` changes nothing when the read is complete, failed or gated.
+    expect(breakdownEmptyText({ gated: false, failed: false, partial: false, omitted: 0 })).toBe('No cost recorded.');
+    expect(breakdownEmptyText({ gated: false, failed: true, partial: true, omitted: 2 })).toMatch(/^The cost read did not complete/);
+  });
 });
 
 describe('CostTagNotice under a gate (#4771 R8)', () => {

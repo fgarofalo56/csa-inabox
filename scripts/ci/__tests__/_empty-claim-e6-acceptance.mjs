@@ -292,6 +292,39 @@ const ROUND8 = [
 /** The round-8 ids, for a LITERAL membership test. */
 export const ROUND8_IDS = ROUND8.map((f) => f.id);
 
+/**
+ * Round 9 (re-reviews 5910871985 A, 5910921069 B at 8e7484784). Shape L / W
+ * prove what Q's own queryFn does; A showed the claim reads Q's CACHE ENTRY,
+ * which another writer in the file can fill. `C-distinct-key` is the positive
+ * control that keeps the key comparison honest: its two keys differ only
+ * inside a string, which the string-blanked text cannot see.
+ */
+const SWALLOW_FN = 'queryFn: async () => ({ ok: true, prompts: [] })';
+const withQueryClient = (src) => variant(src, "import { useQuery } from '@tanstack/react-query';",
+  "import { useQuery, useQueryClient } from '@tanstack/react-query';");
+const ROUND9 = [
+  { id: 'C-dupkey', extra: true, review: 'A-5', klass: 'allow-list refusal', expect: 'unguarded', rule: 'the cache entry has one writer (a second useQuery on the same key swallows)',
+    src: inPanel(`  const shadowQ = useQuery({ queryKey: ['p'], ${SWALLOW_FN} });\n`) },
+  { id: 'C-setdata', extra: true, review: 'A-5', klass: 'allow-list refusal', expect: 'unguarded', rule: 'the cache entry has one writer (an optimistic setQueryData empties the list)',
+    src: withQueryClient(inPanel("  const qc = useQueryClient();\n  const clearAll = () => qc.setQueryData(['p'], { ok: true, prompts: [] });\n")) },
+  { id: 'C-setqueries', extra: true, review: 'A-5 (sibling)', klass: 'allow-list refusal', expect: 'unguarded', rule: 'the cache entry has one writer (setQueriesData over a key prefix)',
+    src: withQueryClient(inPanel("  const qc = useQueryClient();\n  const clearAll = () => qc.setQueriesData({ queryKey: ['p'] }, { ok: true, prompts: [] });\n")) },
+  { id: 'C-dupkey-generic', extra: true, review: 'round-9 witness', klass: 'allow-list refusal', expect: 'unguarded', rule: 'a typed useQuery<T>(…) call is still found (same key, swallowing)',
+    src: inPanel(`  const shadowQ = useQuery<{ ok: boolean; prompts: string[] }>({ queryKey: ['p'], ${SWALLOW_FN} });\n`) },
+  { id: 'C-key-unreadable', extra: true, review: 'round-9 witness', klass: 'allow-list refusal', expect: 'unguarded', rule: 'every other useQuery key is readable (a spread after the key may override it)',
+    src: inPanel(`  const opts = { queryKey: ['p'], ${SWALLOW_FN} };\n  const shadowQ = useQuery({ queryKey: ['z'], ...opts });\n`) },
+  { id: 'C-nokey', extra: true, review: 'round-9 witness', klass: 'allow-list refusal', expect: 'unguarded', rule: "Q's own key is readable (no queryKey)",
+    src: variant(LOUD, "    queryKey: ['p'],\n", '') },
+  { id: 'C-distinct-key', extra: true, review: 'round-9 witness', klass: 'positive control', expect: 'safe', rule: 'keys are compared in the ORIGINAL source (distinct strings of equal length)',
+    src: inPanel(`  const otherQ = useQuery({ queryKey: ['x'], ${SWALLOW_FN} });\n`) },
+  { id: 'S-readState', extra: true, review: 'A nit', klass: 'allow-list refusal', expect: 'unguarded', rule: 'the Shape W wrapper is only ever called (a local readState)',
+    src: variant(WRAPPED, "  const [dimension, setDimension] = useState('service');\n",
+      "  const [dimension, setDimension] = useState('service');\n  const readState = (q: any) => ({ isError: false, error: null, refetch: q.refetch });\n") },
+];
+
+/** The round-9 ids, for a LITERAL membership test. */
+export const ROUND9_IDS = ROUND9.map((f) => f.id);
+
 /** Where each fixture sits in the review: E6-specific, shared with E2, or a held negative/control. */
 export const FIXTURES = [
   // ---- positive controls (SAFE on the new guard) ----
@@ -411,6 +444,7 @@ export const FIXTURES = [
       'export function RowsView({ rowsQ }: { rowsQ: any }) {\n  return <div>{readState(rowsQ).isError ? null : (rowsQ.data?.rows || []).length ? <Chart /> : <EmptyState title="No rows" />}</div>;\n}\n') },
   ...ROUND7,
   ...ROUND8,
+  ...ROUND9,
 ];
 
 /** The review's own 28 (the extras are ours). */

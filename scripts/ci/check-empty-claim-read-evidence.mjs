@@ -200,8 +200,13 @@
  *     What the allow-list relies on, and does not check: react-query's
  *     contract that `isError` is true after a rejected queryFn; the real
  *     `@/lib/client-fetch` rejecting on transport failure and resolving the
- *     Response otherwise; and the route answering `{ ok: false }` (Shape L)
- *     or a non-2xx status (Shape W) when its read failed. A gated 200
+ *     Response otherwise; the route answering `{ ok: false }` (Shape L)
+ *     or a non-2xx status (Shape W) when its read failed; and that the cache
+ *     entry is written only by Q's queryFn. That last one is checked IN THE
+ *     FILE (a cache-writing call such as `setQueryData`, or a second
+ *     `useQuery` whose key is unreadable or textually equal to Q's, refuses
+ *     E6), but NOT in other files, and not for two keys that differ in text
+ *     yet coincide at runtime (`['r', a]` vs `['r', b]` with `a === b`). A gated 200
  *     (`{ items: [], gate }`) is not an error to E6 — the component must
  *     refuse the claim under the gate itself (the cockpit does, #4771).
  *     `as T` on Shape L's return is accepted because a type assertion is
@@ -1028,6 +1033,16 @@ const E6_MSG = `(?:${E6_QUOTED}|${e6Template(`${E6_ID}(?:\\??\\.${E6_ID})*`)})`;
 export const e6Norm = (s) => s.replace(/\s+/g, ' ').trim().replace(/ (?=[^\w$])|(?<=[^\w$]) /g, '');
 
 /**
+ * `s` with EVERY regex metacharacter escaped, so it matches only itself inside
+ * a `new RegExp(…)`. The same class as the console's `escapeRegExp`
+ * (`lib/azure/__tests__/unity-audit-guard.test.ts`), which a `.mjs` script
+ * cannot import. Escaping only `$` was enough for the identifiers E6 passes
+ * today, but an incomplete escape stops covering a name the day one carries
+ * another metacharacter (CodeQL js/incomplete-sanitization, #4771 round 9).
+ */
+export const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
  * Shape L — the queryFn is its own loud read. Lifted from, and identical at:
  *   prompt-registry-panel.tsx `q`  (queryFn :148-153, claim :209)
  *   search-quality-panel.tsx  `q`  (queryFn :92-97,   claim :153)
@@ -1079,7 +1094,7 @@ export const E6_SHAPE_W_HELPER = new RegExp('^'
 /**
  * Shape W, part 3 — the wrapper ORs an HTTP failure into isError, once, with
  * nothing after it that could overwrite it. finops-cockpit-pane.tsx :100-112
- * (`readState`, claims :368 anomaliesQ, :407 breakdownQ, :470 budgetsQ):
+ * (`readState`, claims :377 anomaliesQ, :416 breakdownQ, :479 budgetsQ):
  *   function readState(q: { isError: boolean; error: unknown; data: any; refetch: () => unknown }) {
  *     const status = typeof q.data?.status === 'number' ? q.data.status : null;
  *     const httpFailed = status !== null && status >= 400;
@@ -1111,7 +1126,7 @@ const E6_CLIENT_FETCH_IMPORT = /^import \{ clientFetch \} from '@\/lib\/client-f
  * matched against might not be the one that runs.
  */
 function e6OnlyCalled(text, name, allowed) {
-  const re = new RegExp(String.raw`(?<![\w$])${name.replace(/\$/g, '\\$')}(?![\w$])`, 'g');
+  const re = new RegExp(String.raw`(?<![\w$])${escapeRegExp(name)}(?![\w$])`, 'g');
   let m;
   while ((m = re.exec(text))) {
     if (allowed.has(m.index)) continue;
@@ -1145,7 +1160,7 @@ function e6ClientFetchBound(ctx) {
  */
 function e6TopFunction(ctx, name) {
   const { text, src, pairs } = ctx;
-  const re = new RegExp(String.raw`(?<![\w$.])function\s*\*?\s*${name.replace(/\$/g, '\\$')}(?![\w$])`, 'g');
+  const re = new RegExp(String.raw`(?<![\w$.])function\s*\*?\s*${escapeRegExp(name)}(?![\w$])`, 'g');
   const hits = [...text.matchAll(re)];
   if (hits.length !== 1) return null;
   const at = hits[0].index;
@@ -1186,6 +1201,94 @@ function e6ShapeW(ctx, fn, wrapper) {
   const wm = w && E6_SHAPE_W_WRAPPER.exec(e6Norm(w));
   if (!wm || wm.groups.W !== wrapper || ['status', 'httpFailed'].includes(wm.groups.P)) return false;
   return e6ClientFetchBound(ctx);
+}
+
+// ---------------------------------------------------------------------------
+// E6 CACHE PROVENANCE (#4771 round 9, re-review 5910871985 A).
+//
+// Shape L / W prove what Q's OWN queryFn does. But `q.data` and `q.isError`
+// are the react-query CACHE ENTRY for Q's key, and anything else that writes
+// that entry — an optimistic `setQueryData`, a second `useQuery` on the same
+// key with a swallowing queryFn — puts data on screen that Q's queryFn never
+// produced, with `isError` false. E6 checks the file for both and refuses.
+// ---------------------------------------------------------------------------
+
+/**
+ * Names that write a react-query cache entry other than through the query's
+ * own queryFn. Matched against the ORIGINAL source — comments and strings
+ * included — so `qc['setQueryData']` and an aliasing destructure refuse too;
+ * a mention in a comment is a false alarm, never a false SAFE.
+ */
+const E6_CACHE_WRITERS = /(?<![\w$])(?:setQueryData|setQueriesData|fetchQuery|prefetchQuery|ensureQueryData|fetchInfiniteQuery|prefetchInfiniteQuery|useQueries|useSuspenseQuery|useSuspenseQueries|useInfiniteQuery|useSuspenseInfiniteQuery|usePrefetchQuery|usePrefetchInfiniteQuery)(?![\w$])/;
+
+/** Every `useQuery(…)` / `useQuery<T>(…)` CALL in the file, as its `( … )` span. */
+function e6QueryCalls(ctx) {
+  const { text, pairs } = ctx;
+  const out = [];
+  const re = /(?<![\w$])useQuery\b/g;
+  let m;
+  while ((m = re.exec(text))) {
+    let i = m.index + m[0].length;
+    while (i < text.length && /\s/.test(text[i])) i++;
+    if (text[i] === '<') {
+      let d = 0;
+      for (; i < text.length; i++) {
+        if (text[i] === '<') d++;
+        else if (text[i] === '>') { d--; if (d === 0) { i++; break; } }
+      }
+      while (i < text.length && /\s/.test(text[i])) i++;
+    }
+    if (text[i] !== '(') continue;
+    const p = pairs.find((x) => x.open === i && x.ch === '(');
+    if (p) out.push({ lo: p.open, hi: p.close });
+  }
+  return out;
+}
+
+/**
+ * The `queryKey` of the options object that opens call `span`, as normalised
+ * ORIGINAL source (so `['a']` and `['b']` differ — in `text` both strings are
+ * blanked alike), or null when it cannot be read: no inline object, a spread
+ * (it may carry a key that overrides the literal one), or a quoted or
+ * shorthand key. Two `queryKey`s keep the last, as JavaScript does.
+ */
+function e6QueryKeyOf(ctx, span) {
+  const { text, src, pairs } = ctx;
+  let i = span.lo + 1;
+  while (i < span.hi && /\s/.test(text[i])) i++;
+  if (text[i] !== '{') return null;
+  const obj = pairs.find((x) => x.open === i && x.ch === '{');
+  if (!obj) return null;
+  const bounds = [...depth0Ops(text, obj.open + 1, obj.close).filter((o) => o.op === ',').map((o) => o.at), obj.close];
+  let segLo = obj.open + 1;
+  let key = null;
+  for (const b of bounds) {
+    const seg = text.slice(segLo, b);
+    if (/^\s*\.\.\./.test(seg)) return null;
+    const mm = /^\s*queryKey\s*:/.exec(seg);
+    if (mm) key = e6Norm(src.slice(segLo + mm[0].length, b));
+    segLo = b + 1;
+  }
+  return key;
+}
+
+/**
+ * Is Q's cache entry written ONLY by Q's queryFn, as far as this file shows?
+ * No cache-writing call anywhere in the file, Q's key readable, and every
+ * other `useQuery` call's key readable and textually different. A key built
+ * from variables that coincide at runtime, and writers in OTHER files, are not
+ * checked (guard header).
+ */
+function e6SoleCacheWriter(ctx, call) {
+  if (E6_CACHE_WRITERS.test(ctx.src)) return false;
+  const own = e6QueryKeyOf(ctx, call);
+  if (own === null) return false;
+  for (const span of e6QueryCalls(ctx)) {
+    if (span.lo === call.lo) continue;
+    const k = e6QueryKeyOf(ctx, span);
+    if (k === null || k === own) return false;
+  }
+  return true;
 }
 
 /**
@@ -1294,12 +1397,32 @@ function queryErrorEvidence(info, literals, ctx) {
     // fetcher RESOLVES a non-2xx), is unguarded.
     const complete = wrapper ? e6ShapeW(ctx, fn, wrapper) : e6ShapeL(ctx, fn);
     if (!complete) continue;
+    if (!e6SoleCacheWriter(ctx, call)) continue;
     if (!querySettled(q, literals)) continue;
     if (claimOutOfReach(ctx, ctx.scope, ctx.claimIdx, q)) continue;
     if (!dataLinked(q, ctx.conds, info)) continue;
     return { safe: true, why: `E6 !${lit.expr}` };
   }
   return { safe: false, why: null };
+}
+
+/**
+ * Extra fix advice for a failing claim whose conditions read a react-query
+ * `isError`, or '' for any other claim. E6 accepts only the two shapes lifted
+ * from the six real sites, so an author who breaks one of them (or writes a
+ * new one) is pointed at the sites to copy, not at the useState advice.
+ */
+export function e6FixAdvice(literals) {
+  if (!(literals || []).some((l) => /\.isError$/.test(String(l)))) return '';
+  return '    react-query: E6 accepts a useQuery claim only when its read is, token for token, one of two '
+    + 'shapes (E6_SHAPE_L and E6_SHAPE_W_* in this script), each copied from real sites:\n'
+    + '      Shape L, a queryFn that throws on a not-ok body, read as `!q.isError`: the `q` in '
+    + 'prompt-registry-panel.tsx, search-quality-panel.tsx and token-budget-panel.tsx.\n'
+    + '      Shape W, `() => getJson(URL)` over the getJson helper, read as `!readState(Q).isError`: '
+    + 'anomaliesQ, breakdownQ and budgetsQ in finops-cockpit-pane.tsx.\n'
+    + '    Match one exactly, import clientFetch from @/lib/client-fetch, and let only the query\'s own '
+    + 'queryFn write its cache (no setQueryData, no second useQuery on its key). Any other shape is '
+    + 'unguarded by design (#4771).\n';
 }
 
 // ===========================================================================
@@ -2117,6 +2240,8 @@ function main() {
           + 'error state to be absent (`!err && …`). Do not gate on a `loading` flag a '
           + '`finally` clears regardless of outcome.\n',
         );
+        const e6Advice = e6FixAdvice(f.sample.literals);
+        if (e6Advice) console.error(e6Advice);
       }
     }
     if (stale.length) {

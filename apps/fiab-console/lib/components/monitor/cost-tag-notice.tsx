@@ -33,10 +33,19 @@ export const listErrors = (errors: TagQueryError[]) => {
  * The empty text for a breakdown table, which must never claim emptiness it did
  * not read: a gate, a failed read, and a breakdown missing whole subscriptions
  * each say so instead of "No cost recorded." (#4771 round 8, B-2).
+ *
+ * `omitted` is for a site with no partial-breakdown notice beside it (the
+ * Monitor distribution donuts, #4771 round 9): the count goes into the text
+ * itself instead of pointing at a notice that is not there.
  */
-export function breakdownEmptyText({ gated, failed, partial }: { gated: boolean; failed: boolean; partial: boolean }) {
+export function breakdownEmptyText({ gated, failed, partial, omitted }: {
+  gated: boolean; failed: boolean; partial: boolean; omitted?: number;
+}) {
   if (gated) return 'Grant Cost Management Reader to see this breakdown.';
   if (failed) return 'The cost read did not complete, so nothing is known about this breakdown. The message above says why.';
+  if (partial && omitted !== undefined) {
+    return `No cost recorded in the subscriptions that answered. ${omitted} subscription${omitted === 1 ? '' : 's'} did not answer, so this is not a complete answer.`;
+  }
   if (partial) return 'No cost recorded in the subscriptions that answered. The partial-breakdown notice above names the ones that did not.';
   return 'No cost recorded.';
 }

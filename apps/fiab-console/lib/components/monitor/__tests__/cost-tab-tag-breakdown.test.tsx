@@ -208,4 +208,28 @@ describe('CostTab — non-tag groupings never read a partial or failed breakdown
     expect(await screen.findByText('No cost recorded.')).toBeInTheDocument();
     expect(screen.queryByText(/The cost read did not complete/)).toBeNull();
   });
+
+  // The distribution donuts render only when monthToDate > 0; service carries
+  // the spend, so the subscription and resource-group cards are the empty ones.
+  const DONUT_DATA = { ...EMPTY_SUMMARY, monthToDate: 5, byService: SVC_ROWS };
+  const donutCard = async (title: string) => (await screen.findByText(title)).closest('div') as HTMLElement;
+
+  it('R9: an empty donut card on a partial read says it is partial, not "No cost recorded."', async () => {
+    stubFetch(json(200, { ok: true, data: { ...DONUT_DATA, subscriptionErrors: SUB_ERRORS } }));
+    mount();
+    const card = await donutCard('By resource group');
+    // Breaks if the donut card keeps the bare claim (B's nit) or drops the
+    // omitted count (1 = SUB_ERRORS.length).
+    expect(card.textContent).toContain('1 subscription did not answer, so this is not a complete answer.');
+    expect(within(card).queryByText('No cost recorded.')).toBeNull();
+  });
+
+  it('POSITIVE CONTROL: an empty donut card on a complete read still says "No cost recorded."', async () => {
+    stubFetch(json(200, { ok: true, data: DONUT_DATA }));
+    mount();
+    const card = await donutCard('By resource group');
+    // Breaks if the donut text is routed to the partial text on an empty list.
+    expect(within(card).getByText('No cost recorded.')).toBeInTheDocument();
+    expect(card.textContent).not.toContain('did not answer');
+  });
 });

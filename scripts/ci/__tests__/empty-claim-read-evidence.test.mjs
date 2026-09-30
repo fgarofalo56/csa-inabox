@@ -24,7 +24,9 @@ const GUARD = join(HERE, '..', 'check-empty-claim-read-evidence.mjs');
 
 // Import the analyser without running its CLI.
 const source = readFileSync(GUARD, 'utf8').replace(/\nmain\(\);\s*$/, '\n');
-const { judgeSource, e6Norm, E6_SHAPE_L, E6_SHAPE_W_QUERYFN, E6_SHAPE_W_HELPER, E6_SHAPE_W_WRAPPER } = await import(
+const {
+  judgeSource, e6Norm, E6_SHAPE_L, E6_SHAPE_W_QUERYFN, E6_SHAPE_W_HELPER, E6_SHAPE_W_WRAPPER, escapeRegExp, e6FixAdvice,
+} = await import(
   `data:text/javascript;base64,${Buffer.from(source, 'utf8').toString('base64')}`
 );
 
@@ -162,7 +164,7 @@ export function Panel() {
 // The bases (WRAPPED, LOUD) and the review's acceptance set live in ONE module,
 // so this suite and the round-6 comparison harness judge the same text.
 import {
-  variant, WRAPPED, LOUD, FIXTURES, REVIEW_IDS, ROUND7_IDS, ROUND8_IDS, COCKPIT_GETJSON, COCKPIT_READSTATE,
+  variant, WRAPPED, LOUD, FIXTURES, REVIEW_IDS, ROUND7_IDS, ROUND8_IDS, ROUND9_IDS, COCKPIT_GETJSON, COCKPIT_READSTATE,
 } from './_empty-claim-e6-acceptance.mjs';
 
 test('E6 POSITIVE: a folded react-query outcome gates the claim (the finops cockpit shape)', () => {
@@ -315,15 +317,16 @@ test('the acceptance set carries every fixture the review named, by id', () => {
     '10', '11', '1a', '1b', '1c', '2b', '2c', '3a', '3b', '3c', '4a', '4b', '5a', '5b',
     '5c', '5d', '6a', '6b', '7a', '7b', '8a', '9a', '9b', 'N1', 'N2', 'P1', 'P2', 'U1',
   ]);
-  // 72 fixtures: 28 review + 6 round-6 extras + 20 round-7 + 18 round-8. 68
-  // unguarded = 72 minus 3 positive controls (P1, P2, R-S1b) minus 1 unjudged
-  // (U1). Round 8 flipped P3, P4 and P5 to unguarded (allow-list refusals).
-  // Adding a fixture without deciding its class turns this RED.
-  assert.equal(FIXTURES.length, 72);
-  assert.equal(FIXTURES.filter((f) => f.expect === 'unguarded').length, 68);
+  // 80 fixtures: 28 review + 6 round-6 extras + 20 round-7 + 18 round-8 + 8
+  // round-9. 75 unguarded = 80 minus 4 positive controls (P1, P2, R-S1b,
+  // C-distinct-key) minus 1 unjudged (U1). Round 8 flipped P3, P4 and P5 to
+  // unguarded (allow-list refusals). Adding a fixture without deciding its
+  // class turns this RED.
+  assert.equal(FIXTURES.length, 80);
+  assert.equal(FIXTURES.filter((f) => f.expect === 'unguarded').length, 75);
   assert.deepEqual(
     FIXTURES.filter((f) => f.expect === 'safe').map((f) => f.id).sort(),
-    ['P1', 'P2', 'R-S1b'].sort(),
+    ['P1', 'P2', 'R-S1b', 'C-distinct-key'].sort(),
   );
 });
 
@@ -342,6 +345,80 @@ test('the acceptance set carries every round-8 re-review shape and witness, by i
     'B-decoy-recv', 'L-narrow', 'M-slot', 'L-fetch-catch', 'S-cf', 'S-cf-import',
     'S-cf-commented', 'S-getJson', 'W-catch', 'W-qf-catch',
   ].sort());
+});
+
+test('the acceptance set carries every round-9 re-review shape and witness, by id', () => {
+  // LITERAL, as above. A = review 5910871985, B = review 5910921069.
+  assert.deepEqual([...ROUND9_IDS].sort(), [
+    'C-dupkey', 'C-dupkey-generic', 'C-setdata', 'C-setqueries', 'C-key-unreadable', 'C-nokey', 'C-distinct-key', 'S-readState',
+  ].sort());
+});
+
+// ---------------------------------------------------------------------------
+// Round 9: cache provenance, the regex escape, and the failure advice.
+// ---------------------------------------------------------------------------
+
+/**
+ * Every cache-writing name E6 refuses, as a LITERAL list (not read from the
+ * guard's regex, so dropping a name from the guard turns its row RED).
+ */
+const CACHE_WRITERS = [
+  'setQueryData', 'setQueriesData', 'fetchQuery', 'prefetchQuery', 'ensureQueryData', 'fetchInfiniteQuery',
+  'prefetchInfiniteQuery', 'useQueries', 'useSuspenseQuery', 'useSuspenseQueries', 'useInfiniteQuery',
+  'useSuspenseInfiniteQuery', 'usePrefetchQuery', 'usePrefetchInfiniteQuery',
+];
+const Q_OPEN = '  const q = useQuery({' + String.fromCharCode(10);
+const beforeQ = (stmt) => variant(LOUD, Q_OPEN, stmt + String.fromCharCode(10) + Q_OPEN);
+
+test('E6 cache provenance: any cache-writing call in the file refuses a Shape L claim', () => {
+  // Paired positive: the unedited base is SAFE, so each refusal is the edit's.
+  assert.deepEqual(verdicts(LOUD), ['safe']);
+  for (const name of CACHE_WRITERS) {
+    const src = beforeQ(`  const w = (qc: any) => qc.${name}(['p'], { ok: true, prompts: [] });`);
+    // Breaks if `name` is dropped from E6_CACHE_WRITERS: the claim goes SAFE.
+    assert.deepEqual(verdicts(src), ['unguarded'], `${name} must refuse E6`);
+  }
+  // A writer reached through a string key: breaks if the writers are matched
+  // on the string-blanked text instead of the original source.
+  assert.deepEqual(verdicts(beforeQ("  const w = (qc: any) => qc['setQueryData'](['p'], { ok: true, prompts: [] });")), ['unguarded']);
+  // Positive controls: names that only CONTAIN a writer are not one. Each
+  // breaks if the writer regex loses the boundary on that side. The last is a
+  // real react-query call that re-runs the queryFn rather than writing data.
+  assert.deepEqual(verdicts(beforeQ('  const w = (qc: any) => qc.unsetQueryData();')), ['safe'], 'left boundary');
+  assert.deepEqual(verdicts(beforeQ('  const w = (qc: any) => qc.setQueryDataLog();')), ['safe'], 'right boundary');
+  assert.deepEqual(verdicts(beforeQ("  const w = (qc: any) => qc.refetchQueries({ queryKey: ['p'] });")), ['safe']);
+});
+
+test('escapeRegExp: a name carrying each regex metacharacter matches only itself', () => {
+  // A LITERAL list of the metacharacters (the last is one backslash). Breaks
+  // if any one is dropped from the escape class: that name then throws in
+  // new RegExp, or matches a decoy. The `u` flag matters: without it a lone
+  // `{`, `}` or `]` is a literal (Annex B), so dropping those three from the
+  // class would be invisible here.
+  for (const ch of ['.', '*', '+', '?', '^', '$', '{', '}', '(', ')', '|', '[', ']', String.fromCharCode(92)]) {
+    const name = `a${ch}b`;
+    let re;
+    assert.doesNotThrow(() => { re = new RegExp(`^${escapeRegExp(name)}$`, 'u'); }, `escape of ${JSON.stringify(ch)} left an invalid pattern`);
+    assert.ok(re.test(name), `${JSON.stringify(ch)}: the name must match itself`);
+    assert.ok(!re.test('aXb'), `${JSON.stringify(ch)}: the name must not match a decoy`);
+    assert.ok(!re.test(`a${ch}${ch}b`), `${JSON.stringify(ch)}: the name must not match a repetition`);
+    assert.ok(!re.test('ab'), `${JSON.stringify(ch)}: the name must not match with the character dropped`);
+  }
+  // Positive half for an identifier that needs no escape.
+  assert.equal(escapeRegExp('readState'), 'readState');
+});
+
+test('e6FixAdvice names Shape L, Shape W and the six sites for a react-query claim, and nothing else', () => {
+  const advice = e6FixAdvice(['!breakdownQ.isPending', '!readState(breakdownQ).isError']);
+  // LITERAL list: every shape and site an author needs. Breaks if any is dropped.
+  for (const want of ['Shape L', 'Shape W', 'prompt-registry-panel.tsx', 'search-quality-panel.tsx',
+    'token-budget-panel.tsx', 'finops-cockpit-pane.tsx', 'anomaliesQ', 'breakdownQ', 'budgetsQ', 'setQueryData']) {
+    assert.ok(advice.includes(want), `advice must name ${want}`);
+  }
+  assert.ok(e6FixAdvice(['!q.isPending', '!q.isError']).includes('Shape L'), 'a bare q.isError gets the advice too');
+  // Breaks if every failure gets the react-query advice.
+  assert.equal(e6FixAdvice(['!err', 'rows']), '');
+  assert.equal(e6FixAdvice(undefined), '');
 });
 
 // ---------------------------------------------------------------------------

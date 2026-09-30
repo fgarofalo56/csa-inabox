@@ -242,6 +242,10 @@ export function FinopsCockpitPane() {
   const feed = anomaliesQ.data?.feed || [];
   const rules: CostAnomalyRuleDoc[] = anomaliesQ.data?.rules || [];
   const breakdownTotal = Number(breakdownQ.data?.total || 0);
+  // Subscriptions whose cost read failed are missing from breakdownTotal, so
+  // the period-to-date tile says it is partial rather than showing a short
+  // total as the whole spend (#4771 round 9).
+  const mtdOmitted: number = breakdownQ.data?.subscriptionErrors?.length || 0;
   // The tag dimension's rows ARE the tag breakdown, so the Monitor tab's notice
   // tells a failed or partial tag query apart from "no tags found".
   const tagSummary = {
@@ -287,9 +291,14 @@ export function FinopsCockpitPane() {
             <div key={t.key} className={styles.tile}>
               <Caption1 className={styles.tileLabel}>{t.label}</Caption1>
               <div className={styles.tileValue}>{t.value}</div>
-              {t.caption && (
+              {(t.caption || (t.key === 'mtd' && mtdOmitted > 0)) && (
                 <div className={styles.badgeRow}>
-                  <Badge appearance="tint" color={INTENT_COLOR[t.intent]}>{t.caption}</Badge>
+                  {t.caption && <Badge appearance="tint" color={INTENT_COLOR[t.intent]}>{t.caption}</Badge>}
+                  {t.key === 'mtd' && mtdOmitted > 0 && (
+                    <Badge appearance="tint" color="warning">
+                      {`Partial: ${mtdOmitted} subscription${mtdOmitted === 1 ? '' : 's'} omitted`}
+                    </Badge>
+                  )}
                 </div>
               )}
             </div>

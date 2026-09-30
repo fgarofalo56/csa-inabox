@@ -1769,7 +1769,7 @@ export function CostTab({ onUnauth }: { onUnauth: () => void }) {
                 {c.rows.length ? (
                   <LoomChart type="donut" rows={c.rows} height={240} />
                 ) : (
-                  <span className={styles.anomalyMeta}>No cost recorded.</span>
+                  <span className={styles.anomalyMeta}>{breakdownEmptyText({ gated: !!gate, failed: !!err, partial: !!data.subscriptionErrors?.length, omitted: data.subscriptionErrors?.length ?? 0 })}</span>
                 )}
               </div>
             ))}

@@ -225,6 +225,34 @@ describe('FinopsCockpitPane breakdown — every dimension discloses a partial br
     // Breaks if the generic notice is also rendered on `tag`.
     expect(screen.queryByText('Partial breakdown')).toBeNull();
   });
+
+  /** The period-to-date KPI tile, found by its label. */
+  const mtdTile = async () => (await screen.findByText('Spend (period to date)')).parentElement as HTMLElement;
+
+  it('the period-to-date tile marks a total that omits subscriptions as partial (#4771 R9)', async () => {
+    routeMock(() => ok({ rows: [{ key: 'svc', cost: 5 }], total: 5, tagQueryErrors: [], subscriptionErrors: SUB_ERRORS }));
+    mount(<FinopsCockpitPane />);
+    const tile = await mtdTile();
+    // Positive half: the tile carries the partial read's total.
+    await waitFor(() => expect(tile.textContent).toContain('5.00'));
+    // Breaks if the tile renders the short total with no marker (B's nit), or
+    // if the omitted count is not the length of subscriptionErrors (1 here).
+    expect(within(tile).getByText('Partial: 1 subscription omitted')).toBeInTheDocument();
+    // Breaks if the marker lands on every KPI tile: only the spend total is
+    // short, the forecast, anomaly and budget counts are not read from it.
+    // (The partial notice's own body also begins "Partial:", so the pattern is
+    // the marker's whole text.)
+    expect(screen.getAllByText(/^Partial: \d+ subscriptions? omitted$/)).toHaveLength(1);
+  });
+
+  it('POSITIVE CONTROL: a complete total carries no partial marker on the period-to-date tile', async () => {
+    routeMock(() => ok({ rows: [{ key: 'svc', cost: 5 }], total: 5, tagQueryErrors: [], subscriptionErrors: [] }));
+    mount(<FinopsCockpitPane />);
+    const tile = await mtdTile();
+    await waitFor(() => expect(tile.textContent).toContain('5.00'));
+    // Breaks if the marker renders on an empty error list.
+    expect(within(tile).queryByText(/^Partial:/)).toBeNull();
+  });
 });
 
 describe('FinopsCockpitPane breakdown — loading', () => {
