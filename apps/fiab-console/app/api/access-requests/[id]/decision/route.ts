@@ -77,13 +77,26 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const targetKey = (t: { scopeType: string; scopeRef: string }) => `${t.scopeType}\u0000${t.scopeRef}`;
-
-/** True when both lists name the same set of scopes (order-insensitive). */
-function sameTargets(a: AccessRequestGrantTarget[], b: AccessRequestGrantTarget[]): boolean {
-  const as = new Set(a.map(targetKey));
-  const bs = new Set(b.map(targetKey));
-  return as.size === bs.size && [...as].every((k) => bs.has(k));
+/**
+ * True when the re-derived `current` scopes are the ones the approvers reviewed
+ * (order-insensitive, one-to-one). A reviewed scope with an EMPTY scopeRef was
+ * a store not yet bound when the request was made; it is satisfied by a current
+ * scope of the same type from the same source (the same item, or the same
+ * output port), which is that store as Loom has since recorded it. Every other
+ * reviewed scope must reappear exactly.
+ */
+function reviewedMatches(current: AccessRequestGrantTarget[], reviewed: AccessRequestGrantTarget[]): boolean {
+  if (current.length !== reviewed.length) return false;
+  const open = [...reviewed];
+  for (const t of current) {
+    let i = open.findIndex((r) => !!r.scopeRef && r.scopeType === t.scopeType && r.scopeRef === t.scopeRef);
+    if (i < 0) {
+      i = open.findIndex((r) => !r.scopeRef && r.scopeType === t.scopeType && (r.source || '') === (t.source || ''));
+    }
+    if (i < 0) return false;
+    open.splice(i, 1);
+  }
+  return true;
 }
 
 /** One enforcement summary over every per-scope grant: active only when all are. */
@@ -191,8 +204,9 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
       );
       if (revoked.length) doc.revokedGrants = revoked;
       if (kept.length) {
-        warning = `${kept.length} grant(s) made for this request have no automatic revoke and remain in place: `
-          + kept.map((r) => `${r.scopeType} ${r.scopeRef}`).join(', ') + '. Remove them from the Access report.';
+        warning = `${kept.length} grant(s) made for this request were not revoked and remain in place: `
+          + kept.map((r) => `${r.scopeType} ${r.scopeRef} (${r.detail || 'no reason recorded'})`).join('; ')
+          + '. Review them in the Access report.';
       }
     } else {
       // W2 — advance over the request's approval-plan snapshot (an ordered subset
@@ -219,18 +233,20 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
               { status: 409 },
             );
           }
-          targets = deriveRequestTargets(item, doc.permission)
+          targets = (await deriveRequestTargets(item, doc.permission))
             .map((t) => ({ scopeType: t.scopeType, scopeRef: t.scopeRef, source: t.source }));
           // The approvers decided on the scopes recorded when the request was
           // made (`grantTargets`; a request recorded before those existed shows
           // its single `scopeType`/`scopeRef`). If the asset's bindings have
           // changed since, granting now would bind scopes nobody reviewed: the
           // request is refused with 409 and left open, to be denied and
-          // requested again against the current bindings.
+          // requested again against the current bindings. A store that was not
+          // bound when the request was made is not a change once it is
+          // (`reviewedMatches`), and the resolved scopes are recorded below.
           const reviewed: AccessRequestGrantTarget[] = doc.grantTargets?.length
             ? doc.grantTargets
             : [{ scopeType: doc.scopeType, scopeRef: doc.scopeRef }];
-          if (!sameTargets(targets, reviewed)) {
+          if (!reviewedMatches(targets, reviewed)) {
             return NextResponse.json(
               {
                 ok: false,
@@ -286,11 +302,12 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
         const fresh: AccessRequestGrantResult[] = [];
         for (const t of targets) {
           if (!t.scopeRef) {
-            // A store item with no storage recorded by Loom yet — nothing to
+            // A store not bound yet (an unbound store item, or an output port
+            // naming no store of the product's workspace) — nothing to
             // bind to. Pending, never a wider (workspace) grant in its place.
             fresh.push({
               status: 'pending', scopeType: t.scopeType, scopeRef: '', created: false,
-              detail: `"${doc.assetName}" has no ${t.scopeType} recorded by Loom yet. Open the item so Loom binds its storage, then approve again.`,
+              detail: `"${doc.assetName}" has no ${t.scopeType} recorded by Loom for ${t.source || 'it'} yet. Once that storage is bound in its workspace, approve again.`,
             });
             continue;
           }

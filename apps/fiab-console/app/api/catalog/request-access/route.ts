@@ -69,7 +69,7 @@ export const POST = withSession(async (req, { session: s }) => {
   // The owner NAMED on the item (a data product's `state.owner`), never a body
   // field. It is shown for context only: this route does not message the owner.
   const ownerUpn = ownerOf(asset.item);
-  const targets = deriveRequestTargets(asset.item, permission);
+  const targets = await deriveRequestTargets(asset.item, permission);
   const { scopeType, scopeRef } = targets[0];
   // Self-serve covers the product's self-serve role only; a request for more
   // than that is decided by the governed workflow.
@@ -96,6 +96,12 @@ export const POST = withSession(async (req, { session: s }) => {
     const results: AccessRequestGrantResult[] = [];
     try {
       for (const t of targets) {
+        if (!t.scopeRef) {
+          // Not a store the product's workspace has bound (lib/access/verified-targets.ts):
+          // nothing to grant on. The request goes for approval instead.
+          results.push({ status: 'pending', scopeType: t.scopeType, scopeRef: '', created: false, detail: 'Not a store bound in this product\'s workspace.' });
+          continue;
+        }
         const r = await enforceAccessGrant({
           principalId: s.claims.oid,
           principalName: requester,

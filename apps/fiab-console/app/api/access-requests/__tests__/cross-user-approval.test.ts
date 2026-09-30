@@ -119,6 +119,10 @@ beforeEach(() => {
   (itemsContainer as any).mockResolvedValue(makePartitionedContainer({
     partitionKeyPath: '/workspaceId',
     seed: [{
+      // The lakehouse the product's `gold-out` port names: ports are checked
+      // against the stores bound in the product's workspace.
+      id: 'lh-gold', workspaceId: 'ws-1', itemType: 'lakehouse', displayName: 'Gold lake', state: { adlsContainer: 'gold' },
+    }, {
       id: 'asset-1', workspaceId: 'ws-1', itemType: 'data-product', displayName: 'Gold sales',
       state: { lifecycleState: 'published', ports: { output: [{ name: 'gold-out', kind: 'adls', ref: 'gold' }] } },
     }],

@@ -75,6 +75,16 @@ function product(id: string, state: Record<string, unknown>, extra: Record<strin
 
 let wf: FakeContainer;
 
+/**
+ * Lakehouses in the products' workspace (`ws-1`), bound to the containers their
+ * output ports name. Ports are checked against these
+ * (lib/access/verified-targets.ts); a port naming anything else grants nothing.
+ */
+const BOUND_STORES = [
+  { id: 'lh-gold', workspaceId: 'ws-1', itemType: 'lakehouse', displayName: 'Gold lake', state: { adlsContainer: PRODUCT_CONTAINER } },
+  { id: 'lh-silver', workspaceId: 'ws-1', itemType: 'lakehouse', displayName: 'Silver lake', state: { adlsContainer: 'silver' } },
+];
+
 function post(body: any) {
   return POST({ json: async () => body } as any, { params: Promise.resolve({}) } as any);
 }
@@ -89,6 +99,7 @@ beforeEach(() => {
   (itemsContainer as any).mockResolvedValue(makePartitionedContainer({
     partitionKeyPath: '/workspaceId',
     seed: [
+      ...BOUND_STORES,
       product('governed-1', {}),                                   // no accessModel → governed
       product('self-1', { accessModel: 'self-serve' }),
       product('request-1', { accessModel: 'request' }),
@@ -302,13 +313,13 @@ describe('POST /api/catalog/request-access — a self-serve grant that lands on 
   it('records the landed grant in the ledger and on the request, which goes for approval', async () => {
     // Breaks on: the landed grant left unrecorded (0 ledger rows, no grantResults on
     // the request) — which is what lets a later denial revoke it.
-    seedItems([product('self-2', { accessModel: 'self-serve', ports: { output: [
+    seedItems([...BOUND_STORES, product('self-2', { accessModel: 'self-serve', ports: { output: [
       { name: 'gold-out', kind: 'adls', ref: 'gold' }, { name: 'silver-out', kind: 'adls', ref: 'silver' },
     ] } })]);
     const assignments = makePartitionedContainer({ partitionKeyPath: '/principalId' });
     (accessAssignmentsContainer as any).mockResolvedValue(assignments);
     (enforceAccessGrant as any)
-      .mockResolvedValueOnce({ status: 'active', roleName: 'Storage Blob Data Reader', roleAssignmentId: 'ra-gold' })
+      .mockResolvedValueOnce({ status: 'active', roleName: 'Storage Blob Data Reader', roleAssignmentId: 'ra-gold', preexisting: false })
       .mockResolvedValueOnce({ status: 'error', detail: 'ARM 403 on silver' });
 
     const res = await post({ assetId: 'self-2', permission: 'read' });
@@ -342,5 +353,44 @@ describe('POST /api/catalog/request-access — the owner named in the text', () 
     expect(text).not.toContain('mallory@evil.test');
     expect(text).not.toMatch(/notified|routed to/i);
     expect(wf.__all()[0].ownerUpn).toBe('owner@contoso.com');
+  });
+});
+
+describe('POST /api/catalog/request-access — output ports are checked against the product\'s workspace', () => {
+  it('a self-serve port naming a container no item in the workspace is bound to grants nothing', async () => {
+    // Breaks if ports are granted as the owner typed them: 'someone-elses' would
+    // reach the grant client and the answer would be `granted: true`.
+    seedItems([...BOUND_STORES, product('self-x', { accessModel: 'self-serve', ports: { output: [
+      { name: 'x-out', kind: 'adls', ref: 'someone-elses' },
+    ] } })]);
+    const res = await post({ assetId: 'self-x', permission: 'read' });
+    const j = await res.json();
+    expect(res.status).toBe(200);
+    expect(enforceAccessGrant).not.toHaveBeenCalled();
+    expect(j.granted).toBeUndefined();
+    const [doc] = wf.__all();
+    expect(doc.grantTargets).toEqual([{ scopeType: 'adls-container', scopeRef: '', source: "output port 'x-out'" }]);
+  });
+
+  it('the same port naming a bound container is granted (positive pair)', async () => {
+    // Breaks if verification refused every port.
+    seedItems([...BOUND_STORES, product('self-y', { accessModel: 'self-serve', ports: { output: [
+      { name: 'y-out', kind: 'adls', ref: 'silver' },
+    ] } })]);
+    const res = await post({ assetId: 'self-y', permission: 'read' });
+    expect((await res.json()).granted).toBe(true);
+    expect((enforceAccessGrant as any).mock.calls[0][0]).toMatchObject({ scopeType: 'adls-container', scopeRef: 'silver' });
+  });
+
+  it('a port in ANOTHER workspace\'s bound container does not count', async () => {
+    // Breaks if the store lookup were not confined to the product's own
+    // workspace: a lakehouse bound to 'foreign' in ws-2 would verify the port.
+    seedItems([
+      { id: 'lh-foreign', workspaceId: 'ws-2', itemType: 'lakehouse', displayName: 'Other', state: { adlsContainer: 'foreign' } },
+      product('self-z', { accessModel: 'self-serve', ports: { output: [{ name: 'z-out', kind: 'adls', ref: 'foreign' }] } }),
+    ]);
+    const res = await post({ assetId: 'self-z', permission: 'read' });
+    expect((await res.json()).granted).toBeUndefined();
+    expect(enforceAccessGrant).not.toHaveBeenCalled();
   });
 });

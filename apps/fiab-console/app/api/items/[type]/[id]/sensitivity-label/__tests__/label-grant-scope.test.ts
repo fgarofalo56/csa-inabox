@@ -187,3 +187,56 @@ describe('naming a principal other than the caller requires admin.permissions', 
     expect((enforceAccessGrant as any).mock.calls[0][0]).toMatchObject({ principalId: 'someone-else', scopeRef: 'landing' });
   });
 });
+
+describe('"self" means the caller\'s identity: the name comes from the session', () => {
+  const prevPool2 = process.env.LOOM_SYNAPSE_DEDICATED_POOL;
+  beforeEach(() => { process.env.LOOM_SYNAPSE_DEDICATED_POOL = 'deploymentpool'; });
+  afterEach(() => {
+    if (prevPool2 === undefined) delete process.env.LOOM_SYNAPSE_DEDICATED_POOL;
+    else process.env.LOOM_SYNAPSE_DEDICATED_POOL = prevPool2;
+  });
+  const kql = () => makeItem('kql-database', { provisioning: { status: 'created', secondaryIds: { database: 'kql-own' } } });
+
+  it.each([
+    ['warehouse', () => makeItem('warehouse', {})],
+    ['kql-database', kql],
+  ])('%s: own oid with ANOTHER principalName is not self — 403 for a non-admin, no grant', async (type, mk) => {
+    // The warehouse grant creates its user from principalName; ADX uses an '@'
+    // name as the principal. Breaks if "self" is decided on principalId alone:
+    // the grant would run for 'victim@contoso.com' with no admin check.
+    item = mk();
+    const r = await PATCH(req({ ...self, principalName: 'victim@contoso.com' }), ctx(type));
+    expect(r.status).toBe(403);
+    expect(enforceCapability).toHaveBeenCalledWith(expect.anything(), 'admin.permissions', 'Admin');
+    expect(enforceAccessGrant).not.toHaveBeenCalled();
+  });
+
+  it('a self grant with no name in the body is made for the session UPN', async () => {
+    // Breaks if the grant takes the (absent) body name: principalName would be undefined.
+    item = kql();
+    const r = await PATCH(req({ labelId: LABEL.id, principalId: CALLER, principalType: 'User' }), ctx('kql-database'));
+    expect(r.status).toBe(200);
+    expect(enforceCapability).not.toHaveBeenCalled();
+    expect((enforceAccessGrant as any).mock.calls[0][0]).toMatchObject({ principalId: CALLER, principalName: 'caller@contoso.com' });
+  });
+
+  it('the session UPN in another case is still self, and the grant uses the session spelling', async () => {
+    // Breaks if the comparison is case-sensitive (a spurious 403), or if the body
+    // spelling is passed through instead of the session's.
+    item = kql();
+    const r = await PATCH(req({ ...self, principalName: 'CALLER@CONTOSO.COM' }), ctx('kql-database'));
+    expect(r.status).toBe(200);
+    expect(enforceCapability).not.toHaveBeenCalled();
+    expect((enforceAccessGrant as any).mock.calls[0][0].principalName).toBe('caller@contoso.com');
+  });
+
+  it('a tenant admin naming another name with their own oid is treated as "other" and allowed', async () => {
+    // Pairs the 403 case: breaks if the admin path were refused too.
+    admin = true;
+    item = makeItem('warehouse', {});
+    const r = await PATCH(req({ ...self, principalName: 'victim@contoso.com' }), ctx('warehouse'));
+    expect(r.status).toBe(200);
+    expect(enforceCapability).toHaveBeenCalled();
+    expect((enforceAccessGrant as any).mock.calls[0][0].principalName).toBe('victim@contoso.com');
+  });
+});

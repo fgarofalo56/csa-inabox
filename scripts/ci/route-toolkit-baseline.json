@@ -204,7 +204,6 @@
     "apps/fiab-console/app/api/dab/sources/[kind]/schema/route.ts": 1,
     "apps/fiab-console/app/api/dab/sources/route.ts": 1,
     "apps/fiab-console/app/api/data-products/[id]/access-policy/route.ts": 1,
-    "apps/fiab-console/app/api/data-products/[id]/access-requests/route.ts": 1,
     "apps/fiab-console/app/api/data-products/[id]/analytics/route.ts": 1,
     "apps/fiab-console/app/api/data-products/[id]/assets/route.ts": 1,
     "apps/fiab-console/app/api/data-products/[id]/cdes/route.ts": 1,

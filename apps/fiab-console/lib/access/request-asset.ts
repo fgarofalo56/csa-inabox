@@ -36,6 +36,7 @@ import {
 } from '@/lib/dataproducts/discoverability';
 import { resolveLifecycleState } from '@/lib/dataproducts/lifecycle';
 import { resolveGrantTargets, type GrantTarget } from '@/lib/dataproducts/fulfillment';
+import { verifyProductTargets } from '@/lib/access/verified-targets';
 
 export type RequestAccessModel = 'governed' | 'self-serve' | 'request';
 
@@ -93,8 +94,10 @@ const STORE_ITEM_TYPES: ReadonlySet<string> = new Set(['lakehouse', 'warehouse',
 /**
  * Every scope a grant for `item` binds to, at `permission`. Never empty.
  *
- *   data product      → its bound output ports / ADLS data assets, else the
- *                       product itself (a Loom-native item-scope grant).
+ *   data product      → its output ports / ADLS data assets, each checked
+ *                       against the stores its own workspace has bound (an
+ *                       unverified port keeps an EMPTY scopeRef, i.e. pending),
+ *                       else the product itself (a Loom-native item-scope grant).
  *   lakehouse, warehouse, kql-database, eventhouse
  *                     → the item's own store, read only from bindings Loom
  *                       recorded (`resolveItemBackingScope`): its container,
@@ -104,10 +107,12 @@ const STORE_ITEM_TYPES: ReadonlySet<string> = new Set(['lakehouse', 'warehouse',
  *                       rather than widening to the whole workspace.
  *   anything else     → an item-scope grant on the item itself.
  */
-export function deriveRequestTargets(item: WorkspaceItem, permission: AccessPermission): GrantTarget[] {
+export async function deriveRequestTargets(item: WorkspaceItem, permission: AccessPermission): Promise<GrantTarget[]> {
   if (item.itemType === 'data-product') {
     const targets = resolveGrantTargets(item.state as Record<string, unknown> | undefined, permission);
-    if (targets.length > 0) return targets;
+    // Ports are the owner's free text: each is checked against the stores the
+    // product's own workspace has bound (lib/access/verified-targets.ts).
+    if (targets.length > 0) return verifyProductTargets(item, targets);
     return [{ scopeType: 'item', scopeRef: item.id, permission, source: 'data product' }];
   }
   if (STORE_ITEM_TYPES.has(item.itemType)) {
@@ -116,7 +121,7 @@ export function deriveRequestTargets(item: WorkspaceItem, permission: AccessPerm
     if ('pending' in scope) {
       const scopeType: AccessScopeType = item.itemType === 'lakehouse' ? 'adls-container'
         : item.itemType === 'warehouse' ? 'warehouse' : 'kql-database';
-      return [{ scopeType, scopeRef: '', permission, source: `${source} (no store recorded yet)` }];
+      return [{ scopeType, scopeRef: '', permission, source }];
     }
     return [{ scopeType: scope.scopeType, scopeRef: scope.scopeRef, permission, source }];
   }

@@ -619,7 +619,9 @@ test('the measured population is real: hundreds of sites, and not everything is 
   // 200, which is how it went red the moment console-ui-w2 removed real sites
   // (211 -> 187) rather than when the classifier broke. Lower BOTH in the same
   // PR that removes sites; never lower this one alone.
-  assert.ok(total > 170, `only ${total} violations classified`);
+  // The SAME comparison as the guard (`total < MIN_LIVE_SITES` fails there), so
+  // guard and test agree at the boundary: a population of exactly 170 passes both.
+  assert.ok(total >= 170, `only ${total} violations classified`);
   // A classifier that flagged every free-text box would be useless in the other
   // direction: `<Input>` for a display name is correct and there are thousands.
   assert.ok(total < sites / 4, `${total}/${sites} sites flagged — the classifier is no longer discriminating`);

@@ -644,7 +644,7 @@ export function AccessRequestInboxEditor() {
                       <Caption1>
                         {dlg?.req.packageId
                           ? 'Defined by the access package.'
-                          : 'Derived from the asset’s bound outputs when you approve.'}
+                          : 'Approval grants these scopes. If the asset’s bindings changed since the request, approval is refused; a scope with no store yet is granted once its store is bound.'}
                       </Caption1>
                     </span>
                   </>

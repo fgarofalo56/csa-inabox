@@ -6,12 +6,17 @@ import { describe, it, expect } from 'vitest';
 import { grantResult, mergeGrantResults, landedGrants } from '../landed-grants';
 
 describe('grantResult', () => {
-  it('a fresh active grant is created; an idempotent one is not; a failed one is not', () => {
-    // Breaks if `created` ignored the "(idempotent)" detail: prior access would be
-    // revoked on denial.
-    expect(grantResult({ status: 'active', roleAssignmentId: 'ra' }, 'adls-container', 'gold').created).toBe(true);
+  it('created follows preexisting; an idempotent detail is not created; unknown stays unknown', () => {
+    // Breaks if `created` were inferred from the absence of "(idempotent)" alone:
+    // the unknown case (no preexisting, no detail) would read `true`, and a
+    // denial would revoke a role the principal may have held before.
+    expect(grantResult({ status: 'active', roleAssignmentId: 'ra', preexisting: false }, 'adls-container', 'gold').created).toBe(true);
+    expect(grantResult({ status: 'active', preexisting: true }, 'kql-database', 'db').created).toBe(false);
     expect(grantResult({ status: 'active', detail: 'Role already assigned at this scope (idempotent).' }, 'adls-container', 'gold').created).toBe(false);
+    expect(grantResult({ status: 'active', detail: 'Granted viewers on ADX database db.' }, 'kql-database', 'db').created).toBeUndefined();
     expect(grantResult({ status: 'error', detail: 'ARM 403' }, 'adls-container', 'gold').created).toBe(false);
+    // `preexisting` itself is not stored on the result.
+    expect('preexisting' in grantResult({ status: 'active', preexisting: false }, 'adls-container', 'gold')).toBe(false);
   });
 });
 

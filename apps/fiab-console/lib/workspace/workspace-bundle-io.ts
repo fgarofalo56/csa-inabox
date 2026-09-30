@@ -31,7 +31,7 @@ import type { Workspace, WorkspaceItem, WorkspaceFolder } from '@/lib/types/work
 import { buildWorkspaceBundle, type LoomWsBundle, type WorkspacePermissionRow } from './workspace-export';
 import { summarizePlan, type ImportPlan, type ImportSummary } from './workspace-import';
 import { carryServerDerivedScope } from '@/app/api/items/_lib/item-crud';
-import { autoBindOnCreate, stripLakehouseCreateState } from '@/lib/azure/auto-bind';
+import { autoBindOnCreate, stripCreateState } from '@/lib/azure/auto-bind';
 
 /**
  * Read everything the bundle needs from Cosmos and serialize it. All item /
@@ -100,9 +100,12 @@ export async function executeWorkspaceImport(
       // exported from. Its own root is created here by auto-bind, as for any
       // new lakehouse; if that does not finish (a slow or failed storage call),
       // the storage resolver creates it on the item's first open.
-      const doc: WorkspaceItem = planned.doc.itemType === 'lakehouse'
-        ? { ...planned.doc, state: stripLakehouseCreateState(planned.doc.state as Record<string, unknown>) }
-        : planned.doc;
+      // Every other type drops the installer receipt and account the bundle
+      // carried for the same reason (`stripCreateState`).
+      const doc: WorkspaceItem = {
+        ...planned.doc,
+        state: stripCreateState(planned.doc.itemType, planned.doc.state as Record<string, unknown>),
+      };
       const { resource } = await items.items.create<WorkspaceItem>(doc);
       if (resource) void upsertLoomDoc(docForItem(resource, target.tenantId));
       // Lakehouses only: their binding is one directory create. Other item

@@ -772,8 +772,9 @@ export function autoBindWireStatus(outcome: AutoBindOutcome): {
  * outcome for logging, or null when the deadline won the race.
  *
  * For a lakehouse it first clears the storage-location keys a create body may
- * have carried ({@link clearServerOwnedLakehouseKeysOnCreate}), so the binding
- * that follows is the one auto-bind establishes for THIS item.
+ * have carried, and for every other type the installer receipt and account
+ * ({@link clearServerOwnedKeysOnCreate}), so the binding that follows is the
+ * one established for THIS item.
  */
 export async function autoBindOnCreate(
   item: WorkspaceItem,
@@ -782,7 +783,7 @@ export async function autoBindOnCreate(
   const timeoutMs = opts.timeoutMs ?? 8000;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    await clearServerOwnedLakehouseKeysOnCreate(item);
+    await clearServerOwnedKeysOnCreate(item);
     const work = autoBindOnOpen(item, undefined, opts).then((r) => r.outcome);
     const deadline = new Promise<null>((resolve) => {
       timer = setTimeout(() => resolve(null), timeoutMs);
@@ -841,6 +842,58 @@ export async function persistAutoBindPatch(
  */
 export function stripLakehouseCreateState(state: Record<string, unknown> | null | undefined): Record<string, unknown> {
   return withoutLakehouseCreateState(state, [AUTO_BIND_STATE_KEY]).state;
+}
+
+/**
+ * The `state` keys NO new item, of any type, takes from the state it was
+ * created with: the installer receipt `provisioning` and an explicit
+ * `storageAccount`. Both name the Azure object an item is backed by, and grant
+ * scopes are read from them (`lib/azure/item-backing-scope.ts`,
+ * `app/api/items/_lib/synapse-item-scope.ts`, `adx-item-scope.ts`), so they are
+ * written only by the provisioning path AFTER the item exists
+ * (`app/api/apps/[id]/install`, `app/api/learn/notebook-import`), never by a
+ * create body or a copy of another item's state.
+ */
+export const CREATE_CLEARED_STATE_KEYS = ['provisioning', 'storageAccount'] as const;
+
+/**
+ * `state` as a NEW item of `itemType` may start with: a lakehouse loses every
+ * key {@link stripLakehouseCreateState} removes; every other type loses
+ * {@link CREATE_CLEARED_STATE_KEYS}. Pure: returns a new object.
+ */
+export function stripCreateState(itemType: string, state: Record<string, unknown> | null | undefined): Record<string, unknown> {
+  if (itemType === 'lakehouse') return stripLakehouseCreateState(state);
+  const next: Record<string, unknown> = { ...(state && typeof state === 'object' ? state : {}) };
+  for (const k of CREATE_CLEARED_STATE_KEYS) delete next[k];
+  return next;
+}
+
+/**
+ * On a CREATE of any item type, drop the keys {@link stripCreateState} drops,
+ * from the stored document too. `createOwnedItem` and the bundle import strip
+ * them before writing; this covers the routes that write the document
+ * themselves and then call `autoBindOnCreate`. Never throws.
+ */
+export async function clearServerOwnedKeysOnCreate(item: WorkspaceItem): Promise<boolean> {
+  if (item?.itemType === 'lakehouse') return clearServerOwnedLakehouseKeysOnCreate(item);
+  if (!item?.state || typeof item.state !== 'object') return false;
+  const keys = CREATE_CLEARED_STATE_KEYS.filter((k) => Object.prototype.hasOwnProperty.call(item.state, k));
+  if (keys.length === 0) return false;
+  item.state = stripCreateState(item.itemType, item.state as Record<string, unknown>);
+  try {
+    const { itemsContainer } = await import('@/lib/azure/cosmos-client');
+    const items = await itemsContainer();
+    const { resource } = await items.item(item.id, item.workspaceId).read<WorkspaceItem>();
+    if (!resource) return false;
+    await items.item(item.id, item.workspaceId).replace<WorkspaceItem>({
+      ...resource,
+      state: stripCreateState(resource.itemType, (resource.state as Record<string, unknown>) || {}),
+      updatedAt: new Date().toISOString(),
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

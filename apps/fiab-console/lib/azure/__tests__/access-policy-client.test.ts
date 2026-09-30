@@ -33,12 +33,16 @@ vi.mock('../kusto-client', () => ({
   kustoConfigGate: vi.fn(() => null),
   addDatabasePrincipal: vi.fn(async () => ({ columns: [], rows: [] })),
   dropDatabasePrincipal: vi.fn(async () => ({ columns: [], rows: [] })),
+  showDatabasePrincipals: vi.fn(async () => []),
 }));
 
 import { enforceAccessGrant, revokeStructuredGrant, type AccessGrantInput } from '../access-policy-client';
 import { executeQuery as synapseExecute } from '../synapse-sql-client';
 import { getPoolState, resumePool } from '../synapse-pool-arm';
-import { addDatabasePrincipal, dropDatabasePrincipal } from '../kusto-client';
+import { addDatabasePrincipal, dropDatabasePrincipal, showDatabasePrincipals } from '../kusto-client';
+
+/** The SQL text of every synapseExecute call that GRANTS (the membership probe is a SELECT). */
+const grantSql = () => (synapseExecute as any).mock.calls.map((c: any[]) => c[1] as string).filter((s: string) => /sp_addrolemember/.test(s));
 
 const warehouseInput = (perm: AccessGrantInput['permission'] = 'read'): AccessGrantInput => ({
   principalId: 'oid-1',
@@ -69,7 +73,7 @@ describe('enforceAccessGrant — warehouse (Synapse Dedicated SQL)', () => {
     const res = await enforceAccessGrant(warehouseInput('read'));
     expect(res.status).toBe('active');
     expect(res.roleName).toBe('db_datareader');
-    const sql = (synapseExecute as any).mock.calls[0][1] as string;
+    const sql = grantSql()[0];
     expect(sql).toContain('CREATE USER [alice@contoso.com] FROM EXTERNAL PROVIDER');
     expect(sql).toContain("EXEC sp_addrolemember N'db_datareader', N'alice@contoso.com'");
     expect(sql).not.toMatch(/ALTER ROLE/i);
@@ -77,11 +81,11 @@ describe('enforceAccessGrant — warehouse (Synapse Dedicated SQL)', () => {
 
   it('maps write→db_datawriter and admin→db_owner', async () => {
     await enforceAccessGrant(warehouseInput('write'));
-    expect((synapseExecute as any).mock.calls[0][1]).toContain("sp_addrolemember N'db_datawriter'");
+    expect(grantSql()[0]).toContain("sp_addrolemember N'db_datawriter'");
     vi.clearAllMocks();
     (getPoolState as any).mockResolvedValue({ state: 'Online', sku: 'DW100c', status: 'Online' });
     await enforceAccessGrant(warehouseInput('admin'));
-    expect((synapseExecute as any).mock.calls[0][1]).toContain("sp_addrolemember N'db_owner'");
+    expect(grantSql()[0]).toContain("sp_addrolemember N'db_owner'");
   });
 
   it('returns pending and starts a resume when the pool is paused (no silent success)', async () => {
@@ -104,7 +108,7 @@ describe('enforceAccessGrant — warehouse (Synapse Dedicated SQL)', () => {
     (getPoolState as any).mockRejectedValue(new Error('Missing env var: LOOM_SUBSCRIPTION_ID'));
     const res = await enforceAccessGrant(warehouseInput('read'));
     expect(res.status).toBe('active');
-    expect(synapseExecute).toHaveBeenCalledOnce();
+    expect(grantSql()).toHaveLength(1);
   });
 
   it('requires a principal name', async () => {
@@ -144,8 +148,74 @@ describe('revokeStructuredGrant', () => {
     expect(dropDatabasePrincipal).toHaveBeenCalledWith('loomdb', 'viewers', 'aaduser=alice@contoso.com');
   });
 
-  it('never throws on a backend error (policy delete must still succeed)', async () => {
+  it('never throws on a backend error, and REPORTS it (policy delete must still succeed)', async () => {
+    // Breaks if the error is swallowed into a silent success: a caller that
+    // records the revoke would then mark a grant revoked that is still in place.
     (synapseExecute as any).mockRejectedValue(new Error('TDS down'));
-    await expect(revokeStructuredGrant(warehouseInput('read'))).resolves.toBeUndefined();
+    await expect(revokeStructuredGrant(warehouseInput('read'))).resolves.toEqual({ status: 'error', detail: 'TDS down' });
+  });
+
+  it('reports a completed revoke as revoked', async () => {
+    // Positive pair for the error case.
+    await expect(revokeStructuredGrant(kqlInput('read'))).resolves.toEqual({ status: 'revoked' });
+  });
+});
+
+describe('enforceAccessGrant — whether the principal already held the role', () => {
+  it('warehouse: a principal already in the role is reported preexisting, and nothing is granted', async () => {
+    // Breaks if the membership probe is skipped: the grant would run and be
+    // reported as created, so a later denial would drop the role the principal
+    // already held.
+    (synapseExecute as any).mockImplementation(async (_t: unknown, sql: string) => (
+      /database_role_members/.test(sql) ? { rows: [[1]] } : { rows: [] }
+    ));
+    const res = await enforceAccessGrant(warehouseInput('read'));
+    expect(res).toMatchObject({ status: 'active', preexisting: true });
+    expect(grantSql()).toHaveLength(0);
+    // The probe is parameter-bound (role + member), not concatenated.
+    const probe = (synapseExecute as any).mock.calls[0];
+    expect(probe[3]).toEqual([{ name: 'role', value: 'db_datareader' }, { name: 'member', value: 'alice@contoso.com' }]);
+  });
+
+  it('warehouse: a principal not in the role is granted and reported not preexisting', async () => {
+    (synapseExecute as any).mockImplementation(async (_t: unknown, sql: string) => (
+      /database_role_members/.test(sql) ? { rows: [[0]] } : { rows: [] }
+    ));
+    const res = await enforceAccessGrant(warehouseInput('read'));
+    expect(res).toMatchObject({ status: 'active', preexisting: false });
+    expect(grantSql()).toHaveLength(1);
+  });
+
+  it('warehouse: an unreadable probe leaves preexisting unknown (absent) and still grants', async () => {
+    // Breaks if an unknown answer were reported as "not held" (created), which a
+    // denial would then revoke.
+    (synapseExecute as any).mockImplementation(async (_t: unknown, sql: string) => {
+      if (/database_role_members/.test(sql)) throw new Error('probe failed');
+      return { rows: [] };
+    });
+    const res = await enforceAccessGrant(warehouseInput('read'));
+    expect(res.status).toBe('active');
+    expect(res.preexisting).toBeUndefined();
+  });
+
+  it('ADX: a principal already holding the role is reported preexisting, and nothing is granted', async () => {
+    // Breaks if the ADX grant reports every success as created (the `.add` command
+    // succeeds for an existing member too).
+    (showDatabasePrincipals as any).mockResolvedValue([
+      { role: 'Database Viewer', principalType: 'AAD User', displayName: 'Alice', objectId: 'oid-1', fqn: 'aaduser=oid-1;tenant-1' },
+    ]);
+    const res = await enforceAccessGrant(kqlInput('read'));
+    expect(res).toMatchObject({ status: 'active', preexisting: true });
+    expect(addDatabasePrincipal).not.toHaveBeenCalled();
+  });
+
+  it('ADX: the same principal in a DIFFERENT role does not count, so the grant runs', async () => {
+    // Pairs the test above: breaks if the probe matched on the principal alone.
+    (showDatabasePrincipals as any).mockResolvedValue([
+      { role: 'Database User', principalType: 'AAD User', displayName: 'Alice', objectId: 'oid-1', fqn: 'aaduser=oid-1;tenant-1' },
+    ]);
+    const res = await enforceAccessGrant(kqlInput('read'));
+    expect(res).toMatchObject({ status: 'active', preexisting: false });
+    expect(addDatabasePrincipal).toHaveBeenCalledOnce();
   });
 });

@@ -455,13 +455,22 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ type: s
     // else, which is the tenant-admin `admin.permissions` capability that also
     // governs Access policies (app/api/governance/policies). The store comes from
     // `resolveItemBackingScope`, which reads only bindings Loom recorded itself.
+    //
+    // "The caller" is the caller's IDENTITY, not only their object id: the
+    // warehouse grant creates its database user from `principalName`, and the ADX
+    // grant uses a `principalName` that contains '@' as the principal. So a self
+    // grant always uses the session's own UPN, and a body `principalName` that is
+    // not that UPN names someone else.
     let rbac: import('@/lib/azure/access-policy-client').AccessGrantResult | undefined;
     let grant: import('@/lib/azure/label-protection').LabelRbacGrant | undefined;
     const principalId = typeof body?.principalId === 'string' ? body.principalId.trim() : '';
     if (principalId) {
       const principalType = (body?.principalType === 'Group' || body?.principalType === 'ServicePrincipal')
         ? body.principalType : 'User';
-      const isSelf = principalType === 'User' && principalId === session.claims.oid;
+      const sessionUpn = (session.claims.upn || session.claims.email || '').trim();
+      const bodyName = typeof body?.principalName === 'string' ? body.principalName.trim() : '';
+      const isSelf = principalType === 'User' && principalId === session.claims.oid
+        && (!bodyName || (!!sessionUpn && bodyName.toLowerCase() === sessionUpn.toLowerCase()));
       if (!isSelf) {
         const gate = await enforceCapability(session, LABEL_GRANT_CAPABILITY, LABEL_GRANT_ROLE);
         if (gate) return gate;
@@ -473,7 +482,7 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ type: s
         const res = await enforceLabelRbac({
           label: newLabel,
           principalId,
-          principalName: typeof body?.principalName === 'string' ? body.principalName.trim() : undefined,
+          principalName: isSelf ? (sessionUpn || undefined) : (bodyName || undefined),
           principalType,
           scopeType: scope.scopeType,
           scopeRef: scope.scopeRef,

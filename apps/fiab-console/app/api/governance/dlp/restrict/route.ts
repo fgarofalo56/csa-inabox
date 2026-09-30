@@ -196,7 +196,9 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session: s }) => 
 
   // Cosmos item-permissions update (a): mark matching Access policies restricted,
   // in the tenant Access-policy doc and in the caller's own policies doc (which
-  // holds Access policies recorded before the tenant doc existed).
+  // holds Access policies recorded before the tenant doc existed). Earlier Access
+  // policies in OTHER users' policies docs are not marked here, as before; the
+  // revoke above still applies to them. Tracked in #4845.
   let policiesUpdated = 0;
   const accessScope = tenantScopeId(s);
   for (const [docId, pk] of [

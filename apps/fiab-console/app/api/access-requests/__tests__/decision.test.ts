@@ -49,6 +49,7 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
 }));
 vi.mock('@/lib/azure/rbac-client', () => ({
   enforceAccessGrant: vi.fn(), revokeAccessGrant: vi.fn(), revokeStructuredGrant: vi.fn(),
+  revokeContainerRoleAssignment: vi.fn(),
 }));
 
 import { POST } from '../[id]/decision/route';
@@ -58,7 +59,7 @@ import {
   accessAssignmentsContainer, approvalPoliciesContainer, featurePermissionsContainer,
   itemsContainer,
 } from '@/lib/azure/cosmos-client';
-import { enforceAccessGrant, revokeAccessGrant, revokeStructuredGrant } from '@/lib/azure/rbac-client';
+import { enforceAccessGrant, revokeStructuredGrant, revokeContainerRoleAssignment } from '@/lib/azure/rbac-client';
 import { makePartitionedContainer, makeSinkContainer, type FakeContainer } from './partitioned-cosmos-fake';
 
 /** The partition key: the Entra TENANT, as tenantScopeId() resolves it. */
@@ -113,6 +114,16 @@ function productItem(overrides: Partial<any> = {}) {
 }
 let items: FakeContainer;
 
+/**
+ * Lakehouses in the product's workspace, bound to the containers its output
+ * ports name. Ports are checked against these (lib/access/verified-targets.ts);
+ * without them no port verifies and nothing is granted.
+ */
+const BOUND_STORES = [
+  { id: 'lh-gold', workspaceId: 'ws-1', itemType: 'lakehouse', displayName: 'Gold lake', state: { adlsContainer: 'gold' } },
+  { id: 'lh-silver', workspaceId: 'ws-1', itemType: 'lakehouse', displayName: 'Silver lake', state: { adlsContainer: 'silver' } },
+];
+
 function baseDoc(overrides: Partial<any> = {}) {
   return {
     id: 'req-1',
@@ -154,7 +165,7 @@ beforeEach(() => {
   (featurePermissionsContainer as any).mockResolvedValue(
     makePartitionedContainer({ partitionKeyPath: '/tenantId' }),
   );
-  items = makePartitionedContainer({ partitionKeyPath: '/workspaceId', seed: [productItem()] });
+  items = makePartitionedContainer({ partitionKeyPath: '/workspaceId', seed: [...BOUND_STORES, productItem()] });
   (itemsContainer as any).mockResolvedValue(items);
   // The approver's authority. Without this the route (correctly) 403s — the
   // approval-authority boundary has its own coverage in cross-user-approval.
@@ -246,7 +257,7 @@ describe('POST /api/access-requests/[id]/decision', () => {
     // (1 call, `silver` never granted).
     items = makePartitionedContainer({
       partitionKeyPath: '/workspaceId',
-      seed: [productItem({ state: { lifecycleState: 'published', ports: { output: [
+      seed: [...BOUND_STORES, productItem({ state: { lifecycleState: 'published', ports: { output: [
         { name: 'gold-out', kind: 'adls', ref: 'gold' },
         { name: 'silver-out', kind: 'adls', ref: 'silver' },
       ] } } })],
@@ -356,7 +367,7 @@ const TWO_TARGETS = [
 function twoOutputProduct() {
   items = makePartitionedContainer({
     partitionKeyPath: '/workspaceId',
-    seed: [productItem({ state: { lifecycleState: 'published', ports: { output: TWO_OUTPUTS } } })],
+    seed: [...BOUND_STORES, productItem({ state: { lifecycleState: 'published', ports: { output: TWO_OUTPUTS } } })],
   });
   (itemsContainer as any).mockResolvedValue(items);
 }
@@ -406,7 +417,7 @@ describe('final tier — a mixed result', () => {
     const { container, store } = fakeArContainer(baseDoc({ tier: 'access-provider', grantTargets: TWO_TARGETS }));
     (accessRequestWorkflowContainer as any).mockResolvedValue(container);
     (enforceAccessGrant as any)
-      .mockResolvedValueOnce({ status: 'active', roleName: 'Storage Blob Data Reader', roleAssignmentId: 'ra-gold' })
+      .mockResolvedValueOnce({ status: 'active', roleName: 'Storage Blob Data Reader', roleAssignmentId: 'ra-gold', preexisting: false })
       .mockResolvedValueOnce({ status: 'error', detail: 'ARM 403 on silver' });
 
     const res = await POST(makeReq({ decision: 'approved' }), ctx('req-1'));
@@ -444,12 +455,13 @@ describe('denial revokes what the request created', () => {
     }
     const { container, store } = fakeArContainer(baseDoc({ tier: 'access-provider', grantResults: landed }));
     (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    (revokeStructuredGrant as any).mockResolvedValue({ status: 'revoked' });
 
     const res = await POST(makeReq({ decision: 'denied', reason: 'not needed' }), ctx('req-1'));
     expect(res.status).toBe(200);
     expect(store.doc.status).toBe('denied');
-    expect(revokeAccessGrant).toHaveBeenCalledTimes(1);
-    expect(revokeAccessGrant).toHaveBeenCalledWith('ra-gold');
+    expect(revokeContainerRoleAssignment).toHaveBeenCalledTimes(1);
+    expect(revokeContainerRoleAssignment).toHaveBeenCalledWith('ra-gold');
     expect(revokeStructuredGrant).toHaveBeenCalledTimes(1);
     expect(revokeStructuredGrant).toHaveBeenCalledWith(expect.objectContaining({
       principalId: REQUESTER_OID, scopeType: 'kql-database', scopeRef: 'events', permission: 'read',
@@ -464,7 +476,7 @@ describe('denial revokes what the request created', () => {
     (accessRequestWorkflowContainer as any).mockResolvedValue(container);
     const res = await POST(makeReq({ decision: 'denied', reason: 'no' }), ctx('req-1'));
     expect(res.status).toBe(200);
-    expect(revokeAccessGrant).not.toHaveBeenCalled();
+    expect(revokeContainerRoleAssignment).not.toHaveBeenCalled();
     expect(revokeStructuredGrant).not.toHaveBeenCalled();
   });
 });
@@ -480,7 +492,7 @@ describe('final tier — a store item with no storage recorded yet', () => {
     });
     (itemsContainer as any).mockResolvedValue(items);
     const { container, store } = fakeArContainer(baseDoc({
-      tier: 'access-provider', grantTargets: [{ scopeType: 'adls-container', scopeRef: '' }],
+      tier: 'access-provider', grantTargets: [{ scopeType: 'adls-container', scopeRef: '', source: 'lakehouse item' }],
     }));
     (accessRequestWorkflowContainer as any).mockResolvedValue(container);
 
@@ -491,5 +503,115 @@ describe('final tier — a store item with no storage recorded yet', () => {
     expect(store.doc.status).toBe('open');
     expect(store.doc.enforcement.status).toBe('pending');
     expect(j.warning).toMatch(/no adls-container recorded/);
+  });
+});
+
+describe('denial, warehouse and KQL: only what the request provably created is revoked', () => {
+  beforeEach(() => { ledger(); });
+
+  it('a KQL grant whose prior membership is unknown is kept, reported, and not revoked', async () => {
+    // Breaks if an unknown `created` were treated as created: `.drop` would run and
+    // could remove a role the requester held before the request.
+    const { container, store } = fakeArContainer(baseDoc({ tier: 'access-provider', grantResults: [
+      { scopeType: 'kql-database', scopeRef: 'events', status: 'active', detail: 'Granted viewers on ADX database events.' },
+    ] }));
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    const res = await POST(makeReq({ decision: 'denied', reason: 'no' }), ctx('req-1'));
+    const j = await res.json();
+    expect(res.status).toBe(200);
+    expect(revokeStructuredGrant).not.toHaveBeenCalled();
+    expect(store.doc.revokedGrants).toBeUndefined();
+    expect(j.warning).toMatch(/kql-database events \(Could not determine whether the requester held this role/);
+  });
+
+  it('a KQL grant the requester already held (created: false) is left alone, silently', async () => {
+    // Breaks if a pre-existing membership were revoked (1 `.drop`).
+    const { container } = fakeArContainer(baseDoc({ tier: 'access-provider', grantResults: [
+      { scopeType: 'kql-database', scopeRef: 'events', status: 'active', created: false },
+    ] }));
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    const res = await POST(makeReq({ decision: 'denied', reason: 'no' }), ctx('req-1'));
+    expect(res.status).toBe(200);
+    expect(revokeStructuredGrant).not.toHaveBeenCalled();
+    expect((await res.json()).warning).toBeUndefined();
+  });
+
+  it('a revoke that FAILS is reported as kept, not revoked, and its ledger row stays active', async () => {
+    // Breaks if a failed revoke were recorded as done (the pre-fix `revokeStructuredGrant`
+    // swallowed errors and the entry landed in `revokedGrants` with its ledger row revoked).
+    const assignments = ledger();
+    const { assignmentId } = await import('@/lib/access/assignment-ledger');
+    await assignments.items.upsert({ id: assignmentId(REQUESTER_OID, 'warehouse', 'deploymentpool', 'direct'), principalId: REQUESTER_OID, resourceRef: 'deploymentpool', state: 'active' });
+    const { container, store } = fakeArContainer(baseDoc({ tier: 'access-provider', grantResults: [
+      { scopeType: 'warehouse', scopeRef: 'deploymentpool', status: 'active', created: true },
+    ] }));
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    (revokeStructuredGrant as any).mockResolvedValue({ status: 'error', detail: 'TDS down' });
+    const res = await POST(makeReq({ decision: 'denied', reason: 'no' }), ctx('req-1'));
+    const j = await res.json();
+    expect(res.status).toBe(200);
+    expect(revokeStructuredGrant).toHaveBeenCalledOnce();
+    expect(store.doc.revokedGrants).toBeUndefined();
+    expect(j.warning).toMatch(/Revoke failed: TDS down/);
+    expect(assignments.__all()[0].state).toBe('active');
+  });
+
+  it('an ADLS revoke that answers 404 is treated as revoked; any other error is kept', async () => {
+    // Breaks if "already gone" were reported as a failure, or a real ARM error as success.
+    const { container, store } = fakeArContainer(baseDoc({ tier: 'access-provider', grantResults: [
+      { scopeType: 'adls-container', scopeRef: 'gold', status: 'active', roleAssignmentId: 'ra-gold', created: true },
+      { scopeType: 'adls-container', scopeRef: 'silver', status: 'active', roleAssignmentId: 'ra-silver', created: true },
+    ] }));
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    (revokeContainerRoleAssignment as any)
+      .mockRejectedValueOnce(new Error('ARM 404 RoleAssignmentNotFound'))
+      .mockRejectedValueOnce(new Error('ARM 403 AuthorizationFailed'));
+    const res = await POST(makeReq({ decision: 'denied', reason: 'no' }), ctx('req-1'));
+    const j = await res.json();
+    expect(store.doc.revokedGrants.map((r: any) => r.scopeRef)).toEqual(['gold']);
+    expect(j.warning).toMatch(/adls-container silver \(Revoke failed: ARM 403/);
+  });
+});
+
+describe('final tier — a store bound after the request was made', () => {
+  it('bind-then-approve: the second approval grants on the now-recorded container (200)', async () => {
+    // Breaks on the strict one-to-one match: the reviewed `{ adls-container, '' }`
+    // never equals `{ adls-container, 'raw' }`, so every approval after binding
+    // answers 409 targets_changed, the dead end the pending text pointed into.
+    const lake = { id: 'asset-1', workspaceId: 'ws-1', itemType: 'lakehouse', displayName: 'Raw lake', state: {} as Record<string, unknown> };
+    items = makePartitionedContainer({ partitionKeyPath: '/workspaceId', seed: [lake] });
+    (itemsContainer as any).mockResolvedValue(items);
+    const { container, store } = fakeArContainer(baseDoc({
+      tier: 'access-provider', grantTargets: [{ scopeType: 'adls-container', scopeRef: '', source: 'lakehouse item' }],
+    }));
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+
+    const first = await POST(makeReq({ decision: 'approved' }), ctx('req-1'));
+    expect(first.status).toBe(200);
+    expect(enforceAccessGrant).not.toHaveBeenCalled();
+
+    // Loom binds the lakehouse's storage.
+    items.__all().find((d: any) => d.id === 'asset-1').state.adlsContainer = 'raw';
+    (enforceAccessGrant as any).mockResolvedValue({ status: 'active', roleName: 'Storage Blob Data Reader', roleAssignmentId: 'ra-raw', preexisting: false });
+
+    const second = await POST(makeReq({ decision: 'approved' }), ctx('req-1'));
+    expect(second.status).toBe(200);
+    expect((enforceAccessGrant as any).mock.calls[0][0]).toMatchObject({ scopeType: 'adls-container', scopeRef: 'raw' });
+    expect(store.doc.status).toBe('completed');
+    expect(store.doc.grantTargets).toEqual([{ scopeType: 'adls-container', scopeRef: 'raw', source: 'lakehouse item' }]);
+  });
+
+  it('an empty reviewed scope is NOT satisfied by a different source', async () => {
+    // Pairs the test above: breaks if an empty reviewed scope matched any
+    // current scope of the same type (a product whose port now names a bound
+    // container would then pass without that port having been reviewed).
+    const { container } = fakeArContainer(baseDoc({
+      tier: 'access-provider', grantTargets: [{ scopeType: 'adls-container', scopeRef: '', source: "output port 'other-out'" }],
+    }));
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    const res = await POST(makeReq({ decision: 'approved' }), ctx('req-1'));
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe('targets_changed');
+    expect(enforceAccessGrant).not.toHaveBeenCalled();
   });
 });

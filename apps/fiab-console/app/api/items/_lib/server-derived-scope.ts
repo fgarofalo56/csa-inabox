@@ -207,7 +207,11 @@ export function stableStringify(v: unknown, depth = 0): string {
  *     `admin/workspaces/[id]/git/branch-out/route.ts:195`). `promote.ts` seeds a promotion target
  *     from the SOURCE item's whole state through it, and that is the create half
  *     of a path that has to keep working — but a rule binding only the UPDATE
- *     routes is satisfiable by creating a fresh item instead. OPEN.
+ *     routes is satisfiable by creating a fresh item instead. PARTLY CLOSED:
+ *     `provisioning` and `storageAccount` are now removed from `state` on every
+ *     create through it and through the bundle import (`stripCreateState` in
+ *     lib/azure/auto-bind.ts), for every item type, and a lakehouse also loses
+ *     its location keys. OPEN for any other create-time key a resolver reads.
  *   - The TOP-LEVEL scope coordinates `state.database`, `state.databaseName`,
  *     `state.databases[]` and `state.notebookPath`, which three of the four
  *     readers above PREFER over the provisioning receipt when the receipt is

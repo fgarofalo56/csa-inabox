@@ -45,10 +45,11 @@ import {
 } from '@/lib/azure/access-policy-client';
 import {
   loadOrSeedPolicies, savePolicies,
-  readAccessPolicies, saveAccessPolicies, listLegacyAccessPolicyDocs, stampPoliciesTenant,
+  readAccessPolicies, saveAccessPolicies, stampPoliciesTenant,
   CosmosNotConfiguredError,
   type Policy, type DlpPolicyRule, type PoliciesDoc, type AccessPoliciesDoc,
 } from '@/lib/governance/policy-store';
+import { listLegacyAccessPolicyDocs } from '@/lib/governance/legacy-access-policies';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
