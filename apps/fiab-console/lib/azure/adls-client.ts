@@ -943,8 +943,7 @@ export function listKnownBlobDataRoles(): Array<{ name: string; id: string }> {
  * (cached per-process), and only fall back to env when discovery returns
  * nothing. ARG is authoritative, so this fixes the wrong-RG case transparently.
  */
-async function resolveStorageCoords(): Promise<{ sub: string; rg: string }> {
-  const account = getAccountName();
+async function resolveStorageCoords(account: string = getAccountName()): Promise<{ sub: string; rg: string }> {
   const coords = await discoverResourceCoordsByName({
     resourceType: 'Microsoft.Storage/storageAccounts',
     name: account,
@@ -961,13 +960,13 @@ async function resolveStorageCoords(): Promise<{ sub: string; rg: string }> {
   return { sub, rg };
 }
 
-async function resolveStorageScope(container: string): Promise<string> {
+async function resolveStorageScope(container: string, account: string = getAccountName()): Promise<string> {
   // Storage RBAC supports scoping to a single container via the
   // `blobServices/default/containers/<name>` sub-resource path on the
   // storage account ARM id. Coordinates are resolved by name (self-heal) so a
-  // wrong env RG never breaks the Permissions surface.
-  const { sub, rg } = await resolveStorageCoords();
-  const account = getAccountName();
+  // wrong env RG never breaks the Permissions surface. `account` defaults to the
+  // configured account; a lakehouse bound elsewhere passes its own.
+  const { sub, rg } = await resolveStorageCoords(account);
   return `/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.Storage/storageAccounts/${account}/blobServices/default/containers/${container}`;
 }
 
@@ -995,8 +994,9 @@ async function armCall<T = any>(url: string, init: RequestInit = {}): Promise<T>
   return json as T;
 }
 
-export async function listContainerRoleAssignments(container: string): Promise<ContainerRoleAssignment[]> {
-  const scope = await resolveStorageScope(container);
+/** Role assignments at one container's scope, on `account` (default: the configured account). */
+export async function listContainerRoleAssignments(container: string, account?: string): Promise<ContainerRoleAssignment[]> {
+  const scope = await resolveStorageScope(container, account);
   const url = `${armBase()}${scope}/providers/Microsoft.Authorization/roleAssignments?api-version=2022-04-01&$filter=atScope()`;
   const res = await armCall<{ value: any[] }>(url);
   const out: ContainerRoleAssignment[] = [];
