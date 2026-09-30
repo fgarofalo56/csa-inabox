@@ -2,7 +2,8 @@
 # ---------------------------------------------------------------------------
 # CSA Loom — self-hosted GitHub Actions runner for Azure Container Apps Jobs
 # ---------------------------------------------------------------------------
-# Image: acrloomk6mvh5sm6z7do.azurecr.io/gh-aca-runner:latest
+# Image: acrloomk6mvh5sm6z7do.azurecr.io/gh-actions-runner:<tag>
+#   (repository gh-actions-runner; the Container Apps Job is gh-aca-runner)
 #
 # WHAT this carries (so build/roll/UAT run on it, in-VNet):
 #   - GitHub Actions runner agent (pinned + checksum-verified, ephemeral)

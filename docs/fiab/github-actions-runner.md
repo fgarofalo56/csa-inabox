@@ -133,10 +133,16 @@ KEYVAULT_NAME=<loom-kv> PAT_SECRET_NAME=gh-actions-pat \
 
 The script (idempotent — create-or-update):
 
-1. Toggles ACR public access on (the Loom ACR is PE-only), `az acr build`s
+1. Takes the ACR firewall lease (the Loom ACR is PE-only; see
+   `docs/fiab/acr-firewall-lease.md`), `az acr build`s
    `platform/runners/github-actions/Dockerfile` to
-   `acrloom<hash>.azurecr.io/gh-aca-runner:latest`, then restores ACR
-   public access = Disabled (always, even on build failure).
+   `acrloom<hash>.azurecr.io/gh-actions-runner:latest` (`IMAGE_REPO` /
+   `IMAGE_TAG` override it), then releases the lease and verifies the
+   registry re-locked (always, even on build failure). A failed build or an
+   unverified re-lock exits non-zero with a `[FATAL]` naming the step, and the
+   job is not touched.
+   The image repository is `gh-actions-runner`, not the job name
+   `gh-aca-runner`: that is the repository the live job pulls from.
 2. `az containerapp job create`/`update` an **Event**-triggered job:
    `--min-executions 0 --max-executions 5 --polling-interval 30`,
    `--scale-rule-type github-runner` with metadata
