@@ -27,6 +27,12 @@ import { NextResponse } from 'next/server';
 import { featurePermissionsContainer } from '@/lib/azure/cosmos-client';
 import { type SessionPayload, tenantScopeId } from './session';
 import { ancestorIds, getCapability } from './feature-catalog';
+import {
+  deviceCodeAdminRefusal,
+  isAdminTierCapability,
+  isDeviceCodeSession,
+  INTERACTIVE_SIGN_IN_REQUIRED_REASON,
+} from './device-code-policy';
 
 export type FeatureRole = 'Reader' | 'Contributor' | 'Admin';
 
@@ -62,8 +68,16 @@ function tenantAdminGroupIds(): string[] {
 
 /** Tenant admin = caller is in the LOOM_TENANT_ADMIN_GROUP_ID group OR
  * the caller's oid matches LOOM_TENANT_ADMIN_OID (single-user
- * bootstrap). Tenant admins bypass all permission checks. */
+ * bootstrap). Tenant admins bypass all permission checks.
+ *
+ * A session from the CLI / VS Code device-code sign-in is NEVER a tenant admin
+ * (operator decision 2026-09-30, lib/auth/device-code-policy.ts). Every live
+ * tenant-admin check derives its standing from this function, so every bypass
+ * and tenant-admin tier check built on it refuses such a session. (The oid-only
+ * `isDomainTenantAdmin` in lib/azure/domain-hierarchy.ts is a second derivation
+ * with NO production caller; if one is ever added it must take the session.) */
 export function isTenantAdmin(session: SessionPayload): boolean {
+  if (isDeviceCodeSession(session)) return false;
   const adminGroups = tenantAdminGroupIds();
   if (adminGroups.length > 0 && session.claims.groups?.some((g) => adminGroups.includes(g))) return true;
   const bootstrapOid = process.env.LOOM_TENANT_ADMIN_OID;
@@ -77,6 +91,10 @@ export async function checkCapability(
   capabilityId: string,
   requiredRole: FeatureRole = 'Reader',
 ): Promise<GateResult> {
+  // Device-code sessions never hold an admin-tier capability, whatever grants exist.
+  if (isDeviceCodeSession(session) && isAdminTierCapability(capabilityId, requiredRole)) {
+    return { allow: false, reason: INTERACTIVE_SIGN_IN_REQUIRED_REASON };
+  }
   // Tenant admin bypass.
   if (isTenantAdmin(session)) {
     return { allow: true, role: 'Admin', matchedCapability: capabilityId };
@@ -168,6 +186,7 @@ export function requireTenantAdmin(
   refusal?: TenantAdminRefusal,
 ): NextResponse | null {
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  if (isDeviceCodeSession(session)) return deviceCodeAdminRefusal();
   if (isTenantAdmin(session)) return null;
   return NextResponse.json(
     {
@@ -204,6 +223,9 @@ export async function enforceCapability(
   requiredRole: FeatureRole = 'Reader',
 ): Promise<NextResponse | null> {
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  if (isDeviceCodeSession(session) && isAdminTierCapability(capabilityId, requiredRole)) {
+    return deviceCodeAdminRefusal();
+  }
   const r = await checkCapability(session, capabilityId, requiredRole);
   if (r.allow) return null;
   const cap = getCapability(capabilityId);

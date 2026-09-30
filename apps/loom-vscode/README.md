@@ -60,7 +60,19 @@ acquisition happens server-side.
 (`vscode.SecretStorage`) and nowhere else:
 
 - **Your account (device code)** — a browser opens; enter the shown code. Mirrors
-  the `loom` CLI's flow over `POST /api/auth/cli-session`.
+  the `loom` CLI's flow over `POST /api/auth/cli-session`. As least privilege for
+  a non-interactive sign-in, this session:
+  - lasts **1 hour** (refreshing does not extend it); when it ends, the tree and
+    the status bar switch to **Sign in**;
+  - is refused on admin surfaces and admin-tier actions, and cannot create,
+    reveal or rotate a durable credential or grant anyone access (403
+    `interactive_sign_in_required`; the message names the action and says to
+    use the browser console);
+  - is rate-limited when starting (5 per 10 minutes per network, 2 waiting at
+    once); the notification says how long to wait.
+
+  To create the PAT the MCP servers use, sign in to the Loom console in a
+  browser (Settings → Developer → API tokens).
 - **API token (PAT)** — paste a `loom_pat_…` token. It's verified against
   `/api/v1/whoami` before storing; a **read-only** token disables create / rename
   / delete with a reason (no surprise 403).
