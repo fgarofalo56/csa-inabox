@@ -149,7 +149,7 @@ If `GITHUB_PAT` is unset and no Key Vault source is given, the script **errors
 loudly and exits non-zero** — it never silently skips.
 
 > **Runner version pin.** The image pins the runner version + a `sha256sum -c`
-> checksum via build ARGs `RUNNER_VERSION` / `RUNNER_SHA256` (default `v2.328.0`);
+> checksum via build ARGs `RUNNER_VERSION` / `RUNNER_SHA256` (default `v2.337.0`);
 > the build fails loudly on a mismatch. Bump both together and confirm the SHA256
 > against the [release page](https://github.com/actions/runner/releases) before
 > the first build, or override per-run:
