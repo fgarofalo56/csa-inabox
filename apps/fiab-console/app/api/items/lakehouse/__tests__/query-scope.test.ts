@@ -755,6 +755,10 @@ describe('analyzeLakehouseQuery — refused queries name the construct', () => {
       [`SELECT t.[${name}] FROM t`, COLUMN_HINT],
       [`SELECT a FROM t WHERE [${name}] = 1`, COLUMN_HINT],
       [`SELECT * FROM (SELECT [${name}] FROM t) AS x`, COLUMN_HINT],
+      // A subquery that closes inside WHERE leaves WHERE in force: read as a table only if the inner FROM
+      // stays in force after it, because the closing parenthesis did not end the subquery's clause, or the
+      // opening one did not start a new one.
+      [`SELECT a FROM t WHERE b IN (SELECT c FROM u) AND [${name}] = 1`, COLUMN_HINT],
       [`SELECT * FROM [${name}]`, TABLE_HINT],
       [`SELECT * FROM dbo.[${name}]`, TABLE_HINT],
       [`SELECT * FROM t JOIN [${name}] ON 1 = 1`, TABLE_HINT],
