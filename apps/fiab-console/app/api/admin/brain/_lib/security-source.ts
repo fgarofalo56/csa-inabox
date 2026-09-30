@@ -47,6 +47,8 @@ export type SecurityGraphSource =
       readonly graph: SecurityGraph;
       /** What is known about the graph's age (see `extract/artifact.ts`). */
       readonly ageNote?: string;
+      /** `false` exactly when the age was NOT checked (see `extract/artifact.ts`). */
+      readonly ageChecked?: boolean;
     }
   | { readonly available: false; readonly reason: string };
 

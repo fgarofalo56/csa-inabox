@@ -58,13 +58,16 @@ import { fileURLToPath } from 'node:url';
 
 import {
   CENSUS_SCOPES,
+  CENSUS_UNREAD,
   RUN_ONLY_FIELDS,
   POPULATION_META_FIELDS,
   censusRefusals,
   driftDifferences,
   gitCensus as checkCensus,
+  gitUnreadCensus,
   populationRefusals,
   runOnlyFieldsPresent,
+  unreadCensusRefusals,
 } from '../../brain/_artifact-drift.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -1451,4 +1454,110 @@ test('census: `--check` reconciles the RUN against the census before it compares
   assert.ok(call > takeCensus, '--check no longer reconciles the run against the census');
   assert.ok(compare > call, 'the census reconciliation must run BEFORE the comparison');
   assert.match(source.slice(call, compare), /process\.exit\(1\)/, 'a census refusal must exit non-zero');
+  // The unread census is taken with the lexed one and joins the same refusal
+  // list. Breaks on dropping either the census or its reconciliation.
+  const takeUnread = source.indexOf('gitUnreadCensus(REPO_ROOT)');
+  const unreadCall = source.indexOf('unreadCensusRefusals(run, unreadCensus)');
+  assert.ok(takeUnread > floor && takeUnread < call, 'the unread census is no longer taken beside the lexed one');
+  assert.ok(unreadCall >= call && unreadCall < compare, '--check no longer reconciles the unread counts before comparing');
+});
+
+// ── THE UNREAD SET (#4798, review round 3) ─────────────────────────────────
+//
+// `run.unmodeledPublicationSurfaces[].fileCount` is no longer committed, so a
+// filter dropping some `.yml`/`.sh` files would move nothing a reviewer or
+// `--check` could see. These pin the reconciliation that now covers it.
+
+/** Unread counts that reconcile with {@link unreadCensus}. */
+function runWithUnread() {
+  return {
+    ...baseRun(),
+    unmodeledPublicationSurfaces: [
+      { root: 'scripts/', fileCount: 192, extensions: ['.ps1', '.py', '.sh', '.yaml'] },
+      { root: '.github/', fileCount: 145, extensions: ['.py', '.sh', '.yaml', '.yml'] },
+    ],
+  };
+}
+function unreadCensus() {
+  return [
+    { root: 'scripts/', files: 192 },
+    { root: '.github/', files: 145 },
+  ];
+}
+
+test('unread census: counts that match git reconcile (control)', () => {
+  // Without this the refusal arms below could pass on a helper that refuses
+  // everything.
+  assert.deepEqual(unreadCensusRefusals(runWithUnread(), unreadCensus()), []);
+});
+
+test('unread census: ONE unread file dropped under a root is refused, naming the root and both counts', () => {
+  // A comparison that tolerates a shortfall, or skips a root, lets this pass.
+  const run = runWithUnread();
+  run.unmodeledPublicationSurfaces[1].fileCount = 144;
+  const refusals = unreadCensusRefusals(run, unreadCensus());
+  assert.equal(refusals.length, 1, refusals.join('\n'));
+  assert.match(refusals[0], /unread files under '\.github\/': the run counted 144 but `git ls-files` lists 145/);
+});
+
+test('unread census: a root missing from the run, or doubled, is refused', () => {
+  // Breaks on a match that takes the first entry, or skips a root with none.
+  const missing = runWithUnread();
+  missing.unmodeledPublicationSurfaces.pop();
+  assert.match(unreadCensusRefusals(missing, unreadCensus()).join('\n'), /0 unread-file count\(s\) in the run for '\.github\/'/);
+  const doubled = runWithUnread();
+  doubled.unmodeledPublicationSurfaces.push({ ...doubled.unmodeledPublicationSurfaces[0] });
+  assert.match(unreadCensusRefusals(doubled, unreadCensus()).join('\n'), /2 unread-file count\(s\) in the run for 'scripts\/'/);
+});
+
+test('unread census: a root the census does not cover is refused', () => {
+  // Every census root matches, and the run carries one more. Deleting the
+  // length comparison makes this pass.
+  const run = runWithUnread();
+  run.unmodeledPublicationSurfaces.push({ root: 'tools/', fileCount: 3, extensions: ['.sh'] });
+  assert.match(unreadCensusRefusals(run, unreadCensus()).join('\n'), /under 3 root\(s\) but the census covers 2/);
+});
+
+test('unread census: an empty census is refused, naming that it is empty', () => {
+  // Pins the MESSAGE: with the empty branch gone, `[]` is still refused, but only
+  // by the length check, with the false claim that a root reached the ledger
+  // outside the census.
+  assert.match(unreadCensusRefusals(runWithUnread(), []).join('\n'), /census of unread files is empty/);
+  assert.match(unreadCensusRefusals(runWithUnread(), null).join('\n'), /census of unread files is empty/);
+});
+
+test('unread census: CENSUS_UNREAD spells the extractor\'s unread roots and pattern, lifted from its source', () => {
+  // Breaks on an extension added to PUBLICATION_UNMODELED and not here, or a
+  // root added to PUBLICATION_ROOTS and not here.
+  const source = readFileSync(resolve(REPO_ROOT, 'scripts/brain/extract-security-graph.mjs'), 'utf8');
+  const pubRoots = [...(/const PUBLICATION_ROOTS = \[([^\]]*)\]/.exec(source)?.[1] ?? '').matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  const unmodeled = /const PUBLICATION_UNMODELED = (\/.+\/);/.exec(source)?.[1];
+  assert.ok(pubRoots.length > 0 && unmodeled, 'the extractor no longer declares these in the shape read here');
+  assert.deepEqual([...CENSUS_UNREAD.roots].sort(), [...pubRoots].sort());
+  assert.equal(String(CENSUS_UNREAD.include), unmodeled);
+});
+
+test('unread census: gitUnreadCensus asks git the SAME question the lexed census asks', () => {
+  // Both censuses go through one helper. Breaks if the unread census grows its
+  // own git call with different flags (dropping `--others`, say).
+  const calls = [];
+  const fakeGit = (cmd, args) => {
+    calls.push(args.slice(0, args.indexOf('--')));
+    return '';
+  };
+  checkCensus(REPO_ROOT, CENSUS_SCOPES, fakeGit);
+  gitUnreadCensus(REPO_ROOT, CENSUS_UNREAD, fakeGit);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[1], calls[0]);
+});
+
+test('unread census: gitUnreadCensus on the real tree equals the extractor\'s unread counts, root by root', async () => {
+  // The positive half: on an unmutated tree it must NOT refuse, or `--check`
+  // is red on every PR. Breaks on a pattern or root that disagrees with the
+  // extractor's walk.
+  const census = gitUnreadCensus(REPO_ROOT);
+  const { unmodeled } = await extractorEnumeration();
+  assert.ok(census.every((c) => c.files > 10), JSON.stringify(census));
+  const run = { unmodeledPublicationSurfaces: unmodeled };
+  assert.deepEqual(unreadCensusRefusals(run, census), []);
 });

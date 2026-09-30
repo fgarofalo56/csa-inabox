@@ -139,6 +139,11 @@ export type RiskLayer =
        * source so an unchecked age is never silent.
        */
       readonly ageNote?: string;
+      /**
+       * `false` exactly when the age was NOT checked, so the panel renders a
+       * warning MessageBar from a field rather than by parsing `ageNote`.
+       */
+      readonly ageChecked?: boolean;
       readonly findings: readonly WireRiskFinding[];
       readonly detectors: readonly WireRiskDetectorRun[];
       readonly coverage: {

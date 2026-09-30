@@ -12,25 +12,32 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
-import { IMAGE_BUILD_DATE_FILE, readImageBuildDate } from '../build-date';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { IMAGE_BUILD_DATE_FILE, IMAGE_CONTEXT_MARKERS, readImageBuildDate } from '../build-date';
 import { ageInDays } from '../artifact';
 import { loadExtractedSecurityGraph } from '../runtime';
 
 const CONSOLE_ROOT = resolve(__dirname, '..', '..', '..', '..', '..');
 const DOCKERFILE = join(CONSOLE_ROOT, 'Dockerfile');
+const DAY_MS = 86_400_000;
 
-describe('readImageBuildDate — three states, because "cannot read" is not "not there"', () => {
-  const made: string[] = [];
-  function scratch(): string {
-    const d = mkdtempSync(join(tmpdir(), 'loom-build-date-'));
-    made.push(d);
-    return d;
-  }
-  afterEach(() => {
-    for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true });
-  });
+/** A timestamp `days` ago, in the Dockerfile's exact shape (no milliseconds). */
+function isoDaysAgo(days: number): string {
+  return new Date(Date.now() - days * DAY_MS).toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
 
+const made: string[] = [];
+function scratch(): string {
+  const d = mkdtempSync(join(tmpdir(), 'loom-build-date-'));
+  made.push(d);
+  return d;
+}
+afterEach(() => {
+  vi.restoreAllMocks();
+  for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true });
+});
+
+describe('readImageBuildDate — four states, because "no file" means two things', () => {
   it('PRESENT: returns the trimmed file text (the Dockerfile writes a trailing newline)', () => {
     const d = scratch();
     writeFileSync(join(d, IMAGE_BUILD_DATE_FILE), '2026-09-01T00:00:00Z\n');
@@ -38,10 +45,21 @@ describe('readImageBuildDate — three states, because "cannot read" is not "not
     expect(readImageBuildDate(d)).toEqual({ state: 'present', value: '2026-09-01T00:00:00Z' });
   });
 
-  it('ABSENT: a directory with no such file is absent, not unreadable', () => {
+  it('ABSENT: a directory with no date and no image marker is absent, not unreadable', () => {
     // Breaks if ENOENT is folded into `unreadable` — every local build would
     // then be REFUSED, and the refusal would be learned as noise.
     expect(readImageBuildDate(scratch())).toEqual({ state: 'absent' });
+  });
+
+  it('MISSING: no date beside EITHER image marker is missing, naming the marker found', () => {
+    // Breaks if a marker is dropped from IMAGE_CONTEXT_MARKERS, or the marker
+    // check is removed (both would read a built image as a dev run).
+    for (const marker of IMAGE_CONTEXT_MARKERS) {
+      const d = scratch();
+      mkdirSync(join(d, marker, '..'), { recursive: true });
+      writeFileSync(join(d, marker), 'x');
+      expect(readImageBuildDate(d), marker).toEqual({ state: 'missing', markers: [marker] });
+    }
   });
 
   it('UNREADABLE: a path that exists and cannot be read as a file is unreadable, with its code', () => {
@@ -93,16 +111,106 @@ describe('the console Dockerfile writes the date the runtime reads', () => {
     // Breaks if ageInDays stops accepting the Dockerfile's format.
     expect(ageInDays('2026-09-29T12:00:00Z', new Date('2026-09-30T12:00:00Z'))).toBe(1);
   });
+
+  it('every image marker is produced by the image, and one by the SAME RUN as the date', () => {
+    // A marker the image does not produce would make every deployed image read
+    // as a dev run (absent → available). Breaks if the build-marker write moves
+    // out of the date's RUN instruction, or a marker is added that the image
+    // never creates. Markers are LIFTED from build-date.ts.
+    const cmd = code.find((l) => /^CMD\s/.test(l)) ?? '';
+    const write = code.findIndex((l) => l.includes(writeCmd));
+    let start = write;
+    while (start > 0 && code[start - 1].endsWith('\\')) start--;
+    const runInstruction = code.slice(start, write + 1).join(' ');
+    expect(write).toBeGreaterThan(-1);
+    for (const m of IMAGE_CONTEXT_MARKERS) {
+      expect(cmd.includes(`"${m}"`) || runInstruction.includes(`> /app/${m}`), m).toBe(true);
+    }
+    expect(IMAGE_CONTEXT_MARKERS.some((m) => runInstruction.includes(`> /app/${m}`))).toBe(true);
+  });
 });
 
 describe('the runtime joins them: a checkout has no image date, and says so', () => {
   it('loadExtractedSecurityGraph() under vitest is available with an age-NOT-checked note', () => {
-    // Fixture control: the test process's cwd really has no image date file.
+    // Fixture controls: the test process's cwd really has no date file and no
+    // image marker, so this is the absent path.
     expect(existsSync(join(process.cwd(), IMAGE_BUILD_DATE_FILE))).toBe(false);
+    for (const m of IMAGE_CONTEXT_MARKERS) expect(existsSync(join(process.cwd(), m)), m).toBe(false);
     const source = loadExtractedSecurityGraph();
     if (!source.available) throw new Error(`graph unavailable: ${source.reason}`);
-    // Breaks if the runtime stops passing the read result (e.g. hard-codes a
-    // fresh date), or drops the note on the way out.
+    // Pins the absent path end to end. Breaks if the runtime hard-codes a fresh
+    // date or drops the note. It does NOT catch a runtime that reads the WRONG
+    // directory, because that also finds nothing here; the seam tests below do.
     expect(source.ageNote).toContain("the graph's age was NOT checked");
+    expect(source.ageChecked).toBe(false);
+  });
+});
+
+describe('the runtime reads the date from the directory the server runs in (seam)', () => {
+  // `loadExtractedSecurityGraph` caches the date at module scope, so each test
+  // loads a FRESH module with `process.cwd()` pointed at a scratch directory.
+  // Every case below is RED against a runtime that reads any other directory
+  // (the round-3 review's M1), because that runtime finds nothing and serves the
+  // graph as an unchecked dev run.
+  async function runtimeIn(dir: string) {
+    vi.spyOn(process, 'cwd').mockReturnValue(dir);
+    vi.resetModules();
+    return import('../runtime');
+  }
+
+  it('a STALE date in the server directory is REFUSED', async () => {
+    const d = scratch();
+    writeFileSync(join(d, IMAGE_BUILD_DATE_FILE), `${isoDaysAgo(200)}\n`);
+    const r = (await runtimeIn(d)).loadExtractedSecurityGraph();
+    if (r.available) throw new Error(`expected a refusal, got available (${r.ageNote ?? 'no note'})`);
+    expect(r.reason).toContain('built 200 days ago');
+    expect(r.reason).toContain('STALE');
+  });
+
+  it('a FRESH date in the server directory is AVAILABLE and checked', async () => {
+    const d = scratch();
+    const built = isoDaysAgo(2);
+    writeFileSync(join(d, IMAGE_BUILD_DATE_FILE), `${built}\n`);
+    const r = (await runtimeIn(d)).loadExtractedSecurityGraph();
+    if (!r.available) throw new Error(`expected available, got refusal: ${r.reason}`);
+    expect(r.ageNote).toContain(`Image built ${built}`);
+    expect(r.ageChecked).toBe(true);
+  });
+
+  it('a built image with NO date in the server directory is REFUSED, not served unchecked', async () => {
+    const d = scratch();
+    writeFileSync(join(d, 'server.js'), '// standalone entry\n');
+    const r = (await runtimeIn(d)).loadExtractedSecurityGraph();
+    if (r.available) throw new Error(`expected a refusal, got available (${r.ageNote ?? 'no note'})`);
+    expect(r.reason).toContain('found server.js');
+  });
+
+  it('an UNREADABLE date is not cached: the next load re-reads it', async () => {
+    // Round-3 review A-8. A transient read error must not refuse the graph for
+    // the life of the process. Breaks if the runtime caches `unreadable`.
+    const d = scratch();
+    mkdirSync(join(d, IMAGE_BUILD_DATE_FILE)); // EISDIR on read
+    const runtime = await runtimeIn(d);
+    const first = runtime.loadExtractedSecurityGraph();
+    if (first.available) throw new Error('expected the unreadable date to refuse');
+    expect(first.reason).toContain('could not be read');
+    rmSync(join(d, IMAGE_BUILD_DATE_FILE), { recursive: true });
+    writeFileSync(join(d, IMAGE_BUILD_DATE_FILE), `${isoDaysAgo(1)}\n`);
+    const second = runtime.loadExtractedSecurityGraph();
+    if (!second.available) throw new Error(`expected a re-read to succeed, got: ${second.reason}`);
+    expect(second.ageChecked).toBe(true);
+  });
+
+  it('a SETTLED date is cached: the file is read once per process (control)', async () => {
+    // The other half of the cache rule: a present date cannot change under a
+    // running server, so deleting it after the first load changes nothing.
+    // Breaks if caching is removed altogether.
+    const d = scratch();
+    writeFileSync(join(d, IMAGE_BUILD_DATE_FILE), `${isoDaysAgo(1)}\n`);
+    const runtime = await runtimeIn(d);
+    expect(runtime.loadExtractedSecurityGraph().available).toBe(true);
+    rmSync(join(d, IMAGE_BUILD_DATE_FILE));
+    writeFileSync(join(d, 'server.js'), '// would now read as missing\n');
+    expect(runtime.loadExtractedSecurityGraph().available).toBe(true);
   });
 });

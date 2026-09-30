@@ -56,7 +56,7 @@ export {
   pathOfNodeId,
 } from './join';
 export { MAX_ARTIFACT_AGE_DAYS, ageInDays, resolveSecurityGraph } from './artifact';
-export { IMAGE_BUILD_DATE_FILE, readImageBuildDate } from './build-date';
+export { IMAGE_BUILD_DATE_FILE, IMAGE_CONTEXT_MARKERS, readImageBuildDate } from './build-date';
 export { extractedArtifact, loadExtractedSecurityGraph } from './runtime';
 export type { ResolveOptions, SecurityGraphSource } from './artifact';
 export type { ImageBuildDate } from './build-date';

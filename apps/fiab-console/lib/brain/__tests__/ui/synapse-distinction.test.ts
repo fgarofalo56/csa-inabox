@@ -475,6 +475,24 @@ describe('the risk lane paints what it can join and REPORTS what it cannot', () 
     expect(overlayOf({ risk: evaluatedRisk([]) }).risk.reason).toBe('Security graph source: modelled.');
   });
 
+  it('#4798 — ageUnchecked is true ONLY for an evaluated lane whose age was not checked', () => {
+    // The panel's warning MessageBar keys on this flag. Breaks if the model
+    // ignores `ageChecked` (never warns), treats a missing flag as unchecked
+    // (warns on every hand-built or older layer), or warns on a lane that was
+    // not evaluated at all.
+    const base: RiskLayer = {
+      evaluated: true,
+      graphSource: 'extracted',
+      findings: [],
+      detectors: [],
+      coverage: { judged: 9, candidates: 9, ratio: 1, incompleteDetectors: [] },
+    };
+    expect(overlayOf({ risk: { ...base, ageChecked: false } }).risk.ageUnchecked).toBe(true);
+    expect(overlayOf({ risk: { ...base, ageChecked: true } }).risk.ageUnchecked).toBe(false);
+    expect(overlayOf({ risk: base }).risk.ageUnchecked).toBe(false);
+    expect(overlayOf({ risk: null }).risk.ageUnchecked).toBe(false);
+  });
+
   it('a finding naming an estate node paints that node as risk', () => {
     const o = overlayOf({
       risk: evaluatedRisk([riskFinding({ evidence: { nodeIds: [BROKER_ID], edgeIds: [], query: 'q', facts: [] } })]),

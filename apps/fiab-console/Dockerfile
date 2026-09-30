@@ -151,10 +151,14 @@ COPY --from=builder --chown=nextjs:nodejs /app/deploy-templates ./deploy-templat
 # Validator probes /build-marker.txt and grep's for sha=<expected>.
 #
 # The same step records WHEN this image was built, in ISO-8601 UTC, beside
-# server.js (#4798). The brain security graph is baked into the image, so this
-# date bounds how old the source it describes can be, and
+# server.js (#4798). The brain security graph is committed and baked into the
+# image, so a graph in an image built N days ago is at least N days old, and
 # lib/brain/security/extract/artifact.ts refuses a graph from an image older
-# than 90 days. It is computed HERE, not passed as a build-arg, so every build
+# than 90 days. That refusal is sound; a pass is NOT a freshness proof, because a
+# fresh build of an old ref passes. The build-marker written on the same line
+# (and server.js) mark this directory as a built image, so a runtime that finds
+# them without this date refuses rather than treating itself as a dev run.
+# The date is computed HERE, not passed as a build-arg, so every build
 # path that uses this Dockerfile gets it with no workflow plumbing, and it is
 # never committed (a committed timestamp conflicted between every pair of PRs).
 # Written as root before USER, so the runtime user can read it but not rewrite

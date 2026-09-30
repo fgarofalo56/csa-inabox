@@ -49,8 +49,10 @@ import {
   censusRefusals,
   driftDifferences,
   gitCensus,
+  gitUnreadCensus,
   populationRefusals,
   runOnlyFieldsPresent,
+  unreadCensusRefusals,
 } from './_artifact-drift.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -383,10 +385,14 @@ function main() {
     // the builder, so a file dropped on the way leaves them agreeing. A file that
     // emits no node does not move the artifact at all. So the counts the builder
     // received are reconciled against a separate `git ls-files` count before any
-    // comparison. See `_artifact-drift.mjs#censusRefusals`.
+    // comparison. See `_artifact-drift.mjs#censusRefusals`, and
+    // `#unreadCensusRefusals` for the per-root counts of files this extractor
+    // cannot lex, which are no longer committed either.
     let census;
+    let unreadCensus;
     try {
       census = gitCensus(REPO_ROOT);
+      unreadCensus = gitUnreadCensus(REPO_ROOT);
     } catch (e) {
       const detail = (e && (e.stderr || e.message)) ? String(e.stderr || e.message).trim() : 'no error text';
       console.error(
@@ -395,7 +401,7 @@ function main() {
       );
       process.exit(1);
     }
-    const censusMismatch = censusRefusals(run, census);
+    const censusMismatch = [...censusRefusals(run, census), ...unreadCensusRefusals(run, unreadCensus)];
     if (censusMismatch.length > 0) {
       console.error(
         '[security-extract] REFUSING TO CERTIFY: the files the builder received do not reconcile with ' +
@@ -455,7 +461,8 @@ function main() {
     console.log(
       `[security-extract] OK — committed artifact matches the tree (${nodes} nodes, ${edges} edges; ` +
         `this run scanned ${run.filesScanned} file(s) across ${run.scanScopes.length} declared ` +
-        `scan scope(s), reconciled against \`git ls-files\` (${census.map((c) => `${c.label}: ${c.files}`).join('; ')}), ` +
+        `scan scope(s), reconciled against \`git ls-files\` (${census.map((c) => `${c.label}: ${c.files}`).join('; ')}; ` +
+        `unread ${unreadCensus.map((c) => `${c.root}: ${c.files}`).join(', ')}), ` +
         `digest ${run.inputsDigest} — run values, not committed).`,
     );
     return;

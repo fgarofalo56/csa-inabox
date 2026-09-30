@@ -110,6 +110,17 @@ const UNEVALUATED_LAYERS = {
   history: { available: false, reason: NO_EDGE_HISTORY_REASON } as const,
 };
 
+/** Evaluated over a graph whose age was NOT checked (#4798): a local run with no image date. */
+const AGE_UNCHECKED_LAYERS = {
+  risk: buildRiskLayer({
+    available: true,
+    graph: graphWithASubject(),
+    ageNote: 'AGE-NOTE-4798 the graph age was NOT checked',
+    ageChecked: false,
+  }),
+  history: { available: false, reason: NO_EDGE_HISTORY_REASON } as const,
+};
+
 function viewWith(layers: typeof EVALUATED_LAYERS) {
   return (
     <SynapseView
@@ -386,6 +397,28 @@ describe('a lane that could not be evaluated says so on screen', () => {
     expect(screen.queryByTestId('prune-not-evaluated')).toBeNull();
     expect(screen.getByTestId('lane-prune').textContent).toMatch(/unreachable \+ billing/);
     expect(screen.getByTestId('prune-cost-provenance').textContent).toMatch(/NOT a bill/);
+  });
+
+  it("#4798 — an unchecked graph age renders as a WARNING, and the note renders in the provenance line", async () => {
+    // Review round 3 (B M3, A-1): deleting the `risk-provenance` caption stayed
+    // green, because nothing read the rendered node. Breaks if the caption stops
+    // rendering `risk.reason`, if the model drops the note, or if the warning
+    // MessageBar stops rendering for `ageChecked: false`.
+    wrap(viewWith(AGE_UNCHECKED_LAYERS));
+    const provenance = await screen.findByTestId('risk-provenance');
+    expect(provenance.textContent).toContain('AGE-NOTE-4798');
+    const bar = screen.getByTestId('risk-age-unchecked');
+    expect(bar.textContent).toMatch(/age of this security graph was NOT checked/);
+    // A Fluent warning MessageBar, not body text.
+    expect(bar.closest('[class*="fui-MessageBar"]')).not.toBeNull();
+  });
+
+  it('#4798 — a graph whose age WAS checked shows no age warning (the control)', async () => {
+    // Paired with the test above: a warning rendered on every evaluated lane
+    // would satisfy it. EVALUATED_LAYERS carries no `ageChecked: false`.
+    wrap(viewWith(EVALUATED_LAYERS));
+    await waitFor(() => expect(screen.getByTestId('risk-provenance')).toBeInTheDocument());
+    expect(screen.queryByTestId('risk-age-unchecked')).toBeNull();
   });
 });
 

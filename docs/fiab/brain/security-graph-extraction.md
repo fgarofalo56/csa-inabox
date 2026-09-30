@@ -85,7 +85,10 @@ node scripts/brain/extract-security-graph.mjs --check    # CI drift gate, exit 1
    separate `git ls-files` census taken inside `--check`
    (`_artifact-drift.mjs#censusRefusals`). This is what catches a file dropped
    between the enumeration and the build. For a file that emits no node, that
-   drop would leave both sides of the comparison unchanged.
+   drop would leave both sides of the comparison unchanged. The per-root counts
+   of files the extractor cannot lex (`.sh`, `.ps1`, `.psm1`, `.py`, `.yml`,
+   `.yaml`) are reconciled the same way (`#unreadCensusRefusals`), because
+   they are no longer committed either.
 4. **Compares the whole artifact**: every field, not the inputs digest and not
    a list of watched fields. Measured 2026-08-24: fixing the generic-call
    matcher moved the node count 905 → 908 with a **byte-identical** digest,
@@ -363,7 +366,8 @@ reachable and is entered by `__tests__/artifact.test.ts`:
 | provenance | `source` is not `'extracted'` |
 | **zero nodes** | a sweep would report zero findings, indistinguishable from clean |
 | **stale** | the IMAGE was built more than 90 days ago (`MAX_ARTIFACT_AGE_DAYS`) |
-| unreadable / unparseable build date | the image carries a build date that cannot be read or parsed. An unknown age must not be reported as fresh |
+| **built image, no build date** | the server's directory holds a built image (`server.js` or `public/build-marker.txt`) but no build date. Its graph's age cannot be established |
+| unreadable / unparseable build date | the image carries a build date that cannot be read, or is not exactly `YYYY-MM-DDTHH:MM:SSZ`. An unknown age must not be reported as fresh |
 | future build date | the build date is more than a day ahead of the clock |
 | malformed | shape does not carry graph/join/meta |
 | incoherent join | some node is on no surface |
@@ -374,20 +378,32 @@ timestamp conflicted between every pair of PRs). Instead, the console
 UTC date taken with `date -u` at build time. That file is never committed, and
 `build-date.ts#readImageBuildDate` reads it at runtime. Every console image
 path builds that `Dockerfile`: `build-fiab-images-acr-tasks.yml`,
-`full-app-deploy-commercial.yml`, `console-bluegreen-roll.yml`,
-`gov-build-images.yml`, `gov-console-roll.yml` and `publish-ghcr-images.yml`. So
-the date reaches Commercial and Gov images alike, with no workflow change. In
-Gov the console cannot reach GitHub, so this date is the runtime's only
-staleness signal for the `.github/**` and `scripts/**` half of the graph.
+`build-fiab-images.yml`, `full-app-deploy-commercial.yml`,
+`console-bluegreen-roll.yml`, `gov-build-images.yml`, `gov-console-roll.yml` and
+`publish-ghcr-images.yml`. So the date reaches Commercial and Gov images alike,
+with no workflow change. In Gov the console cannot reach GitHub, so this date is
+the runtime's only staleness signal for the `.github/**` and `scripts/**` half
+of the graph.
+
+**What the date does and does not establish.** The graph is committed and baked
+into the image, so a graph in an image built N days ago is at least N days old,
+and the stale refusal is sound. The bound runs one way only: a pass is not a
+freshness proof, because a fresh build of an old ref passes. Nor does the
+runtime establish that the graph matches the image's source. That is CI's
+`--check`, which does not gate the roll (#4807).
 
 A layer-cache hit reuses an older date. That can refuse too early, but it can
-never report an image as newer than it is.
+never report an image as newer than it is. A read that fails (`unreadable`) is
+not cached, so a transient error is retried on the next load.
 
-When the file is **absent** (a local `next dev` or `next build` outside the
-image), the graph is still available, and it carries an `ageNote` saying that
-its age was NOT checked. The synapses panel renders that note beside the graph
-source. It does not refuse, because there is no age to judge, and it does not
-claim the graph is fresh.
+When there is **no date and no built-image marker** (a local `next dev`, a test
+run), the graph is still available, with `ageChecked: false` and an `ageNote`
+saying its age was NOT checked. The synapses panel renders that as a warning
+MessageBar (`risk-age-unchecked`) above the provenance line. It does not refuse,
+because a local run has no image age to judge, and it does not claim the graph
+is fresh. A directory that **does** hold a built image without the date is
+refused (the table above). So a runtime that stopped finding the date in a
+deployed image fails closed rather than serving an unchecked graph.
 
 A zero-node graph is refused rather than swept. Handing it to the detectors is
 tempting — all nine would raise "green and blind" population findings — but a

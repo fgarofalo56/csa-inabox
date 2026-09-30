@@ -643,7 +643,7 @@ jobs:
             echo "::error::the brain-spec tsconfig matched only $n spec files, below the floor of 100 (measured at 106 on the branch that added this step). A type-check over a shrunken population is green and blind, so this refuses rather than reporting success."
             exit 1
           fi
-          # tsc's own exit code is NOT the verdict — seven files are known red.
+          # tsc's own exit code is NOT the verdict — six files are known red.
           # Captured on the NEXT line, never after a pipe.
           set +e
           node_modules/.bin/tsc --noEmit -p "$cfg" > "$tmp/brain-spec-tsc.txt" 2>&1

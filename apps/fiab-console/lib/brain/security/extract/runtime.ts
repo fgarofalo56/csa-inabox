@@ -33,7 +33,8 @@
  * The ONE file this module does read is the image build date (`build-date.ts`),
  * and reason 1 does not bite it: file tracing never sees it because the
  * Dockerfile's runner stage writes it straight into `/app`, after the traced
- * standalone output is copied in. Its absence is a reported state, not a refusal.
+ * standalone output is copied in. Its absence outside an image is a reported
+ * state; inside one (`build-date.ts#IMAGE_CONTEXT_MARKERS`) it is a refusal.
  *
  * ── THE ONLY CHANGE #3992's SEAM NEEDS ───────────────────────────────────
  *
@@ -67,16 +68,20 @@ import generated from './__generated__/security-graph.json';
 const ARTIFACT = (generated as { artifact: SecurityGraphArtifact | null }).artifact;
 
 /**
- * The image build date, read once per process: the file is written at image
- * build time and cannot change under a running server. See `build-date.ts`
- * for why it is a file in the image and not a field in the artifact.
+ * The image build date, cached once it is SETTLED. The file is written at image
+ * build time and cannot change under a running server, so `present`, `absent`
+ * and `missing` hold for the life of the process. `unreadable` is NOT cached: a
+ * transient `EMFILE` or `EACCES` would otherwise refuse the graph until restart,
+ * so it is re-read on the next load. See `build-date.ts` for why the date is a
+ * file in the image and not a field in the artifact.
  */
 let imageBuiltAt: ImageBuildDate | undefined;
 
 /** Load the security graph shipped with this build. */
 export function loadExtractedSecurityGraph(): SecurityGraphSource {
-  imageBuiltAt ??= readImageBuildDate();
-  return resolveSecurityGraph(ARTIFACT, { now: new Date(), imageBuiltAt });
+  const built = imageBuiltAt ?? readImageBuildDate();
+  if (built.state !== 'unreadable') imageBuiltAt = built;
+  return resolveSecurityGraph(ARTIFACT, { now: new Date(), imageBuiltAt: built });
 }
 
 /**

@@ -252,11 +252,20 @@ describe('a graph with a real subject ⇒ the shipped detectors produce the find
     // buildRiskLayer drops `ageNote` (the rendered reason then loses the
     // "age was NOT checked" disclosure), or if it always sets the key, which
     // puts `ageNote: undefined` on a layer whose source carried no note.
-    const noted = buildRiskLayer({ available: true, graph: graphWith([bypassAuthorizer()]), ageNote: 'AGE-NOTE-4798' });
+    const noted = buildRiskLayer({
+      available: true,
+      graph: graphWith([bypassAuthorizer()]),
+      ageNote: 'AGE-NOTE-4798',
+      ageChecked: false,
+    });
     if (!noted.evaluated) throw new Error('unreachable');
     expect(noted.ageNote).toBe('AGE-NOTE-4798');
+    // Breaks if `ageChecked` is dropped on the way to the wire: the panel's
+    // warning keys on it, and would then never render.
+    expect(noted.ageChecked).toBe(false);
     if (!layer.evaluated) throw new Error('unreachable');
     expect('ageNote' in layer).toBe(false);
+    expect('ageChecked' in layer).toBe(false);
   });
 
   it('C1 found the bypass — the positive control for the whole seam', () => {

@@ -17,20 +17,30 @@
  * So the date moves to where it is true and where it cannot conflict: the
  * console `Dockerfile`'s runner stage writes the UTC build time to
  * {@link IMAGE_BUILD_DATE_FILE} beside `server.js`. Every console image build
- * path (ACR Tasks, the Commercial full deploy, the blue/green roll, the Gov build
- * and roll, the public GHCR channel) builds that one Dockerfile, so every cloud
- * gets the file with no per-workflow plumbing, and nothing is committed.
+ * path builds that one Dockerfile: ACR Tasks, the direct image build, the
+ * Commercial full deploy, the blue/green roll, the Gov build and roll, and the
+ * public GHCR channel. So every cloud gets the file with no per-workflow
+ * plumbing, and nothing is committed.
  *
- * ── THREE STATES, BECAUSE "I COULD NOT READ IT" IS NOT "IT IS NOT THERE" ──
+ * ── FOUR STATES, BECAUSE "NO FILE" MEANS TWO THINGS ──────────────────────
  *
- * `absent` is a build that never ran the Dockerfile — `next dev`, a test run.
- * It is reported as exactly that and NOT refused: refusing every local build
- * would teach everyone to ignore the refusal. `unreadable` is a file that exists
- * and could not be read; that establishes nothing about the age, so
- * `artifact.ts` refuses it rather than guessing (`deploy-integrity.md` R7).
+ * `absent` is a run that never came from a built image: `next dev`, a test run.
+ * It is reported as exactly that and NOT refused, because refusing every local
+ * build would teach everyone to ignore the refusal.
+ *
+ * `missing` is the same missing file in a directory that IS a built image,
+ * because it holds an {@link IMAGE_CONTEXT_MARKERS} file. Every console image
+ * build writes the date, so a built image without one cannot say how old its
+ * graph is, and `artifact.ts` refuses it. Without this state, anything that made
+ * the date unfindable in a deployed image would turn the refusal off in every
+ * cloud and leave only a caption (round-3 review of #4803).
+ *
+ * `unreadable` is a file that exists and could not be read. That establishes
+ * nothing about the age, so `artifact.ts` refuses it rather than guessing
+ * (`deploy-integrity.md` R7).
  */
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
@@ -40,11 +50,26 @@ import { join } from 'node:path';
  */
 export const IMAGE_BUILD_DATE_FILE = 'loom-image-built-at.txt';
 
+/**
+ * Files that exist beside the date in every image the console Dockerfile builds,
+ * and in no checkout, `next dev` or test run:
+ *
+ * - `server.js` is the Next standalone entry, which the runner's `CMD` starts.
+ * - `public/build-marker.txt` is written by the SAME `RUN` instruction that writes
+ *   the date.
+ *
+ * Either one marks the directory as a built image. `image-build-date.test.ts`
+ * asserts the Dockerfile produces both.
+ */
+export const IMAGE_CONTEXT_MARKERS: readonly string[] = Object.freeze(['server.js', 'public/build-marker.txt']);
+
 export type ImageBuildDate =
   /** The file was read. `value` is its trimmed text, NOT yet validated as a date. */
   | { readonly state: 'present'; readonly value: string }
-  /** No such file: this process was not started from an image the Dockerfile built. */
+  /** No date, and no image marker beside it: a local or test run. */
   | { readonly state: 'absent' }
+  /** No date, in a directory that IS a built image. `markers` names what was found. */
+  | { readonly state: 'missing'; readonly markers: readonly string[] }
   /** The file exists but could not be read; `detail` is the error code. */
   | { readonly state: 'unreadable'; readonly detail: string };
 
@@ -54,7 +79,10 @@ export function readImageBuildDate(dir: string = process.cwd()): ImageBuildDate 
     return { state: 'present', value: readFileSync(join(dir, IMAGE_BUILD_DATE_FILE), 'utf8').trim() };
   } catch (e) {
     const code = (e as { code?: unknown } | null)?.code;
-    if (code === 'ENOENT') return { state: 'absent' };
+    if (code === 'ENOENT') {
+      const markers = IMAGE_CONTEXT_MARKERS.filter((m) => existsSync(join(dir, m)));
+      return markers.length > 0 ? { state: 'missing', markers } : { state: 'absent' };
+    }
     return { state: 'unreadable', detail: typeof code === 'string' ? code : String(e) };
   }
 }

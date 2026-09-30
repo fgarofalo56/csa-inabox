@@ -544,21 +544,103 @@ function namesScope(scope, tokens) {
  * holds, so the caller refuses rather than skipping the reconciliation.
  */
 export function gitCensus(repoRoot, scopes = CENSUS_SCOPES, git = execFileSync) {
-  const roots = [...new Set(scopes.flatMap((s) => s.roots))];
-  const raw = git('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...roots], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-    maxBuffer: 256 * 1024 * 1024,
-  });
-  const present = String(raw)
-    .split('\0')
-    .filter(Boolean)
-    .filter((rel) => existsSync(path.join(repoRoot, rel)));
+  const present = gitPresentFiles(repoRoot, [...new Set(scopes.flatMap((s) => s.roots))], git);
   return scopes.map((s) => ({
     runScopeTokens: s.runScopeTokens,
     label: s.runScopeTokens.join(', '),
     files: present.filter((rel) => s.roots.some((r) => rel.startsWith(`${r}/`)) && s.include.test(rel)).length,
   }));
+}
+
+/**
+ * `git ls-files` under `roots`, minus paths deleted from the worktree. ONE helper
+ * for both censuses, so the lexed and unread counts cannot ask git different
+ * questions. Throws if git fails.
+ */
+function gitPresentFiles(repoRoot, roots, git) {
+  const raw = git('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...roots], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    maxBuffer: 256 * 1024 * 1024,
+  });
+  return String(raw)
+    .split('\0')
+    .filter(Boolean)
+    .filter((rel) => existsSync(path.join(repoRoot, rel)));
+}
+
+// ── THE UNREAD SET, RECONCILED TOO (#4798, review round 3) ──────────────────
+//
+// The extractor also COUNTS, per publication root, the files it cannot lex
+// (`.sh`, `.ps1`, `.yml`, ...), and reports them as a ledger subject. Before
+// #4798 that count was spelled into a committed ledger reason, so a filter that
+// dropped some of those files moved the artifact. The count is now a run value
+// (`run.unmodeledPublicationSurfaces[].fileCount`), so without this census such a
+// filter would be watched by nothing.
+
+/**
+ * The unread set, spelled HERE as a literal for the same reason as
+ * {@link CENSUS_SCOPES}. `security-graph-drift-shape.test.mjs` checks the roots
+ * and pattern against the extractor's `PUBLICATION_ROOTS` and
+ * `PUBLICATION_UNMODELED`.
+ */
+export const CENSUS_UNREAD = Object.freeze({
+  roots: Object.freeze(['scripts', '.github']),
+  include: /\.(?:sh|ps1|psm1|py|yml|yaml)$/,
+});
+
+/** Per publication root, the number of unread-language files git carries. Throws if git fails. */
+export function gitUnreadCensus(repoRoot, spec = CENSUS_UNREAD, git = execFileSync) {
+  const present = gitPresentFiles(repoRoot, [...spec.roots], git);
+  return spec.roots.map((r) => ({
+    root: `${r}/`,
+    files: present.filter((rel) => rel.startsWith(`${r}/`) && spec.include.test(rel)).length,
+  }));
+}
+
+/**
+ * Why the run's unread counts do NOT match {@link gitUnreadCensus}: one refusal
+ * per root that is missing from the run, doubled, or counted differently.
+ * Returns an empty array when every root reconciles.
+ *
+ * A ZERO count is not refused here, unlike the lexed census. A root with no
+ * `.sh`/`.yml` file is a real possibility, and a git failure throws rather than
+ * returning zeros. So a zero that matches is a reconciled zero.
+ */
+export function unreadCensusRefusals(run, census) {
+  if (!Array.isArray(census) || census.length === 0) {
+    return ['the independent census of unread files is empty, so the unread counts were checked against nothing.'];
+  }
+  const surfaces =
+    run !== null && typeof run === 'object' && Array.isArray(run.unmodeledPublicationSurfaces)
+      ? run.unmodeledPublicationSurfaces
+      : [];
+  const refusals = [];
+  for (const c of census) {
+    const matches = surfaces.filter((s) => s !== null && typeof s === 'object' && s.root === c.root);
+    if (matches.length !== 1) {
+      refusals.push(
+        `${matches.length} unread-file count(s) in the run for '${c.root}', not exactly one, so the census ` +
+          'for it has nothing to reconcile against.',
+      );
+      continue;
+    }
+    const got = matches[0].fileCount;
+    if (got !== c.files) {
+      refusals.push(
+        `unread files under '${c.root}': the run counted ${JSON.stringify(got)} but \`git ls-files\` lists ` +
+          `${c.files}. The ledger's "seen and NOT read" subject would then understate what this ` +
+          'extractor cannot see.',
+      );
+    }
+  }
+  if (refusals.length === 0 && surfaces.length !== census.length) {
+    refusals.push(
+      `the run reports unread files under ${surfaces.length} root(s) but the census covers ${census.length}, ` +
+        'so a root reached the ledger outside the census.',
+    );
+  }
+  return refusals;
 }
 
 /**

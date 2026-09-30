@@ -61,17 +61,26 @@ export type SecurityGraphSource =
        * need not invent one.
        */
       readonly ageNote?: string;
+      /**
+       * `false` exactly when the age was NOT checked (a local run with no image
+       * build date), so a surface can render that as a warning without parsing
+       * the note. Set with `ageNote` by {@link resolveSecurityGraph}.
+       */
+      readonly ageChecked?: boolean;
     }
   | { readonly available: false; readonly reason: string };
 
 /**
- * How old the IMAGE may be before its graph stops describing the source.
+ * How old the IMAGE may be before its graph is refused as stale.
  *
- * The graph is baked into the image, so the image's build date bounds how old
- * the source it describes can be. An image left running for six months carries
- * a six-month-old security picture, and rendering that as current is the
- * stale-read defect. 90 days is deliberately generous: this refuses an
- * ABANDONED estate, not a slightly-behind one.
+ * The graph is committed and baked into the image, so a graph shipped in an
+ * image built N days ago is at least N days old. The refusal is therefore sound:
+ * a stale image means a stale graph. The bound runs one way only. A pass does
+ * NOT prove the graph is fresh, because a fresh build of an old ref passes. An
+ * image left running for six months carries a security picture at least six
+ * months old, and rendering that as current is the stale-read defect. 90 days is
+ * deliberately generous: this refuses an ABANDONED estate, not a slightly-behind
+ * one.
  *
  * WHERE THE DATE COMES FROM (#4798). Not from the committed artifact: its
  * `generatedAt` differed on every run, so every pair of PRs that regenerated the
@@ -207,38 +216,53 @@ export function resolveSecurityGraph(
     };
   }
 
-  return { available: true, graph: artifact.graph, ageNote: age.note };
+  return { available: true, graph: artifact.graph, ageNote: age.note, ageChecked: age.checked };
 }
 
-type AgeVerdict = { readonly ok: true; readonly note: string } | { readonly ok: false; readonly reason: string };
+type AgeVerdict =
+  | { readonly ok: true; readonly note: string; readonly checked: boolean }
+  | { readonly ok: false; readonly reason: string };
 
 /**
  * The age half of the decision. Every branch names what was, and was not,
- * established — "absent" is reported, not refused (a local build never ran the
- * Dockerfile), while a date that is present but unusable IS refused, because an
- * image that claims a build date and cannot state one is not a dev build.
+ * established. "absent" is reported, not refused, because a local run never came
+ * from a built image. A built image with no date ("missing"), or a date that is
+ * present but unusable, IS refused: an image that cannot state its build date
+ * cannot say how old its graph is.
  */
 function resolveAge(options: ResolveOptions): AgeVerdict {
   const built = options.imageBuiltAt;
   const maxAge = options.maxAgeDays ?? MAX_ARTIFACT_AGE_DAYS;
   const where = `\`${IMAGE_BUILD_DATE_FILE}\``;
+  const unknownAge =
+    "the graph's age cannot be established. An artifact whose age is unknown cannot be " +
+    'certified current, and an unknown must not be reported as a negative.';
 
   if (built.state === 'absent') {
     return {
       ok: true,
+      checked: false,
       note:
-        `This build carries no image build date (${where} is written only by the console ` +
-        "Dockerfile), so the graph's age was NOT checked. That is expected for a local " +
-        'development build; in a deployed image it is a defect.',
+        `No image build date (${where}) and no built-image marker were found beside this ` +
+        "server, so it is treated as a local development run and the graph's age was NOT " +
+        'checked. An image built by the console Dockerfile carries the date, and a directory ' +
+        'holding such an image without it is refused.',
+    };
+  }
+  if (built.state === 'missing') {
+    return {
+      ok: false,
+      reason:
+        `This server's directory holds a built console image (found ${built.markers.join(', ')}) ` +
+        `but not the image build date ${where}, so ${unknownAge} The console Dockerfile ` +
+        'writes the date in every image it builds, so this image either was not built by it or ' +
+        'had the file removed.',
     };
   }
   if (built.state === 'unreadable') {
     return {
       ok: false,
-      reason:
-        `The image build date ${where} exists but could not be read (${built.detail}), so the ` +
-        "graph's age cannot be established. An artifact whose age is unknown cannot be " +
-        'certified current, and an unknown must not be reported as a negative.',
+      reason: `The image build date ${where} exists but could not be read (${built.detail}), so ${unknownAge}`,
     };
   }
 
@@ -247,16 +271,15 @@ function resolveAge(options: ResolveOptions): AgeVerdict {
     return {
       ok: false,
       reason:
-        `The image build date in ${where} is unparseable ('${built.value.slice(0, 64)}'), so ` +
-        "the graph's age cannot be established. An artifact whose age is unknown cannot be " +
-        'certified current, and an unknown must not be reported as a negative.',
+        `The image build date in ${where} is unparseable ('${built.value.slice(0, 64)}'; ` +
+        `expected the Dockerfile's YYYY-MM-DDTHH:MM:SSZ), so ${unknownAge}`,
     };
   }
   if (age < -FUTURE_TOLERANCE_DAYS) {
     return {
       ok: false,
       reason:
-        `The image build date in ${where} (${built.value}) is ${Math.ceil(-age)} days in the ` +
+        `The image build date in ${where} (${built.value}) is ${(-age).toFixed(1)} days in the ` +
         "future, so either it or this host's clock is wrong and the graph's age cannot be " +
         'established.',
     };
@@ -266,21 +289,32 @@ function resolveAge(options: ResolveOptions): AgeVerdict {
       ok: false,
       reason:
         `This image was built ${Math.floor(age)} days ago (${built.value}, ceiling ${maxAge} ` +
-        'days). Its security graph describes the source tree as it was at build time, so it is ' +
-        'reported as STALE rather than rendered as the current state. Rebuild and roll the ' +
-        'console image to refresh it.',
+        'days). The security graph committed in it is at least that old, so it is reported as ' +
+        'STALE rather than rendered as the current state. Rebuild and roll the console image to ' +
+        'refresh it.',
     };
   }
   return {
     ok: true,
+    checked: true,
     note:
-      `Extracted from the source this image was built from, ${built.value} ` +
-      `(${Math.max(0, Math.floor(age))} of ${maxAge} days).`,
+      `Image built ${built.value} (${Math.max(0, Math.floor(age))} of ${maxAge} days); this is ` +
+      'the graph committed in that image. This server does not check that the graph matches ' +
+      "the image's source: CI's `--check` does, and it does not gate the roll (#4807).",
   };
 }
 
-/** Whole and fractional days between an ISO timestamp and `now`. `null` if unparseable. */
+/**
+ * The exact shape the console Dockerfile writes (`date -u +%Y-%m-%dT%H:%M:%SZ`).
+ * `Date.parse` alone is lenient: `'1'` parses as the year 2001, and a date with no
+ * `T` or `Z` is read in LOCAL time. Either would turn a corrupt file into a
+ * plausible age, so anything else is unparseable, which refuses.
+ */
+const IMAGE_BUILD_DATE_SHAPE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+
+/** Whole and fractional days between the Dockerfile's timestamp and `now`. `null` if unparseable. */
 export function ageInDays(isoTimestamp: string, now: Date): number | null {
+  if (!IMAGE_BUILD_DATE_SHAPE.test(isoTimestamp)) return null;
   const then = Date.parse(isoTimestamp);
   if (Number.isNaN(then)) return null;
   return (now.getTime() - then) / 86_400_000;
