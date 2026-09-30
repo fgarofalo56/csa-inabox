@@ -177,8 +177,12 @@ export function GovernOwnerPane() {
     } finally {
       // The Function writes to Cosmos asynchronously; re-read shortly after to
       // surface fresh aggregates without blocking the initial render. Never
-      // schedule once unmounted, and replace (not stack) a pending re-read
-      // when Refresh is clicked again, so the cleanup owns the only timer.
+      // schedule once unmounted. Replace (not stack) a pending re-read: the
+      // Refresh button is disabled until the timer fires, so a click cannot
+      // overlap one — but React StrictMode (reactStrictMode: true) runs the
+      // mount effect twice, so two on-open refreshes resolve while mounted and
+      // both reach this line. Without the replace, the first timer's id is
+      // overwritten and the cleanup can never clear it.
       if (aliveRef.current) {
         if (reloadTimerRef.current !== null) clearTimeout(reloadTimerRef.current);
         reloadTimerRef.current = setTimeout(() => {

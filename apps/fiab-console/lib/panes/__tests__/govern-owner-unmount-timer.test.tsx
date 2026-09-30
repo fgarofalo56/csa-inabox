@@ -33,15 +33,24 @@
  *   - `consoleError` not called: any React warning/error logged on the late
  *     path. Weak on its own (React 19 does not warn on an unmounted setState),
  *     so it is never the only assertion in a test.
+ *   - StrictMode test, every armed id in `clearTimeout`'s calls: `finally`
+ *     arming a new timer without first clearing the pending one. StrictMode
+ *     runs the mount effect twice, both refreshes resolve while mounted, and
+ *     the first id is overwritten in the ref — the cleanup clears only the
+ *     second, so the first id is missing from the cleared set. (The Refresh
+ *     button is disabled until the timer fires, so a click cannot produce
+ *     this overlap; StrictMode's double mount is the only path found.)
  * Positive controls pin that the path under test was actually reached: the
  * 1500ms timer IS armed before unmount (test 1), the refresh POST IS issued
- * (test 2), and — without unmounting — the timer DOES fire and re-read (test 3),
- * so "no second owner read" cannot be satisfied by a timer that never existed.
+ * (test 2), StrictMode DOES arm two distinct timers (test 3), and — without
+ * unmounting — the timer DOES fire and re-read (test 4), so "no second owner
+ * read" cannot be satisfied by a timer that never existed.
  */
 import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } from 'vitest';
 import { render, act, cleanup } from '@testing-library/react';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import type { ReactNode } from 'react';
+import { StrictMode } from 'react';
 
 vi.mock('@/lib/components/governance-shell', () => ({
   GovernanceShell: ({ children }: { children: ReactNode }) => <div>{children}</div>,
@@ -132,7 +141,10 @@ describe('GovernOwnerPane delayed re-read vs unmount', () => {
     expect(clearSpy).toHaveBeenCalledWith(armedId);
 
     // Well past the 1500ms delay: a surviving callback would re-read here.
-    expect(() => vi.advanceTimersByTime(REFRESH_DELAY_MS * 4)).not.toThrow();
+    // (Not wrapped in `.not.toThrow()`: under fake timers the pre-fix callback
+    // runs against a still-live jsdom and does not throw, so that wrapper
+    // passed against the defect and witnessed nothing.)
+    vi.advanceTimersByTime(REFRESH_DELAY_MS * 4);
     await flush();
     expect(ownerCalls).toBe(1);
     expect(consoleError).not.toHaveBeenCalled();
@@ -160,6 +172,32 @@ describe('GovernOwnerPane delayed re-read vs unmount', () => {
     await flush();
     expect(ownerCalls).toBe(1);
     expect(consoleError).not.toHaveBeenCalled();
+  });
+
+  it('StrictMode double mount: every armed re-read timer is cleared by unmount', async () => {
+    // reactStrictMode: true (next.config) runs the mount effect twice, so two
+    // on-open refreshes resolve while mounted and each arms a 1500ms timer.
+    const view = render(
+      <StrictMode>
+        <FluentProvider theme={webLightTheme}>
+          <GovernOwnerPane />
+        </FluentProvider>
+      </StrictMode>,
+    );
+    await flush();
+
+    // Positive control: StrictMode really did double the on-open refresh, so
+    // there are two distinct timer ids to account for. Without this, a single
+    // mount would satisfy the loop below with the cleanup clear alone.
+    expect(refreshCalls).toBe(2);
+    const armed = refreshTimerIds();
+    expect(armed).toHaveLength(2);
+    expect(armed[0]).not.toBe(armed[1]);
+
+    view.unmount();
+
+    const cleared = clearSpy.mock.calls.map((c) => c[0]);
+    for (const id of armed) expect(cleared).toContain(id);
   });
 
   it('control: while still mounted the timer fires and re-reads the posture', async () => {
