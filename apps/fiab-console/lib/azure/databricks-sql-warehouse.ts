@@ -308,11 +308,11 @@ function normalizedQuote(e: ErrShape): string {
  */
 const IDENTIFIER_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   [/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '<id>'],
-  // Linear, not quadratic (round 6): the local part may only START at a
-  // boundary (the lookbehind fails in O(1) inside a run, so a long run is not
-  // rescanned from every position) and every part is length-bounded (local
-  // ≤ 64, labels ≤ 63, ≤ 10 labels), so backtracking per start is bounded.
-  [/(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){1,10}/g, '<principal>'],
+  // Linear, not quadratic (round 6): every part is length-bounded (local
+  // ≤ 64, labels ≤ 63, ≤ 10 labels), so the work per start position is bounded
+  // and a long run costs O(64·n) instead of the round-5 unbounded `+`, which
+  // rescanned the whole run from every position (measured ≈ 2.7 s at 40k).
+  [/[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){1,10}/g, '<principal>'],
   [/\b\d{12,}\b/g, '<id>'],
 ];
 

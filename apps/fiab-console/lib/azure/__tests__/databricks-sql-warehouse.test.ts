@@ -951,8 +951,11 @@ describe('round 3 (#4776 re-review)', () => {
       // (measured ≈ 2.7 s at 40k); a linear pattern is a few ms.
       expect(ms, `${name}: ${ms.toFixed(1)} ms`).toBeLessThan(500);
     }
-    // Positive half: the bounded pattern still redacts an ordinary address.
+    // Positive half: the bounded pattern still redacts an ordinary address…
     expect(redactIdentifiers('by x.y-z@contoso.com.')).toBe('by <principal>.');
+    // …and the domain + trailing 64 local chars of an over-long local part (no
+    // boundary lookbehind, so a long run is not left wholly intact).
+    expect(redactIdentifiers(`${'a'.repeat(100)}@contoso.com`)).toBe(`${'a'.repeat(36)}<principal>`);
   });
 
   it('round 5 (N2) control: a quote with no identifier-shaped token is not rewritten and adds no diagnostic', () => {
