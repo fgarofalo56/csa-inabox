@@ -378,3 +378,61 @@ describe('/api/lakehouse/history — item form and storage-form access', () => {
     expect((executeStatement as any).mock.calls).toEqual([]);
   });
 });
+
+describe('/api/lakehouse/history POST — the statement names exactly the checked path', () => {
+  function ready() {
+    (getSession as any).mockReturnValue(MEMBER);
+    (databricksConfigGate as any).mockReturnValue(null);
+    (listWarehouses as any).mockResolvedValue([{ id: 'wh1', name: 'w', state: 'RUNNING' }]);
+    (executeStatement as any).mockResolvedValue({ columns: ['id'], rows: [[1]], rowCount: 1, executionMs: 1, truncated: false });
+  }
+
+  // The path is INSIDE the item root (so containment alone accepts it) and one
+  // segment carries a backtick. FAILS IF the backtick is stripped after the
+  // scope check instead of refused before it: the previous code answered 200
+  // and ran a statement naming `${ROOT}/Tables/orders`, not the checked path.
+  it('refuses a tablePath with a backtick before scoping, and runs nothing', async () => {
+    ready();
+    const tick = `${ROOT}/Tables/ord\`ers`;
+    expect(tick.startsWith(`${ROOT}/`), 'the fixture must sit inside the root').toBe(true);
+    const res = await POST(postReq({ lakehouseId: LH, container: CONTAINER, tablePath: tick, version: 1, action: 'preview' }));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/backtick/);
+    expect((executeStatement as any).mock.calls).toEqual([]);
+    expect((resolveItemAccessByOid as any).mock.calls, 'refused before the item is even looked up').toEqual([]);
+  });
+
+  // FAILS IF the container is not checked for a backtick BEFORE scoping: the
+  // later check on the resolved location would still answer 400, but only
+  // after the item was looked up (resolveItemAccessByOid calls 1, not 0).
+  it('refuses a container with a backtick, and runs nothing', async () => {
+    ready();
+    const res = await POST(postReq({ lakehouseId: LH, container: 'land`ing', tablePath: TABLE, version: 1, action: 'restore' }));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/backtick/);
+    expect((executeStatement as any).mock.calls).toEqual([]);
+    expect((resolveItemAccessByOid as any).mock.calls, 'refused before the item is even looked up').toEqual([]);
+  });
+
+  // The request is clean; the RESOLVED container (from the item binding) holds
+  // a backtick. FAILS IF the route edits the location after scoping: the
+  // previous code stripped it and ran against `landing`, a container the scope
+  // check never named.
+  it('refuses a resolved location with a backtick instead of rewriting it', async () => {
+    ready();
+    (resolveLakehouseAbfss as any).mockResolvedValue({ abfss: 'abfss://x', container: 'land`ing', root: ROOT });
+    const res = await POST(postReq({ lakehouseId: LH, tablePath: TABLE, version: 1, action: 'preview' }));
+    expect(res.status).toBe(400);
+    expect((executeStatement as any).mock.calls).toEqual([]);
+  });
+
+  // POSITIVE pair: a clean path inside the root still runs, and the statement
+  // names it byte-for-byte. FAILS IF the new refusal also catches clean input.
+  it('runs a clean path and names it unchanged in the statement', async () => {
+    ready();
+    const res = await POST(postReq({ lakehouseId: LH, container: CONTAINER, tablePath: TABLE, version: 4, action: 'preview' }));
+    expect(res.status).toBe(200);
+    expect((executeStatement as any).mock.calls[0][1])
+      .toBe(`SELECT * FROM delta.\`abfss://${CONTAINER}@loomdlz.dfs.core.windows.net/${TABLE}\` VERSION AS OF 4 LIMIT 100`);
+  });
+});

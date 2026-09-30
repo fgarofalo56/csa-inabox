@@ -206,6 +206,15 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   if (version === undefined || version < 0 || !Number.isInteger(version)) {
     return NextResponse.json({ ok: false, error: 'version must be a non-negative integer' }, { status: 400 });
   }
+  // The statement below quotes the table path with backticks, so a backtick in
+  // the request cannot be carried into it. It is refused HERE, before the path
+  // is scoped, so the path the SQL names is exactly the path that was checked.
+  if (container0.includes('`') || tablePathRaw.includes('`')) {
+    return NextResponse.json(
+      { ok: false, error: 'tablePath and container cannot contain a backtick (`).' },
+      { status: 400 },
+    );
+  }
   // The table must lie inside the caller's own lakehouse root (or, with no
   // lakehouseId, the caller must be a tenant admin). A restore rewrites the
   // table, so it asks for write access on the item.
@@ -269,8 +278,10 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
     );
   }
 
-  // Build the abfss URI for the Delta table. Backtick-quoted path literal in
-  // Spark SQL — strip any backticks from the resolved value defensively.
+  // Build the abfss URI for the Delta table from the SCOPED container and path,
+  // unchanged. Nothing is rewritten after the scope check: a value the
+  // backtick-quoted literal cannot carry is refused, never edited into a
+  // different path.
   let account: string;
   try {
     account = getAccountName();
@@ -284,7 +295,13 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   // in Commercial/GCC, `dfs.core.usgovcloudapi.net` in GCC-High/IL5/DoD. A
   // hard-coded Commercial suffix points a Gov restore at a host that does not
   // serve the account.
-  const abfss = `abfss://${container}@${account}.${dfsSuffix()}/${tablePath}`.replace(/`/g, '');
+  const abfss = `abfss://${container}@${account}.${dfsSuffix()}/${tablePath}`;
+  if (abfss.includes('`')) {
+    return NextResponse.json(
+      { ok: false, error: 'The resolved table location contains a backtick, which the time-travel statement cannot quote; nothing was run.' },
+      { status: 400 },
+    );
+  }
 
   try {
     if (action === 'restore') {
