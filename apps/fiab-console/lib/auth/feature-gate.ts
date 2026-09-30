@@ -151,8 +151,22 @@ export async function checkCapability(
  * Returns null when the caller is a tenant admin (so the handler proceeds), or
  * a structured honest-gate 403 (naming the exact bootstrap remediation) when
  * not. Synchronous — `isTenantAdmin` is a claims-only check, no Cosmos round
- * trip. Mirrors `enforceCapability`'s contract for the admin-tier case. */
-export function requireTenantAdmin(session: SessionPayload | null): NextResponse | null {
+ * trip. Mirrors `enforceCapability`'s contract for the admin-tier case.
+ *
+ * `refusal` (optional) replaces the envelope's `reason` and/or `remediation`
+ * text for a route whose admin-only verb is NOT label / DLP / Purview policy,
+ * so the 403 a caller renders describes the surface it actually hit (#4619).
+ * The status, `error`, `code: 'admin_only'`, `gateId` and `bootstrapEnv`
+ * fields are unchanged, and omitting it keeps the body byte-identical. */
+export interface TenantAdminRefusal {
+  reason?: string;
+  remediation?: string;
+}
+
+export function requireTenantAdmin(
+  session: SessionPayload | null,
+  refusal?: TenantAdminRefusal,
+): NextResponse | null {
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   if (isTenantAdmin(session)) return null;
   return NextResponse.json(
@@ -161,9 +175,11 @@ export function requireTenantAdmin(session: SessionPayload | null): NextResponse
       error: 'forbidden',
       code: 'admin_only',
       reason:
+        refusal?.reason ??
         'This surface administers org-wide / shared-tenant policy (sensitivity labels, ' +
         'DLP, Purview) and is restricted to tenant admins.',
       remediation:
+        refusal?.remediation ??
         'Ask an existing tenant admin to grant your account (or a group you belong ' +
         'to) the Admin role at /admin/permissions. If NO ONE in the tenant can open ' +
         'that page either, this deployment shipped without a bootstrap-admin ' +

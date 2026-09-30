@@ -9,7 +9,7 @@
  * network / worker is touched and the subtree settles deterministically.
  */
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 
 vi.mock('@/lib/client-fetch', () => ({
@@ -41,5 +41,44 @@ describe('ShareExplorerPanel — UX-baseline lift (UX-706)', () => {
     // Guided launcher real-action cards from the lift.
     expect(screen.getByText('List schemas')).toBeInTheDocument();
     expect(screen.getByText('Sample a table')).toBeInTheDocument();
+  });
+});
+
+/**
+ * #4776 — the query route's gate renders through the registry HonestGate
+ * (cause + remediation + Fix-it), not a bare MessageBar. Breaks if the panel
+ * stops routing the body through surfaceGateFrom → HonestGate: the gate title
+ * and the Fix-it button are both absent.
+ */
+describe('ShareExplorerPanel — query gate is the HonestGate (#4776)', () => {
+  async function runListSchemasAgainst(body: unknown) {
+    const { clientFetch } = await import('@/lib/client-fetch');
+    (clientFetch as any).mockImplementation(async (url: string) => ({
+      ok: true, status: 200,
+      json: async () => (url === '/api/marketplace/sharing/query' ? body : { ok: true, nodes: [] }),
+    }));
+    await renderPanel();
+    fireEvent.click(await screen.findByText('List schemas'));
+  }
+
+  it('a classified permission failure → the gate with its cause, remediation and a Fix-it', async () => {
+    await runListSchemasAgainst({
+      ok: false, gate: true, code: 'warehouse_permission', gateId: 'svc-databricks-sql', kind: 'permission',
+      error: 'Databricks refused the Console identity\'s list call (HTTP 403).',
+      remediation: 'A workspace admin grants the databricks-sql-access entitlement.', entitlement: 'databricks-sql-access',
+    });
+    expect(await screen.findByText(/Share explorer: .* — permission refused/)).toBeInTheDocument();
+    expect(screen.getByText('A workspace admin grants the databricks-sql-access entitlement.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /fix it/i })).toBeInTheDocument();
+  });
+
+  it('no workspace bound (the route\'s not_configured body) → the svc-databricks gate naming the var', async () => {
+    await runListSchemasAgainst({
+      ok: false, gate: true, code: 'not_configured', missing: 'LOOM_DATABRICKS_HOSTNAME',
+      error: 'Databricks workspace not configured. Set LOOM_DATABRICKS_HOSTNAME on the Loom Console.',
+    });
+    expect(await screen.findByText(/Share explorer needs Azure Databricks/)).toBeInTheDocument();
+    expect(screen.getByText('LOOM_DATABRICKS_HOSTNAME')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /fix it/i })).toBeInTheDocument();
   });
 });

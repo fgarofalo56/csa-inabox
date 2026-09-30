@@ -29,6 +29,14 @@
  * It then (a) marks any matching governance Access policy as restricted in the
  * `policies:<tenant>` doc and (b) appends a restriction record to the
  * `dlp-meta:<tenant>` doc — the authoritative "item-permissions" change.
+ *
+ * Authorization (#4619): TENANT-ADMIN (`withTenantAdmin`, the same gate as the
+ * governance actions route), checked before the body is read — a refused
+ * caller never reaches a revoke. For the ADLS scopes, `scopeRef` must be a
+ * valid storage container name — the account is fixed by the deployment
+ * (`getAccountName()`), so a container name can only name a container of this
+ * deployment's own account — and `subPath` must be a plain container-relative
+ * path (`lib/util/blob-rel-path.ts`). Anything else is a 400.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { tenantSettingsContainer } from '@/lib/azure/cosmos-client';
@@ -36,18 +44,34 @@ import { listContainerRoleAssignments, revokeContainerRoleAssignment, removePrin
 import { revokeStructuredGrant, denySchemaAccess, type PrincipalType } from '@/lib/azure/access-policy-client';
 import { loadDlpMeta, saveDlpMeta, type DlpRestriction } from '../_lib/meta';
 import { trimSlashes } from '@/lib/util/trim';
-import { withSession } from '@/lib/api/route-toolkit';
+import { blobRelPathError } from '@/lib/util/blob-rel-path';
+import { isValidContainerName } from '@/app/api/storage/_lib/validate';
+import { withTenantAdmin } from '@/lib/api/route-toolkit';
+import type { TenantAdminRefusal } from '@/lib/auth/feature-gate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+/** What the 403 says for a non-admin: this verb revokes access, it is not a policy edit. */
+const RESTRICT_REFUSAL: TenantAdminRefusal = {
+  reason:
+    'Restricting access from a DLP finding revokes role assignments, ACL entries and database grants '
+    + 'on the deployment\'s shared storage, warehouses and databases, so it is restricted to tenant admins.',
+  remediation:
+    'Ask a tenant admin to apply the restriction. The finding itself, and the scan that produced it, '
+    + 'stay visible to you.',
+};
+
 type ScopeType = 'adls-container' | 'adls-path' | 'warehouse' | 'warehouse-schema' | 'kql-database';
 const SCOPE_TYPES: ScopeType[] = ['adls-container', 'adls-path', 'warehouse', 'warehouse-schema', 'kql-database'];
 
-export const POST = withSession(async (req: NextRequest, { session: s }) => {
+export const POST = withTenantAdmin(async (req: NextRequest, { session: s }) => {
   const body = await req.json().catch(() => ({}));
   const scopeType = String(body?.scopeType || '') as ScopeType;
   const scopeRef = String(body?.scopeRef || '').trim();
+  // `trimSlashes` keeps its existing normalisation — "/dir/file" and "dir/file"
+  // name the same path under the container — and the normalised value is what
+  // is validated below and passed to the ACL call.
   const subPath = body?.subPath ? trimSlashes(String(body.subPath).trim()) : '';
   const schema = body?.schema ? String(body.schema).trim() : '';
   const principalId = String(body?.principalId || '').trim();
@@ -67,6 +91,16 @@ export const POST = withSession(async (req: NextRequest, { session: s }) => {
   }
   if (scopeType === 'adls-path' && !subPath) {
     return NextResponse.json({ ok: false, error: 'subPath (the directory/file under the container) is required for adls-path scope' }, { status: 400 });
+  }
+  if ((scopeType === 'adls-container' || scopeType === 'adls-path') && !isValidContainerName(scopeRef)) {
+    return NextResponse.json(
+      { ok: false, error: 'scopeRef must be a storage container name: 3-63 lowercase letters, digits or single hyphens' },
+      { status: 400 },
+    );
+  }
+  if (scopeType === 'adls-path') {
+    const subPathErr = blobRelPathError(subPath);
+    if (subPathErr) return NextResponse.json({ ok: false, error: `subPath: ${subPathErr}` }, { status: 400 });
   }
   if (scopeType === 'warehouse-schema' && !schema) {
     return NextResponse.json({ ok: false, error: 'schema is required for warehouse-schema scope' }, { status: 400 });
@@ -219,4 +253,4 @@ export const POST = withSession(async (req: NextRequest, { session: s }) => {
     note,
     restriction,
   });
-});
+}, RESTRICT_REFUSAL);

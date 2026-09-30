@@ -3,7 +3,7 @@
  *      counts, last activity, capacity assignment, state, and resolved owners.
  *      Cosmos-backed (cross-partition scan; see lib/clients/workspaces-client.ts).
  *      Admin-only: every workspace in the tenant is visible regardless of owner,
- *      so the route is gated by isTenantAdmin (LOOM_TENANT_ADMIN_OID / _GROUP_ID).
+ *      so GET is gated by isTenantAdmin (LOOM_TENANT_ADMIN_OID / _GROUP_ID).
  *      A non-admin caller gets a structured 403 rather than another user's
  *      workspaces.
  * POST /api/admin/workspaces — create a workspace from the admin create wizard:
@@ -11,12 +11,16 @@
  *      capacity (Azure-native default needs none), register the domain in
  *      Purview, and optionally provision a dedicated backing resource group.
  *      The Azure-native path works with LOOM_DEFAULT_FABRIC_WORKSPACE unset.
+ *      POST itself is NOT isTenantAdmin-gated: it takes the session, the rate
+ *      limit and the PDP check. Naming a `storageAccountId` is the one part
+ *      that is tenant-admin only (#4619), the same rule as POST /api/workspaces.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession, tenantScopeId } from '@/lib/auth/session';
 import { pdpCheck } from '@/lib/auth/pdp/enforce';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
-import { isTenantAdmin } from '@/lib/auth/feature-gate';
+import { isTenantAdmin, requireTenantAdmin } from '@/lib/auth/feature-gate';
+import { WORKSPACE_STORAGE_ADMIN_ONLY } from '@/lib/util/admin-only-copy';
 import { listAllWorkspacesAdmin } from '@/lib/clients/workspaces-client';
 import { workspacesContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, docForWorkspace } from '@/lib/azure/loom-search';
@@ -113,6 +117,17 @@ export async function POST(req: NextRequest) {
   const name = typeof body?.name === 'string' ? body.name.trim() : '';
   if (!name) return NextResponse.json({ ok: false, error: 'name is required' }, { status: 400 });
 
+  // #4619 — the storage account a workspace binds to is chosen by a tenant
+  // admin, as on POST /api/workspaces. A create without one (or with only
+  // whitespace) gets the deployment default; naming one answers 403 admin_only
+  // before anything is written.
+  const storageAccountId =
+    typeof body?.storageAccountId === 'string' && body.storageAccountId.trim() ? body.storageAccountId.trim() : undefined;
+  if (storageAccountId) {
+    const refused = requireTenantAdmin(s, WORKSPACE_STORAGE_ADMIN_ONLY);
+    if (refused) return refused;
+  }
+
   // A workspace MUST be bound to a governance domain (t158 — domains are the
   // authoritative tenant topology). The domain must exist in this tenant's
   // registry; the `default` starter domain is the guaranteed fallback for
@@ -152,7 +167,7 @@ export async function POST(req: NextRequest) {
     description: typeof body?.description === 'string' && body.description.trim() ? body.description.trim() : undefined,
     capacity: typeof body?.capacity === 'string' && body.capacity.trim() ? body.capacity.trim() : undefined,
     domain,
-    storageAccountId: typeof body?.storageAccountId === 'string' && body.storageAccountId.trim() ? body.storageAccountId.trim() : undefined,
+    storageAccountId,
     licenseMode,
     contacts: contacts && contacts.length ? contacts : undefined,
     createdBy: s.claims.upn || s.claims.email || s.claims.oid,

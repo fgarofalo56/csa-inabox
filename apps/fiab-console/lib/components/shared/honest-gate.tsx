@@ -554,6 +554,25 @@ export function GateFixitDialog({
 }
 
 /**
+ * A route's SERVER-CLASSIFIED failure for a runtime-produced gate (#4776) — the
+ * `warehouseErrorBody` shape (`kind`, `error`, `remediation`, `entitlement`).
+ */
+export interface ClassifiedGateFailure {
+  kind: string;
+  error?: string;
+  remediation?: string;
+  entitlement?: string;
+}
+
+const CLASSIFIED_TITLE: Record<string, string> = {
+  authentication: 'the Console identity was not authenticated',
+  permission: 'permission refused',
+  network: 'refused or unreachable at the network layer',
+  quota: 'quota / capacity refused',
+  unknown: 'failed, cause not established',
+};
+
+/**
  * The gate banner. When `configured` is true renders a compact live chip (so
  * surfaces can always mount it); otherwise the actionable warning bar with the
  * inline Fix-it wizard. `missing` (from the surface's own gate response)
@@ -568,6 +587,7 @@ export function HonestGate({
   detail,
   cloudUnavailable,
   fallbackNote,
+  classified,
   onResolved,
 }: {
   /** Gate id — OR pass the whole `gate` envelope block below and this is derived. */
@@ -599,6 +619,16 @@ export function HonestGate({
   /** X2 — the fallback note override (defaults to the envelope's, then the
    * registry availability declaration). */
   fallbackNote?: string;
+  /**
+   * #4776 — the route's own classification of a failure (permission / network /
+   * authentication / quota / unknown). The registry's runtime overlay
+   * (lib/gates/registry/index.ts) is live only in the SERVER process — in a
+   * browser the runtime store is empty, so `getGate()` here returns the static
+   * def. When this is set it drives the bar's text AND the Fix-it: a
+   * permission failure opens as a role grant naming the remediation; any other
+   * kind keeps the gate's declared Fix-it.
+   */
+  classified?: ClassifiedGateFailure;
   /** Called when the Fix-it wizard confirms the gate flipped to configured. */
   onResolved?: () => void;
 }) {
@@ -609,6 +639,29 @@ export function HonestGate({
   const resolvedMissing = missing ?? envelope?.missing;
   const resolvedDetail = detail ?? envelope?.remediation;
   const gate = useMemo(() => getGate(resolvedId), [resolvedId]);
+  const classifiedKind = classified?.kind;
+  const classifiedRemediation = classified?.remediation;
+  const effective = useMemo<GateDef | undefined>(() => {
+    if (!gate || !classifiedKind) return gate;
+    const remediation = classifiedRemediation || gate.remediation;
+    if (classifiedKind === 'permission') {
+      return { ...gate, remediation, fixit: { kind: 'role-grant', grantNote: remediation } };
+    }
+    // Any other cause (network / authentication / quota / unknown): the gate's
+    // declared Fix-it only lets the operator PIN the value themselves, which
+    // bypasses what the Console produces and does not address the cause. Say
+    // exactly that in the dialog rather than offering the pin as "the fix" (#4776).
+    return {
+      ...gate,
+      remediation,
+      fixit: {
+        ...gate.fixit,
+        grantNote:
+          `Pinning a value below only bypasses the one the Console produces; it does not address the cause of this ${classifiedKind} failure. ` +
+          `To address it: ${remediation}`,
+      },
+    };
+  }, [gate, classifiedKind, classifiedRemediation]);
 
   if (!gate) {
     // Unknown id — render an honest generic bar rather than nothing.
@@ -639,6 +692,41 @@ export function HonestGate({
 
   const missingList = (Array.isArray(resolvedMissing) ? resolvedMissing : resolvedMissing ? [resolvedMissing] : [])
     .filter(Boolean);
+
+  // #4776 — a server-classified failure: the cause the route measured, its
+  // remediation, and a Fix-it matched to it (role grant for permission).
+  if (classified && effective) {
+    return (
+      <>
+        <MessageBar intent="warning" layout="multiline" className={s.bar}>
+          <MessageBarBody>
+            <MessageBarTitle>{surface}: {gate.title} — {CLASSIFIED_TITLE[classified.kind] || 'failed'}</MessageBarTitle>
+            {classified.error}
+            <ul className={s.list}>
+              {classified.remediation && <li>{classified.remediation}</li>}
+              {classified.entitlement && (
+                <li className={s.meta}>Entitlement: <code>{classified.entitlement}</code></li>
+              )}
+            </ul>
+          </MessageBarBody>
+          <MessageBarActions>
+            <Button size="small" appearance="primary" icon={<Wrench16Regular />} onClick={() => setFixOpen(true)}>
+              Fix it
+            </Button>
+            <Button as="a" size="small" appearance="transparent" icon={<Open16Regular />} href="/admin/gates">
+              Gate registry
+            </Button>
+            {onResolved && (
+              <Button size="small" appearance="transparent" icon={<ArrowSync16Regular />} onClick={onResolved}>
+                Recheck
+              </Button>
+            )}
+          </MessageBarActions>
+        </MessageBar>
+        <GateFixitDialog gate={effective} open={fixOpen} onClose={() => setFixOpen(false)} onResolved={onResolved} />
+      </>
+    );
+  }
 
   // X2 — cloud-unavailable: the backing service does not exist in this cloud.
   // Honest bar naming the Azure-native/OSS/Loom-native fallback, NO Fix-it (no
