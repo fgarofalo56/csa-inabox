@@ -133,7 +133,7 @@ describe('re-create resets the creator when the credential changes', () => {
     // loom-dsp- name is shared by everyone who may use the provider, so Bob can
     // re-create Alice's row with the SAME credential and a different table; the
     // row must then be Bob's, not credit Alice with a target she never chose.
-    const cred = { kind: 'deltaSharingProfile', keyVaultSecret: 'loom-dsp-acme' } as const;
+    const cred = { kind: 'deltaSharing', keyVaultSecret: 'loom-dsp-acme' } as const;
     const share = { ...base, targetType: 'delta_sharing' as const };
     await at('2026-01-01T00:00:00Z', () => createShortcut({ ...share, targetUri: 'share.sales.orders', credentialRef: cred, createdBy: ALICE.upn, createdByOid: ALICE.oid }));
     await at('2026-03-01T00:00:00Z', () => createShortcut({ ...share, targetUri: 'share.sales.refunds', credentialRef: cred, createdBy: BOB.upn, createdByOid: BOB.oid }));
