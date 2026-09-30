@@ -51,15 +51,40 @@ export function lakehouseStorageWithheldResponse(reason: LakehouseStorageWithhel
 }
 
 /**
+ * True when `raw` holds a C0 control character (U+0000-U+001F) or DEL (U+007F).
+ * No ADLS path a user can create through Loom contains one, and a path is
+ * carried into generated code, log lines and file names, where a line break or
+ * other control character changes what the text means. Such a path is refused.
+ */
+export function hasPathControlChar(raw: string): boolean {
+  const s = String(raw ?? '');
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s.charCodeAt(i);
+    if (c <= 0x1f || c === 0x7f) return true;
+  }
+  return false;
+}
+
+/** The 400 reason for a path `pathSegments` refused, naming the rule it broke. */
+export function invalidPathMessage(raw: string): string {
+  if (hasPathControlChar(raw)) {
+    return 'invalid path: it contains a control character (such as a line break or tab). Storage paths '
+      + 'cannot contain control characters; rename the file or folder and retry.';
+  }
+  return 'invalid path: expected a relative path inside the container, with no leading "/" and no "." or ".." segments';
+}
+
+/**
  * Split a container-relative path into its segments, or null when the input is
  * not one.
  *
  * Backslashes are treated as separators (a folder drag-and-drop on Windows
  * sends them). An ABSOLUTE form is REFUSED, matching the sibling
  * `/api/lakehouse/upload`: this API takes a container-relative path. A `.` or
- * `..` segment, a NUL, or an input with no segments at all is REFUSED too —
- * returning null rather than dropping the segment, so an input that names a
- * relative back-reference can never be rewritten into one that does not.
+ * `..` segment, a control character (`hasPathControlChar`, which includes NUL),
+ * or an input with no segments at all is REFUSED too — returning null rather
+ * than dropping the segment, so an input that names a relative back-reference
+ * can never be rewritten into one that does not.
  *
  * Doubled (`//`) and trailing separators COLLAPSE rather than refuse: the
  * caller's string is never what goes to storage, so a non-canonical spelling of
@@ -68,7 +93,7 @@ export function lakehouseStorageWithheldResponse(reason: LakehouseStorageWithhel
  */
 export function pathSegments(raw: string): string[] | null {
   const s = String(raw ?? '');
-  if (!s || s.includes('\0')) return null;
+  if (!s || hasPathControlChar(s)) return null;
   // Single-character class, no quantifier — linear, not the quadratic
   // trailing-run shape lib/util/trim.ts exists to replace.
   const normalized = s.replace(/\\/g, '/');
@@ -173,12 +198,7 @@ export function scopePathToRoot(
   } else {
     const parsed = pathSegments(rawPath);
     if (!parsed) {
-      return {
-        ok: false,
-        reason: 'invalid',
-        message:
-          'invalid path: expected a relative path inside the container, with no leading "/" and no "." or ".." segments',
-      };
+      return { ok: false, reason: 'invalid', message: invalidPathMessage(rawPath) };
     }
     segments = parsed;
   }
@@ -205,6 +225,24 @@ export interface ScopedItemPath {
   path: string;
   /** The authorized item; null only on the tenant-admin storage form. */
   item: WorkspaceItem | null;
+  /**
+   * The storage account the item is BOUND to, read from its resolved abfss
+   * URI. A lakehouse can be bound to an account other than the deployment's
+   * primary one (`state.storageAccount`), so a route that builds a storage URL
+   * for the item names this account rather than the primary. Null only on the
+   * tenant-admin form, which names a path on the primary account.
+   */
+  account: string | null;
+}
+
+/**
+ * The storage account named by a resolved `abfss://<container>@<account>.dfs.<suffix>/...`
+ * URI, or null when the URI does not have that shape. Account names are 3-24
+ * lowercase letters and digits.
+ */
+export function boundAccountOf(abfss: string): string | null {
+  const m = /^abfss:\/\/[^@/]+@([a-z0-9]{3,24})\.dfs\./i.exec(String(abfss ?? ''));
+  return m ? m[1].toLowerCase() : null;
 }
 
 /**
@@ -238,12 +276,8 @@ export async function scopeItemPath(
     if (!container) return apiBadRequest('container is required');
     if (!opts.knownContainers.includes(container)) return apiNotFound(`unknown container: ${container}`);
     const segments = pathSegments(params.rawPath);
-    if (!segments) {
-      return apiBadRequest(
-        'invalid path: expected a relative path inside the container, with no leading "/" and no "." or ".." segments',
-      );
-    }
-    return { container, path: segments.join('/'), item: null };
+    if (!segments) return apiBadRequest(invalidPathMessage(params.rawPath));
+    return { container, path: segments.join('/'), item: null, account: null };
   }
 
   const access = await authorizeLakehouse(session, lakehouseId, {
@@ -267,5 +301,12 @@ export async function scopeItemPath(
     if (scoped.reason === 'root-unusable') return apiConflict(scoped.message);
     return apiForbidden(scoped.message);
   }
-  return { container: scoped.container, path: scoped.path, item: access.item };
+  const account = boundAccountOf(resolved.bound.abfss);
+  if (!account) {
+    return apiConflict(
+      'Loom found a storage binding for this lakehouse, but could not read a storage account from it '
+      + `(${JSON.stringify(String(resolved.bound.abfss ?? ''))}). Re-run the item provision to rewrite the binding.`,
+    );
+  }
+  return { container: scoped.container, path: scoped.path, item: access.item, account };
 }

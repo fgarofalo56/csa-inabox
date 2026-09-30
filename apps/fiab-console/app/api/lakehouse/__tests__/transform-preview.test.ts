@@ -19,10 +19,18 @@ process.env.SESSION_SECRET = 'unit-test-session-secret-for-lakehouse-job-handles
 
 vi.mock('@/lib/auth/session', () => ({ getSession: vi.fn() }));
 vi.mock('@/lib/azure/synapse-artifacts-client', () => ({ synapseConfigGate: vi.fn(() => null) }));
-vi.mock('@/lib/azure/adls-client', () => ({
-  KNOWN_CONTAINERS: ['bronze', 'silver', 'gold', 'landing'],
-  pathToHttpsUrl: vi.fn((c: string, p: string) => `https://acct.dfs.core.windows.net/${c}/${p}`),
-}));
+// `pathToHttpsUrlFor` is the real shape (`dfsUrl(account)/container/path`) over
+// the REAL cloud-endpoints `dfsUrl`, so the DFS suffix follows LOOM_CLOUD at
+// call time exactly as it does in production. A plain function, not a vi.fn,
+// so `vi.resetAllMocks()` cannot strip it.
+vi.mock('@/lib/azure/adls-client', async () => {
+  const ce: any = await vi.importActual('@/lib/azure/cloud-endpoints');
+  return {
+    KNOWN_CONTAINERS: ['bronze', 'silver', 'gold', 'landing'],
+    pathToHttpsUrl: vi.fn((c: string, p: string) => `https://acct.dfs.core.windows.net/${c}/${p}`),
+    pathToHttpsUrlFor: (a: string, c: string, p: string) => `${ce.dfsUrl(a)}/${c}/${p.replace(/^\/+/, '')}`,
+  };
+});
 vi.mock('@/lib/azure/synapse-dev-client', () => ({
   createLivySessionAsync: vi.fn(),
   getLivySession: vi.fn(),
@@ -133,8 +141,94 @@ describe('POST /api/lakehouse/transform-preview', () => {
     // The handle carries the Livy coordinates and the scoped path.
     expect(verifyLakehouseJobHandle(SCOPE, j.jobId)).toEqual({
       pool: 'loompool', sessionId: 7, stmtId: 3, container: CONTAINER, path: INSIDE, codeHash: hashJobCode(CODE),
+      account: 'acct',
     });
     expect(submittedPath()).toBe(`abfss://${CONTAINER}@acct.dfs.core.windows.net/${INSIDE}`);
+  });
+
+  it.each([
+    ['a doubled slash', `${ROOT}//Files/t.parquet`],
+    ['backslash separators', `${ROOT.replace(/\//g, '\\')}\\Files\\t.parquet`],
+  ])('loads the path rebuilt from its segments, not the request text: %s', async (_label, raw) => {
+    // Breaks if the kick-off hands the REQUEST path to Spark or to the handle:
+    // `_path` would carry `//` (or be refused for its backslashes) instead of INSIDE.
+    const res = await POST(postReq({ lakehouseId: LH, path: raw, code: CODE }));
+    const j = await res.json();
+    expect(res.status).toBe(200);
+    expect(submittedPath()).toBe(`abfss://${CONTAINER}@acct.dfs.core.windows.net/${INSIDE}`);
+    expect(verifyLakehouseJobHandle(SCOPE, j.jobId)).toMatchObject({ path: INSIDE });
+  });
+
+  it('writes _path as a JSON string literal', async () => {
+    // The file name holds a double quote: not a Spark glob character and not a
+    // control character, so it reaches `_path`. Breaks if _path is emitted with a
+    // hand-rolled quote (`"${abfss}"`): that line ends `q"t.parquet"` with the
+    // inner quote bare, where the JSON literal ends `q\"t.parquet"`. A plain name
+    // cannot tell the two apart — both would print the same line.
+    const quoted = `${ROOT}/Files/q"t.parquet`;
+    const res = await POST(postReq({ lakehouseId: LH, path: quoted, code: CODE }));
+    expect(res.status).toBe(200);
+    const line = String((submitLivyStatement as any).mock.calls[0][2].code).split('\n').find((l) => l.startsWith('_path = '));
+    expect(line).toBe(`_path = ${JSON.stringify(`abfss://${CONTAINER}@acct.dfs.core.windows.net/${quoted}`)}`);
+    expect(line).toContain('q\\"t.parquet"');
+  });
+
+  it('refuses a path holding a control character (400, no Spark session)', async () => {
+    // Breaks if pathSegments stops refusing control characters: the path is
+    // otherwise inside the root and would reach Livy (see the positive arm above).
+    const res = await POST(postReq({ lakehouseId: LH, path: `${ROOT}/Files/a\nb.parquet`, code: CODE }));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/control character/);
+    expect((createLivySessionAsync as any).mock.calls).toEqual([]);
+  });
+
+  it('refuses a Spark wildcard character in the scoped path (400, no Spark session)', async () => {
+    // `{x,..` and `..}` are not `..` segments, so this path scopes inside the
+    // root; only the Spark-boundary check can refuse it. Breaks if that check
+    // is dropped: Livy would be called with a brace pattern.
+    const res = await POST(postReq({ lakehouseId: LH, path: `${ROOT}/{x,../..}/Other/t.parquet`, code: CODE }));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/wildcard/);
+    expect((createLivySessionAsync as any).mock.calls).toEqual([]);
+    expect((submitLivyStatement as any).mock.calls).toEqual([]);
+  });
+
+  it('loads from the item\'s bound storage account, not the deployment default', async () => {
+    (resolveLakehouseAbfss as any).mockResolvedValue({
+      abfss: `abfss://${CONTAINER}@extacct.dfs.core.windows.net/${ROOT}`, container: CONTAINER, root: ROOT,
+    });
+    const res = await POST(postReq({ lakehouseId: LH, path: INSIDE, code: CODE }));
+    const j = await res.json();
+    // Breaks if the URI is built from the primary account (`acct`, what
+    // pathToHttpsUrl answers) or the handle drops the bound account.
+    expect(submittedPath()).toBe(`abfss://${CONTAINER}@extacct.dfs.core.windows.net/${INSIDE}`);
+    expect(verifyLakehouseJobHandle(SCOPE, j.jobId)).toMatchObject({ account: 'extacct' });
+  });
+
+  it('builds the URI on the active cloud\'s DFS host (GCC-High)', async () => {
+    const prev = process.env.LOOM_CLOUD;
+    process.env.LOOM_CLOUD = 'gcc-high';
+    try {
+      (resolveLakehouseAbfss as any).mockResolvedValue({
+        abfss: `abfss://${CONTAINER}@govacct.dfs.core.usgovcloudapi.net/${ROOT}`, container: CONTAINER, root: ROOT,
+      });
+      const res = await POST(postReq({ lakehouseId: LH, path: INSIDE, code: CODE }));
+      expect(res.status).toBe(200);
+      // Breaks if the suffix is hard-coded to `.dfs.core.windows.net`.
+      expect(submittedPath()).toBe(`abfss://${CONTAINER}@govacct.dfs.core.usgovcloudapi.net/${INSIDE}`);
+    } finally {
+      if (prev === undefined) delete process.env.LOOM_CLOUD; else process.env.LOOM_CLOUD = prev;
+    }
+  });
+
+  it('refuses a session with no user object id before any Spark call (401)', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: '' } });
+    const res = await POST(postReq({ lakehouseId: LH, path: INSIDE, code: CODE }));
+    // Breaks if the principal check is dropped: minting then throws inside the
+    // try and the answer is a 502 AFTER Livy was already called.
+    expect(res.status).toBe(401);
+    expect((await res.json()).error).toMatch(/user object id/);
+    expect((createLivySessionAsync as any).mock.calls).toEqual([]);
   });
 
   it('requires access to the lakehouse item (404, no Spark session)', async () => {
@@ -223,10 +317,65 @@ describe('GET /api/lakehouse/transform-preview (poll)', () => {
       id: 3, state: 'available',
       output: { status: 'ok', data: { 'text/plain': 'LOOM_PREVIEW:' + JSON.stringify({ error: "name 'F' is not defined" }) } },
     });
-    const j = await (await GET(getReq(q(running())))).json();
+    const res = await GET(getReq(q(running())));
+    const j = await res.json();
+    // Breaks if a transform error is answered 200 (the panel then has to guess
+    // from the body alone) or with a gateway status.
+    expect(res.status).toBe(422);
     expect(j.ok).toBe(false);
     expect(j.status).toBe('transform_error');
     expect(j.error).toContain('not defined');
+  });
+
+  it.each([
+    ['a Spark statement error', { id: 3, state: 'available', output: { status: 'error', evalue: 'boom', traceback: ['t'] } }, 422, /boom/],
+    ['no LOOM_PREVIEW output', { id: 3, state: 'available', output: { status: 'ok', data: { 'text/plain': 'nothing here' } } }, 502, /no LOOM_PREVIEW/],
+    ['a statement in the error state', { id: 3, state: 'error' }, 422, /error state/],
+    ['a cancelled statement', { id: 3, state: 'cancelled' }, 409, /cancelled/],
+  ])('answers a failed poll with a non-2xx status: %s', async (_label, stmt, status, msg) => {
+    (getLivyStatement as any).mockResolvedValue(stmt);
+    const res = await GET(getReq(q(running())));
+    const j = await res.json();
+    // Breaks if the failure is answered with the default 200.
+    expect(res.status).toBe(status);
+    expect(j.ok).toBe(false);
+    expect(j.status).toBe('error');
+    expect(j.error).toMatch(msg);
+  });
+
+  it('answers a dead warming session with 502 and submits nothing', async () => {
+    (getLivySession as any).mockResolvedValue({ id: 9, state: 'dead' });
+    const res = await GET(getReq(q(warming(), `&code=${encodeURIComponent(CODE)}`)));
+    const j = await res.json();
+    expect(res.status).toBe(502);
+    expect(j.status).toBe('error');
+    expect(j.error).toMatch(/dead/);
+    expect((submitLivyStatement as any).mock.calls).toEqual([]);
+  });
+
+  it('submits a warming job against the bound account carried on the handle', async () => {
+    (getLivySession as any).mockResolvedValue({ id: 9, state: 'idle' });
+    (submitLivyStatement as any).mockResolvedValue({ id: 5, state: 'waiting' });
+    const h = mintLakehouseJobHandle(SCOPE, {
+      pool: 'loompool', sessionId: 9, stmtId: null, container: CONTAINER, path: INSIDE,
+      codeHash: hashJobCode(CODE), account: 'extacct',
+    });
+    const res = await GET(getReq(q(h, `&code=${encodeURIComponent(CODE)}`)));
+    expect(res.status).toBe(200);
+    // Breaks if the poll ignores the handle's account and falls back to the
+    // deployment's primary account (`acct`).
+    expect(submittedPath()).toBe(`abfss://${CONTAINER}@extacct.dfs.core.windows.net/${INSIDE}`);
+  });
+
+  it('refuses a poll from a session with no user object id (401, no Livy read)', async () => {
+    const h = running();
+    (getSession as any).mockReturnValue({ claims: { oid: '' } });
+    const res = await GET(getReq(q(h)));
+    // Breaks if the principal check is dropped: the handle then fails to
+    // verify and the answer is a 404, not the sign-in reason.
+    expect(res.status).toBe(401);
+    expect((getLivyStatement as any).mock.calls).toEqual([]);
+    expect((resolveItemAccessByOid as any).mock.calls).toEqual([]);
   });
 
   it('reports running while the statement is not yet available', async () => {
@@ -333,6 +482,14 @@ describe('POST /api/lakehouse/transform-preview (poll, code in the body)', () =>
     (resolveItemAccessByOid as any).mockResolvedValue(editor(true));
     const other = await POST(postReq({ lakehouseId: LH, jobId: 'loompool:7:3' }));
     expect(other.status).toBe(404);
+    expect((getLivyStatement as any).mock.calls).toEqual([]);
+  });
+
+  it('a POST poll refuses a session with no user object id (401)', async () => {
+    const h = running();
+    (getSession as any).mockReturnValue({ claims: { oid: '' } });
+    const res = await POST(postReq({ lakehouseId: LH, jobId: h }));
+    expect(res.status).toBe(401);
     expect((getLivyStatement as any).mock.calls).toEqual([]);
   });
 

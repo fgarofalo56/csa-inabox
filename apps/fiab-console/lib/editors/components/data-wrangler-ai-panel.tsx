@@ -24,7 +24,7 @@
  * Power BI dependency (per no-fabric-dependency.md).
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import {
   Badge, Body1, Button, Caption1, Divider, Dropdown, Field, MessageBar,
   MessageBarBody, MessageBarTitle, Option, Spinner, Subtitle2, Text, Textarea,
@@ -34,7 +34,7 @@ import {
   Sparkle20Regular, Code20Regular, Play20Regular, Copy20Regular,
   ArrowClockwise20Regular, DocumentAdd20Regular,
 } from '@fluentui/react-icons';
-import { clientFetch } from '@/lib/client-fetch';
+import { clientFetch, describeNonJsonResponse } from '@/lib/client-fetch';
 import type { ColStat } from './delta-preview-grid-utils';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -135,6 +135,17 @@ function parseCodeBlocks(text: string): string[] {
 
 async function copy(text: string) {
   try { await navigator.clipboard.writeText(text); } catch { /* insecure context — ignore */ }
+}
+
+/**
+ * Read a transform-preview response body. The route answers JSON on every
+ * status (2xx and not); a non-JSON body means the gateway answered instead of
+ * the route, so it is reported by status rather than dumped into the UI.
+ */
+async function readPreviewBody(r: Response): Promise<Record<string, any>> {
+  const j = await r.json().catch(() => null);
+  if (j && typeof j === 'object') return j as Record<string, any>;
+  return { ok: false, error: describeNonJsonResponse(r.status, 'The transform preview') };
 }
 
 export function DataWranglerAiPanel(props: DataWranglerAiPanelProps) {
@@ -286,7 +297,7 @@ export function DataWranglerAiPanel(props: DataWranglerAiPanelProps) {
           ...(warming ? { code } : {}),
         }),
       });
-      const j = await r.json();
+      const j = await readPreviewBody(r);
       if (j.ok && j.status === 'available') {
         setPreviewResult({
           columns: j.columns || [], rows: j.rows || [], rowCount: j.rowCount ?? 0,
@@ -297,9 +308,11 @@ export function DataWranglerAiPanel(props: DataWranglerAiPanelProps) {
         return;
       }
       if (!j.ok) {
+        // Every refusal is non-2xx (400/401/403/404/409/422/502/503); the body
+        // carries the reason, so it is read here whatever the status.
         if (j.status === 'transform_error') { setPreviewStatus('error'); setPreviewMsg(`Transform error: ${j.error}`); return; }
         if (r.status === 503 && j.code === 'not_configured') { setPreviewStatus('error'); setPreviewGate(j.error); return; }
-        setPreviewStatus('error'); setPreviewMsg(j.error || 'Preview failed.'); return;
+        setPreviewStatus('error'); setPreviewMsg(j.error || `Preview failed (HTTP ${r.status}).`); return;
       }
       // warming / running — keep polling.
       setPreviewMsg(j.status === 'warming' ? 'Warming the Spark pool…' : 'Running transform on a sample…');
@@ -325,8 +338,9 @@ export function DataWranglerAiPanel(props: DataWranglerAiPanelProps) {
           pool: previewSource.pool, code,
         }),
       });
-      const j = await r.json();
+      const j = await readPreviewBody(r);
       if (!j.ok) {
+        if (j.status === 'transform_error') { setPreviewStatus('error'); setPreviewMsg(`Transform error: ${j.error}`); return; }
         if (r.status === 503 && j.code === 'not_configured') { setPreviewStatus('error'); setPreviewGate(j.error); return; }
         setPreviewStatus('error'); setPreviewMsg(j.error || `HTTP ${r.status}`); return;
       }
@@ -342,6 +356,12 @@ export function DataWranglerAiPanel(props: DataWranglerAiPanelProps) {
     ? (previewUnavailableReason
       || 'Live preview needs a file/table source — open the Table or File tab and select a file first.')
     : null;
+  // The reason is rendered as visible text next to each Preview action (not
+  // only in a hover tooltip), and the buttons stay focusable so keyboard and
+  // screen-reader users reach both the button and its description.
+  const reasonIdBase = useId();
+  const suggestReasonId = `${reasonIdBase}-suggest`;
+  const nlReasonId = `${reasonIdBase}-nl`;
 
   // Inline preview block reused under whichever candidate is active.
   const previewBlock = (candidateId: string) => {
@@ -421,9 +441,19 @@ export function DataWranglerAiPanel(props: DataWranglerAiPanelProps) {
           <MessageBar intent="success"><MessageBarBody>No cleaning issues found in the profiled columns.</MessageBarBody></MessageBar>
         )}
 
+        {suggestions && suggestions.length > 0 && previewDisabledReason && (
+          <MessageBar intent="info" layout="multiline">
+            <MessageBarBody className={s.breakText}>
+              <MessageBarTitle>Live preview unavailable</MessageBarTitle>
+              <span id={suggestReasonId}>{previewDisabledReason}</span>
+            </MessageBarBody>
+          </MessageBar>
+        )}
         {suggestions && suggestions.length > 0 && (
           <div className={s.cards}>
-            {suggestions.map((sg) => (
+            {suggestions.map((sg) => {
+              const blocked = !previewSource || (previewStatus === 'running' && previewFor === sg.id);
+              return (
               <div key={sg.id} className={s.card}>
                 <div className={s.cardHead}>
                   <Badge appearance="filled" color={KIND_COLOR[sg.kind]}>{sg.kind}</Badge>
@@ -436,8 +466,9 @@ export function DataWranglerAiPanel(props: DataWranglerAiPanelProps) {
                   <Tooltip content={previewDisabledReason || 'Run this transform on a sample'} relationship="label">
                     <Button
                       appearance="outline" size="small" icon={<Play20Regular />}
-                      disabled={!previewSource || (previewStatus === 'running' && previewFor === sg.id)}
-                      onClick={() => void runPreview(sg.id, sg.code)}
+                      disabledFocusable={blocked}
+                      aria-describedby={previewDisabledReason ? suggestReasonId : undefined}
+                      onClick={() => { if (!blocked) void runPreview(sg.id, sg.code); }}
                     >
                       Preview
                     </Button>
@@ -451,7 +482,8 @@ export function DataWranglerAiPanel(props: DataWranglerAiPanelProps) {
                 </div>
                 {previewBlock(sg.id)}
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -523,8 +555,12 @@ export function DataWranglerAiPanel(props: DataWranglerAiPanelProps) {
                 <Tooltip content={previewDisabledReason || 'Run this transform on a sample'} relationship="label">
                   <Button
                     appearance="outline" size="small" icon={<Play20Regular />}
-                    disabled={!previewSource || (previewStatus === 'running' && previewFor === 'nl')}
-                    onClick={() => void runPreview('nl', nlCode)}
+                    disabledFocusable={!previewSource || (previewStatus === 'running' && previewFor === 'nl')}
+                    aria-describedby={previewDisabledReason ? nlReasonId : undefined}
+                    onClick={() => {
+                      if (!previewSource || (previewStatus === 'running' && previewFor === 'nl')) return;
+                      void runPreview('nl', nlCode);
+                    }}
                   >
                     Preview
                   </Button>
@@ -539,6 +575,9 @@ export function DataWranglerAiPanel(props: DataWranglerAiPanelProps) {
               <Button appearance="subtle" size="small" icon={<Copy20Regular />} onClick={() => void copy(nlCode)}>Copy</Button>
               <Button appearance="subtle" size="small" icon={<ArrowClockwise20Regular />} onClick={() => void generateCode()}>Regenerate</Button>
             </div>
+            {nlLang === 'pyspark' && previewDisabledReason && (
+              <Caption1 id={nlReasonId} className={s.breakText}>Live preview unavailable: {previewDisabledReason}</Caption1>
+            )}
             {previewBlock('nl')}
           </div>
         )}
