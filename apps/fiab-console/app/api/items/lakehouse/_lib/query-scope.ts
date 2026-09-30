@@ -40,11 +40,12 @@
  *     accepts the `INFORMATION_SCHEMA` views; nothing in the lakehouse editor
  *     reads the `sys` catalog through this route.
  *   - Names with four parts, and three-part names naming another database.
- *   - A call to a metadata, security or session function
- *     (`METADATA_FUNCTIONS`, `SECURITY_FUNCTIONS`, `SESSION_FUNCTIONS`),
- *     `NEXT VALUE FOR`, and the security functions written without
- *     parentheses (`CURRENT_USER`, `SESSION_USER`, `SYSTEM_USER`, `USER`).
- *     Other built-in functions (COUNT, CAST, DATEADD, ISNULL, …) are accepted.
+ *   - A call to a metadata, security, cryptographic or session function
+ *     (`METADATA_FUNCTIONS`, `SECURITY_FUNCTIONS`, `CRYPTOGRAPHIC_FUNCTIONS`,
+ *     `SESSION_FUNCTIONS`), `NEXT VALUE FOR`, and the security functions
+ *     written without parentheses (`CURRENT_USER`, `SESSION_USER`,
+ *     `SYSTEM_USER`, `USER`). Other built-in functions (COUNT, CAST, DATEADD,
+ *     ISNULL, HASHBYTES, …) are accepted.
  *   - A string shaped like a storage location (an `abfss://`/`wasbs://`-style
  *     scheme, a `.dfs.core.`/`.blob.core.` host, or a UNC path) anywhere other
  *     than a `BULK` location. Other strings, including `https://` filters in a
@@ -57,7 +58,7 @@
  *
  * WHAT THIS DOES NOT COVER, stated rather than implied: objects already defined
  * in the database the query runs in (views, external tables) run as whatever
- * they were defined to read, and built-in functions outside the three lists
+ * they were defined to read, and built-in functions outside the four lists
  * above are not restricted. The
  * durable form of this boundary is a per-item serverless database whose external
  * data source is rooted at the item root, with relative `BULK` paths only; that
@@ -163,26 +164,39 @@ function codePoint(c: string): string {
 }
 
 /**
- * Letters with no decomposition that a collation compares as other letters.
- * The sharp s (`ß`, `ẞ`) case-folds to `ss`; that is not a
- * decomposition, so NFKD never produces it. Dotless `ı` compares as `i`
- * under a Turkish collation. Dotted `İ` decomposes to `I` and a combining
- * dot, which the mark rule removes.
+ * Letters with no decomposition that a collation may compare as other letters,
+ * each with the ASCII it reads as. The sharp s (`ß`, `ẞ`) case-folds to
+ * `ss`; that is not a decomposition, so NFKD never produces it. Dotless `ı`
+ * compares as `i` under a Turkish collation. `æ`, `œ` and `þ` are compared
+ * as `ae`, `oe` and `th` by some collations. Dotted `İ` decomposes to `I` and
+ * a combining dot, which the mark rule removes. This is the only list of
+ * characters the reading rule uses.
  */
-const LETTER_EXPANSIONS: Readonly<Record<string, string>> = { '\u00df': 'ss', '\u1e9e': 'ss', '\u0131': 'i' };
+const LETTER_EXPANSIONS: Readonly<Record<string, string>> = {
+  '\u00df': 'ss', '\u1e9e': 'ss', '\u0131': 'i',
+  '\u00e6': 'ae', '\u00c6': 'ae', '\u0153': 'oe', '\u0152': 'oe', '\u00fe': 'th', '\u00de': 'th',
+};
 
 /**
  * The lower-case ASCII a character outside ASCII may stand for, or '' when it
- * has none. The character is NFKD-decomposed, the sharp s in the decomposition
- * reads as `ss` and dotless i as `i`, combining marks (`Mn`, `Me`) are removed,
- * and the result is lower-cased; it counts only when every character left is
- * ASCII.
+ * has none. The character is NFKD-decomposed, each letter of the decomposition
+ * that {@link LETTER_EXPANSIONS} lists reads as its expansion, combining marks
+ * (`Mn`, `Me`) are removed, the result is lower-cased, and every character
+ * still outside ASCII is dropped. So `ŀ` (`l` and a middle dot) reads as `l`,
+ * `ŉ` (an apostrophe and `n`) as `n`, and `℃` (a degree sign and `C`) as `c`:
+ * the non-ASCII part of a decomposition reads as nothing, as it may when it is
+ * written on its own.
  *
- * This contains the case-folded NFKC fold wherever that fold is ASCII (NFKC is
- * the composition of NFKD, and an ASCII string composes to itself), and adds
- * two things NFKC alone does not give: an accented letter stands for its base
- * letter, since a serverless database may use an accent-insensitive collation,
- * and dotless i stands for `i`.
+ * What it covers: wherever the case-folded NFKC fold is ASCII, this fold
+ * contains it (NFKC is the composition of NFKD, and an ASCII string composes to
+ * itself). It is wider in three ways, each of which refuses more, never less:
+ * an accented letter reads as its base letter (the database a caller who is
+ * not a tenant admin queries is serverless `master`, whose collation is
+ * accent-sensitive, so this is wider than that collation needs); dotless i
+ * reads as `i`; and the ASCII letters of a decomposition are kept when the
+ * rest of it is not ASCII. Letters with no decomposition that an
+ * accent-insensitive collation might equate with a base letter (`ø`, `ł`) are
+ * not mapped.
  */
 function asciiFold(c: string): string {
   const f = [...c.normalize('NFKD')]
@@ -190,12 +204,13 @@ function asciiFold(c: string): string {
     .join('')
     .replace(/[\p{Mn}\p{Me}]/gu, '')
     .toLowerCase();
-  return /^[\x00-\x7f]*$/.test(f) ? f : '';
+  return f.replace(/[^\x00-\x7f]/g, '');
 }
 
 /**
  * Can `part` spell `target` (lower-case ASCII)? This is the whole reading rule,
- * and it is closed: no list of characters decides it.
+ * and it is closed: no list of characters decides it beyond the letter
+ * expansions {@link asciiFold} applies.
  *
  *   - An ASCII character matches exactly one letter of the target, compared
  *     case-insensitively.
@@ -208,12 +223,16 @@ function asciiFold(c: string): string {
  * characters those are depends on the collation's version, which the tab does
  * not know. Reading every character outside ASCII as possibly absent needs no
  * such knowledge. Why the fold: without `_WS` the full-width and half-width
- * forms of a character are identical, without `_AS` accented and unaccented
- * letters are identical, and compatibility forms (long s, circled letters,
- * ligatures, superscripts) may compare as their plain letters (Microsoft
- * Learn, "Collation and Unicode support").
+ * forms of a character are identical, and compatibility forms (long s,
+ * circled letters, ligatures, superscripts) may compare as their plain
+ * letters (Microsoft Learn, "Collation and Unicode support"). Accents are
+ * removed too, which only an accent-insensitive (`_AI`) collation needs; the
+ * reader's database, `master`, is accent-sensitive, so that part refuses more
+ * than it must.
  *
- * `prefix`: the target need only begin the part (`##`, `fn_`).
+ * `prefix`: the target need only begin the part (`##`, `fn_`). A fold of
+ * several letters that starts inside the target and runs past its end also
+ * completes a prefix match.
  *
  * Returns the index, in code points, just after the shortest match (-1 when the
  * part cannot spell the target), and `cells`: the number of (position, letter)
@@ -246,6 +265,7 @@ export function spellsName(part: string, target: string, prefix = false): { end:
       any = true;
       // Read as its fold.
       if (fold !== '' && target.startsWith(fold, j)) next[j + fold.length] = true;
+      else if (prefix && fold !== '' && j < m && fold.startsWith(target.slice(j))) next[m] = true;
     }
     if (!any) return { end: -1, cells };
     reach = next;
@@ -271,13 +291,32 @@ function firstSpelled(part: string, targets: Iterable<string>, prefix = false): 
   return undefined;
 }
 
-/** A part as written, then the name it spells when that differs. */
-function shownRead(part: string, reading: string): string {
-  return /^[\x00-\x7f]*$/.test(part) ? part : `[${shownNamePart(part)}] (read as ${reading})`;
+/** Where a name stands: in a column position, as a table (after FROM, JOIN, APPLY or WITH), or called. */
+type NamePosition = 'column' | 'table' | 'call';
+
+/** Clause words that decide a name's position; the last one seen at the same parenthesis depth wins. */
+const CLAUSE_WORDS = new Set(['SELECT', 'FROM', 'JOIN', 'APPLY', 'WITH', 'WHERE', 'ON', 'GROUP', 'ORDER',
+  'HAVING', 'UNION', 'EXCEPT', 'INTERSECT']);
+const TABLE_CLAUSES = new Set(['FROM', 'JOIN', 'APPLY', 'WITH']);
+
+/**
+ * The reason given when a name with letters outside ASCII is refused for the
+ * name it reads as: it says why it reads that way, then the rule's own reason.
+ */
+function readAsWhy(readsAs: string, why: string): string {
+  return `non-ASCII letters in this name may be read as their plain form or ignored, so it reads as ${readsAs}; ${why}`;
 }
 
-/** Remediation added when a part was refused for the name it reads as, not as written. */
-const READ_AS_HINT = 'If it is a column of yours, SELECT * returns it without naming it. ';
+/**
+ * Remediation added when a part was refused for the name it reads as. SELECT *
+ * returns a column without naming it, so it is offered only for a column.
+ */
+function readAsHint(position: NamePosition): string {
+  if (position === 'column') {
+    return 'If it is a column of yours, SELECT * returns it without naming it, or ask a tenant admin to run the query. ';
+  }
+  return `If it is a ${position === 'call' ? 'function' : 'table'} of yours, ask a tenant admin to run the query. `;
+}
 
 const WHY = {
   dynamic: 'dynamic SQL is not run from this tab',
@@ -298,6 +337,8 @@ const WHY = {
     + 'they return or test logins, users, roles, permissions, certificates or keys',
   connection: 'functions that describe the session, its connection or its host are not run from this tab '
     + 'for a caller who is not a tenant admin',
+  cryptographic: 'cryptographic functions that use or describe the server\'s keys and certificates are not run '
+    + 'from this tab for a caller who is not a tenant admin',
 } as const;
 
 const FUNCTION_REMEDIATION =
@@ -344,21 +385,37 @@ const METADATA_FUNCTIONS = new Set([
  * Every function on Microsoft Learn's "Security functions" page that is called
  * with parentheses, except the three that take the metadata reason above. The
  * page's `sys.fn_` functions are in the `sys` schema, refused as such, and its
- * CURRENT_USER, SESSION_USER and SYSTEM_USER are words, refused below. Also
- * refused: CERT_ID and KEY_ID, which return the id of a certificate or key.
+ * CURRENT_USER, SESSION_USER and SYSTEM_USER are words, refused below.
  */
 const SECURITY_FUNCTIONS = new Set([
   'CERTENCODED', 'CERTPRIVATEKEY', 'PWDCOMPARE', 'PWDENCRYPT', 'HAS_PERMS_BY_NAME', 'PERMISSIONS',
   'IS_MEMBER', 'IS_ROLEMEMBER', 'IS_SRVROLEMEMBER', 'LOGINPROPERTY', 'ORIGINAL_LOGIN',
   'SUSER_ID', 'SUSER_SID', 'SUSER_SNAME', 'SUSER_NAME', 'USER_ID', 'USER_NAME',
-  // Not on the security page.
-  'CERT_ID', 'KEY_ID',
 ]);
 
-/** Functions that return the session's host or connection details. Not on either page. */
-const SESSION_FUNCTIONS = new Set(['HOST_NAME', 'HOST_ID', 'CONNECTIONPROPERTY']);
+/**
+ * Every function on Microsoft Learn's "Cryptographic functions" page that uses
+ * or describes a key or certificate the server holds: their ids, names and
+ * properties, and the encryption, decryption and signing functions that take
+ * one. CERTENCODED and CERTPRIVATEKEY are on this page and the security page,
+ * and take the security reason. Accepted from the page: HASHBYTES and the
+ * two functions that encrypt and decrypt with a passphrase, which take
+ * everything they use as arguments and read nothing the server holds. Also
+ * refused, though the page does not list them: CERT_ID and CERTPROPERTY.
+ */
+const CRYPTOGRAPHIC_FUNCTIONS = new Set([
+  'ENCRYPTBYKEY', 'DECRYPTBYKEY', 'KEY_ID', 'KEY_GUID', 'DECRYPTBYKEYAUTOASYMKEY', 'KEY_NAME', 'SYMKEYPROPERTY',
+  'ENCRYPTBYASYMKEY', 'DECRYPTBYASYMKEY', 'ENCRYPTBYCERT', 'DECRYPTBYCERT', 'ASYMKEYPROPERTY', 'ASYMKEY_ID',
+  'SIGNBYASYMKEY', 'VERIFYSIGNEDBYASYMKEY', 'SIGNBYCERT', 'VERIFYSIGNEDBYCERT', 'IS_OBJECTSIGNED',
+  'DECRYPTBYKEYAUTOCERT',
+  // Not on the cryptographic page.
+  'CERT_ID', 'CERTPROPERTY',
+]);
 
-type FunctionKind = 'metadata' | 'security' | 'session';
+/** Functions that return the session's settings, host or connection details. Not on any of the pages. */
+const SESSION_FUNCTIONS = new Set(['HOST_NAME', 'HOST_ID', 'CONNECTIONPROPERTY', 'SESSIONPROPERTY', 'CONTEXT_INFO']);
+
+type FunctionKind = 'metadata' | 'security' | 'cryptographic' | 'session';
 
 /** Every refused function, lower-cased as {@link spellsName} compares it, with the kind a refusal names. */
 const REFUSED_FUNCTIONS: ReadonlyMap<string, { name: string; kind: FunctionKind }> = (() => {
@@ -368,11 +425,14 @@ const REFUSED_FUNCTIONS: ReadonlyMap<string, { name: string; kind: FunctionKind 
   };
   add(METADATA_FUNCTIONS, 'metadata');
   add(SECURITY_FUNCTIONS, 'security');
+  add(CRYPTOGRAPHIC_FUNCTIONS, 'cryptographic');
   add(SESSION_FUNCTIONS, 'session');
   return all;
 })();
 
-const FUNCTION_WHY = { metadata: WHY.metadata, security: WHY.security, session: WHY.connection } as const;
+const FUNCTION_WHY = {
+  metadata: WHY.metadata, security: WHY.security, cryptographic: WHY.cryptographic, session: WHY.connection,
+} as const;
 
 /**
  * Security functions written without parentheses. Unqualified, each of these
@@ -643,10 +703,13 @@ function readOpenrowset(
 /**
  * Check one dotted name (1 to n parts, `''` for an omitted part as in `db..t`).
  * Every comparison uses the parts as the server compares them
- * ({@link normalizeNamePart}). `called` is true when `(` follows the name.
+ * ({@link normalizeNamePart}). `position` is `call` when `(` follows the name.
  * Returns a refusal or null.
  */
-function checkName(rawParts: string[], database: string, databaseLabel: string, called: boolean): QueryRefusal | null {
+function checkName(
+  rawParts: string[], database: string, databaseLabel: string, position: NamePosition,
+): QueryRefusal | null {
+  const called = position === 'call';
   const parts: string[] = [];
   for (const raw of rawParts) {
     // A code point whose comparison cannot be known: unassigned, private-use or an unpaired surrogate.
@@ -699,38 +762,41 @@ function checkName(rawParts: string[], database: string, databaseLabel: string, 
   for (const part of parts) {
     const view = firstSpelled(part, COMPATIBILITY_VIEW_TARGETS);
     if (view !== undefined) {
-      return refuse(
-        `the system compatibility view ${shownRead(part, view)}`,
-        WHY.catalog,
-        (plain(part) ? '' : READ_AS_HINT)
-        + 'For table and column metadata, query INFORMATION_SCHEMA.TABLES or INFORMATION_SCHEMA.COLUMNS.',
-      );
+      const metadata = 'For table and column metadata, query INFORMATION_SCHEMA.TABLES or INFORMATION_SCHEMA.COLUMNS.';
+      return plain(part)
+        ? refuse(`the system compatibility view ${part}`, WHY.catalog, metadata)
+        : refuse(`the name [${shownNamePart(part)}]`, readAsWhy(`the system compatibility view ${view}`, WHY.catalog),
+          readAsHint(position) + metadata);
     }
   }
   for (const [k, part] of parts.entries()) {
     const temp = firstSpelled(part, ['##'], true);
     if (temp !== undefined) {
-      const name = plain(part) ? shown : parts.map((p, n) => (n === k ? shownRead(p, temp) : p)).join('.');
-      return refuse(`the global temporary table ${name}`, WHY.database, (plain(part) ? '' : READ_AS_HINT) + SELECT_REMEDIATION);
+      if (plain(part)) return refuse(`the global temporary table ${shown}`, WHY.database);
+      const name = parts.map((p, n) => (n === k ? `[${shownNamePart(p)}]` : p)).join('.');
+      return refuse(`the name ${name}`, readAsWhy(`the global temporary table ${temp}`, WHY.database),
+        readAsHint(position) + SELECT_REMEDIATION);
     }
   }
   // A bracketed or quoted `fn_` name called as a function; the bare word is refused earlier.
   const last = parts.length - 1;
   const fn = called ? firstSpelled(parts[last], ['fn_'], true) : undefined;
   if (fn !== undefined) {
-    return refuse(`the system function ${shownRead(parts[last], fn)}`, WHY.admin);
+    return plain(parts[last])
+      ? refuse(`the system function ${parts[last]}`, WHY.admin)
+      : refuse(`the name [${shownNamePart(parts[last])}]`, readAsWhy(`the system function ${fn}`, WHY.admin),
+        readAsHint(position) + SELECT_REMEDIATION);
   }
-  // A metadata, security or session function, called. Checked on the last part whatever qualifies
+  // A metadata, security, cryptographic or session function, called. Checked on the last part whatever qualifies
   // it, so `dbo.DB_NAME(…)` is refused too; a qualified call is a user-defined function the tab has
   // no need to run.
   const denied = called ? firstSpelled(parts[last], REFUSED_FUNCTIONS.keys()) : undefined;
   if (denied !== undefined) {
     const { name, kind } = REFUSED_FUNCTIONS.get(denied)!;
-    return refuse(
-      `the ${kind} function ${plain(parts[last]) ? parts[last] : shownRead(parts[last], name)}`,
-      FUNCTION_WHY[kind],
-      FUNCTION_REMEDIATION,
-    );
+    return plain(parts[last])
+      ? refuse(`the ${kind} function ${parts[last]}`, FUNCTION_WHY[kind], FUNCTION_REMEDIATION)
+      : refuse(`the name [${shownNamePart(parts[last])}]`, readAsWhy(`the ${kind} function ${name}`, FUNCTION_WHY[kind]),
+        readAsHint(position) + FUNCTION_REMEDIATION);
   }
   if (parts.length === 3 && parts[0].toLowerCase() !== database) {
     return refuse(
@@ -782,12 +848,18 @@ export function analyzeLakehouseQuery(sql: string, opts: { database: string }): 
 
   const database = opts.database.trim().toLowerCase();
   const locations: string[] = [];
+  // The clause word last seen at each parenthesis depth, for a refusal's remediation (NamePosition).
+  const clauses: string[] = [''];
   let i = 0;
   while (i < tokens.length) {
     const t = tokens[i];
 
     if (t.kind === 'punct') {
+      if (t.value === '(') clauses.push('');
+      else if (t.value === ')' && clauses.length > 1) clauses.pop();
       if (t.value === ';') {
+        clauses.length = 1;
+        clauses[0] = '';
         let k = i + 1;
         while (isPunct(tokens[k], ';')) k += 1;
         if (k < tokens.length && !statementStartOk(tokens[k])) {
@@ -818,6 +890,7 @@ export function analyzeLakehouseQuery(sql: string, opts: { database: string }): 
 
     if (t.kind === 'word') {
       const w = t.value.toUpperCase();
+      if (!laterPart && CLAUSE_WORDS.has(w)) clauses[clauses.length - 1] = w;
       if (w === 'OPENROWSET') {
         const call = readOpenrowset(tokens, i);
         if ('status' in call) return call;
@@ -859,7 +932,10 @@ export function analyzeLakehouseQuery(sql: string, opts: { database: string }): 
         if (isPunct(tokens[j + 1], '.')) { parts.push(''); j += 1; continue; }
         break;
       }
-      const refused = checkName(parts, database, opts.database, isPunct(tokens[j], '('));
+      const position: NamePosition = isPunct(tokens[j], '(')
+        ? 'call'
+        : TABLE_CLAUSES.has(clauses[clauses.length - 1]) ? 'table' : 'column';
+      const refused = checkName(parts, database, opts.database, position);
       if (refused) return refused;
     }
     i += 1;
