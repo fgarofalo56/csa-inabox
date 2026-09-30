@@ -105,27 +105,74 @@ export const LEASE_SIGNAL_ID = 'transient.acr-lease-held-past-roll-budget';
 export const TIMEOUT_SIGNAL_ID = 'transient.job-exceeded-timeout-minutes';
 
 /**
- * The exact re-dispatch command for this lane, or null when a value it needs
- * is unknown (it is then NOT guessed — the caller says what is missing).
- * boundary and tag are validated by the resolve step (a choice value, and an
- * OCI tag charset); apps is quoted unless it is plainly safe.
+ * A dispatch value as a shell-safe word: bare when plainly safe, else single-
+ * quoted (a `'` inside becomes `'\''`).
  */
-export function redispatchCommand({ boundary, tag, apps }) {
-  const b = String(boundary ?? '').trim();
-  const t = String(tag ?? '').trim();
-  const a = String(apps ?? '').trim() || 'all';
+function shellWord(v) {
+  return /^[A-Za-z0-9,._:/-]+$/.test(v) ? v : `'${v.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * The OPTIONAL dispatch inputs a re-dispatch must carry to repeat THIS run:
+ * the three estate overrides (read from `inputs.*`; empty means the run used the
+ * default, so omitting them reproduces it) and pin_deploy_tag (the value the
+ * resolve step resolved). `undefined` means the value could not be read — the
+ * command then leaves that input at the workflow default and SAYS so.
+ */
+const OVERRIDES = [
+  ['location', 'location'],
+  ['resourceGroup', 'resource_group'],
+  ['acr', 'acr'],
+];
+
+/**
+ * The exact re-dispatch command for this lane, or null when boundary or tag is
+ * unknown (it is then NOT guessed — the caller says what is missing). boundary
+ * and tag are validated by the resolve step (a choice value, an OCI tag
+ * charset). Every override the original run set is carried; pin_deploy_tag is
+ * carried whenever it is known.
+ */
+export function redispatchCommand(ctx) {
+  const b = String(ctx.boundary ?? '').trim();
+  const t = String(ctx.tag ?? '').trim();
+  const a = String(ctx.apps ?? '').trim() || 'all';
   if (!/^(commercial|gcc-high|il5)$/.test(b) || !/^[A-Za-z0-9._-]+$/.test(t)) return null;
-  const appsArg = /^[A-Za-z0-9,._-]+$/.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`;
-  return `gh workflow run loom-dataplane-roll.yml -f boundary=${b} -f tag=${t} -f apps=${appsArg}`;
+  const parts = [`gh workflow run loom-dataplane-roll.yml -f boundary=${b} -f tag=${t} -f apps=${shellWord(a)}`];
+  for (const [key, input] of OVERRIDES) {
+    const v = String(ctx[key] ?? '').trim();
+    if (v) parts.push(`-f ${input}=${shellWord(v)}`);
+  }
+  const pin = String(ctx.pinDeployTag ?? '').trim();
+  if (pin === 'true' || pin === 'false') parts.push(`-f pin_deploy_tag=${pin}`);
+  return parts.join(' ');
+}
+
+/** The dispatch inputs whose value for THIS run could not be read. */
+export function redispatchUnknowns(ctx) {
+  const unknown = OVERRIDES.filter(([key]) => ctx[key] === undefined).map(([, input]) => input);
+  if (!['true', 'false'].includes(String(ctx.pinDeployTag ?? '').trim())) unknown.push('pin_deploy_tag');
+  return unknown;
 }
 
 function redispatchSentence(ctx) {
   const cmd = redispatchCommand(ctx);
-  return cmd
-    ? `Re-dispatch: \`${cmd}\``
-    : 'The re-dispatch command cannot be stated exactly because this run did not record its resolved boundary ' +
-        `('${ctx.boundary ?? ''}') and tag ('${ctx.tag ?? ''}') — the resolve step did not complete. Dispatch ` +
-        'loom-dataplane-roll.yml with the boundary and tag this run was given.';
+  if (!cmd) {
+    return (
+      'The re-dispatch command cannot be stated exactly because this run did not record its resolved boundary ' +
+      `('${ctx.boundary ?? ''}') and tag ('${ctx.tag ?? ''}') — the resolve step did not complete. Dispatch ` +
+      'loom-dataplane-roll.yml with the inputs this run was given.'
+    );
+  }
+  const unknown = redispatchUnknowns(ctx);
+  const defaulted = OVERRIDES.filter(([key]) => ctx[key] !== undefined && !String(ctx[key]).trim()).map(([, input]) => input);
+  let s = `Re-dispatch: \`${cmd}\``;
+  if (defaulted.length) s += ` (${defaulted.join(', ')}: not overridden by this run, so left at the workflow default, as this run did).`;
+  if (unknown.length) {
+    s +=
+      ` This run's ${unknown.join(', ')} could NOT be read, so the command leaves ` +
+      `${unknown.length > 1 ? 'them' : 'it'} at the workflow default — check the original run's inputs before using it.`;
+  }
+  return s;
 }
 
 function positiveInt(value, name) {
@@ -229,7 +276,7 @@ export function parseLeaseStatus(text) {
  *
  * @returns {{verdict: 'held-by-other'|'not-held-by-other'|'holder-unreadable', message: string, failure: object|null}}
  */
-export function describeUnacquired({ status, self, step, acr, waitMinutes, budgetMinutes, boundary, tag, apps }) {
+export function describeUnacquired({ status, self, step, acr, waitMinutes, budgetMinutes, dispatch = {} }) {
   const allowance =
     `This step was allowed to wait up to ${waitMinutes}m — what remained of this job's ` +
     `${budgetMinutes}m lease-wait budget, a deadline shared by every lease acquire in the job so ` +
@@ -277,7 +324,7 @@ export function describeUnacquired({ status, self, step, acr, waitMinutes, budge
           'Nothing in the roll is broken; the registry lease was held by another run. If that holder is ' +
           'build-fiab-images-acr-tasks on a push to main, its successful completion triggers a new automatic ' +
           'roll of that newer commit, which takes the lease and pins :v0.1 itself — no action is needed. ' +
-          `Otherwise, once the holder has finished: ${redispatchSentence({ boundary, tag, apps })}`,
+          `Otherwise, once the holder has finished: ${redispatchSentence(dispatch)}`,
         whyStopped:
           `the acquire gave up after this step's allowance of ${waitMinutes}m (the remainder of the job's ` +
           `${budgetMinutes}m shared lease-wait budget); ${readBack}`,
@@ -331,7 +378,9 @@ export function notifyResult({ jobStatus, startedEpoch, nowEpoch, timeoutMinutes
       elapsedSeconds: elapsed,
       limitMinutes: limit,
       note:
-        `This run was cancelled ${elapsed}s after it started — at its ${limit}-minute timeout-minutes limit. ` +
+        `This notice ran ${elapsed}s after the job's first step recorded its start, so the cancel came at or ` +
+        `before that. That is within ${TIMEOUT_MARGIN_SECONDS}s of the job's ${limit}-minute timeout-minutes ` +
+        'limit or past it, so it is read as the timeout. ' +
         'GitHub concludes a timed-out job as `cancelled`, which the failure notifier would log and not file, ' +
         'so it is reported as timed_out: a genuine failure. The step whose outcome is `cancelled` in this ' +
         'run is the one the limit interrupted.',
@@ -341,9 +390,10 @@ export function notifyResult({ jobStatus, startedEpoch, nowEpoch, timeoutMinutes
     result: 'cancelled',
     level: 'notice',
     note:
-      `This run was cancelled ${elapsed}s after it started, before its ${limit}-minute limit, so it was not ` +
-      'the timeout: a person or GitHub cancelled it. It was not superseded either — the concurrency group has ' +
-      'cancel-in-progress: false. Reported as cancelled (no verdict); nothing is filed.',
+      `This notice ran ${elapsed}s after the job's first step recorded its start, so the cancel came before its ` +
+      `${limit}-minute limit and was not the timeout: a person or GitHub cancelled it. It was not superseded ` +
+      'either — the concurrency group has cancel-in-progress: false. Reported as cancelled (no verdict); nothing ' +
+      'is filed.',
   };
 }
 
@@ -373,11 +423,13 @@ export function interruptedSteps(outcomes) {
  * earlier step wrote would be rendered as the cause. So on `timed_out` this is
  * written unconditionally, OVERWRITING any file already at that path.
  *
- * What it asserts is only what the notify step measured: the elapsed time, the
- * limit, and which step id reports `cancelled`. What made the run slow is NOT
- * established and is said not to be.
+ * What it asserts is only what the notify step measured: the elapsed time AT
+ * THE NOTICE (the steps context carries no timestamps, so the cancel moment
+ * itself is not available — the notice runs at or after it), the limit, and
+ * which step id reports `cancelled`. What made the run slow is NOT established
+ * and is said not to be.
  */
-export function timeoutFailure({ elapsedSeconds, limitMinutes, interrupted, boundary, tag, apps }) {
+export function timeoutFailure({ elapsedSeconds, limitMinutes, interrupted, dispatch = {} }) {
   const named = interrupted.length > 0;
   const where = named
     ? `while step id${interrupted.length > 1 ? 's' : ''} ${interrupted.map((s) => `'${s}'`).join(', ')} ` +
@@ -395,9 +447,9 @@ export function timeoutFailure({ elapsedSeconds, limitMinutes, interrupted, boun
       {
         signal: 'job-elapsed',
         line:
-          `the job was cancelled ${elapsedSeconds}s after its first step recorded the start; its ` +
-          `timeout-minutes limit is ${limitMinutes} (${limitMinutes * 60}s), and a cancel within ` +
-          `${TIMEOUT_MARGIN_SECONDS}s of that limit is read as the timeout`,
+          `this notice ran ${elapsedSeconds}s after the job's first step recorded its start (the cancel came at ` +
+          `or before that); the timeout-minutes limit is ${limitMinutes} (${limitMinutes * 60}s), and a ` +
+          `cancel noticed within ${TIMEOUT_MARGIN_SECONDS}s of that limit, or after it, is read as the timeout`,
       },
       {
         signal: 'interrupted-step',
@@ -408,17 +460,19 @@ export function timeoutFailure({ elapsedSeconds, limitMinutes, interrupted, boun
     ],
     remediationKind: 'operator-action',
     remediation:
-      'GitHub cancelled the job at its time limit, so no step after the interrupted one did its work — ' +
-      '`Roll back on failure` is gated on failure() and did not run. If the roll step was interrupted, ' +
-      'apps may be part-way rolled: read the live revisions before acting. Classified transient on the ' +
-      'expectation that the same run, unchanged, completes once whatever was slow has cleared — this record ' +
+      'GitHub cancelled the job at its time limit. The interrupted step and any work steps after it did not ' +
+      'complete, and no failure()- or success()-gated step ran — `Roll back on failure` is gated on failure() ' +
+      'and did not run. The reporting steps gated on cancelled() or always() still ran: this notice, `Summary`, ' +
+      'and `Durability NOT established` when the roll had landed and the pin had not. If the roll step was ' +
+      'interrupted, apps may be part-way rolled: read the live revisions before acting. Classified transient on ' +
+      'the expectation that the same run, unchanged, completes once whatever was slow has cleared — this record ' +
       'does not establish that; if the SAME step times out again on a re-run, it is not transient: read that ' +
       "step's log. " +
-      redispatchSentence({ boundary, tag, apps }),
+      redispatchSentence(dispatch),
     whyStopped:
-      `the job reached its ${limitMinutes}-minute timeout-minutes limit (cancelled ${elapsedSeconds}s after it ` +
-      `started) ${where}. What made the run that slow is NOT established by this record — the interrupted ` +
-      "step's own log is.",
+      `the job reached its ${limitMinutes}-minute timeout-minutes limit ${where} (this notice ran about ` +
+      `${elapsedSeconds}s after the job's first step recorded its start). What made the run that slow is NOT ` +
+      "established by this record — the interrupted step's own log is.",
   };
 }
 
@@ -430,6 +484,23 @@ function arg(argv, name) {
 }
 
 const nowEpoch = () => Math.floor(Date.now() / 1000);
+
+/**
+ * The original run's dispatch inputs, from the CLI flags. A flag that is ABSENT
+ * stays `undefined` — "could not be read", which the re-dispatch sentence says
+ * out loud — while a flag passed EMPTY means the run did not override it.
+ */
+function dispatchFrom(rest) {
+  return {
+    boundary: arg(rest, 'boundary'),
+    tag: arg(rest, 'tag'),
+    apps: arg(rest, 'apps'),
+    location: arg(rest, 'location'),
+    resourceGroup: arg(rest, 'resource-group'),
+    acr: arg(rest, 'acr-override'),
+    pinDeployTag: arg(rest, 'pin-deploy-tag'),
+  };
+}
 
 export function cliMain(argv, env = process.env, out = (s) => process.stdout.write(redactedLine(s))) {
   const [cmd, ...rest] = argv;
@@ -452,9 +523,7 @@ export function cliMain(argv, env = process.env, out = (s) => process.stdout.wri
         acr: arg(rest, 'acr') ?? '<unknown registry>',
         waitMinutes: arg(rest, 'wait-minutes') ?? '?',
         budgetMinutes: arg(rest, 'budget-minutes') ?? '?',
-        boundary: arg(rest, 'boundary'),
-        tag: arg(rest, 'tag'),
-        apps: arg(rest, 'apps'),
+        dispatch: dispatchFrom(rest),
       });
       const artifact = arg(rest, 'out');
       if (artifact && d.failure) fs.writeFileSync(artifact, `${JSON.stringify(d.failure, null, 2)}\n`, 'utf8');
@@ -477,9 +546,7 @@ export function cliMain(argv, env = process.env, out = (s) => process.stdout.wri
           elapsedSeconds: r.elapsedSeconds,
           limitMinutes: r.limitMinutes,
           interrupted: interruptedSteps(arg(rest, 'step-outcomes')),
-          boundary: arg(rest, 'boundary'),
-          tag: arg(rest, 'tag'),
-          apps: arg(rest, 'apps'),
+          dispatch: dispatchFrom(rest),
         });
         fs.writeFileSync(artifact, `${JSON.stringify(failure, null, 2)}\n`, 'utf8');
         out(`Wrote the timeout classification to ${artifact} (${failure.signalId}), replacing any earlier artifact.\n`);

@@ -39508,7 +39508,7 @@
             "declaredSinkCount": 2,
             "sinks": [
               {
-                "id": "stdout:member:434",
+                "id": "stdout:member:505",
                 "surface": "stdout",
                 "accessPath": "member",
                 "wholeExpressionBounded": true,
@@ -39518,7 +39518,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stderr:member:501",
+                "id": "stderr:member:568",
                 "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": true,

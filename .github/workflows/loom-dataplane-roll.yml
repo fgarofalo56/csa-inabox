@@ -284,6 +284,14 @@ jobs:
     timeout-minutes: 45
     env:
       LOOM_ROLL_LEASE_BUDGET_MINUTES: '20'
+      # #4823 — this run's estate overrides, so a lease refusal or a timeout
+      # can print the EXACT command that repeats this run. Empty means "not
+      # overridden" (always the case on the automatic workflow_run path, which
+      # uses the defaults). Read-only here; the steps that USE these inputs
+      # still read them where they always did.
+      ROLL_IN_LOCATION: ${{ inputs.location }}
+      ROLL_IN_RESOURCE_GROUP: ${{ inputs.resource_group }}
+      ROLL_IN_ACR: ${{ inputs.acr }}
     steps:
       # #4823 — the job's start, read by 'Notify on a timeout-cancel' to tell a
       # timeout from an earlier cancel. FIRST, ahead of checkout and setup-node:
@@ -393,6 +401,9 @@ jobs:
             echo "TAG=$TAG"
             echo "APPS=$APPS"
             echo "BOUNDARY=$BOUNDARY_IN"
+            # #4823 — the RESOLVED pin, for the re-dispatch command a lease
+            # refusal or a timeout prints. Nothing branches on it.
+            echo "ROLL_PIN_DEPLOY_TAG=$PIN"
           } >> "$GITHUB_ENV"
           {
             echo "tag=$TAG"
@@ -579,7 +590,9 @@ jobs:
             node scripts/ci/roll-lease-budget.mjs unacquired --status-file .roll/lease-status.txt \
               --severity error --step preflight --acr "$ACR" --wait-minutes "$LEASE_WAIT_MIN" \
               --budget-minutes "$LOOM_ROLL_LEASE_BUDGET_MINUTES" \
-              --boundary "${BOUNDARY:-}" --tag "$TAG" --apps "${APPS:-}" --out deploy-failure.json
+              --boundary "${BOUNDARY:-}" --tag "$TAG" --apps "${APPS:-}" --location "${ROLL_IN_LOCATION:-}" \
+              --resource-group "${ROLL_IN_RESOURCE_GROUP:-}" --acr-override "${ROLL_IN_ACR:-}" \
+              --pin-deploy-tag "${ROLL_PIN_DEPLOY_TAG:-}" --out deploy-failure.json
           }
 
           # Wait only for what is LEFT of the job's one lease-wait deadline.
@@ -961,7 +974,9 @@ jobs:
             node scripts/ci/roll-lease-budget.mjs unacquired --status-file .roll/lease-status.txt \
               --severity error --step "pin :v0.1" --acr "$ACR" --wait-minutes "$LEASE_WAIT_MIN" \
               --budget-minutes "$LOOM_ROLL_LEASE_BUDGET_MINUTES" \
-              --boundary "${BOUNDARY:-}" --tag "$TAG" --apps "${APPS:-}" --out deploy-failure.json
+              --boundary "${BOUNDARY:-}" --tag "$TAG" --apps "${APPS:-}" --location "${ROLL_IN_LOCATION:-}" \
+              --resource-group "${ROLL_IN_RESOURCE_GROUP:-}" --acr-override "${ROLL_IN_ACR:-}" \
+              --pin-deploy-tag "${ROLL_PIN_DEPLOY_TAG:-}" --out deploy-failure.json
           }
 
           # Wait only for what is LEFT of the job's one lease-wait deadline —
@@ -1179,6 +1194,8 @@ jobs:
           NOTIFY_OUT=$(node scripts/ci/roll-lease-budget.mjs notify-result --job-status "$JOB_STATUS" \
             --started "${ROLL_JOB_STARTED:-}" --timeout-minutes "$ROLL_JOB_TIMEOUT_MINUTES" \
             --step-outcomes "$STEP_OUTCOMES" --boundary "${BOUNDARY:-}" --tag "${TAG:-}" --apps "${APPS:-}" \
+            --location "${ROLL_IN_LOCATION:-}" --resource-group "${ROLL_IN_RESOURCE_GROUP:-}" \
+            --acr-override "${ROLL_IN_ACR:-}" --pin-deploy-tag "${ROLL_PIN_DEPLOY_TAG:-}" \
             --out deploy-failure.json)
           printf '%s\n' "$NOTIFY_OUT" | sed '/^result=/d'
           VERDICT=$(printf '%s\n' "$NOTIFY_OUT" | sed -n 's/^result=//p')

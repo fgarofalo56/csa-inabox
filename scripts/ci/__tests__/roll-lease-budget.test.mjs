@@ -444,7 +444,7 @@ const STALE_ARTIFACT = {
   whyStopped: 'STALE-ARTIFACT-FROM-AN-EARLIER-STEP',
 };
 
-function runCancelNotifier({ jobStatus, elapsedSeconds, seedArtifact = null, stepOutcomes = '', resolved = true }) {
+function runCancelNotifier({ jobStatus, elapsedSeconds, seedArtifact = null, stepOutcomes = '', resolved = true, overrides = {} }) {
   const dir = mkdtempSync(join(tmpdir(), 'roll-lease-budget-'));
   mkdirSync(join(dir, 'scripts', 'ci'), { recursive: true });
   mkdirSync(join(dir, '.github', 'scripts'), { recursive: true });
@@ -469,10 +469,16 @@ function runCancelNotifier({ jobStatus, elapsedSeconds, seedArtifact = null, ste
     ROLL_JOB_STARTED: String(now - elapsedSeconds),
     ROLL_JOB_TIMEOUT_MINUTES: String(jobTimeoutMinutes()),
     STEP_OUTCOMES: stepOutcomes,
+    // The job-level env: this run's estate overrides from `inputs.*`, always
+    // present (empty = not overridden).
+    ROLL_IN_LOCATION: '',
+    ROLL_IN_RESOURCE_GROUP: '',
+    ROLL_IN_ACR: '',
+    ...overrides,
   };
   // What the resolve step exports to $GITHUB_ENV; absent when it never ran.
-  if (resolved) Object.assign(env, { BOUNDARY: 'commercial', TAG: 'abc1234', APPS: 'all' });
-  else for (const k of ['BOUNDARY', 'TAG', 'APPS']) delete env[k];
+  if (resolved) Object.assign(env, { BOUNDARY: 'commercial', TAG: 'abc1234', APPS: 'all', ROLL_PIN_DEPLOY_TAG: 'true' });
+  else for (const k of ['BOUNDARY', 'TAG', 'APPS', 'ROLL_PIN_DEPLOY_TAG']) delete env[k];
   const r = spawnSync('bash', [script], { cwd: dir, encoding: 'utf8', env });
   return {
     status: r.status,
@@ -501,6 +507,7 @@ test('EXECUTED + REAL RENDER: the issue a timeout files SAYS it timed out, over 
     elapsedSeconds: jobTimeoutMinutes() * 60 + 9,
     seedArtifact: STALE_ARTIFACT,
     stepOutcomes: 'resolve=success plan=success preflight=success roll=success health=success verify=success digest=success pin=cancelled',
+    overrides: { ROLL_IN_LOCATION: 'eastus2', ROLL_IN_RESOURCE_GROUP: 'rg-loom-override' },
   });
   assert.equal(r.status, 0, r.out);
   assert.equal(r.calls.length, 1, r.out);
@@ -515,8 +522,19 @@ test('EXECUTED + REAL RENDER: the issue a timeout files SAYS it timed out, over 
   assert.match(body, new RegExp(`reached its ${jobTimeoutMinutes()}-minute timeout-minutes limit`));
   assert.match(body, /step id 'pin' reported `cancelled`/);
   assert.match(body, /\*\*Classification: transient\*\* \(`transient\.job-exceeded-timeout-minutes`\)/);
-  assert.match(body, /gh workflow run loom-dataplane-roll\.yml -f boundary=commercial -f tag=abc1234 -f apps=all/);
+  // Every dispatch input this run SET is carried; the one it did not (acr) is
+  // said to be defaulted, not silently dropped.
+  assert.match(body, /`gh workflow run loom-dataplane-roll\.yml -f boundary=commercial -f tag=abc1234 -f apps=all -f location=eastus2 -f resource_group=rg-loom-override -f pin_deploy_tag=true`/);
+  assert.match(body, /\(acr: not overridden by this run, so left at the workflow default, as this run did\)/);
   assert.match(body, /NOT established by this record/);
+  // TIMING is stated as measured at the notice, not as the cancel moment. The
+  // sandbox measures its own clock, so the number is a window, not a constant.
+  const noticed = body.match(/this notice ran about (\d+)s after the job's first step recorded its start/);
+  assert.ok(noticed, 'the timing is not stated as measured when the notice ran');
+  const seconds = Number(noticed[1]);
+  const floor = jobTimeoutMinutes() * 60 + 9;
+  assert.ok(seconds >= floor && seconds <= floor + 30, `measured ${seconds}s, expected ~${floor}s`);
+  assert.doesNotMatch(body, /cancelled \d+s after it started/);
   // ABSENT: the no-artifact text, whose cause and remedy are false here.
   assert.doesNotMatch(body, /did not run through/);
   assert.doesNotMatch(body, /Wiring that step through the retry harness is the fix/);
@@ -560,27 +578,62 @@ test('the workflow hands notify-result EVERY step id it has, so the interrupted 
 });
 
 test('timeoutFailure: states the limit and elapsed it measured, and NOT a cause it did not', () => {
-  const f = timeoutFailure({ elapsedSeconds: 2713, limitMinutes: 45, interrupted: ['pin'], boundary: 'il5', tag: 'deadbeef', apps: 'loom-unity,iceberg-catalog' });
+  const f = timeoutFailure({
+    elapsedSeconds: 2713, limitMinutes: 45, interrupted: ['pin'],
+    dispatch: { boundary: 'il5', tag: 'deadbeef', apps: 'loom-unity,iceberg-catalog', location: '', resourceGroup: '', acr: 'acrloomgov', pinDeployTag: 'false' },
+  });
   assert.equal(f.class, 'transient');
   assert.equal(f.signalId, TIMEOUT_SIGNAL_ID);
   assert.equal(f.remediationKind, 'operator-action');
-  assert.match(f.whyStopped, /cancelled 2713s after it started/);
+  // TIMING (#4830 B nit 2): measured when the notice ran, never claimed as the
+  // cancel moment. Breaks on restoring "cancelled 2713s after it started".
+  assert.match(f.whyStopped, /this notice ran about 2713s after the job's first step recorded its start/);
+  assert.match(f.established[0].line, /^this notice ran 2713s after .*the cancel came at or before that/);
+  for (const text of [f.whyStopped, f.established[0].line]) assert.doesNotMatch(text, /cancelled 2713s after/);
   assert.match(f.established[0].line, /limit is 45 \(2700s\)/);
-  assert.match(f.remediation, /gh workflow run loom-dataplane-roll\.yml -f boundary=il5 -f tag=deadbeef -f apps=loom-unity,iceberg-catalog/);
+  // WHAT RAN AFTER THE CANCEL (#4830 B finding 1, R7). The round-2 sentence
+  // said "no step after the interrupted one did its work" — false: the
+  // durability report, Summary and this notice all run after it. Breaks on
+  // restoring that sentence (the absence check) or on deleting the correction
+  // (the presence checks).
+  assert.doesNotMatch(f.remediation, /no step after the interrupted one did its work/);
+  assert.match(f.remediation, /The interrupted step and any work steps after it did not complete/);
+  assert.match(f.remediation, /no failure\(\)- or success\(\)-gated step ran/);
+  assert.match(f.remediation, /The reporting steps gated on cancelled\(\) or always\(\) still ran: this notice, `Summary`, and `Durability NOT established`/);
   assert.match(f.remediation, /Roll back on failure` is gated on failure\(\) and did not run/);
+  // DISPATCH (#4830 B nit 3): every input the run set, and what it left default.
+  assert.match(f.remediation, /`gh workflow run loom-dataplane-roll\.yml -f boundary=il5 -f tag=deadbeef -f apps=loom-unity,iceberg-catalog -f acr=acrloomgov -f pin_deploy_tag=false`/);
+  assert.match(f.remediation, /\(location, resource_group: not overridden by this run, so left at the workflow default, as this run did\)/);
+  assert.doesNotMatch(f.remediation, /could NOT be read/, 'every input was supplied, yet one is reported unreadable');
   assert.doesNotMatch(f.whyStopped, /lease/i, 'a timeout record asserted the lease as its cause');
 });
 
-test('redispatchCommand: exact for validated values, null (never guessed) otherwise, quotes odd apps', () => {
-  assert.equal(redispatchCommand({ boundary: 'gcc-high', tag: 'v1.2', apps: 'all' }),
-    'gh workflow run loom-dataplane-roll.yml -f boundary=gcc-high -f tag=v1.2 -f apps=all');
+test('redispatchCommand: exact for validated values, carries every override, null (never guessed) without boundary/tag', () => {
+  assert.equal(redispatchCommand({ boundary: 'gcc-high', tag: 'v1.2', apps: 'all', pinDeployTag: 'true' }),
+    'gh workflow run loom-dataplane-roll.yml -f boundary=gcc-high -f tag=v1.2 -f apps=all -f pin_deploy_tag=true');
   assert.equal(redispatchCommand({ boundary: 'commercial', tag: 'abc', apps: '' }),
     'gh workflow run loom-dataplane-roll.yml -f boundary=commercial -f tag=abc -f apps=all');
+  // Breaks on: dropping any override from the command (#4830 B nit 3).
+  assert.equal(
+    redispatchCommand({ boundary: 'il5', tag: 'abc', apps: 'all', location: 'usgovvirginia', resourceGroup: 'rg-x', acr: 'acry', pinDeployTag: 'false' }),
+    'gh workflow run loom-dataplane-roll.yml -f boundary=il5 -f tag=abc -f apps=all -f location=usgovvirginia -f resource_group=rg-x -f acr=acry -f pin_deploy_tag=false',
+  );
   assert.equal(redispatchCommand({ boundary: '', tag: 'abc' }), null);
   assert.equal(redispatchCommand({ boundary: 'gcc', tag: 'abc' }), null, 'gcc is not a boundary this lane offers');
   assert.equal(redispatchCommand({ boundary: 'il5', tag: 'a b' }), null);
   assert.equal(redispatchCommand({ boundary: 'il5', tag: 'abc', apps: "x y'z" }),
     "gh workflow run loom-dataplane-roll.yml -f boundary=il5 -f tag=abc -f apps='x y'\\''z'");
+  assert.equal(redispatchCommand({ boundary: 'il5', tag: 'abc', location: 'a(b)' }),
+    "gh workflow run loom-dataplane-roll.yml -f boundary=il5 -f tag=abc -f apps=all -f location='a(b)'", 'parentheses are not a bare shell word');
+});
+
+test('redispatch: an input that could NOT be read is named, never silently dropped', () => {
+  // `undefined` = the flag was absent (not wired); '' = the run did not override it.
+  const f = timeoutFailure({ elapsedSeconds: 2700, limitMinutes: 45, interrupted: [], dispatch: { boundary: 'commercial', tag: 'abc' } });
+  assert.match(f.remediation, /This run's location, resource_group, acr, pin_deploy_tag could NOT be read, so the command leaves them at the workflow default — check the original run's inputs before using it\./);
+  const g = timeoutFailure({ elapsedSeconds: 2700, limitMinutes: 45, interrupted: [], dispatch: { boundary: 'commercial', tag: 'abc', location: '', resourceGroup: '', acr: '', pinDeployTag: 'true' } });
+  assert.doesNotMatch(g.remediation, /could NOT be read/);
+  assert.match(g.remediation, /\(location, resource_group, acr: not overridden by this run/);
 });
 
 // ── The taxonomy registration ─────────────────────────────────────────────────
@@ -738,7 +791,8 @@ test('SEAM: the CLI writes deploy-failure.json ONLY for contention, and the noti
   const env = { GITHUB_REPOSITORY: 'fgarofalo56/csa-inabox', GITHUB_RUN_ID: '36665140502', GITHUB_RUN_ATTEMPT: '1' };
   const args = ['unacquired', '--status-file', status, '--acr', 'acrloomtest', '--step', 'pin :v0.1',
     '--wait-minutes', '0', '--budget-minutes', '20', '--boundary', 'gcc-high', '--tag', 'abc1234',
-    '--apps', 'loom-trino', '--out', art];
+    '--apps', 'loom-trino', '--location', '', '--resource-group', 'rg-gov-override', '--acr-override', '',
+    '--pin-deploy-tag', 'true', '--out', art];
 
   writeFileSync(status, statusText({ pna: '<unreadable>', da: '<unreadable>', owner: 'none', url: 'none', state: { kind: 'free' } }));
   let printed = '';
@@ -756,7 +810,7 @@ test('SEAM: the CLI writes deploy-failure.json ONLY for contention, and the noti
   assert.match(body, new RegExp(`lease owner '${BUILD_OWNER}'`));
   // operator-action MUST name the exact command (the taxonomy's own contract).
   // Breaks on: dropping --boundary/--tag/--apps plumbing, or a prose-only remedy.
-  assert.match(body, /`gh workflow run loom-dataplane-roll\.yml -f boundary=gcc-high -f tag=abc1234 -f apps=loom-trino`/);
+  assert.match(body, /`gh workflow run loom-dataplane-roll\.yml -f boundary=gcc-high -f tag=abc1234 -f apps=loom-trino -f resource_group=rg-gov-override -f pin_deploy_tag=true`/);
 });
 
 test('SINKS: both publication sinks redact — the lease tags are text another workflow wrote', () => {
@@ -801,7 +855,23 @@ test('the lease steps read the holder back with the helper\'s own `status`, neve
   assert.match(stepRun(LEASE_STEPS[1]), /--severity warning/);
   assert.match(stepRun(LEASE_STEPS[2]), /--out deploy-failure\.json/);
   // …and those two hand it what the exact re-dispatch command needs.
-  for (const step of [LEASE_STEPS[0], LEASE_STEPS[2]]) {
-    assert.match(stepRun(step), /--boundary "\$\{BOUNDARY:-\}" --tag "\$TAG" --apps "\$\{APPS:-\}" --out deploy-failure\.json/, step);
+  const DISPATCH_FLAGS = /--boundary "\$\{BOUNDARY:-\}" --tag "\$\{?TAG(?::-)?\}?" --apps "\$\{APPS:-\}" \\?\s*--location "\$\{ROLL_IN_LOCATION:-\}" \\?\s*--resource-group "\$\{ROLL_IN_RESOURCE_GROUP:-\}" \\?\s*--acr-override "\$\{ROLL_IN_ACR:-\}" \\?\s*--pin-deploy-tag "\$\{ROLL_PIN_DEPLOY_TAG:-\}" \\?\s*--out deploy-failure\.json/;
+  for (const step of [LEASE_STEPS[0], LEASE_STEPS[2], NOTIFY_CANCEL_STEP]) {
+    assert.match(stepRun(step), DISPATCH_FLAGS, step);
   }
+});
+
+test('DISPATCH: the overrides a re-dispatch must repeat are READ from this run, not restated', () => {
+  // Breaks on: dropping any of the three from the job env, reading them from
+  // anything but `inputs.*`, or the resolve step no longer exporting the pin it
+  // resolved — the command would then silently fall back to defaults.
+  const m = wf().match(/^ {4}env:\n((?: {6}.*\n)+)/m);
+  assert.ok(m, 'no job-level env block');
+  for (const [envName, input] of [['ROLL_IN_LOCATION', 'location'], ['ROLL_IN_RESOURCE_GROUP', 'resource_group'], ['ROLL_IN_ACR', 'acr']]) {
+    assert.match(m[1], new RegExp(`^ {6}${envName}: \\$\\{\\{ inputs\\.${input} \\}\\}\\s*$`, 'm'), envName);
+    // The dispatch input must exist, or the command names a flag gh will reject.
+    assert.match(wf(), new RegExp(`^ {6}${input}:\\s*$`, 'm'), `workflow_dispatch has no '${input}' input`);
+  }
+  assert.match(wf(), /^ {6}pin_deploy_tag:\s*$/m);
+  assert.match(stepRun(RESOLVE_STEP), /echo "ROLL_PIN_DEPLOY_TAG=\$PIN"/);
 });
