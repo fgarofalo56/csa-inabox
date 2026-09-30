@@ -19,10 +19,47 @@ export class LoomApiError extends Error {
     public readonly status: number,
     public readonly code?: string,
     public readonly hint?: string,
+    /** Seconds to wait before retrying (a 429's `retryAfter` / `Retry-After`). */
+    public readonly retryAfter?: number,
   ) {
     super(message);
     this.name = 'LoomApiError';
   }
+}
+
+/** A bare machine token (`rate_limited`, `forbidden`) — not a sentence a person can act on. */
+const MACHINE_TOKEN_RE = /^[a-z][a-z0-9_]*$/;
+
+function positiveSeconds(v: unknown): number | undefined {
+  const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() ? Number(v) : NaN;
+  return Number.isFinite(n) && n > 0 ? Math.ceil(n) : undefined;
+}
+
+/**
+ * Build the error for a failed response. The text is the route's `error`,
+ * unless that is a bare token AND the route also sent a `message`, in which
+ * case the message is the sentence to show. The retry wait comes from the body's
+ * `retryAfter`, else the `Retry-After` header (seconds).
+ */
+export function apiErrorFrom(parsed: unknown, res: Response): LoomApiError {
+  const headerWait = positiveSeconds(res.headers.get('retry-after'));
+  if (parsed && typeof parsed === 'object') {
+    const p = parsed as { error?: unknown; message?: unknown; code?: unknown; hint?: unknown; retryAfter?: unknown };
+    const error = typeof p.error === 'string' && p.error ? p.error : undefined;
+    const message = typeof p.message === 'string' && p.message ? p.message : undefined;
+    const text =
+      (error && message && MACHINE_TOKEN_RE.test(error) ? message : error ?? message) ||
+      `${res.status} ${res.statusText}`;
+    return new LoomApiError(
+      text,
+      res.status,
+      typeof p.code === 'string' ? p.code : undefined,
+      typeof p.hint === 'string' ? p.hint : undefined,
+      positiveSeconds(p.retryAfter) ?? headerWait,
+    );
+  }
+  const text = typeof parsed === 'string' && parsed ? parsed : `${res.status} ${res.statusText}`;
+  return new LoomApiError(text, res.status, undefined, undefined, headerWait);
 }
 
 export interface SessionResult {
@@ -78,19 +115,11 @@ export class LoomClient {
       }
     }
 
-    if (!res.ok) {
-      const errMsg =
-        (parsed && typeof parsed === 'object' && (parsed.error || parsed.message)) ||
-        (typeof parsed === 'string' && parsed) ||
-        `${res.status} ${res.statusText}`;
-      const code = parsed && typeof parsed === 'object' ? parsed.code : undefined;
-      const hint = parsed && typeof parsed === 'object' ? parsed.hint : undefined;
-      throw new LoomApiError(String(errMsg), res.status, code, hint);
-    }
+    if (!res.ok) throw apiErrorFrom(parsed, res);
 
     // Some routes return `{ ok:false }` with a 200 in degraded cases — honor it.
     if (parsed && typeof parsed === 'object' && parsed.ok === false) {
-      throw new LoomApiError(String(parsed.error || 'request failed'), res.status, parsed.code, parsed.hint);
+      throw apiErrorFrom({ error: 'request failed', ...parsed }, res);
     }
     return parsed as T;
   }
@@ -114,17 +143,20 @@ export class LoomClient {
     });
     if (!res.ok || !res.body) {
       const t = await res.text().catch(() => '');
-      let hint: string | undefined;
-      let code: string | undefined;
+      let parsed: unknown;
       try {
-        const j = JSON.parse(t);
-        hint = j.hint;
-        code = j.code;
-        throw new LoomApiError(String(j.error || `${res.status} ${res.statusText}`), res.status, code, hint);
-      } catch (e) {
-        if (e instanceof LoomApiError) throw e;
+        parsed = JSON.parse(t);
+      } catch {
+        parsed = undefined;
       }
-      throw new LoomApiError(`device-code login failed: ${res.status} ${res.statusText}`, res.status);
+      if (parsed && typeof parsed === 'object') throw apiErrorFrom(parsed, res);
+      throw new LoomApiError(
+        `device-code login failed: ${res.status} ${res.statusText}`,
+        res.status,
+        undefined,
+        undefined,
+        positiveSeconds(res.headers.get('retry-after')),
+      );
     }
 
     let session: SessionResult | null = null;

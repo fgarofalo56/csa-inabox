@@ -127,6 +127,20 @@ const TOUCH_EXEMPT = new Map([
    '#4092: GET projection fix only, auth prologue untouched; codemod SKIPS (401 not the exact guard shape). 401 pinned by picker-workspace-scope.test.ts'],
   ['apps/fiab-console/app/api/items/plan/[id]/route.ts',
    '#4092: GET projection fix only, auth prologue untouched; codemod SKIPS (401 not the exact guard shape). 401 pinned by picker-workspace-scope.test.ts'],
+  // #4805 touched the silent-refresh route for TWO things only, both inside the
+  // re-mint: carry the `authVia: 'device_code'` marker across the refresh, and
+  // never extend a device-code session past its original expiry (operator
+  // decision 2026-09-30). The auth prologue is UNTOUCHED.
+  //
+  // THE CODEMOD REFUSES THIS FILE, falsifiable in one command:
+  //   node scripts/codemods/migrate-route-toolkit.mjs --file=app/api/auth/refresh/route.ts
+  //   → app/api/auth/refresh/route.ts: SKIPPED (POST: getSession() without the exact 401 guard)
+  // Its 401 is `{ ok:false, reauth:true }`, the contract lib/client-fetch keys
+  // its reauth redirect on; `withSession` would replace it with
+  // `{ ok:false, error:'unauthenticated' }`. COMPENSATING CONTROL: that 401 body
+  // is pinned by lib/auth/__tests__/refresh.test.ts ("returns 401 { reauth:true } …").
+  ['apps/fiab-console/app/api/auth/refresh/route.ts',
+   '#4805: authVia carry + device-code expiry clamp in the re-mint only, auth prologue untouched; codemod SKIPS (401 is the reauth contract). 401 pinned by refresh.test.ts'],
   // #3549/#3551 touched this route ONLY inside Phase-1 item creation, to backfill
   // the bundle definition onto a name-matched EXISTING item that has none. The
   // dedup path pushed `status:'existed'` and wrote nothing while still handing

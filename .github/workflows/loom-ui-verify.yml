@@ -283,11 +283,22 @@ jobs:
             # 31351602478 and commented at the sibling call site in
             # loom-synthetic-monitor.yml. stdout goes to a file so `$?` is
             # unambiguously az's and not `head`'s.
+            #
+            # `--query "[].[hits, lastHit]"` IS LOAD-BEARING (#4805). The
+            # log-analytics extension builds every row as an OrderedDict whose
+            # FIRST key is `TableName`, so bare `-o tsv` prints
+            # `PrimaryResult<TAB>4<TAB><ts>` (reproduced against knack 0.14.0's
+            # tsv writer): the verdict script's count field is the literal
+            # `PrimaryResult`, consistent with run 36628363301 reporting "could
+            # NOT read the invalid_client count" at rc=0. It must be the
+            # list-of-lists form: knack writes a top-level flat list ONE ELEMENT
+            # PER LINE, so `[0].[hits, lastHit]` would put the timestamp on line
+            # 2 where `head -1` drops it.
             HITS_ERRF=$(mktemp)
             HITS_OUTF=$(mktemp)
             az monitor log-analytics query --workspace "$LAW" \
               --analytics-query "ContainerAppConsoleLogs_CL | where TimeGenerated > ago(7d) | where ContainerAppName_s == 'loom-console' | where Log_s contains '[auth/callback] exception:' and Log_s has 'invalid_client' | summarize hits = count(), newest = max(TimeGenerated) | project hits, lastHit = iff(isnull(newest), '', tostring(newest))" \
-              -o tsv > "$HITS_OUTF" 2>"$HITS_ERRF"
+              --query "[].[hits, lastHit]" -o tsv > "$HITS_OUTF" 2>"$HITS_ERRF"
             HITS_RC=$?
             HITS_ROW=$(tr -d '\r' < "$HITS_OUTF" | head -1)
             HITS_ERR=$(tr '\n' ' ' < "$HITS_ERRF" | tr -s ' ' | cut -c1-300)

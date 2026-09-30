@@ -530,6 +530,23 @@ test('WIRING #3498: the reads that feed the verdict no longer discard stderr', (
   assert.match(step, /LH_CRED_ERR="\$CRED_ERR"/);
 });
 
+test('WIRING #4805: the hits query projects its OWN columns, as rows, so no TableName column reaches the verdict', () => {
+  // Bare `-o tsv` printed `PrimaryResult<TAB>4<TAB><ts>` — the extension puts
+  // `TableName` first in every row — and the verdict read `PrimaryResult` as the
+  // count (run 36628363301: "could NOT read the invalid_client count" at rc=0).
+  const step = stepConfigById('login_health');
+  const q = step.match(/--query "([^"]*)" -o tsv > "\$HITS_OUTF"/);
+  assert.ok(q, 'the hits query has no --query projection: bare -o tsv leads with the TableName column');
+  // Breaks on `[0].[hits, lastHit]`: knack writes a flat list one element per
+  // line, so `head -1` would keep the count and drop the timestamp.
+  assert.match(q[1], /^\[\]\.\[/, `projection must be a list of rows, got ${q[1]}`);
+  // Lifted, not transcribed: the projected names must be the KQL `project`
+  // columns, so renaming one side without the other breaks here.
+  const kqlCols = step.match(/\| project (\w+), (\w+) = /);
+  assert.ok(kqlCols, 'KQL project clause not found');
+  assert.equal(q[1], `[].[${kqlCols[1]}, ${kqlCols[2]}]`);
+});
+
 
 /**
  * Extract one `- name: …` step block from the workflow by its `id:`.
