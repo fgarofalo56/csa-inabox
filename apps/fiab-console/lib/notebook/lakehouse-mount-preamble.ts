@@ -18,8 +18,18 @@
 export interface ResolvedAttachedLakehouse {
   /** Lakehouse display name — becomes the dict key the user references. */
   displayName: string;
-  /** Canonical abfss://<container>@<account>.dfs.<suffix>/<root> URI. */
+  /**
+   * Canonical abfss://<container>@<account>.dfs.<suffix>/<root> URI. Empty when
+   * the lakehouse was not opened ({@link withheld} says why).
+   */
   abfss: string;
+  /**
+   * Why Loom did not open this lakehouse, in the user-facing wording the
+   * resolver gives. The preamble makes `loom_lakehouses['<name>']` raise with
+   * this text, so the reason reaches the notebook instead of the name simply
+   * being absent.
+   */
+  withheld?: string;
 }
 
 /** Escape a string for safe embedding inside a Python single-quoted literal. */
@@ -48,21 +58,25 @@ export interface AttachedSourceRef {
  * every run whichever resolve answers first.
  *
  * A source that resolves to null or throws is skipped (no guessed path,
- * no-vaporware.md), and never takes its siblings down with it.
+ * no-vaporware.md), and never takes its siblings down with it. A source the
+ * resolver declined to open, with a reason (`{ withheld }`), is returned with
+ * that reason and no path, so the preamble can say why.
  *
  * `resolve` is injected so this module stays dependency-free and testable; the
- * run route passes `resolveLakehouseAbfss`.
+ * run route passes a wrapper over `resolveLakehouseStorage`.
  */
 export async function resolveAttachedLakehouses(
   attached: readonly AttachedSourceRef[] | null | undefined,
-  resolve: (lakehouseId: string) => Promise<{ abfss: string } | null>,
+  resolve: (lakehouseId: string) => Promise<{ abfss: string } | { withheld: string } | null>,
 ): Promise<ResolvedAttachedLakehouse[]> {
   const lakehouses = (attached || []).filter((a) => a && a.kind === 'lakehouse' && a.id);
   const settled = await Promise.all(
     lakehouses.map(async (lh): Promise<ResolvedAttachedLakehouse | null> => {
       try {
         const r = await resolve(lh.id as string);
-        return r ? { displayName: lh.displayName || lh.id || 'lakehouse', abfss: r.abfss } : null;
+        const displayName = lh.displayName || lh.id || 'lakehouse';
+        if (r && 'withheld' in r) return { displayName, abfss: '', withheld: r.withheld };
+        return r ? { displayName, abfss: r.abfss } : null;
       } catch {
         return null; // skip this source — honest, don't break the session
       }
@@ -80,16 +94,34 @@ export async function resolveAttachedLakehouses(
  * session statement) is safe.
  */
 export function buildLakehouseMountPreamble(sources: ResolvedAttachedLakehouse[]): string {
-  const entries = (sources || []).filter((s) => s && s.abfss && s.displayName);
-  if (entries.length === 0) return '';
+  const entries = (sources || []).filter((s) => s && s.abfss && s.displayName && !s.withheld);
+  const withheld = (sources || []).filter((s) => s && s.withheld && s.displayName);
+  if (entries.length === 0 && withheld.length === 0) return '';
   const lines = entries.map((s) => `    ${pyStr(s.displayName)}: ${pyStr(s.abfss)},`);
+  // With nothing withheld the dict is a plain dict, exactly as before. With a
+  // withheld lakehouse, looking its name up raises with the reason, and the
+  // reason is also printed once where the run shows output.
+  const open = withheld.length === 0
+    ? ['loom_lakehouses = {', ...lines, '}']
+    : [
+      'class _LoomLakehouses(dict):',
+      '    _withheld = {',
+      ...withheld.map((s) => `        ${pyStr(s.displayName)}: ${pyStr(s.withheld as string)},`),
+      '    }',
+      '    def __missing__(self, key):',
+      '        if key in self._withheld:',
+      "            raise KeyError(str(key) + ': ' + self._withheld[key])",
+      '        raise KeyError(key)',
+      'loom_lakehouses = _LoomLakehouses({',
+      ...lines,
+      '})',
+      ...withheld.map((s) => `print(${pyStr(`Lakehouse ${s.displayName} was not mounted: ${s.withheld}`)})`),
+    ];
   return [
     '# --- CSA Loom: attached lakehouses auto-mounted (issue #655) ---',
     '# Each entry maps an attached lakehouse name to its ADLS Gen2 root (abfss).',
     "# Example: spark.read.format('delta').load(loom_lakehouses['<name>'] + '/Tables/<table>')",
-    'loom_lakehouses = {',
-    ...lines,
-    '}',
+    ...open,
     'try:',
     "    spark.conf.set('loom.lakehouses.mounted', ','.join(loom_lakehouses.keys()))",
     'except Exception:',
