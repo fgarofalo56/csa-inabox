@@ -17,7 +17,7 @@
  */
 import React from 'react';
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
+import { screen, waitFor, cleanup, fireEvent, within } from '@testing-library/react';
 import { renderWithProviders, installFetchMock } from '../../__tests__/test-helpers';
 import { LakehouseEditorContext } from '../lakehouse-editor-context';
 import type { LakehouseEditorCtx } from '../lakehouse-editor-context';
@@ -26,7 +26,7 @@ import { SchemasPane } from '../panes/schemas-pane';
 import { InteropPane } from '../panes/interop-pane';
 import { TablesPane } from '../panes/tables-pane';
 import { HistoryPane } from '../panes/history-pane';
-import { LAKEHOUSE_READ_ONLY_TITLE } from '../hooks/use-lakehouse-access';
+import { LAKEHOUSE_READ_ONLY_TITLE, LAKEHOUSE_READ_ONLY_SUBTEXT } from '../hooks/use-lakehouse-access';
 
 type Access = 'read' | 'write';
 
@@ -60,6 +60,15 @@ async function probeSettled(calls: Array<{ url: string }>) {
 async function expectClosed(el: HTMLElement) {
   await waitFor(() => expect(el.getAttribute('aria-disabled')).toBe('true'));
   expect(el.getAttribute('title')).toBe(LAKEHOUSE_READ_ONLY_TITLE);
+}
+
+/**
+ * A closed MENU item also shows the reason as visible text inside the item, so
+ * it does not depend on hover. Breaks if the item loses its `subText`.
+ */
+async function expectMenuClosed(el: HTMLElement) {
+  await expectClosed(el);
+  expect(within(el).getByText(LAKEHOUSE_READ_ONLY_SUBTEXT)).toBeTruthy();
 }
 
 const button = (name: RegExp) => screen.findByRole('button', { name }, { timeout: 5000 });
@@ -378,9 +387,9 @@ describe('Files right-click menu — read-only role', () => {
     const ctx = ctxMenuCtx(FILE);
     mount(<ContextMenu />, ctx, 'read');
     const load = await menuItem('Load to Tables (Delta)');
-    await expectClosed(load);
+    await expectMenuClosed(load);
     const del = await menuItem('Delete');
-    await expectClosed(del);
+    await expectMenuClosed(del);
     fireEvent.click(load);
     fireEvent.click(del);
     // Breaks if either MenuItem loses disabled={readOnly}.
@@ -396,7 +405,7 @@ describe('Files right-click menu — read-only role', () => {
     const ctx = ctxMenuCtx(FOLDER);
     mount(<ContextMenu />, ctx, 'read');
     const sc = await menuItem('New shortcut…');
-    await expectClosed(sc);
+    await expectMenuClosed(sc);
     fireEvent.click(sc);
     expect(ctx.openShortcutWizard).not.toHaveBeenCalled();
   });
@@ -406,6 +415,8 @@ describe('Files right-click menu — read-only role', () => {
     const ctx = ctxMenuCtx(FILE);
     const { calls } = mount(<ContextMenu />, ctx, 'write');
     await probeSettled(calls);
+    // Breaks if the visible reason shows for a writer too.
+    expect(screen.queryByText(LAKEHOUSE_READ_ONLY_SUBTEXT)).toBeNull();
     fireEvent.click(await menuItem('Load to Tables (Delta)'));
     fireEvent.click(await menuItem('Delete'));
     expect(ctx.onLoadToTables).toHaveBeenCalledWith(FILE);
@@ -483,7 +494,7 @@ describe('TablesPane planned-table menu — read-only role', () => {
     await probeSettled(calls);
     fireEvent.click(await rowMenuTrigger());
     const maintain = await menuItem('Maintain…');
-    await expectClosed(maintain);
+    await expectMenuClosed(maintain);
     fireEvent.click(maintain);
     // Breaks if the MenuItem reads `!activeContainer` alone (activeContainer is
     // set here, so only the read-only term can close it).
@@ -498,6 +509,8 @@ describe('TablesPane planned-table menu — read-only role', () => {
     const { calls } = mount(<TablesPane />, ctx, 'write');
     await probeSettled(calls);
     fireEvent.click(await rowMenuTrigger());
+    await menuItem('Maintain…');
+    expect(screen.queryByText(LAKEHOUSE_READ_ONLY_SUBTEXT)).toBeNull();
     fireEvent.click(await menuItem('Maintain…'));
     // Breaks if canWrite=true is read as read-only.
     await waitFor(() => expect(ctx.setMaintainOpen).toHaveBeenCalledWith(true));

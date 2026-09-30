@@ -32,6 +32,9 @@ export function useLakehouseAccess(lakehouseId: string, isNewItem: boolean): { c
 export const LAKEHOUSE_READ_ONLY_TITLE =
   'Your role on this lakehouse is read-only. Ask a workspace Member or Admin to make the change, or to give you an item grant that includes Edit.';
 
+/** The visible short form under a closed menu item; the full reason stays its title. */
+export const LAKEHOUSE_READ_ONLY_SUBTEXT = 'Read-only role: needs Edit on this lakehouse';
+
 /**
  * True only when the access probe answered `canWrite: false`. Loading, an
  * unsaved item and a failed probe all return false, so an action is never

@@ -14,7 +14,7 @@ import {
 import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
 import { useStyles, formatBytes, leafName, templateDfsSuffix } from '../shared';
 import { useLakehouseCtx } from '../lakehouse-editor-context';
-import { useLakehouseReadOnly, LAKEHOUSE_READ_ONLY_TITLE } from '../hooks/use-lakehouse-access';
+import { useLakehouseReadOnly, LAKEHOUSE_READ_ONLY_TITLE, LAKEHOUSE_READ_ONLY_SUBTEXT } from '../hooks/use-lakehouse-access';
 import type { LiveCatalogTable } from '../types';
 import type { PathEntry } from '../shared';
 
@@ -190,6 +190,7 @@ export function TablesPane() {
                                     <MenuItem icon={<Wrench20Regular />}
                                       disabled={!activeContainer || readOnly}
                                       title={readOnly ? LAKEHOUSE_READ_ONLY_TITLE : !activeContainer ? 'Select a container first' : 'OPTIMIZE / VACUUM / ZORDER BY'}
+                                      subText={readOnly ? LAKEHOUSE_READ_ONLY_SUBTEXT : undefined}
                                       onClick={() => { setMaintainTable(t.name); setMaintainOpen(true); }}>
                                       Maintain…
                                     </MenuItem>
