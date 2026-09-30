@@ -434,11 +434,11 @@ test('RC-12 warehouse: WITHOUT the #3339 overlay jar, the LIST-namespaces defect
 
 // A UC_HOME laid out like the image: the overlay jar on disk, and the classpath
 // file bin/start-uc-server boots from, which may or may not list it.
-function ucHomeWithOverlayJar({ onClasspath, entrySuffix = '' }) {
+function ucHomeWithOverlayJar({ onClasspath, entrySuffix = '', jarOnDisk = true }) {
   const home = mkdtempSync(path.join(tmpdir(), 'loom-uc-home-')).replace(/\\/g, '/');
   const jar = `${home}/lib-loom-override/loom-uc-3339-iceberg-authz.jar`;
   mkdirSync(`${home}/lib-loom-override`);
-  writeFileSync(jar, 'x');
+  if (jarOnDisk) writeFileSync(jar, 'x');
   mkdirSync(`${home}/server/target`, { recursive: true });
   const base = `${home}/server/target/classes:${home}/jars/unitycatalog-server.jar`;
   writeFileSync(`${home}/server/target/classpath`, onClasspath ? `${jar}${entrySuffix}:${base}\n` : `${base}\n`);
@@ -481,6 +481,19 @@ test('RC-12 warehouse: a classpath entry that only CONTAINS the #3339 jar path d
   const r = render({ ...AUTHZ_WIRED, LOOM_ICEBERG_WAREHOUSE: 'loom', UC_HOME: home });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /iceberg-list-namespaces=upstream-owner-gate/);
+});
+
+test('RC-12 warehouse: the #3339 jar LISTED on the classpath but absent from disk is the upstream route, and says so', { skip: !shAvailable }, () => {
+  // The classpath names the jar, but the file is not there, so the JVM cannot
+  // load the overlay class from it. Breaks if the plan stops checking the file
+  // (-> 'scoped'), or if the banner blames the classpath for a missing file.
+  const home = ucHomeWithOverlayJar({ onClasspath: true, jarOnDisk: false });
+  const r = render({ ...AUTHZ_WIRED, LOOM_ICEBERG_WAREHOUSE: 'loom', UC_HOME: home });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /iceberg-list-namespaces=upstream-owner-gate/);
+  assert.match(r.stderr, /ICEBERG-LIST-NAMESPACES-DEFECT: the #3339 overlay jar .* is absent from this image, so GET/);
+  // Paired with the positive DEFECT match above.
+  assert.doesNotMatch(r.stderr, /served by this image's #3339 overlay/);
 });
 
 test('RC-12 warehouse: no warehouse (the loom-unity app) announces nothing about LIST-namespaces', { skip: !shAvailable }, () => {

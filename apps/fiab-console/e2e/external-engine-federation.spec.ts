@@ -279,6 +279,12 @@ test('Iceberg REST Catalog: namespaces list resolves through the native route', 
   // a regression would point the next reader at the auth layer that now demonstrably
   // works; calling it `working` would be a lie. Naming it lands the finding where
   // it belongs: provisioning (auto-bind-by-default), not authentication.
+  //
+  // The verdict NAME records that 2026-08-08 cause; the thrown message does not
+  // assert it. A 404/500 has more than one source (the irc-proxy keeps an
+  // upstream IcebergCatalogError's own status): among them, the catalog's list
+  // routes answer 500 when authorization is enabled and no per-request result
+  // filter is installed (#3339), and an image without #3339 answers its owner 500.
   const UPSTREAM_EMPTY_CATALOG = res.status() === 500 || res.status() === 404;
 
   let verdict: 'working' | 'refused' | 'auth-upstream' | 'empty-catalog' | 'gated' | 'regressed';
@@ -366,19 +372,19 @@ Upstream said: ${bodyText.slice(0, 600)}
       + `which needs an IMAGE REBUILD, not a console roll.`,
     );
   } else if (verdict === 'empty-catalog') {
-    // A REAL failure — federation still does not work — but a provisioning one,
-    // not an auth one. Fail with that distinction in the message so nobody
-    // re-opens the token exchange, which this same run proves is healthy.
+    // A REAL failure — federation still does not work. The message names
+    // candidate causes only: this run does not establish which one it is.
     throw new Error(
-      `The catalog ACCEPTED the credential and then had nothing to serve `
-      + `(upstream ${res.status()}).\n\nUpstream said: ${bodyText.slice(0, 400)}\n\n`
-      + `This is NOT the auth chain — RC-1/RC-7/RC-9 are all deployed and the sibling `
-      + `Unity read returns 200 through the same exchanged credential. It is RC-2 + RC-12: `
-      + `iceberg-catalog runs an EPHEMERAL H2 database that re-seeds from the image on every `
-      + `restart, and nothing ever provisions the '${'loom'}' warehouse the client asks for. `
-      + `Confirm by listing the catalogs on the iceberg-catalog host: an empty list is this `
-      + `diagnosis, a populated one refutes it. The fix is persistence (LOOM_UNITY_DB_URL) `
-      + `plus warehouse auto-provisioning, NOT a change to the token path.`,
+      `The namespace list answered ${res.status()}. This run does not establish why.`
+      + `\n\nUpstream said: ${bodyText.slice(0, 400)}\n\n`
+      + `Candidate sources, not an exhaustive list, told apart by the upstream text above: `
+      + `a catalog with no '${'loom'}' warehouse (RC-2 + RC-12: iceberg-catalog runs an `
+      + `ephemeral H2 database; listing the catalogs on the iceberg-catalog host shows `
+      + `whether the warehouse exists); a 500 "Result filter not installed…" from an image `
+      + `with the #3339 change, whose list routes fail closed when authorization is enabled `
+      + `and no per-request result filter is installed; or a 500 "Authorization filter not `
+      + `initialized" from an image without that change, if the Console's fallback did not `
+      + `take it.`,
     );
   } else if (verdict === 'regressed') {
     throw new Error(

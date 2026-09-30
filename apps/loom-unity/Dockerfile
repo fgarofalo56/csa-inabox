@@ -237,7 +237,12 @@ RUN mkdir -p /build/classes /build/lib \
 #     exact v0.5.0 file the patch was made from (sha256 below), and stage 2 does
 #     the same for the compiled base class;
 #   * the jar must contain exactly that one class;
-#   * the compiled class must carry the scoped expression.
+#   * the compiled class must carry the scoped expression;
+#   * it must not reference SchemaService.listSchemas, and must not carry the
+#     text 'Authorization filter not initialized': the Console falls back to
+#     the Unity schemas API on that text (LIST_NS_DEFECT in
+#     apps/fiab-console/lib/azure/iceberg-catalog-client.ts), so a 500 from
+#     this class that carried it would be hidden by the fallback.
 # EXIT CONDITION: delete this stage, uc-patch/, and the jar from stage 2 when the
 # base moves to an upstream release that contains #1813 (da911fad3951). The
 # base-drift assertion fires on that bump, so it cannot be forgotten.
@@ -267,6 +272,7 @@ RUN set -eu; \
     JAVAP_V="$(javap -v -p -cp /build/classes io.unitycatalog.server.service.IcebergRestCatalogService)" || { echo "FATAL: javap could not read the compiled #3339 class, so the in-process-call check below cannot run" >&2; exit 1; }; \
     [ -n "${JAVAP_V}" ] || { echo "FATAL: javap printed nothing for the compiled #3339 class" >&2; exit 1; }; \
     ! printf '%s\n' "${JAVAP_V}" | grep -q 'SchemaService.listSchemas' || { echo "FATAL: the compiled #3339 class references SchemaService.listSchemas (a call or a method reference, read from the constant pool); #3339 reads the schema repository, as upstream #1813 does" >&2; exit 1; }; \
+    ! printf '%s\n' "${JAVAP_V}" | grep -q 'Authorization filter not initialized' || { echo "FATAL: the compiled #3339 class carries the text 'Authorization filter not initialized' (read from the constant pool). The Console's namespace-list fallback triggers on that text (LIST_NS_DEFECT in apps/fiab-console/lib/azure/iceberg-catalog-client.ts), so an error from this class must not use it" >&2; exit 1; }; \
     jar --create --file /build/override/loom-uc-3339-iceberg-authz.jar -C /build/classes .; \
     ENTRIES="$(jar --list --file /build/override/loom-uc-3339-iceberg-authz.jar | grep -c '\.class$')"; \
     [ "${ENTRIES}" -eq 1 ] || { echo "FATAL: the #3339 overlay carries ${ENTRIES} classes, expected exactly 1" >&2; exit 1; }
