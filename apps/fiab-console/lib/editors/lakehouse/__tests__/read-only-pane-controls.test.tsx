@@ -56,10 +56,16 @@ async function probeSettled(calls: Array<{ url: string }>) {
   await new Promise((r) => setTimeout(r, 200));
 }
 
-/** Closed with the reason: breaks if the control is left open, or closed with no title. */
+/**
+ * Closed with the reason, as a hover title (buttons) or as visible text inside
+ * the control (menu items, whose subText is part of the accessible name): breaks
+ * if the control is left open, or closed with the reason in neither place.
+ */
 async function expectClosed(el: HTMLElement) {
   await waitFor(() => expect(el.getAttribute('aria-disabled')).toBe('true'));
-  expect(el.getAttribute('title')).toBe(LAKEHOUSE_READ_ONLY_TITLE);
+  if (el.getAttribute('title') !== LAKEHOUSE_READ_ONLY_TITLE) {
+    expect(el.textContent).toContain(LAKEHOUSE_READ_ONLY_TITLE);
+  }
 }
 
 const button = (name: RegExp) => screen.findByRole('button', { name }, { timeout: 5000 });
@@ -410,6 +416,9 @@ describe('ShortcutsPane row menu — read-only role', () => {
     await expectClosed(test);
     const del = await menuItem('Delete');
     await expectClosed(del);
+    // The reason is shown once, as visible text: breaks if a hover title repeating it comes back.
+    expect(test.getAttribute('title')).toBeNull();
+    expect(del.getAttribute('title')).toBeNull();
     fireEvent.click(test);
     fireEvent.click(del);
     // Breaks if either MenuItem loses disabled={readOnly}: the click would

@@ -19,8 +19,8 @@
  *     compared as the server compares it: trailing spaces removed, and a part
  *     with any other whitespace or control character is refused. A qualifier
  *     (every part before the last) is plain ASCII. A last part that is not
- *     plain ASCII is refused when, with width, accents and other non-ASCII
- *     characters set aside, it reads as a system name.
+ *     plain ASCII is refused when any reading of it names a system object,
+ *     each non-ASCII character read either as its ASCII fold or as nothing.
  *   - `OPENROWSET` is allow-list only: `BULK` is required, each location is a
  *     literal string, and each option is on the read-only list below.
  *   - LOCATIONS are confined by `confineQueryLocation`: a literal `https://` or
@@ -143,25 +143,68 @@ function shownNamePart(raw: string): string {
 }
 
 /**
- * The ASCII letters a name part keeps once compatibility forms are folded
- * (fullwidth letters, `ſ`), accents are separated from their letters, and
- * everything still outside ASCII is dropped; lower-cased. A collation that
- * ignores width, accents or some characters cannot see more than this.
+ * The ASCII readings of one character of a name part, lower-cased. An ASCII
+ * character reads as itself. Any other character reads as its compatibility
+ * decomposition with everything outside ASCII dropped (fullwidth `ｓ` and `ſ`
+ * as `s`, `é` as `e`), OR as nothing: a collation whose tables predate the
+ * character gives it no weight and compares the name as if it were absent.
+ * Dotless `ı` and dotted `İ` may also read as `i`.
  */
-function asciiSkeleton(part: string): string {
-  return part.normalize('NFKD').replace(/[^\x00-\x7f]/g, '').toLowerCase();
+function asciiReadings(c: string): string[] {
+  if (c.charCodeAt(0) < 0x80) return [c.toLowerCase()];
+  const folded = [...c.normalize('NFKD')].filter((d) => d.charCodeAt(0) < 0x80).join('').toLowerCase();
+  const readings = folded ? [folded, ''] : [''];
+  if ((c === '\u0131' || c === '\u0130') && !readings.includes('i')) readings.push('i');
+  return readings;
+}
+
+/** At most this many characters with more than one reading are checked; a part with more is refused. */
+const MAX_BRANCHING_CHARACTERS = 16;
+
+const SYSTEM_PREFIXES = ['##', 'fn_', 'sp_', 'xp_'];
+
+/** `sys` and every compatibility view, lower-cased. */
+function systemNames(): Set<string> {
+  return new Set(['sys', ...[...COMPATIBILITY_VIEWS].map((v) => v.toLowerCase())]);
 }
 
 /**
- * For a last name part that is not plain ASCII: the system name it folds into
- * (the `sys` schema, a compatibility view, or a `##`, `fn_`, `sp_` or `xp_`
- * name), or null. A plain ASCII part is left to the rules that compare it as
- * written, so `t.sp_rating` and an uncalled `[fn_total]` stay accepted.
+ * For a last name part that is not plain ASCII: whether any reading of it
+ * (each character read as in {@link asciiReadings}) is `sys`, a compatibility
+ * view, or starts with `##`, `fn_`, `sp_` or `xp_`. Returns the full name it
+ * reads as, `'unclassifiable'` for a part with more than
+ * {@link MAX_BRANCHING_CHARACTERS} characters that have more than one reading,
+ * or null. A plain ASCII part is left to the rules that compare it as written,
+ * so `t.sp_rating` and an uncalled `[fn_total]` stay accepted.
+ *
+ * The walk keeps only readings that are still the start of a system name, and
+ * each distinct one once, so it never holds more states than there are such
+ * starts, whatever the length of the part.
  */
-function foldedSystemName(part: string): string | null {
+function foldedSystemName(part: string): { name: string } | 'unclassifiable' | null {
   if (/^[\x00-\x7f]*$/.test(part)) return null;
-  const s = asciiSkeleton(part);
-  if (s === 'sys' || COMPATIBILITY_VIEWS.has(s.toUpperCase()) || /^(?:##|fn_|sp_|xp_)/.test(s)) return s;
+  const readings = [...part].map(asciiReadings);
+  if (readings.filter((r) => r.length > 1).length > MAX_BRANCHING_CHARACTERS) return 'unclassifiable';
+  const names = systemNames();
+  const live = (s: string) =>
+    [...names].some((n) => n.startsWith(s)) || SYSTEM_PREFIXES.some((p) => p.startsWith(s));
+  let states = new Set<string>(['']);
+  for (let i = 0; i < readings.length; i += 1) {
+    const next = new Set<string>();
+    for (const s of states) {
+      for (const r of readings[i]) {
+        const n = s + r;
+        if (SYSTEM_PREFIXES.some((p) => n.startsWith(p))) {
+          // Name the whole part as read: the rest in its first reading.
+          return { name: n + readings.slice(i + 1).map((rest) => rest[0]).join('') };
+        }
+        if (live(n)) next.add(n);
+      }
+    }
+    states = next;
+    if (states.size === 0) return null;
+  }
+  for (const s of states) if (names.has(s)) return { name: s };
   return null;
 }
 
@@ -497,10 +540,18 @@ function checkName(rawParts: string[], database: string, databaseLabel: string, 
     return refuse(`the system function ${last}`, WHY.admin);
   }
   const folded = foldedSystemName(last);
+  if (folded === 'unclassifiable') {
+    return refuse(
+      `the name part [${shownNamePart(last)}]`,
+      `it has more than ${MAX_BRANCHING_CHARACTERS} characters outside ASCII that a collation may read as a letter `
+      + 'or skip, too many to check against the system object names',
+      'Write the name in ASCII, or give it an ASCII alias. ' + SELECT_REMEDIATION,
+    );
+  }
   if (folded !== null) {
     return refuse(
-      `the name part [${shownNamePart(last)}], read as ${folded}`,
-      'with letter width, accents and other non-ASCII characters set aside it names a system object',
+      `the name part [${shownNamePart(last)}], read as ${folded.name}`,
+      'with letter width and accents folded, and characters a collation may not define skipped, it names a system object',
       'If it is a column or table of yours, write its name in ASCII or without those characters. '
       + SELECT_REMEDIATION,
     );
