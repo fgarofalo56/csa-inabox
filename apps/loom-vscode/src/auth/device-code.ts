@@ -6,9 +6,10 @@
  * extension shares the CLI's exact contract with the same BFF route
  * (`apps/fiab-console/app/api/auth/cli-session/route.ts`):
  *   line 1  {"type":"device_code", userCode, verificationUri, message, expiresIn}
- *   ...     (server polls Entra via the MSAL device-authorization grant)
+ *   ...     (server runs the RFC 8628 device-authorization grant against Entra
+ *            as the Console's confidential client, lib/auth/device-code-grant.ts)
  *   line N  {"type":"session", ok:true, cookie, expiresAt, claims}
- *   or      {"type":"error", ok:false, error, code}
+ *   or      {"type":"error", ok:false, error, code, aadsts?, correlationId?}
  *
  * Token acquisition is server-side, so the client holds no Entra authority
  * matrix — one build serves Commercial and Government; only `apiUrl` differs

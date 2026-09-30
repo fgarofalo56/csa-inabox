@@ -38,8 +38,26 @@ loom auth status      # show + verify the current session
 loom auth logout      # clear the stored session
 ```
 
-The device-code flow needs the Loom Entra app registration to allow public
-client flows — see `docs/fiab/MSAL-handoff.md`.
+The device-code flow needs NO change to the Loom Entra app registration. The
+Console redeems the code server-side as a **confidential client**, with its own
+client secret, and "Allow public client flows" must stay **off**: turning it on
+makes Entra refuse the browser sign-in's secret. Whether Entra accepts the secret
+on the device-code grant has not yet been verified with a live sign-in (#4805).
+If sign-in fails, the CLI prints the Entra AADSTS code and a remediation.
+
+Sessions from `loom auth login` (device code) are deliberately limited, as least
+privilege for a non-interactive sign-in:
+
+- they last **1 hour** and are not extended by refreshing;
+- they are **refused on admin surfaces** (`/admin/*`, `/api/admin/*` and any
+  tenant-admin or admin-tier capability), with 403
+  `interactive_sign_in_required` — so admin-only commands such as
+  `loom workspace bulk-delete` need the browser console, or a service-principal
+  session whose principal holds tenant-admin standing;
+- starting a sign-in is rate-limited per client IP (5 per 10 minutes, and at
+  most 2 waiting at once), answered with 429 and `Retry-After`.
+
+`--tenant` / `LOOM_TENANT` must be the deployment's own tenant id, or be omitted.
 
 ## Configuration
 
@@ -49,7 +67,7 @@ Precedence: flags > environment > stored default.
 |-------------|--------------|---------------|----------------------------------------|
 | API base    | `--api-url`  | `LOOM_API_URL`| Front Door / Container App hostname.   |
 | Output      | `--output`   | `LOOM_OUTPUT` | `table` (default) \| `json` \| `yaml`. |
-| Tenant      | `--tenant`   | `LOOM_TENANT` | Entra tenant override for sign-in.     |
+| Tenant      | `--tenant`   | `LOOM_TENANT` | The deployment's own Entra tenant id; anything else is refused. Omit to use it. |
 | Config dir  | —            | `LOOM_CONFIG_DIR` | Default `~/.loom`.                 |
 
 A single binary serves every sovereign cloud (Commercial, GCC, GCC-High, IL5):

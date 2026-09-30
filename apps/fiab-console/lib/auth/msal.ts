@@ -349,9 +349,12 @@ export function getMsalClient(): ConfidentialClientApplication {
  * with "Allow public client flows" (isFallbackPublicClient=true). The Console
  * app registration is deliberately the opposite -- a CONFIDENTIAL web app,
  * isFallbackPublicClient=false, enforced by both provisioning paths since the
- * 2026-06-17 AADSTS700025 incident -- so every device-code redemption failed
- * with AADSTS7000218 / invalid_client. The device-code grant now authenticates
- * with the Console's own client secret: see lib/auth/device-code-grant.ts.
+ * 2026-06-17 AADSTS700025 incident -- so every device-code redemption was refused
+ * `invalid_client` (most likely AADSTS7000218; inferred, because MSAL discarded
+ * the code). The device-code grant now authenticates with the Console's own
+ * client secret: see lib/auth/device-code-grant.ts, which also records that
+ * Entra's acceptance of a secret on this grant is UNVERIFIED until the live
+ * receipt on #4805.
  */
 
 /**

@@ -546,7 +546,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
-| `auth/cli-session/route.ts` | POST | public | ● | Microsoft Graph |
+| `auth/cli-session/route.ts` | POST | public | ● | Cosmos, Microsoft Graph |
 | `auth/me/route.ts` | GET | session-only |  | — |
 | `auth/refresh/route.ts` | POST | session-only |  | — |
 

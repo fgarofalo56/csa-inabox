@@ -223,7 +223,9 @@ Notes for the implementer:
   migration" guidance).
 - Update the three secret-presence gates (§3) to accept
   `LOOM_MSAL_CREDENTIAL=fic` as "configured".
-- `getSpConfidentialClient` and the device-code public client are untouched.
+- `getSpConfidentialClient` is untouched. The device-code grant
+  (`lib/auth/device-code-grant.ts`, #4805) is NOT: it presents the Console's own
+  credential, so it moves with the singleton (see its row in §3).
 
 ## 6. Rollout plan (FIC added alongside secret → flip → remove secret)
 

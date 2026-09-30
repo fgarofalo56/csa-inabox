@@ -12,14 +12,28 @@
  * modules/admin-plane/entra-app-registration.bicep) force
  * `isFallbackPublicClient=false`, because setting it true made Entra refuse the
  * browser sign-in's client secret with AADSTS700025 on 2026-06-17. So the two
- * requirements could not both hold, every device-code redemption was answered
- * AADSTS7000218 (`invalid_client`: "must contain client_assertion or
- * client_secret"), and MSAL reported it as the opaque
+ * requirements could not both hold: the redemption carried no client credential,
+ * Entra answered it `invalid_client`, and MSAL reported that as the opaque
  * `post_request_failed ... invalid_client`, having DISCARDED the AADSTS code.
+ * The specific code is INFERRED, not observed: for a credential-less request
+ * against a confidential app Entra's documented answer is AADSTS7000218 ("The
+ * request body must contain the following parameter: 'client_assertion' or
+ * 'client_secret'").
  *
- * The fix is to authenticate the redemption with the credential the Console
- * already holds, which Entra accepts for a confidential client. No app-registration
- * change is needed and the browser path is untouched.
+ * The fix authenticates the redemption with the credential the Console already
+ * holds. That is what RFC 8628 section 3.4 asks of a client that was issued
+ * credentials (it MUST authenticate the device access token request, per RFC 6749
+ * section 3.2.1), and what the AADSTS7000218 text itself asks for. Whether Entra
+ * ACCEPTS a client secret on the device-code grant is UNVERIFIED: Microsoft
+ * Learn's MSAL authentication-flows page describes device code as "available only
+ * for public client applications", and no live redemption with a secret has been
+ * observed. The live receipt on #4805 settles it. No app-registration change is
+ * made and the browser path is untouched.
+ *
+ * ID TOKEN CHECKS. The id token is refused unless its `aud` is exactly this
+ * Console's client id and its `exp` is in the future. The route additionally
+ * requires the minted session to belong to the deployment's tenant (`tid` and
+ * `iss`, see app/api/auth/cli-session/route.ts).
  *
  * WHAT THIS MODULE ALSO OWNS: turning Entra's refusal into a TRUE, specific
  * message. `classifyEntraTokenError` keys on the numeric AADSTS code Entra
@@ -47,6 +61,8 @@ export interface DeviceCodeIdentity {
   /** Home-tenant object id — `client_info.uid`, i.e. MSAL's `homeAccountId` first segment. */
   oid: string;
   tid?: string;
+  /** The id token's `iss`, for the route's deployment-tenant check. */
+  iss?: string;
   name?: string;
   /** preferred_username → upn → email, '' when none — the same order and default MSAL's `AccountInfo.username` uses. */
   username: string;
@@ -99,6 +115,11 @@ export interface DeviceCodeGrantOptions extends DeviceCodeGrantDeps {
 
 /** A tenant id or verified domain — the only shapes that belong in an authority path. */
 const TENANT_RE = /^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$/;
+
+/** Network failures retried while polling, per run of consecutive failures. */
+export const MAX_POLL_NETWORK_RETRIES = 1;
+/** Upper bound on the backoff before that retry (twice the poll interval, at most this). */
+export const POLL_RETRY_BACKOFF_CAP_MS = 30_000;
 export function isValidTenantSegment(t: string): boolean {
   return TENANT_RE.test(t);
 }
@@ -123,7 +144,14 @@ function firstLine(desc: string | undefined): string {
  */
 export function classifyEntraTokenError(
   body: EntraTokenErrorBody,
-  ctx: { clientId: string; tenant: string; secretPresented: boolean },
+  ctx: {
+    clientId: string;
+    tenant: string;
+    /** Whether THIS request carried the client secret. */
+    secretPresented: boolean;
+    /** Which request Entra refused: the device-code request (no secret is ever sent there) or the redemption. Default 'token'. */
+    stage?: 'devicecode' | 'token';
+  },
 ): DeviceCodeFailure {
   const num = Array.isArray(body.error_codes) && body.error_codes.length > 0 ? body.error_codes[0] : undefined;
   const aadsts = num !== undefined ? `AADSTS${num}` : undefined;
@@ -139,7 +167,9 @@ export function classifyEntraTokenError(
         deploymentFault: true,
         message: ctx.secretPresented
           ? `Entra refused device-code sign-in with AADSTS7000218 (no client credential) although the Console sent its client secret for ${app}. Loom does not know why Entra did not see it; Entra said: "${said}".`
-          : `Device-code sign-in needs ${app} to authenticate with its client secret (AADSTS7000218), and this Console has none: neither LOOM_MSAL_CLIENT_SECRET nor AZURE_CLIENT_SECRET is set. Re-run the post-deploy bootstrap (.github/workflows/csa-loom-post-deploy-bootstrap.yml), which stores loom-msal-client-secret in Key Vault and wires it onto the Console.`,
+          : ctx.stage === 'devicecode'
+            ? `Entra asked for a client credential (AADSTS7000218) on the device-code REQUEST for ${app}, where the Console sends none: it presents its client secret only when redeeming the code. Loom does not know why Entra required one at this step; Entra said: "${said}".`
+            : `Device-code sign-in needs ${app} to authenticate with its client secret (AADSTS7000218), and this Console has none: neither LOOM_MSAL_CLIENT_SECRET nor AZURE_CLIENT_SECRET is set. Re-run the post-deploy bootstrap (.github/workflows/csa-loom-post-deploy-bootstrap.yml), which stores loom-msal-client-secret in Key Vault and wires it onto the Console.`,
       };
     case 7000215:
       return {
@@ -230,7 +260,8 @@ function decodeSegment(seg: string | undefined): Record<string, unknown> {
  * The signed-in identity from a successful token response. The id token came
  * straight from Entra's token endpoint over TLS in answer to our own
  * client-authenticated request (OIDC Core §3.1.3.7 permits skipping signature
- * validation there), so only its audience is checked.
+ * validation there), so its signature is not checked. Its audience and expiry
+ * are, here; its tenant and issuer are checked by the route.
  *
  * `oid` is `client_info.uid` — what MSAL's `homeAccountId` carries, and so what
  * the browser callback and the previous MSAL-based branch stamped. For a guest
@@ -239,17 +270,31 @@ function decodeSegment(seg: string | undefined): Record<string, unknown> {
 export function identityFromTokenResponse(
   tok: { id_token?: string; client_info?: string },
   clientId: string,
+  nowMs: number = Date.now(),
 ): DeviceCodeIdentity {
   const idc = decodeSegment(tok.id_token?.split('.')[1]);
   const ci = decodeSegment(tok.client_info);
   if (!tok.id_token || Object.keys(idc).length === 0) {
     throw new DeviceCodeGrantError({ code: 'no_token', deploymentFault: false, message: 'Entra completed the device-code sign-in but returned no readable id token.' });
   }
-  if (idc.aud !== clientId) {
+  // A MISSING aud is refused, not skipped: `aud` must be a string equal to our client id.
+  if (typeof idc.aud !== 'string' || idc.aud !== clientId) {
     throw new DeviceCodeGrantError({
       code: 'id_token_audience_mismatch',
       deploymentFault: true,
-      message: `Entra returned an id token for audience "${String(idc.aud)}", not this Console's app registration (${clientId}). Refusing to mint a session from it.`,
+      message: idc.aud === undefined
+        ? `Entra returned an id token with no audience, so Loom cannot confirm it was issued to this Console's app registration (${clientId}). Refusing to mint a session from it.`
+        : `Entra returned an id token for audience "${String(idc.aud)}", not this Console's app registration (${clientId}). Refusing to mint a session from it.`,
+    });
+  }
+  // A MISSING exp is refused too: an id token with no expiry is not one Entra issues.
+  if (typeof idc.exp !== 'number' || idc.exp * 1000 <= nowMs) {
+    throw new DeviceCodeGrantError({
+      code: 'id_token_expired',
+      deploymentFault: false,
+      message: typeof idc.exp !== 'number'
+        ? 'Entra returned an id token with no expiry. Refusing to mint a session from it; run the sign-in again.'
+        : 'Entra returned an id token that has already expired. Refusing to mint a session from it; run the sign-in again, and check the Console host clock if this repeats.',
     });
   }
   const oid = (ci.uid as string) || (idc.oid as string) || '';
@@ -260,6 +305,7 @@ export function identityFromTokenResponse(
   return {
     oid,
     tid: (idc.tid as string) || (ci.utid as string) || undefined,
+    iss: typeof idc.iss === 'string' ? idc.iss : undefined,
     name: (idc.name as string) || undefined,
     username,
   };
@@ -312,7 +358,7 @@ export async function runDeviceCodeGrant(opts: DeviceCodeGrantOptions): Promise<
   const dc = await postForm(fetchImpl, `${authority}/oauth2/v2.0/devicecode`, { client_id: clientId, scope });
   if (!dc.body || dc.status !== 200 || typeof dc.body.device_code !== 'string') {
     if (dc.body && (dc.body.error || dc.body.error_codes)) {
-      throw new DeviceCodeGrantError(classifyEntraTokenError(dc.body as EntraTokenErrorBody, { clientId, tenant, secretPresented: false }));
+      throw new DeviceCodeGrantError(classifyEntraTokenError(dc.body as EntraTokenErrorBody, { clientId, tenant, secretPresented: false, stage: 'devicecode' }));
     }
     throw new DeviceCodeGrantError({
       code: 'entra_bad_response',
@@ -341,6 +387,11 @@ export async function runDeviceCodeGrant(opts: DeviceCodeGrantOptions): Promise<
   // THE FIX (#4805): a confidential client authenticates its redemption.
   if (secret) form.client_secret = secret;
 
+  // A transient network failure while POLLING is retried ONCE, after a bounded
+  // backoff; a second consecutive failure fails closed with `entra_unreachable`.
+  // A successful HTTP answer resets the count. The device-code request itself is
+  // not retried: nothing has been shown to the user yet, so failing fast is kinder.
+  let consecutiveNetworkFailures = 0;
   for (;;) {
     if (opts.isCancelled?.()) {
       throw new DeviceCodeGrantError({ code: 'cancelled', deploymentFault: false, message: 'The sign-in was cancelled by the client before it completed.' });
@@ -348,9 +399,21 @@ export async function runDeviceCodeGrant(opts: DeviceCodeGrantOptions): Promise<
     if (now() >= deadline) {
       throw new DeviceCodeGrantError({ code: 'device_code_expired', deploymentFault: false, message: 'The device code expired before the sign-in was completed. Run the sign-in again and enter the new code promptly.' });
     }
-    const tok = await postForm(fetchImpl, `${authority}/oauth2/v2.0/token`, form);
+    let tok: Awaited<ReturnType<typeof postForm>>;
+    try {
+      tok = await postForm(fetchImpl, `${authority}/oauth2/v2.0/token`, form);
+    } catch (e) {
+      const transient = e instanceof DeviceCodeGrantError && e.failure.code === 'entra_unreachable';
+      if (transient && consecutiveNetworkFailures < MAX_POLL_NETWORK_RETRIES) {
+        consecutiveNetworkFailures += 1;
+        await sleep(Math.min(intervalMs * 2, POLL_RETRY_BACKOFF_CAP_MS));
+        continue;
+      }
+      throw e;
+    }
+    consecutiveNetworkFailures = 0;
     if (tok.status === 200 && tok.body && typeof tok.body.id_token === 'string') {
-      return identityFromTokenResponse(tok.body as { id_token?: string; client_info?: string }, clientId);
+      return identityFromTokenResponse(tok.body as { id_token?: string; client_info?: string }, clientId, now());
     }
     const err = (tok.body ?? {}) as EntraTokenErrorBody;
     if (err.error === 'authorization_pending') {

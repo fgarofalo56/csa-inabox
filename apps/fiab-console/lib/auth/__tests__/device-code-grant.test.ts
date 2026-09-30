@@ -5,8 +5,9 @@
  * THE DEFECT. `POST /api/auth/cli-session` redeemed the device code through
  * MSAL's PublicClientApplication, which sends no client credential. The Console
  * app registration is confidential (isFallbackPublicClient=false, deliberately),
- * so Entra answered every redemption AADSTS7000218 and MSAL surfaced only
- * `post_request_failed ... invalid_client`, the AADSTS code discarded.
+ * so Entra refused every redemption `invalid_client` (most likely AADSTS7000218;
+ * inferred, because MSAL surfaced only `post_request_failed ... invalid_client`,
+ * the AADSTS code discarded).
  *
  * Each assertion below names, in its message or the comment above it, the
  * input or code change that turns it red. The mutation arms run against this
@@ -56,11 +57,17 @@ function fakeEntra(tokenAnswers: Array<{ status: number; body: unknown }>, dc?: 
 const OK_TOKEN = {
   status: 200,
   body: {
-    id_token: idToken({ aud: CLIENT_ID, tid: TENANT, oid: TOKEN_OID, name: 'Ada', preferred_username: 'ada@contoso.com' }),
+    id_token: idToken({
+      aud: CLIENT_ID, tid: TENANT, oid: TOKEN_OID, name: 'Ada', preferred_username: 'ada@contoso.com',
+      iss: `https://login.microsoftonline.com/${TENANT}/v2.0`,
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    }),
     client_info: b64url({ uid: HOME_OID, utid: HOME_TID }),
     access_token: 'at',
   },
 };
+/** Seconds-since-epoch `exp` one hour out, for id tokens built inline. */
+const FUTURE_EXP = Math.floor(Date.now() / 1000) + 3600;
 
 const env0 = { ...process.env };
 beforeEach(() => {
@@ -183,7 +190,7 @@ describe('#4805 — polling follows RFC 8628', () => {
     expect(sleeps).toEqual([5000]);
     expect(calls.filter((c) => c.url.endsWith('/token'))).toHaveLength(2);
     expect(calls[1].form.get('scope')).toBe('openid profile');
-    expect(who).toEqual({ oid: HOME_OID, tid: TENANT, name: 'Ada', username: 'ada@contoso.com' });
+    expect(who).toEqual({ oid: HOME_OID, tid: TENANT, iss: `https://login.microsoftonline.com/${TENANT}/v2.0`, name: 'Ada', username: 'ada@contoso.com' });
   });
 
   it('slow_down adds 5 s to the interval and keeps it (5000 -> 10000 -> 10000)', async () => {
@@ -196,6 +203,52 @@ describe('#4805 — polling follows RFC 8628', () => {
     await runDeviceCodeGrant({ scopes: ['openid'], onPrompt: () => {}, fetchImpl, sleep: async (ms) => { sleeps.push(ms); } });
     // RED if slow_down does not raise the interval (would read [5000, 5000]) or raises it only once-off.
     expect(sleeps).toEqual([10000, 10000]);
+  });
+
+  /** A fetch that answers /devicecode, then throws on the first `failures` /token calls, then answers OK_TOKEN. */
+  function flakyEntra(failures: number, interval = 5) {
+    const tokenCalls: string[] = [];
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      if (url.endsWith('/devicecode')) {
+        return new Response(JSON.stringify({ device_code: 'DC-1', user_code: 'UC-1', verification_uri: 'https://microsoft.com/devicelogin', message: 'go', expires_in: 900, interval }), { status: 200 });
+      }
+      tokenCalls.push(String(init.body));
+      if (tokenCalls.length <= failures) throw new TypeError('fetch failed');
+      return new Response(JSON.stringify(OK_TOKEN.body), { status: 200 });
+    }) as unknown as typeof fetch;
+    return { tokenCalls, fetchImpl };
+  }
+
+  it('ONE transient network failure while polling is retried after a bounded backoff, and the sign-in completes', async () => {
+    const sleeps: number[] = [];
+    const { tokenCalls, fetchImpl } = flakyEntra(1);
+    const who = await runDeviceCodeGrant({ scopes: ['openid'], onPrompt: () => {}, fetchImpl, sleep: async (ms) => { sleeps.push(ms); } });
+    expect(who.oid).toBe(HOME_OID);
+    // RED if the poll loop does not retry (MAX_POLL_NETWORK_RETRIES = 0: the grant throws entra_unreachable).
+    expect(tokenCalls).toHaveLength(2);
+    // The backoff is twice the 5 s interval. RED if the retry does not sleep first.
+    expect(sleeps).toEqual([10000]);
+  });
+
+  it('a SECOND consecutive network failure fails closed with entra_unreachable, after exactly two /token attempts', async () => {
+    let t = 1_000_000;
+    const { tokenCalls, fetchImpl } = flakyEntra(99);
+    const f = await grantFailure(runDeviceCodeGrant({
+      scopes: ['openid'], onPrompt: () => {}, fetchImpl,
+      now: () => t, sleep: async (ms) => { t += ms; },
+    }));
+    expect(f.code).toBe('entra_unreachable');
+    // RED if the retry is unbounded or allows more than one (the count would exceed 2
+    // before the 900 s device-code deadline stops it with device_code_expired).
+    expect(tokenCalls).toHaveLength(2);
+  });
+
+  it('the retry backoff is capped at 30 s even when the poll interval is long', async () => {
+    const sleeps: number[] = [];
+    const { fetchImpl } = flakyEntra(1, 20); // 20 s interval: 2x would be 40 s
+    await runDeviceCodeGrant({ scopes: ['openid'], onPrompt: () => {}, fetchImpl, sleep: async (ms) => { sleeps.push(ms); } });
+    // RED if the cap is removed (40000).
+    expect(sleeps).toEqual([30000]);
   });
 
   it('stops at the device code expiry without another token request', async () => {
@@ -236,6 +289,45 @@ describe('#4805 — failures that are NOT Entra verdicts say so', () => {
     expect(f.aadsts).toBeUndefined();
   });
 
+  it('a network failure ON THE REDEMPTION never carries the secret: not in the failure, the message, or the thrown error', async () => {
+    // /devicecode succeeds; the /token POST THROWS, and the thrown error's own
+    // message quotes the full request body (client_secret included) — the worst
+    // case a fetch implementation can hand back. The breaking inputs are code
+    // changes: RED if the network-failure message interpolates the request
+    // (e.g. `new URLSearchParams(form)`) or the fetch error's `message` instead
+    // of its `name`.
+    const tokenBodies: string[] = [];
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      if (url.endsWith('/devicecode')) {
+        return new Response(JSON.stringify({ device_code: 'DC-1', user_code: 'UC-1', verification_uri: 'https://microsoft.com/devicelogin', message: 'go', expires_in: 900, interval: 5 }), { status: 200 });
+      }
+      tokenBodies.push(String(init.body));
+      throw new TypeError(`fetch failed: POST ${url} body=${String(init.body)}`);
+    }) as unknown as typeof fetch;
+    let thrown: unknown;
+    try {
+      await runDeviceCodeGrant({ scopes: ['openid'], onPrompt: () => {}, fetchImpl, sleep: async () => {} });
+    } catch (e) { thrown = e; }
+    // Positive first: the secret WAS on the failing requests (the first attempt
+    // and its one retry), and the failure is the network one.
+    expect(tokenBodies, 'expected the /token request and exactly one retry').toHaveLength(2);
+    expect(new URLSearchParams(tokenBodies[0]).get('client_secret')).toBe(SECRET);
+    expect(thrown).toBeInstanceOf(DeviceCodeGrantError);
+    const f = (thrown as DeviceCodeGrantError).failure;
+    expect(f.code).toBe('entra_unreachable');
+    expect(f.message).toContain('login.microsoftonline.com');
+    // The absence checks — every surface the error reaches.
+    for (const [where, text] of [
+      ['failure', JSON.stringify(f)],
+      ['error.message', (thrown as Error).message],
+      ['String(error)', String(thrown)],
+      ['error.stack', String((thrown as Error).stack)],
+    ] as const) {
+      expect(text, `${where} carries the client secret`).not.toContain(SECRET);
+      expect(text, `${where} carries the device code`).not.toContain('DC-1');
+    }
+  });
+
   it('a non-JSON token response is entra_bad_response with the HTTP status', async () => {
     const { fetchImpl } = fakeEntra([{ status: 502, body: '<html>bad gateway</html>' }]);
     const f = await grantFailure(runDeviceCodeGrant({ scopes: ['openid'], onPrompt: () => {}, fetchImpl, sleep: async () => {} }));
@@ -250,6 +342,20 @@ describe('#4805 — failures that are NOT Entra verdicts say so', () => {
     expect(f.code).toBe('app_not_found');
     expect(f.aadsts).toBe('AADSTS700016');
     expect(prompts).toHaveLength(0);
+  });
+
+  it('a 7000218 on the DEVICE-CODE request does not claim the Console has no secret (call-site seam)', async () => {
+    // The breaking input: a secret IS configured, and Entra answers the
+    // /devicecode request (which never carries one) with 7000218. RED if the
+    // grant stops passing `stage: 'devicecode'`: the message would then say
+    // "neither LOOM_MSAL_CLIENT_SECRET nor AZURE_CLIENT_SECRET is set", which is false here.
+    const { calls, fetchImpl } = fakeEntra([], { status: 401, body: { error: 'invalid_client', error_codes: [7000218], error_description: 'AADSTS7000218: body must contain client_secret' } });
+    const f = await grantFailure(runDeviceCodeGrant({ scopes: ['openid'], onPrompt: () => {}, fetchImpl }));
+    expect(process.env.LOOM_MSAL_CLIENT_SECRET).toBe(SECRET);
+    expect(calls[0].form.has('client_secret')).toBe(false);
+    expect(f.code).toBe('client_credential_missing');
+    expect(f.message).toContain('on the device-code REQUEST');
+    expect(f.message).not.toContain('neither LOOM_MSAL_CLIENT_SECRET nor AZURE_CLIENT_SECRET is set');
   });
 
   it('never puts the secret or the device code into a failure message', async () => {
@@ -344,15 +450,63 @@ describe('#4805 — identity matches the browser callback derivation', () => {
 
   it('tid prefers the id token tid, then client_info.utid', () => {
     expect(identityFromTokenResponse(OK_TOKEN.body, CLIENT_ID).tid).toBe(TENANT);
-    const noTid = { id_token: idToken({ aud: CLIENT_ID, name: 'x' }), client_info: b64url({ uid: HOME_OID, utid: HOME_TID }) };
+    const noTid = { id_token: idToken({ aud: CLIENT_ID, name: 'x', exp: FUTURE_EXP }), client_info: b64url({ uid: HOME_OID, utid: HOME_TID }) };
     expect(identityFromTokenResponse(noTid, CLIENT_ID).tid).toBe(HOME_TID);
   });
 
   it('refuses an id token minted for another audience', () => {
-    const other = { id_token: idToken({ aud: 'ffffffff-0000-0000-0000-000000000009', tid: TENANT }), client_info: b64url({ uid: HOME_OID }) };
+    const other = { id_token: idToken({ aud: 'ffffffff-0000-0000-0000-000000000009', tid: TENANT, exp: FUTURE_EXP }), client_info: b64url({ uid: HOME_OID }) };
     expect(() => identityFromTokenResponse(other, CLIENT_ID)).toThrow(/audience/);
     // Control: the same token with our audience is accepted.
-    expect(identityFromTokenResponse({ ...other, id_token: idToken({ aud: CLIENT_ID, tid: TENANT }) }, CLIENT_ID).oid).toBe(HOME_OID);
+    expect(identityFromTokenResponse({ ...other, id_token: idToken({ aud: CLIENT_ID, tid: TENANT, exp: FUTURE_EXP }) }, CLIENT_ID).oid).toBe(HOME_OID);
+  });
+
+  it('refuses an id token with NO aud claim (a missing audience is not a pass)', () => {
+    // The breaking input: an id token whose payload has no `aud` key at all.
+    // RED if the audience check only fires when `aud` is present
+    // (`if (idc.aud !== undefined && idc.aud !== clientId)`, or `if (idc.aud && ...)`).
+    const noAud = { id_token: idToken({ tid: TENANT, exp: FUTURE_EXP }), client_info: b64url({ uid: HOME_OID }) };
+    let err: unknown;
+    try { identityFromTokenResponse(noAud, CLIENT_ID); } catch (e) { err = e; }
+    expect(err, 'an id token with no aud minted an identity').toBeInstanceOf(DeviceCodeGrantError);
+    expect((err as DeviceCodeGrantError).failure.code).toBe('id_token_audience_mismatch');
+    expect((err as DeviceCodeGrantError).failure.message).toContain('no audience');
+    // A non-string aud (an array holding our id) is refused too: Entra id tokens carry a string.
+    const arrAud = { id_token: idToken({ aud: [CLIENT_ID], tid: TENANT, exp: FUTURE_EXP }), client_info: b64url({ uid: HOME_OID }) };
+    expect(() => identityFromTokenResponse(arrAud, CLIENT_ID)).toThrow(/audience/);
+  });
+
+  it('refuses an id token whose exp is past, or equal to now; accepts one a second in the future', () => {
+    const NOW_MS = 2_000_000_000_000; // fixed clock, so the boundary is exact
+    const at = (exp: unknown) => ({ id_token: idToken({ aud: CLIENT_ID, tid: TENANT, exp }), client_info: b64url({ uid: HOME_OID }) });
+    // The breaking inputs: exp one hour back, and exp == now. RED if the exp check
+    // is deleted (both would mint), or if `<=` becomes `<` (the equal case mints).
+    for (const exp of [NOW_MS / 1000 - 3600, NOW_MS / 1000]) {
+      let err: unknown;
+      try { identityFromTokenResponse(at(exp), CLIENT_ID, NOW_MS); } catch (e) { err = e; }
+      expect(err, `exp=${exp} (now=${NOW_MS / 1000}) minted an identity`).toBeInstanceOf(DeviceCodeGrantError);
+      expect((err as DeviceCodeGrantError).failure.code).toBe('id_token_expired');
+    }
+    // No exp at all is refused too.
+    expect(() => identityFromTokenResponse(at(undefined), CLIENT_ID, NOW_MS)).toThrow(/no expiry/);
+    // Control: one second in the future is accepted, so the refusals above are the exp check, not something else.
+    expect(identityFromTokenResponse(at(NOW_MS / 1000 + 1), CLIENT_ID, NOW_MS).oid).toBe(HOME_OID);
+  });
+
+  it("the grant checks exp against ITS clock (call-site seam): a token already expired by the grant's now() is refused", async () => {
+    // OK_TOKEN's exp is Date.now()+1h. The grant's injected clock is 10 years on,
+    // so the token is expired BY THAT CLOCK. RED if runDeviceCodeGrant stops passing
+    // now() to identityFromTokenResponse (the default Date.now() would accept it).
+    const TEN_YEARS_ON = Date.now() + 10 * 365 * 86_400_000;
+    const { fetchImpl } = fakeEntra([OK_TOKEN]);
+    const f = await grantFailure(
+      runDeviceCodeGrant({ scopes: ['openid'], onPrompt: () => {}, fetchImpl, sleep: async () => {}, now: () => TEN_YEARS_ON }),
+    );
+    expect(f.code).toBe('id_token_expired');
+  });
+
+  it('exposes the id token iss for the route to check', () => {
+    expect(identityFromTokenResponse(OK_TOKEN.body, CLIENT_ID).iss).toBe(`https://login.microsoftonline.com/${TENANT}/v2.0`);
   });
 });
 

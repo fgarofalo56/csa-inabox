@@ -693,6 +693,33 @@ test('#4805 only the FIRST line of the row is quoted', () => {
   assert.match(r.out, /row=\[PrimaryResult<TAB>4\]/);
 });
 
+test('#4805 NO exit status recorded says so, and claims neither "exited 0" nor "failed"', () => {
+  // The breaking input: the same unparseable row with LH_HITS_RC UNSET — the
+  // step recorded no exit status. RED if the no-rc case falls into either rc
+  // branch (e.g. `elif [ -n "${LH_HITS_RC:-}" ]` loosened to `elif true`, which
+  // would assert the query FAILED), or if its message is deleted.
+  const r = run({ LH_LAW: 'ws-guid', LH_HITS_ROW: TABLENAME_ROW, LH_MIN_END: daysOut(400) });
+  assert.equal(r.code, 0, r.out);
+  assert.equal(token(r.out), 'unknown');
+  assert.match(r.out, /no exit status was recorded for the hits query, so whether it ran at all is unknown/);
+  assert.doesNotMatch(r.out, /hits query exited 0/);
+  assert.doesNotMatch(r.out, /the hits query failed/);
+});
+
+test('#4805 a row of ONLY unquotable characters is a row, not "NO row" (the empty check runs before the filter)', () => {
+  // The breaking input: a non-empty first line whose every byte the charset
+  // filter drops (non-ASCII). RED if "NO row" is decided on the FILTERED quote,
+  // as it was before this fix: the filtered string is empty, so the script said
+  // the query returned nothing when it returned a row it could not quote.
+  const r = run({ LH_LAW: 'ws-guid', LH_HITS_ROW: 'éèê', LH_HITS_RC: '0', LH_MIN_END: daysOut(400) });
+  assert.equal(token(r.out), 'unknown');
+  assert.match(r.out, /its first field is not a count: row=\[\(no quotable characters: every character is outside the safe set\)\]/);
+  assert.doesNotMatch(r.out, /returned NO row/);
+  // Control: a truly empty row still reads as NO row (the check did not simply move).
+  const empty = run({ LH_LAW: 'ws-guid', LH_HITS_ROW: '', LH_HITS_RC: '0', LH_MIN_END: daysOut(400) });
+  assert.match(empty.out, /returned NO row/);
+});
+
 test('#4805 the FIXED projection\'s output parses; the rejected `[0].[…]` shape does not order the hits', () => {
   // `--query "[].[hits, lastHit]"` → knack writes one TAB-joined line per row.
   const fixed = run({ LH_LAW: 'ws-guid', LH_HITS_ROW: '4\t2026-08-15T10:00:00Z', LH_HITS_RC: '0', LH_CRED_NEWEST: CRED_TODAY, LH_MIN_END: daysOut(400) });
