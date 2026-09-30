@@ -17,7 +17,6 @@
 
 import {
   ConfidentialClientApplication,
-  PublicClientApplication,
   type AccountInfo,
   type Configuration,
   type ICachePlugin,
@@ -33,7 +32,11 @@ function authorityHost(): string {
     : 'https://login.microsoftonline.com';
 }
 
-function getAuthority(tenantId?: string): string {
+/** `<login host>/<tenant>` for the active sovereign cloud. Exported for the
+ * device-code grant (`lib/auth/device-code-grant.ts`), which must hit the SAME
+ * authority as the confidential client — login.microsoftonline.us on GCC-High /
+ * IL5, login.microsoftonline.com on Commercial / GCC. */
+export function getAuthority(tenantId?: string): string {
   const tid = tenantId || process.env.AZURE_TENANT_ID || 'common';
   return `${authorityHost()}/${tid}`;
 }
@@ -293,14 +296,28 @@ const cosmosTokenCachePlugin: ICachePlugin = {
   },
 };
 
+/**
+ * The Console app registration's client id and client secret, resolved ONCE
+ * here so the confidential client below and the device-code grant
+ * (`lib/auth/device-code-grant.ts`, #4805) can never authenticate as two
+ * different things. Read at call time, not import time, so a test (or a
+ * revision whose env changed) sees the current value.
+ */
+export function msalClientId(): string {
+  // Prefer LOOM_MSAL_CLIENT_ID (separate from AZURE_CLIENT_ID which is
+  // the UAMI client id for DefaultAzureCredential). Fall back to
+  // AZURE_CLIENT_ID for v1.x compat.
+  return process.env.LOOM_MSAL_CLIENT_ID || process.env.AZURE_CLIENT_ID || '';
+}
+export function msalClientSecret(): string | undefined {
+  return process.env.LOOM_MSAL_CLIENT_SECRET || process.env.AZURE_CLIENT_SECRET || undefined;
+}
+
 const config: Configuration = {
   auth: {
-    // Prefer LOOM_MSAL_CLIENT_ID (separate from AZURE_CLIENT_ID which is
-    // the UAMI client id for DefaultAzureCredential). Fall back to
-    // AZURE_CLIENT_ID for v1.x compat.
-    clientId: process.env.LOOM_MSAL_CLIENT_ID || process.env.AZURE_CLIENT_ID || '',
+    clientId: msalClientId(),
     authority: getAuthority(),
-    clientSecret: process.env.LOOM_MSAL_CLIENT_SECRET || process.env.AZURE_CLIENT_SECRET,
+    clientSecret: msalClientSecret(),
   },
   // Persist the token cache (per-user, encrypted) to Cosmos so silent refresh
   // works across replicas + restarts. No-op unless LOOM_COSMOS_ENDPOINT is set;
@@ -325,35 +342,20 @@ export function getMsalClient(): ConfidentialClientApplication {
   return _client;
 }
 
-/**
- * Public-client application for the OAuth 2.0 device-authorization grant
- * (RFC 8628). Used by `POST /api/auth/cli-session` so the `loom` CLI can
- * sign a human in from a terminal without a browser redirect — the same
- * interactive method `fab auth login` offers.
- *
- * Reuses the SAME `LOOM_MSAL_CLIENT_ID` app registration and the SAME
- * sovereign-cloud authority switch as the confidential client. No client
- * secret is sent (device code is a public-client flow); the Entra app must
- * have "Allow public client flows" enabled — see docs/fiab/MSAL-handoff.md.
- *
- * `tenantId` overrides the env default so a single deployment can mint CLI
- * sessions for a guest's home tenant when needed.
+/*
+ * NO PUBLIC CLIENT HERE (#4805). A `getMsalPublicClient()` used to live here for
+ * the CLI / VS Code device-code sign-in. It sent the device-code token request
+ * with NO client credential, which Entra only accepts from an app registration
+ * with "Allow public client flows" (isFallbackPublicClient=true). The Console
+ * app registration is deliberately the opposite -- a CONFIDENTIAL web app,
+ * isFallbackPublicClient=false, enforced by both provisioning paths since the
+ * 2026-06-17 AADSTS700025 incident -- so every device-code redemption was refused
+ * `invalid_client` (most likely AADSTS7000218; inferred, because MSAL discarded
+ * the code). The device-code grant now authenticates with the Console's own
+ * client secret: see lib/auth/device-code-grant.ts, which also records that
+ * Entra's acceptance of a secret on this grant is UNVERIFIED until the live
+ * receipt on #4805.
  */
-let _publicClient: PublicClientApplication | null = null;
-let _publicClientTenant: string | null = null;
-export function getMsalPublicClient(tenantId?: string): PublicClientApplication {
-  const tid = tenantId || process.env.AZURE_TENANT_ID || 'common';
-  if (_publicClient && _publicClientTenant === tid) return _publicClient;
-  _publicClient = new PublicClientApplication({
-    auth: {
-      clientId: process.env.LOOM_MSAL_CLIENT_ID || process.env.AZURE_CLIENT_ID || '',
-      authority: getAuthority(tid),
-    },
-    system: config.system,
-  });
-  _publicClientTenant = tid;
-  return _publicClient;
-}
 
 /**
  * Confidential client bound to an EXPLICIT service-principal credential

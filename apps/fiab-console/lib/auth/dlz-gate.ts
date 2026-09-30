@@ -28,6 +28,7 @@ import { NextResponse } from 'next/server';
 import type { SessionPayload } from './session';
 import { canAccessDlzPanes, TENANT_ADMIN_TIER_REMEDIATION, TENANT_ADMIN_BOOTSTRAP_ENV } from './domain-role';
 import { loadTenantDomains } from './load-domains';
+import { deviceCodeAdminRefusal, isDeviceCodeSession } from './device-code-policy';
 
 export type DlzPane = 'scaling' | 'cost' | 'monitoring';
 
@@ -48,6 +49,11 @@ export async function denyIfNoDlzAccess(
   session: SessionPayload,
   pane: DlzPane = 'scaling',
 ): Promise<NextResponse | null> {
+  // #4805 (operator decision 2026-09-30): the DLZ panes are ADMIN-TIER (tenant
+  // admin or domain admin), and a CLI / VS Code device-code session never holds
+  // admin standing. This is also the gate in front of the shared services'
+  // access keys (Event Hubs, Cosmos DB, AI Search, Event Grid, Service Bus).
+  if (isDeviceCodeSession(session)) return deviceCodeAdminRefusal();
   // Tenant scope, NOT the caller's oid — the domain store is per-TENANT and
   // sibling readers (chargeback) key it with tid. See #3282.
   const domains = await loadTenantDomains(tenantScopeId(session));

@@ -97,6 +97,16 @@ export interface SessionPayload {
    * downgrades the caller to the token's scope in the API guards.
    */
   pat?: PatSessionContext;
+  /**
+   * How the session was minted, when that was NOT the browser sign-in.
+   * `'device_code'` is stamped by `POST /api/auth/cli-session`'s device-code
+   * branch (#4805) and carried across a refresh re-mint
+   * (app/api/auth/refresh/route.ts), so it cannot be shed by refreshing.
+   * Undefined for a browser-callback session. The least-privilege policy it
+   * drives (1 h lifetime, no admin surfaces, rate-limited start) lives in
+   * lib/auth/device-code-policy.ts.
+   */
+  authVia?: 'device_code';
 }
 
 /**
@@ -173,8 +183,18 @@ export function sessionGroupsDroppedForSize(payload: SessionPayload): boolean {
 export function getSession(): SessionPayload | null {
   const cookie = (cookies() as unknown as UnsafeUnwrappedCookies).get(COOKIE_NAME);
   if (!cookie) return null;
+  return decodeSessionCookie(cookie.value);
+}
+
+/**
+ * Decrypt and validate a raw `loom_session` cookie value — the body of
+ * {@link getSession}, exposed so middleware.ts (which has the request, not the
+ * `cookies()` store) reads a session exactly the same way. Null on tamper,
+ * format error or expiry.
+ */
+export function decodeSessionCookie(value: string): SessionPayload | null {
   try {
-    const raw = Buffer.from(cookie.value, 'base64url');
+    const raw = Buffer.from(value, 'base64url');
     const iv = raw.subarray(0, IV_LEN);
     const tag = raw.subarray(IV_LEN, IV_LEN + TAG_LEN);
     const encrypted = raw.subarray(IV_LEN + TAG_LEN);
@@ -212,8 +232,8 @@ export function sessionSlidingEnabled(): boolean {
  * SAME flags the auth-callback uses. Shared so the silent-refresh route re-mints
  * the cookie byte-identically (no new crypto, no drift in Path/Max-Age/flags).
  */
-export function setSessionCookieHeader(value: string): string {
-  return `${COOKIE_NAME}=${value}; Path=/; Max-Age=${MAX_AGE_SECS}; HttpOnly; Secure; SameSite=Lax`;
+export function setSessionCookieHeader(value: string, maxAgeSecs: number = MAX_AGE_SECS): string {
+  return `${COOKIE_NAME}=${value}; Path=/; Max-Age=${Math.max(0, Math.floor(maxAgeSecs))}; HttpOnly; Secure; SameSite=Lax`;
 }
 
 // ---------------------------------------------------------------------------
