@@ -603,11 +603,16 @@ export const OUTBOUND_BASELINE = new Map([
   // catalog base, with the SAME injected bearer, and it records
   // recordDatabricksUnityAccess on BOTH the success and the transport-failure
   // path — i.e. it is audited exactly like the listNamespaceGrants exit next to
-  // it, not a new un-audited door. It exists because the shipped catalog image
-  // answers the native Iceberg LIST-namespaces route HTTP 500 for every
-  // principal (measured; the bare upstream v0.5.0 image answers 200 — the
-  // v0.5.1 server overlay is the cause), and it fires ONLY on that exact error
-  // signature.
+  // it, not a new un-audited door. It exists because upstream's native Iceberg
+  // LIST-namespaces route, with authorization enabled, answers 403 to every
+  // caller that is not metastore OWNER and HTTP 500 "Authorization filter not
+  // initialized" to the OWNER. That 500 is upstream's own (an in-process call
+  // with no result filter installed), not the v0.5.1 server overlay: with the
+  // overlay stripped and authorization on it is unchanged, and with
+  // authorization off the route answers 200 (apps/loom-unity/tests/authz/
+  // iceberg-e2e.sh, rows P2/I1/I2). The loom-unity image now serves the route
+  // itself (#3339), so this exit fires only for an image without that change,
+  // and ONLY on that exact 500 signature; a 403 propagates.
   ['lib/azure/iceberg-catalog-client.ts', 3],
   // Its own securableFetch + the Key Vault read in getKeyVaultSecret. The UC
   // exit is audited by securableFetch's own finally as of #2622's residual; the
