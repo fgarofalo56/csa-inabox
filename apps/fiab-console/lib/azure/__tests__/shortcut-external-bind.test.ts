@@ -22,6 +22,11 @@ vi.mock('../adls-client', () => ({ listPaths: vi.fn(async () => []) }));
 // registry lookup is stubbed. [] = no other row has bound the name, so the
 // principal below owns every `loom-sc-` fixture name.
 vi.mock('../lakehouse-shortcuts', () => ({ listShortcutSecretBindings: vi.fn(async () => []) }));
+// The mint record for every `loom-sc-` fixture: saved by the OWNER below.
+vi.mock('../kv-secrets-client', () => ({
+  getShortcutSecretOwnerRecord: vi.fn(async () => ({ exists: true, owner: { oid: 'oid-u', upn: 'u@contoso.com' } })),
+  getShortcutSecretValue: vi.fn(),
+}));
 vi.mock('../synapse-sql-client', () => ({
   serverlessTarget: vi.fn(() => ({ server: 's', database: 'master', cacheKey: 'k' })),
   executeQuery: vi.fn(async () => ({ columns: [], rows: [], rowCount: 0, executionMs: 1, truncated: false })),
@@ -34,7 +39,7 @@ vi.mock('../databricks-client', () => ({
   deleteUcVolumesFile: vi.fn(async () => {}),
 }));
 
-import { bindExternalSource, externalSourceGate, SECRET_SHAPE_MISMATCH } from '../shortcut-engines';
+import { bindExternalSource, createTablesShortcut, externalSourceGate, SECRET_SHAPE_MISMATCH } from '../shortcut-engines';
 import {
   getKeyVaultSecret,
   keyVaultConfigGate,
@@ -44,7 +49,7 @@ import {
 } from '../shortcut-credentials';
 import { executeQuery } from '../synapse-sql-client';
 
-const OWNER = { kind: 'principal' as const, upn: 'u@contoso.com' };
+const OWNER = { kind: 'principal' as const, via: 'request' as const, oid: 'oid-u', upn: 'u@contoso.com' };
 
 const baseEnv = { ...process.env };
 beforeEach(() => {
@@ -174,6 +179,35 @@ describe('bindExternalSource — S3 via Synapse (access keys)', () => {
     expect(ddl).toContain("SECRET = 'AKIAEXAMPLE:supersecretkey'");
     expect(ddl).toContain("CREATE EXTERNAL DATA SOURCE");
     expect(ddl).toContain("LOCATION = 's3://acme'");
+  });
+
+  it('escapes a quote in the bucket inside LOCATION = \'…\' (the same quoting as the rest of the DDL)', async () => {
+    // WHAT BREAKS IT: interpolating `obj.prefix` raw — the literal then closes at
+    // the bucket's quote, and the expected doubled-quote form is absent.
+    process.env.LOOM_SYNAPSE_WORKSPACE = 'ws1';
+    (getKeyVaultSecret as any).mockResolvedValue('AKIAEXAMPLE:supersecretkey');
+    await bindExternalSource({
+      lakehouseId: 'lh1', name: 'q', targetType: 's3',
+      targetUri: "s3://ac'me/x", credentialRef: { kind: 'awsKeys', keyVaultSecret: 'loom-sc-s3-keys' }, owner: OWNER,
+    });
+    const ddl = ((executeQuery as any).mock.calls as any[][]).map((c) => c[1] as string)
+      .find((s) => s.includes('CREATE EXTERNAL DATA SOURCE'))!;
+    expect(ddl).toContain("LOCATION = 's3://ac''me'");
+    expect(ddl).not.toContain("LOCATION = 's3://ac'me'");
+  });
+
+  it('escapes a quote in the container inside the SAS data source LOCATION = \'…\'', async () => {
+    // WHAT BREAKS IT: interpolating `location` raw in the external-ADLS SAS
+    // Tables path — the doubled-quote form is then absent and the raw one present.
+    process.env.LOOM_SYNAPSE_WORKSPACE = 'ws1';
+    await createTablesShortcut({
+      lakehouseId: 'lh1', name: 'sasq', abfssUri: 'abfss://x@acct.dfs.core.windows.net/p',
+      external: { objectUri: '', adlsSas: { sas: 'sv=2024&sig=x', account: 'acct', container: "da'ta", path: 'p' } } as any,
+    });
+    const ddl = ((executeQuery as any).mock.calls as any[][]).map((c) => c[1] as string)
+      .find((s) => s.includes('CREATE EXTERNAL DATA SOURCE'))!;
+    expect(ddl).toMatch(/LOCATION = 'https:\/\/acct\.[a-z0-9.]+\/da''ta'/);
+    expect(ddl).not.toMatch(/LOCATION = 'https:\/\/acct\.[a-z0-9.]+\/da'ta'/);
   });
 });
 

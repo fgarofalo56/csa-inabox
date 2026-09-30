@@ -32,6 +32,7 @@ import { keyVaultConfigGate } from './shortcut-credentials';
 // `shortcut-credential` purpose policy and the ownership check before any vault
 // call (`scripts/ci/check-shortcut-secret-resolver.mjs` enforces the import).
 import { resolveShortcutSecret, type ShortcutSecretOwner } from './shortcut-secret-resolver';
+import { networkFailureReason } from './shortcut-error-hygiene';
 // The UC storage-credential + external-location calls come from the AUDITED
 // facade, NOT from shortcut-credentials directly: that module's private
 // transport writes no Loom audit row, and creating a storage credential is the
@@ -710,7 +711,7 @@ export async function createTablesShortcut(args: {
       `IF EXISTS (SELECT 1 FROM sys.external_data_sources WHERE name = '${dsName}') DROP EXTERNAL DATA SOURCE ${dsName};\n` +
       `IF EXISTS (SELECT 1 FROM sys.database_scoped_credentials WHERE name = '${cred}') DROP DATABASE SCOPED CREDENTIAL ${cred};\n` +
       `CREATE DATABASE SCOPED CREDENTIAL ${cred} WITH IDENTITY = 'SHARED ACCESS SIGNATURE', SECRET = '${sasSecret}';\n` +
-      `CREATE EXTERNAL DATA SOURCE ${dsName} WITH (LOCATION = '${location}', CREDENTIAL = ${cred});\n` +
+      `CREATE EXTERNAL DATA SOURCE ${dsName} WITH (LOCATION = '${escapeSqlLiteral(location)}', CREDENTIAL = ${cred});\n` +
       `IF SCHEMA_ID('shortcuts') IS NULL EXEC('CREATE SCHEMA shortcuts');\n` +
       `IF OBJECT_ID('${obj}','V') IS NOT NULL DROP VIEW ${obj};\n` +
       `EXEC('CREATE VIEW ${obj} AS SELECT * FROM OPENROWSET(BULK ''${key}'', ` +
@@ -1049,18 +1050,6 @@ export interface ExternalBinding {
  */
 export const SECRET_SHAPE_MISMATCH = 'The stored value does not have that shape; re-save the credential.';
 
-/**
- * A symbolic reason for a failed outbound fetch — a Node error code (e.g.
- * ENOTFOUND), `timeout`, or `network error`. Never the error message, which can
- * carry the request URL.
- */
-export function networkFailureReason(e: any): string {
-  const code = e?.cause?.code ?? e?.code;
-  if (typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,40}$/.test(code)) return code;
-  if (e?.name === 'FetchTimeoutError' || e?.name === 'AbortError' || e?.name === 'TimeoutError') return 'timeout';
-  return 'network error';
-}
-
 export async function bindExternalSource(args: {
   lakehouseId: string;
   name: string;
@@ -1300,7 +1289,7 @@ export async function bindExternalSource(args: {
       `CREATE DATABASE SCOPED CREDENTIAL ${cred} ` +
       `WITH IDENTITY = 'S3 Access Key', SECRET = '${escapeSqlLiteral(secret.trim())}';\n` +
       `CREATE EXTERNAL DATA SOURCE ${dsName} ` +
-      `WITH (LOCATION = '${obj.prefix}', CREDENTIAL = ${cred});`;
+      `WITH (LOCATION = '${escapeSqlLiteral(obj.prefix)}', CREDENTIAL = ${cred});`;
     await ensureServerlessDb();
     await executeQuery(serverlessTarget(serverlessDb()), ddl);
     return { readUri: targetUri, synapse: { dataSource: dsName, scopedCredential: cred } };

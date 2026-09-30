@@ -17,6 +17,7 @@
 
 import { lakehouseShortcutsContainer } from './cosmos-client';
 import { trimSlashes } from '@/lib/util/trim';
+import { redactErrorText } from './shortcut-error-hygiene';
 
 export type ShortcutTargetType = 'adls' | 'internal' | 's3' | 'gcs' | 'dataverse' | 'delta_sharing' | 'sharepoint';
 export type ShortcutKind = 'files' | 'tables';
@@ -61,7 +62,15 @@ export interface LakehouseShortcut {
   status: ShortcutStatus;
   /** Last engine error when status='error'. */
   statusDetail?: string;
+  /**
+   * UPN of the principal who created the row. Since the shortcut-secret
+   * resolver, also WHO THE ROW'S CREDENTIAL IS RESOLVED FOR — so it is reset
+   * whenever a re-create changes `credentialRef.keyVaultSecret` (see
+   * {@link createShortcut}).
+   */
   createdBy: string;
+  /** Entra object id of `createdBy`, when the creating session carried one. */
+  createdByOid?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -83,6 +92,7 @@ export interface ShortcutDef {
   status?: ShortcutStatus;
   statusDetail?: string;
   createdBy: string;
+  createdByOid?: string;
 }
 
 /** Sanitise a name/path segment for use in the deterministic id. */
@@ -134,6 +144,7 @@ export interface ShortcutSecretBinding {
   lakehouseId: string;
   id: string;
   createdBy: string;
+  createdByOid?: string;
   createdAt: string;
 }
 
@@ -152,20 +163,37 @@ export async function listShortcutSecretBindings(secretName: string): Promise<Sh
   const { resources } = await c.items
     .query<ShortcutSecretBinding>({
       query:
-        'SELECT c.lakehouseId, c.id, c.createdBy, c.createdAt FROM c ' +
-        'WHERE IS_STRING(c.credentialRef.keyVaultSecret) AND LOWER(c.credentialRef.keyVaultSecret) = @n',
+        'SELECT c.lakehouseId, c.id, c.createdBy, c.createdByOid, c.createdAt FROM c ' +
+        'WHERE IS_STRING(c.credentialRef.keyVaultSecret) AND LOWER(TRIM(c.credentialRef.keyVaultSecret)) = @n',
       parameters: [{ name: '@n', value: n }],
     })
     .fetchAll();
   return resources;
 }
 
-/** Create (upsert) a shortcut from a definition. Fills derived + audit fields. */
+/** The credential name a row binds, normalised for comparison. */
+function boundSecret(ref: ShortcutCredentialRef | undefined): string {
+  return (ref?.keyVaultSecret || '').trim().toLowerCase();
+}
+
+/**
+ * Create (upsert) a shortcut from a definition. Fills derived + audit fields.
+ *
+ * Row ids are deterministic, so a re-create lands on the existing row. When it
+ * changes which credential the row binds, the row's creator becomes the caller
+ * (`createdBy` / `createdByOid` / `createdAt` reset): the creator is who the
+ * row's credential is resolved for, and keeping the previous creator would
+ * resolve the new credential for someone who never saved it. A re-create that
+ * keeps the same credential keeps the original creator.
+ *
+ * `statusDetail` passes through {@link redactErrorText} before it is stored.
+ */
 export async function createShortcut(def: ShortcutDef): Promise<LakehouseShortcut> {
   const parentPath = trimSlashes((def.parentPath || ''));
   const id = shortcutId(def.lakehouseId, def.kind, parentPath, def.name);
   const now = new Date().toISOString();
   const existing = await getShortcut(def.lakehouseId, id);
+  const keepCreator = !!existing && boundSecret(existing.credentialRef) === boundSecret(def.credentialRef);
   const doc: LakehouseShortcut = {
     id,
     lakehouseId: def.lakehouseId,
@@ -182,9 +210,10 @@ export async function createShortcut(def: ShortcutDef): Promise<LakehouseShortcu
     engineObject: def.engineObject,
     format: def.format,
     status: def.status ?? 'active',
-    statusDetail: def.statusDetail,
-    createdBy: existing?.createdBy ?? def.createdBy,
-    createdAt: existing?.createdAt ?? now,
+    statusDetail: def.statusDetail === undefined ? undefined : redactErrorText(def.statusDetail),
+    createdBy: keepCreator ? existing!.createdBy : def.createdBy,
+    createdByOid: keepCreator ? existing!.createdByOid : def.createdByOid,
+    createdAt: keepCreator ? existing!.createdAt : now,
     updatedAt: now,
   };
   const c = await lakehouseShortcutsContainer();
@@ -192,7 +221,7 @@ export async function createShortcut(def: ShortcutDef): Promise<LakehouseShortcu
   return resource ?? doc;
 }
 
-/** Patch a shortcut's status/statusDetail (used by the Test action). */
+/** Patch a shortcut's status/statusDetail (used by the Test action). `statusDetail` is redacted before it is stored. */
 export async function updateShortcutStatus(
   lakehouseId: string,
   id: string,
@@ -204,7 +233,7 @@ export async function updateShortcutStatus(
   const updated: LakehouseShortcut = {
     ...existing,
     status,
-    statusDetail: statusDetail,
+    statusDetail: statusDetail === undefined ? undefined : redactErrorText(statusDetail),
     updatedAt: new Date().toISOString(),
   };
   const c = await lakehouseShortcutsContainer();

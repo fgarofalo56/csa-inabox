@@ -13,7 +13,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAccountName } from '@/lib/azure/adls-client';
 import { getShortcut, updateShortcutStatus } from '@/lib/azure/lakehouse-shortcuts';
-import { resolveAndTestAdls, testEngineObject, refreshDeltaSharingCredential, networkFailureReason } from '@/lib/azure/shortcut-engines';
+import { resolveAndTestAdls, testEngineObject, refreshDeltaSharingCredential } from '@/lib/azure/shortcut-engines';
+import { networkFailureReason, redactErrorText } from '@/lib/azure/shortcut-error-hygiene';
 import {
   resolveShortcutSecret,
   isShortcutSecretRefusal,
@@ -27,8 +28,20 @@ import { stripTrailingSlashes } from '@/lib/util/path-strings';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+/** HTML stripped, whitespace collapsed, URL query strings / credentials removed. */
 function sanitize(e: any): string {
-  return (e?.message || String(e)).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500);
+  return redactErrorText((e?.message || String(e)).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()).slice(0, 500);
+}
+
+/**
+ * The response for a stored credential the shortcut-secret resolver refused.
+ * The row is NOT rewritten: a refusal says the credential cannot be used for
+ * this row's owner, not that the source is unreachable, and the engine objects
+ * created at bind time keep serving queries either way.
+ */
+function secretRefused(e: any) {
+  const status = e?.status === 400 ? 400 : 403;
+  return NextResponse.json({ ok: false, code: e?.code || 'shortcut_secret_refused', error: sanitize(e) }, { status });
 }
 
 export const POST = withSession(async (req: NextRequest) => {
@@ -45,7 +58,9 @@ export const POST = withSession(async (req: NextRequest) => {
   // The stored credential is resolved on behalf of the principal who CREATED
   // this row: a row may only keep using a credential its creator owns, whoever
   // presses Test.
-  const secretOwner: ShortcutSecretOwner = { kind: 'principal', upn: sc.createdBy };
+  const secretOwner: ShortcutSecretOwner = {
+    kind: 'principal', via: 'row', oid: sc.createdByOid, upn: sc.createdBy, lakehouseId: sc.lakehouseId,
+  };
 
   // Delta Sharing: re-validate by listing shares with the stored bearer token.
   // A 401/403 means the token is expired/invalid — the "broken" state the Retry
@@ -121,11 +136,9 @@ export const POST = withSession(async (req: NextRequest) => {
       const updated = await updateShortcutStatus(lakehouseId, id, 'active', undefined);
       return NextResponse.json({ ok: true, data: updated });
     } catch (e: any) {
+      if (isShortcutSecretRefusal(e)) return secretRefused(e);
       const msg = sanitize(e);
       const updated = await updateShortcutStatus(lakehouseId, id, 'error', msg);
-      if (isShortcutSecretRefusal(e)) {
-        return NextResponse.json({ ok: false, error: msg, code: (e as { code?: string }).code || 'shortcut_secret_refused', data: updated }, { status: 403 });
-      }
       return NextResponse.json({ ok: false, error: msg, code: e?.code || 'delta_sharing_unreachable', data: updated }, { status: 502 });
     }
   }
@@ -192,11 +205,9 @@ export const POST = withSession(async (req: NextRequest) => {
       const updated = await updateShortcutStatus(lakehouseId, id, 'active', undefined);
       return NextResponse.json({ ok: true, data: updated });
     } catch (e: any) {
+      if (isShortcutSecretRefusal(e)) return secretRefused(e);
       const msg = sanitize(e);
       const updated = await updateShortcutStatus(lakehouseId, id, 'error', msg);
-      if (isShortcutSecretRefusal(e)) {
-        return NextResponse.json({ ok: false, error: msg, code: (e as { code?: string }).code || 'shortcut_secret_refused', data: updated }, { status: 403 });
-      }
       const code = e instanceof ShortcutSourceError ? e.code : e?.code || 'adls_sas_error';
       return NextResponse.json({ ok: false, error: msg, code, data: updated }, { status: (e instanceof ShortcutSourceError ? e.status : 502) || 502 });
     }

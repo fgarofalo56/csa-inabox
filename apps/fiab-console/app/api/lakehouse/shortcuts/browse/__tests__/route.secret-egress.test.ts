@@ -15,10 +15,15 @@
  *       authority, so `s3.<region>.amazonaws.com` could be relocated to a host of
  *       the caller's choosing while still ending in '.amazonaws.com'.
  *
- * These tests run the REAL kv-secrets-client and the REAL purpose policy; only
- * the session, the Azure credential, the HTTP transport and adls-client's
- * listPaths are mocked. A refusal is therefore proved to happen before a vault
- * token is minted and before any request is issued — not merely reported.
+ * These tests run the REAL kv-secrets-client, the REAL shortcut-secret resolver
+ * and the REAL purpose policy; only the session, the Azure credential, the HTTP
+ * transport, adls-client's listPaths and the registry are mocked. A refusal is
+ * therefore proved to happen before a vault token is minted and before any
+ * request is issued — not merely reported.
+ *
+ * Since the resolver, a `loom-sc-` credential also needs a MINT RECORD naming
+ * the caller: the vault mock answers the metadata read (`/versions`) with the
+ * owner tags the credentials route writes, for `user-1` (the session below).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
@@ -29,13 +34,15 @@ vi.mock('@/lib/auth/session', () => ({
 /** Stands in for whatever the vault would return. No real credential material. */
 const VAULT_VALUE = 'SENTINEL-VAULT-VALUE-NOT-A-REAL-SECRET';
 
+/** The metadata read the resolver makes: one version, tagged as saved by `oid`. */
+function versionsFor(oid: string) {
+  return new Response(JSON.stringify({
+    value: [{ id: 'x', attributes: { enabled: true, created: 1 }, tags: { 'loom-owner-oid': oid, 'loom-purpose': 'shortcut-credential' } }],
+  }), { status: 200 });
+}
+
 const { fetchWithTimeoutMock } = vi.hoisted(() => ({
-  fetchWithTimeoutMock: vi.fn(async (url: any) => {
-    if (String(url).includes('/secrets/')) {
-      return new Response(JSON.stringify({ value: 'SENTINEL-VAULT-VALUE-NOT-A-REAL-SECRET' }), { status: 200 });
-    }
-    return new Response('{}', { status: 200 });
-  }),
+  fetchWithTimeoutMock: vi.fn(async (_url: any) => new Response('{}', { status: 200 })),
 }));
 vi.mock('@/lib/azure/fetch-with-timeout', () => ({
   fetchWithTimeout: (...a: any[]) => fetchWithTimeoutMock(...(a as [])),
@@ -57,6 +64,20 @@ vi.mock('@/lib/azure/adls-client', () => ({
   getMetadata: vi.fn(async () => ({})),
   getAccountName: () => 'loomlake',
 }));
+vi.mock('@/lib/azure/lakehouse-shortcuts', () => ({ listShortcutSecretBindings: vi.fn(async () => []) }));
+
+/** Default vault behaviour: metadata says user-1 saved it; the value read returns `value`. */
+function vault(value: string, ownerOid = 'user-1') {
+  return async (url: any) => {
+    const u = String(url);
+    if (u.includes('/versions')) return versionsFor(ownerOid);
+    if (u.includes('/secrets/')) return new Response(JSON.stringify({ value }), { status: 200 });
+    return new Response('{}', { status: 200 });
+  };
+}
+/** The VALUE reads the route made (not the metadata reads). */
+const valueReads = () =>
+  fetchWithTimeoutMock.mock.calls.map((c) => String(c[0])).filter((u) => u.includes('/secrets/') && !u.includes('/versions'));
 
 import { GET } from '../route';
 
@@ -93,12 +114,7 @@ beforeEach(() => {
   // clearAllMocks resets CALLS but not implementations, so restore the default
   // vault response here — otherwise a per-test mockImplementation leaks forward
   // and a later test silently asserts against the wrong secret value.
-  fetchWithTimeoutMock.mockImplementation(async (url: any) => {
-    if (String(url).includes('/secrets/')) {
-      return new Response(JSON.stringify({ value: VAULT_VALUE }), { status: 200 });
-    }
-    return new Response('{}', { status: 200 });
-  });
+  fetchWithTimeoutMock.mockImplementation(vault(VAULT_VALUE));
   listPathsMock.mockImplementation(async () => [{ name: 'account', isDirectory: true }] as any);
   process.env.LOOM_KEY_VAULT_URI = 'https://loomkv.vault.azure.net';
   // THE REAL SHIPPED DEFAULT: admin-plane/main.bicep sets LOOM_SHORTCUT_KEYVAULT
@@ -124,8 +140,12 @@ describe('ATTACK: a caller-named platform secret', () => {
     const body = await res.json();
     expect(body.ok).toBe(false);
     expect(body.code).toBe('kv_secret_not_permitted');
-    // The refusal names what was ASKED FOR and why — never anything from a vault.
-    expect(body.error).toMatch(/platform credential/i);
+    // The refusal names what was ASKED FOR and what to do — never anything from a
+    // vault. It names only the prefix that passes on this path (loom-sc-), not
+    // loom-shortcut-, which the browse tree refuses.
+    expect(body.error).toMatch(/not a shortcut credential Loom saved \(those are named loom-sc-…\)/);
+    expect(body.error).toMatch(/Save to Key Vault/);
+    expect(body.error).not.toMatch(/loom-shortcut-/);
     expect(JSON.stringify(body)).not.toContain(VAULT_VALUE);
   });
 
@@ -144,7 +164,7 @@ describe('ATTACK: a caller-named platform secret', () => {
     for (const name of ['loom-conn-someone-elses-uuid', 'loom-git-ws1-pat', 'loom-app-git-abc123']) {
       const res = await GET(req(`sourceType=dataverse&kvSecret=${name}`));
       expect(res.status).toBe(403);
-      expect((await res.json()).error).toMatch(/name-space/i);
+      expect((await res.json()).error).toMatch(/not a shortcut credential Loom saved/);
     }
     expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
   });
@@ -159,11 +179,11 @@ describe('ATTACK: a caller-named platform secret', () => {
   });
 
   it('refuses an operator-typed name outside the minted name-space', async () => {
-    // shortcut-credential OWNS loom-sc-/loom-shortcut-. A free-typed name is not
-    // in it, and no UI path sends one to this route.
+    // shortcut-credential OWNS the Loom-minted shortcut prefixes. A free-typed
+    // name is not in them, and no UI path sends one to this route.
     const res = await GET(req('sourceType=dataverse&kvSecret=contoso-dataverse-export-path'));
     expect(res.status).toBe(403);
-    expect((await res.json()).error).toMatch(/name-space/i);
+    expect((await res.json()).error).toMatch(/not a shortcut credential Loom saved/);
     expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
   });
 });
@@ -172,7 +192,7 @@ describe('ATTACK: the resolved value must not come back in the response', () => 
   it('never echoes a malformed dataverse credential', async () => {
     // The vault returns something that is not an abfss:// URI — exactly the case
     // that used to interpolate the value into the error message.
-    const res = await GET(req('sourceType=dataverse&kvSecret=loom-shortcut-abc'));
+    const res = await GET(req('sourceType=dataverse&kvSecret=loom-sc-abc'));
 
     expect(res.status).toBe(400);
     const raw = JSON.stringify(await res.json());
@@ -185,7 +205,7 @@ describe('ATTACK: the S3 destination must not be caller-steerable', () => {
   it('refuses a region that would relocate the request authority — before the secret is read', async () => {
     for (const region of ['evil.example/', 'x.evil.example/y', 'us-east-1@evil.example', 'us-east-1?x=']) {
       const res = await GET(
-        req(`sourceType=s3&kvSecret=loom-shortcut-abc&bucket=b&region=${encodeURIComponent(region)}`),
+        req(`sourceType=s3&kvSecret=loom-sc-abc&bucket=b&region=${encodeURIComponent(region)}`),
       );
       expect(res.status).toBe(400);
       expect((await res.json()).code).toBe('s3_bad_region');
@@ -200,49 +220,55 @@ describe('ATTACK: the S3 destination must not be caller-steerable', () => {
 });
 
 describe('the legitimate browse flow still works', () => {
-  it('resolves a shortcut credential and lists the Dataverse export path', async () => {
-    fetchWithTimeoutMock.mockImplementation(async (url: any) => {
-      if (String(url).includes('/secrets/')) {
-        return new Response(
-          JSON.stringify({ value: 'abfss://dataverse@contoso.dfs.core.windows.net/exports/tables' }),
-          { status: 200 },
-        );
-      }
-      return new Response('{}', { status: 200 });
-    });
+  it('resolves the caller\'s own shortcut credential and lists the Dataverse export path', async () => {
+    fetchWithTimeoutMock.mockImplementation(vault('abfss://dataverse@contoso.dfs.core.windows.net/exports/tables'));
 
-    const res = await GET(req('sourceType=dataverse&kvSecret=loom-shortcut-abc'));
+    const res = await GET(req('sourceType=dataverse&kvSecret=loom-sc-abc'));
 
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.ok).toBe(true);
     expect(body.data.entries).toEqual([{ name: 'account', path: 'account', isDirectory: true }]);
-    // The credential WAS read — from the vault, under its own name.
-    expect(String(fetchWithTimeoutMock.mock.calls[0][0]))
-      .toBe('https://loomkv.vault.azure.net/secrets/loom-shortcut-abc?api-version=7.4');
+    // The credential WAS read — from the shortcut vault, under its own name.
+    expect(valueReads()).toEqual(['https://loomkv.vault.azure.net/secrets/loom-sc-abc?api-version=7.4']);
     // ...and the browse ran against the account named by the stored path.
     expect(listPathsMock).toHaveBeenCalledWith('dataverse', 'exports/tables', 200, 'contoso');
   });
 
-  it('accepts the OTHER minted shortcut prefix (loom-sc-) as well', async () => {
-    // Two mint sites exist: `loom-shortcut-<itemId>` (the item route) and
-    // `loom-sc-<uuid>` (the credentials route). Both must resolve, or the
-    // name-space policy would break one of the two real creation paths.
+  it('refuses another user\'s loom-sc- credential without reading its value', async () => {
+    // WHAT BREAKS IT: browse resolving without the ownership check (the pre-
+    // resolver `getShortcutSecretValue` call) reads the value and answers 400/200.
+    fetchWithTimeoutMock.mockImplementation(vault(VAULT_VALUE, 'someone-else'));
     const res = await GET(req('sourceType=dataverse&kvSecret=loom-sc-4f2a9c1e'));
-    expect(res.status).not.toBe(403);
-    expect(String(fetchWithTimeoutMock.mock.calls[0][0]))
-      .toBe('https://loomkv.vault.azure.net/secrets/loom-sc-4f2a9c1e?api-version=7.4');
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toMatch(/saved by another user/);
+    expect(valueReads()).toEqual([]);
+  });
+
+  it('refuses an item-minted loom-shortcut- name on the browse tree, without reading it', async () => {
+    const res = await GET(req('sourceType=dataverse&kvSecret=loom-shortcut-abc'));
+    expect(res.status).toBe(403);
+    expect(valueReads()).toEqual([]);
+  });
+
+  it('refuses a padded or malformed name instead of trimming it', async () => {
+    for (const bad of [' loom-sc-abc', 'loom-sc-abc ', 'loom-sc-a/b', 'loom-sc-a%2Fb']) {
+      const res = await GET(req(`sourceType=dataverse&kvSecret=${encodeURIComponent(bad)}`));
+      expect(res.status, bad).toBe(400);
+    }
+    expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
   });
 
   it('a valid AWS region is accepted and signs against the AWS host', async () => {
     fetchWithTimeoutMock.mockImplementation(async (url: any) => {
+      if (String(url).includes('/versions')) return versionsFor('user-1');
       if (String(url).includes('/secrets/')) {
         return new Response(JSON.stringify({ value: 'AKIAEXAMPLE:not-a-real-key' }), { status: 200 });
       }
       return new Response('<ListBucketResult></ListBucketResult>', { status: 200 });
     });
 
-    const res = await GET(req('sourceType=s3&kvSecret=loom-shortcut-abc&bucket=my-bucket&region=eu-west-2'));
+    const res = await GET(req('sourceType=s3&kvSecret=loom-sc-abc&bucket=my-bucket&region=eu-west-2'));
 
     expect(res.status).toBe(200);
     // Selector is anchored to the full ORIGIN, not a bare `.includes('amazonaws.com')`.

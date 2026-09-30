@@ -152,8 +152,8 @@ export function ShortcutWizardDialog() {
                             } />
                         </Field>
                         {scExtSasErr && <MessageBar intent="error"><MessageBarBody>{scExtSasErr}</MessageBarBody></MessageBar>}
-                        <Field label="Key Vault secret name" required hint="admin-plane Key Vault secret holding the external account's SAS/key.">
-                          <Input value={scKvSecret} onChange={(_, d) => setScKvSecret(d.value)} placeholder="shortcut-ext-adls-sas" />
+                        <Field label="Key Vault secret name" required hint="Filled in by Save to Key Vault above. Shortcuts use only credentials Loom saved (loom-sc-…).">
+                          <Input value={scKvSecret} onChange={(_, d) => setScKvSecret(d.value)} placeholder="loom-sc-adls-…" />
                         </Field>
                         {scKvSecret && (
                           <Caption1 style={{ color: tokens.colorPaletteGreenForeground1 }}>
@@ -199,19 +199,21 @@ export function ShortcutWizardDialog() {
                       <MessageBarBody>
                         <MessageBarTitle>Delta Sharing (cross-tenant)</MessageBarTitle>
                         Authenticates with a credential file the share owner gives you via an activation link.
-                        Store the raw JSON (<code>shareCredentialsVersion</code>, <code> endpoint</code>,{' '}
-                        <code>bearerToken</code>, <code>expirationTime</code>) as a Key Vault secret and name it below.
-                        Bearer tokens expire after at most 1 year — if the share goes <strong>Broken</strong>, update the
-                        secret with a fresh file and use <strong>Retry</strong>.
+                        The simplest path is <strong>Data shares</strong> → the provider → <strong>Shortcut into
+                        lakehouse</strong>, which reuses the credential Loom stored when the provider was added. Here,
+                        name a shortcut credential Loom saved (<code>loom-sc-…</code>) that holds the raw JSON
+                        (<code>shareCredentialsVersion</code>, <code> endpoint</code>, <code>bearerToken</code>,{' '}
+                        <code>expirationTime</code>). Bearer tokens expire after at most 1 year — if the share goes{' '}
+                        <strong>Broken</strong>, replace the credential with a fresh file and use <strong>Retry</strong>.
                       </MessageBarBody>
                     </MessageBar>
                     <Field label="Share / table path" required hint="delta-sharing://<share>/<schema>/<table> — from the data provider">
                       <Input value={scTargetUri} onChange={(_, d) => setScTargetUri(d.value)}
                         placeholder="delta-sharing://agency_a_perf/analytics/metrics_monthly" />
                     </Field>
-                    <Field label="Key Vault secret name (credential file JSON)" required hint="Holds the full credential JSON">
+                    <Field label="Key Vault secret name (credential file JSON)" required hint="A shortcut credential Loom saved (loom-sc-…) or a data share provider's stored credential (loom-dsp-…).">
                       <Input value={scKvSecret} onChange={(_, d) => setScKvSecret(d.value)}
-                        placeholder="delta-sharing-agency-a-cred" />
+                        placeholder="loom-dsp-<provider>" />
                     </Field>
                   </>
                 )}

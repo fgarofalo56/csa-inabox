@@ -43,11 +43,11 @@ export const KV_SECRET_PURPOSES = [
   'connection-secret',
   /**
    * An external-source credential for a lakehouse SHORTCUT (S3 access key, GCS
-   * service-account JSON, the Dataverse export path). Loom mints BOTH shortcut
-   * credential names — `loom-shortcut-<itemId>` and `loom-sc-<uuid>` — so this
-   * purpose OWNS that name-space rather than accepting an arbitrary name: the
-   * only caller resolves a name supplied in a request, and no UI path sends an
-   * operator-typed name to it.
+   * service-account JSON, the Dataverse export path, a Delta Sharing provider's
+   * activation file). Loom mints every shortcut credential name —
+   * `loom-shortcut-<itemId>`, `loom-sc-…` and `loom-dsp-<provider>` — so this
+   * purpose OWNS that name-space rather than accepting an arbitrary name; which
+   * caller may read which name is decided by lib/azure/shortcut-secret-resolver.ts.
    */
   'shortcut-credential',
   /** A git PAT / SPN secret for Git integration or a Loom App's private repo. */
@@ -80,12 +80,14 @@ export type KvSecretPurpose = (typeof KV_SECRET_PURPOSES)[number];
  *   git-integration-client.ts   `loom-git-pat-<workspaceId>` (LOOM_GIT_PAT_KV_PREFIX)
  *   loom-app-runtime git-credential  `loom-app-git-<id8>`
  *   items/lakehouse-shortcut    `loom-shortcut-<itemId>`
- *   lakehouse/shortcuts/creds   `loom-sc-<uuid>`
+ *   lakehouse/shortcuts/creds   `loom-sc-<type>-<lakehouse>-<name>-<random>`
+ *   marketplace/sharing/providers  `loom-dsp-<provider>` (read only by the
+ *                               shortcut path, authorised per provider)
  */
 const MINTED_NAMESPACES: Record<string, readonly string[]> = {
   'connection-secret': ['loom-conn-'],
   'git-credential': ['loom-git-', 'loom-app-git-'],
-  'shortcut-credential': ['loom-sc-', 'loom-shortcut-'],
+  'shortcut-credential': ['loom-sc-', 'loom-shortcut-', 'loom-dsp-'],
 };
 
 /** Purposes whose secret NAME is chosen by an operator/user rather than minted by Loom. */

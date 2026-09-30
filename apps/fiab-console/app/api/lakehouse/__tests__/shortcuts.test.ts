@@ -17,6 +17,11 @@ vi.mock('@/lib/azure/lakehouse-shortcuts', () => ({
   getShortcut: vi.fn(),
   listShortcutSecretBindings: vi.fn(),
 }));
+// Mint record for credential fixtures: saved by the session user (`u@x`).
+vi.mock('@/lib/azure/kv-secrets-client', () => ({
+  getShortcutSecretOwnerRecord: vi.fn(async () => ({ exists: true, owner: { upn: 'u@x' } })),
+  getShortcutSecretValue: vi.fn(),
+}));
 vi.mock('@/lib/azure/shortcut-engines', () => ({
   resolveAndTestAdls: vi.fn(),
   createTablesShortcut: vi.fn(),

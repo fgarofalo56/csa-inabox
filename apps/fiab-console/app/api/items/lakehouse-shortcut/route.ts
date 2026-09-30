@@ -535,7 +535,11 @@ export async function POST(req: NextRequest) {
     const id = crypto.randomUUID();
     let secretRef: string | undefined;
     if (willPersistSecret) {
-      const { name } = await putShortcutSecret(`loom-shortcut-${id}`, secret);
+      // Recorded with the secret (Key Vault tags) — who saved it and for which item.
+      const { name } = await putShortcutSecret(`loom-shortcut-${id}`, secret, {
+        oid: s.claims.oid, upn: s.claims.upn || s.claims.email, tid: (s.claims as { tid?: string }).tid,
+        itemId: id, workspaceId,
+      });
       secretRef = name;
     }
 
