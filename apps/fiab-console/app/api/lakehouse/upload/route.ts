@@ -29,7 +29,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { KNOWN_CONTAINERS, pathToHttpsUrlFor, uploadFile, type KnownContainer } from '@/lib/azure/adls-client';
-import { httpsToAbfss } from '@/lib/azure/cloud-endpoints';
+import { dfsSuffix, httpsToAbfss } from '@/lib/azure/cloud-endpoints';
 import { detectSparkFormat, renderReadSnippet } from '@/lib/azure/spark-format-detect';
 import { withSession } from '@/lib/api/route-toolkit';
 import { scopeItem } from '../_lib/refusal-envelope';
@@ -138,7 +138,7 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
     const abfssPath = account
       ? httpsToAbfss(pathToHttpsUrlFor(account, container, path))
       : accountName
-        ? `abfss://${container}@${accountName}.dfs.core.windows.net/${path}`
+        ? `abfss://${container}@${accountName}.${dfsSuffix()}/${path}`
         : `${container}/${path}`;
     return NextResponse.json(
       {
