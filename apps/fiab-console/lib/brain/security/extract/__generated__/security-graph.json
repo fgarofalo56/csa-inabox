@@ -39490,6 +39490,39 @@
           }
         },
         {
+          "id": "sec:publication:scripts/ci/roll-lease-budget.mjs#module",
+          "kind": "publication",
+          "provenance": "declared",
+          "label": "scripts/ci/roll-lease-budget.mjs",
+          "facet": {
+            "kind": "publication",
+            "module": "scripts/ci/roll-lease-budget.mjs",
+            "declaredSinkCount": 2,
+            "sinks": [
+              {
+                "id": "stdout:member:287",
+                "surface": "stdout",
+                "accessPath": "member",
+                "wholeExpressionBounded": true,
+                "boundary": "redactedLine",
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "stderr:member:336",
+                "surface": "stderr",
+                "accessPath": "member",
+                "wholeExpressionBounded": true,
+                "boundary": "redactedLine",
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              }
+            ]
+          }
+        },
+        {
           "id": "sec:publication:scripts/ci/roll-plan.mjs#module",
           "kind": "publication",
           "provenance": "declared",
@@ -50149,6 +50182,11 @@
         {
           "nodeId": "sec:publication:scripts/ci/resolve-smoke-console-url.mjs#module",
           "codeModuleId": "code:scripts/ci/resolve-smoke-console-url.mjs",
+          "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
+        },
+        {
+          "nodeId": "sec:publication:scripts/ci/roll-lease-budget.mjs#module",
+          "codeModuleId": "code:scripts/ci/roll-lease-budget.mjs",
           "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
         },
         {

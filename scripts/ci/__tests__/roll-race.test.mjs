@@ -3878,6 +3878,17 @@ function runPin(script, { digests, registry, env = {} } = {}) {
   writeFileSync(join(dir, 'scripts', 'csa-loom', 'acr-firewall-lease.sh'), LEASE_STUB, 'utf8');
   writeFileSync(join(dir, 'scripts', 'ci', 'deploy-retry.mjs'), RETRY_STUB, 'utf8');
   writeFileSync(join(dir, 'scripts', 'ci', 'resolve-acr-digest.sh'), RESOLVE_STUB, 'utf8');
+  // #4823 — the pin step takes its lease-wait allowance from this module. It is
+  // pure (no az, no network), so the REAL file is copied in rather than stubbed:
+  // a stub here would let the budget wiring drift without this suite noticing.
+  // Its one import, the shared publication-boundary redactor, comes with it.
+  for (const f of ['roll-lease-budget.mjs', '_azure-redact.mjs']) {
+    writeFileSync(
+      join(dir, 'scripts', 'ci', f),
+      readFileSync(join(REPO_ROOT, 'scripts', 'ci', f), 'utf8'),
+      'utf8',
+    );
+  }
   writeFileSync(
     join(dir, '.roll', 'digests.tsv'),
     `${digests.map(([r, d]) => `${r}\t${d}`).join('\n')}\n`,
@@ -3901,6 +3912,10 @@ function runPin(script, { digests, registry, env = {} } = {}) {
       ACR_LOGIN: `${ACR}.azurecr.io`,
       EVENT_LOG: posix(logPath),
       STUB_DIGEST_MAP: posix(mapPath),
+      // #4823 — what the resolve step exports for every later step: a job-level
+      // lease-wait budget and its absolute deadline, here 20 minutes out.
+      LOOM_ROLL_LEASE_BUDGET_MINUTES: '20',
+      ROLL_LEASE_DEADLINE: String(Math.floor(Date.now() / 1000) + 20 * 60),
       ...env,
     },
   });
@@ -3950,6 +3965,7 @@ test('HARNESS: the collaborators the step calls exist at those paths in the real
     'scripts/csa-loom/acr-firewall-lease.sh',
     'scripts/ci/deploy-retry.mjs',
     'scripts/ci/resolve-acr-digest.sh',
+    'scripts/ci/roll-lease-budget.mjs',
   ]) {
     assert.ok(fileExists(join(REPO_ROOT, rel)), `${rel} no longer exists — the stub shadows a path that is gone`);
     assert.ok(pinScript().includes(rel), `the pin step no longer calls ${rel} — this suite stubs the wrong thing`);
@@ -4012,6 +4028,11 @@ test('LEASE REFUSED: nothing is retagged, and the message says so', { skip: !bas
   assert.equal(r.events.filter((e) => e.startsWith('import:')).length, 0,
     `a retag was issued despite the lease being refused:\n${r.events.join('\n')}`);
   assert.match(errors(r.out)[0], /NO retag was attempted and :v0\.1 is unchanged/);
+  // #4823 — the message above is ALSO what the budget-computation failure
+  // prints, so pin that this run got as far as a real acquire (and then read
+  // the lease back to name its holder) rather than passing via that branch.
+  assert.ok(r.events.includes('lease:acquire'), `no acquire was attempted:\n${r.events.join('\n')}`);
+  assert.ok(r.events.includes('lease:status'), `the lease was not read back after the refusal:\n${r.events.join('\n')}`);
 });
 
 test('LEASE REFUSED MUTATION: under the pre-fix order the retags were already issued', { skip: !bashAvailable }, () => {
