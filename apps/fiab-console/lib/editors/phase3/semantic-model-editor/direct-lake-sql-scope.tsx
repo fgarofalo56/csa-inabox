@@ -17,6 +17,7 @@
 import { MessageBar, MessageBarBody, MessageBarTitle } from '@fluentui/react-components';
 import { useIsTenantAdmin } from '@/lib/components/session-context';
 import { SqlRefusalOrError, type SqlFailure } from '../../lakehouse/panes/sql-pane';
+import { SqlScopeFollowUp } from '../../components/sql-pool-query-scope-note';
 
 /** The scope of a model's own SQL, shown to a caller who is not a tenant admin. */
 export function DirectLakeSqlScopeNote() {
@@ -26,12 +27,13 @@ export function DirectLakeSqlScopeNote() {
     <MessageBar intent="info" layout="multiline" data-testid="direct-lake-sql-scope">
       <MessageBarBody>
         <MessageBarTitle>What a model&apos;s own SQL can read</MessageBarTitle>
-        A table query on this tab reads the Gold Delta table as before. SQL that a semantic model sends
-        to this endpoint runs, for you, only as a read-only SELECT over files under the storage root of a
-        lakehouse in the model&apos;s workspace (named by full URL in OPENROWSET(BULK …)) and over the
-        INFORMATION_SCHEMA views, in master. A model whose SQL reads other storage is not run: read that
-        data through a lakehouse in the model&apos;s workspace, or ask a tenant admin, who can run other
-        statements.
+        A table query on this tab reads the Gold Delta table. SQL that a semantic model sends to this
+        endpoint runs, for a caller who is not a tenant admin, only as a read-only SELECT over files under
+        the storage root of a lakehouse in the model&apos;s workspace (named by full URL in
+        OPENROWSET(BULK …)) and over the INFORMATION_SCHEMA views, in master. A model whose SQL reads
+        other storage is not run: read that data through a lakehouse in the model&apos;s workspace, or ask
+        a tenant admin, who can run other statements.
+        <SqlScopeFollowUp />
       </MessageBarBody>
     </MessageBar>
   );

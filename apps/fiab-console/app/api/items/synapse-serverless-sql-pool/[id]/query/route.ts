@@ -41,7 +41,7 @@ import { resolveAccessMode } from '@/lib/azure/sql-access-mode';
 import { getUserSqlToken } from '@/lib/azure/sql-user-token-store';
 import { recordQueryRun } from '@/lib/finops/query-run';
 import { READER_DATABASE, readerTarget, readerBatch, withoutReaderUseMessage } from '../../../lakehouse/_lib/query-reader';
-import { guardSqlPoolQueryItem, confineToWorkspaceLakehouses, SQL_POOL_READER_POOL_PREFIX } from '../../_lib/query-scope';
+import { guardSqlPoolQueryItem, confineToWorkspaceLakehouses, sqlPoolQueryKey, SQL_POOL_READER_POOL_PREFIX } from '../../_lib/query-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -79,6 +79,10 @@ export const POST = withSession(async (req: NextRequest, { session, params }) =>
     .map((p: any) => ({ name: String(p.name), value: p.value == null ? null : String(p.value) }));
 
   const accessMode = await resolveAccessMode(id, 'synapse-serverless-sql-pool');
+  // A running query is registered for cancel under the caller, the item and
+  // the queryId together (`../cancel/route.ts` builds the same key), so a
+  // cancel reaches only the caller's own query on this item.
+  const cancelKey = queryId ? sqlPoolQueryKey(session.claims.oid, item.id, queryId) : undefined;
 
   try {
     let result;
@@ -96,9 +100,9 @@ export const POST = withSession(async (req: NextRequest, { session, params }) =>
           { status: 403 },
         );
       }
-      result = await executeQueryAsUser(target, batch, userToken, session.claims.oid, 60_000, parameters, queryId);
+      result = await executeQueryAsUser(target, batch, userToken, session.claims.oid, 60_000, parameters, cancelKey);
     } else {
-      result = await executeQuery(target, batch, 60_000, parameters, queryId);
+      result = await executeQuery(target, batch, 60_000, parameters, cancelKey);
     }
     if (!admin) result = { ...result, messages: withoutReaderUseMessage(result.messages) };
     // DDL (CREATE/ALTER/DROP VIEW|PROC|FUNCTION) and other non-SELECT statements

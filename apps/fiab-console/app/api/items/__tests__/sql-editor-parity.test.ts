@@ -2,7 +2,9 @@
  * BFF gate + contract tests for the SQL-editor-parity cancel routes:
  *   - POST /api/items/databricks-sql-warehouse/[id]/cancel
  *   - POST /api/items/synapse-dedicated-sql-pool/[id]/cancel
- *   - POST /api/items/synapse-serverless-sql-pool/[id]/cancel
+ *   - (the serverless SQL pool cancel route is item-guarded and keyed to the
+ *     caller and item; it is tested with its query route in
+ *     `synapse-serverless-sql-pool/__tests__/cancel-scope.test.ts`)
  *   - POST /api/items/warehouse/[id]/cancel
  *
  * Asserts the auth gate (401), input validation (400), the Databricks
@@ -67,7 +69,6 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
 
 import { POST as dbxCancel } from '../databricks-sql-warehouse/[id]/cancel/route';
 import { POST as dedicatedCancel } from '../synapse-dedicated-sql-pool/[id]/cancel/route';
-import { POST as serverlessCancel } from '../synapse-serverless-sql-pool/[id]/cancel/route';
 import { POST as warehouseCancel } from '../warehouse/[id]/cancel/route';
 import { getSession } from '@/lib/auth/session';
 import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
@@ -139,7 +140,6 @@ describe('POST databricks-sql-warehouse/[id]/cancel', () => {
 
 describe.each([
   ['dedicated', dedicatedCancel],
-  ['serverless', serverlessCancel],
   ['warehouse', warehouseCancel],
 ] as const)('POST %s/[id]/cancel (TDS ATTENTION)', (_name, handler) => {
   it('401 without session', async () => {

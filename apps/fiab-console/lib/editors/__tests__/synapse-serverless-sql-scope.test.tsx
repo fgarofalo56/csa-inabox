@@ -20,6 +20,14 @@
  *     refuses for a non-admin (e.g. a `sys.` view), so the editor would open on
  *     a query its own users cannot run. The posted body is read from the real
  *     click, not transcribed here.
+ *   - Connect to, opened with `?database=salesdb` (the mirror editor's link):
+ *     for a non-admin the picker is disabled and reads master, and the query
+ *     and the object explorer are sent master. Breaks if the editor keeps the
+ *     linked database for a non-admin (the posted body says `salesdb`). For an
+ *     admin the picker is enabled and `salesdb` is sent (the positive half).
+ *   - the New view / procedure / function and Cost entries: disabled with the
+ *     reason for a non-admin, enabled for an admin. Breaks if either side loses
+ *     its `isAdmin` condition.
  */
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -28,10 +36,11 @@ import { renderWithProviders, makeItem, installFetchMock } from './test-helpers'
 import { SessionProvider } from '@/lib/components/session-context';
 import { analyzeLakehouseQuery } from '@/app/api/items/lakehouse/_lib/query-scope';
 
+const nav = vi.hoisted(() => ({ search: '' }));
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn(), back: vi.fn() }),
   usePathname: () => '/',
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => new URLSearchParams(nav.search),
 }));
 vi.mock('@/lib/components/editor/monaco-textarea', () => ({
   MonacoTextarea: (p: { value: string; onChange: (v: string) => void; ariaLabel?: string }) => (
@@ -44,6 +53,21 @@ vi.mock('@fluentui/react-components', async () => {
   return {
     ...actual,
     MessageBar: (p: any) => <div data-intent={p.intent}><actual.MessageBar {...p} /></div>,
+  };
+});
+// The shared setup stubs the chrome with bare ribbon buttons that drop `title`.
+// This file renders the REAL Ribbon, so the reason a disabled entry shows is
+// read from what the product renders, not from the editor's ribbon array.
+vi.mock('@/lib/editors/item-editor-chrome', async () => {
+  const { Ribbon } = await vi.importActual<any>('@/lib/components/ribbon');
+  return {
+    ItemEditorChrome: ({ ribbon, leftPanel, main }: any) => (
+      <div data-testid="chrome">
+        <Ribbon tabs={ribbon} />
+        <div data-testid="left-panel">{leftPanel}</div>
+        <main data-testid="main-panel">{main}</main>
+      </div>
+    ),
   };
 });
 
@@ -71,7 +95,13 @@ async function clickRun() {
   fireEvent.click(runs[0]);
 }
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); nav.search = ''; });
+
+const ADMIN_ONLY_ENTRIES = ['New view', 'New procedure', 'New function', 'Bytes processed', 'Cost cap'];
+
+function postedQuery(calls: Array<{ url: string; init?: RequestInit }>) {
+  return JSON.parse(String(calls.find((c) => c.url.includes('/query'))!.init!.body));
+}
 
 describe('SynapseServerlessSqlEditor — query scope', () => {
   it('tells a caller who is not a tenant admin what they can query', async () => {
@@ -80,6 +110,11 @@ describe('SynapseServerlessSqlEditor — query scope', () => {
     expect(bar.textContent).toContain('What you can query here');
     expect(bar.textContent).toContain('OPENROWSET');
     expect(bar.textContent).toContain('Queries run in master');
+    expect(bar.textContent).toContain('This limit is temporary');
+    expect(Array.from(bar.querySelectorAll('a')).map((a) => a.getAttribute('href'))).toEqual([
+      'https://github.com/fgarofalo56/csa-inabox/issues/4821',
+      'https://github.com/fgarofalo56/csa-inabox/issues/4840',
+    ]);
   });
 
   it('shows no scope bar to a tenant admin (the editor still renders)', async () => {
@@ -133,5 +168,49 @@ describe('SynapseServerlessSqlEditor — query scope', () => {
     expect(typeof posted.sql).toBe('string');
     expect(posted.sql.length).toBeGreaterThan(0);
     expect(analyzeLakehouseQuery(posted.sql, { database: 'master' })).toEqual({ ok: true, locations: [] });
+  });
+  it('pins Connect to at master for a caller who is not a tenant admin, whatever the link names', async () => {
+    nav.search = 'database=salesdb';
+    const { calls } = mount(false);
+    const picker = await screen.findByRole('combobox', {}, { timeout: 5000 });
+    expect(picker.textContent).toContain('master');
+    expect(picker.textContent).not.toContain('salesdb');
+    expect(picker.hasAttribute('disabled') || picker.getAttribute('aria-disabled') === 'true').toBe(true);
+    await clickRun();
+    await waitFor(() => expect(calls.some((c) => c.url.includes('/query'))).toBe(true), { timeout: 5000 });
+    // 'salesdb' here means the editor sent the linked database for a non-admin.
+    expect(postedQuery(calls).database).toBe('master');
+    const objects = calls.filter((c) => c.url.includes('/objects'));
+    expect(objects.length).toBeGreaterThan(0);
+    expect(objects.every((c) => c.url.includes('database=master'))).toBe(true);
+  });
+
+  it('keeps Connect to live for a tenant admin, and sends the linked database (positive half)', async () => {
+    nav.search = 'database=salesdb';
+    const { calls } = mount(true);
+    const picker = await screen.findByRole('combobox', {}, { timeout: 5000 });
+    expect(picker.textContent).toContain('salesdb');
+    expect(picker.hasAttribute('disabled') || picker.getAttribute('aria-disabled') === 'true').toBe(false);
+    await clickRun();
+    await waitFor(() => expect(calls.some((c) => c.url.includes('/query'))).toBe(true), { timeout: 5000 });
+    expect(postedQuery(calls).database).toBe('salesdb');
+  });
+
+  it('disables the DDL templates and cost scripts for a caller who is not a tenant admin, with the reason', async () => {
+    mount(false);
+    for (const label of ADMIN_ONLY_ENTRIES) {
+      const btn = await screen.findByRole('button', { name: label }, { timeout: 5000 });
+      expect(btn.hasAttribute('disabled')).toBe(true);
+      expect(btn.getAttribute('title') || '').toContain('Tenant admins only');
+    }
+  });
+
+  it('leaves the DDL templates and cost scripts enabled for a tenant admin', async () => {
+    mount(true);
+    for (const label of ADMIN_ONLY_ENTRIES) {
+      const btn = await screen.findByRole('button', { name: label }, { timeout: 5000 });
+      expect(btn.hasAttribute('disabled')).toBe(false);
+      expect(btn.getAttribute('title') || '').not.toContain('Tenant admins only');
+    }
   });
 });

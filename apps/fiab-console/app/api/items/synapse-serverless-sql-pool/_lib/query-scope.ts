@@ -27,6 +27,16 @@
  * authorize a lakehouse there. A lakehouse in another workspace is queried from
  * its own SQL tab, and the refusal says so. Recycled lakehouses are not listed.
  *
+ * THAT SET IS RIGHT ONLY BECAUSE THE GUARD IS WORKSPACE-ROLE BASED. Every
+ * caller the guard admits holds a role on the item's WORKSPACE (owner, tenant
+ * admin or shared-ACL member, through `authorizeItemWorkspace`), and a
+ * workspace role already reads every lakehouse in it through the lakehouse
+ * routes. An item-level share (`resolveItemAccessByOid`'s item-grant step) is
+ * NOT admitted here, so a caller whose only access is a share of the SQL pool,
+ * endpoint or geo item gets 404. If the guard ever admits item-level grantees,
+ * this set must shrink to the lakehouses that caller can read; the route test
+ * "an item-level share alone does not admit the caller" fails first.
+ *
  * WHY FOUR ITEM TYPES. Three other editors reach this handler with their OWN
  * item id, so the guard accepts those item types too and the same classifier
  * applies to them:
@@ -82,6 +92,18 @@ export const SQL_POOL_EDITOR: QueryScopeSurface = {
 
 /** Pool-key prefix for this editor's non-admin queries; no other target uses it. */
 export const SQL_POOL_READER_POOL_PREFIX = 'sql-pool-reader:';
+
+/**
+ * The key a running query is registered under in the Synapse client's
+ * in-process cancel registry, for the query and cancel routes of this item
+ * family. It carries the caller's oid and the route item's id with the
+ * caller-supplied `queryId`, so a cancel reaches only the caller's own query on
+ * that item. JSON-encoded, so no oid, id or queryId can be spelled to collide
+ * with another triple.
+ */
+export function sqlPoolQueryKey(oid: string, itemId: string, queryId: string): string {
+  return JSON.stringify(['sql-pool-query', oid, itemId, queryId]);
+}
 
 /**
  * Item types whose editors reach this handler with their own id. The first is

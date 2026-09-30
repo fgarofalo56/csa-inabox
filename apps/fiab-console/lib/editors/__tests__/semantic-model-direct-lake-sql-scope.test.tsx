@@ -96,6 +96,15 @@ describe('SemanticModelEditor — Direct Lake SQL scope', () => {
     expect(note.textContent).toContain('OPENROWSET(BULK');
     expect(note.textContent).toContain('INFORMATION_SCHEMA');
     expect(note.textContent).toContain('ask a tenant admin');
+    // A present-tense scope, not a change log, and it says what lifts it. Breaks if
+    // "as before" comes back or the follow-up sentence / its two links are dropped.
+    expect(note.textContent).not.toContain('as before');
+    expect(note.textContent).toContain('This limit is temporary');
+    const hrefs = Array.from(note.querySelectorAll('a')).map((a) => a.getAttribute('href'));
+    expect(hrefs).toEqual([
+      'https://github.com/fgarofalo56/csa-inabox/issues/4821',
+      'https://github.com/fgarofalo56/csa-inabox/issues/4840',
+    ]);
   }, 20_000);
 
   it('shows no scope note to a tenant admin (the tab still renders)', async () => {

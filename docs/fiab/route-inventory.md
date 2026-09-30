@@ -15,9 +15,9 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | --- | ---: |
 | Total routes | 1696 |
 | Public (no session) | 59 |
-| Session-only | 622 |
-| Owner-scoped | 691 |
-| Admin | 324 |
+| Session-only | 620 |
+| Owner-scoped | 692 |
+| Admin | 325 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 499 |
 | Areas | 122 |
@@ -1146,7 +1146,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/[type]/[id]/versions/[versionId]/restore/route.ts` | POST | owner-scoped | ● | Cosmos, Microsoft Graph |
 | `items/[type]/[id]/versions/[versionId]/route.ts` | GET | owner-scoped | ● | Cosmos, Microsoft Graph |
 | `items/[type]/[id]/versions/route.ts` | GET | owner-scoped | ● | Cosmos, Microsoft Graph |
-| `items/[type]/[id]/visual-query/route.ts` | POST | session-only |  | ADLS, ARM, Azure Monitor, Azure SQL, Cosmos, Managed Identity, Microsoft Graph, Resource Graph, Synapse, Synapse SQL |
+| `items/[type]/[id]/visual-query/route.ts` | POST | admin |  | ADLS, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Resource Graph, Synapse, Synapse SQL |
 | `items/activation-sync/[id]/bind-trigger/route.ts` | POST | owner-scoped |  | ADLS, Azure Monitor, Azure Storage, Cosmos, Microsoft Graph |
 | `items/activation-sync/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | AI Search, Cosmos, Microsoft Graph, Purview |
 | `items/activation-sync/[id]/run/route.ts` | POST | owner-scoped | ● | ADLS, AI Search, ARM, Azure Cache for Redis, Azure Monitor, Azure Storage, Cosmos, Event Grid, Event Hubs / Service Bus, Managed Identity, Microsoft Graph, Power Automate, Power Platform, Service Bus |
@@ -1794,7 +1794,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/synapse-pipeline/[id]/runs/route.ts` | GET | owner-scoped |  | Cosmos, Microsoft Graph, Synapse |
 | `items/synapse-pipeline/[id]/triggers/route.ts` | GET POST | owner-scoped |  | Cosmos, Microsoft Graph, Synapse |
 | `items/synapse-pipeline/list/route.ts` | GET | session-only |  | Synapse |
-| `items/synapse-serverless-sql-pool/[id]/cancel/route.ts` | POST | session-only |  | Azure SQL |
+| `items/synapse-serverless-sql-pool/[id]/cancel/route.ts` | POST | owner-scoped |  | Azure SQL, Cosmos, Microsoft Graph |
 | `items/synapse-serverless-sql-pool/[id]/connection/route.ts` | GET | session-only |  | ADLS, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Databricks, Event Hubs / Service Bus, Key Vault, PostgreSQL, Synapse, Synapse SQL |
 | `items/synapse-serverless-sql-pool/[id]/iqy/route.ts` | POST | session-only |  | — |
 | `items/synapse-serverless-sql-pool/[id]/objects/route.ts` | GET | session-only | ● | ARM, Azure SQL, Managed Identity, Synapse SQL |
