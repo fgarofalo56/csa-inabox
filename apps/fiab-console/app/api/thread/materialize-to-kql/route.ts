@@ -23,7 +23,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem } from '../../items/_lib/item-crud';
 import { recordThreadEdge } from '@/lib/thread/thread-edges';
-import { resolveLakehouseAbfss } from '@/lib/azure/lakehouse-abfss';
+import { lakehouseStorageWithheldFields, resolveLakehouseStorage } from '@/lib/azure/lakehouse-abfss';
 import {
   createExternalDeltaTable,
   setQueryAccelerationPolicy,
@@ -103,8 +103,13 @@ export async function POST(req: NextRequest) {
   if (!kqlItem) return bad('KQL database not found', 404);
 
   // Resolve the lakehouse's REAL ADLS root, then the Delta table's abfss folder.
-  const root = await resolveLakehouseAbfss(from.id, lake.workspaceId);
-  if (!root) {
+  const resolved = await resolveLakehouseStorage(from.id, lake.workspaceId);
+  if (!resolved.ok) {
+    if (resolved.reason === 'not-found') return bad('lakehouse not found', 404);
+    // A withheld location carries the resolver's one wording (and the page that
+    // resolves it); only `no-storage` is the storage-configuration gate.
+    const withheld = lakehouseStorageWithheldFields(resolved.reason);
+    if (withheld) return NextResponse.json({ ok: false, ...withheld }, { status: 409 });
     return NextResponse.json(
       {
         ok: false,
@@ -116,6 +121,7 @@ export async function POST(req: NextRequest) {
       { status: 503 },
     );
   }
+  const root = resolved.bound;
   const tableName = tableSel.split('|')[0]?.trim();
   if (!tableName) return bad('invalid table selection', 400);
   const abfssUri = `${root.abfss.replace(/\/+$/, '')}/Tables/${tableName}`;

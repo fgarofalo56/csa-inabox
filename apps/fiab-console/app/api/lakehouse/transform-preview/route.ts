@@ -22,6 +22,12 @@
  *   GET  /api/lakehouse/transform-preview?lakehouseId=&jobId=&code=&sampleRows=&previewRows=
  *     → 200 { ok, status:'available', columns, rows, rowCount }   (poll → done)
  *     → 200 { ok, status:'warming'|'running', jobId }
+ *     → 422 { ok:false, status:'transform_error', error }  (the candidate threw)
+ *     → 422 { ok:false, status:'error', error, traceback? } (statement failed)
+ *     → 409 { ok:false, status:'error', error }  (statement cancelled)
+ *     → 502 { ok:false, status:'error', error }  (Spark session dead, or no result printed)
+ *     A path holding a control character or a Spark glob character is 400;
+ *     a session with no user object id is 401.
  *     `code` is read only while the job is `warming`, and must be the code the
  *     kick-off accepted. The editor polls with POST so the code is sent in the
  *     body rather than the URL.
@@ -47,14 +53,15 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { synapseConfigGate } from '@/lib/azure/synapse-artifacts-client';
-import { KNOWN_CONTAINERS, pathToHttpsUrl } from '@/lib/azure/adls-client';
+import { KNOWN_CONTAINERS } from '@/lib/azure/adls-client';
 import {
   createLivySessionAsync, getLivySession, submitLivyStatement, getLivyStatement,
 } from '@/lib/azure/synapse-dev-client';
 import { withSession } from '@/lib/api/route-toolkit';
-import { apiBadRequest, apiNotFound } from '@/lib/api/respond';
+import { apiBadRequest, apiError, apiNotFound, apiUnauthorized } from '@/lib/api/respond';
 import type { SessionPayload } from '@/lib/auth/session';
 import { authorizeLakehouse, scopeItemPath } from '../_lib/item-scope';
+import { sparkAbfssFor, type SparkAbfss } from '../_lib/spark-path';
 import {
   SPARK_POOL_NAME_RE, hashJobCode, mintLakehouseJobHandle, verifyLakehouseJobHandle,
   type LakehouseJobScope,
@@ -79,22 +86,28 @@ function gate(): NextResponse | null {
   return null;
 }
 
-/** Derive the abfss:// URI Spark needs (same derivation as table-stats). */
-function abfssFor(container: string, path: string): { abfss: string; ext: string } | { error: string } {
-  let httpsUrl: string;
-  try {
-    httpsUrl = pathToHttpsUrl(container, path);
-  } catch (e: any) {
-    return { error: e?.message || 'ADLS account not configured — set LOOM_{BRONZE,SILVER,GOLD,LANDING}_URL.' };
-  }
-  const m = httpsUrl.match(/^https:\/\/([^/]+)\.dfs\.core\.windows\.net\/([^/]+)\/(.+)$/);
-  const abfss = m ? `abfss://${m[2]}@${m[1]}.dfs.core.windows.net/${m[3]}` : httpsUrl;
-  const deltaIdx = abfss.indexOf('/_delta_log');
-  const tablePath = deltaIdx >= 0 ? abfss.substring(0, deltaIdx) : abfss;
+/**
+ * The abfss:// URI and reader format Spark needs for a SCOPED source, on the
+ * item's bound `account` (`sparkAbfssFor`: refuses Spark glob characters,
+ * sovereign-cloud aware). A path inside a `_delta_log` folder reads its table.
+ */
+function sourceFor(
+  account: string | null, container: string, path: string,
+): { ok: true; abfss: string; ext: string } | Extract<SparkAbfss, { ok: false }> {
+  const built = sparkAbfssFor(account, container, path);
+  if (!built.ok) return built;
+  const deltaIdx = built.abfss.indexOf('/_delta_log');
+  const tablePath = deltaIdx >= 0 ? built.abfss.substring(0, deltaIdx) : built.abfss;
   let ext = path.toLowerCase().split('.').pop() || '';
   if (deltaIdx >= 0 || path.includes('/_delta_log')) ext = 'delta';
   if (!['delta', 'parquet', 'csv', 'tsv', 'json', 'jsonl', 'ndjson'].includes(ext)) ext = 'delta';
-  return { abfss: tablePath, ext };
+  return { ok: true, abfss: tablePath, ext };
+}
+
+/** The response for a source `sourceFor` refused. */
+function sourceRefusal(r: Extract<SparkAbfss, { ok: false }>): NextResponse {
+  if (r.status === 400) return apiBadRequest(r.error);
+  return NextResponse.json({ ok: false, status: 'error', code: r.code, error: r.error }, { status: r.status });
 }
 
 /** Indent every line of the candidate so it nests under `try:`. */
@@ -109,7 +122,6 @@ function indent(code: string): string {
  * surfaces as an honest error string, not a dead session.
  */
 function buildPreviewCode(abfss: string, ext: string, code: string, sampleRows: number, previewRows: number): string {
-  const safePath = abfss.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   const safeExt = ext.replace(/[^a-z0-9]/g, '');
   const nSample = Math.max(1, Math.min(sampleRows, MAX_SAMPLE_ROWS));
   const nPreview = Math.max(1, Math.min(previewRows, MAX_PREVIEW_ROWS));
@@ -118,7 +130,10 @@ function buildPreviewCode(abfss: string, ext: string, code: string, sampleRows: 
     'from pyspark.sql import functions as F',
     'import json',
     'spark = SparkSession.builder.getOrCreate()',
-    `_path = "${safePath}"`,
+    // JSON string syntax is a valid Python string literal: quotes, backslashes
+    // and any control character are written as escapes, so the literal stays
+    // on this one line whatever the path holds.
+    `_path = ${JSON.stringify(abfss)}`,
     `_ext = "${safeExt}"`,
     'def _load():',
     "    if _ext == 'delta':",
@@ -188,6 +203,18 @@ function jobScope(session: SessionPayload, lakehouseId: string): LakehouseJobSco
   return { lakehouseId, purpose: 'transform-preview', oid: String(session.claims.oid || '') };
 }
 
+/**
+ * A preview job is bound to the principal that started it, so a session with no
+ * user object id cannot start or poll one. Answered before any Spark call.
+ */
+function missingPrincipal(session: SessionPayload): NextResponse | null {
+  if (String(session.claims?.oid || '')) return null;
+  return apiUnauthorized(
+    'Your sign-in did not include a user object id, so Loom cannot tie a transform preview to you. '
+    + 'Sign out and sign in again, then retry.',
+  );
+}
+
 export const POST = withSession(async (req: NextRequest, { session }) => {
   const g = gate(); if (g) return g;
 
@@ -204,6 +231,8 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   if (!lakehouseId) {
     return apiBadRequest('lakehouseId is required: a transform preview runs against a file or table of one lakehouse.');
   }
+  const noPrincipal = missingPrincipal(session);
+  if (noPrincipal) return noPrincipal;
   // A body carrying a jobId is a POLL. The client polls with POST so the
   // candidate code (up to MAX_CODE_CHARS) travels in the body, not the URL.
   const jobId = typeof body?.jobId === 'string' ? body.jobId : '';
@@ -224,15 +253,16 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
     );
     if (scoped instanceof NextResponse) return scoped;
 
-    const abfss = abfssFor(scoped.container, scoped.path);
-    if ('error' in abfss) {
-      return NextResponse.json({ ok: false, code: 'not_configured', error: abfss.error }, { status: 503 });
-    }
+    const src = sourceFor(scoped.account, scoped.container, scoped.path);
+    if (!src.ok) return sourceRefusal(src);
     const scope = jobScope(session, lakehouseId);
     const fresh = await createLivySessionAsync(pool, 'pyspark', `loom-wrangler-${Date.now()}`);
     const sessionId = fresh.id;
     const s = await getLivySession(pool, sessionId);
-    const base = { pool, sessionId, container: scoped.container, path: scoped.path, codeHash: hashJobCode(code) };
+    const base = {
+      pool, sessionId, container: scoped.container, path: scoped.path, codeHash: hashJobCode(code),
+      ...(scoped.account ? { account: scoped.account } : {}),
+    };
     if (s.state !== 'idle') {
       return NextResponse.json({
         ok: true, status: 'warming', sessionState: s.state,
@@ -240,7 +270,7 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
       });
     }
     const stmt = await submitLivyStatement(pool, sessionId, {
-      code: buildPreviewCode(abfss.abfss, abfss.ext, code, sampleRows, previewRows), kind: 'pyspark',
+      code: buildPreviewCode(src.abfss, src.ext, code, sampleRows, previewRows), kind: 'pyspark',
     });
     return NextResponse.json({
       ok: true, status: 'running', jobId: mintLakehouseJobHandle(scope, { ...base, stmtId: stmt.id }),
@@ -262,6 +292,8 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
 
   if (!lakehouseId) return apiBadRequest('lakehouseId is required');
   if (!jobId) return apiBadRequest('jobId is required; start a transform preview with POST.');
+  const noPrincipal = missingPrincipal(session);
+  if (noPrincipal) return noPrincipal;
   return pollJob(session, { lakehouseId, jobId, code, sampleRows, previewRows });
 });
 
@@ -288,7 +320,10 @@ async function pollJob(
     if (job.stmtId === null) {
       const s = await getLivySession(pool, sessionId);
       if (DEAD_SESSION.has(String(s.state))) {
-        return NextResponse.json({ ok: false, status: 'error', error: `Spark session ${sessionId} is ${s.state}.` });
+        return apiError(
+          `Spark session ${sessionId} is ${s.state}, so the preview could not run. Start a new preview.`,
+          502, { status: 'error' },
+        );
       }
       if (s.state !== 'idle') {
         return NextResponse.json({ ok: true, status: 'warming', jobId, sessionState: s.state });
@@ -299,12 +334,10 @@ async function pollJob(
       if (hashJobCode(code) !== job.codeHash) {
         return apiBadRequest('code does not match the transform this preview was started with; start a new preview.');
       }
-      const abfss = abfssFor(job.container, job.path);
-      if ('error' in abfss) {
-        return NextResponse.json({ ok: false, status: 'error', code: 'not_configured', error: abfss.error }, { status: 503 });
-      }
+      const src = sourceFor(job.account ?? null, job.container, job.path);
+      if (!src.ok) return sourceRefusal(src);
       const stmt = await submitLivyStatement(pool, sessionId, {
-        code: buildPreviewCode(abfss.abfss, abfss.ext, code, sampleRows, previewRows), kind: 'pyspark',
+        code: buildPreviewCode(src.abfss, src.ext, code, sampleRows, previewRows), kind: 'pyspark',
       });
       return NextResponse.json({
         ok: true, status: 'running',
@@ -318,15 +351,20 @@ async function pollJob(
     if (state === 'available') {
       const out = st.output;
       if (out?.status === 'error') {
-        return NextResponse.json({ ok: false, status: 'error', error: out.evalue || out.ename || 'Spark statement failed.', traceback: out.traceback });
+        return apiError(out.evalue || out.ename || 'Spark statement failed.', 422, {
+          status: 'error', traceback: out.traceback,
+        });
       }
       const parsed = parsePreviewOutput(out);
       if (!parsed) {
-        return NextResponse.json({ ok: false, status: 'error', error: 'Transform completed but produced no LOOM_PREVIEW output.' });
+        return apiError(
+          'The Spark statement finished but printed no LOOM_PREVIEW result, so Loom has no rows to show. Start a new preview.',
+          502, { status: 'error' },
+        );
       }
       if (parsed.error) {
         // The candidate transform itself threw — honest, actionable, not a dead session.
-        return NextResponse.json({ ok: false, status: 'transform_error', error: parsed.error });
+        return apiError(parsed.error, 422, { status: 'transform_error' });
       }
       return NextResponse.json({
         ok: true, status: 'available', jobId,
@@ -334,8 +372,11 @@ async function pollJob(
         addedColumns: parsed.addedColumns || [], removedColumns: parsed.removedColumns || [],
       });
     }
-    if (state === 'error' || state === 'cancelled' || state === 'cancelling') {
-      return NextResponse.json({ ok: false, status: 'error', error: `Spark statement ${state}.` });
+    if (state === 'error') {
+      return apiError('The Spark statement ended in an error state. Start a new preview.', 422, { status: 'error' });
+    }
+    if (state === 'cancelled' || state === 'cancelling') {
+      return apiError(`The Spark statement was ${state}. Start a new preview.`, 409, { status: 'error' });
     }
     return NextResponse.json({ ok: true, status: 'running', jobId });
   } catch (e: any) {

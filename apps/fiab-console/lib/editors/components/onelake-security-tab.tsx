@@ -236,7 +236,9 @@ export function OneLakeSecurityTab({ itemId, itemType, container, workspaceId, f
     const parts = typedPath.trim().split('/').map((x) => x.trim()).filter(Boolean);
     return parts.length ? `/${parts.join('/')}` : '';
   }, [typedPath]);
-  const typedValid = /^\/(Tables|Files)(\/[^/]+)*$/.test(typedNormalized) && !typedNormalized.split('/').includes('..');
+  // A `.` or `..` segment names no folder of its own, so neither is accepted.
+  const typedValid = /^\/(Tables|Files)(\/[^/]+)*$/.test(typedNormalized)
+    && !typedNormalized.split('/').some((seg) => seg === '.' || seg === '..');
   const addTypedPath = useCallback(() => {
     if (!typedValid) return;
     togglePath(typedNormalized, true);

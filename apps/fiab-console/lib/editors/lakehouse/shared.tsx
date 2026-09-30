@@ -84,6 +84,8 @@ interface ListingError {
   remediation?: string;
   code?: string;
   kind?: ListFailureKind;
+  /** A page that resolves this failure (the readiness page, for a lakehouse sharing its storage root). */
+  fixHref?: string;
 }
 
 /**
@@ -302,9 +304,28 @@ async function parseJsonOrError<T extends { ok?: boolean; error?: string }>(
   } as T;
 }
 
+/**
+ * The installed-bundle table definition behind the Maintain… dialog's key.
+ *
+ * The Tables pane sets that key two ways: a planned bundle table sets its own
+ * `name`, and a schema-enabled live table sets `<schema>/<table>`. A bundle
+ * table with no `schema` belongs to `dbo`. Schema names compare
+ * case-insensitively, table names exactly.
+ */
+function maintainTableDef<T extends { name: string; schema?: string }>(tables: T[], key: string): T | undefined {
+  if (!key) return undefined;
+  const exact = tables.find((t) => t.name === key || leafName(t.name) === key);
+  if (exact) return exact;
+  const slash = key.indexOf('/');
+  if (slash <= 0) return undefined;
+  const schema = key.slice(0, slash).toLowerCase();
+  const table = key.slice(slash + 1);
+  return tables.find((t) => (t.schema || 'dbo').toLowerCase() === schema && leafName(t.name) === table);
+}
+
 export {
   useStyles, formatBytes, leafName, collectEntries, formatCell, parseJsonOrError,
-  fileVisual, FileGlyph,
+  fileVisual, FileGlyph, maintainTableDef,
 };
 export type {
   ContainerInfo, PathEntry, ListingError, ReferenceLakehouse, RefSelection, PreviewResponse,

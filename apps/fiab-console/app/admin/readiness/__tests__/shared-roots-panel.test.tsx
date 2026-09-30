@@ -87,28 +87,43 @@ describe('/admin/readiness shared storage roots', () => {
   });
 
   // FAILS IF a completed keep does not re-run the evaluation with a fresh
-  // probe: no `/api/admin/readiness?refresh=1` request after the POST, so the
-  // resolved group would stay on screen until a manual refresh.
-  it('re-runs the readiness evaluation after a keep', async () => {
+  // probe (no `/api/admin/readiness?refresh=1` request after the POST), or if
+  // the outcome is lost when that refresh reports the check as passing: the
+  // check (and the panel inside it) is then no longer rendered, so an outcome
+  // shown inside it would vanish. Here the refresh answers `pass`, and the
+  // outcome must still be on the page, naming where the other lakehouse moved.
+  it('re-runs the readiness evaluation after a keep, and keeps the outcome when the check then passes', async () => {
     const { calls } = installFetchMock({
       ...DEPLOY,
-      '/api/admin/readiness': () => readiness([GROUP]),
-      '/api/admin/lakehouse-roots/keep': () => ({
-        ok: true,
-        kept: { name: 'Sales', container: 'bronze', root: 'lakehouses/Sales' },
-        reassigned: [{ id: 'lh-b', name: 'Sales copy', container: 'landing', root: 'lakehouses/Sales copy--lh-b' }],
-        failed: [],
-      }),
+      '/api/admin/readiness': (url: string) => (url.includes('refresh=1')
+        ? { ...readiness(), storageChecks: [{ id: CHECK_ID, title: 'Lakehouses sharing a storage root', status: 'pass', detail: 'no two share' }] }
+        : readiness([GROUP])),
+      '/api/admin/lakehouse-roots/keep': (_url: string, init?: RequestInit) => (JSON.parse(String(init?.body)).dryRun
+        ? { ok: true, dryRun: true, kept: { id: 'lh-a', name: 'Sales', container: 'bronze', root: 'lakehouses/Sales' },
+          moving: [{ id: 'lh-b', name: 'Sales copy' }], unchanged: [] }
+        : {
+          ok: true,
+          kept: { name: 'Sales', container: 'bronze', root: 'lakehouses/Sales' },
+          reassigned: [{ id: 'lh-b', name: 'Sales copy', container: 'landing', root: 'lakehouses/Sales copy--lh-b' }],
+          unchanged: [],
+          failed: [],
+        }),
     });
     renderWithProviders(<AdminReadinessPage />);
     const bar = await screen.findByTestId(`readiness-storage-check-${CHECK_ID}`);
     fireEvent.click(await within(bar).findByRole('button', { name: 'Keep root for Sales' }));
+    await screen.findByTestId('lakehouse-keep-plan-moving');
     fireEvent.click(await screen.findByRole('button', { name: 'Keep root' }));
     await waitFor(() => expect(calls.some((c) => c.url.includes('/api/admin/readiness?refresh=1'))).toBe(true));
-    const keepIdx = calls.findIndex((c) => c.url.includes('/api/admin/lakehouse-roots/keep'));
+    const keepCalls = calls.filter((c) => c.url.includes('/api/admin/lakehouse-roots/keep'));
+    expect(keepCalls.map((c) => JSON.parse(String(c.init?.body)))).toEqual([{ itemId: 'lh-a', dryRun: true }, { itemId: 'lh-a' }]);
+    const keepIdx = calls.lastIndexOf(keepCalls[1]);
     const reloadIdx = calls.findIndex((c) => c.url.includes('/api/admin/readiness?refresh=1'));
-    expect(keepIdx).toBeGreaterThanOrEqual(0);
     expect(reloadIdx).toBeGreaterThan(keepIdx);
-    expect(JSON.parse(String(calls[keepIdx].init?.body))).toEqual({ itemId: 'lh-a' });
+    // The check passed and is gone; the outcome is still shown.
+    await waitFor(() => expect(screen.queryByTestId(`readiness-storage-check-${CHECK_ID}`)).toBeNull());
+    const result = screen.getByTestId('lakehouse-keep-result');
+    expect(result.textContent).toContain('Storage roots updated');
+    expect(result.textContent).toContain('now uses landing/lakehouses/Sales copy--lh-b');
   });
 });

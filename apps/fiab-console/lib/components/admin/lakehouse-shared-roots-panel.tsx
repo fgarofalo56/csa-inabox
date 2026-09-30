@@ -7,10 +7,21 @@
  * One card per group of lakehouses that resolve to one storage directory. Each
  * member is a link to the lakehouse, with its workspace, whether its root is
  * recorded on the item, and whether it is in the recycle bin. "Keep root for
- * <name>" posts `/api/admin/lakehouse-roots/keep`: that lakehouse keeps the
- * directory and its files, and every other member gets a new, empty root of its
- * own. Nothing is copied or deleted, and the confirm dialog says so before
- * anything is written.
+ * <name>" first asks `/api/admin/lakehouse-roots/keep` for its plan (`dryRun`),
+ * and the confirm dialog lists exactly the lakehouses that will get a new,
+ * empty root, and the ones that stay as they are and why. Confirming posts the
+ * same request without `dryRun`: that lakehouse keeps the directory and its
+ * files, and the listed members get roots of their own. Nothing is copied or
+ * deleted, and the dialog says so before anything is written.
+ *
+ * The outcome is handed to the page (`onResolved`), which shows it with
+ * {@link LakehouseKeepResultBar} OUTSIDE the check: a keep that resolves the
+ * last group makes the check pass, and the check (with this panel) is no longer
+ * rendered.
+ *
+ * The check has no gate-registry entry yet: the registry's entries are
+ * environment-variable gates, and it has no entry type for a data-state check
+ * (#4817). Until then this panel is the check's only Fix-it surface.
  *
  * The shapes below mirror `SharedRootGroup` in
  * `lib/admin/env-checks/lakehouse-shared-roots.ts`; they are restated here so
@@ -20,10 +31,10 @@ import { useState } from 'react';
 import Link from 'next/link';
 import {
   makeStyles, tokens, Badge, Button, Caption1, Card, Text, Spinner,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
 } from '@fluentui/react-components';
-import { FolderLink20Regular, Wrench16Regular } from '@fluentui/react-icons';
+import { Dismiss16Regular, FolderLink20Regular, Wrench16Regular } from '@fluentui/react-icons';
 import { clientFetch } from '@/lib/client-fetch';
 
 export interface SharedRootMemberView {
@@ -41,12 +52,21 @@ export interface SharedRootGroupView {
   members: SharedRootMemberView[];
 }
 
-interface KeepResult {
+export interface KeepResult {
   ok: boolean;
   error?: string;
   kept?: { name: string; container: string; root: string };
   reassigned?: Array<{ id: string; name: string; container: string; root: string }>;
+  unchanged?: Array<{ id: string; name: string; why: string }>;
   failed?: Array<{ id: string; name: string; error: string }>;
+}
+
+interface KeepPlan {
+  ok: boolean;
+  error?: string;
+  kept?: { name: string; container: string; root: string };
+  moving?: Array<{ id: string; name: string }>;
+  unchanged?: Array<{ id: string; name: string; why: string }>;
 }
 
 const useStyles = makeStyles({
@@ -70,60 +90,98 @@ const useStyles = makeStyles({
   dialogList: { margin: 0, paddingLeft: tokens.spacingHorizontalXL },
 });
 
+async function postKeep(itemId: string, dryRun: boolean): Promise<{ status: number; body: any }> {
+  const r = await clientFetch('/api/admin/lakehouse-roots/keep', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(dryRun ? { itemId, dryRun: true } : { itemId }),
+  });
+  return { status: r.status, body: await r.json().catch(() => null) };
+}
+
+/**
+ * The outcome of a keep: which lakehouse kept the root, which moved where, which
+ * were left as they were, and which failed. Rendered by the page, outside the
+ * check, so it stays after the check passes; dismissed by the admin.
+ */
+export function LakehouseKeepResultBar({ result, onDismiss }: { result: KeepResult; onDismiss: () => void }) {
+  return (
+    <MessageBar
+      intent={result.ok ? 'success' : 'error'}
+      layout="multiline"
+      data-testid="lakehouse-keep-result"
+      style={{ marginBottom: tokens.spacingVerticalM }}
+    >
+      <MessageBarBody>
+        <MessageBarTitle>{result.ok ? 'Storage roots updated' : 'Not every lakehouse was updated'}</MessageBarTitle>
+        {result.error ? <>{result.error} </> : null}
+        {result.kept ? <>“{result.kept.name}” keeps {result.kept.container}/{result.kept.root}. </> : null}
+        {(result.reassigned || []).map((m) => (
+          <span key={m.id}>“{m.name}” now uses {m.container}/{m.root}. </span>
+        ))}
+        {(result.unchanged || []).map((m) => (
+          <span key={m.id}>“{m.name}” was left as it is: {m.why}. </span>
+        ))}
+        {(result.failed || []).map((m) => (
+          <span key={m.id}>“{m.name}”: {m.error}. </span>
+        ))}
+      </MessageBarBody>
+      <MessageBarActions
+        containerAction={<Button appearance="transparent" aria-label="Dismiss" icon={<Dismiss16Regular />} onClick={onDismiss} />}
+      />
+    </MessageBar>
+  );
+}
+
 export function LakehouseSharedRootsPanel({
   groups,
   onResolved,
 }: {
   groups: SharedRootGroupView[];
-  /** Called after a keep request completes, so the page can re-run the check. */
-  onResolved?: () => void;
+  /** Called with the outcome after a keep request completes, so the page can show it and re-run the check. */
+  onResolved?: (result: KeepResult) => void;
 }) {
   const s = useStyles();
   const [confirm, setConfirm] = useState<{ group: SharedRootGroupView; keeper: SharedRootMemberView } | null>(null);
+  const [plan, setPlan] = useState<KeepPlan | 'loading' | null>(null);
   const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<KeepResult | null>(null);
+
+  const open = async (group: SharedRootGroupView, keeper: SharedRootMemberView) => {
+    setConfirm({ group, keeper });
+    setPlan('loading');
+    try {
+      const { status, body } = await postKeep(keeper.id, true);
+      setPlan(body && typeof body === 'object'
+        ? { ...body, ok: status < 400 && body.ok !== false }
+        : { ok: false, error: `request failed (${status})` });
+    } catch (e: any) {
+      setPlan({ ok: false, error: e?.message || String(e) });
+    }
+  };
 
   const keep = async () => {
     if (!confirm) return;
     setBusy(true);
-    setResult(null);
+    let result: KeepResult;
     try {
-      const r = await clientFetch('/api/admin/lakehouse-roots/keep', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ itemId: confirm.keeper.id }),
-      });
-      const j = (await r.json().catch(() => null)) as KeepResult | null;
-      setResult(j && typeof j === 'object' ? { ...j, ok: r.ok && j.ok !== false } : { ok: false, error: `request failed (${r.status})` });
+      const { status, body } = await postKeep(confirm.keeper.id, false);
+      result = body && typeof body === 'object'
+        ? { ...body, ok: status < 400 && body.ok !== false }
+        : { ok: false, error: `request failed (${status})` };
     } catch (e: any) {
-      setResult({ ok: false, error: e?.message || String(e) });
-    } finally {
-      setBusy(false);
-      setConfirm(null);
-      onResolved?.();
+      result = { ok: false, error: e?.message || String(e) };
     }
+    setBusy(false);
+    setConfirm(null);
+    setPlan(null);
+    onResolved?.(result);
   };
 
   if (!groups.length) return null;
-  const others = confirm ? confirm.group.members.filter((m) => m.id !== confirm.keeper.id) : [];
+  const ready = plan !== null && plan !== 'loading' && plan.ok;
 
   return (
     <div className={s.list} data-testid="lakehouse-shared-roots-panel">
-      {result && (
-        <MessageBar intent={result.ok ? 'success' : 'error'} layout="multiline" data-testid="lakehouse-keep-result">
-          <MessageBarBody>
-            <MessageBarTitle>{result.ok ? 'Storage roots updated' : 'Not every lakehouse was updated'}</MessageBarTitle>
-            {result.error ? <>{result.error} </> : null}
-            {result.kept ? <>“{result.kept.name}” keeps {result.kept.container}/{result.kept.root}. </> : null}
-            {(result.reassigned || []).map((m) => (
-              <span key={m.id}>“{m.name}” now uses {m.container}/{m.root}. </span>
-            ))}
-            {(result.failed || []).map((m) => (
-              <span key={m.id}>“{m.name}”: {m.error}. </span>
-            ))}
-          </MessageBarBody>
-        </MessageBar>
-      )}
       {groups.map((g) => (
         <Card key={g.ids.join('|')} className={s.card} data-testid={`lakehouse-shared-root-${g.ids.join('-')}`}>
           <div className={s.head}>
@@ -143,7 +201,7 @@ export function LakehouseSharedRootsPanel({
                 icon={<Wrench16Regular />}
                 disabled={busy || m.recycled}
                 title={m.recycled ? 'Restore this lakehouse before keeping its root.' : undefined}
-                onClick={() => setConfirm({ group: g, keeper: m })}
+                onClick={() => void open(g, m)}
               >
                 Keep root for {m.name || m.id}
               </Button>
@@ -151,23 +209,45 @@ export function LakehouseSharedRootsPanel({
           ))}
         </Card>
       ))}
-      <Dialog open={!!confirm} onOpenChange={(_e, d) => { if (!d.open && !busy) setConfirm(null); }}>
+      <Dialog open={!!confirm} onOpenChange={(_e, d) => { if (!d.open && !busy) { setConfirm(null); setPlan(null); } }}>
         <DialogSurface>
           <DialogBody>
             <DialogTitle>Keep root for {confirm?.keeper.name}</DialogTitle>
             <DialogContent>
-              <Text block>
-                “{confirm?.keeper.name}” keeps {confirm?.group.roots.join(', ')} and the files in it. Each other lakehouse
-                below gets a new, empty root of its own and opens there from now on:
-              </Text>
-              <ul className={s.dialogList}>
-                {others.map((m) => <li key={m.id}><Text>{m.name || m.id} ({m.id})</Text></li>)}
-              </ul>
-              <Text block>Nothing is copied or deleted.</Text>
+              {plan === 'loading' && <Spinner size="small" label="Working out what changes…" labelPosition="after" />}
+              {plan !== null && plan !== 'loading' && !plan.ok && (
+                <MessageBar intent="error" layout="multiline" data-testid="lakehouse-keep-plan-error">
+                  <MessageBarBody>{plan.error || 'The plan could not be read.'}</MessageBarBody>
+                </MessageBar>
+              )}
+              {ready && plan.kept && (
+                <>
+                  <Text block>
+                    “{confirm?.keeper.name}” keeps {plan.kept.container}/{plan.kept.root} and the files in it.
+                    {(plan.moving || []).length
+                      ? ' Each lakehouse below gets a new, empty root of its own and opens there from now on:'
+                      : ' No other lakehouse changes.'}
+                  </Text>
+                  {(plan.moving || []).length > 0 && (
+                    <ul className={s.dialogList} data-testid="lakehouse-keep-plan-moving">
+                      {(plan.moving || []).map((m) => <li key={m.id}><Text>{m.name || m.id} ({m.id})</Text></li>)}
+                    </ul>
+                  )}
+                  {(plan.unchanged || []).length > 0 && (
+                    <>
+                      <Text block>These stay as they are:</Text>
+                      <ul className={s.dialogList} data-testid="lakehouse-keep-plan-unchanged">
+                        {(plan.unchanged || []).map((m) => <li key={m.id}><Text>{m.name || m.id} ({m.id}): {m.why}</Text></li>)}
+                      </ul>
+                    </>
+                  )}
+                  <Text block>Nothing is copied or deleted.</Text>
+                </>
+              )}
             </DialogContent>
             <DialogActions>
-              <Button appearance="secondary" disabled={busy} onClick={() => setConfirm(null)}>Cancel</Button>
-              <Button appearance="primary" disabled={busy} icon={busy ? <Spinner size="tiny" /> : undefined} onClick={() => void keep()}>
+              <Button appearance="secondary" disabled={busy} onClick={() => { setConfirm(null); setPlan(null); }}>Cancel</Button>
+              <Button appearance="primary" disabled={busy || !ready} icon={busy ? <Spinner size="tiny" /> : undefined} onClick={() => void keep()}>
                 Keep root
               </Button>
             </DialogActions>

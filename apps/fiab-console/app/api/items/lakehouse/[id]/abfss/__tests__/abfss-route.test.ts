@@ -19,6 +19,7 @@ vi.mock('@/lib/azure/lakehouse-abfss', async () => {
   const resolveLakehouseAbfss = vi.fn();
   return {
     lakehouseStorageWithheldMessage: actual.lakehouseStorageWithheldMessage,
+    lakehouseStorageWithheldFields: actual.lakehouseStorageWithheldFields,
     resolveLakehouseAbfss,
     resolveLakehouseStorage: async (...a: any[]) => {
       const b: any = await resolveLakehouseAbfss(...a);
@@ -93,6 +94,8 @@ describe('GET /api/items/lakehouse/[id]/abfss', () => {
   // FAILS IF a withheld location is reported as resolved (resolved:true with an
   // abfss) or worded as unconfigured storage (the hint would name LOOM_LANDING_URL
   // and `reason` would be absent). The hint is lifted from the resolver module.
+  // Also FAILS IF root-shared loses the page that resolves it (`fixHref`), or
+  // root-unverified (retried, no page) gains one.
   it('reports a withheld location as unresolved, with its reason and the resolver wording', async () => {
     const actual: any = await vi.importActual('@/lib/azure/lakehouse-abfss');
     const expected = actual.lakehouseStorageWithheldMessage('root-shared');
@@ -101,7 +104,12 @@ describe('GET /api/items/lakehouse/[id]/abfss', () => {
     const res = await call('lh-1');
     const body = await res.json();
     expect(res.status).toBe(200);
-    expect(body).toEqual({ ok: true, resolved: false, reason: 'root-shared', hint: expected });
+    expect(body).toEqual({ ok: true, resolved: false, reason: 'root-shared', hint: expected, fixHref: '/admin/readiness' });
+    (resolveLakehouseAbfss as any).mockResolvedValue({ withheld: 'root-unverified' });
+    const unverified = await (await call('lh-1')).json();
+    expect(unverified).toEqual({
+      ok: true, resolved: false, reason: 'root-unverified', hint: actual.lakehouseStorageWithheldMessage('root-unverified'),
+    });
   });
 
   // FAILS IF resolver `not-found` is reported as the unconfigured-storage hint

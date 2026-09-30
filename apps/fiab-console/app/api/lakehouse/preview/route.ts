@@ -113,7 +113,9 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
     );
     if (scoped instanceof NextResponse) return scoped;
     ({ container, path } = scoped);
-    account = undefined;
+    // The item's BOUND account (null only on the tenant-admin storage form,
+    // which reads the deployment's primary account).
+    account = scoped.account ?? undefined;
   }
 
   const fmt = detectFormat(path, explicit);

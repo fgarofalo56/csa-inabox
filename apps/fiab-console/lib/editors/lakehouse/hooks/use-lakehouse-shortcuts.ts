@@ -204,8 +204,13 @@ export function useLakehouseShortcuts({
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ lakehouseId: shortcutLakehouseId, id: row.id }),
       });
-      await parseJsonOrError<{ ok: boolean; error?: string }>(r, 'Test shortcut');
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; remediation?: string }>(r, 'Test shortcut');
+      // Reload first: a failed probe still writes the row's status back. Then
+      // show the refusal or failure (loadShortcuts clears the error it finds).
       await loadShortcuts();
+      if (!j.ok) {
+        setShortcutsError([j.error || `Test shortcut failed (HTTP ${r.status}).`, j.remediation].filter(Boolean).join(' '));
+      }
     } catch (e: any) { setShortcutsError(e?.message || String(e)); }
     finally { setShortcutsBusy(false); }
   }, [shortcutLakehouseId, loadShortcuts]);

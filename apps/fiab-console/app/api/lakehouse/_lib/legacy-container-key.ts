@@ -10,7 +10,8 @@
  * container name to read under in exactly that case, and null otherwise:
  *
  * - the item's storage does not resolve (no binding, withheld location);
- * - another lakehouse item records the same container;
+ * - another lakehouse item records the same container (a recycled item
+ *   counts: it can be restored);
  * - another lakehouse item records no container at all, so it could be bound
  *   to this one;
  * - the lakehouse list cannot be read.
@@ -48,7 +49,9 @@ export async function legacyContainerKeyFor(lakehouseId: string, workspaceId: st
   if (!container) return null;
   let facts: RootFacts[];
   try {
-    facts = await listLakehouseRootFacts();
+    // Recycled items too: a recycled lakehouse can be restored, so a container
+    // it records is still not this item's alone.
+    facts = await listLakehouseRootFacts(undefined, { includeRecycled: true });
   } catch {
     return null;
   }

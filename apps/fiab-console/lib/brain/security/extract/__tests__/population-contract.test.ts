@@ -20,7 +20,7 @@ import {
   assertEveryEmitAccounted,
   NO_EMIT_REASONS,
 } from '../population-contract';
-import { buildSecurityGraphArtifact } from '../build';
+import { buildSecurityGraphArtifact, buildSecurityGraphExtraction } from '../build';
 import type { SourceFile } from '../types';
 
 describe('assertEveryCandidateJudged', () => {
@@ -320,16 +320,26 @@ describe('a declared scan root that was never walked cannot survive', () => {
     expect(publication?.scope).toContain('scripts/**');
   });
 
-  it('reports what it saw under a scanned root and could not read, WITH A COUNT', () => {
-    const a = build({
-      unmodeledPublicationSurfaces: [
-        { root: '.github/', fileCount: 141, extensions: ['.sh', '.yml'] },
-      ],
+  it('declares what it saw under a scanned root and could not read, and COUNTS it on the run', () => {
+    const unmodeledPublicationSurfaces = [
+      { root: '.github/', fileCount: 141, extensions: ['.sh', '.yml'] },
+    ];
+    const { artifact: a, run } = buildSecurityGraphExtraction({
+      files: CORPUS,
+      publicationRoots: ['scripts/'],
+      routeGuardSource: GUARD_SOURCE,
+      commit: null,
+      now: NOW,
+      unmodeledPublicationSurfaces,
     });
     const unread = a.meta.skipped.filter((s) => s.reason.includes('were seen and NOT read'));
     expect(unread).toHaveLength(1);
-    expect(unread[0].reason).toContain('141 file(s)');
     expect(unread[0].subject).toContain('*.yml');
+    // The count is on the RUN, not in the committed reason (#4798). A reason
+    // that spells `141` again is the input that breaks the second assertion;
+    // dropping the surfaces from the run breaks the first.
+    expect(run.unmodeledPublicationSurfaces).toEqual(unmodeledPublicationSurfaces);
+    expect(unread[0].reason).not.toMatch(/\d+ file\(s\)/);
   });
 
   it('records nothing for a root with zero unread files (control)', () => {

@@ -11,7 +11,7 @@
  * OneLake / Fabric workspace). Real backend only.
  */
 import { loadOwnedItem } from '@/app/api/items/_lib/item-crud';
-import { resolveLakehouseAbfss } from './lakehouse-abfss';
+import { lakehouseStorageWithheldFields, resolveLakehouseStorage } from './lakehouse-abfss';
 import { discoverResourceCoordsByName } from './resource-graph-coords';
 import { resolveAoaiTarget } from './copilot-orchestrator';
 import { isSearchConfigured } from './search-index-client';
@@ -57,6 +57,8 @@ export interface IndexPlan {
   searchConfigured: boolean;
   connection: ResolvedConnection | null;
   connectionGate: string | null;
+  /** A page that resolves `connectionGate`, when there is one (a lakehouse sharing its storage root). */
+  connectionGateHref: string | null;
   tableChoices: string[];
   columns: SourceColumn[];
   fieldMapping: ReturnType<typeof buildFieldMappingTable>;
@@ -123,6 +125,7 @@ export async function resolveIndexPlan(opts: {
     searchConfigured: isSearchConfigured(),
     connection: null,
     connectionGate: null,
+    connectionGateHref: null,
     tableChoices: [],
     columns: [],
     fieldMapping: [],
@@ -142,8 +145,14 @@ export async function resolveIndexPlan(opts: {
   }
 
   if (sourceType === 'lakehouse') {
-    const resolved = await resolveLakehouseAbfss(itemId, item.workspaceId);
-    if (!resolved) {
+    const storage = await resolveLakehouseStorage(itemId, item.workspaceId);
+    const resolved = storage.ok ? storage.bound : null;
+    const withheld = storage.ok ? null : lakehouseStorageWithheldFields(storage.reason);
+    if (withheld) {
+      // The location exists but is withheld: say why, not "not provisioned".
+      base.connectionGate = withheld.error;
+      base.connectionGateHref = withheld.fixHref ?? null;
+    } else if (!resolved) {
       base.connectionGate =
         'No ADLS Gen2 path resolved for this lakehouse yet. It resolves once the lakehouse is provisioned and ' +
         'requires the internal Data Landing Zone storage to be configured — set LOOM_LANDING_URL (and/or ' +

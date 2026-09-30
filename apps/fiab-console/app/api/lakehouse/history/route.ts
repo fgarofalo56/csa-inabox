@@ -66,6 +66,10 @@ function cleanTablePath(p: string): string | null {
   const t = trimSlashes((p || '').trim());
   if (!t) return null;
   if (t.includes('..')) return null;
+  // A `%` is refused rather than carried: the path is checked here as literal
+  // segments, and a percent-escape could read as a different path wherever it
+  // is decoded later (a URL, a storage URI).
+  if (t.includes('%')) return null;
   return t;
 }
 

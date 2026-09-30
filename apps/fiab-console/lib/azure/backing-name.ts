@@ -373,6 +373,34 @@ export function lakehouseRootLocation(f: LakehouseRootFacts): LakehouseRootLocat
 }
 
 /**
+ * The {@link LakehouseRootFacts} of one item document: the same fields
+ * `listLakehouseRootFacts` projects in its query, read from the document.
+ */
+export function lakehouseRootFactsOfItem(item: {
+  id: string;
+  workspaceId?: unknown;
+  displayName?: unknown;
+  createdAt?: unknown;
+  state?: unknown;
+}): LakehouseRootFacts {
+  const state = (item.state && typeof item.state === 'object' ? item.state : {}) as Record<string, any>;
+  const sec = (state.provisioning?.secondaryIds || {}) as Record<string, unknown>;
+  return {
+    id: item.id,
+    workspaceId: item.workspaceId,
+    displayName: item.displayName,
+    createdAt: item.createdAt,
+    recycled: state._recycled,
+    lakehouseRoot: state.lakehouseRoot,
+    adlsContainer: state.adlsContainer,
+    storageAccount: state.storageAccount,
+    provAdlsRoot: sec.adlsRoot,
+    provContainer: sec.container,
+    provRootPath: sec.rootPath,
+  };
+}
+
+/**
  * Do two lakehouse roots share files? Same account and container (an unknown
  * one matches any), and one root's segments are a prefix of the other's —
  * `lakehouses/Sales` overlaps `lakehouses/Sales/2024`, not `lakehouses/Sales-archive`.

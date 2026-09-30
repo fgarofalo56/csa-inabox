@@ -1101,11 +1101,15 @@ function BindStep({
               {storageMode === 'connection' && (
                 <div className={s.inlineFields}>
                   {/* Browsed, not typed: the picker walks the real ADLS data plane and
-                      emits an abfss URI, which the report resolver reads as-is. */}
+                      emits an abfss URI, which the report resolver reads as-is.
+                      The picker is NOT limited to the connection's account: it offers
+                      any account the caller can list, and the resolver's storage-adls
+                      branch reads the host in the picked URI (resolveFileTarget). The
+                      hint says exactly that, rather than promising a restriction. */}
                   <div className={s.inlineField}>
                     <AdlsPathPicker
                       label="Delta folder or file"
-                      hint="Browse the storage account the connection reads."
+                      hint="Browse any storage account you can list. The report reads exactly the location you pick."
                       value={filePath}
                       onChange={(loc) => { setFilePath(loc?.uri ?? ''); setPreview(null); }}
                     />

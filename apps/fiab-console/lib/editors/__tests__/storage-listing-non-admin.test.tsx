@@ -217,6 +217,11 @@ describe('OneLake security tab, folder picker', () => {
     // value is added unvalidated.
     fireEvent.change(typed, { target: { value: 'raw/sales' } });
     expect(add).toBeDisabled();
+    // A `.` or `..` segment names no folder. FAILS IF either is accepted.
+    fireEvent.change(typed, { target: { value: 'Tables/.' } });
+    expect(add).toBeDisabled();
+    fireEvent.change(typed, { target: { value: 'Tables/../Files' } });
+    expect(add).toBeDisabled();
     fireEvent.change(typed, { target: { value: ' Tables/sales/ ' } });
     expect(add).not.toBeDisabled();
     fireEvent.click(add);

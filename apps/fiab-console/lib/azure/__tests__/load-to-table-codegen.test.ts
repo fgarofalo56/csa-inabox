@@ -148,6 +148,37 @@ describe('buildLoadToTablePySpark', () => {
       })).not.toThrow();
     }
   });
+
+  // Generated comments are rendered as quoted literals. The source path holds
+  // line breaks around `print(1)`. FAILS IF the `# Source:` line interpolates
+  // the raw URL: the job then has a line that is exactly `print(1)`, and the
+  // source comment is no longer the one quoted line asserted below.
+  it('keeps a source path with line breaks on its one comment line', () => {
+    const code = buildLoadToTablePySpark({
+      container: 'landing', account: 'loomstg', path: 'Files/a\nprint(1)\n.csv',
+      tableName: 'sales', writeMode: 'overwrite', format: 'csv',
+    });
+    const lines = code.split('\n');
+    expect(lines).not.toContain('print(1)');
+    expect(lines[1]).toBe('# Source: "abfss://landing@loomstg.dfs.core.windows.net/Files/a\\nprint(1)\\n.csv"');
+    // The read still names the same path, quoted (readExprFor).
+    expect(code).toContain('.csv("abfss://landing@loomstg.dfs.core.windows.net/Files/a\\nprint(1)\\n.csv")');
+  });
+
+  // Same for the target: the item root holds line breaks around `print(2)`.
+  // FAILS IF the `# Target:` line interpolates the raw target URL: a line that
+  // is exactly `print(2)` appears.
+  it('keeps a target root with line breaks on its one comment line', () => {
+    const code = buildLoadToTablePySpark({
+      container: 'landing', account: 'loomstg', path: 'Files/s.csv',
+      tableName: 'sales', writeMode: 'append', format: 'csv', tablesRoot: 'lakehouses/a\nprint(2)\n#',
+    });
+    const lines = code.split('\n');
+    expect(lines).not.toContain('print(2)');
+    expect(lines[2]).toBe(
+      '# Target: sales (Delta, append) at "abfss://landing@loomstg.dfs.core.windows.net/lakehouses/a\\nprint(2)\\n#/Tables/sales"',
+    );
+  });
 });
 
 describe('parseLoadRowCount', () => {

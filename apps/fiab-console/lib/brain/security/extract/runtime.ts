@@ -30,6 +30,12 @@
  *      than by testing, which is the only form of parity claim that does not need
  *      a per-cloud receipt to be believed.
  *
+ * The ONE file this module does read is the image build date (`build-date.ts`),
+ * and reason 1 does not bite it: file tracing never sees it because the
+ * Dockerfile's runner stage writes it straight into `/app`, after the traced
+ * standalone output is copied in. Its absence outside an image is a reported
+ * state; inside one (`build-date.ts#IMAGE_CONTEXT_MARKERS`) it is a refusal.
+ *
  * ── THE ONLY CHANGE #3992's SEAM NEEDS ───────────────────────────────────
  *
  * `app/api/admin/brain/_lib/security-source.ts#loadSecurityGraph` currently
@@ -46,6 +52,7 @@
 
 import type { SecurityGraphArtifact } from './types';
 import { resolveSecurityGraph, type SecurityGraphSource } from './artifact';
+import { readImageBuildDate, type ImageBuildDate } from './build-date';
 import generated from './__generated__/security-graph.json';
 
 /**
@@ -55,19 +62,26 @@ import generated from './__generated__/security-graph.json';
  * package's own generator from `buildSecurityGraphArtifact()`'s typed output, so
  * the shape is guaranteed at the point of WRITING; what a cast cannot guarantee is
  * that the file on disk was not hand-edited. That is exactly what
- * `resolveSecurityGraph` re-checks — version, provenance, node count, age and
- * join coverage are all re-validated below rather than trusted from the type.
+ * `resolveSecurityGraph` re-checks — version, provenance, node count and join
+ * coverage are all re-validated below rather than trusted from the type.
  */
 const ARTIFACT = (generated as { artifact: SecurityGraphArtifact | null }).artifact;
 
 /**
- * Load the security graph shipped with this build.
- *
- * `now` is injectable so the staleness refusal is testable without waiting 90
- * days — a refusal branch no test can reach is not a guard.
+ * The image build date, cached once it is SETTLED. The file is written at image
+ * build time and cannot change under a running server, so `present`, `absent`
+ * and `missing` hold for the life of the process. `unreadable` is NOT cached: a
+ * transient `EMFILE` or `EACCES` would otherwise refuse the graph until restart,
+ * so it is re-read on the next load. See `build-date.ts` for why the date is a
+ * file in the image and not a field in the artifact.
  */
-export function loadExtractedSecurityGraph(now: Date = new Date()): SecurityGraphSource {
-  return resolveSecurityGraph(ARTIFACT, { now });
+let imageBuiltAt: ImageBuildDate | undefined;
+
+/** Load the security graph shipped with this build. */
+export function loadExtractedSecurityGraph(): SecurityGraphSource {
+  const built = imageBuiltAt ?? readImageBuildDate();
+  if (built.state !== 'unreadable') imageBuiltAt = built;
+  return resolveSecurityGraph(ARTIFACT, { now: new Date(), imageBuiltAt: built });
 }
 
 /**
@@ -77,7 +91,7 @@ export function loadExtractedSecurityGraph(now: Date = new Date()): SecurityGrap
  * Returns `null` when nothing was generated. A caller must NOT use a non-null
  * return as evidence the graph is usable: that question is
  * {@link loadExtractedSecurityGraph}'s, and it refuses artifacts this getter
- * happily hands back (stale, wrong version, zero nodes).
+ * happily hands back (wrong version, zero nodes).
  */
 export function extractedArtifact(): SecurityGraphArtifact | null {
   return ARTIFACT;

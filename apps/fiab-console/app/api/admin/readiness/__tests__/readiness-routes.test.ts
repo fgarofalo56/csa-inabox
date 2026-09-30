@@ -132,8 +132,8 @@ describe('GET /api/admin/readiness', () => {
     ];
 
     // FAILS IF the route stops returning the check (storageChecks undefined or
-    // empty), if it asks for the count-only form (`includeIds: false`: neither id
-    // is in the detail), or if the check's title drifts from the constant the
+    // empty), if it asks for the count-only form (`includeIds: false`: no
+    // groups), or if the check's title drifts from the constant the
     // storage resolver's message names (a hand-typed title here would not catch
     // that, so the expected value is the imported constant).
     it('reports the shared group WITH item ids, under the title the resolver names', async () => {
@@ -145,8 +145,9 @@ describe('GET /api/admin/readiness', () => {
       const check = (j.storageChecks as any[]).find((c) => c.id === LAKEHOUSE_SHARED_ROOTS_CHECK_ID);
       expect(check?.status).toBe('warn');
       expect(check?.title).toBe(LAKEHOUSE_SHARED_ROOTS_CHECK_TITLE);
-      expect(check?.detail).toContain('Sales (lh-a)');
-      expect(check?.detail).toContain('Sales (lh-b)');
+      // The members are listed ONCE, by the groups; the detail is the count.
+      expect(check?.detail).toContain('1 shared storage root(s) across 2 lakehouse(s)');
+      expect(check?.detail).not.toContain('lh-a');
       expect(check?.inconclusive).toBeUndefined();
       // The page renders the group from `groups`, with a link per member and
       // the "Keep root for" action. FAILS IF the route drops the groups (the

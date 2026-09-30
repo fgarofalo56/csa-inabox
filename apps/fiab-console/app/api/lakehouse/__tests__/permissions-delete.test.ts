@@ -104,12 +104,16 @@ describe('DELETE /api/lakehouse/permissions — tenant admin, like POST', () => 
     // with a different body than POST.
     expect(Object.keys(dj).sort()).toEqual(Object.keys(pj).sort());
     // Callers render `error`: it must be the sentence, not a bare code. Breaks
-    // if `error` goes back to 'forbidden' with the sentence only in `hint`.
+    // if `error` goes back to 'forbidden' with the sentence elsewhere.
     expect(dj.error).toMatch(/requires tenant-admin/);
     expect(pj.error).toMatch(/requires tenant-admin/);
     expect(dj.code).toBe('admin_only');
     expect(pj.code).toBe('admin_only');
     expect(dj.remediation).toMatch(/tenant admin|Azure portal/);
+    // The next step travels in `remediation` only; a duplicate `hint` field
+    // is gone. Breaks if `hint` is added back to the shared refusal body.
+    expect(dj).not.toHaveProperty('hint');
+    expect(pj).not.toHaveProperty('hint');
     expect((revokeContainerRoleAssignment as any).mock.calls).toEqual([]);
     expect((listContainerRoleAssignments as any).mock.calls).toEqual([]);
     expect((grantContainerRole as any).mock.calls).toEqual([]);
