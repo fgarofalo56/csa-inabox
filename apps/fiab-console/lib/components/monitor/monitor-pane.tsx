@@ -1502,7 +1502,7 @@ const COST_TIMEFRAMES: { value: string; label: string }[] = [
 /** Dimensions the unified "Cost breakdown" table can group + sort + filter by. */
 type GroupDim = 'service' | 'resourceGroup' | 'subscription' | 'resource' | 'resourceType' | 'location' | 'tag';
 
-function CostTab({ onUnauth }: { onUnauth: () => void }) {
+export function CostTab({ onUnauth }: { onUnauth: () => void }) {
   const styles = useStyles();
   const [data, setData] = useState<CostSummary | null>(null);
   const [gate, setGate] = useState<Gate | null>(null);
@@ -1797,9 +1797,9 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
           </div>
         }
       >
-        {groupDim === 'tag' && activeGroup.rows.length > 0 && <CostTagNotice summary={data} />}
+        {groupDim === 'tag' && activeGroup.rows.length > 0 && <CostTagNotice summary={data} onRetry={() => setTick((t) => t + 1)} />}
         {groupDim === 'tag' && activeGroup.rows.length === 0 ? (
-          <CostTagNotice summary={data} />
+          <CostTagNotice summary={data} loading={loading} onRetry={() => setTick((t) => t + 1)} />
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)', gap: tokens.spacingHorizontalL, alignItems: 'start' }}>
             <LoomDataTable
@@ -1826,9 +1826,9 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
           carries no such tag key. */}
       {data && (
         <Section title={`Cost allocation by tag · ${data.tagKey}`}>
-          {data.byTag.length > 0 && <CostTagNotice summary={data} />}
+          {data.byTag.length > 0 && <CostTagNotice summary={data} onRetry={() => setTick((t) => t + 1)} />}
           {data.byTag.length === 0 ? (
-            <CostTagNotice summary={data} />
+            <CostTagNotice summary={data} onRetry={() => setTick((t) => t + 1)} />
           ) : (
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)', gap: tokens.spacingHorizontalL, alignItems: 'start' }}>
               <LoomDataTable

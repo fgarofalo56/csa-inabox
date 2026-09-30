@@ -113,18 +113,28 @@
  *            by flag).
  *         c. the isError is COMPLETE:
  *              `Q.isError`    — Q's queryFn fails LOUDLY: it calls nothing
- *                               imported (other than `clientFetch`), EVERY
- *                               same-file fetching helper it calls is itself
- *                               loud, it makes at most one direct fetch whose
- *                               every not-ok branch throws and never returns,
- *                               every `.ok` / `.status` read sits in such a test
- *                               (bar a plain `status: R.status` copy), and
- *                               every catch throws and never returns;
+ *                               imported (other than `clientFetch`), every
+ *                               bare callee is a pure builtin (E6_PURE_CALLS)
+ *                               or a same-file top-level helper — a callee E6
+ *                               cannot read is refused — EVERY same-file
+ *                               fetching helper it calls is itself loud, every
+ *                               non-fetching one is provably pure, it makes at
+ *                               most one direct fetch, every not-ok test is
+ *                               EXACTLY `!R.ok` / `!R?.ok` / `R.status >= 400`
+ *                               (no `&&` / `||` conjunct, no other comparison),
+ *                               every not-ok branch throws at its OWN top level
+ *                               (not in a nested callback), never returns, and
+ *                               holds no nested `if` / `switch`; every `.ok` /
+ *                               `.status` read sits in such a test (bar a plain
+ *                               `status: R.status` copy), and every catch
+ *                               throws the same way;
  *              `W(Q).isError` — W is a same-file function with ONE `return`,
  *                               whose returned `isError` is `<param>.isError`
  *                               OR'd with `status >= 400` (plus only null /
  *                               typeof guards, never `<` / `<=`), where status
- *                               is `<param>.data?.status` itself — AND Q's
+ *                               is `<param>.data?.status` itself; the returned
+ *                               object names `isError` exactly once and has no
+ *                               spread or computed key after it — AND Q's
  *                               queryFn is `() => H(…)` for a same-file H that
  *                               merges its one fetch's status LAST
  *                               (`return { ...json, status: res.status }`).
@@ -135,7 +145,8 @@
  *            `isPending && isFetching`, so a paused (offline) query is neither
  *            loading nor errored and has no data.
  *         e. REACH: the claim is not inside a `useMemo` / `useCallback` body,
- *            nor inside an arrow whose parameters rebind Q.
+ *            nor inside an arrow or `function` expression whose parameters
+ *            rebind Q.
  *         f. DATA LINK: every emptiness test on the claim's render path (a
  *            condition reading `.length` / `.size`) reads ONLY Q's data —
  *            `Q.data`, `W(Q).data`, or a const in the component derived PURELY
@@ -185,12 +196,19 @@
  *     = useQuery(…)`, a shorthand or positional `queryFn`, any option outside
  *     E6_OPTION_KEYS, a fetcher in another file, and a derived const whose
  *     initialiser mentions anything but the gated query's data (even pure UI
- *     state such as a search box) all leave the claim UNGUARDED.
+ *     state such as a search box) all leave the claim UNGUARDED. So do an
+ *     honest not-ok test written with a conjunct (`!r.ok || r.status === 204`),
+ *     a status-specific branch that throws for every status (a nested `if`),
+ *     and a helper calling a builtin outside E6_PURE_CALLS — each is refused
+ *     because the guard cannot tell it from the round-7 false-SAFE shapes.
  *     It trusts react-query's own contract that `isError` is true after a
  *     rejected queryFn; it does not model a queryFn that resolves 200 with an
  *     error body the not-ok test does not read. A gated 200 (`{ items: [],
  *     gate }`) is not an error to E6 either — the component must refuse the
  *     claim under the gate itself (the cockpit does, #4771).
+ *     The acceptance set (__tests__/_empty-claim-e6-acceptance.mjs) is every
+ *     false-SAFE shape the reviews have FOUND; it is not a proof that no other
+ *     shape exists. Three rounds each found new ones.
  *   - E2 does not yet carry E6's round-6 tightening: its useState analogs of
  *     the #4771 re-review shapes (a catch or not-ok branch that returns, two
  *     fetches, a conditional return under the error test, a claim in a
@@ -200,7 +218,7 @@
  *     claim IS the returned value — as if COND were required FALSE. It should
  *     be TRUE. Correcting it moves 3 claims from safe to unguarded
  *     (agent-quality-panel.tsx:431, :580; data-product-detail.tsx:783) and so
- *     needs a baseline RAISE; left for an operator decision (#4771 report).
+ *     needs a baseline RAISE; left for an operator decision (#4800).
  *
  * ---------------------------------------------------------------------------
  * EMBEDDED CONTROLS (run on EVERY invocation, not behind a flag)
@@ -1032,19 +1050,90 @@ function callsIn(text, lo, hi) {
 }
 
 /**
+ * Bare calls E6 treats as pure: builtins that neither read nor swallow a
+ * failure. Every other bare callee must be a same-file top-level helper E6 can
+ * read. A callee that is neither — a function declared INSIDE the component,
+ * a global, anything unresolved — refuses the queryFn: it may catch and
+ * return `[]` (fixture 2d).
+ */
+const E6_PURE_CALLS = new Set(['Error', 'String', 'Number', 'Boolean', 'encodeURIComponent',
+  'decodeURIComponent', 'Array', 'Object', 'Promise', 'parseInt', 'parseFloat']);
+
+/**
+ * The ONLY not-ok tests E6 accepts, whole and unconjoined: `!R.ok`, `!R?.ok`
+ * (the consequent throws), `R.ok` / `R?.ok` (the `else` throws) and
+ * `R.status >= 400`. A conjunct narrows the failure it throws on —
+ * `!r.ok && r.status !== 403` lets a 403 resolve (fixtures 1d-1g).
+ */
+const E6_NOT_OK_TEST = /^(?:!?\s*[A-Za-z_$][\w$]*\s*\??\.\s*ok|[A-Za-z_$][\w$]*\s*\??\.\s*status\s*>=\s*400)$/;
+
+/** Is there a `throw` at the TOP level of region `r` — not inside a nested
+ *  function, call or block, where it may never run (`setTimeout(() => { throw
+ *  … })`, fixture 1h)? A `.catch( … )` handler region is judged by the top
+ *  level of its handler's `{ … }` body; an expression-bodied handler cannot
+ *  throw. */
+function throwsAtTop(text, r, pairs = null) {
+  if (text[r.lo] === '(' && pairs) {
+    const inner = text.slice(r.lo + 1, r.hi);
+    const am = /^\s*(?:async\s*)?(?:\([^()]*\)|[A-Za-z_$][\w$]*)\s*=>\s*|^\s*(?:async\s+)?function\s*[\w$]*\s*\([^()]*\)\s*/.exec(inner);
+    if (!am) return false;
+    const open = r.lo + 1 + am[0].length;
+    if (text[open] !== '{') return false;
+    const b = pairs.find((x) => x.open === open && x.ch === '{');
+    if (!b || text.slice(b.close + 1, r.hi).trim() !== '') return false;
+    return throwsAtTop(text, { lo: b.open, hi: b.close });
+  }
+  let i = r.lo;
+  if (text[i] === '{') i++;
+  let depth = 0;
+  for (; i < r.hi; i++) {
+    const c = text[i];
+    if (c === '(' || c === '[' || c === '{') depth++;
+    else if (c === ')' || c === ']' || c === '}') depth--;
+    else if (depth === 0 && c === 't' && /^throw\b/.test(text.slice(i, i + 6)) && !/[\w$.]/.test(text[i - 1] ?? '')) return true;
+  }
+  return false;
+}
+
+/**
+ * Is same-file top-level helper `name` PURE — it fetches nothing, calls nothing
+ * imported, and every bare call in it is a pure builtin or another pure helper?
+ * A helper with no literal `fetch(` can still call an imported fetcher.
+ */
+function helperIsPure(ctx, name, depth, seen = new Set()) {
+  const { text, helpers, imports } = ctx;
+  if (seen.has(name)) return true;
+  seen.add(name);
+  const h = helpers.get(name);
+  if (!h || h.start === undefined || h.hasFetch) return false;
+  for (const c of callsIn(text, h.start, h.end)) {
+    if (c === name || E6_PURE_CALLS.has(c)) continue;
+    if (imports.has(c)) return false;
+    if (depth >= 2 || !helperIsPure(ctx, c, depth + 1, seen)) return false;
+  }
+  return true;
+}
+
+/**
  * Does the code in `span` REJECT whenever its read fails?
  *
  *   - no call to an identifier IMPORTED from another module, other than
  *     `clientFetch` itself — its failure handling cannot be read here (2b);
  *   - EVERY same-file helper it calls that fetches must itself fail loudly —
- *     one loud helper beside a quiet one proves nothing (2c);
- *   - at most ONE direct fetch; with one, every if-not-ok branch must throw and
- *     never return (1b), at least one must exist, and every `.ok` / `.status`
- *     read must sit in such an `if` test or branch — a ternary on `.ok` is a
- *     swallow the branch check cannot see (1c). The one exception is a plain
- *     `status: R.status` copied into an object literal, which decides nothing;
- *   - every catch must throw and never return (1a), except `.json().catch(…)`,
- *     whose fallback still meets the ok test below it.
+ *     one loud helper beside a quiet one proves nothing (2c); every other bare
+ *     callee must be a pure builtin (E6_PURE_CALLS) or a provably pure
+ *     same-file helper — a callee E6 cannot read is refused (2d);
+ *   - at most ONE direct fetch; with one, every if-not-ok test is EXACTLY one
+ *     of E6_NOT_OK_TEST, with no conjunct (1d-1g); every not-ok branch throws
+ *     at its top level and never returns (1b, 1h), at least one must exist,
+ *     and every `.ok` / `.status` read must sit in such an `if` test or branch
+ *     — a ternary on `.ok` is a swallow the branch check cannot see (1c). The
+ *     one exception is a plain `status: R.status` copied into an object
+ *     literal, which decides nothing;
+ *   - every catch throws at its top level and never returns (1a), except
+ *     `.json().catch(…)`, whose fallback still meets the ok test below it;
+ *   - no failure branch contains a nested `if` or `switch` — a throw under one
+ *     runs only sometimes (1g).
  */
 function unitFailsLoudly(ctx, span, self, depth) {
   const { text, pairs, helpers, imports } = ctx;
@@ -1056,8 +1145,13 @@ function unitFailsLoudly(ctx, span, self, depth) {
   for (const name of callsIn(text, span.lo, span.hi)) {
     if (name === self || name === 'clientFetch' || name === 'fetch') continue;
     if (imports.has(name)) return false;
+    if (E6_PURE_CALLS.has(name)) continue;
     const h = helpers.get(name);
-    if (!h || !h.hasFetch || h.start === undefined) continue;
+    if (!h || h.start === undefined) return false;
+    if (!h.hasFetch) {
+      if (!helperIsPure(ctx, name, depth)) return false;
+      continue;
+    }
     if (seen.has(name)) continue;
     seen.add(name);
     if (depth >= 2 || !unitFailsLoudly(ctx, { lo: h.start, hi: h.end }, name, depth + 1)) return false;
@@ -1069,10 +1163,14 @@ function unitFailsLoudly(ctx, span, self, depth) {
   for (const r of failure) {
     const seg = text.slice(r.lo, r.hi);
     if (!isNotOk(r) && /\.\s*json\s*\(\s*\)\s*\.\s*catch\s*$/.test(text.slice(Math.max(span.lo, r.lo - 60), r.lo))) continue;
-    if (!/\bthrow\b/.test(seg) || /\breturn\b/.test(seg)) return false;
+    if (!throwsAtTop(text, r, pairs) || /\breturn\b/.test(seg)) return false;
+    if (/\b(?:if|switch)\b/.test(seg)) return false;
+  }
+  for (const t of notOkTests) {
+    if (!E6_NOT_OK_TEST.test(unwrap(text.slice(t.lo + 1, t.hi)).replace(/\s+/g, ' ').trim())) return false;
   }
   if (direct === 1) {
-    if (!notOk.some((r) => /\bthrow\b/.test(text.slice(r.lo, r.hi)))) return false;
+    if (!notOk.some((r) => throwsAtTop(text, r, pairs))) return false;
     const tokRe = /\??\.\s*(?:ok|status)\b/g;
     let m;
     while ((m = tokRe.exec(body))) {
@@ -1169,6 +1267,13 @@ function wrapperFold(ctx, w) {
   if ((objText.match(/(?<![\w$.])isError\s*:/g) || []).length !== 1) return none;
   const im = new RegExp(`(?<![\\w$.])isError\\s*:\\s*${P}\\s*\\.\\s*isError\\s*(?:\\|\\|\\s*([A-Za-z_$][\\w$]*))?\\s*(?:,|$)`).exec(objText);
   if (!im) return none;
+  // Nothing after the fold may overwrite it: a spread (`...q` brings q's own
+  // bare isError, fixture 3f), a computed key, or a second mention of the
+  // name — counted in the ORIGINAL text, so a quoted `'isError':` key counts.
+  const tail = objText.slice(im.index + im[0].length);
+  if (/\.\.\./.test(tail) || /(?:^|,)\s*\[/.test(tail)) return none;
+  const origObj = src.slice(obj.open + 1, obj.close);
+  if ((origObj.match(/(?<![\w$.])isError\b/g) || []).length !== 1) return none;
   if (!im[1]) return { foldsQuery: true, foldsHttp: false };
 
   /** The original initialiser of a const declared once and never reassigned. */
@@ -1247,7 +1352,8 @@ function querySettled(q, literals) {
 /**
  * Is the claim somewhere E6 cannot follow: inside a `useMemo` / `useCallback`
  * body (its deps can omit isError and serve a stale verdict, fixture 6a), or
- * inside an arrow whose parameters rebind `q` (fixture 6b)?
+ * inside an arrow (fixture 6b) or a `function` expression (fixture 6c) whose
+ * parameters rebind `q`?
  */
 function claimOutOfReach(ctx, scope, claimIdx, q) {
   const { text, pairs } = ctx;
@@ -1274,6 +1380,19 @@ function claimOutOfReach(ctx, scope, claimIdx, q) {
       if (im) params = im[1];
     }
     if (shadow.test(params)) return true;
+  }
+  // The same for a `function (…) { … }` expression enclosing the claim
+  // (fixture 6c): its parameters rebind Q exactly as an arrow's do.
+  const fnRe = /\bfunction\b\s*\*?\s*[\w$]*\s*(?:<[^<>]*>)?\s*\(/g;
+  while ((m = fnRe.exec(hay))) {
+    const open = scope.start + m.index + m[0].length - 1;
+    const pp = pairs.find((x) => x.open === open && x.ch === '(');
+    if (!pp) continue;
+    let k = pp.close + 1;
+    while (k < claimIdx && text[k] !== '{') k++;
+    const b = pairs.find((x) => x.open === k && x.ch === '{');
+    if (!b || !(b.open < claimIdx && b.close > claimIdx)) continue;
+    if (shadow.test(text.slice(pp.open + 1, pp.close))) return true;
   }
   return false;
 }
@@ -1501,7 +1620,12 @@ function consequentEnd(text, pairs, from, hi) {
 function collectFrom(text, lo, hi, claimIdx, out, conds = null) {
   const need = (cond, polarity) => {
     literalsOf(cond, polarity, out);
-    if (conds) conds.push(cond);
+    // E6's data link reads `conds` as expressions. The statement keyword of an
+    // unparenthesised `return c.length === 0 ? <EmptyState/> : …` is not part
+    // of the test; left in, it is a free identifier that refuses an honest
+    // claim over its formatting (fixture R-S1b). Only `conds` is stripped: the
+    // literals feed E1/E2/E4 too, and changing them is out of scope here.
+    if (conds) conds.push(cond.replace(/^\s*return\b/, ''));
   };
   const ops = depth0Ops(text, lo, hi).filter((o) => o.op === '&&' || o.op === '||' || o.op === '?' || o.op === ':');
   if (ops.length === 0) return;

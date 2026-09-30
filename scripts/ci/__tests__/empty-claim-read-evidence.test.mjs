@@ -161,7 +161,7 @@ export function Panel() {
 
 // The bases (WRAPPED, LOUD) and the review's acceptance set live in ONE module,
 // so this suite and the round-6 comparison harness judge the same text.
-import { variant, WRAPPED, LOUD, FIXTURES, REVIEW_IDS } from './_empty-claim-e6-acceptance.mjs';
+import { variant, WRAPPED, LOUD, FIXTURES, REVIEW_IDS, ROUND7_IDS } from './_empty-claim-e6-acceptance.mjs';
 
 test('E6 POSITIVE: a folded react-query outcome gates the claim (the finops cockpit shape)', () => {
   // Breaks if E6 stops recognising `W(Q).isError`, the fold, or the derived `rows`.
@@ -309,8 +309,23 @@ test('the acceptance set carries every fixture the review named, by id', () => {
     '10', '11', '1a', '1b', '1c', '2b', '2c', '3a', '3b', '3c', '4a', '4b', '5a', '5b',
     '5c', '5d', '6a', '6b', '7a', '7b', '8a', '9a', '9b', 'N1', 'N2', 'P1', 'P2', 'U1',
   ]);
-  // 34 fixtures (28 + 6 extras) minus 2 positive controls minus 1 unjudged.
-  assert.equal(FIXTURES.filter((f) => f.expect === 'unguarded').length, 31);
+  // 54 fixtures: 28 review + 6 round-6 extras + 20 round-7. 47 unguarded =
+  // 54 minus 6 positive controls (P1-P5, R-S1b) minus 1 unjudged (U1).
+  // Adding a fixture without deciding its class turns this RED.
+  assert.equal(FIXTURES.length, 54);
+  assert.equal(FIXTURES.filter((f) => f.expect === 'unguarded').length, 47);
+  assert.deepEqual(
+    FIXTURES.filter((f) => f.expect === 'safe').map((f) => f.id).sort(),
+    ['P1', 'P2', 'P3', 'P4', 'P5', 'R-S1b'].sort(),
+  );
+});
+
+test('the acceptance set carries every round-7 re-review shape, by id', () => {
+  // LITERAL, as above. A = review 5903094729, B = review 5903102490.
+  assert.deepEqual([...ROUND7_IDS].sort(), [
+    '1d', '1e', '1e-404', '1f', '1g', '1g-open', '1h', '1h-timeout', '2d', '2e', '2f',
+    '3f', '3g', '6c', 'P3', 'P4', 'P5', 'R-S1b', '1a-dead', '1b-dead',
+  ].sort());
 });
 
 for (const f of FIXTURES) {

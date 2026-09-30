@@ -19,7 +19,7 @@
  */
 import React from 'react';
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, waitFor, cleanup, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
@@ -128,5 +128,66 @@ describe('FinopsCockpitPane breakdown — the tag dimension tells a failed tag q
     // branch: the service view would then carry a tag failure it never asked about.
     await waitFor(() => expect(screen.getByText('No breakdown data')).toBeInTheDocument());
     expect(screen.queryByText(/could not be loaded/)).toBeNull();
+  });
+
+  it('a subscription whose whole cost read failed is disclosed, never "no tags found" (#4771 R7, B-4)', async () => {
+    const SUB_ERRORS = [{ subscription: 'cccccccc-0000-0000-0000-000000000003', error: 'AuthorizationFailed for test' }];
+    routeMock((url) => ok({
+      rows: url.includes('dimension=tag') ? [] : [{ key: 'svc', cost: 5 }],
+      total: 5, tagKey: 'Environment', tagQueryErrors: [], subscriptionErrors: SUB_ERRORS,
+    }));
+    mount(<FinopsCockpitPane />);
+    await pickTagDimension();
+    // Breaks if the pane does not pass `subscriptionErrors` into tagSummary:
+    // with no tag errors and no rows the state would be `none`, and the
+    // notice would claim no tags exist for spend it never read.
+    await waitFor(() => expect(screen.getByText('Tag breakdown could not be loaded')).toBeInTheDocument());
+    expect(screen.getByText(/AuthorizationFailed for test/)).toBeInTheDocument();
+    expect(screen.queryByText(/No cost-allocation tags found/)).toBeNull();
+  });
+
+  it('Retry on a failed tag notice re-reads the breakdown', async () => {
+    routeMock((url) => ok({
+      rows: url.includes('dimension=tag') ? [] : [{ key: 'svc', cost: 5 }],
+      total: 5, tagKey: 'Environment', tagQueryErrors: TAG_ERRORS,
+    }));
+    mount(<FinopsCockpitPane />);
+    await pickTagDimension();
+    const title = await screen.findByText('Tag breakdown could not be loaded');
+    // Another panel carries its own Retry, so scope to the tag notice.
+    const notice = title.closest('.fui-MessageBar') as HTMLElement;
+    expect(notice).not.toBeNull();
+    const tagReads = () => (global.fetch as any).mock.calls
+      .filter(([u]: [unknown]) => String(u).includes('/api/admin/finops/breakdown') && String(u).includes('dimension=tag')).length;
+    const before = tagReads();
+    await userEvent.click(within(notice).getByRole('button', { name: 'Retry' }));
+    // Breaks if Retry is not wired to `breakdownQ.refetch()`: the tag
+    // breakdown would be read no further times.
+    await waitFor(() => expect(tagReads()).toBe(before + 1));
+  });
+});
+
+describe('FinopsCockpitPane breakdown — loading', () => {
+  it('a pending breakdown read holds the panel with a labelled skeleton', async () => {
+    vi.spyOn(global, 'fetch').mockImplementation(async (input: any) => {
+      const url = typeof input === 'string' ? input : String(input);
+      if (url.includes('/api/admin/finops/breakdown')) return new Promise<Response>(() => {});
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } }) as any;
+    });
+    mount(<FinopsCockpitPane />);
+    // Breaks if the breakdown loading state reverts to a Spinner (no element
+    // carries this label) or is dropped altogether.
+    expect(await screen.findByLabelText('Loading breakdown')).toBeInTheDocument();
+    expect(screen.queryByText('No breakdown data')).toBeNull();
+  });
+
+  it('every touched panel holds a labelled skeleton while its read is pending', async () => {
+    vi.spyOn(global, 'fetch').mockImplementation(() => new Promise<Response>(() => {}));
+    mount(<FinopsCockpitPane />);
+    // Each breaks if that panel's loading state reverts to a bare Spinner
+    // (no element would carry the label) or is dropped.
+    expect(await screen.findByLabelText('Loading anomaly feed')).toBeInTheDocument();
+    expect(screen.getByLabelText('Loading breakdown')).toBeInTheDocument();
+    expect(screen.getByLabelText('Loading budgets')).toBeInTheDocument();
   });
 });

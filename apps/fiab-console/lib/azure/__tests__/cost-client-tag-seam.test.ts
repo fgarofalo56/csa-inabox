@@ -11,6 +11,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const SUB = 'aaaaaaaa-0000-0000-0000-000000000001';
+const SUB2 = 'bbbbbbbb-0000-0000-0000-000000000002';
+/** The subscriptions in scope for the current test (two in the grouped-failure case). */
+let SCOPE: string[] = [SUB];
 
 vi.mock('@azure/identity', () => {
   class Cred { async getToken() { return { token: 't', expiresOnTimestamp: Date.now() + 3_600_000 }; } }
@@ -21,13 +24,15 @@ vi.mock('@/lib/azure/aca-managed-identity', () => ({
 }));
 vi.mock('../monitor-client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../monitor-client')>()),
-  readMonitorConfig: () => ({ subscriptionId: SUB, resourceGroups: ['rg-a'], resourceGroupScopes: [], subscriptions: [SUB] }),
+  readMonitorConfig: () => ({ subscriptionId: SUB, resourceGroups: ['rg-a'], resourceGroupScopes: [], subscriptions: SCOPE }),
 }));
-vi.mock('../loom-subscriptions', () => ({ loomSubscriptionScope: () => [SUB] }));
+vi.mock('../loom-subscriptions', () => ({ loomSubscriptionScope: () => SCOPE }));
 vi.mock('../attached-services-store', () => ({ attachedRegistrySubscriptionIds: async () => [] }));
 
 /** How the TagKey-grouped query answers in the current test. */
 let tagAnswer: { status: number; body: unknown };
+/** A subscription whose main RG x Service query is refused, or null. */
+let groupedRefusedFor: string | null = null;
 const fetchMock = vi.fn(async (url: string, init?: { body?: string }) => {
   const reply = (status: number, body: unknown) => ({
     ok: status >= 200 && status < 300,
@@ -39,6 +44,10 @@ const fetchMock = vi.fn(async (url: string, init?: { body?: string }) => {
   if (url.includes('/providers/Microsoft.CostManagement/query')) {
     const grouping = JSON.parse(init?.body || '{}')?.dataset?.grouping || [];
     if (grouping.some((g: { type: string }) => g.type === 'TagKey')) return reply(tagAnswer.status, tagAnswer.body);
+    const isGrouped = grouping.some((g: { name: string }) => g.name === 'ServiceName');
+    if (groupedRefusedFor && isGrouped && url.includes(`/subscriptions/${groupedRefusedFor}/`)) {
+      return reply(403, { error: { message: 'grouped query refused for test' } });
+    }
     // Every other grouping answers with the main grouped shape and one Loom row.
     return reply(200, { properties: { columns: [{ name: 'Cost' }, { name: 'ResourceGroupName' }, { name: 'Currency' }], rows: [[10, 'rg-a', 'USD']] } });
   }
@@ -54,7 +63,7 @@ const MEASURED_TAG_OK = {
   },
 };
 
-beforeEach(() => { fetchMock.mockClear(); });
+beforeEach(() => { fetchMock.mockClear(); SCOPE = [SUB]; groupedRefusedFor = null; });
 
 describe('computeLoomCostSummary — tag breakdown at the seam', () => {
   it('buckets by tag value and records no tag error on the measured shape', async () => {
@@ -90,5 +99,22 @@ describe('computeLoomCostSummary — tag breakdown at the seam', () => {
     // would be [] via hasRealTag and tagQueryErrors [] — the "no tags" claim.
     expect(s.tagQueryErrors).toHaveLength(1);
     expect(s.tagQueryErrors?.[0].error).toMatch(/unrecognised tag response.*columns: Cost, ResourceGroupName, TagKey, Currency/);
+  });
+
+  it('records a sub whose GROUPED query failed as a tag error too (#4771 R7, B-4)', async () => {
+    SCOPE = [SUB, SUB2];
+    groupedRefusedFor = SUB2;
+    // SUB2's TAG query answers with rows: were its fold not skipped they would
+    // double the byTag totals, so the exact byTag below also pins the skip.
+    tagAnswer = { status: 200, body: MEASURED_TAG_OK };
+    const { computeLoomCostSummary } = await import('../cost-client');
+    const s = await computeLoomCostSummary({ timeframe: 'Last7Days' });
+    expect(s.subscriptionErrors).toEqual([{ subscription: SUB2, error: 'grouped query refused for test' }]);
+    // Breaks if the early return skips the tag fold WITHOUT recording it (the
+    // B-4 defect): tagQueryErrors would be [] and SUB2's never-read tag spend
+    // would be silently absent from a breakdown that reads as complete.
+    expect(s.tagQueryErrors).toEqual([{ subscription: SUB2, error: 'cost query failed, so tag spend was not read: grouped query refused for test' }]);
+    // Positive half: SUB's tags still fold, exactly once.
+    expect(s.byTag).toEqual([{ key: 'commercial', cost: 7 }, { key: '(untagged)', cost: 3 }]);
   });
 });

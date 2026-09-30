@@ -367,8 +367,9 @@ export interface CostSummary {
   /** The tag key `byTag` is grouped on (echoed so the UI can label + hint). */
   tagKey: string;
   /**
-   * Subscriptions whose TAG query failed (throttled, timed out, refused) while
-   * the main grouped query succeeded. When non-empty, an empty `byTag` means
+   * Subscriptions whose tag spend was not read: the TAG query failed (throttled,
+   * timed out, refused, unrecognised shape), or the main grouped query failed
+   * and the tag fold was skipped. When non-empty, an empty `byTag` means
    * "could not load", not "no resource carries the tag". Optional so a cached
    * report written before this field existed still type-checks.
    */
@@ -670,8 +671,15 @@ export async function computeLoomCostSummary(opts: CostOptions = {}): Promise<Co
     // The grouped query is the gate: if it failed (e.g. no Cost Management
     // Reader on this sub), record the sub error and skip — exactly the old
     // outer-catch behaviour. The other five are best-effort.
+    //
+    // The early return also skips the tag fold below, so this subscription's
+    // tag spend is never read. Record that as a tag error too: without it an
+    // estate whose other subscriptions answered with no tag rows would report
+    // "no tags found" for spend that was simply never read (#4771 R7, B-4).
     if (groupedR.status === 'rejected') {
-      subscriptionErrors.push({ subscription: sub, error: (groupedR.reason as Error)?.message || String(groupedR.reason) });
+      const error = (groupedR.reason as Error)?.message || String(groupedR.reason);
+      subscriptionErrors.push({ subscription: sub, error });
+      tagQueryErrors.push({ subscription: sub, error: `cost query failed, so tag spend was not read: ${error}` });
       return;
     }
 

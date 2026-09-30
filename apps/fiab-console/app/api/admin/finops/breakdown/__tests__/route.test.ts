@@ -63,4 +63,26 @@ describe('GET /api/admin/finops/breakdown — tag query errors reach the client'
     // the client contract would stop being a list.
     expect(j.tagQueryErrors).toEqual([]);
   });
+
+  it('forwards subscriptionErrors, so a sub whose whole read failed is not missed (#4771 R7, B-4)', async () => {
+    const SUB_ERRORS = [{ subscription: 'cccccccc-0000-0000-0000-000000000003', error: 'AuthorizationFailed for test' }];
+    summary.subscriptionErrors = SUB_ERRORS;
+    const { GET } = await import('../route');
+    const j = await (await GET(req('dimension=tag'), undefined as any)).json();
+    // Positive half: the tag errors are still forwarded beside it.
+    expect(j.tagQueryErrors).toEqual(TAG_ERRORS);
+    // Breaks if the route drops the field (undefined) or forwards a constant
+    // `[]`: the cockpit's tagLoadState would then read a breakdown missing a
+    // whole subscription as complete, or as "no tags found" when it is empty.
+    expect(j.subscriptionErrors).toEqual(SUB_ERRORS);
+  });
+
+  it('defaults a summary with no subscriptionErrors to an empty list', async () => {
+    // The beforeEach summary carries no subscriptionErrors key at all.
+    expect('subscriptionErrors' in summary).toBe(false);
+    const { GET } = await import('../route');
+    const j = await (await GET(req('dimension=tag'), undefined as any)).json();
+    // Breaks if the `?? []` default is dropped: the field would be missing.
+    expect(j.subscriptionErrors).toEqual([]);
+  });
 });

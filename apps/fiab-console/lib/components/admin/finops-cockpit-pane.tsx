@@ -40,6 +40,7 @@ import {
   Dropdown, Option, Button, Input, Field, Switch, Dialog, DialogSurface, DialogTitle,
   DialogBody, DialogContent, DialogActions, Table, TableHeader, TableRow, TableHeaderCell,
   TableBody, TableCell, MessageBar, MessageBarBody, MessageBarTitle, Tooltip, Spinner as FSpinner,
+  Skeleton, SkeletonItem,
 } from '@fluentui/react-components';
 import {
   Money24Regular, Warning20Regular, Add20Regular, Delete20Regular, Edit20Regular,
@@ -214,6 +215,15 @@ function BudgetDialog({ open, onClose, subscriptions, onSaved, editing }:
   );
 }
 
+/** Loading placeholder for a cockpit panel: a Skeleton that holds the panel's shape, not a bare Spinner. */
+function PanelSkeleton({ label, rows = 3 }: { label: string; rows?: number }) {
+  return (
+    <Skeleton aria-label={label}>
+      {Array.from({ length: rows }, (_, i) => <SkeletonItem key={i} style={{ marginBottom: tokens.spacingVerticalS }} />)}
+    </Skeleton>
+  );
+}
+
 export function FinopsCockpitPane() {
   const styles = useStyles();
   const [timeframe, setTimeframe] = useState<(typeof TIMEFRAMES)[number]>('MonthToDate');
@@ -234,7 +244,10 @@ export function FinopsCockpitPane() {
   const breakdownTotal = Number(breakdownQ.data?.total || 0);
   // The tag dimension's rows ARE the tag breakdown, so the Monitor tab's notice
   // tells a failed or partial tag query apart from "no tags found".
-  const tagSummary = { byTag: breakdownQ.data?.rows ?? [], tagQueryErrors: breakdownQ.data?.tagQueryErrors ?? [], tagKey: breakdownQ.data?.tagKey };
+  const tagSummary = {
+    byTag: breakdownQ.data?.rows ?? [], tagQueryErrors: breakdownQ.data?.tagQueryErrors ?? [],
+    subscriptionErrors: breakdownQ.data?.subscriptionErrors ?? [], tagKey: breakdownQ.data?.tagKey,
+  };
   const currency = forecast?.currency || breakdownQ.data?.currency || budgetsQ.data?.currency || 'USD';
 
   const tiles: FinopsTile[] = useMemo(() => assembleFinopsTiles({
@@ -318,7 +331,7 @@ export function FinopsCockpitPane() {
             <SplitPane direction="horizontal" defaultSize="55%" minSize={280} storageKey="finops-anomalies" dividerLabel="Resize anomaly feed">
               <div className={styles.pane}>
                 <Caption1 className={styles.tileLabel}>Live feed — detected against the real daily series</Caption1>
-                {anomaliesQ.isPending ? <Spinner size="tiny" /> :
+                {anomaliesQ.isPending ? <PanelSkeleton label="Loading anomaly feed" /> :
                   /* #3739 — the QueryErrorBar above already says the read did not
                      complete ("An empty feed below would be misleading"). Falling
                      through to the EmptyState made this pane assert, two lines
@@ -374,17 +387,17 @@ export function FinopsCockpitPane() {
           <QueryErrorBar query={readState(breakdownQ)} subject="the spend breakdown"
             endpoint="/api/admin/finops/breakdown"
             reassurance="This says nothing about whether there is spend to break down — the read did not complete." />
-          {breakdownQ.isPending ? <Spinner label="Loading breakdown…" /> :
+          {breakdownQ.isPending ? <PanelSkeleton label="Loading breakdown" rows={5} /> :
             readState(breakdownQ).isError ? null :
             breakdownQ.data?.gate ? <GateBar gate={breakdownQ.data.gate} /> :
             (breakdownQ.data?.rows || []).length ? (
               <>
-                {dimension === 'tag' && <CostTagNotice summary={tagSummary} />}
+                {dimension === 'tag' && <CostTagNotice summary={tagSummary} onRetry={() => { void breakdownQ.refetch(); }} />}
                 <LoomChart type="bar" height={300}
                   rows={(breakdownQ.data.rows as Array<{ key: string; cost: number }>).slice(0, 15).map((r) => ({ key: r.key, cost: Math.round(r.cost * 100) / 100 }))}
                   title={`Spend by ${dimension} (${currency})`} />
               </>
-            ) : dimension === 'tag' ? <CostTagNotice summary={tagSummary} /> : (
+            ) : dimension === 'tag' ? <CostTagNotice summary={tagSummary} onRetry={() => { void breakdownQ.refetch(); }} /> : (
               <EmptyState icon={<Money24Regular />} title="No breakdown data"
                 body={`The cost summary has no ${dimension} rows for this timeframe.`} />
             )}
@@ -404,7 +417,7 @@ export function FinopsCockpitPane() {
             endpoint="/api/admin/finops/budgets"
             reassurance="Existing budgets are unchanged — they could not be listed." />
           {budgetsQ.data?.gate && <GateBar gate={budgetsQ.data.gate} />}
-          {budgetsQ.isPending ? <Spinner label="Loading budgets…" /> :
+          {budgetsQ.isPending ? <PanelSkeleton label="Loading budgets" /> :
             /* #3739 — same defect as the anomaly feed: a failed list read fell
                through to "No budgets yet", which is a statement about the
                customer's Azure Consumption budgets that the read never made.

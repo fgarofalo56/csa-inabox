@@ -3,8 +3,10 @@
  *
  * Twenty-eight shapes from the independent re-review of #4771 at 1b4b83318
  * (review 5898687296), RECONSTRUCTED here from the review's descriptions — the
- * reviewer's own fixture files were not available — plus a few extras marked
- * `extra: true`. Imported by empty-claim-read-evidence.test.mjs; the leading
+ * reviewer's own fixture files were not available — plus extras marked
+ * `extra: true`: six round-6 shapes, and nineteen round-7 shapes rebuilt from
+ * re-reviews 5903094729 and 5903102490 (see ROUND7 below). Imported by
+ * empty-claim-read-evidence.test.mjs; the leading
  * underscore keeps it out of check-node-test-suites discovery (`*.test.*`).
  *
  * Every non-base fixture is ONE checked edit away from a SAFE base (`variant`
@@ -91,6 +93,109 @@ const LOUD_HELPER = (name, url) => `async function ${name}() {
   return r.json();
 }
 `;
+
+/**
+ * The loud shape with an HTTP not-ok test instead of a body test — the base the
+ * round-7 re-reviews (5903094729 A, 5903102490 B) narrowed.
+ */
+export const LOUD_HTTP = variant(LOUD, LOUD_BODY,
+  "      const r = await clientFetch('/api/p');\n      if (!r.ok) throw new Error('HTTP ' + r.status);\n      return r.json();");
+const HTTP_TEST = "      if (!r.ok) throw new Error('HTTP ' + r.status);";
+const httpTest = (to) => variant(LOUD_HTTP, HTTP_TEST, to);
+/** Return `installed` from `loadInstalled()` beside the body and put the claim on it (review A's R-U2). */
+const onInstalled = (src) => variant(
+  variant(src, '      return j;', '      return { ...j, installed: await loadInstalled() };'),
+  '  return <div>{data.prompts.length === 0 ? <EmptyState title="No prompts" /> : <List items={data.prompts} />}</div>;',
+  '  return <div>{data.installed.length === 0 ? <EmptyState title="No extensions installed" /> : <List items={data.installed} />}</div>;');
+
+/**
+ * Round 7. `review` names the finding each fixture reproduces (A = 5903094729,
+ * B = 5903102490); the fixtures are rebuilt from the reviews' descriptions.
+ * Each review-sourced negative was SAFE on the round-6 guard (4f78087) — the
+ * harness in temp/ measures that — and is held by the rule named in `rule`.
+ * The two `round-7 witness` negatives (1a-dead, 1b-dead) were already
+ * unguarded on round 6; they exist so the never-returns rule has a fixture no
+ * round-7 rule also holds.
+ */
+const ROUND7 = [
+  // ---- positives: honest shapes the round-7 rules must NOT refuse ----
+  { id: 'P3', extra: true, review: 'base', klass: 'positive control', expect: 'safe', rule: 'E6 loud queryFn (HTTP not-ok test)', src: LOUD_HTTP },
+  { id: 'P4', extra: true, review: 'base', klass: 'positive control', expect: 'safe', rule: 'a .catch handler whose body throws at its top level',
+    src: variant(LOUD_HTTP, "      const r = await clientFetch('/api/p');",
+      "      const r = await clientFetch('/api/p').catch((e) => { throw new Error('network: ' + e); });") },
+  { id: 'R-S1b', extra: true, review: 'A-3', klass: 'positive control', expect: 'safe', rule: 'a leading `return` is not part of the emptiness test',
+    src: variant(LOUD, '  return <div>{data.prompts.length === 0 ? <EmptyState title="No prompts" /> : <List items={data.prompts} />}</div>;',
+      '  return data.prompts.length === 0 ? <EmptyState title="No prompts" /> : <List items={data.prompts} />;') },
+  // A bare builtin call in the queryFn. Without the E6_PURE_CALLS allowlist
+  // `encodeURIComponent` is an unknown callee and this honest shape is refused.
+  { id: 'P5', extra: true, review: 'base', klass: 'positive control', expect: 'safe', rule: 'a pure builtin callee (encodeURIComponent) is allowed',
+    src: variant(LOUD_HTTP, "      const r = await clientFetch('/api/p');",
+      "      const r = await clientFetch('/api/p?scope=' + encodeURIComponent('all users'));") },
+
+  // ---- a return beside a top-level throw, with no nested if ----
+  // 1a and 1b each carry a nested `if`, so the round-7 nested-if rule holds
+  // them as well as the never-returns rule. Here the throw is DEAD code after
+  // an unconditional return, and only the never-returns rule stops SAFE.
+  { id: '1a-dead', extra: true, review: 'round-7 witness', klass: 'shared with E2', expect: 'unguarded', rule: 'catch must never return (throw after it is dead)',
+    src: variant(LOUD, LOUD_BODY,
+      "      try {\n  " + LOUD_BODY.replace(/\n/g, '\n  ') + "\n      } catch (e) {\n        return { prompts: [] };\n        throw e;\n      }") },
+  { id: '1b-dead', extra: true, review: 'round-7 witness', klass: 'shared with E2', expect: 'unguarded', rule: 'not-ok branch must never return (throw after it is dead)',
+    src: variant(LOUD, "      if (!j?.ok) throw new Error(j?.error || 'load failed');",
+      "      if (!j?.ok) {\n        return { prompts: [] };\n        throw new Error(j?.error || 'load failed');\n      }") },
+
+  // ---- a NARROWED not-ok test: a 403 resolves, isError stays false ----
+  { id: '1d', extra: true, review: 'B-2', klass: 'E6-specific', expect: 'unguarded', rule: 'not-ok test is exactly !R.ok / R.status >= 400 (&& status >= 500)',
+    src: httpTest("      if (!r.ok && r.status >= 500) throw new Error('HTTP ' + r.status);") },
+  { id: '1e', extra: true, review: 'A-1', klass: 'E6-specific', expect: 'unguarded', rule: 'not-ok test is exactly !R.ok / R.status >= 400 (&& status !== 403)',
+    src: httpTest("      if (!r.ok && r.status !== 403) throw new Error('HTTP ' + r.status);") },
+  { id: '1e-404', extra: true, review: 'B-2', klass: 'E6-specific', expect: 'unguarded', rule: 'not-ok test is exactly !R.ok / R.status >= 400 (&& status !== 404)',
+    src: httpTest("      if (!r.ok && r.status !== 404) throw new Error('HTTP ' + r.status);") },
+  { id: '1f', extra: true, review: 'B-2', klass: 'E6-specific', expect: 'unguarded', rule: 'not-ok test is exactly !R.ok / R.status >= 400 (&& status === 401)',
+    src: httpTest("      if (!r.ok && r.status === 401) throw new Error('HTTP ' + r.status);") },
+  { id: '1g', extra: true, review: 'A-1', klass: 'E6-specific', expect: 'unguarded', rule: 'no nested if in a failure branch',
+    src: httpTest("      if (!r.ok) {\n        if (r.status >= 500) throw new Error('HTTP ' + r.status);\n      }") },
+  // 1g's inner test is itself a narrowed status test, so the exact-test rule
+  // holds it too. Here the inner test reads no response, so ONLY the nested-if
+  // rule stands between it and SAFE.
+  { id: '1g-open', extra: true, review: 'A-1', klass: 'E6-specific', expect: 'unguarded', rule: 'no nested if in a failure branch (inner test reads no response)',
+    src: httpTest("      if (!r.ok) {\n        if (open) throw new Error('HTTP ' + r.status);\n      }") },
+  { id: '1h', extra: true, review: 'B-6', klass: 'E6-specific', expect: 'unguarded', rule: 'the throw must sit at the branch top level',
+    src: httpTest("      if (!r.ok) {\n        Promise.resolve().then(() => { throw new Error('HTTP ' + r.status); });\n      }") },
+  { id: '1h-timeout', extra: true, review: 'B-6', klass: 'E6-specific', expect: 'unguarded', rule: 'a throw inside setTimeout (unknown callee + top-level throw)',
+    src: httpTest("      if (!r.ok) {\n        setTimeout(() => { throw new Error('HTTP ' + r.status); });\n      }") },
+
+  // ---- a callee E6 cannot read ----
+  { id: '2d', extra: true, review: 'A-2', klass: 'E6-specific', expect: 'unguarded', rule: 'an unknown bare callee refuses the queryFn (component-local fetcher)',
+    src: onInstalled(variant(LOUD, '  const q = useQuery({\n',
+      "  const loadInstalled = async () => {\n    try {\n      const r2 = await clientFetch('/api/installed');\n      return (await r2.json()).items;\n    } catch {\n      return [];\n    }\n  };\n  const q = useQuery({\n")) },
+  { id: '2e', extra: true, review: 'A-2 (sibling)', klass: 'E6-specific', expect: 'unguarded', rule: 'a non-fetching top-level helper must be pure (it calls an imported fetcher)',
+    src: onInstalled(variant(LOUD, "import { useQuery } from '@tanstack/react-query';\n",
+      "import { useQuery } from '@tanstack/react-query';\nimport { apiGet } from '@/lib/api';\n\nasync function loadInstalled() {\n  try {\n    return await apiGet('/api/installed');\n  } catch {\n    return [];\n  }\n}\n")) },
+  // The import refusal runs BEFORE the pure-builtin allowlist. An imported
+  // binding that shadows a builtin name is someone else's function: with the
+  // import check gone, `Object` would read as pure and this claim as SAFE.
+  // 2b cannot witness that ordering, because the unknown-callee rule also
+  // refuses `fetchRows`.
+  { id: '2f', extra: true, review: 'round-7 witness', klass: 'E6-specific', expect: 'unguarded', rule: 'an imported binding that shadows a pure builtin is still imported',
+    src: variant(
+      variant(LOUD, "import { useQuery } from '@tanstack/react-query';\n",
+        "import { useQuery } from '@tanstack/react-query';\nimport { Object } from '@/lib/rows-client';\n\n" + LOUD_HELPER('ensureAuth', '/api/me')),
+      LOUD_FN_OPEN, "    queryFn: async () => { await ensureAuth(); return Object('/api/p'); },") },
+
+  // ---- a wrapper whose fold is overwritten after it ----
+  { id: '3f', extra: true, review: 'B-3', klass: 'E6-specific', expect: 'unguarded', rule: 'no spread after the folded isError',
+    src: variant(WRAPPED, '  return { isError: q.isError || httpFailed };', '  return { isError: q.isError || httpFailed, ...q };') },
+  { id: '3g', extra: true, review: 'B-3 (sibling)', klass: 'E6-specific', expect: 'unguarded', rule: 'no second isError key, quoted or not',
+    src: variant(WRAPPED, '  return { isError: q.isError || httpFailed };', "  return { isError: q.isError || httpFailed, 'isError': q.isError };") },
+
+  // ---- a `function` expression shadowing the query ----
+  { id: '6c', extra: true, review: 'B-6', klass: 'held negative', expect: 'unguarded', rule: 'function-expression param shadowing the query',
+    src: variant(WRAPPED, RENDER,
+      '      {rowsQ.isPending ? <Spinner /> : qs.map(function (rowsQ) {\n        return (readState(rowsQ).isError ? null :\n        (rowsQ.data?.rows || []).length ? <Chart rows={rowsQ.data.rows} /> : <EmptyState title="No rows" />);\n      })}') },
+];
+
+/** The round-7 ids, for a LITERAL membership test. */
+export const ROUND7_IDS = ROUND7.map((f) => f.id);
 
 /** Where each fixture sits in the review: E6-specific, shared with E2, or a held negative/control. */
 export const FIXTURES = [
@@ -209,6 +314,7 @@ export const FIXTURES = [
   { id: 'U1', klass: 'unjudged', expect: 'unjudged', rule: 'no in-component read',
     src: variant(WRAPPED, /export function Pane\(\)[\s\S]*$/.exec(WRAPPED)[0],
       'export function RowsView({ rowsQ }: { rowsQ: any }) {\n  return <div>{readState(rowsQ).isError ? null : (rowsQ.data?.rows || []).length ? <Chart /> : <EmptyState title="No rows" />}</div>;\n}\n') },
+  ...ROUND7,
 ];
 
 /** The review's own 28 (the extras are ours). */
