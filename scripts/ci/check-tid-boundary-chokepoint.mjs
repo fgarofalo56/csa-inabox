@@ -4964,6 +4964,34 @@ const ADMIN_SHAPE_UNSCOPED = new Map([
         'does not depend on this entry, on the function name, or on any of the three spellings.',
     },
   ],
+  [
+    'app/api/lakehouse/_lib/item-scope.ts:scopeItemPath',
+    {
+      verdict: 'ORG-WIDE',
+      requires: ['isTenantAdmin(', 'authorizeLakehouse('],
+      why:
+        'ORG-WIDE (the admin branch only). The `isTenantAdmin` test is reached ONLY when the request ' +
+        'carries no `lakehouseId`: the caller then names a deployment storage container and path ' +
+        'directly, no workspace and no item is in play, and a non-admin is answered 403 before any ' +
+        'storage call. Every request that names a lakehouse takes the other branch, ' +
+        '`authorizeLakehouse(session, lakehouseId, ...)`, which delegates to ' +
+        '`resolveItemAccessByOid` (checked by 8a-8e) and never consults the admin flag. Both tokens ' +
+        'are pinned: drop the item branch and this entry no longer describes the function.',
+    },
+  ],
+  [
+    'app/api/lakehouse/paths/route.ts:GET',
+    {
+      verdict: 'ORG-WIDE',
+      requires: ['isTenantAdmin(', 'authorizeLakehouse('],
+      why:
+        'ORG-WIDE (the admin branch only). Same shape as `scopeItemPath` above: the `isTenantAdmin` ' +
+        'test guards the listing form that names a deployment container with no `lakehouseId`, where ' +
+        'no workspace or item is in play, and refuses a non-admin with 403 before any storage call. ' +
+        'The `lakehouseId` form is decided by `authorizeLakehouse` (-> `resolveItemAccessByOid`) and ' +
+        'does not read the admin flag.',
+    },
+  ],
 ]);
 
 /**

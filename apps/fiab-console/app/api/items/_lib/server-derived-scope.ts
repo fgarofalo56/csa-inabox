@@ -163,8 +163,8 @@ export function stableStringify(v: unknown, depth = 0): string {
  * OMISSION IS ALLOWED AND NO LONGER DELETES. The assert below permits a body
  * that leaves a guarded key out — making omission an error would break every
  * caller that builds a fresh state object — but `state` is replaced WHOLESALE,
- * so an omitted key used to be DROPPED. That was the bypass, and it defeated
- * the resolver-side precedence fix outright: ONE request could edit
+ * so an omitted key used to be DROPPED, and that undid the resolver-side
+ * precedence fix outright: ONE request could edit
  * `state.database` and drop `state.provisioning`, leaving no receipt to
  * prefer. {@link carryServerDerivedScope} now rebases those keys onto whatever
  * the item already carries, at ALL SIX UPDATE WRITERS enumerated above. This
@@ -212,32 +212,48 @@ export function stableStringify(v: unknown, depth = 0): string {
  *     `state.databases[]` and `state.notebookPath`, which three of the four
  *     readers above PREFER over the provisioning receipt when the receipt is
  *     absent. See the omission note above. OPEN.
- *   - `state.ownedContainers`, which also steers branch 3's container choice.
- *     An earlier version of this note said its range is already bounded to
- *     `KNOWN_CONTAINERS` by `isKnownContainer`. That is FALSE at
- *     `api/lakehouse/references/paths/route.ts:72-76`, where a non-empty
- *     `state.ownedContainers` REPLACES `KNOWN_CONTAINERS` as the allowlist
- *     rather than being checked against it. OPEN — deliberately not added to
- *     the list above, because it has ZERO production writers (every tracked
- *     site is a read, a type field, a comment or a fixture), so listing it
- *     would freeze a key nobody writes, and because it is a declaration rather
- *     than a server record. The remedy is sink-side: intersect with
- *     `KNOWN_CONTAINERS` at that route the way `lakehouse-abfss.ts:64-67`
- *     already does. Not done here, and the reason is weaker than it first
- *     looks and is stated at its true strength: that route also serves
- *     EXTERNAL-ACCOUNT reference lakehouses (`account = state.storageAccount`),
- *     where a container outside `KNOWN_CONTAINERS` could legitimately exist and
- *     would start returning 404 — but by the same census that found no writers,
- *     NOTHING ON THIS TREE PRODUCES that configuration. So the risk is to a
- *     hand-built or externally-created item, not to any shipped flow, and the
- *     honest summary is "unmeasured against real data", not "known to break".
+ *   - (Formerly listed here: `state.ownedContainers`. It is now in the list
+ *     below together with `lakehouseRoot` and `adlsContainer`, so no request
+ *     body can introduce or change it on any of the wholesale writers, and the
+ *     create half is cleared by `clearServerOwnedLakehouseKeysOnCreate`. It
+ *     still has ZERO production writers, so listing it freezes a key nobody
+ *     writes — which is the intent: it is a declaration only the server may
+ *     make. `api/lakehouse/references/paths/route.ts` still lets a non-empty
+ *     value REPLACE `KNOWN_CONTAINERS` there, for external-account reference
+ *     lakehouses; with the key server-owned that list can no longer come from
+ *     a request.)
  *
- * All three are tracked; none is closed by this rule, and this comment is the
- * place that says so rather than implying coverage by omission.
+ * The first two are tracked; neither is closed by this rule, and this comment
+ * is the place that says so rather than implying coverage by omission.
+ *
+ * THE LAKEHOUSE STORAGE BINDING — `lakehouseRoot`, `adlsContainer`,
+ * `ownedContainers` (`LAKEHOUSE_SERVER_OWNED_STATE_KEYS` in
+ * lib/azure/backing-name.ts). `lakehouseRoot` + `adlsContainer` are written only
+ * by auto-bind (`lakehouseAutoBind.stateKeys`) and by the resolver's persist
+ * (`lakehouse-abfss.ts` persistFoundBinding), both direct replaces that do not
+ * pass through this rule; `ownedContainers` has no writer at all. Readers:
+ * `resolveLakehouseAbfss` step 2c and step 3's container list,
+ * `api/lakehouse/references/**`, and `items/[type]/[id]/permissions` +
+ * `external-shares` (the container a grant is placed on). Measured before
+ * adding them: a `git grep` for assignments of the three names across `lib/`
+ * and `app/` returns only those two server writers, and the deployment-rule key
+ * `adlsContainer` in `lib/install/pipeline-deploy.ts` patches a ProvisionTarget,
+ * not item state — so no client flow writes them and listing them breaks none.
+ * The CREATE half: `createOwnedItem` (branch-out, promotion, the Copilot tool
+ * and every collection route that calls it) and the bundle-import create arm
+ * (`workspace-bundle-io.ts`) write a lakehouse's state through
+ * `stripLakehouseCreateState`, and `clearServerOwnedLakehouseKeysOnCreate` in
+ * lib/azure/auto-bind.ts, reached from the routes that call `autoBindOnCreate`
+ * (createOwnedItem, the cosmos-items POST, the workspace items POST), removes
+ * the same keys from the stored document. A copied or imported lakehouse
+ * therefore starts with no location of its own and resolves to its item root.
  */
 export const SERVER_DERIVED_SCOPE_KEYS: readonly string[] = [
   'provisioning',
   'storageAccount',
+  'lakehouseRoot',
+  'adlsContainer',
+  'ownedContainers',
 ];
 
 /** Own-property probe that refuses arrays and non-objects — never walks a proto chain. */
@@ -272,6 +288,18 @@ const SCOPE_REFUSAL_REASON: Record<string, string> = {
     + 'api/storage/_lib/authorize.ts grants against, so a request that moves it moves a grant. '
     + 'No server path writes it, so on an EXISTING item it is fixed at whatever CREATE set: this '
     + 'request can neither change nor clear it. Re-binding an existing item is tracked on #4619.',
+  lakehouseRoot:
+    'It is the ADLS directory this lakehouse\'s data lives in. Loom records it when it creates or '
+    + 'finds the lakehouse root, and every lakehouse path request is confined to it, so it cannot '
+    + 'be set from a request body. If the item was re-bound while you were editing it, reload it '
+    + 'and reapply your change.',
+  adlsContainer:
+    'It is the ADLS container this lakehouse\'s root lives in. Loom records it together with the '
+    + 'root, and lakehouse path requests and permission grants are confined to it, so it cannot be '
+    + 'set from a request body.',
+  ownedContainers:
+    'It lists the ADLS containers a lakehouse may be resolved in, which lakehouse path requests '
+    + 'are confined to, so it cannot be set from a request body.',
 };
 
 /** The subset of {@link SCOPE_REFUSAL_REASON} wording that only makes sense on an
@@ -289,6 +317,15 @@ const SCOPE_REFUSAL_ON_CREATE: Record<string, string> = {
     'It names the storage account this item\'s lake is bound to, and it is the coordinate '
     + 'api/storage/_lib/authorize.ts grants against. A create may set it only through the '
     + 'item-creation path that owns that binding, not by supplying it in this body.',
+  lakehouseRoot:
+    'It is the ADLS directory this lakehouse\'s data lives in, and Loom creates and records it '
+    + 'when the lakehouse is created. Create the item without it.',
+  adlsContainer:
+    'It is the ADLS container this lakehouse\'s root lives in, and Loom records it when the '
+    + 'lakehouse root is created. Create the item without it.',
+  ownedContainers:
+    'It lists the ADLS containers a lakehouse may be resolved in, and it is not settable from a '
+    + 'request body. Create the item without it.',
 };
 
 /**

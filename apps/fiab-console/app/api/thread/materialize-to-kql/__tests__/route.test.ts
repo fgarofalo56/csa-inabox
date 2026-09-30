@@ -18,7 +18,19 @@ vi.mock('@/lib/thread/thread-edges', () => ({ recordThreadEdge: (...a: any[]) =>
 const resolveLakehouseAbfssMock = vi.fn(async () => ({
   abfss: 'abfss://bronze@acct.dfs.core.windows.net/lakehouses/sales', container: 'bronze', root: 'lakehouses/sales',
 }));
-vi.mock('@/lib/azure/lakehouse-abfss', () => ({ resolveLakehouseAbfss: (...a: any[]) => resolveLakehouseAbfssMock(...a) }));
+// `resolveLakehouseStorage` delegates to the mock: a bound value is ok, null is
+// `no-storage`, `{ withheld: <reason> }` is that reason. Real withheld wording.
+vi.mock('@/lib/azure/lakehouse-abfss', async () => {
+  const actual: any = await vi.importActual('@/lib/azure/lakehouse-abfss');
+  return {
+    lakehouseStorageWithheldFields: actual.lakehouseStorageWithheldFields,
+    resolveLakehouseStorage: async (...a: any[]) => {
+      const b: any = await resolveLakehouseAbfssMock(...a);
+      if (b && typeof b === 'object' && 'withheld' in b) return { ok: false, reason: b.withheld };
+      return b ? { ok: true, bound: b } : { ok: false, reason: 'no-storage' };
+    },
+  };
+});
 
 const createExternalDeltaTableMock = vi.fn(async () => ({ columns: [], rows: [] }));
 const setQueryAccelerationPolicyMock = vi.fn(async () => ({ columns: [], rows: [] }));
@@ -113,5 +125,20 @@ describe('materialize-to-kql route', () => {
     expect(j.ok).toBe(true);
     expect(j.accelerated).toBe(false);
     expect(j.message).toMatch(/query acceleration could not be enabled/);
+  });
+
+  // A withheld location is not "no storage configured". FAILS IF the route
+  // words root-shared as the LOOM_*_URL gate (503), loses the readiness check
+  // title the resolver names, or loses the link. No ADX table is created.
+  it('a shared storage root answers the true reason and the readiness link', async () => {
+    const { LAKEHOUSE_SHARED_ROOTS_CHECK_TITLE } = await import('@/lib/admin/env-checks/lakehouse-shared-roots');
+    resolveLakehouseAbfssMock.mockResolvedValueOnce({ withheld: 'root-shared' } as any);
+    const res = await POST(post({ from: FROM, values: VALUES }));
+    const j = await res.json();
+    expect(res.status).toBe(409);
+    expect(j.error).not.toContain('LOOM_');
+    expect(j.error).toContain(LAKEHOUSE_SHARED_ROOTS_CHECK_TITLE);
+    expect(j.fixHref).toBe('/admin/readiness');
+    expect(createExternalDeltaTableMock).not.toHaveBeenCalled();
   });
 });

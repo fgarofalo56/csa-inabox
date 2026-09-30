@@ -109,6 +109,9 @@ const PATCH_CARRY = `    const carriedState = nextState && typeof nextState === 
 const KEY_LIST = `export const SERVER_DERIVED_SCOPE_KEYS: readonly string[] = [
   'provisioning',
   'storageAccount',
+  'lakehouseRoot',
+  'adlsContainer',
+  'ownedContainers',
 ];`;
 
 /** The carry's rebase branch — three arms target it, each differently. */
@@ -200,6 +203,9 @@ export const MUTATIONS = [
       find: KEY_LIST,
       replace: `export const SERVER_DERIVED_SCOPE_KEYS: readonly string[] = [
   'storageAccount',
+  'lakehouseRoot',
+  'adlsContainer',
+  'ownedContainers',
 ];`,
     }],
   },
@@ -213,6 +219,9 @@ export const MUTATIONS = [
       find: KEY_LIST,
       replace: `export const SERVER_DERIVED_SCOPE_KEYS: readonly string[] = [
   'provisioning',
+  'lakehouseRoot',
+  'adlsContainer',
+  'ownedContainers',
 ];`,
     }],
   },

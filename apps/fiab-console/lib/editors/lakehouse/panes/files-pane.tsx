@@ -1,7 +1,7 @@
 'use client';
 import {
   Caption1, Body1, Spinner, Badge, Button, tokens,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBar, MessageBarBody, MessageBarTitle, Link,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Breadcrumb, BreadcrumbItem, BreadcrumbButton, BreadcrumbDivider,
   Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
@@ -182,6 +182,11 @@ export function FilesPane() {
               {listing.remediation && (
                 <span style={{ display: 'block', marginTop: tokens.spacingVerticalXS }}>
                   {listing.remediation}
+                </span>
+              )}
+              {listing.fixHref && (
+                <span style={{ display: 'block', marginTop: tokens.spacingVerticalXS }}>
+                  <Link href={listing.fixHref} data-testid="lakehouse-listing-fix-link">Open Admin &gt; Readiness</Link>
                 </span>
               )}
             </MessageBarBody>
