@@ -77,3 +77,59 @@ describe('useLakehouseShortcuts: row actions name the open item', () => {
     expect(calls.map((c) => c.url)).toEqual([]);
   });
 });
+
+/** Answer the Test POST with `status` + `body`; the list GET answers the row. */
+function installTestAnswer(status: number, body: Record<string, unknown>): Call[] {
+  const calls: Call[] = [];
+  vi.spyOn(global, 'fetch').mockImplementation(async (input: any, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : String(input?.url ?? input);
+    calls.push({ url, init });
+    const isTest = url.includes('/api/lakehouse/shortcuts/test');
+    return new Response(JSON.stringify(isTest ? body : { ok: true, data: [LEGACY_ROW] }), {
+      status: isTest ? status : 200, headers: { 'content-type': 'application/json' },
+    }) as any;
+  });
+  return calls;
+}
+
+// The Test result reaches the user. Before this, the hook parsed the answer and
+// discarded it, so a refusal read as a successful Test. Each case FAILS IF the
+// hook ignores `ok:false` (shortcutsError stays null) or drops `remediation`.
+describe('useLakehouseShortcuts: Test shows a refused or failed result', () => {
+  it.each([
+    // Shaped like the refusal-envelope read-only answer.
+    ['a 403 (read-only role)', 403, {
+      ok: false, code: 'read_only', error: 'Your role on this lakehouse is read-only, so Loom did not test the shortcut.',
+      remediation: 'Ask a workspace Admin or Member for Edit on this lakehouse.',
+    }],
+    // Verbatim from app/api/lakehouse/shortcuts/test/route.ts (row not found).
+    ['a 404 (shortcut not found)', 404, {
+      ok: false, error: 'shortcut not found', code: 'not_found',
+      remediation: 'Refresh the shortcut list; the shortcut may have been deleted.',
+    }],
+  ])('%s is shown with its next step', async (_label, status, body) => {
+    installTestAnswer(status, body);
+    const { result } = mount(ITEM_ID);
+    await act(async () => { await result.current.testShortcut(LEGACY_ROW); });
+    expect(result.current.shortcutsError).toBe(`${body.error} ${body.remediation}`);
+  });
+
+  it('a failed probe is shown AND the list is reloaded (the status was written back)', async () => {
+    const calls = installTestAnswer(502, { ok: false, error: 'engine unreachable', code: 'unreachable', data: LEGACY_ROW });
+    const { result } = mount(ITEM_ID);
+    await act(async () => { await result.current.testShortcut(LEGACY_ROW); });
+    expect(result.current.shortcutsError).toBe('engine unreachable');
+    // FAILS IF the hook throws before reloading: no list GET after the POST.
+    const urls = calls.map((c) => c.url);
+    const post = urls.findIndex((u) => u.includes('/api/lakehouse/shortcuts/test'));
+    expect(urls.slice(post + 1).some((u) => u.includes('/api/lakehouse/shortcuts?'))).toBe(true);
+  });
+
+  it('a passing Test leaves no error (positive arm)', async () => {
+    installTestAnswer(200, { ok: true, data: LEGACY_ROW });
+    const { result } = mount(ITEM_ID);
+    await act(async () => { await result.current.testShortcut(LEGACY_ROW); });
+    expect(result.current.shortcutsError).toBeNull();
+    expect(result.current.shortcuts).toEqual([LEGACY_ROW]);
+  });
+});
