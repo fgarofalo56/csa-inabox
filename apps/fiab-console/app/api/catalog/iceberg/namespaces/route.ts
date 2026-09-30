@@ -41,7 +41,8 @@ export const GET = withIrcCaller(async (req, ctx) => {
     })),
     nextPageToken: result['next-page-token'] ?? null,
     // Which surface actually answered. `unity-schemas` means the catalog image's
-    // Iceberg LIST-namespaces route returned its known 500 and these rows came
+    // Iceberg LIST-namespaces route returned upstream's owner-path 500 (an image
+    // without the #3339 namespace-list change) and these rows came
     // from the Unity Catalog schemas API on the same server — the same data, but
     // the caller is told, never left to assume the native path served it.
     via: result.via,
