@@ -13,11 +13,11 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1694 |
+| Total routes | 1695 |
 | Public (no session) | 59 |
 | Session-only | 644 |
 | Owner-scoped | 680 |
-| Admin | 311 |
+| Admin | 312 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 499 |
 | Areas | 122 |
@@ -268,6 +268,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `admin/gates/route.ts` | GET | admin |  | ADX, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
 | `admin/governance-catalog/reindex/route.ts` | POST | admin | ● | AI Search, Cosmos |
 | `admin/health/exercise/route.ts` | GET POST | admin |  | Power Platform |
+| `admin/lakehouse-roots/keep/route.ts` | POST | admin |  | ADLS, ARM, Azure Monitor, Azure Storage, Cosmos, Managed Identity |
 | `admin/lineage/reconcile/route.ts` | GET POST | admin |  | Cosmos, Purview |
 | `admin/load-sample-data/route.ts` | POST | admin |  | ADX, ARM, Managed Identity |
 | `admin/mcp-servers/bridge/route.ts` | GET | admin |  | — |
@@ -2400,11 +2401,11 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
 | `workspaces/[id]/agent-config/route.ts` | GET PUT | owner-scoped |  | Cosmos, Microsoft Graph |
-| `workspaces/[id]/clone/route.ts` | POST | admin |  | ADX, AI Search, ARM, Azure Cache for Redis, Azure Monitor, Azure RBAC, Azure Storage, Cosmos, Event Hubs, Fabric, Managed Identity, Microsoft Graph, Purview, Resource Graph |
+| `workspaces/[id]/clone/route.ts` | POST | admin |  | ADF, ADLS, ADX, AI Search, ARM, Azure Cache for Redis, Azure Monitor, Azure RBAC, Azure Storage, Cosmos, Event Hubs, Fabric, Managed Identity, Microsoft Graph, Purview, Resource Graph |
 | `workspaces/[id]/export/route.ts` | GET | admin |  | Azure Cache for Redis, Azure Monitor, Cosmos, Microsoft Graph |
 | `workspaces/[id]/folders/route.ts` | GET POST PATCH DELETE | admin |  | Cosmos |
 | `workspaces/[id]/image/route.ts` | GET POST DELETE | owner-scoped |  | Cosmos, Microsoft Graph |
-| `workspaces/[id]/import/route.ts` | POST | admin |  | AI Search, Azure Cache for Redis, Azure Monitor, Cosmos, Microsoft Graph |
+| `workspaces/[id]/import/route.ts` | POST | admin |  | ADF, ADLS, AI Search, ARM, Azure Cache for Redis, Azure Monitor, Azure Storage, Cosmos, Managed Identity, Microsoft Graph |
 | `workspaces/[id]/items/[itemId]/route.ts` | PATCH DELETE | owner-scoped |  | AI Search, Cosmos, Purview |
 | `workspaces/[id]/items/route.ts` | GET POST | admin |  | ADF, ADLS, AI Search, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph |
 | `workspaces/[id]/permissions/route.ts` | GET POST DELETE | owner-scoped |  | Cosmos, Microsoft Graph |
