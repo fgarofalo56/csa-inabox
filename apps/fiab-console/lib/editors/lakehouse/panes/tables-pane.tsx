@@ -14,12 +14,16 @@ import {
 import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
 import { useStyles, formatBytes, leafName } from '../shared';
 import { useLakehouseCtx } from '../lakehouse-editor-context';
+import { useLakehouseReadOnly, LAKEHOUSE_READ_ONLY_TITLE } from '../hooks/use-lakehouse-access';
 import type { LiveCatalogTable } from '../types';
 import type { PathEntry } from '../shared';
 
 export function TablesPane() {
   const s = useStyles();
   const ctx = useLakehouseCtx();
+  // Maintain… and Move to schema… change the lakehouse, so they close
+  // (focusable, with the reason) when the caller's role is read-only.
+  const readOnly = useLakehouseReadOnly(ctx.id, ctx.isNewItem);
   const {
     activeContainer, schemasEnabled, shortcutLakehouseId, tablesPrefix,
     liveTables, liveTablesLoading, liveTablesError, liveTablesGate, loadLiveTables,
@@ -182,8 +186,8 @@ export function TablesPane() {
                                       History (time travel)
                                     </MenuItem>
                                     <MenuItem icon={<Wrench20Regular />}
-                                      disabled={!activeContainer}
-                                      title={!activeContainer ? 'Select a container first' : 'OPTIMIZE / VACUUM / ZORDER BY'}
+                                      disabled={!activeContainer || readOnly}
+                                      title={readOnly ? LAKEHOUSE_READ_ONLY_TITLE : !activeContainer ? 'Select a container first' : 'OPTIMIZE / VACUUM / ZORDER BY'}
                                       onClick={() => { setMaintainTable(t.name); setMaintainOpen(true); }}>
                                       Maintain…
                                     </MenuItem>
@@ -267,7 +271,8 @@ export function TablesPane() {
                                         </Button>
                                         <Button size="small" appearance="outline" icon={<TableSimple20Regular />}
                                           disabled={schemaName.toLowerCase() === 'dbo'}
-                                          title={schemaName.toLowerCase() === 'dbo'
+                                          disabledFocusable={readOnly}
+                                          title={readOnly ? LAKEHOUSE_READ_ONLY_TITLE : schemaName.toLowerCase() === 'dbo'
                                             ? 'Tables in the default dbo schema stay in dbo. Create the table in a named schema to move it later.'
                                             : 'Move this table to another schema of this lakehouse'}
                                           onClick={() => openMoveTable(tableName, schemaName)}>
@@ -279,7 +284,8 @@ export function TablesPane() {
                                         </Button>
                                         <Button size="small" appearance="outline" icon={<Wrench20Regular />}
                                           disabled={!activeContainer}
-                                          title={!activeContainer ? 'Select a container first' : 'OPTIMIZE / VACUUM / ZORDER BY'}
+                                          disabledFocusable={readOnly}
+                                          title={readOnly ? LAKEHOUSE_READ_ONLY_TITLE : !activeContainer ? 'Select a container first' : 'OPTIMIZE / VACUUM / ZORDER BY'}
                                           // The maintenance route resolves `<item root>/Tables/<tableName>`, so it takes
                                           // the path relative to Tables/, never the full listing path.
                                           onClick={() => { setMaintainTable(`${schemaName}/${tableName}`); setMaintainOpen(true); }}>

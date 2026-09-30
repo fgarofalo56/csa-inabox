@@ -43,6 +43,7 @@ import { HonestGate } from '@/lib/components/shared/honest-gate';
 import { LearnPopover } from '@/lib/components/ui/learn-popover';
 import { buildConnectSnippets, type ConnectSnippet } from '@/lib/azure/iceberg-metadata';
 import { useLakehouseCtx } from '../lakehouse-editor-context';
+import { useLakehouseReadOnly, LAKEHOUSE_READ_ONLY_TITLE } from '../hooks/use-lakehouse-access';
 import type { InteropTableRow, InteropResponse } from '../types';
 
 const useLocalStyles = makeStyles({
@@ -105,6 +106,9 @@ async function fetchInterop(lakehouseId: string): Promise<InteropResponse> {
 export function InteropPane() {
   const s = useLocalStyles();
   const ctx = useLakehouseCtx();
+  // Exposing or retiring an Iceberg view writes metadata, so it needs Edit. The
+  // catalog card, the snippets and Refresh stay available to a read-only role.
+  const readOnly = useLakehouseReadOnly(ctx.id, ctx.isNewItem);
   const { activeContainer, liveTables, liveTablesLoading, liveTablesGate, setActionError, setActionStatus } = ctx;
   const container = activeContainer || '';
   // Interop state belongs to the lakehouse ITEM; an unsaved item has none yet.
@@ -269,6 +273,8 @@ export function InteropPane() {
                 appearance="primary"
                 size="small"
                 disabled={busyTable === conflict.table}
+                disabledFocusable={readOnly}
+                title={readOnly ? LAKEHOUSE_READ_ONLY_TITLE : undefined}
                 onClick={() => { void toggle(conflict.table, true, conflict.suggestedNamespace); }}
               >
                 Register as {conflict.suggestedNamespace}.{stateByTable.get(conflict.table.toLowerCase())?.icebergTableName || conflict.table}
@@ -380,9 +386,10 @@ export function InteropPane() {
                     <TableCell>
                       <Switch
                         checked={!!state?.iceberg}
-                        disabled={busyTable === name}
+                        disabled={busyTable === name || readOnly}
+                        root={{ title: readOnly ? LAKEHOUSE_READ_ONLY_TITLE : undefined }}
                         aria-label={`Expose ${name} as Iceberg`}
-                        onChange={(_, d) => { void toggle(name, !!d.checked); }}
+                        onChange={(_, d) => { if (!readOnly) void toggle(name, !!d.checked); }}
                       />
                     </TableCell>
                   </TableRow>
