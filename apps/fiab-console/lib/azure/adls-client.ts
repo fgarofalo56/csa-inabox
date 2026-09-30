@@ -617,8 +617,10 @@ export async function uploadFile(
   path: string,
   body: Buffer,
   contentType: string,
+  /** The storage account to write to; omitted means the container's configured account. */
+  account?: string,
 ): Promise<{ ok: true; size: number; etag?: string }> {
-  const fs = getFileSystem(container);
+  const fs = getFileSystem(container, account);
   const file = fs.getFileClient(path);
   await file.upload(body, {
     pathHttpHeaders: { contentType },

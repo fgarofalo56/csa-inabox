@@ -36,7 +36,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { synapseConfigGate } from '@/lib/azure/synapse-artifacts-client';
-import { KNOWN_CONTAINERS, pathToHttpsUrl } from '@/lib/azure/adls-client';
+import { KNOWN_CONTAINERS } from '@/lib/azure/adls-client';
 import {
   createLivySessionAsync, getLivySession, submitLivyStatement, getLivyStatement,
 } from '@/lib/azure/synapse-dev-client';
@@ -45,6 +45,7 @@ import { authorizeItem, scopeItem } from '../_lib/refusal-envelope';
 import {
   SPARK_POOL_NAME_RE, mintLakehouseJobHandle, verifyLakehouseJobHandle, type LakehouseJobScope,
 } from '../_lib/job-handle';
+import { sparkAbfssFor, type SparkAbfss } from '../_lib/spark-path';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -62,37 +63,46 @@ function gate(): NextResponse | null {
   return null;
 }
 
-/** Derive the abfss:// URI Spark needs from the same helper the preview route uses. */
-function abfssFor(container: string, path: string): { abfss: string; ext: string } | { error: string } {
-  let httpsUrl: string;
-  try {
-    httpsUrl = pathToHttpsUrl(container, path);
-  } catch (e: any) {
-    return { error: e?.message || 'ADLS account not configured — set LOOM_{BRONZE,SILVER,GOLD,LANDING}_URL.' };
-  }
-  // https://<acct>.dfs.core.windows.net/<container>/<path>
-  // → abfss://<container>@<acct>.dfs.core.windows.net/<path>
-  const m = httpsUrl.match(/^https:\/\/([^/]+)\.dfs\.core\.windows\.net\/([^/]+)\/(.+)$/);
-  const abfss = m ? `abfss://${m[2]}@${m[1]}.dfs.core.windows.net/${m[3]}` : httpsUrl;
+/**
+ * The abfss:// URI and reader format Spark needs for a SCOPED file, on the
+ * item's bound `account` (`sparkAbfssFor`: refuses Spark glob characters,
+ * sovereign-cloud aware). A path inside a `_delta_log` folder reads its table.
+ */
+function abfssFor(
+  account: string | null, container: string, path: string,
+): { ok: true; abfss: string; ext: string } | Extract<SparkAbfss, { ok: false }> {
+  const built = sparkAbfssFor(account, container, path);
+  if (!built.ok) return built;
   // For a Delta table the bulk target is the table directory (parent of _delta_log).
-  const deltaIdx = abfss.indexOf('/_delta_log');
-  const tablePath = deltaIdx >= 0 ? abfss.substring(0, deltaIdx) : abfss;
+  const deltaIdx = built.abfss.indexOf('/_delta_log');
+  const tablePath = deltaIdx >= 0 ? built.abfss.substring(0, deltaIdx) : built.abfss;
   let ext = path.toLowerCase().split('.').pop() || '';
   if (deltaIdx >= 0 || path.includes('/_delta_log')) ext = 'delta';
   if (!['delta', 'parquet', 'csv', 'tsv', 'json', 'jsonl', 'ndjson'].includes(ext)) ext = 'delta';
-  return { abfss: tablePath, ext };
+  return { ok: true, abfss: tablePath, ext };
 }
 
-/** Build the PySpark stats statement. Path + ext are server-derived; escaped for a Python string literal. */
+/** The response for a file `abfssFor` refused: 400 for the path, 503 for the configuration. */
+function abfssRefusal(r: Extract<SparkAbfss, { ok: false }>): NextResponse {
+  if (r.status === 400) {
+    return badRequest(r.error, 'Rename the file or folder so its path holds none of { } [ ] * ? \\, then retry.');
+  }
+  return NextResponse.json({ ok: false, status: 'error', code: r.code, error: r.error }, { status: r.status });
+}
+
+/**
+ * Build the PySpark stats statement. The path is written as a JSON string
+ * literal, which is also a valid Python string literal: quotes, backslashes and
+ * control characters in it are escaped, so the path stays one value on one line.
+ */
 function buildStatsCode(abfss: string, ext: string): string {
-  const safePath = abfss.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   const safeExt = ext.replace(/[^a-z0-9]/g, '');
   return [
     'from pyspark.sql import SparkSession',
     'from pyspark.sql import functions as F',
     'import json',
     'spark = SparkSession.builder.getOrCreate()',
-    `_path = "${safePath}"`,
+    `_path = ${JSON.stringify(abfss)}`,
     `_ext = "${safeExt}"`,
     'def _load():',
     "    if _ext == 'delta':",
@@ -225,10 +235,8 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
         if (s.state !== 'idle') {
           return NextResponse.json({ ok: true, status: 'warming', jobId, sessionState: s.state });
         }
-        const abfss = abfssFor(job.container, job.path);
-        if ('error' in abfss) {
-          return NextResponse.json({ ok: false, status: 'error', code: 'not_configured', error: abfss.error }, { status: 503 });
-        }
+        const abfss = abfssFor(job.account ?? null, job.container, job.path);
+        if (!abfss.ok) return abfssRefusal(abfss);
         const stmt = await submitLivyStatement(pool, sessionId, { code: buildStatsCode(abfss.abfss, abfss.ext), kind: 'pyspark' });
         return NextResponse.json({ ok: true, status: 'running', jobId: mintLakehouseJobHandle(scope, { ...job, stmtId: stmt.id }) });
       }
@@ -270,14 +278,16 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
       { knownContainers: KNOWN_CONTAINERS },
     );
     if (scoped instanceof NextResponse) return scoped;
-    const abfss = abfssFor(scoped.container, scoped.path);
-    if ('error' in abfss) {
-      return NextResponse.json({ ok: false, code: 'not_configured', error: abfss.error }, { status: 503 });
-    }
+    const abfss = abfssFor(scoped.account, scoped.container, scoped.path);
+    if (!abfss.ok) return abfssRefusal(abfss);
     const fresh = await createLivySessionAsync(pool, 'pyspark', `loom-stats-${Date.now()}`);
     const sessionId = fresh.id;
     const s = await getLivySession(pool, sessionId);
-    const base = { pool, sessionId, container: scoped.container, path: scoped.path };
+    // The handle carries the bound account, so a warm poll reads the same account.
+    const base = {
+      pool, sessionId, container: scoped.container, path: scoped.path,
+      ...(scoped.account ? { account: scoped.account } : {}),
+    };
     if (s.state !== 'idle') {
       // Cold pool — hand back a statement-less handle; the client polls and we
       // submit once the session reaches idle.

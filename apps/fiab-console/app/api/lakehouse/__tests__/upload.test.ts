@@ -87,6 +87,16 @@ describe('upload — item form (lakehouseId)', () => {
     expect(uploads()).toEqual([[CONTAINER, INSIDE]]);
   });
 
+  it('writes to the item\'s bound storage account and reports its abfss path', async () => {
+    (resolveLakehouseAbfss as any).mockResolvedValue({ abfss: `abfss://${CONTAINER}@extacct.dfs.core.windows.net/${ROOT}`, container: CONTAINER, root: ROOT });
+    const res = await POST(req({ lakehouseId: LH, container: CONTAINER, path: INSIDE }));
+    expect(res.status).toBe(201);
+    // Breaks if the account is not passed to uploadFile (the write lands on
+    // the container's configured account) or the reported path names another account.
+    expect((uploadFile as any).mock.calls[0][4]).toBe('extacct');
+    expect((await res.json()).abfssPath).toBe(`abfss://${CONTAINER}@extacct.dfs.core.windows.net/${INSIDE}`);
+  });
+
   it('requires edit rights on the lakehouse item (403 for a read-only role; nothing written)', async () => {
     (resolveItemAccessByOid as any).mockResolvedValue(access('lakehouse', LH, false));
     const res = await POST(req({ lakehouseId: LH, container: CONTAINER, path: INSIDE }));
@@ -127,6 +137,10 @@ describe('upload — report form (reportId)', () => {
     const res = await POST(req({ reportId: REPORT, container: CONTAINER, path: target }));
     expect(res.status).toBe(201);
     expect(uploads()).toEqual([[CONTAINER, target]]);
+    // The report form carries no bound account: the write uses the container's
+    // configured account. Breaks if an account is invented for this form.
+    expect((uploadFile as any).mock.calls[0]).toHaveLength(5);
+    expect((uploadFile as any).mock.calls[0][4]).toBeUndefined();
     // Breaks if the route authorizes some other item type.
     expect((resolveItemAccessByOid as any).mock.calls.map((c: any[]) => [c[1], c[2]])).toEqual([[REPORT, 'report']]);
   });
