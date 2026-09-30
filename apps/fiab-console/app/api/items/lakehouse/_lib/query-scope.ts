@@ -12,7 +12,7 @@
  *   - Inside a statement, WORDS are checked against a deny-list
  *     (`REFUSED_WORDS`): the words that begin every other T-SQL statement, plus
  *     the external-access and cursor words. A word not on the list is accepted
- *     (column names, aliases, built-in functions).
+ *     (column names, aliases, and built-in functions other than those below).
  *   - NAMES are checked by shape: at most three parts, a three-part name must
  *     start with the database the query runs in, nothing in the `sys` schema,
  *     no system compatibility view, no global temporary table. Each part is
@@ -40,6 +40,10 @@
  *     accepts the `INFORMATION_SCHEMA` views; nothing in the lakehouse editor
  *     reads the `sys` catalog through this route.
  *   - Names with four parts, and three-part names naming another database.
+ *   - A call to a metadata or security function (`METADATA_FUNCTIONS`,
+ *     `PRINCIPAL_FUNCTIONS`), and the security functions written without
+ *     parentheses (`CURRENT_USER`, `SESSION_USER`, `SYSTEM_USER`, `USER`).
+ *     Other built-in functions (COUNT, CAST, DATEADD, ISNULL, …) are accepted.
  *   - A string shaped like a storage location (an `abfss://`/`wasbs://`-style
  *     scheme, a `.dfs.core.`/`.blob.core.` host, or a UNC path) anywhere other
  *     than a `BULK` location. Other strings, including `https://` filters in a
@@ -52,7 +56,8 @@
  *
  * WHAT THIS DOES NOT COVER, stated rather than implied: objects already defined
  * in the database the query runs in (views, external tables) run as whatever
- * they were defined to read, and built-in functions are not restricted. The
+ * they were defined to read, and built-in functions outside the two lists above
+ * are not restricted. The
  * durable form of this boundary is a per-item serverless database whose external
  * data source is rooted at the item root, with relative `BULK` paths only; that
  * is tracked separately.
@@ -143,6 +148,8 @@ function reasons(s: QueryScopeSurface) {
     broker: `Service Broker statements are not run from ${s.place}`,
     catalog: `${s.name} reads ${s.files} and the INFORMATION_SCHEMA views, not the server catalog`,
     select: `only SELECT statements are run from ${s.place}`,
+    metadata: 'non-admin queries may not call metadata functions, several of which take another database\'s id or name',
+    principal: 'non-admin queries may not call functions that return logins, users, roles or permissions',
   } as const;
 }
 
@@ -177,11 +184,11 @@ function refuse(c: Scope, construct: string, why: string, remediation = c.s.sele
 /**
  * Remediation for a refused word that could also be a column or table name.
  * `qualify` is false for a word refused even as a later name part, so the hint
- * offers only the form that is accepted.
+ * offers only the form that is accepted. `then` is the sentence that follows.
  */
-function bracketHint(c: Scope, word: string, qualify = true): string {
+function bracketHint(c: Scope, word: string, qualify = true, then = c.s.selectRemediation): string {
   const forms = qualify ? `write it in brackets, as [${word}], or qualify it, as t.${word}` : `write it in brackets, as [${word}]`;
-  return `If ${word} is a column or table name, ${forms}. ` + c.s.selectRemediation;
+  return `If ${word} is a column or table name, ${forms}. ` + then;
 }
 
 /**
@@ -307,6 +314,61 @@ function shownRead(part: string, reading: string): string {
 
 /** Remediation added when a part was refused for the name it reads as, not as written. */
 const READ_AS_HINT = 'If it is a column of yours, SELECT * returns it without naming it. ';
+
+const FUNCTION_REMEDIATION =
+  'For table and column metadata, query INFORMATION_SCHEMA.TABLES or INFORMATION_SCHEMA.COLUMNS. '
+  + 'A tenant admin can call these functions.';
+
+/**
+ * Built-in functions refused when called, whatever their arguments. A deny-list,
+ * not an allow-list of scalar functions: an allow-list would also refuse
+ * user-defined functions and type methods (`t.doc.value(…)`), and would have to
+ * track the whole built-in catalogue.
+ *
+ * Every function on Microsoft Learn's "Metadata functions" page, except
+ * PARSENAME, which splits a string and reads nothing; plus HAS_DBACCESS and the
+ * deprecated DATABASEPROPERTY, which that page does not list but which take a
+ * database name. The whole family is refused rather than the ones Learn
+ * documents as taking a database id or name, so a function whose arguments
+ * reach another database is not missed through a reading of its syntax page.
+ * NEXT VALUE FOR is not a call and is not listed. `@@` functions are variables,
+ * refused above.
+ */
+const METADATA_FUNCTIONS = new Set([
+  'SERVERPROPERTY', 'DB_ID', 'DB_NAME', 'DATABASEPROPERTYEX', 'DATABASEPROPERTY', 'ORIGINAL_DB_NAME',
+  'HAS_DBACCESS', 'APP_NAME', 'VERSION',
+  'OBJECT_ID', 'OBJECT_NAME', 'OBJECT_SCHEMA_NAME', 'OBJECT_DEFINITION', 'OBJECTPROPERTY', 'OBJECTPROPERTYEX',
+  'ASSEMBLYPROPERTY', 'TYPE_ID', 'TYPE_NAME', 'TYPEPROPERTY', 'COL_NAME', 'COL_LENGTH', 'COLUMNPROPERTY',
+  'INDEX_COL', 'INDEXKEY_PROPERTY', 'INDEXPROPERTY', 'STATS_DATE',
+  'FILE_ID', 'FILE_IDEX', 'FILE_NAME', 'FILEGROUP_ID', 'FILEGROUP_NAME', 'FILEGROUPPROPERTY', 'FILEPROPERTY',
+  'FULLTEXTCATALOGPROPERTY', 'FULLTEXTSERVICEPROPERTY', 'APPLOCK_MODE', 'APPLOCK_TEST', 'SCOPE_IDENTITY',
+]);
+
+/**
+ * Every function on Microsoft Learn's "Security functions" page (the `sys.fn_`
+ * ones are refused as `fn_` names). SCHEMA_ID, SCHEMA_NAME and
+ * DATABASE_PRINCIPAL_ID are on both pages and are refused with the metadata
+ * reason.
+ */
+const PRINCIPAL_FUNCTIONS = new Set([
+  'CERTENCODED', 'CERTPRIVATEKEY', 'PWDCOMPARE', 'PWDENCRYPT', 'HAS_PERMS_BY_NAME', 'PERMISSIONS',
+  'IS_MEMBER', 'IS_ROLEMEMBER', 'IS_SRVROLEMEMBER', 'LOGINPROPERTY', 'ORIGINAL_LOGIN',
+  'SUSER_ID', 'SUSER_SID', 'SUSER_SNAME', 'SUSER_NAME', 'USER_ID', 'USER_NAME',
+]);
+
+/**
+ * Security functions written without parentheses. Unqualified, each of these
+ * words is the function, so they are refused as words; `[user]` and `t.user`
+ * name a column and are accepted.
+ */
+const NILADIC_PRINCIPAL_WORDS = new Set(['CURRENT_USER', 'SESSION_USER', 'SYSTEM_USER', 'USER']);
+
+/** Test-only view of the three lists, so a test can walk every entry. Not used by the classifier. */
+export const REFUSED_FUNCTION_NAMES = {
+  metadata: [...METADATA_FUNCTIONS] as readonly string[],
+  principal: [...PRINCIPAL_FUNCTIONS] as readonly string[],
+  niladic: [...NILADIC_PRINCIPAL_WORDS] as readonly string[],
+};
 
 /**
  * Words refused wherever they appear outside a string, comment or quoted
@@ -648,6 +710,19 @@ function checkName(c: Scope, rawParts: string[], database: string, databaseLabel
   if (fn !== undefined) {
     return refuse(c, `the system function ${shownRead(parts[last], fn)}`, c.why.admin);
   }
+  // A metadata or security function, called. Checked on the last part whatever qualifies it,
+  // so `dbo.DB_NAME(…)` is refused too; a qualified call is a user-defined function the tab
+  // has no need to run.
+  const denied = called ? readings[last].find((r) => METADATA_FUNCTIONS.has(asciiUpper(r)) || PRINCIPAL_FUNCTIONS.has(asciiUpper(r))) : undefined;
+  if (denied !== undefined) {
+    const metadata = METADATA_FUNCTIONS.has(asciiUpper(denied));
+    return refuse(
+      c,
+      `the ${metadata ? 'metadata' : 'security'} function ${shownRead(parts[last], denied.toUpperCase())}`,
+      metadata ? c.why.metadata : c.why.principal,
+      FUNCTION_REMEDIATION,
+    );
+  }
   if (parts.length === 3 && parts[0].toLowerCase() !== database) {
     return refuse(c, 
       `the three-part name ${shown}`,
@@ -760,6 +835,9 @@ export function analyzeLakehouseQuery(
         return refuse(c, `the system procedure ${t.text}`, c.why.dynamic, bracketHint(c, t.text));
       }
       if (/^FN_/.test(w)) return refuse(c, `the system function ${t.text}`, c.why.admin, bracketHint(c, t.text, false));
+      if (NILADIC_PRINCIPAL_WORDS.has(w) && !laterPart) {
+        return refuse(c, `the security function ${t.text}`, c.why.principal, bracketHint(c, t.text, true, FUNCTION_REMEDIATION));
+      }
       // A `##` name, bare or bracketed, is refused by checkName below.
     }
 
