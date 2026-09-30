@@ -63,8 +63,9 @@
 
 import type { SecurityEdge, SecurityGraph, SecurityNode } from '../substrate';
 import type {
-  ScanScopeReport,
+  ScanScopeCount,
   SecurityGraphArtifact,
+  SecurityGraphExtraction,
   SkippedSubject,
   SourceFile,
   UnmodeledSurface,
@@ -129,8 +130,11 @@ export interface BuildInput {
 /**
  * FNV-1a over (path, text) of every scanned file, in path order.
  *
- * Not cryptographic and does not need to be: its only job is to let CI re-run the
- * extractor and prove the committed artifact still matches the tree. A hand-rolled
+ * Not cryptographic and does not need to be: it identifies the input set of ONE
+ * run, printed by the CLI. It is not committed and `--check` does not compare it
+ * (#4798) — any edit to any scanned file moves it, and a content change that
+ * alters what the detectors read necessarily alters the graph, which IS
+ * compared. A hand-rolled
  * hash keeps this package free of value imports, which is what keeps the build
  * step a plain `tsc` invocation rather than a bundler (see `join.ts`).
  */
@@ -156,10 +160,39 @@ export function inputsDigest(files: readonly SourceFile[]): string {
   return `${h1.toString(16).padStart(8, '0')}${h2.toString(16).padStart(8, '0')}`;
 }
 
+/** The header every committed artifact carries. */
+const GENERATED_COMMENT =
+  'GENERATED — do not edit by hand. Produced by scripts/brain/extract-security-graph.mjs.';
+
+/**
+ * The exact bytes the CLI commits for `artifact`.
+ *
+ * One function, called by the CLI to write AND by the merge-stability spec to
+ * simulate a three-way merge, so the spec measures the bytes that ship rather
+ * than a transcription of their format.
+ */
+export function serializeArtifact(artifact: SecurityGraphArtifact): string {
+  return `${JSON.stringify({ _comment: GENERATED_COMMENT, artifact }, null, 2)}\n`;
+}
+
 /** Build the committed artifact from source text. */
 export function buildSecurityGraphArtifact(input: BuildInput): SecurityGraphArtifact {
+  return buildSecurityGraphExtraction(input).artifact;
+}
+
+/**
+ * Build the committed artifact AND the run's measurements, kept apart (#4798).
+ *
+ * Everything tree-wide — the file counts, the per-scope tallies, the digest, the
+ * clock, the sha, the unread-file counts, the non-spawn sink total — goes on
+ * `run`, which the CLI prints and `--check` floors on but never writes. What is
+ * committed is the graph, the join and per-element ledger entries, so two PRs
+ * that each add one unrelated file under a scanned root change DIFFERENT lines
+ * of the committed bytes (or none at all) and merge without regenerating.
+ */
+export function buildSecurityGraphExtraction(input: BuildInput): SecurityGraphExtraction {
   const skipped: SkippedSubject[] = [];
-  const scanScopes: ScanScopeReport[] = [];
+  const scanScopes: ScanScopeCount[] = [];
 
   // ── DETERMINISM IS A CORRECTNESS PROPERTY HERE, NOT A NICETY ──────────
   //
@@ -283,17 +316,24 @@ export function buildSecurityGraphArtifact(input: BuildInput): SecurityGraphArti
   // JavaScript/TypeScript — has to be stated somewhere countable or it reads as
   // absence. A workflow YAML `run:` block and a `.sh` step publish to the same
   // PUBLIC Actions log a `console.log` does; this extractor does not lex either.
-  for (const surface of input.unmodeledPublicationSurfaces ?? []) {
+  //
+  // The COUNT is on `run.unmodeledPublicationSurfaces`, not in this reason
+  // (#4798): a number in committed text moves whenever any `.yml`/`.sh`/`.py`
+  // lands under the root, which is most PRs. The subject still names the root
+  // and every extension, so the narrowing stays declared in the shipped bytes.
+  const unmodeled = input.unmodeledPublicationSurfaces ?? [];
+  for (const surface of unmodeled) {
     if (surface.fileCount === 0) continue;
     skipped.push({
       subject: `${surface.root}** (${surface.extensions.map((e) => `*${e}`).join(', ')})`,
       reason:
-        `${surface.fileCount} file(s) under a SCANNED root were seen and NOT read: this ` +
-        'extractor lexes JavaScript/TypeScript only, so a workflow YAML `run:` block, a shell ' +
-        'step or a Python script is outside the examined population even though it publishes to ' +
-        'the same PUBLIC Actions log. C4 output therefore says nothing about these files. ' +
-        'Recorded with a count so the narrowing is countable rather than inferred from a scope ' +
-        'string — which is how the `.github/**` gap survived until 2026-08-24.',
+        'Files under a SCANNED root were seen and NOT read: this extractor lexes ' +
+        'JavaScript/TypeScript only, so a workflow YAML `run:` block, a shell step or a Python ' +
+        'script is outside the examined population even though it publishes to the same PUBLIC ' +
+        'Actions log. C4 output therefore says nothing about these files. How many is printed by ' +
+        'every extractor run and is deliberately not committed (#4798); the subject names the ' +
+        'root and each extension so the narrowing is declared in the shipped bytes rather than ' +
+        'inferred from a scope string, which is how the `.github/**` gap survived until 2026-08-24.',
     });
   }
 
@@ -310,12 +350,14 @@ export function buildSecurityGraphArtifact(input: BuildInput): SecurityGraphArti
   // It IS a reason to say so out loud: the expression arm is UNEXERCISED here, so
   // its correctness is untested by the real corpus, and a reader must not take
   // C4's output as evidence that no unbounded sensitive write exists.
+  const nonSpawnSinks = publications.sinkCounts.total - publications.sinkCounts.spawnStdio;
   if (publications.sinkCounts.sensitiveNonSpawn === 0 && publications.sinkCounts.total > 0) {
     skipped.push({
       subject: 'C4 expression arm (carriesSensitive)',
       reason:
-        `matched 0 of ${publications.sinkCounts.total - publications.sinkCounts.spawnStdio} ` +
-        'non-spawn publication sink(s), so every C4 finding on this tree comes from the ' +
+        // The denominator is `run.nonSpawnSinks`, not spelled here: it moves with
+        // every `console.log` added under a scanned root (#4798).
+        'matched NONE of the non-spawn publication sinks, so every C4 finding on this tree comes from the ' +
         'spawn-stdio arm. The expression arm is INERT here and its correctness is therefore ' +
         'unexercised by the real corpus — C4 output is not evidence that no unbounded ' +
         'sensitive write exists.',
@@ -342,16 +384,23 @@ export function buildSecurityGraphArtifact(input: BuildInput): SecurityGraphArti
   assertJoinCoversGraph(join, nodes);
 
   return {
-    graph,
-    join,
-    meta: {
-      generatorVersion: GENERATOR_VERSION,
+    artifact: {
+      graph,
+      join,
+      meta: {
+        generatorVersion: GENERATOR_VERSION,
+        scanScopes: scanScopes.map(({ scope }) => ({ scope })),
+        skipped,
+      },
+    },
+    run: {
       generatedAt: input.now.toISOString(),
       commit: input.commit,
       inputsDigest: inputsDigest(files),
       filesScanned: files.length,
       scanScopes,
-      skipped,
+      unmodeledPublicationSurfaces: unmodeled,
+      nonSpawnSinks,
     },
   };
 }
