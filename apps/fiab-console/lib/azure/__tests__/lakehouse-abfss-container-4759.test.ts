@@ -812,14 +812,33 @@ describe('a recorded location is used only when it is this item\'s own', () => {
     expect(r.ok && [r.bound.container, r.bound.root]).toEqual(['gold', OLD]);
   });
 
-  // FAILS IF a failed read of the other items withholds a RECORDED root
-  // (root-unverified): the record was written by the server for this item.
-  it('a recorded root is kept when the other items cannot be read', async () => {
+  // FAILS IF a failed read of the other items keeps an UNMARKED recorded root
+  // that is not the item's own item root (the answer would be ok at
+  // `gold/lakehouses/Old Name`): it is not opened until it is confirmed.
+  it('an unmarked recorded name root is withheld as root-unverified when the other items cannot be read', async () => {
+    EXISTING.add(`gold/${OLD}`);
     putItem({ adlsContainer: 'gold', lakehouseRoot: OLD });
     QUERY_FAILS = true;
-    const r = await resolveLakehouseStorage(LH_ID, WS);
-    expect(r.ok && [r.bound.container, r.bound.root]).toEqual(['gold', OLD]);
+    expect(await resolveLakehouseStorage(LH_ID, WS, PERSIST)).toEqual({ ok: false, reason: 'root-unverified' });
     expect(QUERIES).toHaveLength(1);
+    expect(STAMPS).toEqual([]);
+    expect(replaced).toEqual([]);
+  });
+
+  // Paired positives with the same failing read. FAILS IF the refusal above is
+  // applied to a recorded ITEM root (which needs no read) or to a directory
+  // marked for this item: either would then answer root-unverified.
+  it('a recorded item root, or a root marked for this item, still resolves when the other items cannot be read', async () => {
+    QUERY_FAILS = true;
+    putItem({ adlsContainer: 'gold', lakehouseRoot: ITEM_ROOT }, AFTER_CUTOVER);
+    const own = await resolveLakehouseStorage(LH_ID, WS);
+    expect(own.ok && [own.bound.container, own.bound.root]).toEqual(['gold', ITEM_ROOT]);
+    EXISTING.add(`gold/${OLD}`);
+    OWNERS.set(`gold/${OLD}`, LH_ID);
+    putItem({ adlsContainer: 'gold', lakehouseRoot: OLD });
+    const marked = await resolveLakehouseStorage(LH_ID, WS);
+    expect(marked.ok && [marked.bound.container, marked.bound.root]).toEqual(['gold', OLD]);
+    expect(QUERIES).toEqual([]);
   });
 
   // FAILS IF a recorded root marked for this item still reads the other items
