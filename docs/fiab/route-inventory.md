@@ -2541,7 +2541,7 @@ silently downgrading the route.
 
 ## Backend signals (derived)
 
-458 module(s) ORIGINATE a backend label — the derivation read an
+456 module(s) ORIGINATE a backend label — the derivation read an
 Azure identifier out of them. Every other route/module below inherits through the
 call graph. Nothing in this section is a Loom module name someone typed: the
 modules are derived, and only the Microsoft-owned identifier vocabulary is seeded.
@@ -3160,8 +3160,6 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/editors/lakehouse-shortcut-editor.tsx` | Dataverse |
 | `apps/fiab-console/lib/editors/lakehouse/dialogs/shortcut-wizard-dialog.tsx` | ADLS |
 | `apps/fiab-console/lib/editors/lakehouse/dialogs/small-dialogs.tsx` | Synapse SQL |
-| `apps/fiab-console/lib/editors/lakehouse/lakehouse-editor-shell.tsx` | ADLS |
-| `apps/fiab-console/lib/editors/lakehouse/panes/tables-pane.tsx` | ADLS |
 | `apps/fiab-console/lib/editors/logic-app-editor.tsx` | Logic Apps |
 | `apps/fiab-console/lib/editors/mapping-dataflow-editor.tsx` | ADF |
 | `apps/fiab-console/lib/editors/ml-experiment-editor.tsx` | AML |

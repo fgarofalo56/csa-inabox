@@ -5046,8 +5046,10 @@ const ADMIN_SHAPE_UNSCOPED = new Map([
         '`isTenantAdmin` test is reached ONLY when the request carries no `lakehouseId`, where no ' +
         'workspace or item is in play, and a non-admin is answered 403 before any listing. Every ' +
         'request that names a lakehouse is decided by `authorizeLakehouse` (-> ' +
-        '`resolveItemAccessByOid`), which does not read the admin flag; the object tab then lists ' +
-        'only the item\'s own storage container. Both tokens are pinned: drop the item branch and ' +
+        '`resolveItemAccessByOid`), which does not read the admin flag. The object tab then lists ' +
+        'role assignments only on the item\'s own container, on its bound storage account. The ' +
+        'SQL-plane tabs list the shared dedicated pool\'s catalogue for any caller the item check ' +
+        'admits (not narrowed to the item\'s tables; #4850). Both tokens are pinned: drop the item branch and ' +
         'this entry no longer describes the function.',
     },
   ],

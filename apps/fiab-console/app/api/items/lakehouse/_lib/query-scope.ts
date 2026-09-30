@@ -18,9 +18,10 @@
  *     no system compatibility view, no global temporary table. Each part is
  *     compared as the server compares it: trailing spaces removed, and a part
  *     with any other whitespace or control character is refused. A qualifier
- *     (every part before the last) is plain ASCII. A last part that is not
- *     plain ASCII is refused when any reading of it names a system object,
- *     each non-ASCII character read either as its ASCII fold or as nothing.
+ *     (every part before the last) is plain ASCII. Every part is checked
+ *     through its reading ({@link nameReadings}): width, accents and case
+ *     folded the way a collation may compare them, so a name written in other
+ *     characters gets the verdict of the ASCII name it reads as.
  *   - `OPENROWSET` is allow-list only: `BULK` is required, each location is a
  *     literal string, and each option is on the read-only list below.
  *   - LOCATIONS are confined by `confineQueryLocation`: a literal `https://` or
@@ -202,76 +203,110 @@ function normalizeNamePart(raw: string): string | null {
   return value;
 }
 
-/** A name part with every character outside printable ASCII written as \u{…}, for a message. */
+/**
+ * A name part as the user wrote it, for a message. Only characters that do not
+ * show are written as \u{…}: whitespace other than a space, control and format
+ * characters, and default-ignorable ones such as variation selectors.
+ */
 function shownNamePart(raw: string): string {
-  return [...raw].map((c) => (/^[\x21-\x7e]$/.test(c) || c === ' ' ? c : `\\u{${c.codePointAt(0)!.toString(16)}}`)).join('');
+  return [...raw]
+    .map((c) => (c !== ' ' && /[\p{C}\p{Z}\p{Default_Ignorable_Code_Point}]/u.test(c)
+      ? `\\u{${c.codePointAt(0)!.toString(16)}}`
+      : c))
+    .join('');
+}
+
+/** `U+00E9`, for a message. */
+function codePoint(c: string): string {
+  return `U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}`;
 }
 
 /**
- * The ASCII readings of one character of a name part, lower-cased. An ASCII
- * character reads as itself. Any other character reads as its compatibility
- * decomposition with everything outside ASCII dropped (fullwidth `ｓ` and `ſ`
- * as `s`, `é` as `e`), OR as nothing: a collation whose tables predate the
- * character gives it no weight and compares the name as if it were absent.
- * Dotless `ı` and dotted `İ` may also read as `i`.
+ * Letters with no decomposition that a collation compares as other letters.
+ * The sharp s (`ß`, `ẞ`) expands to `ss`; that is not a decomposition, so NFKD
+ * never produces it. Dotless `ı` has no decomposition either. Dotted `İ`
+ * decomposes to `I` and a combining dot, which the mark rule removes.
  */
-function asciiReadings(c: string): string[] {
-  if (c.charCodeAt(0) < 0x80) return [c.toLowerCase()];
-  const folded = [...c.normalize('NFKD')].filter((d) => d.charCodeAt(0) < 0x80).join('').toLowerCase();
-  const readings = folded ? [folded, ''] : [''];
-  if ((c === '\u0131' || c === '\u0130') && !readings.includes('i')) readings.push('i');
-  return readings;
-}
+const LETTER_EXPANSIONS: Readonly<Record<string, string>> = { '\u00df': 'ss', '\u1e9e': 'ss', '\u0131': 'i' };
 
-/** At most this many characters with more than one reading are checked; a part with more is refused. */
-const MAX_BRANCHING_CHARACTERS = 16;
-
-const SYSTEM_PREFIXES = ['##', 'fn_', 'sp_', 'xp_'];
-
-/** `sys` and every compatibility view, lower-cased. */
-function systemNames(): Set<string> {
-  return new Set(['sys', ...[...COMPATIBILITY_VIEWS].map((v) => v.toLowerCase())]);
+/**
+ * A character whose comparison differs between collations: one with a
+ * compatibility decomposition other than a width variant (superscripts,
+ * subscripts, modifier letters, mathematical letters, ligatures, `ſ`, the
+ * one-dot leader), or one outside the Basic Multilingual Plane. A collation
+ * whose tables define it may compare it as its plain form. One whose tables
+ * predate it gives it no weight and compares the name as if it were absent.
+ */
+function isCompatibilityCharacter(c: string): boolean {
+  if (c.codePointAt(0)! > 0xffff) return true;
+  if (/[\uff00-\uffef]/.test(c)) return false;
+  return c.normalize('NFKD') !== c.normalize('NFD');
 }
 
 /**
- * For a last name part that is not plain ASCII: whether any reading of it
- * (each character read as in {@link asciiReadings}) is `sys`, a compatibility
- * view, or starts with `##`, `fn_`, `sp_` or `xp_`. Returns the full name it
- * reads as, `'unclassifiable'` for a part with more than
- * {@link MAX_BRANCHING_CHARACTERS} characters that have more than one reading,
- * or null. A plain ASCII part is left to the rules that compare it as written,
- * so `t.sp_rating` and an uncalled `[fn_total]` stay accepted.
+ * The names a part reads as, lower-cased, for comparison with the system names.
  *
- * The walk keeps only readings that are still the start of a system name, and
- * each distinct one once, so it never holds more states than there are such
- * starts, whatever the length of the part.
+ * What the server compares, from Microsoft Learn ("Collation and Unicode
+ * support", and "Collation types supported for Synapse SQL"):
+ *   - Without `_WS`, "the full-width and half-width representation of the same
+ *     character" are identical. So a width variant reads as its plain form and
+ *     nothing else: `ＳＨＩＰ＿ＤＡＴＥ` reads as `ship_date`.
+ *   - Without `_VSS`, "the variation selector isn't considered in the
+ *     comparison". Variation selectors are combining marks, and are removed.
+ *   - Without `_AS`, accented and unaccented letters are identical. A
+ *     serverless database can be created with any supported collation, so
+ *     accents are removed whatever the database's option.
+ *   - "Supplementary characters aren't supported for use in metadata, such as
+ *     in names of database objects."
+ * Learn does not say how the sharp s compares, or how a collation compares a
+ * character its tables do not define. Both are read the way that refuses
+ * more: `ß` as `ss`, and a compatibility character
+ * ({@link isCompatibilityCharacter}) both as its plain form and as nothing.
+ *
+ * So: every character is NFKD-decomposed; in the decomposition `ß` and `ẞ`
+ * read as `ss` and `ı` as `i`, and combining marks (`Mn`, `Me`) are removed,
+ * which removes a mark written on its own too; and the result is lower-cased.
+ * NFKD, not NFKC, so an accent written as a separate mark is removed rather
+ * than composed into its letter. A part with a compatibility character has two readings: the
+ * plain one, and one with those characters removed. With more than one
+ * compatibility character, the two readings fold all of them or remove all of
+ * them, not a mix.
+ *
+ * Returns instead the character that stops the part being read: an
+ * unassigned, private-use or unpaired surrogate code point, whose comparison
+ * cannot be known. Format and control characters are refused by
+ * {@link normalizeNamePart} before a part's readings are compared.
  */
-function foldedSystemName(part: string): { name: string } | 'unclassifiable' | null {
-  if (/^[\x00-\x7f]*$/.test(part)) return null;
-  const readings = [...part].map(asciiReadings);
-  if (readings.filter((r) => r.length > 1).length > MAX_BRANCHING_CHARACTERS) return 'unclassifiable';
-  const names = systemNames();
-  const live = (s: string) =>
-    [...names].some((n) => n.startsWith(s)) || SYSTEM_PREFIXES.some((p) => p.startsWith(s));
-  let states = new Set<string>(['']);
-  for (let i = 0; i < readings.length; i += 1) {
-    const next = new Set<string>();
-    for (const s of states) {
-      for (const r of readings[i]) {
-        const n = s + r;
-        if (SYSTEM_PREFIXES.some((p) => n.startsWith(p))) {
-          // Name the whole part as read: the rest in its first reading.
-          return { name: n + readings.slice(i + 1).map((rest) => rest[0]).join('') };
-        }
-        if (live(n)) next.add(n);
-      }
-    }
-    states = next;
-    if (states.size === 0) return null;
+function nameReadings(part: string): { readings: string[] } | { unknown: string } {
+  let plain = '';
+  let strict = '';
+  let compatibility = false;
+  for (const c of part) {
+    if (/[\p{Cn}\p{Co}\p{Cs}]/u.test(c)) return { unknown: c };
+    // The letter expansions apply to the decomposition too: mathematical dotless i decomposes to ı.
+    const folded = [...c.normalize('NFKD')]
+      .map((d) => LETTER_EXPANSIONS[d] ?? d)
+      .join('')
+      .replace(/[\p{Mn}\p{Me}]/gu, '');
+    plain += folded;
+    if (isCompatibilityCharacter(c)) compatibility = true;
+    else strict += folded;
   }
-  for (const s of states) if (names.has(s)) return { name: s };
-  return null;
+  return { readings: compatibility ? [plain.toLowerCase(), strict.toLowerCase()] : [plain.toLowerCase()] };
 }
+
+/** Upper-case ASCII letters only, so no other letter can turn into one. */
+function asciiUpper(s: string): string {
+  return s.replace(/[a-z]+/g, (w) => w.toUpperCase());
+}
+
+/** A part as written, then the name it reads as when that differs. */
+function shownRead(part: string, reading: string): string {
+  return /^[\x00-\x7f]*$/.test(part) ? part : `[${shownNamePart(part)}] (read as ${reading})`;
+}
+
+/** Remediation added when a part was refused for the name it reads as, not as written. */
+const READ_AS_HINT = 'If it is a column of yours, SELECT * returns it without naming it. ';
 
 /**
  * Words refused wherever they appear outside a string, comment or quoted
@@ -539,6 +574,15 @@ function readOpenrowset(
 function checkName(c: Scope, rawParts: string[], database: string, databaseLabel: string, called: boolean): QueryRefusal | null {
   const parts: string[] = [];
   for (const raw of rawParts) {
+    const read = nameReadings(raw);
+    if ('unknown' in read) {
+      return refuse(c,
+        `the name part [${shownNamePart(raw)}]`,
+        `it contains ${codePoint(read.unknown)}, which is unassigned, private-use or an unpaired surrogate, `
+        + 'so how the server compares it is not known',
+        'Write the name without that character. ' + c.s.selectRemediation,
+      );
+    }
     const part = normalizeNamePart(raw);
     if (part === null) {
       return refuse(c, 
@@ -573,39 +617,36 @@ function checkName(c: Scope, rawParts: string[], database: string, databaseLabel
       + 'A tenant admin can read the sys catalog.',
     );
   }
-  // ASCII case only: a part that is not plain ASCII is compared through foldedSystemName below.
-  const view = parts.find((p) => COMPATIBILITY_VIEWS.has(p.replace(/[a-z]+/g, (s) => s.toUpperCase())));
-  if (view !== undefined) {
-    return refuse(c, 
-      `the system compatibility view ${view}`,
-      c.why.catalog,
-      'For table and column metadata, query INFORMATION_SCHEMA.TABLES or INFORMATION_SCHEMA.COLUMNS.',
-    );
+  // Every part is compared through the names it reads as, so a part written in other characters
+  // gets the verdict of the ASCII name it reads as.
+  const readings = parts.map((p) => {
+    const read = nameReadings(p);
+    return 'readings' in read ? read.readings : [];
+  });
+  const plain = (p: string) => /^[\x00-\x7f]*$/.test(p);
+  for (const [k, part] of parts.entries()) {
+    const view = readings[k].find((r) => COMPATIBILITY_VIEWS.has(asciiUpper(r)));
+    if (view !== undefined) {
+      return refuse(c,
+        `the system compatibility view ${shownRead(part, view)}`,
+        c.why.catalog,
+        (plain(part) ? '' : READ_AS_HINT)
+        + 'For table and column metadata, query INFORMATION_SCHEMA.TABLES or INFORMATION_SCHEMA.COLUMNS.',
+      );
+    }
   }
-  if (parts.some((p) => p.startsWith('##'))) {
-    return refuse(c, `the global temporary table ${shown}`, c.why.database);
+  for (const [k, part] of parts.entries()) {
+    const temp = readings[k].find((r) => r.startsWith('##'));
+    if (temp !== undefined) {
+      const name = plain(part) ? shown : parts.map((p, n) => (n === k ? shownRead(p, temp) : p)).join('.');
+      return refuse(c, `the global temporary table ${name}`, c.why.database, (plain(part) ? '' : READ_AS_HINT) + c.s.selectRemediation);
+    }
   }
   // A bracketed or quoted `fn_` name called as a function; the bare word is refused earlier.
-  const last = parts[parts.length - 1];
-  if (called && /^fn_/i.test(last)) {
-    return refuse(c, `the system function ${last}`, c.why.admin);
-  }
-  const folded = foldedSystemName(last);
-  if (folded === 'unclassifiable') {
-    return refuse(c,
-      `the name part [${shownNamePart(last)}]`,
-      `it has more than ${MAX_BRANCHING_CHARACTERS} characters outside ASCII that a collation may read as a letter `
-      + 'or skip, too many to check against the system object names',
-      'Write the name in ASCII, or give it an ASCII alias. ' + c.s.selectRemediation,
-    );
-  }
-  if (folded !== null) {
-    return refuse(c,
-      `the name part [${shownNamePart(last)}], read as ${folded.name}`,
-      'with letter width and accents folded, and characters a collation may not define skipped, it names a system object',
-      'If it is a column or table of yours, write its name in ASCII or without those characters. '
-      + c.s.selectRemediation,
-    );
+  const last = parts.length - 1;
+  const fn = called ? readings[last].find((r) => r.startsWith('fn_')) : undefined;
+  if (fn !== undefined) {
+    return refuse(c, `the system function ${shownRead(parts[last], fn)}`, c.why.admin);
   }
   if (parts.length === 3 && parts[0].toLowerCase() !== database) {
     return refuse(c, 
@@ -616,6 +657,22 @@ function checkName(c: Scope, rawParts: string[], database: string, databaseLabel
     );
   }
   return null;
+}
+
+/**
+ * The word around `pos` when the lexer stopped on a letter outside ASCII, so the
+ * refusal can say to bracket it: `SELECT café FROM t` gives `café`. Null when
+ * the character at `pos` is not a letter or mark, or the word is longer than a
+ * name can be (128 characters).
+ */
+function unbracketedWordAt(sql: string, pos: number): string | null {
+  const inWord = (c: string | undefined) => c !== undefined && /[\p{L}\p{M}\p{N}_]/u.test(c);
+  if (!/[\p{L}\p{M}]/u.test(sql[pos] ?? '')) return null;
+  let a = pos;
+  let b = pos + 1;
+  while (a > 0 && inWord(sql[a - 1])) a -= 1;
+  while (b < sql.length && inWord(sql[b])) b += 1;
+  return b - a > 128 ? null : sql.slice(a, b);
 }
 
 /**
@@ -630,7 +687,13 @@ export function analyzeLakehouseQuery(
   const c = scopeFor(opts.surface ?? LAKEHOUSE_SQL_TAB);
   const lexed = lexTsql(sql);
   if (!lexed.ok) {
-    return refuse(c, `the text at character ${lexed.pos + 1}`, `it could not be read as T-SQL (${lexed.reason})`);
+    const word = unbracketedWordAt(sql, lexed.pos);
+    return refuse(c,
+      `the text at character ${lexed.pos + 1}`,
+      `it could not be read as T-SQL (${lexed.reason})`,
+      word === null ? c.s.selectRemediation : `If ${word} is a column or table name, write it in brackets, as [${word}]. `
+        + c.s.selectRemediation,
+    );
   }
   const tokens = lexed.tokens;
   if (tokens.length === 0) return refuse(c, 'an empty query', 'there is no statement to run');

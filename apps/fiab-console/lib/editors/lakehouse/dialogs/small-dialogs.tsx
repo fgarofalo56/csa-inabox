@@ -15,7 +15,7 @@ import {
 import { useRouter } from 'next/navigation';
 import { useStyles, leafName, formatBytes } from '../shared';
 import { useLakehouseCtx } from '../lakehouse-editor-context';
-import { useLakehouseReadOnly, LAKEHOUSE_READ_ONLY_TITLE } from '../hooks/use-lakehouse-access';
+import { useLakehouseReadOnly, LAKEHOUSE_READ_ONLY_TITLE, LAKEHOUSE_READ_ONLY_SUBTEXT } from '../hooks/use-lakehouse-access';
 import { IdentityPicker } from '@/lib/components/ui/identity-picker';
 
 // ── Context Menu ──────────────────────────────────────────────────────────────
@@ -30,6 +30,8 @@ export function ContextMenu() {
   // MenuItem stays focusable), with the reason, when the role is read-only.
   const readOnly = useLakehouseReadOnly(ctx.id, ctx.isNewItem);
   const roTitle = readOnly ? LAKEHOUSE_READ_ONLY_TITLE : undefined;
+  // Visible under each closed item, so the reason does not depend on hover.
+  const roSub = readOnly ? LAKEHOUSE_READ_ONLY_SUBTEXT : undefined;
 
   return (
     <Menu
@@ -51,7 +53,7 @@ export function ContextMenu() {
               <MenuItem icon={<Eye20Regular />} onClick={() => { if (ctxEntry) { selectFile(ctxEntry); setTab('preview'); } setCtxOpen(false); }}>Preview</MenuItem>
               <MenuItem icon={<Play20Regular />} onClick={() => { if (ctxEntry) { selectFile(ctxEntry); setTab('sql'); } setCtxOpen(false); }}>Query this file</MenuItem>
               <MenuItem icon={<BookOpen20Regular />} onClick={() => { if (ctxEntry) onOpenInNotebook(ctxEntry); setCtxOpen(false); }}>Open in notebook</MenuItem>
-              <MenuItem icon={<TableSimple20Regular />} disabled={readOnly} title={roTitle} onClick={() => { if (ctxEntry) onLoadToTables(ctxEntry); setCtxOpen(false); }}>Load to Tables (Delta)</MenuItem>
+              <MenuItem icon={<TableSimple20Regular />} disabled={readOnly} title={roTitle} subText={roSub} onClick={() => { if (ctxEntry) onLoadToTables(ctxEntry); setCtxOpen(false); }}>Load to Tables (Delta)</MenuItem>
               <MenuItem icon={<ArrowDownload20Regular />} onClick={() => { if (ctxEntry) onDownload(ctxEntry); setCtxOpen(false); }}>Download</MenuItem>
               <MenuItem icon={<ShieldTask20Regular />} onClick={() => { if (ctxEntry) openLabelDialog(ctxEntry); setCtxOpen(false); }}>Download with label…</MenuItem>
             </>
@@ -59,7 +61,7 @@ export function ContextMenu() {
           {ctxEntry && ctxEntry.isDirectory && (
             <>
               <MenuItem icon={<Folder20Regular />} onClick={() => { if (ctxEntry && activeContainer) loadPaths(activeContainer, ctxEntry.name); setCtxOpen(false); }}>Open</MenuItem>
-              <MenuItem icon={<LinkMultiple20Regular />} disabled={readOnly} title={roTitle} onClick={() => {
+              <MenuItem icon={<LinkMultiple20Regular />} disabled={readOnly} title={roTitle} subText={roSub} onClick={() => {
                 const folder = ctxEntry?.name || '';
                 const isTables = /(^|\/)Tables(\/|$)/i.test(folder);
                 const parent = folder.replace(/^Tables\/?|^Files\/?/i, '').replace(/\/+$/, '');
@@ -71,7 +73,7 @@ export function ContextMenu() {
             </>
           )}
           <MenuItem icon={<Info20Regular />} onClick={() => { setPropsEntry(ctxEntry); setCtxOpen(false); }}>Properties</MenuItem>
-          <MenuItem icon={<Delete20Regular />} disabled={readOnly} title={roTitle} onClick={() => { if (ctxEntry) onDelete(ctxEntry); setCtxOpen(false); }}>Delete</MenuItem>
+          <MenuItem icon={<Delete20Regular />} disabled={readOnly} title={roTitle} subText={roSub} onClick={() => { if (ctxEntry) onDelete(ctxEntry); setCtxOpen(false); }}>Delete</MenuItem>
         </MenuList>
       </MenuPopover>
     </Menu>

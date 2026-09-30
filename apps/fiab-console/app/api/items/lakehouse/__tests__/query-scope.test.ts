@@ -40,10 +40,8 @@ function analyze(sql: string, database = 'master') {
 /** The refusal sentence starts with the construct, upper-cased. */
 const asSentence = (construct: string) => construct.charAt(0).toUpperCase() + construct.slice(1);
 
-/** `n` fullwidth letters from fullwidth a (U+FF41) on; each reads as its ASCII letter or as nothing. */
-const fullwidthLetters = (n: number) => Array.from({ length: n }, (_, i) => String.fromCodePoint(0xff41 + i)).join('');
-/** The same letters as a refusal message shows them. */
-const fullwidthShown = (n: number) => Array.from({ length: n }, (_, i) => `\\u{${(0xff41 + i).toString(16)}}`).join('');
+/** A name with every printable ASCII character written as its fullwidth form (U+FF01-U+FF5E). */
+const fullwidth = (s: string) => s.replace(/[!-~]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 0xfee0));
 
 describe('analyzeLakehouseQuery — accepted queries', () => {
   const cases: Array<[string, string, string[]]> = [
@@ -100,24 +98,41 @@ describe('analyzeLakehouseQuery — accepted queries', () => {
       'SELECT * FROM [master ].dbo.orders', []],
     ['a bracketed fn_-prefixed column that is not called (refusing every bracketed fn_ name breaks it)',
       'SELECT [fn_total], t.[fn_total] FROM t', []],
-    // A last name part may use non-ASCII letters, unless it folds into a system name.
+    // A last name part may use other letters; it is checked through the name it reads as.
     ['a non-ASCII column name, bare and qualified (refusing every non-ASCII last part breaks it)',
       'SELECT [caf\u00e9], t.[caf\u00e9], [na\u00efve] FROM t', []],
-    ['a fullwidth table name that folds to an ordinary name (folding to "any non-ASCII is refused" breaks it)',
+    ['a fullwidth table name that reads as an ordinary name (folding to "any non-ASCII is refused" breaks it)',
       'SELECT * FROM [\uff4f\uff52\uff44\uff45\uff52\uff53]', []],
-    // No decomposition, so each of these reads only as nothing: the sharp s, and the CJK letters below.
+    // A fullwidth name reads as its ASCII twin and nothing else, so each of these gets the verdict of
+    // SHIP_DATE, SYSTEM, FIN_YEAR, EXP_DATE, SPEC_NO: accepted. Each was refused while a fullwidth letter
+    // could also be read as nothing (ship_date as sp_date, system as sys, fin_year as fn_year).
+    ['a fullwidth SHIP_DATE', 'SELECT t.[\uff33\uff28\uff29\uff30\uff3f\uff24\uff21\uff34\uff25] FROM t', []],
+    ['a fullwidth SYSTEM', 'SELECT t.[\uff33\uff39\uff33\uff34\uff25\uff2d] FROM t', []],
+    ['a fullwidth FIN_YEAR', 'SELECT t.[\uff26\uff29\uff2e\uff3f\uff39\uff25\uff21\uff32] FROM t', []],
+    ['a fullwidth EXP_DATE', 'SELECT t.[\uff25\uff38\uff30\uff3f\uff24\uff21\uff34\uff25] FROM t', []],
+    ['a fullwidth SPEC_NO', 'SELECT t.[\uff33\uff30\uff25\uff23\uff3f\uff2e\uff2f] FROM t', []],
+    // 21 fullwidth characters: refused while a cap counted characters with two readings.
+    ['a fullwidth CUSTOMER_ADDRESS_LINE', `SELECT t.[${fullwidth('CUSTOMER_ADDRESS_LINE')}] FROM t`, []],
+    // A long Czech name: its accents are removed for the comparison, and it names nothing.
+    ['a Czech column name with many accented letters',
+      'SELECT t.[P\u0159\u00edr\u016fstek_\u00fa\u010dt\u016f_z\u00e1kazn\u00edk\u016f_\u011b\u0161\u010d\u0159\u017e\u00fd\u00e1\u00ed\u00e9] FROM t', []],
+    // Their ASCII twins t.[sys], t.[SYS], t.[sp_who] and t.[xp_dirtree] are accepted, so these are too.
+    ['a fullwidth sys as the last part', 'SELECT t.[\uff53\uff59\uff53] FROM t', []],
+    ['an upper-case fullwidth SYS as the last part', 'SELECT t.[\uff33\uff39\uff33] FROM t', []],
+    ['a fullwidth sp_ column', 'SELECT t.[\uff53\uff50_who] FROM t', []],
+    ['a fullwidth xp_ column', 'SELECT t.[\uff58\uff50_dirtree] FROM t', []],
+    // A fullwidth letter is never skipped: this reads as sysxprocesses only. Refused if width variants were
+    // also read as nothing (sysprocesses).
+    ['a fullwidth letter inside a near-miss of a compatibility view', 'SELECT * FROM [sys\uff58processes]', []],
+    // The sharp s reads as ss: strasse is no system name.
     ['a column name with a sharp s', 'SELECT [Stra\u00dfe] FROM t', []],
     ['a CJK column name', 'SELECT t.[\u9867\u5ba2\u540d] FROM t', []],
-    // 20 characters, none with an ASCII reading: refused if the cap counted every non-ASCII character.
-    ['a CJK column name longer than the branching cap', `SELECT t.[${'\u5ba2\u6237'.repeat(10)}] FROM t`, []],
-    // Exactly at the cap of 16 characters with two readings: refused if the cap were off by one.
-    ['a fullwidth name with 16 characters that have two readings', `SELECT t.[${fullwidthLetters(16)}] FROM t`, []],
-    // Cyrillic letters have no ASCII decomposition and are weighted apart from Latin, so they never
-    // read as s or y; skipped, what is left (nothing, or processes) is not a system name.
+    ['a long CJK column name', `SELECT t.[${'\u5ba2\u6237'.repeat(10)}] FROM t`, []],
+    // Cyrillic letters have no decomposition and are kept as they are, so they never read as s or y.
     ['a Cyrillic look-alike of sys as the last part', 'SELECT t.[\u0455\u0443\u0455] FROM t', []],
     ['a Cyrillic look-alike of a compatibility view', 'SELECT * FROM [\u0455\u0443\u0455processes]', []],
-    // U+2024 (one-dot leader) folds to a dot but is one character of one bracketed name, not a separator;
-    // v1 followed by .2 or by 2 is no system name.
+    // U+2024 (one-dot leader) is a compatibility character: it reads as a dot, or as nothing. v1.2 and
+    // v12 are no system name.
     ['a one-dot leader inside an ordinary name', 'SELECT t.[v1\u20242] FROM t', []],
   ];
   for (const [label, sql, locations] of cases) {
@@ -261,54 +276,89 @@ describe('analyzeLakehouseQuery — refused queries name the construct', () => {
     ['a name part with a leading space', 'SELECT * FROM [ sys].x', 'the name part [ sys]'],
     ['a name part of spaces only', 'SELECT * FROM [  ].x', 'the name part [  ]'],
     ['a name part with a zero-width joiner', 'SELECT * FROM [sys\u200dprocesses]', 'the name part [sys\\u{200d}processes]'],
-    // A qualifier (every part before the last) is plain ASCII.
-    ['a fullwidth sys schema', 'SELECT * FROM [\uff53\uff59\uff53].[dm_exec_requests_history]', 'the qualifier [\\u{ff53}\\u{ff59}\\u{ff53}]'],
-    ['a long-s sys schema', 'SELECT * FROM [\u017fys].objects', 'the qualifier [\\u{17f}ys]'],
+    // A qualifier (every part before the last) is plain ASCII. It is shown as written.
+    ['a fullwidth sys schema', 'SELECT * FROM [\uff53\uff59\uff53].[dm_exec_requests_history]', 'the qualifier [\uff53\uff59\uff53]'],
+    ['a long-s sys schema', 'SELECT * FROM [\u017fys].objects', 'the qualifier [\u017fys]'],
     // The qualifier is not the first part here: accepted if only the first part were checked.
-    ['a long-s sys schema after the database', 'SELECT * FROM master.[\u017fys].objects', 'the qualifier [\\u{17f}ys]'],
+    ['a long-s sys schema after the database', 'SELECT * FROM master.[\u017fys].objects', 'the qualifier [\u017fys]'],
+    // U+034F does not show, so it is written escaped.
     ['a sys schema with a combining grapheme joiner', 'SELECT * FROM [sy\u034fs].objects', 'the qualifier [sy\\u{34f}s]'],
-    ['a non-ASCII table alias used as a qualifier', 'SELECT [caf\u00e9].x FROM t AS [caf\u00e9]', 'the qualifier [caf\\u{e9}]'],
-    // A last part that is not plain ASCII and folds into a system name.
+    ['a non-ASCII table alias used as a qualifier', 'SELECT [caf\u00e9].x FROM t AS [caf\u00e9]', 'the qualifier [caf\u00e9]'],
+    // A last part refused for the name it reads as: shown as written, then that name.
     ['a fullwidth compatibility view', 'SELECT * FROM [\uff53\uff59\uff53processes]',
-      'the name part [\\u{ff53}\\u{ff59}\\u{ff53}processes], read as sysprocesses'],
-    // NFKC would compose e + U+0301 into one non-ASCII letter and lose the e.
-    ['a compatibility view with a combining accent', 'SELECT * FROM [sysprocesse\u0301s]',
-      'the name part [sysprocesse\\u{301}s], read as sysprocesses'],
-    ['a long-s compatibility view', 'SELECT * FROM [\u017fysobjects]', 'the name part [\\u{17f}ysobjects], read as sysobjects'],
-    ['a fullwidth sys as the last part', 'SELECT t.[\uff53\uff59\uff53] FROM t', 'the name part [\\u{ff53}\\u{ff59}\\u{ff53}], read as sys'],
-    ['a fullwidth global temporary table', 'SELECT * FROM [\uff03\uff03shared]', 'the name part [\\u{ff03}\\u{ff03}shared], read as ##shared'],
-    ['a fullwidth fn_ function called', 'SELECT * FROM [\uff46\uff4e_dblog](NULL, NULL)', 'the name part [\\u{ff46}\\u{ff4e}_dblog], read as fn_dblog'],
-    ['a fullwidth sp_ name', 'SELECT t.[\uff53\uff50_who] FROM t', 'the name part [\\u{ff53}\\u{ff50}_who], read as sp_who'],
-    ['a fullwidth xp_ name', 'SELECT t.[\uff58\uff50_dirtree] FROM t', 'the name part [\\u{ff58}\\u{ff50}_dirtree], read as xp_dirtree'],
-    // Upper-case fullwidth letters: accepted if the ASCII form were not lower-cased before the prefix and sys checks.
-    ['an upper-case fullwidth fn_ function called', 'SELECT * FROM [\uff26\uff2e_DBLOG](NULL, NULL)',
-      'the name part [\\u{ff26}\\u{ff2e}_DBLOG], read as fn_dblog'],
-    ['an upper-case fullwidth sys as the last part', 'SELECT t.[\uff33\uff39\uff33] FROM t', 'the name part [\\u{ff33}\\u{ff39}\\u{ff33}], read as sys'],
-    // A character newer than a collation's tables may be skipped rather than folded. Each row below is
-    // accepted if a non-ASCII character were read only as its fold (sysxprocesses, sysacacheobjects, ...).
-    ['a subscript x inside a compatibility view', 'SELECT * FROM [sys\u2093processes]',
-      'the name part [sys\\u{2093}processes], read as sysprocesses'],
-    ['a modifier letter a inside a compatibility view', 'SELECT * FROM [sys\u1d43cacheobjects]',
-      'the name part [sys\\u{1d43}cacheobjects], read as syscacheobjects'],
-    ['a subscript j inside a compatibility view', 'SELECT * FROM [sys\u2c7ccomments]',
-      'the name part [sys\\u{2c7c}comments], read as syscomments'],
-    // The skip is before the prefix: accepted if only the walk's first reading were followed.
-    ['a subscript x before a called fn_ function', 'SELECT * FROM [\u2093fn_dblog](NULL, NULL)',
-      'the name part [\\u{2093}fn_dblog], read as fn_dblog'],
-    // Precomposed U+00E9: NFKC keeps it whole, so it would read only as nothing, giving sysprocesss.
+      'the system compatibility view [\uff53\uff59\uff53processes] (read as sysprocesses)'],
+    // NFKC would compose s + U+0301 into one letter, and the mark would no longer be removed.
+    ['a combining accent before a compatibility view\'s letters', 'SELECT * FROM [sys\u0301objects]',
+      'the system compatibility view [sys\u0301objects] (read as sysobjects)'],
+    ['a combining accent at the end of a compatibility view', 'SELECT * FROM [sysprocesse\u0301s]',
+      'the system compatibility view [sysprocesse\u0301s] (read as sysprocesses)'],
     ['a compatibility view with a precomposed accented e', 'SELECT * FROM [sysprocess\u00e9s]',
-      'the name part [sysprocess\\u{e9}s], read as sysprocesses'],
-    // Dotless i has no decomposition: accepted without its extra reading as i.
-    ['a dotless i inside a compatibility view', 'SELECT * FROM [sys\u0131ndexes]',
-      'the name part [sys\\u{131}ndexes], read as sysindexes'],
-    // U+2024 folds to a dot, so skipped it leaves sysobjects: refused, though the server keeps it as a
-    // character of one bracketed name. Accepted if a folding character were never read as nothing.
+      'the system compatibility view [sysprocess\u00e9s] (read as sysprocesses)'],
+    // Variation selectors and the combining grapheme joiner are marks, removed; they do not show, so they are escaped.
+    ['a variation selector after a compatibility view', 'SELECT * FROM [sysobjects\ufe0f]',
+      'the system compatibility view [sysobjects\\u{fe0f}] (read as sysobjects)'],
+    ['a supplementary variation selector inside a compatibility view', 'SELECT * FROM [sys\u{e0100}objects]',
+      'the system compatibility view [sys\\u{e0100}objects] (read as sysobjects)'],
+    ['a combining grapheme joiner inside a compatibility view', 'SELECT * FROM [sys\u034fobjects]',
+      'the system compatibility view [sys\\u{34f}objects] (read as sysobjects)'],
+    // The sharp s reads as ss: each is accepted without that expansion (sysproceses, syspermiions, ...).
+    ['a sharp s inside sysprocesses', 'SELECT * FROM [sysproce\u00dfes]',
+      'the system compatibility view [sysproce\u00dfes] (read as sysprocesses)'],
+    ['a sharp s inside syspermissions', 'SELECT * FROM [syspermi\u00dfions]',
+      'the system compatibility view [syspermi\u00dfions] (read as syspermissions)'],
+    ['a sharp s inside sysmessages', 'SELECT * FROM [sysme\u00dfages]',
+      'the system compatibility view [sysme\u00dfages] (read as sysmessages)'],
+    ['a capital sharp s inside SYSPROCESSES', 'SELECT * FROM [SYSPROCE\u1e9eES]',
+      'the system compatibility view [SYSPROCE\u1e9eES] (read as sysprocesses)'],
+    ['a sharp s inside a qualified compatibility view', 'SELECT * FROM master.dbo.[sysproce\u00dfes]',
+      'the system compatibility view [sysproce\u00dfes] (read as sysprocesses)'],
+    // Compatibility characters read as their plain form: accepted if they were read only as nothing.
+    ['a long-s compatibility view', 'SELECT * FROM [\u017fysobjects]', 'the system compatibility view [\u017fysobjects] (read as sysobjects)'],
+    ['a mathematical sans-serif s in a compatibility view', 'SELECT * FROM [\u{1d5cc}ysobjects]',
+      'the system compatibility view [\u{1d5cc}ysobjects] (read as sysobjects)'],
+    ['a superscript s in a compatibility view', 'SELECT * FROM [\u02e2ysobjects]',
+      'the system compatibility view [\u02e2ysobjects] (read as sysobjects)'],
+    ['a fi ligature in a compatibility view', 'SELECT * FROM [sys\ufb01les]', 'the system compatibility view [sys\ufb01les] (read as sysfiles)'],
+    // The Kelvin sign decomposes canonically to K.
+    ['a Kelvin sign in a compatibility view', 'SELECT * FROM [sysloc\u212ainfo]', 'the system compatibility view [sysloc\u212ainfo] (read as syslockinfo)'],
+    ['a fullwidth global temporary table', 'SELECT * FROM [\uff03\uff03shared]', 'the global temporary table [\uff03\uff03shared] (read as ##shared)'],
+    ['a fullwidth fn_ function called', 'SELECT * FROM [\uff46\uff4e_dblog](NULL, NULL)', 'the system function [\uff46\uff4e_dblog] (read as fn_dblog)'],
+    ['a fullwidth low line in a called fn_ function', 'SELECT * FROM [fn\uff3fdblog](NULL, NULL)', 'the system function [fn\uff3fdblog] (read as fn_dblog)'],
+    // Upper-case fullwidth letters: accepted if the reading were not lower-cased.
+    ['an upper-case fullwidth fn_ function called', 'SELECT * FROM [\uff26\uff2e_DBLOG](NULL, NULL)',
+      'the system function [\uff26\uff2e_DBLOG] (read as fn_dblog)'],
+    // Compatibility characters also read as nothing: a collation whose tables predate them gives them no
+    // weight. Each is accepted if they were read only as their plain form (sysxprocesses, ...).
+    ['a subscript x inside a compatibility view', 'SELECT * FROM [sys\u2093processes]',
+      'the system compatibility view [sys\u2093processes] (read as sysprocesses)'],
+    ['a modifier letter a inside a compatibility view', 'SELECT * FROM [sys\u1d43cacheobjects]',
+      'the system compatibility view [sys\u1d43cacheobjects] (read as syscacheobjects)'],
+    ['a subscript j inside a compatibility view', 'SELECT * FROM [sys\u2c7ccomments]',
+      'the system compatibility view [sys\u2c7ccomments] (read as syscomments)'],
+    ['a subscript x before a called fn_ function', 'SELECT * FROM [\u2093fn_dblog](NULL, NULL)',
+      'the system function [\u2093fn_dblog] (read as fn_dblog)'],
+    // A character outside the Basic Multilingual Plane is not supported in object names, and a collation
+    // that sees it as two code units may skip both: read as nothing it leaves sysobjects. Accepted if
+    // such characters were read only as themselves.
+    ['a supplementary CJK letter inside a compatibility view', 'SELECT * FROM [sys\u{20000}objects]',
+      'the system compatibility view [sys\u{20000}objects] (read as sysobjects)'],
+    // U+2024 reads as a dot or as nothing; as nothing it leaves sysobjects. The server keeps it as one
+    // character of one bracketed name, so this refusal is stricter than the server needs.
     ['a one-dot leader inside a compatibility view', 'SELECT * FROM [sys\u2024objects]',
-      'the name part [sys\\u{2024}objects], read as sysobjects'],
-    // 17 characters with two readings, one over the cap: accepted if the cap were removed (the letters
-    // spell no system name), or if the cap were raised by one.
-    ['a name with more characters to check than the cap', `SELECT t.[${fullwidthLetters(17)}] FROM t`,
-      `the name part [${fullwidthShown(17)}]`],
+      'the system compatibility view [sys\u2024objects] (read as sysobjects)'],
+    // Dotless i reads as i; dotted I decomposes to I and a mark.
+    ['a dotless i inside a compatibility view', 'SELECT * FROM [sys\u0131ndexes]',
+      'the system compatibility view [sys\u0131ndexes] (read as sysindexes)'],
+    ['a dotted capital I inside a compatibility view', 'SELECT * FROM [SYS\u0130NDEXES]',
+      'the system compatibility view [SYS\u0130NDEXES] (read as sysindexes)'],
+    // Mathematical dotless i decomposes to dotless i, which then reads as i. Accepted if the expansions
+    // applied only to the character as written (sys + dotless i + ndexes, no system name).
+    ['a mathematical dotless i inside a compatibility view', 'SELECT * FROM [sys\u{1d6a4}ndexes]',
+      'the system compatibility view [sys\u{1d6a4}ndexes] (read as sysindexes)'],
+    // Code points whose comparison cannot be known, refused outright.
+    ['an unassigned code point in a name', 'SELECT t.[a\u0378b] FROM t', 'the name part [a\\u{378}b]'],
+    ['a private-use code point in a name', 'SELECT t.[a\ue000b] FROM t', 'the name part [a\\u{e000}b]'],
+    ['an unpaired surrogate in a name', 'SELECT t.[a\ud800b] FROM t', 'the name part [a\\u{d800}b]'],
     // variables, functions and storage-shaped strings outside BULK
     ['a system variable', 'SELECT @@VERSION', 'the variable @@VERSION'],
     ['the :: function syntax', "SELECT * FROM ::fn_trace_gettable('x', default)", 'the :: function syntax'],
@@ -333,20 +383,79 @@ describe('analyzeLakehouseQuery — refused queries name the construct', () => {
     });
   }
 
-  it('a name with 20 characters to check is refused, and quickly', () => {
-    // The time is checked first, so a slow walk reads as slow rather than as a wrong answer.
-    // With the cap the name is refused before any walk. Without the cap the walk keeps only
-    // distinct starts of a system name and still ends quickly, and the name is then accepted, so
-    // the ok check is what turns red. The time limit is for a walk that keeps every distinct
-    // reading, not only the starts of a system name.
-    const started = performance.now();
-    const out = analyze(`SELECT t.[${fullwidthLetters(20)}] FROM t`);
-    const elapsed = performance.now() - started;
-    expect(elapsed).toBeLessThan(250);
-    expect(out.ok).toBe(false);
-    if (out.ok) return;
-    expect(out.construct).toBe(`the name part [${fullwidthShown(20)}]`);
-    expect(out.error).toContain('more than 16 characters outside ASCII');
+  it('a code point whose comparison cannot be known is refused as that, not as whitespace', () => {
+    // The whitespace and control rule also refuses these characters, with another reason. Breaks if the
+    // unassigned, private-use and surrogate check is removed or moved after that rule.
+    for (const [sql, cp] of [['SELECT t.[a\u0378b] FROM t', 'U+0378'], ['SELECT t.[a\ue000b] FROM t', 'U+E000'],
+      ['SELECT t.[a\ud800b] FROM t', 'U+D800']]) {
+      const out = analyze(sql);
+      expect(out.ok).toBe(false);
+      if (out.ok) continue;
+      expect(out.error).toContain(`it contains ${cp}, which is unassigned, private-use or an unpaired surrogate`);
+      expect(out.error).not.toContain('whitespace or control character');
+    }
+  });
+
+  it('a name refused for the name it reads as says SELECT * returns the column', () => {
+    // Breaks if the hint is dropped, or added to a refusal of a name written in ASCII.
+    const read = analyze('SELECT t.[\uff53\uff59\uff53processes] FROM t');
+    const ascii = analyze('SELECT t.[sysprocesses] FROM t');
+    expect(read.ok || ascii.ok).toBe(false);
+    if (read.ok || ascii.ok) return;
+    expect(read.remediation).toContain('If it is a column of yours, SELECT * returns it without naming it.');
+    expect(ascii.remediation).not.toContain('SELECT * returns it');
+    expect(ascii.remediation).toContain('INFORMATION_SCHEMA.COLUMNS');
+    expect(read.remediation).not.toContain('ASCII alias');
+  });
+
+  it('a fullwidth name gets the verdict of its ASCII twin, in every position', () => {
+    // A literal list, both verdicts present (asserted below), so it cannot pass by accepting or refusing
+    // everything. Breaks if a fullwidth character has any reading other than its ASCII letter.
+    const names = ['sysprocesses', 'SYSOBJECTS', 'syscomments', 'sys', 'SYSTEM', 'ship_date', 'SHIP_DATE',
+      'fin_year', 'exp_date', 'spec_no', 'supplier_id', 'shop_id', 'stop_code', 'sp_who', 'xp_cmdshell',
+      'fn_dblog', '##shared', 'orders', 'customer_address_line', 'Order Details'];
+    const shapes = [(n: string) => `SELECT * FROM [${n}]`, (n: string) => `SELECT t.[${n}] FROM t`,
+      (n: string) => `SELECT * FROM [${n}](NULL)`, (n: string) => `SELECT * FROM dbo.[${n}]`];
+    const verdicts = new Set<boolean>();
+    for (const name of names) {
+      for (const shape of shapes) {
+        const ascii = analyze(shape(name)).ok;
+        verdicts.add(ascii);
+        expect([shape(fullwidth(name)), analyze(shape(fullwidth(name))).ok]).toEqual([shape(fullwidth(name)), ascii]);
+      }
+    }
+    expect([...verdicts].sort()).toEqual([false, true]);
+  });
+
+  it('a 2000-character name is read quickly, with no cap', () => {
+    // Accepted: neither reading names a system object. Refused: read as nothing, the subscripts leave
+    // sysobjects. Breaks if a long name is refused as too long, or if reading it is not linear.
+    const long = '\u00e9\uff41\u2093'.repeat(667);
+    expect(long.length).toBe(2001);
+    let started = performance.now();
+    const accepted = analyze(`SELECT t.[${long}] FROM t`);
+    const acceptedMs = performance.now() - started;
+    started = performance.now();
+    const refused = analyze(`SELECT * FROM [${'\u2093'.repeat(1990)}sysobjects]`);
+    const refusedMs = performance.now() - started;
+    expect(accepted.ok).toBe(true);
+    expect(refused.ok).toBe(false);
+    expect(acceptedMs).toBeLessThan(50);
+    expect(refusedMs).toBeLessThan(50);
+  });
+
+  it('an unbracketed name with letters outside ASCII is told to bracket it', () => {
+    // Breaks if the hint is dropped, or names a word other than the one the lexer stopped in.
+    for (const [sql, word] of [['SELECT caf\u00e9 FROM t', 'caf\u00e9'], ['SELECT 1 AS na\u00efve', 'na\u00efve']]) {
+      const out = analyze(sql);
+      expect(out.ok).toBe(false);
+      if (out.ok) continue;
+      expect(out.remediation).toContain(`If ${word} is a column or table name, write it in brackets, as [${word}].`);
+    }
+    // Not a letter: no hint.
+    const other = analyze('SELECT {fn user()}');
+    expect(other.ok).toBe(false);
+    if (!other.ok) expect(other.remediation).not.toContain('write it in brackets');
   });
 
   it('the character offsets named above are where the text stops being readable', () => {

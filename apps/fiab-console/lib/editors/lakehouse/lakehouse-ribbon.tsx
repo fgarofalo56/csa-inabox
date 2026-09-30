@@ -20,10 +20,15 @@ import { checkVariablesRibbonAction } from './dialogs/check-variables-dialog';
 import { LAKEHOUSE_READ_ONLY_TITLE } from './hooks/use-lakehouse-access';
 import type { PathEntry } from './shared';
 
+/** Title on Permissions and Share while the lakehouse is unsaved. */
+export const LAKEHOUSE_SAVE_FIRST_TITLE = 'Save the lakehouse first, then manage its permissions.';
+
 export interface LakehouseRibbonInput {
   activeContainer: string | null;
   activePath: PathEntry | null;
   isReferenceLakehouse: boolean;
+  /** Unsaved (`id === 'new'`): Permissions and Share have no item to read or grant through. */
+  isNewItem: boolean;
   readOnly: boolean;
   uploading: boolean;
   runningUploadCount: number;
@@ -55,7 +60,7 @@ export interface LakehouseRibbonInput {
 
 export function useLakehouseRibbon(p: LakehouseRibbonInput): RibbonTab[] {
   const {
-    activeContainer, activePath, isReferenceLakehouse, readOnly, uploading, runningUploadCount, tab,
+    activeContainer, activePath, isReferenceLakehouse, isNewItem, readOnly, uploading, runningUploadCount, tab,
     maintainTable, workspaceId, interopTabOn, connectTabOn, router, setTab, refreshActive, onUploadClick,
     onFolderUploadClick, onNewFolder, openShortcutWizard, selectFile, onLoadToTables, openLabelDialog,
     setSemanticModelGateOpen, openCheckVariables, openSettings, openPerms, setShareError, setShareSuccess,
@@ -72,6 +77,9 @@ export function useLakehouseRibbon(p: LakehouseRibbonInput): RibbonTab[] {
     const editTitle = readOnly ? LAKEHOUSE_READ_ONLY_TITLE : writeTitle;
     const notebookHref = activeContainer ? `/items/notebook/new?lakehouse=${encodeURIComponent(activeContainer)}` : '/items/notebook/new';
     const maintainReady = tab === 'tables' && !!maintainTable;
+    // Permissions and Share act on the saved lakehouse item; an unsaved one has none yet.
+    const accessBlocked = !activeContainer || isNewItem;
+    const accessTitle = isNewItem ? LAKEHOUSE_SAVE_FIRST_TITLE : !activeContainer ? 'Select a container first' : undefined;
     return [
       { id: 'home', label: 'Home', groups: [
         { label: 'Refresh', actions: [{ label: 'Refresh', icon: <ArrowSync20Regular />, onClick: writeBlocked ? undefined : refreshActive, disabled: writeBlocked, title: writeTitle }] },
@@ -102,8 +110,8 @@ export function useLakehouseRibbon(p: LakehouseRibbonInput): RibbonTab[] {
         { label: 'Protect', actions: [{ label: 'Download with label', onClick: hasFile ? () => { if (activePath) openLabelDialog(activePath); } : undefined, disabled: !hasFile, title: hasFile ? 'Stamp a MIP sensitivity label on download' : 'Select a file first' }] },
         { label: 'Manage', actions: [
           { label: 'Settings', icon: <Info20Regular />, onClick: writeBlocked ? undefined : openSettings, disabled: writeBlocked, title: writeTitle },
-          { label: 'Permissions', icon: <LinkMultiple20Regular />, onClick: activeContainer ? openPerms : undefined, disabled: !activeContainer, title: !activeContainer ? 'Select a container first' : undefined },
-          { label: 'Share', icon: <Add20Regular />, onClick: activeContainer ? () => { setShareError(null); setShareSuccess(null); setShareOpen(true); } : undefined, disabled: !activeContainer, title: !activeContainer ? 'Select a container first' : undefined },
+          { label: 'Permissions', icon: <LinkMultiple20Regular />, onClick: accessBlocked ? undefined : openPerms, disabled: accessBlocked, title: accessTitle },
+          { label: 'Share', icon: <Add20Regular />, onClick: accessBlocked ? undefined : () => { setShareError(null); setShareSuccess(null); setShareOpen(true); }, disabled: accessBlocked, title: accessTitle },
           { label: 'Maintain…', icon: <Wrench20Regular />, onClick: (maintainReady && !readOnly) ? () => setMaintainOpen(true) : undefined, disabled: readOnly || !maintainReady, title: readOnly ? LAKEHOUSE_READ_ONLY_TITLE : !maintainReady ? 'Select a table in the Tables tab first' : 'OPTIMIZE / VACUUM / ZORDER BY' },
           { label: 'OneLake security', icon: <ShieldTask20Regular />, onClick: () => setTab('security'), title: 'Manage OneLake data-access roles + row/column security for this lakehouse' },
           ...(interopTabOn ? [{ label: 'Interop (Iceberg)', icon: <DatabaseLink20Regular />, onClick: () => setTab('interop'), title: 'Expose Delta tables to Trino / Spark / DuckDB / Snowflake as Apache Iceberg — zero copy, same files' }] : []),
@@ -113,7 +121,7 @@ export function useLakehouseRibbon(p: LakehouseRibbonInput): RibbonTab[] {
       ] },
     ];
   }, [
-    activeContainer, activePath, isReferenceLakehouse, readOnly, uploading, runningUploadCount, tab,
+    activeContainer, activePath, isReferenceLakehouse, isNewItem, readOnly, uploading, runningUploadCount, tab,
     maintainTable, workspaceId, interopTabOn, connectTabOn, router, setTab, refreshActive, onUploadClick,
     onFolderUploadClick, onNewFolder, openShortcutWizard, selectFile, onLoadToTables, openLabelDialog,
     setSemanticModelGateOpen, openCheckVariables, openSettings, openPerms, setShareError, setShareSuccess,
