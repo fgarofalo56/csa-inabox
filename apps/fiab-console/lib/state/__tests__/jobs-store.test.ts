@@ -100,6 +100,24 @@ describe('jobs-store', () => {
     (globalThis as any).window.removeEventListener(JOB_EVENT, listener);
   });
 
+  it('a refusal keeps its remediation in the job error, after the error text', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      jsonResponse({
+        ok: false, code: 'read_only',
+        error: 'Your role on this lakehouse is read-only.',
+        remediation: 'Ask a workspace Member or Admin to make the change.',
+      }, 403),
+    ));
+    const id = useJobsStore.getState().startUpload({
+      lakehouseId: 'lh-1', lakehouseName: 'Gold LH', container: 'gold', path: 'a.csv',
+      file: new File([new Uint8Array([0])], 'a.csv'),
+    });
+    await flush();
+    const job = useJobsStore.getState().jobs.find((j) => j.id === id);
+    // Breaks if the remediation is dropped (the error alone would be 'Your role … read-only.').
+    expect(job?.error).toBe('Your role on this lakehouse is read-only. Ask a workspace Member or Admin to make the change.');
+  });
+
   it('cancelJob aborts an in-flight upload (status -> cancelled, no toast)', async () => {
     // fetch that rejects with AbortError when its signal aborts.
     vi.stubGlobal('fetch', vi.fn((_url: string, opts: { signal: AbortSignal }) =>

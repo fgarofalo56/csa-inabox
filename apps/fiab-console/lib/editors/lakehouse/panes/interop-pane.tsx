@@ -177,7 +177,9 @@ export function InteropPane() {
       });
       const json = (await res.json().catch(() => ({}))) as InteropResponse;
       if (!res.ok || json?.ok !== true) {
-        throw new Error(json?.error || `Could not update interop for ${table} (HTTP ${res.status})`);
+        throw new Error(
+          [json?.error || `Could not update interop for ${table} (HTTP ${res.status})`, json?.remediation].filter(Boolean).join(' '),
+        );
       }
       setActionStatus(
         next

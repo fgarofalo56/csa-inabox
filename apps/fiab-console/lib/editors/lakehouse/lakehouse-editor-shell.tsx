@@ -68,7 +68,7 @@ import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
 import { QueryErrorBar } from '@/lib/components/ui/query-error-bar';
 import { DeltaPreviewGrid, type ColStat } from '../components/delta-preview-grid';
 import {
-  useStyles, leafName, collectEntries, formatCell, parseJsonOrError, FileGlyph,
+  useStyles, leafName, collectEntries, formatCell, parseJsonOrError, FileGlyph, maintainTableDef,
 } from './shared';
 import type {
   PathEntry, ListingError, ReferenceLakehouse, PreviewResponse, UploadItem, MipLabelOption,
@@ -288,7 +288,8 @@ export function LakehouseEditor({ item, id }: Props) {
   const lakehouseName: string =
     (itemQ.data?.displayName) || (settings_.settings.displayName) || activeContainer || id;
   const maintainColumns = useMemo(() => {
-    const def = bundleDeltaTables.find((t) => t.name === maintainTable || leafName(t.name) === maintainTable);
+    // Matches both keys the Tables pane sets: a bundle table's name, and `<schema>/<table>`.
+    const def = maintainTableDef(bundleDeltaTables, maintainTable);
     return def?.ddl ? parseDdlColumns(def.ddl) : [];
   }, [bundleDeltaTables, maintainTable]);
 
@@ -468,7 +469,7 @@ export function LakehouseEditor({ item, id }: Props) {
       if (ct.includes('application/json')) { try { j = await r.json(); } catch {} }
       if (!j) { try { bodyText = (await r.text()).slice(0, 240); } catch {} }
       if (!r.ok || j?.ok === false) {
-        return j?.error
+        return (j?.error ? [j.error, j.remediation].filter(Boolean).join(' ') : '')
           || (r.status === 413 ? `${leafName(targetPath)}: file too large. Max 4 GB.`
           : r.status === 502 ? `${leafName(targetPath)}: upstream storage error (502).`
           : r.status === 401 ? 'Sign in expired. Reload and re-authenticate.'
@@ -1031,7 +1032,7 @@ export function LakehouseEditor({ item, id }: Props) {
                         <TreeItem key={`refc-${ref.id}-${c}`} itemType="branch" value={`refc-${ref.id}-${c}`} onClick={() => sec.loadRefPaths(ref.id, c, '')}>
                           <TreeItemLayout iconBefore={<Database20Regular />}>{c}</TreeItemLayout>
                           <Tree><RefTreeChildren ref_={ref} container={c} prefix=""
-                            openPrefixes={sec.refOpenPrefixes} loadRefPaths={sec.loadRefPaths}
+                            openPrefixes={sec.refOpenPrefixes} notes={sec.refPathNotes} loadRefPaths={sec.loadRefPaths}
                             selectRefFile={sec.selectRefFile} /></Tree>
                         </TreeItem>
                       ))}

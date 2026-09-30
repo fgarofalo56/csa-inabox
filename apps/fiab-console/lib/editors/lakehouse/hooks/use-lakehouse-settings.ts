@@ -122,12 +122,12 @@ export function useLakehouseSettings({ lakehouseId, schemasEnabled, setSchemasEn
         }),
       });
       const j = await parseJsonOrError<{
-        ok: boolean; error?: string; settings?: LakehouseSettings;
+        ok: boolean; error?: string; remediation?: string; settings?: LakehouseSettings;
         clusteringApplied?: boolean; clusteringSql?: string; clusteringGate?: string; clusteringError?: string;
         icebergApplied?: boolean; icebergSql?: string; icebergGate?: string; icebergError?: string;
         icebergEndpoint?: IcebergEndpoint;
       }>(r, 'Save settings');
-      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      if (!j.ok) throw new Error([j.error || `HTTP ${r.status}`, j.remediation].filter(Boolean).join(' '));
       setSettings(j.settings || settings);
       setSchemasEnabled(j.settings?.schemasEnabled ?? settings.schemasEnabled ?? false);
       setLcApplied(j.clusteringApplied ?? null);

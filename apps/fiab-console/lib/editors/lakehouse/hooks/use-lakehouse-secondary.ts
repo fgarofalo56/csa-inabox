@@ -221,6 +221,8 @@ export function useLakehouseSecondary({
   const [workspaceLakehouses, setWorkspaceLakehouses] = useState<{ id: string; displayName: string }[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [refOpenPrefixes, setRefOpenPrefixes] = useState<Record<string, PathEntry[] | 'loading' | { error: string }>>({});
+  // The route's `note` for an empty listing (which container holds the files), by the same key.
+  const [refPathNotes, setRefPathNotes] = useState<Record<string, string>>({});
   const [refSelection, setRefSelection] = useState<RefSelection | null>(null);
   const [refPreview, setRefPreview] = useState<PreviewResponse | null>(null);
   const [refPreviewLoading, setRefPreviewLoading] = useState(false);
@@ -275,7 +277,12 @@ export function useLakehouseSecondary({
     try {
       const qs = new URLSearchParams({ refId, container, prefix });
       const r = await clientFetch(`/api/lakehouse/references/paths?${qs.toString()}`);
-      const j = await parseJsonOrError<{ ok: boolean; error?: string; paths?: PathEntry[] }>(r, 'Reference paths');
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; paths?: PathEntry[]; note?: string }>(r, 'Reference paths');
+      setRefPathNotes((n) => {
+        const next = { ...n };
+        if (j.ok && j.note) next[key] = j.note; else delete next[key];
+        return next;
+      });
       setRefOpenPrefixes((p) => ({ ...p, [key]: j.ok ? (j.paths ?? []) : { error: j.error || `HTTP ${r.status}` } }));
     } catch (e: any) { setRefOpenPrefixes((p) => ({ ...p, [key]: { error: e?.message || String(e) } })); }
   }, [refCacheKey]);
@@ -391,7 +398,7 @@ export function useLakehouseSecondary({
     references, refsLoading, refsError,
     workspaceLakehouses,
     pickerOpen, setPickerOpen,
-    refOpenPrefixes, refSelection, setRefSelection, refPreview, setRefPreview, refPreviewLoading,
+    refOpenPrefixes, refPathNotes, refSelection, setRefSelection, refPreview, setRefPreview, refPreviewLoading,
     addReference, removeReference, loadRefPaths, selectRefFile, loadReferences,
     // Share
     shareOpen, setShareOpen,

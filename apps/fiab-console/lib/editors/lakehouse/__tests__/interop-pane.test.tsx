@@ -227,6 +227,27 @@ describe('InteropPane — honest gate (catalog not deployed)', () => {
   });
 });
 
+describe('InteropPane — refused toggle', () => {
+  const ERROR = 'Your role on this lakehouse is read-only.';
+  const REMEDIATION = 'Ask a workspace Member or Admin to make the change.';
+
+  it('reports the error and the remediation together', async () => {
+    installFetchMock({
+      '/api/lakehouse/interop': (_u, init) =>
+        init?.method === 'PUT' ? { ok: false, code: 'read_only', error: ERROR, remediation: REMEDIATION } : CONFIGURED,
+    });
+    const setActionError = vi.fn();
+    const setActionStatus = vi.fn();
+    mount({ setActionError, setActionStatus });
+    await waitFor(() => expect(screen.getByLabelText('Expose customers as Iceberg')).toBeInTheDocument());
+    fireEvent.click(screen.getByLabelText('Expose customers as Iceberg'));
+    // Breaks if `remediation` is dropped (the message would be ERROR alone).
+    await waitFor(() => expect(setActionError).toHaveBeenLastCalledWith(`${ERROR} ${REMEDIATION}`));
+    // Breaks if a refusal is reported as a submitted job.
+    expect(setActionStatus).not.toHaveBeenCalled();
+  });
+});
+
 describe('InteropPane — guided empty states', () => {
   it('guides the user to pick a container instead of rendering an empty pane', () => {
     installFetchMock({ '/api/lakehouse/interop': () => CONFIGURED });

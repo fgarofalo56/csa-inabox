@@ -72,6 +72,8 @@ export interface InteropGateBlock {
 export interface InteropResponse {
   ok: boolean;
   error?: string;
+  /** What to do about a refusal (e.g. a read-only role), shown after `error`. */
+  remediation?: string;
   container?: string;
   account?: string | null;
   accountGate?: string;
