@@ -34,11 +34,13 @@ import { FocusCostPanel } from '@/lib/components/finops/focus-cost-panel';
 import { EmptyState } from '@/lib/components/empty-state';
 import { SplitPane } from '@/lib/components/shared/split-pane';
 import { LoomChart } from '@/lib/components/charts/loom-chart';
+import { CostTagNotice, PartialBreakdownNotice } from '@/lib/components/monitor/cost-tag-notice';
 import {
   makeStyles, tokens, Card, Title3, Subtitle2, Body1, Caption1, Badge, Spinner,
   Dropdown, Option, Button, Input, Field, Switch, Dialog, DialogSurface, DialogTitle,
   DialogBody, DialogContent, DialogActions, Table, TableHeader, TableRow, TableHeaderCell,
   TableBody, TableCell, MessageBar, MessageBarBody, MessageBarTitle, Tooltip, Spinner as FSpinner,
+  Skeleton, SkeletonItem,
 } from '@fluentui/react-components';
 import {
   Money24Regular, Warning20Regular, Add20Regular, Delete20Regular, Edit20Regular,
@@ -213,6 +215,15 @@ function BudgetDialog({ open, onClose, subscriptions, onSaved, editing }:
   );
 }
 
+/** Loading placeholder for a cockpit panel: a Skeleton that holds the panel's shape, not a bare Spinner. */
+function PanelSkeleton({ label, rows = 3 }: { label: string; rows?: number }) {
+  return (
+    <Skeleton aria-label={label}>
+      {Array.from({ length: rows }, (_, i) => <SkeletonItem key={i} style={{ marginBottom: tokens.spacingVerticalS }} />)}
+    </Skeleton>
+  );
+}
+
 export function FinopsCockpitPane() {
   const styles = useStyles();
   const [timeframe, setTimeframe] = useState<(typeof TIMEFRAMES)[number]>('MonthToDate');
@@ -231,6 +242,16 @@ export function FinopsCockpitPane() {
   const feed = anomaliesQ.data?.feed || [];
   const rules: CostAnomalyRuleDoc[] = anomaliesQ.data?.rules || [];
   const breakdownTotal = Number(breakdownQ.data?.total || 0);
+  // Subscriptions whose cost read failed are missing from breakdownTotal, so
+  // the period-to-date tile says it is partial rather than showing a short
+  // total as the whole spend (#4771 round 9).
+  const mtdOmitted: number = breakdownQ.data?.subscriptionErrors?.length || 0;
+  // The tag dimension's rows ARE the tag breakdown, so the Monitor tab's notice
+  // tells a failed or partial tag query apart from "no tags found".
+  const tagSummary = {
+    byTag: breakdownQ.data?.rows ?? [], tagQueryErrors: breakdownQ.data?.tagQueryErrors ?? [],
+    subscriptionErrors: breakdownQ.data?.subscriptionErrors ?? [], tagKey: breakdownQ.data?.tagKey,
+  };
   const currency = forecast?.currency || breakdownQ.data?.currency || budgetsQ.data?.currency || 'USD';
 
   const tiles: FinopsTile[] = useMemo(() => assembleFinopsTiles({
@@ -270,9 +291,14 @@ export function FinopsCockpitPane() {
             <div key={t.key} className={styles.tile}>
               <Caption1 className={styles.tileLabel}>{t.label}</Caption1>
               <div className={styles.tileValue}>{t.value}</div>
-              {t.caption && (
+              {(t.caption || (t.key === 'mtd' && mtdOmitted > 0)) && (
                 <div className={styles.badgeRow}>
-                  <Badge appearance="tint" color={INTENT_COLOR[t.intent]}>{t.caption}</Badge>
+                  {t.caption && <Badge appearance="tint" color={INTENT_COLOR[t.intent]}>{t.caption}</Badge>}
+                  {t.key === 'mtd' && mtdOmitted > 0 && (
+                    <Badge appearance="tint" color="warning">
+                      {`Partial: ${mtdOmitted} subscription${mtdOmitted === 1 ? '' : 's'} omitted`}
+                    </Badge>
+                  )}
                 </div>
               )}
             </div>
@@ -314,7 +340,7 @@ export function FinopsCockpitPane() {
             <SplitPane direction="horizontal" defaultSize="55%" minSize={280} storageKey="finops-anomalies" dividerLabel="Resize anomaly feed">
               <div className={styles.pane}>
                 <Caption1 className={styles.tileLabel}>Live feed — detected against the real daily series</Caption1>
-                {anomaliesQ.isLoading ? <Spinner size="tiny" /> :
+                {anomaliesQ.isPending ? <PanelSkeleton label="Loading anomaly feed" /> :
                   /* #3739 — the QueryErrorBar above already says the read did not
                      complete ("An empty feed below would be misleading"). Falling
                      through to the EmptyState made this pane assert, two lines
@@ -322,6 +348,10 @@ export function FinopsCockpitPane() {
                      range — a claim a 504 never established (deploy-integrity R7).
                      Matches the forecast/breakdown panels, which already do this. */
                   readState(anomaliesQ).isError ? null :
+                  /* #4771 - a gated 200 (Monitor not configured) carries feed: [] and
+                     the GateBar above already says why; an empty feed under a gate is
+                     not evidence that spend is within range, so claim nothing. */
+                  anomaliesQ.data?.gate ? null :
                   feed.length ? (
                     <div className={styles.scroll}>
                       <Table size="small" aria-label="Anomaly feed">
@@ -366,14 +396,26 @@ export function FinopsCockpitPane() {
           <QueryErrorBar query={readState(breakdownQ)} subject="the spend breakdown"
             endpoint="/api/admin/finops/breakdown"
             reassurance="This says nothing about whether there is spend to break down — the read did not complete." />
-          {breakdownQ.isLoading ? <Spinner label="Loading breakdown…" /> :
+          {breakdownQ.isPending ? <PanelSkeleton label="Loading breakdown" rows={5} /> :
             readState(breakdownQ).isError ? null :
             breakdownQ.data?.gate ? <GateBar gate={breakdownQ.data.gate} /> :
             (breakdownQ.data?.rows || []).length ? (
-              <LoomChart type="bar" height={300}
-                rows={(breakdownQ.data.rows as Array<{ key: string; cost: number }>).slice(0, 15).map((r) => ({ key: r.key, cost: Math.round(r.cost * 100) / 100 }))}
-                title={`Spend by ${dimension} (${currency})`} />
-            ) : <Body1>No breakdown data.</Body1>}
+              <>
+                {/* #4771 R8 B-1: every dimension discloses subscriptions whose whole cost read failed;
+                    the tag notice folds the same errors into its own state. */}
+                {dimension === 'tag' ? <CostTagNotice summary={tagSummary} onRetry={() => { void breakdownQ.refetch(); }} />
+                  : <PartialBreakdownNotice errors={breakdownQ.data?.subscriptionErrors} dimension={dimension} onRetry={() => { void breakdownQ.refetch(); }} />}
+                <LoomChart type="bar" height={300}
+                  rows={(breakdownQ.data.rows as Array<{ key: string; cost: number }>).slice(0, 15).map((r) => ({ key: r.key, cost: Math.round(r.cost * 100) / 100 }))}
+                  title={`Spend by ${dimension} (${currency})`} />
+              </>
+            ) : dimension === 'tag' ? <CostTagNotice summary={tagSummary} onRetry={() => { void breakdownQ.refetch(); }} /> :
+            breakdownQ.data?.subscriptionErrors?.length ? (
+              <PartialBreakdownNotice errors={breakdownQ.data.subscriptionErrors} dimension={dimension} onRetry={() => { void breakdownQ.refetch(); }} />
+            ) : (
+              <EmptyState icon={<Money24Regular />} title="No breakdown data"
+                body={`The cost summary has no ${dimension} rows for this timeframe.`} />
+            )}
         </div>
 
         {/* B-N19e - FOCUS cost-per-query / per-dashboard attribution */}
@@ -390,13 +432,16 @@ export function FinopsCockpitPane() {
             endpoint="/api/admin/finops/budgets"
             reassurance="Existing budgets are unchanged — they could not be listed." />
           {budgetsQ.data?.gate && <GateBar gate={budgetsQ.data.gate} />}
-          {budgetsQ.isLoading ? <Spinner label="Loading budgets…" /> :
+          {budgetsQ.isPending ? <PanelSkeleton label="Loading budgets" /> :
             /* #3739 — same defect as the anomaly feed: a failed list read fell
                through to "No budgets yet", which is a statement about the
                customer's Azure Consumption budgets that the read never made.
                The QueryErrorBar above carries the truth ("Existing budgets are
                unchanged — they could not be listed"). */
             readState(budgetsQ).isError ? null :
+            /* #4771 - same for a gated 200: budgets: [] under the GateBar is not
+               a statement that the subscription has no budgets. */
+            budgetsQ.data?.gate ? null :
             budgets.length ? (
               <div className={styles.scroll}>
                 <Table aria-label="Budgets">

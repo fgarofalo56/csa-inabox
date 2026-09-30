@@ -182,7 +182,10 @@ describe('#3733 PerfRecommendationsCard — "everything is inside its bars" is n
       expect(screen.getByText('Cache hit-rate 9% is under the 60% target')).toBeInTheDocument(),
     );
     await userEvent.click(screen.getByRole('button', { name: 'Apply' }));
-    await userEvent.click(await screen.findByRole('button', { name: 'Apply for real' }));
+    // #4771 R8: a test-only change. The confirm button renders after the Apply
+    // click; under full-suite CPU contention the default 1000 ms findByRole
+    // budget flaked. The product code is unchanged.
+    await userEvent.click(await screen.findByRole('button', { name: 'Apply for real' }, { timeout: 5000 }));
 
     await waitFor(() =>
       expect(screen.getByText(/Tenant admin required to apply performance changes/i)).toBeInTheDocument(),

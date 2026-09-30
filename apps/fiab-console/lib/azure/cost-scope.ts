@@ -26,6 +26,7 @@ import {
   loomScopeLabel,
 } from './cost-client';
 import { getOrComputeCached } from './query-result-cache';
+import { tagValueColumnIndex } from './cost-tag-column';
 
 /** Upper bound on returned scopes — keeps pickers + fan-outs bounded. */
 export const MAX_COST_SCOPES: number = (() => {
@@ -103,19 +104,18 @@ export function scopesFromInventory(
 
 /**
  * Pure: extract the distinct non-empty tag VALUES from a Cost Management
- * `query` response grouped on a TagKey. Robust to the API naming the value
- * column after the tag key vs. a generic `TagValue` — the value column is
- * whichever column is not Cost / Currency / UsageDate / ResourceGroupName
- * (mirrors the battle-tested tag fold in cost-client.ts). Sorted by summed
- * cost descending so the biggest allocation buckets list first.
+ * `query` response grouped on a TagKey. The value column is resolved by
+ * {@link tagValueColumnIndex} (`TagValue`, else a column named after
+ * `tagKey`) — never by position, because the response also carries a `TagKey`
+ * column whose every row is the key's own name. Sorted by summed cost
+ * descending so the biggest allocation buckets list first.
  */
-export function tagValuesFromQueryResponse(resp: any): { value: string; cost: number }[] {
+export function tagValuesFromQueryResponse(resp: any, tagKey?: string): { value: string; cost: number }[] {
   const cols: any[] = resp?.properties?.columns || [];
   const rows: any[][] = resp?.properties?.rows || [];
   const lower = cols.map((c) => String(c?.name || '').toLowerCase());
   const iCost = lower.indexOf('cost');
-  const NON_VALUE = new Set(['cost', 'currency', 'usagedate', 'resourcegroupname']);
-  const iVal = lower.findIndex((n) => !NON_VALUE.has(n));
+  const iVal = tagValueColumnIndex(cols, tagKey);
   if (iVal < 0) return [];
   const m = new Map<string, number>();
   for (const r of rows) {
@@ -184,7 +184,10 @@ export async function tagScope(tagKey: string): Promise<CostScope[]> {
               grouping: [{ type: 'TagKey', name: key }],
             },
           }, deadline);
-          for (const { value: v, cost } of tagValuesFromQueryResponse(resp)) {
+          // `key` only matters for a response whose value column is named after
+          // the key; on the measured TagValue shape dropping it changes nothing
+          // (an equivalent mutant, disclosed rather than counted as coverage).
+          for (const { value: v, cost } of tagValuesFromQueryResponse(resp, key)) {
             merged.set(v, (merged.get(v) || 0) + cost);
           }
         } catch { /* per-sub best-effort — other subs still contribute */ }
