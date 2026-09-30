@@ -8,17 +8,16 @@
  * GET /api/mdm/golden-records (no modelId) → MDM run history.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { getModel, listMdmRuns } from '@/lib/azure/mdm-store';
 import { listGoldenRecords, mdmConfigGate } from '@/lib/azure/mdm-match-merge';
 import { apiServerError } from '@/lib/api/respond';
+import { WarehouseResolutionError, warehouseErrorBody, warehouseErrorStatus } from '@/lib/azure/databricks-sql-warehouse';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest, { session: s }) => {
   const tenantId = s.claims.oid;
   const modelId = req.nextUrl.searchParams.get('modelId');
 
@@ -48,9 +47,14 @@ export async function GET(req: NextRequest) {
     const page = await listGoldenRecords(model, limit);
     return NextResponse.json({ ok: true, goldenTable: model.goldenTable, ...page });
   } catch (e: any) {
+    // listGoldenRecords resolves the warehouse first: a classified resolution
+    // failure is NOT "the merge hasn't run" and must not carry that hint.
+    if (e instanceof WarehouseResolutionError) {
+      return NextResponse.json(warehouseErrorBody(e), { status: warehouseErrorStatus(e) });
+    }
     return NextResponse.json(
       { ok: false, error: e?.message || String(e), hint: 'Run a merge first to create the golden-record table.' },
       { status: 500 },
     );
   }
-}
+});

@@ -130,3 +130,47 @@ describe('HonestGate', () => {
     expect(screen.getByText(/Custom detail\./)).toBeInTheDocument();
   });
 });
+
+/**
+ * #4776 — a SERVER-classified failure. In a browser the registry's runtime
+ * overlay is empty (the store is per-process), so `getGate()` returns the
+ * static def with its env-picker Fix-it. The `classified` prop must drive the
+ * bar AND the Fix-it: permission → a role grant carrying the remediation.
+ */
+describe('HonestGate — classified (#4776)', () => {
+  const REMEDIATION = 'A workspace admin grants the allow-cluster-create entitlement to the Console managed identity.';
+
+  it('permission: names the cause + entitlement, and the Fix-it opens as the ROLE GRANT', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ ok: true, options: {} }));
+    wrap(
+      <HonestGate
+        gateId="svc-databricks-sql"
+        surface="MDM"
+        classified={{ kind: 'permission', error: 'Databricks refused the create (HTTP 403).', remediation: REMEDIATION, entitlement: 'allow-cluster-create' }}
+      />,
+    );
+    // Breaks if the classified prop is ignored: the static "MDM needs … wired" title renders.
+    expect(screen.getByText(/MDM: .* — permission refused/)).toBeInTheDocument();
+    expect(screen.queryByText(/needs .* wired in this deployment/)).toBeNull();
+    expect(screen.getByText('Databricks refused the create (HTTP 403).', { exact: false })).toBeInTheDocument();
+    expect(screen.getByText('allow-cluster-create')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /fix it/i }));
+    // Bar item + dialog remediation caption + dialog role-grant note = 3.
+    // Breaks (2) if the dialog keeps the static env-picker (no grant note).
+    expect(await screen.findAllByText(REMEDIATION)).toHaveLength(3);
+  });
+
+  it('network: the Fix-it keeps the declared Fix-it, and SAYS pinning is a bypass, not the fix', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ ok: true, options: {} }));
+    const net = 'Verify the databricks_ui_api private endpoint is Approved.';
+    wrap(<HonestGate gateId="svc-databricks-sql" surface="MDM" classified={{ kind: 'network', error: 'refused at the network layer (HTTP 403)', remediation: net }} />);
+    expect(screen.getByText(/MDM: .* — refused or unreachable at the network layer/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /fix it/i }));
+    // Bar item + dialog caption carry the remediation verbatim. Breaks (3) if a
+    // network cause became a role grant (the grant note IS the bare remediation).
+    expect(await screen.findAllByText(net)).toHaveLength(2);
+    // Round 4 nit: the dialog labels the pin honestly. Breaks if a non-permission
+    // cause opens the plain env-picker with no note.
+    expect(screen.getByText(/only bypasses the one the Console produces; it does not address the cause of this network failure/)).toBeInTheDocument();
+  });
+});
