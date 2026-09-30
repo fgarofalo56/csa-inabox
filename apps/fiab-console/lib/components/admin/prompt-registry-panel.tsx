@@ -153,7 +153,7 @@ export function PromptRegistryPanel() {
     },
   });
 
-  if (q.isLoading) {
+  if (q.isPending) {
     return (
       <Skeleton aria-label="Loading prompt registry">
         <div className={styles.cards}>

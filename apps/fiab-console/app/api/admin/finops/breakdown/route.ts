@@ -55,6 +55,10 @@ export const GET = withTenantAdmin(async (req: NextRequest) => {
       currency: summary.currency,
       total: summary.monthToDate,
       tagKey: summary.tagKey,
+      tagQueryErrors: summary.tagQueryErrors ?? [],
+      // A subscription whose whole cost read failed contributed no rows to ANY
+      // dimension; the client must know the breakdown is partial (#4771 R7).
+      subscriptionErrors: summary.subscriptionErrors ?? [],
       subscriptionNames: summary.subscriptionNames,
       rows: rows.slice(0, 100),
     });
