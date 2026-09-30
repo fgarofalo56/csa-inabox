@@ -267,7 +267,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `admin/gates/[id]/resolve/route.ts` | POST | admin | ● | ADLS, ADX, AKS, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Microsoft Graph |
 | `admin/gates/route.ts` | GET | admin |  | ADX, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
 | `admin/governance-catalog/reindex/route.ts` | POST | admin | ● | AI Search, Cosmos |
-| `admin/health/exercise/route.ts` | GET POST | admin |  | Power Platform |
+| `admin/health/exercise/route.ts` | GET POST | admin |  | ADLS, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Databricks, Event Hubs / Service Bus, Key Vault, PostgreSQL, Power Platform, Synapse, Synapse SQL |
 | `admin/lineage/reconcile/route.ts` | GET POST | admin |  | Cosmos, Purview |
 | `admin/load-sample-data/route.ts` | POST | admin |  | ADX, ARM, Managed Identity |
 | `admin/mcp-servers/bridge/route.ts` | GET | admin |  | — |
