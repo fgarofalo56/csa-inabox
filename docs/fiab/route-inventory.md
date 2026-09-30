@@ -16,8 +16,8 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | Total routes | 1696 |
 | Public (no session) | 59 |
 | Session-only | 628 |
-| Owner-scoped | 691 |
-| Admin | 318 |
+| Owner-scoped | 690 |
+| Admin | 319 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 499 |
 | Areas | 122 |
@@ -1719,7 +1719,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/semantic-model/[id]/datasource/route.ts` | GET POST PUT | owner-scoped | ● | AAS, ADX, ARM, Azure SQL, Cosmos, Fabric, Key Vault, Managed Identity, Microsoft Graph, Power BI, Synapse SQL |
 | `items/semantic-model/[id]/dax-query/route.ts` | POST | owner-scoped |  | AAS, AI Search, ARM, Azure Cache for Redis, Azure SQL, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
 | `items/semantic-model/[id]/describe-bulk/route.ts` | GET POST | owner-scoped |  | AI Search, AML, ARM, Azure AI Services, Azure Cache for Redis, Azure OpenAI, Cosmos, Fabric, Microsoft Graph, Power BI |
-| `items/semantic-model/[id]/direct-lake/route.ts` | GET POST PUT | owner-scoped | ● | ADLS, ARM, Azure Cache for Redis, Azure SQL, Azure Storage, Cosmos, Event Grid, Fabric, Managed Identity, Microsoft Graph, Power BI, Synapse SQL |
+| `items/semantic-model/[id]/direct-lake/route.ts` | GET POST PUT | admin | ● | ADLS, ARM, Azure Cache for Redis, Azure SQL, Azure Storage, Cosmos, Event Grid, Fabric, Managed Identity, Microsoft Graph, Power BI, Synapse SQL |
 | `items/semantic-model/[id]/embed-token/route.ts` | POST | owner-scoped |  | Cosmos, Fabric, Microsoft Graph, Power BI |
 | `items/semantic-model/[id]/ingest/route.ts` | POST | owner-scoped | ● | AAS, ADF, ADLS, ARM, Azure Storage, Cosmos, Microsoft Graph, Resource Graph, Synapse |
 | `items/semantic-model/[id]/measures/route.ts` | POST | owner-scoped |  | Cosmos, Fabric, Microsoft Graph, Power BI |

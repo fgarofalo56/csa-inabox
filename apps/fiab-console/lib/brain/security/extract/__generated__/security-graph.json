@@ -14567,6 +14567,38 @@
           }
         },
         {
+          "id": "sec:authorizer:apps/fiab-console/app/api/items/semantic-model/[id]/direct-lake/route.ts#POST",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "POST /api/items/semantic-model/[id]/direct-lake",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "POST /api/items/semantic-model/[id]/direct-lake",
+            "params": [
+              "id"
+            ],
+            "resourceScoped": true,
+            "callerNamedResourceInputs": [
+              "id",
+              "workspaceId"
+            ],
+            "allowPaths": [
+              {
+                "id": "post:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": true,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": false,
+            "privilegedSinkKinds": []
+          }
+        },
+        {
           "id": "sec:verdict-call:apps/fiab-console/app/api/items/semantic-model/[id]/embed-token/route.ts#POST:authorizeItemWorkspace:3",
           "kind": "verdict-call",
           "provenance": "declared",
@@ -49071,6 +49103,11 @@
         {
           "nodeId": "sec:verdict-call:apps/fiab-console/app/api/items/semantic-model/[id]/datasource/route.ts#POST:authorizeItemWorkspace:7",
           "codeModuleId": "code:apps/fiab-console/app/api/items/semantic-model/[id]/datasource/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/items/semantic-model/[id]/direct-lake/route.ts#POST",
+          "codeModuleId": "code:apps/fiab-console/app/api/items/semantic-model/[id]/direct-lake/route.ts",
           "deployedAs": "loom-console"
         },
         {
