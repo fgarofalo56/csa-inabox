@@ -247,6 +247,18 @@ describe('a graph with a real subject ⇒ the shipped detectors produce the find
     expect(layer.graphSource).toBe('modelled');
   });
 
+  it("#4798 — carries the source's age note verbatim, and adds none the source did not give", () => {
+    // The seam between `resolveSecurityGraph` and the wire. Breaks if
+    // buildRiskLayer drops `ageNote` (the rendered reason then loses the
+    // "age was NOT checked" disclosure), or if it always sets the key, which
+    // puts `ageNote: undefined` on a layer whose source carried no note.
+    const noted = buildRiskLayer({ available: true, graph: graphWith([bypassAuthorizer()]), ageNote: 'AGE-NOTE-4798' });
+    if (!noted.evaluated) throw new Error('unreachable');
+    expect(noted.ageNote).toBe('AGE-NOTE-4798');
+    if (!layer.evaluated) throw new Error('unreachable');
+    expect('ageNote' in layer).toBe(false);
+  });
+
   it('C1 found the bypass — the positive control for the whole seam', () => {
     if (!layer.evaluated) throw new Error('unreachable');
     const c1 = layer.findings.filter((f) => f.findingClass === 'C1-unauthorized-inbound-edge');

@@ -1364,9 +1364,12 @@ test('census: a run scope the census cannot find, or can find twice, is refused'
 
 test('census: an empty or zero census is refused, never read as reconciled', () => {
   // Two empty things compare equal. Each input here would otherwise reconcile
-  // vacuously against a run that also counted nothing.
-  assert.ok(censusRefusals(baseRun(), []).length > 0, 'an empty census');
-  assert.ok(censusRefusals(baseRun(), null).length > 0, 'no census');
+  // vacuously against a run that also counted nothing. The MESSAGE is pinned,
+  // not only the count: without the empty-census branch, `[]` is still refused
+  // by the total check, but with the false claim that a file reached the builder
+  // outside every scope (measured, round 2).
+  assert.match(censusRefusals(baseRun(), []).join('\n'), /independent census is empty/, 'an empty census');
+  assert.match(censusRefusals(baseRun(), null).join('\n'), /independent census is empty/, 'no census');
   const zeroed = baseCensus();
   zeroed[0].files = 0;
   const run = baseRun();
