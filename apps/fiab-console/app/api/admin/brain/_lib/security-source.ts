@@ -42,7 +42,14 @@ import { loadExtractedSecurityGraph } from '@/lib/brain/security/extract';
 import type { SecurityGraph } from '@/lib/brain/security';
 
 export type SecurityGraphSource =
-  | { readonly available: true; readonly graph: SecurityGraph }
+  | {
+      readonly available: true;
+      readonly graph: SecurityGraph;
+      /** What is known about the graph's age (see `extract/artifact.ts`). */
+      readonly ageNote?: string;
+      /** `false` exactly when the age was NOT checked (see `extract/artifact.ts`). */
+      readonly ageChecked?: boolean;
+    }
   | { readonly available: false; readonly reason: string };
 
 /**
@@ -65,10 +72,10 @@ export const NO_SECURITY_GRAPH_REASON =
  * Load the security graph for this deployment.
  *
  * Delegates to the extraction package's runtime half, which re-validates the
- * committed artifact — version, provenance, node count, age, join coverage —
- * before handing it over. It never throws: every failure degrades to a refusal
- * carrying its own specific reason, because a 500 here would hide which of the
- * five it was.
+ * committed artifact — version, provenance, node count, the age of the image it
+ * shipped in, join coverage — before handing it over. It never throws: every
+ * failure degrades to a refusal carrying its own specific reason, because a 500
+ * here would hide which one it was.
  */
 export function loadSecurityGraph(): SecurityGraphSource {
   return loadExtractedSecurityGraph();
