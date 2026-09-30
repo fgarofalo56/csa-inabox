@@ -30,6 +30,7 @@ import { AdminShell } from '@/lib/components/admin-shell';
 import { EmptyState } from '@/lib/components/empty-state';
 import { SplitPane } from '@/lib/components/shared/split-pane';
 import { GateFixitDialog } from '@/lib/components/shared/honest-gate';
+import { LakehouseSharedRootsPanel, type SharedRootGroupView } from '@/lib/components/admin/lakehouse-shared-roots-panel';
 import { clientFetch, CROSS_SUB_FETCH_TIMEOUT_MS } from '@/lib/client-fetch';
 import { getGate } from '@/lib/gates/registry';
 import {
@@ -448,6 +449,8 @@ interface StorageCheck {
   detail: string;
   remediation?: string;
   inconclusive?: boolean;
+  /** Lakehouses sharing a storage root: each group, with the "Keep root for" action. */
+  groups?: SharedRootGroupView[];
 }
 
 export default function AdminReadinessPage() {
@@ -606,6 +609,9 @@ export default function AdminReadinessPage() {
             <MessageBarTitle>{c.title}</MessageBarTitle>
             {c.detail}
             {c.remediation ? <> {c.remediation}</> : null}
+            {c.groups?.length ? (
+              <LakehouseSharedRootsPanel groups={c.groups} onResolved={() => void reload(true)} />
+            ) : null}
           </MessageBarBody>
         </MessageBar>
       ))}

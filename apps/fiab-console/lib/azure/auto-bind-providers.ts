@@ -84,6 +84,7 @@ import {
   safeAdlsRelPath,
   lakehouseItemRootPath,
   lakehouseContainerOrder,
+  isLakehouseItemRootOf,
 } from './backing-name';
 import { DEFAULT_PIPELINE_RUNTIME } from '@/lib/components/pipeline/types';
 import type { AutoBindContext, AutoBindPreflight, AutoBindProvider } from './auto-bind';
@@ -571,19 +572,30 @@ export const lakehouseAutoBind: AutoBindProvider = {
   },
 
   /**
-   * A directory counts as THIS item's root only when its ownership marker says
-   * so. The one exception is the root this item already has on record
-   * (`state.lakehouseRoot`, written only by the server) when that directory
-   * predates markers and carries none — an existing item keeps its root. A
-   * directory marked for another item, or an unmarked one this item has no
-   * record of, is reported absent, so the engine creates this item's own root.
+   * A directory counts as THIS item's root when its ownership marker says so,
+   * or when it carries no marker and is either:
+   *   - this item's own id-bearing item root (`lakehouses/<name>--<itemId>`):
+   *     no other item's root can be at that path, and a first write (a table
+   *     save, an upload) creates it with no marker. It is adopted, and marked
+   *     for this item so later reads need no rule; or
+   *   - the root this item already has on record (`state.lakehouseRoot`,
+   *     written only by the server) from before markers existed.
+   * A directory marked for another item, or an unmarked name-only directory
+   * this item has no record of, is reported absent, so the engine creates this
+   * item's own root.
    */
   probe: async (name, coords, ctx) => {
-    const { readLakehouseRootOwner } = await import('./lakehouse-abfss');
+    const { readLakehouseRootOwner, stampLakehouseRootOwner } = await import('./lakehouse-abfss');
     const r = await readLakehouseRootOwner(coords.container, name);
     if (!r.exists) return false;
     if (r.owner === ctx.itemId) return true;
-    return r.owner === null && name === stateString(ctx, 'lakehouseRoot');
+    if (r.owner !== null) return false;
+    if (isLakehouseItemRootOf(name, ctx.itemId)) {
+      // Best-effort: an unmarked own item root is this item's either way.
+      await stampLakehouseRootOwner(coords.container, name, ctx.itemId, r);
+      return true;
+    }
+    return name === stateString(ctx, 'lakehouseRoot');
   },
 
   /** Creates the root with this item's ownership marker, never over an existing directory. */

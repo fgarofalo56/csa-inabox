@@ -277,11 +277,13 @@ export function isLakehouseItemRootOf(root: string, itemId: string): boolean {
 export const LAKEHOUSE_OWNER_METADATA_KEY = 'loomitemid';
 
 /**
- * Lakehouses created on or after this instant get an item-unique root
- * ({@link lakehouseItemRootPath}). Earlier items keep the name-only root they
- * already have — no data is moved. An item whose `createdAt` is missing or
- * unparsable is treated as pre-cutover, which only ever selects its existing
- * root, never a new one.
+ * Lakehouses created before this instant may keep files under a name-only root
+ * they never recorded, so the resolver also looks for one there
+ * ({@link lakehouseRootPath}). This is the ONLY thing the instant decides: a
+ * RECORDED root is honoured whatever the item's age, so an item created by an
+ * older build after this instant keeps the root it recorded. An item whose
+ * `createdAt` is missing or unparsable is treated as created before it, which
+ * only ever adds the name-only root to what is probed.
  */
 export const LAKEHOUSE_ITEM_ROOT_SINCE = '2026-09-29T00:00:00.000Z';
 
@@ -299,8 +301,12 @@ export function lakehouseUsesItemRoot(createdAt: unknown): boolean {
  */
 export interface LakehouseRootFacts {
   id: string;
+  /** The item's workspace (its Cosmos partition), for links and for writes. */
+  workspaceId?: unknown;
   displayName?: unknown;
   createdAt?: unknown;
+  /** state._recycled — truthy for a recycled item, whose files remain until purge. */
+  recycled?: unknown;
   /** state.lakehouseRoot / state.adlsContainer — the binding auto-bind records. */
   lakehouseRoot?: unknown;
   adlsContainer?: unknown;
@@ -334,36 +340,35 @@ function rootSegments(p: string): string[] {
 
 /**
  * The root a lakehouse item uses: the installer's stamp, else the recorded
- * auto-bind binding, else the root the resolver would derive (the item root on
- * or after {@link LAKEHOUSE_ITEM_ROOT_SINCE}, the name root before it).
+ * auto-bind binding, else the root the resolver would look for — the name-only
+ * root for an item created before {@link LAKEHOUSE_ITEM_ROOT_SINCE} (it may have
+ * files there from before item roots existed), the item root otherwise.
  *
- * For an item created on or after the cutover a recorded root counts only when
- * it is that item's OWN item root ({@link isLakehouseItemRootOf}) — the same
- * rule the resolver applies — so this answer and the resolver's never differ.
+ * A recorded root counts whatever the item's age, exactly as the resolver
+ * treats it: an item created by an older build keeps the name-only root it
+ * recorded.
  */
 export function lakehouseRootLocation(f: LakehouseRootFacts): LakehouseRootLocation | null {
   const id = factStr(f.id);
   if (!id) return null;
-  const itemEra = lakehouseUsesItemRoot(f.createdAt);
-  const usable = (root: string) => !itemEra || isLakehouseItemRootOf(rootSegments(root).join('/'), id);
   const explicitAccount = factStr(f.storageAccount).toLowerCase();
   const stamped = factStr(f.provAdlsRoot).match(/^abfss:\/\/([^@]+)@[^/]+\/(.*)$/i);
-  if (stamped && usable(stamped[2])) {
+  if (stamped) {
     // The stamped URI names the account, but whether that is the primary one is
     // not knowable here, so it is compared as "any account".
     return { id, account: null, container: stamped[1], segments: rootSegments(stamped[2]), recorded: true };
   }
   const provContainer = factStr(f.provContainer);
   const provRoot = factStr(f.provRootPath);
-  if (provContainer && provRoot && usable(provRoot)) {
+  if (provContainer && provRoot) {
     return { id, account: explicitAccount, container: provContainer, segments: rootSegments(provRoot), recorded: true };
   }
   const boundRoot = factStr(f.lakehouseRoot);
-  if (boundRoot && usable(boundRoot)) {
+  if (boundRoot) {
     return { id, account: explicitAccount, container: factStr(f.adlsContainer) || null, segments: rootSegments(boundRoot), recorded: true };
   }
   const name = factStr(f.displayName);
-  const derived = itemEra ? lakehouseItemRootPath(name, id) : lakehouseRootPath(name, id);
+  const derived = lakehouseUsesItemRoot(f.createdAt) ? lakehouseItemRootPath(name, id) : lakehouseRootPath(name, id);
   return { id, account: explicitAccount, container: null, segments: rootSegments(derived), recorded: false };
 }
 

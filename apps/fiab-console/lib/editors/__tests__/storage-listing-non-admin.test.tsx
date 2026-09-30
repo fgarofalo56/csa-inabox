@@ -11,7 +11,7 @@
  *   - governance policies, restrict-access ADLS path picker: the path can be typed
  *   - Foundry data-URI picker (ADLS tab): a jump to the "Datastore path" tab
  *   - shortcut wizard: browse a source lakehouse through its own item
- *   - OneLake security, mirrored item: "Selected folders" disabled with the reason
+ *   - OneLake security, mirrored item: the reason, and folders can be typed
  *
  * The fetch mock answers with the real HTTP status (the shared `installFetchMock`
  * always answers 200, which cannot reach a `status === 403` branch).
@@ -155,8 +155,9 @@ describe('Shortcut wizard, source browse', () => {
     expect(calls.some((u) => u.includes('/api/lakehouse/paths?container='))).toBe(false);
   });
 
-  // FAILS IF a refused container listing renders as an empty folder (the refusal
-  // text absent) or gives no route forward (the lakehouse hint absent).
+  // FAILS IF a refused container listing renders as an empty folder (the
+  // message absent), or if the route's "Open the lakehouse and browse from its
+  // editor." step is shown here, where the next step is to pick a source.
   it('shows the refusal for a direct container browse and points to a source lakehouse', async () => {
     installStatusFetch(SOURCES);
     const { ShortcutWizard } = await import('@/lib/components/onelake/shortcut-wizard');
@@ -167,8 +168,8 @@ describe('Shortcut wizard, source browse', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Next$/ }));
 
     const bar = await screen.findByTestId('shortcut-browse-error', {}, { timeout: 5000 });
-    expect(bar.textContent).toContain(REFUSAL);
-    expect(bar.textContent).toMatch(/pick a source lakehouse/);
+    expect(bar.textContent).toMatch(/limited to tenant admins\. Go back and pick a source lakehouse/);
+    expect(bar.textContent).not.toMatch(/Open the lakehouse/);
     expect(screen.queryByText(/Empty folder/)).toBeNull();
   });
 });
@@ -190,18 +191,38 @@ describe('OneLake security tab, folder picker', () => {
     return dlg;
   }
 
-  // FAILS IF the 403 for a mirrored item stays a red error under a picker that can
-  // never be filled (radio still enabled, mode still "selected", so Next stays
-  // disabled), or if the route's reason is not shown.
-  it('mirrored item: disables Selected folders with the route reason and keeps the wizard finishable', async () => {
+  // A refused listing must not change the scope the user chose. FAILS IF the
+  // refusal switches the role to "All folders" (the round-2 behaviour: the
+  // Selected radio would be unchecked and All checked), if the route's reason is
+  // not shown, or if a folder cannot be typed in its place (no `/Tables/sales`
+  // checkbox after Add, and Next stays disabled).
+  it('mirrored item: keeps Selected folders, shows the route reason, and accepts a typed folder', async () => {
     installStatusFetch({ '/security-roles': ROLES, '/api/lakehouse/paths': refused });
     const dlg = await openStep2('mirrored-database');
 
     const bar = await within(dlg).findByTestId('security-list-refused', {}, { timeout: 5000 });
     expect(bar.textContent).toContain(REFUSAL);
-    expect(within(dlg).getByRole('radio', { name: /Selected folders/, hidden: true })).toBeDisabled();
-    expect(within(dlg).getByRole('radio', { name: /All folders/, hidden: true })).toBeChecked();
-    expect(within(dlg).getByRole('button', { name: /^Next$/, hidden: true })).not.toBeDisabled();
+    expect(within(dlg).getByRole('radio', { name: /Selected folders/, hidden: true })).toBeChecked();
+    // FAILS IF the refusal disables Selected folders: a typed folder is the way
+    // on, so the option has to stay available.
+    expect(within(dlg).getByRole('radio', { name: /Selected folders/, hidden: true })).not.toBeDisabled();
+    expect(within(dlg).getByRole('radio', { name: /All folders/, hidden: true })).not.toBeChecked();
+    // Nothing chosen yet, so the wizard cannot move on with an empty selection.
+    const next = within(dlg).getByRole('button', { name: /^Next$/, hidden: true });
+    expect(next).toBeDisabled();
+
+    const typed = within(dlg).getByPlaceholderText('Tables/sales');
+    const add = within(dlg).getByRole('button', { name: /^Add$/, hidden: true });
+    // A path outside Tables/ and Files/ is not accepted. FAILS IF the typed
+    // value is added unvalidated.
+    fireEvent.change(typed, { target: { value: 'raw/sales' } });
+    expect(add).toBeDisabled();
+    fireEvent.change(typed, { target: { value: ' Tables/sales/ ' } });
+    expect(add).not.toBeDisabled();
+    fireEvent.click(add);
+    // Normalised to the picker's own shape: leading slash, no trailing slash.
+    expect(within(dlg).getByRole('checkbox', { name: '/Tables/sales', hidden: true })).toBeChecked();
+    expect(next).not.toBeDisabled();
     expect(document.body.contains(dlg)).toBe(true);
     expect(calls.some((u) => u.includes('/api/lakehouse/paths?container=bronze'))).toBe(true);
   });
@@ -253,5 +274,34 @@ describe('Governance policies, restrict-access ADLS path picker', () => {
     fireEvent.change(screen.getByLabelText('Path under the container (typed)'), { target: { value: '/raw/sales' } });
     // Leading slash stripped: the restrict route takes a container-relative path.
     expect(await screen.findByText('bronze/raw/sales', {}, { timeout: 5000 })).toBeInTheDocument();
+  }, 20000);
+});
+
+describe('Governance policies, new Access policy, ADLS container', () => {
+  // The container is chosen from the deployment's real container list, not
+  // typed. FAILS IF the field is a free-text box again (no combobox named
+  // "ADLS container" in the dialog, and the `bronze` placeholder box is back),
+  // or if the options are not the listed containers (no `landing` option, and
+  // the preview never reads "on landing").
+  it('offers the listed containers and uses the chosen one', async () => {
+    installStatusFetch({
+      '/api/lakehouse/containers': () => ({ body: { ok: true, containers: [{ name: 'bronze' }, { name: 'landing' }] } }),
+      '/api/governance/policies': () => ({ body: { ok: true, policies: [] } }),
+    });
+    const { default: PoliciesPage } = await import('@/app/governance/policies/page');
+    wrap(<PoliciesPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /^New policy$/ }, { timeout: 10000 }));
+    const kind = await screen.findByRole('combobox', { name: /^Kind$/ }, { timeout: 5000 });
+    const dlg = openDialogOf(kind);
+    fireEvent.click(kind);
+    fireEvent.click(await screen.findByRole('option', { name: 'Access' }, { timeout: 5000 }));
+
+    const container = await within(dlg).findByRole('combobox', { name: /^ADLS container/, hidden: true }, { timeout: 5000 });
+    await waitFor(() => expect(container).not.toBeDisabled());
+    expect(within(dlg).queryByPlaceholderText('bronze')).toBeNull();
+    fireEvent.click(container);
+    fireEvent.click(await screen.findByRole('option', { name: 'landing' }, { timeout: 5000 }));
+    expect(await within(dlg).findByText(/ Read on landing$/, {}, { timeout: 5000 })).toBeInTheDocument();
   }, 20000);
 });

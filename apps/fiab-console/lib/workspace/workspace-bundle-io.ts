@@ -31,7 +31,7 @@ import type { Workspace, WorkspaceItem, WorkspaceFolder } from '@/lib/types/work
 import { buildWorkspaceBundle, type LoomWsBundle, type WorkspacePermissionRow } from './workspace-export';
 import { summarizePlan, type ImportPlan, type ImportSummary } from './workspace-import';
 import { carryServerDerivedScope } from '@/app/api/items/_lib/item-crud';
-import { stripLakehouseCreateState } from '@/lib/azure/auto-bind';
+import { autoBindOnCreate, stripLakehouseCreateState } from '@/lib/azure/auto-bind';
 
 /**
  * Read everything the bundle needs from Cosmos and serialize it. All item /
@@ -97,12 +97,18 @@ export async function executeWorkspaceImport(
     if (planned.action === 'create' && planned.doc) {
       // A lakehouse created from a bundle keeps none of the keys that say where
       // an item's files are: the bundle's values describe the item it was
-      // exported from. The new item gets its own root when it is first opened.
+      // exported from. Its own root is created here by auto-bind, as for any
+      // new lakehouse; if that does not finish (a slow or failed storage call),
+      // the storage resolver creates it on the item's first open.
       const doc: WorkspaceItem = planned.doc.itemType === 'lakehouse'
         ? { ...planned.doc, state: stripLakehouseCreateState(planned.doc.state as Record<string, unknown>) }
         : planned.doc;
       const { resource } = await items.items.create<WorkspaceItem>(doc);
       if (resource) void upsertLoomDoc(docForItem(resource, target.tenantId));
+      // Lakehouses only: their binding is one directory create. Other item
+      // types bind on first open, as they did before, so an import of many
+      // items does not wait on a control plane per item. Never throws.
+      if (resource && resource.itemType === 'lakehouse') await autoBindOnCreate(resource);
     } else if (planned.action === 'overwrite' && planned.existingId && planned.overwrite) {
       const handle = items.item(planned.existingId, target.id);
       let existing: WorkspaceItem | undefined;

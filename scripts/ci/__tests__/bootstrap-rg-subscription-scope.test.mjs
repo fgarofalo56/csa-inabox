@@ -1,0 +1,420 @@
+/**
+ * check-bootstrap-rg-subscription-scope tests (#4765).
+ *
+ * The guard exists because an unscoped `az … -g "$ADMIN_RG"` in the post-deploy
+ * bootstrap asks whichever subscription the az profile happens to hold. When that
+ * is not the admin subscription the call gets `(ResourceGroupNotFound)`, and
+ * `continue-on-error` reports it as success.
+ *
+ * Every assertion below names, in its message or the comment above it, the
+ * value that would turn it red (assertion-design.md). Three of them run against
+ * the REAL workflow text with an in-memory plant, so a lexer that drifted off the
+ * workflow's actual shapes cannot pass by agreeing with its own fixtures. The
+ * tracked workflow is never written; the CLI tests plant into an OS temp dir.
+ *
+ * Run: node --test scripts/ci/__tests__/bootstrap-rg-subscription-scope.test.mjs
+ */
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import {
+  scanText,
+  splitCommands,
+  judgeCommand,
+  runControls,
+  MUST_FLAG,
+  MUST_NOT_FLAG,
+  DEFAULT_TARGETS,
+  RG_TO_SUB,
+  FAILURE_GATE,
+  checkFailureGate,
+  runGateControls,
+  GATE_MUST_FLAG,
+  GATE_MUST_NOT_FLAG,
+  PROFILE_PINS,
+  checkProfilePins,
+  runPinControls,
+  PIN_MUST_FLAG,
+  PIN_MUST_NOT_FLAG,
+} from '../check-bootstrap-rg-subscription-scope.mjs';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const REPO = resolve(HERE, '..', '..', '..');
+const GUARD = resolve(HERE, '..', 'check-bootstrap-rg-subscription-scope.mjs');
+const WORKFLOW = resolve(REPO, DEFAULT_TARGETS[0]);
+
+const arms = (src) => scanText(src).violations.map((v) => v.arm);
+const rows = (src) => scanText(src).violations.map((v) => ({ arm: v.arm, line: v.line, rgVar: v.rgVar }));
+
+// ── The two arms, one line ─────────────────────────────────────────────────
+
+test('unscoped: -g "$ADMIN_RG" with no --subscription is flagged', () => {
+  // Breaks if judgeCommand stops treating a missing --subscription as a violation.
+  assert.deepEqual(arms('az identity list -g "$ADMIN_RG" -o tsv'), ['unscoped']);
+});
+
+test('scoped: the same call with --subscription "$ADMIN_SUB" is clean — the positive pair of the test above', () => {
+  // Breaks if the scanner flags every -g "$ADMIN_RG" regardless of scope (an
+  // over-broad guard that would pass the unscoped test above by construction).
+  assert.deepEqual(arms('az identity list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" -o tsv'), []);
+  // And the scan did SEE it: a guarded population of 1, not 0.
+  assert.equal(scanText('az identity list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" -o tsv').guarded, 1);
+});
+
+test('mis-scoped: the admin group under $DLZ_SUB and the DLZ group under $ADMIN_SUB are both flagged', () => {
+  // Breaks if the guard only checks that SOME --subscription is present.
+  assert.deepEqual(arms('az identity list -g "$ADMIN_RG" --subscription "$DLZ_SUB"'), ['mis-scoped']);
+  assert.deepEqual(arms('az resource list --subscription "$ADMIN_SUB" -g $DLZ_RG'), ['mis-scoped']);
+  // The correct DLZ pairing is clean — breaks if RG_TO_SUB maps DLZ_RG anywhere but DLZ_SUB.
+  assert.equal(RG_TO_SUB.DLZ_RG, 'DLZ_SUB');
+  assert.deepEqual(arms('az resource list --subscription "$DLZ_SUB" -g $DLZ_RG'), []);
+});
+
+test('flag spellings: --resource-group, ${ADMIN_RG}, bare $ADMIN_RG and --subscription= are all read', () => {
+  // Each line breaks if the corresponding spelling stops being recognised: an
+  // unrecognised -g spelling reads as "not guarded" (expected [] would still be
+  // wrong for the first three, which must flag).
+  assert.deepEqual(arms('az keyvault list --resource-group "${ADMIN_RG}"'), ['unscoped']);
+  assert.deepEqual(arms('az keyvault list -g $ADMIN_RG'), ['unscoped']);
+  assert.deepEqual(arms("az keyvault list -g '$ADMIN_RG'"), ['unscoped']);
+  // Breaks if the `--subscription=value` form is not parsed (it would read as unscoped).
+  assert.deepEqual(arms('az acr list -g "$ADMIN_RG" --subscription="$ADMIN_SUB"'), []);
+});
+
+// ── Continuations and CRLF — the shapes a physical-line guard gets wrong ────
+
+test('wrapped: --subscription on a `\\` continuation line is scoped, and the verdict points at the FIRST line', () => {
+  const src = [
+    'echo start',
+    'if az containerapp update -n loom-console -g "$ADMIN_RG" \\',
+    '    --subscription "$ADMIN_SUB" \\',
+    '    --set-env-vars "A=$B" -o none; then',
+    '  echo ok',
+    'fi',
+  ].join('\n');
+  // Breaks if continuations are not folded: line 2 alone has -g and no --subscription.
+  assert.deepEqual(rows(src), []);
+  assert.equal(scanText(src).guarded, 1, 'the wrapped `if az …` command must be SEEN (0 = the `if` keyword hid it)');
+});
+
+test('wrapped: -g on a continuation line with no --subscription anywhere is flagged at the command line', () => {
+  const src = ['echo start', 'X=$(az containerapp show -n loom-console \\', '  -g "$ADMIN_RG" \\', '  --query id -o tsv)'].join('\n');
+  // Breaks if continuations are not folded (the -g line has no `az` and is ignored),
+  // or if the reported line is the -g line (3) rather than the invocation (2).
+  assert.deepEqual(rows(src), [{ arm: 'unscoped', line: 2, rgVar: 'ADMIN_RG' }]);
+});
+
+test('CRLF: a CRLF file with a continuation is judged the same as LF, both directions', () => {
+  const bad = 'az role assignment create --assignee "$P" \\\r\n  --role Reader -g "$ADMIN_RG"\r\n';
+  const good = 'az role assignment create --assignee "$P" \\\r\n  -g "$ADMIN_RG" --subscription "$ADMIN_SUB"\r\n';
+  // Breaks if `\\\r` is not recognised as a continuation (bad: the -g line has no az -> []),
+  // or if a trailing `\r` is glued onto "$ADMIN_SUB" so varName() rejects it (good -> mis-scoped).
+  assert.deepEqual(arms(bad), ['unscoped']);
+  assert.deepEqual(arms(good), []);
+});
+
+// ── The lexer: commands, not lines ─────────────────────────────────────────
+
+test('the second command of an `||` pair is judged on its own — a line containing --subscription is not enough', () => {
+  const src = 'X=$(az a show -g "$ADMIN_RG" --subscription "$ADMIN_SUB" -o tsv || az a show -g "$ADMIN_RG" -o tsv)';
+  // Breaks if the lexer does not split on `||` (the one merged command carries a
+  // --subscription and reads as scoped -> []).
+  assert.deepEqual(arms(src), ['unscoped']);
+  assert.equal(scanText(src).guarded, 2);
+});
+
+test('splitCommands: separators and substitutions produce the expected command list', () => {
+  // Breaks on: no split at `;`/`&&`/`|` (fewer commands), `2>&1` treated as a
+  // separator (a spurious `1` command), or $( ) not lifted out (az hidden inside a word).
+  const cmds = splitCommands('A=$(az x -g "$ADMIN_RG" 2>&1 | tail -1) && echo "done; ok" ; b c').map((w) => w[0]);
+  assert.deepEqual(cmds, ['az', 'tail', 'A=\u0000SUBST\u0000', 'echo', 'b']);
+});
+
+test('not a call: az inside quotes, in a comment, or a non-az command taking -g', () => {
+  // Each breaks if `az` is matched as a substring instead of an unquoted word, or
+  // if a `#` comment is lexed as code. Paired with the unscoped tests above,
+  // which show the same -g "$ADMIN_RG" IS flagged when it is a real az call.
+  assert.deepEqual(arms('echo "::warning::run az identity list -g $ADMIN_RG to check"'), []);
+  assert.deepEqual(arms('# az identity list -g "$ADMIN_RG"'), []);
+  assert.deepEqual(arms('echo ok  # az identity list -g "$ADMIN_RG"'), []);
+  assert.deepEqual(arms('grep -g "$ADMIN_RG" file'), []);
+  assert.equal(judgeCommand(['grep', '-g', '"$ADMIN_RG"']), null);
+  // Breaks if `az` is matched as a SUBSTRING of any word: `lazy.txt` contains "az"
+  // and sits beside an unquoted -g "$ADMIN_RG". (The quoted-echo case above does
+  // NOT witness this: its -g is inside the quoted word, so no -g flag is parsed
+  // either way — measured, a substring mutant passed it.)
+  assert.deepEqual(arms('grep -g "$ADMIN_RG" lazy.txt'), []);
+});
+
+test('splitCommands: a stray CR is whitespace (defence in depth — EQUIVALENT through scanText)', () => {
+  // Breaks if `\r` is dropped from the lexer's whitespace set: the CR would glue
+  // onto "$ADMIN_SUB" and varName() would reject it. DISCLOSED: through scanText
+  // this mutant is equivalent, because readLogicalLines splits on /\r?\n/ and the
+  // lexer never sees a CRLF's CR. This pins only direct callers of splitCommands.
+  assert.deepEqual(splitCommands('az x -g "$ADMIN_RG" --subscription "$ADMIN_SUB"\r'), [
+    ['az', 'x', '-g', '"$ADMIN_RG"', '--subscription', '"$ADMIN_SUB"'],
+  ]);
+});
+
+test('an unrelated resource group is not in scope', () => {
+  // Breaks if the guard widens to every -g (COSMOS_RG has its own subscription var).
+  assert.deepEqual(arms('az cosmosdb show -n x -g "$COSMOS_RG"'), []);
+});
+
+// ── The embedded control ───────────────────────────────────────────────────
+
+test('embedded control: every MUST_FLAG fixture trips its arm and every MUST_NOT_FLAG fixture is clean', () => {
+  // Iterates the module's OWN fixture lists (lifted, not transcribed) so a fixture
+  // edited in the guard is exercised here too. Breaks if any fixture misbehaves.
+  assert.ok(MUST_FLAG.length >= 2 && MUST_NOT_FLAG.length >= 2, 'fixture lists must not be emptied');
+  assert.deepEqual(new Set(MUST_FLAG.map((c) => c.arm)), new Set(['unscoped', 'mis-scoped']), 'both arms need a MUST_FLAG fixture');
+  for (const c of MUST_FLAG) assert.ok(arms(c.src).includes(c.arm), `MUST_FLAG missed: ${c.why}`);
+  for (const c of MUST_NOT_FLAG) assert.deepEqual(arms(c.src), [], `MUST_NOT_FLAG tripped: ${c.why}`);
+  assert.deepEqual(runControls(), []);
+});
+
+// ── The real workflow, read but never written ──────────────────────────────
+
+const REAL = readFileSync(WORKFLOW, 'utf8');
+const realLines = () => REAL.split(/\r?\n/);
+
+test('the real bootstrap workflow is clean and non-empty', () => {
+  const r = scanText(REAL);
+  // Breaks if any admin/DLZ az call in the workflow loses its --subscription.
+  assert.deepEqual(r.violations, []);
+  // Breaks if the lexer drifts off the file entirely (0 guarded). Weak on its own;
+  // the two plant tests below are what show the scan reaches this file's text.
+  assert.ok(r.guarded > 50, `expected dozens of guarded az calls, saw ${r.guarded}`);
+});
+
+test('a plant INTO the real workflow text is found at its exact line (ADMIN and DLZ)', () => {
+  const lines = realLines();
+  const anchor = lines.findIndex((l) => l.includes('echo "    SQL warehouse id: $WID"'));
+  assert.ok(anchor > 0, 'anchor line moved — re-aim this plant rather than letting it silently scan nothing');
+  lines.splice(anchor + 1, 0, '          az identity list -g "$ADMIN_RG" -o tsv', '          az storage account list -g $DLZ_RG -o tsv');
+  // Breaks if the scan does not reach the workflow's run: blocks, or reports the
+  // wrong line. Expected lines are the two 1-based positions just inserted.
+  assert.deepEqual(rows(lines.join('\n')), [
+    { arm: 'unscoped', line: anchor + 2, rgVar: 'ADMIN_RG' },
+    { arm: 'unscoped', line: anchor + 3, rgVar: 'DLZ_RG' },
+  ]);
+});
+
+test('removing --subscription from the real, WRAPPED warehouse update is caught (the #4765 site)', () => {
+  const lines = realLines();
+  const site = lines.findIndex((l) => /if az containerapp update -n loom-console -g "\$ADMIN_RG" --subscription "\$ADMIN_SUB" \\$/.test(l));
+  assert.ok(site > 0, 'the wrapped warehouse `if az containerapp update … \\` line moved — re-aim this mutation');
+  lines[site] = lines[site].replace(' --subscription "$ADMIN_SUB"', '');
+  // Breaks if a wrapped `if az …` command is invisible to the scanner (-> []).
+  assert.deepEqual(rows(lines.join('\n')), [{ arm: 'unscoped', line: site + 1, rgVar: 'ADMIN_RG' }]);
+});
+
+// ── Second rule: the #4765 failure gate, on the REAL workflow ──────────────
+// The ids are LIFTED from the guard's FAILURE_GATE, so a renamed gate cannot make
+// these tests aim at a step the guard no longer looks for.
+
+const gateBounds = (lines) => {
+  const idLine = lines.findIndex((l) => l.trim() === `id: ${FAILURE_GATE.gateId}`);
+  assert.ok(idLine > 0, `no "id: ${FAILURE_GATE.gateId}" line in the real workflow — re-aim these tests`);
+  let start = idLine;
+  while (start > 0 && !/^ {6}- name:/.test(lines[start])) start -= 1;
+  assert.ok(start > 0 && idLine - start < 16, 'could not find the gate step\'s "- name:" line above its id');
+  return { start, idLine };
+};
+
+test('failure gate: intact on the real workflow — present, last, always(), reads every gated outcome', () => {
+  // Breaks if the real gate is removed, loses always(), stops being last, gains
+  // continue-on-error, stops exiting 1, or stops reading steps.<id>.outcome.
+  assert.deepEqual(checkFailureGate(REAL), []);
+  // Positive pins, so the empty list above cannot come from the checker looking at nothing.
+  assert.ok(REAL.includes(`id: ${FAILURE_GATE.gateId}`), 'the gate step id is in the real workflow');
+  for (const id of FAILURE_GATE.gatedIds) {
+    assert.ok(REAL.includes(`id: ${id}`), `gated step id ${id} is in the real workflow`);
+    assert.ok(REAL.includes(`steps.${id}.outcome`), `the real gate reads steps.${id}.outcome`);
+  }
+});
+
+test('failure gate: REMOVING the gate step from the real workflow is caught', () => {
+  const lines = realLines();
+  const { start } = gateBounds(lines);
+  const problems = checkFailureGate(lines.slice(0, start).join('\n'));
+  // Breaks if a bootstrap with no gate passes — the defect #4765 is about: a failed
+  // continue-on-error step concluding the job as success. The message is only
+  // emitted AFTER the job's steps were found, so a parse failure cannot satisfy it.
+  assert.match(problems.join('\n'), new RegExp(`no step with id '${FAILURE_GATE.gateId}'`));
+});
+
+test('failure gate: the real gate losing always() (deleted, or turned into success()) is caught', () => {
+  const lines = realLines();
+  const { start, idLine } = gateBounds(lines);
+  const ifLine = lines.findIndex((l, i) => i > start && i < idLine + 4 && /^ {8}if: always\(\)\s*$/.test(l));
+  assert.ok(ifLine > start, 'the gate step\'s "if: always()" line moved — re-aim this mutation');
+  const dropped = [...lines];
+  dropped.splice(ifLine, 1);
+  // Breaks if a gate with no `if:` passes. The default is success(), which SKIPS
+  // the gate on exactly the runs where an earlier step failed the job.
+  assert.match(checkFailureGate(dropped.join('\n')).join('\n'), /runs if: \(unset, i\.e\. success\(\)\)/);
+  const narrowed = [...lines];
+  narrowed[ifLine] = '        if: success()';
+  // Breaks if an explicit success() passes.
+  assert.match(checkFailureGate(narrowed.join('\n')).join('\n'), /runs if: success\(\)/);
+});
+
+test('failure gate: a step appended after the real gate, or the warehouse step losing its id, is caught', () => {
+  const after = `${REAL.replace(/\s+$/, '')}\n\n      - name: A later step\n        run: echo later\n`;
+  // Breaks if the gate is allowed to stop being the last step (the later step's failure would be ungated).
+  assert.match(checkFailureGate(after).join('\n'), /not the LAST step/);
+  const [gated] = FAILURE_GATE.gatedIds;
+  const noId = REAL.replace(new RegExp(`\\n {8}id: ${gated}\\r?\\n`), '\n');
+  assert.notEqual(noId, REAL, 'the gated step id line was not found — re-aim this mutation');
+  // Breaks if the gate may read the outcome of a step id that no longer exists
+  // (steps.<id>.outcome is then '' and the gate never fires).
+  assert.match(checkFailureGate(noId).join('\n'), new RegExp(`gated step id '${gated}' is not in job`));
+});
+
+test('failure gate: embedded controls — every GATE_MUST_FLAG fixture is flagged, every GATE_MUST_NOT_FLAG is clean', () => {
+  // Lifted from the module. Breaks if any fixture misbehaves, or the lists are emptied.
+  assert.ok(GATE_MUST_FLAG.length >= 5 && GATE_MUST_NOT_FLAG.length >= 1, 'gate fixture lists must not be emptied');
+  for (const c of GATE_MUST_FLAG) assert.ok(checkFailureGate(c.src).length > 0, `GATE_MUST_FLAG missed: ${c.why}`);
+  for (const c of GATE_MUST_NOT_FLAG) assert.deepEqual(checkFailureGate(c.src), [], `GATE_MUST_NOT_FLAG tripped: ${c.why}`);
+  assert.deepEqual(runGateControls(), []);
+});
+
+// ── The CLI ────────────────────────────────────────────────────────────────
+
+const runGuard = (args, cwd = REPO) => spawnSync(process.execPath, [GUARD, ...args], { cwd, encoding: 'utf8' });
+
+test('CLI: exits 0 on the real workflow', () => {
+  const r = runGuard([]);
+  // Breaks on any violation in the workflow, a broken failure gate, or a control failure (exit 1).
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /all scoped to the matching subscription/);
+  assert.match(r.stdout, new RegExp(`failure gate '${FAILURE_GATE.gateId}' is last, always\\(\\)`));
+});
+
+test('CLI: exits 1 on a copy of the real workflow whose failure gate was removed', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'rgscope-gate-'));
+  try {
+    const lines = realLines();
+    const { start } = gateBounds(lines);
+    const copy = join(dir, 'bootstrap-no-gate.yml');
+    writeFileSync(copy, lines.slice(0, start).join('\r\n'));
+    const r = runGuard([copy]);
+    // Breaks if the CLI does not fail (exit 1) on a bootstrap with no gate. The
+    // copy's az calls are all scoped, so the scope rule contributes nothing here:
+    // the non-zero exit comes from the gate rule alone.
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stderr, /the #4765 failure gate is broken/);
+    assert.match(r.stdout, /all scoped to the matching subscription/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI: exits 1 on a planted file and annotates the planted line; exits 1 on an empty population and on an unreadable file', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'rgscope-'));
+  try {
+    const planted = join(dir, 'planted.yml');
+    writeFileSync(planted, 'steps:\r\n  - run: |\r\n      az keyvault list \\\r\n        -g "$ADMIN_RG" -o tsv\r\n');
+    const r = runGuard([planted]);
+    // Breaks if the CLI annotates the -g line (4) not the az line (3), or misses it.
+    // DISCLOSED: these small fixtures have no failure gate, so the gate rule ALSO
+    // exits 1 on each of them. The status assertions in this test therefore cannot
+    // fail on their own; the stderr MESSAGE assertions are what pin each arm.
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stderr, /line=3::unscoped \(\$ADMIN_RG/);
+
+    const empty = join(dir, 'empty.yml');
+    writeFileSync(empty, 'steps:\n  - run: echo nothing here\n');
+    const e = runGuard([empty]);
+    // Breaks if zero guarded commands is reported as a pass.
+    assert.equal(e.status, 1, e.stdout);
+    assert.match(e.stderr, /found ZERO/);
+
+    const missing = runGuard([join(dir, 'does-not-exist.yml')]);
+    // Breaks if an unreadable target is skipped instead of failing.
+    assert.equal(missing.status, 1, missing.stdout);
+    assert.match(missing.stderr, /cannot read/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI: --self-test runs only the controls and passes', () => {
+  const r = runGuard(['--self-test']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /self-test OK/);
+});
+
+// ── Third rule: profile pins (#4765 review S4), on the REAL workflow ─────────
+// Each plant is ONE edit of the real text, lifted by a literal anchor that must
+// be found exactly once (so a moved line re-aims the test instead of silently
+// planting nothing).
+
+const WEAVE_PIN = '          az account set --subscription "$DLZ_SUB"';
+const SCC_PIN = '          az account set --subscription "$ADMIN_SUB"';
+const onlyLine = (lines, text, what) => {
+  const hits = lines.map((l, i) => (l === text ? i : -1)).filter((i) => i >= 0);
+  assert.equal(hits.length, 1, `expected exactly one "${what}" line in the real workflow, found ${hits.length} — re-aim this test`);
+  return hits[0];
+};
+
+test('profile pins: every PIN_MUST_FLAG control is flagged and every PIN_MUST_NOT_FLAG control is clean', () => {
+  // Breaks if the rule stops detecting a removed / mis-pointed / suppressed /
+  // late / set +e pin, or starts flagging the intact or CRLF ${VAR} form.
+  assert.deepEqual(runPinControls(), []);
+  assert.ok(PIN_MUST_FLAG.length >= 7 && PIN_MUST_NOT_FLAG.length >= 2);
+  assert.deepEqual(PROFILE_PINS.map((p) => p.sub), ['ADMIN_SUB', 'DLZ_SUB']);
+});
+
+test('profile pins: the real workflow is intact, and removing, re-pointing or suppressing the Weave pin is caught', () => {
+  // Breaks if the real workflow's pins stop satisfying the rule (the positive half).
+  assert.deepEqual(checkProfilePins(REAL), []);
+  const lines = realLines();
+  const at = onlyLine(lines, WEAVE_PIN, 'Weave DLZ pin');
+  const removed = [...lines];
+  removed.splice(at, 1);
+  // Breaks if deleting the pin before bootstrap-weave-pg.sh passes: the profile is
+  // then whatever the SCC step left ($ADMIN_SUB), and the script's -g "$DLZ_RG" misses.
+  assert.match(checkProfilePins(removed.join('\n')).join('\n'), /bootstrap-weave-pg\.sh with no `az account set --subscription "\$DLZ_SUB"`/);
+  const repointed = [...lines];
+  repointed[at] = SCC_PIN;
+  // Breaks if a pin to the WRONG subscription passes.
+  assert.match(checkProfilePins(repointed.join('\n')).join('\n'), /names \$ADMIN_SUB, not \$DLZ_SUB/);
+  const suppressed = [...lines];
+  suppressed[at] = `${WEAVE_PIN} || true`;
+  // Breaks if a suppressed pin passes (a failed pin would then not stop the step).
+  assert.match(checkProfilePins(suppressed.join('\n')).join('\n'), /is followed by `\|\| true`/);
+});
+
+test('profile pins: removing the real SCC admin pin is caught', () => {
+  const lines = realLines();
+  const at = onlyLine(lines, SCC_PIN, 'SCC admin pin');
+  lines.splice(at, 1);
+  // Breaks if the SCC step can call provision-scc-labels-sidecar.sh with no admin pin.
+  assert.match(checkProfilePins(lines.join('\n')).join('\n'), /provision-scc-labels-sidecar\.sh with no `az account set --subscription "\$ADMIN_SUB"`/);
+});
+
+test('CLI: exits 1 on a copy of the real workflow whose Weave DLZ pin was removed', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'rgscope-pin-'));
+  try {
+    const lines = realLines();
+    lines.splice(onlyLine(lines, WEAVE_PIN, 'Weave DLZ pin'), 1);
+    const copy = join(dir, 'bootstrap-no-weave-pin.yml');
+    writeFileSync(copy, lines.join('\r\n'));
+    const r = runGuard([copy]);
+    // Breaks if the CLI does not fail on the pin alone: the copy's gate and its az
+    // calls are intact, so the non-zero exit comes from the pin rule.
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stderr, /profile pin broken \(#4765\).*bootstrap-weave-pg\.sh/);
+    assert.match(r.stdout, /failure gate 'bootstrap_failure_gate' is last/);
+    assert.match(r.stdout, /all scoped to the matching subscription/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
