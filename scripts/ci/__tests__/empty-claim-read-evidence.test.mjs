@@ -159,69 +159,9 @@ export function Panel() {
 // removal turns it RED; the mutation run is in the PR body.
 // ---------------------------------------------------------------------------
 
-const variant = (base, from, to) => {
-  assert.ok(base.includes(from), `fixture edit did not apply: ${JSON.stringify(from)}`);
-  const out = base.replace(from, to);
-  assert.notEqual(out, base);
-  return out;
-};
-
-/** finops-cockpit-pane.tsx's shape: a RESOLVING fetcher + a same-file fold. */
-const WRAPPED = `'use client';
-import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-
-async function getJson(url: string): Promise<any> {
-  const res = await clientFetch(url, { cache: 'no-store' });
-  const json = await res.json().catch(() => ({}));
-  return { ...json, status: res.status };
-}
-
-function readState(q: { isError: boolean; data: any }) {
-  const status = typeof q.data?.status === 'number' ? q.data.status : null;
-  const httpFailed = status !== null && status >= 400;
-  return { isError: q.isError || httpFailed };
-}
-
-export function Pane() {
-  const [dimension, setDimension] = useState('service');
-  const rowsQ = useQuery({ queryKey: ['r', dimension], queryFn: () => getJson('/api/r') });
-  const otherQ = useQuery({ queryKey: ['o'], queryFn: () => getJson('/api/o') });
-  const rows = rowsQ.data?.rows || [];
-  return (
-    <div>
-      {rowsQ.isLoading ? <Spinner /> :
-        readState(rowsQ).isError ? null :
-        rows.length ? <Chart rows={rows} /> : (
-          <EmptyState title="No rows" />
-        )}
-    </div>
-  );
-}
-`;
-
-/** The loud shape: the queryFn itself throws on a not-ok body. */
-const LOUD = `'use client';
-import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-
-export function Panel() {
-  const [open, setOpen] = useState(false);
-  const q = useQuery({
-    queryKey: ['p'],
-    queryFn: async () => {
-      const r = await clientFetch('/api/p');
-      const j = await r.json();
-      if (!j?.ok) throw new Error(j?.error || 'load failed');
-      return j;
-    },
-  });
-  if (q.isLoading) return <Spinner />;
-  if (q.isError) return <MessageBar intent="error">failed</MessageBar>;
-  const data = q.data!;
-  return <div>{data.prompts.length === 0 ? <EmptyState title="No prompts" /> : <List items={data.prompts} />}</div>;
-}
-`;
+// The bases (WRAPPED, LOUD) and the review's acceptance set live in ONE module,
+// so this suite and the round-6 comparison harness judge the same text.
+import { variant, WRAPPED, LOUD, FIXTURES, REVIEW_IDS } from './_empty-claim-e6-acceptance.mjs';
 
 test('E6 POSITIVE: a folded react-query outcome gates the claim (the finops cockpit shape)', () => {
   // Breaks if E6 stops recognising `W(Q).isError`, the fold, or the derived `rows`.
@@ -355,3 +295,38 @@ test('E6 NEGATIVE: an emptiness test over a const that mixes in useState is ungu
   const src = variant(WRAPPED, 'const rows = rowsQ.data?.rows || [];', 'const rows = rowsQ.data?.rows || dimension;');
   assert.deepEqual(verdicts(src), ['unguarded']);
 });
+
+// ---------------------------------------------------------------------------
+// The acceptance set from the #4771 re-review (5898687296). Round 5's E6 called
+// 18 of these SAFE; the merge-base guard called none of them SAFE. Each row
+// below goes RED if the rule it names is removed (arms in the PR body).
+// ---------------------------------------------------------------------------
+
+test('the acceptance set carries every fixture the review named, by id', () => {
+  // A LITERAL list, not derived from FIXTURES: deleting a fixture from the
+  // module turns this RED instead of silently shrinking the set.
+  assert.deepEqual([...REVIEW_IDS].sort(), [
+    '10', '11', '1a', '1b', '1c', '2b', '2c', '3a', '3b', '3c', '4a', '4b', '5a', '5b',
+    '5c', '5d', '6a', '6b', '7a', '7b', '8a', '9a', '9b', 'N1', 'N2', 'P1', 'P2', 'U1',
+  ]);
+  // 34 fixtures (28 + 6 extras) minus 2 positive controls minus 1 unjudged.
+  assert.equal(FIXTURES.filter((f) => f.expect === 'unguarded').length, 31);
+});
+
+for (const f of FIXTURES) {
+  test(`acceptance ${f.id} (${f.klass}): ${f.expect} — ${f.rule}`, () => {
+    const r = judgeSource(f.src, '<test>');
+    if (f.expect === 'unjudged') {
+      assert.deepEqual(r.claims, []);
+      assert.equal(r.noReadClaims, 1);
+      return;
+    }
+    const got = [...r.claims].sort((a, b) => a.line - b.line);
+    assert.ok(got.length >= 1, `${f.id}: no claim judged`);
+    const judged = f.firstClaimOnly ? [got[0]] : got;
+    for (const c of judged) {
+      assert.equal(c.verdict, f.expect, `${f.id} must be ${f.expect} (stopped by: ${f.rule}); got ${c.verdict} ${c.why || ''}`);
+    }
+    if (f.expect === 'safe') assert.match(String(got[0].why), /^E6 /);
+  });
+}

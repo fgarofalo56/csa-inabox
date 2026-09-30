@@ -318,7 +318,7 @@ export function FinopsCockpitPane() {
             <SplitPane direction="horizontal" defaultSize="55%" minSize={280} storageKey="finops-anomalies" dividerLabel="Resize anomaly feed">
               <div className={styles.pane}>
                 <Caption1 className={styles.tileLabel}>Live feed — detected against the real daily series</Caption1>
-                {anomaliesQ.isLoading ? <Spinner size="tiny" /> :
+                {anomaliesQ.isPending ? <Spinner size="tiny" /> :
                   /* #3739 — the QueryErrorBar above already says the read did not
                      complete ("An empty feed below would be misleading"). Falling
                      through to the EmptyState made this pane assert, two lines
@@ -326,6 +326,10 @@ export function FinopsCockpitPane() {
                      range — a claim a 504 never established (deploy-integrity R7).
                      Matches the forecast/breakdown panels, which already do this. */
                   readState(anomaliesQ).isError ? null :
+                  /* #4771 - a gated 200 (Monitor not configured) carries feed: [] and
+                     the GateBar above already says why; an empty feed under a gate is
+                     not evidence that spend is within range, so claim nothing. */
+                  anomaliesQ.data?.gate ? null :
                   feed.length ? (
                     <div className={styles.scroll}>
                       <Table size="small" aria-label="Anomaly feed">
@@ -370,7 +374,7 @@ export function FinopsCockpitPane() {
           <QueryErrorBar query={readState(breakdownQ)} subject="the spend breakdown"
             endpoint="/api/admin/finops/breakdown"
             reassurance="This says nothing about whether there is spend to break down — the read did not complete." />
-          {breakdownQ.isLoading ? <Spinner label="Loading breakdown…" /> :
+          {breakdownQ.isPending ? <Spinner label="Loading breakdown…" /> :
             readState(breakdownQ).isError ? null :
             breakdownQ.data?.gate ? <GateBar gate={breakdownQ.data.gate} /> :
             (breakdownQ.data?.rows || []).length ? (
@@ -400,13 +404,16 @@ export function FinopsCockpitPane() {
             endpoint="/api/admin/finops/budgets"
             reassurance="Existing budgets are unchanged — they could not be listed." />
           {budgetsQ.data?.gate && <GateBar gate={budgetsQ.data.gate} />}
-          {budgetsQ.isLoading ? <Spinner label="Loading budgets…" /> :
+          {budgetsQ.isPending ? <Spinner label="Loading budgets…" /> :
             /* #3739 — same defect as the anomaly feed: a failed list read fell
                through to "No budgets yet", which is a statement about the
                customer's Azure Consumption budgets that the read never made.
                The QueryErrorBar above carries the truth ("Existing budgets are
                unchanged — they could not be listed"). */
             readState(budgetsQ).isError ? null :
+            /* #4771 - same for a gated 200: budgets: [] under the GateBar is not
+               a statement that the subscription has no budgets. */
+            budgetsQ.data?.gate ? null :
             budgets.length ? (
               <div className={styles.scroll}>
                 <Table aria-label="Budgets">
