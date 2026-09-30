@@ -96,7 +96,8 @@ describe('B-6 — the SCIM identity diagnostic reaches admin readers only', () =
     const { buildDefaultRegistry } = await import('@/lib/azure/copilot-orchestrator');
     const tool = buildDefaultRegistry().get('loom_self_audit');
     expect(tool).toBeDefined();
-    const out = JSON.stringify(await tool!.handler({} as any));
+    // ctx stays undefined, exactly as before; the cast only satisfies the 2-arg type.
+    const out = JSON.stringify(await tool!.handler({} as any, undefined as any));
     expect(out).not.toContain(APP_ID);
     expect(out).not.toContain(NAME);
     expect(out).toMatch(/failed \(permission\)/);

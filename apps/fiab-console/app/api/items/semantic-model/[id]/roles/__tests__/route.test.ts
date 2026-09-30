@@ -52,7 +52,7 @@ const updateOwnedItemMock = vi.fn(
   },
 );
 vi.mock('@/app/api/items/_lib/item-crud', () => ({
-  loadOwnedItem: (...a: any[]) => loadOwnedItemMock(...(a as [string, string, string])),
+  loadOwnedItem: (...a: any[]) => loadOwnedItemMock(...(a as [string, string])),
   updateOwnedItem: (...a: any[]) => updateOwnedItemMock(...(a as [string, string, string, any])),
 }));
 
