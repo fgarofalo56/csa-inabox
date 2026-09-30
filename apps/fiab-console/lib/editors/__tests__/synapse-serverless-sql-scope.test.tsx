@@ -50,7 +50,7 @@ vi.mock('@fluentui/react-components', async () => {
 import { SynapseServerlessSqlEditor } from '../synapse-serverless-sql-editor';
 
 const REMEDIATION = 'Read files under a lakehouse root in this workspace. Remediation-5521.';
-const REFUSAL_ERROR = "The serverless SQL pool editor runs read-only SELECT queries. The location 'https://x' is not accepted.";
+const REFUSAL_ERROR = "This editor runs read-only SELECT queries. The location 'https://x' is not accepted.";
 
 function mount(isTenantAdmin: boolean, queryBody: unknown = { ok: true, columns: ['smoke'], rows: [[1]] }) {
   const mock = installFetchMock({

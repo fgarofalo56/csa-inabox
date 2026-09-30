@@ -89,6 +89,8 @@ vi.mock('@/lib/azure/sql-user-token-store', () => ({ getUserSqlToken: vi.fn(asyn
 vi.mock('@/lib/finops/query-run', () => ({ recordQueryRun: vi.fn(async () => undefined) }));
 
 import { POST } from '../[id]/query/route';
+// The SQL analytics endpoint's query route re-exports this POST; its editor posts there with its own id.
+import { POST as ENDPOINT_POST } from '@/app/api/items/sql-analytics-endpoint/[id]/query/route';
 
 const POOL: any = { id: 'pool-1', itemType: 'synapse-serverless-sql-pool', workspaceId: 'ws-1', displayName: 'P', state: {} };
 
@@ -161,8 +163,30 @@ describe('item authorization', () => {
     const res = await POST(req({ sql: 'SELECT 1' }), ctx('missing'));
     expect(res.status).toBe(404);
     expect(guard.authorizeItemWorkspace.mock.calls.map((c: any[]) => c[1].itemType)).toEqual([
-      'synapse-serverless-sql-pool', 'geo-dataset', 'geo-query',
+      'synapse-serverless-sql-pool', 'sql-analytics-endpoint', 'geo-dataset', 'geo-query',
     ]);
+    expect(ranAnything()).toBe(0);
+  });
+
+  it('a SQL analytics endpoint id posted through its own route is accepted and confined (breaks if that type is not guarded: 404 for every caller)', async () => {
+    db.item = { ...POOL, id: 'sae-1', itemType: 'sql-analytics-endpoint' };
+    const sql = bulk(IN_SECOND);
+    const res = await ENDPOINT_POST(req({ sql, database: 'salesdb' }), ctx('sae-1'));
+    expect(res.status).toBe(200);
+    expect(guard.authorizeItemWorkspace.mock.calls.map((c: any[]) => c[1].itemType)).toEqual([
+      'synapse-serverless-sql-pool', 'sql-analytics-endpoint',
+    ]);
+    // The same non-admin rules apply: master, the editor pool, the prefix.
+    const [target, batch] = synapse.executeQuery.mock.calls[0];
+    expect(target.cacheKey).toBe('sql-pool-reader:k:master');
+    expect(batch).toBe(`USE [master]; ${sql}`);
+  });
+
+  it('a SQL analytics endpoint id with an out-of-root location is refused and nothing runs', async () => {
+    db.item = { ...POOL, id: 'sae-1', itemType: 'sql-analytics-endpoint' };
+    const res = await ENDPOINT_POST(req({ sql: bulk(OUT) }), ctx('sae-1'));
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('query_location_outside_root');
     expect(ranAnything()).toBe(0);
   });
 
@@ -171,7 +195,7 @@ describe('item authorization', () => {
     const res = await POST(req({ sql: 'SELECT 1 AS a' }), ctx('geo-1'));
     expect(res.status).toBe(200);
     expect(guard.authorizeItemWorkspace.mock.calls.map((c: any[]) => c[1].itemType)).toEqual([
-      'synapse-serverless-sql-pool', 'geo-dataset',
+      'synapse-serverless-sql-pool', 'sql-analytics-endpoint', 'geo-dataset',
     ]);
   });
 });
@@ -245,7 +269,8 @@ describe('a caller who is not a tenant admin', () => {
   it('the refusal speaks for this editor, not the lakehouse SQL tab', async () => {
     const res = await POST(req({ sql: 'SELECT name FROM sys.databases' }), ctx());
     const j = await res.json();
-    expect(j.error).toContain('The serverless SQL pool editor');
+    // Four editors share this handler, so the lead names none of them.
+    expect(j.error.startsWith('This editor runs read-only SELECT queries')).toBe(true);
     expect(j.error).not.toContain('SQL tab');
   });
 

@@ -15,9 +15,9 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | --- | ---: |
 | Total routes | 1696 |
 | Public (no session) | 59 |
-| Session-only | 629 |
+| Session-only | 628 |
 | Owner-scoped | 691 |
-| Admin | 317 |
+| Admin | 318 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 499 |
 | Areas | 122 |
@@ -1798,7 +1798,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/synapse-serverless-sql-pool/[id]/connection/route.ts` | GET | session-only |  | Azure Monitor, Azure SQL, Cosmos, Synapse SQL |
 | `items/synapse-serverless-sql-pool/[id]/iqy/route.ts` | POST | session-only |  | — |
 | `items/synapse-serverless-sql-pool/[id]/objects/route.ts` | GET | session-only | ● | ARM, Azure SQL, Managed Identity, Synapse SQL |
-| `items/synapse-serverless-sql-pool/[id]/query/route.ts` | POST | session-only |  | ARM, Azure SQL, Cosmos, Managed Identity, Synapse SQL |
+| `items/synapse-serverless-sql-pool/[id]/query/route.ts` | POST | admin |  | ADLS, ARM, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
 | `items/synapse-serverless-sql-pool/[id]/schema/route.ts` | GET | session-only |  | ARM, Azure SQL, Managed Identity, Synapse SQL |
 | `items/synapse-spark-pool/[id]/auto-pause/route.ts` | POST | session-only |  | ARM, Resource Graph, Synapse |
 | `items/synapse-spark-pool/[id]/config/route.ts` | POST | session-only |  | ARM, Resource Graph, Synapse |
@@ -2425,7 +2425,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 ## Authorization resolvers (derived)
 
-198 function(s) across 89 module(s) reach an owner / workspace-ACL
+199 function(s) across 90 module(s) reach an owner / workspace-ACL
 decision. Derived by `scripts/ci/_route-auth-scope.mjs` from the seeds above —
 nothing here is hand-maintained. A change to this list in a diff means the
 authorization surface moved.
@@ -2460,6 +2460,7 @@ authorization surface moved.
 | `apps/fiab-console/app/api/items/materialized-lake-view/_lib/load.ts` | `loadMlvItem` |
 | `apps/fiab-console/app/api/items/scorecard/config-store.ts` | `loadScorecardConfig` |
 | `apps/fiab-console/app/api/items/semantic-model/_lib/prep-for-ai-store.ts` | `enrichSemanticModelSources`, `readPrepForAi`, `writePrepForAi` |
+| `apps/fiab-console/app/api/items/synapse-serverless-sql-pool/_lib/query-scope.ts` | `guardSqlPoolQueryItem` |
 | `apps/fiab-console/app/api/lakehouse/_lib/item-binding.ts` | `authorizeAndBind` |
 | `apps/fiab-console/app/api/lakehouse/_lib/item-scope.ts` | `authorizeLakehouse`, `scopeItemPath` |
 | `apps/fiab-console/app/api/lakehouse/_lib/reference-scope.ts` | `scopeReference`, `scopeReferenceListing`, `scopeReferencePath` |

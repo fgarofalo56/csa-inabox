@@ -14795,6 +14795,37 @@
           }
         },
         {
+          "id": "sec:authorizer:apps/fiab-console/app/api/items/synapse-serverless-sql-pool/[id]/query/route.ts#POST",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "POST /api/items/synapse-serverless-sql-pool/[id]/query",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "POST /api/items/synapse-serverless-sql-pool/[id]/query",
+            "params": [
+              "id"
+            ],
+            "resourceScoped": true,
+            "callerNamedResourceInputs": [
+              "id"
+            ],
+            "allowPaths": [
+              {
+                "id": "post:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": false,
+            "privilegedSinkKinds": []
+          }
+        },
+        {
           "id": "sec:authorizer:apps/fiab-console/app/api/keyvault/secret-names/route.ts#GET",
           "kind": "authorizer",
           "provenance": "declared",
@@ -49100,6 +49131,11 @@
         {
           "nodeId": "sec:verdict-call:apps/fiab-console/app/api/items/synapse-notebook/[id]/route.ts#GET:authorizeItemWorkspace:9",
           "codeModuleId": "code:apps/fiab-console/app/api/items/synapse-notebook/[id]/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/items/synapse-serverless-sql-pool/[id]/query/route.ts#POST",
+          "codeModuleId": "code:apps/fiab-console/app/api/items/synapse-serverless-sql-pool/[id]/query/route.ts",
           "deployedAs": "loom-console"
         },
         {

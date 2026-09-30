@@ -8,8 +8,10 @@
  *     shared-ACL member of its workspace, with the workspace resolved from the
  *     item and a 404 for an id naming no item. Read roles are accepted because
  *     every non-admin query is classifier-accepted SELECT text (the same
- *     justification as the lakehouse SQL tab). The geo-dataset and geo-query
- *     editors post here with their own item id, so those types are accepted too.
+ *     justification as the lakehouse SQL tab). Three other editors reach this
+ *     handler with their own item id, so those types are accepted too: the SQL
+ *     analytics endpoint (its query route re-exports this POST) and the
+ *     geo-dataset and geo-query editors (they post here directly).
  *   - A TENANT ADMIN runs the SQL unchanged, in the requested `database`
  *     (default `master`), with its named parameters.
  *   - Any other caller: the SQL passes the lakehouse SQL tab's classifier

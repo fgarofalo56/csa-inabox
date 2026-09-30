@@ -27,9 +27,16 @@
  * authorize a lakehouse there. A lakehouse in another workspace is queried from
  * its own SQL tab, and the refusal says so. Recycled lakehouses are not listed.
  *
- * WHY THREE ITEM TYPES. The geo-dataset and geo-query editors post their SQL to
- * this route with their OWN item id (`lib/editors/geo-editors.tsx`), so the
- * guard accepts those item types too. The same classifier applies to them.
+ * WHY FOUR ITEM TYPES. Three other editors reach this handler with their OWN
+ * item id, so the guard accepts those item types too and the same classifier
+ * applies to them:
+ *   - the SQL analytics endpoint: `app/api/items/sql-analytics-endpoint/[id]/query/route.ts`
+ *     re-exports this route's POST, and its editor posts there with the
+ *     endpoint item's id (`lib/editors/sql-analytics-endpoint-editor.tsx`);
+ *   - geo-dataset and geo-query: their editors post to this route directly
+ *     (`lib/editors/geo-editors.tsx`).
+ * Because four editors share the handler, the refusal wording says "This
+ * editor" rather than naming one of them.
  *
  * WHAT THIS DOES NOT COVER, stated rather than implied: views and external
  * tables already defined in `master` run as whatever they were defined to read,
@@ -55,11 +62,13 @@ import {
   type QueryScopeSurface,
 } from '@/app/api/items/lakehouse/_lib/query-scope';
 
-/** The serverless SQL pool editor, as the classifier's refusals name it. */
+/**
+ * The editors that share this route, as the classifier's refusals name them.
+ * The lead does not name one editor, because four reach this handler.
+ */
 export const SQL_POOL_EDITOR: QueryScopeSurface = {
   lead:
-    'The serverless SQL pool editor runs read-only SELECT queries over the files of the lakehouses in this '
-    + 'workspace. ',
+    'This editor runs read-only SELECT queries over the files of the lakehouses in this workspace. ',
   name: 'this editor',
   place: 'this editor',
   files: 'the files of the lakehouses in this workspace',
@@ -75,10 +84,15 @@ export const SQL_POOL_EDITOR: QueryScopeSurface = {
 export const SQL_POOL_READER_POOL_PREFIX = 'sql-pool-reader:';
 
 /**
- * Item types whose editors post to this route with their own id. The first is
- * the route's own type; the geo editors reuse the route (see the header).
+ * Item types whose editors reach this handler with their own id. The first is
+ * the route's own type; the others reuse it (see the header).
  */
-export const SQL_POOL_QUERY_ITEM_TYPES = ['synapse-serverless-sql-pool', 'geo-dataset', 'geo-query'] as const;
+export const SQL_POOL_QUERY_ITEM_TYPES = [
+  'synapse-serverless-sql-pool',
+  'sql-analytics-endpoint',
+  'geo-dataset',
+  'geo-query',
+] as const;
 
 /** Most lakehouse roots resolved for one query, and how many at once. */
 const MAX_LAKEHOUSES = 100;

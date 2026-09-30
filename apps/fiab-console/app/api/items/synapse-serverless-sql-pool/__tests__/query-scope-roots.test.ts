@@ -1,5 +1,5 @@
 /**
- * The classifier pieces the serverless SQL pool editor adds to the lakehouse
+ * The classifier pieces the serverless SQL pool route adds to the lakehouse
  * SQL tab's classifier: confinement to a SET of roots
  * (`confineQueryLocationToRoots`) and the editor's own refusal wording.
  *
