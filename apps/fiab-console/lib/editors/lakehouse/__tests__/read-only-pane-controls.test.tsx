@@ -378,3 +378,88 @@ describe('Files right-click menu — read-only role', () => {
     expect(ctx2.openShortcutWizard).toHaveBeenCalledWith('files', 'raw');
   });
 });
+
+// ---------------------------------------------------------------- Row menus
+// These open a Fluent Menu from its "…" trigger, so they sit after everything
+// that queries by role and read the trigger and the items by text.
+
+/** The single "…" row-menu trigger in the rendered pane. */
+async function rowMenuTrigger(): Promise<HTMLElement> {
+  const label = await screen.findByText('…', {}, { timeout: 5000 });
+  const b = label.closest('button');
+  if (!b) throw new Error('no row menu trigger');
+  return b as HTMLElement;
+}
+
+describe('ShortcutsPane row menu — read-only role', () => {
+  it('closes Test and Delete, and leaves Query (SQL) open', async () => {
+    const ctx = shortcutsCtx();
+    const { calls } = mount(<ShortcutsPane />, ctx, 'read');
+    await probeSettled(calls);
+    fireEvent.click(await rowMenuTrigger());
+    const test = await menuItem('Test');
+    await expectClosed(test);
+    const del = await menuItem('Delete');
+    await expectClosed(del);
+    fireEvent.click(test);
+    fireEvent.click(del);
+    // Breaks if either MenuItem loses disabled={readOnly}: the click would
+    // re-test or delete the shortcut.
+    expect(ctx.testShortcut).not.toHaveBeenCalled();
+    expect(ctx.deleteShortcutRow).not.toHaveBeenCalled();
+    // Positive: the read in the same menu still runs. Breaks if the whole menu is gated.
+    fireEvent.click(await menuItem('Query (SQL)'));
+    expect(ctx.queryShortcut).toHaveBeenCalledWith(BROKEN);
+  });
+
+  it('with canWrite=true Test and Delete reach their handlers', async () => {
+    const ctx = shortcutsCtx();
+    const { calls } = mount(<ShortcutsPane />, ctx, 'write');
+    await probeSettled(calls);
+    fireEvent.click(await rowMenuTrigger());
+    fireEvent.click(await menuItem('Test'));
+    // Breaks if the pane treats canWrite=true as read-only.
+    await waitFor(() => expect(ctx.testShortcut).toHaveBeenCalledWith(BROKEN));
+    fireEvent.click(await rowMenuTrigger());
+    fireEvent.click(await menuItem('Delete'));
+    await waitFor(() => expect(ctx.deleteShortcutRow).toHaveBeenCalledWith(BROKEN));
+  });
+});
+
+// The planned-table menu renders only when the scan found no live tables and
+// the installed bundle plans some; the schema-enabled fixture above never
+// reaches it.
+const PLANNED_TABLE = { name: 'orders', ddl: 'CREATE TABLE orders (id INT)', sampleRows: [] };
+
+function plannedTablesCtx() {
+  return { ...tablesCtx(), schemasEnabled: false, liveTables: [], openPrefixes: {}, bundleDeltaTables: [PLANNED_TABLE] };
+}
+
+describe('TablesPane planned-table menu — read-only role', () => {
+  it('closes Maintain… and leaves History open', async () => {
+    const ctx = plannedTablesCtx();
+    const { calls } = mount(<TablesPane />, ctx, 'read');
+    await probeSettled(calls);
+    fireEvent.click(await rowMenuTrigger());
+    const maintain = await menuItem('Maintain…');
+    await expectClosed(maintain);
+    fireEvent.click(maintain);
+    // Breaks if the MenuItem reads `!activeContainer` alone (activeContainer is
+    // set here, so only the read-only term can close it).
+    expect(ctx.setMaintainOpen).not.toHaveBeenCalled();
+    // Positive: a read in the same menu still runs.
+    fireEvent.click(await menuItem('History (time travel)'));
+    expect(ctx.openTableHistory).toHaveBeenCalledWith('Tables/orders');
+  });
+
+  it('with canWrite=true Maintain… reaches its handler', async () => {
+    const ctx = plannedTablesCtx();
+    const { calls } = mount(<TablesPane />, ctx, 'write');
+    await probeSettled(calls);
+    fireEvent.click(await rowMenuTrigger());
+    fireEvent.click(await menuItem('Maintain…'));
+    // Breaks if canWrite=true is read as read-only.
+    await waitFor(() => expect(ctx.setMaintainOpen).toHaveBeenCalledWith(true));
+    expect(ctx.setMaintainTable).toHaveBeenCalledWith('orders');
+  });
+});

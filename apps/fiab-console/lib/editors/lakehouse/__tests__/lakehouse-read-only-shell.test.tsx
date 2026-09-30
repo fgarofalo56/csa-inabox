@@ -87,9 +87,22 @@ async function probeSettled(calls: Array<{ url: string }>) {
   await new Promise((r) => setTimeout(r, 200));
 }
 
+/** The Files table row for a file, by text (the explorer tree shows the same name). */
+async function fileRow(name: string): Promise<HTMLElement> {
+  let row: HTMLElement | null = null;
+  await waitFor(() => {
+    row = screen.getAllByText(name).map((el) => el.closest('tr') as HTMLElement | null).find(Boolean) ?? null;
+    expect(row).not.toBeNull();
+  }, { timeout: 5000 });
+  return row!;
+}
+
 const WRITE_ENTRIES = ['Upload', 'Upload folder', 'New folder', 'New shortcut', 'Load to table', 'Maintain…'];
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); chrome.ribbon = []; });
+// Selecting a file writes ?tab=preview&container=..&path=.. into the URL, and the
+// next mount restores that deep link -- so without this reset a later test
+// opens on the Preview tab and never renders the Files table.
+afterEach(() => { cleanup(); vi.restoreAllMocks(); chrome.ribbon = []; window.history.replaceState(null, '', '/'); });
 
 describe('Lakehouse editor — read-only role', () => {
   it('shows the read-only banner and closes the Files write buttons with the reason', async () => {
@@ -107,6 +120,10 @@ describe('Lakehouse editor — read-only role', () => {
     const newFolder = screen.getByRole('button', { name: /^New folder$/ });
     expect(newFolder.getAttribute('aria-disabled')).toBe('true');
     expect(newFolder.getAttribute('title')).toBe(LAKEHOUSE_READ_ONLY_TITLE);
+    // Breaks if the Upload folder button drops disabledFocusable={readOnly}.
+    const uploadFolder = screen.getByRole('button', { name: /^Upload folder$/ });
+    expect(uploadFolder.getAttribute('aria-disabled')).toBe('true');
+    expect(uploadFolder.getAttribute('title')).toBe(LAKEHOUSE_READ_ONLY_TITLE);
     // disabledFocusable, not disabled: the reason stays reachable by keyboard.
     expect(upload.hasAttribute('disabled')).toBe(false);
   });
@@ -198,5 +215,32 @@ describe('Lakehouse editor — read-only role', () => {
     fireEvent.click(save);
     // Breaks if canWrite=true is read as read-only (no PUT would be sent).
     await waitFor(() => expect(calls.some((c) => c.url.includes('/api/lakehouse/settings') && c.init?.method === 'PUT')).toBe(true));
+  });
+  // The ribbon test above reads Load to table with no file selected, where
+  // `!hasFile` already closes it -- so it cannot see the read-only gate on that
+  // entry (dropping `|| readOnly` left it green). These two select a file first,
+  // and read Preview (gated on the selection alone) to prove the selection took.
+  // Selecting a file changes the URL; the afterEach reset above keeps that from
+  // reaching the next test.
+  it('keeps Load to table closed for a read-only role with a file selected', async () => {
+    mount(() => ({ ok: true, lakehouseId: 'lh-ro', canWrite: false }));
+    await screen.findByTestId('lakehouse-read-only', {}, { timeout: 5000 });
+    fireEvent.click(await fileRow('orders.csv'));
+    // Fixture witness: breaks if the click did not select the file.
+    await waitFor(() => expect(ribbonAction('Preview').disabled).toBe(false));
+    // Breaks if Load to table reads `!hasFile` alone.
+    expect(ribbonAction('Load to table').disabled).toBe(true);
+    expect(ribbonAction('Load to table').onClick).toBeUndefined();
+    expect(ribbonAction('Load to table').title).toBe(LAKEHOUSE_READ_ONLY_TITLE);
+  });
+
+  it('opens Load to table for a writer with a file selected', async () => {
+    const { calls } = mount(() => ({ ok: true, lakehouseId: 'lh-ro', canWrite: true }));
+    await probeSettled(calls);
+    fireEvent.click(await fileRow('orders.csv'));
+    await waitFor(() => expect(ribbonAction('Preview').disabled).toBe(false));
+    // Breaks if the gate closes Load to table for a writer too (e.g. `|| true`).
+    expect(ribbonAction('Load to table').disabled).toBe(false);
+    expect(typeof ribbonAction('Load to table').onClick).toBe('function');
   });
 });
