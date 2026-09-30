@@ -77,6 +77,13 @@ vi.mock('@/lib/auth/workspace-access', () => ({
 // reaches Azure. The create hook runs BEFORE that lookup either way.
 vi.mock('@/lib/azure/auto-bind-providers', () => ({ AUTO_BIND_PROVIDERS: [] }));
 
+// The REAL `autoBindOnCreate`, wrapped so a test can see which items it was
+// called for. Every call still runs the real hook.
+vi.mock('@/lib/azure/auto-bind', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/lib/azure/auto-bind')>();
+  return { ...real, autoBindOnCreate: vi.fn(real.autoBindOnCreate) };
+});
+
 vi.mock('@/lib/azure/loom-search', () => ({
   upsertLoomDoc: vi.fn(async () => undefined),
   deleteLoomDoc: vi.fn(async () => undefined),
@@ -100,7 +107,7 @@ vi.mock('@/lib/events/webhook-emitter', async () => ({
 }));
 
 import { createOwnedItem } from '../item-crud';
-import { clearServerOwnedLakehouseKeysOnCreate, AUTO_BIND_STATE_KEY } from '@/lib/azure/auto-bind';
+import { clearServerOwnedLakehouseKeysOnCreate, AUTO_BIND_STATE_KEY, autoBindOnCreate } from '@/lib/azure/auto-bind';
 import { LAKEHOUSE_CREATE_CLEARED_STATE_KEYS } from '@/lib/azure/backing-name';
 import { executeWorkspaceImport } from '@/lib/workspace/workspace-bundle-io';
 import { POST as COSMOS_ITEM_CREATE } from '@/app/api/cosmos-items/[type]/route';
@@ -135,6 +142,7 @@ beforeEach(() => {
   created.length = 0;
   replaced.length = 0;
   DOCS.clear();
+  vi.mocked(autoBindOnCreate).mockClear();
 });
 
 describe('the cleared-key list', () => {
@@ -212,6 +220,21 @@ describe('bundle import, create arm', () => {
     expect(keysPresent(created[0].state)).toEqual([]);
     expect(created[0].state).toMatchObject({ notes: 'kept', tables: ['orders'] });
     expect(created[1].state).toEqual(sourceLakehouseState());
+  });
+
+  // FAILS IF the create arm does not bind the imported lakehouse (0 calls: its
+  // root would wait for a first open), or binds every imported type (2 calls,
+  // the warehouse too). The item bound is the one written, with no location
+  // keys, so the bind starts from this item and not the bundle's source.
+  it('binds the imported lakehouse, and only the lakehouse, once it is written', async () => {
+    const now = '2026-09-29T12:00:00.000Z';
+    await executeWorkspaceImport(plan([
+      { id: 'lh-new', workspaceId: WS, itemType: 'lakehouse', displayName: 'Sales', state: sourceLakehouseState(), createdAt: now, updatedAt: now },
+      { id: 'wh-new', workspaceId: WS, itemType: 'warehouse', displayName: 'Sales WH', state: sourceLakehouseState(), createdAt: now, updatedAt: now },
+    ]), target);
+    const calls = vi.mocked(autoBindOnCreate).mock.calls;
+    expect(calls.map(([item]) => item.id)).toEqual(['lh-new']);
+    expect(keysPresent(calls[0][0].state as Record<string, unknown>)).toEqual([]);
   });
 });
 
