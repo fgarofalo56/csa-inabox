@@ -95,6 +95,9 @@ describe('analyzeLakehouseQuery — refused queries name the construct', () => {
     ['WAITFOR', "SELECT 1 WAITFOR DELAY '00:00:10'", 'WAITFOR'],
     ['a cursor FETCH', 'SELECT 1 FETCH NEXT FROM c', 'FETCH'],
     ['BULK INSERT', "BULK INSERT t FROM 'x'", 'a statement starting with BULK'],
+    // Each of the next two is the only case naming its word; the word removed from REFUSED_WORDS turns it red.
+    ['EXECUTE after a SELECT', "SELECT 1 EXECUTE('x')", 'EXECUTE'],
+    ['BULK after a SELECT', "SELECT 1 BULK INSERT t FROM 'x'", 'BULK'],
     // comment splitting and lexer boundaries
     ['OPEN/**/ROWSET split by a comment', `SELECT * FROM OPEN/**/ROWSET(BULK '${IN}') AS r`, 'OPEN'],
     ['EXEC after a line comment ended by a form feed', "SELECT 1 -- note\fEXEC('x')", 'EXEC'],
@@ -115,6 +118,11 @@ describe('analyzeLakehouseQuery — refused queries name the construct', () => {
       'an OPENROWSET(BULK …) location built from an expression'],
     ['DATA_SOURCE', `SELECT * FROM OPENROWSET(BULK 'Tables/orders', DATA_SOURCE = 'ds', FORMAT='DELTA') AS r`,
       'the OPENROWSET option DATA_SOURCE'],
+    // Outside OPENROWSET the word itself is refused; a column of that name is written [DATA_SOURCE].
+    ['DATA_SOURCE outside OPENROWSET', 'SELECT DATA_SOURCE FROM t', 'DATA_SOURCE'],
+    // The first list entry is not a string: accepting it would carry a non-literal into the location list.
+    ['a BULK list whose first location is not a literal', "SELECT * FROM OPENROWSET(BULK (x, 'y'), FORMAT='PARQUET') AS r",
+      'an OPENROWSET(BULK …) location that is not a literal string'],
     ['ERRORFILE_LOCATION', `SELECT * FROM OPENROWSET(BULK '${IN}/a.csv', FORMAT='CSV', ERRORFILE_LOCATION = 'x') AS r`,
       'the OPENROWSET option ERRORFILE_LOCATION'],
     ['an option value that is a URL', `SELECT * FROM OPENROWSET(BULK '${IN}', FORMAT='${OTHER_ACCOUNT}') AS r`,
@@ -197,6 +205,8 @@ describe('confineQueryLocation', () => {
     ['percent-encoded dots', `${P}/sales-1/%2e%2e/sales-2/Tables/t`, BOUND, 'percent-encoding'],
     ['a backslash', `${P}/sales-1\\..\\sales-2`, BOUND, 'percent-encoding, a backslash'],
     ['a query string', `${IN}?sv=1`, BOUND, 'a query string'],
+    // Inside the root in every other respect, so only the non-ASCII check refuses it.
+    ['a non-ASCII character under the root', `${P}/sales-1/Tables/café`, BOUND, 'a non-ASCII character'],
     ['a doubled slash', `${P}/sales-1//Tables/t`, BOUND, 'not written in its canonical form'],
   ];
   for (const [label, url, bound, reason] of refused) {
