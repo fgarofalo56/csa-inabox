@@ -21,7 +21,10 @@
  *       PRPs/) run on EVERY pull_request in loom-guardrails.yml instead, in
  *       their own ADVISORY job `copilot-corpus-lint` (operator decision
  *       2026-09-30: not inside the required `guardrails` job, and not a
- *       required context).
+ *       required context);
+ *   (e) those two step bodies, EXECUTED under `bash -e` against stub
+ *       scripts, fail when their script fails, with its code, and name only
+ *       candidate paths the stager really hashes (see the (e) block below).
  *
  * The paths under test are LIFTED FROM THE YAML at runtime. The expected sets
  * are LITERALS on purpose: an expectation derived from the file under test
@@ -63,9 +66,11 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync, statSync } from 'node:fs';
+import { readFileSync, existsSync, statSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { dirname, resolve, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '..', '..', '..');
@@ -184,9 +189,10 @@ function parseOnBlock(text) {
 }
 
 /**
- * Parse every `steps:` list into [{ keys, name, if, runLines }]. `runLines`
- * are the trimmed, non-blank, non-comment lines of the step's `run:` (block
- * or inline).
+ * Parse every `steps:` list into [{ keys, name, if, runLines, runRaw }].
+ * `runLines` are the trimmed, non-blank, non-comment lines of the step's
+ * `run:` (block or inline); `runRaw` is the same script as the runner gets it
+ * (block indentation removed, comments kept), for the behavioural test.
  */
 function parseSteps(text) {
   const lines = text.split(/\r?\n/);
@@ -203,6 +209,8 @@ function parseSteps(text) {
       if (/^\s*$/.test(line)) continue;
       const ind = indentOf(line);
       if (cur && runIndent >= 0 && ind >= runIndent) {
+        if (cur.rawIndent === undefined) cur.rawIndent = ind;
+        cur.runRaw.push(line.slice(Math.min(ind, cur.rawIndent)));
         if (!isComment(line)) cur.runLines.push(line.trim());
         continue;
       }
@@ -212,7 +220,7 @@ function parseSteps(text) {
       if (dash < 0) dash = ind;
       let m;
       if (ind === dash && (m = /^\s*-\s+(.*)$/.exec(line))) {
-        cur = { keys: [], name: undefined, if: undefined, runLines: [] };
+        cur = { keys: [], name: undefined, if: undefined, runLines: [], runRaw: [] };
         steps.push(cur);
         m = /^([\w-]+):\s*(.*)$/.exec(m[1]);
       } else if (cur && ind === dash + 2) {
@@ -227,7 +235,10 @@ function parseSteps(text) {
       if (k === 'if') cur.if = v.trim();
       if (k === 'run') {
         if (/^[|>][-+]?\s*$/.test(v)) runIndent = dash + 3;
-        else cur.runLines.push(v.trim());
+        else {
+          cur.runLines.push(v.trim());
+          cur.runRaw.push(v.trim());
+        }
       }
     }
   }
@@ -471,6 +482,10 @@ test('step-parser positive control: a literal fixture parses to its known steps'
   assert.deepEqual(got[1].runLines, ['node scripts/a.mjs']);
   assert.deepEqual(got[2].keys, ['name', 'continue-on-error', 'run']);
   assert.deepEqual(got[2].runLines, ['X=1', 'name: not-a-key', 'bash scripts/b.sh']);
+  // runRaw is what the behavioural test EXECUTES: block indent removed, the
+  // comment kept, nested indentation preserved (here none), nothing trimmed away.
+  assert.deepEqual(got[2].runRaw, ['# a comment inside the block', 'X=1', 'name: not-a-key', 'bash scripts/b.sh']);
+  assert.deepEqual(got[1].runRaw, ['node scripts/a.mjs']);
   assert.deepEqual(got[3].runLines, ['echo hi']);
 });
 
@@ -706,4 +721,211 @@ test('(d) the corpus stager + eval-set lint run on EVERY pull_request, in an ADV
   const noManifest = ifBlock(lint.runLines, NO_MANIFEST_IF);
   assert.ok(noManifest, 'the lint step must check for the staged manifest (otherwise it silently degrades to repo-tree-only)');
   assert.ok(noManifest.includes('exit 1'), 'the no-manifest branch must `exit 1`');
+});
+
+// ── (e) BEHAVIOURAL: the two step bodies, EXECUTED ──────────────────────────
+//
+// (d) reads the steps; this RUNS them. Both bodies are lifted from
+// loom-guardrails.yml at runtime (parseSteps' runRaw) and executed under
+// `bash -e` -- the runner's default shell for a `run:` step -- in a throwaway
+// git repo with STUB scripts in place of the stager and the lint:
+//   - the stager stub is `exit <rc>` followed by a stager's text, so the
+//     diagnostic reads its SOURCES / EXCLUDE_FIND out of that text, exactly as
+//     it does in CI;
+//   - the lint stub is `process.exit(<rc>)`.
+// It witnesses EXACTLY the cases below: the step's exit code, the ::error:: /
+// "may be the cause" lines it prints, and (lint) that the corpus dir is clean
+// afterwards. Any edit that makes a failing step exit 0 turns a case RED
+// whatever its spelling -- an extra `rc=0`, `exit "$rc"` under `if false`, a
+// trap ending in `exit 00`, an ERR trap `exit $((0))`, a bare `exit` -- which
+// is why this replaced growing the SWALLOWS list. Not witnessed here: the
+// broken-symlink and unreadable-file wording (only the directory case runs;
+// symlinks and permission bits are not portable to the Windows runs).
+//
+// BASH: `bash` on Linux/macOS. On Windows the bare name resolves to WSL's
+// System32 bash first, which cannot see this process's temp paths, so Git
+// Bash is used (CONTRACT_TEST_BASH overrides); with neither, the test is
+// SKIPPED and says so, and CI (ubuntu, `bash`) is the verdict.
+const STAGER_REL = 'scripts/csa-loom/stage-copilot-corpus.sh';
+const LINT_REL = 'scripts/csa-loom/lint-eval-sets.mjs';
+const CORPUS_REL = 'apps/fiab-console/copilot-corpus';
+
+function findBash() {
+  if (process.platform !== 'win32') return 'bash';
+  const candidates = [process.env.CONTRACT_TEST_BASH, 'C:\\Program Files\\Git\\bin\\bash.exe'];
+  return candidates.find((c) => c && existsSync(c)) ?? null;
+}
+const BASH = findBash();
+const SKIP_BEHAVIOUR = BASH ? false : 'win32 without Git Bash (set CONTRACT_TEST_BASH); WSL bash cannot see the temp paths. CI runs this on Linux.';
+
+const REAL_STAGER = readFileSync(join(REPO, STAGER_REL), 'utf8');
+const stubStager = (rc, body = REAL_STAGER) => `#!/usr/bin/env bash\necho "stub stager: exit ${rc}" >&2\nexit ${rc}\n${body}`;
+// A stager whose roots and exclusions DIFFER from the real one: if the
+// diagnostic transcribed the real list instead of reading this file, C3 goes RED.
+const SYNTHETIC_STAGER_BODY = [
+  'SOURCES="',
+  '$ROOT/docs|docs',
+  '$ROOT/zz-root|zz-root',
+  '"',
+  'EXCLUDE_FIND=(',
+  "  -not -path './zz-fixture-only/*'",
+  ')',
+  '',
+].join('\n');
+
+function stepBodies() {
+  const job = parseJobs(GTEXT)[ADVISORY_JOB];
+  assert.ok(job, `${GUARDRAILS_REL} has no job ${ADVISORY_JOB}`);
+  const steps = parseSteps(job.text);
+  const stage = steps.find((s) => s.runLines.includes(STAGE_CMD));
+  const lint = steps.find((s) => s.runLines.includes(LINT_CMD));
+  assert.ok(stage && lint, 'could not find the stager / lint steps to execute');
+  return { stage: `${stage.runRaw.join('\n')}\n`, lint: `${lint.runRaw.join('\n')}\n` };
+}
+
+/** A throwaway repo: stubbed stager + lint, a docs/ root, the gitignored corpus dir. */
+function fixture({ stager, lintRc = 0, dirs = [], manifest = false, git = false }) {
+  const root = mkdtempSync(join(tmpdir(), 'cc-lint-'));
+  const put = (rel, body) => {
+    mkdirSync(dirname(join(root, rel)), { recursive: true });
+    writeFileSync(join(root, rel), body);
+  };
+  put(STAGER_REL, stager);
+  put(LINT_REL, `process.exit(${lintRc});\n`);
+  put('docs/ok.md', '# ok\n');
+  put(`${CORPUS_REL}/.gitkeep`, '');
+  put('.gitignore', `${CORPUS_REL}/*\n!${CORPUS_REL}/.gitkeep\n`);
+  for (const d of dirs) mkdirSync(join(root, d), { recursive: true });
+  if (manifest) put(`${CORPUS_REL}/.corpus-manifest.json`, '{"files":{}}\n');
+  if (git) {
+    const g = spawnSync('git', ['init', '-q'], { cwd: root, encoding: 'utf8' });
+    assert.equal(g.status, 0, `git init failed in the fixture: ${g.stderr}`);
+    // Committed, as in the real checkout (the corpus dir is a tracked
+    // `.gitkeep` only). Untracked or merely staged, the step's own leftover
+    // check reports it (`??` / `A`) -- measured, both.
+    const a = spawnSync('git', ['add', '--', `${CORPUS_REL}/.gitkeep`, '.gitignore'], { cwd: root, encoding: 'utf8' });
+    assert.equal(a.status, 0, `git add failed in the fixture: ${a.stderr}`);
+    const c = spawnSync('git', ['-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false',
+      'commit', '-q', '--no-verify', '-m', 'fixture'], { cwd: root, encoding: 'utf8' });
+    assert.equal(c.status, 0, `git commit failed in the fixture: ${c.stderr}`);
+  }
+  return root;
+}
+
+/** Run one step body under `bash -e` in `cwd`. */
+function runStep(cwd, body) {
+  const scratch = mkdtempSync(join(tmpdir(), 'cc-step-'));
+  try {
+    const file = join(scratch, 'step.sh');
+    writeFileSync(file, body);
+    const r = spawnSync(BASH, ['-e', file.replace(/\\/g, '/')], { cwd, encoding: 'utf8', timeout: 120000 });
+    assert.equal(r.error, undefined, `could not run ${BASH}: ${r.error}`);
+    return { code: r.status, out: `${r.stdout}${r.stderr}` };
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+function corpusLeft(cwd) {
+  const r = spawnSync('git', ['status', '--porcelain', '--ignored', '--', CORPUS_REL], { cwd, encoding: 'utf8' });
+  assert.equal(r.status, 0, `git status failed: ${r.stderr}`);
+  return r.stdout.trim();
+}
+
+function withFixture(opts, fn) {
+  const root = fixture(opts);
+  try {
+    return fn(root);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+const causeLines = (out) => out.split(/\r?\n/).filter((l) => l.startsWith('::error::may be the cause: '));
+
+test('(e) the stager step, EXECUTED: a failing stager fails the step with its own code and names only real candidates', { skip: SKIP_BEHAVIOUR }, () => {
+  const { stage } = stepBodies();
+
+  // C0 control: a passing stager passes the step, silently. (Without this, a
+  // step that ALWAYS exits non-zero would satisfy every case below.)
+  withFixture({ stager: stubStager(0) }, (root) => {
+    const r = runStep(root, stage);
+    assert.equal(r.code, 0, `C0: a passing stager must pass the step:\n${r.out}`);
+    assert.doesNotMatch(r.out, /::error::/, 'C0: no ::error:: when the stager passed');
+  });
+
+  // C1: real SOURCES / EXCLUDE_FIND. docs/zz-real.md is a candidate;
+  // docs/fiab/audit/zz-ex.md is under a subtree the stager EXCLUDES, so it
+  // must never be blamed (the round-3 R7 defect).
+  withFixture({ stager: stubStager(7), dirs: ['docs/zz-real.md', 'docs/fiab/audit/zz-ex.md'] }, (root) => {
+    const r = runStep(root, stage);
+    assert.equal(r.code, 7, `C1: the step must exit with the stager's own code:\n${r.out}`);
+    assert.match(r.out, /::error::scripts\/csa-loom\/stage-copilot-corpus\.sh exited 7\./);
+    assert.deepEqual(causeLines(r.out), [
+      '::error::may be the cause: docs/zz-real.md is a directory, named *.md, in a tree the stager hashes. Rename it or change its extension.',
+    ]);
+    assert.ok(!r.out.includes('zz-ex.md'), `C1: blamed a path the stager excludes:\n${r.out}`);
+  });
+
+  // C2: nothing to blame -> says so, still exits with the stager's code.
+  withFixture({ stager: stubStager(7) }, (root) => {
+    const r = runStep(root, stage);
+    assert.equal(r.code, 7, `C2:\n${r.out}`);
+    assert.match(r.out, /::error::no candidate found: .* so the cause was NOT determined here\./);
+    assert.deepEqual(causeLines(r.out), []);
+  });
+
+  // C3: a stager with DIFFERENT roots and exclusions. The diagnostic must use
+  // THIS file's lists: it searches zz-root/ (a root the real stager does not
+  // have) and does not exclude fiab/audit/, but does exclude zz-fixture-only/.
+  // A transcribed copy of the real lists would miss zz-root/n.md and skip
+  // docs/fiab/audit/b.md.
+  withFixture({ stager: stubStager(9, SYNTHETIC_STAGER_BODY), dirs: ['docs/zz-fixture-only/a.md', 'docs/fiab/audit/b.md', 'zz-root/n.md'] }, (root) => {
+    const r = runStep(root, stage);
+    assert.equal(r.code, 9, `C3:\n${r.out}`);
+    assert.deepEqual(causeLines(r.out).map((l) => l.split(' ')[4]), ['docs/fiab/audit/b.md', 'zz-root/n.md']);
+  });
+
+  // C4: the 20-line cap. 22 candidates -> 20 lines + a count of the other 2.
+  const many = Array.from({ length: 22 }, (_, i) => `docs/c${String(i + 1).padStart(2, '0')}.md`);
+  withFixture({ stager: stubStager(7), dirs: many }, (root) => {
+    const r = runStep(root, stage);
+    assert.equal(r.code, 7, `C4:\n${r.out}`);
+    assert.equal(causeLines(r.out).length, 20);
+    assert.match(r.out, /::error::2 more candidate path\(s\) not listed \(the first 20 are shown\)\./);
+  });
+
+  // C5: the stager's SOURCES / EXCLUDE_FIND cannot be read -> no path named.
+  withFixture({ stager: stubStager(5, ''), dirs: ['docs/zz-real.md'] }, (root) => {
+    const r = runStep(root, stage);
+    assert.equal(r.code, 5, `C5:\n${r.out}`);
+    assert.match(r.out, /::error::could not read SOURCES \/ EXCLUDE_FIND from scripts\/csa-loom\/stage-copilot-corpus\.sh/);
+    assert.deepEqual(causeLines(r.out), []);
+  });
+});
+
+test('(e) the lint step, EXECUTED: a failing lint or a missing manifest fails the step, and the corpus dir is restored', { skip: SKIP_BEHAVIOUR }, () => {
+  const { lint } = stepBodies();
+
+  // L0 control: manifest present, lint passes -> step passes, dir restored.
+  withFixture({ stager: stubStager(0), manifest: true, git: true }, (root) => {
+    const r = runStep(root, lint);
+    assert.equal(r.code, 0, `L0:\n${r.out}`);
+    assert.equal(corpusLeft(root), '', 'L0: the staged corpus must be cleaned up');
+  });
+
+  // L1: no manifest -> exit 1 with the no-manifest error, even though the lint passed.
+  withFixture({ stager: stubStager(0), manifest: false, git: true }, (root) => {
+    const r = runStep(root, lint);
+    assert.equal(r.code, 1, `L1:\n${r.out}`);
+    assert.match(r.out, /::error::no staged manifest at apps\/fiab-console\/copilot-corpus\/\.corpus-manifest\.json/);
+    assert.equal(corpusLeft(root), '');
+  });
+
+  // L2: the lint fails -> the step exits with the lint's own code, and the trap still cleans.
+  withFixture({ stager: stubStager(0), lintRc: 3, manifest: true, git: true }, (root) => {
+    const r = runStep(root, lint);
+    assert.equal(r.code, 3, `L2:\n${r.out}`);
+    assert.equal(corpusLeft(root), '', 'L2: the EXIT trap must clean up on failure too');
+  });
 });
