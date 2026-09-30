@@ -19,19 +19,17 @@
  *
  *   node scripts/brain/extract-security-graph.mjs --check
  *       Regenerate in memory and FAIL (exit 1) if the committed artifact does
- *       not match the tree. This is the drift gate: a stale artifact must not
- *       survive a merge, because at runtime the console cannot recompute the
- *       inputs digest and can only fall back to an age check.
+ *       not match the tree. This is the drift gate, and a REQUIRED context on
+ *       `main`: a stale artifact must not survive a merge.
  *
- *       WHAT IT COMPARES CHANGED ON #4128. It used to compare `{graph, join}`
- *       and nothing else, so a change that moved the POPULATION without moving
- *       the GRAPH — a new `.mjs` inside the publication scope that carries no
- *       publication construct, i.e. zero nodes — passed it while the REQUIRED
- *       census in `no-estate-identifiers.test.ts` went red. It now compares the
- *       WHOLE artifact except the run-volatile fields named in
- *       `_artifact-drift.mjs`, so `meta.scanScopes[].filesMatched`,
- *       `meta.filesScanned`, `meta.skipped` and `meta.generatorVersion` are all
- *       covered, along with any field a later extractor version adds.
+ *       WHAT IT COMPARES. The WHOLE committed artifact, with no exemptions
+ *       (#4128 inverted the old `{graph, join}` comparison so a field added
+ *       later is covered without being named). Since #4798 the committed
+ *       artifact carries nothing that moves when an unrelated file is added —
+ *       no file counts, no digest, no clock, no sha — so two PRs that each add
+ *       a file under a scanned root no longer conflict on it. Those values are
+ *       printed per run, floored on before the comparison, and REFUSED if they
+ *       reappear in the committed bytes (`_artifact-drift.mjs#RUN_ONLY_FIELDS`).
  *
  * ── NO RESULT IS DISCARDED ───────────────────────────────────────────────
  *
@@ -47,7 +45,15 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { driftDifferences, populationRefusals } from './_artifact-drift.mjs';
+import {
+  censusRefusals,
+  driftDifferences,
+  gitCensus,
+  gitUnreadCensus,
+  populationRefusals,
+  runOnlyFieldsPresent,
+  unreadCensusRefusals,
+} from './_artifact-drift.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
@@ -152,6 +158,60 @@ export function scanFiles(repoRoot, root, predicate, visible) {
 
 export { gitVisibleFiles };
 
+// ── THE PUBLICATION SCOPE, WALKED AND DECLARED FROM ONE PLACE ──────────
+//
+// These roots are passed into `buildSecurityGraphExtraction`, which derives BOTH
+// the file partition and the scope string the artifact reports from them. They
+// used to be a hand-written literal here and a second hand-written literal in
+// build.ts, and the two disagreed: the artifact declared `scripts/**,
+// .github/**` while this walk covered `scripts/` alone. Measured on the
+// committed bytes — 0 `.github` nodes, 0 `skipped` entries naming it — and
+// `.github/scripts/deploy-notify-failure.mjs`, a FAILURE NOTIFIER whose whole
+// job is publishing to a public issue and a public run log, sat outside a
+// population the artifact claimed to cover.
+const PUBLICATION_ROOTS = ['scripts', '.github'];
+/** What this extractor can lex. */
+const PUBLICATION_INCLUDE = /\.(?:mjs|cjs|js)$/;
+/**
+ * Publication-capable languages under the SAME roots that this extractor
+ * cannot lex. Counted rather than ignored: a workflow `run:` block and a `.sh`
+ * step echo into the same PUBLIC Actions log a `console.log` does, so the
+ * narrowing is reported into `meta.skipped` and its count into the run.
+ */
+const PUBLICATION_UNMODELED = /\.(?:sh|ps1|psm1|py|yml|yaml)$/;
+const ROUTE_ROOT = 'apps/fiab-console/app';
+
+/**
+ * EVERY file the extractor reads, and what it saw and could not read.
+ *
+ * Exported so `scripts/ci/__tests__/security-graph-drift-shape.test.mjs` can
+ * count THIS enumeration against an independent `git ls-files` census on a
+ * required lane. Until #4798 that census compared the COMMITTED `filesMatched`;
+ * the count is no longer committed, so the census now reads the enumeration it
+ * was a proxy for.
+ */
+export function enumerateScan(repoRoot = REPO_ROOT) {
+  // EVERY scan root's enumeration is filtered through this (#4216) — the routes
+  // walk included, so a gitignored `route.ts` cannot mint a node either.
+  const visible = gitVisibleFiles([ROUTE_ROOT, ...PUBLICATION_ROOTS], repoRoot);
+
+  const routeFiles = scanFiles(repoRoot, ROUTE_ROOT, (rel) => /\/route\.tsx?$/.test(rel), visible);
+
+  const scriptFiles = [];
+  const unmodeledPublicationSurfaces = [];
+  for (const root of PUBLICATION_ROOTS) {
+    scriptFiles.push(...scanFiles(repoRoot, root, (rel) => PUBLICATION_INCLUDE.test(rel), visible));
+
+    const unread = scanFiles(repoRoot, root, (rel) => PUBLICATION_UNMODELED.test(rel), visible);
+    unmodeledPublicationSurfaces.push({
+      root: `${root}/`,
+      fileCount: unread.length,
+      extensions: [...new Set(unread.map((f) => path.extname(f)))].sort(),
+    });
+  }
+  return { routeFiles, scriptFiles, unmodeledPublicationSurfaces };
+}
+
 /**
  * Compile the extractor to CommonJS in a temp dir and return its `build.js`.
  *
@@ -208,47 +268,7 @@ function currentCommit() {
 function main() {
   const check = process.argv.includes('--check');
 
-  // ── THE PUBLICATION SCOPE, WALKED AND DECLARED FROM ONE PLACE ──────────
-  //
-  // These roots are passed into `buildSecurityGraphArtifact`, which derives BOTH
-  // the file partition and the scope string the artifact reports from them. They
-  // used to be a hand-written literal here and a second hand-written literal in
-  // build.ts, and the two disagreed: the artifact declared `scripts/**,
-  // .github/**` while this walk covered `scripts/` alone. Measured on the
-  // committed bytes — 0 `.github` nodes, 0 `skipped` entries naming it — and
-  // `.github/scripts/deploy-notify-failure.mjs`, a FAILURE NOTIFIER whose whole
-  // job is publishing to a public issue and a public run log, sat outside a
-  // population the artifact claimed to cover.
-  const PUBLICATION_ROOTS = ['scripts', '.github'];
-  /** What this extractor can lex. */
-  const PUBLICATION_INCLUDE = /\.(?:mjs|cjs|js)$/;
-  /**
-   * Publication-capable languages under the SAME roots that this extractor
-   * cannot lex. Counted rather than ignored: a workflow `run:` block and a `.sh`
-   * step echo into the same PUBLIC Actions log a `console.log` does, so the
-   * narrowing is reported into `meta.skipped` with a real number.
-   */
-  const PUBLICATION_UNMODELED = /\.(?:sh|ps1|psm1|py|yml|yaml)$/;
-
-  // EVERY scan root's enumeration is filtered through this (#4216) — the routes
-  // walk included, so a gitignored `route.ts` cannot mint a node either.
-  const ROUTE_ROOT = 'apps/fiab-console/app';
-  const visible = gitVisibleFiles([ROUTE_ROOT, ...PUBLICATION_ROOTS]);
-
-  const routeFiles = scanFiles(REPO_ROOT, ROUTE_ROOT, (rel) => /\/route\.tsx?$/.test(rel), visible);
-
-  const scriptFiles = [];
-  const unmodeledPublicationSurfaces = [];
-  for (const root of PUBLICATION_ROOTS) {
-    scriptFiles.push(...scanFiles(REPO_ROOT, root, (rel) => PUBLICATION_INCLUDE.test(rel), visible));
-
-    const unread = scanFiles(REPO_ROOT, root, (rel) => PUBLICATION_UNMODELED.test(rel), visible);
-    unmodeledPublicationSurfaces.push({
-      root: `${root}/`,
-      fileCount: unread.length,
-      extensions: [...new Set(unread.map((f) => path.extname(f)))].sort(),
-    });
-  }
+  const { routeFiles, scriptFiles, unmodeledPublicationSurfaces } = enumerateScan();
 
   const files = [...routeFiles, ...scriptFiles].map((absolute) => ({
     path: repoRelative(absolute),
@@ -276,17 +296,20 @@ function main() {
 
   const { entry, outDir } = compileExtractor();
   let artifact;
+  let run;
+  let serialize;
   try {
     const require_ = createRequire(import.meta.url);
     const mod = require_(entry);
-    artifact = mod.buildSecurityGraphArtifact({
+    ({ artifact, run } = mod.buildSecurityGraphExtraction({
       files,
       publicationRoots: PUBLICATION_ROOTS.map((r) => `${r}/`),
       unmodeledPublicationSurfaces,
       routeGuardSource,
       commit: currentCommit(),
       now: new Date(),
-    });
+    }));
+    serialize = mod.serializeArtifact;
   } finally {
     rmSync(outDir, { recursive: true, force: true });
   }
@@ -302,7 +325,10 @@ function main() {
     process.exit(1);
   }
 
-  const payload = `${JSON.stringify({ _comment: 'GENERATED — do not edit by hand. Produced by scripts/brain/extract-security-graph.mjs.', artifact }, null, 2)}\n`;
+  // The committed bytes. `serializeArtifact` is the same function the
+  // merge-stability spec simulates a three-way merge over, so what that spec
+  // measures is what lands here.
+  const payload = serialize(artifact);
 
   if (check) {
     const committed = readFileSync(OUT_FILE, 'utf8');
@@ -315,15 +341,34 @@ function main() {
       process.exit(1);
     }
 
+    // ── A RUN-ONLY FIELD IN THE COMMITTED BYTES IS REFUSED, NOT IGNORED ──
+    //
+    // #4798: these values move with every file added under a scanned root, so
+    // committing any of them brings back the conflict between every pair of open
+    // PRs. Ignoring them here would let one creep back in by a hand-merge or an
+    // older generator and stay; refusing makes the regression red on the PR that
+    // introduces it.
+    const runOnly = runOnlyFieldsPresent(a);
+    if (runOnly.length > 0) {
+      console.error(
+        '[security-extract] REFUSING: the committed artifact carries run-only field(s) that must not be ' +
+          `committed: ${runOnly.join(', ')}. Each one moves whenever any file under a scanned root is ` +
+          'added, so every open PR that touches the artifact would conflict with every other (#4798). ' +
+          'Run: node scripts/brain/extract-security-graph.mjs',
+      );
+      process.exit(1);
+    }
+
     // ── THE POPULATION FLOOR, BEFORE ANY COMPARISON ────────────────────
     //
     // Two empty things compare equal. A drift gate that passes because BOTH
     // sides measured nothing is green and blind, so the floor is asserted on
     // each side first and a degenerate population is REFUSED rather than
-    // certified.
+    // certified. The file counts exist only for the side extracted just now, so
+    // that side is floored on its run as well.
     const refusals = [
       ...populationRefusals(a, 'the COMMITTED artifact'),
-      ...populationRefusals(artifact, 'the artifact just extracted from this tree'),
+      ...populationRefusals(artifact, 'the artifact just extracted from this tree', run),
     ];
     if (refusals.length > 0) {
       console.error(
@@ -334,23 +379,48 @@ function main() {
       process.exit(1);
     }
 
-    // Compare the WHOLE artifact minus the run-volatile fields — not an
-    // enumeration of watched ones.
+    // ── THE BUILDER'S INPUT, RECONCILED AGAINST AN INDEPENDENT CENSUS ──────
     //
-    // The digest covers input drift (the tree changed) but is BLIND to extractor
-    // drift (the analyzers changed while the tree did not) — and that case is
-    // real: fixing the generic-call matcher in sinks.ts moved the node count
-    // 905 -> 908 with a byte-identical digest. A check that only compared
-    // digests would have called the stale artifact current.
+    // Both sides of the comparison below come from the files `main()` handed
+    // the builder, so a file dropped on the way leaves them agreeing. A file that
+    // emits no node does not move the artifact at all. So the counts the builder
+    // received are reconciled against a separate `git ls-files` count before any
+    // comparison. See `_artifact-drift.mjs#censusRefusals`, and
+    // `#unreadCensusRefusals` for the per-root counts of files this extractor
+    // cannot lex, which are no longer committed either.
+    let census;
+    let unreadCensus;
+    try {
+      census = gitCensus(REPO_ROOT);
+      unreadCensus = gitUnreadCensus(REPO_ROOT);
+    } catch (e) {
+      const detail = (e && (e.stderr || e.message)) ? String(e.stderr || e.message).trim() : 'no error text';
+      console.error(
+        '[security-extract] REFUSING TO CERTIFY: the independent `git ls-files` census failed, so this run ' +
+          `cannot establish that the builder received every file the tree holds. git said: ${detail}`,
+      );
+      process.exit(1);
+    }
+    const censusMismatch = [...censusRefusals(run, census), ...unreadCensusRefusals(run, unreadCensus)];
+    if (censusMismatch.length > 0) {
+      console.error(
+        '[security-extract] REFUSING TO CERTIFY: the files the builder received do not reconcile with ' +
+          '`git ls-files`, so "the artifact matches the tree" would be a claim about a narrower population ' +
+          'than the tree holds.',
+      );
+      for (const r of censusMismatch) console.error(`  - ${r}`);
+      process.exit(1);
+    }
+
+    // Compare the WHOLE artifact — not an enumeration of watched fields.
     //
-    // Until #4128 this compared `{graph, join}`, which had the mirror-image
-    // blind spot: a file inside the declared scan scope that emits NO node moved
-    // `meta.scanScopes[].filesMatched` and `meta.filesScanned` while the graph
-    // held identical, and this gate passed while the REQUIRED census went red.
-    // Naming `meta.scanScopes` as a third watched field would have left
-    // `filesScanned` — and every future field — invisible, so the comparison is
-    // inverted instead: everything is compared, and exemptions are declared with
-    // a reason in `_artifact-drift.mjs`.
+    // The digest was never enough on its own: it is BLIND to extractor drift
+    // (the analyzers changed while the tree did not) — fixing the generic-call
+    // matcher in sinks.ts moved the node count 905 -> 908 with a byte-identical
+    // digest. Until #4128 this compared `{graph, join}`, and naming fields one
+    // at a time would leave every future field invisible, so everything is
+    // compared. Since #4798 there is also nothing to exempt: the run-volatile
+    // fields are not committed at all, and their presence is refused above.
     const CAP = 20;
     const differences = driftDifferences(a, artifact, CAP);
     if (differences.length > 0) {
@@ -364,9 +434,10 @@ function main() {
       const onlySkipped = differences.every((d) => String(d.path).startsWith('meta.skipped'));
       const diagnosis = graphHeld && onlySkipped
         ? 'Every difference is under `meta.skipped` and the node/edge counts are identical, so no modelled '
-          + 'construct moved: the SET OF FILES under a scanned root did. That is a file this extractor does '
-          + 'not lex being added or removed. (Before #4216 a GITIGNORED file could produce exactly this '
-          + 'shape; enumeration now comes from `git ls-files`, so a file git does not carry cannot.)'
+          + 'construct moved: a ledger entry did. That includes the set of EXTENSIONS this extractor does '
+          + 'not lex under a scanned root, which moves when the first file of a new one is added or the '
+          + 'last is removed. (Before #4216 a GITIGNORED file could produce exactly this shape; enumeration '
+          + 'now comes from `git ls-files`, so a file git does not carry cannot.)'
         : 'This check establishes only that the committed bytes and the bytes produced from this tree '
           + 'differ; it does not establish WHICH of the source, the extractor or the scanned file set moved.';
       console.error(
@@ -388,9 +459,11 @@ function main() {
       process.exit(1);
     }
     console.log(
-      `[security-extract] OK — committed artifact matches the tree (${nodes} nodes, ${edges} edges, ` +
-        `${artifact.meta.filesScanned} file(s) across ${artifact.meta.scanScopes.length} declared ` +
-        `scan scope(s), digest ${artifact.meta.inputsDigest}).`,
+      `[security-extract] OK — committed artifact matches the tree (${nodes} nodes, ${edges} edges; ` +
+        `this run scanned ${run.filesScanned} file(s) across ${run.scanScopes.length} declared ` +
+        `scan scope(s), reconciled against \`git ls-files\` (${census.map((c) => `${c.label}: ${c.files}`).join('; ')}; ` +
+        `unread ${unreadCensus.map((c) => `${c.root}: ${c.files}`).join(', ')}), ` +
+        `digest ${run.inputsDigest} — run values, not committed).`,
     );
     return;
   }
@@ -399,22 +472,26 @@ function main() {
 
   const painted = artifact.join.painted.length;
   const unjoined = artifact.join.unjoined.length;
-  console.log(`[security-extract] files scanned      : ${files.length}`);
-  for (const scope of artifact.meta.scanScopes) {
+  console.log(`[security-extract] files scanned      : ${run.filesScanned}`);
+  for (const scope of run.scanScopes) {
     console.log(`[security-extract]   ${scope.scope}: ${scope.filesMatched} file(s) -> ${scope.nodesEmitted} node(s)`);
+  }
+  for (const surface of run.unmodeledPublicationSurfaces) {
+    console.log(`[security-extract]   ${surface.root}** not lexed: ${surface.fileCount} file(s) (${surface.extensions.join(', ')})`);
   }
   console.log(`[security-extract] nodes / edges       : ${nodes} / ${edges}`);
   console.log(`[security-extract] join painted        : ${painted}`);
   console.log(`[security-extract] join unjoined       : ${unjoined}`);
   console.log(`[security-extract] skipped subjects    : ${artifact.meta.skipped.length}`);
-  console.log(`[security-extract] inputs digest       : ${artifact.meta.inputsDigest}`);
-  console.log(`[security-extract] wrote ${repoRelative(OUT_FILE)}`);
+  console.log(`[security-extract] non-spawn sinks     : ${run.nonSpawnSinks}`);
+  console.log(`[security-extract] inputs digest       : ${run.inputsDigest}`);
+  console.log(`[security-extract] wrote ${repoRelative(OUT_FILE)} (run values above are printed, not committed — #4798)`);
 }
 
 // The default is UNCONDITIONAL: every CLI shape — `node <path>`, a relative
 // path, a symlink, an npm script — runs the extraction, so there is no
 // invocation that can silently exit 0 having produced nothing. The single
-// opt-out exists so `gitVisibleFiles`/`scanFiles` can be imported by a test
+// opt-out exists so `gitVisibleFiles`/`scanFiles`/`enumerateScan` can be imported by a test
 // without the whole extraction running, and it announces itself on stderr so a
 // run that took it cannot be mistaken for a run that extracted.
 if (process.env.LOOM_SECURITY_EXTRACT_IMPORT_ONLY === '1') {

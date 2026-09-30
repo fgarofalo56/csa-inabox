@@ -21,7 +21,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { buildSecurityGraphArtifact } from '../build';
+import { buildSecurityGraphExtraction } from '../build';
 import type { SourceFile } from '../types';
 
 const NOW = new Date('2026-08-24T12:00:00.000Z');
@@ -69,8 +69,8 @@ process.stderr.write(String(process.env.SOME_TOKEN));`,
   },
 ];
 
-function build(files: readonly SourceFile[]) {
-  return buildSecurityGraphArtifact({
+function extract(files: readonly SourceFile[]) {
+  return buildSecurityGraphExtraction({
     files,
     // Declared because the artifact's scope string is DERIVED from this, not
     // written beside it — see `build.ts`. The fixture only carries `scripts/`
@@ -81,6 +81,10 @@ function build(files: readonly SourceFile[]) {
     commit: null,
     now: NOW,
   });
+}
+
+function build(files: readonly SourceFile[]) {
+  return extract(files).artifact;
 }
 
 /** Compare everything that is part of the artifact's identity. */
@@ -103,7 +107,9 @@ describe('buildSecurityGraphArtifact is order-independent', () => {
   });
 
   it('produces the same inputs digest regardless of order', () => {
-    expect(build([...FILES].reverse()).meta.inputsDigest).toBe(canonical.meta.inputsDigest);
+    // The digest is a RUN value since #4798 (printed, not committed), and it is
+    // still the identity of a run's input set, so it must not depend on order.
+    expect(extract([...FILES].reverse()).run.inputsDigest).toBe(extract(FILES).run.inputsDigest);
   });
 
   it('is stable across repeated runs with the same input', () => {
@@ -112,10 +118,10 @@ describe('buildSecurityGraphArtifact is order-independent', () => {
 
   it('treats a CRLF checkout and an LF checkout as the same inputs', () => {
     // Windows checkouts carry CRLF; ubuntu-latest carries LF. Without the
-    // normalisation in `inputsDigest` the drift gate would report drift on every
-    // CI run for byte-identical content.
+    // normalisation in `inputsDigest` a Windows run and a Linux run over the
+    // same content would report different input sets.
     const crlf = FILES.map((f) => ({ ...f, text: f.text.replace(/\n/g, '\r\n') }));
-    expect(build(crlf).meta.inputsDigest).toBe(canonical.meta.inputsDigest);
+    expect(extract(crlf).run.inputsDigest).toBe(extract(FILES).run.inputsDigest);
   });
 });
 
