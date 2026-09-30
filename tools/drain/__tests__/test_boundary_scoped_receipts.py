@@ -161,7 +161,7 @@ def test_seam_an_unlabelled_g1_item_takes_the_per_kind_default_and_names_it(tmp_
     monkeypatch.setattr(tick, "sh", _labels_stub(["lane:console", "sp:1"]))
     seen = {}
 
-    def _closer(_policy, _repo, _number, _state, detail, _kind, _issue_class):
+    def _closer(_policy, _repo, _number, _state, detail, _kind, _issue_class, _binding):
         seen["detail"] = detail
         return "closed (test stub)"
 
@@ -218,10 +218,24 @@ def test_seam_an_unlabelled_deploy_item_refuses_because_its_kind_has_no_default(
 
     WHAT VALUE WOULD MAKE THIS FAIL: adding `deploy-run` to
     `default_boundary`, or reverting that key to a bare string.
+
+    THE TITLE IS #3449's CURRENT ONE, NOT THE WATCHER SHAPE (#4764). It used to
+    be `deploy: deploy-fiab-gcch is failing`, and since #4764 an item with that
+    title is routed to the WATCHER route -- which never consults the boundary,
+    because it binds by workflow identity instead. Keeping the old title here
+    would test that route, not this one. The watcher route's own refusal of a
+    Commercial roll for a Gov workflow item is
+    `test_watcher_seam_a_policy_producer_run_cannot_close_a_watcher_item`.
     """
     led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
-    item = led.upsert(3449, "deploy: deploy-fiab-gcch is failing", "W1-deploy",
-                      lane="lane:bicep", size=1)
+    item = led.upsert(
+        3449,
+        "deploy-fiab-gcch: scheduled runs have been QUEUED behind an environment "
+        "approval since 2026-09-17, not failing (the Jul-Aug failing era is "
+        "separate and ended)",
+        "W1-deploy", lane="lane:bicep", size=1)
+    assert tick.watcher_workflow_in_title(item.title) is None, (
+        "this test needs an item OFF the watcher route")
     monkeypatch.setattr(tick, "_run_evidence", lambda *_: _roll())
     monkeypatch.setattr(tick, "sh", _labels_stub(["lane:bicep", "sp:1"]))
 
