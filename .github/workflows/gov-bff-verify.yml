@@ -212,15 +212,16 @@ jobs:
             # `timeout` bounds a stream that never closes (exit 124 is reported).
             # A revision with no replica fails here with "Could not find a
             # replica", which `diag` prints.
-            diag "logs show --type console $TARGET" timeout 120 az containerapp logs show -n loom-unity -g "$RG" --revision "$TARGET" --type console --tail 100 --format text
+            diag "logs show --type console $TARGET (exit 124 = timed out after 120s)" timeout 120 az containerapp logs show -n loom-unity -g "$RG" --revision "$TARGET" --type console --tail 100 --format text
           else
             echo "::warning::could not resolve any loom-unity revision name, so the per-revision sections did not run (see the warnings above for why)."
           fi
           echo "=== system log stream (APP-level: every revision, not one) ==="
-          # az rejects --revision / --replica / --container (and --format) with
-          # --type system, so this stream cannot be narrowed to one revision.
-          # The per-revision system records are in the Log Analytics section.
-          diag "logs show --type system" timeout 120 az containerapp logs show -n loom-unity -g "$RG" --type system --tail 100
+          # az rejects --revision / --replica / --container (and any --format
+          # other than json) with --type system, so this stream cannot be
+          # narrowed to one revision. The per-revision system records are in
+          # the Log Analytics section.
+          diag "logs show --type system (exit 124 = timed out after 120s)" timeout 120 az containerapp logs show -n loom-unity -g "$RG" --type system --tail 100
 
           echo "=== registry pull identity: roles it holds on its registry ==="
           # A revision whose registry identity cannot pull never starts, and the
@@ -234,33 +235,50 @@ jobs:
             [ -n "${REG_SERVER:-}" ] || continue
             REG_ACR_ID=$(val az acr list --query "[?loginServer=='$REG_SERVER'].id | [0]" -o tsv)
             REG_PRINCIPAL=""
+            # `-o tsv` prints a null field as the literal `None`.
             case "${REG_IDENT:-}" in
               /subscriptions/*|/SUBSCRIPTIONS/*)
                 REG_KIND="user-assigned"
                 REG_PRINCIPAL=$(val az identity show --ids "$REG_IDENT" --query principalId -o tsv) ;;
-              "") REG_KIND="none (username/password or anonymous pull)" ;;
+              ""|None) REG_KIND="none (username/password or anonymous pull)" ;;
               *) REG_KIND="${REG_IDENT} (not a user-assigned identity; role check not implemented for it)" ;;
             esac
             echo "registry=$REG_SERVER identityKind=$REG_KIND identity=${REG_IDENT##*/} principalId=${REG_PRINCIPAL:-<unresolved>} acr=${REG_ACR_ID##*/}"
             if [ -n "$REG_ACR_ID" ] && [ -n "$REG_PRINCIPAL" ]; then
-              REG_ROLES=$(val az role assignment list --scope "$REG_ACR_ID" --include-inherited \
+              # The exit code is taken directly: an empty result is reported as
+              # "0 visible" ONLY when the query succeeded. A failed query (403,
+              # 429, 5xx, network) is reported as a failure with no count.
+              REG_ERR=$(mktemp)
+              REG_ROLES_RC=0
+              REG_ROLES=$(az role assignment list --scope "$REG_ACR_ID" --include-inherited \
                 --fill-principal-name false \
-                --query "[?principalId=='$REG_PRINCIPAL'].[roleDefinitionName, scope]" -o tsv)
-              if [ -n "$REG_ROLES" ]; then
+                --query "[?principalId=='$REG_PRINCIPAL'].[roleDefinitionName, scope]" -o tsv 2>"$REG_ERR") || REG_ROLES_RC=$?
+              REG_ROLES=$(printf '%s' "$REG_ROLES" | tr -d '\r')
+              if [ "$REG_ROLES_RC" -ne 0 ]; then
+                echo "::warning::role assignment query for $REG_SERVER FAILED (exit $REG_ROLES_RC) — no count is reported; stderr follows"
+                head -n 40 "$REG_ERR" | sed 's/^/  stderr| /'
+              elif [ -n "$REG_ROLES" ]; then
                 printf '%s\n' "$REG_ROLES" | sed 's/^/  role| /'
               else
-                echo "  0 role assignments visible for this principal at or above the registry. Group-inherited assignments and assignments the deploy principal cannot read are not shown, so this does NOT prove AcrPull is absent."
+                echo "  query succeeded: 0 role assignments visible for this principal at or above the registry. Group-inherited assignments are not listed, so this does NOT prove AcrPull is absent."
               fi
+              rm -f "$REG_ERR"
             else
               echo "  (registry id or principal id unresolved — role check not run)"
             fi
           done <<< "$REGS"
 
-          echo "=== activity log: FAILED operations on loom-unity, last 7 days ==="
+          echo "=== activity log: FAILED operations on loom-unity, among the newest 200 events of the last 7 days ==="
           APP_ID=$(val az containerapp show -n loom-unity -g "$RG" --query id -o tsv)
           if [ -n "$APP_ID" ]; then
             # Filtered client-side: whether the service honours a status term in
-            # the activity-log $filter is not documented.
+            # the activity-log $filter is not documented. --max-events applies
+            # BEFORE that filter, so the window is stated and a full window warns.
+            AL_N=$(val az monitor activity-log list --resource-id "$APP_ID" --offset 7d --max-events 200 --query "length(@)" -o tsv)
+            echo "events read: ${AL_N:-<query failed, see warning above>} (cap 200)"
+            if [ "${AL_N:-}" = "200" ]; then
+              echo "::warning::the 200-event cap was reached, so failures older than the 200th event in the last 7 days are NOT shown"
+            fi
             diag "activity-log list" az monitor activity-log list --resource-id "$APP_ID" --offset 7d --max-events 200 \
               --query "[?status.value=='Failed'].{time:eventTimestamp,operation:operationName.value,status:status.value,subStatus:subStatus.value,message:properties.statusMessage}" -o json
           fi
@@ -298,8 +316,9 @@ jobs:
             diag "extension add log-analytics" az extension add -n log-analytics -y --only-show-errors
             # la_q LABEL TABLE APPCOL WHERE WINDOW LINE_EXPR
             # Prints the matched-row count, then the NEWEST 150 rows (shown
-            # oldest-first) as one `line` column: `-o tsv` sorts dict keys, so a
-            # multi-column projection would come out in a different order.
+            # oldest-first) as one `line` column, so the tsv output is one row
+            # per line regardless of the extra TableName field the extension
+            # adds to every row.
             la_q() {
               la_base="$2 | where TimeGenerated > ago($5) | where $3 == 'loom-unity' | where $4"
               echo "--- $1 ---"
@@ -310,12 +329,15 @@ jobs:
                   "$la_base | top 150 by TimeGenerated desc | order by TimeGenerated asc | project line=$6"
               fi
             }
-            # Custom-table columns beyond the documented ones are read through
+            # Replica column differs by table (Learn table reference): the
+            # system table has ReplicaName; the console table has NO
+            # ReplicaName, the replica is ContainerGroupName. Custom-table
+            # columns beyond the ones the filters use are read through
             # column_ifexists, so a workspace without them still answers.
             CL_SYS="strcat(format_datetime(TimeGenerated,'yyyy-MM-dd HH:mm:ss'),' ',RevisionName_s,' ',column_ifexists('ReplicaName_s',''),' ',column_ifexists('Reason_s',''),' ',Log_s)"
             RS_SYS="strcat(format_datetime(TimeGenerated,'yyyy-MM-dd HH:mm:ss'),' ',RevisionName,' ',ReplicaName,' ',Reason,' ',Log)"
-            CL_CON="strcat(format_datetime(TimeGenerated,'yyyy-MM-dd HH:mm:ss'),' ',RevisionName_s,' ',column_ifexists('ReplicaName_s',''),' ',Log_s)"
-            RS_CON="strcat(format_datetime(TimeGenerated,'yyyy-MM-dd HH:mm:ss'),' ',RevisionName,' ',ReplicaName,' ',Log)"
+            CL_CON="strcat(format_datetime(TimeGenerated,'yyyy-MM-dd HH:mm:ss'),' ',RevisionName_s,' ',column_ifexists('ContainerGroupName_s',''),' ',Log_s)"
+            RS_CON="strcat(format_datetime(TimeGenerated,'yyyy-MM-dd HH:mm:ss'),' ',RevisionName,' ',ContainerGroupName,' ',Log)"
             SERVING="${LREADY:-}"
             if [ -n "$SERVING" ]; then
               echo "filter: A) revisions other than the serving one ($SERVING), 7 days; B) the serving revision, 1 hour"
