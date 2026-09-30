@@ -28,7 +28,10 @@ import { POST } from '../shortcuts/test/route';
 import { getSession } from '@/lib/auth/session';
 import { resolveItemAccessByOid } from '@/lib/auth/item-access';
 import { getShortcut, updateShortcutStatus } from '@/lib/azure/lakehouse-shortcuts';
-import { resolveAndTestAdls } from '@/lib/azure/shortcut-engines';
+import { resolveAndTestAdls, testEngineObject, refreshDeltaSharingCredential } from '@/lib/azure/shortcut-engines';
+import { getKeyVaultSecret } from '@/lib/azure/shortcut-credentials';
+import { parseAbfss, listAdlsWithSas } from '@/lib/azure/shortcut-client';
+import { headDriveItem, parseSharepointUri, graphDriveConfigGate } from '@/lib/azure/graph-drive-client';
 import { legacyContainerKeyFor } from '../_lib/legacy-container-key';
 
 const sess = { claims: { upn: 'u@x', tid: 't1' } };
@@ -101,5 +104,174 @@ describe('POST /api/lakehouse/shortcuts/test', () => {
     expect([res.status, j.code]).toEqual([404, 'not_found']);
     expect((getShortcut as any).mock.calls).toEqual([['lh', 'bronze:files::a']]);
     expect(resolveAndTestAdls).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Every status write-back, for a row stored under the earlier container key.
+ *
+ * Each branch of the route writes the status itself, so each is pinned on its
+ * own: the FIRST argument of every updateShortcutStatus call must be 'bronze'
+ * (the key the row was read from). Writing under 'lh' instead would leave the
+ * stored row unchanged, and the Status chip would never move. That value --
+ * 'lh' in argument 0 -- is what turns each of these red.
+ */
+describe('POST /api/lakehouse/shortcuts/test — write-back key per target type', () => {
+  const LEGACY = 'bronze';
+
+  function legacyRow(row: Record<string, unknown>) {
+    (legacyContainerKeyFor as any).mockResolvedValue(LEGACY);
+    (getShortcut as any).mockImplementation(async (key: string) => (key === LEGACY ? row : null));
+  }
+
+  async function run(id: string) {
+    const res = await POST(postReq({ lakehouseId: 'lh', id }));
+    return { res, j: await res.json() };
+  }
+
+  /** Every write went to the legacy key, with this status. Breaks on 'lh' in arg 0. */
+  function wroteUnderLegacy(id: string, status: string) {
+    const calls = (updateShortcutStatus as any).mock.calls as unknown[][];
+    expect(calls.length).toBe(1);
+    expect(calls[0].slice(0, 3)).toEqual([LEGACY, id, status]);
+  }
+
+  const DS = {
+    id: 'bronze:tables::ds', name: 'ds', kind: 'tables', targetType: 'delta_sharing',
+    targetUri: 'https://sharing.example.test/delta-sharing', engine: 'databricks', engineObject: 'loom.sh.orders',
+    credentialRef: { kind: 'bearer', keyVaultSecret: 'ds-profile' },
+  };
+  // Low-entropy placeholders: not credentials, never sent anywhere but the mock.
+  const PROFILE = JSON.stringify({ endpoint: 'https://sharing.example.test/delta-sharing/', bearerToken: 'fixture-bearer', shareCredentialsVersion: 1 });
+
+  function stubFetch(status: number) {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ status, ok: status >= 200 && status < 300 })));
+  }
+
+  it('delta_sharing, Tables on Databricks: refreshes the credential and writes active under the legacy key', async () => {
+    legacyRow(DS);
+    (getKeyVaultSecret as any).mockResolvedValue(PROFILE);
+    stubFetch(200);
+    const { res, j } = await run(DS.id);
+    vi.unstubAllGlobals();
+    expect([res.status, j.ok]).toEqual([200, true]);
+    // Breaks if the credential file is written for the item id instead of the row's key.
+    expect((refreshDeltaSharingCredential as any).mock.calls[0][0]).toBe(LEGACY);
+    expect((refreshDeltaSharingCredential as any).mock.calls[0][1]).toBe('ds');
+    expect(testEngineObject).toHaveBeenCalledWith('databricks', 'loom.sh.orders');
+    // route.ts:120 -- the active write-back.
+    wroteUnderLegacy(DS.id, 'active');
+  });
+
+  it('delta_sharing with an expired token: writes error under the legacy key (502)', async () => {
+    legacyRow(DS);
+    (getKeyVaultSecret as any).mockResolvedValue(PROFILE);
+    stubFetch(401);
+    const { res, j } = await run(DS.id);
+    vi.unstubAllGlobals();
+    expect([res.status, j.code]).toEqual([502, 'delta_sharing_auth_failure']);
+    expect(refreshDeltaSharingCredential).not.toHaveBeenCalled();
+    wroteUnderLegacy(DS.id, 'error');
+  });
+
+  it('delta_sharing with no credential: writes pending under the legacy key', async () => {
+    const row = { ...DS, credentialRef: undefined };
+    legacyRow(row);
+    const { res } = await run(DS.id);
+    expect(res.status).toBe(200);
+    wroteUnderLegacy(DS.id, 'pending');
+  });
+
+  const S3 = {
+    id: 'bronze:tables::s3', name: 's3', kind: 'tables', targetType: 's3',
+    targetUri: 's3://bucket/orders', engine: 'synapse', engineObject: 'loom_sc.s3_orders',
+  };
+
+  it('s3: proves the engine object and writes active under the legacy key', async () => {
+    legacyRow(S3);
+    const { res } = await run(S3.id);
+    expect(res.status).toBe(200);
+    expect(testEngineObject).toHaveBeenCalledWith('synapse', 'loom_sc.s3_orders');
+    wroteUnderLegacy(S3.id, 'active');
+  });
+
+  it('gcs with an unreachable engine: writes error under the legacy key (502)', async () => {
+    legacyRow({ ...S3, targetType: 'gcs', targetUri: 'gs://bucket/orders' });
+    (testEngineObject as any).mockRejectedValue(Object.assign(new Error('object not found'), { code: 'engine_object_missing' }));
+    const { res, j } = await run(S3.id);
+    expect([res.status, j.code]).toEqual([502, 'engine_object_missing']);
+    wroteUnderLegacy(S3.id, 'error');
+  });
+
+  it('s3 with no engine binding: writes pending under the legacy key', async () => {
+    legacyRow({ ...S3, engine: 'none' });
+    const { res } = await run(S3.id);
+    expect(res.status).toBe(200);
+    wroteUnderLegacy(S3.id, 'pending');
+  });
+
+  const SP = {
+    id: 'bronze:files::sp', name: 'sp', kind: 'files', targetType: 'sharepoint',
+    targetUri: 'sharepoint://drive-1/Shared/orders.csv',
+  };
+
+  it('sharepoint: re-reads the drive item and writes active under the legacy key', async () => {
+    legacyRow(SP);
+    (parseSharepointUri as any).mockReturnValue({ driveId: 'drive-1', path: 'Shared/orders.csv' });
+    const { res } = await run(SP.id);
+    expect(res.status).toBe(200);
+    expect(headDriveItem).toHaveBeenCalledWith('drive-1', 'Shared/orders.csv');
+    wroteUnderLegacy(SP.id, 'active');
+  });
+
+  it('sharepoint with Graph not configured: writes pending under the legacy key (503)', async () => {
+    legacyRow(SP);
+    (graphDriveConfigGate as any).mockReturnValue({ code: 'graph_not_configured', hint: { followUp: 'grant the Graph app role' } });
+    const { res, j } = await run(SP.id);
+    expect([res.status, j.code]).toEqual([503, 'graph_not_configured']);
+    wroteUnderLegacy(SP.id, 'pending');
+  });
+
+  const SAS = {
+    id: 'bronze:files::ext', name: 'ext', kind: 'files', targetType: 'adls',
+    targetUri: 'abfss://data@partneracct.dfs.core.windows.net/orders',
+    credentialRef: { kind: 'sas', keyVaultSecret: 'partner-sas' },
+  };
+
+  it('SAS-authenticated ADLS: probes with the SAS and writes active under the legacy key', async () => {
+    legacyRow(SAS);
+    (getKeyVaultSecret as any).mockResolvedValue('sas-fixture');
+    (parseAbfss as any).mockReturnValue({ account: 'partneracct', container: 'data', path: 'orders' });
+    const { res } = await run(SAS.id);
+    expect(res.status).toBe(200);
+    expect((listAdlsWithSas as any).mock.calls[0][0]).toMatchObject({ account: 'partneracct', container: 'data', path: 'orders' });
+    expect(resolveAndTestAdls).not.toHaveBeenCalled();
+    wroteUnderLegacy(SAS.id, 'active');
+  });
+
+  it('SAS-authenticated ADLS with an empty secret: writes error under the legacy key', async () => {
+    legacyRow(SAS);
+    (getKeyVaultSecret as any).mockResolvedValue('   ');
+    const { res, j } = await run(SAS.id);
+    expect([res.status, j.code]).toEqual([502, 'kv_secret_empty']);
+    expect(listAdlsWithSas).not.toHaveBeenCalled();
+    wroteUnderLegacy(SAS.id, 'error');
+  });
+
+  it('UAMI ADLS unreachable: writes error under the legacy key (502)', async () => {
+    const row = { ...ADLS_ROW, id: 'bronze:files::a' };
+    legacyRow(row);
+    (resolveAndTestAdls as any).mockRejectedValue(Object.assign(new Error('403 AuthorizationPermissionMismatch'), { code: 'forbidden' }));
+    const { res, j } = await run(row.id);
+    expect([res.status, j.code]).toEqual([502, 'forbidden']);
+    wroteUnderLegacy(row.id, 'error');
+  });
+
+  it('dataverse with no resolved path: writes pending under the legacy key', async () => {
+    legacyRow({ id: 'bronze:files::dv', name: 'dv', kind: 'files', targetType: 'dataverse', targetUri: 'dataverse://org/table' });
+    const { res } = await run('bronze:files::dv');
+    expect(res.status).toBe(200);
+    expect(resolveAndTestAdls).not.toHaveBeenCalled();
+    wroteUnderLegacy('bronze:files::dv', 'pending');
   });
 });
