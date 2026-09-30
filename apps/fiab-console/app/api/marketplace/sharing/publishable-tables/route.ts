@@ -13,7 +13,7 @@
  * same dialog has always been a cascading Catalog → Schema → Table picker; this
  * is the Azure-native equivalent (Workspace → Lakehouse → Delta table).
  *
- * The abfss URI is assembled SERVER-side, from `resolveLakehouseAbfss` (which
+ * The abfss URI is assembled SERVER-side, from `resolveLakehouseStorage` (which
  * already resolved the provisioner-stamped container + root, sovereign-cloud
  * correct via the configured LOOM_*_URL host) plus the path the scanner
  * actually found. The browser never constructs a storage URI — it has neither
@@ -37,7 +37,7 @@
  */
 import { NextResponse } from 'next/server';
 import { withTenantAdmin } from '@/lib/api/route-toolkit';
-import { resolveLakehouseAbfss } from '@/lib/azure/lakehouse-abfss';
+import { lakehouseStorageWithheldFields, resolveLakehouseStorage } from '@/lib/azure/lakehouse-abfss';
 import { scanLakehouseTables } from '@/lib/azure/synapse-catalog-client';
 import { apiServerError } from '@/lib/api/respond';
 
@@ -94,8 +94,15 @@ export const GET = withTenantAdmin(async (req) => {
   }
 
   try {
-    const root = await resolveLakehouseAbfss(lakehouseId, workspaceId);
-    if (!root) {
+    const resolved = await resolveLakehouseStorage(lakehouseId, workspaceId);
+    if (!resolved.ok) {
+      if (resolved.reason === 'not-found') {
+        return NextResponse.json({ ok: false, error: 'lakehouse not found' }, { status: 404 });
+      }
+      // A withheld location carries the resolver's one wording (and the page
+      // that resolves it); only `no-storage` is the storage-configuration gate.
+      const withheld = lakehouseStorageWithheldFields(resolved.reason);
+      if (withheld) return NextResponse.json({ ok: false, ...withheld }, { status: 409 });
       return NextResponse.json({
         ok: false,
         gate: { missing: 'LOOM_{BRONZE,SILVER,GOLD,LANDING}_URL' },
@@ -105,6 +112,7 @@ export const GET = withTenantAdmin(async (req) => {
           + 'UAMI Storage Blob Data Reader on the container, then reopen this dialog.',
       });
     }
+    const root = resolved.bound;
 
     const scanned = await scanLakehouseTables({ containers: [root.container], rootPrefix: root.root });
     const tables: PublishableTable[] = [];

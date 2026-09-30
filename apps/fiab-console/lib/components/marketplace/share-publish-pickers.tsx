@@ -30,7 +30,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Caption1, Button, Dropdown, Option, Field, Persona,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBar, MessageBarBody, MessageBarTitle, Link,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { Dismiss16Regular } from '@fluentui/react-icons';
@@ -118,6 +118,8 @@ export function LakehouseTablePicker({
   const [err, setErr] = useState<string | null>(null);
   /** Honest infra gate from the tables route (missing LOOM_*_URL / RBAC). */
   const [gate, setGate] = useState<string | null>(null);
+  /** The page that resolves `gate`, when the tables route names one. */
+  const [gateHref, setGateHref] = useState<string | null>(null);
 
   const lakehouseName = useMemo(
     () => (lakehouses || []).find((l) => l.id === lhId)?.displayName || '',
@@ -162,13 +164,18 @@ export function LakehouseTablePicker({
 
   // Lakehouse → real Delta tables (ADLS listing + _delta_log probe, server-side).
   useEffect(() => {
-    setGate(null); onSelect(null);
+    setGate(null); setGateHref(null); onSelect(null);
     if (!lhId || !wsId) { setTables(null); return; }
     setTables(null);
     clientFetch(`/api/marketplace/sharing/publishable-tables?lakehouseId=${encodeURIComponent(lhId)}&workspaceId=${encodeURIComponent(wsId)}`)
       .then((r) => r.json())
-      .then((d: { ok?: boolean; tables?: PublishableTable[]; error?: string }) => {
-        if (!d?.ok) { setGate(d?.error || 'Could not list Delta tables.'); setTables([]); return; }
+      .then((d: { ok?: boolean; tables?: PublishableTable[]; error?: string; fixHref?: string }) => {
+        if (!d?.ok) {
+          setGate(d?.error || 'Could not list Delta tables.');
+          setGateHref(typeof d?.fixHref === 'string' ? d.fixHref : null);
+          setTables([]);
+          return;
+        }
         setTables(d.tables || []);
       })
       .catch((e: unknown) => { setGate(String((e as Error)?.message || e)); setTables([]); });
@@ -248,6 +255,12 @@ export function LakehouseTablePicker({
           <MessageBarBody>
             <MessageBarTitle>Can&apos;t list Delta tables</MessageBarTitle>
             {gate}
+            {gateHref && (
+              <>
+                {' '}
+                <Link href={gateHref} data-testid="publishable-tables-gate-link">Open Admin &gt; Readiness</Link>
+              </>
+            )}
           </MessageBarBody>
         </MessageBar>
       )}

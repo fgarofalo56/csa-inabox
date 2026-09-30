@@ -84,7 +84,7 @@ function tenantAdminRequiredBody(verb: 'Granting' | 'Revoking') {
   const message = `${verb} lakehouse permissions requires tenant-admin, so Loom did not ${action} anything.`;
   const remediation =
     `Ask a tenant admin to ${action} the role for you, or ${action} it on the storage container in the Azure portal.`;
-  return { ok: false as const, error: message, code: 'admin_only', remediation, hint: remediation };
+  return { ok: false as const, error: message, code: 'admin_only', remediation };
 }
 
 /** The 403 for a write verb when the caller is not a tenant admin. */

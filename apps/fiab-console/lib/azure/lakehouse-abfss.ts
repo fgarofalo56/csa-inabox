@@ -40,9 +40,10 @@
  *       an overlapping root, or it is another item's item root: that is
  *       `root-shared`, and resolution stops. Items that merely share the display
  *       name and never recorded a root do not count. If the other items cannot
- *       be read, the item's own record is kept. A recorded root found to be the
- *       item's alone is stamped with its marker when the caller persists, so
- *       later resolves read no other item.
+ *       be read, nothing is returned (`root-unverified`): an unmarked root that
+ *       is not the item's own item root is not opened until it is confirmed. A
+ *       recorded root found to be the item's alone is stamped with its marker
+ *       when the caller persists, so later resolves read no other item.
  *   So an item created by an older build, whose recorded root is name-only,
  *   keeps it, whatever its `createdAt`.
  *
@@ -342,10 +343,12 @@ async function persistFoundBinding(
  *                    container is chosen in its place: the files are where they
  *                    are, and an administrator picks the item that keeps the
  *                    location (Admin > Readiness, "Keep root for ...").
- *   root-unverified  an unrecorded name-only root was found, and the other
- *                    lakehouses could not be read to confirm it is this item's
- *                    alone. An unknown answer is not a "no"; retry. A RECORDED
- *                    root is never withheld for this reason.
+ *   root-unverified  an unmarked root that is not the item's own item root (a
+ *                    recorded one, or an unrecorded name-only one) was found,
+ *                    and the other lakehouses could not be read to confirm it is
+ *                    this item's alone. An unknown answer is not a "no"; retry.
+ *                    A recorded item root, or a directory marked for this item,
+ *                    is never withheld for this reason.
  */
 export type LakehouseStorageWithheld = 'not-found' | 'no-storage' | 'root-shared' | 'root-unverified';
 
@@ -365,10 +368,53 @@ export function lakehouseStorageWithheldMessage(reason: LakehouseStorageWithheld
       + 'with the other items that use the same location, and "Keep root for ..." chooses which lakehouse keeps it.';
   }
   if (reason === 'root-unverified') {
-    return 'Loom found an older storage folder for this lakehouse but could not confirm that it belongs to this '
-      + 'lakehouse alone, because the list of lakehouse items could not be read. Nothing was opened. Retry in a moment.';
+    return 'Loom could not confirm that this lakehouse\'s storage folder is used by this lakehouse alone, because the '
+      + 'list of lakehouse items could not be read. Nothing was opened. Retry in a moment.';
   }
   return null;
+}
+
+/** Where an administrator resolves `root-shared`: the readiness page, which lists the group with "Keep root for ...". */
+export const LAKEHOUSE_SHARED_ROOTS_FIX_HREF = '/admin/readiness';
+
+/**
+ * The link a surface shows beside a withheld message, or null when the reason
+ * has no page to go to (`root-unverified` is retried; `not-found` and
+ * `no-storage` are each route's own answer). ONE mapping for every route, so
+ * every surface that shows `root-shared` links to the same place.
+ */
+export function lakehouseStorageWithheldFix(reason: LakehouseStorageWithheld): { href: string; label: string } | null {
+  return reason === 'root-shared' ? { href: LAKEHOUSE_SHARED_ROOTS_FIX_HREF, label: 'Open Admin > Readiness' } : null;
+}
+
+/**
+ * The JSON fields a caller adds to its response for a withheld resolution:
+ * the reason, the resolver's one wording, and the link when there is one. Null
+ * for `not-found` and `no-storage`, which each caller words itself.
+ */
+export function lakehouseStorageWithheldFields(
+  reason: LakehouseStorageWithheld,
+): { reason: LakehouseStorageWithheld; error: string; fixHref?: string } | null {
+  const error = lakehouseStorageWithheldMessage(reason);
+  if (!error) return null;
+  const fix = lakehouseStorageWithheldFix(reason);
+  return { reason, error, ...(fix ? { fixHref: fix.href } : {}) };
+}
+
+/**
+ * Thrown by a library caller (not a route) whose lakehouse location was
+ * withheld, so the route that catches it can answer with the true reason and
+ * the link instead of a generic server error.
+ */
+export class LakehouseStorageWithheldError extends Error {
+  readonly reason: LakehouseStorageWithheld;
+  readonly fixHref: string | null;
+  constructor(message: string, reason: LakehouseStorageWithheld, fixHref: string | null) {
+    super(message);
+    this.name = 'LakehouseStorageWithheldError';
+    this.reason = reason;
+    this.fixHref = fixHref;
+  }
 }
 
 /**
@@ -434,7 +480,9 @@ export async function resolveLakehouseStorage(
   const persist = opts.persist === true;
   const itemRoot = lakehouseItemRootPath(item.displayName || '', item.id);
   // Only an item created before the cutover can have files under a name-only
-  // root it never recorded, so only such an item looks for one in step 3.
+  // root it never recorded, so only such an item looks for one in step 3. That
+  // root follows the CURRENT display name until a persisting resolve records
+  // it; an older item renamed before then looks under the new name (#4818).
   const nameRoot = lakehouseUsesItemRoot(item.createdAt) ? null : lakehouseRootPath(item.displayName || '', item.id);
 
   // Every OTHER lakehouse's root, recycled ones included (their files remain
@@ -480,8 +528,8 @@ export async function resolveLakehouseStorage(
    *   - otherwise (unmarked, not yet created, or on an account whose marker
    *     this resolver does not read): yes, unless another item also records
    *     that root (or it is another item's item root), which is `root-shared`
-   *     and stops resolution. If the other items cannot be read, the item's
-   *     own record is kept: it was written by the server for this item. A
+   *     and stops resolution. If the other items cannot be read, the answer is
+   *     `root-unverified`: the root is not opened until it is confirmed. A
    *     recorded root found to be this item's alone is stamped with its marker
    *     when the caller persists, so the next resolve reads no other item.
    */
@@ -500,7 +548,8 @@ export async function resolveLakehouseStorage(
     if (dir?.exists && dir.owner !== null) return null;
     const shared = await overlapsOther(c.account, c.bound.container, c.bound.root, true);
     if (shared === true) return { ok: false, reason: 'root-shared' };
-    if (shared === false && persist && dir?.exists) {
+    if (shared === null) return { ok: false, reason: 'root-unverified' };
+    if (persist && dir?.exists) {
       await stampLakehouseRootOwner(c.bound.container, c.bound.root, item.id, dir);
     }
     return ok;

@@ -249,6 +249,23 @@ export function SynapsePanel({
               </Badge>
             </div>
 
+            {/* An evaluated graph whose age was NOT checked (#4798). Only a local run
+                with no image build date reaches this; a built image without one is
+                refused upstream. It is a warning, not body text, because the
+                findings below are then undated. */}
+            {risk.ageUnchecked && (
+              <MessageBar intent="warning" data-testid="risk-age-unchecked">
+                <MessageBarBody>
+                  <MessageBarTitle>The age of this security graph was NOT checked.</MessageBarTitle>
+                  No image build date was found, so nothing bounds how old the graph behind these
+                  findings is. That is expected on a local development run only.
+                </MessageBarBody>
+              </MessageBar>
+            )}
+
+            {/* Provenance and age of the graph (#4798). */}
+            <Caption1 data-testid="risk-provenance">{risk.reason}</Caption1>
+
             {risk.incompleteDetectors.length > 0 && (
               <MessageBar intent="error" data-testid="risk-incomplete">
                 <MessageBarBody>

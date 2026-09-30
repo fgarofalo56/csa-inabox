@@ -139,7 +139,8 @@ export const LAKEHOUSE_SHARED_ROOTS_REMEDIATION =
   + 'Until a group is resolved, Loom does not open that directory for a member it cannot confirm is the only one '
   + 'using it, so some members show a "storage location is also used by another item" message. To resolve a group, '
   + 'choose "Keep root for <lakehouse>" on the lakehouse whose data it is: that lakehouse keeps the directory, and '
-  + 'every other member is given a new, empty root of its own. Nothing is copied or deleted.';
+  + 'each other member whose root is that directory, inside it, or around it is given a new, empty root of its own. The '
+  + 'confirm dialog lists which ones before anything is written. Nothing is copied or deleted.';
 
 /** Pure: the readiness result for a set of lakehouse rows. */
 export function lakehouseSharedRootsCheck(
@@ -164,10 +165,9 @@ export function lakehouseSharedRootsCheck(
       remediation: LAKEHOUSE_SHARED_ROOTS_REMEDIATION,
     };
   }
-  const named = groups
-    .map((g) => `[${g.roots.join(', ')}: ${g.members.map((m) => `${m.name} (${m.id}${m.recycled ? ', recycled' : ''})`).join(', ')}]`)
-    .join(' ');
-  return { ...BASE, status: 'warn', detail: `${head} ${named}`, remediation: LAKEHOUSE_SHARED_ROOTS_REMEDIATION, groups };
+  // With the groups returned, the members are listed once, by the groups (the
+  // readiness page renders them as cards), so the detail is the count alone.
+  return { ...BASE, status: 'warn', detail: head, remediation: LAKEHOUSE_SHARED_ROOTS_REMEDIATION, groups };
 }
 
 /**
