@@ -15,9 +15,9 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | --- | ---: |
 | Total routes | 1696 |
 | Public (no session) | 59 |
-| Session-only | 632 |
+| Session-only | 629 |
 | Owner-scoped | 691 |
-| Admin | 314 |
+| Admin | 317 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 499 |
 | Areas | 122 |
@@ -1405,9 +1405,9 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/dataflow/profile/route.ts` | POST | session-only | ● | ARM, Azure SQL, Managed Identity, Synapse SQL |
 | `items/dataflow/route.ts` | GET POST | owner-scoped |  | Cosmos |
 | `items/datamart/migrate/route.ts` | POST | owner-scoped | ● | AAS, AI Search, ARM, Azure SQL, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
-| `items/dataset/[id]/lineage/route.ts` | GET | session-only |  | AML, ARM |
-| `items/dataset/[id]/preview/route.ts` | GET | session-only | ● | ADLS, AML, ARM, Azure SQL, Azure Storage, Managed Identity, Synapse SQL |
-| `items/dataset/[id]/route.ts` | GET | session-only |  | AML, ARM |
+| `items/dataset/[id]/lineage/route.ts` | GET | admin |  | AML, ARM, Cosmos, Microsoft Graph |
+| `items/dataset/[id]/preview/route.ts` | GET | admin | ● | ADLS, AML, ARM, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
+| `items/dataset/[id]/route.ts` | GET | admin |  | AML, ARM, Cosmos, Microsoft Graph |
 | `items/dataset/browse/route.ts` | GET | session-only |  | ADLS, ARM, Azure Storage, Managed Identity |
 | `items/dataset/route.ts` | GET POST | session-only |  | AML, ARM |
 | `items/dataverse-table/[id]/business-rules/route.ts` | GET | session-only |  | Power Automate, Power Platform |

@@ -22,6 +22,15 @@
  *     that names the character.
  *
  * It is a lexer, not a parser: it does not decide what the tokens mean.
+ *
+ * Why not reuse the two existing scanners: `lib/util/sql-strip.ts`
+ * (`stripSqlCommentsAndLiterals`) returns text with comments and literals
+ * REPLACED, ends a block comment at the first `*\/` (no nesting) and treats an
+ * unterminated region as running to end of input; `lib/sql/check-expression.ts`
+ * (`consumeQuoted`) skips a quoted run without returning its content. A
+ * classifier needs token values (a location string's content, a bracketed
+ * name's unescaped value), nested comments, and a FAILURE on unterminated
+ * input, so this is a separate lexer rather than a change to either.
  */
 
 export type TsqlTokenKind = 'word' | 'quoted-ident' | 'string' | 'number' | 'variable' | 'punct';

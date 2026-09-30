@@ -400,13 +400,17 @@ export const LAKEHOUSE_SERVER_OWNED_STATE_KEYS = ['lakehouseRoot', 'adlsContaine
  * files are, so when a create copies state from somewhere else (a template, a
  * bundle, a promoted or branched item) they describe the SOURCE item's location,
  * not the new one's. The new item gets its own root from auto-bind or the
- * installer instead. Stripped by `createOwnedItem`, by the auto-bind create hook
- * and by the bundle import's create arm.
+ * installer instead. `sqlDatabase` / `sqlEndpointDatabase` name the database
+ * the SQL tab runs a tenant admin's query in; the server chooses it, so a create
+ * does not carry one over either. Stripped by `createOwnedItem`, by the auto-bind
+ * create hook and by the bundle import's create arm.
  */
 export const LAKEHOUSE_CREATE_CLEARED_STATE_KEYS = [
   ...LAKEHOUSE_SERVER_OWNED_STATE_KEYS,
   'provisioning',
   'storageAccount',
+  'sqlDatabase',
+  'sqlEndpointDatabase',
 ] as const;
 
 /**

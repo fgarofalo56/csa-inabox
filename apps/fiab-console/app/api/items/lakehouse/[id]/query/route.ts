@@ -17,16 +17,22 @@
  *     naming no lakehouse). Read roles are accepted: the endpoint is read-only,
  *     and a shared Viewer runs the editor's SQL tab and the entity-diagram
  *     column enrichment through it.
- *   - The target database is resolved from the item, never from the request.
+ *   - The SQL tab runs in a server-chosen database, never one named by the
+ *     request. For a caller who is not a tenant admin it is always `master`.
+ *     A tenant admin runs in the database the item records (`state.sqlDatabase`
+ *     or `state.sqlEndpointDatabase`, both server-owned state keys that a
+ *     client write cannot set), else `master`.
  *   - For a caller who is not a tenant admin, the SQL text passes
- *     `../../_lib/query-scope.ts` before it runs: SELECT statements only, and
- *     every OPENROWSET(BULK …) location must be a literal URL inside this
- *     item's container and root. A construct the classifier does not accept is
- *     a 400 that names it; a location outside the item root is a 403. Tenant
- *     admins run SQL unchanged, as on the other lakehouse routes.
- *   - Objects inside the item's own database (views, external tables) are not
- *     re-checked here; a per-item serverless database rooted at the item root
- *     is the durable form of this boundary and is tracked separately.
+ *     `../../_lib/query-scope.ts` before it runs: SELECT statements only, no
+ *     `sys` catalog, and every OPENROWSET(BULK …) location must be a literal
+ *     URL inside this item's container and root. A construct the classifier
+ *     does not accept is a 400 that names it; a location outside the item root
+ *     is a 403. Both carry a `remediation`. Tenant admins run SQL unchanged, as
+ *     on the other lakehouse routes.
+ *   - Objects already defined in the database the query runs in (views,
+ *     external tables) are not re-checked here; a per-item serverless database
+ *     rooted at the item root is the durable form of this boundary and is
+ *     tracked separately.
  *
  * Background:
  *  - Fabric lakehouse SQL analytics endpoint: a read-only T-SQL endpoint over
@@ -49,13 +55,17 @@ import { analyzeLakehouseQuery, confineQueryLocation, type QueryRefusal } from '
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+/** The database every caller who is not a tenant admin runs in. */
+const READER_DATABASE = 'master';
+
 /**
- * The Serverless database this lakehouse item is bound to. Serverless exposes
- * `master` plus any explicitly-created serverless databases; the item declares
- * one in `state.sqlDatabase` when it has its own, otherwise `master` — which is
- * what every caller in the console already sends.
+ * The Serverless database a TENANT ADMIN's query runs in. Serverless exposes
+ * `master` plus any explicitly-created serverless databases; the item may record
+ * one in `state.sqlDatabase`, otherwise `master`. Both keys are server-owned
+ * (`SERVER_OWNED_STATE_KEYS`, and cleared on create), so no client write sets
+ * them; no provisioner writes them today either.
  */
-function lakehouseSqlDatabase(state: Record<string, unknown> | undefined): string {
+function adminSqlDatabase(state: Record<string, unknown> | undefined): string {
   for (const key of ['sqlDatabase', 'sqlEndpointDatabase'] as const) {
     const v = state?.[key];
     if (typeof v === 'string' && v.trim()) return v.trim();
@@ -93,9 +103,12 @@ async function confineToItem(sqlText: string, item: WorkspaceItem, database: str
       {
         ok: false,
         error:
-          'Loom has no lakehouse storage binding for this item, so the files this query names cannot be '
-          + 'confirmed as this lakehouse\'s own. Re-run the item provision and retry.',
+          'No lakehouse storage is configured for this deployment, so the files this query names cannot be '
+          + 'confirmed as this lakehouse\'s own.',
         code: 'lakehouse_storage_unbound',
+        remediation:
+          'The DLZ Bicep deploy sets LOOM_{BRONZE,SILVER,GOLD,LANDING}_URL. Once one is set, Loom resolves and '
+          + 'records this lakehouse\'s storage root itself; there is no per-item step.',
       },
       { status: 409 },
     );
@@ -123,12 +136,13 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
   const body = await req.json().catch(() => ({}));
   const sqlText = (body?.sql || '').toString().trim();
-  const database = lakehouseSqlDatabase(item.state);
   if (!sqlText) return NextResponse.json({ ok: false, error: 'sql is required' }, { status: 400 });
   if (sqlText.length > 65_536) return NextResponse.json({ ok: false, error: 'sql too large (>64KB)' }, { status: 413 });
 
   // Item scope for the SQL text itself; tenant admins run SQL unchanged.
-  if (!isTenantAdmin(session)) {
+  const admin = isTenantAdmin(session);
+  const database = admin ? adminSqlDatabase(item.state) : READER_DATABASE;
+  if (!admin) {
     const refused = await confineToItem(sqlText, item, database);
     if (refused) return refused;
   }

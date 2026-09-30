@@ -4,39 +4,52 @@
  *
  * The SQL tab runs on the shared Synapse Serverless endpoint as the console's
  * identity, so the query TEXT decides which storage it reads. For a caller who
- * is not a tenant admin the text therefore passes this classifier first, and it
- * is REFUSE-BY-DEFAULT: a query is accepted only when every token is one the
- * classifier understands and every storage location it names is a literal URL
- * inside the item's container and root.
+ * is not a tenant admin the text passes this classifier first. What it does,
+ * stated as the code does it rather than as a slogan:
  *
- * What is accepted:
- *   - One or more SELECT statements (a statement may start with `WITH` for a
- *     CTE, or with `(`), separated by `;`.
- *   - `OPENROWSET(BULK '<url>' | ('<url>', …), <option> = <value>, …)` where
- *     each `<url>` is a LITERAL `https://` or `abfss://` URL on the item's own
- *     storage account, in its container, strictly under its root
- *     (`confineQueryLocation`), and each option is on the read-only list below.
- *   - Names with one or two parts, and three-part names whose database is the
- *     item's own database.
+ *   - STATEMENTS are refuse-by-default: each statement must start with SELECT,
+ *     WITH or `(`, including after every `;`.
+ *   - Inside a statement, WORDS are checked against a deny-list
+ *     (`REFUSED_WORDS`): the words that begin every other T-SQL statement, plus
+ *     the external-access and cursor words. A word not on the list is accepted
+ *     (column names, aliases, built-in functions).
+ *   - NAMES are checked by shape: at most three parts, a three-part name must
+ *     start with the database the query runs in, nothing in the `sys` schema,
+ *     no system compatibility view, no global temporary table.
+ *   - `OPENROWSET` is allow-list only: `BULK` is required, each location is a
+ *     literal string, and each option is on the read-only list below.
+ *   - LOCATIONS are confined by `confineQueryLocation`: a literal `https://` or
+ *     `abfss://` URL on the item's own storage account, in its container,
+ *     strictly under its root.
  *
  * What is refused, with the construct named in the message:
  *   - Anything the lexer (`lib/sql/tsql-lexer.ts`) cannot read.
- *   - Dynamic SQL (`EXEC`, `EXECUTE`, `sp_executesql` and other `sp_`/`xp_`
- *     procedures), every DDL and data-change verb, permissions, `USE`,
- *     variables and session options, control flow, transactions, cursors, and
- *     server administration — the statement words in `REFUSED_WORDS`.
+ *   - Dynamic SQL (`EXEC`, `EXECUTE`, `sp_`/`xp_` procedures), DDL and
+ *     data-change verbs, permissions, `USE`, variables and session options,
+ *     control flow, transactions, cursors and server administration.
  *   - `OPENDATASOURCE`, `OPENQUERY`, `OPENXML`, `BULK` outside `OPENROWSET`,
  *     `OPENROWSET` without `BULK`, a `BULK` location that is not a literal
- *     string, `DATA_SOURCE` and the error-file options.
+ *     string, and the `DATA_SOURCE` and error-file options.
+ *   - The `sys` schema and the system compatibility views. For metadata the tab
+ *     accepts the `INFORMATION_SCHEMA` views; nothing in the lakehouse editor
+ *     reads the `sys` catalog through this route.
  *   - Names with four parts, and three-part names naming another database.
- *   - A string that holds a storage URL anywhere other than a `BULK` location.
- *   - `sys.fn_*` file and trace functions and global temporary tables.
+ *   - A string shaped like a storage location (an `abfss://`/`wasbs://`-style
+ *     scheme, a `.dfs.core.`/`.blob.core.` host, or a UNC path) anywhere other
+ *     than a `BULK` location. Other strings, including `https://` filters in a
+ *     WHERE clause, are ordinary literals.
  *
- * WHAT THIS DOES NOT COVER, stated rather than implied: objects inside the
- * item's own database (views, external tables) run as whatever they were
- * defined to read. The durable form of this boundary is a per-item serverless
- * database whose external data source is rooted at the item root, with
- * relative `BULK` paths only; that is tracked separately.
+ * A word on the deny-list is accepted as the second or later part of a dotted
+ * name (`r.data_source`, `t.[Open]` or `t.Open`), because a statement cannot
+ * start there. Unqualified, it has to be bracketed (`[Open]`), and the refusal
+ * says so.
+ *
+ * WHAT THIS DOES NOT COVER, stated rather than implied: objects already defined
+ * in the database the query runs in (views, external tables) run as whatever
+ * they were defined to read, and built-in functions are not restricted. The
+ * durable form of this boundary is a per-item serverless database whose external
+ * data source is rooted at the item root, with relative `BULK` paths only; that
+ * is tracked separately.
  */
 import { lexTsql, type TsqlToken } from '@/lib/sql/tsql-lexer';
 import { scopePathToRoot } from '@/app/api/lakehouse/_lib/item-scope';
@@ -70,9 +83,14 @@ const LEAD =
   'The lakehouse SQL tab runs read-only SELECT queries over this lakehouse\'s own files. ';
 
 const SELECT_REMEDIATION =
-  'Write a single SELECT (optionally with a WITH clause) that reads this lakehouse through '
+  'Write a SELECT (optionally with a WITH clause) that reads this lakehouse through '
   + "OPENROWSET(BULK 'https://<account>.dfs.<suffix>/<container>/<lakehouse root>/…'). "
   + 'A tenant admin can run other statements.';
+
+/** Upper-case the first character, so every refusal reads as a sentence. */
+function sentence(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
 
 function refuse(construct: string, why: string, remediation = SELECT_REMEDIATION): QueryRefusal {
   return {
@@ -80,9 +98,15 @@ function refuse(construct: string, why: string, remediation = SELECT_REMEDIATION
     status: 400,
     code: 'query_construct_not_accepted',
     construct,
-    error: `${LEAD}${construct} is not accepted: ${why}.`,
+    error: `${LEAD}${sentence(construct)} is not accepted: ${why}.`,
     remediation,
   };
+}
+
+/** Remediation for a refused word that could also be a column or table name. */
+function bracketHint(word: string): string {
+  return `If ${word} is a column or table name, write it in brackets, as [${word}], or qualify it, as t.${word}. `
+    + SELECT_REMEDIATION;
 }
 
 const WHY = {
@@ -90,19 +114,28 @@ const WHY = {
   ddl: 'statements that create, change or remove objects are not run from this tab',
   dml: 'statements that change data are not run from this tab',
   perms: 'permission statements are not run from this tab',
-  database: 'the query runs against the database bound to this lakehouse',
+  database: 'the query runs in the database this tab chooses',
   session: 'variables and session options are not accepted in this tab',
   external: 'external data access goes through OPENROWSET(BULK …) on this lakehouse\'s files only',
   admin: 'server administration is not run from this tab',
   control: 'control flow and transactions are not accepted in this tab',
   cursor: 'cursors are not accepted in this tab',
+  broker: 'Service Broker statements are not run from this tab',
+  catalog: 'the SQL tab reads this lakehouse\'s files and the INFORMATION_SCHEMA views, not the server catalog',
 } as const;
 
 /**
- * Statement words refused wherever they appear outside a string, comment or
- * quoted identifier. Every T-SQL statement other than SELECT begins with one of
- * these, so a second statement without a `;` cannot start with anything else
- * either (an unreserved word there is read by the server as an alias).
+ * Words refused wherever they appear outside a string, comment or quoted
+ * identifier, unless they are a later part of a dotted name.
+ *
+ * The list is drawn from the Transact-SQL statement reference: the words that
+ * begin a statement other than SELECT, plus CONVERSATION (which GET, MOVE and
+ * END CONVERSATION contain; END itself also closes CASE, so it is not listed).
+ * It exists so the statement-start rule also holds WITHOUT a `;`: a second
+ * statement written straight after a SELECT has to begin with a statement
+ * word, and this list is what refuses it. If the reference gains a statement,
+ * its leading word belongs here. A GOTO label (`name:`) has no leading keyword;
+ * it runs nothing by itself.
  */
 const REFUSED_WORDS: Record<string, string> = {
   EXEC: WHY.dynamic,
@@ -114,6 +147,10 @@ const REFUSED_WORDS: Record<string, string> = {
   TRUNCATE: WHY.ddl,
   EXTERNAL: WHY.ddl,
   CREDENTIAL: WHY.ddl,
+  ENABLE: WHY.ddl,
+  DISABLE: WHY.ddl,
+  ADD: WHY.ddl,
+  RENAME: WHY.ddl,
   INSERT: WHY.dml,
   UPDATE: WHY.dml,
   DELETE: WHY.dml,
@@ -143,6 +180,7 @@ const REFUSED_WORDS: Record<string, string> = {
   RECONFIGURE: WHY.admin,
   CHECKPOINT: WHY.admin,
   DISK: WHY.admin,
+  EXPLAIN: WHY.admin,
   WAITFOR: WHY.control,
   RAISERROR: WHY.control,
   THROW: WHY.control,
@@ -162,7 +200,38 @@ const REFUSED_WORDS: Record<string, string> = {
   OPEN: WHY.cursor,
   CLOSE: WHY.cursor,
   DEALLOCATE: WHY.cursor,
+  SEND: WHY.broker,
+  RECEIVE: WHY.broker,
+  CONVERSATION: WHY.broker,
 };
+
+/**
+ * The deny-list's words, for the test that checks every one has a written-out
+ * case. Not used by the classifier.
+ */
+export const REFUSED_WORD_NAMES: readonly string[] = Object.keys(REFUSED_WORDS);
+
+/**
+ * Deny-list words refused even as a later part of a dotted name. These name
+ * an external source or run text, so they stay refused in every position.
+ */
+const REFUSED_IN_ANY_POSITION = new Set([
+  'EXEC', 'EXECUTE', 'SP_EXECUTESQL', 'OPENDATASOURCE', 'OPENQUERY', 'OPENXML', 'BULK',
+]);
+
+/**
+ * The system compatibility views. They live in the `sys` schema but resolve
+ * without it (`SELECT * FROM sysprocesses`), so the `sys` schema rule alone
+ * does not reach them.
+ */
+const COMPATIBILITY_VIEWS = new Set([
+  'SYSALTFILES', 'SYSCACHEOBJECTS', 'SYSCHARSETS', 'SYSCOLUMNS', 'SYSCOMMENTS', 'SYSCONFIGURES',
+  'SYSCONSTRAINTS', 'SYSCURCONFIGS', 'SYSDATABASES', 'SYSDEPENDS', 'SYSDEVICES', 'SYSFILEGROUPS',
+  'SYSFILES', 'SYSFOREIGNKEYS', 'SYSFULLTEXTCATALOGS', 'SYSINDEXES', 'SYSINDEXKEYS', 'SYSLANGUAGES',
+  'SYSLOCKINFO', 'SYSLOGINS', 'SYSMEMBERS', 'SYSMESSAGES', 'SYSOBJECTS', 'SYSOLEDBUSERS',
+  'SYSOPENTAPES', 'SYSPERFINFO', 'SYSPERMISSIONS', 'SYSPROCESSES', 'SYSPROTECTS', 'SYSREFERENCES',
+  'SYSREMOTELOGINS', 'SYSSERVERS', 'SYSTYPES', 'SYSUSERS', 'SYSXLOGINS',
+]);
 
 /** Read-only `OPENROWSET(BULK …)` options for Synapse Serverless. */
 const OPENROWSET_OPTIONS = new Set([
@@ -196,9 +265,34 @@ function isNamePart(t: TsqlToken | undefined): boolean {
   return !!t && (t.kind === 'word' || t.kind === 'quoted-ident');
 }
 
-/** A string that names a storage location. */
-function looksLikeLocation(value: string): boolean {
-  return value.includes('://') || value.startsWith('\\\\');
+/**
+ * Is token `i` a later part of a dotted name: preceded by one or more `.`, with
+ * a name part before them? `1.` is lexed as one number token, so `SELECT 1.EXEC`
+ * is not a dotted name.
+ */
+function isLaterNamePart(tokens: TsqlToken[], i: number): boolean {
+  let k = i - 1;
+  if (!isPunct(tokens[k], '.')) return false;
+  while (isPunct(tokens[k], '.')) k -= 1;
+  return isNamePart(tokens[k]);
+}
+
+/** T-SQL removes a backslash followed by a line break inside a string. */
+function withoutLineContinuations(value: string): string {
+  return value.replace(/\\(?:\r\n|\n|\r)/g, '');
+}
+
+/** A string shaped like a storage location. */
+function looksLikeStorage(value: string): boolean {
+  const v = withoutLineContinuations(value).toLowerCase();
+  if (v.length > 2 && v.startsWith('\\\\')) return true;
+  if (/(?:^|[^a-z0-9])(?:abfss?|wasbs?|adl|hdfs|s3a?|gs|az):\/\//.test(v)) return true;
+  return /\.(?:dfs|blob)\.core\./.test(v) || v.includes('.azuredatalakestore.');
+}
+
+/** An option value must not name any location: storage-shaped, or any URL. */
+function looksLikeAnyLocation(value: string): boolean {
+  return looksLikeStorage(value) || withoutLineContinuations(value).includes('://');
 }
 
 function statementStartOk(t: TsqlToken | undefined): boolean {
@@ -271,10 +365,12 @@ function readOpenrowset(
       return refuse(`the OPENROWSET option ${name} without a value`, 'options are written as name = value');
     }
     j += 1;
+    // A negative number is lexed as `-` then the number (`MAXERRORS = -1`).
+    if (isPunct(tokens[j], '-') && tokens[j + 1]?.kind === 'number') j += 1;
     const v = tokens[j];
     const valueOk = !!v && (
       v.kind === 'number'
-      || (v.kind === 'string' && !looksLikeLocation(v.value))
+      || (v.kind === 'string' && !looksLikeAnyLocation(v.value))
       || (v.kind === 'word' && (upper(v) === 'TRUE' || upper(v) === 'FALSE'))
     );
     if (!valueOk) {
@@ -285,8 +381,45 @@ function readOpenrowset(
 }
 
 /**
+ * Check one dotted name (1 to n parts, `''` for an omitted part as in `db..t`).
+ * Returns a refusal or null.
+ */
+function checkName(parts: string[], database: string, databaseLabel: string): QueryRefusal | null {
+  const shown = parts.join('.');
+  if (parts.length >= 4) {
+    return refuse(`the four-part name ${shown}`, 'names that reach another server are not accepted');
+  }
+  // `sys` as a schema: `sys.x`, or `db.sys.x`. The last part is never a schema.
+  if (parts.slice(0, -1).some((p) => p.toLowerCase() === 'sys')) {
+    return refuse(
+      `the sys schema object ${shown}`,
+      WHY.catalog,
+      'For table and column metadata, query INFORMATION_SCHEMA.TABLES or INFORMATION_SCHEMA.COLUMNS. '
+      + 'A tenant admin can read the sys catalog.',
+    );
+  }
+  const view = parts.find((p) => COMPATIBILITY_VIEWS.has(p.toUpperCase()));
+  if (view !== undefined) {
+    return refuse(
+      `the system compatibility view ${view}`,
+      WHY.catalog,
+      'For table and column metadata, query INFORMATION_SCHEMA.TABLES or INFORMATION_SCHEMA.COLUMNS.',
+    );
+  }
+  if (parts.length === 3 && parts[0].toLowerCase() !== database) {
+    return refuse(
+      `the three-part name ${shown}`,
+      `a three-part name must start with the database this query runs in (${databaseLabel})`,
+      `Name a table as schema.table, and a column as table.column (for example t.col, not dbo.t.col). `
+      + SELECT_REMEDIATION,
+    );
+  }
+  return null;
+}
+
+/**
  * Classify caller-authored T-SQL for the lakehouse SQL tab. `database` is the
- * database the query runs against (the item's own).
+ * database the query runs in.
  */
 export function analyzeLakehouseQuery(sql: string, opts: { database: string }): QueryAnalysis | QueryRefusal {
   const lexed = lexTsql(sql);
@@ -326,14 +459,14 @@ export function analyzeLakehouseQuery(sql: string, opts: { database: string }): 
       return refuse(`the variable ${t.text}`, WHY.session);
     }
 
-    if (t.kind === 'string' || t.kind === 'quoted-ident') {
-      if (looksLikeLocation(t.value)) {
-        return refuse(
-          `the storage location ${t.text}`,
-          'a storage location is accepted only as the literal BULK argument of OPENROWSET',
-        );
-      }
+    if ((t.kind === 'string' || t.kind === 'quoted-ident') && looksLikeStorage(t.value)) {
+      return refuse(
+        `the storage location ${t.text}`,
+        'a storage location is accepted only as the literal BULK argument of OPENROWSET',
+      );
     }
+
+    const laterPart = isLaterNamePart(tokens, i);
 
     if (t.kind === 'word') {
       const w = t.value.toUpperCase();
@@ -346,19 +479,21 @@ export function analyzeLakehouseQuery(sql: string, opts: { database: string }): 
       }
       if (w === 'FETCH') {
         const prev = upper(tokens[i - 1]);
-        if (prev !== 'ROW' && prev !== 'ROWS') return refuse('FETCH', WHY.cursor);
+        if (prev !== 'ROW' && prev !== 'ROWS') return refuse('FETCH', WHY.cursor, bracketHint(t.text));
         i += 1;
         continue;
       }
       const why = REFUSED_WORDS[w];
-      if (why) return refuse(t.text, why);
-      if (/^(SP|XP)_/.test(w)) return refuse(`the system procedure ${t.text}`, WHY.dynamic);
-      if (/^FN_/.test(w)) return refuse(`the system function ${t.text}`, WHY.admin);
+      if (why && (!laterPart || REFUSED_IN_ANY_POSITION.has(w))) return refuse(t.text, why, bracketHint(t.text));
+      if (/^(SP|XP)_/.test(w) && !laterPart) {
+        return refuse(`the system procedure ${t.text}`, WHY.dynamic, bracketHint(t.text));
+      }
+      if (/^FN_/.test(w)) return refuse(`the system function ${t.text}`, WHY.admin, bracketHint(t.text));
       if (w.startsWith('##')) return refuse(`the global temporary table ${t.text}`, WHY.database);
     }
 
-    // Multi-part names: collect the chain that starts here.
-    if (isNamePart(t) && !isPunct(tokens[i - 1], '.')) {
+    // Dotted names: collect the chain that starts here.
+    if (isNamePart(t) && !laterPart) {
       const parts: string[] = [t.value];
       let j = i + 1;
       while (isPunct(tokens[j], '.')) {
@@ -366,15 +501,8 @@ export function analyzeLakehouseQuery(sql: string, opts: { database: string }): 
         if (isPunct(tokens[j + 1], '.')) { parts.push(''); j += 1; continue; }
         break;
       }
-      if (parts.length >= 4) {
-        return refuse(`the four-part name ${parts.join('.')}`, 'names that reach another server are not accepted');
-      }
-      if (parts.length === 3 && parts[0].toLowerCase() !== database) {
-        return refuse(
-          `the three-part name ${parts.join('.')}`,
-          `the query runs against the database bound to this lakehouse (${opts.database}), and other databases are not reached from this tab`,
-        );
-      }
+      const refused = checkName(parts, database, opts.database);
+      if (refused) return refused;
     }
     i += 1;
   }
@@ -382,12 +510,54 @@ export function analyzeLakehouseQuery(sql: string, opts: { database: string }): 
 }
 
 /**
+ * The location as the storage service will read it, or the reason it cannot be
+ * accepted. Percent-escapes are decoded only when they form valid UTF-8 for a
+ * space, letter, digit or mark, so no escape can produce `/`, `.` or `\`.
+ */
+function decodeLocation(raw: string): { ok: true; decoded: string } | { ok: false; why: string } {
+  if (/[\\?#]/.test(raw)) {
+    return { ok: false, why: 'it contains a backslash, a query string or a fragment' };
+  }
+  let decoded = '';
+  let i = 0;
+  while (i < raw.length) {
+    if (raw[i] === '%') {
+      const m = /^(?:%[0-9A-Fa-f]{2})+/.exec(raw.slice(i));
+      if (!m) return { ok: false, why: 'it contains a % that is not a percent-escape' };
+      let text: string;
+      try {
+        text = decodeURIComponent(m[0]);
+      } catch {
+        return { ok: false, why: 'it contains a percent-escape that is not valid UTF-8' };
+      }
+      if (!/^[ \p{L}\p{N}\p{M}]+$/u.test(text)) {
+        return { ok: false, why: 'it contains a percent-escape for a character other than a space, a letter or a digit' };
+      }
+      decoded += text;
+      i += m[0].length;
+      continue;
+    }
+    const c = String.fromCodePoint(raw.codePointAt(i) ?? 0);
+    const printableAscii = c >= '\x21' && c <= '\x7e';
+    if (!printableAscii && c !== ' ' && !/^[\p{L}\p{N}\p{M}]$/u.test(c)) {
+      return { ok: false, why: 'it contains a control character, or punctuation outside ASCII' };
+    }
+    decoded += c;
+    i += c.length;
+  }
+  return { ok: true, decoded };
+}
+
+/**
  * Confine one `OPENROWSET(BULK …)` location to the item's storage: its own
  * account (dfs or blob endpoint of the binding's cloud suffix), its container,
  * and strictly under its root — through the same `scopePathToRoot` (strict)
  * the lakehouse routes use. `*` wildcards are accepted only below the root.
- * Percent-encoding, backslashes, `?`, `#`, ports, user info, empty segments and
- * `.`/`..` segments are refused rather than normalised.
+ *
+ * Spaces and non-ASCII letters are accepted as written or percent-encoded.
+ * Backslashes, `?`, `#`, ports, user info, empty segments, `.`/`..` segments,
+ * segments that start or end with a space or end with `.`, and escapes for any
+ * other character are refused rather than normalised.
  */
 export function confineQueryLocation(raw: string, bound: ItemStorageLocation): { ok: true } | QueryRefusal {
   const outside = (why: string): QueryRefusal => ({
@@ -398,12 +568,12 @@ export function confineQueryLocation(raw: string, bound: ItemStorageLocation): {
     error: `${LEAD}The location '${raw}' is not accepted: ${why}.`,
     remediation:
       `Read files under ${bound.abfss} (or its https://<account>.dfs.<suffix>/${bound.container}/${bound.root}/ form). `
-      + 'Open the lakehouse that owns the other location and query it there.',
+      + 'A space or a non-ASCII letter in a file name can be written as itself. '
+      + 'To read another lakehouse, open that lakehouse and query it there.',
   });
 
-  if (/[%\\?#\s]/.test(raw) || /[^\x21-\x7e]/.test(raw)) {
-    return outside('it contains percent-encoding, a backslash, a query string, a fragment, whitespace or a non-ASCII character');
-  }
+  const read = decodeLocation(raw);
+  if (!read.ok) return outside(read.why);
   const host = abfssHost(bound.abfss);
   const hostMatch = host ? /^([^.]+)\.dfs\.(.+)$/i.exec(host) : null;
   if (!hostMatch) return outside("this lakehouse's storage binding has no dfs host to compare it with");
@@ -431,6 +601,14 @@ export function confineQueryLocation(raw: string, bound: ItemStorageLocation): {
   }
 
   const path = rest.endsWith('/') ? rest.slice(0, -1) : rest;
+  // Judge each segment as the service will read it (escapes decoded).
+  for (const seg of path.split('/')) {
+    const plain = decodeLocation(seg);
+    const s = plain.ok ? plain.decoded : seg;
+    if (s !== s.trim() || (s.endsWith('.') && s !== '.' && s !== '..')) {
+      return outside('a path segment starts or ends with a space, or ends with a dot');
+    }
+  }
   // `scopePathToRoot` refuses `.`/`..` segments and compares every root segment
   // exactly, so a wildcard can only match below the root. It collapses `//`;
   // the canonical comparison after it refuses that spelling instead.

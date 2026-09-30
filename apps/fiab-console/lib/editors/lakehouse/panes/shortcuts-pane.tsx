@@ -12,10 +12,23 @@ import {
 } from '@fluentui/react-icons';
 import { useStyles } from '../shared';
 import { useLakehouseCtx } from '../lakehouse-editor-context';
+import { useIsTenantAdmin } from '@/lib/components/session-context';
+
+/**
+ * Why a shortcut's "Query (SQL)" is unavailable to a caller who is not a tenant
+ * admin. A shortcut normally points outside this lakehouse's storage root, and a
+ * Tables shortcut is an object in the shortcut database; the SQL tab reads only
+ * this lakehouse's own root for such a caller, so the generated query would be
+ * refused. Tracked with the per-item SQL database in #4821.
+ */
+export const SHORTCUT_QUERY_ADMIN_ONLY =
+  "Runs for tenant admins: the SQL tab reads only this lakehouse's own storage root, and a shortcut "
+  + 'points outside it (#4821). Use Test to check the shortcut resolves.';
 
 export function ShortcutsPane() {
   const s = useStyles();
   const ctx = useLakehouseCtx();
+  const canQueryShortcuts = useIsTenantAdmin();
   const {
     shortcutLakehouseId, shortcuts, shortcutsBusy, shortcutsError, loadShortcuts,
     selectedShortcut, setSelectedShortcut,
@@ -169,13 +182,21 @@ export function ShortcutsPane() {
                         </MenuTrigger>
                         <MenuPopover>
                           <MenuList>
-                            {sc.kind === 'tables' && sc.engineObject && (
+                            {!canQueryShortcuts && (
+                              // `disabled`, not `disabledFocusable`: this MenuItem version ignores the
+                              // latter (no aria-disabled), and a disabled menu item stays reachable by
+                              // arrow keys, so the reason below is still read out.
+                              <MenuItem icon={<Play20Regular />} disabled subText={SHORTCUT_QUERY_ADMIN_ONLY}>
+                                Query (SQL)
+                              </MenuItem>
+                            )}
+                            {canQueryShortcuts && sc.kind === 'tables' && sc.engineObject && (
                               <MenuItem icon={<Play20Regular />} onClick={() => {
                                 setSqlText(`SELECT TOP 100 * FROM ${sc.engineObject};`);
                                 setTab('sql');
                               }}>Query (SQL)</MenuItem>
                             )}
-                            {!(sc.kind === 'tables' && sc.engineObject) && (
+                            {canQueryShortcuts && !(sc.kind === 'tables' && sc.engineObject) && (
                               <MenuItem icon={<Play20Regular />} onClick={() => queryShortcut(sc)}>Query (SQL)</MenuItem>
                             )}
                             <MenuItem icon={<ArrowSync20Regular />} onClick={() => testShortcut(sc)}>Test</MenuItem>

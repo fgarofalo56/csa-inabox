@@ -137,11 +137,14 @@ describe('POST /api/items/lakehouse/[id]/query — caller authorization', () => 
     expect((await res.json()).database).toBe('master');
   });
 
-  it('honours a database the ITEM declares', async () => {
+  // The item's recorded database is honoured for a tenant admin only
+  // (`query-item-scope.test.ts`); this caller is not one.
+  it('a caller who is not a tenant admin runs in master even when the item records a database', async () => {
     cosmos.byId = [{ ...ITEM, state: { sqlDatabase: 'lakedb' } }];
     const res = await POST(req({ sql: 'SELECT 1' }), ctx);
     expect(res.status).toBe(200);
-    expect(synapse.serverlessTarget).toHaveBeenCalledWith('lakedb');
+    expect(synapse.serverlessTarget).toHaveBeenCalledWith('master');
+    expect(synapse.serverlessTarget).not.toHaveBeenCalledWith('lakedb');
   });
 
   it('an authorized owner still gets rows back', async () => {

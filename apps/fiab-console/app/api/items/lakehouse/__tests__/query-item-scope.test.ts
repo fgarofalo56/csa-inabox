@@ -72,6 +72,7 @@ const OUT = 'https://acct1.dfs.core.windows.net/silver/lakehouses/sales-1/Tables
 
 beforeEach(() => {
   vi.clearAllMocks();
+  ITEM.state = {};
   admin.isTenantAdmin.mockReturnValue(false);
   guard.authorizeItemWorkspace.mockResolvedValue(null as any);
   storage.resolveLakehouseStorage.mockResolvedValue({ ok: true, bound: BOUND });
@@ -154,5 +155,48 @@ describe('POST /api/items/lakehouse/[id]/query — confined to the item root', (
     expect(res.status).toBe(500);
     expect((await res.json()).ok).toBe(false);
     expect(synapse.executeQuery).not.toHaveBeenCalled();
+  });
+
+  it('the unconfigured-storage 409 carries a remediation naming the deploy settings', async () => {
+    // Breaks if the 409 drops `remediation` or goes back to asking for a per-item step.
+    storage.resolveLakehouseStorage.mockResolvedValue({ ok: false, reason: 'no-storage' });
+    const res = await POST(req({ sql: `SELECT * FROM OPENROWSET(BULK '${IN}', FORMAT='DELTA') AS r` }), ctx);
+    expect(res.status).toBe(409);
+    const j = await res.json();
+    expect(j.remediation).toContain('LOOM_{BRONZE,SILVER,GOLD,LANDING}_URL');
+    expect(j.error).not.toContain('Re-run the item provision');
+  });
+});
+
+describe('POST /api/items/lakehouse/[id]/query — the SQL tab runs in a server-chosen database', () => {
+  it('a caller who is not a tenant admin runs in master even when the item records a database', async () => {
+    // Breaks if the reader's database is read from item state again: the
+    // executor would get 'lakedb' (state.sqlDatabase) instead of 'master'.
+    ITEM.state = { sqlDatabase: 'lakedb', sqlEndpointDatabase: 'lakedb2' };
+    const res = await POST(req({ sql: 'SELECT 1' }), ctx);
+    expect(res.status).toBe(200);
+    expect(synapse.serverlessTarget).toHaveBeenCalledTimes(1);
+    expect(synapse.serverlessTarget).toHaveBeenCalledWith('master');
+    const target = (synapse.executeQuery.mock.calls[0] as unknown[])[0] as { database: string };
+    expect(target.database).toBe('master');
+    expect((await res.json()).database).toBe('master');
+  });
+
+  it('a caller who is not a tenant admin cannot reach the recorded database by a three-part name', async () => {
+    // Breaks if the classifier is given the recorded database instead of master.
+    ITEM.state = { sqlDatabase: 'lakedb' };
+    const res = await POST(req({ sql: 'SELECT * FROM lakedb.dbo.orders' }), ctx);
+    expect(res.status).toBe(400);
+    expect((await res.json()).construct).toBe('the three-part name lakedb.dbo.orders');
+    expect(synapse.executeQuery).not.toHaveBeenCalled();
+  });
+
+  it('a tenant admin runs in the database the item records', async () => {
+    // Breaks if the admin path is also pinned to master.
+    admin.isTenantAdmin.mockReturnValue(true);
+    ITEM.state = { sqlDatabase: 'lakedb' };
+    const res = await POST(req({ sql: 'SELECT 1' }), ctx);
+    expect(res.status).toBe(200);
+    expect(synapse.serverlessTarget).toHaveBeenCalledWith('lakedb');
   });
 });
