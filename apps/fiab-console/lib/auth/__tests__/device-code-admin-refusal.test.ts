@@ -37,9 +37,10 @@ vi.mock('next/headers', () => ({
 
 import { encodeSessionCookie, type SessionPayload } from '../session';
 import { isTenantAdmin, requireTenantAdmin, enforceCapability, checkCapability } from '../feature-gate';
-import { INTERACTIVE_SIGN_IN_REQUIRED_REASON } from '../device-code-policy';
+import { INTERACTIVE_SIGN_IN_REQUIRED_REASON, INTERACTIVE_SIGN_IN_HINT } from '../device-code-policy';
 import { withTenantAdmin, withCapability } from '@/lib/api/route-toolkit';
 import { middleware, config as middlewareConfig } from '@/middleware';
+import { unstable_doesMiddlewareMatch } from 'next/experimental/testing/server';
 
 const ADMIN_OID = 'aaaaaaaa-0000-0000-0000-00000000ad01';
 const TENANT = 'bbbbbbbb-0000-0000-0000-000000000002';
@@ -156,9 +157,26 @@ describe('#4805 (b) middleware.ts guards /admin/* and /api/admin/* for every hel
     expect(middleware(garbage).headers.get('x-middleware-next')).toBe('1');
   });
 
-  it('the matcher covers exactly the admin trees, on the Node runtime', () => {
-    // RED if the matcher drops a tree (the middleware would never run there).
-    expect(middlewareConfig.matcher).toEqual(expect.arrayContaining(['/admin/:path*', '/api/admin/:path*']));
+  it('the matcher covers the admin trees by MEANING (Next evaluates it), on the Node runtime', () => {
+    // Asserted through Next's own matcher rather than the literal strings, so an
+    // equivalent rewrite passes and a dropped or narrowed tree is RED: removing
+    // '/api/admin/:path*' fails the nested /api/admin URLs; '/admin/:path' (one
+    // segment) fails /admin/a/b/c. The admin refusal body also carries the hint
+    // both clients print.
+    const match = (url: string) => unstable_doesMiddlewareMatch({ config: middlewareConfig, url });
+    for (const url of ['/admin', '/admin/', '/admin/a/b/c?x=1', '/api/admin', '/api/admin/', '/api/admin/env-config?x=1&y=2', '/api/admin/domains/d1/networking/rules']) {
+      expect(match(url), `${url} is not matched`).toBe(true);
+    }
+    for (const url of ['/administrator', '/api/administrator', '/_next/static/chunks/main.js', '/', '/api/auth/cli-session', '/ADMIN', '/API/ADMIN/env-config', '/workspaces']) {
+      expect(match(url), `${url} is matched`).toBe(false);
+    }
     expect(middlewareConfig.runtime).toBe('nodejs');
+  });
+
+  it('the admin refusal carries the browser hint the CLI and the extension print', async () => {
+    const b = await middleware(at('/api/admin/policy-code', deviceCode())).json();
+    // RED if `hint` is dropped: both clients read `hint`, not `remediation`.
+    expect(b.hint).toBe(INTERACTIVE_SIGN_IN_HINT);
+    expect(b.message).toBe(INTERACTIVE_SIGN_IN_REQUIRED_REASON);
   });
 });

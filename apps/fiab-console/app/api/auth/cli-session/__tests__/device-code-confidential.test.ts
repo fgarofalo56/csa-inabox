@@ -216,6 +216,18 @@ describe("#4805 — the minted session must belong to the deployment's tenant", 
     expect(encodeSessionCookie).not.toHaveBeenCalled();
   });
 
+  it('NO tenant at all (no tid, no utid) is refused, not waved through', async () => {
+    // The breaking input: a token that names no tenant, with a home-tenant iss.
+    // RED if the comparison is the fail-open shape `a.tid && a.tid !== home`
+    // (#3823/#3840): an absent tid would skip it and mint. sameTenantConfirmed
+    // treats an absent tid as unconfirmed, which refuses.
+    tokenAnswer = okToken({ tid: undefined, iss: COM_ISS(TENANT) }, '');
+    const last = await lastOf();
+    expect(last).toMatchObject({ type: 'error', code: 'tenant_mismatch' });
+    expect(String(last.error)).toContain('(none stated in the id token)');
+    expect(encodeSessionCookie).not.toHaveBeenCalled();
+  });
+
   it('a home-tenant tid with an issuer for ANOTHER tenant is refused', async () => {
     // The breaking input: tid is the deployment tenant, iss names FOREIGN.
     // RED if the route drops the iss check (the tid check alone would pass it).
@@ -330,7 +342,22 @@ describe('#4805 — operator decision 2026-09-30 (c): starting a sign-in is rate
     // not call the limiter (it would stream a 7th device code too).
     const sixth = await POST(reqFrom({}, '198.51.100.7'));
     expect(sixth.status).toBe(429);
-    expect(Number(sixth.headers.get('Retry-After'))).toBeGreaterThan(0);
+    const wait = Number(sixth.headers.get('Retry-After'));
+    expect(wait).toBeGreaterThan(0);
+    // The body the CLI and the extension print (review B-2): a sentence, a hint
+    // and the wait. RED if the route returns the limiter's bare
+    // `{ error:'rate_limited', retryAfter }` (no message, no hint, no code).
+    const sixthBody = await sixth.json();
+    expect(sixthBody).toMatchObject({
+      ok: false,
+      error: 'rate_limited',
+      code: 'rate_limited',
+      message: 'Too many device-code sign-in attempts from this network.',
+      retryAfter: wait,
+    });
+    expect(sixthBody.hint).toMatch(/Wait, then run the sign-in again/);
+    // The limiter's own headers survive the re-shape.
+    expect(sixth.headers.get('x-ratelimit-limit')).toBeTruthy();
     expect(calls.filter((c) => c.url.endsWith('/devicecode'))).toHaveLength(5);
     // Per IP, not global: a different client IP still starts.
     expect((await lines({}, '203.0.113.9')).status).toBe(200);
@@ -361,7 +388,10 @@ describe('#4805 — operator decision 2026-09-30 (c): starting a sign-in is rate
     const c = await POST(reqFrom({}, ip));
     expect(c.status).toBe(429);
     expect(c.headers.get('Retry-After')).toBe('60');
-    expect((await c.json()).code).toBe('too_many_open_sign_ins');
+    const cBody = await c.json();
+    expect(cBody.code).toBe('too_many_open_sign_ins');
+    expect(cBody).toMatchObject({ retryAfter: 60, message: expect.stringMatching(/already waiting/) });
+    expect(cBody.hint).toMatch(/Finish or cancel/);
     // Another IP is not affected by this IP's open streams.
     const other = await POST(reqFrom({}, '203.0.113.10'));
     expect(other.status).toBe(200);

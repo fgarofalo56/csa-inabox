@@ -37,10 +37,32 @@ export class DeviceCodeError extends Error {
     public readonly status: number,
     public readonly code?: string,
     public readonly hint?: string,
+    /** Seconds to wait before retrying (a 429's `retryAfter` / `Retry-After`). */
+    public readonly retryAfter?: number,
   ) {
     super(message);
     this.name = 'DeviceCodeError';
   }
+}
+
+/** A bare machine token (`rate_limited`) — not a sentence a person can act on. */
+const MACHINE_TOKEN_RE = /^[a-z][a-z0-9_]*$/;
+
+function positiveSeconds(v: unknown): number | undefined {
+  const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() ? Number(v) : NaN;
+  return Number.isFinite(n) && n > 0 ? Math.ceil(n) : undefined;
+}
+
+/**
+ * What the sign-in failure notification says: the message, the wait before
+ * retrying when the server sent one (#4805: the sign-in start is rate-limited),
+ * and the route's remediation `hint`.
+ */
+export function describeDeviceCodeError(e: DeviceCodeError): string {
+  const parts = [e.message.replace(/\s+$/, '')];
+  if (e.retryAfter) parts.push(`Try again in ${e.retryAfter} second${e.retryAfter === 1 ? '' : 's'}.`);
+  if (e.hint) parts.push(e.hint);
+  return parts.join(' ');
 }
 
 /** Async-iterate newline-delimited JSON lines off a fetch ReadableStream. */
@@ -102,18 +124,26 @@ export async function runDeviceCodeLogin(
 
   if (!res.ok || !res.body) {
     const t = await res.text().catch(() => '');
+    const headerWait = positiveSeconds(res.headers.get('retry-after'));
+    let j: { error?: unknown; message?: unknown; hint?: unknown; code?: unknown; retryAfter?: unknown } | undefined;
     try {
-      const j = JSON.parse(t) as { error?: string; hint?: string; code?: string };
-      throw new DeviceCodeError(
-        String(j.error || `${res.status} ${res.statusText}`),
-        res.status,
-        j.code,
-        j.hint,
-      );
-    } catch (e) {
-      if (e instanceof DeviceCodeError) throw e;
+      j = JSON.parse(t);
+    } catch {
+      j = undefined;
     }
-    throw new DeviceCodeError(`device-code login failed: ${res.status} ${res.statusText}`, res.status);
+    if (j && typeof j === 'object') {
+      const error = typeof j.error === 'string' && j.error ? j.error : undefined;
+      const message = typeof j.message === 'string' && j.message ? j.message : undefined;
+      throw new DeviceCodeError(
+        (error && message && MACHINE_TOKEN_RE.test(error) ? message : error ?? message) ||
+          `${res.status} ${res.statusText}`,
+        res.status,
+        typeof j.code === 'string' ? j.code : undefined,
+        typeof j.hint === 'string' ? j.hint : undefined,
+        positiveSeconds(j.retryAfter) ?? headerWait,
+      );
+    }
+    throw new DeviceCodeError(`device-code login failed: ${res.status} ${res.statusText}`, res.status, undefined, undefined, headerWait);
   }
 
   let session: DeviceCodeSession | null = null;

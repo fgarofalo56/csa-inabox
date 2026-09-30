@@ -49,13 +49,25 @@ Sessions from `loom auth login` (device code) are deliberately limited, as least
 privilege for a non-interactive sign-in:
 
 - they last **1 hour** and are not extended by refreshing;
-- they are **refused on admin surfaces** (`/admin/*`, `/api/admin/*` and any
-  tenant-admin or admin-tier capability), with 403
-  `interactive_sign_in_required` — so admin-only commands such as
-  `loom workspace bulk-delete` need the browser console, or a service-principal
-  session whose principal holds tenant-admin standing;
+- they are **refused on admin surfaces** (`/admin/*`, `/api/admin/*`, any
+  tenant-admin or admin-tier capability, and the Data Landing Zone admin tier),
+  with 403 `interactive_sign_in_required` and a hint to use the browser — so
+  admin-only commands such as `loom workspace bulk-delete` need the browser
+  console, or a service-principal session whose principal holds tenant-admin
+  standing;
+- they cannot create, reveal or rotate a durable credential (for example a
+  personal API token or a subscription key) or grant anyone access (role
+  assignments, permissions, shares, access-request approvals) — the same 403,
+  naming the action; do those in the browser console;
 - starting a sign-in is rate-limited per client IP (5 per 10 minutes, and at
-  most 2 waiting at once), answered with 429 and `Retry-After`.
+  most 2 waiting at once). The CLI prints the reason, how long to wait and what
+  to do, for example:
+
+  ```text
+  API error (429 rate_limited): Too many device-code sign-in attempts from this network.
+  Try again in 120 seconds.
+  Hint: Wait, then run the sign-in again. An attempt that is already waiting can still be completed in the browser.
+  ```
 
 `--tenant` / `LOOM_TENANT` must be the deployment's own tenant id, or be omitted.
 

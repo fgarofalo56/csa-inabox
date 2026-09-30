@@ -91,6 +91,7 @@ import {
   type DeviceCodeFailure,
 } from '@/lib/auth/device-code-grant';
 import { logSafe } from '@/lib/util/log-safe';
+import { sameTenantConfirmed } from '@/lib/auth/tenant-boundary';
 import { DEVICE_CODE_SESSION_MAX_AGE_SECS } from '@/lib/auth/device-code-policy';
 import { clientIp, enforceRateLimitForKey } from '@/lib/azure/rate-limiter';
 
@@ -128,6 +129,39 @@ function releaseStreamSlot(ip: string): void {
 export function __resetCliSessionStreams(): void {
   openStreamsByIp.clear();
   openStreamsTotal = 0;
+}
+
+/**
+ * The shared limiter answers `{ ok:false, error:'rate_limited', retryAfter }`,
+ * which the CLI and the VS Code extension can only print as "rate_limited".
+ * Re-shape it for this route — same status and headers (`Retry-After` and the
+ * `x-ratelimit-*` trio), plus a `message` and `hint` a person can act on. The
+ * clients add the wait from `retryAfter`, so the sentence does not repeat it.
+ */
+async function signInRateLimited(limited: Response): Promise<Response> {
+  const prior = (await limited.clone().json().catch(() => ({}))) as { retryAfter?: unknown };
+  const headerWait = Number(limited.headers.get('Retry-After'));
+  const retryAfter =
+    typeof prior.retryAfter === 'number' && prior.retryAfter > 0
+      ? prior.retryAfter
+      : Number.isFinite(headerWait) && headerWait > 0
+        ? headerWait
+        : undefined;
+  const headers = new Headers();
+  for (const [k, v] of limited.headers) {
+    if (k === 'retry-after' || k.startsWith('x-ratelimit-')) headers.set(k, v);
+  }
+  return NextResponse.json(
+    {
+      ok: false,
+      error: 'rate_limited',
+      code: 'rate_limited',
+      message: 'Too many device-code sign-in attempts from this network.',
+      hint: 'Wait, then run the sign-in again. An attempt that is already waiting can still be completed in the browser.',
+      retryAfter,
+    },
+    { status: 429, headers },
+  );
 }
 
 function configured(): { ok: boolean; missing: string[] } {
@@ -256,7 +290,7 @@ export async function POST(req: NextRequest) {
     rawTenant !== undefined &&
     (typeof rawTenant !== 'string' ||
       !isValidTenantSegment(rawTenant) ||
-      rawTenant.toLowerCase() !== homeTenant.toLowerCase())
+      !sameTenantConfirmed(rawTenant, homeTenant))
   ) {
     return NextResponse.json(
       {
@@ -273,13 +307,15 @@ export async function POST(req: NextRequest) {
   // streams. Only a well-formed start is counted: the 400s above cost Entra nothing.
   const ip = clientIp(req.headers);
   const limited = await enforceRateLimitForKey(`cli-session:${ip}`, 'cli-session');
-  if (limited) return limited;
+  if (limited) return signInRateLimited(limited);
   if (!acquireStreamSlot(ip)) {
     return NextResponse.json(
       {
         ok: false,
         error: 'Too many device-code sign-ins are already waiting from this address. Finish or cancel one, then try again.',
         code: 'too_many_open_sign_ins',
+        message: 'Too many device-code sign-ins are already waiting from this address.',
+        hint: 'Finish or cancel a sign-in that is already waiting, then try again.',
         retryAfter: STREAM_CAP_RETRY_AFTER_SECS,
       },
       { status: 429, headers: { 'Retry-After': String(STREAM_CAP_RETRY_AFTER_SECS) } },
@@ -318,8 +354,9 @@ export async function POST(req: NextRequest) {
         // THE MINTED SESSION MUST BELONG TO THE DEPLOYMENT'S TENANT: the id
         // token's `tid` must be AZURE_TENANT_ID, and its `iss` must be this
         // cloud's login host for that tenant. Either mismatch refuses the mint.
-        const tidOk = typeof who.tid === 'string' && who.tid.toLowerCase() === homeTenant.toLowerCase();
-        if (!tidOk) {
+        // THE comparison primitive (lib/auth/tenant-boundary.ts): case-insensitive,
+        // and a missing or empty tid on either side refuses.
+        if (!sameTenantConfirmed(who.tid, homeTenant)) {
           throw new DeviceCodeGrantError({
             code: 'tenant_mismatch',
             deploymentFault: false,

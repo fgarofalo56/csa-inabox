@@ -48,6 +48,7 @@ import {
 } from '@/lib/azure/adf-client';
 import { provisionMirrorCdf } from '@/lib/azure/mirror-cdf-producer';
 import { withSession } from '@/lib/api/route-toolkit';
+import { isDeviceCodeSession } from '@/lib/auth/device-code-policy';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -378,13 +379,17 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest, { sessi
       await createEventHub({ name: hubName, partitionCount: 4, messageRetentionInDays: 1 });
       const fqdn = nsFqdn();
       // 2) Optional Send SAS rule — keys only usable when local auth is enabled.
+      //    The connection string is a durable credential, so a CLI / VS Code
+      //    device-code session is not handed it (#4805, operator decision
+      //    2026-09-30); the rule is still created and the browser shows it.
+      const withholdSas = isDeviceCodeSession(session);
       let connectionString: string | null = null;
       let localAuthDisabled = true;
       try {
         await createEventHubAuthRule(hubName, 'loom-sender', ['Send']);
         const keys = await listEventHubKeys(hubName, 'loom-sender');
         localAuthDisabled = keys.localAuthDisabled;
-        connectionString = keys.primaryConnectionString ?? null;
+        connectionString = withholdSas ? null : keys.primaryConnectionString ?? null;
       } catch (e) {
         // SAS rule creation can fail on a locked-down namespace; Entra path still works.
         if (!(e instanceof EventHubsArmError)) throw e;
@@ -398,7 +403,9 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest, { sessi
       };
       hint = localAuthDisabled
         ? `The namespace has disableLocalAuth: true — push events to https://${fqdn}/${hubName}/messages with an Entra bearer token (or Kafka OAUTHBEARER). Set disableLocalAuth=false in eventhubs.bicep (Commercial only) to enable SAS connection strings.`
-        : 'A Send SAS connection string was issued. Prefer Entra auth where possible.';
+        : withholdSas
+          ? 'A Send SAS rule was created. Its connection string is shown only to an interactive browser sign-in; open this source in the Loom console to copy it, or use Entra auth.'
+          : 'A Send SAS connection string was issued. Prefer Entra auth where possible.';
       cfg.eventHubName = hubName;
     } else if (kind === 'mirror-cdf') {
       if (!cfg.mirrorItemId || !cfg.mirrorWorkspaceId) {
