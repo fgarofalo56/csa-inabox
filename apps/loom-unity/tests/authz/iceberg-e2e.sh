@@ -25,10 +25,21 @@
 #
 # The fix is in the image (Dockerfile stage 1b): IcebergRestCatalogService is
 # recompiled with upstream da911fad3951 (#1813)'s scoped expressions, and the
-# entrypoint adds USE SCHEMA to the Console's catalog grants. So on the PRE-FIX
-# image D, J and K go RED (403) under this harness, and on the fixed image they
-# are GREEN. Section M proves the fix did not open the surface to everyone: a
-# second, registered principal with NO grants is still refused.
+# entrypoint adds USE SCHEMA to the Console's catalog grants. The first #3339
+# change left LIST-namespaces on metastore OWNER; after it rolled, that route was
+# the Console's live 403 (2026-09-29). The second change scopes it too, per #1813:
+# GET_SCHEMA, the schemas read from the repository, and the list filtered.
+#
+# Measured 2026-09-29 (LOOM_E2E_SKIP_BUILD=1 on each image) with the 42-row
+# revision of this harness (commit 950f465): the image from before #3339 fails
+# 17 rows (D E F H H1 H2 J K N1 N2 N2b K2 M4 M4b M5 M5b A4); the #4783 image,
+# which carries only the first #3339 change, fails 6 (A4 H H1 H2 M5 M5b); the
+# image at 950f465 passes all 42. Rows H2b, Px, Pb and I3a were added after
+# that; this tree's image passes all 46, and the two older images were not
+# re-run against the 46-row revision. Section M proves the fix did not open the surface
+# to everyone: a second, registered principal with NO grants is still refused,
+# and both lists are filtered to nothing for it. Section P keeps the pre-fix
+# behaviour measured, on THIS image with the #3339 jar stripped.
 #
 #   A  warehouse auto-bind      entrypoint creates catalog + ns + grants -> log
 #   B  Unity read, console      GET /catalogs                            -> 200
@@ -36,44 +47,47 @@
 #   D  IRC config, console      exchanged app-only token                 -> 200
 #   E  IRC config, ABSENT wh    warehouse that does not exist            -> 404
 #   F  IRC prefix override      config body                              -> catalogs/loom
-#   G  UNPREFIXED namespaces    /v1/namespaces (what the client sent)    -> 500
-#   H  PREFIXED  namespaces     /v1/catalogs/loom/namespaces             -> 500
-#   I1 SAME image, authz OFF    the ONE variable that moves it           -> 200
-#   I2 SAME image, NO #1603 jar authz still ON — overlay exonerated      -> 500
+#   G  UNPREFIXED namespaces    /v1/namespaces (no such route)           -> 500
+#   H  LIST-namespaces          console 200 [["default"]], admin 200
 #   J  namespace GET, console   /v1/catalogs/loom/namespaces/default     -> 200
 #   K  table LIST, console      .../namespaces/default/tables            -> 200
-#   L  Unity schemas, console   the LIST-namespaces fallback source      -> 200
+#   L  Unity schemas, console   the Console's fallback source            -> 200
 #   N  table GET (loadTable)    console: non-Iceberg table 404, UniForm 200
 #   M  a principal with NO grants: config / namespace / table GET -> 403,
-#      and the table LIST filters the UniForm table out
+#      and both LISTs (tables, namespaces) are filtered to nothing
+#   P  PRE-FIX controls, this image with the #3339 jar stripped:
+#      P0 config 403 (the strip took), P1 LIST-namespaces console 403 (the live
+#      403), P2 LIST-namespaces admin 500 "Authorization filter not initialized"
+#   I1 P's image, authz OFF     the ONE variable that moves P2           -> 200
+#   I2 P's image, #1603 ALSO stripped, authz ON — overlay exonerated    -> 500
 #
 # C: the AuthDecorator rejects any bearer whose `iss` is not its own `internal`
 # issuer, so an unexchanged bearer is 403 before authorization runs.
 #
-# G+H+I are the live 500 and are NOT fixed here (#3339 backports only the read
-# gates; listNamespaces still requires metastore OWNER). G: there is no
-# /v1/namespaces route, and because UnityAccessDecorator is bound as a ROUTE
-# DECORATOR over the whole /api/2.1/unity-catalog/ prefix, an unmatched path
-# still enters it and dies "Couldn't unwrap service." H: even the CORRECT
-# prefixed route 500s, for EVERY principal including the metastore owner —
+# G: there is no /v1/namespaces route, and because UnityAccessDecorator is bound
+# as a ROUTE DECORATOR over the whole /api/2.1/unity-catalog/ prefix, an
+# unmatched path still enters it and dies "Couldn't unwrap service."
+#
+# UPSTREAM LIST-namespaces (P1/P2), for the record: 403 to every caller that is
+# not metastore OWNER, and 500 to the owner —
 #   {"error":{"message":"Authorization filter not initialized — ensure the
 #     request goes through UnityAccessDecorator.","code":500}}
+# The 500 is upstream, in BOTH v0.5.0 and v0.5.1: AuthorizedService.
+# applyResponseFilter runs only `if (isAuthorizationEnabled())` and then requires
+# the RESULT_FILTER attribute UnityAccessDecorator installs for
+# @ResponseAuthorizeFilter routes; upstream's listNamespaces reaches
+# SchemaService.listSchemas IN-PROCESS, under the Iceberg route's context, where
+# that attribute was never set.
 #
 # ── THE I CONTROL WAS BROKEN ONCE, AND IT PRODUCED A WRONG DIAGNOSIS (2026-08-10)
 # Row I used to be "the same call on the BARE upstream v0.5.0 image answers 200",
 # and the conclusion drawn from it was "so the regression arrives with the v0.5.1
 # unitycatalog-server OVERLAY". That control moved TWO variables at once: the bare
 # image has no overlay AND runs with server.authorization DISABLED. It is now a
-# pair of SINGLE-variable controls:
-#   I1  the same Loom image, authorization DISABLED  -> 200   (moves the flag only)
-#   I2  the same Loom image with the #1603 overlay jar STRIPPED off the classpath,
-#       authorization still ENABLED                  -> 500   (moves the overlay only)
-# The real cause of H is upstream, in BOTH releases: AuthorizedService.
-# applyResponseFilter runs only `if (isAuthorizationEnabled())` and then requires
-# the RESULT_FILTER attribute UnityAccessDecorator installs for
-# @ResponseAuthorizeFilter routes; IcebergRestCatalogService.listNamespaces reaches
-# SchemaService.listSchemas IN-PROCESS, under the Iceberg route's context, where
-# that attribute was never set.
+# pair of SINGLE-variable controls against P's image:
+#   I1  authorization DISABLED                      -> 200   (moves the flag only)
+#   I2  the #1603 overlay jar ALSO stripped, authorization still ENABLED
+#                                                   -> 500   (moves the overlay only)
 #
 # Every assertion below names the value that would break it (assertion-design.md).
 #
@@ -93,12 +107,13 @@ APP_DIR="$(cd "${HERE}/../.." && pwd)"
 IMAGE="${1:-loom-unity:iceberg-e2e}"
 SKIP_BUILD="${LOOM_E2E_SKIP_BUILD:-0}"
 NOOVL_IMAGE="${IMAGE%%:*}:iceberg-e2e-no-overlay"
+PRE_IMAGE="${IMAGE%%:*}:iceberg-e2e-pre3339"
 NET=loom-unity-iceberg-e2e
 IDP=loom-unity-iceberg-idp
 UC=loom-unity-iceberg-uc
-UC_OPEN=loom-unity-iceberg-open
+PRE=loom-unity-iceberg-pre3339
+PRE_OPEN=loom-unity-iceberg-open
 NOOVL=loom-unity-iceberg-nooverlay
-NOOVL_DIR="$(mktemp -d)"
 AUD='api://loom-unity'
 WAREHOUSE='loom'
 NS='default'
@@ -117,14 +132,14 @@ DELTA='/api/2.1/unity-catalog/delta'
 UC_PORT=18090
 OPEN_PORT=18091
 NOOVL_PORT=18092
+PRE_PORT=18093
 
 PASS=0
 FAIL=0
 
 cleanup() {
-  docker rm -f "$IDP" "$UC" "$UC_OPEN" "$NOOVL" >/dev/null 2>&1
+  docker rm -f "$IDP" "$UC" "$PRE" "$PRE_OPEN" "$NOOVL" >/dev/null 2>&1
   docker network rm "$NET" >/dev/null 2>&1
-  rm -rf "$NOOVL_DIR" >/dev/null 2>&1
   true
 }
 trap cleanup EXIT
@@ -182,9 +197,9 @@ docker build -q -f "$HERE/Dockerfile.test-idp" -t loom-unity-test-idp:e2e "$HERE
 # `--entrypoint sh`, not `/bin/sh`: Git Bash rewrites a leading-slash argument
 # into a Windows path, which made this line report a false "does NOT carry".
 if docker run --rm --entrypoint sh "$IMAGE" -c 'test -f /home/unitycatalog/lib-loom-override/loom-uc-3339-iceberg-authz.jar'; then
-  echo "  image carries the #3339 Iceberg authorization backport"
+  echo "  image carries the #3339 overlay jar (which routes it scopes is measured below, not inferred from the jar)"
 else
-  echo "  image does NOT carry the #3339 backport (pre-fix image: expect D/J/K and N to fail)"
+  echo "  image does NOT carry the #3339 backport (pre-fix image: expect D/J/K, N and H to fail)"
 fi
 cleanup
 docker network create "$NET" >/dev/null
@@ -218,9 +233,12 @@ case "$LOG" in
   *"WAREHOUSE-BIND: granted"*) check "A3 grants applied to the Console principal" "yes" "yes" ;;
   *) check "A3 grants applied to the Console principal" "yes" "no" ;;
 esac
+# A4: the boot banner states what LIST-namespaces does on THIS image. Breaks if
+# the image announces the upstream defect (overlay jar absent), or says nothing.
 case "$LOG" in
-  *"ICEBERG-LIST-NAMESPACES-DEFECT"*) check "A4 the LIST-namespaces defect is STATED on boot" "yes" "yes" ;;
-  *) check "A4 the LIST-namespaces defect is STATED on boot" "yes" "no" ;;
+  *"ICEBERG-LIST-NAMESPACES-DEFECT"*) check "A4 LIST-namespaces stated as scoped on boot" "yes" "no (defect banner)" ;;
+  *"ICEBERG-LIST-NAMESPACES: "*"served by this image's #3339 overlay"*) check "A4 LIST-namespaces stated as scoped on boot" "yes" "yes" ;;
+  *) check "A4 LIST-namespaces stated as scoped on boot" "yes" "no (no banner)" ;;
 esac
 
 echo "== mint the Console's REAL credential shape (app-only: sub=oid, NO email) =="
@@ -268,81 +286,47 @@ case "$CFG" in
   *) check "F  IRC config declares prefix=catalogs/loom" "yes" "no ($CFG)" ;;
 esac
 
-echo "== G-I. the 500: a wrong path, and an UPSTREAM defect (not the overlay) =="
+echo "== G-H. LIST-namespaces: the wrong path, and the route itself on this image =="
+# G: there is no /v1/namespaces route. UnityAccessDecorator is bound as a ROUTE
+# DECORATOR over the whole /api/2.1/unity-catalog/ prefix, so an unmatched path
+# still enters it and dies "Couldn't unwrap service." (500, not 404). The Loom
+# client used to send exactly this path. Breaks if that path ever becomes a route.
 check "G  IRC    /v1/namespaces (UNPREFIXED)         [admin]  " "500" \
   "$(status "$UC_PORT" "$IRC/v1/namespaces" "$ADMIN")"
-check "H  IRC    /v1/catalogs/loom/namespaces        [admin]  " "500" \
-  "$(status "$UC_PORT" "$IRC/v1/catalogs/$WAREHOUSE/namespaces" "$ADMIN")"
-NSBODY="$(body "$UC_PORT" "$IRC/v1/catalogs/$WAREHOUSE/namespaces" "$ADMIN")"
-case "$NSBODY" in
-  *"Authorization filter not initialized"*) check "H2 …with the applyResponseFilter signature" "yes" "yes" ;;
-  *) check "H2 …with the applyResponseFilter signature" "yes" "no ($NSBODY)" ;;
+
+LISTNS_PATH="$IRC/v1/catalogs/$WAREHOUSE/namespaces"
+# H: the route the Console's /api/catalog/iceberg/namespaces calls. Live on
+# 2026-09-29, after the first #3339 roll, this was the Console's 403 (the route
+# still demanded metastore OWNER). Breaks -> 403 on an image without the second
+# #3339 change (measured on the #4783 image). It does NOT break if only the
+# route's expression is put back to metastore OWNER: a @ResponseAuthorizeFilter
+# route has no pre-gate, the expression is applied per schema, and that arm
+# measured 200 with an EMPTY list. H1 is the row that catches it.
+check "H  IRC    /v1/catalogs/loom/namespaces        [console]" "200" \
+  "$(status "$UC_PORT" "$LISTNS_PATH" "$CONSOLE")"
+H1BODY="$(body "$UC_PORT" "$LISTNS_PATH" "$CONSOLE")"
+# H1: the list is the real one. Breaks if the filter drops a schema the Console
+# may read (-> []: measured with the expression put back to metastore OWNER), or
+# the body is an error.
+case "$H1BODY" in
+  *'"namespaces":[["default"]]'*) check "H1 …and lists [[\"default\"]]                  [console]" "yes" "yes" ;;
+  *) check "H1 …and lists [[\"default\"]]                  [console]" "yes" "no ($H1BODY)" ;;
 esac
-
-# CONTROL I1 — the SAME image, the SAME warehouse, authorization DISABLED. This
-# moves exactly one variable, and it is the one that moves the status.
-docker run -d --name "$UC_OPEN" --network "$NET" -p "$OPEN_PORT:8080" \
-  -e LOOM_UNITY_AUTH=disable -e LOOM_UNITY_DB_LOCAL=1 \
-  -e "LOOM_ICEBERG_WAREHOUSE=$WAREHOUSE" "$IMAGE" >/dev/null
-wait_ready "$OPEN_PORT" || { echo "authz-disabled control never answered"; exit 1; }
-sleep 20
-check "I1 SAME image, authz DISABLED                 [no authz]" "200" \
-  "$(status "$OPEN_PORT" "$IRC/v1/catalogs/$WAREHOUSE/namespaces" "")"
-
-# CONTROL I2 — the SAME image with the #1603 overlay jar STRIPPED off every
-# classpath file, authorization still ENABLED. This moves the OTHER variable on
-# its own, and it does NOT move the status: the overlay is not the cause. Built
-# here so the claim is measured on this tree rather than quoted from a doc.
-#
-# Only the #1603 jar is stripped. The #3339 jar lives in the same
-# lib-loom-override directory, so the check below names the 1603 jar rather than
-# the directory (a directory-level check would fail on every fixed image).
-#
-# NOTE: `sed -i` truncates these classpath files to 0 bytes (mode 0550, busybox),
-# which is how the first attempt at this control silently produced an unbootable
-# image. Read-modify-`cat >` instead, and assert on BYTE COUNT so an emptied
-# classpath can never masquerade as a passing control.
-mkdir -p "$NOOVL_DIR"   # the early cleanup() call removes it; recreate before use
-cat > "$NOOVL_DIR/Dockerfile" <<DOCKERFILE
-FROM $IMAGE
-USER root
-RUN set -eu; \
-    OVERRIDE=/home/unitycatalog/lib-loom-override/loom-uc-1603-fix.jar; \
-    for CP_FILE in \$(find /home/unitycatalog -type f -name classpath); do \
-      NEW="\$(tr ':' '\n' < "\${CP_FILE}" | grep -v "^\${OVERRIDE}\$" | tr '\n' ':' | sed 's/:\$//')"; \
-      printf '%s' "\${NEW}" > /tmp/cp-new; \
-      cat /tmp/cp-new > "\${CP_FILE}"; \
-      rm -f /tmp/cp-new; \
-    done; \
-    SCP=/home/unitycatalog/server/target/classpath; \
-    BYTES="\$(wc -c < "\${SCP}")"; \
-    [ "\${BYTES}" -gt 30000 ] || { echo "FATAL: classpath truncated (\${BYTES} bytes)"; exit 1; }; \
-    ! grep -q 'loom-uc-1603-fix.jar' "\${SCP}" || { echo "FATAL: #1603 overlay still present"; exit 1; }; \
-    grep -q 'server/target/classes' "\${SCP}" || { echo "FATAL: v0.5.0 server classes lost"; exit 1; }
-USER unitycatalog
-DOCKERFILE
-if docker build -q -t "$NOOVL_IMAGE" "$NOOVL_DIR" >/dev/null 2>&1; then
-  docker run -d --name "$NOOVL" --network "$NET" -p "$NOOVL_PORT:8080" \
-    -e LOOM_UNITY_AUTH=enable -e LOOM_UNITY_ALLOWED_ISSUERS=http://idp:8000 \
-    -e "LOOM_UNITY_AUDIENCES=$AUD" -e LOOM_UNITY_DB_LOCAL=1 \
-    -e "LOOM_ICEBERG_WAREHOUSE=$WAREHOUSE" \
-    -e "LOOM_UNITY_CONSOLE_PRINCIPAL_ID=$PRINCIPAL" "$NOOVL_IMAGE" >/dev/null
-  if wait_ready "$NOOVL_PORT"; then
-    sleep 20
-    NOOVL_ADMIN="$(docker exec "$NOOVL" sh -c 'cat /home/unitycatalog/etc/conf/token.txt' | tr -d '\r\n')"
-    check "I2 SAME image, #1603 STRIPPED, authz ON    [admin]  " "500" \
-      "$(status "$NOOVL_PORT" "$IRC/v1/catalogs/$WAREHOUSE/namespaces" "$NOOVL_ADMIN")"
-    # And the #1603 fix must be GONE without the overlay — that is what proves the
-    # stripped image really lost it, i.e. that I2 tested what it claims to test.
-    NOOVL_CONSOLE="$(exchange "$NOOVL_PORT" "$RAW")"
-    check "I3 …and #1603 IS back once stripped (500)  [console]" "500" \
-      "$(status "$NOOVL_PORT" /api/2.1/unity-catalog/permissions/catalog/unity "$NOOVL_CONSOLE")"
-  else
-    check "I2 SAME image, #1603 STRIPPED, authz ON    [admin]  " "500" "control-never-answered"
-  fi
-else
-  check "I2 SAME image, #1603 STRIPPED, authz ON    [admin]  " "500" "control-image-build-failed"
-fi
+# H2: the metastore owner, the one caller that reached the upstream handler and
+# got its 500. Breaks -> 500 on the #4783 image. It does NOT break if the
+# in-process SchemaService.listSchemas call alone is restored (that arm measured
+# every row green): this route's own @ResponseAuthorizeFilter now installs the
+# filter attribute the in-process call lacked. That arm is stopped at BUILD time
+# by the Dockerfile's javap check, not by this harness.
+check "H2 IRC    /v1/catalogs/loom/namespaces        [admin]  " "200" \
+  "$(status "$UC_PORT" "$LISTNS_PATH" "$ADMIN")"
+# H2b: the owner's list is the real one too. Breaks on a 200 whose body is not
+# [["default"]] (an empty or error body under a 200).
+H2BODY="$(body "$UC_PORT" "$LISTNS_PATH" "$ADMIN")"
+case "$H2BODY" in
+  *'"namespaces":[["default"]]'*) check "H2b …and lists [[\"default\"]]                 [admin]  " "yes" "yes" ;;
+  *) check "H2b …and lists [[\"default\"]]                 [admin]  " "yes" "no ($H2BODY)" ;;
+esac
 
 echo "== J-L. the receipt: the Console's own principal reads the Iceberg surface =="
 # Breaks (-> 403) on the pre-fix image (metastore OWNER), and on the fixed image
@@ -354,6 +338,8 @@ check "J  IRC    /v1/catalogs/loom/namespaces/default        [console]" "200" \
 # route has no pre-gate, so any principal gets 200. K2 and M4 are what witness it.
 check "K  IRC    /v1/catalogs/loom/namespaces/default/tables [console]" "200" \
   "$(status "$UC_PORT" "$IRC/v1/catalogs/$WAREHOUSE/namespaces/$NS/tables" "$CONSOLE")"
+# L: the Unity schemas API the Console falls back to if LIST-namespaces ever 500s
+# again. Breaks (-> 403) if the Console loses USE CATALOG.
 check "L  Unity  /schemas?catalog_name=loom (fallback source)[console]" "200" \
   "$(status "$UC_PORT" "/api/2.1/unity-catalog/schemas?catalog_name=$WAREHOUSE" "$CONSOLE")"
 
@@ -455,6 +441,153 @@ case "$M4BODY" in
   *"\"identifiers\""*) check "M4b table LIST hides ${T_UNI}               [ungranted]" "hidden" "hidden" ;;
   *) check "M4b table LIST hides ${T_UNI}               [ungranted]" "hidden" "no list body ($M4BODY)" ;;
 esac
+
+# M5: LIST-namespaces for a principal with NO grants. Same no-pre-gate design as
+# the table list: 200 and a filtered list, which here must be EMPTY. Breaks
+# (-> LEAKED) if the ResultFilter runs over a copy or not at all; -> 403 if a
+# pre-gate stricter than upstream #1813 is added. Paired with H1, which proves
+# `default` is there to be filtered.
+M5CODE="$(status "$UC_PORT" "$LISTNS_PATH" "$OUTSIDER_TOK")"
+M5BODY="$(body "$UC_PORT" "$LISTNS_PATH" "$OUTSIDER_TOK")"
+check "M5 LIST-namespaces status                        [ungranted]" "200" "$M5CODE"
+case "$M5BODY" in
+  *'"namespaces":[]'*) check "M5b LIST-namespaces is EMPTY                  [ungranted]" "hidden" "hidden" ;;
+  *'"default"'*) check "M5b LIST-namespaces is EMPTY                  [ungranted]" "hidden" "LEAKED ($M5BODY)" ;;
+  *) check "M5b LIST-namespaces is EMPTY                  [ungranted]" "hidden" "no list body ($M5BODY)" ;;
+esac
+
+# ── P. PRE-FIX CONTROLS ──────────────────────────────────────────────────────
+# The same image with overlay jars STRIPPED off every classpath file, so each
+# control moves exactly one variable against the image above. With the #3339
+# jar stripped, IcebergRestCatalogService is upstream v0.5.0's.
+#
+# `sed -i` truncates these classpath files to 0 bytes (mode 0550, busybox), which
+# is how the first attempt at this control silently produced an unbootable image.
+# Read-modify-`cat >` instead, and assert on BYTE COUNT so an emptied classpath
+# can never masquerade as a passing control.
+build_stripped() { # build_stripped <tag> <jar>... -> 0 on success
+  local tag="$1"; shift
+  local dir; dir="$(mktemp -d)"
+  local jars="$*"
+  cat > "$dir/Dockerfile" <<DOCKERFILE
+FROM $IMAGE
+USER root
+RUN set -eu; \
+    for CP_FILE in \$(find /home/unitycatalog -type f -name classpath); do \
+      NEW="\$(cat "\${CP_FILE}")"; \
+      for JAR in $jars; do \
+        NEW="\$(printf '%s' "\${NEW}" | tr ':' '\n' | grep -v "^/home/unitycatalog/lib-loom-override/\${JAR}\$" | tr '\n' ':' | sed 's/:\$//')"; \
+      done; \
+      printf '%s' "\${NEW}" > /tmp/cp-new; \
+      cat /tmp/cp-new > "\${CP_FILE}"; \
+      rm -f /tmp/cp-new; \
+    done; \
+    SCP=/home/unitycatalog/server/target/classpath; \
+    BYTES="\$(wc -c < "\${SCP}")"; \
+    [ "\${BYTES}" -gt 30000 ] || { echo "FATAL: classpath truncated (\${BYTES} bytes)"; exit 1; }; \
+    for JAR in $jars; do \
+      ! grep -q "\${JAR}" "\${SCP}" || { echo "FATAL: \${JAR} still present"; exit 1; }; \
+    done; \
+    grep -q 'server/target/classes' "\${SCP}" || { echo "FATAL: v0.5.0 server classes lost"; exit 1; }
+USER unitycatalog
+DOCKERFILE
+  docker build -q -t "$tag" "$dir" >/dev/null 2>&1
+  local rc=$?
+  rm -rf "$dir"
+  return $rc
+}
+
+start_control() { # start_control <name> <port> <image> <auth: enable|disable>
+  if [ "$4" = "enable" ]; then
+    docker run -d --name "$1" --network "$NET" -p "$2:8080" \
+      -e LOOM_UNITY_AUTH=enable -e LOOM_UNITY_ALLOWED_ISSUERS=http://idp:8000 \
+      -e "LOOM_UNITY_AUDIENCES=$AUD" -e LOOM_UNITY_DB_LOCAL=1 \
+      -e "LOOM_ICEBERG_WAREHOUSE=$WAREHOUSE" \
+      -e "LOOM_UNITY_CONSOLE_PRINCIPAL_ID=$PRINCIPAL" "$3" >/dev/null
+  else
+    docker run -d --name "$1" --network "$NET" -p "$2:8080" \
+      -e LOOM_UNITY_AUTH=disable -e LOOM_UNITY_DB_LOCAL=1 \
+      -e "LOOM_ICEBERG_WAREHOUSE=$WAREHOUSE" "$3" >/dev/null
+  fi
+  wait_ready "$2" || return 1
+  sleep 25   # the SCIM bind + warehouse provisioning run after boot
+}
+
+echo "== P. pre-fix controls: this image with the #3339 overlay stripped =="
+if build_stripped "$PRE_IMAGE" loom-uc-3339-iceberg-authz.jar; then
+  if start_control "$PRE" "$PRE_PORT" "$PRE_IMAGE" enable; then
+    PRE_CONSOLE="$(exchange "$PRE_PORT" "$RAW")"
+    PRE_ADMIN="$(docker exec "$PRE" sh -c 'cat /home/unitycatalog/etc/conf/token.txt' | tr -d '\r\n')"
+    # Px: P0 and P1 are authorization 403s only if the Console's bearer was
+    # exchanged; a raw or empty bearer is also a 403 (row C). Breaks (-> no) if
+    # the exchange on the stripped image returns nothing.
+    check "Px console token exchange succeeds on the stripped image" "yes" \
+      "$([ -n "$PRE_CONSOLE" ] && echo yes || echo no)"
+    # Pb: the boot banner reads the classpath the server boots from, not the jar
+    # on disk. This image still carries the #3339 jar file but does not load it,
+    # so it must announce the upstream route. Breaks (-> scoped banner) if the
+    # banner keys on the file again.
+    PRE_LOG="$(docker logs "$PRE" 2>&1)"
+    case "$PRE_LOG" in
+      *"ICEBERG-LIST-NAMESPACES-DEFECT"*) check "Pb stripped image announces the upstream route" "yes" "yes" ;;
+      *"served by this image's #3339 overlay"*) check "Pb stripped image announces the upstream route" "yes" "no (scoped banner)" ;;
+      *) check "Pb stripped image announces the upstream route" "yes" "no (no banner)" ;;
+    esac
+    # P0: proves the strip took. Breaks (-> 200) if the #3339 class is still on
+    # the classpath, in which case P1-P3 would not be testing upstream's route.
+    check "P0 strip took: /v1/config is upstream's again  [console]" "403" \
+      "$(status "$PRE_PORT" "$IRC/v1/config?warehouse=$WAREHOUSE" "$PRE_CONSOLE")"
+    # P1: the live 403. Breaks if upstream's list gate stops refusing a caller
+    # that holds only catalog grants.
+    check "P1 LIST-namespaces, upstream route          [console]" "403" \
+      "$(status "$PRE_PORT" "$LISTNS_PATH" "$PRE_CONSOLE")"
+    # P2: the owner gets past the gate and hits the in-process defect.
+    check "P2 LIST-namespaces, upstream route          [admin]  " "500" \
+      "$(status "$PRE_PORT" "$LISTNS_PATH" "$PRE_ADMIN")"
+    P2BODY="$(body "$PRE_PORT" "$LISTNS_PATH" "$PRE_ADMIN")"
+    case "$P2BODY" in
+      *"Authorization filter not initialized"*) check "P2b …with the applyResponseFilter signature" "yes" "yes" ;;
+      *) check "P2b …with the applyResponseFilter signature" "yes" "no ($P2BODY)" ;;
+    esac
+  else
+    check "P0 strip took: /v1/config is upstream's again  [console]" "403" "control-never-answered"
+  fi
+  docker rm -f "$PRE" >/dev/null 2>&1
+
+  # I1: the same stripped image, authorization DISABLED. This moves exactly one
+  # variable — the flag — and it is the one that moves P2's 500 to 200.
+  if start_control "$PRE_OPEN" "$OPEN_PORT" "$PRE_IMAGE" disable; then
+    check "I1 upstream route, authz DISABLED           [no authz]" "200" \
+      "$(status "$OPEN_PORT" "$LISTNS_PATH" "")"
+  else
+    check "I1 upstream route, authz DISABLED           [no authz]" "200" "control-never-answered"
+  fi
+  docker rm -f "$PRE_OPEN" >/dev/null 2>&1
+else
+  check "P0 strip took: /v1/config is upstream's again  [console]" "403" "control-image-build-failed"
+fi
+
+# I2: BOTH overlays stripped, authorization on. Moves the #1603 overlay on its
+# own relative to P2, and the 500 does NOT move: that overlay is not the cause.
+# I3 proves the #1603 strip really took (its permission GET fix is gone -> 500).
+if build_stripped "$NOOVL_IMAGE" loom-uc-3339-iceberg-authz.jar loom-uc-1603-fix.jar; then
+  if start_control "$NOOVL" "$NOOVL_PORT" "$NOOVL_IMAGE" enable; then
+    NOOVL_ADMIN="$(docker exec "$NOOVL" sh -c 'cat /home/unitycatalog/etc/conf/token.txt' | tr -d '\r\n')"
+    check "I2 upstream route, #1603 ALSO stripped      [admin]  " "500" \
+      "$(status "$NOOVL_PORT" "$LISTNS_PATH" "$NOOVL_ADMIN")"
+    NOOVL_CONSOLE="$(exchange "$NOOVL_PORT" "$RAW")"
+    # I3a: I3's 500 is the permission route's own defect only if the bearer was
+    # exchanged. Breaks (-> no) if the exchange returns nothing.
+    check "I3a console token exchange succeeds on the both-stripped image" "yes" \
+      "$([ -n "$NOOVL_CONSOLE" ] && echo yes || echo no)"
+    check "I3 …and #1603 IS back once stripped (500)  [console]" "500" \
+      "$(status "$NOOVL_PORT" /api/2.1/unity-catalog/permissions/catalog/unity "$NOOVL_CONSOLE")"
+  else
+    check "I2 upstream route, #1603 ALSO stripped      [admin]  " "500" "control-never-answered"
+  fi
+else
+  check "I2 upstream route, #1603 ALSO stripped      [admin]  " "500" "control-image-build-failed"
+fi
 
 echo
 echo "passed: $PASS   failed: $FAIL"
