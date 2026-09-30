@@ -12,9 +12,9 @@ import {
   CheckmarkCircle20Filled, ErrorCircle20Filled, Clock20Regular,
 } from '@fluentui/react-icons';
 import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
-import { useStyles, formatBytes, leafName } from '../shared';
+import { useStyles, formatBytes, leafName, templateDfsSuffix, bundleTableKey } from '../shared';
 import { useLakehouseCtx } from '../lakehouse-editor-context';
-import { useLakehouseReadOnly, LAKEHOUSE_READ_ONLY_TITLE } from '../hooks/use-lakehouse-access';
+import { useLakehouseReadOnly, LAKEHOUSE_READ_ONLY_TITLE, LAKEHOUSE_READ_ONLY_SUBTEXT } from '../hooks/use-lakehouse-access';
 import type { LiveCatalogTable } from '../types';
 import type { PathEntry } from '../shared';
 
@@ -31,6 +31,8 @@ export function TablesPane() {
     openPrefixes, cacheKey, loadPaths,
     previewTable, setSqlText, setTab, openTableHistory, setMaintainTable, setMaintainOpen, openMoveTable,
   } = ctx;
+  // The query templates below name the active cloud's DFS host (from the server's container URLs).
+  const dfsHostSuffix = templateDfsSuffix(ctx.containers);
 
   return (
     <>
@@ -109,7 +111,7 @@ export function TablesPane() {
                             <TableCell>
                               <Button appearance="subtle" size="small" icon={<Play20Regular />}
                                 onClick={() => {
-                                  setSqlText(`-- Read the app-seeded CSV for ${t.name}\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.dfs.core.windows.net/${t.container}/${t.csvPath}', FORMAT='CSV', PARSER_VERSION='2.0', HEADER_ROW=TRUE) AS r;`);
+                                  setSqlText(`-- Read the app-seeded CSV for ${t.name}\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.${dfsHostSuffix}/${t.container}/${t.csvPath}', FORMAT='CSV', PARSER_VERSION='2.0', HEADER_ROW=TRUE) AS r;`);
                                   setTab('sql');
                                 }}>
                                 Query CSV
@@ -162,7 +164,7 @@ export function TablesPane() {
                       </TableHeader>
                       <TableBody>
                         {bundleDeltaTables.map((t) => (
-                          <TableRow key={t.name}>
+                          <TableRow key={bundleTableKey(t)}>
                             <TableCell><strong>{t.name}</strong></TableCell>
                             <TableCell><code style={{ fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{t.ddl}</code></TableCell>
                             <TableCell className={s.cell}>{t.sampleRows?.length ?? 0}</TableCell>
@@ -175,7 +177,7 @@ export function TablesPane() {
                                   <MenuList>
                                     <MenuItem icon={<Play20Regular />}
                                       onClick={() => {
-                                        setSqlText(`-- Read Delta table (once materialized under ${tablesPrefix}/${t.name})\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.dfs.core.windows.net/${activeContainer || '<container>'}/${tablesPrefix}/${t.name}', FORMAT='DELTA') AS r;`);
+                                        setSqlText(`-- Read Delta table (once materialized under ${tablesPrefix}/${t.name})\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.${dfsHostSuffix}/${activeContainer || '<container>'}/${tablesPrefix}/${t.name}', FORMAT='DELTA') AS r;`);
                                         setTab('sql');
                                       }}>
                                       Query template
@@ -188,7 +190,8 @@ export function TablesPane() {
                                     <MenuItem icon={<Wrench20Regular />}
                                       disabled={!activeContainer || readOnly}
                                       title={readOnly ? LAKEHOUSE_READ_ONLY_TITLE : !activeContainer ? 'Select a container first' : 'OPTIMIZE / VACUUM / ZORDER BY'}
-                                      onClick={() => { setMaintainTable(t.name); setMaintainOpen(true); }}>
+                                      subText={readOnly ? LAKEHOUSE_READ_ONLY_SUBTEXT : undefined}
+                                      onClick={() => { setMaintainTable(t.schema ? `${t.schema}/${leafName(t.name)}` : t.name); setMaintainOpen(true); }}>
                                       Maintain…
                                     </MenuItem>
                                   </MenuList>
@@ -264,7 +267,7 @@ export function TablesPane() {
                                         </Button>
                                         <Button size="small" appearance="outline"
                                           onClick={() => {
-                                            setSqlText(`-- 4-part name: ${shortcutLakehouseId}.${schemaName}.${tableName}\n-- Serverless view (if registered): SELECT TOP 100 * FROM loom_lakehouse.${schemaName}.${tableName};\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.dfs.core.windows.net/${activeContainer}/${t.name}', FORMAT='DELTA') AS r;`);
+                                            setSqlText(`-- 4-part name: ${shortcutLakehouseId}.${schemaName}.${tableName}\n-- Serverless view (if registered): SELECT TOP 100 * FROM loom_lakehouse.${schemaName}.${tableName};\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.${dfsHostSuffix}/${activeContainer}/${t.name}', FORMAT='DELTA') AS r;`);
                                             setTab('sql');
                                           }}>
                                           Query

@@ -18,8 +18,14 @@
  *
  * Every GET names the lakehouse it is for (`lakehouseId=`), authorized for read
  * through `authorizeLakehouse` (404 when the caller cannot reach it). For
- * tab=object the container must be that lakehouse's storage container. Only a
+ * tab=object the container must be that lakehouse's storage container, and the
+ * role assignments are listed on the item's bound storage account. Only a
  * tenant admin may list without `lakehouseId`.
+ *
+ * The SQL-plane tabs read the one shared dedicated pool's catalogue:
+ * `lakehouseId` decides who may list, not which objects are listed, because
+ * lakehouse tables live in each item's Spark database and nothing links a pool
+ * object to a lakehouse item. Narrowing the listing is tracked in #4850.
  *
  * GET  ?lakehouseId=<id>&tab=object[&container=<c>] → { assignments, knownRoles }
  * GET  ?lakehouseId=<id>&tab=table|column        → { grants }
@@ -72,7 +78,7 @@ import { graphBase as cloudGraphBase, getGraphScope } from '@/lib/azure/cloud-en
 import { withSession } from '@/lib/api/route-toolkit';
 import { apiConflict, apiForbidden } from '@/lib/api/respond';
 import { resolveLakehouseStorage } from '@/lib/azure/lakehouse-abfss';
-import { authorizeLakehouse, lakehouseStorageWithheldResponse } from '../_lib/item-scope';
+import { authorizeLakehouse, boundAccountOf, lakehouseStorageWithheldResponse } from '../_lib/item-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -181,6 +187,7 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
   // is then not tied to anything the caller can open.
   const lakehouseId = (sp.get('lakehouseId') || '').trim();
   let boundContainer: string | null = null;
+  let boundAccount: string | null = null;
   if (!lakehouseId) {
     if (!isTenantAdmin(session)) {
       return apiForbidden(
@@ -203,6 +210,9 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
         );
       }
       boundContainer = resolved.bound.container;
+      // The listing runs on the item's bound account, not the configured one:
+      // a lakehouse bound to another account has its container there.
+      boundAccount = boundAccountOf(resolved.bound.abfss);
     }
   }
 
@@ -216,7 +226,7 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
           + 'lakehouse that uses it to see its role assignments.',
         );
       }
-      const raw = await listContainerRoleAssignments(container);
+      const raw = await listContainerRoleAssignments(container, boundAccount ?? undefined);
       const assignments = await enrichUpns(raw);
       const knownRoles = listKnownBlobDataRoles();
       return NextResponse.json({ ok: true, assignments, knownRoles });

@@ -120,6 +120,56 @@ describe('preview — item form', () => {
   });
 });
 
+describe('preview — a percent sign in the path', () => {
+  // The BULK URL is the path as-is, and a reader that decodes it once would
+  // turn these segments into '/..' or '..'. Each is inside the root as a raw
+  // string, so the root check alone passes it; what the test names is the
+  // decoded path.
+  const decodedLeavesRoot = (p: string) => {
+    const segs: string[] = [];
+    for (const s of decodeURIComponent(p).split('/')) {
+      if (s === '..') segs.pop(); else if (s !== '.' && s !== '') segs.push(s);
+    }
+    return !segs.join('/').startsWith(`${ROOT}/`);
+  };
+  const CASES: Array<[string, string]> = [
+    ['an encoded dot-dot segment', `${ROOT}/%2e%2e/Other--lh-x/a.parquet`],
+    ['an encoded slash with dot-dots', `${ROOT}/Files%2F..%2F..%2FOther--lh-x/a.parquet`],
+  ];
+
+  it.each(CASES)('fixture witness: %s decodes to a path outside the item root', (_l, p) => {
+    // Breaks if the fixture stops decoding outside the root; the refusal test
+    // below would then prove nothing about the decoded path.
+    expect([p.startsWith(`${ROOT}/`), decodedLeavesRoot(p)]).toEqual([true, true]);
+  });
+
+  it.each(CASES)('item form: %s is refused (400, nothing queried)', async (_l, p) => {
+    const res = await GET(req(`lakehouseId=${LH}&container=${CONTAINER}&path=${encodeURIComponent(p)}`));
+    // Breaks if the '%' refusal is removed: the route answers 200 and queries a
+    // BULK URL whose decoded path leaves the root.
+    expect(res.status).toBe(400);
+    expect((await res.json()).code).toBe('bad_request');
+    expect(queried()).toEqual([]);
+  });
+
+  it('reference form: an encoded dot-dot segment is refused (400, nothing queried)', async () => {
+    const p = `${REF_ROOT}/%2e%2e/Other--lh-x/b.parquet`;
+    const res = await GET(req(`refId=${REF}&container=${CONTAINER}&path=${encodeURIComponent(p)}`));
+    // Breaks if the refusal sits inside the item-form branch only.
+    expect(res.status).toBe(400);
+    expect(queried()).toEqual([]);
+  });
+
+  it('a path without a percent sign still previews, and its decoded path stays in the root (positive arm)', async () => {
+    const p = `${ROOT}/Files/a b.parquet`;
+    const res = await GET(req(`lakehouseId=${LH}&container=${CONTAINER}&path=${encodeURIComponent(p)}`));
+    expect(res.status).toBe(200);
+    // Breaks if the refusal is widened to any non-alphanumeric character.
+    expect(queried()[0]).toContain(`https://primary.dfs.core.windows.net/${CONTAINER}/${p}`);
+    expect(decodedLeavesRoot(p)).toBe(false);
+  });
+});
+
 describe('preview — reference form', () => {
   it('previews a file inside the referenced item root, on its own storage account', async () => {
     const res = await GET(req(`refId=${REF}&container=${CONTAINER}&path=${encodeURIComponent(REF_INSIDE)}`));

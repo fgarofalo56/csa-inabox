@@ -175,6 +175,19 @@ describe('lakehouse shell: upload error text', () => {
 });
 
 describe('lakehouse shell: Maintain column list', () => {
+  it('renders the two same-named bundle tables as distinct explorer items', async () => {
+    const errs: string[] = [];
+    const spy = vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => { errs.push(a.map(String).join(' ')); });
+    const { calls } = mount(true);
+    await settled(true, calls);
+    // Fixture witness: the explorer lists both bundle tables.
+    expect(await screen.findByText('Delta tables (2)')).toBeTruthy();
+    // Breaks if the explorer keys its tree items by name alone (React reports
+    // two children with the same key `orders`).
+    expect(errs.filter((e) => e.includes('same key'))).toEqual([]);
+    spy.mockRestore();
+  });
+
   it('follows the `<schema>/<table>` key, not the first table with that leaf name', async () => {
     const { calls } = mount(true);
     await settled(true, calls);
@@ -231,6 +244,19 @@ describe('lakehouse shell: permissions reads name this lakehouse', () => {
     const read = reads(calls).filter((q) => q.list === 'columns')[before];
     // Breaks if the dialog passes the editor any id but ctx.id (e.g. `lakehouseId=""`).
     expect([read.objectId, read.lakehouseId]).toEqual(['7', 'lh-h']);
+  });
+});
+
+describe('lakehouse shell: query template host', () => {
+  it("selecting a file writes a query template on the container URL's cloud host", async () => {
+    const { calls } = mount(true, {
+      '/api/lakehouse/containers': () => ({ ok: true, containers: [{ name: 'landing', url: 'https://govacct.dfs.core.usgovcloudapi.net/landing' }] }),
+    });
+    await settled(true, calls);
+    await act(async () => { await cap.ctx.selectFile(FILE); });
+    // Breaks if the template keeps the Commercial literal (dfs.core.windows.net)
+    // or the shell stops handing the helper its container list (__dfs_suffix__).
+    await waitFor(() => expect(cap.ctx.sqlText).toContain(`https://__account__.dfs.core.usgovcloudapi.net/landing/${FILE.name}`));
   });
 });
 

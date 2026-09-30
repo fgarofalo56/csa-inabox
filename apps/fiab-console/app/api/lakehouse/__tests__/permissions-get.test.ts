@@ -65,6 +65,7 @@ const member = { claims: { oid: 'oid-member', upn: 'member@x' } };
 
 const LH = 'lh-perm';
 const CONTAINER = 'landing';
+const ACCOUNT = 'acct';
 const ROOT = 'lakehouses/Sales--lh-perm';
 const TARGET = { server: 's', database: 'd' };
 
@@ -101,7 +102,7 @@ beforeEach(() => {
     canWrite: false,
   });
   (resolveLakehouseAbfss as any).mockResolvedValue({
-    abfss: `abfss://${CONTAINER}@acct.dfs.core.windows.net/${ROOT}`,
+    abfss: `abfss://${CONTAINER}@${ACCOUNT}.dfs.core.windows.net/${ROOT}`,
     container: CONTAINER,
     root: ROOT,
   });
@@ -129,7 +130,7 @@ describe('GET /api/lakehouse/permissions?tab=object — the item container', () 
     (getSession as any).mockReturnValue(member);
     const res = await GET(getReq({ lakehouseId: LH, tab: 'object', container: CONTAINER }));
     expect(res.status).toBe(200);
-    expect(listingCalls()).toEqual({ ...NONE, rbac: [[CONTAINER]] });
+    expect(listingCalls()).toEqual({ ...NONE, rbac: [[CONTAINER, ACCOUNT]] });
     expect((resolveItemAccessByOid as any).mock.calls).toEqual([[member, LH, 'lakehouse']]);
   });
 
@@ -139,7 +140,22 @@ describe('GET /api/lakehouse/permissions?tab=object — the item container', () 
     (getSession as any).mockReturnValue(member);
     const res = await GET(getReq({ lakehouseId: LH, tab: 'object' }));
     expect(res.status).toBe(200);
-    expect(listingCalls()).toEqual({ ...NONE, rbac: [[CONTAINER]] });
+    expect(listingCalls()).toEqual({ ...NONE, rbac: [[CONTAINER, ACCOUNT]] });
+  });
+
+  // FAILS IF the listing ignores the item's bound account (the code before this
+  // change): the row set would be [['landing']] or [['landing', undefined]],
+  // which lists the configured account's container of the same name.
+  it('lists on the item\'s bound account when it is not the configured one', async () => {
+    (getSession as any).mockReturnValue(member);
+    (resolveLakehouseAbfss as any).mockResolvedValue({
+      abfss: `abfss://${CONTAINER}@otheracct.dfs.core.windows.net/${ROOT}`,
+      container: CONTAINER,
+      root: ROOT,
+    });
+    const res = await GET(getReq({ lakehouseId: LH, tab: 'object' }));
+    expect(res.status).toBe(200);
+    expect(listingCalls()).toEqual({ ...NONE, rbac: [[CONTAINER, 'otheracct']] });
   });
 
   // FAILS IF the named container is not compared with the binding: the status
@@ -192,7 +208,7 @@ describe('GET /api/lakehouse/permissions — no lakehouseId', () => {
     (getSession as any).mockReturnValue(admin);
     const res = await GET(getReq({ tab: 'object', container: CONTAINER }));
     expect(res.status).toBe(200);
-    expect(listingCalls()).toEqual({ ...NONE, rbac: [[CONTAINER]] });
+    expect(listingCalls()).toEqual({ ...NONE, rbac: [[CONTAINER, undefined]] });
     expect((resolveItemAccessByOid as any).mock.calls).toEqual([]);
   });
 });

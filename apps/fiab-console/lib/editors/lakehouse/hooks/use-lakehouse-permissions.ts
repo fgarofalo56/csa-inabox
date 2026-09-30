@@ -85,11 +85,12 @@ export function useLakehousePermissions({ lakehouseId, activeContainer, confirm 
   }, [activeContainer, readUrl]);
 
   const openPerms = useCallback(() => {
+    if (!lakehouseId) return; // unsaved lakehouse: no item to read through
     setPermsOpen(true);
     setPermsTab('object');
     setPermsError(null);
     loadPerms();
-  }, [loadPerms]);
+  }, [lakehouseId, loadPerms]);
 
   const grantPerm = useCallback(async () => {
     if (!activeContainer || !newPrincipalId.trim()) return;
