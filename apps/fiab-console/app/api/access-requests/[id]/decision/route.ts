@@ -12,11 +12,16 @@
  *                  enforcement.roleAssignmentId = REAL ARM role assignment id.
  *        pending → stays at access-provider (honest infra/config gate surfaced).
  *        error   → stays at access-provider, 502 with the grant error.
- *   open · ANY tier        + denied   → status: denied, deniedAt, denialReason.
+ *        Every grant that lands is recorded in the entitlement ledger, on a
+ *        mixed result too (lib/access/landed-grants.ts).
+ *   open · ANY tier        + denied   → status: denied, deniedAt, denialReason;
+ *        grants this request created on some of its scopes are revoked.
  *
  * The grant scope is derived at the final tier from the requested asset's own
- * record (lib/access/request-asset.ts) — its bound output ports, or the item
- * itself — so it reflects what the asset is bound to when access is granted.
+ * record (lib/access/request-asset.ts) — its bound output ports, the item's
+ * own store, or the item itself. If that differs from the scopes recorded when
+ * the request was made (what the approvers reviewed), the approval is refused
+ * with 409 `targets_changed` and the request stays open.
  * An access-package leg keeps the scope its package defines.
  *
  * Every decision writes an audit-log entry (itemId = requestId). No Fabric
@@ -65,14 +70,26 @@ import { checkSelfApproval } from '@/lib/access/approval-authority';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { computeExpiry } from '@/lib/access/expiry';
 import { deriveRequestTargets, loadCatalogItem } from '@/lib/access/request-asset';
+import {
+  grantResult, mergeGrantResults, recordLandedGrants, revokeLandedGrants,
+} from '@/lib/access/landed-grants';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+const targetKey = (t: { scopeType: string; scopeRef: string }) => `${t.scopeType}\u0000${t.scopeRef}`;
+
+/** True when both lists name the same set of scopes (order-insensitive). */
+function sameTargets(a: AccessRequestGrantTarget[], b: AccessRequestGrantTarget[]): boolean {
+  const as = new Set(a.map(targetKey));
+  const bs = new Set(b.map(targetKey));
+  return as.size === bs.size && [...as].every((k) => bs.has(k));
+}
+
 /** One enforcement summary over every per-scope grant: active only when all are. */
 function summarizeGrants(results: AccessRequestGrantResult[]): AccessRequestEnforcement {
   if (results.length === 1) {
-    const { scopeType: _t, scopeRef: _r, ...only } = results[0];
+    const { scopeType: _t, scopeRef: _r, created: _c, ...only } = results[0];
     return only;
   }
   const status = results.some((r) => r.status === 'error') ? 'error'
@@ -164,6 +181,19 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
       doc.deniedAt = now;
       doc.denialReason = reason;
       doc.deniedAtTier = currentTier;
+      // Grants this request already created on some of its scopes (a partial
+      // self-serve grant, or a final approval with a mixed result) are revoked
+      // with the denial. Access the requester held beforehand is left alone.
+      const { revoked, kept } = await revokeLandedGrants(
+        { requesterId: doc.requesterId, requesterUpn: doc.requesterUpn, permission: doc.permission },
+        doc.grantResults,
+        s,
+      );
+      if (revoked.length) doc.revokedGrants = revoked;
+      if (kept.length) {
+        warning = `${kept.length} grant(s) made for this request have no automatic revoke and remain in place: `
+          + kept.map((r) => `${r.scopeType} ${r.scopeRef}`).join(', ') + '. Remove them from the Access report.';
+      }
     } else {
       // W2 — advance over the request's approval-plan snapshot (an ordered subset
       // of the canonical tiers) when present; legacy requests fall back to the
@@ -191,6 +221,30 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
           }
           targets = deriveRequestTargets(item, doc.permission)
             .map((t) => ({ scopeType: t.scopeType, scopeRef: t.scopeRef, source: t.source }));
+          // The approvers decided on the scopes recorded when the request was
+          // made (`grantTargets`; a request recorded before those existed shows
+          // its single `scopeType`/`scopeRef`). If the asset's bindings have
+          // changed since, granting now would bind scopes nobody reviewed: the
+          // request is refused with 409 and left open, to be denied and
+          // requested again against the current bindings.
+          const reviewed: AccessRequestGrantTarget[] = doc.grantTargets?.length
+            ? doc.grantTargets
+            : [{ scopeType: doc.scopeType, scopeRef: doc.scopeRef }];
+          if (!sameTargets(targets, reviewed)) {
+            return NextResponse.json(
+              {
+                ok: false,
+                code: 'targets_changed',
+                error:
+                  `"${doc.assetName}" is now bound to different storage than when this request was made, so `
+                  + 'approving it would grant access nobody reviewed. Deny it and ask the requester to request '
+                  + 'access again.',
+                reviewed: reviewed.map((t) => ({ scopeType: t.scopeType, scopeRef: t.scopeRef })),
+                current: targets.map((t) => ({ scopeType: t.scopeType, scopeRef: t.scopeRef })),
+              },
+              { status: 409 },
+            );
+          }
           doc.grantTargets = targets;
         }
         doc.scopeType = targets[0].scopeType;
@@ -229,8 +283,17 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
           });
         } else {
         // Provision the REAL Azure RBAC grant on every backing scope.
-        const results: AccessRequestGrantResult[] = [];
+        const fresh: AccessRequestGrantResult[] = [];
         for (const t of targets) {
+          if (!t.scopeRef) {
+            // A store item with no storage recorded by Loom yet — nothing to
+            // bind to. Pending, never a wider (workspace) grant in its place.
+            fresh.push({
+              status: 'pending', scopeType: t.scopeType, scopeRef: '', created: false,
+              detail: `"${doc.assetName}" has no ${t.scopeType} recorded by Loom yet. Open the item so Loom binds its storage, then approve again.`,
+            });
+            continue;
+          }
           const r = await enforceAccessGrant({
             principalId: doc.requesterId,
             principalName: doc.requesterUpn,
@@ -239,36 +302,33 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
             scopeRef: t.scopeRef,
             permission: doc.permission,
           });
-          results.push({ ...r, scopeType: t.scopeType, scopeRef: t.scopeRef });
+          fresh.push(grantResult(r, t.scopeType, t.scopeRef));
         }
+        // A retry keeps the record of grants an earlier attempt created.
+        const results = mergeGrantResults(doc.grantResults, fresh);
         const grant = summarizeGrants(results);
         doc.enforcement = grant;
-        if (targets.length > 1) doc.grantResults = results;
+        if (targets.length > 1 || doc.grantResults) doc.grantResults = results;
+        const grantExpiry = grant.status === 'active'
+          ? computeExpiry(new Date(now), { lifetimeDays: doc.grantLifetimeDays })
+          : null;
+        // Entitlement ledger (access-governance W1): every grant that LANDED is
+        // recorded with its role-assignment id — on a mixed result too, so a
+        // grant that landed is in the who-has-access report and a later denial
+        // revokes it (lib/access/landed-grants.ts). Best-effort.
+        await recordLandedGrants({
+          requestId: doc.id,
+          requesterId: doc.requesterId,
+          requesterUpn: doc.requesterUpn,
+          tenantId,
+          assetName: doc.assetName,
+          permission: doc.permission,
+          grantedBy: s.claims.upn || s.claims.oid,
+          expiresAt: grantExpiry,
+        }, results);
         if (grant.status === 'active') {
           doc.status = 'completed';
           doc.subscribedAt = now;
-          // W3 — apply the package's grant lifetime (if any) as the expiry.
-          const grantExpiry = computeExpiry(new Date(now), { lifetimeDays: doc.grantLifetimeDays });
-          // Entitlement ledger (access-governance W1): record each effective
-          // grant so the who-has-access report reflects it. Best-effort.
-          for (const r of results) {
-            await recordAssignment({
-              principalId: doc.requesterId,
-              principalUpn: doc.requesterUpn,
-              principalType: 'User',
-              tenantId,
-              resourceType: r.scopeType,
-              resourceRef: r.scopeRef,
-              resourceName: doc.assetName,
-              role: r.roleName || r.scopeType,
-              permission: doc.permission,
-              source: 'direct',
-              sourceRef: doc.id,
-              grantedBy: s.claims.upn || s.claims.oid,
-              roleAssignmentId: r.roleAssignmentId,
-              expiresAt: grantExpiry,
-            });
-          }
           // Notify the requester they're now a subscriber.
           const nc = await notificationsContainer();
           await nc.items.create({

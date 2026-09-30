@@ -898,7 +898,7 @@ export async function removePrincipalFromPathAcl(
 
 import { armBase, armScope, dfsUrl } from './cloud-endpoints';
 import { discoverResourceCoordsByName } from './resource-graph-coords';
-import { armScopeSegment, assertContainerRoleAssignmentId } from './arm-scope-segment';
+import { armScopeSegment, assertContainerRoleAssignmentId, containerSegment } from './arm-scope-segment';
 
 const ARM_SCOPE = armScope();
 // I5: the ARM-plane credential also rides the factory's shared chain
@@ -968,7 +968,7 @@ async function resolveStorageScope(container: string): Promise<string> {
   // Each name is validated as exactly one ARM path segment and percent-encoded
   // (see arm-scope-segment.ts). The container is checked FIRST, before any
   // coordinate lookup, so a malformed name is refused without an ARM call.
-  const containerSeg = armScopeSegment(container, 'container');
+  const containerSeg = containerSegment(container);
   const { sub, rg } = await resolveStorageCoords();
   const account = getAccountName();
   return `/subscriptions/${armScopeSegment(sub, 'subscription id')}`

@@ -12335,6 +12335,25 @@
           }
         },
         {
+          "id": "sec:verdict-call:apps/fiab-console/app/api/items/[type]/[id]/sensitivity-label/route.ts#PATCH:enforceCapability:62",
+          "kind": "verdict-call",
+          "provenance": "declared",
+          "label": "PATCH /api/items/[type]/[id]/sensitivity-label -> enforceCapability",
+          "facet": {
+            "kind": "verdict-call",
+            "callSite": "PATCH /api/items/[type]/[id]/sensitivity-label:62",
+            "symbol": "enforceCapability",
+            "returnsVerdictUnion": true,
+            "pathsToPrivilegedSink": 1,
+            "pathsConsumingAsRefusal": 1,
+            "consumption": "returned",
+            "allowlisted": false,
+            "allowlistPremiseTested": false,
+            "sinkPrivileged": true,
+            "sinkKind": "cosmos-write"
+          }
+        },
+        {
           "id": "sec:verdict-call:apps/fiab-console/app/api/items/[type]/[id]/visual-query/route.ts#POST:pdpCheck:7",
           "kind": "verdict-call",
           "provenance": "declared",
@@ -48715,6 +48734,11 @@
         {
           "nodeId": "sec:verdict-call:apps/fiab-console/app/api/items/[type]/[id]/security-roles/route.ts#DELETE:pdpCheck:9",
           "codeModuleId": "code:apps/fiab-console/app/api/items/[type]/[id]/security-roles/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/items/[type]/[id]/sensitivity-label/route.ts#PATCH:enforceCapability:62",
+          "codeModuleId": "code:apps/fiab-console/app/api/items/[type]/[id]/sensitivity-label/route.ts",
           "deployedAs": "loom-console"
         },
         {

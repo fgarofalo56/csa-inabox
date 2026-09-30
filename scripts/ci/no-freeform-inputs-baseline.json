@@ -26,7 +26,7 @@
     "apps/fiab-console/lib/components/pipeline/params-variables-panel.tsx": 1,
     "apps/fiab-console/lib/components/powerbi/dq-source-panel.tsx": 2,
     "apps/fiab-console/lib/components/realtime-hub/connect-source-dialog.tsx": 1,
-    "apps/fiab-console/lib/components/workspace-settings-drawer.tsx": 3,
+    "apps/fiab-console/lib/components/workspace-settings-drawer.tsx": 2,
     "apps/fiab-console/lib/copilot/agent-tool-catalog-editor.tsx": 1,
     "apps/fiab-console/lib/dialogs/external-share-panel.tsx": 1,
     "apps/fiab-console/lib/editors/apim-editors/data-product-editor.tsx": 2,

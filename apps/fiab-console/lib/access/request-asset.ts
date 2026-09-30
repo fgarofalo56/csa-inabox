@@ -16,7 +16,9 @@
  *     self-serve | request, default governed). Every other item is governed.
  *   - grant scope — a data product's bound output ports / ADLS data assets
  *     (`resolveGrantTargets`), falling back to the product itself (a Loom-native
- *     item-scope grant). Every other item is an item-scope grant on itself.
+ *     item-scope grant). A lakehouse, warehouse or KQL database is granted on its
+ *     own store as Loom recorded it (`resolveItemBackingScope`); any other item
+ *     is an item-scope grant on itself.
  *
  * Self-serve grants the product's self-serve role only. Data products carry no
  * per-product role setting, so that role is Read; a request for more than Read
@@ -26,7 +28,8 @@ import type { SessionPayload } from '@/lib/auth/session';
 import { authorizeWorkspace } from '@/lib/auth/workspace-guard';
 import { sameTenantConfirmed } from '@/lib/auth/tenant-boundary';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
-import type { AccessPermission } from '@/lib/azure/access-policy-client';
+import type { AccessPermission, AccessScopeType } from '@/lib/azure/access-policy-client';
+import { resolveItemBackingScope } from '@/lib/azure/item-backing-scope';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import {
   DISCOVERABLE, resolveDiscoveryAccess, workspaceTid,
@@ -73,14 +76,49 @@ export function accessModelOf(item: WorkspaceItem): RequestAccessModel {
 }
 
 /**
- * Every scope a grant for `item` binds to, at `permission`. Never empty: an item
- * with no bound physical output is granted at item scope on itself.
+ * The owner named on the item, when it names one: a data product's
+ * `state.owner`, as recorded through `PATCH /api/data-products/[id]` — the
+ * product record, not the request body. Other items carry no owner field; the
+ * empty string means "not named".
+ */
+export function ownerOf(item: WorkspaceItem): string {
+  if (item.itemType !== 'data-product') return '';
+  const owner = (item.state as Record<string, unknown> | undefined)?.owner;
+  return typeof owner === 'string' ? owner.trim().slice(0, 256) : '';
+}
+
+/** Item types whose data lives in a physical Azure store (see {@link resolveItemBackingScope}). */
+const STORE_ITEM_TYPES: ReadonlySet<string> = new Set(['lakehouse', 'warehouse', 'kql-database', 'eventhouse']);
+
+/**
+ * Every scope a grant for `item` binds to, at `permission`. Never empty.
+ *
+ *   data product      → its bound output ports / ADLS data assets, else the
+ *                       product itself (a Loom-native item-scope grant).
+ *   lakehouse, warehouse, kql-database, eventhouse
+ *                     → the item's own store, read only from bindings Loom
+ *                       recorded (`resolveItemBackingScope`): its container,
+ *                       the dedicated pool, its ADX database. When nothing is
+ *                       recorded yet the target keeps the store type with an
+ *                       EMPTY scopeRef, which the grant step reports as pending
+ *                       rather than widening to the whole workspace.
+ *   anything else     → an item-scope grant on the item itself.
  */
 export function deriveRequestTargets(item: WorkspaceItem, permission: AccessPermission): GrantTarget[] {
   if (item.itemType === 'data-product') {
     const targets = resolveGrantTargets(item.state as Record<string, unknown> | undefined, permission);
     if (targets.length > 0) return targets;
     return [{ scopeType: 'item', scopeRef: item.id, permission, source: 'data product' }];
+  }
+  if (STORE_ITEM_TYPES.has(item.itemType)) {
+    const scope = resolveItemBackingScope(item);
+    const source = `${item.itemType} item`;
+    if ('pending' in scope) {
+      const scopeType: AccessScopeType = item.itemType === 'lakehouse' ? 'adls-container'
+        : item.itemType === 'warehouse' ? 'warehouse' : 'kql-database';
+      return [{ scopeType, scopeRef: '', permission, source: `${source} (no store recorded yet)` }];
+    }
+    return [{ scopeType: scope.scopeType, scopeRef: scope.scopeRef, permission, source }];
   }
   return [{ scopeType: 'item', scopeRef: item.id, permission, source: `${item.itemType || 'catalog'} item` }];
 }

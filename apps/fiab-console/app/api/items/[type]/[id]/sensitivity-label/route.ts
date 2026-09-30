@@ -36,7 +36,9 @@
  *                RBAC grant on the item's backing store (ADLS container /
  *                Synapse pool / ADX db) via `enforceLabelRbac` →
  *                `enforceAccessGrant`. The resulting grant is persisted in
- *                `state.labelRbacGrant`.
+ *                `state.labelRbacGrant`. The store is the one Loom recorded for
+ *                the item (`resolveItemBackingScope`); a principal other than
+ *                the caller requires `admin.permissions` at Admin.
  *
  *        Body:
  *          {
@@ -83,9 +85,15 @@ import {
   resolveItemBackingScope,
 } from '@/lib/azure/label-protection';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { enforceCapability } from '@/lib/auth/feature-gate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+/** Naming a principal other than the caller for a label grant is the tenant-admin
+ *  capability that also governs Access policies (app/api/governance/policies). */
+const LABEL_GRANT_CAPABILITY = 'admin.permissions';
+const LABEL_GRANT_ROLE = 'Admin' as const;
 
 /**
  * #3941 review - A ROUTE CEILING ABOVE THE GROUP WALK.
@@ -440,16 +448,28 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ type: s
       newLabel.name || newLabel.displayName || labelId;
 
     // ── F21: enforce the new label's protection tier as real Azure RBAC.
+    //
+    // Who may be named: the caller themselves (as a User) needs only the write
+    // access `loadItem` already established. Naming any OTHER principal — another
+    // user, a group or a service principal — places a role assignment for someone
+    // else, which is the tenant-admin `admin.permissions` capability that also
+    // governs Access policies (app/api/governance/policies). The store comes from
+    // `resolveItemBackingScope`, which reads only bindings Loom recorded itself.
     let rbac: import('@/lib/azure/access-policy-client').AccessGrantResult | undefined;
     let grant: import('@/lib/azure/label-protection').LabelRbacGrant | undefined;
     const principalId = typeof body?.principalId === 'string' ? body.principalId.trim() : '';
     if (principalId) {
+      const principalType = (body?.principalType === 'Group' || body?.principalType === 'ServicePrincipal')
+        ? body.principalType : 'User';
+      const isSelf = principalType === 'User' && principalId === session.claims.oid;
+      if (!isSelf) {
+        const gate = await enforceCapability(session, LABEL_GRANT_CAPABILITY, LABEL_GRANT_ROLE);
+        if (gate) return gate;
+      }
       const scope = resolveItemBackingScope(item);
       if ('pending' in scope) {
         rbac = { status: 'pending', detail: scope.pending };
       } else {
-        const principalType = (body?.principalType === 'Group' || body?.principalType === 'ServicePrincipal')
-          ? body.principalType : 'User';
         const res = await enforceLabelRbac({
           label: newLabel,
           principalId,

@@ -44,6 +44,30 @@ export function armScopeSegment(value: unknown, label: string): string {
   return encodeURIComponent(s);
 }
 
+/**
+ * Azure Storage container names: 3-63 characters of lowercase letters, digits
+ * and single hyphens, starting and ending with a letter or digit — plus the
+ * three system containers.
+ * https://learn.microsoft.com/rest/api/storageservices/naming-and-referencing-containers--blobs--and-metadata
+ */
+const CONTAINER_NAME = /^(?=.{3,63}$)[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const SYSTEM_CONTAINERS: ReadonlySet<string> = new Set(['$root', '$web', '$logs']);
+
+/**
+ * {@link armScopeSegment} for a storage CONTAINER: the name must also be one
+ * Azure accepts as a container name. Returns it percent-encoded.
+ */
+export function containerSegment(value: unknown): string {
+  const s = typeof value === 'string' ? value : '';
+  if (!CONTAINER_NAME.test(s) && !SYSTEM_CONTAINERS.has(s)) {
+    throw new ArmScopeSegmentError(
+      'container', s,
+      'it is not a storage container name (3-63 lowercase letters, digits or single hyphens)',
+    );
+  }
+  return armScopeSegment(s, 'container');
+}
+
 /** A GUID-shaped role-assignment name. */
 const GUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 
@@ -72,7 +96,7 @@ export function assertContainerRoleAssignmentId(id: unknown, account: string): s
   armScopeSegment(sub, 'subscription id');
   armScopeSegment(rg, 'resource group');
   armScopeSegment(acct, 'storage account');
-  armScopeSegment(container, 'container');
+  containerSegment(container);
   if (acct.toLowerCase() !== account.toLowerCase()) {
     throw new ArmScopeSegmentError(
       'role-assignment id', s,

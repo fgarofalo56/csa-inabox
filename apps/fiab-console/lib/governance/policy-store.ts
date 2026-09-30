@@ -18,6 +18,7 @@ import {
   type LabelPolicyBody, type LabelPresetCategory,
 } from '@/lib/governance/label-policy-library';
 import { accessPoliciesDocId } from '@/lib/governance/access-policy-doc';
+import { sameTenantConfirmed } from '@/lib/auth/tenant-boundary';
 export type { DlpPolicyRule, DlpPresetCategory } from '@/lib/governance/dlp-policy-library';
 
 export interface PolicyEnforcement {
@@ -65,6 +66,10 @@ export interface PoliciesDoc {
   /** Built-in default source-keys already seeded once — so a later disable/delete
    *  by an operator is never re-seeded (day-one default-on, without fighting opt-out). */
   seededDefaults?: string[];
+  /** The owner's Entra tenant, stamped when the owner lists their policies
+   *  (`stampPoliciesTenant`). Lets an admin find this doc's pre-existing Access
+   *  policies without relying on the owner having created a workspace. */
+  tid?: string;
   updatedAt: string;
 }
 
@@ -187,7 +192,7 @@ export async function readPoliciesDoc(ownerId: string): Promise<PoliciesDoc | nu
 //
 // Access policies written before this change live in their author's
 // `policies:<oid>` doc. They are NOT moved or deleted; the policies route lists
-// them beside the tenant doc (see `listLegacyAccessPolicyOwners`).
+// them beside the tenant doc (see `listLegacyAccessPolicyDocs`).
 
 export interface AccessPoliciesDoc {
   id: string;
@@ -224,33 +229,64 @@ export async function saveAccessPolicies(doc: AccessPoliciesDoc): Promise<Access
   return doc;
 }
 
-/** Upper bound on the per-user docs one list call reads for pre-existing Access policies. */
-export const LEGACY_ACCESS_OWNER_CAP = 200;
+/**
+ * Record the owner's Entra tenant on their own `policies:<oid>` doc, once.
+ * Called with the owner's own session only (their `tid` claim), so the stamp is
+ * never written from a request body. Returns the (possibly updated) doc.
+ */
+export async function stampPoliciesTenant(doc: PoliciesDoc, tid: string | undefined): Promise<PoliciesDoc> {
+  if (!tid || doc.tid) return doc;
+  doc.tid = tid;
+  return savePolicies(doc);
+}
 
 /**
- * The oids whose `policies:<oid>` doc may hold Access policies recorded before
- * they became tenant-scoped, for an admin in Entra tenant `tid`.
+ * Every OTHER user's `policies:<oid>` doc in Entra tenant `tid` that still holds
+ * an Access policy recorded before Access policies became tenant-scoped.
  *
- * The `policies:<oid>` doc records no Entra tenant, so tenant membership is
- * taken from the workspaces container: every workspace creator (`tenantId` is
- * the creator's oid) whose workspace is stamped with this `tid`. A user who
- * never created a workspace, or whose workspaces predate the `tid` stamp
- * (scripts/csa-loom/backfill-workspace-tid.mjs), is not found here; that user's
- * pre-existing Access policies stay listed to that user and are not deleted.
+ * One cross-partition query finds the docs holding an Access item — the
+ * enumeration is over the policy documents themselves, so it does not depend on
+ * the author owning anything, and it is not capped. A `policies:<oid>` doc
+ * records no Entra tenant of its own, so each candidate is attributed to `tid`
+ * when EITHER
+ *   - it carries the `tid` stamp its owner's own session wrote
+ *     (`stampPoliciesTenant`, on every policies list since this change), or
+ *   - it is unstamped and its owner created a workspace stamped with `tid`.
+ * A doc stamped with another tenant is never included. An unstamped doc whose
+ * owner has created no `tid`-stamped workspace cannot be attributed and is not
+ * listed until its owner next opens the policies page; nothing is deleted.
  * Returns [] for a tid-less session (the single-operator case, where the only
- * relevant doc is the caller's own). Capped at {@link LEGACY_ACCESS_OWNER_CAP}.
+ * relevant doc is the caller's own).
  */
-export async function listLegacyAccessPolicyOwners(tid: string | undefined): Promise<string[]> {
+export async function listLegacyAccessPolicyDocs(
+  tid: string | undefined,
+  excludeOwner: string,
+): Promise<PoliciesDoc[]> {
   if (!tid) return [];
-  const ws = await workspacesContainer();
-  const { resources } = await ws.items
-    .query<string>({
-      query: 'SELECT DISTINCT VALUE c.tenantId FROM c WHERE c.tid = @tid',
-      parameters: [{ name: '@tid', value: tid }],
+  const settings = await tenantSettingsContainer();
+  const { resources } = await settings.items
+    .query<PoliciesDoc>({
+      query: "SELECT * FROM c WHERE c.kind = 'policies' AND ARRAY_CONTAINS(c.items, @access, true)",
+      parameters: [{ name: '@access', value: { kind: 'Access' } }],
     })
     .fetchAll();
-  return Array.from(new Set((resources || []).filter((x) => typeof x === 'string' && x)))
-    .slice(0, LEGACY_ACCESS_OWNER_CAP);
+  const candidates = (resources || []).filter((d) =>
+    d && d.tenantId && d.tenantId !== excludeOwner && Array.isArray(d.items)
+    && d.items.some((p) => p?.kind === 'Access'));
+  if (candidates.length === 0) return [];
+  const needMembership = candidates.some((d) => !d.tid);
+  let members = new Set<string>();
+  if (needMembership) {
+    const ws = await workspacesContainer();
+    const { resources: owners } = await ws.items
+      .query<string>({
+        query: 'SELECT DISTINCT VALUE c.tenantId FROM c WHERE c.tid = @tid',
+        parameters: [{ name: '@tid', value: tid }],
+      })
+      .fetchAll();
+    members = new Set((owners || []).filter((x) => typeof x === 'string' && x));
+  }
+  return candidates.filter((d) => (d.tid ? sameTenantConfirmed(d.tid, tid) : members.has(d.tenantId)));
 }
 
 export { CosmosNotConfiguredError };

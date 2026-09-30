@@ -69,6 +69,22 @@ function parseCondition(raw: string): Cond {
     return (doc) => doc?.[field] !== undefined && doc?.[field] !== null;
   }
 
+  // ARRAY_CONTAINS(c.field, @param, true) — Cosmos PARTIAL match: true when some
+  // element of the array carries every key/value of the parameter object.
+  m = new RegExp(`^ARRAY_CONTAINS\\(\\s*${IDENT}\\s*,\\s*@([A-Za-z_][A-Za-z0-9_]*)\\s*,\\s*true\\s*\\)$`, 'i').exec(s);
+  if (m) {
+    const [, field, param] = m;
+    return (doc, params) => {
+      if (!(param in params)) {
+        throw new Error(`[cosmos-fake] query references @${param} but no such parameter was supplied`);
+      }
+      const probe = params[param] as Record<string, unknown>;
+      const arr = doc?.[field];
+      return Array.isArray(arr) && arr.some((el) =>
+        el && typeof el === 'object' && Object.entries(probe).every(([k, v]) => (el as any)[k] === v));
+    };
+  }
+
   // (c.a = 'x' OR c.b = 'y') — a parenthesised OR of supported conjuncts.
   if (s.startsWith('(') && s.endsWith(')')) {
     const inner = s.slice(1, -1);

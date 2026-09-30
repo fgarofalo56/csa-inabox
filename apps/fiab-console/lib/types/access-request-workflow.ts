@@ -103,8 +103,18 @@ export interface AccessRequestDoc {
    * from the package definition.
    */
   grantTargets?: AccessRequestGrantTarget[];
-  /** Per-scope outcome of the final-tier grant. */
+  /**
+   * Per-scope grant outcome. Written at the final tier, and also when a
+   * self-serve request's grant landed on some scopes but not all before it
+   * was routed for approval (lib/access/landed-grants.ts). Every `active` entry
+   * that this request `created` is recorded in the entitlement ledger and is
+   * revoked if the request is denied.
+   */
   grantResults?: AccessRequestGrantResult[];
+  /** Grants this request created and a denial revoked (lib/access/landed-grants.ts). */
+  revokedGrants?: AccessRequestGrantResult[];
+  /** Owner recorded on the requested item, when it names one (never from the request body). */
+  ownerUpn?: string;
 }
 
 /** One scope an access request's grant binds to. */
@@ -115,10 +125,16 @@ export interface AccessRequestGrantTarget {
   source?: string;
 }
 
-/** The final-tier grant outcome for one scope. */
+/** The grant outcome for one scope. */
 export interface AccessRequestGrantResult extends AccessRequestEnforcement {
   scopeType: AccessScopeType;
   scopeRef: string;
+  /**
+   * True when this request's grant CREATED the role assignment / membership;
+   * false when the grant found it already in place. Only created grants are
+   * revoked on denial, so access the principal held beforehand is left alone.
+   */
+  created?: boolean;
 }
 
 /** Map a tier to the doc field that records its decision. */

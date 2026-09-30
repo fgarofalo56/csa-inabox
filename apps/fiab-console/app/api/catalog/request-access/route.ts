@@ -16,9 +16,9 @@
  * names WHICH asset and HOW MUCH access is requested — nothing else about the
  * grant is read from it.
  *
- * Body: { assetId, permission?, justification?, ownerUpn? }
- *   (assetName / itemType / accessModel / scopeType / scopeRef are accepted for
- *    compatibility with older callers and ignored.)
+ * Body: { assetId, permission?, justification? }
+ *   (assetName / itemType / accessModel / scopeType / scopeRef / ownerUpn are
+ *    accepted for compatibility with older callers and ignored.)
  * Returns: { ok, message, requestId } | { ok, granted:true, … } | { ok:false, error }
  */
 import { NextResponse } from 'next/server';
@@ -28,11 +28,12 @@ import { isDeviceCodeSession } from '@/lib/auth/device-code-policy';
 import {
   auditLogContainer, notificationsContainer, accessRequestWorkflowContainer,
 } from '@/lib/azure/cosmos-client';
-import type { AccessRequestDoc } from '@/lib/types/access-request-workflow';
+import type { AccessRequestDoc, AccessRequestGrantResult } from '@/lib/types/access-request-workflow';
 import { enforceAccessGrant, type AccessPermission } from '@/lib/azure/access-policy-client';
 import {
-  ASSET_NOT_FOUND, SELF_SERVE_PERMISSION, deriveRequestTargets, resolveRequestableAsset,
+  ASSET_NOT_FOUND, SELF_SERVE_PERMISSION, deriveRequestTargets, ownerOf, resolveRequestableAsset,
 } from '@/lib/access/request-asset';
+import { grantResult, landedGrants, recordLandedGrants } from '@/lib/access/landed-grants';
 import crypto from 'node:crypto';
 import { apiServerError } from '@/lib/api/respond';
 
@@ -51,7 +52,6 @@ export const POST = withSession(async (req, { session: s }) => {
 
   const body = await req.json().catch(() => ({} as any));
   const assetId = String(body?.assetId || '').trim();
-  const ownerUpn = body?.ownerUpn ? String(body.ownerUpn).trim() : '';
   const permission: AccessPermission = PERMS.has(body?.permission) ? body.permission : 'read';
   const justification = String(body?.justification || '').trim().slice(0, 1000);
   if (!assetId) return NextResponse.json({ ok: false, error: 'assetId is required' }, { status: 400 });
@@ -66,6 +66,9 @@ export const POST = withSession(async (req, { session: s }) => {
 
   const assetName = asset.name;
   const itemType = asset.item.itemType;
+  // The owner NAMED on the item (a data product's `state.owner`), never a body
+  // field. It is shown for context only: this route does not message the owner.
+  const ownerUpn = ownerOf(asset.item);
   const targets = deriveRequestTargets(asset.item, permission);
   const { scopeType, scopeRef } = targets[0];
   // Self-serve covers the product's self-serve role only; a request for more
@@ -76,6 +79,11 @@ export const POST = withSession(async (req, { session: s }) => {
 
   const requester = s.claims.upn || s.claims.email || s.claims.oid;
   const now = new Date().toISOString();
+  // Minted up front so a grant that lands before the request is routed for
+  // approval is recorded against the request that will carry it.
+  const requestId = crypto.randomUUID();
+  /** Per-scope results of a self-serve attempt that landed some grants but not all. */
+  let partialResults: AccessRequestGrantResult[] | undefined;
 
   // Self-serve: try to provision a REAL RBAC grant immediately. Needs a concrete
   // scopeRef (the backing container/db/pool) — when present and the grant lands
@@ -85,38 +93,69 @@ export const POST = withSession(async (req, { session: s }) => {
   // decision 2026-09-30): its request takes the governed path instead, so an
   // approver decides and nothing outlives the session unreviewed.
   if (accessModel === 'self-serve' && scopeRef && !isDeviceCodeSession(s)) {
+    const results: AccessRequestGrantResult[] = [];
     try {
-      const grants = [];
       for (const t of targets) {
-        grants.push(await enforceAccessGrant({
+        const r = await enforceAccessGrant({
           principalId: s.claims.oid,
           principalName: requester,
           principalType: 'User',
           scopeType: t.scopeType,
           scopeRef: t.scopeRef,
           permission: SELF_SERVE_PERMISSION,
-        }));
+        });
+        results.push(grantResult(r, t.scopeType, t.scopeRef));
       }
-      if (grants.every((g) => g.status === 'active')) {
-        const roles = grants.map((g, i) => g.roleName || targets[i].scopeType).join(', ');
-        try {
-          const audit = await auditLogContainer();
+    } catch { /* the grants made so far are handled below; the rest go for approval */ }
+    if (results.length === targets.length && results.every((g) => g.status === 'active')) {
+      const roles = results.map((g, i) => g.roleName || targets[i].scopeType).join(', ');
+      try {
+        const audit = await auditLogContainer();
+        await audit.items.create({
+          id: crypto.randomUUID(), itemId: assetId, itemType,
+          action: 'access-granted',
+          summary: `${requester} self-served ${SELF_SERVE_PERMISSION} access to ${assetName} (${roles}).`,
+          upn: requester, at: now,
+        });
+      } catch { /* audit best-effort */ }
+      return NextResponse.json({
+        ok: true,
+        granted: true,
+        accessModel: 'self-serve',
+        permission: SELF_SERVE_PERMISSION,
+        roleAssignmentId: results[0].roleAssignmentId,
+        message: `Self-serve ${SELF_SERVE_PERMISSION} access to "${assetName}" granted immediately (${roles}).`,
+      });
+    }
+    // Some grants may have landed before one did not. They are real role
+    // assignments, so each is audited, recorded in the entitlement ledger and
+    // carried on the request routed below — a denial of that request revokes
+    // the ones it created (lib/access/landed-grants.ts).
+    const landed = landedGrants(results);
+    if (landed.length) {
+      await recordLandedGrants({
+        requestId,
+        requesterId: s.claims.oid,
+        requesterUpn: requester,
+        tenantId: tenantScopeId(s),
+        assetName,
+        permission: SELF_SERVE_PERMISSION,
+        grantedBy: requester,
+      }, results);
+      try {
+        const audit = await auditLogContainer();
+        for (const g of landed) {
           await audit.items.create({
             id: crypto.randomUUID(), itemId: assetId, itemType,
             action: 'access-granted',
-            summary: `${requester} self-served ${SELF_SERVE_PERMISSION} access to ${assetName} (${roles}).`,
+            summary: `${requester} self-served ${SELF_SERVE_PERMISSION} access to ${assetName} on ${g.scopeType} ${g.scopeRef}`
+              + `${g.roleName ? ` (${g.roleName})` : ''}; the remaining scopes were routed for approval (request ${requestId}).`,
             upn: requester, at: now,
           });
-        } catch { /* audit best-effort */ }
-        return NextResponse.json({
-          ok: true,
-          granted: true,
-          permission: SELF_SERVE_PERMISSION,
-          roleAssignmentId: grants[0].roleAssignmentId,
-          message: `Self-serve ${SELF_SERVE_PERMISSION} access to "${assetName}" granted immediately (${roles}).`,
-        });
-      }
-    } catch { /* fall through to governed workflow */ }
+        }
+      } catch { /* audit best-effort */ }
+      partialResults = results;
+    }
   }
 
   try {
@@ -135,18 +174,26 @@ export const POST = withSession(async (req, { session: s }) => {
       at: now,
     });
 
-    // 2) Confirmation notification to the requester (real, oid-keyed).
+    // 2) Confirmation notification to the requester (real, oid-keyed). It says
+    //    only what happened: the request is recorded on the item's activity, and
+    //    — for the governed path — is in the approval inbox. No one else is
+    //    messaged by this route, so the text does not say the owner was.
+    const ownerNote = ownerUpn ? ` The item's owner is ${ownerUpn}.` : '';
+    const partialNote = partialResults
+      ? ` Read access was granted on ${landedGrants(partialResults).length} of ${targets.length} of its storage locations; `
+        + 'the rest need approval.'
+      : '';
     const notifs = await notificationsContainer();
     await notifs.items.create({
       id: crypto.randomUUID(),
       userId: s.claims.oid,
       title: `Access requested: ${assetName}`,
       body:
-        `Your request for ${permission} access to ${assetName} was recorded` +
-        (ownerUpn ? ` and routed to the owner (${ownerUpn}).` : '.') +
+        `Your request for ${permission} access to ${assetName} was recorded in the item's activity.` +
+        partialNote +
         (accessModel === 'request'
-          ? ' The owner provisions access for this asset.'
-          : ' It now awaits manager approval in Governance → Access requests.'),
+          ? ` Access to this asset is provisioned by its owner.${ownerNote}`
+          : ` It now awaits manager approval in Governance → Access requests.${ownerNote}`),
       severity: 'info',
       link: itemType ? `/items/${itemType}/${assetId}` : null,
       read: false,
@@ -155,13 +202,13 @@ export const POST = withSession(async (req, { session: s }) => {
 
     // 3) Approval-workflow row — opened at the MANAGER tier — for the GOVERNED
     //    model (default) and for self-serve that fell through (couldn't auto-grant).
-    //    The 'request' model is notify-only: the owner provisions manually, so we
-    //    deliberately skip the multi-tier workflow row.
+    //    The 'request' model is recorded on the item only: the owner provisions
+    //    access, so we deliberately skip the multi-tier workflow row.
     let savedReqId: string | undefined;
     if (accessModel !== 'request') {
       const arContainer = await accessRequestWorkflowContainer();
       const requestDoc: AccessRequestDoc = {
-        id: crypto.randomUUID(),
+        id: requestId,
         // PARTITION KEY (/tenantId) — the ENTRA TENANT, never the requester's
         // oid. An approver is a DIFFERENT user than the requester, so an
         // oid-keyed partition put every request in a partition no approver
@@ -177,6 +224,8 @@ export const POST = withSession(async (req, { session: s }) => {
         scopeType,
         scopeRef,
         grantTargets: targets.map((t) => ({ scopeType: t.scopeType, scopeRef: t.scopeRef, source: t.source })),
+        ...(partialResults ? { grantResults: partialResults } : {}),
+        ...(ownerUpn ? { ownerUpn } : {}),
         permission,
         justification,
         requesterId: s.claims.oid,
@@ -193,12 +242,13 @@ export const POST = withSession(async (req, { session: s }) => {
       ok: true,
       requestId: savedReqId,
       accessModel,
+      ...(partialResults ? { grantResults: partialResults } : {}),
       message:
         accessModel === 'request'
-          ? `Access request for "${assetName}" recorded${ownerUpn ? ` and the owner (${ownerUpn})` : ' and the owner'} was notified. Provisioning is handled manually by the owner.`
-          : `Access request for "${assetName}" recorded${ownerUpn ? ` and routed to ${ownerUpn}` : ''}. ` +
+          ? `Access request for "${assetName}" recorded on the item's activity. Access to this asset is provisioned by its owner.${ownerNote}`
+          : `Access request for "${assetName}" recorded.${partialNote} ` +
             'It now awaits multi-tier approval (manager → privacy → approver → access provider) ' +
-            'in Governance → Access requests.',
+            `in Governance → Access requests.${ownerNote}`,
     });
   } catch (e: any) {
     return apiServerError(e);

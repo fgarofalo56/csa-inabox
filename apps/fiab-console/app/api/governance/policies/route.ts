@@ -26,9 +26,11 @@
  * ACCESS POLICIES RECORDED BEFORE THE TENANT DOC
  *   Existing Access policies in an author's `policies:<oid>` doc are left where
  *   they are (nothing is moved or deleted). The author still sees them in their
- *   own list; an admin's list also includes them for every workspace creator in
- *   the same Entra tenant (`listLegacyAccessPolicyOwners`), and an admin can edit
- *   or delete them in place.
+ *   own list; an admin's list also includes every such doc attributed to the
+ *   admin's Entra tenant (`listLegacyAccessPolicyDocs`: one query over the
+ *   policy docs, attributed by the doc's own `tid` stamp or its owner's
+ *   workspaces), and an admin can edit or delete them in place. GET stamps the
+ *   caller's own doc with their `tid` so it stays attributable.
  *
  * Route-toolkit: withSession (R1) + an in-handler enforceCapability for the
  * Access kind, whose result is returned when it is a denial.
@@ -42,8 +44,8 @@ import {
   type AccessPermission, type AccessScopeType, type PrincipalType,
 } from '@/lib/azure/access-policy-client';
 import {
-  loadOrSeedPolicies, savePolicies, readPoliciesDoc,
-  readAccessPolicies, saveAccessPolicies, listLegacyAccessPolicyOwners,
+  loadOrSeedPolicies, savePolicies,
+  readAccessPolicies, saveAccessPolicies, listLegacyAccessPolicyDocs, stampPoliciesTenant,
   CosmosNotConfiguredError,
   type Policy, type DlpPolicyRule, type PoliciesDoc, type AccessPoliciesDoc,
 } from '@/lib/governance/policy-store';
@@ -87,14 +89,7 @@ type Located =
   | { where: 'legacy'; doc: PoliciesDoc; ix: number };
 
 async function readLegacyAccessDocs(s: SessionPayload): Promise<PoliciesDoc[]> {
-  const owners = (await listLegacyAccessPolicyOwners(s.claims.tid))
-    .filter((o) => o !== s.claims.oid);
-  const out: PoliciesDoc[] = [];
-  for (let i = 0; i < owners.length; i += 20) {
-    const batch = await Promise.all(owners.slice(i, i + 20).map((o) => readPoliciesDoc(o)));
-    for (const d of batch) if (d && Array.isArray(d.items) && d.items.some((p) => p.kind === 'Access')) out.push(d);
-  }
-  return out;
+  return listLegacyAccessPolicyDocs(s.claims.tid, s.claims.oid);
 }
 
 /**
@@ -164,6 +159,9 @@ function editablePatch(body: any): Partial<Policy> {
 
 export const GET = withSession(async (_req, { session: s }) => {
   try {
+    // Record the caller's tenant on their own policies doc (once), so any
+    // Access policy it still holds is attributable to this tenant for admins.
+    await stampPoliciesTenant(await loadOrSeedPolicies(s.claims.oid), s.claims.tid);
     const v = await listVisible(s);
     return NextResponse.json({
       ok: true, policies: v.policies, canManageAccess: v.canManageAccess,

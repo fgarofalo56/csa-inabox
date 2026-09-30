@@ -13,7 +13,7 @@
  * mocked to 'discoverable' except where a test sets 'denied' — its own rules
  * are covered in lib/dataproducts/__tests__.
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 vi.mock('@/lib/auth/session', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/session')>();
@@ -25,11 +25,16 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
   notificationsContainer: vi.fn(),
   itemsContainer: vi.fn(),
   workspacesContainer: vi.fn(),
+  accessAssignmentsContainer: vi.fn(),
+}));
+vi.mock('@/lib/auth/workspace-guard', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/auth/workspace-guard')>()),
+  authorizeWorkspace: vi.fn(),
 }));
 vi.mock('@/lib/azure/access-policy-client', () => ({ enforceAccessGrant: vi.fn() }));
 vi.mock('@/lib/dataproducts/discoverability', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/dataproducts/discoverability')>();
-  return { ...actual, resolveDiscoveryAccess: vi.fn() };
+  return { ...actual, resolveDiscoveryAccess: vi.fn(), workspaceTid: vi.fn() };
 });
 
 import { POST } from '../request-access/route';
@@ -38,7 +43,9 @@ import {
   accessRequestWorkflowContainer, auditLogContainer, notificationsContainer, itemsContainer,
 } from '@/lib/azure/cosmos-client';
 import { enforceAccessGrant } from '@/lib/azure/access-policy-client';
-import { resolveDiscoveryAccess } from '@/lib/dataproducts/discoverability';
+import { resolveDiscoveryAccess, workspaceTid } from '@/lib/dataproducts/discoverability';
+import { authorizeWorkspace } from '@/lib/auth/workspace-guard';
+import { accessAssignmentsContainer } from '@/lib/azure/cosmos-client';
 import {
   makePartitionedContainer, makeSinkContainer, type FakeContainer,
 } from '@/app/api/access-requests/__tests__/partitioned-cosmos-fake';
@@ -209,5 +216,131 @@ describe('POST /api/catalog/request-access — self-serve', () => {
     expect(res.status).toBe(200);
     expect(j.granted).toBeUndefined();
     expect(wf.__all()).toHaveLength(1);
+  });
+});
+
+// ── Items that are not data products ────────────────────────────────────────────
+
+function storeItem(id: string, itemType: string, state: Record<string, unknown>) {
+  return { id, workspaceId: 'ws-9', itemType, displayName: `Item ${id}`, state };
+}
+
+function seedItems(docs: any[]) {
+  (itemsContainer as any).mockResolvedValue(makePartitionedContainer({ partitionKeyPath: '/workspaceId', seed: docs }));
+}
+
+describe('POST /api/catalog/request-access — a store item is requested on its own store', () => {
+  const prevPool = process.env.LOOM_SYNAPSE_DEDICATED_POOL;
+  beforeEach(() => {
+    (authorizeWorkspace as any).mockResolvedValue(null); // the caller may see the workspace
+    process.env.LOOM_SYNAPSE_DEDICATED_POOL = 'deploymentpool';
+  });
+  afterEach(() => {
+    if (prevPool === undefined) delete process.env.LOOM_SYNAPSE_DEDICATED_POOL;
+    else process.env.LOOM_SYNAPSE_DEDICATED_POOL = prevPool;
+  });
+
+  it.each([
+    // [item, expected scopeType, expected scopeRef]. Each item also carries a
+    // client-writable decoy; a resolver reading it would record the decoy.
+    [storeItem('lh-1', 'lakehouse', { adlsContainer: 'landing', container: 'planted' }), 'adls-container', 'landing'],
+    [storeItem('wh-1', 'warehouse', { dedicatedPool: 'otherpool' }), 'warehouse', 'deploymentpool'],
+    [storeItem('kql-1', 'kql-database', { adxDatabase: 'planteddb', provisioning: { status: 'created', secondaryIds: { database: 'telemetry' } } }), 'kql-database', 'telemetry'],
+  ])('%#: the request records the item store, not an item/workspace scope', async (item: any, scopeType, scopeRef) => {
+    // Breaks on: `deriveRequestTargets` returning `{ scopeType: 'item' }` for every
+    // non-product (a workspace-wide Viewer/Contributor grant at approval).
+    seedItems([item]);
+    const res = await post({ assetId: item.id, permission: 'read', scopeType: 'item', scopeRef: BODY_CONTAINER });
+    expect(res.status).toBe(200);
+    const [doc] = wf.__all();
+    expect(doc.grantTargets.map((t: any) => [t.scopeType, t.scopeRef])).toEqual([[scopeType, scopeRef]]);
+    expect(enforceAccessGrant).not.toHaveBeenCalled(); // non-products are governed
+  });
+
+  it('a lakehouse with no storage recorded keeps its store type with an empty scope, never item scope', async () => {
+    // Breaks on: falling back to `item` (workspace role) for an unbound store item.
+    seedItems([storeItem('lh-2', 'lakehouse', { container: 'planted' })]);
+    const res = await post({ assetId: 'lh-2', permission: 'read' });
+    expect(res.status).toBe(200);
+    expect(wf.__all()[0].grantTargets.map((t: any) => [t.scopeType, t.scopeRef])).toEqual([['adls-container', '']]);
+  });
+
+  it('an item with no physical store is requested at item scope', async () => {
+    // Pairs the store cases: breaks if every item were forced to a store scope.
+    seedItems([storeItem('rep-1', 'report', {})]);
+    const res = await post({ assetId: 'rep-1', permission: 'read' });
+    expect(res.status).toBe(200);
+    expect(wf.__all()[0].grantTargets.map((t: any) => [t.scopeType, t.scopeRef])).toEqual([['item', 'rep-1']]);
+  });
+});
+
+describe('POST /api/catalog/request-access — visibility of an item that is not a data product', () => {
+  const denied = new Response(JSON.stringify({ ok: false }), { status: 404 });
+
+  it('404, and no request filed, for a workspace the caller has no role in and another tenant owns', async () => {
+    // Breaks on: dropping the workspace/tenant check for non-products (→ 200 + a request doc).
+    seedItems([storeItem('lh-x', 'lakehouse', { adlsContainer: 'landing' })]);
+    (authorizeWorkspace as any).mockResolvedValue(denied);
+    (workspaceTid as any).mockResolvedValue('other-tenant-tid');
+    const res = await post({ assetId: 'lh-x', permission: 'read' });
+    expect(res.status).toBe(404);
+    expect(wf.__all()).toHaveLength(0);
+  });
+
+  it('200 for the same item when its workspace is confirmed in the caller\'s own tenant', async () => {
+    // The positive pair: breaks if the check refused same-tenant items too.
+    seedItems([storeItem('lh-x', 'lakehouse', { adlsContainer: 'landing' })]);
+    (authorizeWorkspace as any).mockResolvedValue(denied);
+    (workspaceTid as any).mockResolvedValue(TENANT);
+    const res = await post({ assetId: 'lh-x', permission: 'read' });
+    expect(res.status).toBe(200);
+    expect(wf.__all()).toHaveLength(1);
+  });
+});
+
+describe('POST /api/catalog/request-access — a self-serve grant that lands on some scopes but not all', () => {
+  it('records the landed grant in the ledger and on the request, which goes for approval', async () => {
+    // Breaks on: the landed grant left unrecorded (0 ledger rows, no grantResults on
+    // the request) — which is what lets a later denial revoke it.
+    seedItems([product('self-2', { accessModel: 'self-serve', ports: { output: [
+      { name: 'gold-out', kind: 'adls', ref: 'gold' }, { name: 'silver-out', kind: 'adls', ref: 'silver' },
+    ] } })]);
+    const assignments = makePartitionedContainer({ partitionKeyPath: '/principalId' });
+    (accessAssignmentsContainer as any).mockResolvedValue(assignments);
+    (enforceAccessGrant as any)
+      .mockResolvedValueOnce({ status: 'active', roleName: 'Storage Blob Data Reader', roleAssignmentId: 'ra-gold' })
+      .mockResolvedValueOnce({ status: 'error', detail: 'ARM 403 on silver' });
+
+    const res = await post({ assetId: 'self-2', permission: 'read' });
+    const j = await res.json();
+    expect(res.status).toBe(200);
+    expect(j.granted).toBeUndefined();
+    const [doc] = wf.__all();
+    expect(doc.id).toBe(j.requestId);
+    expect(doc.grantResults.map((r: any) => [r.scopeRef, r.status, r.created])).toEqual([
+      ['gold', 'active', true], ['silver', 'error', false],
+    ]);
+    expect(assignments.__all().map((r: any) => [r.resourceRef, r.roleAssignmentId, r.sourceRef])).toEqual([
+      ['gold', 'ra-gold', doc.id],
+    ]);
+    expect(j.message).toMatch(/granted on 1 of 2/);
+  });
+});
+
+describe('POST /api/catalog/request-access — the owner named in the text', () => {
+  it('comes from the product, never the body, and nothing claims the owner was notified', async () => {
+    // Breaks on: reading `body.ownerUpn` ('mallory@…' would appear), or a message that
+    // says "notified" / "routed to" when no message to the owner is sent.
+    seedItems([product('gov-o', { owner: 'owner@contoso.com' })]);
+    const notes = makeSinkContainer();
+    (notificationsContainer as any).mockResolvedValue(notes);
+    const res = await post({ assetId: 'gov-o', permission: 'read', ownerUpn: 'mallory@evil.test' });
+    const j = await res.json();
+    expect(res.status).toBe(200);
+    const text = `${j.message} ${notes.__writes.map((w: any) => w.body).join(' ')}`;
+    expect(text).toContain('owner@contoso.com');
+    expect(text).not.toContain('mallory@evil.test');
+    expect(text).not.toMatch(/notified|routed to/i);
+    expect(wf.__all()[0].ownerUpn).toBe('owner@contoso.com');
   });
 });

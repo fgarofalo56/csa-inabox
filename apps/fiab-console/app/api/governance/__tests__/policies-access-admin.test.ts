@@ -232,3 +232,72 @@ describe('GET — listing', () => {
     expect(ids).toEqual(expect.arrayContaining(['own-legacy-ap', 'tenant-ap', 'other-legacy-ap']));
   });
 });
+
+// ── Access policies recorded before the tenant doc: how an admin finds them ────
+
+function addLegacyDoc(owner: string, apId: string, extra: Record<string, unknown> = {}) {
+  return settings.items.create({
+    id: `policies:${owner}`, tenantId: owner, kind: 'policies', seededDefaults: [],
+    items: [accessPolicy(apId)], updatedAt: 'x', ...extra,
+  });
+}
+function workspaceOwners(owners: string[]) {
+  (workspacesContainer as any).mockResolvedValue({
+    items: { query: () => ({ fetchAll: async () => ({ resources: owners }) }) },
+  });
+}
+async function listedIds(): Promise<string[]> {
+  const res = await GET(jsonReq({}), CTX);
+  return (await res.json()).policies.map((p: any) => p.id);
+}
+
+describe('GET — earlier Access policies are found from the policy docs themselves', () => {
+  beforeEach(() => { admin = true; });
+
+  it('a doc stamped with this tenant is listed even when its owner owns no workspace, and an admin can edit it', async () => {
+    // Breaks on: discovering owners only through workspace ownership (the stamped
+    // owner below owns none → not listed, and the PUT 404s).
+    await addLegacyDoc('no-ws-oid', 'stamped-ap', { tid: TENANT });
+    workspaceOwners([USER.oid, OTHER]);
+    expect(await listedIds()).toContain('stamped-ap');
+    const put = await PUT(jsonReq({ id: 'stamped-ap', name: 'renamed by admin' }), CTX);
+    expect(put.status).toBe(200);
+    expect(docById('policies:no-ws-oid').items[0].name).toBe('renamed by admin');
+  });
+
+  it('a doc stamped with ANOTHER tenant is never listed, even if its owner has a workspace here', async () => {
+    // Breaks on: letting workspace membership override a doc's own tenant stamp.
+    await addLegacyDoc('foreign-oid', 'foreign-ap', { tid: 'other-tenant-tid' });
+    workspaceOwners([USER.oid, OTHER, 'foreign-oid']);
+    const ids = await listedIds();
+    expect(ids).not.toContain('foreign-ap');
+    expect(ids).toContain('other-legacy-ap'); // positive control in the same list
+  });
+
+  it('an unstamped doc whose owner has no workspace in this tenant is not listed', async () => {
+    // Breaks on: listing every Access-holding doc in the container regardless of tenant.
+    await addLegacyDoc('stranger-oid', 'stranger-ap');
+    workspaceOwners([USER.oid, OTHER]);
+    const ids = await listedIds();
+    expect(ids).not.toContain('stranger-ap');
+    expect(ids).toContain('other-legacy-ap');
+  });
+
+  it('is not capped: 250 earlier owners are all listed', async () => {
+    // Breaks on: a silent cap (the previous 200-owner slice listed 200 of 250).
+    const owners = Array.from({ length: 250 }, (_, i) => `legacy-${i}`);
+    for (const o of owners) await addLegacyDoc(o, `ap-${o}`);
+    workspaceOwners([USER.oid, OTHER, ...owners]);
+    const ids = await listedIds();
+    expect(owners.filter((o) => ids.includes(`ap-${o}`))).toHaveLength(250);
+  });
+
+  it("GET stamps the caller's own doc with their tenant, once", async () => {
+    // Breaks on: dropping the stamp (the caller's own earlier Access policies would
+    // stay findable only through workspace ownership).
+    admin = false;
+    expect(docById(`policies:${USER.oid}`).tid).toBeUndefined();
+    await GET(jsonReq({}), CTX);
+    expect(docById(`policies:${USER.oid}`).tid).toBe(TENANT);
+  });
+});

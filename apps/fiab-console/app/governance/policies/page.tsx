@@ -70,6 +70,19 @@ const ACCESS_ADMIN_REASON =
   'Access policies are managed by tenant admins. Ask a tenant admin to add or change one, or request ' +
   'access to a data product from the catalog.';
 
+/**
+ * The text for a failed policy write. A 403 from the Access-policy gate carries
+ * `reason` + `remediation` (lib/auth/feature-gate `enforceCapability`) under
+ * `error: 'forbidden'`, so those are shown rather than the bare token; anything
+ * else reads as `refusalText` does.
+ */
+function policyErrorText(j: any, status: number): string {
+  if (status === 403 && (j?.reason || j?.remediation)) {
+    return [j.reason, j.remediation].filter((x: unknown) => typeof x === 'string' && x.trim()).join(' ');
+  }
+  return refusalText(j, status);
+}
+
 const useStyles = makeStyles({
   empty: { padding: tokens.spacingVerticalXXL, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, textAlign: 'center' },
   rule: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, maxWidth: '360px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
@@ -507,7 +520,7 @@ export default function PoliciesPage() {
         body: JSON.stringify(body),
       });
       const j = await r.json();
-      if (!j.ok) { setActionErr(j.error || `HTTP ${r.status}`); if (j.policies) setPolicies(j.policies); return; }
+      if (!j.ok) { setActionErr(policyErrorText(j, r.status)); if (j.policies) setPolicies(j.policies); return; }
       setPolicies(j.policies);
       setOpen(false);
       setDraftName(''); setScopeType('tenant'); setScopeTarget('');
@@ -525,7 +538,7 @@ export default function PoliciesPage() {
       });
       const j = await r.json();
       if (j.ok) setPolicies(j.policies);
-      else setActionErr(j.error);
+      else setActionErr(policyErrorText(j, r.status));
     } catch (e: any) { setActionErr(e?.message || String(e)); }
   }
 
@@ -535,7 +548,7 @@ export default function PoliciesPage() {
       const r = await clientFetch(`/api/governance/policies?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
       const j = await r.json();
       if (j.ok) setPolicies(j.policies);
-      else setActionErr(j.error);
+      else setActionErr(policyErrorText(j, r.status));
     } catch (e: any) { setActionErr(e?.message || String(e)); }
   }
 
@@ -593,7 +606,15 @@ export default function PoliciesPage() {
           aria-label={locked ? `${p.name}: access policies are managed by tenant admins` : `Enable ${p.name}`} />;
         return (
           <span onClick={(e) => e.stopPropagation()}>
-            {locked ? <Tooltip relationship="description" content={ACCESS_ADMIN_REASON}>{sw}</Tooltip> : sw}
+            {/* A disabled Switch takes no focus, so the reason sits on a focusable
+                wrapper: keyboard users reach it the same way pointer users do. */}
+            {locked
+              ? (
+                <Tooltip relationship="description" content={ACCESS_ADMIN_REASON}>
+                  <span tabIndex={0} data-testid={`access-row-locked-${p.id}`}>{sw}</span>
+                </Tooltip>
+              )
+              : sw}
           </span>
         );
       },
@@ -849,6 +870,16 @@ export default function PoliciesPage() {
       {!loading && !error && !cosmosGate && (policies?.length ?? 0) === 0 && (
         <div className={s.empty}>
           No policies defined yet. Click <strong>New policy</strong> to add your first DLP, masking, RLS, retention, or access rule.
+        </div>
+      )}
+
+      {!error && accessLocked && (policies || []).some((p) => p.kind === 'Access') && (
+        <div style={{ marginBottom: tokens.spacingVerticalM }}>
+          <AdminOnlyNotice
+            title="Access policies are read-only for you"
+            reason={ACCESS_ADMIN_REASON}
+            remediation="DLP, Masking, RLS and Retention policies stay editable."
+          />
         </div>
       )}
 

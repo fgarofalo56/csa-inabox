@@ -23,7 +23,7 @@ vi.mock('@/lib/azure/resource-graph-coords', () => ({
   discoverResourceCoordsByName: (...args: unknown[]) => discover(...args),
 }));
 
-import { armScopeSegment, assertContainerRoleAssignmentId, ArmScopeSegmentError } from '../arm-scope-segment';
+import { armScopeSegment, assertContainerRoleAssignmentId, ArmScopeSegmentError, containerSegment } from '../arm-scope-segment';
 
 const SUB = '00000000-0000-0000-0000-0000000000ff';
 const RG = 'rg-test';
@@ -70,6 +70,36 @@ describe('armScopeSegment', () => {
   it('percent-encodes a segment it accepts', () => {
     // Breaks if encoding is dropped: '$web' would be returned raw, not '%24web'.
     expect(armScopeSegment('$web', 'container')).toBe('%24web');
+  });
+});
+
+describe('containerSegment — Azure container names only', () => {
+  it.each([
+    ['Bronze', 'uppercase'],
+    ['ab', 'shorter than 3'],
+    ['a'.repeat(64), 'longer than 63'],
+    ['-bronze', 'leading hyphen'],
+    ['bronze-', 'trailing hyphen'],
+    ['bro--nze', 'consecutive hyphens'],
+    ['bro_nze', 'underscore'],
+    ['bro.nze', 'dot'],
+    ['$other', 'unknown system name'],
+    ['..', 'relative segment'],
+  ])('refuses %j (%s)', (value) => {
+    // Breaks if the container-name rule is dropped: each of these passes armScopeSegment.
+    expect(() => containerSegment(value)).toThrow(ArmScopeSegmentError);
+  });
+
+  it.each([['bronze-01', 'bronze-01'], ['abc', 'abc'], ['a'.repeat(63), 'a'.repeat(63)], ['$web', '%24web'], ['$root', '%24root'], ['$logs', '%24logs']])(
+    'accepts %j', (value, encoded) => {
+      // Breaks if the rule over-refuses (a valid name or a system container throws).
+      expect(containerSegment(value)).toBe(encoded);
+    },
+  );
+
+  it('assertContainerRoleAssignmentId applies it to the container in the id', () => {
+    // Breaks if the id check uses the generic segment rule: 'Bronze' passes that.
+    expect(() => assertContainerRoleAssignmentId(containerRaId('Bronze'), ACCOUNT)).toThrow(/not a storage container name/);
   });
 });
 
