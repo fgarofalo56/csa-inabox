@@ -42,15 +42,21 @@ import { fileURLToPath } from 'node:url';
 
 import { readLogicalLines } from '../_logical-lines.mjs';
 import {
+  LEASE_SIGNAL_ID,
   TIMEOUT_MARGIN_SECONDS,
+  TIMEOUT_SIGNAL_ID,
   cliMain,
   describeUnacquired,
+  interruptedSteps,
   leaseDeadline,
   notifyResult,
   parseLeaseStatus,
+  redispatchCommand,
   remainingWaitMinutes,
   selfOwner,
+  timeoutFailure,
 } from '../roll-lease-budget.mjs';
+import { classify, TAXONOMY } from '../deploy-classify.mjs';
 import { buildIssueBody } from '../../../.github/scripts/deploy-notify-failure.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -233,11 +239,28 @@ test('BUDGET: the deadline is written ONCE, by the resolve step, from the job-le
   const run = stepRun(RESOLVE_STEP);
   assert.match(run, /ROLL_LEASE_DEADLINE=\$\(node scripts\/ci\/roll-lease-budget\.mjs deadline --budget-minutes "\$LOOM_ROLL_LEASE_BUDGET_MINUTES"\)/);
   assert.match(run, /echo "ROLL_LEASE_DEADLINE=\$ROLL_LEASE_DEADLINE" >> "\$GITHUB_ENV"/);
-  assert.match(run, /echo "ROLL_JOB_STARTED=\$\(date -u \+%s\)" >> "\$GITHUB_ENV"/);
   // Nothing else may reset the deadline — a second writer would hand later steps
   // a fresh budget and the sum would be unbounded again.
   const writers = wf().split('\n').filter((l) => /ROLL_LEASE_DEADLINE=.*GITHUB_ENV/.test(l));
   assert.equal(writers.length, 1, `ROLL_LEASE_DEADLINE is written ${writers.length} times:\n${writers.join('\n')}`);
+});
+
+test('TIMING: ROLL_JOB_STARTED is written ONCE, by the job\'s FIRST step, ahead of checkout and setup-node', () => {
+  // Breaks on: moving the write back into the resolve step (or anywhere after
+  // checkout) — slow setup then shrinks the elapsed time the timeout notifier
+  // measures, and a real timeout can fall under the margin and go quiet.
+  const lines = wf().split('\n');
+  const stepsAt = lines.findIndex((l) => /^ {4}steps:\s*$/.test(l));
+  assert.ok(stepsAt >= 0, 'no job-level steps: block');
+  const firstStep = lines.slice(stepsAt + 1).find((l) => /^ {6}- /.test(l));
+  assert.equal(firstStep?.trim(), '- name: Record the job start', `the first step is ${JSON.stringify(firstStep)}`);
+  assert.match(stepText('Record the job start'), /run: echo "ROLL_JOB_STARTED=\$\(date -u \+%s\)" >> "\$GITHUB_ENV"/);
+  const writers = lines.filter((l) => /ROLL_JOB_STARTED=.*GITHUB_ENV/.test(l));
+  assert.equal(writers.length, 1, `ROLL_JOB_STARTED is written ${writers.length} times:\n${writers.join('\n')}`);
+  assert.ok(
+    lines.indexOf(writers[0]) < lines.findIndex((l) => /uses: actions\/checkout@/.test(l)),
+    'ROLL_JOB_STARTED is written after checkout',
+  );
 });
 
 test('BUDGET: the helper waits `wait_min * 60` seconds — the unit this module computes in', () => {
@@ -354,6 +377,9 @@ test('VISIBILITY: the timeout notifier files through the chokepoint with a GENUI
   const text = stepText(NOTIFY_CANCEL_STEP);
   assert.match(text, /node \.github\/scripts\/deploy-notify-failure\.mjs/);
   assert.match(text, /--workflow loom-dataplane-roll --result timed_out --failure-json deploy-failure\.json/);
+  // The notifier renders the file notify-result writes: the SAME path, and the
+  // write comes first (the EXECUTED tests below prove the order by running it).
+  assert.match(stepRun(NOTIFY_CANCEL_STEP), /roll-lease-budget\.mjs notify-result [\s\S]*?--out deploy-failure\.json\)/);
   assert.match(text, /^\s+GH_TOKEN:\s*\$\{\{\s*secrets\.GITHUB_TOKEN\s*\}\}\s*$/m);
   assert.match(text, /^\s+JOB_STATUS:\s*\$\{\{\s*job\.status\s*\}\}\s*$/m);
   // The step's copy of the limit MUST equal the job's. Breaks on changing either
@@ -369,9 +395,11 @@ test('VISIBILITY: the timeout notifier files through the chokepoint with a GENUI
 test('notifyResult: a cancel at the limit is timed_out; an earlier one stays cancelled; others pass through', () => {
   const started = 1_800_000_000;
   const at = (s) => notifyResult({ jobStatus: 'cancelled', startedEpoch: started, nowEpoch: started + s, timeoutMinutes: 45 });
-  // Run 36665140502: job 03:36:32 -> killed 04:21:45; ROLL_JOB_STARTED is written
-  // 9s after job start, so the notifier would observe ~45m04s.
+  // Run 36665140502: job 03:36:32 -> killed 04:21:45, i.e. 2713s. ROLL_JOB_STARTED
+  // is now written by the job's first step, a few seconds after the job starts,
+  // so the notifier observes about 45m04s-45m13s — OVER the limit, not under.
   assert.equal(at(45 * 60 + 4).result, 'timed_out');
+  assert.equal(at(45 * 60 + 13).result, 'timed_out');
   assert.equal(at(45 * 60 - TIMEOUT_MARGIN_SECONDS).result, 'timed_out', 'the margin boundary is inclusive');
   assert.equal(at(45 * 60 - TIMEOUT_MARGIN_SECONDS - 1).result, 'cancelled', 'one second earlier is a person, not the limit');
   assert.equal(at(600).result, 'cancelled');
@@ -394,11 +422,29 @@ test('notifyResult: a cancel at the limit is timed_out; an earlier one stays can
 const bashAvailable = spawnSync('bash', ['-c', 'exit 0']).status === 0;
 const posix = (p) => p.replace(/\\/g, '/').replace(/^([A-Za-z]):/, (_m, d) => `/${d.toLowerCase()}`);
 
-const NOTIFIER_STUB = `import { appendFileSync } from 'node:fs';
-appendFileSync(process.env.NOTIFY_LOG, process.argv.slice(2).join(' ') + '\\n');
+// The stub records its argv AND a copy of the --failure-json file as it stood
+// at the moment of the call — so a test can render exactly what the real
+// notifier would have been handed, through the REAL buildIssueBody.
+const NOTIFIER_STUB = `import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+const argv = process.argv.slice(2);
+appendFileSync(process.env.NOTIFY_LOG, argv.join(' ') + '\\n');
+const i = argv.indexOf('--failure-json');
+const f = i === -1 ? null : argv[i + 1];
+writeFileSync(process.env.NOTIFY_ARTIFACT, f && existsSync(f) ? readFileSync(f, 'utf8') : '<none>');
 `;
 
-function runCancelNotifier({ jobStatus, elapsedSeconds }) {
+/** A pin-retag failure an EARLIER step left behind — not the cause of a timeout. */
+const STALE_ARTIFACT = {
+  schemaVersion: 1,
+  step: 'pin loom-unity:v0.1',
+  command: 'az acr import',
+  class: 'unknown',
+  signalId: null,
+  retryable: false,
+  whyStopped: 'STALE-ARTIFACT-FROM-AN-EARLIER-STEP',
+};
+
+function runCancelNotifier({ jobStatus, elapsedSeconds, seedArtifact = null, stepOutcomes = '', resolved = true }) {
   const dir = mkdtempSync(join(tmpdir(), 'roll-lease-budget-'));
   mkdirSync(join(dir, 'scripts', 'ci'), { recursive: true });
   mkdirSync(join(dir, '.github', 'scripts'), { recursive: true });
@@ -408,23 +454,33 @@ function runCancelNotifier({ jobStatus, elapsedSeconds }) {
       readFileSync(join(REPO_ROOT, 'scripts', 'ci', f), 'utf8'), 'utf8');
   }
   writeFileSync(join(dir, '.github', 'scripts', 'deploy-notify-failure.mjs'), NOTIFIER_STUB, 'utf8');
+  if (seedArtifact) writeFileSync(join(dir, 'deploy-failure.json'), JSON.stringify(seedArtifact), 'utf8');
   const log = join(dir, 'notify.log');
+  const handed = join(dir, 'handed.json');
   writeFileSync(log, '', 'utf8');
   const script = join(dir, 'step.sh');
   writeFileSync(script, stepRun(NOTIFY_CANCEL_STEP), 'utf8');
   const now = Math.floor(Date.now() / 1000);
-  const r = spawnSync('bash', [script], {
-    cwd: dir,
-    encoding: 'utf8',
-    env: {
-      ...process.env,
-      NOTIFY_LOG: posix(log),
-      JOB_STATUS: jobStatus,
-      ROLL_JOB_STARTED: String(now - elapsedSeconds),
-      ROLL_JOB_TIMEOUT_MINUTES: String(jobTimeoutMinutes()),
-    },
-  });
-  return { status: r.status, out: `${r.stdout}${r.stderr}`, calls: readFileSync(log, 'utf8').split('\n').filter(Boolean) };
+  const env = {
+    ...process.env,
+    NOTIFY_LOG: posix(log),
+    NOTIFY_ARTIFACT: posix(handed),
+    JOB_STATUS: jobStatus,
+    ROLL_JOB_STARTED: String(now - elapsedSeconds),
+    ROLL_JOB_TIMEOUT_MINUTES: String(jobTimeoutMinutes()),
+    STEP_OUTCOMES: stepOutcomes,
+  };
+  // What the resolve step exports to $GITHUB_ENV; absent when it never ran.
+  if (resolved) Object.assign(env, { BOUNDARY: 'commercial', TAG: 'abc1234', APPS: 'all' });
+  else for (const k of ['BOUNDARY', 'TAG', 'APPS']) delete env[k];
+  const r = spawnSync('bash', [script], { cwd: dir, encoding: 'utf8', env });
+  return {
+    status: r.status,
+    out: `${r.stdout}${r.stderr}`,
+    calls: readFileSync(log, 'utf8').split('\n').filter(Boolean),
+    handed: existsSync(handed) ? readFileSync(handed, 'utf8') : null,
+    onDisk: existsSync(join(dir, 'deploy-failure.json')) ? readFileSync(join(dir, 'deploy-failure.json'), 'utf8') : null,
+  };
 }
 
 test('EXECUTED: a cancel at the time limit FILES, as timed_out', { skip: !bashAvailable }, () => {
@@ -435,11 +491,144 @@ test('EXECUTED: a cancel at the time limit FILES, as timed_out', { skip: !bashAv
   assert.match(r.out, /::error::.*timeout-minutes limit/);
 });
 
-test('EXECUTED: an early cancel (a person) files NOTHING and says why', { skip: !bashAvailable }, () => {
-  const r = runCancelNotifier({ jobStatus: 'cancelled', elapsedSeconds: 600 });
+test('EXECUTED + REAL RENDER: the issue a timeout files SAYS it timed out, over a STALE artifact, and blames no retry harness', { skip: !bashAvailable }, () => {
+  // Breaks on: dropping `--out deploy-failure.json` from the notify-result call
+  // (the notifier is then handed the stale pin artifact — or none, whose text
+  // says the step "did not run through deploy-retry.mjs"), or writing the
+  // artifact only when none exists (the stale one survives).
+  const r = runCancelNotifier({
+    jobStatus: 'cancelled',
+    elapsedSeconds: jobTimeoutMinutes() * 60 + 9,
+    seedArtifact: STALE_ARTIFACT,
+    stepOutcomes: 'resolve=success plan=success preflight=success roll=success health=success verify=success digest=success pin=cancelled',
+  });
+  assert.equal(r.status, 0, r.out);
+  assert.equal(r.calls.length, 1, r.out);
+  assert.notEqual(r.handed, '<none>', 'the notifier was handed NO artifact');
+  assert.doesNotMatch(r.handed, /STALE-ARTIFACT-FROM-AN-EARLIER-STEP/, 'the notifier was handed the STALE artifact an earlier step left');
+  const failure = JSON.parse(r.handed);
+  assert.equal(failure.signalId, TIMEOUT_SIGNAL_ID);
+  assert.equal(failure.step, 'pin', 'the interrupted step id is not named');
+
+  const body = buildIssueBody({ workflow: 'loom-dataplane-roll', runId: '1', sha: 'abc', failure });
+  // POSITIVE: it says it timed out, at which limit, where, and how to re-run.
+  assert.match(body, new RegExp(`reached its ${jobTimeoutMinutes()}-minute timeout-minutes limit`));
+  assert.match(body, /step id 'pin' reported `cancelled`/);
+  assert.match(body, /\*\*Classification: transient\*\* \(`transient\.job-exceeded-timeout-minutes`\)/);
+  assert.match(body, /gh workflow run loom-dataplane-roll\.yml -f boundary=commercial -f tag=abc1234 -f apps=all/);
+  assert.match(body, /NOT established by this record/);
+  // ABSENT: the no-artifact text, whose cause and remedy are false here.
+  assert.doesNotMatch(body, /did not run through/);
+  assert.doesNotMatch(body, /Wiring that step through the retry harness is the fix/);
+  assert.doesNotMatch(body, /No classification was captured/);
+});
+
+test('EXECUTED: a timeout before resolve ran names no command it cannot state, and no step', { skip: !bashAvailable }, () => {
+  const r = runCancelNotifier({ jobStatus: 'cancelled', elapsedSeconds: jobTimeoutMinutes() * 60 + 2, resolved: false });
+  assert.equal(r.status, 0, r.out);
+  const failure = JSON.parse(r.handed);
+  assert.equal(failure.step, 'unidentified');
+  assert.match(failure.remediation, /cannot be stated exactly/);
+  assert.doesNotMatch(failure.remediation, /gh workflow run/, 'a re-dispatch command was guessed without a boundary and tag');
+});
+
+test('EXECUTED: an early cancel (a person) files NOTHING, says why, and leaves any artifact alone', { skip: !bashAvailable }, () => {
+  const r = runCancelNotifier({ jobStatus: 'cancelled', elapsedSeconds: 600, seedArtifact: STALE_ARTIFACT });
   assert.equal(r.status, 0, r.out);
   assert.deepEqual(r.calls, [], `a person's cancel was filed as a deploy failure (#3368):\n${r.out}`);
   assert.match(r.out, /::notice::.*before its \d+-minute limit/);
+  assert.deepEqual(JSON.parse(r.onDisk), STALE_ARTIFACT, 'a non-timeout cancel rewrote deploy-failure.json');
+});
+
+// ── The timeout artifact, unit level ─────────────────────────────────────────
+
+test('interruptedSteps: only ids whose outcome is `cancelled`, from the env list the workflow builds', () => {
+  assert.deepEqual(interruptedSteps('resolve=success roll=cancelled pin='), ['roll']);
+  assert.deepEqual(interruptedSteps('a=cancelled,b=skipped c=cancelled'), ['a', 'c']);
+  assert.deepEqual(interruptedSteps(''), []);
+  assert.deepEqual(interruptedSteps('pin=skipped digest=success'), [], 'skipped is not interrupted');
+});
+
+test('the workflow hands notify-result EVERY step id it has, so the interrupted one can be named', () => {
+  // Row set: a new `id:` added to the job must be added to STEP_OUTCOMES, or a
+  // timeout in that step is reported as "unidentified". Lifted from the file.
+  const ids = [...wf().matchAll(/^ {8}id: ([A-Za-z0-9_-]+)\s*$/gm)].map((m) => m[1]).sort();
+  const text = stepText(NOTIFY_CANCEL_STEP);
+  const listed = [...text.matchAll(/([A-Za-z0-9_-]+)=\$\{\{ steps\.([A-Za-z0-9_-]+)\.outcome \}\}/g)];
+  for (const [, k, id] of listed) assert.equal(k, id, `STEP_OUTCOMES labels steps.${id} as '${k}'`);
+  assert.deepEqual(listed.map((m) => m[2]).sort(), ids);
+});
+
+test('timeoutFailure: states the limit and elapsed it measured, and NOT a cause it did not', () => {
+  const f = timeoutFailure({ elapsedSeconds: 2713, limitMinutes: 45, interrupted: ['pin'], boundary: 'il5', tag: 'deadbeef', apps: 'loom-unity,iceberg-catalog' });
+  assert.equal(f.class, 'transient');
+  assert.equal(f.signalId, TIMEOUT_SIGNAL_ID);
+  assert.equal(f.remediationKind, 'operator-action');
+  assert.match(f.whyStopped, /cancelled 2713s after it started/);
+  assert.match(f.established[0].line, /limit is 45 \(2700s\)/);
+  assert.match(f.remediation, /gh workflow run loom-dataplane-roll\.yml -f boundary=il5 -f tag=deadbeef -f apps=loom-unity,iceberg-catalog/);
+  assert.match(f.remediation, /Roll back on failure` is gated on failure\(\) and did not run/);
+  assert.doesNotMatch(f.whyStopped, /lease/i, 'a timeout record asserted the lease as its cause');
+});
+
+test('redispatchCommand: exact for validated values, null (never guessed) otherwise, quotes odd apps', () => {
+  assert.equal(redispatchCommand({ boundary: 'gcc-high', tag: 'v1.2', apps: 'all' }),
+    'gh workflow run loom-dataplane-roll.yml -f boundary=gcc-high -f tag=v1.2 -f apps=all');
+  assert.equal(redispatchCommand({ boundary: 'commercial', tag: 'abc', apps: '' }),
+    'gh workflow run loom-dataplane-roll.yml -f boundary=commercial -f tag=abc -f apps=all');
+  assert.equal(redispatchCommand({ boundary: '', tag: 'abc' }), null);
+  assert.equal(redispatchCommand({ boundary: 'gcc', tag: 'abc' }), null, 'gcc is not a boundary this lane offers');
+  assert.equal(redispatchCommand({ boundary: 'il5', tag: 'a b' }), null);
+  assert.equal(redispatchCommand({ boundary: 'il5', tag: 'abc', apps: "x y'z" }),
+    "gh workflow run loom-dataplane-roll.yml -f boundary=il5 -f tag=abc -f apps='x y'\\''z'");
+});
+
+// ── The taxonomy registration ─────────────────────────────────────────────────
+
+test('TAXONOMY: both signal ids this module writes are REGISTERED, in <class>.<name> form, with the class written', () => {
+  // Breaks on: an unregistered id (the #4830 round-1 `acr-lease.held-past-roll-budget`),
+  // or a registered class that differs from the artifact's.
+  const lease = describeUnacquired({
+    status: { readable: true, owner: 'other', url: 'u', state: 'live', remainingSeconds: 60 },
+    self: 'me', step: 's', acr: 'a', waitMinutes: 0, budgetMinutes: 20,
+  }).failure;
+  const timeout = timeoutFailure({ elapsedSeconds: 2700, limitMinutes: 45, interrupted: [] });
+  for (const f of [lease, timeout]) {
+    const s = TAXONOMY.signals.find((x) => x.id === f.signalId);
+    assert.ok(s, `${f.signalId} is not in failure-taxonomy.json`);
+    assert.equal(s.class, f.class, `${f.signalId}: taxonomy class ${s.class} != artifact class ${f.class}`);
+    assert.ok(f.signalId.startsWith(`${f.class}.`), `${f.signalId} breaks the <class>.<name> form`);
+    assert.ok(TAXONOMY.remediationKinds[f.remediationKind], `${f.remediationKind} is not a registered remediation kind`);
+    assert.equal(s.remediationKind, f.remediationKind);
+  }
+  assert.deepEqual([lease.signalId, timeout.signalId], [LEASE_SIGNAL_ID, TIMEOUT_SIGNAL_ID]);
+});
+
+/** The helper's give-up line, lifted from its source and filled in. */
+function helperTimedOutLine() {
+  const m = helper().match(/_lease_err "(TIMED OUT after \$\{wait_min\}m waiting for the ACR firewall lease[^"]*)"/);
+  assert.ok(m, 'the helper no longer prints its TIMED OUT give-up line');
+  return m[1]
+    .replace(/\$\{wait_min\}/g, '0')
+    .replace(/\$_LEASE_ACR/g, 'acrloomtest')
+    .replace(/\$\{owner:-none\}/g, BUILD_OWNER)
+    .replace(/\$holder_url/g, BUILD_URL);
+}
+
+test('TAXONOMY: the classifier selects the lease signal for the roll\'s LIVE output, and NOT for the helper line alone', () => {
+  // Lifted, not transcribed: the helper's line from its source, the roll's line
+  // from the real describeUnacquired. Breaks on: widening the signal to the bare
+  // helper line (the il5 redeploy-gov.sh path would start retrying a lease
+  // timeout), or rewording the roll message so it no longer carries the
+  // discriminating phrase.
+  const line = helperTimedOutLine();
+  const roll = describe(statusText({ pna: 'Enabled', owner: BUILD_OWNER, url: BUILD_URL, state: { kind: 'live', seconds: 60 } })).message;
+  const both = classify(`${line}\n${roll}`);
+  assert.equal(both.signalId, LEASE_SIGNAL_ID);
+  assert.equal(both.class, 'transient');
+  const alone = classify(line);
+  assert.equal(alone.class, 'unknown', `the bare helper line classified as ${alone.class} (${alone.signalId})`);
+  assert.equal(classify('The job has exceeded the maximum execution time of 45m0s').signalId, TIMEOUT_SIGNAL_ID);
 });
 
 // ── 3. WHAT IS SAID ABOUT THE HOLDER (R7) ─────────────────────────────────────
@@ -491,7 +680,7 @@ test('selfOwner mirrors the helper\'s own holder id', () => {
   assert.equal(selfOwner({ LOOM_ACR_LEASE_OWNER: 'me here!' }), 'me_here_');
 });
 
-test('HOLDER: a LIVE lease held by another run is named, and classified as transient contention', () => {
+test('HOLDER: a LIVE lease held by another run is named AS READ BACK, and classified as transient contention', () => {
   const d = describe(statusText({ pna: 'Enabled', owner: BUILD_OWNER, url: BUILD_URL, state: { kind: 'live', seconds: 5400 } }));
   assert.equal(d.verdict, 'held-by-other');
   assert.match(d.message, new RegExp(`held by '${BUILD_OWNER}' \\(${BUILD_URL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\)`));
@@ -499,6 +688,15 @@ test('HOLDER: a LIVE lease held by another run is named, and classified as trans
   assert.equal(d.failure.class, 'transient', 'lease contention is not a defect, permission or quota failure');
   assert.equal(d.failure.retryable, true);
   assert.match(d.failure.whyStopped, new RegExp(BUILD_OWNER));
+  // R7: the read-back is a LATER snapshot. Positive: it is labelled as such and
+  // points at the helper's own give-up line. Absent: the round-1 inference that
+  // the read-back holder held the lease "for the whole" of the wait.
+  for (const text of [d.message, d.failure.whyStopped]) {
+    assert.match(text, /when read back after the acquire gave up/);
+    assert.doesNotMatch(text, /for the whole of/);
+  }
+  assert.match(d.message, /`TIMED OUT … Current holder:` line above names the holder it actually saw/);
+  assert.match(d.failure.established[0].line, /^read back after the acquire gave up: /);
 });
 
 test('HOLDER: an UNREADABLE registry is not reported as a free lease (R7)', () => {
@@ -522,7 +720,14 @@ test('HOLDER: free, stale, and held-by-THIS-run are NOT blamed on another holder
     const d = describe(text);
     assert.equal(d.verdict, 'not-held-by-other', `${label}: ${d.message}`);
     assert.equal(d.failure, null, `${label}: classified as contention with no contending holder`);
-    assert.match(d.message, /did NOT fail by waiting behind another holder/);
+    // R7: a later snapshot says nothing about why the acquire failed. Positive:
+    // it is labelled a snapshot and points at the acquire's own line. Absent:
+    // the round-1 inference "did NOT fail by waiting behind another holder",
+    // false when a holder released between the give-up and the read-back.
+    assert.match(d.message, /When read back after the acquire gave up/, label);
+    assert.match(d.message, /no cause is asserted/, label);
+    assert.match(d.message, /`TIMED OUT … Current holder:` line above/, label);
+    assert.doesNotMatch(d.message, /did NOT fail by waiting/, label);
   }
 });
 
@@ -532,7 +737,8 @@ test('SEAM: the CLI writes deploy-failure.json ONLY for contention, and the noti
   const art = join(dir, 'deploy-failure.json');
   const env = { GITHUB_REPOSITORY: 'fgarofalo56/csa-inabox', GITHUB_RUN_ID: '36665140502', GITHUB_RUN_ATTEMPT: '1' };
   const args = ['unacquired', '--status-file', status, '--acr', 'acrloomtest', '--step', 'pin :v0.1',
-    '--wait-minutes', '0', '--budget-minutes', '20', '--out', art];
+    '--wait-minutes', '0', '--budget-minutes', '20', '--boundary', 'gcc-high', '--tag', 'abc1234',
+    '--apps', 'loom-trino', '--out', art];
 
   writeFileSync(status, statusText({ pna: '<unreadable>', da: '<unreadable>', owner: 'none', url: 'none', state: { kind: 'free' } }));
   let printed = '';
@@ -545,9 +751,12 @@ test('SEAM: the CLI writes deploy-failure.json ONLY for contention, and the noti
   cliMain(args, env, (s) => { printed += s; });
   assert.ok(existsSync(art), 'no deploy-failure.json for a genuine held-lease refusal');
   const body = buildIssueBody({ workflow: 'loom-dataplane-roll', runId: '1', sha: 'abc', failure: JSON.parse(readFileSync(art, 'utf8')) });
-  assert.match(body, /\*\*Classification: transient\*\* \(`acr-lease\.held-past-roll-budget`\)/);
+  assert.match(body, /\*\*Classification: transient\*\* \(`transient\.acr-lease-held-past-roll-budget`\)/);
   assert.doesNotMatch(body, /No classification was captured/, 'the notifier still renders the unclassified body');
   assert.match(body, new RegExp(`lease owner '${BUILD_OWNER}'`));
+  // operator-action MUST name the exact command (the taxonomy's own contract).
+  // Breaks on: dropping --boundary/--tag/--apps plumbing, or a prose-only remedy.
+  assert.match(body, /`gh workflow run loom-dataplane-roll\.yml -f boundary=gcc-high -f tag=abc1234 -f apps=loom-trino`/);
 });
 
 test('SINKS: both publication sinks redact — the lease tags are text another workflow wrote', () => {
@@ -591,4 +800,8 @@ test('the lease steps read the holder back with the helper\'s own `status`, neve
   assert.doesNotMatch(stepRun(LEASE_STEPS[1]), /--out deploy-failure\.json/);
   assert.match(stepRun(LEASE_STEPS[1]), /--severity warning/);
   assert.match(stepRun(LEASE_STEPS[2]), /--out deploy-failure\.json/);
+  // …and those two hand it what the exact re-dispatch command needs.
+  for (const step of [LEASE_STEPS[0], LEASE_STEPS[2]]) {
+    assert.match(stepRun(step), /--boundary "\$\{BOUNDARY:-\}" --tag "\$TAG" --apps "\$\{APPS:-\}" --out deploy-failure\.json/, step);
+  }
 });

@@ -3913,9 +3913,13 @@ function runPin(script, { digests, registry, env = {} } = {}) {
       EVENT_LOG: posix(logPath),
       STUB_DIGEST_MAP: posix(mapPath),
       // #4823 — what the resolve step exports for every later step: a job-level
-      // lease-wait budget and its absolute deadline, here 20 minutes out.
+      // lease-wait budget and its absolute deadline, here 20 minutes out, and
+      // the resolved boundary/apps the lease-refusal report names in its
+      // re-dispatch command.
       LOOM_ROLL_LEASE_BUDGET_MINUTES: '20',
       ROLL_LEASE_DEADLINE: String(Math.floor(Date.now() / 1000) + 20 * 60),
+      BOUNDARY: 'commercial',
+      APPS: 'all',
       ...env,
     },
   });

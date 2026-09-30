@@ -285,6 +285,14 @@ jobs:
     env:
       LOOM_ROLL_LEASE_BUDGET_MINUTES: '20'
     steps:
+      # #4823 — the job's start, read by 'Notify on a timeout-cancel' to tell a
+      # timeout from an earlier cancel. FIRST, ahead of checkout and setup-node:
+      # recorded any later, slow setup would shrink the measured elapsed time
+      # below the 2-minute margin and turn a real timeout into a quiet
+      # "cancelled". A bare `date`, so it needs nothing checked out.
+      - name: Record the job start
+        run: echo "ROLL_JOB_STARTED=$(date -u +%s)" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - name: Use Node.js 20
@@ -328,10 +336,11 @@ jobs:
           PRODUCER_RUN: ${{ github.event.workflow_run.id }}
         run: |
           set -euo pipefail
-          # #4823 — the job's start (read by the notifier to tell a timeout from
-          # an earlier cancel) and the ONE deadline every lease acquire below
-          # waits against. Written first, so every later step can rely on them.
-          echo "ROLL_JOB_STARTED=$(date -u +%s)" >> "$GITHUB_ENV"
+          # #4823 — the ONE deadline every lease acquire below waits against.
+          # Written first, so every later step can rely on it. It is a deadline
+          # measured from HERE, not accumulated waiting: the roll, health and
+          # verify steps spend it too, so a slow roll leaves the pin a 0-minute
+          # wait (one attempt) and the pin then fails fast on any contention.
           ROLL_LEASE_DEADLINE=$(node scripts/ci/roll-lease-budget.mjs deadline --budget-minutes "$LOOM_ROLL_LEASE_BUDGET_MINUTES")
           echo "ROLL_LEASE_DEADLINE=$ROLL_LEASE_DEADLINE" >> "$GITHUB_ENV"
           echo "::notice::ACR lease-wait budget for this job: ${LOOM_ROLL_LEASE_BUDGET_MINUTES}m in total across every lease acquire (deadline epoch $ROLL_LEASE_DEADLINE)."
@@ -569,7 +578,8 @@ jobs:
             fi
             node scripts/ci/roll-lease-budget.mjs unacquired --status-file .roll/lease-status.txt \
               --severity error --step preflight --acr "$ACR" --wait-minutes "$LEASE_WAIT_MIN" \
-              --budget-minutes "$LOOM_ROLL_LEASE_BUDGET_MINUTES" --out deploy-failure.json
+              --budget-minutes "$LOOM_ROLL_LEASE_BUDGET_MINUTES" \
+              --boundary "${BOUNDARY:-}" --tag "$TAG" --apps "${APPS:-}" --out deploy-failure.json
           }
 
           # Wait only for what is LEFT of the job's one lease-wait deadline.
@@ -950,7 +960,8 @@ jobs:
             fi
             node scripts/ci/roll-lease-budget.mjs unacquired --status-file .roll/lease-status.txt \
               --severity error --step "pin :v0.1" --acr "$ACR" --wait-minutes "$LEASE_WAIT_MIN" \
-              --budget-minutes "$LOOM_ROLL_LEASE_BUDGET_MINUTES" --out deploy-failure.json
+              --budget-minutes "$LOOM_ROLL_LEASE_BUDGET_MINUTES" \
+              --boundary "${BOUNDARY:-}" --tag "$TAG" --apps "${APPS:-}" --out deploy-failure.json
           }
 
           # Wait only for what is LEFT of the job's one lease-wait deadline —
@@ -1144,16 +1155,31 @@ jobs:
       #  ROLL_JOB_TIMEOUT_MINUTES must equal the job's timeout-minutes (the `env`
       #  context is not available to timeout-minutes, so it cannot be shared by
       #  reference); roll-lease-budget.test.mjs fails if they differ.
+      #
+      #  #4823 round 2 — on a timeout, `notify-result --out` WRITES the
+      #  deploy-failure.json the notifier renders, OVERWRITING any earlier one.
+      #  With no artifact the notifier's text says the failing step "did not run
+      #  through deploy-retry.mjs" and that wiring it is the fix — false here —
+      #  and never says the job timed out; a stale artifact from an earlier
+      #  step would be rendered as the cause. STEP_OUTCOMES lets it name the
+      #  step id whose outcome is `cancelled` (the one the limit interrupted).
       - name: Notify on a timeout-cancel
         if: cancelled()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           JOB_STATUS: ${{ job.status }}
           ROLL_JOB_TIMEOUT_MINUTES: '45'
+          STEP_OUTCOMES: >-
+            resolve=${{ steps.resolve.outcome }} plan=${{ steps.plan.outcome }}
+            preflight=${{ steps.preflight.outcome }} roll=${{ steps.roll.outcome }}
+            health=${{ steps.health.outcome }} verify=${{ steps.verify.outcome }}
+            digest=${{ steps.digest.outcome }} pin=${{ steps.pin.outcome }}
         run: |
           set -euo pipefail
           NOTIFY_OUT=$(node scripts/ci/roll-lease-budget.mjs notify-result --job-status "$JOB_STATUS" \
-            --started "${ROLL_JOB_STARTED:-}" --timeout-minutes "$ROLL_JOB_TIMEOUT_MINUTES")
+            --started "${ROLL_JOB_STARTED:-}" --timeout-minutes "$ROLL_JOB_TIMEOUT_MINUTES" \
+            --step-outcomes "$STEP_OUTCOMES" --boundary "${BOUNDARY:-}" --tag "${TAG:-}" --apps "${APPS:-}" \
+            --out deploy-failure.json)
           printf '%s\n' "$NOTIFY_OUT" | sed '/^result=/d'
           VERDICT=$(printf '%s\n' "$NOTIFY_OUT" | sed -n 's/^result=//p')
           case "$VERDICT" in

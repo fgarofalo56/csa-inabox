@@ -32,13 +32,17 @@
  *                    cannot sum past the budget, by construction — there is one
  *                    number to keep below `timeout-minutes`, not three.
  *   `unacquired`     when an acquire fails, read the lease back and say TRUTHFULLY
- *                    who holds it (R7). Only a LIVE lease held by ANOTHER holder
- *                    is classified as contention (`transient`), and only then is
- *                    a deploy-failure.json written for the notifier. A lease that
- *                    is free, stale, ours, or unreadable asserts no cause.
+ *                    what that later read shows (R7) — a snapshot taken after the
+ *                    acquire gave up, not the reason it failed. Only a LIVE lease
+ *                    held by ANOTHER holder at that read is classified as
+ *                    contention (`transient`), and only then is a
+ *                    deploy-failure.json written for the notifier. A lease that
+ *                    reads back free, stale, ours, or unreadable asserts no cause.
  *   `notify-result`  turns the job status into the result the notifier is given.
  *                    A cancel that reached the timeout is reported as
- *                    `timed_out` (a genuine failure in run-outcome.mjs); any
+ *                    `timed_out` (a genuine failure in run-outcome.mjs) AND, with
+ *                    --out, writes a timeout-shaped deploy-failure.json over any
+ *                    earlier one, so the filed issue says it timed out; any
  *                    earlier cancel stays `cancelled` and is logged, not filed.
  *
  * WHAT IT DOES NOT DO
@@ -46,6 +50,14 @@
  *   It does not change what is pinned or when. It does not bound the roll's own
  *   retry wall-clocks (deploy-retry.mjs, up to 15m per app) — a job can still
  *   time out on those, and `notify-result` is what makes that visible.
+ *
+ *   The budget is a DEADLINE, not accumulated waiting. It is measured from the
+ *   resolve step, so the NON-lease work between acquires (the roll, health,
+ *   live-image verification) spends it too. A roll whose steps before the pin
+ *   take longer than the budget leaves the pin a 0-minute wait — one attempt —
+ *   so the pin then fails on ANY contention and files a failure notice. That
+ *   is the price of the bound: a pin that cannot finish inside the job is the
+ *   failure #4823 was; a pin that fails fast and says who held the lease is not.
  *
  * Tests: node --test scripts/ci/__tests__/roll-lease-budget.test.mjs
  */
@@ -70,13 +82,51 @@ import { redactedLine } from './_azure-redact.mjs';
 
 /**
  * A cancel observed at least this close to the job's timeout-minutes limit is
- * the timeout. ROLL_JOB_STARTED is written by the resolve step, which starts a
- * few seconds after the job does (9 s in run 36665140502), so at the limit the
- * measured elapsed time is slightly UNDER timeout-minutes, never over. Two
- * minutes absorbs that offset; the cost is that a person cancelling in the last
+ * the timeout. ROLL_JOB_STARTED is written by the job's FIRST step, ahead of
+ * checkout and setup-node, so slow setup cannot eat into the margin. It is
+ * still read a few seconds after the job's own start, and the cancel reaches
+ * the notify step a few seconds after the limit, so the measured elapsed time
+ * at a timeout lands within about 2 minutes EITHER SIDE of timeout-minutes. In
+ * run 36665140502 the job started 03:36:32 and the pin was cancelled 04:21:45,
+ * i.e. 2713 s against a 2700 s limit — OVER, not under. The verdict is
+ * `elapsed >= limit*60 - margin`, so over is always a timeout; the margin
+ * exists for the under side. The cost is that a person cancelling in the last
  * two minutes is reported as a timeout.
  */
 export const TIMEOUT_MARGIN_SECONDS = 120;
+
+/**
+ * The taxonomy signal ids this module writes into deploy-failure.json. Both
+ * are REGISTERED in apps/fiab-console/lib/deploy/failure-taxonomy.json under
+ * the same class, in the `<class>.<name>` form every signal there uses;
+ * roll-lease-budget.test.mjs fails if either is missing or its class differs.
+ */
+export const LEASE_SIGNAL_ID = 'transient.acr-lease-held-past-roll-budget';
+export const TIMEOUT_SIGNAL_ID = 'transient.job-exceeded-timeout-minutes';
+
+/**
+ * The exact re-dispatch command for this lane, or null when a value it needs
+ * is unknown (it is then NOT guessed — the caller says what is missing).
+ * boundary and tag are validated by the resolve step (a choice value, and an
+ * OCI tag charset); apps is quoted unless it is plainly safe.
+ */
+export function redispatchCommand({ boundary, tag, apps }) {
+  const b = String(boundary ?? '').trim();
+  const t = String(tag ?? '').trim();
+  const a = String(apps ?? '').trim() || 'all';
+  if (!/^(commercial|gcc-high|il5)$/.test(b) || !/^[A-Za-z0-9._-]+$/.test(t)) return null;
+  const appsArg = /^[A-Za-z0-9,._-]+$/.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`;
+  return `gh workflow run loom-dataplane-roll.yml -f boundary=${b} -f tag=${t} -f apps=${appsArg}`;
+}
+
+function redispatchSentence(ctx) {
+  const cmd = redispatchCommand(ctx);
+  return cmd
+    ? `Re-dispatch: \`${cmd}\``
+    : 'The re-dispatch command cannot be stated exactly because this run did not record its resolved boundary ' +
+        `('${ctx.boundary ?? ''}') and tag ('${ctx.tag ?? ''}') — the resolve step did not complete. Dispatch ` +
+        'loom-dataplane-roll.yml with the boundary and tag this run was given.';
+}
 
 function positiveInt(value, name) {
   const s = String(value ?? '').trim();
@@ -163,56 +213,74 @@ export function parseLeaseStatus(text) {
 /**
  * What to say — and whether to classify — when an acquire failed.
  *
+ * WHAT THE READ-BACK IS, AND IS NOT (R7). `status` is read AFTER the acquire
+ * gave up, so it is a snapshot of that later moment, not the reason the
+ * acquire failed: a holder can release, or hand over to another, between the
+ * acquire's last check and this read. So every message below says "when read
+ * back after the acquire gave up" and asserts nothing about the wait itself.
+ * The acquire's own `TIMED OUT … Current holder:` line
+ * (scripts/csa-loom/acr-firewall-lease.sh, acquire loop) is the record of the
+ * holder it actually saw, and the messages point at it.
+ *
+ * Only a LIVE lease held by ANOTHER owner at the read-back is classified
+ * (`transient` contention). That classification rests on the read-back alone
+ * (this module never parses the acquire's output), and the class promises only
+ * that the same run, unchanged, is expected to succeed once a holder finishes.
+ *
  * @returns {{verdict: 'held-by-other'|'not-held-by-other'|'holder-unreadable', message: string, failure: object|null}}
  */
-export function describeUnacquired({ status, self, step, acr, waitMinutes, budgetMinutes }) {
+export function describeUnacquired({ status, self, step, acr, waitMinutes, budgetMinutes, boundary, tag, apps }) {
   const allowance =
     `This step was allowed to wait up to ${waitMinutes}m — what remained of this job's ` +
     `${budgetMinutes}m lease-wait budget, a deadline shared by every lease acquire in the job so ` +
     'their waits cannot add up past timeout-minutes.';
+  const pointer =
+    "If the acquire timed out, its own `TIMED OUT … Current holder:` line above names the holder it actually saw.";
 
   if (!status.readable) {
     return {
       verdict: 'holder-unreadable',
       message:
-        `Could not read the ACR firewall lease on '${acr}' back after the failed acquire, so the holder is ` +
-        'NOT named here and no cause is asserted. If the acquire timed out waiting, its own error above ' +
-        `names the holder it last saw. ${allowance}`,
+        `Could not read the ACR firewall lease on '${acr}' back after the acquire gave up, so the holder is ` +
+        `NOT named here and no cause is asserted. ${pointer} ${allowance}`,
       failure: null,
     };
   }
 
   if (status.state === 'live' && status.owner !== self && status.owner !== 'none') {
-    const why =
-      `the ACR firewall lease on '${acr}' was held by '${status.owner}' (${status.url}) for the whole of ` +
-      `this step's allowance of ${waitMinutes}m (the remainder of the job's ${budgetMinutes}m shared ` +
-      'lease-wait budget)';
+    const readBack =
+      `when read back after the acquire gave up, the ACR firewall lease on '${acr}' was held by ` +
+      `'${status.owner}' (${status.url}), LIVE for another ${status.remainingSeconds}s`;
     return {
       verdict: 'held-by-other',
       message:
-        `The ACR firewall lease on '${acr}' is held by '${status.owner}' (${status.url}), LIVE for another ` +
-        `${status.remainingSeconds}s as read back just now. ${allowance} This is lease CONTENTION, not a ` +
-        'defect in this run.',
+        `The acquire gave up after this step's ${waitMinutes}m allowance; ${readBack}. That read-back is a later ` +
+        `snapshot and does not by itself establish who held the lease throughout the wait. ${pointer} ` +
+        `${allowance} Contention for the lease, not a defect in this run.`,
       failure: {
         schemaVersion: 1,
         step,
         command: 'acr-firewall-lease.sh acquire',
         class: 'transient',
-        signalId: 'acr-lease.held-past-roll-budget',
+        signalId: LEASE_SIGNAL_ID,
         retryable: true,
         established: [
           {
-            signal: 'acr-lease-holder',
-            line: `lease owner '${status.owner}', holder url ${status.url}, LIVE for another ${status.remainingSeconds}s`,
+            signal: 'acr-lease-read-back',
+            line:
+              `read back after the acquire gave up: lease owner '${status.owner}', holder url ${status.url}, ` +
+              `LIVE for another ${status.remainingSeconds}s`,
           },
         ],
         remediationKind: 'operator-action',
         remediation:
-          'Nothing in the roll is broken; another run held the registry lease. If that holder is ' +
+          'Nothing in the roll is broken; the registry lease was held by another run. If that holder is ' +
           'build-fiab-images-acr-tasks on a push to main, its successful completion triggers a new automatic ' +
           'roll of that newer commit, which takes the lease and pins :v0.1 itself — no action is needed. ' +
-          'Otherwise re-dispatch loom-dataplane-roll with the same tag once the holder has finished.',
-        whyStopped: why,
+          `Otherwise, once the holder has finished: ${redispatchSentence({ boundary, tag, apps })}`,
+        whyStopped:
+          `the acquire gave up after this step's allowance of ${waitMinutes}m (the remainder of the job's ` +
+          `${budgetMinutes}m shared lease-wait budget); ${readBack}`,
       },
     };
   }
@@ -224,8 +292,10 @@ export function describeUnacquired({ status, self, step, acr, waitMinutes, budge
   return {
     verdict: 'not-held-by-other',
     message:
-      `The ACR firewall lease on '${acr}' is recorded as ${recorded}, so this acquire did NOT fail by waiting ` +
-      `behind another holder. The acquire output above states why it failed. ${allowance}`,
+      `When read back after the acquire gave up, the ACR firewall lease on '${acr}' was recorded as ${recorded}. ` +
+      'That is a later snapshot, not the reason the acquire failed — a holder may have released in between, and ' +
+      "the helper also prints owner 'none' / free when it cannot read the owner tag — so no cause is asserted " +
+      `here. ${pointer} ${allowance}`,
     failure: null,
   };
 }
@@ -258,6 +328,8 @@ export function notifyResult({ jobStatus, startedEpoch, nowEpoch, timeoutMinutes
     return {
       result: 'timed_out',
       level: 'error',
+      elapsedSeconds: elapsed,
+      limitMinutes: limit,
       note:
         `This run was cancelled ${elapsed}s after it started — at its ${limit}-minute timeout-minutes limit. ` +
         'GitHub concludes a timed-out job as `cancelled`, which the failure notifier would log and not file, ' +
@@ -272,6 +344,81 @@ export function notifyResult({ jobStatus, startedEpoch, nowEpoch, timeoutMinutes
       `This run was cancelled ${elapsed}s after it started, before its ${limit}-minute limit, so it was not ` +
       'the timeout: a person or GitHub cancelled it. It was not superseded either — the concurrency group has ' +
       'cancel-in-progress: false. Reported as cancelled (no verdict); nothing is filed.',
+  };
+}
+
+/**
+ * The step ids whose outcome is `cancelled`, from a `id=outcome` list (space-
+ * or comma-separated) the workflow builds out of `steps.<id>.outcome`. A step
+ * interrupted by the job timeout reports `cancelled`; steps after it report
+ * `skipped` (or nothing, for `if: always()`/`cancelled()` ones), and steps
+ * without an `id:` are not in the steps context at all — so an empty result
+ * means "not identifiable from here", never "nothing was running".
+ */
+export function interruptedSteps(outcomes) {
+  return String(outcomes ?? '')
+    .split(/[\s,]+/)
+    .map((pair) => pair.match(/^([A-Za-z0-9_-]+)=(.*)$/))
+    .filter((m) => m && m[2] === 'cancelled')
+    .map((m) => m[1]);
+}
+
+/**
+ * The deploy-failure.json a TIMED-OUT roll hands the notifier (#4823 round 2).
+ *
+ * Without it, deploy-notify-failure.mjs renders its no-artifact text — "the
+ * failing step did not run through scripts/ci/deploy-retry.mjs … wiring it is
+ * the fix" — which is FALSE here (the roll and pin retags DO run through
+ * deploy-retry.mjs) and never says the job timed out; and a stale artifact an
+ * earlier step wrote would be rendered as the cause. So on `timed_out` this is
+ * written unconditionally, OVERWRITING any file already at that path.
+ *
+ * What it asserts is only what the notify step measured: the elapsed time, the
+ * limit, and which step id reports `cancelled`. What made the run slow is NOT
+ * established and is said not to be.
+ */
+export function timeoutFailure({ elapsedSeconds, limitMinutes, interrupted, boundary, tag, apps }) {
+  const named = interrupted.length > 0;
+  const where = named
+    ? `while step id${interrupted.length > 1 ? 's' : ''} ${interrupted.map((s) => `'${s}'`).join(', ')} ` +
+      `reported \`cancelled\``
+    : 'in a step this record cannot name (no step with an `id:` reports `cancelled`; the run\'s step list ' +
+      'shows which one was interrupted)';
+  return {
+    schemaVersion: 1,
+    step: named ? interrupted.join(', ') : 'unidentified',
+    command: `job timeout-minutes (${limitMinutes})`,
+    class: 'transient',
+    signalId: TIMEOUT_SIGNAL_ID,
+    retryable: true,
+    established: [
+      {
+        signal: 'job-elapsed',
+        line:
+          `the job was cancelled ${elapsedSeconds}s after its first step recorded the start; its ` +
+          `timeout-minutes limit is ${limitMinutes} (${limitMinutes * 60}s), and a cancel within ` +
+          `${TIMEOUT_MARGIN_SECONDS}s of that limit is read as the timeout`,
+      },
+      {
+        signal: 'interrupted-step',
+        line: named
+          ? `steps.<id>.outcome == 'cancelled' for: ${interrupted.join(', ')}`
+          : 'no step with an id reported cancelled',
+      },
+    ],
+    remediationKind: 'operator-action',
+    remediation:
+      'GitHub cancelled the job at its time limit, so no step after the interrupted one did its work — ' +
+      '`Roll back on failure` is gated on failure() and did not run. If the roll step was interrupted, ' +
+      'apps may be part-way rolled: read the live revisions before acting. Classified transient on the ' +
+      'expectation that the same run, unchanged, completes once whatever was slow has cleared — this record ' +
+      'does not establish that; if the SAME step times out again on a re-run, it is not transient: read that ' +
+      "step's log. " +
+      redispatchSentence({ boundary, tag, apps }),
+    whyStopped:
+      `the job reached its ${limitMinutes}-minute timeout-minutes limit (cancelled ${elapsedSeconds}s after it ` +
+      `started) ${where}. What made the run that slow is NOT established by this record — the interrupted ` +
+      "step's own log is.",
   };
 }
 
@@ -305,6 +452,9 @@ export function cliMain(argv, env = process.env, out = (s) => process.stdout.wri
         acr: arg(rest, 'acr') ?? '<unknown registry>',
         waitMinutes: arg(rest, 'wait-minutes') ?? '?',
         budgetMinutes: arg(rest, 'budget-minutes') ?? '?',
+        boundary: arg(rest, 'boundary'),
+        tag: arg(rest, 'tag'),
+        apps: arg(rest, 'apps'),
       });
       const artifact = arg(rest, 'out');
       if (artifact && d.failure) fs.writeFileSync(artifact, `${JSON.stringify(d.failure, null, 2)}\n`, 'utf8');
@@ -319,6 +469,21 @@ export function cliMain(argv, env = process.env, out = (s) => process.stdout.wri
         timeoutMinutes: arg(rest, 'timeout-minutes'),
       });
       if (r.note) out(`::${r.level}::${r.note}\n`);
+      const artifact = arg(rest, 'out');
+      if (r.result === 'timed_out' && artifact) {
+        // Written unconditionally on a timeout, OVERWRITING any artifact an
+        // earlier step left: that one describes a different, earlier failure.
+        const failure = timeoutFailure({
+          elapsedSeconds: r.elapsedSeconds,
+          limitMinutes: r.limitMinutes,
+          interrupted: interruptedSteps(arg(rest, 'step-outcomes')),
+          boundary: arg(rest, 'boundary'),
+          tag: arg(rest, 'tag'),
+          apps: arg(rest, 'apps'),
+        });
+        fs.writeFileSync(artifact, `${JSON.stringify(failure, null, 2)}\n`, 'utf8');
+        out(`Wrote the timeout classification to ${artifact} (${failure.signalId}), replacing any earlier artifact.\n`);
+      }
       out(`result=${r.result}\n`);
       return 0;
     }
