@@ -25,6 +25,7 @@ import { ShortcutsPane } from '../panes/shortcuts-pane';
 import { SchemasPane } from '../panes/schemas-pane';
 import { InteropPane } from '../panes/interop-pane';
 import { TablesPane } from '../panes/tables-pane';
+import { HistoryPane } from '../panes/history-pane';
 import { LAKEHOUSE_READ_ONLY_TITLE } from '../hooks/use-lakehouse-access';
 
 type Access = 'read' | 'write';
@@ -276,6 +277,46 @@ describe('InteropPane — read-only role', () => {
     fireEvent.click(sw);
     // Breaks if canWrite=true is read as read-only (no PUT would be sent).
     await waitFor(() => expect(calls.some((c) => c.url.includes('/api/lakehouse/interop') && c.init?.method === 'PUT')).toBe(true));
+  });
+});
+
+// ---------------------------------------------------------------- History
+
+function historyCtx() {
+  return {
+    activeContainer: 'gold', historyTable: 'Tables/orders',
+    historyRows: [{ version: 3, timestamp: null, operation: 'WRITE', userName: null, metrics: {} }],
+    historyLoading: false, historyError: null, historyRestoring: null, historyRestoreMsg: null,
+    historyPreviewVersion: null, historyPreviewResult: null, historyPreviewLoading: false,
+    loadHistory: vi.fn(), restoreToVersion: vi.fn(), previewAsOf: vi.fn(),
+  };
+}
+
+describe('HistoryPane — read-only role', () => {
+  it('closes Restore with the reason, and leaves Preview and Refresh open', async () => {
+    const ctx = historyCtx();
+    mount(<HistoryPane />, ctx, 'read');
+    const restore = await button(/^Restore$/);
+    await expectClosed(restore);
+    fireEvent.click(restore);
+    // Breaks if Restore loses disabledFocusable={readOnly}: the click would restore version 3.
+    expect(ctx.restoreToVersion).not.toHaveBeenCalled();
+    // Positive: the reads in the same pane still run. Breaks if the whole row is gated.
+    fireEvent.click(await button(/^Preview$/));
+    expect(ctx.previewAsOf).toHaveBeenCalledWith('Tables/orders', 3);
+    fireEvent.click(await button(/^Refresh$/));
+    expect(ctx.loadHistory).toHaveBeenCalledWith('Tables/orders');
+  });
+
+  it('with canWrite=true Restore reaches restoreToVersion', async () => {
+    const ctx = historyCtx();
+    const { calls } = mount(<HistoryPane />, ctx, 'write');
+    await probeSettled(calls);
+    const restore = await button(/^Restore$/);
+    // Breaks if the pane treats canWrite=true as read-only.
+    expect(restore.getAttribute('title')).not.toBe(LAKEHOUSE_READ_ONLY_TITLE);
+    fireEvent.click(restore);
+    expect(ctx.restoreToVersion).toHaveBeenCalledWith('Tables/orders', 3);
   });
 });
 

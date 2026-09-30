@@ -7,10 +7,13 @@ import {
 import { ArrowSync20Regular, Eye20Regular } from '@fluentui/react-icons';
 import { useStyles, leafName, formatBytes, formatCell } from '../shared';
 import { useLakehouseCtx } from '../lakehouse-editor-context';
+import { useLakehouseReadOnly, LAKEHOUSE_READ_ONLY_TITLE } from '../hooks/use-lakehouse-access';
 
 export function HistoryPane() {
   const s = useStyles();
   const ctx = useLakehouseCtx();
+  // Restore writes a new table version; Preview and Refresh are reads and stay open.
+  const readOnly = useLakehouseReadOnly(ctx.id, ctx.isNewItem);
   const {
     activeContainer,
     historyTable, historyRows, historyLoading, historyError,
@@ -100,6 +103,8 @@ export function HistoryPane() {
                     </Button>
                     <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />}
                       disabled={historyRestoring === row.version}
+                      disabledFocusable={readOnly}
+                      title={readOnly ? LAKEHOUSE_READ_ONLY_TITLE : undefined}
                       onClick={() => historyTable && restoreToVersion(historyTable, row.version)}>
                       {historyRestoring === row.version ? 'Restoring…' : 'Restore'}
                     </Button>
