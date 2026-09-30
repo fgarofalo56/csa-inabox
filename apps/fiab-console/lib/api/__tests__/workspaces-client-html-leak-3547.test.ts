@@ -32,7 +32,7 @@ vi.mock('@/lib/client-fetch', async () => {
 });
 
 import { clientFetch } from '@/lib/client-fetch';
-import { listWorkspaces, createItem, getItem, listItems, deleteWorkspace } from '../workspaces';
+import { listWorkspaces, createItem, getItem, listItems, deleteWorkspace, updateWorkspace } from '../workspaces';
 
 /**
  * The Front Door / Container Apps ingress interstitial, in the shape the issue
@@ -146,6 +146,25 @@ describe("#3547 — the BFF's own JSON reason is still preferred", () => {
     const msg = await messageFrom(() => listWorkspaces());
     expect(msg).not.toContain('{');
     expect(msg).toMatch(/non-JSON response|unexpected/i);
+  });
+
+  it('#4619: a tenant-admin refusal surfaces its reason and remediation, not "forbidden"', async () => {
+    // The admin_only envelope's `error` is the bare token "forbidden". Breaks if
+    // the helper reads `error` first: the message would be "forbidden (HTTP 403)".
+    stub(403, JSON.stringify({
+      ok: false, error: 'forbidden', code: 'admin_only',
+      reason: 'REASON-4619-api', remediation: 'REMEDIATION-4619-api',
+    }), 'application/json');
+    const msg = await messageFrom(() => updateWorkspace('ws-1', { storageAccountId: '' }));
+    expect(msg).toBe('REASON-4619-api REMEDIATION-4619-api (HTTP 403)');
+  });
+
+  it('#4619: any other 403 still surfaces its own `error` (positive pair)', async () => {
+    // Breaks if every 403 were treated as admin_only: this envelope has no
+    // reason, so the message would fall to the generic tenant-admin sentence.
+    stub(403, JSON.stringify({ ok: false, error: 'read_only' }), 'application/json');
+    const msg = await messageFrom(() => updateWorkspace('ws-1', { name: 'x' }));
+    expect(msg).toBe('read_only (HTTP 403)');
   });
 });
 

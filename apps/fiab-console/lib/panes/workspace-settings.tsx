@@ -31,6 +31,9 @@ import { WorkspaceImageEditor } from '@/lib/components/workspace-image-editor';
 import { WorkspaceIdentityPanel } from '@/lib/panes/workspace-identity-panel';
 import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
 import type { Workspace, WorkspaceLicenseMode } from '@/lib/types/workspace';
+import { AdminOnlyNotice, useTenantAdminGate } from '@/lib/components/shared/admin-only-notice';
+import { WORKSPACE_STORAGE_ADMIN_ONLY } from '@/lib/util/admin-only-copy';
+import { refusalText } from '@/lib/util/admin-refusal';
 
 interface WsRef { id: string; name: string }
 interface FabricCapacityOpt { id: string; displayName: string; sku: string; region?: string; state?: string; }
@@ -69,7 +72,7 @@ async function patchWorkspace(id: string, patch: Record<string, unknown>, isAdmi
   const url = isAdmin ? `/api/admin/workspaces/${encodeURIComponent(id)}` : `/api/workspaces/${encodeURIComponent(id)}`;
   const r = await fetch(url, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) });
   const j = await r.json();
-  if (!r.ok || j?.ok === false) throw new Error(j?.error || `HTTP ${r.status}`);
+  if (!r.ok || j?.ok === false) throw new Error(refusalText(j, r.status));
   return (j.workspace ?? j) as Workspace;
 }
 
@@ -429,7 +432,7 @@ interface StorageMetrics {
   containers?: Array<{ name: string; usedBytes: number }>;
 }
 
-function OneLakeTab({ ws, isAdmin, onSaved }: { ws: Workspace; isAdmin?: boolean; onSaved: (w: Workspace) => void }) {
+export function OneLakeTab({ ws, isAdmin, onSaved }: { ws: Workspace; isAdmin?: boolean; onSaved: (w: Workspace) => void }) {
   const styles = useStyles();
   const [metrics, setMetrics] = useState<StorageMetrics | null>(null);
   const [mLoading, setMLoading] = useState(true);
@@ -438,6 +441,8 @@ function OneLakeTab({ ws, isAdmin, onSaved }: { ws: Workspace; isAdmin?: boolean
   const [selected, setSelected] = useState(ws.storageAccountId || '');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const canBind = useTenantAdminGate().allowed;
+  const bindingChanged = selected.trim() !== (ws.storageAccountId || '').trim();
 
   useEffect(() => { setSelected(ws.storageAccountId || ''); }, [ws.id, ws.storageAccountId]);
 
@@ -459,8 +464,11 @@ function OneLakeTab({ ws, isAdmin, onSaved }: { ws: Workspace; isAdmin?: boolean
   }, [ws.id]);
 
   const saveBinding = async () => {
+    // #4619 — the binding is tenant-admin only on PATCH. Send the field only
+    // when an admin changed it; an empty value then means "clear".
+    if (!canBind || !bindingChanged) return;
     setBusy(true); setErr(null);
-    try { onSaved(await patchWorkspace(ws.id, { storageAccountId: selected || '' }, isAdmin)); }
+    try { onSaved(await patchWorkspace(ws.id, { storageAccountId: selected.trim() }, isAdmin)); }
     catch (e: any) { setErr(e?.message || String(e)); }
     finally { setBusy(false); }
   };
@@ -521,10 +529,10 @@ function OneLakeTab({ ws, isAdmin, onSaved }: { ws: Workspace; isAdmin?: boolean
         <Field label="ADLS Gen2 account">
           <Dropdown
             placeholder={storage === null ? 'Loading…' : 'Deployment default'}
-            disabled={storage === null}
+            disabled={storage === null || !canBind}
             value={selectedName || (selected ? selected.split('/').pop() : 'Deployment default')}
             selectedOptions={selected ? [selected] : ['']}
-            onOptionSelect={(_e, d) => setSelected(d.optionValue || '')}
+            onOptionSelect={(_e, d) => { if (canBind) setSelected(d.optionValue || ''); }}
           >
             <Option value="">Deployment default</Option>
             {(storage || []).map((sx) => (
@@ -535,7 +543,8 @@ function OneLakeTab({ ws, isAdmin, onSaved }: { ws: Workspace; isAdmin?: boolean
           </Dropdown>
         </Field>
       )}
-      <ApplyButton busy={busy} error={err} onApply={saveBinding} label="Save binding" />
+      {!canBind && <AdminOnlyNotice {...WORKSPACE_STORAGE_ADMIN_ONLY} />}
+      <ApplyButton busy={busy} error={err} onApply={saveBinding} disabled={!canBind || !bindingChanged} label="Save binding" />
     </div>
   );
 }
