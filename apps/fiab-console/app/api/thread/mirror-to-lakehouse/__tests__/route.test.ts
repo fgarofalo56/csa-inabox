@@ -22,14 +22,18 @@
  *    duplicate rows instead of upserting the existing ones);
  *  - dropping the item-id fallback → an unnamed mirror derives `mirrors/`;
  *  - using the raw name with no derivation → every derivation row except the
- *    'sales-2024.v2' row fails.
- * The backslash, newline and NUL rows are killed only by the raw-name arm: the
- * previous filter already mapped those characters, so they pin that the
- * mapping still covers them rather than a difference from the old code.
+ *    'sales-2024.v2' row fails;
+ *  - dropping the `typeof from.name === 'string'` guard → a number / object /
+ *    boolean name derives its own folder instead of the display name's;
+ *  - widening the allowed set to keep "\" → 'a\\b' derives `mirrors/a\b`,
+ *    which pathSegments splits into two segments.
+ * The newline and NUL rows are killed only by the raw-name arm: the previous
+ * filter already mapped those characters, so they pin that the mapping still
+ * covers them rather than a difference from the old code.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
-import { pathSegments } from '@/app/api/lakehouse/path/route';
+import { pathSegments } from '@/app/api/lakehouse/_lib/item-scope';
 
 const getSessionMock = vi.fn(() => ({ claims: { oid: 'oid-1', upn: 'u@x' } } as any));
 vi.mock('@/lib/auth/session', () => ({ getSession: () => getSessionMock() }));
@@ -103,7 +107,7 @@ describe('mirror-to-lakehouse route', () => {
     expect(res.status).toBe(200);
     const j = await res.json();
     expect(j.ok).toBe(true);
-    expect(j.folder).toBe('mirrors/Orders_Mirror');
+    expect(j.path).toBe('mirrors/Orders_Mirror');
     expect(j.message).toContain('under Files/mirrors/Orders_Mirror');
     expect(createShortcutMock).toHaveBeenCalledTimes(2);
     expect(createShortcutMock.mock.calls[0][0]).toMatchObject({
@@ -154,5 +158,19 @@ describe('mirror-to-lakehouse folder derivation (one segment after mirrors/)', (
     const parentPath = createShortcutMock.mock.calls[0][0].parentPath as string;
     expect(parentPath).toBe('mirrors/mirror-1');
     expect(pathSegments(parentPath)).toEqual(['mirrors', 'mirror-1']);
+  });
+
+  // A non-string `from.name` is not a name: the display name is used. Breaks
+  // if the `typeof from.name === 'string'` guard is dropped — 42 would then
+  // derive `mirrors/42` and be recorded as "Mirrored from 42".
+  it.each([
+    ['a number', 42],
+    ['an object', { x: 1 }],
+    ['true', true],
+  ])('a non-string from.name (%s) falls back to the display name', async (_label, name) => {
+    await POST(post(body(name)));
+    const def = createShortcutMock.mock.calls[0][0];
+    expect(def.parentPath).toBe('mirrors/Orders_Mirror');
+    expect(def.statusDetail).toBe('Mirrored from Orders Mirror (dbo.orders)');
   });
 });

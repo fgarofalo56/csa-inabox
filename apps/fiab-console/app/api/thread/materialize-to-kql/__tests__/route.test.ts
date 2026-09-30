@@ -18,7 +18,19 @@ vi.mock('@/lib/thread/thread-edges', () => ({ recordThreadEdge: (...a: any[]) =>
 const resolveLakehouseAbfssMock = vi.fn(async () => ({
   abfss: 'abfss://bronze@acct.dfs.core.windows.net/lakehouses/sales', container: 'bronze', root: 'lakehouses/sales',
 }));
-vi.mock('@/lib/azure/lakehouse-abfss', () => ({ resolveLakehouseAbfss: (...a: any[]) => resolveLakehouseAbfssMock(...a) }));
+// `resolveLakehouseStorage` delegates to the mock: a bound value is ok, null is
+// `no-storage`, `{ withheld: <reason> }` is that reason. Real withheld wording.
+vi.mock('@/lib/azure/lakehouse-abfss', async () => {
+  const actual: any = await vi.importActual('@/lib/azure/lakehouse-abfss');
+  return {
+    lakehouseStorageWithheldFields: actual.lakehouseStorageWithheldFields,
+    resolveLakehouseStorage: async (...a: any[]) => {
+      const b: any = await resolveLakehouseAbfssMock(...a);
+      if (b && typeof b === 'object' && 'withheld' in b) return { ok: false, reason: b.withheld };
+      return b ? { ok: true, bound: b } : { ok: false, reason: 'no-storage' };
+    },
+  };
+});
 
 const createExternalDeltaTableMock = vi.fn(async () => ({ columns: [], rows: [] }));
 const setQueryAccelerationPolicyMock = vi.fn(async () => ({ columns: [], rows: [] }));
@@ -114,6 +126,21 @@ describe('materialize-to-kql route', () => {
     expect(j.accelerated).toBe(false);
     expect(j.message).toMatch(/query acceleration could not be enabled/);
   });
+
+  // A withheld location is not "no storage configured". FAILS IF the route
+  // words root-shared as the LOOM_*_URL gate (503), loses the readiness check
+  // title the resolver names, or loses the link. No ADX table is created.
+  it('a shared storage root answers the true reason and the readiness link', async () => {
+    const { LAKEHOUSE_SHARED_ROOTS_CHECK_TITLE } = await import('@/lib/admin/env-checks/lakehouse-shared-roots');
+    resolveLakehouseAbfssMock.mockResolvedValueOnce({ withheld: 'root-shared' } as any);
+    const res = await POST(post({ from: FROM, values: VALUES }));
+    const j = await res.json();
+    expect(res.status).toBe(409);
+    expect(j.error).not.toContain('LOOM_');
+    expect(j.error).toContain(LAKEHOUSE_SHARED_ROOTS_CHECK_TITLE);
+    expect(j.fixHref).toBe('/admin/readiness');
+    expect(createExternalDeltaTableMock).not.toHaveBeenCalled();
+  });
 });
 
 /**
@@ -125,9 +152,9 @@ describe('materialize-to-kql route', () => {
  * What breaks these (mutation arms run in a sandbox, see the PR body):
  *  - deleting the `tableNameProblem` call → every refusal case reaches
  *    `createExternalDeltaTable` and returns 200 (status 200 ≠ 400);
- *  - moving the check below `resolveLakehouseAbfss` → the status still reads
- *    400 but `resolveLakehouseAbfssMock` has been called, so the
- *    `not.toHaveBeenCalled()` line fails;
+ *  - moving the check below `resolveLakehouseStorage` → the status still reads
+ *    400 but the storage resolver (backed by `resolveLakehouseAbfssMock`) has
+ *    been called, so the `not.toHaveBeenCalled()` line fails;
  *  - dropping the control-character rule → 'a\nb' and 'a\u007fb' become one
  *    segment and are accepted (200); 'a\u0000b' is still refused by
  *    `pathSegments` but with the segment message, so its message assertion
@@ -137,10 +164,12 @@ describe('materialize-to-kql route', () => {
  *  - dropping the `segs[0] !== name` comparison → 'a/b', 'a\\b' and
  *    'orders/' are accepted ('.', '..' and '../x' are still refused inside
  *    `pathSegments`, which is why those rows exist separately);
- *  - dropping the `;?#%` rule → 'orders;x' and 'a%2Fb' are accepted.
+ *  - dropping any one character from the `;?#%@` rule → that character's row
+ *    ('orders;x', 'orders?x', 'orders#x', 'a%2Fb', 'orders@x') is accepted.
  */
 describe('materialize-to-kql table-name validation', () => {
   const SEGMENT_MSG = /single folder name under Tables\//;
+  const META_MSG = /";", "\?", "#", "%" and "@" are not accepted/;
   const cases: Array<[label: string, table: string, msg: RegExp]> = [
     ['parent reference', '../x|bronze/Tables/x', SEGMENT_MSG],
     ['bare parent', '..|bronze/Tables/x', SEGMENT_MSG],
@@ -153,8 +182,11 @@ describe('materialize-to-kql table-name validation', () => {
     ['embedded newline', 'a\nb|bronze/Tables/a', /control character/],
     ['embedded DEL (0x7F)', 'a\u007fb|bronze/Tables/a', /control character/],
     ['embedded NUL', 'a\u0000b|bronze/Tables/a', /control character/],
-    ['connection-string separator', 'orders;x|bronze/Tables/orders', /";", "\?", "#" and "%"/],
-    ['percent escape', 'a%2Fb|bronze/Tables/a', /";", "\?", "#" and "%"/],
+    ['connection-string separator', 'orders;x|bronze/Tables/orders', META_MSG],
+    ['query marker', 'orders?x|bronze/Tables/orders', META_MSG],
+    ['fragment marker', 'orders#x|bronze/Tables/orders', META_MSG],
+    ['percent escape', 'a%2Fb|bronze/Tables/a', META_MSG],
+    ['user-part separator', 'orders@x|bronze/Tables/orders', META_MSG],
   ];
 
   it.each(cases)('refuses %s with 400 before any Cosmos / storage / ADX call', async (_label, table, msg) => {
@@ -198,5 +230,79 @@ describe('materialize-to-kql table-name validation', () => {
     const extName = createExternalDeltaTableMock.mock.calls[0][1] as string;
     expect(extName).toBe('Sales_LH_sales_2024_v2');
     expect(extName).toMatch(/^[A-Za-z0-9_]+$/);
+  });
+});
+
+/**
+ * The target database is WRITTEN (external table + policy), the source
+ * lakehouse only read. `loadOwnedItem` admits a read-only member only when
+ * called with `{ allowReadRoles: true }`, so the mock below models that: a
+ * reader of the target sees it on the read-scoped load and gets null on the
+ * write-scoped one.
+ *
+ * What breaks these (sandbox arms, see the PR body):
+ *  - loading the target with `allowReadRoles: true` (the previous behaviour)
+ *    → the reader is admitted and reaches ADX (200 ≠ 403);
+ *  - running the write check after `resolveLakehouseStorage` → still 403, but
+ *    the storage resolver has been called (the `not.toHaveBeenCalled` line);
+ *  - write-loading a fixed 'kql-database' type → the eventhouse writer gets
+ *    null from the write load and a 403 (≠ 200);
+ *  - dropping the read-scoped visibility load → an invisible target reads 403
+ *    instead of 404.
+ */
+describe('materialize-to-kql target-database access', () => {
+  type Role = 'writer' | 'reader' | 'none';
+  function access(target: Role, targetType: 'kql-database' | 'eventhouse' = 'kql-database') {
+    loadOwnedItemMock.mockReset();
+    loadOwnedItemMock.mockImplementation(async (_id: string, type: string, _oid: string, opts?: { allowReadRoles?: boolean }) => {
+      // Source lakehouse: the caller is a reader of it in every case here.
+      if (type === 'lakehouse') return opts?.allowReadRoles ? { id: 'lh-1', displayName: 'Sales LH', workspaceId: 'ws-1' } : null;
+      if (type !== targetType) return null;
+      const item = { id: 'kql-1', itemType: targetType, displayName: 'Telemetry', workspaceId: 'ws-2', state: {} };
+      if (target === 'writer') return item;
+      if (target === 'reader') return opts?.allowReadRoles ? item : null;
+      return null;
+    });
+    resolveLakehouseAbfssMock.mockClear();
+  }
+
+  it('403 for a read-only member of the target, before any storage or ADX call', async () => {
+    access('reader');
+    const res = await POST(post({ from: FROM, values: VALUES }));
+    expect(res.status).toBe(403);
+    const j = await res.json();
+    expect(j.ok).toBe(false);
+    expect(j.error).toBe('materializing requires write access to the target database');
+    expect(resolveLakehouseAbfssMock).not.toHaveBeenCalled();
+    expect(createExternalDeltaTableMock).not.toHaveBeenCalled();
+    expect(setQueryAccelerationPolicyMock).not.toHaveBeenCalled();
+  });
+
+  it('a writer of the target (reader of the source) materializes, via a write-scoped load', async () => {
+    access('writer');
+    const res = await POST(post({ from: FROM, values: VALUES }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).ok).toBe(true);
+    expect(createExternalDeltaTableMock).toHaveBeenCalledTimes(1);
+    // The target was loaded once WITHOUT read roles (the write-scoped check).
+    const writeLoads = loadOwnedItemMock.mock.calls.filter(
+      (c) => c[1] === 'kql-database' && !(c[3] && c[3].allowReadRoles),
+    );
+    expect(writeLoads).toHaveLength(1);
+  });
+
+  it('an eventhouse target is write-checked as an eventhouse', async () => {
+    access('writer', 'eventhouse');
+    const res = await POST(post({ from: FROM, values: VALUES }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).linkLabel).toBe('Open the Eventhouse');
+  });
+
+  it('404 when the caller cannot see the target at all', async () => {
+    access('none');
+    const res = await POST(post({ from: FROM, values: VALUES }));
+    expect(res.status).toBe(404);
+    expect((await res.json()).error).toBe('KQL database not found');
+    expect(createExternalDeltaTableMock).not.toHaveBeenCalled();
   });
 });

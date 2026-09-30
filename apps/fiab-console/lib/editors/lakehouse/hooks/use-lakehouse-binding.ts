@@ -20,8 +20,9 @@
  *   2. else the BFF running that same resolver (its env-derived step 3
  *      included) via `/api/lakehouse/paths?lakehouseId=&workspaceId=`, which
  *      returns the binding AND its root listing in one round trip,
- *   3. else nothing — the container root, exactly as before, so an unsaved or
- *      never-provisioned lakehouse is unaffected.
+ *   3. else nothing — an unsaved or never-provisioned lakehouse opens on the
+ *      first probed container, and its item-scoped listing answers with the
+ *      route's storage gate rather than another item's files.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { clientFetch } from '@/lib/client-fetch';
@@ -54,7 +55,7 @@ export interface LakehouseBindingState {
   tablesPrefix: string;
   /** Where a given container's explorer tree starts. */
   treeRootFor: (container: string) => string;
-  /** Containers to render, with the bound one guaranteed present. */
+  /** Containers to render: only the bound one when bound; the probed list otherwise. */
   displayContainers: ContainerInfo[];
 }
 
@@ -114,8 +115,8 @@ export function useLakehouseBinding({
       const qs = new URLSearchParams({ lakehouseId: id, workspaceId });
       const fallback = () => {
         setBindingResolved(true);
-        // 3. No binding to be had (honest gate / not provisioned) — browse the
-        //    container root, the pre-#3904 behaviour.
+        // 3. No binding to be had (honest gate / not provisioned). The listing
+        //    stays item-scoped, so the route answers with its storage gate.
         if (containers.length) setActiveContainer(containers[0].name);
       };
       clientFetch(`/api/lakehouse/paths?${qs.toString()}`)
@@ -149,9 +150,9 @@ export function useLakehouseBinding({
   ]);
 
   /**
-   * Where a container's tree starts. For the container this lakehouse is bound
-   * to that is the lakehouse's own root; a user browsing a DIFFERENT container
-   * still starts at that container's root, which is legitimate.
+   * Where a container's tree starts: the lakehouse's own root in its bound
+   * container. An unbound item lists through the same item-scoped route, which
+   * answers with the storage gate rather than a container listing.
    */
   const treeRootFor = useCallback(
     (container: string) => (binding && container === binding.container ? binding.root : ''),
@@ -159,14 +160,18 @@ export function useLakehouseBinding({
   );
 
   /**
-   * The bound container is rendered even when the live `listContainers()` probe
-   * did not return it (it drops entries on a 6s timeout) — a transient probe
-   * miss must not hide the container this item actually lives in.
+   * A BOUND lakehouse renders only its own container: every listing is
+   * item-scoped (`/api/lakehouse/paths?lakehouseId=`), and the route answers a
+   * listing outside the item's container + root with 403, so offering the other
+   * containers would only offer refusals. It is rendered even when the live
+   * `listContainers()` probe did not return it (that probe drops entries on a 6s
+   * timeout) — a transient probe miss must not hide where this item lives.
+   * An unbound item keeps the probed list.
    */
   const displayContainers = useMemo<ContainerInfo[]>(() => {
     const list = containers || [];
-    if (!binding?.container || list.some((c) => c.name === binding.container)) return list;
-    return [{ name: binding.container, url: '' }, ...list];
+    if (!binding?.container) return list;
+    return [list.find((c) => c.name === binding.container) ?? { name: binding.container, url: '' }];
   }, [containers, binding]);
 
   return {

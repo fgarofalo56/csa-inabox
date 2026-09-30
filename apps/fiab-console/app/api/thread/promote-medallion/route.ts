@@ -20,7 +20,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem, createOwnedItem } from '../../items/_lib/item-crud';
 import { recordThreadEdge } from '@/lib/thread/thread-edges';
-import { resolveLakehouseAbfss } from '@/lib/azure/lakehouse-abfss';
+import { lakehouseStorageWithheldFields, resolveLakehouseStorage } from '@/lib/azure/lakehouse-abfss';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -114,8 +114,13 @@ export async function POST(req: NextRequest) {
   const dstTable = `${sourceName}_${targetLayer}`;
 
   // Resolve the SOURCE Delta table abfss.
-  const srcRoot = await resolveLakehouseAbfss(from.id, srcLake.workspaceId);
-  if (!srcRoot) {
+  const srcResolved = await resolveLakehouseStorage(from.id, srcLake.workspaceId);
+  if (!srcResolved.ok) {
+    if (srcResolved.reason === 'not-found') return bad('source lakehouse not found', 404);
+    // A withheld location carries the resolver's one wording (and the page that
+    // resolves it); only `no-storage` is the storage-configuration gate.
+    const withheld = lakehouseStorageWithheldFields(srcResolved.reason);
+    if (withheld) return NextResponse.json({ ok: false, ...withheld }, { status: 409 });
     return NextResponse.json(
       {
         ok: false,
@@ -127,6 +132,7 @@ export async function POST(req: NextRequest) {
       { status: 503 },
     );
   }
+  const srcRoot = srcResolved.bound;
   const srcAbfss = `${srcRoot.abfss.replace(/\/+$/, '')}/Tables/${sourceName}`;
 
   // Resolve (or create) the TARGET lakehouse in the same workspace.
@@ -145,8 +151,16 @@ export async function POST(req: NextRequest) {
     if (!targetLake) return bad('target lakehouse not found', 404);
   }
 
-  const dstRoot = await resolveLakehouseAbfss(targetLake.id, targetLake.workspaceId);
-  if (!dstRoot) {
+  const dstResolved = await resolveLakehouseStorage(targetLake.id, targetLake.workspaceId);
+  if (!dstResolved.ok) {
+    if (dstResolved.reason === 'not-found') return bad('target lakehouse not found', 404);
+    const withheld = lakehouseStorageWithheldFields(dstResolved.reason);
+    if (withheld) {
+      return NextResponse.json(
+        { ok: false, ...withheld, error: `The target lakehouse: ${withheld.error}` },
+        { status: 409 },
+      );
+    }
     return NextResponse.json(
       {
         ok: false,
@@ -156,6 +170,7 @@ export async function POST(req: NextRequest) {
       { status: 503 },
     );
   }
+  const dstRoot = dstResolved.bound;
   const dstAbfss = `${dstRoot.abfss.replace(/\/+$/, '')}/Tables/${dstTable}`;
 
   const code = promotionCode({ sourceName, targetLayer, transform, srcAbfss, dstAbfss, dstTable });

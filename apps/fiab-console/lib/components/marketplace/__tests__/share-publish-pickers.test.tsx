@@ -252,5 +252,25 @@ describe('LakehouseTablePicker', () => {
     await user.click(await screen.findByRole('option', { name: 'sales_lake' }));
     const bar = await screen.findByText(/Can't list Delta tables/i);
     expect(within(bar.closest('[role="alert"], div')!).getByText(/LOOM_\{BRONZE,SILVER,GOLD,LANDING\}_URL/)).toBeInTheDocument();
+    // Paired control for the link below: a gate that names no page shows none.
+    expect(screen.queryByTestId('publishable-tables-gate-link')).toBeNull();
+  });
+
+  // A lakehouse sharing its storage root: the route names the page that
+  // resolves it. FAILS IF the picker drops `fixHref` (no link to /admin/readiness).
+  it('links a shared storage root to the readiness page', async () => {
+    clientFetchMock.mockImplementation(async (url: string) => {
+      if (url === '/api/workspaces') return json([{ id: 'ws-1', displayName: 'Sales WS' }]);
+      if (url.startsWith('/api/items/lakehouse')) return json({ ok: true, items: [{ id: 'lh-1', displayName: 'sales_lake' }] });
+      return json({ ok: false, reason: 'root-shared', fixHref: '/admin/readiness', error: 'This lakehouse\'s storage location is also used by another item.' });
+    });
+    wrap(<LakehouseTablePicker open selected={null} onSelect={() => {}} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('combobox', { name: /Workspace/i }));
+    await user.click(await screen.findByRole('option', { name: 'Sales WS' }));
+    await user.click(await screen.findByRole('combobox', { name: /Lakehouse/i }));
+    await user.click(await screen.findByRole('option', { name: 'sales_lake' }));
+    const link = await screen.findByTestId('publishable-tables-gate-link');
+    expect(link.getAttribute('href')).toBe('/admin/readiness');
   });
 });

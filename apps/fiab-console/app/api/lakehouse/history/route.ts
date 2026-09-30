@@ -1,7 +1,7 @@
 /**
  * Table history / time travel (F20) — Delta Lake version log for a lakehouse table.
  *
- *   GET  /api/lakehouse/history?container=&tablePath=
+ *   GET  /api/lakehouse/history?lakehouseId=&container=&tablePath=
  *        Lists committed Delta versions by reading the table's `_delta_log/*.json`
  *        commit files directly from ADLS Gen2. NO SQL engine required — the
  *        `commitInfo` action in each commit file carries the exact fields that
@@ -10,13 +10,19 @@
  *        dependency.
  *
  *   POST /api/lakehouse/history
- *        { container, tablePath, version, action: 'restore' | 'preview' }
+ *        { lakehouseId, container, tablePath, version, action: 'restore' | 'preview' }
  *        Restore: `RESTORE TABLE delta.`<abfss>` TO VERSION AS OF <n>`
  *        Preview: `SELECT * FROM delta.`<abfss>` VERSION AS OF <n> LIMIT 100`
  *        Both run on a Databricks SQL Warehouse (the only Azure-native engine
  *        that speaks Delta time-travel SQL — Synapse Serverless does not).
  *        Honest-gates with a precise MessageBar payload when Databricks is not
  *        configured / has no warehouse.
+ *
+ * Both verbs resolve the table through the lakehouse item (`scopeItemPath` in
+ * `../_lib/item-scope`): `lakehouseId` is authorized (404 when the caller cannot
+ * reach it; a restore also needs write access) and the table path must lie
+ * strictly below that item's storage root. Without `lakehouseId` only a tenant
+ * admin may name a table path directly.
  */
 
 import { trimSlashes } from '@/lib/util/trim';
@@ -26,6 +32,7 @@ import {
   listPaths,
   downloadFile,
   getAccountName,
+  type KnownContainer,
 } from '@/lib/azure/adls-client';
 import {
   databricksConfigGate,
@@ -33,6 +40,8 @@ import {
   executeStatement,
 } from '@/lib/azure/databricks-client';
 import { withSession } from '@/lib/api/route-toolkit';
+import { dfsSuffix } from '@/lib/azure/cloud-endpoints';
+import { scopeItemPath } from '../_lib/item-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -52,15 +61,15 @@ interface HistoryRow {
   operationParameters?: Record<string, unknown>;
 }
 
-function isKnownContainer(c: string): boolean {
-  return (KNOWN_CONTAINERS as readonly string[]).includes(c);
-}
-
 /** Reject path traversal + leading/trailing slashes. */
 function cleanTablePath(p: string): string | null {
   const t = trimSlashes((p || '').trim());
   if (!t) return null;
   if (t.includes('..')) return null;
+  // A `%` is refused rather than carried: the path is checked here as literal
+  // segments, and a percent-escape could read as a different path wherever it
+  // is decoded later (a URL, a storage URI).
+  if (t.includes('%')) return null;
   return t;
 }
 
@@ -75,19 +84,29 @@ function num(v: unknown): number | undefined {
 // ------------------------------------------------------------------
 export const GET = withSession(async (req: NextRequest, { session }) => {
 
-  const container = req.nextUrl.searchParams.get('container') || '';
+  const container0 = req.nextUrl.searchParams.get('container') || '';
   const tablePathRaw = req.nextUrl.searchParams.get('tablePath') || '';
 
-  if (!container || !tablePathRaw) {
-    return NextResponse.json({ ok: false, error: 'container and tablePath are required' }, { status: 400 });
+  if (!tablePathRaw) {
+    return NextResponse.json({ ok: false, error: 'tablePath is required' }, { status: 400 });
   }
-  if (!isKnownContainer(container)) {
-    return NextResponse.json({ ok: false, error: `unknown container: ${container}` }, { status: 404 });
-  }
-  const tablePath = cleanTablePath(tablePathRaw);
-  if (!tablePath) {
+  if (!cleanTablePath(tablePathRaw)) {
     return NextResponse.json({ ok: false, error: 'invalid tablePath' }, { status: 400 });
   }
+  // The table must lie inside the caller's own lakehouse root (or, with no
+  // lakehouseId, the caller must be a tenant admin). See ../_lib/item-scope.
+  const scoped = await scopeItemPath(
+    session,
+    {
+      lakehouseId: req.nextUrl.searchParams.get('lakehouseId') || '',
+      container: container0,
+      rawPath: tablePathRaw,
+    },
+    { knownContainers: KNOWN_CONTAINERS },
+  );
+  if (scoped instanceof NextResponse) return scoped;
+  const container = scoped.container as KnownContainer;
+  const tablePath = scoped.path;
 
   try {
     const logDir = `${tablePath}/_delta_log`;
@@ -168,7 +187,7 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
 // ------------------------------------------------------------------
 // POST — restore / preview-as-of (Databricks Delta time-travel SQL)
 // ------------------------------------------------------------------
-export const POST = withSession(async (req: NextRequest) => {
+export const POST = withSession(async (req: NextRequest, { session }) => {
 
   let body: any;
   try {
@@ -177,15 +196,12 @@ export const POST = withSession(async (req: NextRequest) => {
     return NextResponse.json({ ok: false, error: 'invalid JSON body' }, { status: 400 });
   }
 
-  const container = String(body?.container || '');
-  const tablePath = cleanTablePath(String(body?.tablePath || ''));
+  const container0 = String(body?.container || '');
+  const tablePathRaw = String(body?.tablePath || '');
   const action = body?.action === 'restore' ? 'restore' : body?.action === 'preview' ? 'preview' : null;
   const version = num(body?.version);
 
-  if (!container || !isKnownContainer(container)) {
-    return NextResponse.json({ ok: false, error: `unknown container: ${container}` }, { status: 404 });
-  }
-  if (!tablePath) {
+  if (!cleanTablePath(tablePathRaw)) {
     return NextResponse.json({ ok: false, error: 'invalid tablePath' }, { status: 400 });
   }
   if (!action) {
@@ -194,6 +210,32 @@ export const POST = withSession(async (req: NextRequest) => {
   if (version === undefined || version < 0 || !Number.isInteger(version)) {
     return NextResponse.json({ ok: false, error: 'version must be a non-negative integer' }, { status: 400 });
   }
+  // The statement below quotes the table path with backticks, so a backtick in
+  // the request cannot be carried into it. It is refused HERE, before the path
+  // is scoped, so the path the SQL names is exactly the path that was checked.
+  if (container0.includes('`') || tablePathRaw.includes('`')) {
+    return NextResponse.json(
+      { ok: false, error: 'tablePath and container cannot contain a backtick (`).' },
+      { status: 400 },
+    );
+  }
+  // The table must lie inside the caller's own lakehouse root (or, with no
+  // lakehouseId, the caller must be a tenant admin). A restore rewrites the
+  // table, so it asks for write access on the item.
+  const scoped = await scopeItemPath(
+    session,
+    { lakehouseId: String(body?.lakehouseId || ''), container: container0, rawPath: tablePathRaw },
+    {
+      knownContainers: KNOWN_CONTAINERS,
+      write: action === 'restore',
+      readOnlyMessage:
+        'Your role on this lakehouse is read-only, so Loom did not restore the table. A workspace '
+        + 'Member/Admin, or an item grant that includes Edit, can restore a version.',
+    },
+  );
+  if (scoped instanceof NextResponse) return scoped;
+  const container = scoped.container;
+  const tablePath = scoped.path;
 
   // Honest infra-gate: Delta time-travel SQL requires Databricks. Synapse
   // Serverless does not support RESTORE / VERSION AS OF.
@@ -240,8 +282,10 @@ export const POST = withSession(async (req: NextRequest) => {
     );
   }
 
-  // Build the abfss URI for the Delta table. Backtick-quoted path literal in
-  // Spark SQL — strip any backticks from the resolved value defensively.
+  // Build the abfss URI for the Delta table from the SCOPED container and path,
+  // unchanged. Nothing is rewritten after the scope check: a value the
+  // backtick-quoted literal cannot carry is refused, never edited into a
+  // different path.
   let account: string;
   try {
     account = getAccountName();
@@ -251,7 +295,17 @@ export const POST = withSession(async (req: NextRequest) => {
       { status: 502 },
     );
   }
-  const abfss = `abfss://${container}@${account}.dfs.core.windows.net/${tablePath}`.replace(/`/g, '');
+  // The DFS host suffix is the boundary's (`dfsSuffix`): `dfs.core.windows.net`
+  // in Commercial/GCC, `dfs.core.usgovcloudapi.net` in GCC-High/IL5/DoD. A
+  // hard-coded Commercial suffix points a Gov restore at a host that does not
+  // serve the account.
+  const abfss = `abfss://${container}@${account}.${dfsSuffix()}/${tablePath}`;
+  if (abfss.includes('`')) {
+    return NextResponse.json(
+      { ok: false, error: 'The resolved table location contains a backtick, which the time-travel statement cannot quote; nothing was run.' },
+      { status: 400 },
+    );
+  }
 
   try {
     if (action === 'restore') {

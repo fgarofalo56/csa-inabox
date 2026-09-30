@@ -90,4 +90,28 @@ describe('#3904 — a classified listing failure reaches the user as a fix, not 
     await waitFor(() => expect(screen.getAllByText('Nothing here yet').length).toBeGreaterThan(0));
     expect(document.body.textContent).not.toContain('RequestId');
   });
+
+  // A lakehouse sharing its storage root: the route answers 409 with the
+  // resolver's wording and `fixHref`. FAILS IF the pane drops the link (no
+  // link to /admin/readiness), leaving only a paragraph that names the page.
+  it('a shared storage root links to the readiness page that resolves it', async () => {
+    mount({
+      ok: false, reason: 'root-shared', fixHref: '/admin/readiness',
+      error: 'This lakehouse\'s storage location is also used by another item, so Loom is not opening it here.',
+    });
+    const link = await screen.findByTestId('lakehouse-listing-fix-link');
+    expect(link.getAttribute('href')).toBe('/admin/readiness');
+    expect(screen.getAllByText(/also used by another item/).length).toBeGreaterThan(0);
+  });
+
+  // Paired control. FAILS IF the link is shown for a failure that names no page.
+  it('shows no readiness link for a failure without one', async () => {
+    mount({
+      ok: false, kind: 'denied', code: 'AuthorizationPermissionMismatch',
+      error: 'Loom is not authorized to list landing/lakehouses/x.',
+      remediation: 'Grant the Console managed identity (UAMI) the Storage Blob Data Contributor role.',
+    });
+    await waitFor(() => expect(screen.getAllByText('List failed').length).toBeGreaterThan(0));
+    expect(screen.queryByTestId('lakehouse-listing-fix-link')).toBeNull();
+  });
 });

@@ -17,11 +17,16 @@
  * request refused: `mirrorFolderSegment` maps every character outside
  * `[A-Za-z0-9_.-]` to `_` (which includes "/" and "\", so the result is always
  * one segment) and maps the two names that are not folder names, "." and "..",
- * to "_" and "__". For a name with no "/" this is exactly the mapping the route
- * used before, so re-weaving an existing mirror upserts the same shortcut rows.
+ * to "_" and "__". For a name with no "/" other than "." and "..", this is
+ * exactly the folder the route derived before. The shortcut registry's row id
+ * flattens separators, so a name whose "/" are single and interior or trailing
+ * keeps its row id and a re-weave moves the existing rows to the flat folder; a
+ * leading or doubled "/" (and "." / "..") yields a new row id, so a re-weave
+ * writes new rows beside the old ones. A non-string `from.name` falls back to
+ * the display name.
  * The mapping is recorded, not guessed: each shortcut row stores the derived
  * `parentPath` and a `statusDetail` naming the source mirror, and the response
- * returns the folder.
+ * returns it as `path` (`mirrors/<folder>`).
  *
  * Route-toolkit: withSession (R3), behind a 1-arg `POST` adapter — this route
  * is a Weave bridge that `app/api/estate/execute/route.ts` dynamic-imports as
@@ -118,7 +123,7 @@ async function mirrorToLakehouse(req: NextRequest, session: SessionPayload): Pro
   const failNote = failed.length ? ` (${failed.length} failed: ${failed.map((f) => f.table).join(', ')})` : '';
   return NextResponse.json({
     ok: true,
-    folder: parentPath,
+    path: parentPath,
     message: `Added ${created.length} shortcut(s) to lakehouse "${lake.displayName}" under Files/${parentPath}${failNote}. Open the lakehouse to work with the mirrored data.`,
     link: `/items/lakehouse/${lake.id}`,
     linkLabel: 'Open the Lakehouse',
@@ -131,6 +136,8 @@ async function mirrorToLakehouse(req: NextRequest, session: SessionPayload): Pro
  * not a `const x = withSession(...)` binding, so the route-inventory analyzer
  * (scripts/ci/_route-auth-scope.mjs), which follows call sites from the
  * exported verb, still reaches the item loads and backend calls in its body.
+ * An unexpected throw becomes the toolkit's generic 500 (`apiServerError`,
+ * logged server-side) rather than propagating to the caller.
  */
 export async function POST(req: NextRequest): Promise<Response> {
   return withSession((r: NextRequest, { session }) => mirrorToLakehouse(r, session))(req, {
