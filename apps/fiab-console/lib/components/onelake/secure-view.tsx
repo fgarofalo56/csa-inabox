@@ -67,6 +67,9 @@ import {
 import { Section } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { NotConfiguredBar } from '@/lib/components/admin-security/not-configured-bar';
+import { AdminOnlyNotice, useTenantAdminGate } from '@/lib/components/shared/admin-only-notice';
+import { SECURE_TAB_ADMIN_ONLY } from '@/lib/util/admin-only-copy';
+import { isAdminOnlyRefusal, refusalText, type RefusalEnvelope } from '@/lib/util/admin-refusal';
 
 // ── shapes mirrored from /api/onelake/security ────────────────────────────────
 interface MatrixRow {
@@ -249,6 +252,11 @@ export function SecureView({ workspaces, items }: { workspaces: Workspace[]; ite
   const [error, setError] = useState<string | null>(null);
   const [gate, setGate] = useState<{ surface: string; missing?: string; hint?: string } | null>(null);
   const [grantOpen, setGrantOpen] = useState(false);
+  // /api/onelake/security (list, grant, revoke) is tenant-admin gated (#4619):
+  // a non-admin gets the notice instead of a request that can only 403.
+  const adminGate = useTenantAdminGate();
+  const [refused, setRefused] = useState<RefusalEnvelope | null>(null);
+  const canUseSecure = adminGate.allowed;
 
   // location label for a container — the lakehouse item whose name matches.
   const wsName = useMemo(() => {
@@ -259,6 +267,7 @@ export function SecureView({ workspaces, items }: { workspaces: Workspace[]; ite
 
   // ── discover the container list (knownContainers) once ──
   useEffect(() => {
+    if (!canUseSecure) return undefined;
     let cancelled = false;
     clientFetch('/api/onelake/security', { cache: 'no-store' })
       .then((r) => r.json())
@@ -270,13 +279,14 @@ export function SecureView({ workspaces, items }: { workspaces: Workspace[]; ite
       })
       .catch(() => { if (!cancelled) setKnownContainers([]); });
     return () => { cancelled = true; };
-  }, []);
+  }, [canUseSecure]);
 
   const load = useCallback(async () => {
-    if (!container) return;
+    if (!container || !canUseSecure) return;
     setLoading(true);
     setError(null);
     setGate(null);
+    setRefused(null);
     try {
       const qs = new URLSearchParams({ container });
       if (workspaceId) qs.set('workspaceId', workspaceId);
@@ -287,8 +297,13 @@ export function SecureView({ workspaces, items }: { workspaces: Workspace[]; ite
         setData(null);
         return;
       }
+      if (isAdminOnlyRefusal(json)) {
+        setRefused(json);
+        setData(null);
+        return;
+      }
       if (!res.ok || !json?.ok) {
-        setError(json?.error || `HTTP ${res.status}`);
+        setError(refusalText(json, res.status));
         setData(null);
         return;
       }
@@ -299,7 +314,7 @@ export function SecureView({ workspaces, items }: { workspaces: Workspace[]; ite
     } finally {
       setLoading(false);
     }
-  }, [container, workspaceId]);
+  }, [container, workspaceId, canUseSecure]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -436,7 +451,7 @@ export function SecureView({ workspaces, items }: { workspaces: Workspace[]; ite
             <Tab value="roles">View security roles</Tab>
           </TabList>
           <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' }}>
-            <Button appearance="primary" icon={<PersonAdd20Regular />} disabled={!container} onClick={() => setGrantOpen(true)}>
+            <Button appearance="primary" icon={<PersonAdd20Regular />} disabled={!container || !canUseSecure} onClick={() => setGrantOpen(true)}>
               Grant access
             </Button>
             <Tooltip content="OneLake security roles (Microsoft Learn)" relationship="label">
@@ -452,6 +467,11 @@ export function SecureView({ workspaces, items }: { workspaces: Workspace[]; ite
           </div>
         </div>
 
+        {refused ? (
+          <AdminOnlyNotice reason={refused.reason} remediation={refused.remediation} />
+        ) : adminGate.refused && (
+          <AdminOnlyNotice {...SECURE_TAB_ADMIN_ONLY} />
+        )}
         {gate && (
           <NotConfiguredBar
             surface={gate.surface}
@@ -637,7 +657,7 @@ function GrantDialog({
         }),
       });
       const json = await res.json();
-      if (!res.ok || !json.ok) { setError(json?.error || `HTTP ${res.status}`); return; }
+      if (!res.ok || !json.ok) { setError(refusalText(json, res.status)); return; }
       onGranted();
     } catch (e: any) {
       setError(e?.message || String(e));

@@ -43,7 +43,13 @@ vi.mock('@/lib/client-fetch', async () => {
       if (url.startsWith('/api/lakehouse/permissions/rls-test')) {
         return (rls.POST as any)(routeReq(`http://x${url}`, body), {});
       }
-      if (url.startsWith('/api/lakehouse/permissions?tab=column&list=columns')) {
+      // The column list answers only a read that names the lakehouse: the GET
+      // is scoped to one item. A pane that drops `lakehouseId` gets the
+      // fallback below, the column picker never enables, and both tests fail.
+      if (
+        url.startsWith('/api/lakehouse/permissions?tab=column&list=columns')
+        && new URL(url, 'http://x').searchParams.get('lakehouseId') === 'lh-rls'
+      ) {
         return new Response(JSON.stringify({ ok: true, columns: [{ columnId: 3, name: 'region', dataType: 'varchar' }] }));
       }
       if (url === '/api/lakehouse/permissions') {
@@ -72,7 +78,7 @@ afterEach(() => {
 async function mountWithTableAndColumn() {
   render(
     <FluentProvider theme={webLightTheme}>
-      <OnelakeRlsPredicateEditor tables={[{ objectId: 7, schema: 'dbo', name: 'orders', type: 'U' }]} />
+      <OnelakeRlsPredicateEditor lakehouseId="lh-rls" tables={[{ objectId: 7, schema: 'dbo', name: 'orders', type: 'U' }]} />
     </FluentProvider>,
   );
   const [tableDd, colDd] = screen.getAllByRole('combobox');

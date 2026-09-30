@@ -11,15 +11,19 @@
  * The run (target table, row count, columns) is persisted to state.runs[].
  * Azure-native (Databricks SQL over Delta) — no Microsoft Fabric dependency.
  *
- * Honest gate (no-vaporware): Databricks not configured / no warehouse → 503
- * with the exact env var to set. Preview still works with no backend.
+ * Honest gate (no-vaporware): Databricks workspace not configured → 503 with
+ * the exact env var; a warehouse that cannot be produced → its classified cause
+ * (#3744). Preview still works with no backend.
  * Owner-scoped via loadOwnedItem / updateOwnedItem (route-guards).
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import {
-  databricksConfigGate, warehouseConfigGate, createUcTableFromFile,
+  databricksConfigGate, createUcTableFromFile,
 } from '@/lib/azure/databricks-client';
+import {
+  resolveWarehouseIdOrThrow, WarehouseResolutionError, warehouseErrorBody, warehouseErrorStatus,
+} from '@/lib/azure/databricks-sql-warehouse';
 import { generateRows, rowsToCsv, type ColumnGenSpec } from '@/lib/azure/synthetic-data-gen';
 import { sanitizeSpecs } from '../../_lib/specs';
 import { loadOwnedItem, updateOwnedItem, jerr } from '../../../_lib/item-crud';
@@ -30,7 +34,7 @@ export const dynamic = 'force-dynamic';
 const ITEM_TYPE = 'synthetic-data';
 const MAX_ROWS = 200_000;
 const DBX_GATE_HINT =
-  'Provision an Azure Databricks workspace + SQL Warehouse and set LOOM_DATABRICKS_HOSTNAME (+ LOOM_DATABRICKS_SQL_WAREHOUSE_ID) — the generated rows are written to a real Delta table via Databricks SQL. Preview still runs with no backend.';
+  'Set LOOM_DATABRICKS_HOSTNAME (an Azure Databricks workspace) — the Console then creates or adopts the \'loom-default\' SQL warehouse itself and the generated rows are written to a real Delta table via Databricks SQL. Preview still runs with no backend.';
 
 export interface SyntheticRun {
   id: string;
@@ -49,10 +53,8 @@ export interface SyntheticRun {
 
 const IDENT = /^[A-Za-z0-9_]+$/;
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return jerr('unauthenticated', 401);
-  const itemId = (await ctx.params).id;
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const itemId = params.id;
   const item = await loadOwnedItem(itemId, ITEM_TYPE, session.claims.oid);
   if (!item) return jerr('synthetic-data item not found', 404);
 
@@ -78,12 +80,20 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     return NextResponse.json({ ok: false, error: 'volume (catalog.schema.volume) is required to stage the generated rows.' }, { status: 400 });
   }
 
-  // Honest backend gate — Databricks + a warehouse are needed for the write.
+  // Honest backend gate — only the Databricks WORKSPACE can be missing. The SQL
+  // warehouse is the caller's pick, else the platform warehouse the Console
+  // produces (#3744); a failed resolution returns its classified cause.
   const dbxGate = databricksConfigGate();
   if (dbxGate) return NextResponse.json({ ok: false, code: 'not_configured', gated: true, error: `Databricks not configured: set ${dbxGate.missing}.`, hint: DBX_GATE_HINT }, { status: 503 });
-  const whGate = warehouseConfigGate(warehouseId || null);
-  if (whGate) return NextResponse.json({ ok: false, code: 'not_configured', gated: true, error: `No SQL warehouse: set ${whGate.missing} or pick a warehouse.`, hint: DBX_GATE_HINT }, { status: 503 });
-  const wid = warehouseId || String(process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID || '');
+  let wid: string;
+  try {
+    wid = await resolveWarehouseIdOrThrow(warehouseId || null);
+  } catch (e) {
+    if (e instanceof WarehouseResolutionError) {
+      return NextResponse.json({ ...warehouseErrorBody(e), gated: true }, { status: warehouseErrorStatus(e) });
+    }
+    throw e;
+  }
 
   const startedAt = new Date().toISOString();
   const t0 = Date.now();
@@ -121,7 +131,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
   await persistRun(itemId, session.claims.oid, item.state, body, run).catch(() => {});
   return NextResponse.json({ ok: true, run });
-}
+});
 
 /** Persist the run into item.state.runs[] and mirror the last-used config. */
 async function persistRun(

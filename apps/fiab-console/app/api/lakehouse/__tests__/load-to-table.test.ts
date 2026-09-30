@@ -152,6 +152,35 @@ describe('POST /api/lakehouse/load-to-table', () => {
     expect(submitLivyBatch).not.toHaveBeenCalled();
   });
 
+  // Input validation at the route: a source path holding a control character is
+  // refused with 400 before any Spark job is built, so the codegen layer's own
+  // quoting is never the only line. Breaks if the route stops passing the path
+  // through `scopePathToRoot` (the batch is then submitted, 200), or if the
+  // check narrows back to C0 + DEL (the U+0085 and U+2028 rows then reach Livy).
+  it.each([
+    ['SOH U+0001', '\u0001'],
+    ['LF', '\n'],
+    ['NEL U+0085', '\u0085'],
+    ['LINE SEPARATOR U+2028', '\u2028'],
+  ])('refuses a source path holding %s (400; no Livy batch)', async (_label, ch) => {
+    const res = await POST(bodyReq({ ...base, path: `${ROOT}/Files/a${ch}b.csv` }));
+    expect(res.status).toBe(400);
+    const j = await res.json();
+    expect(j.code).toBe('bad_request');
+    expect(j.error).toMatch(/control character/);
+    expect((submitLivyBatch as any).mock.calls).toEqual([]);
+  });
+
+  it('accepts a non-ASCII source name on the same fixture (positive arm for the row above)', async () => {
+    // Breaks if the refusal widens to every code point above 0x7f: this name
+    // (U+00FC, U+00A0) is then refused and no batch is submitted.
+    const path = `${ROOT}/Files/a\u00fc\u00a0b.csv`;
+    const res = await POST(bodyReq({ ...base, path }));
+    expect(res.status).toBe(200);
+    expect((submitLivyBatch as any).mock.calls).toHaveLength(1);
+    expect(submittedCode()).toContain(`abfss://${CONTAINER}@${HOST}/${path}`);
+  });
+
   it('409 when the item has no storage binding', async () => {
     (resolveLakehouseAbfss as any).mockResolvedValue(null);
     const res = await POST(bodyReq(base));

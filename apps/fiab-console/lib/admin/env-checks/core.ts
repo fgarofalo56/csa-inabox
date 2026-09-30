@@ -19,6 +19,9 @@
 // Pure, zero-import leaf (safe in a client bundle) — the SAME predicate the
 // runtime clients use to decide whether a *_URL is a real endpoint.
 import { isUnreachableServiceUrl } from '@/lib/azure/unreachable-url';
+// Pure, zero-import leaf (safe in a client bundle) — values the Console produced
+// at runtime for a spec's `runtimeProduced` vars (#3744). Empty in a browser.
+import { readRuntimeValue, readRuntimeFailure } from '@/lib/azure/runtime-produced-env';
 
 export type AuditStatus = 'pass' | 'warn' | 'fail';
 /**
@@ -592,10 +595,32 @@ export interface EnvSpec {
    * never stand it up). The sharp verdict for a DEPLOYED component must live in
    * a live probe wired through readiness.ts GATE_PROBE_MAP. */
   appliesWhenPresent?: { envVar: string; notDeployedDetail: string };
+  /** Vars the CONSOLE ITSELF PRODUCES at runtime when unset (auto-bind-by-default.md §5).
+   *
+   * WHY THIS EXISTS (#3744). `svc-databricks-sql` required
+   * LOOM_DATABRICKS_SQL_WAREHOUSE_ID, whose only producer was a bootstrap step
+   * the workspace refuses at the network layer — so the gate sat blocked on a
+   * value the Console can produce itself (it reaches the workspace over its
+   * private endpoint). The resolver now ensure-creates the warehouse and
+   * publishes the id to `lib/azure/runtime-produced-env`; a var listed here is
+   * satisfied by that published value exactly as by the env var.
+   *
+   * It is NOT a pass-by-declaration: an unset var with NO published value is
+   * still missing, and a published FAILURE replaces the generic "Missing:"
+   * detail/remediation with the classified cause the resolver measured
+   * (permission / network / quota / unknown) — never "not configured" for a
+   * call that was made and refused. */
+  runtimeProduced?: string[];
+}
+
+/** True when `k` is unset in env but the Console produced it at runtime for a spec that allows that. */
+function producedAtRuntime(spec: EnvSpec, k: string): boolean {
+  return !has(k) && !!spec.runtimeProduced?.includes(k) && !!readRuntimeValue(k);
 }
 
 /** True when `k` is set AND its value is not one this spec explicitly rejects. */
 function hasSatisfying(spec: EnvSpec, k: string): boolean {
+  if (producedAtRuntime(spec, k)) return true;
   if (!has(k)) return false;
   // A var that must hold a reachable-shaped service URL is NOT satisfied by a
   // bind-all / unparseable placeholder — the runtime clients reject exactly
@@ -650,11 +675,30 @@ export function evalEnv(spec: EnvSpec): CheckResult {
   const unusable = ok ? [] : missing.filter(
     (k) => has(k) && spec.rejectUnreachableUrls?.includes(k) && isUnreachableServiceUrl(env(k)),
   );
+  // Runtime-produced vars (#3744): name what the Console produced, or — when it
+  // tried and failed — the classified cause it measured, instead of a bare
+  // "Missing:" that would send the operator to set a value the platform owns.
+  const produced = (spec.runtimeProduced || [])
+    .filter((k) => producedAtRuntime(spec, k))
+    .map((k) => `${k} produced by the Console — ${readRuntimeValue(k)!.detail}`);
+  const failures = ok ? [] : (spec.runtimeProduced || [])
+    .filter((k) => missing.includes(k))
+    .map((k) => ({ k, f: readRuntimeFailure(k) }))
+    .filter((x): x is { k: string; f: NonNullable<ReturnType<typeof readRuntimeFailure>> } => !!x.f);
   const detail = ok
-    ? 'Configured.'
-    : unusable.length
-      ? `${unusable.join(', ')} is SET but is not a reachable endpoint (a bind-all address like 0.0.0.0, or an unparseable value) — the runtime treats it exactly like unset. Missing: ${missing.join(', ')}.`
-      : `Missing: ${missing.join(', ')}.`;
+    ? (produced.length ? `Configured. ${produced.join(' ')}` : 'Configured.')
+    : failures.length
+      ? `${failures.map(({ k, f }) => (f.kind === 'not-configured'
+        ? `The Console cannot produce ${k} yet: ${f.message}`
+        : `The Console tried to produce ${k} and failed (${f.kind}): ${f.message}`)).join(' ')} Missing: ${missing.join(', ')}.`
+      : unusable.length
+        ? `${unusable.join(', ')} is SET but is not a reachable endpoint (a bind-all address like 0.0.0.0, or an unparseable value) — the runtime treats it exactly like unset. Missing: ${missing.join(', ')}.`
+        : `Missing: ${missing.join(', ')}.`;
+  const remediation = ok
+    ? undefined
+    : failures.length
+      ? failures.map(({ f }) => f.remediation).join(' ')
+      : spec.remediation;
   return {
     id: spec.id,
     category: spec.category,
@@ -662,7 +706,7 @@ export function evalEnv(spec: EnvSpec): CheckResult {
     severity: spec.severity,
     status: ok ? 'pass' : failStatus,
     detail,
-    remediation: ok ? undefined : spec.remediation,
+    remediation,
     redeploy: ok ? undefined : true,
     docs: spec.docs,
     portalSteps: fix?.portalSteps,

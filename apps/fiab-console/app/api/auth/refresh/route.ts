@@ -47,6 +47,7 @@ import {
   sessionSlidingEnabled,
   MAX_AGE_SECS,
 } from '@/lib/auth/session';
+import { isDeviceCodeSession } from '@/lib/auth/device-code-policy';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -89,10 +90,20 @@ export async function POST() {
     // Sliding ON (default): new exp = now + MAX_AGE_SECS. OFF: mirror the
     // pre-sliding callback behavior (exp from the access-token expiry).
     const sliding = sessionSlidingEnabled();
-    const exp = sliding
+    const slid = sliding
       ? Math.floor(Date.now() / 1000) + MAX_AGE_SECS
       : Math.floor((silentExpiresOn?.getTime() ?? Date.now() + 3600_000) / 1000);
-    const cookieValue = encodeSessionCookie({ claims: session.claims, exp });
+    // A device-code session is NEVER extended (operator decision 2026-09-30,
+    // lib/auth/device-code-policy.ts): its exp was set at mint to mint + 1 h, and
+    // a re-mint keeps the EARLIER of the two, so refreshing cannot outlive it.
+    const exp = isDeviceCodeSession(session) ? Math.min(slid, session.exp) : slid;
+    // The `authVia` marker survives the re-mint (#4805): dropping it here would
+    // let a device-code session shed its marker by refreshing.
+    const cookieValue = encodeSessionCookie({
+      claims: session.claims,
+      exp,
+      ...(session.authVia ? { authVia: session.authVia } : {}),
+    });
     // KILL-SWITCH SIGNAL (LOOM_SESSION_SLIDING_ENABLED=false): we still re-mint
     // ONCE here (so an in-flight clientFetch 401 can recover, and so the existing
     // OFF-path contract — 200 + Set-Cookie with the ~1h access-token exp — is
@@ -106,7 +117,9 @@ export async function POST() {
       status: 200,
       headers: {
         'content-type': 'application/json',
-        'set-cookie': setSessionCookieHeader(cookieValue),
+        'set-cookie': isDeviceCodeSession(session)
+          ? setSessionCookieHeader(cookieValue, exp - Math.floor(Date.now() / 1000))
+          : setSessionCookieHeader(cookieValue),
       },
     });
   } catch {

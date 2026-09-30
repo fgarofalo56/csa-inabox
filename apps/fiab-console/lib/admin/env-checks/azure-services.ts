@@ -412,10 +412,17 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
   },
   {
     id: 'svc-databricks-sql', category: 'azure-services', title: 'Databricks SQL warehouse (DQ monitor / MDM / DLP schemas)', severity: 'recommended',
+    // #3744 — the Console PRODUCES this value (auto-bind-by-default.md §5): with
+    // a Databricks workspace bound it adopts or ensure-creates the serverless
+    // `loom-default` warehouse (lib/azure/databricks-sql-warehouse.ts) and
+    // persists the id. `runtimeProduced` lets that published id satisfy the
+    // gate; a failed attempt surfaces its classified cause in place of the
+    // remediation below, which now only applies before the Console has tried.
     required: ['LOOM_DATABRICKS_SQL_WAREHOUSE_ID'], warnOnMiss: true,
-    remediation: 'Set LOOM_DATABRICKS_SQL_WAREHOUSE_ID (with LOOM_DATABRICKS_HOSTNAME) so DQ monitoring, MDM match-merge, and governance DLP schema surfaces run against a real Databricks SQL warehouse (warehouseConfigGate). Synapse covers the warehouse item type without it.',
-    provisionedBy: 'modules/landing-zone (Databricks workspace + SQL warehouse) → apps[] env',
-    role: 'Databricks SQL access (Console UAMI, SCIM-provisioned)',
+    runtimeProduced: ['LOOM_DATABRICKS_SQL_WAREHOUSE_ID'],
+    remediation: 'The Console creates or adopts the Databricks SQL warehouse itself once LOOM_DATABRICKS_HOSTNAME is bound — it adopts \'loom-default\' (else the Azure Government producers\' \'loom-governance\') and creates the serverless \'loom-default\' only when neither exists — the first time a Databricks SQL surface (DQ monitor, MDM match-merge, Delta Share query) or the readiness self-audit needs it. The report accelerator stays opt-in: it runs on Databricks only when LOOM_DATABRICKS_SQL_WAREHOUSE_ID is pinned. /admin/readiness runs the resolver in the replica serving the page before it reads this gate, so a gate still unmet there carries the classified cause of that attempt. Pinning LOOM_DATABRICKS_SQL_WAREHOUSE_ID overrides the produced value. Synapse covers the warehouse item type without it.',
+    provisionedBy: 'Console runtime — lib/azure/databricks-sql-warehouse.ts ensure-creates \'loom-default\' over the workspace private endpoint and persists the id on the platform-settings doc (env-config container). The post-deploy bootstrap step "Provision default Databricks SQL warehouse" is the legacy producer (refused at the network layer from hosted runners, #3744).',
+    role: 'Databricks entitlements on the Console UAMI (SCIM-provisioned): databricks-sql-access to use the warehouse; allow-cluster-create (or workspace admin) for the Console to CREATE it',
     // X-MATRIX (Databricks-SQL): region-limited in Azure Government ('limited',
     // non-blocking note) — Synapse dedicated SQL covers the warehouse workload.
     availability: {

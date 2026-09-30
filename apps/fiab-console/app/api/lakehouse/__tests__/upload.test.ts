@@ -235,6 +235,31 @@ describe('upload — storage form (no item)', () => {
     expect(res.status).toBe(201);
     expect(uploads()).toEqual([[CONTAINER, 'staging/a.csv']]);
   });
+
+  // The storage form reports its abfss path from the container's configured
+  // account URL, on the active cloud's DFS host. Breaks if the suffix is
+  // hard-coded to `.dfs.core.windows.net`: the GCC-High row then names the
+  // Commercial host. The Commercial row pins that the same code path still
+  // answers the Commercial host (so the GCC-High row is not satisfied by a
+  // route that stopped reporting a path at all).
+  it.each([
+    ['commercial', undefined, 'https://comacct.dfs.core.windows.net', 'abfss://landing@comacct.dfs.core.windows.net/staging/a.csv'],
+    ['GCC-High', 'gcc-high', 'https://govacct.dfs.core.usgovcloudapi.net', 'abfss://landing@govacct.dfs.core.usgovcloudapi.net/staging/a.csv'],
+  ])('reports the abfss path on the %s DFS host', async (_n, cloud, url, expected) => {
+    const prevCloud = process.env.LOOM_CLOUD;
+    const prevUrl = process.env.LOOM_LANDING_URL;
+    if (cloud === undefined) delete process.env.LOOM_CLOUD; else process.env.LOOM_CLOUD = cloud;
+    process.env.LOOM_LANDING_URL = url;
+    try {
+      (getSession as any).mockReturnValue(admin);
+      const res = await POST(req({ container: CONTAINER, path: 'staging/a.csv' }));
+      expect(res.status).toBe(201);
+      expect((await res.json()).abfssPath).toBe(expected);
+    } finally {
+      if (prevCloud === undefined) delete process.env.LOOM_CLOUD; else process.env.LOOM_CLOUD = prevCloud;
+      if (prevUrl === undefined) delete process.env.LOOM_LANDING_URL; else process.env.LOOM_LANDING_URL = prevUrl;
+    }
+  });
 });
 
 describe('upload — request shape', () => {

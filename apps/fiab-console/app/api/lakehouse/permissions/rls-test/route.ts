@@ -48,8 +48,19 @@ function resolveDedicated(): { target: SynapseTarget } | { gate: NextResponse } 
   }
 }
 
+/**
+ * The admin-only refusal for this route names row-level security, not the
+ * feature-gate default (labels / DLP / Purview), so the 403 describes the
+ * surface the caller hit. Status, `error`, `code` and `gateId` are unchanged.
+ */
+const RLS_ADMIN_REFUSAL = {
+  reason:
+    'The row-level security preview runs a predicate against live pool rows as the identity '
+    + 'the caller names, so it is restricted to tenant admins, like the RLS policy writes.',
+};
+
 export const POST = withSession(async (req: NextRequest, { session }) => {
-  const denied = requireTenantAdmin(session);
+  const denied = requireTenantAdmin(session, RLS_ADMIN_REFUSAL);
   if (denied) return denied;
 
   const body = await req.json().catch(() => ({}));

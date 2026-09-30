@@ -4418,25 +4418,6 @@
           }
         },
         {
-          "id": "sec:verdict-call:apps/fiab-console/app/api/admin/gates/route.ts#GET:enforceCapability:3",
-          "kind": "verdict-call",
-          "provenance": "declared",
-          "label": "GET /api/admin/gates -> enforceCapability",
-          "facet": {
-            "kind": "verdict-call",
-            "callSite": "GET /api/admin/gates:3",
-            "symbol": "enforceCapability",
-            "returnsVerdictUnion": true,
-            "pathsToPrivilegedSink": 0,
-            "pathsConsumingAsRefusal": 0,
-            "consumption": "returned",
-            "allowlisted": false,
-            "allowlistPremiseTested": false,
-            "sinkPrivileged": false,
-            "sinkKind": "none"
-          }
-        },
-        {
           "id": "sec:authorizer:apps/fiab-console/app/api/admin/governance-catalog/reindex/route.ts#POST",
           "kind": "authorizer",
           "provenance": "declared",
@@ -10004,6 +9985,58 @@
           }
         },
         {
+          "id": "sec:authorizer:apps/fiab-console/app/api/admin/workspaces/[id]/route.ts#PATCH",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "PATCH /api/admin/workspaces/[id]",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "PATCH /api/admin/workspaces/[id]",
+            "params": [
+              "id"
+            ],
+            "resourceScoped": true,
+            "callerNamedResourceInputs": [
+              "id"
+            ],
+            "allowPaths": [
+              {
+                "id": "patch:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": true,
+            "privilegedSinkKinds": [
+              "cosmos-write"
+            ]
+          }
+        },
+        {
+          "id": "sec:verdict-call:apps/fiab-console/app/api/admin/workspaces/[id]/route.ts#PATCH:requireTenantAdmin:21",
+          "kind": "verdict-call",
+          "provenance": "declared",
+          "label": "PATCH /api/admin/workspaces/[id] -> requireTenantAdmin",
+          "facet": {
+            "kind": "verdict-call",
+            "callSite": "PATCH /api/admin/workspaces/[id]:21",
+            "symbol": "requireTenantAdmin",
+            "returnsVerdictUnion": true,
+            "pathsToPrivilegedSink": 1,
+            "pathsConsumingAsRefusal": 1,
+            "consumption": "returned",
+            "allowlisted": false,
+            "allowlistPremiseTested": false,
+            "sinkPrivileged": true,
+            "sinkKind": "cosmos-write"
+          }
+        },
+        {
           "id": "sec:authorizer:apps/fiab-console/app/api/admin/workspaces/[id]/route.ts#DELETE",
           "kind": "authorizer",
           "provenance": "declared",
@@ -10160,6 +10193,35 @@
           }
         },
         {
+          "id": "sec:authorizer:apps/fiab-console/app/api/admin/workspaces/route.ts#POST",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "POST /api/admin/workspaces",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "POST /api/admin/workspaces",
+            "params": [],
+            "resourceScoped": false,
+            "callerNamedResourceInputs": [],
+            "allowPaths": [
+              {
+                "id": "post:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": true,
+            "privilegedSinkKinds": [
+              "cosmos-write"
+            ]
+          }
+        },
+        {
           "id": "sec:verdict-call:apps/fiab-console/app/api/admin/workspaces/route.ts#POST:pdpCheck:8",
           "kind": "verdict-call",
           "provenance": "declared",
@@ -10168,6 +10230,25 @@
             "kind": "verdict-call",
             "callSite": "POST /api/admin/workspaces:8",
             "symbol": "pdpCheck",
+            "returnsVerdictUnion": true,
+            "pathsToPrivilegedSink": 1,
+            "pathsConsumingAsRefusal": 1,
+            "consumption": "returned",
+            "allowlisted": false,
+            "allowlistPremiseTested": false,
+            "sinkPrivileged": true,
+            "sinkKind": "cosmos-write"
+          }
+        },
+        {
+          "id": "sec:verdict-call:apps/fiab-console/app/api/admin/workspaces/route.ts#POST:requireTenantAdmin:24",
+          "kind": "verdict-call",
+          "provenance": "declared",
+          "label": "POST /api/admin/workspaces -> requireTenantAdmin",
+          "facet": {
+            "kind": "verdict-call",
+            "callSite": "POST /api/admin/workspaces:24",
+            "symbol": "requireTenantAdmin",
             "returnsVerdictUnion": true,
             "pathsToPrivilegedSink": 1,
             "pathsConsumingAsRefusal": 1,
@@ -11320,6 +11401,36 @@
             "allowlistPremiseTested": false,
             "sinkPrivileged": false,
             "sinkKind": "none"
+          }
+        },
+        {
+          "id": "sec:authorizer:apps/fiab-console/app/api/governance/dlp/restrict/route.ts#POST",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "POST /api/governance/dlp/restrict",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "POST /api/governance/dlp/restrict",
+            "params": [],
+            "resourceScoped": false,
+            "callerNamedResourceInputs": [],
+            "allowPaths": [
+              {
+                "id": "post:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": true,
+            "privilegedSinkKinds": [
+              "cosmos-cross-partition-read",
+              "cosmos-write"
+            ]
           }
         },
         {
@@ -14977,6 +15088,33 @@
           }
         },
         {
+          "id": "sec:authorizer:apps/fiab-console/app/api/lakehouse/permissions/route.ts#GET",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "GET /api/lakehouse/permissions",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "GET /api/lakehouse/permissions",
+            "params": [],
+            "resourceScoped": false,
+            "callerNamedResourceInputs": [],
+            "allowPaths": [
+              {
+                "id": "get:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": false,
+            "privilegedSinkKinds": []
+          }
+        },
+        {
           "id": "sec:authorizer:apps/fiab-console/app/api/lakehouse/permissions/route.ts#POST",
           "kind": "authorizer",
           "provenance": "declared",
@@ -16127,6 +16265,149 @@
           }
         },
         {
+          "id": "sec:authorizer:apps/fiab-console/app/api/onelake/lifecycle/route.ts#PUT",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "PUT /api/onelake/lifecycle",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "PUT /api/onelake/lifecycle",
+            "params": [],
+            "resourceScoped": true,
+            "callerNamedResourceInputs": [
+              "workspaceId"
+            ],
+            "allowPaths": [
+              {
+                "id": "put:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": false,
+            "privilegedSinkKinds": []
+          }
+        },
+        {
+          "id": "sec:authorizer:apps/fiab-console/app/api/onelake/security/route.ts#GET",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "GET /api/onelake/security",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "GET /api/onelake/security",
+            "params": [],
+            "resourceScoped": true,
+            "callerNamedResourceInputs": [
+              "id"
+            ],
+            "allowPaths": [
+              {
+                "id": "get:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": false,
+            "privilegedSinkKinds": []
+          }
+        },
+        {
+          "id": "sec:authorizer:apps/fiab-console/app/api/onelake/security/route.ts#POST",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "POST /api/onelake/security",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "POST /api/onelake/security",
+            "params": [],
+            "resourceScoped": true,
+            "callerNamedResourceInputs": [
+              "id"
+            ],
+            "allowPaths": [
+              {
+                "id": "post:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": false,
+            "privilegedSinkKinds": []
+          }
+        },
+        {
+          "id": "sec:authorizer:apps/fiab-console/app/api/onelake/security/route.ts#DELETE",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "DELETE /api/onelake/security",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "DELETE /api/onelake/security",
+            "params": [],
+            "resourceScoped": true,
+            "callerNamedResourceInputs": [
+              "id"
+            ],
+            "allowPaths": [
+              {
+                "id": "delete:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": false,
+            "privilegedSinkKinds": []
+          }
+        },
+        {
+          "id": "sec:authorizer:apps/fiab-console/app/api/onelake/tier/route.ts#PUT",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "PUT /api/onelake/tier",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "PUT /api/onelake/tier",
+            "params": [],
+            "resourceScoped": false,
+            "callerNamedResourceInputs": [],
+            "allowPaths": [
+              {
+                "id": "put:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": false,
+            "privilegedSinkKinds": []
+          }
+        },
+        {
           "id": "sec:verdict-call:apps/fiab-console/app/api/setup/deploy-preflight/route.ts#GET:enforceCapability:6",
           "kind": "verdict-call",
           "provenance": "declared",
@@ -16500,6 +16781,58 @@
           }
         },
         {
+          "id": "sec:authorizer:apps/fiab-console/app/api/workspaces/[id]/route.ts#PATCH",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "PATCH /api/workspaces/[id]",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "PATCH /api/workspaces/[id]",
+            "params": [
+              "id"
+            ],
+            "resourceScoped": true,
+            "callerNamedResourceInputs": [
+              "id"
+            ],
+            "allowPaths": [
+              {
+                "id": "patch:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": true,
+            "privilegedSinkKinds": [
+              "cosmos-write"
+            ]
+          }
+        },
+        {
+          "id": "sec:verdict-call:apps/fiab-console/app/api/workspaces/[id]/route.ts#PATCH:requireTenantAdmin:25",
+          "kind": "verdict-call",
+          "provenance": "declared",
+          "label": "PATCH /api/workspaces/[id] -> requireTenantAdmin",
+          "facet": {
+            "kind": "verdict-call",
+            "callSite": "PATCH /api/workspaces/[id]:25",
+            "symbol": "requireTenantAdmin",
+            "returnsVerdictUnion": true,
+            "pathsToPrivilegedSink": 1,
+            "pathsConsumingAsRefusal": 1,
+            "consumption": "returned",
+            "allowlisted": false,
+            "allowlistPremiseTested": false,
+            "sinkPrivileged": true,
+            "sinkKind": "cosmos-write"
+          }
+        },
+        {
           "id": "sec:verdict-call:apps/fiab-console/app/api/workspaces/[id]/scm/route.ts#GET:authorizeWorkspace:9",
           "kind": "verdict-call",
           "provenance": "declared",
@@ -16627,6 +16960,54 @@
             ],
             "reachesPrivilegedSink": false,
             "privilegedSinkKinds": []
+          }
+        },
+        {
+          "id": "sec:authorizer:apps/fiab-console/app/api/workspaces/route.ts#POST",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "POST /api/workspaces",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "POST /api/workspaces",
+            "params": [],
+            "resourceScoped": false,
+            "callerNamedResourceInputs": [],
+            "allowPaths": [
+              {
+                "id": "post:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": true,
+            "privilegedSinkKinds": [
+              "cosmos-write"
+            ]
+          }
+        },
+        {
+          "id": "sec:verdict-call:apps/fiab-console/app/api/workspaces/route.ts#POST:requireTenantAdmin:15",
+          "kind": "verdict-call",
+          "provenance": "declared",
+          "label": "POST /api/workspaces -> requireTenantAdmin",
+          "facet": {
+            "kind": "verdict-call",
+            "callSite": "POST /api/workspaces:15",
+            "symbol": "requireTenantAdmin",
+            "returnsVerdictUnion": true,
+            "pathsToPrivilegedSink": 1,
+            "pathsConsumingAsRefusal": 1,
+            "consumption": "returned",
+            "allowlisted": false,
+            "allowlistPremiseTested": false,
+            "sinkPrivileged": true,
+            "sinkKind": "cosmos-write"
           }
         },
         {
@@ -29436,26 +29817,6 @@
             "declaredSinkCount": 23,
             "sinks": [
               {
-                "id": "console:member:2899",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:2907",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
                 "id": "console:member:2920",
                 "surface": "console",
                 "accessPath": "member",
@@ -29466,7 +29827,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2939",
+                "id": "console:member:2928",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -29476,7 +29837,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2944",
+                "id": "console:member:2941",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -29486,7 +29847,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2951",
+                "id": "console:member:2960",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -29496,7 +29857,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2958",
+                "id": "console:member:2965",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -29506,7 +29867,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2962",
+                "id": "console:member:2972",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -29516,7 +29877,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2968",
+                "id": "console:member:2979",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -29526,7 +29887,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2973",
+                "id": "console:member:2983",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -29536,7 +29897,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2986",
+                "id": "console:member:2989",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -29546,7 +29907,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:3013",
+                "id": "console:member:2994",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -29556,7 +29917,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:3014",
+                "id": "console:member:3007",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -29566,7 +29927,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:3017",
+                "id": "console:member:3034",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -29576,7 +29937,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:3045",
+                "id": "console:member:3035",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -29586,7 +29947,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:3046",
+                "id": "console:member:3038",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -29596,7 +29957,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:3055",
+                "id": "console:member:3066",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -29606,7 +29967,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:3057",
+                "id": "console:member:3067",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -29616,7 +29977,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:3058",
+                "id": "console:member:3076",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -29626,7 +29987,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:3059",
+                "id": "console:member:3078",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -29636,7 +29997,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:3060",
+                "id": "console:member:3079",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -29646,7 +30007,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:3061",
+                "id": "console:member:3080",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -29656,7 +30017,27 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:3062",
+                "id": "console:member:3081",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:3082",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:3083",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -34778,7 +35159,7 @@
             "declaredSinkCount": 24,
             "sinks": [
               {
-                "id": "console:member:6532",
+                "id": "console:member:6552",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -34788,37 +35169,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6651",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:6655",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:6662",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:6669",
+                "id": "console:member:6671",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -34838,7 +35189,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6683",
+                "id": "console:member:6682",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -34848,7 +35199,17 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6693",
+                "id": "console:member:6689",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:6695",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -34868,7 +35229,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6730",
+                "id": "console:member:6713",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -34878,7 +35239,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6734",
+                "id": "console:member:6723",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -34888,7 +35249,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6736",
+                "id": "console:member:6750",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -34898,7 +35259,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6744",
+                "id": "console:member:6754",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -34908,7 +35269,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6753",
+                "id": "console:member:6756",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -34918,7 +35279,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6763",
+                "id": "console:member:6764",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -34928,7 +35289,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6770",
+                "id": "console:member:6773",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -34938,7 +35299,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6771",
+                "id": "console:member:6783",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -34948,7 +35309,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6775",
+                "id": "console:member:6790",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -34958,7 +35319,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6776",
+                "id": "console:member:6791",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -34968,7 +35329,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6777",
+                "id": "console:member:6795",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -34978,7 +35339,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6778",
+                "id": "console:member:6796",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -34988,7 +35349,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6779",
+                "id": "console:member:6797",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -34998,7 +35359,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6780",
+                "id": "console:member:6798",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -35008,7 +35369,27 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6784",
+                "id": "console:member:6799",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:6800",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:6804",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -45733,6 +46114,27 @@
           "provenance": "declared"
         },
         {
+          "id": "sec-edge:calls:sec:authorizer:apps/fiab-console/app/api/admin/workspaces/[id]/route.ts#PATCH->sec:verdict-call:apps/fiab-console/app/api/admin/workspaces/[id]/route.ts#PATCH:requireTenantAdmin:21",
+          "from": "sec:authorizer:apps/fiab-console/app/api/admin/workspaces/[id]/route.ts#PATCH",
+          "to": "sec:verdict-call:apps/fiab-console/app/api/admin/workspaces/[id]/route.ts#PATCH:requireTenantAdmin:21",
+          "kind": "calls",
+          "provenance": "declared"
+        },
+        {
+          "id": "sec-edge:calls:sec:authorizer:apps/fiab-console/app/api/admin/workspaces/route.ts#POST->sec:verdict-call:apps/fiab-console/app/api/admin/workspaces/route.ts#POST:pdpCheck:8",
+          "from": "sec:authorizer:apps/fiab-console/app/api/admin/workspaces/route.ts#POST",
+          "to": "sec:verdict-call:apps/fiab-console/app/api/admin/workspaces/route.ts#POST:pdpCheck:8",
+          "kind": "calls",
+          "provenance": "declared"
+        },
+        {
+          "id": "sec-edge:calls:sec:authorizer:apps/fiab-console/app/api/admin/workspaces/route.ts#POST->sec:verdict-call:apps/fiab-console/app/api/admin/workspaces/route.ts#POST:requireTenantAdmin:24",
+          "from": "sec:authorizer:apps/fiab-console/app/api/admin/workspaces/route.ts#POST",
+          "to": "sec:verdict-call:apps/fiab-console/app/api/admin/workspaces/route.ts#POST:requireTenantAdmin:24",
+          "kind": "calls",
+          "provenance": "declared"
+        },
+        {
           "id": "sec-edge:calls:sec:authorizer:apps/fiab-console/app/api/adx/anomaly/route.ts#POST->sec:verdict-call:apps/fiab-console/app/api/adx/anomaly/route.ts#POST:requireTenantAdmin:93",
           "from": "sec:authorizer:apps/fiab-console/app/api/adx/anomaly/route.ts#POST",
           "to": "sec:verdict-call:apps/fiab-console/app/api/adx/anomaly/route.ts#POST:requireTenantAdmin:93",
@@ -45939,6 +46341,20 @@
           "id": "sec-edge:calls:sec:authorizer:apps/fiab-console/app/api/network/managed-private-endpoints/route.ts#DELETE->sec:verdict-call:apps/fiab-console/app/api/network/managed-private-endpoints/route.ts#DELETE:requireTenantAdmin:3",
           "from": "sec:authorizer:apps/fiab-console/app/api/network/managed-private-endpoints/route.ts#DELETE",
           "to": "sec:verdict-call:apps/fiab-console/app/api/network/managed-private-endpoints/route.ts#DELETE:requireTenantAdmin:3",
+          "kind": "calls",
+          "provenance": "declared"
+        },
+        {
+          "id": "sec-edge:calls:sec:authorizer:apps/fiab-console/app/api/workspaces/[id]/route.ts#PATCH->sec:verdict-call:apps/fiab-console/app/api/workspaces/[id]/route.ts#PATCH:requireTenantAdmin:25",
+          "from": "sec:authorizer:apps/fiab-console/app/api/workspaces/[id]/route.ts#PATCH",
+          "to": "sec:verdict-call:apps/fiab-console/app/api/workspaces/[id]/route.ts#PATCH:requireTenantAdmin:25",
+          "kind": "calls",
+          "provenance": "declared"
+        },
+        {
+          "id": "sec-edge:calls:sec:authorizer:apps/fiab-console/app/api/workspaces/route.ts#POST->sec:verdict-call:apps/fiab-console/app/api/workspaces/route.ts#POST:requireTenantAdmin:15",
+          "from": "sec:authorizer:apps/fiab-console/app/api/workspaces/route.ts#POST",
+          "to": "sec:verdict-call:apps/fiab-console/app/api/workspaces/route.ts#POST:requireTenantAdmin:15",
           "kind": "calls",
           "provenance": "declared"
         }
@@ -46818,11 +47234,6 @@
         {
           "nodeId": "sec:verdict-call:apps/fiab-console/app/api/admin/gates/[id]/resolve/route.ts#POST:pdpCheck:6",
           "codeModuleId": "code:apps/fiab-console/app/api/admin/gates/[id]/resolve/route.ts",
-          "deployedAs": "loom-console"
-        },
-        {
-          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/admin/gates/route.ts#GET:enforceCapability:3",
-          "codeModuleId": "code:apps/fiab-console/app/api/admin/gates/route.ts",
           "deployedAs": "loom-console"
         },
         {
@@ -48041,6 +48452,16 @@
           "deployedAs": "loom-console"
         },
         {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/admin/workspaces/[id]/route.ts#PATCH",
+          "codeModuleId": "code:apps/fiab-console/app/api/admin/workspaces/[id]/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/admin/workspaces/[id]/route.ts#PATCH:requireTenantAdmin:21",
+          "codeModuleId": "code:apps/fiab-console/app/api/admin/workspaces/[id]/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
           "nodeId": "sec:authorizer:apps/fiab-console/app/api/admin/workspaces/[id]/route.ts#DELETE",
           "codeModuleId": "code:apps/fiab-console/app/api/admin/workspaces/[id]/route.ts",
           "deployedAs": "loom-console"
@@ -48076,7 +48497,17 @@
           "deployedAs": "loom-console"
         },
         {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/admin/workspaces/route.ts#POST",
+          "codeModuleId": "code:apps/fiab-console/app/api/admin/workspaces/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
           "nodeId": "sec:verdict-call:apps/fiab-console/app/api/admin/workspaces/route.ts#POST:pdpCheck:8",
+          "codeModuleId": "code:apps/fiab-console/app/api/admin/workspaces/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/admin/workspaces/route.ts#POST:requireTenantAdmin:24",
           "codeModuleId": "code:apps/fiab-console/app/api/admin/workspaces/route.ts",
           "deployedAs": "loom-console"
         },
@@ -48313,6 +48744,11 @@
         {
           "nodeId": "sec:verdict-call:apps/fiab-console/app/api/governance/dlp/library/route.ts#POST:requireTenantAdmin:4",
           "codeModuleId": "code:apps/fiab-console/app/api/governance/dlp/library/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/governance/dlp/restrict/route.ts#POST",
+          "codeModuleId": "code:apps/fiab-console/app/api/governance/dlp/restrict/route.ts",
           "deployedAs": "loom-console"
         },
         {
@@ -49201,6 +49637,11 @@
           "deployedAs": "loom-console"
         },
         {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/lakehouse/permissions/route.ts#GET",
+          "codeModuleId": "code:apps/fiab-console/app/api/lakehouse/permissions/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
           "nodeId": "sec:authorizer:apps/fiab-console/app/api/lakehouse/permissions/route.ts#POST",
           "codeModuleId": "code:apps/fiab-console/app/api/lakehouse/permissions/route.ts",
           "deployedAs": "loom-console"
@@ -49426,6 +49867,31 @@
           "deployedAs": "loom-console"
         },
         {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/onelake/lifecycle/route.ts#PUT",
+          "codeModuleId": "code:apps/fiab-console/app/api/onelake/lifecycle/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/onelake/security/route.ts#GET",
+          "codeModuleId": "code:apps/fiab-console/app/api/onelake/security/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/onelake/security/route.ts#POST",
+          "codeModuleId": "code:apps/fiab-console/app/api/onelake/security/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/onelake/security/route.ts#DELETE",
+          "codeModuleId": "code:apps/fiab-console/app/api/onelake/security/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/onelake/tier/route.ts#PUT",
+          "codeModuleId": "code:apps/fiab-console/app/api/onelake/tier/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
           "nodeId": "sec:verdict-call:apps/fiab-console/app/api/setup/deploy-preflight/route.ts#GET:enforceCapability:6",
           "codeModuleId": "code:apps/fiab-console/app/api/setup/deploy-preflight/route.ts",
           "deployedAs": "loom-console"
@@ -49501,6 +49967,16 @@
           "deployedAs": "loom-console"
         },
         {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/workspaces/[id]/route.ts#PATCH",
+          "codeModuleId": "code:apps/fiab-console/app/api/workspaces/[id]/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/workspaces/[id]/route.ts#PATCH:requireTenantAdmin:25",
+          "codeModuleId": "code:apps/fiab-console/app/api/workspaces/[id]/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
           "nodeId": "sec:verdict-call:apps/fiab-console/app/api/workspaces/[id]/scm/route.ts#GET:authorizeWorkspace:9",
           "codeModuleId": "code:apps/fiab-console/app/api/workspaces/[id]/scm/route.ts",
           "deployedAs": "loom-console"
@@ -49528,6 +50004,16 @@
         {
           "nodeId": "sec:authorizer:apps/fiab-console/app/api/workspaces/bulk-delete/route.ts#POST",
           "codeModuleId": "code:apps/fiab-console/app/api/workspaces/bulk-delete/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/workspaces/route.ts#POST",
+          "codeModuleId": "code:apps/fiab-console/app/api/workspaces/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/workspaces/route.ts#POST:requireTenantAdmin:15",
+          "codeModuleId": "code:apps/fiab-console/app/api/workspaces/route.ts",
           "deployedAs": "loom-console"
         }
       ],

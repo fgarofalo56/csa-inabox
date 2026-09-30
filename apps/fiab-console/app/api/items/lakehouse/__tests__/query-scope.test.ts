@@ -40,6 +40,11 @@ function analyze(sql: string, database = 'master') {
 /** The refusal sentence starts with the construct, upper-cased. */
 const asSentence = (construct: string) => construct.charAt(0).toUpperCase() + construct.slice(1);
 
+/** `n` fullwidth letters from fullwidth a (U+FF41) on; each reads as its ASCII letter or as nothing. */
+const fullwidthLetters = (n: number) => Array.from({ length: n }, (_, i) => String.fromCodePoint(0xff41 + i)).join('');
+/** The same letters as a refusal message shows them. */
+const fullwidthShown = (n: number) => Array.from({ length: n }, (_, i) => `\\u{${(0xff41 + i).toString(16)}}`).join('');
+
 describe('analyzeLakehouseQuery — accepted queries', () => {
   const cases: Array<[string, string, string[]]> = [
     ['the entity-diagram column query (refusing two-part names or ORDER BY breaks it)', LAKEHOUSE_COLUMNS_SQL, []],
@@ -100,6 +105,20 @@ describe('analyzeLakehouseQuery — accepted queries', () => {
       'SELECT [caf\u00e9], t.[caf\u00e9], [na\u00efve] FROM t', []],
     ['a fullwidth table name that folds to an ordinary name (folding to "any non-ASCII is refused" breaks it)',
       'SELECT * FROM [\uff4f\uff52\uff44\uff45\uff52\uff53]', []],
+    // No decomposition, so each of these reads only as nothing: the sharp s, and the CJK letters below.
+    ['a column name with a sharp s', 'SELECT [Stra\u00dfe] FROM t', []],
+    ['a CJK column name', 'SELECT t.[\u9867\u5ba2\u540d] FROM t', []],
+    // 20 characters, none with an ASCII reading: refused if the cap counted every non-ASCII character.
+    ['a CJK column name longer than the branching cap', `SELECT t.[${'\u5ba2\u6237'.repeat(10)}] FROM t`, []],
+    // Exactly at the cap of 16 characters with two readings: refused if the cap were off by one.
+    ['a fullwidth name with 16 characters that have two readings', `SELECT t.[${fullwidthLetters(16)}] FROM t`, []],
+    // Cyrillic letters have no ASCII decomposition and are weighted apart from Latin, so they never
+    // read as s or y; skipped, what is left (nothing, or processes) is not a system name.
+    ['a Cyrillic look-alike of sys as the last part', 'SELECT t.[\u0455\u0443\u0455] FROM t', []],
+    ['a Cyrillic look-alike of a compatibility view', 'SELECT * FROM [\u0455\u0443\u0455processes]', []],
+    // U+2024 (one-dot leader) folds to a dot but is one character of one bracketed name, not a separator;
+    // v1 followed by .2 or by 2 is no system name.
+    ['a one-dot leader inside an ordinary name', 'SELECT t.[v1\u20242] FROM t', []],
   ];
   for (const [label, sql, locations] of cases) {
     it(`accepts ${label}`, () => {
@@ -265,6 +284,31 @@ describe('analyzeLakehouseQuery — refused queries name the construct', () => {
     ['an upper-case fullwidth fn_ function called', 'SELECT * FROM [\uff26\uff2e_DBLOG](NULL, NULL)',
       'the name part [\\u{ff26}\\u{ff2e}_DBLOG], read as fn_dblog'],
     ['an upper-case fullwidth sys as the last part', 'SELECT t.[\uff33\uff39\uff33] FROM t', 'the name part [\\u{ff33}\\u{ff39}\\u{ff33}], read as sys'],
+    // A character newer than a collation's tables may be skipped rather than folded. Each row below is
+    // accepted if a non-ASCII character were read only as its fold (sysxprocesses, sysacacheobjects, ...).
+    ['a subscript x inside a compatibility view', 'SELECT * FROM [sys\u2093processes]',
+      'the name part [sys\\u{2093}processes], read as sysprocesses'],
+    ['a modifier letter a inside a compatibility view', 'SELECT * FROM [sys\u1d43cacheobjects]',
+      'the name part [sys\\u{1d43}cacheobjects], read as syscacheobjects'],
+    ['a subscript j inside a compatibility view', 'SELECT * FROM [sys\u2c7ccomments]',
+      'the name part [sys\\u{2c7c}comments], read as syscomments'],
+    // The skip is before the prefix: accepted if only the walk's first reading were followed.
+    ['a subscript x before a called fn_ function', 'SELECT * FROM [\u2093fn_dblog](NULL, NULL)',
+      'the name part [\\u{2093}fn_dblog], read as fn_dblog'],
+    // Precomposed U+00E9: NFKC keeps it whole, so it would read only as nothing, giving sysprocesss.
+    ['a compatibility view with a precomposed accented e', 'SELECT * FROM [sysprocess\u00e9s]',
+      'the name part [sysprocess\\u{e9}s], read as sysprocesses'],
+    // Dotless i has no decomposition: accepted without its extra reading as i.
+    ['a dotless i inside a compatibility view', 'SELECT * FROM [sys\u0131ndexes]',
+      'the name part [sys\\u{131}ndexes], read as sysindexes'],
+    // U+2024 folds to a dot, so skipped it leaves sysobjects: refused, though the server keeps it as a
+    // character of one bracketed name. Accepted if a folding character were never read as nothing.
+    ['a one-dot leader inside a compatibility view', 'SELECT * FROM [sys\u2024objects]',
+      'the name part [sys\\u{2024}objects], read as sysobjects'],
+    // 17 characters with two readings, one over the cap: accepted if the cap were removed (the letters
+    // spell no system name), or if the cap were raised by one.
+    ['a name with more characters to check than the cap', `SELECT t.[${fullwidthLetters(17)}] FROM t`,
+      `the name part [${fullwidthShown(17)}]`],
     // variables, functions and storage-shaped strings outside BULK
     ['a system variable', 'SELECT @@VERSION', 'the variable @@VERSION'],
     ['the :: function syntax', "SELECT * FROM ::fn_trace_gettable('x', default)", 'the :: function syntax'],
@@ -288,6 +332,22 @@ describe('analyzeLakehouseQuery — refused queries name the construct', () => {
       expect(out.error).toContain(`${asSentence(construct)} is not accepted`);
     });
   }
+
+  it('a name with 20 characters to check is refused, and quickly', () => {
+    // The time is checked first, so a slow walk reads as slow rather than as a wrong answer.
+    // With the cap the name is refused before any walk. Without the cap the walk keeps only
+    // distinct starts of a system name and still ends quickly, and the name is then accepted, so
+    // the ok check is what turns red. The time limit is for a walk that keeps every distinct
+    // reading, not only the starts of a system name.
+    const started = performance.now();
+    const out = analyze(`SELECT t.[${fullwidthLetters(20)}] FROM t`);
+    const elapsed = performance.now() - started;
+    expect(elapsed).toBeLessThan(250);
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.construct).toBe(`the name part [${fullwidthShown(20)}]`);
+    expect(out.error).toContain('more than 16 characters outside ASCII');
+  });
 
   it('the character offsets named above are where the text stops being readable', () => {
     // Lifted from the lexer, so the offsets in the table are measured, not guessed.

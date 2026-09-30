@@ -14,9 +14,38 @@
  *       ... (server polls Entra) ...
  *       {"type":"session", ok:true, cookie, expiresAt, claims}
  *     The first line carries the code the human types at the verification URL;
- *     the final line carries the minted cookie. MSAL handles the polling
- *     server-side via the device-authorization grant (RFC 8628). The Entra app
- *     must allow public-client flows — see docs/fiab/MSAL-handoff.md.
+ *     the final line carries the minted cookie. The server runs the
+ *     device-authorization grant (RFC 8628) as a CONFIDENTIAL client — it
+ *     redeems the code with the Console app registration's client secret —
+ *     via lib/auth/device-code-grant.ts. The app registration must NOT allow
+ *     public-client flows (#4805: MSAL's public client sent no credential, so
+ *     every redemption was refused `invalid_client`, most likely AADSTS7000218,
+ *     inferred because MSAL discarded the code; turning public flows on to
+ *     "fix" that breaks browser sign-in with AADSTS700025). Whether Entra
+ *     accepts the secret on this grant is UNVERIFIED until the live receipt on
+ *     #4805; see device-code-grant.ts.
+ *
+ *     THE MINTED SESSION MUST BELONG TO THE DEPLOYMENT'S TENANT. The `tenantId`
+ *     override is accepted only when it IS the deployment tenant
+ *     (`AZURE_TENANT_ID`), anything else is 400 `bad_tenant`; and no session is
+ *     minted unless the id token's `tid` equals `AZURE_TENANT_ID` and its `iss`
+ *     is `<this cloud's login host>/<that tenant>/v2.0`.
+ *     The session is stamped `authVia: 'device_code'` (lib/auth/session.ts).
+ *
+ *     LEAST PRIVILEGE FOR NON-INTERACTIVE SIGN-IN (operator decision 2026-09-30,
+ *     lib/auth/device-code-policy.ts): the session lives 1 hour
+ *     (`DEVICE_CODE_SESSION_MAX_AGE_SECS`) and is refused on admin surfaces;
+ *     starting a sign-in is rate-limited per client IP (the `cli-session` class
+ *     of lib/azure/rate-limiter.ts: 5 starts per 10 minutes) and capped at
+ *     {@link MAX_OPEN_STREAMS_PER_IP} open streams per IP and
+ *     {@link MAX_OPEN_STREAMS_TOTAL} per replica. Both refusals are 429 with
+ *     `Retry-After`. The IP is `trustedClientIp`'s — the value a hop Loom
+ *     controls wrote, never the caller's own `X-Forwarded-For` claim.
+ *
+ *     On failure the last line is
+ *       {"type":"error", ok:false, error, code, aadsts?, correlationId?}
+ *     where `error` is the classified, remediating message (it names the
+ *     AADSTS code) — the CLI and the VS Code extension surface only `error`.
  *
  *  2. Service principal (non-interactive / CI).  Single JSON response:
  *       { ok:true, cookie, expiresAt, claims }
@@ -28,7 +57,7 @@
  * TENANCY, PER BRANCH — the two chains are DIFFERENT, and conflating them is
  * what hid #3845 for as long as it lived:
  *
- *   device code        `tid` = idTokenClaims.tid → account.tenantId → homeAccountId[1]
+ *   device code        `tid` = id_token `tid` → client_info `utid` (MSAL's homeAccountId[1])
  *   service principal  `tid` = access-token `tid` → the request's `tenantId`
  *
  * The SP branch has no id token and no MSAL account object, so it shares none of
@@ -49,17 +78,91 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import {
-  getMsalPublicClient,
+  getAuthority,
   getSpConfidentialClient,
   graphBase,
   type UserClaims,
 } from '@/lib/auth/msal';
 import { encodeSessionCookie, COOKIE_NAME, MAX_AGE_SECS } from '@/lib/auth/session';
+import {
+  runDeviceCodeGrant,
+  isValidTenantSegment,
+  DeviceCodeGrantError,
+  type DeviceCodeFailure,
+} from '@/lib/auth/device-code-grant';
+import { logSafe } from '@/lib/util/log-safe';
+import { sameTenantConfirmed } from '@/lib/auth/tenant-boundary';
+import { DEVICE_CODE_SESSION_MAX_AGE_SECS } from '@/lib/auth/device-code-policy';
+import { clientIp, enforceRateLimitForKey } from '@/lib/azure/rate-limiter';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const LOGIN_SCOPES = ['openid', 'profile', 'email', 'User.Read'];
+
+/** Open device-code streams allowed per client IP at once (operator decision 2026-09-30). */
+export const MAX_OPEN_STREAMS_PER_IP = 2;
+/** Open device-code streams allowed per replica at once — a key-independent backstop. */
+export const MAX_OPEN_STREAMS_TOTAL = 50;
+/** `Retry-After` for a stream-cap refusal: a device code lives 15 minutes; a minute is a fair wait. */
+const STREAM_CAP_RETRY_AFTER_SECS = 60;
+const openStreamsByIp = new Map<string, number>();
+let openStreamsTotal = 0;
+
+/** Reserve an open-stream slot for `ip`, or return false when a cap is reached. */
+function acquireStreamSlot(ip: string): boolean {
+  const mine = openStreamsByIp.get(ip) ?? 0;
+  if (mine >= MAX_OPEN_STREAMS_PER_IP || openStreamsTotal >= MAX_OPEN_STREAMS_TOTAL) return false;
+  openStreamsByIp.set(ip, mine + 1);
+  openStreamsTotal += 1;
+  return true;
+}
+
+function releaseStreamSlot(ip: string): void {
+  const mine = openStreamsByIp.get(ip) ?? 0;
+  if (mine <= 1) openStreamsByIp.delete(ip);
+  else openStreamsByIp.set(ip, mine - 1);
+  openStreamsTotal = Math.max(0, openStreamsTotal - 1);
+}
+
+/** Test-only: forget every open-stream reservation. */
+export function __resetCliSessionStreams(): void {
+  openStreamsByIp.clear();
+  openStreamsTotal = 0;
+}
+
+/**
+ * The shared limiter answers `{ ok:false, error:'rate_limited', retryAfter }`,
+ * which the CLI and the VS Code extension can only print as "rate_limited".
+ * Re-shape it for this route — same status and headers (`Retry-After` and the
+ * `x-ratelimit-*` trio), plus a `message` and `hint` a person can act on. The
+ * clients add the wait from `retryAfter`, so the sentence does not repeat it.
+ */
+async function signInRateLimited(limited: Response): Promise<Response> {
+  const prior = (await limited.clone().json().catch(() => ({}))) as { retryAfter?: unknown };
+  const headerWait = Number(limited.headers.get('Retry-After'));
+  const retryAfter =
+    typeof prior.retryAfter === 'number' && prior.retryAfter > 0
+      ? prior.retryAfter
+      : Number.isFinite(headerWait) && headerWait > 0
+        ? headerWait
+        : undefined;
+  const headers = new Headers();
+  for (const [k, v] of limited.headers) {
+    if (k === 'retry-after' || k.startsWith('x-ratelimit-')) headers.set(k, v);
+  }
+  return NextResponse.json(
+    {
+      ok: false,
+      error: 'rate_limited',
+      code: 'rate_limited',
+      message: 'Too many device-code sign-in attempts from this network.',
+      hint: 'Wait, then run the sign-in again. An attempt that is already waiting can still be completed in the browser.',
+      retryAfter,
+    },
+    { status: 429, headers },
+  );
+}
 
 function configured(): { ok: boolean; missing: string[] } {
   const missing: string[] = [];
@@ -98,7 +201,7 @@ export async function POST(req: NextRequest) {
         ok: false,
         error: `Loom sign-in is not configured on this deployment (missing: ${cfg.missing.join(', ')}).`,
         code: 'not_configured',
-        hint: 'See docs/fiab/MSAL-handoff.md for the az ad app + Container App env steps.',
+        hint: 'Run the post-deploy bootstrap (.github/workflows/csa-loom-post-deploy-bootstrap.yml), which registers the Console app and wires these onto the Console.',
       },
       { status: 503 },
     );
@@ -170,52 +273,147 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: `unknown flow "${flow}"`, code: 'bad_flow' }, { status: 400 });
   }
 
-  const tenantOverride = body?.tenantId as string | undefined;
+  const rawTenant: unknown = body?.tenantId || undefined;
+  const homeTenant = process.env.AZURE_TENANT_ID as string; // configured() guarantees it
+  // The override is interpolated into the authority URL path, so it must be a
+  // tenant-segment shape — never a path, query or host fragment — AND it must be
+  // the deployment's own tenant: the minted session must belong to the
+  // deployment's tenant, so there is no other tenant worth asking Entra about.
+  // (Verified domain names are not accepted: the Console has no cheap, trusted
+  // list of them, and the tenant id is always valid.)
+  // The SHAPE check is defence in depth and, while the home-tenant comparison
+  // stands, an EQUIVALENT MUTANT (arm C13): an override that must equal
+  // AZURE_TENANT_ID reaches the same authority path the default already uses,
+  // so deleting the shape check changes no outcome. It is kept so the
+  // comparison can never be loosened into a URL-injection path by itself.
+  if (
+    rawTenant !== undefined &&
+    (typeof rawTenant !== 'string' ||
+      !isValidTenantSegment(rawTenant) ||
+      !sameTenantConfirmed(rawTenant, homeTenant))
+  ) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "tenantId must be this deployment's Entra tenant id (the one the Console runs in); omit it to use that tenant",
+        code: 'bad_tenant',
+      },
+      { status: 400 },
+    );
+  }
+  const tenantOverride = rawTenant as string | undefined;
+
+  // Starting a sign-in is rate-limited per client IP, then capped by open
+  // streams. Only a well-formed start is counted: the 400s above cost Entra nothing.
+  const ip = clientIp(req.headers);
+  const limited = await enforceRateLimitForKey(`cli-session:${ip}`, 'cli-session');
+  if (limited) return signInRateLimited(limited);
+  if (!acquireStreamSlot(ip)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: 'Too many device-code sign-ins are already waiting from this address. Finish or cancel one, then try again.',
+        code: 'too_many_open_sign_ins',
+        message: 'Too many device-code sign-ins are already waiting from this address.',
+        hint: 'Finish or cancel a sign-in that is already waiting, then try again.',
+        retryAfter: STREAM_CAP_RETRY_AFTER_SECS,
+      },
+      { status: 429, headers: { 'Retry-After': String(STREAM_CAP_RETRY_AFTER_SECS) } },
+    );
+  }
+  let released = false;
+  const release = () => {
+    if (!released) {
+      released = true;
+      releaseStreamSlot(ip);
+    }
+  };
+
   const enc = new TextEncoder();
-  let capturedCookie: string | null = null;
+  let cancelled = false;
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      const send = (obj: unknown) => controller.enqueue(enc.encode(JSON.stringify(obj) + '\n'));
+      const send = (obj: unknown) => {
+        if (!cancelled) controller.enqueue(enc.encode(JSON.stringify(obj) + '\n'));
+      };
       try {
-        const pca = getMsalPublicClient(tenantOverride);
-        const result = await pca.acquireTokenByDeviceCode({
+        const who = await runDeviceCodeGrant({
           scopes: LOGIN_SCOPES,
-          deviceCodeCallback: (resp) => {
+          tenantId: tenantOverride,
+          isCancelled: () => cancelled,
+          onPrompt: (p) =>
             send({
               type: 'device_code',
-              userCode: resp.userCode,
-              verificationUri: resp.verificationUri,
-              message: resp.message,
-              expiresIn: resp.expiresIn,
-            });
-          },
+              userCode: p.userCode,
+              verificationUri: p.verificationUri,
+              message: p.message,
+              expiresIn: p.expiresIn,
+            }),
         });
-        if (!result?.account || !result.accessToken) {
-          send({ type: 'error', ok: false, error: 'Device-code flow returned no account/token', code: 'no_token' });
-          return;
+        // THE MINTED SESSION MUST BELONG TO THE DEPLOYMENT'S TENANT: the id
+        // token's `tid` must be AZURE_TENANT_ID, and its `iss` must be this
+        // cloud's login host for that tenant. Either mismatch refuses the mint.
+        // THE comparison primitive (lib/auth/tenant-boundary.ts): case-insensitive,
+        // and a missing or empty tid on either side refuses.
+        if (!sameTenantConfirmed(who.tid, homeTenant)) {
+          throw new DeviceCodeGrantError({
+            code: 'tenant_mismatch',
+            deploymentFault: false,
+            message: `The account that signed in belongs to tenant ${who.tid ? `"${who.tid}"` : '(none stated in the id token)'}, not this deployment's tenant. The minted session must belong to the deployment's tenant; sign in with an account from that tenant.`,
+          });
         }
-        const account = result.account;
+        const expectedIss = `${getAuthority(who.tid)}/v2.0`;
+        if (who.iss !== expectedIss) {
+          throw new DeviceCodeGrantError({
+            code: 'id_token_issuer_mismatch',
+            deploymentFault: true,
+            message: `The id token was issued by ${who.iss ? `"${who.iss}"` : '(no issuer)'}, not "${expectedIss}", the issuer for this deployment's tenant on this cloud (AZURE_CLOUD=${process.env.AZURE_CLOUD || 'AzureCloud'}). Refusing to mint a session from it.`,
+          });
+        }
+        // Entra TENANT id (rel-T11) — kept in lock-step with app/auth/callback:
+        // `oid` is client_info.uid (MSAL's homeAccountId[0]); `tid` is the id
+        // token's tid, falling back to client_info.utid.
         const claims: UserClaims = {
-          oid: account.homeAccountId.split('.')[0],
-          // Entra TENANT id (rel-T11) — kept in lock-step with app/auth/callback.
-          tid:
-            ((account.idTokenClaims as Record<string, unknown> | undefined)?.tid as string) ||
-            account.tenantId ||
-            account.homeAccountId.split('.')[1] ||
-            undefined,
-          name: account.name ?? account.username,
-          email: account.username,
-          upn: account.username,
+          oid: who.oid,
+          tid: who.tid,
+          name: who.name || who.username,
+          email: who.username,
+          upn: who.username,
         };
-        const exp = sessionExp();
-        capturedCookie = encodeSessionCookie({ claims, exp });
-        send({ type: 'session', ok: true, cookie: capturedCookie, expiresAt: exp, claims });
-      } catch (e: any) {
-        send({ type: 'error', ok: false, error: e?.message || 'device-code login failed', code: 'device_login_failed' });
+        // 1 hour, from THIS mint (operator decision 2026-09-30); a refresh never
+        // extends it (app/api/auth/refresh/route.ts).
+        const exp = Math.floor(Date.now() / 1000) + DEVICE_CODE_SESSION_MAX_AGE_SECS;
+        // Marked as a device-code session, which the least-privilege policy in
+        // lib/auth/device-code-policy.ts keys on.
+        const cookie = encodeSessionCookie({ claims, exp, authVia: 'device_code' });
+        send({ type: 'session', ok: true, cookie, expiresAt: exp, claims });
+      } catch (e: unknown) {
+        const f: DeviceCodeFailure =
+          e instanceof DeviceCodeGrantError
+            ? e.failure
+            : {
+                code: 'device_login_failed',
+                deploymentFault: false,
+                message: `Device-code sign-in failed inside the Console with an unexpected error, which is not a verdict from Entra: ${(e instanceof Error ? e.message : String(e)).slice(0, 300)}`,
+              };
+        // Code, AADSTS and correlation id — never a token, device code or user code.
+        console.error(
+          '[auth/cli-session] device-code failed:',
+          logSafe(f.code),
+          logSafe(f.aadsts ?? '-'),
+          logSafe(f.correlationId ?? '-'),
+          logSafe(f.message),
+        );
+        send({ type: 'error', ok: false, error: f.message, code: f.code, aadsts: f.aadsts, correlationId: f.correlationId });
       } finally {
-        controller.close();
+        release();
+        if (!cancelled) controller.close();
       }
+    },
+    cancel() {
+      cancelled = true;
+      release();
     },
   });
 

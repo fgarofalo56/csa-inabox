@@ -232,6 +232,33 @@ describe('POST /api/lakehouse/shortcuts/test — write-back key per target type'
     wroteUnderLegacy(SP.id, 'pending');
   });
 
+  it('sharepoint with an unparseable target: writes error under the legacy key (400 bad_target)', async () => {
+    legacyRow({ ...SP, targetUri: 'sharepoint://' });
+    (parseSharepointUri as any).mockReturnValue(null);
+    const { res, j } = await run(SP.id);
+    expect([res.status, j.code]).toEqual([400, 'bad_target']);
+    // The drive is never read for a target that does not parse.
+    expect(headDriveItem).not.toHaveBeenCalled();
+    // route.ts:159 -- breaks on 'lh' in arg 0 of the error write-back.
+    wroteUnderLegacy(SP.id, 'error');
+  });
+
+  it.each([
+    ['a Graph status (404, item moved)', { status: 404, code: 'drive_item_not_found' }, 404, 'drive_item_not_found'],
+    ['no status and no code', {}, 502, 'graph_drive_error'],
+  ])('sharepoint drive read failing with %s: writes error under the legacy key', async (_l, extra, status, code) => {
+    legacyRow(SP);
+    (parseSharepointUri as any).mockReturnValue({ driveId: 'drive-1', path: 'Shared/orders.csv' });
+    (headDriveItem as any).mockRejectedValue(Object.assign(new Error('item not found'), extra));
+    const { res, j } = await run(SP.id);
+    // Breaks if the Graph status is not carried through (the 404 row reads 502),
+    // or the fallbacks change (the second row reads another status / code).
+    expect([res.status, j.code]).toEqual([status, code]);
+    expect(headDriveItem).toHaveBeenCalledWith('drive-1', 'Shared/orders.csv');
+    // route.ts:168 -- breaks on 'lh' in arg 0 of the error write-back.
+    wroteUnderLegacy(SP.id, 'error');
+  });
+
   const SAS = {
     id: 'bronze:files::ext', name: 'ext', kind: 'files', targetType: 'adls',
     targetUri: 'abfss://data@partneracct.dfs.core.windows.net/orders',

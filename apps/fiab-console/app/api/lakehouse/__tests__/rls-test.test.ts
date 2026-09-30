@@ -51,6 +51,17 @@ describe('POST /api/lakehouse/permissions/rls-test', () => {
     expect((testRlsPredicate as any).mock.calls).toEqual([]);
   });
 
+  it('the 403 names row-level security, not the labels / DLP / Purview default', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'oid-member', upn: 'm@x' } });
+    const res = await POST(req(body));
+    const j = await res.json();
+    // Unchanged envelope fields: breaks if the override replaces code/gateId.
+    expect([res.status, j.code, j.gateId]).toEqual([403, 'admin_only', 'bootstrap-admin']);
+    // Breaks if the route drops its refusal override (the default text returns).
+    expect(j.reason).toMatch(/row-level security preview/);
+    expect(j.reason).not.toMatch(/sensitivity labels|DLP|Purview/);
+  });
+
   it('a tenant admin runs the preview as the named identity (positive arm)', async () => {
     (getSession as any).mockReturnValue({ claims: { oid: ADMIN_OID, upn: 'a@x' } });
     const res = await POST(req(body));

@@ -407,6 +407,7 @@ export function PermissionsDialog() {
 
                 <div style={{ marginTop: tokens.spacingVerticalXL, paddingTop: tokens.spacingVerticalL, borderTop: `1px solid ${tokens.colorNeutralStroke2}` }}>
                   <OnelakeRlsPredicateEditor
+                    lakehouseId={ctx.id}
                     tables={sqlTables}
                     onSaved={() => loadSqlPerms('row')}
                   />

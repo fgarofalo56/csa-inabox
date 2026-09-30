@@ -25,6 +25,7 @@ import { ShortcutsPane, SHORTCUT_QUERY_ADMIN_ONLY_READER, SHORTCUT_TEST_HINT } f
 import { SchemasPane } from '../panes/schemas-pane';
 import { InteropPane } from '../panes/interop-pane';
 import { TablesPane } from '../panes/tables-pane';
+import { HistoryPane } from '../panes/history-pane';
 import { LAKEHOUSE_READ_ONLY_TITLE } from '../hooks/use-lakehouse-access';
 import { SessionProvider } from '@/lib/components/session-context';
 
@@ -56,10 +57,16 @@ async function probeSettled(calls: Array<{ url: string }>) {
   await new Promise((r) => setTimeout(r, 200));
 }
 
-/** Closed with the reason: breaks if the control is left open, or closed with no title. */
+/**
+ * Closed with the reason, as a hover title (buttons) or as visible text inside
+ * the control (menu items, whose subText is part of the accessible name): breaks
+ * if the control is left open, or closed with the reason in neither place.
+ */
 async function expectClosed(el: HTMLElement) {
   await waitFor(() => expect(el.getAttribute('aria-disabled')).toBe('true'));
-  expect(el.getAttribute('title')).toBe(LAKEHOUSE_READ_ONLY_TITLE);
+  if (el.getAttribute('title') !== LAKEHOUSE_READ_ONLY_TITLE) {
+    expect(el.textContent).toContain(LAKEHOUSE_READ_ONLY_TITLE);
+  }
 }
 
 const button = (name: RegExp) => screen.findByRole('button', { name }, { timeout: 5000 });
@@ -280,6 +287,46 @@ describe('InteropPane — read-only role', () => {
   });
 });
 
+// ---------------------------------------------------------------- History
+
+function historyCtx() {
+  return {
+    activeContainer: 'gold', historyTable: 'Tables/orders',
+    historyRows: [{ version: 3, timestamp: null, operation: 'WRITE', userName: null, metrics: {} }],
+    historyLoading: false, historyError: null, historyRestoring: null, historyRestoreMsg: null,
+    historyPreviewVersion: null, historyPreviewResult: null, historyPreviewLoading: false,
+    loadHistory: vi.fn(), restoreToVersion: vi.fn(), previewAsOf: vi.fn(),
+  };
+}
+
+describe('HistoryPane — read-only role', () => {
+  it('closes Restore with the reason, and leaves Preview and Refresh open', async () => {
+    const ctx = historyCtx();
+    mount(<HistoryPane />, ctx, 'read');
+    const restore = await button(/^Restore$/);
+    await expectClosed(restore);
+    fireEvent.click(restore);
+    // Breaks if Restore loses disabledFocusable={readOnly}: the click would restore version 3.
+    expect(ctx.restoreToVersion).not.toHaveBeenCalled();
+    // Positive: the reads in the same pane still run. Breaks if the whole row is gated.
+    fireEvent.click(await button(/^Preview$/));
+    expect(ctx.previewAsOf).toHaveBeenCalledWith('Tables/orders', 3);
+    fireEvent.click(await button(/^Refresh$/));
+    expect(ctx.loadHistory).toHaveBeenCalledWith('Tables/orders');
+  });
+
+  it('with canWrite=true Restore reaches restoreToVersion', async () => {
+    const ctx = historyCtx();
+    const { calls } = mount(<HistoryPane />, ctx, 'write');
+    await probeSettled(calls);
+    const restore = await button(/^Restore$/);
+    // Breaks if the pane treats canWrite=true as read-only.
+    expect(restore.getAttribute('title')).not.toBe(LAKEHOUSE_READ_ONLY_TITLE);
+    fireEvent.click(restore);
+    expect(ctx.restoreToVersion).toHaveBeenCalledWith('Tables/orders', 3);
+  });
+});
+
 // ---------------------------------------------------------------- Schemas dialog
 // Kept LAST: an open Fluent Dialog can leave the rest of the page aria-hidden
 // after cleanup, so these read the Create button by its text, not its role.
@@ -410,6 +457,9 @@ describe('ShortcutsPane row menu — read-only role', () => {
     await expectClosed(test);
     const del = await menuItem('Delete');
     await expectClosed(del);
+    // The reason is shown once, as visible text: breaks if a hover title repeating it comes back.
+    expect(test.getAttribute('title')).toBeNull();
+    expect(del.getAttribute('title')).toBeNull();
     fireEvent.click(test);
     fireEvent.click(del);
     // Breaks if either MenuItem loses disabled={readOnly}: the click would

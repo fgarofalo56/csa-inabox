@@ -16,12 +16,17 @@
  * route returns `{ ok:false, gate:true, missing:'LOOM_SYNAPSE_DEDICATED_POOL' }`
  * with HTTP 503 so the UI shows a precise MessageBar (no silent no-op).
  *
- * GET  ?tab=object&container=<c>                 → { assignments, knownRoles }
- * GET  ?tab=table|column&container=<c>           → { grants }
- * GET  ?tab=table|column&list=tables             → { tables }
- * GET  ?tab=column&list=columns&objectId=<n>     → { columns }
- * GET  ?tab=row                                  → { policies }
- * GET  ?tab=row&list=tables | &list=columns&objectId=<n>
+ * Every GET names the lakehouse it is for (`lakehouseId=`), authorized for read
+ * through `authorizeLakehouse` (404 when the caller cannot reach it). For
+ * tab=object the container must be that lakehouse's storage container. Only a
+ * tenant admin may list without `lakehouseId`.
+ *
+ * GET  ?lakehouseId=<id>&tab=object[&container=<c>] → { assignments, knownRoles }
+ * GET  ?lakehouseId=<id>&tab=table|column        → { grants }
+ * GET  ?lakehouseId=<id>&tab=table|column&list=tables → { tables }
+ * GET  ?lakehouseId=<id>&tab=column&list=columns&objectId=<n> → { columns }
+ * GET  ?lakehouseId=<id>&tab=row                 → { policies }
+ * GET  ?lakehouseId=<id>&tab=row&list=tables | &list=columns&objectId=<n>
  * POST { tab, ... }                              → grant / create      (tenant admin)
  * DELETE ?tab=object&container=<c>&id=<armId>    → revoke RBAC         (tenant admin; id must be
  *                                                  an assignment listed on <c>)
@@ -65,6 +70,9 @@ import {
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { graphBase as cloudGraphBase, getGraphScope } from '@/lib/azure/cloud-endpoints';
 import { withSession } from '@/lib/api/route-toolkit';
+import { apiConflict, apiForbidden } from '@/lib/api/respond';
+import { resolveLakehouseStorage } from '@/lib/azure/lakehouse-abfss';
+import { authorizeLakehouse, lakehouseStorageWithheldResponse } from '../_lib/item-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -167,10 +175,47 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
   const sp = req.nextUrl.searchParams;
   const tab = parseTab(sp.get('tab'));
 
+  // Reads are scoped to one lakehouse: `lakehouseId` is authorized for read
+  // (404 when the caller cannot reach it, as every other lakehouse route
+  // answers). Without an item only a tenant admin may list, since the listing
+  // is then not tied to anything the caller can open.
+  const lakehouseId = (sp.get('lakehouseId') || '').trim();
+  let boundContainer: string | null = null;
+  if (!lakehouseId) {
+    if (!isTenantAdmin(session)) {
+      return apiForbidden(
+        'Listing lakehouse permissions needs the lakehouse they belong to (lakehouseId). Open the lakehouse '
+        + 'and use its permissions view; listing without a lakehouse is limited to tenant admins.',
+      );
+    }
+  } else {
+    const access = await authorizeLakehouse(session, lakehouseId);
+    if (access instanceof NextResponse) return access;
+    if (tab === 'object') {
+      // Container role assignments are listed only on the item's own container.
+      const resolved = await resolveLakehouseStorage(lakehouseId, access.item.workspaceId);
+      if (!resolved.ok) {
+        const withheld = lakehouseStorageWithheldResponse(resolved.reason);
+        if (withheld) return withheld;
+        return apiConflict(
+          'Loom has no lakehouse storage binding for this item, so there is no container to list role '
+          + 'assignments for. Re-run the item provision and retry.',
+        );
+      }
+      boundContainer = resolved.bound.container;
+    }
+  }
+
   try {
     if (tab === 'object') {
-      const container = sp.get('container');
+      const container = sp.get('container') || boundContainer;
       if (!container) return NextResponse.json({ ok: false, error: 'container query param required' }, { status: 400 });
+      if (boundContainer !== null && container !== boundContainer) {
+        return apiForbidden(
+          `Container ${container} is not this lakehouse's storage container (${boundContainer}). Open the `
+          + 'lakehouse that uses it to see its role assignments.',
+        );
+      }
       const raw = await listContainerRoleAssignments(container);
       const assignments = await enrichUpns(raw);
       const knownRoles = listKnownBlobDataRoles();

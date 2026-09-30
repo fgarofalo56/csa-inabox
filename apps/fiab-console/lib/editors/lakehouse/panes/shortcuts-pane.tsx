@@ -213,11 +213,12 @@ export function ShortcutsPane() {
                             {canQueryShortcuts && !(sc.kind === 'tables' && sc.engineObject) && (
                               <MenuItem icon={<Play20Regular />} onClick={() => queryShortcut(sc)}>Query (SQL)</MenuItem>
                             )}
-                            {/* The read-only reason is visible subText as well as the hover title,
-                                so keyboard and touch users reach it, as with Query (SQL) above. */}
-                            <MenuItem icon={<ArrowSync20Regular />} disabled={readOnly} title={roTitle} subText={roTitle}
+                            {/* The read-only reason is visible subText, part of the item's accessible
+                                name, so keyboard and touch users reach it, as with Query (SQL) above.
+                                No hover title as well: it would repeat the same text. */}
+                            <MenuItem icon={<ArrowSync20Regular />} disabled={readOnly} subText={roTitle}
                               onClick={() => testShortcut(sc)}>Test</MenuItem>
-                            <MenuItem icon={<Delete20Regular />} disabled={readOnly} title={roTitle} subText={roTitle}
+                            <MenuItem icon={<Delete20Regular />} disabled={readOnly} subText={roTitle}
                               onClick={() => deleteShortcutRow(sc)}>Delete</MenuItem>
                           </MenuList>
                         </MenuPopover>
