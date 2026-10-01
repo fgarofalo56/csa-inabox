@@ -22,7 +22,7 @@ import { sparkString } from '@/lib/azure/rls-compiler';
 import { buildCreateTableFormatDdl, TableFormatBuildError } from '@/lib/sql/uc-table-format-builders';
 import { compileDltSql, emptyDltModel, type DltPipelineModel } from '@/lib/editors/databricks/dlt-spec';
 import { buildCreateStreamingTable, buildCreateMaterializedView } from '@/lib/editors/databricks/streaming-sql';
-import { resolveTimeTravel } from '@/lib/time-machine/time-machine';
+import { resolveTimeTravel, applySqlTableSuffix } from '@/lib/time-machine/time-machine';
 import { generateTransformProject } from '@/lib/transform/transform-codegen';
 import { emptyTransformProject, type TransformProject } from '@/lib/transform/transform-project-model';
 import { foldAppliedStepsToSql } from '@/lib/components/pipeline/dataflow/m-script';
@@ -136,10 +136,12 @@ describe('time-machine resolveTimeTravel', () => {
   // EQUIVALENT MUTANT. These assertions pin the per-engine rule at the helper,
   // with an input only a direct caller could supply.
   it('delta uses the Spark rule; synapse-temporal keeps doubling', () => {
-    expect(resolveTimeTravel('delta', { kind: 'timestamp', iso: V }).sqlTableSuffix)
-      .toBe(` TIMESTAMP AS OF '${SPARK}'`);
-    expect(resolveTimeTravel('synapse-temporal', { kind: 'timestamp', iso: V }).sqlTableSuffix)
-      .toBe(` FOR SYSTEM_TIME AS OF '${TSQL}'`);
+    // Through applySqlTableSuffix (the exported consumer), so a resolution that
+    // came back unsupported also fails: the bare `t` would be returned.
+    expect(applySqlTableSuffix('t', resolveTimeTravel('delta', { kind: 'timestamp', iso: V })))
+      .toBe(`t TIMESTAMP AS OF '${SPARK}'`);
+    expect(applySqlTableSuffix('t', resolveTimeTravel('synapse-temporal', { kind: 'timestamp', iso: V })))
+      .toBe(`t FOR SYSTEM_TIME AS OF '${TSQL}'`);
   });
 });
 

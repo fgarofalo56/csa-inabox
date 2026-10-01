@@ -17,6 +17,7 @@
  */
 
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { escapeSparkSqlLiteral } from '@/lib/sql/quoting';
 import { listPaths, containerExistsOn } from './adls-client';
 import { getDfsSuffix } from './cloud-endpoints';
 import { serverlessTarget, executeQuery } from './synapse-sql-client';
@@ -52,7 +53,7 @@ import type {
   ShortcutEngine,
   ShortcutCredentialRef,
 } from './lakehouse-shortcuts';
-import { escapeSparkSqlLiteral, escapeSqlLiteral } from '@/lib/sql/quoting';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 /** An honest-gate result — the control rendered, but a credential/resource is missing. */
 export interface EngineGate {
