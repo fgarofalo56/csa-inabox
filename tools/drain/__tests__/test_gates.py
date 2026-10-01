@@ -906,6 +906,78 @@ def test_a_rollup_with_no_advisory_red_is_go():
     assert "3 clean of 3 advisory" in why, why
 
 
+# #4346 -- the eval's neutral "not measured" check-run. LIFTED from the module
+# that publishes it, never retyped here, so a rename on the publishing side
+# fails this file instead of silently turning the check back into clean
+# coverage.
+_EVAL_MEASUREMENT = os.path.join(
+    os.path.dirname(__file__), "..", "..", "..", "scripts", "ci", "eval-measurement.mjs"
+)
+
+
+def _lift_not_measured_check_name() -> str:
+    import re
+
+    with open(_EVAL_MEASUREMENT, encoding="utf-8") as fh:
+        src = fh.read()
+    hits = re.findall(r"^export const NOT_MEASURED_CHECK_NAME = '([^']+)';$", src, re.M)
+    assert len(hits) == 1, f"expected exactly one NOT_MEASURED_CHECK_NAME in {_EVAL_MEASUREMENT}, found {hits!r}"
+    return hits[0]
+
+
+def test_the_published_not_measured_name_is_the_one_the_gate_reads():
+    """Breaks if `NOT_MEASURED_CHECK_NAME` in eval-measurement.mjs and
+    `NOT_EVIDENCE_CONTEXTS` here drift apart -- the publisher would then emit a
+    name this gate scores as ordinary clean coverage."""
+    name = _lift_not_measured_check_name()
+    assert name == "Copilot quality: not measured", name
+    assert name in gates.NOT_EVIDENCE_CONTEXTS, sorted(gates.NOT_EVIDENCE_CONTEXTS)
+
+
+def test_a_neutral_not_measured_check_is_not_evidence_and_not_green_coverage():
+    """THE #4346 CASE: every required context green, CodeQL green, and the
+    eval's neutral "Copilot quality: not measured" check.
+
+    Breaks if: that NEUTRAL is counted in `clean` (the defect -- the line would
+    read "2 clean of 2 advisory" and say nothing about it), if it is dropped
+    from the population ("1 of 1"), or if it is made to BLOCK (`ok` False --
+    it is informational and must not hold a merge). The positive pair is
+    `PR Summary` NEUTRAL, which must stay clean: breaks if every NEUTRAL is
+    turned into not-evidence."""
+    name = _lift_not_measured_check_name()
+    checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+        _adv("CodeQL", "SUCCESS"),
+        _adv("PR Summary", "NEUTRAL"),
+        _adv(name, "NEUTRAL"),
+    ]
+    split = gates.classify_advisory_checks(checks, REQUIRED)
+    assert split.clean == ["CodeQL", "PR Summary"], split
+    assert split.not_evidence == [f"{name} (NEUTRAL)"], split
+    assert split.population == 3, split
+
+    ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+    assert ok, why
+    assert "2 clean of 3 advisory" in why, why
+    assert f"NOT EVIDENCE 1: {name} (NEUTRAL)" in why, why
+    assert "not counted as clean" in why, why
+
+
+def test_the_not_measured_name_with_a_non_neutral_conclusion_is_read_normally():
+    """Only a NEUTRAL on that name is not-evidence. Breaks if the name alone is
+    matched: a SUCCESS would vanish from `clean` and a FAILURE from `red`
+    (an advisory red that no longer blocks)."""
+    name = _lift_not_measured_check_name()
+    base = [_run(n, "SUCCESS") for n in REQUIRED]
+
+    split = gates.classify_advisory_checks(base + [_adv(name, "SUCCESS")], REQUIRED)
+    assert split.clean == [name] and split.not_evidence == [], split
+
+    ok, why = gates.advisory_verdict(base + [_adv(name, "FAILURE")], REQUIRED, True)
+    assert not ok, why
+    assert f"ADV-RED 1: {name} (FAILURE)" in why, why
+    assert "NOT EVIDENCE" not in why, why
+
+
 def test_negative_control_an_advisory_red_blocks_while_every_required_is_green():
     """THE #4540 FIXTURE, in miniature: every required context green, exactly
     one non-required check red. Today's code answers GO; this must answer

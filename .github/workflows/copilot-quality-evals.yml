@@ -191,8 +191,11 @@ jobs:
     # whether the judge scored anything (`measurement`, from
     # scripts/ci/eval-measurement.mjs) and whether the gate enforced. Empty when
     # the gate step never ran; the label reads empty as "unrecorded", never PASS.
+    # `measurement_text` is the one-line description the neutral
+    # "Copilot quality: not measured" check-run carries as its summary.
     outputs:
       measurement: ${{ steps.gate.outputs.measurement }}
+      measurement_text: ${{ steps.gate.outputs.measurement_text }}
       gate_reported_only: ${{ steps.gate.outputs.gate_reported_only }}
       gate_rc: ${{ steps.gate.outputs.gate_rc }}
     steps:
@@ -640,15 +643,14 @@ jobs:
           if [ "$HTTP" = "000" ]; then
             PROV_WHY="TRANSPORT: the eval-probe could not be reached at all (curl 000). curl said: $(tr '\n' ' ' < "$PROV_ERR" | head -c 200)"
           # #4346 — an HTML 403 is NOT the route answering. The eval-probe route
-          # only ever refuses with 401 JSON (`bad_internal_token`), so an HTML
-          # 403 came from something in front of it. Its shape matches the Front
-          # Door WAF custom rule `BlockInternalApiAtEdge` (front-door.bicep),
-          # which blocks /api/internal/* at the edge BY DESIGN — measured
-          # 2026-10-01 on PR and push runs. Rotating the token cannot change it.
-          # The message says what was observed and what it matches; it does not
-          # claim the WAF log was read (deploy-integrity R7).
+          # only ever refuses with JSON (`bad_internal_token`, 401), so an HTML
+          # 403 came from something in front of it — measured 2026-10-01 on PR
+          # and push runs. Rotating the token cannot change it. The message
+          # says only what was observed; it does not name which layer returned
+          # the page, because this step did not establish that
+          # (deploy-integrity R7). The page body is not echoed.
           elif [ "$HTTP" = "403" ] && [ "${PROV_LEAD:0:1}" = "<" ]; then
-            PROV_WHY="EDGE-BLOCKED: the eval-probe answered HTTP 403 with an HTML page. The route itself only refuses with 401 JSON, so this was not the route and not a token problem; it matches the Front Door WAF rule BlockInternalApiAtEdge (front-door.bicep), which blocks /api/internal/* at the edge by design. Corpus provenance cannot be read from a runner through the edge; establishing it needs the in-VNet evaluator to report its corpus commit in the run receipt. First 200 bytes: <<$PROV_HEAD>>"
+            PROV_WHY="EDGE-BLOCKED: the eval-probe answered HTTP 403 with an HTML page: an HTML 403 returned in front of the route (not the app's JSON 401/403). This was not the route answering and not a token problem, and this step did not establish which layer returned it. Corpus provenance cannot be read from a runner along this path; establishing it needs the evaluator to report its corpus commit in the run receipt."
           elif [ "$HTTP" -lt 200 ] || [ "$HTTP" -ge 300 ]; then
             PROV_WHY="TRANSPORT: the eval-probe answered HTTP $HTTP, so no manifest was served. First 200 bytes of what came back: <<$PROV_HEAD>>"
           elif ! jq -e . "$PROV_BODY" > /dev/null 2>>"$PROV_ERR"; then
@@ -731,10 +733,9 @@ jobs:
           # Measured 2026-09-06: the eval-probe answers HTTP 403 on every current
           # run (33670827038:435, 33696595668:640), so provenance is UNRESOLVED
           # on every run and EVERY PR-attached verdict is an estate verdict.
-          # Re-measured 2026-10-01 (#4346): the 403 is an HTML page from the
-          # Front Door WAF custom rule `BlockInternalApiAtEdge` (front-door.bicep),
-          # which blocks /api/internal/* at the edge BY DESIGN. The route itself
-          # only ever answers 401 JSON. It is not a token problem; see the
+          # Re-measured 2026-10-01 (#4346): the 403 is an HTML page returned in
+          # front of the route, not the route's own JSON refusal (the route
+          # only ever answers 401 JSON). It is not a token problem; see the
           # provenance step's 403 branch.
           #
           # So on `pull_request`, when provenance is anything other than a
@@ -770,15 +771,17 @@ jobs:
           # still warns.
           MEASURED=$(jq '[.surfaces[]? | select((.questions // 0) > 0)] | length' eval-run.json)
           TOTAL=$(jq '.surfaces | length' eval-run.json)
-          echo "surfaces present: $TOTAL, surfaces with asked questions: $MEASURED"
-          # #4346 — "asked" is not "judged". When the evaluator's daily judge
-          # budget is spent, every surface still asks its questions and comes
-          # back with `groundingAvg: null`. MEASURED above counted those as
-          # measured, so 17 PR runs on 2026-09-30 logged "10 surfaces actually
-          # measured" and reported PASS over ZERO judged questions. This prints
-          # the judged count, writes `measurement=` (none | deterministic-only |
-          # partial | judged) as a step output for the report-outcome label, and
-          # emits a ::warning:: whenever the judge did not score every surface.
+          echo "surfaces present: $TOTAL, surfaces that returned an answer: $MEASURED"
+          # #4346 — "returned an answer" is not "judged". When the evaluator's
+          # daily judge budget is spent, every surface still returns its answers
+          # and comes back with `groundingAvg: null`. MEASURED above counted
+          # those as measured, so 17 PR runs on 2026-09-30 logged "10 surfaces
+          # actually measured" and reported PASS over ZERO judged questions.
+          # This prints the judged count, writes `measurement=` (none |
+          # deterministic-only | partial | judged) as a step output for the
+          # report-outcome label, and emits a ::warning:: whenever the judge did
+          # not fully score every probed surface (a surface whose every probe
+          # failed counts as probed and not judged).
           # It LABELS; it does not change this step's conclusion (whether an
           # unjudged PR run should go red is an operator decision, #4346).
           node scripts/ci/eval-measurement.mjs --artifact eval-run.json --annotate
@@ -933,9 +936,13 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # `checks: write` is granted to THIS job only, for the one step that
+    # publishes the neutral "Copilot quality: not measured" check-run. No other
+    # job in this workflow can create a check-run.
     permissions:
       contents: read
       pull-requests: write
+      checks: write
     steps:
       - uses: actions/checkout@v7.0.1
 
@@ -956,10 +963,12 @@ jobs:
       # 2026-09-30: 17 PR runs concluded green with the grounding judge deferred
       # on every surface (0 questions judged) and every one of them said PASS
       # here. The heading now comes from eval-measurement.mjs, which calls a
-      # green run PASS only when the judge scored every surface AND the gate
-      # was enforcing; otherwise it says NOT MEASURED / PARTIALLY MEASURED /
-      # REPORTED, NOT ENFORCED. A missing measurement output (the evals job
-      # died before its gate step) reads "unrecorded", never PASS.
+      # green run PASS only when the judge fully scored every probed surface
+      # AND the gate recorded that it enforced; otherwise it says NOT MEASURED /
+      # PARTIALLY MEASURED / REPORTED, NOT ENFORCED. A red run is "a real
+      # verdict" only when it was judged; over an unjudged run it says the
+      # failure is a judge/measurement failure. A missing measurement output
+      # (the evals job died before its gate step) reads "unrecorded", never PASS.
       - name: Say so in the job summary
         env:
           CATEGORY: ${{ steps.outcome.outputs.category }}
@@ -983,6 +992,37 @@ jobs:
                 echo "This is **not** a quality regression and **not** a pass — nothing was measured."
               } >> "$GITHUB_STEP_SUMMARY" ;;
           esac
+
+      # #4346 — a SEPARATE check-run, conclusion `neutral`, whenever a PR run's
+      # judge measurement is not `judged`. It sits beside the evals job's own
+      # check and changes no conclusion: neutral is neither a pass nor a
+      # failure, so no PR check goes red because of it. Its summary carries the
+      # measurement line (NOT MEASURED / PARTIALLY MEASURED). The drain gate
+      # (tools/drain/gates.py) reads a neutral conclusion on this exact name as
+      # "not evidence", never as green coverage.
+      #
+      # Same-repo PRs only: a fork PR's token cannot create a check-run, and
+      # the evals job does not run for one, so `measurement` would be empty
+      # there anyway. A failed publish fails this step; it is not discarded.
+      - name: Publish the neutral not-measured check-run
+        if: >-
+          ${{ github.event_name == 'pull_request'
+           && github.event.pull_request.head.repo.full_name == github.repository
+           && contains(fromJSON('["deterministic-only","partial","none"]'), needs.evals.outputs.measurement) }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MEASUREMENT: ${{ needs.evals.outputs.measurement }}
+          MEASUREMENT_TEXT: ${{ needs.evals.outputs.measurement_text }}
+        run: |
+          set -euo pipefail
+          node scripts/ci/eval-measurement.mjs --check-run \
+            --measurement "$MEASUREMENT" \
+            --text "$MEASUREMENT_TEXT" \
+            --head-sha "$HEAD_SHA" > not-measured-check-run.json
+          gh api --method POST "repos/$REPO/check-runs" --input not-measured-check-run.json \
+            --jq '"published check-run \(.id): \(.name) = \(.conclusion)"'
 
       # The sticky comment the reviewer actually reads. Same header as the two
       # inside `evals`, so a later real verdict REPLACES this note rather than

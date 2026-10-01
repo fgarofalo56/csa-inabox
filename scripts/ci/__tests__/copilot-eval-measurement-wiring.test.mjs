@@ -22,6 +22,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
+import { NOT_MEASURED_STATES } from '../eval-measurement.mjs';
+
 const WF = path.resolve(import.meta.dirname, '..', '..', '..', '.github', 'workflows', 'copilot-quality-evals.yml');
 const SRC = fs.readFileSync(WF, 'utf8').replace(/\r\n/g, '\n');
 
@@ -84,7 +86,7 @@ test('the gate step (id: gate) writes gate_reported_only and gate_rc, so the out
   assert.match(gate, /GITHUB_OUTPUT/);
 });
 
-test('the gate step runs eval-measurement --annotate on eval-run.json, after the asked-count MEASURED line', () => {
+test('the gate step runs eval-measurement --annotate on eval-run.json, after the answered-count MEASURED line', () => {
   // Breaks if the --annotate call is deleted (no ::warning::, and the
   // `measurement` output above is never written), moved to another step
   // (steps.gate.outputs.measurement would be ''), or placed before
@@ -93,7 +95,7 @@ test('the gate step runs eval-measurement --annotate on eval-run.json, after the
   const call = 'node scripts/ci/eval-measurement.mjs --artifact eval-run.json --annotate';
   const iMeasured = at(gate, 'MEASURED=$(jq');
   const iCall = at(gate, call);
-  assert.ok(iCall > iMeasured, '--annotate runs after the asked-count line');
+  assert.ok(iCall > iMeasured, '--annotate runs after the answered-count line');
   // No result discarding on the call: a read failure (exit 2) must fail the step.
   const line = gate.slice(iCall, gate.indexOf('\n', iCall));
   assert.doesNotMatch(line, /\|\||2>\/dev\/null/, 'exit 2 is not swallowed');
@@ -134,6 +136,64 @@ test('report-outcome checks the repo out BEFORE it runs a repo script', () => {
   assert.ok(iCheckout >= 0, 'checkout step present');
   assert.ok(iSay >= 0, 'label step present');
   assert.ok(iCheckout < iSay);
+});
+
+// ── the neutral "Copilot quality: not measured" check-run ──────────────────
+
+const PUBLISH = () => stepNamed(REPORT_JOB(), 'Publish the neutral not-measured check-run').body;
+
+test('evals exports measurement_text FROM the gate step, for the check-run summary', () => {
+  // Breaks if the output is deleted or reads another step: the check-run would
+  // then carry the fallback sentence instead of the measurement line.
+  const job = EVALS_JOB();
+  const header = job.slice(0, at(job, '\n    steps:\n'));
+  assert.match(header, /^ {6}measurement_text: \$\{\{ steps\.gate\.outputs\.measurement_text \}\}$/m);
+});
+
+test('checks: write is granted to report-outcome ONLY, not to the workflow or the evals job', () => {
+  // Breaks if `checks: write` is dropped from report-outcome (the POST would
+  // be refused and the step would fail), or widened to the workflow-level
+  // block or the evals job.
+  const report = REPORT_JOB();
+  const perms = report.slice(at(report, '\n    permissions:\n'), at(report, '\n    steps:\n'));
+  assert.match(perms, /^ {6}checks: write$/m);
+  const topLevel = SRC.slice(at(SRC, '\npermissions:\n'), at(SRC, '\njobs:\n'));
+  assert.match(topLevel, /^ {2}contents: read$/m, 'the workflow-level block was found (positive control)');
+  assert.doesNotMatch(topLevel, /checks:/);
+  const evals = EVALS_JOB();
+  assert.doesNotMatch(evals.slice(0, at(evals, '\n    steps:\n')), /checks:/);
+  assert.equal([...SRC.matchAll(/^ *checks: write$/gm)].length, 1, 'exactly one `checks: write` key line in the file');
+});
+
+test('the publish step runs only on same-repo PRs, for EXACTLY the module\'s not-judged states', () => {
+  // Breaks if the state list in `if:` drifts from NOT_MEASURED_STATES (e.g.
+  // `judged` added, or `partial` dropped), or if the pull_request / same-repo
+  // conditions are removed (a fork token cannot create a check-run). The list
+  // is lifted from the step and compared with the module's export.
+  const body = PUBLISH();
+  const m = /contains\(fromJSON\('(\[[^\]]*\])'\), needs\.evals\.outputs\.measurement\)/.exec(body);
+  assert.ok(m, 'the contains(fromJSON(...), needs.evals.outputs.measurement) condition is present');
+  assert.deepEqual(JSON.parse(m[1]), [...NOT_MEASURED_STATES]);
+  assert.match(body, /github\.event_name == 'pull_request'/);
+  assert.match(body, /github\.event\.pull_request\.head\.repo\.full_name == github\.repository/);
+});
+
+test('the publish step builds the body with --check-run from the evals outputs and POSTs it, nothing discarded', () => {
+  // Breaks if --text / --measurement read a different source, if the head sha
+  // is not the PR head, if the POST targets another endpoint, or if a failure
+  // is swallowed (`|| true`, `2>/dev/null`, continue-on-error).
+  const body = PUBLISH();
+  assert.match(body, /^ {10}MEASUREMENT: \$\{\{ needs\.evals\.outputs\.measurement \}\}$/m);
+  assert.match(body, /^ {10}MEASUREMENT_TEXT: \$\{\{ needs\.evals\.outputs\.measurement_text \}\}$/m);
+  assert.match(body, /^ {10}HEAD_SHA: \$\{\{ github\.event\.pull_request\.head\.sha \}\}$/m);
+  const iBuild = at(body, 'node scripts/ci/eval-measurement.mjs --check-run');
+  const iPost = at(body, 'gh api --method POST "repos/$REPO/check-runs" --input not-measured-check-run.json');
+  assert.ok(iBuild < iPost, 'the body is built before it is POSTed');
+  assert.match(body, /--measurement "\$MEASUREMENT"/);
+  assert.match(body, /--text "\$MEASUREMENT_TEXT"/);
+  assert.match(body, /--head-sha "\$HEAD_SHA" > not-measured-check-run\.json/);
+  assert.match(body, /set -euo pipefail/);
+  assert.doesNotMatch(body, /\|\| *true|2>\/dev\/null|continue-on-error/);
 });
 
 test('the provenance step names an HTML 403 EDGE-BLOCKED, and checks it BEFORE the generic non-2xx branch', () => {
@@ -186,13 +246,19 @@ function runProvChain(http, body) {
   }
 }
 
-const EDGE_HTML = '<!DOCTYPE html><html><head><title>Azure Front Door</title></head><body>The request is blocked.</body></html>';
+const EDGE_HTML = '<!DOCTYPE html><html><head><title>403 Forbidden</title></head><body>The request is blocked.</body></html>';
 
-test('behaviour: an HTML 403 (the measured edge block) is EDGE-BLOCKED', () => {
+test('behaviour: an HTML 403 (the measured block in front of the route) is EDGE-BLOCKED', () => {
   // Breaks if the 403 branch is deleted, or moved after the generic non-2xx
   // branch (which then claims it as TRANSPORT) — the reorder arm.
   const why = runProvChain('403', EDGE_HTML);
-  assert.match(why, /^EDGE-BLOCKED: the eval-probe answered HTTP 403 with an HTML page/);
+  assert.match(why, /^EDGE-BLOCKED: the eval-probe answered HTTP 403 with an HTML page: an HTML 403 returned in front of the route \(not the app's JSON 401\/403\)\./);
+  // Breaks if the message claims which layer returned the page — the step
+  // never established that (deploy-integrity R7).
+  assert.match(why, /this step did not establish which layer returned it/);
+  // Breaks if the page body is echoed again (`First 200 bytes: <<…>>`
+  // appended): the message must END at the receipt sentence.
+  assert.match(why, /report its corpus commit in the run receipt\.$/);
 });
 
 test('behaviour: an HTML 403 led by whitespace is still EDGE-BLOCKED', () => {
@@ -203,7 +269,7 @@ test('behaviour: an HTML 403 led by whitespace is still EDGE-BLOCKED', () => {
 
 test('behaviour: a JSON 403 is NOT called an edge block — it stays TRANSPORT with its status', () => {
   // Breaks if the `<` half of the condition is dropped (every 403 → EDGE-BLOCKED,
-  // a claim about the WAF the code did not establish — deploy-integrity R7).
+  // a claim about what answered that the code did not establish — deploy-integrity R7).
   const why = runProvChain('403', '{"ok":false,"error":"forbidden"}');
   assert.match(why, /^TRANSPORT: the eval-probe answered HTTP 403, so no manifest was served/);
   assert.doesNotMatch(why, /EDGE-BLOCKED/);
