@@ -203,9 +203,14 @@ describe('a final approval refused because the storage changed', () => {
     // positive pair: the button is there for targets_changed.
     expect(within(dialog).queryByRole('button', { name: 'Deny with this reason', hidden: true })).not.toBeInTheDocument();
     expect(within(dialog).queryByLabelText('Storage recorded when requested and bound now')).not.toBeInTheDocument();
-    // Focus goes to the refusal itself, not the body: breaks if no focus move
-    // follows a refusal (activeElement is the disabled submit or the body).
-    await waitFor(() => expect(document.activeElement?.textContent).toContain('Another decision is granting.'));
+    // Focus goes to the refusal message itself. Pinned by ELEMENT, not text: an
+    // ancestor (the body, the dialog surface) also contains the text, so a
+    // textContent check could not fail. Breaks if no focus move follows a
+    // refusal (activeElement is the disabled submit, the surface or the body).
+    const bar = within(dialog).getByText('Another decision is granting.').closest('[tabindex="-1"]');
+    expect(bar).not.toBeNull();
+    expect(bar).not.toBe(dialog);
+    await waitFor(() => expect(document.activeElement).toBe(bar));
   });
 
   it('keeps keyboard focus in the dialog: on Deny with this reason after the 409, then on the reason after it', async () => {
