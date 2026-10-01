@@ -78,88 +78,92 @@ export function escapeSqlLiteral(value: string): string {
 // For both, the backslash MUST be escaped before the quote: escaping the quote
 // first and the backslash second would turn the `\'` just written into `\\'`.
 //
+// Every character, control characters included, is carried: neither helper
+// throws. Both grammars accept any Unicode character in a regular literal; the
+// only characters that need an escape are the backslash, the quote, and (per
+// engine, below) the ones whose raw form the engine reads differently.
+//
 // Both helpers assume the engine's default parser settings. Spark's legacy
 // `spark.sql.parser.escapedStringLiterals=true` switches escape processing off;
 // Databricks SQL warehouses and Loom's Spark pools leave it at the default.
 // ---------------------------------------------------------------------------
 
-/** The engine a {@link LiteralEscapeError} was raised for. */
-export type LiteralEngine = 'spark-sql' | 'kql';
-
-/**
- * Raised when a value holds a character the target literal grammar cannot carry
- * safely: NUL, or a C0 control / DEL other than tab, LF and CR (which both
- * engines carry as `\t`, `\n`, `\r`). Callers that surface build errors as a 400
- * catch this by type. The message names the code point and its offset, never the
- * value itself, so it is safe to return to the client and to log.
- */
-export class LiteralEscapeError extends Error {
-  readonly engine: LiteralEngine;
-  readonly codePoint: number;
-  readonly index: number;
-  constructor(engine: LiteralEngine, codePoint: number, index: number) {
-    const hex = codePoint.toString(16).toUpperCase().padStart(4, '0');
-    super(`value contains control character U+${hex} at offset ${index}, which a ${engine} string literal cannot carry`);
-    this.name = 'LiteralEscapeError';
-    this.engine = engine;
-    this.codePoint = codePoint;
-    this.index = index;
-  }
-}
-
-// NUL, C0 controls except TAB (09) / LF (0A) / CR (0D), and DEL.
-const UNCARRIABLE_CONTROL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
-
-function refuseControlChars(value: string, engine: LiteralEngine): void {
-  const m = UNCARRIABLE_CONTROL.exec(value);
-  if (m) throw new LiteralEscapeError(engine, m[0].charCodeAt(0), m.index);
-}
-
-/** Backslash first, then the quote, then the three carriable controls. */
-function backslashEscape(value: string): string {
-  return value
-    .replace(/\\/g, '\\\\')
-    .replace(/'/g, "\\'")
-    .replace(/\t/g, '\\t')
-    .replace(/\n/g, '\\n')
-    .replace(/\r/g, '\\r');
-}
+/** Two-digit octal tail: Spark reads `\0` + two of these as ONE octal escape. */
+const OCTAL_DIGIT = /[0-7]/;
 
 /**
  * Escape a string for the INSIDE of a regular single-quoted Databricks / Spark
  * SQL literal (`'…'`, not `r'…'`). Returns the inner text only; the caller
- * wraps it. `\` → `\\`, `'` → `\'`, TAB/LF/CR → `\t`/`\n`/`\r`.
+ * wraps it. Never throws.
  *
- * @throws {LiteralEscapeError} on NUL or another uncarriable control character.
+ *   `\` → `\\`, `'` → `\'`, TAB/LF/CR → `\t`/`\n`/`\r`, NUL → `\0`.
+ *   Every other character, other control characters included, is passed raw —
+ *   the Databricks literal grammar takes "any character from the Unicode
+ *   character set".
+ *
+ * NUL is the one control character whose raw form is not used: it becomes the
+ * documented `\0` escape. Spark's decoder (`SparkParserUtils.unescapeSQLString`)
+ * also reads `\` + a three-digit octal number (`[01][0-7][0-7]`) as one
+ * character, so `\0` followed by two octal digits would merge with them (`NUL`
+ * then `12` would decode as LF). When the next two characters are both octal
+ * digits, NUL is written as `\u0000` instead, which the same decoder reads as
+ * exactly four hex digits.
  */
 export function escapeSparkSqlLiteral(value: string): string {
   const s = String(value);
-  refuseControlChars(s, 'spark-sql');
-  return backslashEscape(s);
+  let out = '';
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    switch (c) {
+      case '\\': out += '\\\\'; break;
+      case "'": out += "\\'"; break;
+      case '\t': out += '\\t'; break;
+      case '\n': out += '\\n'; break;
+      case '\r': out += '\\r'; break;
+      case '\u0000':
+        out += OCTAL_DIGIT.test(s[i + 1] ?? '') && OCTAL_DIGIT.test(s[i + 2] ?? '') ? '\\u0000' : '\\0';
+        break;
+      default: out += c;
+    }
+  }
+  return out;
 }
 
 /**
  * Escape a string for the INSIDE of a regular single-quoted KQL literal (`'…'`
  * or the obfuscated `h'…'`) — Azure Data Explorer, Log Analytics / Azure
  * Monitor, and Azure Resource Graph all share this grammar. Returns the inner
- * text only. `\` → `\\`, `'` → `\'`, TAB/LF/CR → `\t`/`\n`/`\r`.
+ * text only. Never throws.
+ *
+ *   `\` → `\\`, `'` → `\'`, TAB/LF/CR → `\t`/`\n`/`\r`, and every other C0
+ *   control character and DEL → `\uXXXX` (four hex digits, the documented
+ *   Unicode escape). Every other character is passed raw.
  *
  * NOT for verbatim literals (`@'…'`), whose rule is quote doubling.
- *
- * @throws {LiteralEscapeError} on NUL or another uncarriable control character.
  */
 export function escapeKqlLiteral(value: string): string {
   const s = String(value);
-  refuseControlChars(s, 'kql');
-  return backslashEscape(s);
+  let out = '';
+  for (const c of s) {
+    switch (c) {
+      case '\\': out += '\\\\'; break;
+      case "'": out += "\\'"; break;
+      case '\t': out += '\\t'; break;
+      case '\n': out += '\\n'; break;
+      case '\r': out += '\\r'; break;
+      default: {
+        const cp = c.charCodeAt(0);
+        out += cp <= 0x1f || cp === 0x7f ? `\\u${cp.toString(16).toUpperCase().padStart(4, '0')}` : c;
+      }
+    }
+  }
+  return out;
 }
 
 /**
  * The inner-literal escape for a {@link SqlDialect}: the Spark SQL rule for
  * `databricks-sql`, the T-SQL / ANSI doubling rule ({@link escapeSqlLiteral})
  * for every other dialect. For sites that already choose their own wrapper.
- *
- * @throws {LiteralEscapeError} for `databricks-sql` on an uncarriable control character.
  */
 export function escapeLiteralFor(value: string, dialect?: SqlDialect): string {
   return dialect === 'databricks-sql' ? escapeSparkSqlLiteral(value) : escapeSqlLiteral(value);
@@ -178,8 +182,6 @@ export function escapeLiteralFor(value: string, dialect?: SqlDialect): string {
  * dialect-driven in the legacy code and byte-parity was the priority.
  *
  * KQL is not a {@link SqlDialect}; build KQL literals with {@link escapeKqlLiteral}.
- *
- * @throws {LiteralEscapeError} for `databricks-sql` on an uncarriable control character.
  */
 export function quoteLiteral(
   value: string | number | boolean | null | undefined,

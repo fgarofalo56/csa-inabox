@@ -20,20 +20,18 @@
  */
 
 import { NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { apiOk, apiError, apiServerError, apiUnauthorized } from '@/lib/api/respond';
+import { apiOk, apiError, apiServerError } from '@/lib/api/respond';
 import { databricksConfigGate, listWarehouses, executeStatement } from '@/lib/azure/databricks-client';
 import { getAccountName } from '@/lib/azure/adls-client';
 import { toAbfss } from '@/lib/azure/delta-source-uri';
 import { listDeltaVersions, cleanTablePath, isKnownContainer } from '@/lib/azure/delta-history';
 import { escapeSparkSqlLiteral } from '@/lib/sql/quoting';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return apiUnauthorized();
+export const GET = withSession(async (req: NextRequest, { session }) => {
 
   const container = req.nextUrl.searchParams.get('container') || '';
   const tablePath = cleanTablePath(req.nextUrl.searchParams.get('tablePath') || '');
@@ -52,11 +50,9 @@ export async function GET(req: NextRequest) {
     }
     return apiServerError(e, 'Failed to read Delta history', 'history_failed');
   }
-}
+});
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return apiUnauthorized();
+export const POST = withSession(async (req: NextRequest) => {
 
   const body = await req.json().catch(() => ({}));
   const container = String(body?.container || '');
@@ -71,8 +67,9 @@ export async function POST(req: NextRequest) {
   if (mode === 'version' && (version === undefined || !Number.isInteger(version) || version < 0)) {
     return apiError('version must be a non-negative integer', 400);
   }
-  // Accept ISO8601 / 'YYYY-MM-DD[THH:MM:SS]' — reject anything with control or
-  // quote chars before it reaches the (still quote-doubled) literal.
+  // Accept ISO8601 / 'YYYY-MM-DD[THH:MM:SS]' only. The value is also escaped by
+  // the Spark SQL literal rule below; this allow-list rejects malformed input
+  // with a clear 400 before any warehouse call.
   if (mode === 'timestamp' && !/^[0-9T:\- .+Z]{4,40}$/.test(timestamp)) {
     return apiError('timestamp must be an ISO8601 date/datetime', 400);
   }
@@ -113,4 +110,4 @@ export async function POST(req: NextRequest) {
   } catch (e) {
     return apiServerError(e, 'Delta time-travel query failed', 'timetravel_failed');
   }
-}
+});

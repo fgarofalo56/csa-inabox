@@ -22,7 +22,7 @@ import type { SqlDialect } from '../../../azure/wells-to-sql';
 import { stripTrailingSemicolons } from '@/lib/util/trim';
 // Pure string helper (no runtime dependencies of its own): the per-dialect
 // string-literal escape, shared with the server SQL builders.
-import { escapeLiteralFor, LiteralEscapeError } from '@/lib/sql/quoting';
+import { escapeLiteralFor } from '@/lib/sql/quoting';
 
 export interface AppliedStep {
   /** Step (let-binding) name, e.g. `Source`, `Filtered Rows`. */
@@ -407,9 +407,8 @@ function foldQuoteIdent(name: string, dialect?: SqlDialect): string {
 /**
  * SQL single-quoted string literal in the fold's dialect. Databricks SQL reads
  * backslash escape sequences inside `'…'`, so it takes the Spark SQL rule
- * (escapeSparkSqlLiteral); every other dialect doubles the quote. A value the
- * Spark literal cannot carry throws LiteralEscapeError, which
- * foldAppliedStepsToSql reports as an unfoldable step.
+ * (escapeSparkSqlLiteral); every other dialect doubles the quote. Every
+ * character is carried; control characters are encoded, never refused.
  */
 function sqlString(v: string, d?: SqlDialect): string {
   return `'${escapeLiteralFor(v, d)}'`;
@@ -957,14 +956,7 @@ export function foldAppliedStepsToSql(
     const call = parseMCall(step.expr);
     if (!call) return { ok: false, unfoldableStep: step.name };
     const from = `(${current}) AS ${foldQuoteIdent(`_q${i - 1}`, dialect)}`;
-    let layer: ReturnType<typeof foldStep>;
-    try {
-      layer = foldStep(call, from, cols, dialect);
-    } catch (e) {
-      // A string the target dialect's literal cannot carry → honest gate.
-      if (e instanceof LiteralEscapeError) return { ok: false, unfoldableStep: step.name };
-      throw e;
-    }
+    const layer = foldStep(call, from, cols, dialect);
     if (!layer) return { ok: false, unfoldableStep: step.name };
     current = layer.sql;
     cols = layer.cols;

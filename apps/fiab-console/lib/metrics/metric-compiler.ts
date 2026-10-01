@@ -21,7 +21,7 @@
  *   • Filter VALUES are NEVER spliced: the T-SQL engines bind them as TDS
  *     parameters (`@p0`, `@p1`, …); the KQL engine escapes them through the
  *     central `escapeKqlLiteral` (the KQL string-literal grammar: backslash
- *     escapes, control characters refused as a 400 MetricCompileError).
+ *     escapes; control characters are encoded as `\uXXXX`, never refused).
  *
  * MOAT / IL5: the compiled query executes ENTIRELY in-boundary (Synapse / ADX /
  * lakehouse — all Gov-GA), so a metric compiles + serves with zero external
@@ -31,7 +31,7 @@
  * picks the cloud-correct endpoint via the existing clients.
  */
 
-import { bracket, escapeKqlLiteral, LiteralEscapeError } from '@/lib/sql/quoting';
+import { bracket, escapeKqlLiteral } from '@/lib/sql/quoting';
 import type { SynapseQueryParam } from '@/lib/azure/synapse-sql-client';
 import {
   resolveMetricMeasure,
@@ -309,17 +309,11 @@ const KQL_TIMESPAN: Record<string, string> = {
 };
 
 /**
- * Escape a value for a KQL single-quoted string literal. A value the literal
- * cannot carry (a control character) is a 400 {@link MetricCompileError}, so
- * every caller that already maps compile errors to a response keeps working.
+ * Escape a value for a KQL single-quoted string literal. Every character is
+ * carried: control characters are encoded (`\t`/`\n`/`\r`, else `\uXXXX`).
  */
 function kqlString(value: string): string {
-  try {
-    return escapeKqlLiteral(value);
-  } catch (e) {
-    if (e instanceof LiteralEscapeError) throw new MetricCompileError(e.message, 400);
-    throw e;
-  }
+  return escapeKqlLiteral(value);
 }
 
 /** Bracket-quote a KQL entity name: `['name']` (names are whitelisted from the spec). */

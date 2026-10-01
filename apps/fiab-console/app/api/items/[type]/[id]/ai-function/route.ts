@@ -32,7 +32,6 @@
  *        AOAI path        → { ok, engine:'aoai', fn, column, input, result, model, usage }
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { isGovCloud } from '@/lib/azure/cloud-endpoints';
 import {
   databricksConfigGate,
@@ -50,7 +49,8 @@ import {
   type AiFnOptions,
 } from '@/lib/azure/ai-functions-client';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
-import { escapeSparkSqlLiteral, LiteralEscapeError } from '@/lib/sql/quoting';
+import { buildAiSqlExpr, isEnrichmentOp, opHasDbxBuiltin } from '@/lib/azure/ai-enrichment-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -74,25 +74,17 @@ function quoteIdent(raw: string): string {
  * Map a Loom AiFn → the Databricks built-in AI SQL expression over a column.
  * PARTIAL: only the functions with a direct `ai_*` SQL builtin are in-database.
  * `embed` / `similarity` have no simple column builtin, so they always take the
- * AOAI-direct path (below) — `DBX_FN[fn]` is undefined for them and the caller
- * falls through.
+ * AOAI-direct path (below) — this returns null for them and the caller falls
+ * through.
+ *
+ * The expression comes from `buildAiSqlExpr` (lib/azure/ai-enrichment-client),
+ * the one implementation shared with the AI enrichment item, so labels, fields
+ * and the target language are escaped by the same pinned Spark SQL rule.
  */
-const DBX_FN: Partial<Record<AiFn, (col: string, o: AiFnOptions) => string>> = {
-  sentiment: (col) => `ai_analyze_sentiment(${col})`,
-  summarize: (col) => `ai_summarize(${col})`,
-  classify: (col, o) =>
-    `ai_classify(${col}, ARRAY(${(o.labels && o.labels.length ? o.labels : ['positive', 'negative', 'neutral'])
-      .map((l) => `'${escapeSparkSqlLiteral(String(l))}'`)
-      .join(', ')}))`,
-  translate: (col, o) =>
-    `ai_translate(${col}, '${escapeSparkSqlLiteral(String(o.targetLang || 'English'))}')`,
-  extract: (col, o) =>
-    `ai_extract(${col}, ARRAY(${(o.fields && o.fields.length ? o.fields : ['entity'])
-      .map((f) => `'${escapeSparkSqlLiteral(String(f))}'`)
-      .join(', ')}))`,
-  fix_grammar: (col) => `ai_fix_grammar(${col})`,
-  generate_response: (col) => `ai_gen(${col})`,
-};
+function dbxExpr(fn: AiFn, col: string, o: AiFnOptions): string | null {
+  if (!isEnrichmentOp(fn) || !opHasDbxBuiltin(fn)) return null;
+  return buildAiSqlExpr(fn, col, { labels: o.labels, fields: o.fields, targetLang: o.targetLang });
+}
 
 function parseOptions(o: unknown): AiFnOptions {
   const opts: AiFnOptions = {};
@@ -120,13 +112,8 @@ function parseOptions(o: unknown): AiFnOptions {
 const GATE_HINT =
   'Set LOOM_AOAI_ENDPOINT + LOOM_AOAI_DEPLOYMENT (admin-plane/main.bicep — enable aiFoundryEnabled or agentFoundryEnabled, or pass explicit overrides) and grant the Console UAMI "Cognitive Services OpenAI User".';
 
-export async function GET(
-  req: NextRequest,
-  ctx: { params: Promise<{ type: string; id: string }> },
-) {
-  const { type } = await ctx.params;
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession<{ type: string; id: string }>(async (req: NextRequest, { session, params }) => {
+  const { type } = params;
 
   const govPath = isGovCloud();
   const dbxAvailable = !govPath && databricksConfigGate() === null;
@@ -146,15 +133,10 @@ export async function GET(
     missing: gated ? 'LOOM_AOAI_ENDPOINT' : undefined,
     hint: gated ? GATE_HINT : undefined,
   });
-}
+});
 
-export async function POST(
-  req: NextRequest,
-  ctx: { params: Promise<{ type: string; id: string }> },
-) {
-  await ctx.params; // [type]/[id] carried for item scoping; backend keys off body
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession<{ type: string; id: string }>(async (req: NextRequest, { session, params }) => {
+  params; // [type]/[id] carried for item scoping; backend keys off body
 
   let body: any;
   try { body = await req.json(); } catch { body = {}; }
@@ -183,8 +165,8 @@ export async function POST(
   // ---------- Commercial / GCC + Databricks SQL warehouse: in-database ----------
   // Only functions with a direct `ai_*` SQL builtin run in-database; embed /
   // similarity have no column builtin and fall through to the AOAI path below.
-  const dbxExpr = DBX_FN[fn];
-  if (!govPath && warehouseId && dbxExpr && databricksConfigGate() === null) {
+  const hasDbxBuiltin = isEnrichmentOp(fn) && opHasDbxBuiltin(fn);
+  if (!govPath && warehouseId && hasDbxBuiltin && databricksConfigGate() === null) {
     if (!IDENT_RE.test(column) || (table && !IDENT_RE.test(table))) {
       return NextResponse.json(
         { ok: false, error: 'column / table must be plain SQL identifiers (no spaces or punctuation other than "." and backticks).' },
@@ -205,17 +187,8 @@ export async function POST(
     const colExpr = quoteIdent(column);
     const tableExpr = table.includes('`') || table.includes('.') ? table : quoteIdent(table);
     // Labels / fields / target language become Databricks string literals
-    // (Spark SQL grammar). escapeSparkSqlLiteral refuses a control character
-    // the literal cannot carry; that is a 400 on the request, not a 500.
-    let sql: string;
-    try {
-      sql = `SELECT ${colExpr}, ${dbxExpr(colExpr, opts)} AS ai_result FROM ${tableExpr} LIMIT ${limit}`;
-    } catch (e) {
-      if (e instanceof LiteralEscapeError) {
-        return NextResponse.json({ ok: false, error: `options: ${e.message}` }, { status: 400 });
-      }
-      throw e;
-    }
+    // (Spark SQL grammar), escaped inside buildAiSqlExpr.
+    const sql = `SELECT ${colExpr}, ${dbxExpr(fn, colExpr, opts)} AS ai_result FROM ${tableExpr} LIMIT ${limit}`;
     try {
       const result = await executeStatement(warehouseId, sql, catalog, schema);
       return NextResponse.json({ ok: true, engine: 'databricks', fn, column, sql, ...result });
@@ -322,4 +295,4 @@ export async function POST(
     }
     return NextResponse.json({ ok: false, engine: 'aoai', error: e?.message || String(e) }, { status: 502 });
   }
-}
+});

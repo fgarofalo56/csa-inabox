@@ -104,8 +104,6 @@ function quoteIdentFor(dialect: CheckDialect, name: string): string {
  * Single-quoted string literal in the check's dialect. Spark SQL (Databricks)
  * reads backslash escape sequences inside `'…'`, so it takes the backslash rule
  * (escapeSparkSqlLiteral); T-SQL and DuckDB double the quote (escapeSqlLiteral).
- * A value Spark cannot carry throws LiteralEscapeError, which compileChecks
- * records as a skipped check.
  */
 function literalFor(dialect: CheckDialect, value: string): string {
   return `'${dialect === 'spark' ? escapeSparkSqlLiteral(value) : escapeSqlLiteral(value)}'`;

@@ -28,7 +28,7 @@
  *   CREATE TABLE:            https://learn.microsoft.com/azure/databricks/sql/language-manual/sql-ref-syntax-ddl-create-table-using
  */
 
-import { escapeSparkSqlLiteral, LiteralEscapeError, quoteIdent } from '@/lib/sql/quoting';
+import { escapeSparkSqlLiteral, quoteIdent } from '@/lib/sql/quoting';
 
 /** Throwable for all build-time validation failures (surfaced as HTTP 400). */
 export class TableFormatBuildError extends Error {
@@ -100,16 +100,11 @@ function threePart(catalog: string, schema: string, name: string): string {
 
 /**
  * Inner text of a Databricks string literal, escaped by the Spark SQL literal
- * grammar (escapeSparkSqlLiteral). A control character the literal cannot carry
- * is reported as a TableFormatBuildError (a 400), like any other bad input.
+ * grammar (escapeSparkSqlLiteral). Every character is carried; NUL is written
+ * as an escape and other control characters pass through.
  */
 function lit(value: string): string {
-  try {
-    return escapeSparkSqlLiteral(value);
-  } catch (e) {
-    if (e instanceof LiteralEscapeError) throw new TableFormatBuildError(e.message);
-    throw e;
-  }
+  return escapeSparkSqlLiteral(value);
 }
 
 /** `'k' = 'v'` — TBLPROPERTIES key/value emitted as escaped string literals. */

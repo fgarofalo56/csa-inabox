@@ -41,7 +41,7 @@ import { runAttachIntegration } from '@/lib/azure/attach-integration';
 import { resolveUamiPrincipalId } from '@/lib/clients/azure-connections-client';
 import { decodeLandingZoneId } from '@/lib/azure/landing-zone-id';
 import { emitAuditEvent } from '@/lib/admin/audit-stream';
-import { escapeKqlLiteral, LiteralEscapeError } from '@/lib/sql/quoting';
+import { escapeKqlLiteral } from '@/lib/sql/quoting';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -95,16 +95,6 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const ids = requested.map((s) => (s?.armResourceId || '').trim()).filter(Boolean);
   if (ids.length === 0) return apiError('no valid armResourceId in services', 400);
-  // The ids are carried in a KQL string literal (Resource Graph). Build the
-  // query once up front so an id the literal cannot carry is a 400 here, not
-  // an empty ARG result reported as "not visible".
-  try {
-    buildIdQuery(ids);
-  } catch (e) {
-    if (e instanceof LiteralEscapeError) return apiError(`armResourceId: ${e.message}`, 400);
-    throw e;
-  }
-
   // Server-side posture read (ARG by id) — UAMI first (Loom's perspective),
   // then the caller's token; ARG can silently return zero for one identity.
   let rows: ArgIdRow[] = [];
