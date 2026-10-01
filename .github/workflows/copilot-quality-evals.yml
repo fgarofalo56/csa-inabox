@@ -20,17 +20,20 @@ name: copilot-quality-evals
 #   4. sticky PR comment with the per-surface score/delta table + uploads the
 #      run artifact (the NEXT run downloads it as the delta baseline).
 #
-# Change gating: the corpus paths below ARE the change filter — CI runners are
-# fresh, so stage-copilot-corpus.sh has no incremental baseline to diff against
-# (its .corpus-manifest.json 'copied' count is always the full tree here); the
-# nightly schedule runs unconditionally with --strict-missing.
+# Change gating: on `push` to main the corpus paths below ARE the change filter
+# — CI runners are fresh, so stage-copilot-corpus.sh has no incremental
+# baseline to diff against (its .corpus-manifest.json 'copied' count is always
+# the full tree here); the nightly schedule runs unconditionally with
+# --strict-missing. The `pull_request` filter is NARROWER on purpose (operator
+# decision 2026-09-30) — see the comment on that trigger.
 #
 # WHAT THIS RUN CAN AND CANNOT MEASURE (#3085): the console indexes the corpus
 # BAKED INTO ITS IMAGE, and the staging step here never leaves the runner — so
-# on a docs-only PR the scores are produced against the DEPLOYED corpus, not
-# the diff. Until the checkout's corpus can be shipped to an ephemeral index,
-# the "Corpus provenance" step states both commits and says plainly when they
-# differ, so no one reads a corpus-PR verdict as a verdict on the corpus.
+# on a docs-only push to main the scores are produced against the DEPLOYED
+# corpus, not the diff. Until the checkout's corpus can be shipped to an
+# ephemeral index, the "Corpus provenance" step states both commits and says
+# plainly when they differ, so no one reads a corpus-change verdict as a
+# verdict on the corpus.
 #
 # CONCURRENCY (#3083): the job carries a SECOND, repo-wide concurrency group so
 # only ONE 153-turn sweep runs estate-wide at a time. Per-ref
@@ -71,12 +74,54 @@ on:
       - '.github/workflows/copilot-quality-evals.yml'
   pull_request:
     branches: [main]
+    # Operator decision 2026-09-30 ("path-filter the evals"): a PR run fires
+    # ONLY on what a PR run executes FROM THE CHECKOUT. The sweep itself scores
+    # the DEPLOYED console and the DEPLOYED evaluator image (#3085 — the corpus
+    # and the eval sets are both baked into images), so a docs/** or PRPs/**
+    # change is not measured by it; triggering on those only queued sweeps in
+    # the repo-wide `copilot-quality-evals-estate` group, where GitHub keeps one
+    # pending run and cancels the rest at zero steps — an advisory red on the
+    # drain's merge gate that measured nothing.
+    #
+    # Scripts are listed WITH their local imports (redact-secrets,
+    # parse-reindex-poll, eval-regression-lib): an edit to a helper changes
+    # what runs exactly as an edit to its caller does.
+    #
+    # WHAT A docs/PRPs PR RUN USED TO CATCH, AND WHERE IT IS CAUGHT NOW. Two
+    # steps of this workflow read docs/** and PRPs/** from the checkout, so a
+    # docs-only diff could fail them before merge:
+    #   - stage-copilot-corpus.sh walks docs/ and PRPs/ under
+    #     `set -euo pipefail` (`find | xargs sha256sum`): a tracked directory
+    #     named `*.md` exits 123, and the same stager runs in the console
+    #     build/deploy lanes on main;
+    #   - lint-eval-sets.mjs resolves every eval-set `expectedChunks`
+    #     path/anchor against docs/** and PRPs/**.
+    # Both now run on EVERY pull_request in loom-guardrails.yml (no paths
+    # filter, no secrets, no Azure), in the job `copilot-corpus-lint`. That job
+    # is ADVISORY by operator decision (2026-09-30): it is not in branch
+    # protection or tools/drain/required_contexts.json, although the drain's
+    # merge gate (4c) still treats a red advisory check as a NO-GO. So narrowing
+    # this filter does not drop them.
+    #
+    # `PRPs/archive/**` is a stager source root and has never been in either
+    # filter here. That gap predates this change and is out of its scope; the
+    # `copilot-corpus-lint` stager step does walk it.
+    #
+    # Pinned by scripts/ci/__tests__/copilot-evals-trigger-contract.test.mjs,
+    # including that the `copilot-corpus-lint` job exists, stays advisory and
+    # runs on every PR.
     paths:
-      - 'docs/**'
-      - 'PRPs/active/**'
-      - 'PRPs/completed/csa-loom-pillar/**'
       - 'content/evals/**'
       - 'scripts/csa-loom/stage-copilot-corpus.sh'
+      - 'scripts/csa-loom/lint-eval-sets.mjs'
+      - 'scripts/csa-loom/check-eval-regression.mjs'
+      - 'scripts/csa-loom/eval-regression-lib.mjs'
+      - 'scripts/ci/reindex-loom-docs.sh'
+      - 'scripts/ci/parse-reindex-poll.mjs'
+      - 'scripts/ci/classify-reindex-result.mjs'
+      - 'scripts/ci/redact-secrets.mjs'
+      - 'scripts/ci/run-outcome.mjs'
+      - '.github/workflows/copilot-quality-evals.yml'
   schedule:
     # Nightly full run (UTC). Offset from the Function's own 07:00 timer so the
     # two runs don't share a burst window against the AOAI judge TPM.
@@ -531,13 +576,13 @@ jobs:
           CHECKOUT_COMMIT: ${{ steps.stage.outputs.corpus_commit }}
         run: |
           set -uo pipefail
-          # #3085 — this workflow is PATH-TRIGGERED on docs/**, PRPs/** and
+          # #3085 — on push this workflow is PATH-TRIGGERED on docs/**, PRPs/** and
           # content/evals/**, and it structurally CANNOT measure them: the
           # console indexes the corpus BAKED INTO ITS IMAGE
           # (apps/fiab-console/Dockerfile:139), and the staging step above never
-          # leaves the runner. So a docs-only PR is scored against the corpus of
-          # the last built image — the gate can go RED on a corpus fix and GREEN
-          # on a corpus regression.
+          # leaves the runner. So a docs-only push is scored against the corpus
+          # of the last built image — the gate can go RED on a corpus fix and
+          # GREEN on a corpus regression.
           #
           # Shipping the checkout's corpus to the console for the run (an
           # ephemeral index) or building a throwaway image is the real fix and
