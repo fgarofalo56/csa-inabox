@@ -4995,19 +4995,22 @@ const ADMIN_SHAPE_UNSCOPED = new Map([
     },
   ],
   [
-    'app/api/lakehouse/shortcuts/browse/route.ts:GET',
+    'app/api/lakehouse/_lib/adls-scope.ts:resolveAdlsScope',
     {
-      verdict: 'ORG-WIDE',
+      verdict: 'UNRESOLVED',
       requires: ['authorizeLakehouse(', 'isTenantAdmin('],
       why:
-        'ORG-WIDE (the ADLS branch\'s admin test only). The lakehouse is resolved and tenant-bounded ' +
-        'FIRST: `authorizeLakehouse(session, lakehouseId)` (-> `resolveItemAccessByOid`, checked by ' +
-        '8a-8e) answers 404 before the admin flag is read, and a request with no `lakehouseId` is 400. ' +
-        'The `isTenantAdmin` test then only widens STORAGE reach on the Console identity: a tenant ' +
-        'admin may list any account and container, while everyone else is limited to the ' +
-        'deployment\'s lake containers and the containers readable lakehouses in that workspace ' +
-        'record (403 otherwise). It reads no workspace document. Both tokens are pinned: drop the ' +
-        'item check and this entry no longer describes the function.',
+        'UNRESOLVED (recorded here so it prints on every run; this guard does not clear it). ADLS ' +
+        'shortcuts and browse share one container scope, decided in this function. The lakehouse item ' +
+        'is resolved FIRST: `authorizeLakehouse(session, lakehouseId)` (-> `resolveItemAccessByOid`, ' +
+        'checked by 8a-8e) answers 404 before the admin flag is read, and both callers answer 400 ' +
+        'without an item id. The `isTenantAdmin` test then widens STORAGE reach on the Console ' +
+        'identity rather than workspace reach: a tenant admin may use any account and container, ' +
+        'while everyone else is limited to the deployment\'s lake containers and the containers ' +
+        'readable lakehouses in that workspace record (403 otherwise). Neither NARROWS (the flag ' +
+        'grants) nor ORG-WIDE (an item is in play) describes that, and this guard bounds workspaces, ' +
+        'not storage accounts. Both tokens are pinned: drop the item check and this entry no longer ' +
+        'describes the function.',
     },
   ],
   [

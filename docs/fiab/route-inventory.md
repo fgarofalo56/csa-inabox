@@ -13,11 +13,11 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1696 |
+| Total routes | 1697 |
 | Public (no session) | 59 |
-| Session-only | 636 |
-| Owner-scoped | 683 |
-| Admin | 318 |
+| Session-only | 635 |
+| Owner-scoped | 686 |
+| Admin | 317 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 499 |
 | Areas | 122 |
@@ -1878,9 +1878,10 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `lakehouse/references/route.ts` | GET POST | owner-scoped |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity |
 | `lakehouse/schemas/route.ts` | GET POST PATCH DELETE | session-only | ● | Cosmos, Synapse |
 | `lakehouse/settings/route.ts` | GET PUT | session-only | ● | ADLS, Azure Monitor, Azure Storage, Cosmos |
-| `lakehouse/shortcuts/browse/route.ts` | GET | admin | ● | ADLS, ARM, Azure Monitor, Azure Storage, Cosmos, Key Vault, Managed Identity, Microsoft Graph |
+| `lakehouse/shortcuts/adls-scope/route.ts` | GET | owner-scoped |  | ADLS, Azure Storage, Cosmos, Microsoft Graph |
+| `lakehouse/shortcuts/browse/route.ts` | GET | owner-scoped | ● | ADLS, ARM, Azure Monitor, Azure Storage, Cosmos, Key Vault, Managed Identity, Microsoft Graph |
 | `lakehouse/shortcuts/credentials/route.ts` | POST | session-only | ● | Key Vault |
-| `lakehouse/shortcuts/route.ts` | GET POST DELETE | session-only |  | ADLS, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Key Vault, Managed Identity, Microsoft Graph, Synapse SQL |
+| `lakehouse/shortcuts/route.ts` | GET POST DELETE | owner-scoped |  | ADLS, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Key Vault, Managed Identity, Microsoft Graph, Synapse SQL |
 | `lakehouse/shortcuts/sharepoint/route.ts` | GET | session-only | ● | Microsoft Graph |
 | `lakehouse/shortcuts/test/route.ts` | POST | session-only | ● | ADLS, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Key Vault, Managed Identity, Microsoft Graph, Synapse SQL |
 | `lakehouse/table-stats/route.ts` | GET | session-only | ● | ADLS, Azure Storage, Synapse |
@@ -2425,7 +2426,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 ## Authorization resolvers (derived)
 
-191 function(s) across 86 module(s) reach an owner / workspace-ACL
+193 function(s) across 87 module(s) reach an owner / workspace-ACL
 decision. Derived by `scripts/ci/_route-auth-scope.mjs` from the seeds above —
 nothing here is hand-maintained. A change to this list in a diff means the
 authorization surface moved.
@@ -2460,6 +2461,7 @@ authorization surface moved.
 | `apps/fiab-console/app/api/items/materialized-lake-view/_lib/load.ts` | `loadMlvItem` |
 | `apps/fiab-console/app/api/items/scorecard/config-store.ts` | `loadScorecardConfig` |
 | `apps/fiab-console/app/api/items/semantic-model/_lib/prep-for-ai-store.ts` | `enrichSemanticModelSources`, `readPrepForAi`, `writePrepForAi` |
+| `apps/fiab-console/app/api/lakehouse/_lib/adls-scope.ts` | `resolveAdlsScope`, `workspaceLocations` |
 | `apps/fiab-console/app/api/lakehouse/_lib/item-scope.ts` | `authorizeLakehouse`, `scopeItemPath` |
 | `apps/fiab-console/app/api/notebook/_lib/notebook-access.ts` | `loadAccessibleNotebook` |
 | `apps/fiab-console/app/api/sqldb/_shared.ts` | `guardSqlDbRequest`, `loadWs` |

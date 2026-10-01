@@ -10,6 +10,7 @@ import {
   type CredSourceType,
 } from '@/lib/components/onelake/shortcut-wizard';
 import { useLakehouseCtx } from '../lakehouse-editor-context';
+import { AdlsBoundLocationPicker, useAdlsScope, useDebouncedValue } from './adls-scope-picker';
 import type { ShortcutKind } from '../types';
 
 export function ShortcutWizardDialog() {
@@ -32,8 +33,14 @@ export function ShortcutWizardDialog() {
     scFormat, setScFormat,
     scTargetSchema, setScTargetSchema,
     scSubmitError, scSubmitting, submitShortcut,
-    shortcutLakehouseId, schemas, schemasEnabled,
+    shortcutLakehouseId, schemas, schemasEnabled, id, isNewItem,
   } = ctx;
+  // ADLS browse and an ADLS target are authorized on the lakehouse ITEM; the
+  // registry key (`shortcutLakehouseId`) is not always the item id.
+  const itemId = isNewItem ? '' : id;
+  const adlsScope = useAdlsScope(itemId, scWizardOpen && scStep === 2 && scType === 'adls' && scAdlsMode === 'picker');
+  // The tree lists only after the container has stopped changing, not on every keystroke.
+  const browseContainer = useDebouncedValue(scAdlsContainer, 400);
 
   return (
     <Dialog open={scWizardOpen} onOpenChange={(_, d) => setScWizardOpen(d.open)}>
@@ -97,38 +104,53 @@ export function ShortcutWizardDialog() {
                     </Field>
                     {scAdlsMode === 'picker' ? (
                       <>
-                        <Field label="Storage account" required hint={storageAcctsLoading ? 'Discovering accounts…' : 'ADLS Gen2 / Blob accounts you can access across the tenant'}>
-                          <Dropdown
-                            value={scAcctHost ? (storageAccts.find((a) => (a.dfsHost || a.blobHost) === scAcctHost)?.name || scAcctHost) : ''}
-                            selectedOptions={scAcctHost ? [scAcctHost] : []}
-                            placeholder={storageAcctsLoading ? 'Loading…' : 'Select a storage account'}
-                            onOptionSelect={(_, d) => setScAcctHost(d.optionValue || '')}>
-                            {storageAccts.map((a) => {
-                              const host = a.dfsHost || (a.blobHost ? a.blobHost.replace(/\.blob\./i, '.dfs.') : '');
-                              return <Option key={a.name} value={host} text={a.name}>{a.name}{a.isHns ? ' (ADLS Gen2)' : ' (Blob)'}{a.resourceGroup ? ` · ${a.resourceGroup}` : ''}</Option>;
-                            })}
-                          </Dropdown>
+                        {adlsScope.loading && <Spinner size="tiny" label="Loading the containers this workspace can use…" />}
+                        {adlsScope.error && (
+                          <MessageBar intent="warning"><MessageBarBody>{adlsScope.error}</MessageBarBody></MessageBar>
+                        )}
+                        {!adlsScope.loading && !adlsScope.error && (
+                          <AdlsBoundLocationPicker
+                            label={adlsScope.unrestricted ? 'Container bound to this workspace (or any account below)' : 'Container'}
+                            locations={adlsScope.locations}
+                            acctHost={scAcctHost}
+                            container={scAdlsContainer}
+                            onPick={(host, c) => { setScAcctHost(host); setScAdlsContainer(c); }}
+                          />
+                        )}
+                        {adlsScope.unrestricted && (
+                          <>
+                            <Field label="Storage account" hint={storageAcctsLoading ? 'Discovering accounts…' : 'Tenant admin: any ADLS Gen2 / Blob account the Console identity can access'}>
+                              <Dropdown
+                                value={scAcctHost ? (storageAccts.find((a) => (a.dfsHost || a.blobHost) === scAcctHost)?.name || scAcctHost) : ''}
+                                selectedOptions={scAcctHost ? [scAcctHost] : []}
+                                placeholder={storageAcctsLoading ? 'Loading…' : 'Select a storage account'}
+                                onOptionSelect={(_, d) => setScAcctHost(d.optionValue || '')}>
+                                {storageAccts.map((a) => {
+                                  const host = a.dfsHost || (a.blobHost ? a.blobHost.replace(/\.blob\./i, '.dfs.') : '');
+                                  return <Option key={a.name} value={host} text={a.name}>{a.name}{a.isHns ? ' (ADLS Gen2)' : ' (Blob)'}{a.resourceGroup ? ` · ${a.resourceGroup}` : ''}</Option>;
+                                })}
+                              </Dropdown>
+                            </Field>
+                            <Field label="Container / filesystem">
+                              <Input value={scAdlsContainer} onChange={(_, d) => setScAdlsContainer(d.value)} placeholder="landing" />
+                            </Field>
+                          </>
+                        )}
+                        <Field label="Path" hint="folder under the container (optional)">
+                          <Input value={scAdlsPath} onChange={(_, d) => setScAdlsPath(d.value)} placeholder="eventhub-capture" />
                         </Field>
-                        <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
-                          <Field label="Container / filesystem" required style={{ flex: 1 }}>
-                            <Input value={scAdlsContainer} onChange={(_, d) => setScAdlsContainer(d.value)} placeholder="landing" />
-                          </Field>
-                          <Field label="Path" hint="folder under the container (optional)" style={{ flex: 1 }}>
-                            <Input value={scAdlsPath} onChange={(_, d) => setScAdlsPath(d.value)} placeholder="eventhub-capture" />
-                          </Field>
-                        </div>
                         {scAcctHost && scAdlsContainer && (
                           <Caption1 style={{ fontFamily: 'Consolas, monospace', color: tokens.colorBrandForeground1, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
                             abfss://{scAdlsContainer}@{scAcctHost}/{(extCreds.selectedPath || scAdlsPath).replace(/^\/+/, '')}
                           </Caption1>
                         )}
-                        {scAcctHost && scAdlsContainer && (
+                        {scAcctHost && browseContainer && (
                           <Field label="Browse remote objects" hint="Click a folder or file to set the path (runs on the Console UAMI).">
                             <RemoteBrowseTree
                               sourceType="adls"
                               account={scAcctHost.split('.')[0]}
-                              container={scAdlsContainer}
-                              lakehouseId={shortcutLakehouseId}
+                              container={browseContainer}
+                              itemId={itemId}
                               onSelect={(path) => { setExtCreds((c) => ({ ...c, selectedPath: path })); setScAdlsPath(path); }}
                               selectedPath={extCreds.selectedPath}
                             />

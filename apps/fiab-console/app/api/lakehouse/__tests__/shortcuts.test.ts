@@ -89,7 +89,7 @@ describe('POST /api/lakehouse/shortcuts', () => {
     (resolveAndTestAdls as any).mockResolvedValue({ abfssUri: 'abfss://c@loomacct.dfs.core.windows.net/p', reachable: true });
     (createShortcut as any).mockImplementation(async (d: any) => ({ ...d, id: 'lh:files::a', fullPath: 'Files/a', status: 'active' }));
     const res = await POST(postReq({
-      lakehouseId: 'lh', name: 'a', kind: 'files', targetType: 'adls',
+      lakehouseId: 'lh', itemId: 'lh', name: 'a', kind: 'files', targetType: 'adls',
       targetUri: 'abfss://c@loomacct.dfs.core.windows.net/p',
     }));
     const j = await res.json();
@@ -104,7 +104,7 @@ describe('POST /api/lakehouse/shortcuts', () => {
     (createTablesShortcut as any).mockResolvedValue({ engine: 'synapse', engineObject: 'shortcuts.a' });
     (createShortcut as any).mockImplementation(async (d: any) => ({ ...d, id: 'lh:tables::a', fullPath: 'Tables/a' }));
     const res = await POST(postReq({
-      lakehouseId: 'lh', name: 'a', kind: 'tables', targetType: 'adls',
+      lakehouseId: 'lh', itemId: 'lh', name: 'a', kind: 'tables', targetType: 'adls',
       targetUri: 'abfss://c@loomacct.dfs.core.windows.net/p', format: 'delta',
     }));
     const j = await res.json();

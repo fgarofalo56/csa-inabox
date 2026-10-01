@@ -271,7 +271,7 @@ export function LakehouseEditor({ item, id }: Props) {
     tablesPrefix,
   });
   const sc_ = useLakehouseShortcuts({
-    shortcutLakehouseId: activeContainer || id,
+    shortcutLakehouseId: activeContainer || id, itemId: isNewItem ? '' : id,
     schemasEnabled, containers, schemas: sec.schemas,
     bundleShortcuts, loadSchemas: sec.loadSchemas, confirm, setSqlText, setTab, tab,
   });

@@ -9,6 +9,8 @@ import type { LakehouseContent } from '@/lib/apps/content-bundles/types';
 
 interface Params {
   shortcutLakehouseId: string;
+  /** The lakehouse ITEM id. An ADLS target is authorized on it (the registry key is not always the item id). */
+  itemId?: string;
   schemasEnabled: boolean;
   containers: ContainerInfo[] | null;
   schemas: SchemaRow[] | null;
@@ -22,7 +24,7 @@ interface Params {
 }
 
 export function useLakehouseShortcuts({
-  shortcutLakehouseId, schemasEnabled, containers, schemas, bundleShortcuts,
+  shortcutLakehouseId, itemId = '', schemasEnabled, containers, schemas, bundleShortcuts,
   loadSchemas, confirm, setSqlText, setTab, tab,
 }: Params) {
   // ── Shortcuts state ───────────────────────────────────────────────────────
@@ -161,7 +163,7 @@ export function useLakehouseShortcuts({
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           lakehouseId: shortcutLakehouseId, name: scName.trim(), kind: scKind,
-          parentPath: effectiveParent, targetType: scType, targetUri,
+          parentPath: effectiveParent, targetType: scType, targetUri, itemId,
           format: scKind === 'tables' ? scFormat : undefined, credentialRef,
           schemaName: schemasEnabled && scKind === 'tables' ? scTargetSchema : undefined,
         }),
@@ -172,7 +174,7 @@ export function useLakehouseShortcuts({
       await loadShortcuts();
     } catch (e: any) { setScSubmitError(e?.message || String(e)); }
     finally { setScSubmitting(false); }
-  }, [shortcutLakehouseId, scName, scTargetUri, scType, scAdlsMode, scAcctHost, scAdlsContainer, scAdlsPath, scInternalContainer, scInternalPath, scKvSecret, scKind, scParentPath, scFormat, schemasEnabled, scTargetSchema, extCreds, scSpSelection, loadShortcuts]);
+  }, [shortcutLakehouseId, itemId, scName, scTargetUri, scType, scAdlsMode, scAcctHost, scAdlsContainer, scAdlsPath, scInternalContainer, scInternalPath, scKvSecret, scKind, scParentPath, scFormat, schemasEnabled, scTargetSchema, extCreds, scSpSelection, loadShortcuts]);
 
   const registerBundleShortcut = useCallback(async (sc: any) => {
     if (!shortcutLakehouseId) return;
@@ -180,14 +182,14 @@ export function useLakehouseShortcuts({
     try {
       const r = await clientFetch('/api/lakehouse/shortcuts', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ lakehouseId: shortcutLakehouseId, name: sc.name, kind: sc.kind || 'files', parentPath: sc.parentPath || '', targetType: 'adls', targetUri: sc.target }),
+        body: JSON.stringify({ lakehouseId: shortcutLakehouseId, itemId, name: sc.name, kind: sc.kind || 'files', parentPath: sc.parentPath || '', targetType: 'adls', targetUri: sc.target }),
       });
       const j = await parseJsonOrError<{ ok: boolean; error?: string; hint?: string }>(r, 'Register shortcut');
       if (!j.ok) throw new Error(j.hint || j.error || `HTTP ${r.status}`);
       await loadShortcuts();
     } catch (e: any) { setShortcutsError(e?.message || String(e)); }
     finally { setRegBusy(null); }
-  }, [shortcutLakehouseId, loadShortcuts]);
+  }, [shortcutLakehouseId, itemId, loadShortcuts]);
 
   const registerAllBundleShortcuts = useCallback(async () => {
     for (const sc of bundleShortcuts) await registerBundleShortcut(sc);

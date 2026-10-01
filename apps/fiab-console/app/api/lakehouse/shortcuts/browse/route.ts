@@ -14,8 +14,9 @@
  *   region     = AWS region                     (s3)
  *   account    = storage account                (adls)
  *   container  = filesystem/container           (adls)
- *   lakehouseId = the lakehouse the wizard is creating the shortcut in
- *                 (required for every source; 400 item_required without it)
+ *   itemId     = the lakehouse ITEM id               (adls; 400 item_required without it)
+ *   lakehouseId = the shortcut registry key the credential was saved for
+ *                 (s3/gcs/dataverse; 400 item_required without it)
  *
  * Credentials are read from Key Vault by NAME (never passed in the URL, never
  * echoed). ADLS browses on the Console UAMI (no credential). Returns
@@ -50,17 +51,16 @@
  *
  * ADLS browse is scoped to the containers bound to the caller's workspace. It
  * runs on the Console identity, so the account and container it may list are
- * decided here: the caller must be able to read `lakehouseId` (the same
- * `authorizeLakehouse` check the lakehouse routes use, 404 otherwise), and the
- * account + container must be one of
- *   (a) this deployment's lake containers (`deploymentLakeAccounts` with
- *       `configuredContainerNames`), or
- *   (b) a container a lakehouse in that lakehouse's workspace records
- *       (`state.storageAccount`, `adlsContainer`, `ownedContainers`, the
- *       provisioning receipt) when the caller can read that lakehouse.
- * A tenant admin may browse any account. Anything else is 403
- * `adls_browse_not_permitted` before any storage call; a lookup that fails is
- * 503 `adls_browse_unverified`, never an allow.
+ * decided by `resolveAdlsScope` (app/api/lakehouse/_lib/adls-scope.ts), the
+ * same scope the create route applies to an ADLS shortcut target: the caller
+ * must be able to read the lakehouse ITEM named by `itemId` (404 otherwise),
+ * and the account + container must be this deployment's lake container or one
+ * a readable lakehouse in that workspace records. A tenant admin may browse any
+ * account. Anything else is 403 `adls_location_not_permitted` (with the allowed
+ * locations) before any storage call; a lookup that fails is 503
+ * `adls_scope_unverified`, never an allow. `itemId` is separate from
+ * `lakehouseId` because the wizard's `lakehouseId` is the shortcut registry key,
+ * which is not always the item id.
  *
  * Auth: session-required. Runtime: nodejs, force-dynamic.
  * Per .claude/rules/no-vaporware.md — real S3/GCS/ADLS REST, no mock arrays.
@@ -81,14 +81,7 @@ import {
   type GcsServiceAccount,
 } from '@/lib/azure/shortcut-client';
 import { withSession } from '@/lib/api/route-toolkit';
-import { authorizeLakehouse } from '../../_lib/item-scope';
-import { deploymentLakeAccounts } from '@/app/api/storage/_lib/authorize';
-import { configuredContainerNames, getAccountName } from '@/lib/azure/adls-client';
-import { itemsContainer } from '@/lib/azure/cosmos-client';
-import { isTenantAdmin } from '@/lib/auth/feature-gate';
-import { resolveItemAccessByOid } from '@/lib/auth/item-access';
-import type { SessionPayload } from '@/lib/auth/session';
-import type { WorkspaceItem } from '@/lib/types/workspace';
+import { adlsLocationPermitted, adlsLocationRefusal, resolveAdlsScope } from '../../_lib/adls-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -99,108 +92,6 @@ type SourceType = (typeof SOURCE_TYPES)[number];
 /** HTML stripped, whitespace collapsed, URL query strings / credentials removed. */
 function sanitize(e: any): string {
   return redactErrorText((e?.message || String(e)).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()).slice(0, 500);
-}
-
-/** The storage coordinates a lakehouse item records, as read by {@link adlsBrowseScope}. */
-interface LakehouseStorageRow {
-  id: string;
-  storageAccount?: unknown;
-  adlsContainer?: unknown;
-  ownedContainers?: unknown;
-  provContainer?: unknown;
-  provAdlsRoot?: unknown;
-}
-
-/** This deployment's primary lake account, lower-cased, or null when none is configured. */
-function primaryLakeAccount(): string | null {
-  try {
-    return getAccountName().toLowerCase();
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Every (account, container) pair a lakehouse row records. The account is
- * `state.storageAccount` when set, else the primary lake account; the
- * provisioning receipt's abfss URI names its own account.
- */
-function recordedLocations(row: LakehouseStorageRow, primary: string | null): Array<[string, string]> {
-  const out: Array<[string, string]> = [];
-  const explicit = typeof row.storageAccount === 'string' ? row.storageAccount.trim().toLowerCase() : '';
-  const account = explicit || primary;
-  const owned = Array.isArray(row.ownedContainers) ? row.ownedContainers : [];
-  if (account) {
-    for (const c of [row.adlsContainer, row.provContainer, ...owned]) {
-      if (typeof c === 'string' && c.trim()) out.push([account, c.trim()]);
-    }
-  }
-  if (typeof row.provAdlsRoot === 'string') {
-    const m = /^abfss:\/\/([^@/]+)@([^./]+)\./i.exec(row.provAdlsRoot.trim());
-    if (m) out.push([m[2].toLowerCase(), m[1]]);
-  }
-  return out;
-}
-
-type AdlsBrowseScope = 'allowed' | 'not-bound' | 'unverified';
-
-/**
- * May a non-admin caller who can read `lakehouse` browse `container` on
- * `account`? See the header: this deployment's lake containers, or a container
- * a lakehouse in the same workspace records and the caller can read. A failed
- * lookup is `unverified`, which the route refuses.
- */
-async function adlsBrowseScope(
-  session: SessionPayload,
-  lakehouse: WorkspaceItem,
-  accountRaw: string,
-  container: string,
-): Promise<AdlsBrowseScope> {
-  const account = accountRaw.toLowerCase();
-  if (deploymentLakeAccounts().has(account) && (configuredContainerNames() as string[]).includes(container)) {
-    return 'allowed';
-  }
-  try {
-    const items = await itemsContainer();
-    const { resources } = await items.items
-      .query<LakehouseStorageRow>(
-        {
-          query:
-            'SELECT c.id, c.state.storageAccount AS storageAccount, c.state.adlsContainer AS adlsContainer, '
-            + 'c.state.ownedContainers AS ownedContainers, '
-            + 'c.state.provisioning.secondaryIds.container AS provContainer, '
-            + 'c.state.provisioning.secondaryIds.adlsRoot AS provAdlsRoot '
-            + "FROM c WHERE c.workspaceId = @ws AND c.itemType = 'lakehouse' "
-            + 'AND (NOT IS_DEFINED(c.state._recycled) OR c.state._recycled = null)',
-          parameters: [{ name: '@ws', value: lakehouse.workspaceId }],
-        },
-        { partitionKey: lakehouse.workspaceId },
-      )
-      .fetchAll();
-    const primary = primaryLakeAccount();
-    for (const row of resources) {
-      if (!recordedLocations(row, primary).some(([a, c]) => a === account && c === container)) continue;
-      // The lakehouse in the request is already authorized; another one must be readable too.
-      if (row.id === lakehouse.id) return 'allowed';
-      if (await resolveItemAccessByOid(session, row.id, 'lakehouse')) return 'allowed';
-    }
-  } catch {
-    return 'unverified';
-  }
-  return 'not-bound';
-}
-
-/** The refusal for an ADLS browse {@link adlsBrowseScope} did not allow. */
-function adlsBrowseRefusal(scope: Exclude<AdlsBrowseScope, 'allowed'>): NextResponse {
-  if (scope === 'unverified') {
-    const error = 'Loom could not confirm that this container is bound to this workspace, so it did not browse it. '
-      + 'Retry in a moment; if it persists, ask a tenant admin.';
-    return NextResponse.json({ ok: false, code: 'adls_browse_unverified', error, hint: error }, { status: 503 });
-  }
-  const error = 'ADLS browse is scoped to the containers bound to this workspace, and this storage account and '
-    + "container are not one of them, so Loom did not browse it. Pick a container bound to this workspace (this "
-    + "deployment's lake containers, or one a lakehouse in this workspace is bound to), or ask a tenant admin.";
-  return NextResponse.json({ ok: false, code: 'adls_browse_not_permitted', error, hint: error }, { status: 403 });
 }
 
 export const GET = withSession(async (req: NextRequest, { session }) => {
@@ -233,20 +124,17 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
       if (!account || !container) {
         return NextResponse.json({ ok: false, error: 'account and container are required for ADLS browse' }, { status: 400 });
       }
-      // The lakehouse names the workspace whose bound containers bound this browse.
-      const lakehouseId = (sp.get('lakehouseId') || '').trim();
-      if (!lakehouseId) {
+      // The lakehouse ITEM names the workspace whose bound containers bound this browse.
+      const itemId = (sp.get('itemId') || '').trim();
+      if (!itemId) {
         return NextResponse.json(
-          { ok: false, code: 'item_required', error: 'lakehouseId is required to browse a storage account.' },
+          { ok: false, code: 'item_required', error: 'itemId (the lakehouse item) is required to browse a storage account.' },
           { status: 400 },
         );
       }
-      const access = await authorizeLakehouse(session, lakehouseId);
-      if (access instanceof NextResponse) return access;
-      if (!isTenantAdmin(session)) {
-        const scope = await adlsBrowseScope(session, access.item, account, container);
-        if (scope !== 'allowed') return adlsBrowseRefusal(scope);
-      }
+      const scope = await resolveAdlsScope(session, itemId);
+      if (scope instanceof NextResponse) return scope;
+      if (!adlsLocationPermitted(scope, account, container)) return adlsLocationRefusal(scope, 'browse');
       result = await browseAdls({ account, container, prefix });
     } else {
       // Not trimmed: the resolver refuses a padded name rather than reading a

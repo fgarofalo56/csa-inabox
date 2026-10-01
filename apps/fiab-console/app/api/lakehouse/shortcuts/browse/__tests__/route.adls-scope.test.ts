@@ -1,12 +1,18 @@
 /**
  * GET /api/lakehouse/shortcuts/browse?sourceType=adls — ADLS browse is scoped
- * to the containers bound to the caller's workspace.
+ * to the containers bound to the caller's workspace. ADLS shortcuts and browse
+ * share one container scope (`app/api/lakehouse/_lib/adls-scope.ts`).
  *
  * The route lists on the Console identity, so the account + container it may
- * list are decided by the route: the caller must be able to read `lakehouseId`,
- * and the account + container must be one of this deployment's lake containers
- * or a container a readable lakehouse in that lakehouse's workspace records. A
- * tenant admin may browse any account.
+ * list are decided by the route: the caller must be able to read the lakehouse
+ * ITEM named by `itemId`, and the account + container must be one of this
+ * deployment's lake containers (each configured container with the account in
+ * its URL) or a container a readable lakehouse in that item's workspace records.
+ * A tenant admin may browse any account.
+ *
+ * `lakehouseId` is the shortcut registry key (s3/gcs/dataverse credentials are
+ * saved under it); the editor sends the bound CONTAINER NAME there, so the ADLS
+ * branch never authorizes it.
  *
  * What is mocked: the session, `resolveItemAccessByOid` (who can read which
  * lakehouse), the Cosmos items container, `listPaths`, and the vault transport.
@@ -51,6 +57,7 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
             return {
               resources: rows.map((d) => ({
                 id: d.id,
+                displayName: d.displayName,
                 storageAccount: d.state?.storageAccount,
                 adlsContainer: d.state?.adlsContainer,
                 ownedContainers: d.state?.ownedContainers,
@@ -91,16 +98,16 @@ const ADMIN = { claims: { oid: 'admin-1', tid: 't1', groups: [] }, exp: Date.now
  */
 const DOCS = [
   // The request's own lakehouse: an explicit external account + adlsContainer.
-  { id: 'lh-1', workspaceId: 'ws-A', itemType: 'lakehouse', state: { storageAccount: 'partneracct', adlsContainer: 'exports' } },
+  { id: 'lh-1', workspaceId: 'ws-A', itemType: 'lakehouse', displayName: 'Sales', state: { storageAccount: 'partneracct', adlsContainer: 'exports' } },
   // A readable sibling, recorded only through its provisioning receipt.
   {
-    id: 'lh-2', workspaceId: 'ws-A', itemType: 'lakehouse',
+    id: 'lh-2', workspaceId: 'ws-A', itemType: 'lakehouse', displayName: 'Shared',
     state: { provisioning: { secondaryIds: { adlsRoot: 'abfss://shared@otheracct.dfs.core.windows.net/lakehouses/lh-2' } } },
   },
   // A readable sibling with no explicit account: its provisioned container is
   // on the deployment's primary lake account (loomlake), and is NOT one of the
   // configured lake containers, so only this record allows it.
-  { id: 'lh-5', workspaceId: 'ws-A', itemType: 'lakehouse', state: { provisioning: { secondaryIds: { container: 'curated' } } } },
+  { id: 'lh-5', workspaceId: 'ws-A', itemType: 'lakehouse', displayName: 'Curated', state: { provisioning: { secondaryIds: { container: 'curated' } } } },
   // A sibling the caller cannot read, on an account nothing else names.
   { id: 'lh-3', workspaceId: 'ws-A', itemType: 'lakehouse', state: { storageAccount: 'privateacct', ownedContainers: ['vault'] } },
   // A recycled sibling the caller can read.
@@ -150,7 +157,7 @@ const req = (qs: string) =>
 /** One browse call. The route reads no route params, so the handler context is empty. */
 const browse = (qs: string) => GET(req(qs), undefined as never);
 
-/** The (container, account) pairs listPaths was asked for. */
+/** The (account, container) pairs listPaths was asked for. */
 const listed = () => listPathsMock.mock.calls.map((c) => `${c[3]}/${c[0]}`);
 
 async function expectNotPermitted(qs: string) {
@@ -158,34 +165,46 @@ async function expectNotPermitted(qs: string) {
   expect(res.status, qs).toBe(403);
   const body = await res.json();
   expect(body.ok, qs).toBe(false);
-  expect(body.code, qs).toBe('adls_browse_not_permitted');
+  expect(body.code, qs).toBe('adls_location_not_permitted');
   return body;
 }
 
-describe('ADLS browse names the lakehouse', () => {
-  it('400 item_required when lakehouseId is absent or blank, before any item or storage read', async () => {
-    // WHAT BREAKS IT: deleting the lakehouseId check. The account and container
-    // below are the request lakehouse's own binding, so without the check the
-    // route would carry on, and authorizeLakehouse('') answers 404, not 400.
-    for (const qs of ['account=partneracct&container=exports', 'account=partneracct&container=exports&lakehouseId=',
-      'account=partneracct&container=exports&lakehouseId=%20%20']) {
+describe('ADLS browse names the lakehouse ITEM (itemId), not the registry key', () => {
+  it('400 item_required when itemId is absent or blank, before any item or storage read', async () => {
+    // WHAT BREAKS IT: deleting the itemId check, or reading `lakehouseId` for
+    // the ADLS branch. The third and fourth requests carry `lakehouseId=lh-1`,
+    // a READABLE item that binds partneracct/exports, so a route that
+    // authorized `lakehouseId` would list (200) instead of 400.
+    for (const qs of ['account=partneracct&container=exports', 'account=partneracct&container=exports&itemId=',
+      'account=partneracct&container=exports&lakehouseId=lh-1', 'account=partneracct&container=exports&itemId=%20&lakehouseId=lh-1']) {
       const res = await browse(qs);
       expect(res.status, qs).toBe(400);
       const body = await res.json();
       expect(body.code, qs).toBe('item_required');
-      expect(body.error, qs).toMatch(/lakehouseId is required/);
+      expect(body.error, qs).toMatch(/itemId \(the lakehouse item\) is required/);
     }
     expect(resolveItemAccessByOid).not.toHaveBeenCalled();
     expect(listPathsMock).not.toHaveBeenCalled();
 
-    // The same request naming the lakehouse lists.
-    const ok = await browse('account=partneracct&container=exports&lakehouseId=lh-1');
+    // The same request naming the item lists.
+    const ok = await browse('account=partneracct&container=exports&itemId=lh-1');
     expect(ok.status).toBe(200);
     expect(listed()).toEqual(['partneracct/exports']);
   });
 
-  it('a tenant admin still names the lakehouse (400 without it)', async () => {
-    // WHAT BREAKS IT: moving the admin short-circuit above the lakehouseId check.
+  it('a registry key that is a container name does not get in the way: itemId is what is authorized', async () => {
+    // The editor sends `lakehouseId=<bound container>` (here `landing`, which is
+    // no item id). WHAT BREAKS IT: the route authorizing `lakehouseId` instead
+    // of `itemId` — `landing` is not readable, so that route answers 404.
+    const res = await browse('account=partneracct&container=exports&lakehouseId=landing&itemId=lh-1');
+    expect(res.status).toBe(200);
+    expect(listed()).toEqual(['partneracct/exports']);
+    expect(resolveItemAccessByOid).toHaveBeenCalledWith(MEMBER, 'lh-1', 'lakehouse');
+    expect(resolveItemAccessByOid).not.toHaveBeenCalledWith(MEMBER, 'landing', 'lakehouse');
+  });
+
+  it('a tenant admin still names the item (400 without it)', async () => {
+    // WHAT BREAKS IT: an admin short-circuit above the itemId check.
     (getSession as any).mockReturnValue(ADMIN);
     const res = await browse('account=foreignacct&container=raw');
     expect(res.status).toBe(400);
@@ -193,58 +212,80 @@ describe('ADLS browse names the lakehouse', () => {
     expect(listPathsMock).not.toHaveBeenCalled();
   });
 
-  it('404 when the caller cannot read the named lakehouse, with no storage call', async () => {
-    // WHAT BREAKS IT: dropping authorizeLakehouse. lh-3 binds privateacct/vault
-    // and the caller cannot read lh-3; without the item check the binding scan
-    // finds the row whose id IS the request lakehouse and allows it (200).
-    const res = await browse('account=privateacct&container=vault&lakehouseId=lh-3');
+  it('404 when the caller cannot read the named item, with no storage call', async () => {
+    // WHAT BREAKS IT: dropping authorizeLakehouse, its `return access` in
+    // resolveAdlsScope, or the route's `return scope`. lh-3 binds
+    // privateacct/vault and the caller cannot read lh-3. Without the item
+    // refusal the scope is computed anyway and the request is refused 403 (or
+    // the route throws on a response it treats as a scope) — never 404.
+    const res = await browse('account=privateacct&container=vault&itemId=lh-3');
     expect(res.status).toBe(404);
+    expect((await res.json()).error).toMatch(/lakehouse not found/);
     expect(listPathsMock).not.toHaveBeenCalled();
     expect(resolveItemAccessByOid).toHaveBeenCalledWith(MEMBER, 'lh-3', 'lakehouse');
 
     // Once the caller can read lh-3, the same request lists.
     readable.add('lh-3');
-    const ok = await browse('account=privateacct&container=vault&lakehouseId=lh-3');
+    const ok = await browse('account=privateacct&container=vault&itemId=lh-3');
     expect(ok.status).toBe(200);
     expect(listed()).toEqual(['privateacct/vault']);
   });
 });
 
 describe('a non-admin may browse only containers bound to the workspace', () => {
-  it('refuses an account and container no lakehouse in the workspace records, before any storage call', async () => {
-    // WHAT BREAKS IT: the scope check removed, or a non-'allowed' scope that
-    // still falls through to browseAdls. 'unboundacct' is named by no document.
-    const body = await expectNotPermitted('account=unboundacct&container=data&lakehouseId=lh-1');
-    expect(body.error).toMatch(/Pick a container bound to this workspace/);
-    expect(body.error).toMatch(/ask a tenant admin/);
+  it('refuses an unbound account and container before any storage call, listing exactly the allowed pairs', async () => {
+    // WHAT BREAKS IT: the scope check removed, or a refusal that falls through
+    // to browseAdls. 'unboundacct' is named by no document. The `allowed` list
+    // is the whole scope for lh-1: the two lake containers (configured order),
+    // then lh-1's own binding, lh-2's receipt and lh-5's provisioned container.
+    // An unreadable (lh-3), recycled (lh-4), non-lakehouse (nb-1) or
+    // foreign-workspace (lh-9) entry in it fails the toEqual.
+    const body = await expectNotPermitted('account=unboundacct&container=data&itemId=lh-1');
+    expect(body.allowed).toEqual([
+      { account: 'loomlake', container: 'bronze', dfsHost: 'loomlake.dfs.core.windows.net' },
+      { account: 'loomlake', container: 'landing', dfsHost: 'loomlake.dfs.core.windows.net' },
+      { account: 'partneracct', container: 'exports', dfsHost: 'partneracct.dfs.core.windows.net' },
+      { account: 'otheracct', container: 'shared', dfsHost: 'otheracct.dfs.core.windows.net' },
+      { account: 'loomlake', container: 'curated', dfsHost: 'loomlake.dfs.core.windows.net' },
+    ]);
+    expect(body.error).toMatch(/ADLS shortcuts and browse are scoped to the containers bound to this workspace/);
+    expect(body.error).toMatch(/did not browse it/);
+    expect(body.error).toMatch(/Pick one of the 5 listed in the wizard, or ask a tenant admin, who can create this shortcut for you\./);
     expect(body.hint).toBe(body.error);
     expect(listPathsMock).not.toHaveBeenCalled();
   });
 
-  it('allows this deployment\'s lake containers without a workspace lookup', async () => {
-    // WHAT BREAKS IT: dropping the lake check (a). No document binds
+  it('allows this deployment\'s lake containers', async () => {
+    // WHAT BREAKS IT: dropping the lake locations (a). No document binds
     // loomlake/landing, so without (a) the request is refused (403).
-    const res = await browse('account=loomlake&container=landing&lakehouseId=lh-1');
+    const res = await browse('account=loomlake&container=landing&itemId=lh-1');
     expect(res.status).toBe(200);
     expect((await res.json()).ok).toBe(true);
     expect(listed()).toEqual(['loomlake/landing']);
-    expect(cosmos.calls).toHaveLength(0);
   });
 
-  it('the lake check pairs the account with a CONFIGURED container', async () => {
-    // WHAT BREAKS IT: (a) testing the account alone (gold is not configured
-    // here, so loomlake/gold passes) or the container alone (landing on
-    // foreignacct passes). Each half is refused on its own.
-    await expectNotPermitted('account=loomlake&container=gold&lakehouseId=lh-1');
-    await expectNotPermitted('account=foreignacct&container=landing&lakehouseId=lh-1');
+  it('the lake check pairs each configured container with the account in ITS URL', async () => {
+    // A second lake account for silver. WHAT BREAKS IT: (a) built as a cross
+    // product of lake accounts and containers (secondlake/bronze and
+    // loomlake/silver would pass), testing the account alone (loomlake/gold
+    // passes; gold is not configured) or the container alone (landing on
+    // foreignacct passes). Each is refused; the exact pairs list.
+    process.env.LOOM_SILVER_URL = 'https://secondlake.dfs.core.windows.net/silver';
+    await expectNotPermitted('account=loomlake&container=gold&itemId=lh-1');
+    await expectNotPermitted('account=foreignacct&container=landing&itemId=lh-1');
+    await expectNotPermitted('account=secondlake&container=bronze&itemId=lh-1');
+    await expectNotPermitted('account=loomlake&container=silver&itemId=lh-1');
     expect(listPathsMock).not.toHaveBeenCalled();
+    expect((await browse('account=secondlake&container=silver&itemId=lh-1')).status).toBe(200);
+    expect((await browse('account=loomlake&container=bronze&itemId=lh-1')).status).toBe(200);
+    expect(listed()).toEqual(['secondlake/silver', 'loomlake/bronze']);
   });
 
-  it('allows the request lakehouse\'s own bound account and container', async () => {
+  it('allows the item\'s own bound account and container', async () => {
     // WHAT BREAKS IT: reading the explicit `storageAccount` wrongly (falling
     // back to the primary account) or skipping `adlsContainer`. Nothing else
     // names partneracct/exports.
-    const res = await browse('account=partneracct&container=exports&lakehouseId=lh-1');
+    const res = await browse('account=partneracct&container=exports&itemId=lh-1');
     expect(res.status).toBe(200);
     expect(listed()).toEqual(['partneracct/exports']);
   });
@@ -253,7 +294,7 @@ describe('a non-admin may browse only containers bound to the workspace', () => 
     // WHAT BREAKS IT: dropping the abfss receipt parse, or swapping its
     // container and account captures (the browse would then look for
     // account 'shared', container 'otheracct').
-    const res = await browse('account=otheracct&container=shared&lakehouseId=lh-1');
+    const res = await browse('account=otheracct&container=shared&itemId=lh-1');
     expect(res.status).toBe(200);
     expect(listed()).toEqual(['otheracct/shared']);
   });
@@ -263,22 +304,22 @@ describe('a non-admin may browse only containers bound to the workspace', () => 
     // the primary-account fallback for a row with no `storageAccount`. curated
     // is not a configured lake container, so the lake check does not allow it;
     // and the same container on any other account is refused.
-    const res = await browse('account=loomlake&container=curated&lakehouseId=lh-1');
+    const res = await browse('account=loomlake&container=curated&itemId=lh-1');
     expect(res.status).toBe(200);
     expect(listed()).toEqual(['loomlake/curated']);
-    await expectNotPermitted('account=partneracct&container=curated&lakehouseId=lh-1');
+    await expectNotPermitted('account=partneracct&container=curated&itemId=lh-1');
     expect(listed()).toEqual(['loomlake/curated']);
   });
 
   it('refuses a container recorded by a sibling the caller cannot read; allows it once readable', async () => {
     // WHAT BREAKS IT: dropping the sibling's resolveItemAccessByOid check. The
     // refusal must come FROM that check, so it is asserted to have run for lh-3.
-    await expectNotPermitted('account=privateacct&container=vault&lakehouseId=lh-1');
+    await expectNotPermitted('account=privateacct&container=vault&itemId=lh-1');
     expect(resolveItemAccessByOid).toHaveBeenCalledWith(MEMBER, 'lh-3', 'lakehouse');
     expect(listPathsMock).not.toHaveBeenCalled();
 
     readable.add('lh-3');
-    const ok = await browse('account=privateacct&container=vault&lakehouseId=lh-1');
+    const ok = await browse('account=privateacct&container=vault&itemId=lh-1');
     expect(ok.status).toBe(200);
     expect(listed()).toEqual(['privateacct/vault']);
   });
@@ -286,7 +327,7 @@ describe('a non-admin may browse only containers bound to the workspace', () => 
   it('refuses a container recorded only in another workspace, even when the caller can read that lakehouse', async () => {
     // WHAT BREAKS IT: dropping the workspace scope (the partition key AND the
     // `@ws` filter). lh-9 is readable, so the item check alone would allow it.
-    await expectNotPermitted('account=foreignacct&container=raw&lakehouseId=lh-1');
+    await expectNotPermitted('account=foreignacct&container=raw&itemId=lh-1');
     expect(cosmos.calls).toHaveLength(1);
     expect(cosmos.calls[0].opts).toEqual({ partitionKey: 'ws-A' });
     expect(listPathsMock).not.toHaveBeenCalled();
@@ -299,29 +340,32 @@ describe('a non-admin may browse only containers bound to the workspace', () => 
     // clause is backed by a second check; this mock ignores the type and nb-1 is
     // made readable, so what this pins is the query clause on its own.
     readable.add('nb-1');
-    await expectNotPermitted('account=binacct&container=old&lakehouseId=lh-1');
-    await expectNotPermitted('account=nbacct&container=scratch&lakehouseId=lh-1');
+    await expectNotPermitted('account=binacct&container=old&itemId=lh-1');
+    await expectNotPermitted('account=nbacct&container=scratch&itemId=lh-1');
     expect(listPathsMock).not.toHaveBeenCalled();
   });
 
-  it('503 adls_browse_unverified when the workspace lookup fails — never an allow', async () => {
-    // WHAT BREAKS IT: a catch that returns 'allowed' or falls through to browse.
+  it('503 adls_scope_unverified when the workspace lookup fails — even for a lake container, never an allow', async () => {
+    // WHAT BREAKS IT: a catch that falls through with the lake locations alone
+    // (loomlake/landing would list) or with no limit (partneracct/exports would).
     cosmos.fail = true;
-    const res = await browse('account=partneracct&container=exports&lakehouseId=lh-1');
-    expect(res.status).toBe(503);
-    const body = await res.json();
-    expect(body.code).toBe('adls_browse_unverified');
-    expect(body.error).toMatch(/could not confirm/);
+    for (const qs of ['account=partneracct&container=exports&itemId=lh-1', 'account=loomlake&container=landing&itemId=lh-1']) {
+      const res = await browse(qs);
+      expect(res.status, qs).toBe(503);
+      const body = await res.json();
+      expect(body.code, qs).toBe('adls_scope_unverified');
+      expect(body.error, qs).toMatch(/could not read which containers are bound to this workspace/);
+    }
     expect(listPathsMock).not.toHaveBeenCalled();
 
     // The same request with the lookup answering lists.
     cosmos.fail = false;
-    expect((await browse('account=partneracct&container=exports&lakehouseId=lh-1')).status).toBe(200);
+    expect((await browse('account=partneracct&container=exports&itemId=lh-1')).status).toBe(200);
   });
 
   it('reads no vault secret on an ADLS browse', async () => {
     // Pinned with a positive: the browse below did list.
-    const res = await browse('account=partneracct&container=exports&lakehouseId=lh-1');
+    const res = await browse('account=partneracct&container=exports&itemId=lh-1');
     expect(res.status).toBe(200);
     expect(listed()).toEqual(['partneracct/exports']);
     expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
@@ -329,18 +373,21 @@ describe('a non-admin may browse only containers bound to the workspace', () => 
 });
 
 describe('a tenant admin keeps full browse', () => {
-  it('lists any account and container on a lakehouse the admin can read, with no workspace lookup', async () => {
-    // WHAT BREAKS IT: dropping the admin bypass (foreignacct/raw is not bound to
-    // ws-A, so the scope check refuses it) or forcing it on for everyone (the
-    // MEMBER request at the end would list instead of 403).
+  it('lists any account and container on an item the admin can read, even when the workspace lookup fails', async () => {
+    // WHAT BREAKS IT: dropping the admin branch (foreignacct/raw is not bound to
+    // ws-A, so the scope refuses it), failing the admin closed on the lookup
+    // (503), or forcing `unrestricted` on for everyone (the MEMBER request at
+    // the end would list instead of 403).
     (getSession as any).mockReturnValue(ADMIN);
-    const res = await browse('account=foreignacct&container=raw&lakehouseId=lh-1');
+    const res = await browse('account=foreignacct&container=raw&itemId=lh-1');
     expect(res.status).toBe(200);
     expect(listed()).toEqual(['foreignacct/raw']);
-    expect(cosmos.calls).toHaveLength(0);
+    cosmos.fail = true;
+    expect((await browse('account=foreignacct&container=raw&itemId=lh-1')).status).toBe(200);
+    cosmos.fail = false;
 
     (getSession as any).mockReturnValue(MEMBER);
-    await expectNotPermitted('account=foreignacct&container=raw&lakehouseId=lh-1');
-    expect(listed()).toEqual(['foreignacct/raw']);
+    await expectNotPermitted('account=foreignacct&container=raw&itemId=lh-1');
+    expect(listed()).toEqual(['foreignacct/raw', 'foreignacct/raw']);
   });
 });

@@ -22,6 +22,7 @@ import {
   type ShortcutCredentialRef,
 } from '@/lib/azure/lakehouse-shortcuts';
 import {
+  parseAbfss as parseTargetAbfss,
   resolveAndTestAdls,
   createTablesShortcut,
   dropShortcutObject,
@@ -33,6 +34,8 @@ import {
   type ExternalBinding,
 } from '@/lib/azure/shortcut-engines';
 import { parseAbfss as parseExternalAbfss, listAdlsWithSas, ShortcutSourceError } from '@/lib/azure/shortcut-client';
+import { adlsLocationPermitted, adlsLocationRefusal, resolveAdlsScope } from '../_lib/adls-scope';
+import type { SessionPayload } from '@/lib/auth/session';
 import {
   resolveShortcutSecret,
   assertShortcutSecretUsable,
@@ -58,6 +61,39 @@ function isGate(x: unknown): x is EngineGate {
  */
 function sanitize(e: any): string {
   return redactErrorText((e?.message || String(e)).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()).slice(0, 500);
+}
+
+/**
+ * ADLS shortcuts and browse share one container scope (`_lib/adls-scope.ts`).
+ * An ADLS target read on the Console identity must name the lakehouse ITEM
+ * (`itemId`, 400 without it), which the caller must be able to edit, and a
+ * location inside that item's scope (403 with the allowed locations). The
+ * target is parsed exactly as `resolveAndTestAdls` parses it; a target that
+ * does not parse is left to its 400 `bad_target`, before any storage call.
+ * Returns null when the target may be used.
+ */
+async function adlsTargetRefusal(session: SessionPayload, itemIdRaw: unknown, targetUri: string): Promise<NextResponse | null> {
+  const itemId = (itemIdRaw || '').toString().trim();
+  if (!itemId) {
+    return NextResponse.json(
+      { ok: false, code: 'item_required', error: 'itemId (the lakehouse item) is required for an ADLS shortcut.' },
+      { status: 400 },
+    );
+  }
+  let parts: { account: string; container: string } | null;
+  try {
+    parts = parseTargetAbfss(targetUri, getAccountName);
+  } catch {
+    parts = null;
+  }
+  if (!parts) return null;
+  const scope = await resolveAdlsScope(session, itemId, {
+    write: true,
+    readOnlyMessage: 'Your role on this lakehouse is read-only, so Loom did not create the shortcut. A workspace '
+      + 'Member/Admin, or an item grant that includes Edit, can make this change.',
+  });
+  if (scope instanceof NextResponse) return scope;
+  return adlsLocationPermitted(scope, parts.account, parts.container) ? null : adlsLocationRefusal(scope, 'shortcut');
 }
 
 /**
@@ -265,6 +301,10 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
     }
   } else {
     // --- ADLS Gen2 / internal Loom lakehouse: real UAMI resolve + reachability test. ---
+    if (targetType === 'adls') {
+      const refused = await adlsTargetRefusal(session, body?.itemId, targetUri);
+      if (refused) return refused;
+    }
     try {
       const resolved = await resolveAndTestAdls(targetType, targetUri, getAccountName);
       abfssUri = resolved.abfssUri!;
