@@ -339,16 +339,14 @@ function adoptionTail(rel: Awaited<ReturnType<typeof releaseAdoptions>> | undefi
   if (!rel) return '';
   if (rel.unreadable) {
     return " The request's grant records could not be read, so grants it had taken over from another attempt of this request "
-      + 'were not handed back; a denial of the request revokes them.';
+      + 'were not handed back.';
   }
   let text = '';
   if (rel.revoked.length) {
     text += ` Grants it had taken over from another attempt of this request, which that attempt had already recorded, were removed: ${scopeList(rel.revoked)}.`;
   }
   if (rel.returned) text += ` ${rel.returned} grant record(s) it had taken over were handed back to the attempt that made them.`;
-  if (rel.stuck) {
-    text += ` ${rel.stuck} grant record(s) it had taken over could not be handed back; a denial of the request revokes them.`;
-  }
+  if (rel.stuck) text += ` ${rel.stuck} grant record(s) it had taken over could not be handed back to the attempt that made them.`;
   return text;
 }
 

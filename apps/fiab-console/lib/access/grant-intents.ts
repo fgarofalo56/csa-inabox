@@ -521,8 +521,8 @@ export const IN_FLIGHT =
   + 'checks it against the store.';
 export const ADOPTED = 'Left in place: another approval of this request took this grant over when it completed the request.';
 export const ADOPTED_OPEN =
-  'Left in place: another approval of this request took this grant over and has not completed the request yet. '
-  + 'If that approval stops without completing it, a grant recorded as created by this request is removed.';
+  'Left in place: another approval of this request took this grant over, and had not completed the request '
+  + 'when this was checked.';
 /** The kept-grant text for a row another approval adopted, given the request's status now. */
 export const adoptedText = (requestStatus?: string) => (requestStatus === 'completed' ? ADOPTED : ADOPTED_OPEN);
 export const UNCONFIRMED =
@@ -761,8 +761,8 @@ export async function releaseAdoptions(
           revokedNow = res.revoked[0];
           next = { ...next, state: 'revoked', revokedAt: nowIso(), revokedBy: by };
         } else {
-          // Kept with the reason; the row is still handed back, and a later
-          // denial revokes it from the ledger.
+          // Kept with the reason; the row is still handed back, where a later
+          // denial of the request revokes it (a created `active` row of any attempt).
           revokeFailed = true;
           out.kept.push(...res.kept);
         }
@@ -777,7 +777,8 @@ export async function releaseAdoptions(
         if (!isPreconditionFailed(e)) break;
         if (revokedNow) {
           // Revoked, but the row changed before it was marked: it is reported
-          // as revoked, and a later denial revokes it again (ARM answers 404).
+          // as revoked, and stays `active` on the row (a later denial revokes
+          // it again, and ARM answers 404).
           done = true;
           break;
         }
