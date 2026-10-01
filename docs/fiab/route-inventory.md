@@ -13,13 +13,13 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1696 |
+| Total routes | 1697 |
 | Public (no session) | 59 |
-| Session-only | 637 |
-| Owner-scoped | 683 |
-| Admin | 317 |
+| Session-only | 636 |
+| Owner-scoped | 684 |
+| Admin | 318 |
 | Unknown (generator fails) | 0 |
-| Gated (backend config) | 499 |
+| Gated (backend config) | 500 |
 | Areas | 122 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
@@ -237,6 +237,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `admin/copilot/memory/route.ts` | GET POST | admin |  | AI Search, Cosmos |
 | `admin/data-products-backend/route.ts` | GET | admin |  | — |
 | `admin/data-quality-rules/route.ts` | GET POST PUT DELETE | admin |  | Cosmos |
+| `admin/databricks-warehouses/adopt/route.ts` | GET POST | admin | ● | Azure Monitor, Cosmos, Microsoft Graph |
 | `admin/deploy-plan/cost-estimate/route.ts` | POST | admin |  | Defender for Cloud, Retail Prices API |
 | `admin/deploy-plan/route.ts` | GET PUT | admin |  | Cosmos, Defender for Cloud |
 | `admin/deploy-status/route.ts` | GET | admin |  | Azure Cache for Redis, Cosmos |
@@ -1105,7 +1106,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
 | `items/[type]/[id]/access-mode/route.ts` | PATCH | owner-scoped |  | Cosmos, Microsoft Graph |
-| `items/[type]/[id]/ai-function/route.ts` | GET POST | session-only | ● | AML, ARM, Azure AI Services, Azure Monitor, Azure OpenAI, Cosmos |
+| `items/[type]/[id]/ai-function/route.ts` | GET POST | owner-scoped | ● | AML, ARM, Azure AI Services, Azure Monitor, Azure OpenAI, Cosmos, Microsoft Graph |
 | `items/[type]/[id]/alerts/route.ts` | GET POST PATCH DELETE | owner-scoped | ● | ARM, Azure Monitor, Cosmos, Microsoft Graph |
 | `items/[type]/[id]/assist/route.ts` | POST | session-only | ● | AML, ARM, Azure AI Services, Azure Cache for Redis, Azure Monitor, Azure OpenAI, Azure SQL, Cosmos, Managed Identity, Synapse SQL |
 | `items/[type]/[id]/audit/route.ts` | GET POST | owner-scoped |  | Cosmos |
@@ -2425,7 +2426,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 ## Authorization resolvers (derived)
 
-191 function(s) across 86 module(s) reach an owner / workspace-ACL
+193 function(s) across 87 module(s) reach an owner / workspace-ACL
 decision. Derived by `scripts/ci/_route-auth-scope.mjs` from the seeds above —
 nothing here is hand-maintained. A change to this list in a diff means the
 authorization surface moved.
@@ -2450,6 +2451,7 @@ authorization surface moved.
 | `apps/fiab-console/app/api/items/_lib/sql-server-scope.ts` | `loadOwnedSqlItem`, `withBoundSqlServer`, `withOwnedSqlItem` |
 | `apps/fiab-console/app/api/items/_lib/synapse-item-scope.ts` | `guardSynapseItemRequest` |
 | `apps/fiab-console/app/api/items/_lib/synapse-model.ts` | `DELETE`, `GET`, `POST`, `makeSynapseModelHandlers` |
+| `apps/fiab-console/app/api/items/_lib/warehouse-item-binding.ts` | `authorizeWarehouseTarget`, `healWarehouseLink` |
 | `apps/fiab-console/app/api/items/aip-logic/[id]/_block-graph.ts` | `loadEntityBindings`, `resolveUseLlmTools`, `runBlockGraph`, `runSiblingFunction` |
 | `apps/fiab-console/app/api/items/aip-logic/[id]/_spindle-eval.ts` | `runSpindleEvalSuite` |
 | `apps/fiab-console/app/api/items/aip-logic/[id]/_spindle-grounding.ts` | `resolveSpindleGrounding` |

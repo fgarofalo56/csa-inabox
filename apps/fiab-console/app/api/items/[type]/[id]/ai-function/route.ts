@@ -39,6 +39,15 @@
  * Databricks/Cosmos read failure is a 502 with `code: 'warehouse_unverifiable'` —
  * nothing runs on either. The Gov boundaries never reach this path: they use the
  * AOAI substitute, which takes no warehouse.
+ *
+ * THE DEPLOYMENT-SHARED WAREHOUSE STAYS ADMIN-ONLY. `loom-default` (and
+ * `loom-gov-default`, and whatever `LOOM_DATABRICKS_SQL_WAREHOUSE_ID` names) is
+ * created by the bootstrap, carries no item link, and is never linked to one —
+ * neither the editor's self-heal nor the admin "Link to this item" action will
+ * tag it (`isDeploymentSharedWarehouse`). So it is runnable here by tenant admins
+ * only. A non-admin sent here with it gets the 404 + remediation above, and the
+ * SQL warehouse editor's AI functions panel offers "Use Azure OpenAI instead",
+ * which re-sends the call WITHOUT `warehouseId` and takes the AOAI path below.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { withSession } from '@/lib/api/route-toolkit';

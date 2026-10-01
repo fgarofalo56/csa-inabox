@@ -5018,9 +5018,14 @@ const ADMIN_SHAPE_UNSCOPED = new Map([
         'resource of the DEPLOYMENT\'s Databricks workspace, and a non-admin gets the coded 404. A ' +
         'warehouse whose tag names an item takes the other branch, `authorizeItemWorkspace(session, ' +
         '{ workspaceId, itemId, allowReadRoles: true })` with the item\'s workspace, which never ' +
-        'consults the admin flag here and returns its own 409 on a tenant mismatch. All three tokens ' +
-        'are pinned: drop the item branch or its read scope and this entry no longer describes the ' +
-        'function.',
+        'consults the admin flag here and returns its own 409 on a tenant mismatch. The three tokens ' +
+        'pin PRESENCE only: this guard checks that each substring is in the masked body, not where ' +
+        'it sits or in which order, so moving the admin test above the item branch would still pass ' +
+        'here. That ORDER is enforced by vitest, in ' +
+        'app/api/items/[type]/[id]/ai-function/__tests__/warehouse-binding.test.ts: "goes through ' +
+        'the ladder for a tagged warehouse, and its 409 passes through" (an admin short-circuit ' +
+        'turns that 409 into a 200) and its positive pair "runs on a tagged warehouse in a ' +
+        'workspace the resolver grants".',
     },
   ],
 ]);

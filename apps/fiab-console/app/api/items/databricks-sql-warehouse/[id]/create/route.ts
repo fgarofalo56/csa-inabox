@@ -6,7 +6,7 @@
  *     max_num_clusters?, tags?, spot_instance_policy?,   // Databricks (Comm/GCC)
  *     gov_sku?                                           // Synapse Dedicated pool (Gov)
  *   }
- *   → { ok: true, id, name }  |  { ok: false, error, code? }
+ *   → { ok: true, id, name, receiptRecorded? }  |  { ok: false, error, code? }
  *
  * Completes the SQL Warehouse lifecycle (edit/scale already exist). This is the
  * Azure-native DEFAULT create — NO Fabric/Power BI dependency (per
@@ -76,6 +76,14 @@
  *   the warehouse. The Gov branch is unchanged: a Synapse dedicated pool is
  *   addressed by name and `createDedicatedSqlPool` takes no tags, so pools carry
  *   no link yet (stated in the PR for #3669).
+ *
+ * LAYER 4 — THE RECEIPT. After the Databricks create succeeds, the new
+ *   warehouse id is recorded on the item at
+ *   `state.provisioning.secondaryIds.warehouseId` (`recordWarehouseReceipt`, an
+ *   etag-conditional merge). `provisioning` is server-derived, so no request can
+ *   rewrite it. The editor's load route reads ONLY this id to re-stamp a tag that
+ *   went missing (`healWarehouseLink`). The response carries
+ *   `receiptRecorded: boolean`; a failed receipt does not fail the create.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -86,7 +94,7 @@ import { createDedicatedSqlPool } from '@/lib/azure/synapse-dev-client';
 import { isGovCloud } from '@/lib/azure/cloud-endpoints';
 import { prepareItemCreate, isDeployTargetGate } from '@/lib/azure/topology';
 import { LOOM_OWNER_KEY } from '../../../_lib/databricks-resource-binding';
-import { isOwnerTagKey } from '../../../_lib/warehouse-item-binding';
+import { isOwnerTagKey, recordWarehouseReceipt } from '../../../_lib/warehouse-item-binding';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -232,10 +240,14 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest, { param
   custom_tags.push({ key: LOOM_OWNER_KEY, value: guard.ctx.item.id });
   spec.tags = { custom_tags };
 
+  let result: { id: string };
   try {
-    const result = await createWarehouse(spec);
-    return NextResponse.json({ ok: true, id: result.id, name });
+    result = await createWarehouse(spec);
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
+  // LAYER 4. The receipt the self-heal reads. Best-effort: the warehouse
+  // exists and is tagged either way, so a failed write is REPORTED, not a 5xx.
+  const receiptRecorded = await recordWarehouseReceipt(guard.ctx.item, result.id);
+  return NextResponse.json({ ok: true, id: result.id, name, receiptRecorded });
 });

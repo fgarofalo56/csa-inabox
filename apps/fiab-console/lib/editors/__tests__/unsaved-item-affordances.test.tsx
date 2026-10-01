@@ -75,8 +75,23 @@ const CLIENT_FALLBACK =
 /** The `[id]/state` gate body shape, per `state/route.ts:119-127`. */
 const UNSAVED_STATE_GATE = { ok: false, code: 'unsaved_item', error: SERVER_REMEDIATION };
 
-/** One real warehouse, so `warehouseId` is populated exactly as it is live. */
-const WAREHOUSES = { ok: true, gov: false, warehouses: [{ id: 'wh-1', name: 'analytics-wh', state: 'STOPPED', cluster_size: 'Small' }] };
+/**
+ * One real warehouse, LINKED to the item, so `warehouseId` is populated. The
+ * editor preselects only `linkedWarehouseId` (never `warehouses[0]`), so without
+ * it `warehouseId` stays '' and every spec below would pass through the
+ * pre-existing `!!warehouseId` clause instead of the guards it names.
+ *
+ * For `id="new"` the live route returns `linkedWarehouseId: ''`, so live the
+ * selection is set by the user picking a warehouse, not on mount. This fixture
+ * stands in for that state; what matters to these specs is only that
+ * `warehouseId` is non-empty, which the premise check below pins.
+ */
+const WAREHOUSES = {
+  ok: true,
+  gov: false,
+  linkedWarehouseId: 'wh-1',
+  warehouses: [{ id: 'wh-1', name: 'analytics-wh', state: 'STOPPED', cluster_size: 'Small' }],
+};
 
 /** A SAVED item's `[id]/state` — the control case. STOPPED so Start is offered. */
 const SAVED_STATE = { ok: true, state: 'STOPPED', name: 'analytics-wh', cluster_size: 'Small', warehouse_type: 'PRO' };

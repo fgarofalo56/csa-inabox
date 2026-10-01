@@ -36,21 +36,17 @@ const ITEMS = [
   { id: 'wh-item-nows', itemType: 'databricks-sql-warehouse', workspaceId: '' },
   // Same id shape, WRONG type — a tag naming it must not resolve.
   { id: 'nb-item', itemType: 'notebook', workspaceId: 'ws-read' },
+  // ONE id, TWO warehouse items (ids are unique per partition only). One is in
+  // the Viewer's `ws-read`, so returning the first row would admit a 200.
+  { id: 'wh-item-dup', itemType: 'databricks-sql-warehouse', workspaceId: 'ws-read' },
+  { id: 'wh-item-dup', itemType: 'databricks-sql-warehouse', workspaceId: 'ws-hidden' },
 ];
-vi.mock('@/lib/azure/cosmos-client', () => ({
-  itemsContainer: async () => ({
-    items: {
-      query: (spec: any) => ({
-        fetchAll: async () => {
-          const id = spec?.parameters?.find((p: any) => p.name === '@id')?.value;
-          const t = spec?.parameters?.find((p: any) => p.name === '@t')?.value;
-          if (id === 'cosmos-down') throw new Error('cosmos unavailable');
-          return { resources: ITEMS.filter((i) => i.id === id && i.itemType === t) };
-        },
-      }),
-    },
-  }),
-}));
+// The container EVALUATES the query text (`cosmos-query-model.ts`): only the
+// predicates the production query writes are applied. The previous mock filtered
+// on the `@t` parameter itself, so dropping `AND c.itemType = @t` from the query
+// was invisible to it.
+let cosmos: ItemsModel;
+vi.mock('@/lib/azure/cosmos-client', () => ({ itemsContainer: async () => cosmos.container }));
 vi.mock('@/lib/azure/databricks-client', () => ({
   databricksConfigGate: vi.fn(() => null),
   executeStatement: vi.fn(),
@@ -74,6 +70,7 @@ import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import { executeStatement, getWarehouse } from '@/lib/azure/databricks-client';
 import { isGovCloud } from '@/lib/azure/cloud-endpoints';
 import { callAiFn } from '@/lib/azure/ai-functions-client';
+import { makeItemsModel, type ItemsModel } from '../../../../_lib/__tests__/cosmos-query-model';
 
 const USER = { claims: { upn: 'u@contoso.com', oid: 'oid-user', tid: 'tid-1' }, exp: 9_999_999_999 };
 const ADMIN = { claims: { upn: 'a@contoso.com', oid: 'oid-admin', tid: 'tid-1' }, exp: 9_999_999_999 };
@@ -95,6 +92,7 @@ const WAREHOUSES: Record<string, any> = {
   'wh-conflict': { id: 'wh-conflict', state: 'RUNNING', tags: { custom_tags: [tag('wh-item-read'), tag('wh-item-hidden')] } },
   'wh-cosmos': { id: 'wh-cosmos', state: 'RUNNING', tags: { custom_tags: [tag('cosmos-down')] } },
   'wh-stopped': { id: 'wh-stopped', state: 'STOPPED', tags: { custom_tags: [tag('wh-item-read')] } },
+  'wh-dup': { id: 'wh-dup', state: 'RUNNING', tags: { custom_tags: [tag('wh-item-dup')] } },
 };
 
 const notFound = (msg: string) => NextResponse.json({ ok: false, error: msg }, { status: 404 });
@@ -128,6 +126,9 @@ const run = (warehouseId: string) =>
 
 beforeEach(() => {
   vi.resetAllMocks();
+  cosmos = makeItemsModel(ITEMS, {
+    failQuery: (s) => s.parameters?.some((p) => p.name === '@id' && p.value === 'cosmos-down') ?? false,
+  });
   vi.stubEnv('LOOM_TENANT_ADMIN_OID', 'oid-admin');
   (getSession as any).mockReturnValue(USER);
   (isGovCloud as any).mockReturnValue(false);
@@ -177,7 +178,10 @@ describe('a non-admin caller', () => {
     const j = await res.json();
     expect(res.status).toBe(404);
     expect(j.code).toBe('warehouse_not_available');
-    expect(j.remediation).toContain('/api/admin/databricks-warehouses/adopt');
+    // RED if the remediation stops naming the in-product action (G2), or goes back
+    // to sending the caller to an admin API path.
+    expect(j.remediation).toContain('Link to this item');
+    expect(j.remediation).not.toContain('/api/admin/');
     expect(executeStatement).not.toHaveBeenCalled();
   });
 
@@ -198,12 +202,27 @@ describe('a non-admin caller', () => {
   });
 
   // RED if a tag naming no item, or an item of another type, counts as bound.
+  // `wh-wrongtype` names `nb-item`, a NOTEBOOK in `ws-read` where this caller is
+  // a Viewer — so if the lookup query loses `AND c.itemType = @t`, the notebook
+  // resolves, the read-scoped ladder admits it, and this becomes a 200.
   it('is refused an orphaned warehouse and one tagged with a non-warehouse item', async () => {
     for (const id of ['wh-orphan', 'wh-wrongtype']) {
       const res = await run(id);
       expect(res.status, id).toBe(404);
     }
     expect(executeStatement).not.toHaveBeenCalled();
+  });
+
+  // RED if the item lookup stops filtering on type in the QUERY TEXT (the mock
+  // applies only what the text says), or binds `@t` to anything but the
+  // warehouse item type. Positive pair: the same lookup resolves `wh-item-read`.
+  it('looks the linked item up by id AND item type, in the query itself', async () => {
+    await run('wh-wrongtype');
+    const q = cosmos.queries.find((s) => s.parameters?.some((p) => p.name === '@id' && p.value === 'nb-item'));
+    expect(q, 'no item lookup was issued for nb-item').toBeDefined();
+    expect(q!.query).toMatch(/\bc\.itemType\s*=\s*@t\b/);
+    expect(q!.parameters?.find((p) => p.name === '@t')?.value).toBe('databricks-sql-warehouse');
+    expect((await run('wh-bound')).status).toBe(200);
   });
 
   // RED if the empty-workspace fail-closed check is removed: the ladder model
@@ -275,6 +294,21 @@ describe('when the link cannot be read', () => {
       expect(j.code, id).toBe('warehouse_unverifiable');
     }
     expect(executeStatement).not.toHaveBeenCalled();
+  });
+
+  // RED if `loadWarehouseItemRaw` returns the first of two matching rows instead
+  // of failing closed: the first row is in `ws-read`, where this NON-admin is a
+  // Viewer, so the read-scoped ladder would admit it and this becomes a 200.
+  it('502s, and runs nothing, when the linked id matches two warehouse items', async () => {
+    const res = await run('wh-dup');
+    const j = await res.json();
+    expect(res.status).toBe(502);
+    expect(j.code).toBe('warehouse_unverifiable');
+    expect(j.error).toContain('more than one item');
+    expect(authorizeItemWorkspace).not.toHaveBeenCalled();
+    expect(executeStatement).not.toHaveBeenCalled();
+    // Positive pair: a single-row id on the same path still runs.
+    expect((await run('wh-bound')).status).toBe(200);
   });
 });
 

@@ -14,19 +14,10 @@ vi.mock('@/lib/auth/session', async (importOriginal) => ({
 }));
 vi.mock('@/lib/auth/workspace-guard', () => ({ authorizeItemWorkspace: vi.fn(async () => null) }));
 const ITEMS = [{ id: 'sw-1', itemType: 'databricks-sql-warehouse', workspaceId: 'ws-1', state: {} }];
-vi.mock('@/lib/azure/cosmos-client', () => ({
-  itemsContainer: async () => ({
-    items: {
-      query: (spec: any) => ({
-        fetchAll: async () => {
-          const id = spec?.parameters?.find((p: any) => p.name === '@id')?.value;
-          const t = spec?.parameters?.find((p: any) => p.name === '@t')?.value;
-          return { resources: ITEMS.filter((i) => (!id || i.id === id) && (!t || i.itemType === t)) };
-        },
-      }),
-    },
-  }),
-}));
+// Evaluates the query TEXT and supports item().read/replace, so the receipt
+// write (LAYER 4) really lands on the document.
+let cosmos: ItemsModel;
+vi.mock('@/lib/azure/cosmos-client', () => ({ itemsContainer: async () => cosmos.container }));
 vi.mock('@/lib/azure/databricks-client', () => ({
   createWarehouse: vi.fn(),
   databricksConfigGate: vi.fn(() => null),
@@ -45,6 +36,7 @@ import { createWarehouse, databricksConfigGate } from '@/lib/azure/databricks-cl
 import { isGovCloud } from '@/lib/azure/cloud-endpoints';
 import { createDedicatedSqlPool } from '@/lib/azure/synapse-dev-client';
 import { prepareItemCreate, isDeployTargetGate } from '@/lib/azure/topology';
+import { makeItemsModel, type ItemsModel } from '@/app/api/items/_lib/__tests__/cosmos-query-model';
 
 const SESSION = { claims: { upn: 'u@contoso.com', oid: 'oid-1', tid: 'tid-1' }, exp: 9_999_999_999 };
 const req = (body: any) => {
@@ -56,6 +48,7 @@ const sentTags = () => (createWarehouse as any).mock.calls[0][0].tags?.custom_ta
 
 beforeEach(() => {
   vi.resetAllMocks();
+  cosmos = makeItemsModel(ITEMS);
   (getSession as any).mockReturnValue(SESSION);
   (authorizeItemWorkspace as any).mockResolvedValue(null);
   (databricksConfigGate as any).mockReturnValue(null);
@@ -115,5 +108,40 @@ describe('the owner tag', () => {
     expect(res.status).toBe(200);
     expect(createDedicatedSqlPool).toHaveBeenCalledTimes(1);
     vi.unstubAllEnvs();
+  });
+});
+
+describe('the receipt (LAYER 4)', () => {
+  const doc = () => cosmos.docs.find((d) => d.id === 'sw-1') as any;
+
+  // RED if the receipt write is removed (no `provisioning` on the document and
+  // `receiptRecorded` absent), written from the request (`wh-body` would land),
+  // or written anywhere but the server-derived provisioning path.
+  it('records the CREATED warehouse id on the item and reports it', async () => {
+    const res = await POST(req({ name: 'wh', warehouseId: 'wh-body' }), ctx('sw-1'));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, id: 'wh-new', receiptRecorded: true });
+    expect(doc().state).toEqual({ provisioning: { secondaryIds: { warehouseId: 'wh-new' } } });
+    expect(cosmos.replaces).toHaveLength(1);
+  });
+
+  // RED if a failed receipt fails the create (the warehouse already exists, so
+  // a 5xx would invite a duplicate retry), or is reported as recorded.
+  it('still returns 200, with receiptRecorded false, when the receipt cannot be written', async () => {
+    let n = 0;
+    cosmos = makeItemsModel(ITEMS, { afterRead: (d) => { d._etag = `"bump-${++n}"`; } });
+    const res = await POST(req({ name: 'wh' }), ctx('sw-1'));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, id: 'wh-new', receiptRecorded: false });
+    expect(cosmos.replaces).toHaveLength(0);
+  });
+
+  // RED if the receipt is written before the create succeeds: a refused create
+  // would leave an id the self-heal would later act on.
+  it('writes no receipt when the create fails', async () => {
+    (createWarehouse as any).mockRejectedValue(new Error('quota'));
+    expect((await POST(req({ name: 'wh' }), ctx('sw-1'))).status).toBe(502);
+    expect(cosmos.replaces).toHaveLength(0);
+    expect(doc().state).toEqual({});
   });
 });
