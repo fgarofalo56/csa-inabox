@@ -248,10 +248,14 @@ describe.each(ENGINES)('%s', (_name, escape, decode) => {
     }
   });
 
-  it('TAB / LF / CR are carried as escape sequences', () => {
-    // Breaks if any of the three is emitted raw or dropped.
+  it('TAB / LF are carried as escape sequences; CR per engine', () => {
+    // Breaks if TAB or LF is emitted raw or dropped. CR: Spark writes the
+    // documented `\r`; KQL writes the `\u` form, because the KQL string page
+    // lists `\t`, `\n`, `\\` and the quote as the regular-literal escapes and
+    // mentions `\r` only in its notes. Breaks if either engine's CR changes.
     const v = 'a\tb\nc\rd';
-    expect(escape(v)).toBe('a\\tb\\nc\\rd');
+    const cr = _name === 'escapeKqlLiteral' ? '\\u000D' : '\\r';
+    expect(escape(v)).toBe(`a\\tb\\nc${cr}d`);
     expectRoundTrip(v);
   });
 

@@ -43,6 +43,28 @@ vi.mock('@/lib/azure/databricks-client', () => ({
 
 vi.mock('@/lib/azure/copilot-config-store', () => ({ loadTenantCopilotConfig: async () => null }));
 
+/**
+ * Item scoping. The REAL guardSynapseItemRequest runs (and its Cosmos lookup
+ * against ITEMS); only the workspace ladder is mocked, so a test can make it
+ * deny. `n1` is a notebook in ws-1.
+ */
+const authorizeItemWorkspace = vi.fn(async (..._a: unknown[]): Promise<Response | null> => null);
+vi.mock('@/lib/auth/workspace-guard', () => ({ authorizeItemWorkspace: (...a: unknown[]) => authorizeItemWorkspace(...a) }));
+const ITEMS = [{ id: 'n1', itemType: 'notebook', workspaceId: 'ws-1', state: {} }];
+vi.mock('@/lib/azure/cosmos-client', () => ({
+  itemsContainer: async () => ({
+    items: {
+      query: (spec: any) => ({
+        fetchAll: async () => {
+          const id = spec?.parameters?.find((p: any) => p.name === '@id')?.value;
+          const t = spec?.parameters?.find((p: any) => p.name === '@t')?.value;
+          return { resources: ITEMS.filter((i) => i.id === id && i.itemType === t) };
+        },
+      }),
+    },
+  }),
+}));
+
 import { POST } from '../route';
 
 /** POST the body and return the one statement sent to the warehouse. */
@@ -64,6 +86,70 @@ async function sentSql(body: Record<string, unknown>): Promise<string> {
 
 beforeEach(() => {
   executeStatement.mockClear();
+  authorizeItemWorkspace.mockReset();
+  authorizeItemWorkspace.mockResolvedValue(null);
+});
+
+/** POST to an arbitrary [type]/[id]; returns status, body and whether the warehouse was reached. */
+async function postAs(type: string, id: string) {
+  const req = new NextRequest(`https://x/api/items/${type}/${id}/ai-function`, {
+    method: 'POST',
+    body: JSON.stringify({ fn: 'classify', column: 'txt', table: 'main.s.t', warehouseId: 'wh1', options: { labels: ['good'] } }),
+  });
+  const res = await POST(req, { params: Promise.resolve({ type, id }) });
+  return { status: res.status, body: await res.json(), sent: executeStatement.mock.calls.length };
+}
+
+describe('ai-function route: POST is item-scoped', () => {
+  it('positive control: an authorized caller on an existing item reaches the warehouse (200)', async () => {
+    const r = await postAs('notebook', 'n1');
+    expect(r.status).toBe(200);
+    expect(r.sent).toBe(1);
+    // The ladder is asked about THIS item, read-scoped. Breaks if the route
+    // authorizes a fixed type, drops allowReadRoles, or skips the ladder.
+    expect(authorizeItemWorkspace).toHaveBeenCalledTimes(1);
+    expect(authorizeItemWorkspace.mock.calls[0][1]).toMatchObject({ itemId: 'n1', itemType: 'notebook', allowReadRoles: true });
+  });
+
+  it('a caller with no role on the item gets 404 and no statement is sent', async () => {
+    // Breaks if the route goes back to session-only authorization (the denial
+    // is ignored and the statement is sent, status 200).
+    authorizeItemWorkspace.mockResolvedValueOnce(
+      new Response(JSON.stringify({ ok: false, error: 'workspace not found' }), { status: 404 }),
+    );
+    const r = await postAs('notebook', 'n1');
+    expect(r.status).toBe(404);
+    expect(r.sent).toBe(0);
+  });
+
+  it('an id that names no item of [type] gets 404 and no statement is sent', async () => {
+    // The ladder ALLOWS here (null) — it does for an id naming no item — so this
+    // pins the guard's fail-closed lookup. `n1` exists, but as a notebook, so the
+    // second call breaks if the route stops passing [type] to the lookup.
+    expect((await postAs('notebook', 'missing')).status).toBe(404);
+    expect((await postAs('databricks-sql-warehouse', 'n1')).status).toBe(404);
+    expect(executeStatement).not.toHaveBeenCalled();
+  });
+
+  it("an unsaved item ('new') gets the coded gate, not a statement", async () => {
+    // Breaks if the gate is removed (the guard then 404s a fresh item: a red
+    // first open) or if it is widened to let a real id through.
+    const r = await postAs('databricks-sql-warehouse', 'new');
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ ok: false, code: 'unsaved_item' });
+    expect(r.sent).toBe(0);
+    expect(authorizeItemWorkspace).not.toHaveBeenCalled();
+  });
+
+  it('no session: 401 on a real id and on new, before the unsaved gate', async () => {
+    getSessionMock.mockReturnValueOnce(null as any).mockReturnValueOnce(null as any);
+    // Breaks if the unsaved-item gate moves above authentication.
+    expect((await postAs('notebook', 'n1')).status).toBe(401);
+    const n = await postAs('databricks-sql-warehouse', 'new');
+    expect(n.status).toBe(401);
+    expect(n.body.code).not.toBe('unsaved_item');
+    expect(executeStatement).not.toHaveBeenCalled();
+  });
 });
 
 describe('ai-function route (Databricks path): option literals follow the Spark SQL rule', () => {

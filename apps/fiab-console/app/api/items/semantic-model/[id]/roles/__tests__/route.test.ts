@@ -401,15 +401,15 @@ describe('#3744 — a bound Databricks workspace is a native RLS endpoint (the w
   // output with split/join, which has no `$` patterns.
   //
   // Kill power, measured on a sandbox copy with the replacer reverted to a
-  // string: the `$&` and `` $` `` rows go RED. The `$'` row CANNOT: sparkString
-  // turns the quote into `\'`, so the replacement text holds `$\'`, never `$'`,
-  // and no UPN makes that row distinguish the two forms. It is kept as
-  // documentation of the third pattern and is not counted as coverage.
+  // string: all three `$` rows go RED. `$'` reaches the replacement text when
+  // the UPN ends in `$`: sparkString closes the literal with `'`, so the text
+  // ends `$'`, and a string replacement substitutes the text after the match
+  // (here empty) for it, dropping the closing quote.
   it.each([
     ['positive control: a plain UPN', 'ops@contoso.com'],
     ['`$&` in the UPN', 'a$&b@contoso.com'],
     ['`$`` in the UPN', 'a$`b@contoso.com'],
-    ["`$'` in the UPN (documentation only, see above)", "a$'b@contoso.com"],
+    ["`$'` (a UPN ending in `$`)", 'svc@contoso.com$'],
   ])('test-as-role: %s is carried into the SELECT exactly', async (_n, upn) => {
     const dax = '[Owner] = USERPRINCIPALNAME()';
     seedItem([{ name: 'Own', members: [], tablePermissions: [{ table: 'Sales', filterExpression: dax }] }]);
@@ -423,7 +423,7 @@ describe('#3744 — a bound Databricks workspace is a native RLS endpoint (the w
     const literal = sparkString(upn);
     // Breaks with `.replace(re, sparkString(upn))`: `$&` re-inserts
     // current_user(), `` $` `` splices the compiled SQL before the match into
-    // the literal.
+    // the literal, and `$'` (UPN ending in `$`) drops the closing quote.
     expect(stmt).toContain(`WHERE (${compiled.split('current_user()').join(literal)}) LIMIT 100;`);
     expect(stmt).not.toContain('current_user()');
   });

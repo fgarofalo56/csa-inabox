@@ -12,6 +12,9 @@
  *   - "planted positive control: an unlisted Databricks-client importer": a
  *     file importing databricks-client with one escapeSqlLiteral( must be
  *     reported. Breaks if the client-import population is removed.
+ *   - "planted positive control: an unlisted Resource Graph sender": a file
+ *     that posts to Microsoft.ResourceGraph/resources with one escapeSqlLiteral(
+ *     must be reported. Breaks if the endpoint-marker population is removed.
  *   - "real tree is clean": the committed list matches the tree exactly. Breaks
  *     on any drift between the list and the code (in either direction).
  *
@@ -28,6 +31,7 @@ import {
   DEFINITION_FILE,
   ENGINE_CLIENT_MODULES,
   ENGINE_CLIENT_IMPORT_RE,
+  ENGINE_CONTENT_MARKERS,
 } from '../check-sql-literal-dialect.mjs';
 import { codeOnly } from '../_code-only.mjs';
 
@@ -179,6 +183,50 @@ test('a different module with a client-like prefix, or an import only in a comme
   }
   // Positive pairing: the same shape with the real module name is caught.
   assert.match(codeOnly("import { a } from '@/lib/azure/kusto-client';"), ENGINE_CLIENT_IMPORT_RE);
+});
+
+test('module names are [a-z-] only, so joining them unescaped builds the intended alternation', () => {
+  // ENGINE_CLIENT_IMPORT_RE joins the names without escaping. Breaks if a name
+  // with a regex metacharacter (`.`, `+`, `\`, `(`...) is added: it would match
+  // more than the literal module name, so it must be escaped first.
+  for (const m of ENGINE_CLIENT_MODULES) assert.match(m, /^[a-z]+(?:-[a-z]+)*$/, m);
+});
+
+// ── Endpoint-marker population (Resource Graph, KQL, no client module) ──────
+// The marker is lifted from ENGINE_CONTENT_MARKERS, not transcribed.
+const R = 'apps/fiab-console/lib/x/arg-user.ts';
+const RG = ENGINE_CONTENT_MARKERS.find((m) => m.engine === 'kql');
+const argSrc = (urlLine, escapes = 1) =>
+  `${urlLine}\nexport const q = (v: string) => \`Resources | where name == '\${v}'\`;\n`
+  + 'export const lit = (v: string) => escapeSqlLiteral(v);\n'.repeat(escapes);
+const ARG_URL = `const url = \`https://management.azure.com/providers/${RG.name}?api-version=2022-10-01\`;`;
+
+test('planted positive control: an unlisted Resource Graph sender with one escapeSqlLiteral fails', () => {
+  // Reviewer arm G3: this file imports no client and references no helper, so
+  // before the marker it passed. Breaks if the marker arm is removed from the
+  // unlisted loop, or if the marker regex stops matching the endpoint path.
+  assert.equal(RG.name, 'Microsoft.ResourceGraph/resources');
+  const v = evaluate({ sites: [entry()] }, new Map([...base(), [R, argSrc(ARG_URL)]]));
+  assert.deepEqual(kinds(v), [`unlisted-engine-endpoint ${R}`]);
+  assert.match(v[0].detail, /Microsoft\.ResourceGraph\/resources \(KQL\)/);
+});
+
+test('Resource Graph: no escape passes; the URL only in a comment passes; the allowlist with the exact count passes', () => {
+  // Each is paired with the positive control above (same file shape, one
+  // change). The comment case breaks if the marker is matched on raw source
+  // instead of comment-masked source.
+  assert.deepEqual(evaluate({ sites: [entry()] }, new Map([...base(), [R, argSrc(ARG_URL, 0)]])), []);
+  assert.deepEqual(evaluate({ sites: [entry()] }, new Map([...base(), [R, argSrc(`// posts to ${RG.name}`)]])), []);
+  const allow = { sites: [entry()], tsqlClientFiles: [{ path: R, tsqlEscapes: 1, reason: 'OData filter, quote-doubled' }] };
+  assert.deepEqual(evaluate(allow, new Map([...base(), [R, argSrc(ARG_URL)]])), []);
+});
+
+test('the real tree has a non-empty Resource Graph population', () => {
+  // Breaks if the marker stops matching the way the console writes the URL
+  // (the population would silently drop to 0 and the arm would watch nothing).
+  // Measured at this change: 28 files carry it in code, 2 more only in comments.
+  const n = [...loadFiles().values()].filter((s) => RG.re.test(codeOnly(s))).length;
+  assert.ok(n >= 20, `only ${n} files carry ${RG.name} in code`);
 });
 
 test('tsqlClientFiles: the exact count passes; one more or one fewer fails', () => {

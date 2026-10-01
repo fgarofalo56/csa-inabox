@@ -51,15 +51,23 @@
  *       `tsqlClientFiles` allowlist with that exact count — the allowlist names
  *       the quote-doubling engine (T-SQL, OData, DAX, Postgres, KQL verbatim)
  *       each such escape feeds;
+ *     - a file that SENDS to a KQL endpoint with no client module
+ *       (ENGINE_CONTENT_MARKERS: the Azure Resource Graph
+ *       `Microsoft.ResourceGraph/resources` URL in a string) holds a T-SQL-rule
+ *       escape, and is neither listed nor allowlisted — same remedy;
  *     - the list is empty or an entry is malformed / duplicated.
  *
  * WHAT IT DOES NOT SEE (stated so a green run is not read as more):
  *   - a file that builds Spark/KQL text, has NEVER referenced a Spark/KQL
- *     helper, and does not import one of ENGINE_CLIENT_MODULES (it hands the
- *     text to another module that sends it). Population membership comes from
- *     the helper reference or the client import; such a file is found by
- *     triage, then listed. The list's floor is enforced (a listed file cannot
- *     leave), its ceiling is not.
+ *     helper, does not import one of ENGINE_CLIENT_MODULES and carries none of
+ *     ENGINE_CONTENT_MARKERS (it hands the text to another module that sends
+ *     it). Population membership comes from the helper reference, the client
+ *     import or the endpoint marker; such a file is found by triage, then
+ *     listed. The list's floor is enforced (a listed file cannot leave), its
+ *     ceiling is not.
+ *   - an endpoint URL assembled so the marker never appears as one string
+ *     (`'Microsoft.' + 'ResourceGraph/resources'`), or a KQL endpoint other than
+ *     Resource Graph that has no client module.
  *   - a client imported by a path other than `@/lib/azure/<module>` or a
  *     relative `./<module>` / `../azure/<module>`, or loaded without an import
  *     statement.
@@ -115,12 +123,30 @@ export const DIALECT_AWARE_RE =
  * queryLogs). An explicit list, not a pattern: a new client is added here.
  */
 export const ENGINE_CLIENT_MODULES = ['databricks-client', 'kusto-client', 'monitor-client'];
-/** An import (static or dynamic) of one of ENGINE_CLIENT_MODULES. */
+/**
+ * An import (static or dynamic) of one of ENGINE_CLIENT_MODULES. The module
+ * names are joined unescaped: they are `[a-z-]` only, and a hyphen is not a
+ * metacharacter outside a character class. The test file asserts that shape,
+ * so a name with any other character fails there rather than silently
+ * widening this pattern.
+ */
 export const ENGINE_CLIENT_IMPORT_RE = new RegExp(
   String.raw`(?:\bfrom\s+|\bimport\s*\(\s*|\bimport\s+)['"](?:@/lib/azure/|\./|\.\./azure/)(?:`
-    + ENGINE_CLIENT_MODULES.map((m) => m.replace(/-/g, '\\-')).join('|')
+    + ENGINE_CLIENT_MODULES.join('|')
     + String.raw`)['"]`,
 );
+
+/**
+ * Endpoints whose request body is KQL and that have no client module, so a
+ * file that sends to them is found by CONTENT rather than by import. Azure
+ * Resource Graph (`providers/Microsoft.ResourceGraph/resources`) takes a KQL
+ * `query` and is posted to directly from ~30 console files. Matched on
+ * comment-masked source with string text kept, so the URL in a string counts
+ * and a comment that merely names the endpoint does not.
+ */
+export const ENGINE_CONTENT_MARKERS = [
+  { name: 'Microsoft.ResourceGraph/resources', engine: 'kql', re: /Microsoft\.ResourceGraph\/resources/ },
+];
 
 /** Per engine: the helper reference a listed file must keep. */
 export const ENGINE_HELPER_RE = {
@@ -232,12 +258,15 @@ export function evaluate(list, files) {
     }
     const dialectAware = DIALECT_AWARE_RE.test(code);
     const clientImport = ENGINE_CLIENT_IMPORT_RE.test(code);
-    if (dialectAware || clientImport) {
+    const marker = ENGINE_CONTENT_MARKERS.find((m) => m.re.test(code));
+    if (dialectAware || clientImport || marker) {
       const { total, byShape } = countTsqlEscapes(src);
       if (total > 0 && dialectAware) {
         v.push({ kind: 'unlisted-tsql-escape', path: p, detail: `dialect-aware file with ${total} T-SQL-rule escapes ${JSON.stringify(byShape)} and no list entry` });
-      } else if (total > 0) {
+      } else if (total > 0 && clientImport) {
         v.push({ kind: 'unlisted-engine-client', path: p, detail: `imports a Databricks/Kusto statement client and holds ${total} T-SQL-rule escapes ${JSON.stringify(byShape)} — use escapeSparkSqlLiteral / escapeKqlLiteral for a literal that client parses, or add the file to tsqlClientFiles naming the quote-doubling engine each escape feeds` });
+      } else if (total > 0) {
+        v.push({ kind: 'unlisted-engine-endpoint', path: p, detail: `sends to ${marker.name} (${marker.engine.toUpperCase()}) and holds ${total} T-SQL-rule escapes ${JSON.stringify(byShape)} — use escapeKqlLiteral for a literal in that query, or add the file to tsqlClientFiles naming the quote-doubling engine each escape feeds` });
       }
     }
   }
@@ -287,7 +316,11 @@ function main() {
   const sites = Array.isArray(list.sites) ? list.sites : [];
   const allowanceSum = sites.reduce((n, e) => n + (Number.isInteger(e?.tsqlEscapeAllowance) ? e.tsqlEscapeAllowance : 0), 0);
   const allowFiles = Array.isArray(list.tsqlClientFiles) ? list.tsqlClientFiles.length : 0;
-  console.log(`[sql-literal-dialect] scanned ${files.size} console .ts/.tsx files; ${sites.length} listed Spark/KQL sites; T-SQL-rule allowance total ${allowanceSum}; ${allowFiles} allowlisted T-SQL files importing a Databricks/Kusto client`);
+  const endpointFiles = [...files.values()].filter((s) => {
+    const code = codeOnly(s);
+    return ENGINE_CONTENT_MARKERS.some((m) => m.re.test(code));
+  }).length;
+  console.log(`[sql-literal-dialect] scanned ${files.size} console .ts/.tsx files; ${sites.length} listed Spark/KQL sites; T-SQL-rule allowance total ${allowanceSum}; ${allowFiles} allowlisted T-SQL files importing a Databricks/Kusto client; ${endpointFiles} files sending to a client-less KQL endpoint (Resource Graph)`);
   if (files.size === 0) {
     console.error('[sql-literal-dialect] FAIL — scanned 0 files; the scan roots moved or the checkout is incomplete.');
     process.exit(1);

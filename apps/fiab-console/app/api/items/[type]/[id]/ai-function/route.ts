@@ -51,9 +51,50 @@ import {
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
 import { buildAiSqlExpr, isEnrichmentOp, opHasDbxBuiltin } from '@/lib/azure/ai-enrichment-client';
 import { withSession } from '@/lib/api/route-toolkit';
+import { guardSynapseItemRequest, UNSAVED_ITEM_ID } from '@/app/api/items/_lib/synapse-item-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+/**
+ * POST is ITEM-SCOPED: the caller must hold a role on the `[type]/[id]` item's
+ * workspace (read roles admitted: the statement is a fixed `SELECT ai_*(col)`
+ * over identifier-validated input, and the AOAI paths send text to the model;
+ * neither writes). `guardSynapseItemRequest` is the guard the sibling
+ * `databricks-sql-warehouse/[id]/query` runs; it fails CLOSED on an id that
+ * names no item of `[type]` and on a Cosmos error, and refuses with 404 (not
+ * 403) so a foreign item's existence is not disclosed.
+ *
+ * NOT A BOUND ON THE WAREHOUSE, stated so the guard is not read as more. On the
+ * Databricks path `warehouseId`, `table`, `catalog` and `schema` stay caller-
+ * supplied, exactly as on the sibling `query` route: no server-attested
+ * item→warehouse binding exists yet (#3669), and one anchored on item `state`
+ * would be inert because `PATCH /api/cosmos-items/[type]/[id]` replaces `state`
+ * wholesale (`_lib/databricks-resource-binding.ts`). Any warehouse reachable is
+ * still one in this deployment's own Databricks workspace.
+ *
+ * GET stays session-only: it returns the static function list and env-derived
+ * capability flags, reads no item data, and is allowlisted on that basis in
+ * `scripts/ci/check-route-guards.mjs`.
+ */
+const ITEM_UNREACHABLE =
+  'This item is not available to you. Either it does not exist, or you have no role in its ' +
+  'workspace. Ask a workspace owner to share it with you.';
+
+/**
+ * The unsaved-item gate: the helper can mount on `/items/<type>/new`, and the
+ * guard rightly refuses an id naming no item. 200 with a coded body so the
+ * dialog shows the sentence rather than a red error on first open. Matched
+ * EXACTLY: real ids are UUIDs, so a prefix test would let a real id skip the
+ * guard.
+ */
+function unsavedItemGate(): NextResponse {
+  return NextResponse.json({
+    ok: false,
+    code: 'unsaved_item',
+    error: 'Save this item first — AI functions run in the name of a saved item.',
+  }, { status: 200 });
+}
 
 /**
  * SQL identifier safety. Columns / tables flow into a Databricks SQL statement,
@@ -135,9 +176,20 @@ export const GET = withSession<{ type: string; id: string }>(async (req: NextReq
   });
 });
 
-export const POST = withSession<{ type: string; id: string }>(async (req: NextRequest, { session, params }) => {
-  params; // [type]/[id] carried for item scoping; backend keys off body
-
+export const POST = withSession<{ type: string; id: string }>(async (req: NextRequest, { params }) => {
+  // Authentication is the wrapper's (above this line), so the unsaved-item gate
+  // below cannot answer a request that carries no session.
+  if (params.id === UNSAVED_ITEM_ID) return unsavedItemGate();
+  const guard = await guardSynapseItemRequest({
+    itemId: params.id,
+    itemType: params.type,
+    allowReadRoles: true,
+    notFound: ITEM_UNREACHABLE,
+  });
+  if (guard.res) return guard.res;
+  // Consumed, so deleting the `if (guard.res)` line is a type error rather than
+  // a silent pass (the same reasoning as the sibling `query` route).
+  const { session } = guard.ctx;
   let body: any;
   try { body = await req.json(); } catch { body = {}; }
 

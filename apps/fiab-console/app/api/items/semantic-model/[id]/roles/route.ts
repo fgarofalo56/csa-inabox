@@ -580,8 +580,8 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest, { sessi
     const tr = daxFilterToDatabricksSql(filtered.filterExpression);
     // Substitute current_user() with the literal test UPN for a faithful receipt.
     // A replacer FUNCTION, so the replacement text is inserted literally: a
-    // string replacement would expand `$&` and `` $` `` in the UPN (`$'` cannot
-    // occur, since sparkString writes the quote as `\'`).
+    // string replacement would expand `$&`, `` $` `` and `$'` in it (`$'` occurs
+    // when the UPN ends in `$`, since the literal then ends `$'`).
     const upnLiteral = sparkString(effectiveUserName);
     const predicate = tr.sql.replace(/current_user\(\)/gi, () => upnLiteral);
     const tableFq = `${bq(dbxCatalog())}.${bq(dbxSchema())}.${bq(table)}`;

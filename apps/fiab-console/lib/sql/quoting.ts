@@ -64,14 +64,20 @@ export function escapeSqlLiteral(value: string): string {
 //
 //   Databricks / Spark SQL — a regular literal processes backslash escape
 //   sequences (`\\`, `\'`, `\n`, `\t`, `\r`, `\0`, …; `\<other char>` becomes
-//   `<other char>`), and adjacent literals are chained, so `'a''b'` reads as
-//   `ab`, not `a'b`. A raw literal `r'…'` has no escape character.
+//   `<other char>`). How a doubled quote (`'a''b'`) reads depends on the
+//   engine version: the Databricks page documents chaining adjacent literals
+//   for Databricks Runtime 18.0 and later (`ab`), while Apache Spark master's
+//   lexer (`SqlBaseLexer.g4` STRING_LITERAL) and `unescapeSQLString` fold `''`
+//   to `'` (`a'b`). The helper below does not rely on either: it writes the
+//   quote as `\'`, which reads as `'` under both. A raw literal `r'…'` has no
+//   escape character.
 //   https://learn.microsoft.com/azure/databricks/sql/language-manual/data-types/string-type
 //
 //   KQL — a single-quoted literal escapes the enclosing quote and the backslash
-//   itself with a backslash (`\'`, `\\`, plus `\t`, `\n`, `\r`), and adjacent
-//   literals are concatenated, so `'a''b'` again reads as `ab`. A verbatim
-//   literal `@'…'` is the exception: there the quote IS doubled (see
+//   itself with a backslash (`\'`, `\\`, plus `\t`, `\n`), and adjacent
+//   literals with no separation are combined, so `'a''b'` reads as `ab` (the
+//   page's "Concatenation of separated string literals"). A verbatim literal
+//   `@'…'` is the exception: there the quote IS doubled (see
 //   lib/azure/kql-escape.ts `kqlVerbatimSingle`).
 //   https://learn.microsoft.com/kusto/query/scalar-data-types/string
 //
@@ -108,6 +114,13 @@ const OCTAL_DIGIT = /[0-7]/;
  * then `12` would decode as LF). When the next two characters are both octal
  * digits, NUL is written as `\u0000` instead, which the same decoder reads as
  * exactly four hex digits.
+ *
+ * Grounding: the `\u` form and the octal reading come from Spark SOURCE
+ * (`SparkParserUtils.unescapeSQLString`, apache/spark), not from the Databricks
+ * STRING page, which documents `\0` but neither `\u` nor octal. A decoder that
+ * followed that page alone would read the `\u` form of NUL followed by `12` as
+ * `u000012`. No live `SELECT hex(...)` receipt from a SQL warehouse backs this
+ * yet.
  */
 export function escapeSparkSqlLiteral(value: string): string {
   const s = String(value);
@@ -135,9 +148,14 @@ export function escapeSparkSqlLiteral(value: string): string {
  * Monitor, and Azure Resource Graph all share this grammar. Returns the inner
  * text only. Never throws.
  *
- *   `\` → `\\`, `'` → `\'`, TAB/LF/CR → `\t`/`\n`/`\r`, and every other C0
- *   control character and DEL → `\uXXXX` (four hex digits, the documented
- *   Unicode escape). Every other character is passed raw.
+ *   `\` → `\\`, `'` → `\'`, TAB/LF → `\t`/`\n`, and CR, every other C0 control
+ *   character and DEL → `\uXXXX` (four hex digits, the documented Unicode
+ *   escape). Every other character is passed raw. CR takes the `\u` form
+ *   because the KQL string page lists `\t`, `\n`, `\\` and the enclosing quote
+ *   as the backslash escapes of a regular literal and mentions `\r` only in its
+ *   notes; this way every escape emitted is one the page shows for a regular
+ *   literal (the `\u` form appears in its "String literal with Unicode"
+ *   example).
  *
  * NOT for verbatim literals (`@'…'`), whose rule is quote doubling.
  */
@@ -150,7 +168,6 @@ export function escapeKqlLiteral(value: string): string {
       case "'": out += "\\'"; break;
       case '\t': out += '\\t'; break;
       case '\n': out += '\\n'; break;
-      case '\r': out += '\\r'; break;
       default: {
         const cp = c.charCodeAt(0);
         out += cp <= 0x1f || cp === 0x7f ? `\\u${cp.toString(16).toUpperCase().padStart(4, '0')}` : c;
