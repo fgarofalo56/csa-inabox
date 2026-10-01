@@ -45,13 +45,24 @@
  *     - a file that references any other dialect-aware literal helper (the
  *       lib/azure/kql-escape module) holds a T-SQL-rule escape and is not
  *       listed;
+ *     - a file that IMPORTS a Databricks or Kusto statement client
+ *       (ENGINE_CLIENT_MODULES: databricks-client, kusto-client, monitor-client)
+ *       holds a T-SQL-rule escape, and is neither listed in `sites` nor on the
+ *       `tsqlClientFiles` allowlist with that exact count — the allowlist names
+ *       the quote-doubling engine (T-SQL, OData, DAX, Postgres, KQL verbatim)
+ *       each such escape feeds;
  *     - the list is empty or an entry is malformed / duplicated.
  *
  * WHAT IT DOES NOT SEE (stated so a green run is not read as more):
- *   - a file that builds Spark/KQL text and has NEVER referenced a Spark/KQL
- *     helper. Population membership comes from the helper reference; such a
- *     file is found by triage, then listed. The list's floor is enforced (a
- *     listed file cannot leave), its ceiling is not.
+ *   - a file that builds Spark/KQL text, has NEVER referenced a Spark/KQL
+ *     helper, and does not import one of ENGINE_CLIENT_MODULES (it hands the
+ *     text to another module that sends it). Population membership comes from
+ *     the helper reference or the client import; such a file is found by
+ *     triage, then listed. The list's floor is enforced (a listed file cannot
+ *     leave), its ceiling is not.
+ *   - a client imported by a path other than `@/lib/azure/<module>` or a
+ *     relative `./<module>` / `../azure/<module>`, or loaded without an import
+ *     statement.
  *   - which engine a given escapeSqlLiteral call FEEDS. Within a listed file the
  *     count is exact, so a site moved from a T-SQL branch to a Spark branch at
  *     an unchanged count is invisible; the per-site statement-text tests under
@@ -96,6 +107,20 @@ export const SPARK_KQL_HELPER_RE = /(?<![\w$])(?:escapeSparkSqlLiteral|escapeKql
 /** A reference that makes a file dialect-aware (listed if it also holds a T-SQL escape). */
 export const DIALECT_AWARE_RE =
   /(?<![\w$])(?:escapeSparkSqlLiteral|escapeKqlLiteral|escapeLiteralFor|kqlEscapeSingle|kqlEscapeDouble|kqlVerbatimSingle|kqlVerbatimDouble)(?![\w$])|['"]@\/lib\/azure\/kql-escape['"]/;
+
+/**
+ * Statement clients whose text is parsed by a backslash-escape grammar:
+ * databricks-client (Databricks SQL, executeStatement), kusto-client (ADX KQL,
+ * executeQuery / executeMgmtCommand), monitor-client (Log Analytics KQL,
+ * queryLogs). An explicit list, not a pattern: a new client is added here.
+ */
+export const ENGINE_CLIENT_MODULES = ['databricks-client', 'kusto-client', 'monitor-client'];
+/** An import (static or dynamic) of one of ENGINE_CLIENT_MODULES. */
+export const ENGINE_CLIENT_IMPORT_RE = new RegExp(
+  String.raw`(?:\bfrom\s+|\bimport\s*\(\s*|\bimport\s+)['"](?:@/lib/azure/|\./|\.\./azure/)(?:`
+    + ENGINE_CLIENT_MODULES.map((m) => m.replace(/-/g, '\\-')).join('|')
+    + String.raw`)['"]`,
+);
 
 /** Per engine: the helper reference a listed file must keep. */
 export const ENGINE_HELPER_RE = {
@@ -150,6 +175,36 @@ export function evaluate(list, files) {
     listed.set(e.path, e);
   }
 
+  // T-SQL allowlist for engine-client importers: files that import a
+  // Databricks/Kusto client AND hold quote-doubling escapes that feed a
+  // quote-doubling grammar. Exact count, like `sites`.
+  const allow = new Map();
+  for (const e of Array.isArray(list?.tsqlClientFiles) ? list.tsqlClientFiles : []) {
+    const ok = e && typeof e.path === 'string' && e.path.length > 0
+      && Number.isInteger(e.tsqlEscapes) && e.tsqlEscapes >= 1
+      && typeof e.reason === 'string' && e.reason.trim().length > 0;
+    if (!ok) {
+      v.push({ kind: 'bad-entry', path: String(e?.path ?? '?'), detail: 'tsqlClientFiles entry needs path, integer tsqlEscapes >= 1, and a reason naming the quote-doubling engine' });
+      continue;
+    }
+    if (allow.has(e.path) || listed.has(e.path)) {
+      v.push({ kind: 'duplicate-entry', path: e.path, detail: 'listed more than once (sites and tsqlClientFiles are disjoint)' });
+      continue;
+    }
+    allow.set(e.path, e);
+  }
+  for (const [p, e] of allow) {
+    const src = files.get(p);
+    if (src === undefined) {
+      v.push({ kind: 'missing-file', path: p, detail: 'on tsqlClientFiles but not found in the scanned tree (renamed? update the list)' });
+      continue;
+    }
+    const { total, byShape } = countTsqlEscapes(src);
+    if (total !== e.tsqlEscapes) {
+      v.push({ kind: 'tsql-client-count', path: p, detail: `${total} T-SQL-rule escapes ${JSON.stringify(byShape)}, allowlisted ${e.tsqlEscapes} — a new escape here may feed the Databricks/Kusto client; use escapeSparkSqlLiteral / escapeKqlLiteral for it, or set tsqlEscapes to ${total} with its engine named in reason` });
+    }
+  }
+
   for (const [p, e] of listed) {
     const src = files.get(p);
     if (src === undefined) {
@@ -169,16 +224,20 @@ export function evaluate(list, files) {
   }
 
   for (const [p, src] of files) {
-    if (listed.has(p)) continue;
+    if (listed.has(p) || allow.has(p)) continue;
     const code = codeOnly(src);
     if (SPARK_KQL_HELPER_RE.test(code)) {
       v.push({ kind: 'unlisted-spark-kql', path: p, detail: 'references escapeSparkSqlLiteral / escapeKqlLiteral / escapeLiteralFor but is not listed' });
       continue;
     }
-    if (DIALECT_AWARE_RE.test(code)) {
+    const dialectAware = DIALECT_AWARE_RE.test(code);
+    const clientImport = ENGINE_CLIENT_IMPORT_RE.test(code);
+    if (dialectAware || clientImport) {
       const { total, byShape } = countTsqlEscapes(src);
-      if (total > 0) {
+      if (total > 0 && dialectAware) {
         v.push({ kind: 'unlisted-tsql-escape', path: p, detail: `dialect-aware file with ${total} T-SQL-rule escapes ${JSON.stringify(byShape)} and no list entry` });
+      } else if (total > 0) {
+        v.push({ kind: 'unlisted-engine-client', path: p, detail: `imports a Databricks/Kusto statement client and holds ${total} T-SQL-rule escapes ${JSON.stringify(byShape)} — use escapeSparkSqlLiteral / escapeKqlLiteral for a literal that client parses, or add the file to tsqlClientFiles naming the quote-doubling engine each escape feeds` });
       }
     }
   }
@@ -227,7 +286,8 @@ function main() {
   const violations = evaluate(list, files);
   const sites = Array.isArray(list.sites) ? list.sites : [];
   const allowanceSum = sites.reduce((n, e) => n + (Number.isInteger(e?.tsqlEscapeAllowance) ? e.tsqlEscapeAllowance : 0), 0);
-  console.log(`[sql-literal-dialect] scanned ${files.size} console .ts/.tsx files; ${sites.length} listed Spark/KQL sites; T-SQL-rule allowance total ${allowanceSum}`);
+  const allowFiles = Array.isArray(list.tsqlClientFiles) ? list.tsqlClientFiles.length : 0;
+  console.log(`[sql-literal-dialect] scanned ${files.size} console .ts/.tsx files; ${sites.length} listed Spark/KQL sites; T-SQL-rule allowance total ${allowanceSum}; ${allowFiles} allowlisted T-SQL files importing a Databricks/Kusto client`);
   if (files.size === 0) {
     console.error('[sql-literal-dialect] FAIL — scanned 0 files; the scan roots moved or the checkout is incomplete.');
     process.exit(1);
