@@ -12,31 +12,41 @@
  *                  enforcement.roleAssignmentId = REAL ARM role assignment id.
  *        pending → stays at access-provider (honest infra/config gate surfaced).
  *        error   → stays at access-provider, 502 with the grant error.
- *        Every grant that lands is recorded in the entitlement ledger, on a
- *        mixed result too (lib/access/landed-grants.ts).
+ *        Every grant is written to the GRANT LEDGER before it is made and
+ *        settled after (lib/access/grant-intents.ts), and every grant that
+ *        lands is recorded in the entitlement ledger, on a mixed result too
+ *        (lib/access/landed-grants.ts).
  *   open · ANY tier        + denied   → status: denied, deniedAt, denialReason;
- *        grants this request created on some of its scopes are revoked.
+ *        grants the request's grant ledger says it created are revoked.
  *
  * The grant scope is derived at the final tier from the requested asset's own
  * record (lib/access/request-asset.ts) — its bound output ports, the item's
  * own store, or the item itself. If that differs from the scopes recorded when
  * the request was made (what the approvers reviewed), the approval is refused
- * with 409 `targets_changed`, naming the cause per scope, and the request
- * stays open.
+ * with 409 `targets_changed`, naming the cause per scope (one
+ * `predates_recording` change for a request that recorded no scopes), and the
+ * request stays open.
  * An access-package leg keeps the scope its package defines.
  *
  * One grant or revoke at a time per request: a final approval, and a denial,
  * take the same short lease on the request document (an etag-conditioned write
  * of `grantLeaseUntil`) before they grant or revoke, renew it (etag-conditioned)
- * after each scope, and release it with the final write. A second decision
- * while the lease is held is refused with 409 `grant_in_progress`. The lease
- * bounds how long a stalled decision blocks others; correctness does not rest
- * on its length. When a renewal or the final write finds the document changed
- * (a lease that expired while one scope took longer), the decision stops: an
- * approval re-reads the request and, unless it is completed, revokes exactly
- * the grants it created and lists them in its 409; a denial lists what it
- * revoked. Separate requests for the same principal and scope are not
- * serialized with each other.
+ * after each scope, and release it with the final write, or when they stop. A
+ * second decision while the lease is held is refused with 409
+ * `grant_in_progress`, which says when the hold expires. The lease bounds how
+ * long a stalled decision blocks others; correctness rests on the grant
+ * ledger, not on its length:
+ *   - a grant is never made before its ledger row is written, so a grant is
+ *     never live and recorded nowhere;
+ *   - a decision that stops after granting (a renewal, a ledger settle or the
+ *     final write found the request changed, or the store failed) re-reads the
+ *     request and, unless another approval completed it or another decision
+ *     holds it, revokes what the ledger says the request created — 409
+ *     `request_changed`, or 503 `grant_interrupted` for a store failure;
+ *   - a denial revokes from the ledger, after resolving rows a stopped
+ *     decision left `pending` from the store itself.
+ * Separate requests for the same principal and scope are not serialized with
+ * each other.
  *
  * Every decision writes an audit-log entry (itemId = requestId). No Fabric
  * dependency: the grant is a real Azure ARM Storage / Synapse SQL / ADX
@@ -85,9 +95,13 @@ import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { computeExpiry } from '@/lib/access/expiry';
 import { deriveRequestTargets, loadCatalogItem } from '@/lib/access/request-asset';
 import {
-  grantLedgerId, grantResult, mergeGrantResults, recordLandedGrants, revokeLandedGrants,
+  denialKeptWarning, grantLedgerId, grantResult, keptTail, mergeGrantResults, recordLandedGrants,
   type LandedGrantContext, type LedgerRecord,
 } from '@/lib/access/landed-grants';
+import {
+  GRANT_LEASE_MS, intentAsResult, newAttemptId, reconcileRequestIntents, revokeIntents, settleGrantIntent,
+  settledFields, writeGrantIntent, type GrantIntent, type IntentContext,
+} from '@/lib/access/grant-intents';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -156,26 +170,30 @@ function compareTargets(current: AccessRequestGrantTarget[], reviewed: AccessReq
 
 /** The store a scope names: its bound ref, else the name its port declared. */
 const storeName = (t: AccessRequestGrantTarget) =>
-  t.scopeRef ? `${t.scopeType} '${t.scopeRef}'` : t.declaredRef ? `${t.scopeType} '${t.declaredRef}' (not bound yet)` : `no ${t.scopeType}`;
+  t.scopeRef ? `${t.scopeType} '${t.scopeRef}'` : t.declaredRef ? `${t.scopeType} '${t.declaredRef}' (not bound yet)` : `an unbound ${t.scopeType} scope`;
 
 /** One sentence per change, for the approver. */
 function describeChange(ch: TargetChange, assetName: string): string {
-  const src = ch.source || 'a scope';
   const r = ch.reviewed;
   const t = ch.current;
   switch (ch.cause) {
     case 'predates_recording':
-      return `${src}: this request predates target recording; deny it and ask the requester to re-request.`;
+      return `${ch.source ? `${ch.source}: t` : 'T'}his request predates target recording; deny it and ask the requester to re-request.`;
     case 'port_unbound':
-      return `${src} was bound to ${storeName(r!)} when this request was made and is bound to no store now.`;
+      return `${ch.source} was bound to ${storeName(r!)} when this request was made and `
+        + (t?.declaredRef
+          ? `now names '${t.declaredRef}', which no store in the workspace holds.`
+          : 'now names no store.');
     case 'port_rebound':
-      return `${src} ${r!.scopeRef ? 'was bound to' : 'named'} ${storeName(r!)} when this request was made and is bound to ${storeName(t!)} now.`;
+      return `${ch.source} ${r!.scopeRef ? 'was bound to' : 'named'} ${storeName(r!)} when this request was made and is bound to ${storeName(t!)} now.`;
     case 'declared_ref_changed':
-      return `${src} named ${storeName(r!)} when this request was made and names ${storeName(t!)} now.`;
+      return `${ch.source} named ${storeName(r!)} when this request was made and names ${storeName(t!)} now.`;
     case 'scope_removed':
-      return `${storeName(r!)} (${src}) is no longer part of "${assetName}".`;
+      return `${storeName(r!)}${ch.source ? ` (${ch.source})` : ''} is no longer part of "${assetName}".`;
     case 'scope_added':
-      return `${storeName(t!)} (${src}) was added to "${assetName}" after this request was made.`;
+      // Reached only for a request that recorded its scopes (a request that
+      // did not is one predates_recording change), so "after" is established.
+      return `${storeName(t!)}${ch.source ? ` (${ch.source})` : ''} was added to "${assetName}" after this request was made.`;
   }
 }
 
@@ -192,7 +210,9 @@ function targetsChanged(
   reviewed: AccessRequestGrantTarget[], current: AccessRequestGrantTarget[],
 ) {
   const onlyPredates = changes.every((ch) => ch.cause === 'predates_recording');
-  const error = `"${assetName}" is not bound to the storage that was reviewed. `
+  const error = (onlyPredates
+    ? `"${assetName}" cannot be approved as reviewed. `
+    : `"${assetName}" is not bound to the storage that was reviewed. `)
     + changes.map((ch) => describeChange(ch, assetName)).join(' ')
     + (onlyPredates ? '' : ' Approving it would grant access nobody reviewed. Deny it and ask the requester to request access again.');
   const suggestedDenyReason = onlyPredates
@@ -217,46 +237,46 @@ function targetsChanged(
   );
 }
 
-/**
- * How long one hold on the request lasts. A decision renews it after every
- * scope, so this bounds a single scope's grant or revoke; when one runs longer
- * and another decision takes the request meanwhile, the renewal or the final
- * write fails and the decision compensates (see the header).
- */
-const GRANT_LEASE_MS = 120_000;
-
 type RequestContainer = Awaited<ReturnType<typeof accessRequestWorkflowContainer>>;
 
 /**
  * Take (or renew) the per-request lease: write `grantLeaseUntil` onto the
  * document as it was read, conditioned on `etag` — the etag of that read, or of
- * this decision's last lease write. Returns the etag of the leased document, or
- * null when another write got there first (412).
+ * this decision's last lease write. The lease lasts GRANT_LEASE_MS; a decision
+ * renews it after every scope, so it bounds a single scope's grant or revoke.
+ * Returns the leased document's etag and expiry, or null when another write
+ * got there first (412).
  */
 async function takeGrantLease(
   c: RequestContainer, id: string, pk: string, asRead: AccessRequestDoc, etag: string | undefined,
-): Promise<string | null> {
+): Promise<{ etag: string; until: string } | null> {
   if (!etag) {
     throw new Error('The access request was read without an etag, so its grant could not be serialized; nothing was granted.');
   }
+  const until = new Date(Date.now() + GRANT_LEASE_MS).toISOString();
   try {
     const { resource } = await c.item(id, pk).replace(
-      { ...asRead, grantLeaseUntil: new Date(Date.now() + GRANT_LEASE_MS).toISOString() },
+      { ...asRead, grantLeaseUntil: until },
       { accessCondition: { type: 'IfMatch', condition: etag } },
     );
-    return String((resource as any)?._etag || '');
+    return { etag: String((resource as any)?._etag || ''), until };
   } catch (e: any) {
     if (isPreconditionFailed(e)) return null;
     throw e;
   }
 }
 
-function grantInProgress() {
+/** HH:MM:SS of an ISO-8601 instant, for "until 12:04:31 UTC". */
+const utcTime = (iso: string | undefined) => (iso || '').slice(11, 19) || 'an unknown time';
+
+function grantInProgress(until: string | undefined) {
   return NextResponse.json(
     {
       ok: false,
       code: 'grant_in_progress',
-      error: 'Another decision on this request is granting or removing access right now. Reload in a minute to see its result.',
+      error: `Another decision holds this request until ${utcTime(until)} UTC. It is granting or removing access, `
+        + 'or it stopped without releasing its hold. Reload after that time to see its result, or decide again.',
+      ...(until ? { holdUntil: until } : {}),
     },
     { status: 409 },
   );
@@ -275,6 +295,20 @@ function requestChanged() {
 
 const isPreconditionFailed = (e: any) => e?.code === 412 || e?.statusCode === 412;
 
+const STORE_STATUS_LABEL: Record<number, string> = {
+  408: 'timed out', 429: 'throttled', 500: 'internal error', 502: 'bad gateway', 503: 'unavailable', 504: 'timed out',
+};
+
+/**
+ * A store failure as the approver is told it: the status code and its class,
+ * never the service's own message (which can quote internal detail).
+ */
+function describeStoreError(e: any): string {
+  const code = [e?.code, e?.statusCode, e?.status].find((v) => typeof v === 'number');
+  if (code === undefined) return 'an unexpected error';
+  return `the request store answered ${code}${STORE_STATUS_LABEL[code] ? `, ${STORE_STATUS_LABEL[code]}` : ''}`;
+}
+
 /** A grant as a 409 body lists it: its scope, its ledger row, and why it stayed. */
 function grantView(requesterId: string, r: AccessRequestGrantResult, ledger?: LedgerRecord[]) {
   const ledgerId = grantLedgerId(requesterId, r);
@@ -291,22 +325,6 @@ function grantView(requesterId: string, r: AccessRequestGrantResult, ledger?: Le
 }
 
 const scopeList = (rs: AccessRequestGrantResult[]) => rs.map((r) => `${r.scopeType} ${r.scopeRef}`).join(', ');
-
-/**
- * What an approver is told about grants left in place. The Access report is
- * named only when every kept grant's ledger row is known to be written (`ledger`
- * given and each row `recorded`), and offered as a place to act only to a
- * tenant admin, who is the one who can open it.
- */
-function keptTail(kept: AccessRequestGrantResult[], admin: boolean, requesterId: string, ledger?: LedgerRecord[]): string {
-  if (!kept.length) return '';
-  const list = kept.map((r) => `${r.scopeType} ${r.scopeRef} (${r.detail || 'no reason recorded'})`).join('; ');
-  const allRecorded = !!ledger && kept.every((r) => ledger.some((l) => l.ledgerId === grantLedgerId(requesterId, r) && l.recorded));
-  const where = allRecorded
-    ? (admin ? ' They are recorded in the Access report; review them there.' : ' They are recorded in the Access report; a tenant admin can review and remove the kept grants.')
-    : (admin ? ' Review them in the Access report.' : ' A tenant admin can review and remove the kept grants.');
-  return ` ${kept.length} grant(s) were not removed and remain in place: ${list}.${where}`;
-}
 
 /** One enforcement summary over every per-scope grant: active only when all are. */
 function summarizeGrants(results: AccessRequestGrantResult[]): AccessRequestEnforcement {
@@ -372,7 +390,7 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
     // Another decision holds the request (a final approval granting, or a
     // denial revoking): no other decision until it has written its result.
     if (doc.grantLeaseUntil && Date.parse(doc.grantLeaseUntil) > Date.now()) {
-      return grantInProgress();
+      return grantInProgress(doc.grantLeaseUntil);
     }
 
     // ── Separation of duties. Absolute — it holds even for a tenant admin, so
@@ -408,10 +426,15 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
     let httpStatus = 200;
     let ok = true;
     let warning: string | undefined;
-    /** Etag of this decision's lease on the request, once it holds one. */
+    /** This decision's lease on the request while it holds one: the etag of its last lease write, and its expiry. */
     let leaseEtag: string | undefined;
-    /** Set when a lease renewal errored (not a 412): the decision cannot know it still holds the request. */
-    let renewError = '';
+    let leaseUntil: string | undefined;
+    /**
+     * Why this decision stopped when a store call failed (not a 412): a short
+     * classified reason, never the service's own message. When set, the
+     * decision answers 503 `grant_interrupted`.
+     */
+    let stopReason = '';
     /** The requester's notification — sent only once the decision is recorded. */
     let notice: Record<string, unknown> | undefined;
     /** The eligible (PIM) ledger row — written only once the decision is recorded. */
@@ -420,9 +443,26 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
     let toRecord: { results: AccessRequestGrantResult[]; expiresAt: string | null } | undefined;
     /** What to answer when the final write finds the request changed (412). */
     let onLost: () => Promise<NextResponse> = async () => requestChanged();
+    /**
+     * What to answer when the final write fails otherwise, for a decision that
+     * granted or revoked (it must not leave that unreported as a 500).
+     */
+    let onStopped: (() => Promise<NextResponse>) | undefined;
     /** Grants this approval made on this attempt. */
     const fresh: AccessRequestGrantResult[] = [];
+    /** This attempt's grant-ledger rows, each with the outcome of its grant. */
+    const mine: Array<{ row: GrantIntent; result: AccessRequestGrantResult }> = [];
     const admin = isTenantAdmin(s);
+    const intentCtx: IntentContext = {
+      tenantId,
+      requestId: doc.id,
+      attemptId: newAttemptId(),
+      principalId: doc.requesterId,
+      principalName: doc.requesterUpn,
+      permission: doc.permission,
+      assetName: doc.assetName,
+      by: s.claims.upn || s.claims.oid,
+    };
     const ledgerCtx = (expiresAt: string | null): LandedGrantContext => ({
       requestId: doc.id,
       requesterId: doc.requesterId,
@@ -440,73 +480,144 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
     const acquireLease = async (): Promise<NextResponse | null> => {
       const leased = await takeGrantLease(c, id, tenantId, asRead, readEtag);
       if (leased !== null) {
-        leaseEtag = leased;
+        leaseEtag = leased.etag;
+        leaseUntil = leased.until;
         return null;
       }
       const { resource: latest } = await c.item(id, tenantId).read<AccessRequestDoc>();
       return latest?.grantLeaseUntil && Date.parse(latest.grantLeaseUntil) > Date.now()
-        ? grantInProgress()
+        ? grantInProgress(latest.grantLeaseUntil)
         : requestChanged();
     };
     /**
      * Renew the lease, conditioned on this decision's last lease write. False
-     * when another write changed the request since (412), or when the renewal
-     * itself failed (`renewError`); the caller stops either way.
+     * when another write changed the request since (412: the lease is no longer
+     * this decision's), or when the renewal itself failed (`stopReason`); the
+     * caller stops either way.
      */
     const renewLease = async (): Promise<boolean> => {
       try {
         const renewed = await takeGrantLease(c, id, tenantId, asRead, leaseEtag);
-        if (renewed === null) return false;
-        leaseEtag = renewed;
+        if (renewed === null) {
+          leaseEtag = undefined;
+          return false;
+        }
+        leaseEtag = renewed.etag;
+        leaseUntil = renewed.until;
         return true;
       } catch (e: any) {
-        renewError = String(e?.message || e).slice(0, 300);
+        stopReason = `its hold on the request could not be renewed (${describeStoreError(e)})`;
         return false;
       }
     };
-    const lostAnswer = (who: 'approval' | 'denial', text: string, body: Record<string, unknown>) => NextResponse.json(
-      {
-        ok: false,
-        code: renewError ? 'grant_interrupted' : 'request_changed',
-        error: (renewError
-          ? `This ${who} could not renew its hold on the request (${renewError}), so it stopped and was not recorded.`
-          : `This request was changed by another decision while this ${who} was being made, so the ${who} was not recorded.`)
-          + text,
-        ...body,
-      },
-      { status: renewError ? 503 : 409 },
-    );
     /**
-     * A final approval lost the request after granting (a renewal or its final
-     * write failed). Unless another approval completed the request, revoke
-     * exactly the grants this approval created — recorded in the ledger first,
-     * so each revoke marks its row — and list them, with their ledger ids.
+     * Release this decision's hold when it stops, so the next decision is not
+     * refused for a hold nobody is using. Returns '' when released (or no longer
+     * held), otherwise a sentence giving when the hold expires.
+     */
+    const releaseLease = async (): Promise<string> => {
+      if (!leaseEtag) return '';
+      const { grantLeaseUntil: _held, ...unleased } = asRead;
+      try {
+        await c.item(id, tenantId).replace(unleased, { accessCondition: { type: 'IfMatch', condition: leaseEtag } });
+        leaseEtag = undefined;
+        return '';
+      } catch (e: any) {
+        if (isPreconditionFailed(e)) {
+          leaseEtag = undefined;
+          return '';
+        }
+        return ` Its hold on the request could not be released and expires at ${utcTime(leaseUntil)} UTC; `
+          + 'the request can be decided again after that.';
+      }
+    };
+    /** The answer of a decision that stopped before recording its result. */
+    const stopAnswer = async (who: 'approval' | 'denial', text: string, body: Record<string, unknown>) => {
+      const hold = await releaseLease();
+      return NextResponse.json(
+        {
+          ok: false,
+          code: stopReason ? 'grant_interrupted' : 'request_changed',
+          error: (stopReason
+            ? `This ${who} stopped and was not recorded: ${stopReason}.`
+            : `This request was changed by another decision while this ${who} was being made, so the ${who} was not recorded.`)
+            + text + hold,
+          ...body,
+        },
+        { status: stopReason ? 503 : 409 },
+      );
+    };
+    /**
+     * A final approval that granted and then stopped: it lost the request (a
+     * renewal, a ledger settle or its final write found it changed) or could
+     * not reach the store. It re-reads the request before undoing anything:
+     *   - completed by another approval → nothing is revoked;
+     *   - held by another decision now → nothing is revoked (that decision
+     *     removes or keeps the grants: a denial revokes from the ledger);
+     *   - unreadable → nothing is revoked (every grant is in the grant ledger,
+     *     so a later denial removes it).
+     * Otherwise it revokes what the request's grant ledger says the request
+     * created, from any attempt, with this attempt's own outcomes in place of
+     * its rows (a row it could not settle is still its grant).
      */
     const compensate = async (): Promise<NextResponse> => {
-      let latest: AccessRequestDoc | undefined;
+      let latest: (AccessRequestDoc & { _etag?: string }) | undefined;
+      let unread = false;
       try {
         latest = (await c.item(id, tenantId).read<AccessRequestDoc>()).resource;
       } catch {
-        latest = undefined; // unknown: treated as not completed, so nothing unreviewed stays granted
+        unread = true;
       }
-      const mine = fresh.filter((r) => r.status === 'active' && r.created !== false);
+      const ownLanded = mine.filter((m) => m.result.status === 'active').map((m) => m.result);
+      const keepOwn = (detail: string) => ownLanded.filter((r) => r.created !== false).map((r) => ({ ...r, detail }));
       if (latest?.status === 'completed') {
-        const kept = mine.map((r) => ({ ...r, detail: 'Left in place: another approval completed this request.' }));
-        return lostAnswer(
+        const kept = keepOwn('Left in place: another approval completed this request.');
+        return stopAnswer(
           'approval',
           (kept.length ? ` The access it granted stays in place under that approval: ${scopeList(kept)}.` : '')
             + ' Reload it to see its current state.',
           { requestStatus: 'completed', revoked: [], kept: view(kept) },
         );
       }
-      const ledger = await recordLandedGrants(ledgerCtx(null), mine);
-      const { revoked, kept } = await revokeLandedGrants(revokeCtx, mine, s);
-      return lostAnswer(
+      // Only an OPEN request can be held by a decision that will still act on
+      // it; a closed one was decided, and its hold (if any) is stale.
+      const heldByOther = latest?.status === 'open'
+        && !!latest.grantLeaseUntil && Date.parse(latest.grantLeaseUntil) > Date.now()
+        && latest._etag !== leaseEtag;
+      if (unread || !latest || heldByOther) {
+        const ledger = await recordLandedGrants(ledgerCtx(null), ownLanded);
+        const kept = keepOwn(heldByOther
+          ? 'Left in place: another decision holds the request now, and removes or keeps this grant.'
+          : 'Left in place: the request could not be re-read to confirm how it was decided. It is in the grant ledger, and a denial of the request removes it.');
+        return stopAnswer(
+          'approval',
+          (kept.length ? ` The access it granted was left in place: ${scopeList(kept)}.` : '')
+            + ' Reload it to see its current state.',
+          { requestStatus: latest?.status ?? null, revoked: [], kept: view(kept, ledger) },
+        );
+      }
+      let rows: GrantIntent[] = [];
+      try {
+        rows = await reconcileRequestIntents(c, tenantId, id);
+      } catch {
+        rows = []; // this attempt's own rows are below; other attempts' rows stay for the next decision
+      }
+      const own = new Set(mine.map((m) => m.row.id));
+      const merged: GrantIntent[] = [
+        ...rows.filter((r) => !own.has(r.id)),
+        ...mine.map((m) => {
+          const { created: _c, ...row } = m.row;
+          return { ...row, ...settledFields(m.result) };
+        }),
+      ];
+      const ledger = await recordLandedGrants(ledgerCtx(null), merged.filter((r) => r.state === 'active').map(intentAsResult));
+      const { revoked, kept } = await revokeIntents(c, merged, revokeCtx, s);
+      return stopAnswer(
         'approval',
         (revoked.length ? ` The access it had granted was removed: ${scopeList(revoked)}.` : '')
           + keptTail(kept, admin, doc.requesterId, ledger)
           + ' Reload it to see its current state.',
-        { requestStatus: latest?.status ?? null, revoked: view(revoked, ledger), kept: view(kept, ledger) },
+        { requestStatus: latest.status ?? null, revoked: view(revoked, ledger), kept: view(kept, ledger) },
       );
     };
 
@@ -515,17 +626,27 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
       doc.deniedAt = now;
       doc.denialReason = reason;
       doc.deniedAtTier = currentTier;
-      // Grants this request already created on some of its scopes (a partial
-      // self-serve grant, or a final approval with a mixed result) are revoked
-      // with the denial, under the same lease an approval grants under, renewed
-      // before each revoke after the first. Access the requester held
-      // beforehand is left alone.
+      // Grants this request created (a partial self-serve grant, or a final
+      // approval with a mixed or interrupted result) are revoked with the
+      // denial, under the same lease an approval grants under, renewed before
+      // each revoke after the first. What to revoke is read from the request's
+      // grant ledger — never from the request document, which a stopped
+      // approval may not have written — after its stale `pending` rows are
+      // resolved from the store. Access the requester held beforehand is left
+      // alone.
       const refused = await acquireLease();
       if (refused) return refused;
-      const out = await revokeLandedGrants(revokeCtx, doc.grantResults, s, { beforeEach: renewLease });
+      let rows: GrantIntent[];
+      try {
+        rows = await reconcileRequestIntents(c, tenantId, id);
+      } catch (e: any) {
+        stopReason = `the grant ledger could not be read (${describeStoreError(e)})`;
+        return stopAnswer('denial', ' Nothing was revoked. Reload it and decide again.', { revoked: [], kept: [] });
+      }
+      const out = await revokeIntents(c, rows, revokeCtx, s, { beforeEach: renewLease });
       if (out.aborted) {
         const notAttempted = out.notAttempted.map((r) => ({ ...r, detail: 'Not attempted: the denial stopped before this revoke.' }));
-        return lostAnswer(
+        return stopAnswer(
           'denial',
           (out.revoked.length ? ` It had removed: ${scopeList(out.revoked)}.` : '')
             + ` Not attempted, still in place: ${scopeList(notAttempted)}.`
@@ -535,19 +656,20 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
         );
       }
       if (out.revoked.length) doc.revokedGrants = out.revoked;
-      if (out.kept.length) {
-        warning = `${out.kept.length} grant(s) made for this request were not revoked and remain in place: `
-          + out.kept.map((r) => `${r.scopeType} ${r.scopeRef} (${r.detail || 'no reason recorded'})`).join('; ')
-          + (admin ? '. Review them in the Access report.' : '. A tenant admin can review and remove the kept grants.');
-      }
-      onLost = async () => lostAnswer(
+      if (out.kept.length) warning = denialKeptWarning(out.kept, admin);
+      onLost = async () => stopAnswer(
         'denial',
         (out.revoked.length ? ` It had removed: ${scopeList(out.revoked)}.` : '')
           + keptTail(out.kept, admin, doc.requesterId)
           + ' Reload it and decide again.',
         { revoked: view(out.revoked), kept: view(out.kept) },
       );
+      onStopped = onLost;
     } else {
+      // Every decision on the request resolves grant-ledger rows a stopped
+      // decision left `pending` (best-effort here; a denial and a stopped
+      // approval do it themselves and act on the result).
+      await reconcileRequestIntents(c, tenantId, id).catch(() => []);
       // W2 — advance over the request's approval-plan snapshot (an ordered subset
       // of the canonical tiers) when present; legacy requests fall back to the
       // full canonical sequence, so behaviour is identical by default.
@@ -589,7 +711,13 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
           const reviewed: AccessRequestGrantTarget[] = doc.grantTargets?.length
             ? doc.grantTargets
             : [{ scopeType: doc.scopeType, scopeRef: doc.scopeRef }];
-          const changes = compareTargets(targets, reviewed);
+          let changes = compareTargets(targets, reviewed);
+          // A request with no recorded scopes (recorded before `grantTargets`
+          // existed) kept whatever scope its request body named, which nothing
+          // verified. Any difference is reported as ONE predates-recording
+          // change for the whole request: no per-scope "added"/"removed" claim
+          // that nothing established.
+          if (changes.length && !doc.grantTargets?.length) changes = [{ cause: 'predates_recording' }];
           if (changes.length) return targetsChanged(doc.assetName, changes, reviewed, targets);
           doc.grantTargets = targets;
         }
@@ -629,9 +757,12 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
           };
         } else {
         // One grant at a time per request (see the header): each scope is
-        // granted under this lease, which is renewed after each one.
+        // granted under this lease, which is renewed after each one. Every
+        // grant is written to the grant ledger BEFORE it is made, and settled
+        // after (lib/access/grant-intents.ts).
         const refused = await acquireLease();
         if (refused) return refused;
+        onStopped = compensate;
         // Provision the REAL Azure RBAC grant on every backing scope.
         for (const t of targets) {
           if (!t.scopeRef) {
@@ -644,6 +775,13 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
             });
             continue;
           }
+          let row: GrantIntent;
+          try {
+            row = await writeGrantIntent(c, intentCtx, { scopeType: t.scopeType, scopeRef: t.scopeRef });
+          } catch (e: any) {
+            stopReason = `the next grant could not be recorded before it was made, so it was not made (${describeStoreError(e)})`;
+            return compensate();
+          }
           const r = await enforceAccessGrant({
             principalId: doc.requesterId,
             principalName: doc.requesterUpn,
@@ -652,7 +790,17 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
             scopeRef: t.scopeRef,
             permission: doc.permission,
           });
-          fresh.push(grantResult(r, t.scopeType, t.scopeRef));
+          const g = grantResult(r, t.scopeType, t.scopeRef);
+          fresh.push(g);
+          mine.push({ row, result: g });
+          const settled = await settleGrantIntent(c, row, g);
+          if (!settled.ok) {
+            // Lost: the row was resolved by another decision, so this one's
+            // lease had lapsed. Otherwise the store failed.
+            if (!settled.lost) stopReason = `a grant could not be recorded after it was made (${describeStoreError(settled.error)})`;
+            return compensate();
+          }
+          mine[mine.length - 1].row = settled.row;
           // Renewed between scopes and before the final write: a failed renewal
           // means the request may have been decided otherwise meanwhile.
           if (!(await renewLease())) return compensate();
@@ -703,7 +851,9 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
 
     // Written over the document this decision read (or leased) only: a 412
     // means another decision changed it first, and this one is not recorded.
-    // Writing the result releases the lease.
+    // Any other failure, for a decision that granted or revoked, stops it the
+    // same way a failed renewal does (503 grant_interrupted, grants undone or
+    // listed) rather than a bare 500. Writing the result releases the lease.
     delete (doc as any).grantLeaseUntil;
     const writeEtag = leaseEtag || readEtag;
     if (!writeEtag) {
@@ -712,8 +862,13 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
     try {
       await c.item(id, tenantId).replace(doc, { accessCondition: { type: 'IfMatch', condition: writeEtag } });
     } catch (e: any) {
-      if (isPreconditionFailed(e)) return onLost();
-      throw e;
+      if (isPreconditionFailed(e)) {
+        leaseEtag = undefined;
+        return onLost();
+      }
+      if (!onStopped) throw e;
+      stopReason = `its result could not be written (${describeStoreError(e)})`;
+      return onStopped();
     }
 
     // The decision is recorded: now the ledger rows and the requester's notice.

@@ -24,7 +24,7 @@
  * can't bind (collection) returns status 'pending' with a precise reason —
  * never a silent no-op (no-vaporware.md).
  */
-import { grantContainerRole, revokeContainerRoleAssignment } from './adls-client';
+import { grantContainerRole, listContainerRoleAssignments, revokeContainerRoleAssignment } from './adls-client';
 import { dedicatedTarget, executeQuery as synapseExecute } from './synapse-sql-client';
 import { getPoolState, resumePool } from './synapse-pool-arm';
 import {
@@ -336,6 +336,57 @@ export async function revokeStructuredGrant(input: AccessGrantInput): Promise<St
     return { status: 'skipped', detail: `No structured revoke for ${input.scopeType} scopes.` };
   } catch (e: any) {
     return { status: 'error', detail: (e?.message || String(e)).slice(0, 400) };
+  }
+}
+
+/** What {@link probeAccessGrant} found. */
+export type AccessGrantProbe =
+  | { held: true; roleName: string; roleAssignmentId?: string }
+  | { held: false }
+  | { unknown: string };
+
+/**
+ * Whether the principal holds the grant `input` describes right now, read from
+ * the store itself: the container's role assignments (ADLS), the dedicated
+ * pool's role membership (warehouse), or the ADX database's principals. A read
+ * that fails, or a scope with no read, is `unknown` with the reason: never
+ * reported as not held.
+ */
+export async function probeAccessGrant(input: AccessGrantInput): Promise<AccessGrantProbe> {
+  const scopeRef = (input.scopeRef || '').trim();
+  if (!scopeRef) return { unknown: 'the grant scope names no store' };
+  switch (input.scopeType) {
+    case 'adls-container': {
+      const roleName = PERMISSION_ROLE[input.permission];
+      try {
+        const hit = (await listContainerRoleAssignments(scopeRef))
+          .find((a) => a.principalId === input.principalId && a.roleName === roleName);
+        return hit ? { held: true, roleName, roleAssignmentId: hit.id } : { held: false };
+      } catch (e: any) {
+        return { unknown: `the container's role assignments could not be listed${e?.status ? ` (ARM ${e.status})` : ''}` };
+      }
+    }
+    case 'warehouse': {
+      const roleName = SQL_ROLE[input.permission];
+      const name = (input.principalName || '').trim();
+      if (!name) return { unknown: 'no principal name to look up in the warehouse' };
+      let target;
+      try { target = dedicatedTarget(); } catch { return { unknown: 'the warehouse is not configured' }; }
+      if (scopeRef.toLowerCase() !== String(target.database || '').trim().toLowerCase()) {
+        return { unknown: `warehouse '${scopeRef}' is not this deployment's dedicated SQL pool` };
+      }
+      const held = await warehouseRoleHeld(target, roleName, name);
+      return held === undefined ? { unknown: 'the warehouse role membership could not be read' } : held ? { held: true, roleName } : { held: false };
+    }
+    case 'kql-database': {
+      const gate = kustoConfigGate();
+      if (gate) return { unknown: `ADX is not configured (${gate.missing})` };
+      const roleName = ADX_ROLE[input.permission];
+      const held = await adxRoleHeld(scopeRef, roleName, input);
+      return held === undefined ? { unknown: 'the database principals could not be read' } : held ? { held: true, roleName } : { held: false };
+    }
+    default:
+      return { unknown: `no check exists for ${input.scopeType} grants` };
   }
 }
 

@@ -74,6 +74,9 @@ function product(id: string, state: Record<string, unknown>, extra: Record<strin
 }
 
 let wf: FakeContainer;
+/** Access-request rows only: the same container holds the grant ledger's `grant-intent` rows. */
+const requests = () => wf.__all().filter((d: any) => d.kind === 'access-request');
+const intents = () => wf.__all().filter((d: any) => d.kind === 'grant-intent');
 
 /**
  * Lakehouses in the products' workspace (`ws-1`), bound to the containers their
@@ -120,7 +123,7 @@ describe('POST /api/catalog/request-access — asset resolution', () => {
     expect(res.status).toBe(404);
     expect(j.ok).toBe(false);
     expect(enforceAccessGrant).not.toHaveBeenCalled();
-    expect(wf.__all()).toHaveLength(0);
+    expect(requests()).toHaveLength(0);
   });
 
   it('404 for an unpublished (draft) product, even when it is self-serve', async () => {
@@ -129,7 +132,7 @@ describe('POST /api/catalog/request-access — asset resolution', () => {
     const res = await post({ assetId: 'draft-1' });
     expect(res.status).toBe(404);
     expect(enforceAccessGrant).not.toHaveBeenCalled();
-    expect(wf.__all()).toHaveLength(0);
+    expect(requests()).toHaveLength(0);
   });
 
   it('404 for a product the caller may not discover', async () => {
@@ -161,7 +164,7 @@ describe('POST /api/catalog/request-access — access model comes from the produ
     expect(j.granted).toBeUndefined();
     expect(j.accessModel).toBe('governed');
     expect(enforceAccessGrant).not.toHaveBeenCalled();
-    const docs = wf.__all();
+    const docs = requests();
     expect(docs).toHaveLength(1);
     expect(docs[0]).toMatchObject({
       tenantId: TENANT, assetId: 'governed-1', tier: 'manager', status: 'open',
@@ -180,7 +183,7 @@ describe('POST /api/catalog/request-access — access model comes from the produ
     const j = await res.json();
     expect(res.status).toBe(200);
     expect(j.accessModel).toBe('request');
-    expect(wf.__all()).toHaveLength(0);
+    expect(requests()).toHaveLength(0);
     expect(enforceAccessGrant).not.toHaveBeenCalled();
   });
 });
@@ -201,7 +204,13 @@ describe('POST /api/catalog/request-access — self-serve', () => {
     expect(enforceAccessGrant).toHaveBeenCalledWith(expect.objectContaining({
       principalId: USER.oid, scopeType: 'adls-container', scopeRef: PRODUCT_CONTAINER, permission: 'read',
     }));
-    expect(wf.__all()).toHaveLength(0);
+    expect(requests()).toHaveLength(0);
+    // The grant was recorded in the ledger before it was made, and settled after.
+    // Breaks if the self-serve path granted without a ledger row (no intent) or
+    // never settled it (state 'pending', no role-assignment id).
+    expect(intents().map((r: any) => [r.scopeType, r.scopeRef, r.state, r.roleAssignmentId, r.principalId])).toEqual([
+      ['adls-container', PRODUCT_CONTAINER, 'active', 'ra-1', USER.oid],
+    ]);
   });
 
   it.each(['write', 'admin'])('a %s request on a self-serve product grants nothing and goes to approval', async (perm) => {
@@ -213,7 +222,7 @@ describe('POST /api/catalog/request-access — self-serve', () => {
     expect(j.granted).toBeUndefined();
     expect(j.accessModel).toBe('governed');
     expect(enforceAccessGrant).not.toHaveBeenCalled();
-    const docs = wf.__all();
+    const docs = requests();
     expect(docs).toHaveLength(1);
     expect(docs[0].permission).toBe(perm);
     expect(docs[0].scopeRef).toBe(PRODUCT_CONTAINER);
@@ -226,7 +235,7 @@ describe('POST /api/catalog/request-access — self-serve', () => {
     const j = await res.json();
     expect(res.status).toBe(200);
     expect(j.granted).toBeUndefined();
-    expect(wf.__all()).toHaveLength(1);
+    expect(requests()).toHaveLength(1);
   });
 });
 
@@ -263,7 +272,7 @@ describe('POST /api/catalog/request-access — a store item is requested on its 
     seedItems([item]);
     const res = await post({ assetId: item.id, permission: 'read', scopeType: 'item', scopeRef: BODY_CONTAINER });
     expect(res.status).toBe(200);
-    const [doc] = wf.__all();
+    const [doc] = requests();
     expect(doc.grantTargets.map((t: any) => [t.scopeType, t.scopeRef])).toEqual([[scopeType, scopeRef]]);
     expect(enforceAccessGrant).not.toHaveBeenCalled(); // non-products are governed
   });
@@ -273,7 +282,7 @@ describe('POST /api/catalog/request-access — a store item is requested on its 
     seedItems([storeItem('lh-2', 'lakehouse', { container: 'planted' })]);
     const res = await post({ assetId: 'lh-2', permission: 'read' });
     expect(res.status).toBe(200);
-    expect(wf.__all()[0].grantTargets.map((t: any) => [t.scopeType, t.scopeRef])).toEqual([['adls-container', '']]);
+    expect(requests()[0].grantTargets.map((t: any) => [t.scopeType, t.scopeRef])).toEqual([['adls-container', '']]);
   });
 
   it('an item with no physical store is requested at item scope', async () => {
@@ -281,7 +290,7 @@ describe('POST /api/catalog/request-access — a store item is requested on its 
     seedItems([storeItem('rep-1', 'report', {})]);
     const res = await post({ assetId: 'rep-1', permission: 'read' });
     expect(res.status).toBe(200);
-    expect(wf.__all()[0].grantTargets.map((t: any) => [t.scopeType, t.scopeRef])).toEqual([['item', 'rep-1']]);
+    expect(requests()[0].grantTargets.map((t: any) => [t.scopeType, t.scopeRef])).toEqual([['item', 'rep-1']]);
   });
 });
 
@@ -295,7 +304,7 @@ describe('POST /api/catalog/request-access — visibility of an item that is not
     (workspaceTid as any).mockResolvedValue('other-tenant-tid');
     const res = await post({ assetId: 'lh-x', permission: 'read' });
     expect(res.status).toBe(404);
-    expect(wf.__all()).toHaveLength(0);
+    expect(requests()).toHaveLength(0);
   });
 
   it('200 for the same item when its workspace is confirmed in the caller\'s own tenant', async () => {
@@ -305,7 +314,7 @@ describe('POST /api/catalog/request-access — visibility of an item that is not
     (workspaceTid as any).mockResolvedValue(TENANT);
     const res = await post({ assetId: 'lh-x', permission: 'read' });
     expect(res.status).toBe(200);
-    expect(wf.__all()).toHaveLength(1);
+    expect(requests()).toHaveLength(1);
   });
 });
 
@@ -326,7 +335,7 @@ describe('POST /api/catalog/request-access — a self-serve grant that lands on 
     const j = await res.json();
     expect(res.status).toBe(200);
     expect(j.granted).toBeUndefined();
-    const [doc] = wf.__all();
+    const [doc] = requests();
     expect(doc.id).toBe(j.requestId);
     expect(doc.grantResults.map((r: any) => [r.scopeRef, r.status, r.created])).toEqual([
       ['gold', 'active', true], ['silver', 'error', false],
@@ -352,7 +361,7 @@ describe('POST /api/catalog/request-access — the owner named in the text', () 
     expect(text).toContain('owner@contoso.com');
     expect(text).not.toContain('mallory@evil.test');
     expect(text).not.toMatch(/notified|routed to/i);
-    expect(wf.__all()[0].ownerUpn).toBe('owner@contoso.com');
+    expect(requests()[0].ownerUpn).toBe('owner@contoso.com');
   });
 });
 
@@ -368,7 +377,7 @@ describe('POST /api/catalog/request-access — output ports are checked against 
     expect(res.status).toBe(200);
     expect(enforceAccessGrant).not.toHaveBeenCalled();
     expect(j.granted).toBeUndefined();
-    const [doc] = wf.__all();
+    const [doc] = requests();
     // declaredRef records what the port named, so a later approval can tell
     // whether the port still names it (decision/route.ts `reviewedMatches`).
     expect(doc.grantTargets).toEqual([{ scopeType: 'adls-container', scopeRef: '', source: "output port 'x-out'", declaredRef: 'someone-elses' }]);
@@ -390,7 +399,7 @@ describe('POST /api/catalog/request-access — output ports are checked against 
     expect((enforceAccessGrant as any).mock.calls[0][0]).toMatchObject({ scopeType: 'adls-container', scopeRef: PRODUCT_CONTAINER });
     // The KQL port is not granted, so the request is filed for approval.
     expect(j.granted).toBeUndefined();
-    const [doc] = wf.__all();
+    const [doc] = requests();
     expect(doc.grantTargets.map((t: any) => [t.scopeType, t.scopeRef, t.declaredRef])).toEqual([
       ['adls-container', PRODUCT_CONTAINER, PRODUCT_CONTAINER], ['kql-database', '', 'nodb'],
     ]);
@@ -431,7 +440,7 @@ describe('POST /api/catalog/request-access — the identity a self-serve grant i
     expect(res.status).toBe(200);
     expect(enforceAccessGrant).not.toHaveBeenCalled();
     expect(j.granted).toBeUndefined();
-    const docs = wf.__all();
+    const docs = requests();
     expect(docs).toHaveLength(1);
     expect(docs[0]).toMatchObject({ assetId: 'self-1', status: 'open', tier: 'manager', requesterUpn: 'alice.alt@contoso.com' });
   });

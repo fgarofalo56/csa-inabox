@@ -19,6 +19,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 vi.mock('../adls-client', () => ({
   grantContainerRole: vi.fn(),
   revokeContainerRoleAssignment: vi.fn(),
+  listContainerRoleAssignments: vi.fn(async () => []),
 }));
 vi.mock('../synapse-sql-client', () => ({
   dedicatedTarget: vi.fn(() => ({ server: 'ws.sql.azuresynapse.net', database: 'loompool', cacheKey: 'k' })),
@@ -36,7 +37,8 @@ vi.mock('../kusto-client', () => ({
   showDatabasePrincipals: vi.fn(async () => []),
 }));
 
-import { enforceAccessGrant, revokeStructuredGrant, type AccessGrantInput } from '../access-policy-client';
+import { enforceAccessGrant, probeAccessGrant, revokeStructuredGrant, type AccessGrantInput } from '../access-policy-client';
+import { listContainerRoleAssignments } from '../adls-client';
 import { executeQuery as synapseExecute } from '../synapse-sql-client';
 import { getPoolState, resumePool } from '../synapse-pool-arm';
 import { addDatabasePrincipal, dropDatabasePrincipal, showDatabasePrincipals } from '../kusto-client';
@@ -337,11 +339,67 @@ describe('revokeStructuredGrant — kql-database needs a named database', () => 
     expect(dropDatabasePrincipal).not.toHaveBeenCalled();
   });
 
+  it.each([[''], [undefined]])('R9: a scopeRef of %j is refused the same way, never read as the default database', async (ref) => {
+    // Breaks if the refusal checked only whitespace, or if an absent/empty scope
+    // fell through to defaultDatabase(): a drop on 'loomdb' and 'revoked'.
+    const res = await revokeStructuredGrant({ ...kqlInput('read'), scopeRef: ref as any });
+    expect(res).toEqual({ status: 'error', detail: 'A KQL database name is required for the revoke scope; nothing was revoked.' });
+    expect(dropDatabasePrincipal).not.toHaveBeenCalled();
+  });
+
   it('a named database is revoked on that database', async () => {
     // Pairs the refusal: breaks if the refusal fired for every input, or if the
     // named database were replaced by the default one.
     const res = await revokeStructuredGrant({ ...kqlInput('read'), scopeRef: 'salesdb' });
     expect(res).toEqual({ status: 'revoked' });
     expect(dropDatabasePrincipal).toHaveBeenCalledWith('salesdb', 'viewers', 'aaduser=alice@contoso.com');
+  });
+});
+
+describe('probeAccessGrant — what the store says the principal holds', () => {
+  const adls = (over: Partial<AccessGrantInput> = {}): AccessGrantInput => ({
+    principalId: 'oid-1', principalName: 'alice@contoso.com', principalType: 'User',
+    scopeType: 'adls-container', scopeRef: 'gold', permission: 'read', ...over,
+  });
+
+  it('ADLS: an assignment of the permission role to the principal is held, with its id', async () => {
+    // Breaks if the match ignored the principal (oid-2's row would count) or the
+    // role (a Contributor row would count): the answer would name the wrong id.
+    (listContainerRoleAssignments as any).mockResolvedValueOnce([
+      { id: 'ra-other', principalId: 'oid-2', roleName: 'Storage Blob Data Reader' },
+      { id: 'ra-contrib', principalId: 'oid-1', roleName: 'Storage Blob Data Contributor' },
+      { id: 'ra-mine', principalId: 'oid-1', roleName: 'Storage Blob Data Reader' },
+    ]);
+    await expect(probeAccessGrant(adls())).resolves.toEqual({ held: true, roleName: 'Storage Blob Data Reader', roleAssignmentId: 'ra-mine' });
+    expect(listContainerRoleAssignments).toHaveBeenCalledWith('gold');
+  });
+
+  it('ADLS: no matching assignment is not held', async () => {
+    (listContainerRoleAssignments as any).mockResolvedValueOnce([
+      { id: 'ra-other', principalId: 'oid-2', roleName: 'Storage Blob Data Reader' },
+    ]);
+    await expect(probeAccessGrant(adls())).resolves.toEqual({ held: false });
+  });
+
+  it('ADLS: a failed read is unknown, never "not held"', async () => {
+    // Breaks if a listing failure were read as an empty listing: { held: false },
+    // and a reconciler would mark a live grant absent.
+    (listContainerRoleAssignments as any).mockRejectedValueOnce(Object.assign(new Error('forbidden'), { status: 403 }));
+    await expect(probeAccessGrant(adls())).resolves.toEqual({ unknown: "the container's role assignments could not be listed (ARM 403)" });
+  });
+
+  it('an empty scope is unknown and reads nothing', async () => {
+    await expect(probeAccessGrant(adls({ scopeRef: '  ' }))).resolves.toEqual({ unknown: 'the grant scope names no store' });
+    expect(listContainerRoleAssignments).not.toHaveBeenCalled();
+  });
+
+  it('warehouse: a pool other than the deployment pool is unknown, and no SQL runs', async () => {
+    await expect(probeAccessGrant({ ...warehouseInput('read'), scopeRef: 'otherpool' }))
+      .resolves.toEqual({ unknown: "warehouse 'otherpool' is not this deployment's dedicated SQL pool" });
+    expect(synapseExecute).not.toHaveBeenCalled();
+    // Pairs the absence above: the deployment pool itself IS read. Breaks if the
+    // warehouse arm never probed at all (every pool would be 'unknown').
+    await probeAccessGrant(warehouseInput('read'));
+    expect(synapseExecute).toHaveBeenCalled();
   });
 });

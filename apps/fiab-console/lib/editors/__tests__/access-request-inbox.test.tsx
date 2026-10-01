@@ -165,7 +165,11 @@ describe('a final approval refused because the storage changed', () => {
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'Deny with this reason' }));
     expect(await within(dialog).findByDisplayValue(SUGGESTED)).toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole('button', { name: /^Deny$/ }));
+    // Awaited, not synchronous: on a loaded runner a synchronous query found the
+    // dialog surface carrying aria-hidden="true" (seen in the failure dump) right
+    // after the "Deny with this reason" button unmounted; alone it always passed.
+    // The POST assertion below still pins the reason that was sent.
+    fireEvent.click(await within(dialog).findByRole('button', { name: /^Deny$/ }, { timeout: 5000 }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
 
     const posts = fetchMock.mock.calls

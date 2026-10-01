@@ -18,11 +18,12 @@
  *   - {@link recordLandedGrants} writes every landed grant to the entitlement
  *     ledger with its role-assignment id (`sourceRef` = the request id), so the
  *     who-has-access report shows it.
- *   - {@link revokeLandedGrants} runs on denial, and when a final approval
- *     finds the request was decided otherwise while it granted: it revokes
- *     only the grants the request (or that approval) created, never access the
- *     principal already held, and reports every grant it could not revoke
- *     (with the reason) instead of claiming it.
+ *   - {@link revokeLandedGrants} revokes the grants it is given — on denial,
+ *     and when a final approval stops after granting, the created rows of the
+ *     request's grant ledger (lib/access/grant-intents.ts): it revokes
+ *     only the grants the request created, never access the principal already
+ *     held, and reports every grant it could not revoke (with the reason)
+ *     instead of claiming it.
  */
 import type { SessionPayload } from '@/lib/auth/session';
 import type { AccessGrantResult, AccessPermission, AccessScopeType } from '@/lib/azure/access-policy-client';
@@ -125,8 +126,13 @@ export async function recordLandedGrants(ctx: LandedGrantContext, results: Acces
   return out;
 }
 
-/** A role-assignment DELETE that answered "not found" already has the outcome a revoke wants. */
-const ALREADY_GONE = /\b404\b|NotFound|RoleAssignmentNotFound/i;
+/**
+ * A role-assignment DELETE that ARM answered 404 already has the outcome a
+ * revoke wants. Classified on the HTTP status `armCall` records, never on the
+ * message: ARM's message quotes the scope, so a 403 over a container named
+ * `archive-404` must not read as "already gone".
+ */
+const alreadyGone = (e: any) => e?.status === 404;
 
 /**
  * Revoke the grants this request CREATED (denial).
@@ -188,8 +194,7 @@ export async function revokeLandedGrants(
       try {
         await revokeContainerRoleAssignment(r.roleAssignmentId!);
       } catch (e: any) {
-        const msg = (e?.message || String(e)).slice(0, 300);
-        if (!ALREADY_GONE.test(msg)) failure = msg;
+        if (!alreadyGone(e)) failure = (e?.message || String(e)).slice(0, 300);
       }
     } else {
       const out = await revokeStructuredGrant({
@@ -210,6 +215,33 @@ export async function revokeLandedGrants(
     revoked.push(r);
   }
   return { revoked, kept, notAttempted, aborted };
+}
+
+const keptList = (kept: AccessRequestGrantResult[]) =>
+  kept.map((r) => `${r.scopeType} ${r.scopeRef} (${r.detail || 'no reason recorded'})`).join('; ');
+
+/**
+ * What an approver is told about grants left in place. The Access report is
+ * named only when every kept grant's ledger row is known to be written (`ledger`
+ * given and each row `recorded`), and offered as a place to act only to a
+ * tenant admin, who is the one who can open it.
+ */
+export function keptTail(kept: AccessRequestGrantResult[], admin: boolean, requesterId: string, ledger?: LedgerRecord[]): string {
+  if (!kept.length) return '';
+  const allRecorded = !!ledger && kept.every((r) => ledger.some((l) => l.ledgerId === grantLedgerId(requesterId, r) && l.recorded));
+  const where = allRecorded
+    ? (admin ? ' They are recorded in the Access report; review them there.' : ' They are recorded in the Access report; a tenant admin can review and remove the kept grants.')
+    : (admin ? ' Review them in the Access report.' : ' A tenant admin can review and remove the kept grants.');
+  return ` ${kept.length} grant(s) were not removed and remain in place: ${keptList(kept)}.${where}`;
+}
+
+/**
+ * The warning a recorded denial carries for grants it did not revoke. The
+ * Access report is offered only to a tenant admin, who is the one who can open it.
+ */
+export function denialKeptWarning(kept: AccessRequestGrantResult[], admin: boolean): string {
+  return `${kept.length} grant(s) made for this request were not revoked and remain in place: ${keptList(kept)}`
+    + (admin ? '. Review them in the Access report.' : '. A tenant admin can review and remove the kept grants.');
 }
 
 /** Why `r` cannot be revoked automatically, or undefined when it can. */

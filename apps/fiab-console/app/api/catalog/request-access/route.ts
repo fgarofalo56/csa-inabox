@@ -34,6 +34,7 @@ import {
   ASSET_NOT_FOUND, SELF_SERVE_PERMISSION, deriveRequestTargets, ownerOf, resolveRequestableAsset,
 } from '@/lib/access/request-asset';
 import { grantResult, landedGrants, recordLandedGrants } from '@/lib/access/landed-grants';
+import { newAttemptId, settleGrantIntent, writeGrantIntent, type IntentContext } from '@/lib/access/grant-intents';
 import crypto from 'node:crypto';
 import { apiServerError } from '@/lib/api/respond';
 
@@ -99,7 +100,21 @@ export const POST = withSession(async (req, { session: s }) => {
   // approver decides and nothing outlives the session unreviewed.
   if (accessModel === 'self-serve' && scopeRef && sessionUpn && !isDeviceCodeSession(s)) {
     const results: AccessRequestGrantResult[] = [];
+    // Every grant is written to the request's grant ledger before it is made
+    // (lib/access/grant-intents.ts): a denial of the request routed below
+    // revokes from the ledger, so a grant that is not in it would outlive it.
+    const intentCtx: IntentContext = {
+      tenantId: tenantScopeId(s),
+      requestId,
+      attemptId: newAttemptId(),
+      principalId: s.claims.oid,
+      principalName: sessionUpn,
+      permission: SELF_SERVE_PERMISSION,
+      assetName,
+      by: requester,
+    };
     try {
+      const ledger = await accessRequestWorkflowContainer();
       for (const t of targets) {
         if (!t.scopeRef) {
           // Not a store the product's workspace has bound (lib/access/verified-targets.ts):
@@ -107,6 +122,9 @@ export const POST = withSession(async (req, { session: s }) => {
           results.push({ status: 'pending', scopeType: t.scopeType, scopeRef: '', created: false, detail: 'Not a store bound in this product\'s workspace.' });
           continue;
         }
+        // A grant that cannot be recorded first is not made; the loop stops
+        // and the remaining scopes go for approval.
+        const row = await writeGrantIntent(ledger, intentCtx, { scopeType: t.scopeType, scopeRef: t.scopeRef });
         const r = await enforceAccessGrant({
           principalId: s.claims.oid,
           principalName: sessionUpn,
@@ -115,7 +133,11 @@ export const POST = withSession(async (req, { session: s }) => {
           scopeRef: t.scopeRef,
           permission: SELF_SERVE_PERMISSION,
         });
-        results.push(grantResult(r, t.scopeType, t.scopeRef));
+        const g = grantResult(r, t.scopeType, t.scopeRef);
+        results.push(g);
+        // A row that cannot be settled stays `pending`; the next decision on
+        // the request resolves it from the store (reconcileGrantIntent).
+        await settleGrantIntent(ledger, row, g);
       }
     } catch { /* the grants made so far are handled below; the rest go for approval */ }
     if (results.length === targets.length && results.every((g) => g.status === 'active')) {
@@ -140,8 +162,8 @@ export const POST = withSession(async (req, { session: s }) => {
     }
     // Some grants may have landed before one did not. They are real role
     // assignments, so each is audited, recorded in the entitlement ledger and
-    // carried on the request routed below — a denial of that request revokes
-    // the ones it created (lib/access/landed-grants.ts).
+    // carried on the request routed below; its grant-ledger rows (written
+    // above) are what a denial of that request revokes from.
     const landed = landedGrants(results);
     if (landed.length) {
       await recordLandedGrants({

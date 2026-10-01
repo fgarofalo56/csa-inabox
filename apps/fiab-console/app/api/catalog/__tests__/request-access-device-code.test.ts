@@ -26,6 +26,8 @@ vi.mock('@/lib/azure/access-policy-client', () => ({
   },
 }));
 const workflowRows: any[] = [];
+/** Access-request rows only: the same container holds the grant ledger's `grant-intent` rows. */
+const requestRows = () => workflowRows.filter((d) => d.kind === 'access-request');
 const sink = (rows?: any[]) => ({
   items: { create: async (doc: any) => { rows?.push(doc); return { resource: doc }; } },
 });
@@ -89,9 +91,9 @@ describe('#4805 (d) self-serve catalog access from a device-code session', () =>
     expect(grantCalls).toHaveLength(0);
     expect(body.granted).toBeUndefined();
     expect(body.ok).toBe(true);
-    expect(workflowRows).toHaveLength(1);
+    expect(requestRows()).toHaveLength(1);
     // The scope is the product's bound container, not the body's decoy.
-    expect(workflowRows[0]).toMatchObject({ tier: 'manager', status: 'open', scopeType: 'adls-container', scopeRef: 'gold' });
+    expect(requestRows()[0]).toMatchObject({ tier: 'manager', status: 'open', scopeType: 'adls-container', scopeRef: 'gold' });
   });
 
   it('control: the same claims in a browser session get the immediate self-serve grant', async () => {
@@ -103,6 +105,9 @@ describe('#4805 (d) self-serve catalog access from a device-code session', () =>
     expect(grantCalls).toHaveLength(1);
     expect(grantCalls[0]).toMatchObject({ principalId: claims.oid, scopeType: 'adls-container', scopeRef: 'gold', permission: 'read' });
     expect(body).toMatchObject({ ok: true, granted: true, roleAssignmentId: 'ra-1' });
-    expect(workflowRows).toHaveLength(0);
+    expect(requestRows()).toHaveLength(0);
+    // Pairs the absence above: the grant's ledger row was written (this sink
+    // cannot settle it, so it stays pending). Breaks if the filter dropped every row.
+    expect(workflowRows.filter((d) => d.kind === 'grant-intent').map((d) => [d.scopeRef, d.principalId])).toEqual([['gold', claims.oid]]);
   });
 });
