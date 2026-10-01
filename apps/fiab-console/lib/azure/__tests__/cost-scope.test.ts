@@ -51,17 +51,19 @@ describe('tagValuesFromQueryResponse', () => {
     const out = tagValuesFromQueryResponse(resp(
       ['Cost', 'Environment', 'Currency'],
       [[10, 'prod', 'USD'], [5, 'dev', 'USD'], [7, 'prod', 'USD']],
-    ));
+    ), 'Environment');
     expect(out).toEqual([{ value: 'prod', cost: 17 }, { value: 'dev', cost: 5 }]);
   });
 
-  it('detects the value column regardless of its name (TagValue vs the tag key)', () => {
-    const out = tagValuesFromQueryResponse(resp(['Cost', 'TagValue'], [[3, 'team-a']]));
+  it('reads TagValue, not the TagKey column that carries the key name on every row', () => {
+    // Measured api-version 2023-03-01 shape. Breaks if the value column is
+    // chosen by position (TagKey is first): the result would be one 'environment' scope.
+    const out = tagValuesFromQueryResponse(resp(['Cost', 'TagKey', 'TagValue', 'Currency'], [[3, 'environment', 'team-a', 'USD']]), 'Environment');
     expect(out).toEqual([{ value: 'team-a', cost: 3 }]);
   });
 
   it('skips untagged rows and handles empty/missing responses', () => {
-    expect(tagValuesFromQueryResponse(resp(['Cost', 'Environment'], [[9, ''], [4, null]]))).toEqual([]);
+    expect(tagValuesFromQueryResponse(resp(['Cost', 'Environment'], [[9, ''], [4, null]]), 'Environment')).toEqual([]);
     expect(tagValuesFromQueryResponse(null)).toEqual([]);
     expect(tagValuesFromQueryResponse({})).toEqual([]);
   });

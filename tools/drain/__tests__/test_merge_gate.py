@@ -110,7 +110,13 @@ def test_the_stub_argv_helper_finds_the_subcommand_under_any_global_option():
 #: `resolve_declaration_as_of`'s `git show <sha>:tools/drain/policy.json`, which
 #: reads the `ci-green` declaration at the sha being measured. 14 -> 15. The
 #: assertion below routes it like every other: it goes through `sh()`.
-_GIT_ARGV_LITERALS = {"merge_gate.py": 15, "tick.py": 0, "gates.py": 0}
+#: Re-measured for #4811, not edited to match: the re-pin chain walk added
+#: THREE git calls, 15 -> 18 -- `git fetch --quiet origin pull/<n>/head` (so
+#: the chain's commits are local rather than silently unreadable),
+#: `git merge-base --is-ancestor <p2> <base-tip>` (the per-hop "second parent is
+#: on main" fact) and `git show -s --format=%ct <pin>` (the pin's date, which
+#: replaced a `gh api .../commits/<sha>` call). All three go through `sh()`.
+_GIT_ARGV_LITERALS = {"merge_gate.py": 18, "tick.py": 0, "gates.py": 0}
 
 
 def _git_call_census(module_path):

@@ -54,7 +54,20 @@ ENV LOOM_BUILD_SHA=${LOOM_BUILD_SHA}
 # step consistently V8-heap-aborts (SIGABRT ~4.5-5GB) at 5120 — two ACR builds
 # failed in a row (7eb2ee94, 2eaf8656). Safe headroom on the 16 GB loombuild S3
 # pool; this is a V8 heap ceiling, not a cgroup SIGKILL. (memory: csa_loom_acr_build_oom_incident)
-ENV NODE_OPTIONS=--max-old-space-size=6656
+# 8192 MiB (2026-09-30): the CI `next build` hit the same V8 abort at 6144
+# (5477 MB used / 6193 MB committed, compiler worker, SIGABRT), intermittently;
+# 6656 was only 512 MiB above that. Every builder of THIS Dockerfile is a
+# 16 GB machine: the ACR S3 agent pool (8 vCPU / 16 GB — Learn "Run an ACR
+# task on a dedicated agent pool"; loombuild / loombuild2, created --tier S3
+# in every console roll/build workflow) or a GitHub ubuntu-latest runner
+# (4 vCPU / 16 GB, docker build). 8192 heap + ~2 GB native + ~1 GB next parent
+# + OS/buildkit leaves ~3 GB spare — NOT safe on the 8 GB DEFAULT ACR agent,
+# which is why the console must stay on the S3 pool (gov-console-roll's
+# `bypass_agent_pool` diagnostic builds there on purpose and is documented as
+# EXPECTED to fail — that stays true, and more so, at 8192). Kept EQUAL to
+# fiab-console-ci.yml's build step; scripts/ci/__tests__/next-build-heap.test.mjs
+# pins the floor, the ceiling and the equality.
+ENV NODE_OPTIONS=--max-old-space-size=8192
 RUN npm install -g pnpm@9 && \
     pnpm build
 

@@ -157,7 +157,7 @@ export function TokenBudgetPanel() {
     onError: (e) => setError(e instanceof Error ? e.message : String(e)),
   });
 
-  if (q.isLoading) {
+  if (q.isPending) {
     return (
       <Skeleton aria-label="Loading token budgets">
         <div className={styles.overview} style={{ marginBottom: tokens.spacingVerticalL }}>
