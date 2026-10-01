@@ -220,6 +220,10 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<RunResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The route answers an unsaved item (`/items/<type>/new`) with 200
+  // `{ ok:false, code:'unsaved_item' }`. That is guidance, not a failure, so it
+  // renders as a warning (the sibling convention in warehouse-alerts.tsx).
+  const [unsavedNotice, setUnsavedNotice] = useState<string | null>(null);
 
   // FGC-19 — model-tier selector (Fast/default vs Advanced) + reasoning-effort.
   // Applies to the Azure OpenAI path only (the in-database Databricks path uses
@@ -302,7 +306,7 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
   }, [useDbx, column, table, fn, optionsPayload, targetLang]);
   const snippetBlockedReason = useDbx ? aiSnippetBlockedReason({ column }) : null;
 
-  const reset = useCallback(() => { setResult(null); setError(null); }, []);
+  const reset = useCallback(() => { setResult(null); setError(null); setUnsavedNotice(null); }, []);
 
   const insert = useCallback(() => {
     if (generatedSql && onInsert) {
@@ -342,6 +346,10 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
         }),
       });
       const j = await r.json();
+      if (!j.ok && j.code === 'unsaved_item') {
+        setUnsavedNotice(j.error || 'Save this item first, then run the AI function.');
+        return;
+      }
       if (!j.ok) {
         setError(j.error || `HTTP ${r.status}`);
         if (j.gated) setProbe((p) => (p ? { ...p, gated: true, hint: j.hint } : p));
@@ -522,6 +530,15 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
                         rows={3}
                       />
                     </Field>
+                  )}
+
+                  {unsavedNotice && (
+                    <MessageBar intent="warning">
+                      <MessageBarBody>
+                        <MessageBarTitle>Save this item first</MessageBarTitle>
+                        {unsavedNotice}
+                      </MessageBarBody>
+                    </MessageBar>
                   )}
 
                   {error && (

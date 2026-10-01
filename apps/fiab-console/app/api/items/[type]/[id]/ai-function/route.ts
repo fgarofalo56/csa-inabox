@@ -65,13 +65,9 @@ export const dynamic = 'force-dynamic';
  * names no item of `[type]` and on a Cosmos error, and refuses with 404 (not
  * 403) so a foreign item's existence is not disclosed.
  *
- * NOT A BOUND ON THE WAREHOUSE, stated so the guard is not read as more. On the
- * Databricks path `warehouseId`, `table`, `catalog` and `schema` stay caller-
- * supplied, exactly as on the sibling `query` route: no server-attested
- * item→warehouse binding exists yet (#3669), and one anchored on item `state`
- * would be inert because `PATCH /api/cosmos-items/[type]/[id]` replaces `state`
- * wholesale (`_lib/databricks-resource-binding.ts`). Any warehouse reachable is
- * still one in this deployment's own Databricks workspace.
+ * On the Databricks path, `warehouseId`, `table`, `catalog` and `schema` are
+ * read from the request body, as on the sibling `query` route; the warehouse
+ * is one in this deployment's own Databricks workspace.
  *
  * GET stays session-only: it returns the static function list and env-derived
  * capability flags, reads no item data, and is allowlisted on that basis in
@@ -83,10 +79,10 @@ const ITEM_UNREACHABLE =
 
 /**
  * The unsaved-item gate: the helper can mount on `/items/<type>/new`, and the
- * guard rightly refuses an id naming no item. 200 with a coded body so the
- * dialog shows the sentence rather than a red error on first open. Matched
- * EXACTLY: real ids are UUIDs, so a prefix test would let a real id skip the
- * guard.
+ * guard rightly refuses an id naming no item. 200 with `code:'unsaved_item'`,
+ * which the helper (`ai-functions-helper.tsx`) renders as a warning titled
+ * "Save this item first" rather than as a failed run. Matched EXACTLY: real
+ * ids are UUIDs, so a prefix test would let a real id skip the guard.
  */
 function unsavedItemGate(): NextResponse {
   return NextResponse.json({

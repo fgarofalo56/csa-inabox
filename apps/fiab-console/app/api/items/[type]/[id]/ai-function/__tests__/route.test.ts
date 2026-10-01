@@ -109,6 +109,10 @@ describe('ai-function route: POST is item-scoped', () => {
     // authorizes a fixed type, drops allowReadRoles, or skips the ladder.
     expect(authorizeItemWorkspace).toHaveBeenCalledTimes(1);
     expect(authorizeItemWorkspace.mock.calls[0][1]).toMatchObject({ itemId: 'n1', itemType: 'notebook', allowReadRoles: true });
+    // The refusal text the ladder will use. Breaks if the route passes a
+    // different `notFound` (e.g. "workspace not found", which tells a caller
+    // with no role nothing about what to do next).
+    expect((authorizeItemWorkspace.mock.calls[0][1] as { notFound: string }).notFound).toMatch(/Ask a workspace owner to share it with you\.$/);
   });
 
   it('a caller with no role on the item gets 404 and no statement is sent', async () => {
@@ -126,14 +130,23 @@ describe('ai-function route: POST is item-scoped', () => {
     // The ladder ALLOWS here (null) — it does for an id naming no item — so this
     // pins the guard's fail-closed lookup. `n1` exists, but as a notebook, so the
     // second call breaks if the route stops passing [type] to the lookup.
-    expect((await postAs('notebook', 'missing')).status).toBe(404);
+    const missing = await postAs('notebook', 'missing');
+    expect(missing.status).toBe(404);
+    // The guard's own refusal carries the route's text. Breaks if the route's
+    // `notFound` changes. (The ladder's denial body is pinned through the real
+    // ladder in route-real-ladder.test.ts; here the ladder is a mock.)
+    expect(missing.body.error).toMatch(/Ask a workspace owner to share it with you\.$/);
     expect((await postAs('databricks-sql-warehouse', 'n1')).status).toBe(404);
     expect(executeStatement).not.toHaveBeenCalled();
   });
 
   it("an unsaved item ('new') gets the coded gate, not a statement", async () => {
-    // Breaks if the gate is removed (the guard then 404s a fresh item: a red
-    // first open) or if it is widened to let a real id through.
+    // Breaks if the gate is removed: the guard then answers `new` with a 404,
+    // which the helper renders as a failed run. With the gate, the helper shows
+    // a "Save this item first" warning instead (pinned in
+    // lib/editors/components/__tests__/ai-functions-helper-unsaved.test.tsx).
+    // The `authorizeItemWorkspace` assertion breaks if the gate is widened so
+    // that it no longer short-circuits ahead of the guard.
     const r = await postAs('databricks-sql-warehouse', 'new');
     expect(r.status).toBe(200);
     expect(r.body).toMatchObject({ ok: false, code: 'unsaved_item' });
