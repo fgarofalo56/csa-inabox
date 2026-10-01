@@ -152,8 +152,8 @@ export function ShortcutWizardDialog() {
                             } />
                         </Field>
                         {scExtSasErr && <MessageBar intent="error"><MessageBarBody>{scExtSasErr}</MessageBarBody></MessageBar>}
-                        <Field label="Key Vault secret name" required hint="admin-plane Key Vault secret holding the external account's SAS/key.">
-                          <Input value={scKvSecret} onChange={(_, d) => setScKvSecret(d.value)} placeholder="shortcut-ext-adls-sas" />
+                        <Field label="Key Vault secret name" required hint="Filled in by Save to Key Vault above. Shortcuts use only credentials Loom saved (loom-sc-…).">
+                          <Input value={scKvSecret} onChange={(_, d) => setScKvSecret(d.value)} placeholder="loom-sc-adls-…" />
                         </Field>
                         {scKvSecret && (
                           <Caption1 style={{ color: tokens.colorPaletteGreenForeground1 }}>
@@ -182,6 +182,7 @@ export function ShortcutWizardDialog() {
                         bucket={extCreds.bucket}
                         region={extCreds.region}
                         kvSecret={extCreds.secretName}
+                        lakehouseId={shortcutLakehouseId}
                         onSelect={(path) => setExtCreds((c) => ({ ...c, selectedPath: path }))}
                         selectedPath={extCreds.selectedPath}
                       />
@@ -199,19 +200,22 @@ export function ShortcutWizardDialog() {
                       <MessageBarBody>
                         <MessageBarTitle>Delta Sharing (cross-tenant)</MessageBarTitle>
                         Authenticates with a credential file the share owner gives you via an activation link.
-                        Store the raw JSON (<code>shareCredentialsVersion</code>, <code> endpoint</code>,{' '}
-                        <code>bearerToken</code>, <code>expirationTime</code>) as a Key Vault secret and name it below.
-                        Bearer tokens expire after at most 1 year — if the share goes <strong>Broken</strong>, update the
-                        secret with a fresh file and use <strong>Retry</strong>.
+                        Add the provider under <strong>Data shares</strong> → <strong>Add provider</strong> with that
+                        file; Loom stores its credential. Then use <strong>Data shares</strong> → <strong>Shared with
+                        me</strong> → <strong>Explore &amp; query</strong> → select the table → <strong>Create lakehouse
+                        shortcut</strong>, or enter the provider&apos;s stored credential name below. Saving a
+                        credential file from this wizard is not available. Bearer tokens expire after at most 1 year
+                        — if the share goes <strong>Broken</strong>, get a fresh activation file, remove the provider
+                        under Data shares and add it again with that file, then use <strong>Retry</strong>.
                       </MessageBarBody>
                     </MessageBar>
                     <Field label="Share / table path" required hint="delta-sharing://<share>/<schema>/<table> — from the data provider">
                       <Input value={scTargetUri} onChange={(_, d) => setScTargetUri(d.value)}
                         placeholder="delta-sharing://agency_a_perf/analytics/metrics_monthly" />
                     </Field>
-                    <Field label="Key Vault secret name (credential file JSON)" required hint="Holds the full credential JSON">
+                    <Field label="Key Vault secret name (credential file JSON)" required hint="A data share provider's stored credential: loom-dsp- plus the provider name, where any character other than a letter, digit or hyphen becomes a hyphen (provider acme_corp → loom-dsp-acme-corp).">
                       <Input value={scKvSecret} onChange={(_, d) => setScKvSecret(d.value)}
-                        placeholder="delta-sharing-agency-a-cred" />
+                        placeholder="loom-dsp-<provider>" />
                     </Field>
                   </>
                 )}
