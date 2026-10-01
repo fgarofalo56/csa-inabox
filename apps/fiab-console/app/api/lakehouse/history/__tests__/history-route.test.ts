@@ -419,11 +419,17 @@ describe('/api/lakehouse/history POST — the statement names exactly the checke
   // a backtick. FAILS IF the route edits the location after scoping: the
   // previous code stripped it and ran against `landing`, a container the scope
   // check never named.
+  // The binding is a real abfss location (account `loomdlz`), so the scope
+  // check accepts it and the request reaches the backtick check; a placeholder
+  // such as `abfss://x` names no account and is answered 409 before that check.
   it('refuses a resolved location with a backtick instead of rewriting it', async () => {
     ready();
-    (resolveLakehouseAbfss as any).mockResolvedValue({ abfss: 'abfss://x', container: 'land`ing', root: ROOT });
+    (resolveLakehouseAbfss as any).mockResolvedValue({
+      abfss: `abfss://land\`ing@loomdlz.dfs.core.windows.net/${ROOT}`, container: 'land`ing', root: ROOT,
+    });
     const res = await POST(postReq({ lakehouseId: LH, tablePath: TABLE, version: 1, action: 'preview' }));
     expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/resolved table location contains a backtick/);
     expect((executeStatement as any).mock.calls).toEqual([]);
   });
 

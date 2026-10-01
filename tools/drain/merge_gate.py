@@ -629,6 +629,92 @@ def base_update_facts(head: str) -> tuple[list[str], str | None, str]:
     return parents, automerge_tree, head_tree
 
 
+def base_update_chain_facts(head: str, base_tip: str,
+                            max_hops: int = gates.REPIN_MAX_HOPS
+                            ) -> list[gates.BaseUpdateHop]:
+    """The facts for the first-parent walk back from `head` (#4811).
+
+    Reads one commit at a time and STOPS at the first one that is not a
+    content-free base update, or after `max_hops + 1` commits -- one more than
+    the bound, so `gates.resolve_repin_chain` can tell "the chain is longer
+    than the bound" from "the chain ends exactly at it". The decision is not
+    made here; `gates.base_update_hop_transfers` is consulted only to know when
+    to stop reading.
+
+    `base_side_on_main` comes from `git merge-base --is-ancestor`, whose exit
+    code is the answer: 0 = ancestor, 1 = not, anything else = the check could
+    not run (a missing object), which resolves to None and refuses the hop.
+    Stderr is never discarded (R7).
+    """
+    hops: list[gates.BaseUpdateHop] = []
+    sha = head
+    while len(hops) <= max_hops:
+        parents, automerge_tree, tree = base_update_facts(sha)
+        on_main: bool | None = None
+        if len(parents) == 2:
+            rc, _out, err = sh(["git", "merge-base", "--is-ancestor",
+                                parents[1], base_tip])
+            if rc in (0, 1):
+                on_main = rc == 0
+            else:
+                print(f"WARNING: cannot tell whether {parents[1][:12]} is on the "
+                      f"base tip {base_tip[:12]} (rc={rc}): {err[:200]} - the "
+                      "re-pin will stop at this hop", file=sys.stderr)
+        hop = gates.BaseUpdateHop(sha=sha, parents=tuple(parents),
+                                  automerge_tree=automerge_tree, tree=tree,
+                                  base_side_on_main=on_main)
+        hops.append(hop)
+        ok, _why = gates.base_update_hop_transfers(hop)
+        if not ok:
+            break
+        sha = parents[0]
+    return hops
+
+
+def commit_date_utc(sha: str) -> str:
+    """The committer date of `sha` from LOCAL git, as `YYYY-MM-DDTHH:MM:SSZ`.
+
+    The same field, in the same shape, as the API's `.commit.committer.date`
+    -- which `parse_verdicts` compares as a STRING against `created_at`, so the
+    `Z` form is load-bearing: git's own `%cI` carries a local offset and would
+    compare wrongly. Read from `%ct` (epoch seconds) and formatted in UTC.
+    Empty on any failure, which the caller refuses.
+    """
+    rc, out, err = sh(["git", "show", "-s", "--format=%ct", sha])
+    try:
+        epoch = int(out.strip()) if rc == 0 else None
+    except ValueError:
+        epoch = None
+    if epoch is None:
+        print(f"WARNING: cannot read the committer date of {sha[:12]} (rc={rc}): "
+              f"{err[:200]}", file=sys.stderr)
+        return ""
+    return _dt.datetime.fromtimestamp(epoch, _dt.timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ")
+
+
+def resolve_repin(head: str, base_tip: str,
+                  max_hops: int = gates.REPIN_MAX_HOPS) -> dict:
+    """The `repin` block `run_gates` reads: `{ok, why, date, pin}`.
+
+    Walks the chain (`base_update_chain_facts`), decides it
+    (`gates.resolve_repin_chain`), and dates the pin from local git. Every
+    failure -- including an undatable pin -- is `ok=False`, which pins verdicts
+    to the HEAD date: the strict behaviour, never a silent transfer.
+    """
+    chain = gates.resolve_repin_chain(
+        base_update_chain_facts(head, base_tip, max_hops), max_hops)
+    if not chain.ok:
+        return {"ok": False, "why": chain.why, "date": "", "pin": ""}
+    date = commit_date_utc(chain.pin)
+    if not date:
+        # Refuse rather than fall back to the head date silently: an
+        # unresolvable pin date is an unmeasurable re-pin.
+        return {"ok": False, "date": "", "pin": "",
+                "why": f"{chain.why} - but the pin's date could not be read, refusing"}
+    return {"ok": True, "why": chain.why, "date": date, "pin": chain.pin}
+
+
 def derive_context_scopes(
     repo: str, head: str, base_sha: str, origin_main_sha: str, required: list[str]
 ) -> list[gates.ContextScope]:
@@ -760,38 +846,8 @@ def collect(repo: str, number: int) -> dict:
     if not head_date:
         print(f"WARNING: could not resolve head commit date: {err[:200]}", file=sys.stderr)
 
-    # --- RE-PIN ACROSS A BASE UPDATE -------------------------------------
-    # Verdict liveness is a TIMESTAMP proxy, so `update-branch` retires every
-    # verdict beneath it even though it authors nothing. Where the head is
-    # provably the auto-merge of its two parents, the bytes the reviewer
-    # measured are still the bytes on offer, so verdicts are pinned to the
-    # PR-SIDE PARENT's date instead of the merge's.
-    #
-    # parents[0] is the PR-side head: `update-branch` merges main INTO the PR
-    # branch, so the branch tip is the first parent. That is an assumption
-    # about GitHub's merge direction, and it is CHECKED rather than trusted --
-    # `verdict_transfers_across_base_update` requires the approved head to be
-    # among the parents, and the date below is read from whichever parent is
-    # named, so a reversed merge yields a refusal and not a wrong pin.
-    repin_ok, repin_why, repin_date = False, "head is not a base update", ""
-    parents, automerge_tree, head_tree = base_update_facts(head)
-    if len(parents) == 2:
-        repin_ok, repin_why = gates.verdict_transfers_across_base_update(
-            parents, parents[0], automerge_tree, head_tree
-        )
-        if repin_ok:
-            rc2, out2, err2 = sh(
-                ["gh", "api", f"repos/{repo}/commits/{parents[0]}",
-                 "--jq", ".commit.committer.date"]
-            )
-            repin_date = out2.strip() if rc2 == 0 else ""
-            if not repin_date:
-                # Refuse rather than fall back to the head date silently: an
-                # unresolvable parent date is an unmeasurable re-pin, and the
-                # strict behaviour is the safe one.
-                repin_ok = False
-                repin_why = (f"head is a pure base update, but the parent's date "
-                             f"could not be resolved ({err2[:120]}) - refusing")
+    # --- RE-PIN ACROSS BASE UPDATES: computed below, once the base tip is
+    # known -- the walk asks whether each merge's second parent is ON it.
 
     comments = [
         {"id": c.get("id", 0), "body": c.get("body") or "",
@@ -819,10 +875,38 @@ def collect(repo: str, number: int) -> dict:
     rc, out, err = sh(["git", "fetch", "--quiet", "origin", base_ref])
     if rc != 0:
         print(f"WARNING: git fetch origin {base_ref} failed: {err[:200]}", file=sys.stderr)
+    # FETCH THE PR HEAD BEFORE ANYTHING READS IT. Both the merge-base below
+    # (gate 1) and the re-pin walk read `head` from the LOCAL store, and the
+    # update-branch merges that make a head are built SERVER-SIDE, so without
+    # this they read `bad object`: gate 1 then reports "cannot resolve base"
+    # (#4648, which READS exactly like a stale base), every hop of the walk is
+    # unmeasurable, and real APPROVEs read as predating the head. A failed
+    # fetch is not fatal: both readers then refuse, the strict direction.
+    rc, _, err = sh(["git", "fetch", "--quiet", "origin", f"pull/{number}/head"])
+    if rc != 0:
+        print(f"WARNING: git fetch pull/{number}/head failed: {err[:200]} - gate 1 "
+              "and the re-pin will refuse on any commit they cannot read",
+              file=sys.stderr)
     rc, out, err = sh(["git", "merge-base", origin_main_sha, head])
     base_sha = out.strip() if rc == 0 else ""
     if rc != 0:
         print(f"WARNING: merge-base failed: {err[:200]}", file=sys.stderr)
+
+    # --- RE-PIN ACROSS BASE UPDATES (#4811: the whole CHAIN, not one hop) ---
+    # Verdict liveness is a TIMESTAMP proxy, so `update-branch` retires every
+    # verdict beneath it even though it authors nothing. Where every commit
+    # from the head back to some commit V is a content-free merge of main --
+    # tree == `merge-tree --write-tree <p1> <p2>` AND p2 on the base tip -- the
+    # bytes a reviewer measured at V are still the bytes on offer, so verdicts
+    # are pinned to V's date instead of the head's. It used to follow ONE hop,
+    # and #4791/#4801/#4829 each lost valid APPROVEs to a second update-branch.
+    #
+    # parents[0] is the PR-side head: `update-branch` merges main INTO the PR
+    # branch, so the branch tip is the first parent. That is CHECKED rather
+    # than trusted -- a reversed merge puts the PR side second, whose ancestry
+    # on main fails, so it refuses rather than pinning wrongly. The PR head was
+    # fetched above, before gate 1's merge-base.
+    repin = resolve_repin(head, origin_main_sha)
 
     open_issues = gh_json(
         ["gh", "issue", "list", "--repo", repo, "--state", "open", "--limit", "1000",
@@ -875,7 +959,7 @@ def collect(repo: str, number: int) -> dict:
         "pr": pr,
         "head": head,
         "head_date": head_date,
-        "repin": {"ok": repin_ok, "why": repin_why, "date": repin_date},
+        "repin": repin,
         "comments": comments,
         "base_sha": base_sha,
         "origin_main_sha": origin_main_sha,
@@ -1553,8 +1637,17 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None,
         # Said out loud on every run it applies to. A verdict counted as live
         # against a date that is NOT the head's is a material fact about how
         # this decision was reached, and burying it would make the gate's
-        # output disagree with its own rule.
-        detail += f" | RE-PINNED to parent {repin['date']}: {repin['why']}"
+        # output disagree with its own rule. `why` names EVERY hop crossed --
+        # sha, tree, both parents -- so a human can re-run each `merge-tree`
+        # and audit the transfer (#4811).
+        detail += f" | RE-PINNED to {repin['date']}: {repin['why']}"
+    else:
+        # The REFUSAL is said out loud too. Printed only on success, a gate that
+        # re-pinned nothing looked identical to one whose walk never ran, and a
+        # reviewer asking "why is my APPROVE stale after update-branch?" had
+        # nothing in the output to read. The reason names the commit that ended
+        # the walk and which test it failed.
+        detail += f" | NOT re-pinned: {repin.get('why') or 'no reason recorded'}"
     record("2+3 verdicts (conjunction, pinned to head)", ok, detail)
 
     # The closing scan is computed HERE, above 3b, because 3b needs the issue

@@ -119,58 +119,6 @@ jobs:
           echo "::add-mask::$SS"
           echo "SS=$SS" >> "$GITHUB_ENV"
 
-      - name: loom-unity diagnostics (replica state + recent logs)
-        run: |
-          set -euo pipefail
-          echo "--- revisions ---"
-          az containerapp revision list -n loom-unity -g "$RG" \
-            --query "[?properties.active].{name:name,health:properties.healthState,running:properties.runningState,replicas:properties.replicas}" -o table || true
-          echo "--- replicas ---"
-          az containerapp replica list -n loom-unity -g "$RG" -o table 2>/dev/null || true
-          echo "--- recent logs (last 60 lines) ---"
-          az containerapp logs show -n loom-unity -g "$RG" --tail 60 --format text 2>/dev/null | tail -60 || true
-          echo "--- ActivationFailed root cause: revision detail ---"
-          REV=$(az containerapp revision list -n loom-unity -g "$RG" --query "[?properties.active] | [0].name" -o tsv | tr -d '\r')
-          az containerapp revision show -n loom-unity -g "$RG" --revision "$REV" \
-            --query "properties.{running:runningState,health:healthState,provisioning:provisioningState,error:provisioningError,lastActive:lastActiveTime}" -o json || true
-          echo "--- replica container states ---"
-          az containerapp replica list -n loom-unity -g "$RG" --revision "$REV" \
-            --query "[].{name:name,state:properties.runningState,containers:properties.containers[].{n:name,started:started,ready:ready,restarts:restartCount,state:runningState,reason:runningStateDetails}}" -o json 2>/dev/null || true
-          echo "--- CAE storages (Azure Files mounts) ---"
-          CAE_NAME=$(az containerapp show -n loom-unity -g "$RG" --query properties.environmentId -o tsv | tr -d '\r' | awk -F/ '{print $NF}')
-          az containerapp env storage list -n "$CAE_NAME" -g "$RG" -o table 2>/dev/null || true
-          echo "--- app volume config ---"
-          az containerapp show -n loom-unity -g "$RG" --query "properties.template.{volumes:volumes,mounts:containers[0].volumeMounts,image:containers[0].image}" -o json || true
-          echo "--- system log stream (kind system) ---"
-          az containerapp logs show -n loom-unity -g "$RG" --type system --tail 40 --format text 2>/dev/null | tail -40 || true
-          echo "--- current image + env on the RUNNING revision ---"
-          LR=$(az containerapp show -n loom-unity -g "$RG" --query properties.latestRevisionName -o tsv | tr -d '\r')
-          az containerapp revision show -n loom-unity -g "$RG" --revision "$LR" \
-            --query "properties.template.containers[0].{image:image, env:env}" -o json || true
-          echo "--- direct container-log query (robust, --only-show-errors) ---"
-          if [ -n "${LAW:-}" ]; then
-            az monitor log-analytics query --only-show-errors -w "$LAW" --analytics-query "ContainerAppConsoleLogs_CL | where ContainerName_s == 'loom-unity' | where TimeGenerated > ago(30m) | order by TimeGenerated desc | take 60 | project Log_s" -o tsv 2>&1 | head -70 || true
-          fi
-          echo "--- crash stack from Log Analytics (last 45 min) ---"
-          LAW=$(az monitor log-analytics workspace list -g "$RG" --query "[0].customerId" -o tsv 2>/dev/null | tr -d '\r')
-          if [ -z "$LAW" ]; then LAW=$(az monitor log-analytics workspace list --query "[?contains(name,'loom')] | [0].customerId" -o tsv 2>/dev/null | tr -d '\r'); fi
-          echo "LAW=$LAW"
-          az extension add -n log-analytics -y 2>/dev/null || true
-          if [ -n "$LAW" ]; then
-            for TBL in ContainerAppConsoleLogs_CL ContainerAppConsoleLogs; do
-              echo "--- table $TBL ---"
-              az monitor log-analytics query -w "$LAW" --analytics-query "$TBL | where ContainerAppName_s == 'loom-unity' or ContainerName_s == 'loom-unity' | where TimeGenerated > ago(45m) | order by TimeGenerated asc | project Log_s | take 120" -o json 2>&1 | python3 -c "
-          import json,sys
-          raw=sys.stdin.read()
-          try:
-              rows=json.loads(raw)
-              for r in rows: print(r.get('Log_s',''))
-          except Exception:
-              print(raw[:400])
-          " | tail -80 || true
-            done
-          fi
-
       - name: Front Door WAF — recent blocks (operator browser 'request is blocked')
         run: |
           set -euo pipefail
@@ -499,3 +447,278 @@ jobs:
             setTimeout(() => process.exit(bad ? 1 : 0), 30000).unref();
           })();
           EOF
+
+      - name: loom-unity diagnostics (revision state, platform logs)
+        # LAST, and `always()`: the BFF probes above are this workflow's
+        # purpose, so a slow Log Analytics query here (bounded by the timeout)
+        # can no longer skip them, and these diagnostics still run when they
+        # fail.
+        if: always()
+        timeout-minutes: 8
+        run: |
+          set -euo pipefail
+          # READ-ONLY: every Azure call is a show/list/query; `az extension
+          # add` changes only this runner.
+          #
+          # This repository's Actions logs are PUBLIC, so the step prints an
+          # ALLOWLIST rather than filtering app output:
+          #  - platform fields picked with --query / KQL `project`: revision and
+          #    replica state, role names, activity-log operation/status/error
+          #    code, system-log type/reason/count and the platform's message;
+          #  - from CONSOLE logs (app content) only lines that start with
+          #    `[loom-unity] ` -- the prefix apps/loom-unity/bin/loom-entrypoint.sh
+          #    writes, and the contract this filter relies on -- and Java
+          #    exception CLASS names at the start of a message or after
+          #    `Caused by: `, never their message; other lines are counted;
+          #  - identities by kind and UAMI name only, never principal, client or
+          #    resource ids.
+          # `redact` runs over all of it as defence in depth. It is a denylist
+          # over free text and cannot be complete: the allowlist is the control.
+          # Each block of Azure-sourced text is wrapped in `::stop-commands::`
+          # with a fresh random token, so no line in it is parsed as a workflow
+          # command. This differs from the `defuse_cmds` prefix used by
+          # loom-drift-check.yml: a per-line prefix depends on where the runner
+          # splits lines (a bare CR also ends a line there), while a framed
+          # block is inert however it splits, and the text stays unaltered
+          # apart from `redact`. This step's own annotations are printed outside
+          # the blocks. A name used in a heading or in KQL must match
+          # [A-Za-z0-9._-].
+          redact() {
+            sed -E \
+              -e "s#eyJ[A-Za-z0-9_-]{8,}(\.[A-Za-z0-9_-]+){0,2}#[REDACTED-JWT]#g" \
+              -e "s#(bearer[[:space:]]+)[A-Za-z0-9._~+/=-]{8,}#\1[REDACTED]#Ig" \
+              -e "s#(authorization:[[:space:]]*basic[[:space:]]+)[A-Za-z0-9+/=]+#\1[REDACTED]#Ig" \
+              -e "s#((jdbc:[A-Za-z0-9]+(:[A-Za-z0-9]+)*|postgres|postgresql)://)([^/;?[:space:]\"']*@)?([^/:;?@[:space:]\"']+)[^[:space:]\"']*#\1\5[REDACTED]#Ig" \
+              -e "s#(jdbc:[A-Za-z0-9]+:)[^/[:space:]\"'][^[:space:]\"']*#\1[REDACTED]#Ig" \
+              -e "s#(\"[A-Za-z0-9_]*(password|passwd|pwd|secret|token|key|credential)[A-Za-z0-9_]*\"[[:space:]]*:[[:space:]]*\")[^\"]+#\1[REDACTED]#Ig" \
+              -e "s#([A-Za-z0-9_]*(password|passwd|pwd|secret|token|key)[A-Za-z0-9_]*=)(\"[^\"]+\"|'[^']+'|[^&;,[:space:]\"']+)#\1[REDACTED]#Ig" \
+              -e "s#([A-Za-z0-9_-]*(password|passwd|pwd|secret|token|key|credential)[A-Za-z0-9_-]*[[:space:]]*:[[:space:]]+)(\"[^\"]+\"|'[^']+'|[^[:space:]]+)#\1[REDACTED]#Ig" \
+              -e "s#((^|[^A-Za-z0-9_])(sig|se|st|sv|sp|sr|spr|srt|ss|sip|skoid|sktid|skt|ske|sks|skv|sdd)=)[^&;,[:space:]\"']+#\1[REDACTED]#Ig" \
+              -e "s#[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}#[GUID]#g"
+          }
+          shield() {
+            sh_t=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+            printf '::stop-commands::%s\n' "$sh_t"
+            redact
+            printf '::%s::\n' "$sh_t"
+          }
+          # val LABEL CMD...: runs CMD in this shell and sets VAL (stdout, CR
+          # stripped) and VAL_RC. On failure: a warning naming LABEL and the
+          # exit code, CMD's stderr in a shielded block, and VAL empty.
+          val() {
+            v_l="$1"; shift; v_e=$(mktemp); VAL_RC=0
+            VAL=$("$@" 2>"$v_e" </dev/null) || VAL_RC=$?
+            VAL=$(printf '%s' "$VAL" | tr -d '\r')
+            if [ "$VAL_RC" -ne 0 ]; then
+              echo "::warning::${v_l}: exited ${VAL_RC}; stderr follows"
+              head -n 20 "$v_e" | shield
+              VAL=""
+            fi
+            rm -f "$v_e"
+          }
+          # diag LABEL CMD...: CMD's stdout in a shielded block; on failure the
+          # same warning and shielded stderr as val.
+          diag() {
+            d_l="$1"; shift; d_e=$(mktemp); d_rc=0
+            { "$@" 2>"$d_e" </dev/null | shield; } || d_rc=$?
+            if [ "$d_rc" -ne 0 ]; then
+              echo "::warning::${d_l}: exited ${d_rc}; stderr follows"
+              head -n 20 "$d_e" | shield
+            fi
+            rm -f "$d_e"
+          }
+          name_ok() { case "$1" in *[!A-Za-z0-9._-]*) return 1 ;; esac; }
+          # Console rows arrive as `<time> <revision><TAB><message>`; the query
+          # turns CR, LF and TAB inside the message into spaces, so one row is
+          # one line and the first TAB is the query's own.
+          console_filter() {
+            awk -F'\t' '
+              $0 == "" { next }
+              NF < 2 || $1 ~ /[^0-9a-z: -]/ || $1 !~ /^[0-9]/ { n++; next }
+              { m = substr($0, length($1) + 2) }
+              substr(m, 1, 13) == "[loom-unity] " { print $1 " " m; next }
+              { e = m; sub(/^Exception in thread "[^"]*" /, "", e) }
+              match(e, /^(Caused by: )?[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*\.[A-Z][A-Za-z0-9_$]*(Exception|Error)/) && substr(e, RLENGTH + 1, 1) !~ /[A-Za-z0-9_$]/ {
+                print $1 " exception: " substr(e, 1, RLENGTH); next }
+              { n++ }
+              END { print (n + 0) " other console lines not printed" }'
+          }
+
+          echo "=== loom-unity revisions: newest 10 of --all (inactive and failed included), oldest first ==="
+          diag "revision list" az containerapp revision list -n loom-unity -g "$RG" --all \
+            --query "sort_by([], &properties.createdTime)[-10:].{name:name,active:properties.active,created:properties.createdTime,provisioning:properties.provisioningState,provisioningError:properties.provisioningError,running:properties.runningState,health:properties.healthState,replicas:properties.replicas,image:properties.template.containers[0].image}" -o json
+          echo "=== app ==="
+          diag "containerapp show" az containerapp show -n loom-unity -g "$RG" \
+            --query "{provisioning:properties.provisioningState,runningStatus:properties.runningStatus,revisionsMode:properties.configuration.activeRevisionsMode,latestRevision:properties.latestRevisionName,latestReadyRevision:properties.latestReadyRevisionName}" -o json
+          val "newest revision" az containerapp revision list -n loom-unity -g "$RG" --all --query "sort_by([], &properties.createdTime)[-1].name" -o tsv
+          TARGET=$VAL; name_ok "$TARGET" || TARGET=""
+          val "latestReadyRevisionName" az containerapp show -n loom-unity -g "$RG" --query "properties.latestReadyRevisionName || ''" -o tsv
+          SERVING=$VAL; name_ok "$SERVING" || SERVING=""
+          TARGET_CREATED=""; TC_WHY="newest revision not resolved"
+          if [ -n "$TARGET" ]; then
+            val "createdTime" az containerapp revision show -n loom-unity -g "$RG" --revision "$TARGET" --query properties.createdTime -o tsv
+            TARGET_CREATED=$VAL
+            if [ "$VAL_RC" -ne 0 ]; then TC_WHY="createdTime could not be read (stderr above)"
+            elif [ -z "$VAL" ]; then TC_WHY="createdTime came back empty"
+            else TC_WHY="createdTime was not a UTC timestamp"; fi
+            echo "=== replicas of the newest revision, $TARGET ==="
+            diag "replica list" az containerapp replica list -n loom-unity -g "$RG" --revision "$TARGET" \
+              --query "[].{name:name,running:properties.runningState,containers:properties.containers[].{name:name,ready:ready,started:started,restarts:restartCount,state:runningState,details:runningStateDetails}}" -o json
+          else
+            echo "(newest revision name not resolved, so the replica section did not run)"
+          fi
+
+          echo "=== registry pull identity: kind, UAMI name, pull-capable role on the registry ==="
+          val "subscription name" az account show --query name -o tsv
+          SUB_NAME="subscription $VAL"; case "$VAL" in ""|*[!A-Za-z0-9\ ._\(\)-]*) SUB_NAME="the current subscription" ;; esac
+          val "registries" az containerapp show -n loom-unity -g "$RG" --query "properties.configuration.registries[].[server, identity || '']" -o tsv
+          [ -n "$VAL" ] || echo "(no registries returned, so this section did not run)"
+          while IFS=$'\t' read -r R_SRV R_ID; do
+            [ -n "${R_SRV:-}" ] || continue
+            name_ok "$R_SRV" || { echo "(a registry server name with unexpected characters was withheld)"; continue; }
+            UAMI=""
+            case "${R_ID:-}" in
+              /subscriptions/*|/SUBSCRIPTIONS/*) KIND=user-assigned; UAMI="${R_ID##*/}"; name_ok "$UAMI" || UAMI="<withheld>" ;;
+              ""|None) KIND="none (admin credentials or anonymous pull)" ;;
+              system) KIND=system-assigned ;;
+              *) KIND=other ;;
+            esac
+            PULL="not checked for identity kind '$KIND'"
+            ROLES=""
+            if [ "$KIND" = user-assigned ]; then
+              val "principal of the pull identity" az identity show --ids "$R_ID" --query principalId -o tsv; PID=$VAL; PID_RC=$VAL_RC
+              val "registry lookup" az acr list --query "[?loginServer=='$R_SRV'].id | [0]" -o tsv; AID=$VAL; AID_RC=$VAL_RC
+              if [ "$PID_RC" -ne 0 ]; then
+                PULL="could-not-read: the identity lookup exited $PID_RC (stderr above)"
+              elif [ -z "$PID" ]; then
+                PULL="could-not-read: the identity returned no principalId"
+              elif [ "$AID_RC" -ne 0 ]; then
+                PULL="could-not-read: the registry lookup exited $AID_RC (stderr above)"
+              elif [ -z "$AID" ]; then
+                PULL="could-not-read: no registry with login server $R_SRV in $SUB_NAME (the lookup searches the current subscription only)"
+              else
+                val "role assignments on the registry" az role assignment list --scope "$AID" --include-inherited \
+                  --fill-principal-name false --query "[?principalId=='$PID'].[roleDefinitionName, scope]" -o tsv
+                if [ "$VAL_RC" -ne 0 ]; then
+                  PULL="could-not-read: the role query exited $VAL_RC (stderr above)"
+                else
+                  ROLES=$VAL
+                  HIT=$(printf '%s\n' "$ROLES" | awk -F'\t' '$1 == "AcrPull" || $1 == "AcrPush" || $1 == "Contributor" || $1 == "Owner" { print $1; exit }')
+                  if [ -n "$HIT" ]; then
+                    PULL="yes (role $HIT)"
+                  else
+                    PULL="no: no AcrPull, AcrPush, Contributor or Owner assignment visible (roles listed below; group-inherited assignments are not listed)"
+                  fi
+                fi
+              fi
+            fi
+            {
+              echo "registry=$R_SRV identity-kind=$KIND uami=${UAMI:-n/a} acrpull=$PULL"
+              printf '%s\n' "$ROLES" | awk -F'\t' 'NF {
+                l = "other"
+                if ($2 ~ /\/registries\/[^\/]+$/) l = "registry"
+                else if ($2 ~ /\/resourceGroups\/[^\/]+$/) l = "resource group"
+                else if ($2 ~ /^\/subscriptions\/[^\/]+$/) l = "subscription"
+                r = $1; if (r ~ /[^A-Za-z0-9 ._()-]/) r = "<withheld>"
+                print "  role: " r " @ " l }'
+            } | shield
+          done <<< "$VAL"
+
+          echo "=== activity log: failed operations on loom-unity, newest 200 events of 7 days ==="
+          val "app id" az containerapp show -n loom-unity -g "$RG" --query id -o tsv
+          if [ -n "$VAL" ]; then
+            val "activity-log list" az monitor activity-log list --resource-id "$VAL" --offset 7d --max-events 200 \
+              --query "[].[eventTimestamp, status.value || '', operationName.value || '', subStatus.value || '', properties.statusMessage || '']" -o tsv
+            if [ "$VAL_RC" -eq 0 ]; then
+              printf '%s\n' "$VAL" | awk -F'\t' '
+                NF { n++ }
+                $2 == "Failed" {
+                  c = "-"
+                  if (match($5, /"code" *: *"[A-Za-z0-9_.-]*"/)) { c = substr($5, RSTART, RLENGTH); sub(/^"code" *: *"/, "", c); sub(/"$/, "", c) }
+                  print $1 " " $3 " " $2 " " $4 " code=" c }
+                END { print "events read: " (n + 0) " (cap 200" (n >= 200 ? ", reached: older failures are not shown)" : ")") }' | shield
+            fi
+          else
+            echo "(app id not resolved, so the activity log was not read)"
+          fi
+
+          echo "=== Log Analytics: the workspace the environment logs to ==="
+          val "environment id" az containerapp show -n loom-unity -g "$RG" --query properties.environmentId -o tsv
+          CAE_ID=$VAL; DEST=""; LAW=""
+          if [ -n "$CAE_ID" ]; then
+            val "log destination" az containerapp env show --ids "$CAE_ID" --query "properties.appLogsConfiguration.destination || ''" -o tsv; DEST=$VAL
+            val "workspace customerId" az containerapp env show --ids "$CAE_ID" --query "properties.appLogsConfiguration.logAnalyticsConfiguration.customerId || ''" -o tsv; LAW=$VAL
+            if [ -z "$LAW" ]; then
+              val "diagnostic settings" az monitor diagnostic-settings list --resource "$CAE_ID" --query "[?workspaceId] | [0].workspaceId || ''" -o tsv
+              if [ -n "$VAL" ]; then
+                val "workspace show" az monitor log-analytics workspace show --ids "$VAL" --query customerId -o tsv; LAW=$VAL
+              fi
+            fi
+          fi
+          case "$DEST" in *[!a-z-]*) DEST="" ;; esac
+          case "$LAW" in *[!0-9a-fA-F-]*) LAW="" ;; esac
+          echo "destination=${DEST:-<unresolved>} workspace=$([ -n "$LAW" ] && echo resolved || echo '<unresolved>')"
+          if [ -z "$LAW" ]; then
+            echo "(workspace not resolved, so no Log Analytics query ran)"
+          else
+            diag "extension add log-analytics" az extension add -n log-analytics -y --only-show-errors
+            # la_q LABEL TABLE APPCOL WHERE TIME LINE [con]: prints the matched
+            # count, then the newest rows oldest-first as one `line` column
+            # (console rows, `con`, go through console_filter).
+            la_q() {
+              q="$2 | where $5 | where $3 == 'loom-unity' | where $4"
+              if [ "${7:-}" = con ]; then cap=300; capd="newest $cap fetched, filtered"; else cap=150; capd="newest $cap printed"; fi
+              val "$1: count" az monitor log-analytics query -w "$LAW" -o tsv --query "[0].Count" --analytics-query "$q | count"
+              case "$VAL" in ""|*[!0-9]*) echo "--- $1: count not read"; return 0 ;; esac
+              echo "--- $1: $VAL rows matched ($capd)"
+              if [ "$VAL" = 0 ]; then
+                echo "(Log Analytics ingestion can lag by several minutes; 0 rows soon after a revision is created is not evidence that no events occurred)"
+                return 0
+              fi
+              if [ "${7:-}" = con ]; then
+                val "$1: rows" az monitor log-analytics query -w "$LAW" -o tsv --query "[].line" --analytics-query "$q | top $cap by TimeGenerated desc | order by TimeGenerated asc | project line=$6"
+                [ "$VAL_RC" -ne 0 ] || printf '%s\n' "$VAL" | console_filter | shield
+              else
+                diag "$1: rows" az monitor log-analytics query -w "$LAW" -o tsv --query "[].line" --analytics-query "$q | top $cap by TimeGenerated desc | order by TimeGenerated asc | project line=$6"
+              fi
+            }
+            # Window A: 1h before to 24h after the newest revision's creation,
+            # so a later dispatch still sees it; datetime() gets the documented
+            # ISO 8601 `...Z` form, and only from a UTC createdTime.
+            TC19="${TARGET_CREATED:0:19}"
+            if [[ "$TC19" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$ ]] && [[ "${TARGET_CREATED:19}" =~ ^(\.[0-9]+)?(Z|\+00:00)$ ]]; then
+              A_WIN="TimeGenerated >= datetime(${TC19}Z) - 1h and TimeGenerated <= datetime(${TC19}Z) + 24h"
+              A_DESC="1h before to 24h after $TARGET was created (${TC19}Z)"
+            else
+              A_WIN="TimeGenerated > ago(24h)"
+              A_DESC="the last 24h ($TC_WHY)"
+            fi
+            if [ -n "$SERVING" ]; then
+              echo "filter: A) revisions other than the serving one ($SERVING), $A_DESC; B) the serving revision's system log, last 1h"
+            else
+              echo "filter: A) every revision, $A_DESC (serving revision not resolved); B) skipped"
+            fi
+            T="format_datetime(TimeGenerated,'yyyy-MM-dd HH:mm:ss')"
+            case "$DEST" in
+              log-analytics) SHAPES=cl ;;
+              azure-monitor) SHAPES=rs ;;
+              *) SHAPES="cl rs"; echo "(destination not resolved: both table shapes are queried and the absent one fails)" ;;
+            esac
+            for S in $SHAPES; do
+              if [ "$S" = cl ]; then
+                SYS=ContainerAppSystemLogs_CL; CON=ContainerAppConsoleLogs_CL; AC=ContainerAppName_s; RC=RevisionName_s
+                SYS_L="strcat($T,' ',RevisionName_s,' ',tostring(column_ifexists('ReplicaName_s','')),' ',tostring(column_ifexists('Type_s','')),' ',tostring(column_ifexists('Reason_s','')),' x',tostring(column_ifexists('Count_d','')),' ',translate('\r\n\t',' ',Log_s))"
+                CON_L="strcat($T,' ',RevisionName_s,'\t',translate('\r\n\t',' ',Log_s))"
+              else
+                SYS=ContainerAppSystemLogs; CON=ContainerAppConsoleLogs; AC=ContainerAppName; RC=RevisionName
+                SYS_L="strcat($T,' ',RevisionName,' ',ReplicaName,' ',Type,' ',Reason,' x',tostring(Count),' ',translate('\r\n\t',' ',Log))"
+                CON_L="strcat($T,' ',RevisionName,'\t',translate('\r\n\t',' ',Log))"
+              fi
+              if [ -n "$SERVING" ]; then OTHER="$RC != '$SERVING'"; else OTHER="isnotempty($RC)"; fi
+              la_q "A system $SYS" "$SYS" "$AC" "$OTHER" "$A_WIN" "$SYS_L"
+              la_q "A console $CON" "$CON" "$AC" "$OTHER" "$A_WIN" "$CON_L" con
+              if [ -n "$SERVING" ]; then
+                la_q "B system $SYS, serving revision" "$SYS" "$AC" "$RC == '$SERVING'" "TimeGenerated > ago(1h)" "$SYS_L"
+              fi
+            done
+          fi

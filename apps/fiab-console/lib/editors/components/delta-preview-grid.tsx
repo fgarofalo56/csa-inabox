@@ -70,6 +70,9 @@ export interface DeltaPreviewGridProps {
    *  transform against a Livy-sampled DataFrame before apply. When absent the AI
    *  tab still renders but the live-preview action is disabled with a reason. */
   previewSource?: PreviewSource | null;
+  /** Why the host withheld `previewSource`; forwarded to the AI tab as the
+   *  disabled reason of the live-preview action. */
+  previewUnavailableReason?: string | null;
   /** G4 — insert generated/suggested code into a bound notebook cell. When
    *  absent the AI tab falls back to copy-to-clipboard. */
   onInsertToNotebook?: (code: string, lang: string) => void;
@@ -130,7 +133,7 @@ const useStyles = makeStyles({
 
 export function DeltaPreviewGrid(props: DeltaPreviewGridProps) {
   const s = useStyles();
-  const { columns: baseColumns, rows: baseRows, rowCount, executionMs, truncated, columnStats, statsLoading, statsError, mode, onModeChange, enableAiColumn = true, enableAiTab = true, previewSource, onInsertToNotebook, askSurfaceKind, askItemId, askItemType } = props;
+  const { columns: baseColumns, rows: baseRows, rowCount, executionMs, truncated, columnStats, statsLoading, statsError, mode, onModeChange, enableAiColumn = true, enableAiTab = true, previewSource, previewUnavailableReason, onInsertToNotebook, askSurfaceKind, askItemId, askItemType } = props;
 
   const [filterText, setFilterText] = useState('');
   const [selectedRows, setSelectedRows] = useState<Set<TableRowId>>(new Set());
@@ -281,6 +284,7 @@ export function DeltaPreviewGrid(props: DeltaPreviewGridProps) {
           columnStats={columnStats}
           numericColNames={numericColNames}
           previewSource={previewSource}
+          previewUnavailableReason={previewUnavailableReason}
           onInsertToNotebook={onInsertToNotebook}
           renderResultGrid={(cols, resultRows, ms) => (
             <DeltaPreviewGrid
