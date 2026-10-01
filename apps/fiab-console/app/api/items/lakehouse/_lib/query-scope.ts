@@ -118,6 +118,14 @@ export interface QueryScopeSurface {
   selectRemediation: string;
   /** Why the OPENROWSET `DATA_SOURCE` option is refused. */
   dataSource: string;
+  /**
+   * True when the surface runs SQL that a compiler built from a canvas, with
+   * every name it writes in brackets. A refused word there (the `INTO` of a
+   * Sink) was written by the compiler, so the hint to bracket or qualify it is
+   * left out. Absent on the surfaces where the caller types the SQL, which
+   * keep the hint.
+   */
+  generated?: boolean;
 }
 
 /** The lakehouse SQL tab (`POST /api/items/lakehouse/[id]/query`), the default surface. */
@@ -193,8 +201,10 @@ function refuse(c: Scope, construct: string, why: string, remediation = c.s.sele
  * Remediation for a refused word that could also be a column or table name.
  * `qualify` is false for a word refused even as a later name part, so the hint
  * offers only the form that is accepted. `then` is the sentence that follows.
+ * On a surface whose SQL is generated, `then` alone (see `generated`).
  */
 function bracketHint(c: Scope, word: string, qualify = true, then = c.s.selectRemediation): string {
+  if (c.s.generated) return then;
   const forms = qualify ? `write it in brackets, as [${word}], or qualify it, as t.${word}` : `write it in brackets, as [${word}]`;
   return `If ${word} is a column or table name, ${forms}. ` + then;
 }

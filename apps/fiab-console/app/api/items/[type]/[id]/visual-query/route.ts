@@ -39,6 +39,9 @@
  *     (`confineToWorkspaceLakehouses`), and runs in `master` on the SQL pool
  *     editor's own pool with the `USE [master];` prefix, whatever `database`
  *     the request names. The response's `generatedSql` is the text as compiled.
+ *     Its refusals are worded for a visual query (`VISUAL_QUERY_SURFACE`): a
+ *     Sink's `INTO` / `CREATE` is the compiler's, so they name the Sink and the
+ *     targets that run one, with no hint to bracket `INTO`.
  * The other engine types are unchanged by this.
  */
 
@@ -66,6 +69,7 @@ import {
   confineToWorkspaceLakehouses,
   SQL_POOL_READER_POOL_PREFIX,
 } from '@/app/api/items/synapse-serverless-sql-pool/_lib/query-scope';
+import { VISUAL_QUERY_SURFACE } from '@/app/api/items/synapse-serverless-sql-pool/_lib/visual-query-surface';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -159,7 +163,7 @@ export const POST = withSession<{ type: string; id: string }>(async (req: NextRe
         { status: 500 },
       );
     }
-    const refused = await confineToWorkspaceLakehouses(sql, serverlessItem);
+    const refused = await confineToWorkspaceLakehouses(sql, serverlessItem, VISUAL_QUERY_SURFACE);
     if (refused) return refused;
   }
 
