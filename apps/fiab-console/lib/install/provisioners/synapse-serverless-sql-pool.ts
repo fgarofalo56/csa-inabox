@@ -45,6 +45,7 @@ import {
   getSynapseSqlSuffix,
 } from '@/lib/azure/synapse-sql-client';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { externalDataSourceDdl } from './_serverless-ddl';
 import { trimEdges } from '@/lib/util/trim';
 
 /** Content shape the install engine's pairing rule stamps onto the item. */
@@ -237,7 +238,6 @@ export const synapseSqlPoolProvisioner: Provisioner = async (input): Promise<Pro
   // the receipt is actionable instead of a misleading "grant CONTROL" hint (the
   // UAMI is typically already the workspace AAD admin).
   const userTarget = serverlessTarget(DB);
-  const locLiteral = escapeSqlLiteral(location);
   const errText = (e: any) => (e?.message || String(e)).replace(/\s+/g, ' ').trim();
   let stage = 'master key';
   try {
@@ -272,12 +272,7 @@ export const synapseSqlPoolProvisioner: Provisioner = async (input): Promise<Pro
     steps.push(`Scoped credential [WorkspaceIdentity] present in [${DB}] (Managed Identity).`);
 
     stage = 'external data source';
-    await synapseExec(
-      userTarget,
-      `IF EXISTS (SELECT 1 FROM sys.external_data_sources WHERE name = N'${DS}')\n` +
-        `  EXEC('DROP EXTERNAL DATA SOURCE [${DS}]');\n` +
-        `EXEC('CREATE EXTERNAL DATA SOURCE [${DS}] WITH (LOCATION = ''${locLiteral}'', CREDENTIAL = [WorkspaceIdentity])');`,
-    );
+    await synapseExec(userTarget, externalDataSourceDdl(DS, location));
     steps.push(`External data source [${DS}] → ${location} (credential: WorkspaceIdentity / Managed Identity).`);
   } catch (e: any) {
     const msg = errText(e);
@@ -510,11 +505,7 @@ async function provisionDatabricksMirror(
       ds = dsByRoot.get(split.root);
       if (!ds) {
         ds = `loom_ds_dbx_${dsMade}_${safeIdent(name)}`.slice(0, 120);
-        const locLiteral = escapeSqlLiteral(split.root);
-        const dsDdl =
-          `IF EXISTS (SELECT 1 FROM sys.external_data_sources WHERE name = N'${ds}')\n` +
-          `  EXEC('DROP EXTERNAL DATA SOURCE [${ds}]');\n` +
-          `EXEC('CREATE EXTERNAL DATA SOURCE [${ds}] WITH (LOCATION = ''${locLiteral}'', CREDENTIAL = [WorkspaceIdentity])');`;
+        const dsDdl = externalDataSourceDdl(ds, split.root);
         try {
           await synapseExec(userTarget, dsDdl);
           dsByRoot.set(split.root, ds);

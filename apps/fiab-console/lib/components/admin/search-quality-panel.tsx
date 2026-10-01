@@ -112,7 +112,7 @@ export function SearchQualityPanel() {
     onError: (e) => setRunError(e instanceof Error ? e.message : String(e)),
   });
 
-  if (q.isLoading) {
+  if (q.isPending) {
     return (
       <Skeleton aria-label="Loading search relevance">
         <div className={styles.cards}>{[0, 1, 2].map((i) => <SkeletonItem key={i} style={{ height: '180px', borderRadius: tokens.borderRadiusLarge }} />)}</div>

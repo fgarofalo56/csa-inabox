@@ -658,10 +658,15 @@ const NON_AUTHORIZER_BODY_PINS = new Map([
   ['lib/auth/workspace-access.ts:listAccessibleWorkspaces', '6b7f66ea5819'],
   ['lib/auth/workspace-access.ts:ambientAccessOptsFor', '2068414aa6c6'],
   ['lib/auth/workspace-denial.ts:workspaceDenialResponse', '174876032ce1'],
-  ['lib/auth/feature-gate.ts:requireTenantAdmin', '7431745bc687'],
-  ['lib/auth/feature-gate.ts:enforceCapability', '3bf4e9b55806'],
-  ['lib/auth/feature-gate.ts:isTenantAdmin', '150938bad034'],
-  ['lib/auth/feature-gate.ts:checkCapability', 'dfcb5d1dbb8d'],
+  // #4805 re-pinned these four: each body gained ONLY an early device-code
+  // refusal (a least-privilege DENY for non-interactive sign-in, never a grant);
+  // none reads a workspace document, so every reason above still holds.
+  // requireTenantAdmin also carries #4788's optional `refusal` text override
+  // (it rewords the 403 only), so its pin is the digest of the merged body.
+  ['lib/auth/feature-gate.ts:requireTenantAdmin', 'f4c06a6a9c09'],
+  ['lib/auth/feature-gate.ts:enforceCapability', 'e9e7b6f8ad80'],
+  ['lib/auth/feature-gate.ts:isTenantAdmin', '4284fea3226f'],
+  ['lib/auth/feature-gate.ts:checkCapability', 'cc57f264b504'],
   ['lib/auth/feature-catalog.ts:capabilityIdForItemType', '5464653183fe'],
   ['lib/auth/domain-role.ts:isTenantAdminTier', 'c11fb15031ec'],
   ['lib/auth/domain-role.ts:resolveDomainTier', 'fc460f8a64d6'],
@@ -4987,6 +4992,18 @@ const ADMIN_SHAPE_UNSCOPED = new Map([
         'no workspace or item is in play, and refuses a non-admin with 403 before any storage call. ' +
         'The `lakehouseId` form is decided by `authorizeLakehouse` (-> `resolveItemAccessByOid`) and ' +
         'does not read the admin flag.',
+    },
+  ],
+  [
+    'app/api/lakehouse/permissions/route.ts:DELETE',
+    {
+      verdict: 'ORG-WIDE',
+      requires: ['isTenantAdmin(', 'revokeContainerRoleAssignmentInScope('],
+      why:
+        'ORG-WIDE (function scope). Tenant-admin-or-403, same as POST in this file; no workspace or ' +
+        'item is resolved. The object tab revokes only an id that is shaped as a role assignment on ' +
+        'the named container AND appears in that container\'s listing ' +
+        '(revokeContainerRoleAssignmentInScope).',
     },
   ],
 ]);

@@ -216,7 +216,30 @@ if [ -z "${LH_LAW:-}" ]; then
   UNKNOWN=$((UNKNOWN + 1))
 else
   if [ -z "$HITS" ]; then
-    echo "::warning::resolved the workspace but could NOT read the invalid_client count (query error / no Log Analytics Reader on it) — the callback-error check did NOT run. Not treated as zero.${HITS_ERR_NOTE}"
+    # THREE different reasons a count is unreadable, and only one of them is a
+    # permission (#4805). Run 36628363301 printed "(query error / no Log
+    # Analytics Reader on it)" next to "The hits query itself exited 0" — the
+    # message asserted a cause its own diagnosis contradicted. The real fault
+    # was the OUTPUT SHAPE: bare `az … -o tsv` prints the extension's
+    # `TableName` column first, so the count field read `PrimaryResult`.
+    # The first field is quoted back, bounded and reduced to a safe charset,
+    # so the next shape fault names itself. "NO row" is decided on the RAW first
+    # line, BEFORE the charset filter: a row made only of characters the filter
+    # drops (e.g. non-ASCII) is a row, not an absent one.
+    FIRST_LINE="$(printf '%s' "${LH_HITS_ROW:-${HITS_RAW}}" | tr -d '\r' | head -1)"
+    SHOWN="$(printf '%s' "$FIRST_LINE" | sed 's/\t/<TAB>/g' | tr -cd 'A-Za-z0-9 <>._:+/()-' | cut -c1-120)"
+    if [ -n "$FIRST_LINE" ] && [ -z "$SHOWN" ]; then
+      SHOWN="(no quotable characters: every character is outside the safe set)"
+    fi
+    if [ "${LH_HITS_RC:-}" = "0" ] && [ -z "$FIRST_LINE" ]; then
+      echo "::warning::resolved the workspace and the hits query exited 0, but it returned NO row — the callback-error check did NOT run. Not treated as zero: a \`summarize\` with no group-by always yields one row, so an empty result means this gate did not receive the query output it expects."
+    elif [ "${LH_HITS_RC:-}" = "0" ]; then
+      echo "::warning::resolved the workspace and the hits query exited 0, but its first field is not a count: row=[${SHOWN}]. The query RAN; this gate could not PARSE its output, so the callback-error check did NOT run. Not treated as zero. This is an output-shape fault, not a permission one — the gate expects '<count><TAB><last-hit>' (bare \`az monitor log-analytics query -o tsv\` prepends the TableName column unless --query projects the columns)."
+    elif [ -n "${LH_HITS_RC:-}" ]; then
+      echo "::warning::resolved the workspace but could NOT read the invalid_client count — the hits query failed (a query error or a missing Log Analytics Reader grant on the workspace are the usual causes; az's own error is quoted below). The callback-error check did NOT run. Not treated as zero.${HITS_ERR_NOTE}"
+    else
+      echo "::warning::resolved the workspace but could NOT read the invalid_client count, and no exit status was recorded for the hits query, so whether it ran at all is unknown. The callback-error check did NOT run. Not treated as zero.${HITS_ERR_NOTE}"
+    fi
     UNKNOWN=$((UNKNOWN + 1))
   elif [ "$HITS" -gt 0 ]; then
     # RECENCY (#3160). A 7-day count with no recency test cannot tell

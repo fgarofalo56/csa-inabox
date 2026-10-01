@@ -84,8 +84,9 @@
  *      (`const viewSchema = schemasEnabled ? String(t.schema||'dbo').replace(/[^A-Za-z0-9_]/g,'') : 'lakehouse'`)
  *      -> RED: "the Synapse view, the recorded key and the ADLS path all name
  *      the SAME schema".
- *   e) In `lakehouse.ts` drop the brackets from the emitted DDL
- *      (`CREATE SCHEMA ${viewSchema}`) -> RED on the leading-digit row.
+ *   e) In `_serverless-ddl.ts` (`deltaTableViewDdl`, which `lakehouse.ts`
+ *      calls) drop the brackets from the emitted DDL
+ *      (`CREATE SCHEMA ${schema}`) -> RED on the leading-digit row.
  *   f) In `report-binding.ts` make `seedCsvPathLookup` rebuild the path from a
  *      naming convention instead of reading the recorded map -> RED: "the
  *      recorded CSV path round-trips through the reader both consumers use".

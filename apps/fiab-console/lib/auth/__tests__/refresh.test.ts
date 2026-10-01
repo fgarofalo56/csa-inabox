@@ -124,6 +124,50 @@ describe('POST /api/auth/refresh', () => {
     expect(s!.exp).toBeLessThanOrEqual(now + MAX_AGE_SECS + 5);
   });
 
+  it("#4805 a device-code session's authVia marker survives the re-mint; a browser session stays unmarked", async () => {
+    mockAccounts = [{ homeAccountId: `${OID}.tenant`, localAccountId: OID }];
+    cookieValue = encodeSessionCookie({ claims, exp: Math.floor(Date.now() / 1000) + 60, authVia: 'device_code' });
+    const res = await POST();
+    expect(res.status).toBe(200);
+    cookieValue = extractSetCookieValue(res.headers.get('set-cookie'));
+    // RED if the refresh re-mints `{ claims, exp }` only: the marker would be shed
+    // by refreshing, and the re-minted session would read as a browser one.
+    expect(getSession()?.authVia).toBe('device_code');
+    // Control: an unmarked (browser) session is NOT marked by the re-mint. RED if
+    // the refresh stamps 'device_code' unconditionally.
+    cookieValue = encodeSessionCookie({ claims, exp: Math.floor(Date.now() / 1000) + 60 });
+    const res2 = await POST();
+    cookieValue = extractSetCookieValue(res2.headers.get('set-cookie'));
+    const s2 = getSession();
+    expect(s2?.claims.oid).toBe(OID);
+    expect(s2?.authVia).toBeUndefined();
+  });
+
+  it('#4805 operator decision 2026-09-30 (a): a refresh NEVER extends a device-code session past its original expiry', async () => {
+    mockAccounts = [{ homeAccountId: `${OID}.tenant`, localAccountId: OID }];
+    const originalExp = Math.floor(Date.now() / 1000) + 60; // minted ~59 min ago, 60 s left
+    cookieValue = encodeSessionCookie({ claims, exp: originalExp, authVia: 'device_code' });
+    const res = await POST();
+    expect(res.status).toBe(200);
+    const setCookie = res.headers.get('set-cookie') ?? '';
+    cookieValue = extractSetCookieValue(setCookie);
+    const s = getSession();
+    // The breaking input: sliding refresh ON (the default), which re-mints at
+    // now + MAX_AGE_SECS (8 h). RED if the device-code clamp is removed: exp
+    // would jump ~8 h past the original.
+    expect(s?.authVia).toBe('device_code');
+    expect(s!.exp).toBeLessThanOrEqual(originalExp);
+    // The cookie's own Max-Age follows the clamped exp, not the 8 h default.
+    const maxAge = Number(/Max-Age=(\d+)/.exec(setCookie)?.[1]);
+    expect(maxAge).toBeLessThanOrEqual(60);
+    expect(maxAge).toBeLessThan(MAX_AGE_SECS);
+    // Control: the SAME claims in a browser session still slide to ~8 h.
+    cookieValue = encodeSessionCookie({ claims, exp: originalExp });
+    const res2 = await POST();
+    cookieValue = extractSetCookieValue(res2.headers.get('set-cookie'));
+    expect(getSession()!.exp).toBeGreaterThan(Math.floor(Date.now() / 1000) + MAX_AGE_SECS - 120);
+  });
+
   it('returns 401 { reauth:true } on MSAL cache-miss (no matching account)', async () => {
     mockAccounts = []; // account not in the confidential-client cache
     const res = await POST();
