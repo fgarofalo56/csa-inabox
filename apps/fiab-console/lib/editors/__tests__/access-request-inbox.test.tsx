@@ -95,7 +95,7 @@ describe('after a decision that returns a warning', () => {
     render(<AccessRequestInboxEditor />);
     await screen.findByText('Sales product');
     fireEvent.click(screen.getByRole('button', { name: /^Approve — advance to the next tier$/ }));
-    const dialog = await screen.findByRole('dialog');
+    const dialog = await screen.findByRole('dialog', { hidden: true });
     fireEvent.click(within(dialog).getByRole('button', { name: /^Approve$/ }));
 
     // Breaks if the close were applied to every warning: the dialog would be gone.
@@ -153,8 +153,8 @@ describe('a final approval refused because the storage changed', () => {
     asUser(<AccessRequestInboxEditor />, false);
     await screen.findByText('Sales product');
     fireEvent.click(screen.getByRole('button', { name: /^Approve — advance to the next tier$/ }));
-    const dialog = await screen.findByRole('dialog');
-    fireEvent.click(within(dialog).getByRole('button', { name: /^Approve & grant$/ }));
+    const dialog = await screen.findByRole('dialog', { hidden: true });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Approve & grant$/, hidden: true }));
 
     expect(await within(dialog).findByText(REFUSAL.error)).toBeInTheDocument();
     const lists = within(dialog).getByLabelText('Storage recorded when requested and bound now');
@@ -166,16 +166,18 @@ describe('a final approval refused because the storage changed', () => {
     expect(within(lists).getByText('Bound now')).toBeInTheDocument();
     expect(within(lists).getByText("adls-container · silver (output port 'gold-out')")).toBeInTheDocument();
 
-    // Awaited, like the Deny click below: on a loaded runner the dialog surface
-    // was found carrying aria-hidden="true" at this click too (round 7 broad run).
-    fireEvent.click(await within(dialog).findByRole('button', { name: 'Deny with this reason' }, { timeout: 5000 }));
+    // hidden: true on the role queries inside the dialog from here on. In some
+    // runs of the full spec set, tabster's modalizer marks the open
+    // DialogSurface itself aria-hidden="true" under jsdom, and it stays that
+    // way: waiting 5 s did not clear it. The same pattern is used in
+    // stored-function-editor.test.tsx. This test pins the denial flow (the
+    // button, the prefilled reason, the POST), not the accessibility tree.
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Deny with this reason', hidden: true }));
     expect(await within(dialog).findByDisplayValue(SUGGESTED)).toBeInTheDocument();
-    // Awaited, not synchronous: on a loaded runner a synchronous query found the
-    // dialog surface carrying aria-hidden="true" (seen in the failure dump) right
-    // after the "Deny with this reason" button unmounted; alone it always passed.
-    // The POST assertion below still pins the reason that was sent.
-    fireEvent.click(await within(dialog).findByRole('button', { name: /^Deny$/ }, { timeout: 5000 }));
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    fireEvent.click(await within(dialog).findByRole('button', { name: /^Deny$/, hidden: true }));
+    // hidden: true here too. Without it a dialog that stayed open but hidden
+    // reads as closed, and this check could not fail.
+    await waitFor(() => expect(screen.queryByRole('dialog', { hidden: true })).not.toBeInTheDocument());
 
     const posts = fetchMock.mock.calls
       .filter(([u, i]) => u === '/api/access-requests/r1/decision' && i?.method === 'POST')
@@ -193,10 +195,13 @@ describe('a final approval refused because the storage changed', () => {
     asUser(<AccessRequestInboxEditor />, false);
     await screen.findByText('Sales product');
     fireEvent.click(screen.getByRole('button', { name: /^Approve — advance to the next tier$/ }));
-    const dialog = await screen.findByRole('dialog');
-    fireEvent.click(within(dialog).getByRole('button', { name: /^Approve & grant$/ }));
+    const dialog = await screen.findByRole('dialog', { hidden: true });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Approve & grant$/, hidden: true }));
     expect(await within(dialog).findByText('Another decision is granting.')).toBeInTheDocument();
-    expect(within(dialog).queryByRole('button', { name: 'Deny with this reason' })).not.toBeInTheDocument();
+    // hidden: true, or an aria-hidden surface (see the test above) would hide
+    // the button and this absence check could not fail. The test above is its
+    // positive pair: the button is there for targets_changed.
+    expect(within(dialog).queryByRole('button', { name: 'Deny with this reason', hidden: true })).not.toBeInTheDocument();
     expect(within(dialog).queryByLabelText('Storage recorded when requested and bound now')).not.toBeInTheDocument();
   });
 });
