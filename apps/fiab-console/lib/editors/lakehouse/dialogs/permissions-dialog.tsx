@@ -8,6 +8,7 @@ import {
 } from '@fluentui/react-components';
 import { OnelakeRlsPredicateEditor } from '@/lib/panes/onelake-security-tab';
 import { IdentityPicker } from '@/lib/components/ui/identity-picker';
+import { useIsTenantAdmin } from '@/lib/components/session-context';
 import { useStyles } from '../shared';
 import { useLakehouseCtx } from '../lakehouse-editor-context';
 import type { PermsTab } from '../types';
@@ -29,6 +30,12 @@ export function PermissionsDialog() {
     principalBusy, principalResults, setPrincipalResults,
     activeContainer,
   } = ctx;
+  // Removing a container role assignment is tenant-admin only on the server
+  // (DELETE /api/lakehouse/permissions answers 403 `admin_only`). Say so before
+  // the click instead of after it. Fail-closed: false while the shell probe is
+  // still loading.
+  const isTenantAdmin = useIsTenantAdmin();
+  const revokeReasonId = 'lh-perms-revoke-admin-reason';
 
   const renderPrincipalPicker = () => (
     <Field label="Principal (Entra user)" required>
@@ -105,6 +112,14 @@ export function PermissionsDialog() {
                   Azure RBAC role assignments scoped to the container. Storage Blob Data
                   Reader/Contributor/Owner govern data-plane access (read/write/manage).
                 </Caption1>
+                {!isTenantAdmin && permsRows.length > 0 && (
+                  <MessageBar intent="info" style={{ marginTop: tokens.spacingVerticalS }}>
+                    <MessageBarBody id={revokeReasonId}>
+                      Removing a role assignment requires tenant-admin. Ask a tenant admin to remove it, or
+                      remove it on the storage container in the Azure portal.
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
                 <div style={{ overflow: 'auto', margin: `${tokens.spacingVerticalS} 0 ${tokens.spacingVerticalM}` }}>
                   <Table aria-label="Role assignments" size="small">
                     <TableHeader><TableRow>
@@ -122,7 +137,18 @@ export function PermissionsDialog() {
                           <TableCell>{r.upn ? <span>{r.upn}</span> : <code style={{ fontSize: tokens.fontSizeBase100 }}>{r.principalId?.slice(0, 8)}…</code>}</TableCell>
                           <TableCell>{r.principalType || '—'}</TableCell>
                           <TableCell>{r.roleName || '—'}</TableCell>
-                          <TableCell><Button size="small" appearance="subtle" disabled={permsBusy} onClick={() => revokePerm(r.id)}>Revoke</Button></TableCell>
+                          <TableCell>
+                            <Button
+                              size="small"
+                              appearance="subtle"
+                              disabled={isTenantAdmin ? permsBusy : undefined}
+                              disabledFocusable={!isTenantAdmin}
+                              aria-describedby={isTenantAdmin ? undefined : revokeReasonId}
+                              onClick={() => revokePerm(r.id)}
+                            >
+                              Revoke
+                            </Button>
+                          </TableCell>
                         </TableRow>
                       ))}
                     </TableBody>

@@ -931,8 +931,8 @@ export function referencesCatalogAddress(rel, src) {
 /**
  * Exports of {@link SECURABLE_RAW} that any module may import: the two that do
  * NOT touch Unity Catalog. `getKeyVaultSecret` reads a Key Vault secret and
- * `keyVaultConfigGate` is a pure env check; both are consumed directly by the
- * lakehouse-shortcut routes.
+ * `keyVaultConfigGate` is a pure env check; `getKeyVaultSecret` is imported only
+ * by lib/azure/shortcut-secret-resolver.ts (check-shortcut-secret-resolver.mjs).
  *
  * ## Why this is an ALLOWLIST of the harmless two, not a denylist of the five
  *

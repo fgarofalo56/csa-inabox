@@ -40,12 +40,25 @@
 # WS-G2 freshness guard reads. A no-change run copies zero files.
 set -euo pipefail
 
+# ── --list-inputs: say what this run WOULD read, and do nothing else ─────────
+#
+# `stage-copilot-corpus.sh --list-inputs` prints every path the hash step
+# below would read, repo-relative and NUL-separated, then exits 0. It copies,
+# hashes and writes NOTHING: it returns before the first `mkdir` and before any
+# `mktemp`. The list comes from this script's own code path -- the same
+# SOURCES, the same EXCLUDE_FIND and the same `find_source_md` that the hash
+# step calls -- not from a copy of it; keep the hash step calling
+# `find_source_md`. copilot-corpus-lint (loom-guardrails.yml) calls
+# --list-inputs to name candidate causes when a default run fails.
+#
+# With no argument (every other caller), behaviour is unchanged.
+LIST_INPUTS=0
+if [ "${1:-}" = "--list-inputs" ]; then LIST_INPUTS=1; fi
+
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 DEST="$ROOT/apps/fiab-console/copilot-corpus"
 MANIFEST="$DEST/.corpus-manifest.json"
 HASHES="$DEST/.corpus-hashes.tsv"   # flat "<relpath>\t<sha>" for fast diffing
-
-mkdir -p "$DEST/docs" "$DEST/PRPs/completed/csa-loom-pillar" "$DEST/PRPs/active" "$DEST/PRPs/archive"
 
 SHA_CMD="sha256sum"; command -v sha256sum >/dev/null 2>&1 || SHA_CMD="shasum -a 256"
 
@@ -89,6 +102,25 @@ EXCLUDE_FIND=(
   -not -path './fiab/audit/*'
 )
 
+# The inputs under ONE source root: every *.md, minus EXCLUDE_FIND. Run from
+# inside the root; prints NUL-separated `./relative` paths. The hash step below
+# and --list-inputs both call this, so they read the same set of paths.
+find_source_md() {
+  find . -name '*.md' "${EXCLUDE_FIND[@]}" -print0
+}
+
+if [ "$LIST_INPUTS" -eq 1 ]; then
+  while IFS='|' read -r src _; do
+    [ -n "$src" ] && [ -d "$src" ] || continue
+    ( cd "$src" && find_source_md ) | while IFS= read -r -d '' p; do
+      printf '%s\0' "${src#"$ROOT"/}/${p#./}"
+    done
+  done <<< "$SOURCES"
+  exit 0
+fi
+
+mkdir -p "$DEST/docs" "$DEST/PRPs/completed/csa-loom-pillar" "$DEST/PRPs/active" "$DEST/PRPs/archive"
+
 NEW="$(mktemp)"   # desired staged files: "<relpath>\t<sha>", sorted
 OLD="$(mktemp)"   # previous run's manifest (empty on first run)
 [ -f "$HASHES" ] && sort "$HASHES" > "$OLD" || : > "$OLD"
@@ -96,7 +128,7 @@ OLD="$(mktemp)"   # previous run's manifest (empty on first run)
 # ── 1. batch-hash every source md (one process per source tree) → NEW ──
 while IFS='|' read -r src destsub; do
   [ -n "$src" ] && [ -d "$src" ] || continue
-  ( cd "$src" && find . -name '*.md' "${EXCLUDE_FIND[@]}" -print0 | xargs -0 $SHA_CMD 2>/dev/null ) \
+  ( cd "$src" && find_source_md | xargs -0 $SHA_CMD 2>/dev/null ) \
     | while IFS= read -r line; do
         h="${line%% *}"; p="${line#* }"; p="${p#\*}"; p="${p# }"; p="${p#./}"
         printf '%s\t%s\n' "$destsub/$p" "$h"

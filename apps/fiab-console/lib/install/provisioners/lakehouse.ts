@@ -99,7 +99,7 @@ import {
 } from '@/lib/azure/backing-name';
 import { createShortcut, type ShortcutKind, type ShortcutTargetType } from '@/lib/azure/lakehouse-shortcuts';
 import { readRepoDataset } from '@/lib/apps/repo-datasets';
-import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { deltaTableViewDdl, shortcutFileViewDdl } from './_serverless-ddl';
 import { buildCsv, columnsFromDdl, seedLakehouseAdls } from './_seed-lakehouse-adls';
 // #3920 — the ONE encoder for list-valued `secondaryIds` keys, shared with the
 // install route and the lakehouse editor (which both decode it).
@@ -393,14 +393,7 @@ async function provisionShortcuts(
         const httpsUrl = pathToHttpsUrl(ctx.container, relFile);
         const viewLeaf = `shortcut_${safeRelPath(name)}`.replace(/[^A-Za-z0-9_]/g, '_');
         const obj = `lakehouse.${viewLeaf}`;
-        const urlLiteral = escapeSqlLiteral(httpsUrl);
-        const fmtClause = fmt === 'json'
-          ? `FORMAT = ''CSV'', FIELDTERMINATOR = ''0x0b'', FIELDQUOTE = ''0x0b''`
-          : `FORMAT = ''CSV'', PARSER_VERSION = ''2.0'', HEADER_ROW = TRUE`;
-        const ddl =
-          `IF SCHEMA_ID('lakehouse') IS NULL EXEC('CREATE SCHEMA lakehouse');\n` +
-          `IF OBJECT_ID('${obj}','V') IS NOT NULL DROP VIEW ${obj};\n` +
-          `EXEC('CREATE VIEW ${obj} AS SELECT * FROM OPENROWSET(BULK ''${urlLiteral}'', ${fmtClause}) AS r');`;
+        const ddl = shortcutFileViewDdl(obj, httpsUrl, fmt);
         try {
           await synapseExec(ctx.synapse, ddl);
           engineObject = obj;
@@ -837,7 +830,7 @@ async function provisionAzureNative(
     // The reported identity — plain `<schema>.<table>`, which is what
     // `secondaryIds.externalViews` and the step lines carry.
     const obj = `${viewSchema}.${viewLeaf}`;
-    // …and the DDL identity, BRACKET-DELIMITED. Both segments are already
+    // …and the DDL identity, BRACKET-DELIMITED (deltaTableViewDdl). Both segments are already
     // restricted to `[A-Za-z0-9_]` (the seeder sanitizes the schema, `viewLeaf`
     // above sanitizes the name), so no bracket or quote can appear inside them
     // — but that character set still admits a LEADING DIGIT, and a bundle
@@ -847,19 +840,13 @@ async function provisionAzureNative(
     // table is silently unqueryable. Brackets are the delimited-identifier form
     // Learn prescribes and cost nothing for the ordinary names.
     // Learn: https://learn.microsoft.com/sql/relational-databases/databases/database-identifiers
-    const objDdl = `[${viewSchema}].[${viewLeaf}]`;
     // NOTE the asymmetry, and it is deliberate: `SCHEMA_ID()` / `OBJECT_ID()`
     // take a NAME as a string. `SCHEMA_ID('2024_q1')` is the correct call —
     // bracketing there would look up a schema literally called `[2024_q1]` —
     // whereas `OBJECT_ID()` parses a multi-part name and therefore wants the
-    // delimited form.
-    // Doubled single-quotes for the inner EXEC string literal.
-    const urlLiteral = escapeSqlLiteral(httpsUrl);
-    const ddl =
-      `IF SCHEMA_ID('${viewSchema}') IS NULL EXEC('CREATE SCHEMA [${viewSchema}]');\n` +
-      `IF OBJECT_ID('${objDdl}','V') IS NOT NULL DROP VIEW ${objDdl};\n` +
-      `EXEC('CREATE VIEW ${objDdl} AS SELECT * FROM OPENROWSET(BULK ''${urlLiteral}'', ` +
-      `FORMAT = ''DELTA'') AS r');`;
+    // delimited form. Values in nested dynamic SQL are escaped for each literal
+    // level (lib/install/provisioners/_serverless-ddl.ts).
+    const ddl = deltaTableViewDdl(viewSchema, viewLeaf, httpsUrl);
     try {
       await synapseExec(synapse, ddl);
       externalViews.push(obj);
