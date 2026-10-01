@@ -118,6 +118,8 @@ export interface Warehouse {
    * once; the connection route gates honestly when they are absent.
    */
   odbc_params?: WarehouseOdbcParams;
+  /** `GetWarehouseResponse.tags` — carries Loom's `loom_item_id` owner tag (#3669). */
+  tags?: { custom_tags?: Array<{ key: string; value: string }> };
 }
 
 // asJsonOrThrow keeps the `<op> failed <status>: <body>` message AND sets
@@ -272,7 +274,11 @@ export interface WarehouseScaleSpec {
  * warehouse to already exist (no upsert semantics) and will return 400
  * if cluster_size is outside the allowed enum.
  */
-export async function editWarehouse(id: string, spec: WarehouseScaleSpec): Promise<void> {
+export async function editWarehouse(
+  id: string,
+  spec: WarehouseScaleSpec,
+  customTags?: Array<{ key: string; value: string }>,
+): Promise<void> {
   // Read existing to preserve required fields (name + warehouse_type) the
   // edit endpoint requires even when not changing them.
   const existing = await getWarehouse(id);
@@ -285,6 +291,11 @@ export async function editWarehouse(id: string, spec: WarehouseScaleSpec): Promi
   if (typeof spec.max_num_clusters === 'number') payload.max_num_clusters = spec.max_num_clusters;
   if (typeof spec.auto_stop_mins === 'number') payload.auto_stop_mins = spec.auto_stop_mins;
   if (typeof spec.enable_serverless_compute === 'boolean') payload.enable_serverless_compute = spec.enable_serverless_compute;
+  // #3669 — ALWAYS send tags. The SDK's WarehousesAPI.edit documents `tags` but not
+  // whether omitting it clears them; sending the current set is right either way
+  // and keeps the `loom_item_id` owner tag on every scale. `customTags` replaces.
+  const tags = customTags ?? existing.tags?.custom_tags;
+  if (tags && tags.length > 0) payload.tags = { custom_tags: tags };
 
   const res = await dbxFetch(`/api/2.0/sql/warehouses/${encodeURIComponent(id)}/edit`, {
     method: 'POST',

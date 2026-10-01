@@ -5006,6 +5006,23 @@ const ADMIN_SHAPE_UNSCOPED = new Map([
         '(revokeContainerRoleAssignmentInScope).',
     },
   ],
+  [
+    'app/api/items/_lib/warehouse-item-binding.ts:authorizeWarehouseTarget',
+    {
+      verdict: 'ORG-WIDE',
+      requires: ['isTenantAdmin(', 'authorizeItemWorkspace(', 'allowReadRoles: true'],
+      why:
+        'ORG-WIDE (the admin branch only), #3669. The `isTenantAdmin` test is reached ONLY when the ' +
+        'Databricks SQL warehouse carries no `loom_item_id` tag, or a tag naming no ' +
+        '`databricks-sql-warehouse` item: no workspace and no item is in play, the warehouse is a ' +
+        'resource of the DEPLOYMENT\'s Databricks workspace, and a non-admin gets the coded 404. A ' +
+        'warehouse whose tag names an item takes the other branch, `authorizeItemWorkspace(session, ' +
+        '{ workspaceId, itemId, allowReadRoles: true })` with the item\'s workspace, which never ' +
+        'consults the admin flag here and returns its own 409 on a tenant mismatch. All three tokens ' +
+        'are pinned: drop the item branch or its read scope and this entry no longer describes the ' +
+        'function.',
+    },
+  ],
 ]);
 
 /**

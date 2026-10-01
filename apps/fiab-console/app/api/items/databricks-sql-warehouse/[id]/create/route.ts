@@ -68,13 +68,14 @@
  *   `workspace_id` and the URL carries no `workspaceId`, so the previous value
  *   on the shipped path was the empty string.
  *
- * LAYER 3 — the created resource is still NOT bound back to the item. Creating
- *   a warehouse here does not stamp it with `loom_item_id`, so the next call to
- *   a sibling route still cannot resolve it — that is the same missing binding
- *   the rest of this family records, tracked in #3669. FLOOR, NOT BOUND:
- *   `createOwnedItem` (`_lib/item-crud.ts:423`) is self-service, so this moves
- *   the reachable population from "any authenticated session" to "any
- *   authenticated session, plus one POST".
+ * LAYER 3 — THE CREATED WAREHOUSE IS LINKED BACK TO THE ITEM (#3669). The
+ *   Databricks branch stamps the custom tag `loom_item_id` = the authorized
+ *   item's id, server-side, and refuses a `loom_item_id` key (any case or
+ *   padding) in `body.tags` with a 400 — the caller never chooses the owner.
+ *   `_lib/warehouse-item-binding.ts` reads that tag live to decide who may target
+ *   the warehouse. The Gov branch is unchanged: a Synapse dedicated pool is
+ *   addressed by name and `createDedicatedSqlPool` takes no tags, so pools carry
+ *   no link yet (stated in the PR for #3669).
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -84,6 +85,8 @@ import { createWarehouse, databricksConfigGate, type WarehouseCreateSpec } from 
 import { createDedicatedSqlPool } from '@/lib/azure/synapse-dev-client';
 import { isGovCloud } from '@/lib/azure/cloud-endpoints';
 import { prepareItemCreate, isDeployTargetGate } from '@/lib/azure/topology';
+import { LOOM_OWNER_KEY } from '../../../_lib/databricks-resource-binding';
+import { isOwnerTagKey } from '../../../_lib/warehouse-item-binding';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -207,13 +210,27 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest, { param
     spec.spot_instance_policy = body.spot_instance_policy;
   }
   // Tags arrive from the UI as a { key: value } object; the REST API wants
-  // { custom_tags: [{ key, value }] }.
+  // { custom_tags: [{ key, value }] }. The owner tag is Loom's to write (LAYER 3).
+  const custom_tags: Array<{ key: string; value: string }> = [];
   if (body?.tags && typeof body.tags === 'object' && !Array.isArray(body.tags)) {
-    const custom_tags = Object.entries(body.tags as Record<string, unknown>)
-      .filter(([k, v]) => k && typeof v === 'string' && v.length > 0)
-      .map(([key, value]) => ({ key, value: String(value) }));
-    if (custom_tags.length > 0) spec.tags = { custom_tags };
+    if (Object.keys(body.tags as Record<string, unknown>).some(isOwnerTagKey)) {
+      return NextResponse.json(
+        {
+          ok: false,
+          code: 'reserved_tag',
+          error: `The tag "${LOOM_OWNER_KEY}" is set by Loom to link the warehouse to this item. Remove it from the tags and create again.`,
+        },
+        { status: 400 },
+      );
+    }
+    custom_tags.push(
+      ...Object.entries(body.tags as Record<string, unknown>)
+        .filter(([k, v]) => k && typeof v === 'string' && v.length > 0)
+        .map(([key, value]) => ({ key, value: String(value) })),
+    );
   }
+  custom_tags.push({ key: LOOM_OWNER_KEY, value: guard.ctx.item.id });
+  spec.tags = { custom_tags };
 
   try {
     const result = await createWarehouse(spec);

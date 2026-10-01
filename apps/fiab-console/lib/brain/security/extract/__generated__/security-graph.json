@@ -3151,6 +3151,79 @@
           }
         },
         {
+          "id": "sec:authorizer:apps/fiab-console/app/api/admin/databricks-warehouses/adopt/route.ts#GET",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "GET /api/admin/databricks-warehouses/adopt",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "GET /api/admin/databricks-warehouses/adopt",
+            "params": [],
+            "resourceScoped": false,
+            "callerNamedResourceInputs": [],
+            "allowPaths": [
+              {
+                "id": "get:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": false,
+            "privilegedSinkKinds": []
+          }
+        },
+        {
+          "id": "sec:authorizer:apps/fiab-console/app/api/admin/databricks-warehouses/adopt/route.ts#POST",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "POST /api/admin/databricks-warehouses/adopt",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "POST /api/admin/databricks-warehouses/adopt",
+            "params": [],
+            "resourceScoped": false,
+            "callerNamedResourceInputs": [],
+            "allowPaths": [
+              {
+                "id": "post:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": true,
+                "ownsResolver": "authorizeItemWorkspace"
+              }
+            ],
+            "reachesPrivilegedSink": false,
+            "privilegedSinkKinds": []
+          }
+        },
+        {
+          "id": "sec:verdict-call:apps/fiab-console/app/api/admin/databricks-warehouses/adopt/route.ts#POST:authorizeItemWorkspace:18",
+          "kind": "verdict-call",
+          "provenance": "declared",
+          "label": "POST /api/admin/databricks-warehouses/adopt -> authorizeItemWorkspace",
+          "facet": {
+            "kind": "verdict-call",
+            "callSite": "POST /api/admin/databricks-warehouses/adopt:18",
+            "symbol": "authorizeItemWorkspace",
+            "returnsVerdictUnion": true,
+            "pathsToPrivilegedSink": 0,
+            "pathsConsumingAsRefusal": 0,
+            "consumption": "returned",
+            "allowlisted": false,
+            "allowlistPremiseTested": false,
+            "sinkPrivileged": false,
+            "sinkKind": "none"
+          }
+        },
+        {
           "id": "sec:authorizer:apps/fiab-console/app/api/admin/deploy-plan/cost-estimate/route.ts#POST",
           "kind": "authorizer",
           "provenance": "declared",
@@ -34980,7 +35053,7 @@
             "declaredSinkCount": 24,
             "sinks": [
               {
-                "id": "console:member:6507",
+                "id": "console:member:6524",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -34990,7 +35063,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6626",
+                "id": "console:member:6643",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -35000,7 +35073,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6630",
+                "id": "console:member:6647",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -35010,7 +35083,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6637",
+                "id": "console:member:6654",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -35020,7 +35093,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6644",
+                "id": "console:member:6661",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -35030,7 +35103,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6650",
+                "id": "console:member:6667",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -35040,7 +35113,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6658",
+                "id": "console:member:6675",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -35050,7 +35123,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6668",
+                "id": "console:member:6685",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -35060,7 +35133,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6678",
+                "id": "console:member:6695",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -35070,7 +35143,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6705",
+                "id": "console:member:6722",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -35080,27 +35153,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6709",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:6711",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:6719",
+                "id": "console:member:6726",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -35120,7 +35173,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6738",
+                "id": "console:member:6736",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -35140,66 +35193,6 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6746",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:6750",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:6751",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:6752",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:6753",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:6754",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
                 "id": "console:member:6755",
                 "surface": "console",
                 "accessPath": "member",
@@ -35210,7 +35203,87 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6759",
+                "id": "console:member:6762",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:6763",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:6767",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:6768",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:6769",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:6770",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:6771",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:6772",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:6776",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -45214,6 +45287,13 @@
           "provenance": "declared"
         },
         {
+          "id": "sec-edge:calls:sec:authorizer:apps/fiab-console/app/api/admin/databricks-warehouses/adopt/route.ts#POST->sec:verdict-call:apps/fiab-console/app/api/admin/databricks-warehouses/adopt/route.ts#POST:authorizeItemWorkspace:18",
+          "from": "sec:authorizer:apps/fiab-console/app/api/admin/databricks-warehouses/adopt/route.ts#POST",
+          "to": "sec:verdict-call:apps/fiab-console/app/api/admin/databricks-warehouses/adopt/route.ts#POST:authorizeItemWorkspace:18",
+          "kind": "calls",
+          "provenance": "declared"
+        },
+        {
           "id": "sec-edge:calls:sec:authorizer:apps/fiab-console/app/api/admin/deploy-plan/cost-estimate/route.ts#POST->sec:verdict-call:apps/fiab-console/app/api/admin/deploy-plan/cost-estimate/route.ts#POST:requireTenantAdmin:4",
           "from": "sec:authorizer:apps/fiab-console/app/api/admin/deploy-plan/cost-estimate/route.ts#POST",
           "to": "sec:verdict-call:apps/fiab-console/app/api/admin/deploy-plan/cost-estimate/route.ts#POST:requireTenantAdmin:4",
@@ -46793,6 +46873,21 @@
         {
           "nodeId": "sec:verdict-call:apps/fiab-console/app/api/admin/data-quality-rules/route.ts#DELETE:requireTenantAdmin:4",
           "codeModuleId": "code:apps/fiab-console/app/api/admin/data-quality-rules/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/admin/databricks-warehouses/adopt/route.ts#GET",
+          "codeModuleId": "code:apps/fiab-console/app/api/admin/databricks-warehouses/adopt/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/admin/databricks-warehouses/adopt/route.ts#POST",
+          "codeModuleId": "code:apps/fiab-console/app/api/admin/databricks-warehouses/adopt/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/admin/databricks-warehouses/adopt/route.ts#POST:authorizeItemWorkspace:18",
+          "codeModuleId": "code:apps/fiab-console/app/api/admin/databricks-warehouses/adopt/route.ts",
           "deployedAs": "loom-console"
         },
         {

@@ -30,14 +30,22 @@
  *          limit?, options?:{ labels?, fields?, targetLang?, maxTokens? } }
  *        Databricks path  → { ok, engine:'databricks', sql, columns, rows, rowCount, executionMs }
  *        AOAI path        → { ok, engine:'aoai', fn, column, input, result, model, usage }
+ *
+ * WAREHOUSE ACCESS (#3669). On the Databricks path the caller names
+ * `warehouseId`. The route runs on it only when its live `loom_item_id` tag links
+ * it to a SQL warehouse item in a workspace the caller can read (any workspace
+ * role); a warehouse with no link is open to tenant admins only. Every other case
+ * is a 404 with `code: 'warehouse_not_available'` and a remediation, and a
+ * Databricks/Cosmos read failure is a 502 with `code: 'warehouse_unverifiable'` —
+ * nothing runs on either. The Gov boundaries never reach this path: they use the
+ * AOAI substitute, which takes no warehouse.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import { isGovCloud } from '@/lib/azure/cloud-endpoints';
 import {
   databricksConfigGate,
   executeStatement,
-  getWarehouse,
 } from '@/lib/azure/databricks-client';
 import {
   callAiFn,
@@ -51,6 +59,7 @@ import {
 } from '@/lib/azure/ai-functions-client';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { authorizeWarehouseTarget } from '../../../_lib/warehouse-item-binding';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -120,13 +129,8 @@ function parseOptions(o: unknown): AiFnOptions {
 const GATE_HINT =
   'Set LOOM_AOAI_ENDPOINT + LOOM_AOAI_DEPLOYMENT (admin-plane/main.bicep — enable aiFoundryEnabled or agentFoundryEnabled, or pass explicit overrides) and grant the Console UAMI "Cognitive Services OpenAI User".';
 
-export async function GET(
-  req: NextRequest,
-  ctx: { params: Promise<{ type: string; id: string }> },
-) {
-  const { type } = await ctx.params;
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession<{ type: string; id: string }>(async (_req: NextRequest, { params }) => {
+  const { type } = params;
 
   const govPath = isGovCloud();
   const dbxAvailable = !govPath && databricksConfigGate() === null;
@@ -146,15 +150,9 @@ export async function GET(
     missing: gated ? 'LOOM_AOAI_ENDPOINT' : undefined,
     hint: gated ? GATE_HINT : undefined,
   });
-}
+});
 
-export async function POST(
-  req: NextRequest,
-  ctx: { params: Promise<{ type: string; id: string }> },
-) {
-  await ctx.params; // [type]/[id] carried for item scoping; backend keys off body
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession<{ type: string; id: string }>(async (req: NextRequest, { session }) => {
 
   let body: any;
   try { body = await req.json(); } catch { body = {}; }
@@ -194,9 +192,14 @@ export async function POST(
     if (!table) {
       return NextResponse.json({ ok: false, error: 'table required for the Databricks SQL path' }, { status: 400 });
     }
+    // #3669 — the warehouse must be linked (its live `loom_item_id` tag) to a SQL
+    // warehouse item in a workspace the caller can read; an unlinked warehouse is
+    // for tenant admins only. See `_lib/warehouse-item-binding.ts`.
+    const target = await authorizeWarehouseTarget(session, warehouseId);
+    if (!target.ok) return target.res;
     // Verify the warehouse is RUNNING (honest 409 if not — never a silent fail).
-    const wh = await getWarehouse(warehouseId).catch(() => null);
-    if (wh && wh.state && wh.state !== 'RUNNING') {
+    const wh = target.warehouse;
+    if (wh.state && wh.state !== 'RUNNING') {
       return NextResponse.json(
         { ok: false, error: `Warehouse is ${wh.state}. Start it before running an AI function.`, state: wh.state },
         { status: 409 },
@@ -311,4 +314,4 @@ export async function POST(
     }
     return NextResponse.json({ ok: false, engine: 'aoai', error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
