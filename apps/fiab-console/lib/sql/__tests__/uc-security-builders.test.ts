@@ -38,9 +38,12 @@ describe('sqlString', () => {
     // Breaks if the backslash is not escaped: 'C:\' leaves the literal open.
     expect(sqlString('C:\\')).toBe("'C:\\\\'");
   });
-  it('refuses a control character with UcBuildError', () => {
-    // Breaks if LiteralEscapeError is not mapped to the module's build error.
-    expect(() => sqlString('a\u0000b')).toThrow(UcBuildError);
+  it('carries a control character instead of refusing it', () => {
+    // Breaks if sqlString throws on a control character, emits NUL raw, or
+    // encodes the other controls (Spark takes any Unicode character raw; NUL
+    // is written as the documented \0 escape).
+    expect(sqlString('a\u0000b')).toBe("'a\\0b'");
+    expect(sqlString('a\u001bb\u000c')).toBe("'a\u001bb\u000c'");
   });
 });
 

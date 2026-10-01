@@ -141,6 +141,22 @@ const TOUCH_EXEMPT = new Map([
   // is pinned by lib/auth/__tests__/refresh.test.ts ("returns 401 { reauth:true } …").
   ['apps/fiab-console/app/api/auth/refresh/route.ts',
    '#4805: authVia carry + device-code expiry clamp in the re-mint only, auth prologue untouched; codemod SKIPS (401 is the reauth contract). 401 pinned by refresh.test.ts'],
+  // #4861 touched the two landing-zone attach routes for ONE line each: the
+  // Resource Graph id literal is built with escapeKqlLiteral (KQL backslash
+  // rule) instead of T-SQL quote doubling. The auth prologue is UNTOUCHED.
+  //
+  // THE CODEMOD REFUSES BOTH, falsifiable in one command each:
+  //   node scripts/codemods/migrate-route-toolkit.mjs --file="app/api/landing-zones/[id]/attach/route.ts"
+  //   → SKIPPED (POST: getSession() without the exact 401 guard)
+  // The prologue is getSession → enforceCapability('admin.attach-service',
+  // 'Admin') → pdpCheck; the capability gate issues the 401 itself, so there is
+  // no bare session guard for withSession to replace. COMPENSATING CONTROL:
+  // attach-routes.test.ts pins, for both routes, that the gate verdict is
+  // returned before any ARG call. FOLLOW-UP: #4862.
+  ['apps/fiab-console/app/api/landing-zones/[id]/attach/route.ts',
+   '#4861: ARG id literal escaping only, auth prologue untouched; codemod SKIPS (401 issued by enforceCapability). Gate-first pinned by attach-routes.test.ts; migration tracked in #4862'],
+  ['apps/fiab-console/app/api/landing-zones/[id]/attach/preflight/route.ts',
+   '#4861: ARG id literal escaping only, auth prologue untouched; codemod SKIPS (401 issued by enforceCapability). Gate-first pinned by attach-routes.test.ts; migration tracked in #4862'],
   // #3549/#3551 touched this route ONLY inside Phase-1 item creation, to backfill
   // the bundle definition onto a name-matched EXISTING item that has none. The
   // dedup path pushed `status:'existed'` and wrote nothing while still handing

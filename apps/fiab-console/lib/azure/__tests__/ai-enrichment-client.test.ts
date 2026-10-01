@@ -98,6 +98,18 @@ describe('ai-enrichment: CTAS builders', () => {
     expect(sql).toContain('AS t(source_value, `ai_result`)');
     expect(() => buildValuesCtas({ catalog: 'm', schema: 's', destTable: 'd', outputColumn: 'o', pairs: [] })).toThrow(/no enriched rows/);
   });
+  it('carries control characters in the VALUES literals: U+000C and U+001B raw, NUL as \\0', () => {
+    // Breaks if buildValuesCtas throws on a control character (the round-1
+    // behaviour refused them), drops one, or emits NUL raw. Spark reads any
+    // Unicode character in a literal; \0 is its documented NUL escape.
+    const sql = buildValuesCtas({
+      catalog: 'main', schema: 'sales', destTable: 'out', outputColumn: 'ai_result',
+      pairs: [{ source: 'a\u000cb', output: 'c\u001bd' }, { source: 'n\u0000ul', output: 'x' }],
+    });
+    expect(sql).toContain("('a\u000cb', 'c\u001bd')");
+    expect(sql).toContain("('n\\0ul', 'x')");
+    expect(sql).not.toContain('\u0000');
+  });
   it('builds a bounded sample SELECT', () => {
     expect(buildSampleSelect('`m`.`s`.`t`', 'body', 5)).toBe('SELECT `body` AS source_value FROM `m`.`s`.`t` LIMIT 5');
     // clamps insane limits

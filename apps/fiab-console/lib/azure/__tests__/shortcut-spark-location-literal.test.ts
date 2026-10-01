@@ -45,7 +45,6 @@ vi.mock('../databricks-client', () => ({
 
 import { createTablesShortcut } from '../shortcut-engines';
 import { executeStatement } from '../databricks-client';
-import { LiteralEscapeError } from '@/lib/sql/quoting';
 
 /** Read the Spark SQL literal whose opening quote is at `open` (backslash escapes). */
 function readSparkLiteral(s: string, open: number): { value: string; end: number } {
@@ -112,13 +111,17 @@ describe('createTablesShortcut (Databricks UC): LOCATION literal follows the Spa
     expect(rest).toBe(';');
   });
 
-  it('refuses a control character in the LOCATION before any statement is sent', async () => {
-    // Breaks if the site stops using the Spark helper (escapeSqlLiteral passes
-    // the NUL through into the statement) or if the refusal comes after the call.
-    await expect(createTablesShortcut({
-      lakehouseId: 'lh1', name: 'uc3', abfssUri: 'abfss://c@acct.dfs.core.windows.net/a\u0000b', format: 'delta',
-    })).rejects.toBeInstanceOf(LiteralEscapeError);
-    expect(executeStatement).not.toHaveBeenCalled();
+  it('carries a control character in the LOCATION: NUL as \\0, U+001B raw', async () => {
+    // Breaks if the site stops using the Spark helper (escapeSqlLiteral sends
+    // the NUL raw), or if the helper goes back to refusing control characters
+    // (the statement is then never sent and locationOf() fails on the count).
+    await createTablesShortcut({
+      lakehouseId: 'lh1', name: 'uc3', abfssUri: 'abfss://c@acct.dfs.core.windows.net/a\u0000b\u001b', format: 'delta',
+    });
+    const { ddl, rest } = locationOf();
+    expect(ddl).toContain("USING DELTA LOCATION 'abfss://c@acct.dfs.core.windows.net/a\\0b\u001b';");
+    expect(ddl).not.toContain('\u0000');
+    expect(rest).toBe(';');
   });
 });
 

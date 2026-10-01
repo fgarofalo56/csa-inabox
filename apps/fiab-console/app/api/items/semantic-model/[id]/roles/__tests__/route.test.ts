@@ -393,6 +393,41 @@ describe('#3744 — a bound Databricks workspace is a native RLS endpoint (the w
     expect((executeStatement as any).mock.calls.map((c: unknown[]) => c[0])).toEqual(['wh-healed']);
   });
 
+  // The test UPN replaces current_user() in the compiled predicate. The
+  // replacement text is inserted literally: with a STRING replacement,
+  // String.prototype.replace expands `$&` (the match), `` $` `` (the text before
+  // it) and `$'` (the text after it), so these UPNs would not reach the
+  // statement as typed. The expected predicate is built from the real compiler
+  // output with split/join, which has no `$` patterns.
+  //
+  // Kill power, measured on a sandbox copy with the replacer reverted to a
+  // string: the `$&` and `` $` `` rows go RED. The `$'` row CANNOT: sparkString
+  // turns the quote into `\'`, so the replacement text holds `$\'`, never `$'`,
+  // and no UPN makes that row distinguish the two forms. It is kept as
+  // documentation of the third pattern and is not counted as coverage.
+  it.each([
+    ['positive control: a plain UPN', 'ops@contoso.com'],
+    ['`$&` in the UPN', 'a$&b@contoso.com'],
+    ['`$`` in the UPN', 'a$`b@contoso.com'],
+    ["`$'` in the UPN (documentation only, see above)", "a$'b@contoso.com"],
+  ])('test-as-role: %s is carried into the SELECT exactly', async (_n, upn) => {
+    const dax = '[Owner] = USERPRINCIPALNAME()';
+    seedItem([{ name: 'Own', members: [], tablePermissions: [{ table: 'Sales', filterExpression: dax }] }]);
+    const { executeStatement } = await import('@/lib/azure/databricks-client');
+    const { daxFilterToDatabricksSql, sparkString } = await import('@/lib/azure/rls-compiler');
+    const compiled = daxFilterToDatabricksSql(dax).sql;
+    expect(compiled).toContain('current_user()');
+    const res = await POST(testReq(LOOM_ID, { roleName: 'Own', effectiveUserName: upn }), params(LOOM_ID));
+    expect(res.status).toBe(200);
+    const stmt = String((executeStatement as any).mock.calls[0][1]);
+    const literal = sparkString(upn);
+    // Breaks with `.replace(re, sparkString(upn))`: `$&` re-inserts
+    // current_user(), `` $` `` splices the compiled SQL before the match into
+    // the literal.
+    expect(stmt).toContain(`WHERE (${compiled.split('current_user()').join(literal)}) LIMIT 100;`);
+    expect(stmt).not.toContain('current_user()');
+  });
+
   it('PUT reports a classified resolution failure (403 permission), roles still persisted', async () => {
     seedItem();
     const { WarehouseResolutionError } = await import('@/lib/azure/databricks-sql-warehouse');

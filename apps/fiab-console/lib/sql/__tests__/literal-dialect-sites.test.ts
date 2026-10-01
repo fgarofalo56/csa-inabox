@@ -19,14 +19,14 @@ import { describe, it, expect } from 'vitest';
 import { buildCheckSql, type DqCheck } from '@/lib/azure/dq-check-compile';
 import { buildCreateMlvSql, type MlvSpec } from '@/lib/azure/materialized-lake-view-model';
 import { sparkString } from '@/lib/azure/rls-compiler';
-import { buildCreateTableFormatDdl, TableFormatBuildError } from '@/lib/sql/uc-table-format-builders';
+import { buildCreateTableFormatDdl } from '@/lib/sql/uc-table-format-builders';
 import { compileDltSql, emptyDltModel, type DltPipelineModel } from '@/lib/editors/databricks/dlt-spec';
 import { buildCreateStreamingTable, buildCreateMaterializedView } from '@/lib/editors/databricks/streaming-sql';
 import { resolveTimeTravel, applySqlTableSuffix } from '@/lib/time-machine/time-machine';
 import { generateTransformProject } from '@/lib/transform/transform-codegen';
 import { emptyTransformProject, type TransformProject } from '@/lib/transform/transform-project-model';
 import { foldAppliedStepsToSql } from '@/lib/components/pipeline/dataflow/m-script';
-import { buildDatabricksAiSnippet } from '@/lib/editors/components/ai-functions-helper';
+import { buildDatabricksAiSnippet, aiSnippetBlockedReason } from '@/lib/editors/components/ai-functions-helper';
 
 /** Input: a quote in the middle and a trailing backslash. */
 const V = "a'b\\";
@@ -89,10 +89,10 @@ describe('uc-table-format-builders buildCreateTableFormatDdl', () => {
     expect(sql).toContain(`\`id\` BIGINT COMMENT '${SPARK}'`);
     expect(sql).toContain(`\nCOMMENT '${SPARK}'`);
   });
-  it('a control character is a TableFormatBuildError (400), not an untyped throw', () => {
-    // Breaks if lit() stops mapping LiteralEscapeError to the module's error.
-    expect(() => buildCreateTableFormatDdl({ ...base, comment: 'a\u0001b', columns: [{ name: 'id', type: 'BIGINT' }] }))
-      .toThrow(TableFormatBuildError);
+  it('a control character in COMMENT is carried, not refused', () => {
+    // Breaks if lit() throws on a control character or emits NUL raw.
+    const sql = buildCreateTableFormatDdl({ ...base, comment: 'a\u0000b\u0001', columns: [{ name: 'id', type: 'BIGINT' }] });
+    expect(sql).toContain(`\nCOMMENT 'a\\0b\u0001'`);
   });
 });
 
@@ -176,10 +176,12 @@ describe('m-script foldAppliedStepsToSql', () => {
     expect(tsql.ok && tsql.sql).toContain(`= '${TSQL}'`);
   });
 
-  it('a control character on databricks-sql is an unfoldable step, not a throw', () => {
-    // Breaks if the LiteralEscapeError catch in foldAppliedStepsToSql is removed.
-    expect(foldAppliedStepsToSql('SELECT * FROM t', body('a\u0001b'), 'databricks-sql'))
-      .toEqual({ ok: false, unfoldableStep: 'Filtered' });
+  it('a control character on databricks-sql folds, carried in the literal', () => {
+    // Breaks if the fold refuses a control character (the round-1 behaviour
+    // returned { ok: false, unfoldableStep }) or emits NUL raw.
+    const r = foldAppliedStepsToSql('SELECT * FROM t', body('a\u0000b\u0001'), 'databricks-sql');
+    expect(r.ok).toBe(true);
+    expect(r.ok && r.sql).toContain(`= 'a\\0b\u0001'`);
   });
 });
 
@@ -190,7 +192,21 @@ describe('ai-functions-helper buildDatabricksAiSnippet', () => {
     expect(buildDatabricksAiSnippet({ fn: 'classify', column: 'c', table: 't', labels: [V, 'z'] }))
       .toContain(`ARRAY('${SPARK}', 'z')`);
   });
-  it('a control character yields an empty snippet rather than throwing in render', () => {
-    expect(buildDatabricksAiSnippet({ fn: 'translate', column: 'c', table: 't', targetLang: 'a\u0001b' })).toBe('');
+  it('a control character is carried in the snippet, not refused', () => {
+    // Breaks if the helper returns an empty snippet (the round-1 behaviour)
+    // or throws in render.
+    expect(buildDatabricksAiSnippet({ fn: 'translate', column: 'c', table: 't', targetLang: 'a\u0000b' }))
+      .toContain("ai_translate(`c`, 'a\\0b')");
+  });
+});
+
+describe('ai-functions-helper aiSnippetBlockedReason (why Insert is disabled)', () => {
+  it('names the missing column; null once a column is chosen', () => {
+    // Breaks if the reason is dropped (a disabled Insert with no explanation)
+    // or if it is shown while a snippet exists.
+    expect(aiSnippetBlockedReason({ column: '  ' })).toBe('Choose a column to generate the AI SQL.');
+    expect(buildDatabricksAiSnippet({ fn: 'translate', column: '', table: 't', targetLang: 'fr' })).toBe('');
+    expect(aiSnippetBlockedReason({ column: 'c' })).toBeNull();
+    expect(buildDatabricksAiSnippet({ fn: 'translate', column: 'c', table: 't', targetLang: 'fr' })).not.toBe('');
   });
 });

@@ -167,19 +167,43 @@ describe('attach routes: ARG id literal follows the KQL rule', () => {
   it.each([
     ['preflight', '../[id]/attach/preflight/route'],
     ['attach', '../[id]/attach/route'],
-  ])('%s: an id with a control character is a 400 and no ARG call is made', async (_n, mod) => {
+  ])('%s: the gate verdict is returned before any ARG call (the prologue the route-toolkit exemption relies on)', async (_n, mod) => {
+    // These two routes are TOUCH_EXEMPT in check-route-toolkit.mjs (the codemod
+    // skips them). This pins the hand-written prologue: breaks if the
+    // enforceCapability result is ignored (status 200 and an ARG query sent).
+    const queries = captureArg();
+    enforceMock.mockResolvedValueOnce(NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 }));
+    const { POST } = await import(mod);
+    const req = new NextRequest('https://x/api/landing-zones/hub/attach', {
+      method: 'POST', body: JSON.stringify({ services: [{ armResourceId: ADX_ID, kind: 'adx' }] }),
+    });
+    const res = await POST(req, { params: { id: 'hub' } });
+    expect(res.status).toBe(401);
+    expect(queries()).toHaveLength(0);
+    expect(createMock).not.toHaveBeenCalled();
+    // Positive pairing: with the gate open the same request does reach ARG.
+    const res2 = await POST(new NextRequest('https://x/api/landing-zones/hub/attach', {
+      method: 'POST', body: JSON.stringify({ services: [{ armResourceId: ADX_ID, kind: 'adx' }] }),
+    }), { params: { id: 'hub' } });
+    expect(res2.status).not.toBe(401);
+    expect(queries().length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    ['preflight', '../[id]/attach/preflight/route'],
+    ['attach', '../[id]/attach/route'],
+  ])('%s: an id with a control character is encoded as \\uXXXX in the ARG query', async (_n, mod) => {
     const queries = captureArg();
     const { POST } = await import(mod);
     const req = new NextRequest('https://x/api/landing-zones/hub/attach', {
       method: 'POST', body: JSON.stringify({ services: [{ armResourceId: `${ADX_ID}\u0000`, kind: 'adx' }] }),
     });
-    const res = await POST(req, { params: { id: 'hub' } });
-    // Breaks if the up-front buildIdQuery check is removed: the literal error
-    // would surface from inside the ARG helper instead of as a 400 here.
-    expect(res.status).toBe(400);
-    const j = await res.json();
-    expect(j.error).toMatch(/^armResourceId: .*U\+0000/);
-    expect(queries()).toHaveLength(0);
-    expect(createMock).not.toHaveBeenCalled();
+    await POST(req, { params: { id: 'hub' } });
+    // Breaks if the route refuses the id before the ARG call (the round-1
+    // behaviour was a 400 with no query), or sends the NUL raw.
+    const qs = queries();
+    expect(qs.length).toBeGreaterThan(0);
+    expect(qs[0]).toContain(`id in~ ('${ADX_ID}\\u0000')`);
+    expect(qs[0]).not.toContain('\u0000');
   });
 });

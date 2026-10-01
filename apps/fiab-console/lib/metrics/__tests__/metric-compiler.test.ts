@@ -113,20 +113,17 @@ describe('compileMetricQuery — ADX KQL golden', () => {
     expect(c.sql).toContain("['region'] == 'C:\\\\'");
   });
 
-  it('refuses a control character in an ADX filter value with a 400 MetricCompileError', () => {
-    // Breaks if kqlString lets LiteralEscapeError escape untyped, or if the
-    // NUL is carried into the query text.
-    let caught: unknown;
-    try {
-      compileMetricQuery({
-        spec: SPEC,
-        metric: 'net_revenue',
-        filters: [{ dimension: 'region', op: '=', value: 'a\u0000b' }],
-        engine: 'adx',
-      });
-    } catch (e) { caught = e; }
-    expect(caught).toBeInstanceOf(MetricCompileError);
-    expect((caught as MetricCompileError).status).toBe(400);
+  it('encodes a control character in an ADX filter value as \\uXXXX', () => {
+    // Breaks if kqlString refuses control characters (the round-1 behaviour
+    // threw a 400) or sends NUL / U+001B raw into the query text.
+    const c = compileMetricQuery({
+      spec: SPEC,
+      metric: 'net_revenue',
+      filters: [{ dimension: 'region', op: '=', value: 'a\u0000b\u001b' }],
+      engine: 'adx',
+    });
+    expect(c.sql).toContain("['region'] == 'a\\u0000b\\u001B'");
+    expect(c.sql).not.toMatch(/[\u0000\u001b]/);
   });
 });
 
