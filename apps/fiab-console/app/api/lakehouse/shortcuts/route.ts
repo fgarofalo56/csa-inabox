@@ -39,7 +39,13 @@ import {
   type ExternalBinding,
 } from '@/lib/azure/shortcut-engines';
 import { parseAbfss as parseExternalAbfss, listAdlsWithSas, ShortcutSourceError } from '@/lib/azure/shortcut-client';
-import { getKeyVaultSecret } from '@/lib/azure/shortcut-credentials';
+import {
+  resolveShortcutSecret,
+  assertShortcutSecretUsable,
+  isShortcutSecretRefusal,
+  type ShortcutSecretOwner,
+} from '@/lib/azure/shortcut-secret-resolver';
+import { redactErrorText } from '@/lib/azure/shortcut-error-hygiene';
 import { withSession } from '@/lib/api/route-toolkit';
 import { authorizeItem } from '../_lib/refusal-envelope';
 import { findShortcutRow, listShortcutsForItem } from '../_lib/shortcut-rows';
@@ -65,9 +71,22 @@ function isGate(x: unknown): x is EngineGate {
   return !!x && typeof x === 'object' && (x as EngineGate).gated === true;
 }
 
-/** Strip any HTML and collapse whitespace so a firewall/gateway page never leaks raw. */
+/**
+ * Strip any HTML and collapse whitespace so a firewall/gateway page never leaks
+ * raw, and strip URL query strings / credentials (`redactErrorText`).
+ */
 function sanitize(e: any): string {
-  return (e?.message || String(e)).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500);
+  return redactErrorText((e?.message || String(e)).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()).slice(0, 500);
+}
+
+/**
+ * The response for a credential the shortcut-secret resolver refused (400 for a
+ * malformed name, 403 otherwise). Nothing is persisted: a refused name must not
+ * become a registry row.
+ */
+function secretRefused(e: any) {
+  const status = e?.status === 400 ? 400 : 403;
+  return NextResponse.json({ ok: false, code: e?.code || 'shortcut_secret_refused', error: sanitize(e) }, { status });
 }
 
 export const GET = withSession(async (req: NextRequest, { session }) => {
@@ -134,7 +153,27 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   if (access instanceof NextResponse) return access;
 
   const createdBy = session.claims.upn;
+  const createdByOid = (session.claims as { oid?: string }).oid;
   const tenantId = (session.claims as any).tid || (session.claims as any).tenantId;
+  // The credential is resolved on behalf of the signed-in caller, the same
+  // principal this request records as the row's `createdBy` / `createdByOid`.
+  // A `loom-sc-` credential's owner is the mint record written by
+  // POST /api/lakehouse/shortcuts/credentials (see shortcut-secret-resolver).
+  const secretOwner: ShortcutSecretOwner = {
+    kind: 'principal', via: 'request', oid: createdByOid, upn: createdBy, tid: tenantId, lakehouseId, targetType,
+  };
+
+  // Every path below may persist `credentialRef` on a registry row (active,
+  // pending, or error) — several without ever resolving it. Check the name
+  // up-front so no row records a credential the caller may not use.
+  if (credentialRef?.keyVaultSecret) {
+    try {
+      await assertShortcutSecretUsable(credentialRef.keyVaultSecret, secretOwner);
+    } catch (e: any) {
+      if (isShortcutSecretRefusal(e)) return secretRefused(e);
+      return NextResponse.json({ ok: false, code: 'shortcut_secret_check_failed', error: sanitize(e) }, { status: 502 });
+    }
+  }
 
   const isExternal =
     targetType === 's3' || targetType === 'gcs' || targetType === 'dataverse' ||
@@ -168,8 +207,9 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
     // --- External ADLS Gen2 + SAS: resolve the SAS, run a REAL signed list. ---
     let sas: string;
     try {
-      sas = (await getKeyVaultSecret(credentialRef!.keyVaultSecret!)).trim();
+      sas = (await resolveShortcutSecret(credentialRef!.keyVaultSecret!, secretOwner)).trim();
     } catch (e: any) {
+      if (isShortcutSecretRefusal(e)) return secretRefused(e);
       return NextResponse.json(
         {
           ok: false,
@@ -204,7 +244,7 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
       const errRow = await createShortcut({
         lakehouseId, tenantId, name, kind, parentPath, targetType, targetUri,
         credentialRef, engine: 'none', format,
-        status: 'error', statusDetail: msg, createdBy,
+        status: 'error', statusDetail: msg, createdBy, createdByOid,
       });
       return NextResponse.json({ ok: false, code, error: msg, hint: msg, data: errRow }, { status: status || 502 });
     }
@@ -221,19 +261,21 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
         targetType: targetType as 's3' | 'gcs' | 'dataverse' | 'delta_sharing' | 'sharepoint',
         targetUri,
         credentialRef,
+        owner: secretOwner,
       });
       if (isGate(result)) {
         // Engine for this source isn't configured — persist pending, 503 honestly.
         const pending = await createShortcut({
           lakehouseId, tenantId, name, kind, parentPath, targetType, targetUri,
           credentialRef, engine: 'none', format,
-          status: 'pending', statusDetail: result.hint, createdBy,
+          status: 'pending', statusDetail: result.hint, createdBy, createdByOid,
         });
         return NextResponse.json({ ok: false, code: result.code, error: result.hint, hint: result.hint, data: pending }, { status: 503 });
       }
       binding = result;
       abfssUri = result.readUri;
     } catch (e: any) {
+      if (isShortcutSecretRefusal(e)) return secretRefused(e);
       if (e?.code === 'bad_target' || /^bad_/.test(e?.code || '')) {
         return NextResponse.json({ ok: false, error: sanitize(e), code: e.code }, { status: 400 });
       }
@@ -242,7 +284,7 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
       const errRow = await createShortcut({
         lakehouseId, tenantId, name, kind, parentPath, targetType, targetUri,
         credentialRef, engine: 'none', format,
-        status: 'error', statusDetail: msg, createdBy,
+        status: 'error', statusDetail: msg, createdBy, createdByOid,
       });
       const code =
         /^kv_/.test(e?.code || '') ? (e.code as string) : 'external_bind_error';
@@ -322,7 +364,7 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
         const pending = await createShortcut({
           lakehouseId, tenantId, name, kind, parentPath, targetType, targetUri,
           abfssUri, credentialRef, engine: 'none', format,
-          status: 'pending', statusDetail: reg.hint, createdBy,
+          status: 'pending', statusDetail: reg.hint, createdBy, createdByOid,
         });
         return NextResponse.json({ ok: false, code: reg.code, error: reg.hint, hint: reg.hint, data: pending }, { status: 503 });
       }
@@ -334,7 +376,7 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
       const errRow = await createShortcut({
         lakehouseId, tenantId, name, kind, parentPath, targetType, targetUri,
         abfssUri, credentialRef, engine: 'none', format,
-        status: 'error', statusDetail: msg, createdBy,
+        status: 'error', statusDetail: msg, createdBy, createdByOid,
       });
       return NextResponse.json({ ok: false, code: 'engine_error', error: msg, data: errRow }, { status: 502 });
     }
@@ -353,7 +395,7 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   const row = await createShortcut({
     lakehouseId, tenantId, name, kind, parentPath, targetType, targetUri,
     abfssUri, credentialRef: persistedCredentialRef, engine, engineObject, format,
-    status: 'active', createdBy,
+    status: 'active', createdBy, createdByOid,
   });
   return NextResponse.json({ ok: true, data: row });
 });

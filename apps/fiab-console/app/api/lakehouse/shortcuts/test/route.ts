@@ -20,11 +20,17 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAccountName } from '@/lib/azure/adls-client';
 import { updateShortcutStatus } from '@/lib/azure/lakehouse-shortcuts';
 import { resolveAndTestAdls, testEngineObject, refreshDeltaSharingCredential } from '@/lib/azure/shortcut-engines';
-import { getKeyVaultSecret } from '@/lib/azure/shortcut-credentials';
+import { networkFailureReason, redactErrorText } from '@/lib/azure/shortcut-error-hygiene';
+import {
+  resolveShortcutSecret,
+  isShortcutSecretRefusal,
+  type ShortcutSecretOwner,
+} from '@/lib/azure/shortcut-secret-resolver';
 import { parseAbfss as parseExternalAbfss, listAdlsWithSas, ShortcutSourceError } from '@/lib/azure/shortcut-client';
 import { headDriveItem, parseSharepointUri, graphDriveConfigGate } from '@/lib/azure/graph-drive-client';
 import { withSession } from '@/lib/api/route-toolkit';
 import { stripTrailingSlashes } from '@/lib/util/path-strings';
+import { SHARE_PROVIDER_SECRET_PREFIX } from '@/lib/azure/share-provider-access';
 import { authorizeItem } from '../../_lib/refusal-envelope';
 import { findShortcutRow } from '../../_lib/shortcut-rows';
 
@@ -35,8 +41,20 @@ const READ_ONLY_MESSAGE =
   'Your role on this lakehouse is read-only, so Loom did not re-test its shortcuts. A workspace '
   + 'Member/Admin, or an item grant that includes Edit, can run the test.';
 
+/** HTML stripped, whitespace collapsed, URL query strings / credentials removed. */
 function sanitize(e: any): string {
-  return (e?.message || String(e)).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500);
+  return redactErrorText((e?.message || String(e)).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()).slice(0, 500);
+}
+
+/**
+ * The response for a stored credential the shortcut-secret resolver refused.
+ * The row is NOT rewritten: a refusal says the credential cannot be used for
+ * this row's owner, not that the source is unreachable, and the engine objects
+ * created at bind time keep serving queries either way.
+ */
+function secretRefused(e: any) {
+  const status = e?.status === 400 ? 400 : 403;
+  return NextResponse.json({ ok: false, code: e?.code || 'shortcut_secret_refused', error: sanitize(e) }, { status });
 }
 
 export const POST = withSession(async (req: NextRequest, { session }) => {
@@ -63,6 +81,13 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   }
   // The registry key the row is stored under; status is written back there.
   const { row: sc, key } = found;
+  // The stored credential is resolved on behalf of the principal who CREATED
+  // this row: a row may only keep using a credential its creator owns, whoever
+  // presses Test.
+  const secretOwner: ShortcutSecretOwner = {
+    kind: 'principal', via: 'row', oid: sc.createdByOid, upn: sc.createdBy, lakehouseId: sc.lakehouseId,
+    targetType: sc.targetType,
+  };
 
   // Delta Sharing: re-validate by listing shares with the stored bearer token.
   // A 401/403 means the token is expired/invalid — the "broken" state the Retry
@@ -77,7 +102,7 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
       return NextResponse.json({ ok: true, data: updated });
     }
     try {
-      const raw = (await getKeyVaultSecret(sc.credentialRef.keyVaultSecret)).trim();
+      const raw = (await resolveShortcutSecret(sc.credentialRef.keyVaultSecret, secretOwner)).trim();
       let profile: { endpoint?: string; bearerToken?: string; expirationTime?: string; shareCredentialsVersion?: number };
       try {
         profile = JSON.parse(raw);
@@ -94,19 +119,43 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
         );
       }
       const sharesUrl = stripTrailingSlashes(profile.endpoint) + '/shares';
-      const testRes = await fetch(sharesUrl, { headers: { Authorization: `Bearer ${profile.bearerToken}` } });
+      let testRes: Response;
+      try {
+        testRes = await fetch(sharesUrl, { headers: { Authorization: `Bearer ${profile.bearerToken}` } });
+      } catch (netErr: any) {
+        // The endpoint comes from the stored credential file: report a symbolic
+        // reason, never the URL or a transport message that may carry it.
+        throw Object.assign(
+          new Error(
+            `Delta Sharing endpoint in the credential file '${sc.credentialRef.keyVaultSecret}' is unreachable ` +
+            `(${networkFailureReason(netErr)}).`,
+          ),
+          { code: 'delta_sharing_unreachable' },
+        );
+      }
       if (testRes.status === 401 || testRes.status === 403) {
+        // A loom-dsp- credential is the one Loom stored when the provider was
+        // added under Data shares; adding the provider again saves a new one.
+        const fromProvider = sc.credentialRef.keyVaultSecret.toLowerCase().startsWith(SHARE_PROVIDER_SECRET_PREFIX);
+        const fix = fromProvider
+          ? 'Get a fresh activation file from the provider, then under Data shares remove the provider and add it ' +
+            'again with that file (Add provider), which saves the new credential. Then Retry.'
+          : 'Update the Key Vault secret with a fresh credential file from the provider, then Retry.';
         throw Object.assign(
           new Error(
             `Delta Sharing authentication failed (HTTP ${testRes.status}). The bearer token in secret ` +
-            `'${sc.credentialRef.keyVaultSecret}' is invalid or expired. Update the Key Vault secret with a ` +
-            `fresh credential file from the provider, then Retry.`,
+            `'${sc.credentialRef.keyVaultSecret}' is invalid or expired. ${fix}`,
           ),
           { code: 'delta_sharing_auth_failure' },
         );
       }
       if (!testRes.ok) {
-        throw Object.assign(new Error(`Delta Sharing endpoint unreachable (HTTP ${testRes.status}): ${sharesUrl}`), { code: 'delta_sharing_unreachable' });
+        throw Object.assign(
+          new Error(
+            `Delta Sharing endpoint in the credential file '${sc.credentialRef.keyVaultSecret}' returned HTTP ${testRes.status}.`,
+          ),
+          { code: 'delta_sharing_unreachable' },
+        );
       }
       // Tables shortcut on Databricks: push the (possibly refreshed) token to the
       // UC Volume credential file and prove the UC table still reads.
@@ -120,6 +169,7 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
       const updated = await updateShortcutStatus(key, id, 'active', undefined);
       return NextResponse.json({ ok: true, data: updated });
     } catch (e: any) {
+      if (isShortcutSecretRefusal(e)) return secretRefused(e);
       const msg = sanitize(e);
       const updated = await updateShortcutStatus(key, id, 'error', msg);
       return NextResponse.json({ ok: false, error: msg, code: e?.code || 'delta_sharing_unreachable', data: updated }, { status: 502 });
@@ -178,7 +228,7 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
     (sc.credentialRef.kind === 'sas' || sc.credentialRef.kind === 'accountKey')
   ) {
     try {
-      const sas = (await getKeyVaultSecret(sc.credentialRef.keyVaultSecret)).trim();
+      const sas = (await resolveShortcutSecret(sc.credentialRef.keyVaultSecret, secretOwner)).trim();
       if (!sas) throw Object.assign(new Error(`Key Vault secret '${sc.credentialRef.keyVaultSecret}' is empty — re-save the SAS.`), { code: 'kv_secret_empty' });
       const parts = parseExternalAbfss(sc.abfssUri || sc.targetUri);
       await listAdlsWithSas({ account: parts.account, container: parts.container, path: parts.path, sasToken: sas, maxResults: 1 });
@@ -188,9 +238,10 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
       const updated = await updateShortcutStatus(key, id, 'active', undefined);
       return NextResponse.json({ ok: true, data: updated });
     } catch (e: any) {
+      if (isShortcutSecretRefusal(e)) return secretRefused(e);
       const msg = sanitize(e);
-      const code = e instanceof ShortcutSourceError ? e.code : e?.code || 'adls_sas_error';
       const updated = await updateShortcutStatus(key, id, 'error', msg);
+      const code = e instanceof ShortcutSourceError ? e.code : e?.code || 'adls_sas_error';
       return NextResponse.json({ ok: false, error: msg, code, data: updated }, { status: (e instanceof ShortcutSourceError ? e.status : 502) || 502 });
     }
   }
