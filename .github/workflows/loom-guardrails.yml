@@ -133,6 +133,9 @@ jobs:
       - name: kv-secret-purpose (every Key Vault read declares its name-space)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-kv-secret-purpose.mjs
+      - name: shortcut-secret-resolver (only the resolver imports getKeyVaultSecret / getShortcutSecretValue, and does not re-export them)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-shortcut-secret-resolver.mjs
       - name: containerlog-query-scope (a log query must not be able to count its own output)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-containerlog-query-scope.mjs
@@ -1700,3 +1703,109 @@ jobs:
         run: |
           node scripts/ci/check-guardrails-observability.mjs --self-test
           node scripts/ci/check-guardrails-observability.mjs
+
+  # ── copilot-corpus-lint: ADVISORY, deliberately NOT a required check ────────
+  #
+  # Operator decision 2026-09-30: these two steps run in their OWN job, not in
+  # `guardrails`, and this job is NOT listed in branch protection or in
+  # tools/drain/required_contexts.json. GitHub will not block a merge on it.
+  # The drain's merge gate still does: gate 4c treats a red ADVISORY check as a
+  # NO-GO (tools/drain/gates.py advisory_verdict), so a red here holds a
+  # drain-merged PR.
+  #
+  # WHY IT EXISTS. copilot-quality-evals.yml runs on a PR only when the PR
+  # changes what that run executes (operator decision 2026-09-30), so a
+  # docs/PRPs-only PR no longer reaches its first two steps. Both READ docs/ and
+  # PRPs/, and a docs-only diff can fail either one:
+  #   - stage-copilot-corpus.sh hashes every *.md under them with
+  #     `find | xargs sha256sum` under `set -euo pipefail`. A directory named
+  #     `*.md` exits 123, and the same stager runs in the console build/deploy
+  #     lanes on main, so that is where it would otherwise first fail;
+  #   - lint-eval-sets.mjs resolves every eval `expectedChunks` path/anchor
+  #     against doc headings.
+  #
+  # It runs on EVERY pull_request (this workflow's `pull_request:` has no keys).
+  # It needs no secrets, no Azure and no network, and it is safe on a fork PR.
+  #
+  # TWO ADJACENT STEPS, not one `a && b`, so a stager failure cannot hide a lint
+  # result:
+  #   1. The stager writes into apps/fiab-console/copilot-corpus/ (gitignored
+  #      except .gitkeep) and leaves it there. The stager discards
+  #      sha256sum's stderr, so when it fails this step names the exit code
+  #      and then CANDIDATE paths, each worded "may be the cause": inputs that
+  #      are not readable regular files (a directory, a broken symlink, an
+  #      unreadable file). The inputs come from `stage-copilot-corpus.sh
+  #      --list-inputs`, which runs the stager's OWN roots, exclusions and
+  #      find and writes nothing. This step does not parse the script. If the
+  #      listing itself fails, it says the cause was not determined and names
+  #      no path. At most 20 are listed, then a count of the rest.
+  #   2. The lint runs against that staged manifest (corpus membership, as
+  #      copilot-quality-evals.yml runs it). It fails if no manifest was
+  #      staged. Then `git clean -X` restores the dir, on failure too (trap).
+  #
+  # Pinned by scripts/ci/__tests__/copilot-evals-trigger-contract.test.mjs:
+  # (d) the job's shape, (e) both step bodies EXECUTED under `bash -e`, and
+  # (f) the stager's --list-inputs (exact list, no writes) and default mode.
+  copilot-corpus-lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Node.js 20
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20"
+      - name: copilot-corpus-stages (the Copilot corpus stager survives this diff's docs/ + PRPs/)
+        if: ${{ !cancelled() }}
+        run: |
+          rc=0
+          bash scripts/csa-loom/stage-copilot-corpus.sh || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::scripts/csa-loom/stage-copilot-corpus.sh exited $rc. It hashes every *.md under its source roots with find | xargs sha256sum under set -euo pipefail, and discards sha256sum's stderr, so it may have printed no reason above. Likely cause: an input it hashes that is not a readable regular file."
+            STAGER=scripts/csa-loom/stage-copilot-corpus.sh
+            inputs="$(mktemp)"
+            lrc=0
+            bash "$STAGER" --list-inputs > "$inputs" || lrc=$?
+            if [ "$lrc" -ne 0 ]; then
+              echo "::error::could not list the stager's inputs ($STAGER --list-inputs exited $lrc); cause not determined, and no candidate path is named."
+              exit "$rc"
+            fi
+            cands=()
+            total=0
+            while IFS= read -r -d '' p; do
+              total=$((total + 1))
+              if [ ! -f "$p" ] || [ ! -r "$p" ]; then cands+=("$p"); fi
+            done < "$inputs"
+            rm -f "$inputs"
+            if [ "${#cands[@]}" -eq 0 ]; then
+              echo "::error::no candidate found: all $total input(s) the stager lists ($STAGER --list-inputs) are readable regular files, so the cause was NOT determined here. Reproduce with: bash -x $STAGER"
+            else
+              for p in "${cands[@]:0:20}"; do
+                kind="not a regular file"
+                if [ -f "$p" ] && [ ! -r "$p" ]; then kind="an unreadable file"; fi
+                if [ -d "$p" ]; then kind="a directory"; fi
+                if [ -L "$p" ] && [ ! -e "$p" ]; then kind="a broken symlink"; fi
+                echo "::error::may be the cause: ${p//%/%25} is $kind, and the stager lists it as an input ($STAGER --list-inputs). Rename it or change its extension."
+              done
+              if [ "${#cands[@]}" -gt 20 ]; then echo "::error::$(( ${#cands[@]} - 20 )) more candidate path(s) not listed (the first 20 are shown)."; fi
+            fi
+            exit "$rc"
+          fi
+      - name: copilot-eval-sets-lint (every eval expectedChunks anchor resolves in the corpus staged above)
+        if: ${{ !cancelled() }}
+        run: |
+          CORPUS=apps/fiab-console/copilot-corpus
+          trap 'git clean -fdqX -- "$CORPUS"' EXIT
+          node scripts/csa-loom/lint-eval-sets.mjs
+          if [ ! -f "$CORPUS/.corpus-manifest.json" ]; then
+            echo "::error::no staged manifest at $CORPUS/.corpus-manifest.json, so the lint above checked the repo tree only, not corpus membership (see the copilot-corpus-stages step)"
+            exit 1
+          fi
+          git clean -fdqX -- "$CORPUS"
+          LEFT="$(git status --porcelain --ignored -- "$CORPUS")"
+          if [ -n "$LEFT" ]; then
+            echo "::error::staged corpus files are still in $CORPUS after cleanup:"
+            printf '%s\n' "$LEFT"
+            exit 1
+          fi
