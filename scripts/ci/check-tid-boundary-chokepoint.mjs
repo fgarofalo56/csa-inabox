@@ -4995,6 +4995,22 @@ const ADMIN_SHAPE_UNSCOPED = new Map([
     },
   ],
   [
+    'app/api/lakehouse/shortcuts/browse/route.ts:GET',
+    {
+      verdict: 'ORG-WIDE',
+      requires: ['authorizeLakehouse(', 'isTenantAdmin('],
+      why:
+        'ORG-WIDE (the ADLS branch\'s admin test only). The lakehouse is resolved and tenant-bounded ' +
+        'FIRST: `authorizeLakehouse(session, lakehouseId)` (-> `resolveItemAccessByOid`, checked by ' +
+        '8a-8e) answers 404 before the admin flag is read, and a request with no `lakehouseId` is 400. ' +
+        'The `isTenantAdmin` test then only widens STORAGE reach on the Console identity: a tenant ' +
+        'admin may list any account and container, while everyone else is limited to the ' +
+        'deployment\'s lake containers and the containers readable lakehouses in that workspace ' +
+        'record (403 otherwise). It reads no workspace document. Both tokens are pinned: drop the ' +
+        'item check and this entry no longer describes the function.',
+    },
+  ],
+  [
     'app/api/lakehouse/permissions/route.ts:DELETE',
     {
       verdict: 'ORG-WIDE',
