@@ -203,6 +203,81 @@ describe('a final approval refused because the storage changed', () => {
     // positive pair: the button is there for targets_changed.
     expect(within(dialog).queryByRole('button', { name: 'Deny with this reason', hidden: true })).not.toBeInTheDocument();
     expect(within(dialog).queryByLabelText('Storage recorded when requested and bound now')).not.toBeInTheDocument();
+    // Focus goes to the refusal itself, not the body: breaks if no focus move
+    // follows a refusal (activeElement is the disabled submit or the body).
+    await waitFor(() => expect(document.activeElement?.textContent).toContain('Another decision is granting.'));
+  });
+
+  it('keeps keyboard focus in the dialog: on Deny with this reason after the 409, then on the reason after it', async () => {
+    // Reviewer B measured focus on BODY at both points. Breaks if the 409 does
+    // not move focus to the offered action (activeElement is the submit button
+    // that disabled itself, or the body), or if switching to a denial leaves it
+    // on the unmounted button (activeElement is the body, not the textarea).
+    fetchMock.mockImplementation(async (url: string, init?: any) => {
+      if (url === '/api/access-requests/r1/decision' && init?.method === 'POST') return jsonRes(REFUSAL, 409);
+      if (url === '/api/access-requests?tier=manager&status=open') return jsonRes({ ok: true, requests: [request({ tier: 'access-provider' })] });
+      return jsonRes({ ok: true, requests: [] });
+    });
+    asUser(<AccessRequestInboxEditor />, false);
+    await screen.findByText('Sales product');
+    fireEvent.click(screen.getByRole('button', { name: /^Approve — advance to the next tier$/ }));
+    const dialog = await screen.findByRole('dialog', { hidden: true });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Approve & grant$/, hidden: true }));
+    const denyInstead = await within(dialog).findByRole('button', { name: 'Deny with this reason', hidden: true });
+    await waitFor(() => expect(document.activeElement).toBe(denyInstead));
+    fireEvent.click(denyInstead);
+    const reasonBox = await within(dialog).findByDisplayValue(SUGGESTED);
+    await waitFor(() => expect(document.activeElement).toBe(reasonBox));
+  });
+});
+
+describe('opening the inbox on one request (?request=, the Access report link)', () => {
+  afterEach(() => { window.history.replaceState({}, '', '/'); });
+
+  it('opens the request on its own tier, expanded and marked current', async () => {
+    // Breaks if the parameter is ignored: the inbox stays on Manager, the
+    // Approver list is never fetched and no row is marked current.
+    window.history.replaceState({}, '', '/governance/access-requests?request=r9');
+    const r9 = request({ id: 'r9', assetName: 'Linked product', tier: 'approver' });
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url === '/api/access-requests?status=open') return jsonRes({ ok: true, requests: [request(), r9] });
+      if (url === '/api/access-requests?tier=approver&status=open') return jsonRes({ ok: true, requests: [r9] });
+      return jsonRes({ ok: true, requests: [] });
+    });
+    render(<AccessRequestInboxEditor />);
+    const name = await screen.findByText('Linked product');
+    const row = name.closest('tr')!;
+    expect(row.getAttribute('aria-current')).toBe('true');
+    expect(within(row).getByRole('button', { name: 'Collapse details' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { selected: true }).textContent).toContain('Approver');
+  });
+
+  it('opens a closed request under History', async () => {
+    // Breaks if only open requests were searched (the request is not found).
+    window.history.replaceState({}, '', '/governance/access-requests?request=r7');
+    const r7 = request({ id: 'r7', assetName: 'Closed product', status: 'denied', deniedAt: '2026-09-02T00:00:00.000Z' });
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url === '/api/access-requests?status=denied') return jsonRes({ ok: true, requests: [r7] });
+      return jsonRes({ ok: true, requests: [] });
+    });
+    render(<AccessRequestInboxEditor />);
+    const row = (await screen.findByText('Closed product')).closest('tr')!;
+    expect(row.getAttribute('aria-current')).toBe('true');
+    expect(screen.getByRole('tab', { selected: true }).textContent).toContain('History');
+  });
+
+  it('says when the linked request is not found, and when it could not be looked up', async () => {
+    // Breaks if a miss were silent, or if a failed lookup were reported as
+    // "not found" (a claim the inbox did not establish).
+    window.history.replaceState({}, '', '/governance/access-requests?request=gone');
+    fetchMock.mockImplementation(async () => jsonRes({ ok: true, requests: [] }));
+    const first = render(<AccessRequestInboxEditor />);
+    expect(await screen.findByText("Request gone is not among this tenant's open, completed or denied requests.")).toBeInTheDocument();
+    first.unmount();
+    fetchMock.mockImplementation(async (url: string) => (
+      url === '/api/access-requests?status=open' ? jsonRes({ ok: false, error: 'store unavailable' }, 503) : jsonRes({ ok: true, requests: [] })));
+    render(<AccessRequestInboxEditor />);
+    expect(await screen.findByText('Request gone could not be looked up: store unavailable')).toBeInTheDocument();
   });
 });
 

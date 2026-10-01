@@ -31,8 +31,10 @@
  * Exit code: 0 when every selected pass completed — INCLUDING an honest config
  * gate (e.g. group-sync returning {gated:true} because
  * LOOM_GRAPH_GROUP_SYNC_ENABLED is off); that is a documented state, not a code
- * failure. Non-zero ONLY when a POST itself fails (unreachable console, bad
- * token, HTTP >= 400), so a Failed execution always means a real regression.
+ * failure. Non-zero when a POST itself fails (unreachable console, bad token,
+ * HTTP >= 400), and when the expiry pass answers ok but reports
+ * `grantRecordsError` (the access-request grant records were not resolved), so
+ * a Failed execution always means a real regression.
  */
 
 const base = (process.env.LOOM_URL || 'http://loom-console').replace(/\/$/, '');
@@ -90,18 +92,27 @@ async function runPass(pass) {
     return true;
   }
   if (data && data.ok) {
+    const g = data.grantRecords;
     const detail =
       pass.name === 'expiry'
         ? `candidates=${data.candidates ?? 0} expired=${data.expired ?? 0}`
-          + (data.grantRecords
-            ? ` grantRecords: checked=${data.grantRecords.checked ?? 0} absent=${data.grantRecords.absent ?? 0}`
-              + ` found=${data.grantRecords.found ?? 0} landedLate=${data.grantRecords.landedLate ?? 0}`
-              + ` unknown=${data.grantRecords.unknown ?? 0}`
+          + (g
+            ? ` grantRecords: checked=${g.checked ?? 0} absent=${g.absent ?? 0}`
+              + ` found=${g.found ?? 0} landedLate=${g.landedLate ?? 0}`
+              + ` stillAbsent=${g.stillAbsent ?? 0} lapsed=${g.lapsed ?? 0}`
+              + ` unknown=${g.unknown ?? 0}`
             : '')
           + (data.grantRecordsError ? ` grantRecordsError="${data.grantRecordsError}"` : '')
         : pass.name === 'reviews'
           ? `closed=${data.closed ?? 0} revoked=${data.revoked ?? 0}`
           : `packages=${data.groupTargetedPackages ?? 0} granted=${data.granted ?? 0} revoked=${data.revoked ?? 0}`;
+    if (data.grantRecordsError) {
+      // The expiry pass completed, but the grant records were not resolved: a
+      // stopped decision's grant may be live and unrecorded, so this execution
+      // is a failure, never a green run over a pass that did not happen.
+      console.error(`[access-sweep] ${pass.name}: grant records not resolved — ${detail}${dryRun ? ' (dryRun)' : ''}`);
+      return false;
+    }
     console.log(`[access-sweep] ${pass.name}: ok — ${detail}${dryRun ? ' (dryRun)' : ''}`);
     return true;
   }

@@ -10,6 +10,8 @@
  *                  role-assignment id), or landed with its prior state unknown
  *                  (`created` absent);
  *   preexisting  — the principal already held it (`created: false`);
+ *   gated        — the grant answered `pending`: an honest configuration gate
+ *                  (a store not bound yet), nothing granted;
  *   failed       — the grant did not land.
  *
  * A live grant is therefore never recorded nowhere: if anything stops the
@@ -24,16 +26,21 @@
  * `absent` is not final. It is what the store showed when the row was checked,
  * and a grant still in flight can land after that. When it does, the decision
  * that made it writes the real outcome onto the row ({@link settleGrantIntent}),
- * and the scheduled sweep re-checks `absent` rows for a day.
+ * and the scheduled sweep re-checks `absent` rows for a day. After that day the
+ * sweep checks a row once more: found in place, it is recorded; still not in
+ * place, it is marked `lapsed`, which is final and no longer listed.
  *
  * OWNERSHIP decides what a stopped approval revokes ({@link revokeOwnIntents}):
  * exactly the rows THIS attempt wrote whose grant this attempt created, whoever
  * holds the request now. The one exception is a row another approval ADOPTED
- * when it completed the request ({@link adoptGrantIntents}): adopting re-points
- * the row's `attemptId`, conditioned on its etag, and the adopter's completed
- * request keeps the grant. A stopped approval never revokes another attempt's
- * rows. A denial revokes every created row of the request, from any attempt
- * ({@link revokeIntents}).
+ * before its final write ({@link adoptGrantIntents}): adopting re-points the
+ * row's `attemptId`, conditioned on its etag, so the adopter's request keeps
+ * the grant. An adopter that then stops without completing the request hands
+ * each adopted row back to the attempt that wrote it, or revokes the grant
+ * itself when that attempt has already recorded it as created
+ * ({@link releaseAdoptions}). A stopped approval never revokes another
+ * attempt's rows. A denial revokes every created row of the request, from any
+ * attempt ({@link revokeIntents}).
  *
  * Storage: rows live beside the request, in the `access-request-workflow`
  * container and the request's partition (`/tenantId`), as `kind: 'grant-intent'`
@@ -41,7 +48,7 @@
  * `kind = "access-request"`, `status`, `requesterId` or `assetId`; an intent
  * row carries none of those fields, so it never appears in an inbox, a
  * "my requests" list, the access gate, the backfill or the repartition scan.
- * The Access report lists the rows that are not settled
+ * The Access report lists the rows that are not settled and not superseded
  * ({@link listUnsettledGrantIntents}).
  */
 import crypto from 'node:crypto';
@@ -66,7 +73,7 @@ export const GRANT_LEASE_MS = 120_000;
 /** How long the scheduled sweep keeps re-checking an `absent` row for a grant that landed late. */
 export const ABSENT_RECHECK_MS = 24 * 60 * 60 * 1000;
 
-export type GrantIntentState = 'pending' | 'active' | 'preexisting' | 'failed' | 'absent' | 'revoked';
+export type GrantIntentState = 'pending' | 'active' | 'preexisting' | 'gated' | 'failed' | 'absent' | 'lapsed' | 'revoked';
 
 export interface GrantIntent {
   id: string;
@@ -162,6 +169,9 @@ export function settledFields(r: AccessRequestGrantResult): Pick<GrantIntent, 's
     ...(r.roleAssignmentId ? { roleAssignmentId: r.roleAssignmentId } : {}),
     ...(r.detail ? { detail: r.detail } : {}),
   };
+  // `pending` is an honest configuration gate (nothing was granted, nothing
+  // failed); an `error` is a grant that did not land.
+  if (r.status === 'pending') return { ...base, state: 'gated', created: false };
   if (r.status !== 'active') return { ...base, state: 'failed', created: false };
   if (r.created === false) return { ...base, state: 'preexisting', created: false };
   if (r.created === true) return { ...base, state: 'active', created: true };
@@ -253,6 +263,11 @@ export function isRecheckableAbsent(row: GrantIntent, now = Date.now()): boolean
   return row.state === 'absent' && Date.parse(row.createdAt) + ABSENT_RECHECK_MS > now;
 }
 
+/** An `absent` row past its re-check window: checked once more, then settled. */
+export function isLapsingAbsent(row: GrantIntent, now = Date.now()): boolean {
+  return row.state === 'absent' && Date.parse(row.createdAt) + ABSENT_RECHECK_MS <= now;
+}
+
 /** Write `patch` onto the stored row, conditioned on the etag it was read with; re-read once on a 412. */
 async function patchIntent(c: IntentContainer, row: GrantIntent, patch: Partial<GrantIntent>, when: (r: GrantIntent) => boolean): Promise<GrantIntent> {
   let current = row;
@@ -282,19 +297,33 @@ export const RECONCILED_FOUND =
 export const RECONCILED_LANDED_LATE =
   'Not in place when first checked, and found in place on a later check. Whether the requester held it before '
   + 'the request is unknown, so it is not removed automatically.';
+export const RECONCILED_LAPSED =
+  'Not in place when checked, nor on any re-check in the 24 hours after this row was written; no longer re-checked.';
+
+/** What one reconcile did: the outcome the sweep counts, and the row as it stands after. */
+export type ReconcileOutcome = 'skipped' | 'unknown' | 'found' | 'landedLate' | 'absent' | 'stillAbsent' | 'lapsed' | 'changed';
 
 /**
  * Resolve a stale `pending` row from the store (see the module header), and,
- * with `recheckAbsent`, re-check an `absent` row young enough for a late grant
- * ({@link isRecheckableAbsent}). A row neither applies to, or whose store could
- * not be read, is returned unchanged. A row found in place is also written to
- * the entitlement ledger (no expiry), so the Access report shows it.
+ * with `recheckAbsent`, re-check an `absent` row: one young enough for a late
+ * grant ({@link isRecheckableAbsent}) stays `absent` when still not in place,
+ * and one past that window ({@link isLapsingAbsent}) is marked `lapsed`. A row
+ * none of these applies to, or whose store could not be read, is returned
+ * unchanged. A row found in place is also written to the entitlement ledger
+ * (no expiry), so the Access report shows it.
  */
 export async function reconcileGrantIntent(
   c: IntentContainer, row: GrantIntent, now = Date.now(), opts: { recheckAbsent?: boolean } = {},
 ): Promise<GrantIntent> {
-  const absent = !!opts.recheckAbsent && isRecheckableAbsent(row, now);
-  if (!isStalePending(row, now) && !absent) return row;
+  return (await reconcileWithOutcome(c, row, now, opts)).row;
+}
+
+async function reconcileWithOutcome(
+  c: IntentContainer, row: GrantIntent, now: number, opts: { recheckAbsent?: boolean },
+): Promise<{ row: GrantIntent; outcome: ReconcileOutcome }> {
+  const absent = !!opts.recheckAbsent && row.state === 'absent';
+  const lapsing = absent && isLapsingAbsent(row, now);
+  if (!isStalePending(row, now) && !absent) return { row, outcome: 'skipped' };
   let probe;
   try {
     probe = await probeAccessGrant({
@@ -304,22 +333,33 @@ export async function reconcileGrantIntent(
   } catch {
     probe = undefined;
   }
-  if (!probe || 'unknown' in probe) return row;
-  if (absent && !probe.held) return row;
+  if (!probe || 'unknown' in probe) return { row, outcome: 'unknown' };
+  if (absent && !probe.held && !lapsing) return { row, outcome: 'stillAbsent' };
   const found = absent ? RECONCILED_LANDED_LATE : RECONCILED_FOUND;
-  const patch: Partial<GrantIntent> = probe.held
-    ? {
+  let patch: Partial<GrantIntent>;
+  let outcome: ReconcileOutcome;
+  if (probe.held) {
+    patch = {
       state: 'active', roleName: probe.roleName, detail: found,
       ...(probe.roleAssignmentId ? { roleAssignmentId: probe.roleAssignmentId } : {}),
-    }
-    : { state: 'absent', detail: RECONCILED_ABSENT };
+    };
+    outcome = absent ? 'landedLate' : 'found';
+  } else if (lapsing) {
+    patch = { state: 'lapsed', detail: RECONCILED_LAPSED };
+    outcome = 'lapsed';
+  } else {
+    patch = { state: 'absent', detail: RECONCILED_ABSENT };
+    outcome = 'absent';
+  }
   let next: GrantIntent;
   try {
     next = await patchIntent(c, row, patch, (r) => r.state === row.state);
   } catch {
-    return row;
+    return { row, outcome: 'unknown' };
   }
-  if (probe.held && next.state === 'active' && next.detail === found) {
+  // Another writer settled the row first (a decision's own outcome): not ours to count.
+  if (next.state !== patch.state || next.detail !== patch.detail) return { row: next, outcome: 'changed' };
+  if (probe.held) {
     await recordAssignment({
       principalId: row.principalId, principalUpn: row.principalName, principalType: 'User',
       tenantId: row.tenantId, resourceType: row.scopeType, resourceRef: row.scopeRef,
@@ -328,7 +368,7 @@ export async function reconcileGrantIntent(
       roleAssignmentId: probe.roleAssignmentId, expiresAt: null,
     });
   }
-  return next;
+  return { row: next, outcome };
 }
 
 /** Every intent row for a request, with its stale `pending` rows reconciled. */
@@ -342,56 +382,88 @@ export async function reconcileRequestIntents(
 }
 
 /**
- * The scheduled sweep (app/api/access-governance/sweep): reconcile every stale
- * `pending` row, and re-check every `absent` row young enough for a grant that
- * landed late, in one tenant or across tenants. Returns what it found; a row
- * whose store could not be read is unchanged and counted as `unknown`.
+ * The scheduled sweep (app/api/access-governance/sweep), in one tenant or
+ * across tenants. Three arms, each its own query, ordered oldest first and
+ * bounded by `limit`, so one arm can never fill another's quota with rows it
+ * would skip:
+ *   - every `pending` row older than the lease is reconciled;
+ *   - every `absent` row inside the re-check window is re-checked for a grant
+ *     that landed late;
+ *   - every `absent` row past that window is checked once more, and marked
+ *     `lapsed` when still not in place.
+ * Returns what it found; a row whose store could not be read is unchanged and
+ * counted as `unknown`. A pending row whose store keeps answering unknown stays
+ * in its arm, oldest first: more than `limit` of them would hold the arm.
  */
 export async function reconcileStaleGrantIntents(opts: { tenantId?: string; now?: number; limit?: number } = {}): Promise<{
-  checked: number; absent: number; found: number; landedLate: number; stillAbsent: number; unknown: number;
+  checked: number; absent: number; found: number; landedLate: number; stillAbsent: number; lapsed: number; unknown: number;
 }> {
   const c = await accessRequestWorkflowContainer();
   const now = opts.now ?? Date.now();
-  const { resources } = await c.items
-    .query<GrantIntent>(
-      {
-        query: `SELECT TOP ${Math.max(1, Math.min(opts.limit ?? 500, 5000))} * FROM c WHERE c.kind = @k AND (c.state = @p OR c.state = @a)`,
-        parameters: [{ name: '@k', value: GRANT_INTENT_KIND }, { name: '@p', value: 'pending' }, { name: '@a', value: 'absent' }],
-      },
-      opts.tenantId ? { partitionKey: opts.tenantId } : undefined,
-    )
-    .fetchAll();
-  const tally = { checked: 0, absent: 0, found: 0, landedLate: 0, stillAbsent: 0, unknown: 0 };
-  for (const row of resources || []) {
-    const wasAbsent = isRecheckableAbsent(row, now);
-    if (!isStalePending(row, now) && !wasAbsent) continue;
+  const top = Math.max(1, Math.min(opts.limit ?? 500, 5000));
+  const leaseCutoff = new Date(now - GRANT_LEASE_MS).toISOString();
+  const absentCutoff = new Date(now - ABSENT_RECHECK_MS).toISOString();
+  const arm = async (state: GrantIntentState, cmp: '<' | '>' | '<=', cutoff: string) => {
+    const { resources } = await c.items
+      .query<GrantIntent>(
+        {
+          query: `SELECT TOP ${top} * FROM c WHERE c.kind = @k AND c.state = @s AND c.createdAt ${cmp} @t ORDER BY c.createdAt ASC`,
+          parameters: [{ name: '@k', value: GRANT_INTENT_KIND }, { name: '@s', value: state }, { name: '@t', value: cutoff }],
+        },
+        opts.tenantId ? { partitionKey: opts.tenantId } : undefined,
+      )
+      .fetchAll();
+    return resources || [];
+  };
+  const pending = await arm('pending', '<', leaseCutoff);
+  const young = await arm('absent', '>', absentCutoff);
+  const old = await arm('absent', '<=', absentCutoff);
+  const tally = { checked: 0, absent: 0, found: 0, landedLate: 0, stillAbsent: 0, lapsed: 0, unknown: 0 };
+  for (const row of [...pending, ...young, ...old]) {
+    const { outcome } = await reconcileWithOutcome(c, row, now, { recheckAbsent: true });
+    if (outcome === 'skipped') continue;
     tally.checked += 1;
-    const next = await reconcileGrantIntent(c, row, now, { recheckAbsent: true });
-    if (next.state === 'active') {
-      if (wasAbsent) tally.landedLate += 1;
-      else tally.found += 1;
-    } else if (next.state === 'absent') {
-      // An absent row re-checked and not found (or whose store could not be read) stays absent.
-      if (wasAbsent) tally.stillAbsent += 1;
-      else tally.absent += 1;
-    } else tally.unknown += 1;
+    // A row another writer settled meanwhile was not resolved by this check.
+    if (outcome === 'changed') tally.unknown += 1;
+    else tally[outcome] += 1;
   }
   return tally;
 }
 
-/** The grant-ledger states the Access report lists: grants not settled as in place, held before or removed. */
-export const UNSETTLED_STATES: GrantIntentState[] = ['pending', 'failed', 'absent'];
+/**
+ * The grant-ledger states the Access report lists: grants not settled as in
+ * place, held before, removed or lapsed.
+ */
+export const UNSETTLED_STATES: GrantIntentState[] = ['pending', 'gated', 'failed', 'absent'];
+
+/** States that settle a scope for the request: a later row in one of these supersedes an earlier unsettled row. */
+const SETTLING_STATES: GrantIntentState[] = ['active', 'preexisting', 'revoked'];
 
 /**
- * The rows of one tenant that are not settled ({@link UNSETTLED_STATES}),
- * newest first, optionally for one principal or one scope ref. The Access
- * report shows them with their state and age.
+ * Whether an unsettled `row` no longer says anything an admin must act on:
+ * its request is no longer open, or a LATER row of the same request and scope
+ * settled it. A `pending` row is never superseded — it may be a live grant
+ * until the sweep resolves it.
+ */
+export function isSuperseded(row: GrantIntent, requestStatus: string | undefined, siblings: GrantIntent[]): boolean {
+  if (row.state === 'pending') return false;
+  if (requestStatus !== undefined && requestStatus !== 'open') return true;
+  return siblings.some((r) => r.id !== row.id && key(r) === key(row)
+    && SETTLING_STATES.includes(r.state) && r.createdAt >= row.createdAt);
+}
+
+/**
+ * The rows of one tenant that are not settled ({@link UNSETTLED_STATES}) and
+ * not superseded ({@link isSuperseded}), newest first, optionally for one
+ * principal or one scope ref. The Access report shows them with their state
+ * and age. When a request's own record or rows cannot be read, its rows are
+ * listed rather than hidden.
  */
 export async function listUnsettledGrantIntents(
   tenantId: string, opts: { principalId?: string; scopeRef?: string; limit?: number } = {},
 ): Promise<GrantIntent[]> {
   const c = await accessRequestWorkflowContainer();
-  const where = ['c.kind = @k', '(c.state = @s0 OR c.state = @s1 OR c.state = @s2)'];
+  const where = ['c.kind = @k', `(${UNSETTLED_STATES.map((_, i) => `c.state = @s${i}`).join(' OR ')})`];
   const parameters: Array<{ name: string; value: string }> = [
     { name: '@k', value: GRANT_INTENT_KIND },
     ...UNSETTLED_STATES.map((s, i) => ({ name: `@s${i}`, value: s })),
@@ -411,7 +483,23 @@ export async function listUnsettledGrantIntents(
       { partitionKey: tenantId },
     )
     .fetchAll();
-  return (resources || []).filter((r) => UNSETTLED_STATES.includes(r.state));
+  const rows = (resources || []).filter((r) => UNSETTLED_STATES.includes(r.state));
+  const byRequest = new Map<string, { status?: string; siblings: GrantIntent[] } | null>();
+  for (const requestId of new Set(rows.filter((r) => r.state !== 'pending').map((r) => r.requestId))) {
+    try {
+      const [{ resource: request }, siblings] = await Promise.all([
+        c.item(requestId, tenantId).read<{ status?: string }>(),
+        listGrantIntents(c, tenantId, requestId),
+      ]);
+      byRequest.set(requestId, { status: request?.status, siblings });
+    } catch {
+      byRequest.set(requestId, null);
+    }
+  }
+  return rows.filter((r) => {
+    const info = byRequest.get(r.requestId);
+    return !info || !isSuperseded(r, info.status, info.siblings);
+  });
 }
 
 /** A row as the grant outcome the revoke path and the 409/503 bodies use. */
@@ -432,6 +520,11 @@ export const IN_FLIGHT =
   + 'without completing the request; if it ends without recording the grant at all, the scheduled access sweep '
   + 'checks it against the store.';
 export const ADOPTED = 'Left in place: another approval of this request took this grant over when it completed the request.';
+export const ADOPTED_OPEN =
+  'Left in place: another approval of this request took this grant over and has not completed the request yet. '
+  + 'If that approval stops without completing it, a grant recorded as created by this request is removed.';
+/** The kept-grant text for a row another approval adopted, given the request's status now. */
+export const adoptedText = (requestStatus?: string) => (requestStatus === 'completed' ? ADOPTED : ADOPTED_OPEN);
 export const UNCONFIRMED =
   "Left in place: the request's grant records could not be read to confirm this approval still owns this grant.";
 export const OUTCOME_UNKNOWN =
@@ -523,7 +616,10 @@ export interface OwnGrant {
  * What a STOPPED approval revokes: exactly the rows this attempt wrote, still
  * owned by this attempt, whose grant this attempt created, whoever holds the
  * request now. Each row is re-read first:
- *   - adopted by another approval   → kept ({@link ADOPTED});
+ *   - adopted by another approval   → kept ({@link adoptedText}: whether the
+ *     adopter completed the request is read from `opts.requestStatus`), and
+ *     written to the entitlement ledger with the request's expiry (`restore`),
+ *     so the Access report shows a grant the request relies on;
  *   - still owned                   → this attempt's own outcome is written
  *     over a row the reconciler resolved meanwhile ({@link takesOutcome}), and
  *     a created grant is revoked and its row marked `revoked`;
@@ -531,10 +627,10 @@ export interface OwnGrant {
  *   - rows unreadable               → every landed grant is kept
  *     ({@link UNCONFIRMED}).
  * A row adopted between the re-read and the revoke is re-granted at once and
- * the new assignment written onto it, so the adopter's completed request keeps
- * the grant. `record` writes the grants to the entitlement ledger before any
- * revoke (`restore` for a re-granted one), so a kept grant is named as recorded
- * only when it is.
+ * the new assignment written onto it, so the adopter keeps the grant. `record`
+ * writes the grants to the entitlement ledger before any revoke (`restore` for
+ * a re-granted or adopted one), so a kept grant is named as recorded only when
+ * it is.
  */
 export async function revokeOwnIntents(
   c: IntentContainer,
@@ -546,8 +642,10 @@ export async function revokeOwnIntents(
     record: (rs: AccessRequestGrantResult[]) => Promise<LedgerRecord[]>;
     restore: (rs: AccessRequestGrantResult[]) => Promise<LedgerRecord[]>;
   },
+  opts: { requestStatus?: string } = {},
 ): Promise<{ revoked: AccessRequestGrantResult[]; kept: AccessRequestGrantResult[]; ledger: LedgerRecord[] }> {
   const landed = (o: OwnGrant) => !o.result || (o.result.status === 'active' && o.result.created !== false);
+  const adopted = adoptedText(opts.requestStatus);
   let stored: Map<string, GrantIntent>;
   try {
     stored = new Map((await listGrantIntents(c, ctx.tenantId, ctx.requestId)).map((r) => [r.id, r]));
@@ -557,11 +655,12 @@ export async function revokeOwnIntents(
     return { revoked: [], kept, ledger };
   }
   const kept: AccessRequestGrantResult[] = [];
+  const handedOver: AccessRequestGrantResult[] = [];
   const candidates: Array<{ row: GrantIntent; result: AccessRequestGrantResult; fix: Partial<GrantIntent> }> = [];
   for (const o of own) {
     const row = stored.get(o.row.id) || o.row;
     if (row.attemptId !== ctx.attemptId) {
-      if (landed(o) && o.result) kept.push({ ...o.result, detail: ADOPTED });
+      if (landed(o) && o.result) handedOver.push({ ...o.result, detail: adopted });
       continue;
     }
     if (!o.result) {
@@ -574,6 +673,8 @@ export async function revokeOwnIntents(
     candidates.push({ row, result: intentAsResult(eff), fix });
   }
   const ledger = await hooks.record(candidates.map((x) => x.result));
+  if (handedOver.length) ledger.push(...await hooks.restore(handedOver));
+  kept.push(...handedOver);
   const out = await revokeLandedGrants(revokeCtx, candidates.map((x) => x.result), session);
   kept.push(...out.kept);
   const revoked: AccessRequestGrantResult[] = [];
@@ -602,11 +703,92 @@ export async function revokeOwnIntents(
       continue;
     }
     try {
-      await patchIntent(c, marked, { ...settledFields(again), detail: ADOPTED }, (r) => r.state !== 'revoked');
+      await patchIntent(c, marked, { ...settledFields(again), detail: adopted }, (r) => r.state !== 'revoked');
     } catch { /* the grant is back in place; the row keeps the adopted outcome */ }
     const back = await hooks.restore([again]);
     ledger.push(...back);
-    kept.push({ ...again, detail: ADOPTED });
+    kept.push({ ...again, detail: adopted });
   }
   return { revoked, kept, ledger };
+}
+
+/**
+ * What an approval that ADOPTED other attempts' rows ({@link adoptGrantIntents})
+ * does with them when it stops without completing the request. Nothing relies
+ * on those grants any more, so each row this attempt adopted (still owned, with
+ * `adoptedFrom`) is re-read and:
+ *   - recorded `active` with `created: true` → the attempt that made the grant
+ *     has already recorded it, and may already have stopped keeping it for this
+ *     adopter: this approval revokes it, marks the row `revoked` and hands the
+ *     row back. A revoke that fails is kept, with the reason;
+ *   - anything else (a grant still in flight, found in place with its origin
+ *     unknown, or not in place) → the row is handed back to `adoptedFrom`,
+ *     conditioned on its etag, so that attempt's own settle and compensation
+ *     decide it.
+ * Throws nothing: `unreadable` is set when the rows could not be read, and a
+ * row whose hand-back failed is counted in `stuck`.
+ */
+export async function releaseAdoptions(
+  c: IntentContainer,
+  ctx: IntentContext,
+  revokeCtx: Pick<LandedGrantContext, 'requesterId' | 'requesterUpn' | 'permission'>,
+  session: SessionPayload,
+): Promise<{ revoked: AccessRequestGrantResult[]; kept: AccessRequestGrantResult[]; returned: number; stuck: number; unreadable: boolean }> {
+  const out = { revoked: [] as AccessRequestGrantResult[], kept: [] as AccessRequestGrantResult[], returned: 0, stuck: 0, unreadable: false };
+  let rows: GrantIntent[];
+  try {
+    rows = await listGrantIntents(c, ctx.tenantId, ctx.requestId);
+  } catch {
+    return { ...out, unreadable: true };
+  }
+  const by = session.claims.upn || session.claims.oid;
+  for (const r of rows) {
+    if (r.attemptId !== ctx.attemptId || !r.adoptedFrom) continue;
+    let current: GrantIntent | undefined = r;
+    let done = false;
+    let revokeFailed = false;
+    for (let i = 0; i < 3 && current && !done; i++) {
+      if (current.attemptId !== ctx.attemptId || !current.adoptedFrom) {
+        done = true;
+        break;
+      }
+      const { _etag, adoptedFrom, adoptedAt: _at, ...rest } = current;
+      let next: GrantIntent = { ...rest, attemptId: adoptedFrom, updatedAt: nowIso() };
+      let revokedNow: AccessRequestGrantResult | undefined;
+      if (current.state === 'active' && current.created === true && !revokeFailed) {
+        const res = await revokeLandedGrants(revokeCtx, [intentAsResult(current)], session);
+        if (res.revoked.length) {
+          revokedNow = res.revoked[0];
+          next = { ...next, state: 'revoked', revokedAt: nowIso(), revokedBy: by };
+        } else {
+          // Kept with the reason; the row is still handed back, and a later
+          // denial revokes it from the ledger.
+          revokeFailed = true;
+          out.kept.push(...res.kept);
+        }
+      }
+      try {
+        await c.item(current.id, current.tenantId).replace(next, { accessCondition: { type: 'IfMatch', condition: _etag || '' } });
+        if (revokedNow) out.revoked.push(revokedNow);
+        else out.returned += 1;
+        done = true;
+      } catch (e) {
+        if (revokedNow) out.revoked.push(revokedNow);
+        if (!isPreconditionFailed(e)) break;
+        if (revokedNow) {
+          // Revoked, but the row changed before it was marked: it is reported
+          // as revoked, and a later denial revokes it again (ARM answers 404).
+          done = true;
+          break;
+        }
+        try {
+          current = (await c.item(current.id, current.tenantId).read<GrantIntent>()).resource;
+        } catch {
+          break;
+        }
+      }
+    }
+    if (!done) out.stuck += 1;
+  }
+  return out;
 }

@@ -20,12 +20,15 @@
  * The same pass resolves the access-request grant ledger
  * (lib/access/grant-intents.ts, reconcileStaleGrantIntents): every `pending`
  * row older than a decision's hold is checked against the store and marked
- * `absent` or found in place, and `absent` rows are re-checked for a day for a
- * grant that landed late — so a decision that stopped without recording its
- * grant is resolved on the schedule, not only when someone decides on that
- * request again. The scheduled job covers every tenant; an admin's button
- * covers the admin's own. Skipped on a dry run. A failure there is reported in
- * `grantRecordsError` and does not fail the expiry pass.
+ * `absent` or found in place, `absent` rows are re-checked for a day for a
+ * grant that landed late, and an `absent` row past that day is checked once
+ * more and marked `lapsed` when still not in place — so a decision that stopped
+ * without recording its grant is resolved on the schedule, not only when
+ * someone decides on that request again. The scheduled job covers every
+ * tenant; an admin's button covers the admin's own. Skipped on a dry run. A
+ * failure there is reported in `grantRecordsError`; the expiry pass still
+ * completes, and the scheduled job's runner fails the execution
+ * (e2e/run-access-sweep.mjs).
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { withTenantAdmin } from '@/lib/api/route-toolkit';

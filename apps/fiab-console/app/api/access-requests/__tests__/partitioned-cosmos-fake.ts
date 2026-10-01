@@ -62,6 +62,26 @@ function parseCondition(raw: string): Cond {
     };
   }
 
+  // c.field < @param | <= | > | >= — Cosmos compares strings ordinally, which is
+  // how ISO-8601 instants order. A document without the field never matches,
+  // as in Cosmos (an undefined operand makes the comparison undefined).
+  m = new RegExp(`^${IDENT}\\s*(<=|>=|<|>)\\s*@([A-Za-z_][A-Za-z0-9_]*)$`).exec(s);
+  if (m) {
+    const [, field, op, param] = m;
+    return (doc, params) => {
+      if (!(param in params)) {
+        throw new Error(`[cosmos-fake] query references @${param} but no such parameter was supplied`);
+      }
+      const v = doc?.[field];
+      const p = params[param];
+      if (v === undefined || v === null || typeof v !== typeof p) return false;
+      if (op === '<') return v < p;
+      if (op === '<=') return v <= p;
+      if (op === '>') return v > p;
+      return v >= p;
+    };
+  }
+
   // c.field = "literal" | 'literal'
   m = new RegExp(`^${IDENT}\\s*=\\s*(?:"([^"]*)"|'([^']*)')$`).exec(s);
   if (m) {

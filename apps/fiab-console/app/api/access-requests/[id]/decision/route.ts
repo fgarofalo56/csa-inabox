@@ -41,9 +41,11 @@
  *   - a decision that stops after granting (a renewal, a ledger settle or the
  *     final write found the request changed, a store failed, or a grant call
  *     threw) revokes exactly the grants it made itself, whoever holds the
- *     request now, unless an approval that completed the request adopted them —
- *     409 `request_changed`, or 503 `grant_interrupted` for a failure; it never
- *     revokes another attempt's grants;
+ *     request now, unless another approval adopted them before its final
+ *     write — 409 `request_changed`, or 503 `grant_interrupted` for a failure;
+ *     it never revokes another attempt's grants, and an adopter that stops
+ *     hands its adopted rows back, or revokes a grant whose creator already
+ *     recorded it;
  *   - a denial revokes from the ledger, every attempt's created grants, after
  *     resolving rows a stopped decision left `pending` from the store itself.
  * The scheduled access sweep resolves rows nobody decided on again.
@@ -101,8 +103,8 @@ import {
   type LandedGrantContext, type LedgerRecord,
 } from '@/lib/access/landed-grants';
 import {
-  GRANT_LEASE_MS, adoptGrantIntents, newAttemptId, reconcileRequestIntents, revokeIntents, revokeOwnIntents,
-  settleGrantIntent, writeGrantIntent, type GrantIntent, type IntentContext, type OwnGrant,
+  GRANT_LEASE_MS, adoptGrantIntents, newAttemptId, reconcileRequestIntents, releaseAdoptions, revokeIntents,
+  revokeOwnIntents, settleGrantIntent, writeGrantIntent, type GrantIntent, type IntentContext, type OwnGrant,
 } from '@/lib/access/grant-intents';
 
 export const runtime = 'nodejs';
@@ -332,6 +334,24 @@ function grantView(requesterId: string, r: AccessRequestGrantResult, ledger?: Le
 
 const scopeList = (rs: AccessRequestGrantResult[]) => rs.map((r) => `${r.scopeType} ${r.scopeRef}`).join(', ');
 
+/** What a stopped approval did with the rows it had adopted from other attempts of the request (releaseAdoptions). */
+function adoptionTail(rel: Awaited<ReturnType<typeof releaseAdoptions>> | undefined): string {
+  if (!rel) return '';
+  if (rel.unreadable) {
+    return " The request's grant records could not be read, so grants it had taken over from another attempt of this request "
+      + 'were not handed back; a denial of the request revokes them.';
+  }
+  let text = '';
+  if (rel.revoked.length) {
+    text += ` Grants it had taken over from another attempt of this request, which that attempt had already recorded, were removed: ${scopeList(rel.revoked)}.`;
+  }
+  if (rel.returned) text += ` ${rel.returned} grant record(s) it had taken over were handed back to the attempt that made them.`;
+  if (rel.stuck) {
+    text += ` ${rel.stuck} grant record(s) it had taken over could not be handed back; a denial of the request revokes them.`;
+  }
+  return text;
+}
+
 /** One enforcement summary over every per-scope grant: active only when all are. */
 function summarizeGrants(results: AccessRequestGrantResult[]): AccessRequestEnforcement {
   if (results.length === 1) {
@@ -458,6 +478,8 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
     const fresh: AccessRequestGrantResult[] = [];
     /** The grant-ledger rows this attempt wrote, each with the outcome of its grant (none when the grant call threw). */
     const mine: OwnGrant[] = [];
+    /** Set once this approval starts adopting other attempts' rows, which it releases if it then stops. */
+    let adopting = false;
     const admin = isTenantAdmin(s);
     const intentCtx: IntentContext = {
       tenantId,
@@ -558,10 +580,12 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
      * renewal, a ledger settle or its final write found it changed), a store
      * failed, or a grant call threw. It revokes exactly the grants it made
      * itself, whoever holds the request now — ownership decides, not the
-     * request's state — except a grant an approval that completed the request
-     * adopted (lib/access/grant-intents.ts, revokeOwnIntents). It never
-     * revokes another attempt's grants: those stay with the request, for its
-     * completion or its denial.
+     * request's state — except a grant another approval adopted
+     * (lib/access/grant-intents.ts, revokeOwnIntents). It never revokes another
+     * attempt's grants: those stay with the request, for its completion or its
+     * denial. Rows it adopted itself are handed back, or revoked when their
+     * creator has already recorded them (releaseAdoptions), because nothing
+     * relies on them once this approval stops.
      */
     const compensate = async (): Promise<NextResponse> => {
       let latest: AccessRequestDoc | undefined;
@@ -573,13 +597,19 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
         restore: (rs) => recordLandedGrants(
           ledgerCtx(computeExpiry(new Date(), { lifetimeDays: doc.grantLifetimeDays })), rs,
         ),
-      });
+      }, { requestStatus: latest?.status });
+      const rel = adopting ? await releaseAdoptions(c, intentCtx, revokeCtx, s) : undefined;
       return stopAnswer(
         'approval',
         (out.revoked.length ? ` The access it had granted was removed: ${scopeList(out.revoked)}.` : '')
-          + keptTail(out.kept, admin, doc.requesterId, out.ledger)
+          + adoptionTail(rel)
+          + keptTail([...out.kept, ...(rel?.kept || [])], admin, doc.requesterId, out.ledger)
           + ' Reload it to see its current state.',
-        { requestStatus: latest?.status ?? null, revoked: view(out.revoked, out.ledger), kept: view(out.kept, out.ledger) },
+        {
+          requestStatus: latest?.status ?? null,
+          revoked: view([...out.revoked, ...(rel?.revoked || [])], out.ledger),
+          kept: view([...out.kept, ...(rel?.kept || [])], out.ledger),
+        },
       );
     };
 
@@ -796,9 +826,11 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
           // may be held because another attempt of this request granted it, and
           // that attempt revokes its own grants when it stops: adopt those rows
           // first, so the grant this completion relies on stays
-          // (lib/access/grant-intents.ts, adoptGrantIntents).
+          // (lib/access/grant-intents.ts, adoptGrantIntents). If this approval
+          // then stops, it releases them (compensate, releaseAdoptions).
           for (const g of fresh) {
             if (g.status !== 'active' || g.created === true || !g.scopeRef) continue;
+            adopting = true;
             try {
               await adoptGrantIntents(c, intentCtx, g);
             } catch (e: any) {

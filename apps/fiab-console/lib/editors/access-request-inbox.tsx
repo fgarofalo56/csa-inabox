@@ -19,12 +19,15 @@ import { clientFetch } from '@/lib/client-fetch';
  * Completed / Denied history tab surfaces closed requests with their receipt
  * (role assignment id, or denial reason). No Microsoft Fabric dependency.
  *
+ * `?request=<id>` (REQUEST_PARAM, the Access report's Request link) opens the
+ * inbox on that request: its tier tab (or History), expanded and highlighted.
+ *
  * Design: Fluent v9 + Loom tokens — spaced Section cards, accent status badges,
  * keyboard-navigable controls. Honest infra/config gates surface as a Fluent
  * MessageBar naming the exact env var / role to provision (no-vaporware.md).
  */
 
-import { useCallback, useEffect, useMemo, useState, Fragment } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, Fragment } from 'react';
 import {
   makeStyles, tokens, Spinner, Badge, Button, Text, Caption1, Body1Strong,
   TabList, Tab, type SelectTabData, type SelectTabEvent,
@@ -125,6 +128,13 @@ const scopeKey = (g: GrantScope, i: number) => `${i}:${g.scopeType}:${g.scopeRef
 /** Where kept grants and every live assignment are listed. */
 export const ACCESS_REPORT_HREF = '/admin/access-governance?tab=report';
 
+/**
+ * The query parameter that opens the inbox on one request (the Access report's
+ * Request column links here): the inbox finds it among open, completed and
+ * denied requests, switches to its tier (or History) and expands it.
+ */
+export const REQUEST_PARAM = 'request';
+
 /** What a non-admin is told about kept grants, since only a tenant admin can open the report. */
 export const KEPT_GRANTS_ADMIN_NOTE = 'A tenant admin can review and remove the kept grants.';
 
@@ -198,6 +208,7 @@ const useStyles = makeStyles({
   steps: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   dialogFields: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: '420px', maxWidth: '100%', boxSizing: 'border-box' },
   err: { marginBottom: tokens.spacingVerticalM },
+  focusedRow: { backgroundColor: tokens.colorBrandBackground2 },
 });
 
 const STATUS_BADGE: Record<ApprovalStatus, { color: 'informative' | 'success' | 'danger'; label: string }> = {
@@ -258,6 +269,19 @@ export function AccessRequestInboxEditor() {
   /** Set when a final approval is refused because the storage changed since review. */
   const [targetsChange, setTargetsChange] = useState<TargetsChange | null>(null);
   const isAdmin = useIsTenantAdmin();
+  /** The request the URL opened the inbox on (`?request=<id>`), once found. */
+  const [focusId, setFocusId] = useState<string | null>(null);
+  /** The URL named a request that was not found, or could not be looked up. */
+  const [focusMiss, setFocusMiss] = useState<{ id: string; reason?: string } | null>(null);
+  /**
+   * Where keyboard focus goes once the dialog has re-rendered: the submit
+   * button disables itself while busy, and **Deny with this reason** unmounts
+   * itself, so without this focus drops to the document body.
+   */
+  const [focusAfter, setFocusAfter] = useState<'deny-instead' | 'reason' | 'error' | null>(null);
+  const denyInsteadRef = useRef<HTMLButtonElement>(null);
+  const reasonRef = useRef<HTMLTextAreaElement>(null);
+  const dlgErrorRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async (v: ViewKey) => {
     setLoading(true); setError(null); setGate(null);
@@ -311,6 +335,43 @@ export function AccessRequestInboxEditor() {
   useEffect(() => { load(view); }, [view, load]);
   useEffect(() => { loadCounts(); }, [loadCounts]);
 
+  // `?request=<id>` (the Access report's Request link): find the request among
+  // open, completed and denied ones, open its tier (or History) and expand it.
+  useEffect(() => {
+    const id = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get(REQUEST_PARAM);
+    if (!id) return;
+    let cancelled = false;
+    const find = async (status: ApprovalStatus): Promise<AccessRequest | undefined> => {
+      const r = await clientFetch(`/api/access-requests?status=${status}`);
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.reason || j.error || `HTTP ${r.status}`);
+      return (j.requests || []).find((x: AccessRequest) => x.id === id);
+    };
+    (async () => {
+      try {
+        const hit = (await find('open')) || (await find('completed')) || (await find('denied'));
+        if (cancelled) return;
+        if (!hit) { setFocusMiss({ id }); return; }
+        setView(hit.status === 'open' ? hit.tier : 'history');
+        setExpanded((prev) => new Set(prev).add(id));
+        setFocusId(id);
+      } catch (e: any) {
+        if (!cancelled) setFocusMiss({ id, reason: e?.message || String(e) });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!focusAfter || busy) return;
+    const el = focusAfter === 'deny-instead' ? denyInsteadRef.current
+      : focusAfter === 'reason' ? reasonRef.current
+        : dlgErrorRef.current;
+    if (!el) return;
+    el.focus();
+    setFocusAfter(null);
+  }, [focusAfter, busy, dlg, dlgError, targetsChange]);
+
   const onTab = (_e: SelectTabEvent, d: SelectTabData) => setView(d.value as ViewKey);
 
   const toggle = (id: string) => setExpanded((prev) => {
@@ -324,6 +385,7 @@ export function AccessRequestInboxEditor() {
     setReason('');
     setDlgError(null);
     setTargetsChange(null);
+    setFocusAfter(null);
   };
 
   /** Switch a refused approval to a denial, prefilled with the reason the server suggested. */
@@ -332,6 +394,8 @@ export function AccessRequestInboxEditor() {
     setDlg({ req: dlg.req, decision: 'denied' });
     setReason(targetsChange?.suggestedDenyReason || '');
     setDlgError(null);
+    // The button that was clicked unmounts: put focus on the reason to send.
+    setFocusAfter('reason');
   };
 
   const isFinalTier = dlg?.req.tier === 'access-provider';
@@ -350,9 +414,13 @@ export function AccessRequestInboxEditor() {
       if (!j.ok) {
         // Honest gate / grant error — keep the dialog open with the precise reason.
         setDlgError(j.warning || j.error || `HTTP ${r.status}`);
-        setTargetsChange(j.code === 'targets_changed'
+        const refused = j.code === 'targets_changed';
+        setTargetsChange(refused
           ? { reviewed: j.reviewed || [], current: j.current || [], suggestedDenyReason: j.suggestedDenyReason }
           : null);
+        // The submit button disabled itself while busy: move focus to the
+        // action the refusal offers, or to the message itself.
+        setFocusAfter(refused && dlg.decision === 'approved' ? 'deny-instead' : 'error');
         return;
       }
       if (j.warning && dlg.decision === 'denied') {
@@ -366,6 +434,7 @@ export function AccessRequestInboxEditor() {
       if (j.warning) {
         // pending infra/config gate — surfaced but request stays at this tier.
         setDlgError(j.warning);
+        setFocusAfter('error');
         await Promise.all([load(view), loadCounts()]);
         return;
       }
@@ -373,6 +442,7 @@ export function AccessRequestInboxEditor() {
       await Promise.all([load(view), loadCounts()]);
     } catch (e: any) {
       setDlgError(e?.message || String(e));
+      setFocusAfter('error');
     } finally { setBusy(false); }
   }, [dlg, reason, load, view, loadCounts]);
 
@@ -490,6 +560,20 @@ export function AccessRequestInboxEditor() {
           </MessageBar>
         )}
 
+        {focusMiss && (
+          <MessageBar intent="warning" className={s.err} layout="multiline">
+            <MessageBarBody>
+              <MessageBarTitle>{focusMiss.reason ? 'Couldn’t look up the linked request' : 'Linked request not found'}</MessageBarTitle>
+              {focusMiss.reason
+                ? `Request ${focusMiss.id} could not be looked up: ${focusMiss.reason}`
+                : `Request ${focusMiss.id} is not among this tenant's open, completed or denied requests.`}
+            </MessageBarBody>
+            <MessageBarActions
+              containerAction={<Button appearance="transparent" size="small" aria-label="Dismiss" icon={<DismissCircle20Regular />} onClick={() => setFocusMiss(null)} />}
+            />
+          </MessageBar>
+        )}
+
         {error && (
           <MessageBar intent="error" className={s.err}>
             <MessageBarBody><MessageBarTitle>Couldn’t load requests</MessageBarTitle>{error}</MessageBarBody>
@@ -561,7 +645,11 @@ export function AccessRequestInboxEditor() {
                 const sb = STATUS_BADGE[r.status];
                 return (
                   <Fragment key={r.id}>
-                    <TableRow>
+                    <TableRow
+                      className={r.id === focusId ? s.focusedRow : undefined}
+                      aria-current={r.id === focusId ? 'true' : undefined}
+                      ref={r.id === focusId ? (el: HTMLTableRowElement | null) => el?.scrollIntoView?.({ block: 'center' }) : undefined}
+                    >
                       {selectable && (
                         <TableCell>
                           <Checkbox
@@ -709,14 +797,14 @@ export function AccessRequestInboxEditor() {
                 )}
 
                 {dlgError && (
-                  <MessageBar intent="warning">
+                  <MessageBar intent="warning" ref={dlgErrorRef} tabIndex={-1}>
                     <MessageBarBody>
                       <MessageBarTitle>Action needs attention</MessageBarTitle>
                       {dlgError}
                     </MessageBarBody>
                     {targetsChange && dlg?.decision === 'approved' && (
                       <MessageBarActions>
-                        <Button appearance="primary" size="small" icon={<DismissCircle20Regular />} onClick={denyInstead}>
+                        <Button ref={denyInsteadRef} appearance="primary" size="small" icon={<DismissCircle20Regular />} onClick={denyInstead}>
                           Deny with this reason
                         </Button>
                       </MessageBarActions>
@@ -773,6 +861,7 @@ export function AccessRequestInboxEditor() {
                   required={dlg?.decision === 'denied'}
                 >
                   <Textarea
+                    ref={reasonRef}
                     value={reason}
                     onChange={(_, d) => setReason(d.value)}
                     placeholder={dlg?.decision === 'denied' ? 'Why is this request denied?' : 'Optional context for the audit trail'}

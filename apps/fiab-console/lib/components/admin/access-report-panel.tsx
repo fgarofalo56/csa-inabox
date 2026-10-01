@@ -9,12 +9,16 @@
  * never a stub. Fluent v9 + Loom tokens throughout (web3-ui + ux-baseline §9.5).
  *
  * Below the grants, "Grants not yet settled" lists the access-request grants
- * whose outcome is not recorded as in place, held before, or removed (the
- * report's `grantRecords`): a grant in progress or interrupted, one that
- * failed, or one not in place when it was checked — with its age, because a
- * pending row may be a live grant until the scheduled access sweep resolves it.
+ * whose outcome is not recorded as in place, held before, removed or lapsed
+ * (the report's `grantRecords`): a grant in progress or interrupted, one that
+ * failed, one waiting on configuration, or one not in place when it was
+ * checked — with its age, because a pending row may be a live grant until the
+ * scheduled access sweep resolves it. Rows a closed request or a later attempt
+ * superseded are not listed. Each row links to its request in the inbox. The
+ * CSV export covers the recorded grants only, and says so.
  */
 import { useState, useEffect, useCallback } from 'react';
+import Link from 'next/link';
 import { clientFetch } from '@/lib/client-fetch';
 import {
   makeStyles, tokens, Badge, Button, Input, Caption1, Subtitle2, Spinner,
@@ -44,16 +48,28 @@ interface GrantRecord {
   id: string; requestId: string;
   principalId: string; principalName?: string;
   scopeType: string; scopeRef: string; assetName?: string; permission?: string;
-  state: 'pending' | 'failed' | 'absent' | string;
+  state: 'pending' | 'gated' | 'failed' | 'absent' | string;
   createdAt: string; updatedAt?: string; detail?: string;
 }
 
 /** What each unsettled state means to an admin. */
 export const GRANT_RECORD_STATE_LABEL: Record<string, string> = {
   pending: 'Grant in progress or interrupted',
+  gated: 'Waiting on configuration',
   failed: 'Grant failed',
   absent: 'Not in place when checked',
 };
+
+/** The access-request inbox, opened on one request (lib/editors/access-request-inbox.tsx reads `request`). */
+export function requestInboxHref(requestId: string): string {
+  return `/governance/access-requests?request=${encodeURIComponent(requestId)}`;
+}
+
+/** What the CSV export covers, shown beside it whenever there are grants not yet settled. */
+export const CSV_SCOPE_NOTE =
+  'The CSV export covers recorded grants only. Grants not yet settled, listed below, are not exported.';
+/** Why Export is unavailable when nothing is recorded. */
+export const CSV_EMPTY_NOTE = 'Nothing recorded to export. Grants not yet settled are not exported.';
 
 /** "12 min", "3 h", "2 d" since an ISO instant. */
 export function ageLabel(iso: string, now = Date.now()): string {
@@ -185,7 +201,7 @@ export function AccessReportPanel() {
       if (!j.ok) { setErr(j.error || 'sweep failed'); return; }
       const g = j.grantRecords;
       setNote(`Sweep complete — ${j.expired ?? 0} expired of ${j.candidates ?? 0} due.`
-        + (g ? ` Grants not yet settled: ${g.checked ?? 0} checked, ${(g.found ?? 0) + (g.landedLate ?? 0)} found in place, ${g.absent ?? 0} not in place, ${g.unknown ?? 0} could not be checked.` : '')
+        + (g ? ` Grants not yet settled: ${g.checked ?? 0} checked, ${(g.found ?? 0) + (g.landedLate ?? 0)} found in place, ${(g.absent ?? 0) + (g.stillAbsent ?? 0)} not in place, ${g.lapsed ?? 0} no longer re-checked, ${g.unknown ?? 0} could not be checked.` : '')
         + (j.grantRecordsError ? ` ${j.grantRecordsError}` : ''));
       await load();
     } catch (er: any) { setErr(er?.message || String(er)); }
@@ -258,13 +274,21 @@ export function AccessReportPanel() {
           <Tooltip content="Reload" relationship="label">
             <Button appearance="subtle" icon={<ArrowSync20Regular />} onClick={() => void load()} aria-label="Reload" />
           </Tooltip>
-          <Button appearance="secondary" icon={<ArrowDownload20Regular />} disabled={!rows || rows.length === 0} onClick={downloadCsv}>Export CSV</Button>
+          {rows && rows.length === 0 && records.length > 0 ? (
+            // Disabled, but still focusable so its reason is announced.
+            <Tooltip content={CSV_EMPTY_NOTE} relationship="description">
+              <Button appearance="secondary" icon={<ArrowDownload20Regular />} disabledFocusable>Export CSV</Button>
+            </Tooltip>
+          ) : (
+            <Button appearance="secondary" icon={<ArrowDownload20Regular />} disabled={!rows || rows.length === 0} onClick={downloadCsv}>Export CSV</Button>
+          )}
           <Button appearance="secondary" icon={<Timer20Regular />} disabled={busy} onClick={() => void runSweep()}>Run sweep</Button>
           <Button appearance="primary" icon={busy ? <Spinner size="tiny" /> : <DatabaseArrowUp20Regular />} disabled={busy} onClick={() => void runBackfill()}>Backfill ledger</Button>
         </div>
       </div>
 
       {note && <MessageBar intent="success"><MessageBarBody>{note}</MessageBarBody></MessageBar>}
+      {records.length > 0 && <Caption1 className={s.count}>{CSV_SCOPE_NOTE}</Caption1>}
       {err && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Could not load report</MessageBarTitle>{err}</MessageBarBody></MessageBar>}
       {mode === 'resource' && groupExpansion === 'unavailable' && rows && rows.length > 0 && (
         <MessageBar intent="info"><MessageBarBody>
@@ -357,9 +381,12 @@ export function AccessReportPanel() {
             <Badge appearance="tint" color="warning" size="small">{records.length}</Badge>
           </div>
           <Caption1 className={s.count}>
-            Access-request grants whose outcome was not recorded as in place, held before, or removed. A grant in
-            progress or interrupted may be live: the scheduled access sweep checks each one against the store, and
-            one found in place moves into the grants above.
+            Access-request grants whose outcome is not recorded as in place, held before, removed or lapsed. A grant
+            in progress or interrupted may be live: the scheduled access sweep checks it against the store, and one
+            found in place moves into the grants above. One not in place when checked is re-checked for 24 hours,
+            then once more, and leaves this list if still not in place. A failed grant, or one waiting on
+            configuration, is not retried by the sweep; approving the request again retries it. Rows of a closed
+            request, or of a scope a later attempt settled, are not listed.
           </Caption1>
           <div className={s.scroll}>
             <Table size="small" aria-label="Grants not yet settled">
@@ -389,7 +416,11 @@ export function AccessReportPanel() {
                     <TableCell>
                       <div className={s.principalCell}>
                         <div className={s.badges}>
-                          <Badge appearance="tint" color={g.state === 'failed' ? 'danger' : 'warning'} size="small">
+                          <Badge
+                            appearance="tint"
+                            color={g.state === 'failed' ? 'danger' : g.state === 'gated' ? 'informative' : 'warning'}
+                            size="small"
+                          >
                             {GRANT_RECORD_STATE_LABEL[g.state] || g.state}
                           </Badge>
                         </div>
@@ -397,7 +428,11 @@ export function AccessReportPanel() {
                       </div>
                     </TableCell>
                     <TableCell><Caption1 className={s.count}>{ageLabel(g.createdAt)}</Caption1></TableCell>
-                    <TableCell><Caption1 className={s.via}>{g.requestId}</Caption1></TableCell>
+                    <TableCell>
+                      <Link href={requestInboxHref(g.requestId)} aria-label={`Open request ${g.requestId} in the access-request inbox`}>
+                        <Caption1>{g.requestId}</Caption1>
+                      </Link>
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>

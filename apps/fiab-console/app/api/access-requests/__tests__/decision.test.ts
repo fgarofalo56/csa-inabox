@@ -65,8 +65,9 @@ import {
 import { makePartitionedContainer, makeSinkContainer, type FakeContainer } from './partitioned-cosmos-fake';
 import { assignmentId } from '@/lib/access/assignment-ledger';
 import {
-  ABSENT_RECHECK_MS, ADOPTED, GRANT_INTENT_KIND, GRANT_LEASE_MS, IN_FLIGHT, OUTCOME_UNKNOWN, RECONCILED_FOUND,
-  RECONCILED_LANDED_LATE, reconcileStaleGrantIntents, revokeOwnIntents, settleGrantIntent, writeGrantIntent,
+  ABSENT_RECHECK_MS, ADOPTED, ADOPTED_OPEN, GRANT_INTENT_KIND, GRANT_LEASE_MS, IN_FLIGHT, OUTCOME_UNKNOWN, RECONCILED_FOUND,
+  RECONCILED_LANDED_LATE, RECONCILED_LAPSED, adoptGrantIntents, listUnsettledGrantIntents, reconcileStaleGrantIntents,
+  releaseAdoptions, revokeOwnIntents, settleGrantIntent, writeGrantIntent,
 } from '@/lib/access/grant-intents';
 import { selectExpired } from '@/lib/access/expiry';
 
@@ -1322,7 +1323,7 @@ describe('the grant ledger: written before each grant, and what compensation and
       await io.raw({ status: 'completed', grantLeaseUntil: undefined, completedBy: 'other-approval' });
       return activeGold;
     });
-    ledger();
+    const assignments = ledger();
     const res = await POST(makeReq({ decision: 'approved' }), ctx('req-1'));
     const j = await res.json();
     expect(res.status).toBe(409);
@@ -1331,6 +1332,10 @@ describe('the grant ledger: written before each grant, and what compensation and
     expect(j.kept.map((r: any) => [r.scopeRef, r.detail])).toEqual([['gold', ADOPTED]]);
     expect(revokeContainerRoleAssignment).not.toHaveBeenCalled();
     expect(store.doc.completedBy).toBe('other-approval');
+    // The kept grant is in the entitlement ledger, so the Access report shows
+    // it. Breaks if the adopted keep path skipped recording (0 rows; A's
+    // should-fix 2: a live grant nobody can see).
+    expect(assignments.__all().map((r: any) => [r.resourceRef, r.roleAssignmentId, r.state])).toEqual([['gold', 'ra-gold', 'active']]);
     // The stopped approval still wrote what its grant did onto the adopted row.
     expect(intents(container).map((r: any) => [r.attemptId, r.state, r.created, r.roleAssignmentId]))
       .toEqual([['completing-attempt', 'active', true, 'ra-gold']]);
@@ -1482,8 +1487,9 @@ describe('the grant ledger: written before each grant, and what compensation and
     const session = { claims: { oid: 'other-oid', upn: 'other@contoso.com' } } as any;
     const out = await revokeOwnIntents(container as any, theirCtx, [{ row: theirRow, result }], {
       requesterId: REQUESTER_OID, requesterUpn: 'req@contoso.com', permission: 'read',
-    }, session, { record: async () => [], restore: async () => [] });
+    }, session, { record: async () => [], restore: async () => [] }, { requestStatus: store.doc.status });
     expect(out.revoked).toEqual([]);
+    // ADOPTED (not ADOPTED_OPEN) because the request is `completed`.
     expect(out.kept.map((r) => [r.scopeRef, r.detail])).toEqual([['gold', ADOPTED]]);
     expect(revokeContainerRoleAssignment).not.toHaveBeenCalled();
     expect(intents(container).find((r: any) => r.id === theirRow.id))
@@ -1513,7 +1519,9 @@ describe('the grant ledger: written before each grant, and what compensation and
     expect(j.code).toBe('grant_interrupted');
     expect(enforceAccessGrant).toHaveBeenCalledTimes(2);
     expect(j.revoked).toEqual([]);
-    expect(j.kept.map((r: any) => [r.scopeRef, r.roleAssignmentId, r.detail])).toEqual([['gold', 'ra-gold-2', ADOPTED]]);
+    // The fake adopter never completed the request (it is still `open`), so the
+    // kept text does not claim it did: ADOPTED_OPEN, not ADOPTED.
+    expect(j.kept.map((r: any) => [r.scopeRef, r.roleAssignmentId, r.detail])).toEqual([['gold', 'ra-gold-2', ADOPTED_OPEN]]);
     expect(intents(container).map((r: any) => [r.attemptId, r.state, r.roleAssignmentId])).toEqual([['adopter', 'active', 'ra-gold-2']]);
     const row = assignments.__all().find((r: any) => r.resourceRef === 'gold');
     expect([row.state, row.roleAssignmentId, typeof row.expiresAt]).toEqual(['active', 'ra-gold-2', 'string']);
@@ -1656,7 +1664,7 @@ describe('the grant ledger: stale pending rows are resolved from the store', () 
       return answer[i.scopeRef];
     });
     const tally = await reconcileStaleGrantIntents({ tenantId: TENANT });
-    expect(tally).toEqual({ checked: 5, absent: 2, found: 1, landedLate: 0, stillAbsent: 0, unknown: 2 });
+    expect(tally).toEqual({ checked: 5, absent: 2, found: 1, landedLate: 0, stillAbsent: 0, lapsed: 0, unknown: 2 });
     expect(assignments.__all().map((r: any) => r.resourceRef)).toEqual(['gold']);
     expect(intents(container).map((r: any) => [r.scopeRef, r.state])).toEqual([
       ['gold', 'active'], ['silver', 'absent'], ['bronze', 'absent'], ['tin', 'pending'], ['lead', 'pending'], ['fresh', 'pending'],
@@ -1672,24 +1680,248 @@ describe('the grant ledger: stale pending rows are resolved from the store', () 
     }
   }
 
-  it('the sweep re-checks a young `absent` row: a grant that landed late is found, recorded and kept', async () => {
-    // `absent` is not final. Breaks if the sweep read only `pending` rows (the
-    // late grant stays recorded as absent: checked 0, no entitlement row), or
-    // re-checked absent rows of any age (the 2-day-old row probed: checked 3).
+  it('the sweep re-checks a young `absent` row, and settles an old one `lapsed` after one final check', async () => {
+    // `absent` is not final for a day; after that it must not stay listed
+    // forever. Breaks if the sweep read only `pending` rows (the late grant
+    // stays absent: landedLate 0, no entitlement row); if it never re-checked
+    // an old absent row (the 2-day-old row stays `absent` and is listed
+    // forever: lapsed 0, 0 probes of 'old'); or if a YOUNG absent row lapsed
+    // ('silver' marked `lapsed`: lapsed 2, stillAbsent 0).
     const assignments = ledger();
     const { container } = fakeArContainer(baseDoc({ tier: 'access-provider' }));
     await seedAbsent(container, ['gold', 'silver'], GRANT_LEASE_MS + 80_000);
     await seedAbsent(container, ['old'], ABSENT_RECHECK_MS + 86_400_000);
     (accessRequestWorkflowContainer as any).mockResolvedValue(container);
-    (probeAccessGrant as any).mockImplementation(async (i: any) => {
-      if (i.scopeRef === 'old') throw new Error('an absent row past the re-check window was probed');
-      return i.scopeRef === 'gold' ? { held: true, roleName: 'Storage Blob Data Reader', roleAssignmentId: 'ra-gold' } : { held: false };
-    });
+    (probeAccessGrant as any).mockImplementation(async (i: any) => (
+      i.scopeRef === 'gold' ? { held: true, roleName: 'Storage Blob Data Reader', roleAssignmentId: 'ra-gold' } : { held: false }));
     const tally = await reconcileStaleGrantIntents({ tenantId: TENANT });
-    expect(tally).toEqual({ checked: 2, absent: 0, found: 0, landedLate: 1, stillAbsent: 1, unknown: 0 });
+    expect(tally).toEqual({ checked: 3, absent: 0, found: 0, landedLate: 1, stillAbsent: 1, lapsed: 1, unknown: 0 });
     expect(intents(container).map((r: any) => [r.scopeRef, r.state, r.detail ?? null])).toEqual([
-      ['gold', 'active', RECONCILED_LANDED_LATE], ['silver', 'absent', null], ['old', 'absent', null],
+      ['gold', 'active', RECONCILED_LANDED_LATE], ['silver', 'absent', null], ['old', 'lapsed', RECONCILED_LAPSED],
     ]);
     expect(assignments.__all().map((r: any) => [r.resourceRef, r.roleAssignmentId, r.expiresAt])).toEqual([['gold', 'ra-gold', null]]);
+    // A lapsed row is final: the next sweep neither probes it nor lists it.
+    (probeAccessGrant as any).mockClear();
+    expect((await reconcileStaleGrantIntents({ tenantId: TENANT })).checked).toBe(1);
+    expect((probeAccessGrant as any).mock.calls.map((c: any) => c[0].scopeRef)).toEqual(['silver']);
+    expect((await listUnsettledGrantIntents(TENANT)).map((r) => r.scopeRef)).toEqual(['silver']);
+  });
+
+  it('an old `absent` row found in place at its final check is recorded as landed late, not lapsed', async () => {
+    // Pairs the test above. Breaks if the final check marked every old row
+    // `lapsed` without probing (the grant stays live and unrecorded).
+    const assignments = ledger();
+    const { container } = fakeArContainer(baseDoc({ tier: 'access-provider' }));
+    await seedAbsent(container, ['old'], ABSENT_RECHECK_MS + 86_400_000);
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    (probeAccessGrant as any).mockResolvedValue({ held: true, roleName: 'Storage Blob Data Reader', roleAssignmentId: 'ra-old' });
+    const tally = await reconcileStaleGrantIntents({ tenantId: TENANT });
+    expect([tally.landedLate, tally.lapsed]).toEqual([1, 0]);
+    expect(intents(container).map((r: any) => [r.state, r.detail])).toEqual([['active', RECONCILED_LANDED_LATE]]);
+    expect(assignments.__all().map((r: any) => r.roleAssignmentId)).toEqual(['ra-old']);
+  });
+
+  it('each sweep arm has its own bounded, oldest-first query, so old absent rows cannot starve stale pending ones', async () => {
+    // limit 1. The old absent row is written FIRST and two stale pending rows
+    // after it, the newer of those first. Breaks with one shared TOP-1 query
+    // in write order (only 'old' is checked: 'p-old' and 'p-new' are never
+    // probed), and without ORDER BY createdAt ASC ('p-new', written first,
+    // is probed instead of the older 'p-old').
+    const { container } = fakeArContainer(baseDoc({ tier: 'access-provider' }));
+    await seedAbsent(container, ['old'], ABSENT_RECHECK_MS + 86_400_000);
+    await seedStale(container, [{ scopeType: 'adls-container', scopeRef: 'p-new', status: 'in-flight' }], GRANT_LEASE_MS + 60_000);
+    await seedStale(container, [{ scopeType: 'adls-container', scopeRef: 'p-old', status: 'in-flight' }], GRANT_LEASE_MS + 600_000);
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    (probeAccessGrant as any).mockResolvedValue({ held: false });
+    const tally = await reconcileStaleGrantIntents({ tenantId: TENANT, limit: 1 });
+    expect((probeAccessGrant as any).mock.calls.map((c: any) => c[0].scopeRef).sort()).toEqual(['old', 'p-old']);
+    expect([tally.checked, tally.absent, tally.lapsed]).toEqual([2, 1, 1]);
+    expect(intents(container).map((r: any) => [r.scopeRef, r.state])).toEqual([
+      ['old', 'lapsed'], ['p-new', 'pending'], ['p-old', 'absent'],
+    ]);
+  });
+});
+
+describe("an approval that adopted rows and then stopped releases them (A's P5)", () => {
+  const GOLD = { scopeType: 'adls-container' as const, scopeRef: 'gold' };
+  const REVOKE_CTX = { requesterId: REQUESTER_OID, requesterUpn: 'req@contoso.com', permission: 'read' as const };
+
+  it("A's P5 order: the adopter's final write fails, it hands the in-flight row back, and the creator revokes the grant when it lands", async () => {
+    // The measured sequence. A's grant is in flight past its lease; B (+130 s)
+    // finds gold held, adopts A's row, and its final write fails (503); a
+    // denial then sees nothing in place; A's grant lands. Breaks if B left its
+    // adoption in place: A's compensation sees the row owned by B and keeps
+    // the grant, the request ends `denied` with 'ra-gold' live (0 revoke
+    // calls, row `active`).
+    ledger();
+    const { container, store } = fakeArContainer(baseDoc({ tier: 'access-provider' }));
+    const io = instrument(container);
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    (revokeContainerRoleAssignment as any).mockResolvedValue(undefined);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    (enforceAccessGrant as any)
+      .mockImplementationOnce(async () => { await gate; return activeGold; })
+      .mockImplementationOnce(async () => ({ status: 'active', roleName: 'Storage Blob Data Reader', preexisting: true }));
+    // B's own reconcile cannot read the store, so A's row is still `pending`
+    // when B adopts it; the denial's reconcile finds nothing in place.
+    (probeAccessGrant as any)
+      .mockResolvedValueOnce({ unknown: 'the store could not be read' })
+      .mockResolvedValue({ held: false });
+
+    const approvalA = POST(makeReq({ decision: 'approved' }), ctx('req-1'));
+    await vi.waitFor(() => expect(enforceAccessGrant).toHaveBeenCalledTimes(1));
+    const [rowA] = intents(container);
+
+    const realNow = Date.now.bind(Date);
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + 130_000);
+    let b: any;
+    let denial: Response;
+    let afterB: any[];
+    try {
+      io.onReplace((d) => {
+        if (d.status === 'completed' && !('grantLeaseUntil' in d)) throw Object.assign(new Error('down'), { code: 503 });
+      });
+      const resB = await POST(makeReq({ decision: 'approved' }), ctx('req-1'));
+      b = { status: resB.status, ...(await resB.json()) };
+      afterB = intents(container).filter((r: any) => r.id === rowA.id).map((r: any) => [r.attemptId, r.state, r.adoptedFrom ?? null]);
+      io.onReplace(() => undefined);
+      denial = await POST(makeReq({ decision: 'denied', reason: 'not needed' }), ctx('req-1'));
+    } finally {
+      clock.mockRestore();
+    }
+    expect(b.status).toBe(503);
+    expect(b.code).toBe('grant_interrupted');
+    expect(b.error).toContain('1 grant record(s) it had taken over were handed back to the attempt that made them.');
+    // Handed back: A owns its row again, with no adoption recorded.
+    expect(afterB).toEqual([[rowA.attemptId, 'pending', null]]);
+    expect(denial.status).toBe(200);
+    expect(store.doc.status).toBe('denied');
+    expect(revokeContainerRoleAssignment).not.toHaveBeenCalled();
+
+    release();
+    const resA = await approvalA;
+    const a = await resA.json();
+    expect(resA.status).toBe(409);
+    expect(a.revoked.map((r: any) => r.roleAssignmentId)).toEqual(['ra-gold']);
+    expect(revokeContainerRoleAssignment).toHaveBeenCalledTimes(1);
+    expect(revokeContainerRoleAssignment).toHaveBeenCalledWith('ra-gold');
+    expect(intents(container).filter((r: any) => r.id === rowA.id).map((r: any) => [r.attemptId, r.state, r.created, r.roleAssignmentId]))
+      .toEqual([[rowA.attemptId, 'revoked', true, 'ra-gold']]);
+  });
+
+  it('the other order: the creator recorded the grant and kept it for the adopter, so the stopped adopter revokes it itself', async () => {
+    // A's grant lands and A stops while B still holds A's row: A keeps it
+    // (ADOPTED_OPEN, since nothing completed the request) and records it.
+    // Then B stops. Breaks if releaseAdoptions only handed the row back: A has
+    // already finished, so nothing revokes 'ra-gold' (0 revoke calls, row
+    // `active`).
+    ledger();
+    const { container } = fakeArContainer(baseDoc({ tier: 'access-provider' }));
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    (revokeContainerRoleAssignment as any).mockResolvedValue(undefined);
+    const base = {
+      tenantId: TENANT, requestId: 'req-1', principalId: REQUESTER_OID, principalName: 'req@contoso.com',
+      permission: 'read' as const, assetName: 'Gold sales',
+    };
+    const creator = { ...base, attemptId: 'creator', by: 'a@contoso.com' };
+    const adopter = { ...base, attemptId: 'adopter', by: 'b@contoso.com' };
+    const row = await writeGrantIntent(container as any, creator, GOLD);
+    expect((await adoptGrantIntents(container as any, adopter, GOLD)).map((r) => r.id)).toEqual([row.id]);
+    const result = {
+      status: 'active', scopeType: 'adls-container', scopeRef: 'gold', roleName: 'Storage Blob Data Reader',
+      roleAssignmentId: 'ra-gold', created: true,
+    } as any;
+    expect(await settleGrantIntent(container as any, row, result)).toMatchObject({ ok: false, lost: true });
+    const session = { claims: { oid: 'a-oid', upn: 'a@contoso.com' } } as any;
+    const restored: any[] = [];
+    const a = await revokeOwnIntents(container as any, creator, [{ row, result }], REVOKE_CTX, session, {
+      record: async () => [],
+      restore: async (rs) => { restored.push(...rs); return []; },
+    }, { requestStatus: 'open' });
+    expect(a.kept.map((r) => [r.scopeRef, r.detail])).toEqual([['gold', ADOPTED_OPEN]]);
+    // The kept grant is recorded (A's should-fix 2: visible in the Access report).
+    expect(restored.map((r) => r.roleAssignmentId)).toEqual(['ra-gold']);
+    expect(revokeContainerRoleAssignment).not.toHaveBeenCalled();
+
+    const rel = await releaseAdoptions(container as any, adopter, REVOKE_CTX, session);
+    expect(rel.revoked.map((r) => r.roleAssignmentId)).toEqual(['ra-gold']);
+    expect([rel.returned, rel.stuck, rel.unreadable, rel.kept]).toEqual([0, 0, false, []]);
+    expect(revokeContainerRoleAssignment).toHaveBeenCalledTimes(1);
+    expect(intents(container).map((r: any) => [r.attemptId, r.state, r.adoptedFrom ?? null]))
+      .toEqual([['creator', 'revoked', null]]);
+  });
+});
+
+describe('grants not yet settled: superseded rows are not listed (B, round 7)', () => {
+  it("B's P1: a failed first attempt is listed, and is no longer listed once a retry completes the request", async () => {
+    // Breaks if superseded rows were listed: the completed request keeps a red
+    // "Grant failed" row (1 row after the retry). The first list call is the
+    // positive control: the failed row IS listed while it is the latest word.
+    ledger();
+    const { container } = fakeArContainer(baseDoc({ tier: 'access-provider' }));
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    (enforceAccessGrant as any)
+      .mockResolvedValueOnce({ status: 'error', detail: 'ARM 500 transient' })
+      .mockResolvedValueOnce(activeGold);
+    expect((await POST(makeReq({ decision: 'approved' }), ctx('req-1'))).status).toBe(502);
+    expect((await listUnsettledGrantIntents(TENANT)).map((r) => [r.state, r.detail])).toEqual([['failed', 'ARM 500 transient']]);
+    expect((await POST(makeReq({ decision: 'approved' }), ctx('req-1'))).status).toBe(200);
+    expect(intents(container).map((r: any) => r.state)).toEqual(['failed', 'active']);
+    expect(await listUnsettledGrantIntents(TENANT)).toEqual([]);
+  });
+
+  it('a later attempt that settles a scope supersedes its earlier failure while the request stays open', async () => {
+    // The request stays open (silver fails twice), so only the later-row rule
+    // can drop gold's failure. Breaks if supersession read only the request's
+    // status: gold's failed row is listed too (3 rows).
+    ledger();
+    twoOutputProduct();
+    const { container, store } = fakeArContainer(baseDoc({ tier: 'access-provider', grantTargets: TWO_TARGETS }));
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    (enforceAccessGrant as any)
+      .mockResolvedValueOnce({ status: 'error', detail: 'gold 500' })
+      .mockResolvedValueOnce({ status: 'error', detail: 'silver 500' })
+      .mockResolvedValueOnce(activeGold)
+      .mockResolvedValueOnce({ status: 'error', detail: 'silver 500 again' });
+    expect((await POST(makeReq({ decision: 'approved' }), ctx('req-1'))).status).toBe(502);
+    expect((await POST(makeReq({ decision: 'approved' }), ctx('req-1'))).status).toBe(502);
+    expect(store.doc.status).toBe('open');
+    expect((await listUnsettledGrantIntents(TENANT)).map((r) => [r.scopeRef, r.detail]).sort())
+      .toEqual([['silver', 'silver 500'], ['silver', 'silver 500 again']]);
+  });
+
+  it('a closed request supersedes its failed row, but a pending row of a closed request is still listed', async () => {
+    // The failed row has no later settled sibling, so only the request-status
+    // rule can drop it. Breaks if supersession read only siblings (the failed
+    // row is listed: 2 rows), or if a pending row were superseded too (it may
+    // be a live grant: 0 rows).
+    ledger();
+    const { container, store } = fakeArContainer(baseDoc({ tier: 'access-provider' }));
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    (enforceAccessGrant as any)
+      .mockResolvedValueOnce({ status: 'error', detail: 'ARM 500 transient' })
+      .mockRejectedValueOnce(Object.assign(new Error('socket hang up'), { status: 503 }));
+    expect((await POST(makeReq({ decision: 'approved' }), ctx('req-1'))).status).toBe(502);
+    expect((await POST(makeReq({ decision: 'approved' }), ctx('req-1'))).status).toBe(503);
+    expect((await POST(makeReq({ decision: 'denied', reason: 'no' }), ctx('req-1'))).status).toBe(200);
+    expect(store.doc.status).toBe('denied');
+    expect(intents(container).map((r: any) => r.state)).toEqual(['failed', 'pending']);
+    expect((await listUnsettledGrantIntents(TENANT)).map((r) => r.state)).toEqual(['pending']);
+  });
+});
+
+describe('an honest configuration gate is recorded as such (B nit, round 7)', () => {
+  it('a grant that answers `pending` settles `gated`, not `failed`, and is listed with its detail', async () => {
+    // Breaks if every non-active outcome mapped to `failed` (the old mapping):
+    // the admin sees a danger "Grant failed" badge for a store not bound yet.
+    ledger();
+    const { container } = fakeArContainer(baseDoc({ tier: 'access-provider' }));
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    (enforceAccessGrant as any).mockResolvedValue({ status: 'pending', detail: 'The store is not bound yet.' });
+    const res = await POST(makeReq({ decision: 'approved' }), ctx('req-1'));
+    expect(res.status).toBe(200);
+    expect(intents(container).map((r: any) => [r.state, r.created, r.detail])).toEqual([['gated', false, 'The store is not bound yet.']]);
+    expect((await listUnsettledGrantIntents(TENANT)).map((r) => r.state)).toEqual(['gated']);
   });
 });

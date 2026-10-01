@@ -13,13 +13,15 @@
  *     `grantRecordsError` is dropped.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, within, waitFor } from '@testing-library/react';
 
 const fetchMock = vi.fn();
 vi.mock('@/lib/client-fetch', () => ({ clientFetch: (...a: unknown[]) => fetchMock(...a) }));
 vi.mock('@/lib/components/ui/identity-picker', () => ({ IdentityPicker: () => null }));
 
-import { AccessReportPanel, GRANT_RECORD_STATE_LABEL, ageLabel } from '../access-report-panel';
+import {
+  AccessReportPanel, CSV_EMPTY_NOTE, CSV_SCOPE_NOTE, GRANT_RECORD_STATE_LABEL, ageLabel, requestInboxHref,
+} from '../access-report-panel';
 
 const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
 
@@ -73,6 +75,51 @@ describe('Access report — grants not yet settled', () => {
     serve({ grantRecords: [], grantRecordsError: msg });
     render(<AccessReportPanel />);
     expect(await screen.findByText(msg)).toBeInTheDocument();
+  });
+
+  it('links each row to its request in the inbox, and labels a configuration gate as waiting, not failed', async () => {
+    // Breaks if the Request column is a bare id (no link found), if the link
+    // drops or mis-encodes the id ('a&b' must not split the query), or if a
+    // `gated` row shows its raw state or "Grant failed".
+    serve({ grantRecords: [record('g4', 'gated', ago(5), { requestId: 'a&b', detail: 'The store is not bound yet.' })] });
+    render(<AccessReportPanel />);
+    const table = await screen.findByRole('table', { name: 'Grants not yet settled' });
+    const link = within(table).getByRole('link', { name: 'Open request a&b in the access-request inbox' });
+    expect(link.getAttribute('href')).toBe('/governance/access-requests?request=a%26b');
+    expect(new URL(link.getAttribute('href')!, 'http://x').searchParams.get('request')).toBe('a&b');
+    expect(requestInboxHref('a&b')).toBe(link.getAttribute('href'));
+    expect(within(table).getByText(GRANT_RECORD_STATE_LABEL.gated)).toBeInTheDocument();
+    expect(within(table).queryByText(GRANT_RECORD_STATE_LABEL.failed)).not.toBeInTheDocument();
+    expect(within(table).getByText('The store is not bound yet.')).toBeInTheDocument();
+  });
+
+  it('says the CSV covers recorded grants only, and explains a disabled Export when only unsettled rows exist', async () => {
+    // Breaks if the export's scope is not stated beside unsettled rows (the
+    // note is missing), or if Export is disabled with no reason a keyboard
+    // user can reach (the button is not focusable, or the tooltip never shows).
+    serve({ grantRecords: [record('g1', 'pending', ago(12))] });
+    render(<AccessReportPanel />);
+    expect(await screen.findByText(CSV_SCOPE_NOTE)).toBeInTheDocument();
+    const exportBtn = screen.getByRole('button', { name: 'Export CSV' });
+    expect(exportBtn.getAttribute('aria-disabled')).toBe('true');
+    exportBtn.focus();
+    expect(document.activeElement).toBe(exportBtn);
+    expect(await screen.findByText(CSV_EMPTY_NOTE)).toBeInTheDocument();
+  });
+
+  it('positive pair: with recorded grants and nothing unsettled, Export is enabled and no CSV note shows', async () => {
+    serve({
+      entries: [{
+        principalId: 'p1', principalType: 'User', resourceType: 'adls-container', resourceRef: 'gold',
+        role: 'Storage Blob Data Reader', source: 'direct', state: 'active',
+      }],
+      grantRecords: [],
+    });
+    render(<AccessReportPanel />);
+    const exportBtn = await screen.findByRole('button', { name: 'Export CSV' });
+    await waitFor(() => expect(exportBtn).not.toBeDisabled());
+    expect(exportBtn.getAttribute('aria-disabled')).not.toBe('true');
+    expect(screen.queryByText(CSV_SCOPE_NOTE)).not.toBeInTheDocument();
   });
 });
 
