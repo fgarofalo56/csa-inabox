@@ -1,7 +1,8 @@
 /**
  * The shortcut routes keep BOTH sets of checks: the lakehouse item check
  * (reach, then edit rights) and the stored-credential checks (the secret
- * resolver's owner check, and redacted error text).
+ * resolver's owner check, the Test route's tenant check, and redacted error
+ * text).
  *
  * Each route has a positive case that passes every check, then one test per
  * check. Each check's test changes ONLY the input that check reads, so the
@@ -86,7 +87,7 @@ const SENTINEL = 'fixture-sig-sentinel';
 const errorWithQuery = () => new ShortcutSourceError(`ADLS list failed at ${HOST_PATH}?resource=filesystem&sig=${SENTINEL}`, 'adls_list_failed', 502);
 
 const me = { claims: { oid: 'oid-me', upn: 'me@contoso.com', tid: 't1' } };
-const recordFor = (oid: string) => ({ exists: true, owner: { oid, lakehouseId: LH } });
+const recordFor = (oid: string, tid?: string) => ({ exists: true, owner: { oid, lakehouseId: LH, ...(tid ? { tid } : {}) } });
 const grant = (canWrite: boolean) => async (_s: unknown, id: string) => ({
   item: { id, workspaceId: 'ws-1', itemType: 'lakehouse' }, role: canWrite ? 'Member' : 'Viewer', via: 'workspace', canWrite,
 });
@@ -242,7 +243,7 @@ describe('DELETE /api/lakehouse/shortcuts — item check and redacted errors', (
   });
 });
 
-describe('POST /api/lakehouse/shortcuts/test — item check, owner check, redacted errors', () => {
+describe('POST /api/lakehouse/shortcuts/test — item check, owner and tenant checks, redacted errors', () => {
   const run = () => TEST(postReq({ lakehouseId: LH, id: ROW_ID }));
 
   it('positive: the creator\'s credential on a lakehouse the caller can edit re-tests the row', async () => {
@@ -269,6 +270,25 @@ describe('POST /api/lakehouse/shortcuts/test — item check, owner check, redact
   // Red when the credential is read without the resolver (status 200, one value read, one status write).
   it('owner check: a credential the row\'s creator did not save is 403 shortcut_secret_not_owned, row unchanged', async () => {
     ownerRecord.mockResolvedValue(recordFor('oid-other'));
+    const res = await run();
+    const j = await res.json();
+    expect([res.status, j.code, calls(vault), calls(updateShortcutStatus)]).toEqual([403, 'shortcut_secret_not_owned', 0, 0]);
+  });
+
+  // The tenant check (#4860): the row's tenant is compared with the tenant the
+  // credential was saved under. Both cases below use the creator's own oid, so
+  // only the tenant differs between them.
+  it('positive: a row whose tenant matches the recorded one re-tests the row', async () => {
+    ownerRecord.mockResolvedValue(recordFor('oid-me', 't1'));
+    (getShortcut as any).mockResolvedValue({ ...myRow, tenantId: 't1' });
+    const res = await run();
+    expect([res.status, calls(vault), calls(updateShortcutStatus)]).toEqual([200, 1, 1]);
+  });
+
+  // Red when the owner is built without `tid: sc.tenantId` (status 200, one value read, one status write).
+  it('tenant check: a row whose tenant differs from the recorded one is 403 shortcut_secret_not_owned, row unchanged', async () => {
+    ownerRecord.mockResolvedValue(recordFor('oid-me', 't1'));
+    (getShortcut as any).mockResolvedValue({ ...myRow, tenantId: 't2' });
     const res = await run();
     const j = await res.json();
     expect([res.status, j.code, calls(vault), calls(updateShortcutStatus)]).toEqual([403, 'shortcut_secret_not_owned', 0, 0]);
