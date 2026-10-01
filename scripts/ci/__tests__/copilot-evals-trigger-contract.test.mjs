@@ -90,6 +90,7 @@ const EXPECTED_PR_PATHS = [
   'scripts/ci/classify-reindex-result.mjs',
   'scripts/ci/redact-secrets.mjs',
   'scripts/ci/run-outcome.mjs',
+  'scripts/ci/eval-measurement.mjs',
   '.github/workflows/copilot-quality-evals.yml',
 ];
 
@@ -103,13 +104,14 @@ const EXPECTED_PUSH_PATHS = [
   '.github/workflows/copilot-quality-evals.yml',
 ];
 
-/** The five scripts the run steps name directly (positive control for the lift); the sixth harness script, classify-reindex-result.mjs, is reached via reindex-loom-docs.sh. */
+/** The six scripts the run steps name directly (positive control for the lift); the seventh harness script, classify-reindex-result.mjs, is reached via reindex-loom-docs.sh. */
 const EXPECTED_DIRECT_SCRIPTS = [
   'scripts/csa-loom/stage-copilot-corpus.sh',
   'scripts/csa-loom/lint-eval-sets.mjs',
   'scripts/ci/reindex-loom-docs.sh',
   'scripts/csa-loom/check-eval-regression.mjs',
   'scripts/ci/run-outcome.mjs',
+  'scripts/ci/eval-measurement.mjs',
 ];
 
 /** (d) The advisory job, and the exact command lines it must run. */
