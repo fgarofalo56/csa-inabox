@@ -89,29 +89,58 @@ const errorWithQuery = () => new ShortcutSourceError(`ADLS list failed at ${HOST
 /**
  * True when `text` names HOST_PATH: every URL in it is PARSED, and its origin
  * plus path is compared with `===`. Not `text.includes(HOST_PATH)`: that is
- * also satisfied by a different host that merely contains this one, and CodeQL
- * flags it (js/incomplete-url-substring-sanitization). False when the route
- * drops the URL from the message (for example a generic "list failed" text),
- * or names another host or path.
+ * also satisfied when HOST_PATH sits inside another URL (for example in its
+ * query string), and CodeQL flags it (js/incomplete-url-substring-sanitization).
+ * False when the route drops the URL from the message (for example a generic
+ * "list failed" text), or names another host or path.
+ *
+ * Sentence punctuation after a URL (`.`, `,`, `;`, `:`, `)`, `]`, a backtick)
+ * is stripped before parsing, so a message that ends a URL with a full stop
+ * still names it. Without the strip that `.` becomes part of the path.
  */
 const namesHostPath = (text: unknown): boolean =>
   (String(text ?? '').match(/https?:\/\/[^\s'"<>]+/g) ?? []).some((raw) => {
     try {
-      const u = new URL(raw);
+      const u = new URL(raw.replace(/[.,;:)\]`]+$/, ''));
       return `${u.origin}${u.pathname}` === HOST_PATH;
     } catch {
       return false;
     }
   });
-// The helper's own controls: the fixture URL matches, and a host that only
-// CONTAINS the expected one does not (the case `.includes` would accept).
+// The helper's own controls. Each input names the change that turns it red.
 describe('namesHostPath (the URL check the redaction tests use)', () => {
-  it('matches the fixture URL and refuses a host that only contains it', () => {
+  it('matches the fixture URL and refuses HOST_PATH inside another URL', () => {
     expect([
+      // Positive. Breaks if the helper stops matching the fixture's own URL.
       namesHostPath(`failed at ${HOST_PATH}?sig=x`),
+      // Breaks under a substring compare (`raw.includes(HOST_PATH)` or
+      // `text.includes(HOST_PATH)`): the regex takes the whole evil.example
+      // URL, which CONTAINS HOST_PATH in its query, so a substring check says
+      // true. Its parsed origin is https://evil.example, so the compare is false.
+      namesHostPath(`failed at https://evil.example/?u=${HOST_PATH}`),
+      // A host that extends the expected one. A substring check is false here
+      // too (HOST_PATH is not a substring of it), so this input does not tell
+      // the parsed compare from a substring check. It pins only that a longer
+      // host is not read as the expected one.
       namesHostPath('failed at https://partner.dfs.core.windows.net.example/data'),
+      // Breaks if the helper returns true for a message with no URL at all.
       namesHostPath('list failed'),
-    ]).toEqual([true, false, false]);
+    ]).toEqual([true, false, false, false]);
+  });
+
+  it('ignores sentence punctuation after the URL', () => {
+    // Breaks if the trailing-punctuation strip is removed: the `.`, `,`, `)`
+    // and backtick stay in the path ("/data." is not "/data"), so each of the
+    // first four is false.
+    expect([
+      namesHostPath(`list failed at ${HOST_PATH}.`),
+      namesHostPath(`list failed at ${HOST_PATH}, retry`),
+      namesHostPath(`list failed (${HOST_PATH})`),
+      namesHostPath(`list failed at \`${HOST_PATH}\``),
+      // Control: the strip removes punctuation only. Breaks if it also removes
+      // path characters, so that "/datax" is read as "/data".
+      namesHostPath(`list failed at ${HOST_PATH}x.`),
+    ]).toEqual([true, true, true, true, false]);
   });
 });
 

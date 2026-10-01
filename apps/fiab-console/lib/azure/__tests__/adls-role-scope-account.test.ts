@@ -15,6 +15,7 @@
  * Resource Graph discovery and the ARM fetch are replaced by recorders.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { logSafe } from '@/lib/util/log-safe';
 
 const rec = vi.hoisted(() => ({
   urls: [] as string[], bodies: [] as string[], discovered: [] as string[],
@@ -48,11 +49,15 @@ vi.mock('@/lib/azure/fetch-with-timeout', () => ({
 
 // Shaped like ARM's real 403 text: it names an identity's object id and a
 // subscription / resource-group scope, which must not reach a response.
-// Low-entropy placeholders.
+// Low-entropy placeholders. The newline is there so the log test can tell a
+// one-line entry from one that carries ARM's text unflattened.
 const ARM_OBJECT_ID = '00000000-0000-0000-0000-00000000abcd';
 const ARM_SCOPE = '/subscriptions/sub-fixture/resourceGroups/rg-fixture';
-const ARM_MESSAGE = `The client 'console-uami' with object id '${ARM_OBJECT_ID}' does not have authorization to perform `
+const ARM_MESSAGE = `The client 'console-uami' with object id '${ARM_OBJECT_ID}' does not have authorization to perform\n`
   + `action 'Microsoft.Authorization/roleAssignments/write' over scope '${ARM_SCOPE}/providers/Microsoft.Storage/storageAccounts/boundacct'.`;
+// ARM's text as the log line carries it: flattened by the REAL logSafe (not a
+// transcription of it), so this value moves with the implementation.
+const ARM_MESSAGE_LOGGED = logSafe(ARM_MESSAGE, 1000);
 const PRIMARY = 'primaryacct';
 const BOUND = 'boundacct';
 const saved = process.env.LOOM_BRONZE_URL;
@@ -258,9 +263,17 @@ describe('a 403 from ARM on a role-assignment request', () => {
       expect(err.message).toContain(`correlation id ${err.correlationId}.`);
       // Breaks if ARM's text is not logged, or is logged under another id.
       expect(logged).toHaveBeenCalledTimes(1);
-      expect(logged.mock.calls[0][1]).toEqual({
-        correlationId: err.correlationId, account: BOUND, operation: 'grant', armMessage: ARM_MESSAGE,
-      });
+      // ONE string argument on ONE line. Breaks if the entry goes back to a
+      // header plus an object (2 arguments, which Node prints over several
+      // lines), or if ARM's text is logged without logSafe and keeps its newline.
+      const entry = logged.mock.calls[0];
+      expect([entry.length, typeof entry[0], String(entry[0]).includes('\n')]).toEqual([1, 'string', false]);
+      // Breaks if any field is dropped from the line, or the id differs from
+      // the one the error names. `error` keeps the stock error-line query matching.
+      expect(entry[0]).toBe(
+        `[adls-client] error: role-assignment request refused (HTTP 403) correlationId=${err.correlationId} `
+        + `account=${BOUND} operation=grant arm=${ARM_MESSAGE_LOGGED}`,
+      );
     } finally {
       logged.mockRestore();
     }

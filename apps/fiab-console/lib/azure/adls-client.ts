@@ -1056,9 +1056,14 @@ async function roleAssignmentCall<T>(
   } catch (e: any) {
     if (e?.status === 403) {
       const correlationId = newCorrelationId();
+      // ONE line: the Console's logs are read one row per line
+      // (ContainerAppConsoleLogs_CL `Log_s`), so a search for the id must return
+      // the account, the operation and Azure's reason with it. An object
+      // argument is printed over several lines by util.inspect. `error` is in
+      // the text so the stock "error-like lines" query matches it.
       console.error(
-        '[adls-client] role-assignment request refused (HTTP 403)',
-        { correlationId, account, operation, armMessage: logSafe(e?.message, 1000) },
+        `[adls-client] error: role-assignment request refused (HTTP 403) correlationId=${correlationId} `
+        + `account=${logSafe(account, 100)} operation=${operation} arm=${logSafe(e?.message, 1000)}`,
       );
       throw new StorageRoleDeniedError(account, operation, correlationId);
     }

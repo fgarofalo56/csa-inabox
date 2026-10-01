@@ -25,7 +25,7 @@ export function TablesPane() {
   // (focusable, with the reason) when the caller's role is read-only.
   const readOnly = useLakehouseReadOnly(ctx.id, ctx.isNewItem);
   const {
-    activeContainer, schemasEnabled, shortcutLakehouseId, tablesPrefix,
+    activeContainer, schemasEnabled, lakehouseName, tablesPrefix,
     liveTables, liveTablesLoading, liveTablesError, liveTablesGate, loadLiveTables,
     seededTableInfo, bundleDeltaTables,
     openPrefixes, cacheKey, loadPaths,
@@ -257,7 +257,7 @@ export function TablesPane() {
                                 return (
                                   <TableRow key={t.name}>
                                     <TableCell><strong>{tableName}</strong></TableCell>
-                                    <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{shortcutLakehouseId}.{schemaName}.{tableName}</code></TableCell>
+                                    <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{lakehouseName}.{schemaName}.{tableName}</code></TableCell>
                                     <TableCell>
                                       <span style={{ display: 'inline-flex', gap: tokens.spacingHorizontalS }}>
                                         <Button size="small" appearance="primary" icon={<Eye20Regular />}
@@ -267,7 +267,7 @@ export function TablesPane() {
                                         </Button>
                                         <Button size="small" appearance="outline"
                                           onClick={() => {
-                                            setSqlText(`-- 4-part name: ${shortcutLakehouseId}.${schemaName}.${tableName}\n-- Serverless view (if registered): SELECT TOP 100 * FROM loom_lakehouse.${schemaName}.${tableName};\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.${dfsHostSuffix}/${activeContainer}/${t.name}', FORMAT='DELTA') AS r;`);
+                                            setSqlText(`-- 4-part name: ${lakehouseName}.${schemaName}.${tableName}\n-- Serverless view (if registered): SELECT TOP 100 * FROM loom_lakehouse.${schemaName}.${tableName};\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.${dfsHostSuffix}/${activeContainer}/${t.name}', FORMAT='DELTA') AS r;`);
                                             setTab('sql');
                                           }}>
                                           Query
