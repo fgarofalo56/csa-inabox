@@ -93,6 +93,12 @@ async function runPass(pass) {
     const detail =
       pass.name === 'expiry'
         ? `candidates=${data.candidates ?? 0} expired=${data.expired ?? 0}`
+          + (data.grantRecords
+            ? ` grantRecords: checked=${data.grantRecords.checked ?? 0} absent=${data.grantRecords.absent ?? 0}`
+              + ` found=${data.grantRecords.found ?? 0} landedLate=${data.grantRecords.landedLate ?? 0}`
+              + ` unknown=${data.grantRecords.unknown ?? 0}`
+            : '')
+          + (data.grantRecordsError ? ` grantRecordsError="${data.grantRecordsError}"` : '')
         : pass.name === 'reviews'
           ? `closed=${data.closed ?? 0} revoked=${data.revoked ?? 0}`
           : `packages=${data.groupTargetedPackages ?? 0} granted=${data.granted ?? 0} revoked=${data.revoked ?? 0}`;

@@ -15,12 +15,15 @@
  *   - {@link mergeGrantResults} keeps a created grant's identity when a retry of
  *     the same scope now finds it in place, so a retry cannot erase the record
  *     of what this request created.
- *   - {@link recordLandedGrants} writes every landed grant to the entitlement
- *     ledger with its role-assignment id (`sourceRef` = the request id), so the
- *     who-has-access report shows it.
+ *   - {@link recordLandedGrants} writes every landed grant the request did not
+ *     find in place to the entitlement ledger with its role-assignment id
+ *     (`sourceRef` = the request id), so the who-has-access report shows it. A
+ *     grant the principal already held is not written: its row would carry this
+ *     request's expiry, and the expiry sweep would revoke it.
  *   - {@link revokeLandedGrants} revokes the grants it is given — on denial,
- *     and when a final approval stops after granting, the created rows of the
- *     request's grant ledger (lib/access/grant-intents.ts): it revokes
+ *     the created rows of the request's grant ledger, and when a final approval
+ *     stops after granting, the rows that approval created
+ *     (lib/access/grant-intents.ts): it revokes
  *     only the grants the request created, never access the principal already
  *     held, and reports every grant it could not revoke (with the reason)
  *     instead of claiming it.
@@ -97,14 +100,20 @@ export interface LedgerRecord {
 }
 
 /**
- * Record every landed grant in the entitlement ledger. Best-effort, like the
- * ledger itself: a row that could not be written is returned with
- * `recorded: false`, so a caller never says a grant is in the Access report
- * when it is not.
+ * Record every landed grant the request did not find already in place in the
+ * entitlement ledger. Best-effort, like the ledger itself: a row that could
+ * not be written is returned with `recorded: false`, so a caller never says a
+ * grant is in the Access report when it is not.
+ *
+ * A grant the principal already held (`created: false`) is NOT written. Its
+ * row would read as a grant this request made, with this request's expiry, and
+ * the expiry sweep (app/api/access-governance/sweep) revokes by that row when
+ * it falls due, which would remove access held before the request.
  */
 export async function recordLandedGrants(ctx: LandedGrantContext, results: AccessRequestGrantResult[]): Promise<LedgerRecord[]> {
   const out: LedgerRecord[] = [];
   for (const r of landedGrants(results)) {
+    if (r.created === false) continue;
     const recorded = await recordAssignment({
       principalId: ctx.requesterId,
       principalUpn: ctx.requesterUpn,

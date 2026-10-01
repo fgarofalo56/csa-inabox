@@ -157,13 +157,18 @@ describe('a final approval refused because the storage changed', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: /^Approve & grant$/ }));
 
     expect(await within(dialog).findByText(REFUSAL.error)).toBeInTheDocument();
-    const lists = within(dialog).getByLabelText('Storage reviewed and bound now');
-    expect(within(lists).getByText('Reviewed when requested')).toBeInTheDocument();
+    const lists = within(dialog).getByLabelText('Storage recorded when requested and bound now');
+    // Breaks if the column is titled "Reviewed when requested" again: for a
+    // request made before targets were recorded nothing reviewed that scope.
+    expect(within(lists).getByText('Recorded when requested')).toBeInTheDocument();
+    expect(within(lists).queryByText('Reviewed when requested')).not.toBeInTheDocument();
     expect(within(lists).getByText("adls-container · gold (output port 'gold-out')")).toBeInTheDocument();
     expect(within(lists).getByText('Bound now')).toBeInTheDocument();
     expect(within(lists).getByText("adls-container · silver (output port 'gold-out')")).toBeInTheDocument();
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Deny with this reason' }));
+    // Awaited, like the Deny click below: on a loaded runner the dialog surface
+    // was found carrying aria-hidden="true" at this click too (round 7 broad run).
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Deny with this reason' }, { timeout: 5000 }));
     expect(await within(dialog).findByDisplayValue(SUGGESTED)).toBeInTheDocument();
     // Awaited, not synchronous: on a loaded runner a synchronous query found the
     // dialog surface carrying aria-hidden="true" (seen in the failure dump) right
@@ -192,7 +197,7 @@ describe('a final approval refused because the storage changed', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: /^Approve & grant$/ }));
     expect(await within(dialog).findByText('Another decision is granting.')).toBeInTheDocument();
     expect(within(dialog).queryByRole('button', { name: 'Deny with this reason' })).not.toBeInTheDocument();
-    expect(within(dialog).queryByLabelText('Storage reviewed and bound now')).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText('Storage recorded when requested and bound now')).not.toBeInTheDocument();
   });
 });
 

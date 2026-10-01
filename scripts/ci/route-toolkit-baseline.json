@@ -5,7 +5,6 @@
   "entries": {
     "apps/fiab-console/app/api/access-governance/assignments/[id]/activate/route.ts": 1,
     "apps/fiab-console/app/api/access-governance/backfill/route.ts": 1,
-    "apps/fiab-console/app/api/access-governance/report/route.ts": 1,
     "apps/fiab-console/app/api/access-governance/reviews/[id]/decision/route.ts": 1,
     "apps/fiab-console/app/api/access-governance/reviews/route.ts": 1,
     "apps/fiab-console/app/api/access-governance/revoke-all/route.ts": 1,

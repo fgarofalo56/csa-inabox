@@ -141,7 +141,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `access-governance/reviews/route.ts` | GET POST | admin |  | Cosmos |
 | `access-governance/reviews/sweep/route.ts` | POST | admin |  | ADLS, ADX, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Managed Identity, Synapse SQL |
 | `access-governance/revoke-all/route.ts` | POST | admin |  | ADLS, ADX, ARM, Azure SQL, Azure Storage, Cosmos, Managed Identity, Synapse SQL |
-| `access-governance/sweep/route.ts` | POST | admin |  | ADLS, ADX, ARM, Azure SQL, Azure Storage, Cosmos, Managed Identity, Synapse SQL |
+| `access-governance/sweep/route.ts` | POST | admin |  | ADLS, ADX, ARM, Azure RBAC, Azure SQL, Azure Storage, Cosmos, Managed Identity, Resource Graph, Synapse SQL |
 
 ## access-packages
 

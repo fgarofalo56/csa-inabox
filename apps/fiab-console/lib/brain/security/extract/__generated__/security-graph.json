@@ -110,25 +110,6 @@
           }
         },
         {
-          "id": "sec:verdict-call:apps/fiab-console/app/api/access-governance/report/route.ts#GET:requireTenantAdmin:3",
-          "kind": "verdict-call",
-          "provenance": "declared",
-          "label": "GET /api/access-governance/report -> requireTenantAdmin",
-          "facet": {
-            "kind": "verdict-call",
-            "callSite": "GET /api/access-governance/report:3",
-            "symbol": "requireTenantAdmin",
-            "returnsVerdictUnion": true,
-            "pathsToPrivilegedSink": 6,
-            "pathsConsumingAsRefusal": 6,
-            "consumption": "returned",
-            "allowlisted": false,
-            "allowlistPremiseTested": false,
-            "sinkPrivileged": true,
-            "sinkKind": "cosmos-cross-partition-read"
-          }
-        },
-        {
           "id": "sec:authorizer:apps/fiab-console/app/api/access-governance/reviews/[id]/decision/route.ts#POST",
           "kind": "authorizer",
           "provenance": "declared",
@@ -45024,13 +45005,6 @@
           "provenance": "declared"
         },
         {
-          "id": "sec-edge:calls:sec:authorizer:apps/fiab-console/app/api/access-governance/report/route.ts#GET->sec:verdict-call:apps/fiab-console/app/api/access-governance/report/route.ts#GET:requireTenantAdmin:3",
-          "from": "sec:authorizer:apps/fiab-console/app/api/access-governance/report/route.ts#GET",
-          "to": "sec:verdict-call:apps/fiab-console/app/api/access-governance/report/route.ts#GET:requireTenantAdmin:3",
-          "kind": "calls",
-          "provenance": "declared"
-        },
-        {
           "id": "sec-edge:calls:sec:authorizer:apps/fiab-console/app/api/access-governance/reviews/route.ts#POST->sec:verdict-call:apps/fiab-console/app/api/access-governance/reviews/route.ts#POST:requireTenantAdmin:3",
           "from": "sec:authorizer:apps/fiab-console/app/api/access-governance/reviews/route.ts#POST",
           "to": "sec:verdict-call:apps/fiab-console/app/api/access-governance/reviews/route.ts#POST:requireTenantAdmin:3",
@@ -46273,11 +46247,6 @@
         },
         {
           "nodeId": "sec:authorizer:apps/fiab-console/app/api/access-governance/report/route.ts#GET",
-          "codeModuleId": "code:apps/fiab-console/app/api/access-governance/report/route.ts",
-          "deployedAs": "loom-console"
-        },
-        {
-          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/access-governance/report/route.ts#GET:requireTenantAdmin:3",
           "codeModuleId": "code:apps/fiab-console/app/api/access-governance/report/route.ts",
           "deployedAs": "loom-console"
         },

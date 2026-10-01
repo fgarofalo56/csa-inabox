@@ -65,9 +65,10 @@ import {
 import { makePartitionedContainer, makeSinkContainer, type FakeContainer } from './partitioned-cosmos-fake';
 import { assignmentId } from '@/lib/access/assignment-ledger';
 import {
-  GRANT_INTENT_KIND, GRANT_LEASE_MS, IN_FLIGHT, RECONCILED_FOUND, reconcileStaleGrantIntents,
-  settleGrantIntent, writeGrantIntent,
+  ABSENT_RECHECK_MS, ADOPTED, GRANT_INTENT_KIND, GRANT_LEASE_MS, IN_FLIGHT, OUTCOME_UNKNOWN, RECONCILED_FOUND,
+  RECONCILED_LANDED_LATE, reconcileStaleGrantIntents, revokeOwnIntents, settleGrantIntent, writeGrantIntent,
 } from '@/lib/access/grant-intents';
+import { selectExpired } from '@/lib/access/expiry';
 
 /** The partition key: the Entra TENANT, as tenantScopeId() resolves it. */
 const TENANT = 'tenant-1-tid';
@@ -453,7 +454,7 @@ describe('final tier — the scopes the approvers reviewed', () => {
     expect(res.status).toBe(409);
     expect(j.code).toBe('targets_changed');
     expect(j.changes).toEqual([{ cause: 'predates_recording' }]);
-    expect(j.error).toBe('"Gold sales" cannot be approved as reviewed. This request predates target recording; deny it and ask the requester to re-request.');
+    expect(j.error).toBe('"Gold sales" cannot be approved as reviewed. This request was made before targets were recorded; deny it and ask the requester to request access again.');
     expect(j.suggestedDenyReason).toMatch(/^This request was made before Loom recorded which storage it covers/);
     expect(enforceAccessGrant).not.toHaveBeenCalled();
   });
@@ -775,7 +776,7 @@ describe('final tier — a store bound after the request was made', () => {
     // Named by cause: breaks if the classifier read the missing declaredRef as a
     // re-bound port (cause 'port_rebound', and the "nobody reviewed" sentence).
     expect(j.changes.map((ch: any) => ch.cause)).toEqual(['predates_recording']);
-    expect(j.error).toContain("output port 'gold-out': this request predates target recording; deny it and ask the requester to re-request.");
+    expect(j.error).toContain("output port 'gold-out': this request was made before targets were recorded; deny it and ask the requester to request access again.");
     expect(j.error).not.toContain('nobody reviewed');
     expect(j.suggestedDenyReason).toMatch(/^This request was made before Loom recorded which storage it covers/);
     expect(j.reviewed).toEqual([{ scopeType: 'adls-container', scopeRef: '', source: "output port 'gold-out'" }]);
@@ -982,7 +983,11 @@ describe('decisions that lose the request while granting or revoking', () => {
       // the store cannot say yet (the probe answers nothing), so the denial
       // keeps it and says so, rather than revoking blind or saying nothing.
       expect(revokeContainerRoleAssignment).not.toHaveBeenCalled();
-      expect((await denial.json()).warning).toContain(`adls-container gold (${IN_FLIGHT})`);
+      const denialWarning = (await denial.json()).warning;
+      expect(denialWarning).toContain(`adls-container gold (${IN_FLIGHT})`);
+      // Breaks if the kept-grant text points the approver at "the grant
+      // ledger", a store no admin surface opens (reviewer B, round 6).
+      expect(denialWarning).not.toMatch(/grant ledger/i);
       expect(intents(container).map((r: any) => r.state)).toEqual(['pending']);
 
       release();
@@ -992,7 +997,7 @@ describe('decisions that lose the request while granting or revoking', () => {
       expect(j.code).toBe('request_changed');
       expect(j.requestStatus).toBe('denied');
       expect(j.revoked).toEqual([expect.objectContaining({
-        scopeType: 'adls-container', scopeRef: 'gold', ledgerId: GOLD_LEDGER_ID, roleAssignmentId: 'ra-gold', recorded: true,
+        scopeType: 'adls-container', scopeRef: 'gold', accessReportId: GOLD_LEDGER_ID, roleAssignmentId: 'ra-gold', recorded: true,
       })]);
       expect(j.kept).toEqual([]);
     } finally {
@@ -1044,7 +1049,7 @@ describe('decisions that lose the request while granting or revoking', () => {
     expect(res.status).toBe(409);
     expect(j.code).toBe('request_changed');
     expect(enforceAccessGrant).toHaveBeenCalledTimes(1);
-    expect(j.revoked.map((r: any) => [r.scopeRef, r.ledgerId])).toEqual([['gold', GOLD_LEDGER_ID]]);
+    expect(j.revoked.map((r: any) => [r.scopeRef, r.accessReportId])).toEqual([['gold', GOLD_LEDGER_ID]]);
     expect(j.error).toContain('The access it had granted was removed: adls-container gold.');
     expect(revokeContainerRoleAssignment).toHaveBeenCalledWith('ra-gold');
     expect(store.doc.status).toBe('denied');
@@ -1169,7 +1174,7 @@ describe('decisions that lose the request while granting or revoking', () => {
     const j = await res.json();
     expect(res.status).toBe(409);
     expect(j.code).toBe('request_changed');
-    expect(j.revoked.map((r: any) => [r.scopeRef, r.ledgerId])).toEqual([['gold', GOLD_LEDGER_ID]]);
+    expect(j.revoked.map((r: any) => [r.scopeRef, r.accessReportId])).toEqual([['gold', GOLD_LEDGER_ID]]);
     expect(j.error).toContain('the denial was not recorded. It had removed: adls-container gold.');
     expect(revokeContainerRoleAssignment).toHaveBeenCalledWith('ra-gold');
     expect(store.doc.otherWriter).toBe('marker-9');
@@ -1302,10 +1307,38 @@ describe('the grant ledger: written before each grant, and what compensation and
     expect(intents(container).map((r: any) => r.state)).toEqual(['revoked']);
   });
 
-  it('R2/A6: an approval that finds the request completed by another approval revokes nothing', async () => {
-    // Breaks if the completed branch were removed: the request is closed, so no
-    // hold counts as another decision's, and the approval revokes 'ra-gold'
-    // that the completing approval granted and recorded.
+  it('R2/A6: an approval whose grant the completing approval ADOPTED keeps it, and revokes nothing', async () => {
+    // Another approval completes the request while this one is granting, and
+    // adopts this one's row (re-points attemptId). Breaks if adoption were
+    // ignored: the stopped approval revokes 'ra-gold', which the completed
+    // request relies on (1 revoke call).
+    const { container, store } = fakeArContainer(baseDoc({ tier: 'access-provider' }));
+    const io = instrument(container);
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    (enforceAccessGrant as any).mockImplementation(async () => {
+      const [row] = intents(container);
+      const h = container.item(row.id, TENANT);
+      await h.replace({ ...(await h.read()).resource, attemptId: 'completing-attempt', adoptedFrom: row.attemptId });
+      await io.raw({ status: 'completed', grantLeaseUntil: undefined, completedBy: 'other-approval' });
+      return activeGold;
+    });
+    ledger();
+    const res = await POST(makeReq({ decision: 'approved' }), ctx('req-1'));
+    const j = await res.json();
+    expect(res.status).toBe(409);
+    expect(j.code).toBe('request_changed');
+    expect(j.requestStatus).toBe('completed');
+    expect(j.kept.map((r: any) => [r.scopeRef, r.detail])).toEqual([['gold', ADOPTED]]);
+    expect(revokeContainerRoleAssignment).not.toHaveBeenCalled();
+    expect(store.doc.completedBy).toBe('other-approval');
+    // The stopped approval still wrote what its grant did onto the adopted row.
+    expect(intents(container).map((r: any) => [r.attemptId, r.state, r.created, r.roleAssignmentId]))
+      .toEqual([['completing-attempt', 'active', true, 'ra-gold']]);
+  });
+
+  it('ownership decides: a request completed by an approval that did NOT adopt this grant still has it revoked', async () => {
+    // Pairs the test above. Breaks if the request's state decided instead of
+    // the row's owner (a "completed → keep" branch): 0 revoke calls.
     const { container, store } = fakeArContainer(baseDoc({ tier: 'access-provider' }));
     const io = instrument(container);
     (accessRequestWorkflowContainer as any).mockResolvedValue(container);
@@ -1313,19 +1346,20 @@ describe('the grant ledger: written before each grant, and what compensation and
       await io.raw({ status: 'completed', grantLeaseUntil: undefined, completedBy: 'other-approval' });
       return activeGold;
     });
-    const res = await POST(makeReq({ decision: 'approved' }), ctx('req-1'));
-    const j = await res.json();
-    expect(res.status).toBe(409);
+    ledger();
+    const j = await (await POST(makeReq({ decision: 'approved' }), ctx('req-1'))).json();
     expect(j.code).toBe('request_changed');
-    expect(j.requestStatus).toBe('completed');
-    expect(j.kept.map((r: any) => [r.scopeRef, r.detail])).toEqual([['gold', 'Left in place: another approval completed this request.']]);
-    expect(revokeContainerRoleAssignment).not.toHaveBeenCalled();
+    expect(revokeContainerRoleAssignment).toHaveBeenCalledTimes(1);
+    expect(revokeContainerRoleAssignment).toHaveBeenCalledWith('ra-gold');
+    expect(j.revoked.map((r: any) => r.scopeRef)).toEqual(['gold']);
+    expect(intents(container).map((r: any) => r.state)).toEqual(['revoked']);
     expect(store.doc.completedBy).toBe('other-approval');
   });
 
-  it('A3: an approval that finds another decision holding the request revokes nothing and leaves that hold', async () => {
-    // Breaks if heldByOther were removed: the approval revokes 'ra-gold' under
-    // the other decision's hold, and releases nothing of its own.
+  it('A3: a stopped approval revokes its own grant while another decision holds the request, and leaves that hold', async () => {
+    // Breaks if a hold by another decision still meant "keep" (0 revoke calls:
+    // that decision has already read the rows and may never remove it), or if
+    // the approval released or overwrote the other decision's hold.
     const { container, store } = fakeArContainer(baseDoc({ tier: 'access-provider' }));
     const io = instrument(container);
     const theirs = new Date(Date.now() + 60_000).toISOString();
@@ -1339,10 +1373,198 @@ describe('the grant ledger: written before each grant, and what compensation and
     const j = await res.json();
     expect(res.status).toBe(409);
     expect(j.requestStatus).toBe('open');
-    expect(j.kept.map((r: any) => [r.scopeRef, r.detail]))
-      .toEqual([['gold', 'Left in place: another decision holds the request now, and removes or keeps this grant.']]);
-    expect(revokeContainerRoleAssignment).not.toHaveBeenCalled();
+    expect(j.revoked.map((r: any) => r.scopeRef)).toEqual(['gold']);
+    expect(j.kept).toEqual([]);
+    expect(revokeContainerRoleAssignment).toHaveBeenCalledWith('ra-gold');
     expect(store.doc.grantLeaseUntil).toBe(theirs);
+  });
+
+  it("A's blocker: a grant that lands after a denial resolved its row `absent` is revoked by the approval that made it", async () => {
+    // The measured sequence: the approval's grant runs past the lease; a denial
+    // takes the request, probes the store (not there yet), marks the row
+    // `absent` and is about to write; the grant lands; the approval's settle
+    // finds the row changed. Breaks if `absent` were final (the settle leaves
+    // it, compensation sees nothing created: 0 revoke calls, row 'absent'), or
+    // if a hold by the denial still meant "keep".
+    ledger();
+    const { container, store } = fakeArContainer(baseDoc({ tier: 'access-provider' }));
+    const io = instrument(container);
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    (probeAccessGrant as any).mockResolvedValue({ held: false });
+    (revokeContainerRoleAssignment as any).mockResolvedValue(undefined);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    (enforceAccessGrant as any).mockImplementation(async () => { await gate; return activeGold; });
+
+    const approval = POST(makeReq({ decision: 'approved' }), ctx('req-1'));
+    await vi.waitFor(() => expect(enforceAccessGrant).toHaveBeenCalledTimes(1));
+    const [ours] = intents(container);
+
+    let approvalBody: any;
+    let rowsWhenDenialWrites: any[] = [];
+    io.onReplace(async (d) => {
+      if (d.status !== 'denied' || 'grantLeaseUntil' in d || approvalBody) return;
+      rowsWhenDenialWrites = intents(container).map((r: any) => [r.scopeRef, r.state]);
+      release();
+      const res = await approval;
+      approvalBody = { status: res.status, ...(await res.json()) };
+    });
+    const realNow = Date.now.bind(Date);
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + 130_000);
+    let denial: Response;
+    try {
+      denial = await POST(makeReq({ decision: 'denied', reason: 'not needed' }), ctx('req-1'));
+    } finally {
+      clock.mockRestore();
+    }
+    expect(rowsWhenDenialWrites).toEqual([['gold', 'absent']]);
+    expect(approvalBody.status).toBe(409);
+    expect(approvalBody.code).toBe('request_changed');
+    expect(approvalBody.revoked.map((r: any) => r.scopeRef)).toEqual(['gold']);
+    expect(denial.status).toBe(200);
+    expect(store.doc.status).toBe('denied');
+    expect(revokeContainerRoleAssignment).toHaveBeenCalledTimes(1);
+    expect(revokeContainerRoleAssignment).toHaveBeenCalledWith('ra-gold');
+    expect(intents(container).map((r: any) => [r.attemptId, r.state, r.created, r.roleAssignmentId]))
+      .toEqual([[ours.attemptId, 'revoked', true, 'ra-gold']]);
+  });
+
+  it("A's silver/gold probe: a stopped approval revokes only the grant it made, never an earlier attempt's", async () => {
+    // 'silver' was created by an earlier attempt and the request is still open;
+    // this approval grants 'gold' and its final write fails. Breaks if
+    // compensation read every attempt's rows: 'ra-silver' is revoked too (2
+    // calls) and the 503 claims this approval granted silver.
+    ledger();
+    const { container } = fakeArContainer(baseDoc({ tier: 'access-provider' }));
+    await seedLedger(container, [{ scopeType: 'adls-container', scopeRef: 'silver', status: 'active', roleAssignmentId: 'ra-silver', created: true }]);
+    const io = instrument(container);
+    io.onReplace((d) => {
+      if (d.status === 'completed' && !('grantLeaseUntil' in d)) throw Object.assign(new Error('down'), { code: 503 });
+    });
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    (enforceAccessGrant as any).mockResolvedValue(activeGold);
+    const res = await POST(makeReq({ decision: 'approved' }), ctx('req-1'));
+    const j = await res.json();
+    expect(res.status).toBe(503);
+    expect(revokeContainerRoleAssignment).toHaveBeenCalledTimes(1);
+    expect(revokeContainerRoleAssignment).toHaveBeenCalledWith('ra-gold');
+    expect(j.error).toContain('The access it had granted was removed: adls-container gold.');
+    expect(j.error).not.toContain('silver');
+    expect(intents(container).map((r: any) => [r.scopeRef, r.state]).sort())
+      .toEqual([['gold', 'revoked'], ['silver', 'active']]);
+  });
+
+  it('a completing approval adopts the row of another attempt whose grant it found in place; that attempt then keeps it', async () => {
+    // Breaks if the completing approval did not adopt (the row keeps
+    // 'stopped-attempt', whose own compensation then revokes 'ra-gold' from
+    // the completed request: 1 revoke call).
+    ledger();
+    const { container, store } = fakeArContainer(baseDoc({ tier: 'access-provider' }));
+    const theirCtx = {
+      tenantId: TENANT, requestId: 'req-1', attemptId: 'stopped-attempt', principalId: REQUESTER_OID,
+      principalName: 'req@contoso.com', permission: 'read' as const, assetName: 'Gold sales', by: 'other@contoso.com',
+    };
+    const theirRow = await writeGrantIntent(container as any, theirCtx, { scopeType: 'adls-container', scopeRef: 'gold' });
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    (enforceAccessGrant as any).mockResolvedValue({ status: 'active', roleName: 'Storage Blob Data Reader', preexisting: true });
+    const res = await POST(makeReq({ decision: 'approved' }), ctx('req-1'));
+    expect(res.status).toBe(200);
+    expect(store.doc.status).toBe('completed');
+    const adopted = intents(container).find((r: any) => r.id === theirRow.id);
+    expect(adopted.attemptId).not.toBe('stopped-attempt');
+    expect(adopted.adoptedFrom).toBe('stopped-attempt');
+
+    // The other attempt's grant then lands and it stops: it writes its outcome
+    // onto the row and keeps the grant for the approval that adopted it.
+    const result = { status: 'active', scopeType: 'adls-container', scopeRef: 'gold', roleAssignmentId: 'ra-gold', created: true } as any;
+    const settled = await settleGrantIntent(container as any, theirRow, result);
+    expect(settled).toMatchObject({ ok: false, lost: true });
+    const session = { claims: { oid: 'other-oid', upn: 'other@contoso.com' } } as any;
+    const out = await revokeOwnIntents(container as any, theirCtx, [{ row: theirRow, result }], {
+      requesterId: REQUESTER_OID, requesterUpn: 'req@contoso.com', permission: 'read',
+    }, session, { record: async () => [], restore: async () => [] });
+    expect(out.revoked).toEqual([]);
+    expect(out.kept.map((r) => [r.scopeRef, r.detail])).toEqual([['gold', ADOPTED]]);
+    expect(revokeContainerRoleAssignment).not.toHaveBeenCalled();
+    expect(intents(container).find((r: any) => r.id === theirRow.id))
+      .toMatchObject({ attemptId: adopted.attemptId, state: 'active', created: true, roleAssignmentId: 'ra-gold' });
+  });
+
+  it('a row adopted while its creator is revoking it is granted again and kept for the adopter', async () => {
+    // The adoption lands between compensation's read and its revoke. Breaks if
+    // the creator did not re-check ownership after revoking: the adopter's
+    // completed request is left without the grant (1 grant call, row revoked).
+    const assignments = ledger();
+    const { container } = fakeArContainer(baseDoc({ tier: 'access-provider', grantLifetimeDays: 30 }));
+    const io = instrument(container);
+    io.onReplace((d) => {
+      if (d.status === 'completed' && !('grantLeaseUntil' in d)) throw Object.assign(new Error('down'), { code: 503 });
+    });
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    (enforceAccessGrant as any)
+      .mockResolvedValueOnce(activeGold)
+      .mockResolvedValueOnce({ ...activeGold, roleAssignmentId: 'ra-gold-2' });
+    (revokeContainerRoleAssignment as any).mockImplementation(async () => {
+      const [row] = intents(container);
+      const h = container.item(row.id, TENANT);
+      await h.replace({ ...(await h.read()).resource, attemptId: 'adopter', adoptedFrom: row.attemptId });
+    });
+    const j = await (await POST(makeReq({ decision: 'approved' }), ctx('req-1'))).json();
+    expect(j.code).toBe('grant_interrupted');
+    expect(enforceAccessGrant).toHaveBeenCalledTimes(2);
+    expect(j.revoked).toEqual([]);
+    expect(j.kept.map((r: any) => [r.scopeRef, r.roleAssignmentId, r.detail])).toEqual([['gold', 'ra-gold-2', ADOPTED]]);
+    expect(intents(container).map((r: any) => [r.attemptId, r.state, r.roleAssignmentId])).toEqual([['adopter', 'active', 'ra-gold-2']]);
+    const row = assignments.__all().find((r: any) => r.resourceRef === 'gold');
+    expect([row.state, row.roleAssignmentId, typeof row.expiresAt]).toEqual(['active', 'ra-gold-2', 'string']);
+  });
+
+  it('a grant call that throws answers a classified 503, releases the hold, and keeps the row pending', async () => {
+    // Breaks if the throw reached the generic handler (500 internal_error, the
+    // hold left set), or if the client's own message were quoted.
+    ledger();
+    const { container, store } = fakeArContainer(baseDoc({ tier: 'access-provider' }));
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    (enforceAccessGrant as any).mockRejectedValue(Object.assign(new Error('socket hang up at internal-host-5'), { status: 503 }));
+    const res = await POST(makeReq({ decision: 'approved' }), ctx('req-1'));
+    const j = await res.json();
+    expect(res.status).toBe(503);
+    expect(j.code).toBe('grant_interrupted');
+    expect(j.error).toContain('This approval stopped and was not recorded: a grant call failed (the grant service answered 503, unavailable), so whether it landed is unknown.');
+    expect(j.error).not.toMatch(/socket|internal-host/);
+    expect(j.kept.map((r: any) => [r.scopeRef, r.detail])).toEqual([['gold', OUTCOME_UNKNOWN]]);
+    expect(store.doc.grantLeaseUntil).toBeUndefined();
+    expect(store.doc.status).toBe('open');
+    expect(intents(container).map((r: any) => r.state)).toEqual(['pending']);
+    expect(revokeContainerRoleAssignment).not.toHaveBeenCalled();
+  });
+});
+
+describe('the entitlement ledger and the expiry sweep: a grant held before the request (R3)', () => {
+  it('a preexisting grant is not recorded with this request\'s expiry, so the expiry sweep never selects it', async () => {
+    // Breaks if recordLandedGrants wrote created:false results: the ledger gets
+    // a 'direct' row expiring in 30 days, and the sweep's own selector returns
+    // it 31 days later (1 candidate), revoking a role held before the request.
+    const assignments = ledger();
+    const { container, store } = fakeArContainer(baseDoc({ tier: 'access-provider', grantLifetimeDays: 30 }));
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    (enforceAccessGrant as any).mockResolvedValue({ status: 'active', roleName: 'Storage Blob Data Reader', preexisting: true });
+    expect((await POST(makeReq({ decision: 'approved' }), ctx('req-1'))).status).toBe(200);
+    expect(store.doc.status).toBe('completed');
+    expect(assignments.__all().filter((r: any) => r.resourceRef === 'gold')).toEqual([]);
+    expect(selectExpired(assignments.__all(), new Date(Date.now() + 31 * 86_400_000))).toEqual([]);
+  });
+
+  it('positive pair: a grant this request created is recorded with the expiry, and the sweep selects it when due', async () => {
+    const assignments = ledger();
+    const { container } = fakeArContainer(baseDoc({ tier: 'access-provider', grantLifetimeDays: 30 }));
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    (enforceAccessGrant as any).mockResolvedValue(activeGold);
+    expect((await POST(makeReq({ decision: 'approved' }), ctx('req-1'))).status).toBe(200);
+    const rows = assignments.__all().filter((r: any) => r.resourceRef === 'gold');
+    expect(rows.map((r: any) => [r.state, r.roleAssignmentId, typeof r.expiresAt])).toEqual([['active', 'ra-gold', 'string']]);
+    expect(selectExpired(assignments.__all(), new Date(Date.now() + 29 * 86_400_000))).toEqual([]);
+    expect(selectExpired(assignments.__all(), new Date(Date.now() + 31 * 86_400_000)).map((r: any) => r.resourceRef)).toEqual(['gold']);
   });
 });
 
@@ -1434,10 +1656,40 @@ describe('the grant ledger: stale pending rows are resolved from the store', () 
       return answer[i.scopeRef];
     });
     const tally = await reconcileStaleGrantIntents({ tenantId: TENANT });
-    expect(tally).toEqual({ checked: 5, absent: 2, found: 1, unknown: 2 });
+    expect(tally).toEqual({ checked: 5, absent: 2, found: 1, landedLate: 0, stillAbsent: 0, unknown: 2 });
     expect(assignments.__all().map((r: any) => r.resourceRef)).toEqual(['gold']);
     expect(intents(container).map((r: any) => [r.scopeRef, r.state])).toEqual([
       ['gold', 'active'], ['silver', 'absent'], ['bronze', 'absent'], ['tin', 'pending'], ['lead', 'pending'], ['fresh', 'pending'],
     ]);
+  });
+
+  /** Rows written `ageMs` ago and then resolved `absent`, as a denial's reconcile leaves them. */
+  async function seedAbsent(container: FakeContainer, refs: string[], ageMs: number) {
+    await seedStale(container, refs.map((ref) => ({ scopeType: 'adls-container', scopeRef: ref, status: 'in-flight' })), ageMs);
+    for (const row of intents(container).filter((r: any) => refs.includes(r.scopeRef))) {
+      const h = container.item(row.id, TENANT);
+      await h.replace({ ...(await h.read()).resource, state: 'absent' });
+    }
+  }
+
+  it('the sweep re-checks a young `absent` row: a grant that landed late is found, recorded and kept', async () => {
+    // `absent` is not final. Breaks if the sweep read only `pending` rows (the
+    // late grant stays recorded as absent: checked 0, no entitlement row), or
+    // re-checked absent rows of any age (the 2-day-old row probed: checked 3).
+    const assignments = ledger();
+    const { container } = fakeArContainer(baseDoc({ tier: 'access-provider' }));
+    await seedAbsent(container, ['gold', 'silver'], GRANT_LEASE_MS + 80_000);
+    await seedAbsent(container, ['old'], ABSENT_RECHECK_MS + 86_400_000);
+    (accessRequestWorkflowContainer as any).mockResolvedValue(container);
+    (probeAccessGrant as any).mockImplementation(async (i: any) => {
+      if (i.scopeRef === 'old') throw new Error('an absent row past the re-check window was probed');
+      return i.scopeRef === 'gold' ? { held: true, roleName: 'Storage Blob Data Reader', roleAssignmentId: 'ra-gold' } : { held: false };
+    });
+    const tally = await reconcileStaleGrantIntents({ tenantId: TENANT });
+    expect(tally).toEqual({ checked: 2, absent: 0, found: 0, landedLate: 1, stillAbsent: 1, unknown: 0 });
+    expect(intents(container).map((r: any) => [r.scopeRef, r.state, r.detail ?? null])).toEqual([
+      ['gold', 'active', RECONCILED_LANDED_LATE], ['silver', 'absent', null], ['old', 'absent', null],
+    ]);
+    expect(assignments.__all().map((r: any) => [r.resourceRef, r.roleAssignmentId, r.expiresAt])).toEqual([['gold', 'ra-gold', null]]);
   });
 });

@@ -38,7 +38,7 @@ vi.mock('../kusto-client', () => ({
 }));
 
 import { enforceAccessGrant, probeAccessGrant, revokeStructuredGrant, type AccessGrantInput } from '../access-policy-client';
-import { listContainerRoleAssignments } from '../adls-client';
+import { grantContainerRole, listContainerRoleAssignments } from '../adls-client';
 import { executeQuery as synapseExecute } from '../synapse-sql-client';
 import { getPoolState, resumePool } from '../synapse-pool-arm';
 import { addDatabasePrincipal, dropDatabasePrincipal, showDatabasePrincipals } from '../kusto-client';
@@ -401,5 +401,40 @@ describe('probeAccessGrant — what the store says the principal holds', () => {
     // warehouse arm never probed at all (every pool would be 'unknown').
     await probeAccessGrant(warehouseInput('read'));
     expect(synapseExecute).toHaveBeenCalled();
+  });
+});
+
+describe('enforceAccessGrant — ADLS "already held" is the ARM status and code, never the message', () => {
+  const adlsInput: AccessGrantInput = {
+    principalId: 'oid-1', principalName: 'alice@contoso.com', principalType: 'User',
+    scopeType: 'adls-container', scopeRef: 'x-409', permission: 'read',
+  };
+  /** An ARM failure as adls-client's armCall throws it: the message, `status`, and the parsed body. */
+  const armError = (status: number, code: string, message: string) =>
+    Object.assign(new Error(message), { status, body: { error: { code, message } } });
+
+  it('a 409 RoleAssignmentExists is the principal already holding the role', async () => {
+    (grantContainerRole as any).mockRejectedValue(armError(409, 'RoleAssignmentExists', 'The role assignment already exists.'));
+    const r = await enforceAccessGrant(adlsInput);
+    expect(r).toMatchObject({ status: 'active', preexisting: true });
+  });
+
+  it("a 403 whose message quotes '409' (a container named x-409) is a failure, not a hold", async () => {
+    // Breaks if the message were matched (/409|already exists/): the failed
+    // grant settles as active and preexisting, and the request completes with
+    // "Access granted" while the requester holds nothing.
+    (grantContainerRole as any).mockRejectedValue(
+      armError(403, 'AuthorizationFailed', "Client is not authorized over scope '/blobServices/default/containers/x-409' (RoleAssignmentExists check skipped; already exists?)"),
+    );
+    const r = await enforceAccessGrant(adlsInput);
+    expect(r.status).toBe('error');
+    expect(r.preexisting).toBeUndefined();
+  });
+
+  it('a 409 with another code (a resource lock) is a failure, not a hold', async () => {
+    // Breaks if the status alone decided: ScopeLocked would read as held.
+    (grantContainerRole as any).mockRejectedValue(armError(409, 'ScopeLocked', 'The scope cannot perform write operation because it is locked.'));
+    const r = await enforceAccessGrant(adlsInput);
+    expect(r.status).toBe('error');
   });
 });

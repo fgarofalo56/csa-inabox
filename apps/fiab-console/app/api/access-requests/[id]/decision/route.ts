@@ -39,12 +39,14 @@
  *   - a grant is never made before its ledger row is written, so a grant is
  *     never live and recorded nowhere;
  *   - a decision that stops after granting (a renewal, a ledger settle or the
- *     final write found the request changed, or the store failed) re-reads the
- *     request and, unless another approval completed it or another decision
- *     holds it, revokes what the ledger says the request created — 409
- *     `request_changed`, or 503 `grant_interrupted` for a store failure;
- *   - a denial revokes from the ledger, after resolving rows a stopped
- *     decision left `pending` from the store itself.
+ *     final write found the request changed, a store failed, or a grant call
+ *     threw) revokes exactly the grants it made itself, whoever holds the
+ *     request now, unless an approval that completed the request adopted them —
+ *     409 `request_changed`, or 503 `grant_interrupted` for a failure; it never
+ *     revokes another attempt's grants;
+ *   - a denial revokes from the ledger, every attempt's created grants, after
+ *     resolving rows a stopped decision left `pending` from the store itself.
+ * The scheduled access sweep resolves rows nobody decided on again.
  * Separate requests for the same principal and scope are not serialized with
  * each other.
  *
@@ -99,8 +101,8 @@ import {
   type LandedGrantContext, type LedgerRecord,
 } from '@/lib/access/landed-grants';
 import {
-  GRANT_LEASE_MS, intentAsResult, newAttemptId, reconcileRequestIntents, revokeIntents, settleGrantIntent,
-  settledFields, writeGrantIntent, type GrantIntent, type IntentContext,
+  GRANT_LEASE_MS, adoptGrantIntents, newAttemptId, reconcileRequestIntents, revokeIntents, revokeOwnIntents,
+  settleGrantIntent, writeGrantIntent, type GrantIntent, type IntentContext, type OwnGrant,
 } from '@/lib/access/grant-intents';
 
 export const runtime = 'nodejs';
@@ -178,7 +180,7 @@ function describeChange(ch: TargetChange, assetName: string): string {
   const t = ch.current;
   switch (ch.cause) {
     case 'predates_recording':
-      return `${ch.source ? `${ch.source}: t` : 'T'}his request predates target recording; deny it and ask the requester to re-request.`;
+      return `${ch.source ? `${ch.source}: t` : 'T'}his request was made before targets were recorded; deny it and ask the requester to request access again.`;
     case 'port_unbound':
       return `${ch.source} was bound to ${storeName(r!)} when this request was made and `
         + (t?.declaredRef
@@ -300,23 +302,27 @@ const STORE_STATUS_LABEL: Record<number, string> = {
 };
 
 /**
- * A store failure as the approver is told it: the status code and its class,
- * never the service's own message (which can quote internal detail).
+ * A failed call as the approver is told it: who answered, the status code and
+ * its class, never the service's own message (which can quote internal detail).
  */
-function describeStoreError(e: any): string {
+function describeStoreError(e: any, who = 'the request store'): string {
   const code = [e?.code, e?.statusCode, e?.status].find((v) => typeof v === 'number');
   if (code === undefined) return 'an unexpected error';
-  return `the request store answered ${code}${STORE_STATUS_LABEL[code] ? `, ${STORE_STATUS_LABEL[code]}` : ''}`;
+  return `${who} answered ${code}${STORE_STATUS_LABEL[code] ? `, ${STORE_STATUS_LABEL[code]}` : ''}`;
 }
 
-/** A grant as a 409 body lists it: its scope, its ledger row, and why it stayed. */
+/**
+ * A grant as a 409/503 body lists it: its scope, the id of its row in the
+ * Access report (the entitlement ledger) and whether that row was written, and
+ * why it stayed.
+ */
 function grantView(requesterId: string, r: AccessRequestGrantResult, ledger?: LedgerRecord[]) {
-  const ledgerId = grantLedgerId(requesterId, r);
-  const row = ledger?.find((l) => l.ledgerId === ledgerId);
+  const accessReportId = grantLedgerId(requesterId, r);
+  const row = ledger?.find((l) => l.ledgerId === accessReportId);
   return {
     scopeType: r.scopeType,
     scopeRef: r.scopeRef,
-    ledgerId,
+    accessReportId,
     ...(r.roleName ? { roleName: r.roleName } : {}),
     ...(r.roleAssignmentId ? { roleAssignmentId: r.roleAssignmentId } : {}),
     ...(r.detail ? { detail: r.detail } : {}),
@@ -450,8 +456,8 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
     let onStopped: (() => Promise<NextResponse>) | undefined;
     /** Grants this approval made on this attempt. */
     const fresh: AccessRequestGrantResult[] = [];
-    /** This attempt's grant-ledger rows, each with the outcome of its grant. */
-    const mine: Array<{ row: GrantIntent; result: AccessRequestGrantResult }> = [];
+    /** The grant-ledger rows this attempt wrote, each with the outcome of its grant (none when the grant call threw). */
+    const mine: OwnGrant[] = [];
     const admin = isTenantAdmin(s);
     const intentCtx: IntentContext = {
       tenantId,
@@ -549,75 +555,31 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
     };
     /**
      * A final approval that granted and then stopped: it lost the request (a
-     * renewal, a ledger settle or its final write found it changed) or could
-     * not reach the store. It re-reads the request before undoing anything:
-     *   - completed by another approval → nothing is revoked;
-     *   - held by another decision now → nothing is revoked (that decision
-     *     removes or keeps the grants: a denial revokes from the ledger);
-     *   - unreadable → nothing is revoked (every grant is in the grant ledger,
-     *     so a later denial removes it).
-     * Otherwise it revokes what the request's grant ledger says the request
-     * created, from any attempt, with this attempt's own outcomes in place of
-     * its rows (a row it could not settle is still its grant).
+     * renewal, a ledger settle or its final write found it changed), a store
+     * failed, or a grant call threw. It revokes exactly the grants it made
+     * itself, whoever holds the request now — ownership decides, not the
+     * request's state — except a grant an approval that completed the request
+     * adopted (lib/access/grant-intents.ts, revokeOwnIntents). It never
+     * revokes another attempt's grants: those stay with the request, for its
+     * completion or its denial.
      */
     const compensate = async (): Promise<NextResponse> => {
-      let latest: (AccessRequestDoc & { _etag?: string }) | undefined;
-      let unread = false;
+      let latest: AccessRequestDoc | undefined;
       try {
         latest = (await c.item(id, tenantId).read<AccessRequestDoc>()).resource;
-      } catch {
-        unread = true;
-      }
-      const ownLanded = mine.filter((m) => m.result.status === 'active').map((m) => m.result);
-      const keepOwn = (detail: string) => ownLanded.filter((r) => r.created !== false).map((r) => ({ ...r, detail }));
-      if (latest?.status === 'completed') {
-        const kept = keepOwn('Left in place: another approval completed this request.');
-        return stopAnswer(
-          'approval',
-          (kept.length ? ` The access it granted stays in place under that approval: ${scopeList(kept)}.` : '')
-            + ' Reload it to see its current state.',
-          { requestStatus: 'completed', revoked: [], kept: view(kept) },
-        );
-      }
-      // Only an OPEN request can be held by a decision that will still act on
-      // it; a closed one was decided, and its hold (if any) is stale.
-      const heldByOther = latest?.status === 'open'
-        && !!latest.grantLeaseUntil && Date.parse(latest.grantLeaseUntil) > Date.now()
-        && latest._etag !== leaseEtag;
-      if (unread || !latest || heldByOther) {
-        const ledger = await recordLandedGrants(ledgerCtx(null), ownLanded);
-        const kept = keepOwn(heldByOther
-          ? 'Left in place: another decision holds the request now, and removes or keeps this grant.'
-          : 'Left in place: the request could not be re-read to confirm how it was decided. It is in the grant ledger, and a denial of the request removes it.');
-        return stopAnswer(
-          'approval',
-          (kept.length ? ` The access it granted was left in place: ${scopeList(kept)}.` : '')
-            + ' Reload it to see its current state.',
-          { requestStatus: latest?.status ?? null, revoked: [], kept: view(kept, ledger) },
-        );
-      }
-      let rows: GrantIntent[] = [];
-      try {
-        rows = await reconcileRequestIntents(c, tenantId, id);
-      } catch {
-        rows = []; // this attempt's own rows are below; other attempts' rows stay for the next decision
-      }
-      const own = new Set(mine.map((m) => m.row.id));
-      const merged: GrantIntent[] = [
-        ...rows.filter((r) => !own.has(r.id)),
-        ...mine.map((m) => {
-          const { created: _c, ...row } = m.row;
-          return { ...row, ...settledFields(m.result) };
-        }),
-      ];
-      const ledger = await recordLandedGrants(ledgerCtx(null), merged.filter((r) => r.state === 'active').map(intentAsResult));
-      const { revoked, kept } = await revokeIntents(c, merged, revokeCtx, s);
+      } catch { /* the status is only reported */ }
+      const out = await revokeOwnIntents(c, intentCtx, mine, revokeCtx, s, {
+        record: (rs) => recordLandedGrants(ledgerCtx(null), rs),
+        restore: (rs) => recordLandedGrants(
+          ledgerCtx(computeExpiry(new Date(), { lifetimeDays: doc.grantLifetimeDays })), rs,
+        ),
+      });
       return stopAnswer(
         'approval',
-        (revoked.length ? ` The access it had granted was removed: ${scopeList(revoked)}.` : '')
-          + keptTail(kept, admin, doc.requesterId, ledger)
+        (out.revoked.length ? ` The access it had granted was removed: ${scopeList(out.revoked)}.` : '')
+          + keptTail(out.kept, admin, doc.requesterId, out.ledger)
           + ' Reload it to see its current state.',
-        { requestStatus: latest.status ?? null, revoked: view(revoked, ledger), kept: view(kept, ledger) },
+        { requestStatus: latest?.status ?? null, revoked: view(out.revoked, out.ledger), kept: view(out.kept, out.ledger) },
       );
     };
 
@@ -640,7 +602,7 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
       try {
         rows = await reconcileRequestIntents(c, tenantId, id);
       } catch (e: any) {
-        stopReason = `the grant ledger could not be read (${describeStoreError(e)})`;
+        stopReason = `the request's grant records could not be read (${describeStoreError(e)})`;
         return stopAnswer('denial', ' Nothing was revoked. Reload it and decide again.', { revoked: [], kept: [] });
       }
       const out = await revokeIntents(c, rows, revokeCtx, s, { beforeEach: renewLease });
@@ -782,14 +744,24 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
             stopReason = `the next grant could not be recorded before it was made, so it was not made (${describeStoreError(e)})`;
             return compensate();
           }
-          const r = await enforceAccessGrant({
-            principalId: doc.requesterId,
-            principalName: doc.requesterUpn,
-            principalType: 'User',
-            scopeType: t.scopeType,
-            scopeRef: t.scopeRef,
-            permission: doc.permission,
-          });
+          let r: Awaited<ReturnType<typeof enforceAccessGrant>>;
+          try {
+            r = await enforceAccessGrant({
+              principalId: doc.requesterId,
+              principalName: doc.requesterUpn,
+              principalType: 'User',
+              scopeType: t.scopeType,
+              scopeRef: t.scopeRef,
+              permission: doc.permission,
+            });
+          } catch (e: any) {
+            // The grant client answers most failures itself; one that throws
+            // leaves whether the grant landed unknown. Its row stays `pending`
+            // for the scheduled sweep, and the hold is released.
+            mine.push({ row });
+            stopReason = `a grant call failed (${describeStoreError(e, 'the grant service')}), so whether it landed is unknown`;
+            return compensate();
+          }
           const g = grantResult(r, t.scopeType, t.scopeRef);
           fresh.push(g);
           mine.push({ row, result: g });
@@ -820,6 +792,20 @@ export const POST = withApprovalAuthority<{ id: string }>(async (req, { session:
         // report and a later denial revokes it (lib/access/landed-grants.ts).
         toRecord = { results, expiresAt: grantExpiry };
         if (grant.status === 'active') {
+          // This approval completes the request. A scope it found already held
+          // may be held because another attempt of this request granted it, and
+          // that attempt revokes its own grants when it stops: adopt those rows
+          // first, so the grant this completion relies on stays
+          // (lib/access/grant-intents.ts, adoptGrantIntents).
+          for (const g of fresh) {
+            if (g.status !== 'active' || g.created === true || !g.scopeRef) continue;
+            try {
+              await adoptGrantIntents(c, intentCtx, g);
+            } catch (e: any) {
+              stopReason = `a grant another attempt made for this request could not be taken over (${describeStoreError(e)})`;
+              return compensate();
+            }
+          }
           doc.status = 'completed';
           doc.subscribedAt = now;
           // Notify the requester they're now a subscriber (after the write below).

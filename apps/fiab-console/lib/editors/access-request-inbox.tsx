@@ -725,9 +725,12 @@ export function AccessRequestInboxEditor() {
                 )}
 
                 {targetsChange && (
-                  <div className={s.detailRow} aria-label="Storage reviewed and bound now">
+                  <div className={s.detailRow} aria-label="Storage recorded when requested and bound now">
                     <span className={s.kv}>
-                      <Caption1 className={s.kvLabel}>Reviewed when requested</Caption1>
+                      {/* "Recorded", not "Reviewed": for a request made before
+                          targets were recorded, this is the scope its request
+                          body named, which nothing checked. */}
+                      <Caption1 className={s.kvLabel}>Recorded when requested</Caption1>
                       {targetsChange.reviewed.length ? targetsChange.reviewed.map((g, i) => (
                         <Text key={scopeKey(g, i)}>{scopeLabel(g)}{g.source ? ` (${g.source})` : ''}</Text>
                       )) : <Text>—</Text>}

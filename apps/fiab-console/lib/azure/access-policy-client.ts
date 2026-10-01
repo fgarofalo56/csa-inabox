@@ -117,6 +117,17 @@ function adxPrincipalToken(input: AccessGrantInput): { token: string } | { gate:
   return { gate: 'Set AZURE_TENANT_ID to grant ADX access to a service principal.' };
 }
 
+/**
+ * An ARM role-assignment PUT refused because the principal already holds that
+ * role at the scope. Classified on what `armCall` records — the HTTP status and
+ * ARM's error code — never on the message, which quotes the scope: a failed
+ * grant on a container named `x-409` must not read as "already held". A 409
+ * with another code (`ScopeLocked`, a resource lock) is a failure, not a hold.
+ */
+function roleAssignmentExists(e: any): boolean {
+  return e?.status === 409 && e?.body?.error?.code === 'RoleAssignmentExists';
+}
+
 /** Enforce an access grant. Real data-plane grant per scope; honest gate otherwise. */
 export async function enforceAccessGrant(input: AccessGrantInput): Promise<AccessGrantResult> {
   switch (input.scopeType) {
@@ -127,7 +138,7 @@ export async function enforceAccessGrant(input: AccessGrantInput): Promise<Acces
         return { status: 'active', roleName: grant.roleName || roleName, roleAssignmentId: grant.id, preexisting: false };
       } catch (e: any) {
         const msg = (e?.message || String(e)).slice(0, 400);
-        if (/\b409\b|already exists|RoleAssignmentExists/i.test(msg)) {
+        if (roleAssignmentExists(e)) {
           return { status: 'active', roleName, detail: 'Role already assigned at this scope (idempotent).', preexisting: true };
         }
         return { status: 'error', detail: msg };
