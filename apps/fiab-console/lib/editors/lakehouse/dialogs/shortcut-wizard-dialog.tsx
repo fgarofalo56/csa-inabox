@@ -202,11 +202,13 @@ export function ShortcutWizardDialog() {
                         Authenticates with a credential file the share owner gives you via an activation link.
                         Add the provider under <strong>Data shares</strong> → <strong>Add provider</strong> with that
                         file; Loom stores its credential. Then use <strong>Data shares</strong> → <strong>Shared with
-                        me</strong> → <strong>Explore &amp; query</strong> → select the table → <strong>Create lakehouse
-                        shortcut</strong>, or enter the provider&apos;s stored credential name below. Saving a
-                        credential file from this wizard is not available. Bearer tokens expire after at most 1 year
-                        — if the share goes <strong>Broken</strong>, get a fresh activation file, remove the provider
-                        under Data shares and add it again with that file, then use <strong>Retry</strong>.
+                        me</strong> → <strong>Subscribe</strong> to the share → <strong>Explore &amp; query</strong> →
+                        select the table → <strong>Create lakehouse shortcut</strong>, or enter the provider&apos;s
+                        stored credential name below. Saving a credential file from this wizard is not available.
+                        Bearer tokens expire after at most 1 year — if the share goes <strong>Broken</strong>, get a
+                        fresh activation file, unmount the provider&apos;s subscribed catalogs (Remove is refused while
+                        they are mounted), remove the provider under Data shares and add it again under the
+                        <strong> same provider name</strong> with that file, then use <strong>Retry</strong>.
                       </MessageBarBody>
                     </MessageBar>
                     <Field label="Share / table path" required hint="delta-sharing://<share>/<schema>/<table> — from the data provider">

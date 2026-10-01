@@ -262,4 +262,23 @@ describe('POST /api/lakehouse/shortcuts/test — credential checks', () => {
     expect(vault).toHaveBeenCalledWith('loom-sc-theirs');
     expect(updateShortcutStatus).toHaveBeenCalledWith('bronze', 'bronze:files::ext', 'active', undefined);
   });
+
+  it('refuses when the row\'s tenant differs from the one recorded for the same oid, and leaves the row unchanged', async () => {
+    // WHAT BREAKS IT: the Test route building the owner without `tid:
+    // sc.tenantId`, so the tenant comparison is skipped and the value is read
+    // (200). The same row under the recorded tenant is read (below), which pins
+    // that the refusal comes from the tenant and not from the oid.
+    ownerRecord.mockResolvedValue({ exists: true, owner: { oid: 'oid-other', tid: 'T1', lakehouseId: 'bronze' } });
+    (getShortcut as any).mockResolvedValue({ ...row('loom-sc-theirs', 'other@contoso.com', 'oid-other'), tenantId: 'T2' });
+    const res = await TEST(postReq({ lakehouseId: 'bronze', id: 'bronze:files::ext' }));
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toContain('saved by another user');
+    expect(vault).not.toHaveBeenCalled();
+    expect(updateShortcutStatus).not.toHaveBeenCalled();
+
+    (getShortcut as any).mockResolvedValue({ ...row('loom-sc-theirs', 'other@contoso.com', 'oid-other'), tenantId: 'T1' });
+    const ok = await TEST(postReq({ lakehouseId: 'bronze', id: 'bronze:files::ext' }));
+    expect(ok.status).toBe(200);
+    expect(vault).toHaveBeenCalledWith('loom-sc-theirs');
+  });
 });

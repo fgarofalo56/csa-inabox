@@ -83,10 +83,11 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   const { row: sc, key } = found;
   // The stored credential is resolved on behalf of the principal who CREATED
   // this row: a row may only keep using a credential its creator owns, whoever
-  // presses Test.
+  // presses Test. The row's tenantId is the creator's session tenant (the create
+  // route stores it), so the tenant comparison applies here too.
   const secretOwner: ShortcutSecretOwner = {
-    kind: 'principal', via: 'row', oid: sc.createdByOid, upn: sc.createdBy, lakehouseId: sc.lakehouseId,
-    targetType: sc.targetType,
+    kind: 'principal', via: 'row', oid: sc.createdByOid, upn: sc.createdBy, tid: sc.tenantId,
+    lakehouseId: sc.lakehouseId, targetType: sc.targetType,
   };
 
   // Delta Sharing: re-validate by listing shares with the stored bearer token.
@@ -135,11 +136,17 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
       }
       if (testRes.status === 401 || testRes.status === 403) {
         // A loom-dsp- credential is the one Loom stored when the provider was
-        // added under Data shares; adding the provider again saves a new one.
+        // added under Data shares; adding the provider again saves a new one,
+        // named from the provider name — so only the SAME name replaces the
+        // credential this row binds. Remove is refused while the provider still
+        // has subscribed (mounted) catalogs, so those are unmounted first.
         const fromProvider = sc.credentialRef.keyVaultSecret.toLowerCase().startsWith(SHARE_PROVIDER_SECRET_PREFIX);
         const fix = fromProvider
-          ? 'Get a fresh activation file from the provider, then under Data shares remove the provider and add it ' +
-            'again with that file (Add provider), which saves the new credential. Then Retry.'
+          ? 'Get a fresh activation file from the provider. Under Data shares → Shared with me, unmount the ' +
+            "provider's subscribed catalogs (Use / manage → Unmount) — Remove is refused while they are mounted — " +
+            'then Remove the provider and add it again under the SAME provider name with the new file (Add provider), ' +
+            'which saves the new credential under the name this shortcut uses. Then Retry, and subscribe again if you ' +
+            'still need the catalogs.'
           : 'Update the Key Vault secret with a fresh credential file from the provider, then Retry.';
         throw Object.assign(
           new Error(

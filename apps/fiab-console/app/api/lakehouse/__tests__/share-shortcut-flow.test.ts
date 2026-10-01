@@ -155,7 +155,7 @@ describe('Data shares → Shortcut into lakehouse', () => {
     // WHAT BREAKS IT: appending the generic row hint (Save to Key Vault, which
     // Delta Sharing does not have) instead of the re-add advice.
     const err = (await res.json()).error as string;
-    expect(err).toContain('Re-add the provider under Data shares → Add provider');
+    expect(err).toContain('Re-add the provider under Data shares → Add provider with the same provider name');
     expect(err).not.toContain('Save to Key Vault');
     expect(vault).not.toHaveBeenCalled();
     expect(updateShortcutStatus).not.toHaveBeenCalled();
@@ -174,7 +174,13 @@ describe('Data shares → Shortcut into lakehouse', () => {
     expect(res.status).toBe(502);
     const j = await res.json();
     expect(j.code).toBe('delta_sharing_auth_failure');
-    expect(j.error).toContain('remove the provider and add it again with that file (Add provider)');
+    // WHAT BREAKS IT: the round-3 text, which told the user to remove the
+    // provider without unmounting first (Remove is refused while catalogs are
+    // mounted) and without keeping the provider name (another name saves a
+    // credential this row does not bind).
+    expect(j.error).toContain('unmount the provider\'s subscribed catalogs (Use / manage → Unmount)');
+    expect(j.error).toContain('Remove is refused while they are mounted');
+    expect(j.error).toContain('add it again under the SAME provider name with the new file (Add provider)');
     expect(j.error).not.toContain('Update the Key Vault secret');
   });
 

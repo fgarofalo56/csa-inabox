@@ -84,8 +84,18 @@ const valueReads = () =>
 
 import { GET } from '../route';
 
-const req = (qs: string) =>
+/** Sends the query exactly as written. */
+const bareReq = (qs: string) =>
   ({ nextUrl: new URL(`https://console.local/api/lakehouse/shortcuts/browse?${qs}`) }) as any;
+/**
+ * A credentialed browse must name the lakehouse (400 `item_required` without
+ * it), so `req` adds `lakehouseId=lh-1` unless the query already names one or
+ * is ADLS. No mint record below carries `lh-1` unless a test says so, and the
+ * resolver compares the lakehouse only when both sides carry one — so this
+ * keeps every existing fixture on the path it was written for.
+ */
+const req = (qs: string) =>
+  bareReq(/(^|&)lakehouseId=/.test(qs) || /(^|&)sourceType=adls(&|$)/.test(qs) ? qs : `${qs}&lakehouseId=lh-1`);
 
 /**
  * Every platform credential the browse surface must never resolve.
@@ -330,5 +340,41 @@ describe('the legitimate browse flow still works', () => {
     // No vault read happened on the uncredentialed path.
     const secretReads = fetchWithTimeoutMock.mock.calls.filter((c) => String(c[0]).includes('/secrets/'));
     expect(secretReads).toHaveLength(0);
+  });
+});
+
+describe('a credentialed browse must name the lakehouse', () => {
+  it('refuses S3, GCS and Dataverse with 400 item_required and no vault access when lakehouseId is absent or blank', async () => {
+    // WHAT BREAKS IT: removing the lakehouseId check. The vault fixture below
+    // holds a valid Dataverse path saved by the caller, so without the check the
+    // Dataverse call resolves and answers 200 (and S3/GCS read the value).
+    fetchWithTimeoutMock.mockImplementation(vault('abfss://dataverse@contoso.dfs.core.windows.net/exports/tables'));
+    for (const qs of [
+      'sourceType=dataverse&kvSecret=loom-sc-abc',
+      'sourceType=dataverse&kvSecret=loom-sc-abc&lakehouseId=',
+      'sourceType=dataverse&kvSecret=loom-sc-abc&lakehouseId=%20%20',
+      'sourceType=s3&kvSecret=loom-sc-abc&bucket=b&region=us-east-1',
+      'sourceType=gcs&kvSecret=loom-sc-abc&bucket=b',
+    ]) {
+      const res = await GET(bareReq(qs));
+      expect(res.status, qs).toBe(400);
+      const body = await res.json();
+      expect(body.code, qs).toBe('item_required');
+      expect(body.error, qs).toMatch(/lakehouseId is required/);
+    }
+    expect(getTokenMock).not.toHaveBeenCalled();
+    expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
+
+    // The same Dataverse request naming a lakehouse is read and listed.
+    const ok = await GET(bareReq('sourceType=dataverse&kvSecret=loom-sc-abc&lakehouseId=lh-7'));
+    expect(ok.status).toBe(200);
+    expect(valueReads()).toEqual(['https://loomkv.vault.azure.net/secrets/loom-sc-abc?api-version=7.4']);
+  });
+
+  it('ADLS browse does not need a lakehouseId', async () => {
+    // WHAT BREAKS IT: the lakehouse check moved above the ADLS branch (400).
+    const res = await GET(bareReq('sourceType=adls&account=contoso&container=raw'));
+    expect(res.status).toBe(200);
+    expect((await res.json()).ok).toBe(true);
   });
 });
