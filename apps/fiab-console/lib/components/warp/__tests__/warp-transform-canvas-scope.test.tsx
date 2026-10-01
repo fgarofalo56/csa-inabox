@@ -23,6 +23,11 @@
  *
  * `@xyflow/react` is stubbed as in `assets-canvas.test.tsx` (the real engine
  * OOMs the jsdom fork); the canvas component and its run wiring are real.
+ *
+ * The refusals here are sentinel bodies, so each case can tell the error from
+ * the remediation. The route's own text on the canvas, and the Sink graph that
+ * turns Run and Validate off, are in `warp-transform-canvas-route.test.tsx`,
+ * which answers the canvas with the real route.
  */
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';

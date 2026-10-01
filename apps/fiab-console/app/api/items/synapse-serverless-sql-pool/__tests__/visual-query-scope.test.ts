@@ -74,6 +74,9 @@ vi.mock('@/lib/azure/databricks-client', () => ({ executeStatement: vi.fn(), get
 
 import { POST } from '@/app/api/items/[type]/[id]/visual-query/route';
 import { compileGraph, type VqGraph } from '@/lib/editors/visual-query-compiler';
+import { VISUAL_QUERY_SURFACE } from '@/app/api/items/synapse-serverless-sql-pool/_lib/visual-query-surface';
+import { SQL_POOL_EDITOR } from '@/app/api/items/synapse-serverless-sql-pool/_lib/query-scope';
+import { analyzeLakehouseQuery } from '@/app/api/items/lakehouse/_lib/query-scope';
 
 const IN_ROOT = 'https://acct1.dfs.core.windows.net/gold/lakehouses/sales-1/Tables/orders';
 const OUT = 'https://acct1.dfs.core.windows.net/gold/lakehouses/other-9/Tables/orders';
@@ -198,5 +201,69 @@ describe('visual query on the serverless SQL pool item', () => {
     expect(res.status).toBe(200);
     expect(guard.authorizeItemWorkspace).not.toHaveBeenCalled();
     expect(synapse.executeQuery.mock.calls[0][1]).toBe('SELECT TOP 0 * FROM [sys].[tables]');
+  });
+});
+
+/** source → Sink; the compiler wraps it in `SELECT … INTO` (table) or `CREATE OR ALTER VIEW` (view). */
+function sinkGraph(mode: 'table' | 'view'): VqGraph {
+  return {
+    nodes: [
+      { id: 's1', kind: 'source', inputs: [], schema: 'INFORMATION_SCHEMA', table: 'TABLES' },
+      { id: 'k1', kind: 'sink', inputs: ['s1'], sink: { mode, table: 'out_t' } },
+    ],
+    outputId: 'k1',
+  } as VqGraph;
+}
+
+describe('visual query Sink on the serverless SQL pool item, caller who is not a tenant admin', () => {
+  it('a table Sink is refused in the visual query\'s own words, with no bracket hint, and nothing runs', async () => {
+    const graph = sinkGraph('table');
+    // The fixture reaches the rule: the compiled text carries the compiler's INTO.
+    expect(compileGraph(graph, 'tsql')).toContain('INTO [out_t]');
+    const res = await POST(req({ graph }), ctx('synapse-serverless-sql-pool'));
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe('query_construct_not_accepted');
+    expect(body.construct).toBe('INTO');
+    // Breaks if the route words it for the SQL editor (`This editor runs …`).
+    expect(body.error).toBe(
+      `${VISUAL_QUERY_SURFACE.lead}INTO is not accepted: statements that change data are not run from `
+      + `${VISUAL_QUERY_SURFACE.place}.`,
+    );
+    // Breaks if the bracket hint comes back (`If INTO is a column or table name, write it in brackets …`).
+    expect(body.remediation).toBe(VISUAL_QUERY_SURFACE.selectRemediation);
+    expect(body.remediation).toContain('remove the Sink');
+    expect(ranAnything()).toBe(0);
+  });
+
+  it('a view Sink is refused by the statement-start rule in the visual query\'s words, and nothing runs', async () => {
+    const res = await POST(req({ graph: sinkGraph('view') }), ctx('synapse-serverless-sql-pool'));
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.construct).toBe('a statement starting with CREATE');
+    expect(body.error).toBe(
+      `${VISUAL_QUERY_SURFACE.lead}A statement starting with CREATE is not accepted: only SELECT statements are run `
+      + `from ${VISUAL_QUERY_SURFACE.place}.`,
+    );
+    expect(body.remediation).toBe(VISUAL_QUERY_SURFACE.selectRemediation);
+    expect(ranAnything()).toBe(0);
+  });
+
+  it('the same Sink with no table compiles to a plain SELECT and runs (positive half)', async () => {
+    const graph = sinkGraph('table');
+    (graph.nodes[1] as any).sink.table = '';
+    const res = await POST(req({ graph }), ctx('synapse-serverless-sql-pool'));
+    expect(res.status).toBe(200);
+    expect(synapse.executeQuery.mock.calls[0][1]).toBe(`USE [master]; ${compileGraph(graph, 'tsql')}`);
+  });
+
+  it('the surfaces where SQL is typed keep the bracket hint for the same text (the lakehouse SQL tab and the SQL editor)', () => {
+    const sql = compileGraph(sinkGraph('table'), 'tsql');
+    // Breaks if `generated` is honoured on every surface rather than only the visual query's.
+    for (const surface of [undefined, SQL_POOL_EDITOR]) {
+      const r = analyzeLakehouseQuery(sql, { database: 'master', surface });
+      expect(r.ok).toBe(false);
+      expect(!r.ok && r.remediation).toContain('write it in brackets, as [INTO]');
+    }
   });
 });

@@ -311,6 +311,20 @@ function buildGraph(nodes: Node[], edges: Edge[], outputId?: string): VqGraph {
   return { nodes: vqNodes, outputId };
 }
 
+/**
+ * True when the graph ends in a Sink that names a table: the case `compileGraph`
+ * wraps in `SELECT … INTO` / `CREATE … VIEW` (an output Sink with an input and a
+ * table). A Sink with no table yet compiles to a plain SELECT and runs.
+ */
+export function graphWritesSink(graph: VqGraph): boolean {
+  const out = graph.nodes.find((n) => n.id === graph.outputId);
+  return !!out && out.kind === 'sink' && out.inputs.length > 0 && !!(out.sink?.table || '').trim();
+}
+
+/** Why Run and Validate are off for a Sink graph on a serverless target, for a caller who is not a tenant admin. */
+export const SERVERLESS_SINK_REASON =
+  'Sinks are not run on a serverless target for your role: remove the Sink, or pick a warehouse or dedicated pool target.';
+
 /** React Flow node from a VqNode (used when laying down a starter graph). */
 function rfNodeFromVq(n: VqNode, x: number, y: number): Node {
   const { id, kind, inputs, ...rest } = n;
@@ -400,6 +414,14 @@ function CanvasInner(props: WarpTransformCanvasProps) {
     if (!nodes.length) return '-- Add a source to start building a transform.';
     return compileGraph(buildGraph(nodes, edges, outputId), dialect);
   }, [nodes, edges, outputId, dialect]);
+
+  // The visual-query route does not run a Sink on a serverless SQL pool for a
+  // caller who is not a tenant admin, so Run and Validate are off, with the
+  // reason, rather than posting a graph that is refused.
+  const sinkNotRun = useMemo(
+    () => target?.engine === 'synapse-serverless-sql-pool' && !isAdmin && graphWritesSink(buildGraph(nodes, edges, outputId)),
+    [target, isAdmin, nodes, edges, outputId],
+  );
 
   // ---- describe (column discovery) against the chosen target ----
   const fetchColumns = useCallback(async (nodeId: string, schema: string | undefined, table: string) => {
@@ -644,8 +666,18 @@ function CanvasInner(props: WarpTransformCanvasProps) {
           : <Badge appearance="outline" color="informative">No engine</Badge>}
         <div className={s.toolbarSpacer} />
         <Button icon={<Sparkle20Regular />} appearance="secondary" onClick={() => setWizardOpen(true)}>New from pattern</Button>
-        <Button icon={<CheckmarkCircle20Regular />} appearance="secondary" disabled={!nodes.length || !target || running} onClick={() => void callRun('validate')}>Validate</Button>
-        <Button icon={running ? <Spinner size="tiny" /> : <Play20Regular />} appearance="primary" disabled={!nodes.length || !target || running} onClick={() => void callRun('run')}>{running ? 'Running…' : 'Run / Preview'}</Button>
+        <Button
+          icon={<CheckmarkCircle20Regular />} appearance="secondary"
+          disabled={!nodes.length || !target || running} disabledFocusable={sinkNotRun}
+          title={sinkNotRun ? SERVERLESS_SINK_REASON : undefined}
+          onClick={sinkNotRun ? undefined : () => void callRun('validate')}
+        >Validate</Button>
+        <Button
+          icon={running ? <Spinner size="tiny" /> : <Play20Regular />} appearance="primary"
+          disabled={!nodes.length || !target || running} disabledFocusable={sinkNotRun}
+          title={sinkNotRun ? SERVERLESS_SINK_REASON : undefined}
+          onClick={sinkNotRun ? undefined : () => void callRun('run')}
+        >{running ? 'Running…' : 'Run / Preview'}</Button>
         <Button icon={<Save20Regular />} appearance="secondary" disabled={!nodes.length} onClick={() => { setSaveMsg(null); setSaveOpen(true); }}>Save</Button>
       </div>
 
@@ -677,10 +709,18 @@ function CanvasInner(props: WarpTransformCanvasProps) {
             A transform here runs as one read-only SELECT in master, so its sources are tables and views in
             master, such as the INFORMATION_SCHEMA views; the canvas does not name a lakehouse file as a source.
             To transform a lakehouse&apos;s files, query them with OPENROWSET(BULK …) in that lakehouse&apos;s SQL
-            tab, or pick a warehouse or dedicated SQL pool target. A source in the sys schema, and a Sink that
-            creates or writes a table or view, are not run: the run shows the reason and what to do. Tenant
-            admins can run these.
+            tab, or pick a warehouse or dedicated SQL pool target. A Sink that creates or writes a table or view is
+            not run here, so Run and Validate are off while the graph ends in one; a source in the sys schema is
+            refused with the reason and what to do. Tenant admins can run these.
             <SqlScopeFollowUp />
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {sinkNotRun && (
+        <MessageBar intent="warning" data-testid="warp-sink-not-run">
+          <MessageBarBody style={{ overflowWrap: 'anywhere' }}>
+            <MessageBarTitle>Run and Validate are off</MessageBarTitle>
+            {SERVERLESS_SINK_REASON}
           </MessageBarBody>
         </MessageBar>
       )}
