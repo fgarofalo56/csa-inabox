@@ -6,8 +6,10 @@
 #   bundling break (e.g. an import of a file that was never committed) passed
 #   every required check and only blew up later in the Docker image build inside
 #   loom-roll-and-validate / deploy-fiab-*. This workflow runs the SAME build the
-#   Dockerfile runs (`pnpm build` == `next build`, node 20, pnpm 9, 4 GB heap),
-#   so module-resolution / bundling failures are caught at PR time instead.
+#   Dockerfile runs (`pnpm build` == `next build`, pnpm 9, the same 8192 MiB
+#   heap — pinned equal by scripts/ci/__tests__/next-build-heap.test.mjs; the
+#   Dockerfile builder is node 22, this job is node 20), so module-resolution /
+#   bundling failures are caught at PR time instead.
 #
 #   What `pnpm build` does and does not fail on, as of next.config.mjs today:
 #   `typescript.ignoreBuildErrors` is FALSE, with `tsconfigPath` pinned to
@@ -252,9 +254,32 @@ jobs:
         if: steps.changed.outputs.console == 'true'
         env:
           NEXT_TELEMETRY_DISABLED: '1'
-          # 6144 matches the Dockerfile/ACR build heap — 4096 OOMs since the
-          # console grew past ~117 editors (FATAL: JS heap out of memory).
-          NODE_OPTIONS: --max-old-space-size=6144
+          # 8192 MiB, equal to apps/fiab-console/Dockerfile. History: 4096 OOMed
+          # once the console passed ~117 editors; 6144 then OOMed
+          # INTERMITTENTLY on 2026-09-30 (main f9c1b59a5; PR jobs 109874887915,
+          # 109896243197) — V8 at 5477 MB used / 6193 MB committed in the
+          # webpack compiler worker, then SIGABRT. Same code passed on re-run,
+          # so it was at the edge, not broken.
+          #
+          # WHY RAISING THE HEAP (and not bounding workers) IS THE FIX, read
+          # off next@15.5 dist/: the compile runs ONE worker at a time
+          # (webpack-build/index.js: server -> edge-server -> client, numWorkers
+          # 1, each ended before the next), and that worker INHERITS this cap
+          # (lib/worker.js, isolatedMemory:false). The type-check worker runs
+          # AFTER the compile, not beside it. The static-generation workers
+          # (experimental.cpus = 3 here) run later still and are
+          # isolatedMemory:true, which STRIPS --max-old-space-size, so this
+          # value is not multiplied across them. The OOM is one process's own
+          # heap; experimental.cpus / workerThreads would not touch it.
+          #
+          # Budget on ubuntu-latest (public repo: 4 vCPU / 16 GB, GitHub docs
+          # "GitHub-hosted runners reference"): compiler worker 8192 heap +
+          # ~2 GB native (SWC, webpack buffers) + next parent ~1 GB + pnpm/OS/
+          # runner agent ~1.5 GB = ~12.7 GB, ~3 GB spare. Going much higher
+          # trades a clean V8 abort WITH a stack for an opaque kernel OOM-kill
+          # (the Dockerfile's 2026-07-16 history), so the pin test also has a
+          # ceiling. Floor + ceiling: scripts/ci/__tests__/next-build-heap.test.mjs
+          NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build
 
       - name: Lint (next lint)
@@ -643,7 +668,7 @@ jobs:
             echo "::error::the brain-spec tsconfig matched only $n spec files, below the floor of 100 (measured at 106 on the branch that added this step). A type-check over a shrunken population is green and blind, so this refuses rather than reporting success."
             exit 1
           fi
-          # tsc's own exit code is NOT the verdict — seven files are known red.
+          # tsc's own exit code is NOT the verdict — six files are known red.
           # Captured on the NEXT line, never after a pipe.
           set +e
           node_modules/.bin/tsc --noEmit -p "$cfg" > "$tmp/brain-spec-tsc.txt" 2>&1
@@ -679,7 +704,6 @@ jobs:
             ['lib/brain/run/__tests__/cli.test.ts', 'TS2345/TS2741: partial fixtures where a full record is required.'],
             ['lib/brain/run/__tests__/estate-id.test.ts', 'TS2345/TS2741: partial fixtures where a full record is required.'],
             ['lib/brain/run/__tests__/history-wiring.test.ts', 'TS2339: property read off a narrowed union.'],
-            ['lib/brain/security/extract/__tests__/no-estate-identifiers.test.ts', 'TS2322/TS2345/TS2367: fixture typing.'],
           ]);
           const text = fs.readFileSync(process.argv[2], 'utf8');
           const byFile = new Map();
@@ -961,14 +985,16 @@ jobs:
   # A committed artifact can go stale, and a stale security graph rendered as a
   # current verdict is the exact "UNKNOWN reported as a NEGATIVE" defect this
   # repo has shipped before. At RUNTIME the console cannot recompute anything —
-  # there is no checkout — so it can only fall back to an age check. THIS job is
-  # the real backstop: it re-runs the extractor and fails if the committed
-  # artifact does not match the tree.
+  # there is no checkout — so its only age signal is the date baked into the
+  # IMAGE at build time (#4798). THIS job is the real backstop: it re-runs the
+  # extractor and fails if the committed artifact does not match the tree.
   #
-  # The comparison is over the GRAPH AND JOIN, not the inputs digest. Measured
-  # 2026-08-24: fixing the generic-call matcher moved the node count 905 -> 908
-  # with a BYTE-IDENTICAL digest, so a digest-only check would have called a
-  # stale artifact current. Extractor drift and input drift both have to fail.
+  # The comparison is over the WHOLE committed artifact, which since #4798
+  # carries no digest, clock, sha or file tally (those are printed per run,
+  # refused if committed, and the file counts are reconciled against a
+  # `git ls-files` census). Measured 2026-08-24: fixing the generic-call matcher
+  # moved the node count 905 -> 908 with a BYTE-IDENTICAL digest, so a
+  # digest-only check would have called a stale artifact current.
   #
   # No `continue-on-error`, no `|| true`, no `2>/dev/null`: a drift gate whose
   # result can be discarded is not a gate.

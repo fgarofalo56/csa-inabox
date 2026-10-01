@@ -2309,6 +2309,40 @@ export const TOUCH_EXEMPT = new Map([
     'apps/fiab-console/lib/components/admin/copilot-agents-config.tsx',
     '#4443 added two empty-but-successful honest gates here (the #4432 ARM-paging defect); the 4 sites need pickers — :362 a read-only derived endpoint, :446/:454 a Foundry project enumeration that has no route yet, :507 a Fabric workspace picker — tracked in #4444',
   ],
+  // ── #4619 / #4816 ─────────────────────────────────────────────────────────
+  // workspace-settings-drawer.tsx was touched for the storage binding only: it
+  // is admin-only now, and picker-only. Its free-text ARM-id fallback (the
+  // `Storage account ARM resource id` box, formerly :1215) is CLEARED in the
+  // same diff, not deferred — a failed or empty account list now renders a
+  // guided MessageBar with Retry instead of a text box.
+  //
+  // This Map is keyed by FILE, so the entry cannot name sites; the two it
+  // covers are, measured with `--report` at the head that adds it:
+  //   :412  Power BI workspace id (GUID) — needs a workspace picker that
+  //         degrades cleanly with no Power BI / Fabric tenant bound
+  //         (no-fabric-dependency.md), not a day-one gate.
+  //   :934  the Git PAT password field — needs a Key Vault secret reference
+  //         so the browser never handles the raw token.
+  //
+  // Dated exception in the shape #3626 / #3530 / #4443 established, NOT
+  // amnesty. Acceptance — including DELETING this entry — is #4816.
+  [
+    'apps/fiab-console/lib/components/workspace-settings-drawer.tsx',
+    '#4619 touches only the storage binding, which is cleared; the two unrelated sites are tracked in #4816 (:412 a Power BI workspace picker, :934 a Key Vault secret reference for the Git PAT)',
+  ],
+  // shortcut-wizard-dialog.tsx — touched only to correct the EXAMPLE text of its
+  // two typed Key Vault secret-name fields (:156 external ADLS SAS, :214 Delta
+  // Sharing credential file) to the `loom-sc-` name-space the shortcut routes
+  // accept. Placeholder and hint text add no site, so the file's baselined count
+  // (8) is unchanged. Clearing the two `secret-ref` sites means replacing the
+  // typed names with the Save to Key Vault flow — and Delta Sharing has no such
+  // flow yet (`CredSourceType` in lib/components/onelake/shortcut-wizard.tsx
+  // lists s3 | gcs | adls | dataverse). Dated exception with named acceptance —
+  // including DELETING this entry — in #4854.
+  [
+    'apps/fiab-console/lib/editors/lakehouse/dialogs/shortcut-wizard-dialog.tsx',
+    'touched only for the example text of the two typed secret-name fields (:156, :214); replacing them with Save to Key Vault (and adding it for Delta Sharing) is tracked in #4854',
+  ],
 ]);
 
 // ═══════════════════════════════════════════════════════════════════════════

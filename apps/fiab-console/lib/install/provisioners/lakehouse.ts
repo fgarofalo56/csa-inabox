@@ -82,6 +82,7 @@ import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import {
   KNOWN_CONTAINERS,
   createDirectory as adlsCreateDirectory,
+  getAccountName as adlsAccountName,
   listContainers as adlsListContainers,
   uploadFile as adlsUploadFile,
   pathToHttpsUrl,
@@ -89,10 +90,16 @@ import {
   type KnownContainer,
 } from '@/lib/azure/adls-client';
 import { executeQuery as synapseExec, serverlessTarget } from '@/lib/azure/synapse-sql-client';
-import { safeAdlsRelPath, lakehouseRootPath } from '@/lib/azure/backing-name';
+import {
+  safeAdlsRelPath,
+  lakehouseItemRootPath,
+  lakehouseRootFactsOfItem,
+  lakehouseRootLocation,
+  lakehouseUsesItemRoot,
+} from '@/lib/azure/backing-name';
 import { createShortcut, type ShortcutKind, type ShortcutTargetType } from '@/lib/azure/lakehouse-shortcuts';
 import { readRepoDataset } from '@/lib/apps/repo-datasets';
-import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { deltaTableViewDdl, shortcutFileViewDdl } from './_serverless-ddl';
 import { buildCsv, columnsFromDdl, seedLakehouseAdls } from './_seed-lakehouse-adls';
 // #3920 — the ONE encoder for list-valued `secondaryIds` keys, shared with the
 // install route and the lakehouse editor (which both decode it).
@@ -386,14 +393,7 @@ async function provisionShortcuts(
         const httpsUrl = pathToHttpsUrl(ctx.container, relFile);
         const viewLeaf = `shortcut_${safeRelPath(name)}`.replace(/[^A-Za-z0-9_]/g, '_');
         const obj = `lakehouse.${viewLeaf}`;
-        const urlLiteral = escapeSqlLiteral(httpsUrl);
-        const fmtClause = fmt === 'json'
-          ? `FORMAT = ''CSV'', FIELDTERMINATOR = ''0x0b'', FIELDQUOTE = ''0x0b''`
-          : `FORMAT = ''CSV'', PARSER_VERSION = ''2.0'', HEADER_ROW = TRUE`;
-        const ddl =
-          `IF SCHEMA_ID('lakehouse') IS NULL EXEC('CREATE SCHEMA lakehouse');\n` +
-          `IF OBJECT_ID('${obj}','V') IS NOT NULL DROP VIEW ${obj};\n` +
-          `EXEC('CREATE VIEW ${obj} AS SELECT * FROM OPENROWSET(BULK ''${urlLiteral}'', ${fmtClause}) AS r');`;
+        const ddl = shortcutFileViewDdl(obj, httpsUrl, fmt);
         try {
           await synapseExec(ctx.synapse, ddl);
           engineObject = obj;
@@ -602,16 +602,100 @@ async function provisionAzureNative(
   const schemasEnabled: boolean = content?.schemasEnabled === true;
   const declaredSchemas: Array<{ name: string }> = Array.isArray(content?.schemas) ? content.schemas : [];
 
-  // Root path for this lakehouse inside the container — keeps multiple
-  // installed lakehouses isolated and browsable side-by-side. THE shared
-  // definition (lib/azure/backing-name), so open-time auto-bind resolves this
-  // exact directory instead of creating a second root.
-  const root = lakehouseRootPath(input.displayName, input.cosmosItemId);
+  // Root path for this lakehouse inside the container. It must be the root the
+  // resolver (`resolveLakehouseStorage`) reads for this item, and the resolver
+  // decides a RECORDED location by the record, never by the item's age. So:
+  //   - an item that records a location (an earlier install's receipt, or the
+  //     binding auto-bind or a resolve wrote), or was created before
+  //     LAKEHOUSE_ITEM_ROOT_SINCE (it may have files under a name-only root it
+  //     never recorded), is resolved by the resolver itself, with persist, and
+  //     the install writes into the location it returns. A re-install or a
+  //     re-provision therefore keeps the recorded root, whatever `createdAt` is.
+  //   - an item created on or after the cutover that records nothing gets its
+  //     own `lakehouseItemRootPath` in the container chosen above.
+  // The item is read first; an unreadable item fails the install rather than
+  // guessing.
+  let createdAt: unknown;
+  let recordsLocation = false;
+  try {
+    const { itemsContainer } = await import('@/lib/azure/cosmos-client');
+    const { resource } = await (await itemsContainer()).item(input.cosmosItemId, input.workspaceId).read();
+    if (!resource) {
+      return { status: 'failed', error: `Lakehouse item ${input.cosmosItemId} was not found in workspace ${input.workspaceId}; its storage root cannot be chosen.`, steps };
+    }
+    createdAt = (resource as { createdAt?: unknown }).createdAt;
+    recordsLocation = lakehouseRootLocation(
+      lakehouseRootFactsOfItem({ ...(resource as Record<string, unknown>), id: input.cosmosItemId }),
+    )?.recorded === true;
+  } catch (e: any) {
+    // The cause text is kept whole so runWithRetry can retry a transient (429/503/timeout).
+    return { status: 'failed', error: `Could not read lakehouse item ${input.cosmosItemId} to choose its storage root: ${e?.message || String(e)}`, steps };
+  }
+  const lakehouseStorage = await import('@/lib/azure/lakehouse-abfss');
+  let root: string;
+  if (recordsLocation || !lakehouseUsesItemRoot(createdAt)) {
+    let resolved: Awaited<ReturnType<typeof lakehouseStorage.resolveLakehouseStorage>>;
+    try {
+      resolved = await lakehouseStorage.resolveLakehouseStorage(input.cosmosItemId, input.workspaceId, { persist: true });
+    } catch (e: any) {
+      return { status: 'failed', error: `Could not resolve the storage location of lakehouse item ${input.cosmosItemId}: ${e?.message || String(e)}`, steps };
+    }
+    if (!resolved.ok) {
+      const why = lakehouseStorage.lakehouseStorageWithheldMessage(resolved.reason)
+        || (resolved.reason === 'not-found'
+          ? `Lakehouse item ${input.cosmosItemId} was not found in workspace ${input.workspaceId}.`
+          : 'No DLZ ADLS Gen2 container is configured for lakehouse storage.');
+      return { status: 'failed', error: `${why} Nothing was written.`, steps };
+    }
+    const account = resolved.bound.abfss.match(/^abfss:\/\/[^@]+@([^.]+)\./i)?.[1]?.toLowerCase() || '';
+    let primary = '';
+    try {
+      primary = adlsAccountName().toLowerCase();
+    } catch {
+      primary = '';
+    }
+    if (!(KNOWN_CONTAINERS as readonly string[]).includes(resolved.bound.container) || !account || account !== primary) {
+      return {
+        status: 'failed',
+        error: `Lakehouse item ${input.cosmosItemId} records its storage at ${resolved.bound.abfss}, which is not a DLZ container this installer writes to. Nothing was written.`,
+        steps,
+      };
+    }
+    container = resolved.bound.container as KnownContainer;
+    root = resolved.bound.root;
+    steps.push(`Using the lakehouse's storage location ${container}/${root}.`);
+  } else {
+    root = lakehouseItemRootPath(input.displayName, input.cosmosItemId);
+  }
 
   // 1. Create the lakehouse root + every declared folder as real directories.
   try {
-    await adlsCreateDirectory(container, root);
-    steps.push(`Created lakehouse root directory ${container}/${root}.`);
+    // Same writer as open-time auto-bind: a conditional create that stamps
+    // this item's ownership marker. A directory already there is used when it
+    // is this item's: marked for it, or unmarked (the item's own item root, or
+    // a root the resolver has just confirmed is this item's alone), and an
+    // unmarked one is marked now, as the resolver and auto-bind mark it. A
+    // directory marked for another item is not written into.
+    try {
+      await lakehouseStorage.createOwnedLakehouseRoot(container, root, input.cosmosItemId);
+      steps.push(`Created lakehouse root directory ${container}/${root}.`);
+    } catch (ce: any) {
+      if (ce?.statusCode !== 409 && ce?.statusCode !== 412) throw ce;
+      const found = await lakehouseStorage.readLakehouseRootOwner(container, root);
+      // Gone again since the create was refused: report the create's own error.
+      if (!found.exists) throw ce;
+      if (!lakehouseStorage.mayAdoptRoot(found.owner, input.cosmosItemId)) {
+        return {
+          status: 'failed',
+          error: `The lakehouse root ${container}/${root} already exists and is marked for another item; nothing was written to it.`,
+          steps,
+        };
+      }
+      if (found.owner === null) {
+        await lakehouseStorage.stampLakehouseRootOwner(container, root, input.cosmosItemId, found);
+      }
+      steps.push(`Reused this item's lakehouse root directory ${container}/${root}.`);
+    }
   } catch (e: any) {
     const msg = e?.message || String(e);
     if (e?.statusCode === 401 || e?.statusCode === 403) {
@@ -746,7 +830,7 @@ async function provisionAzureNative(
     // The reported identity — plain `<schema>.<table>`, which is what
     // `secondaryIds.externalViews` and the step lines carry.
     const obj = `${viewSchema}.${viewLeaf}`;
-    // …and the DDL identity, BRACKET-DELIMITED. Both segments are already
+    // …and the DDL identity, BRACKET-DELIMITED (deltaTableViewDdl). Both segments are already
     // restricted to `[A-Za-z0-9_]` (the seeder sanitizes the schema, `viewLeaf`
     // above sanitizes the name), so no bracket or quote can appear inside them
     // — but that character set still admits a LEADING DIGIT, and a bundle
@@ -756,19 +840,13 @@ async function provisionAzureNative(
     // table is silently unqueryable. Brackets are the delimited-identifier form
     // Learn prescribes and cost nothing for the ordinary names.
     // Learn: https://learn.microsoft.com/sql/relational-databases/databases/database-identifiers
-    const objDdl = `[${viewSchema}].[${viewLeaf}]`;
     // NOTE the asymmetry, and it is deliberate: `SCHEMA_ID()` / `OBJECT_ID()`
     // take a NAME as a string. `SCHEMA_ID('2024_q1')` is the correct call —
     // bracketing there would look up a schema literally called `[2024_q1]` —
     // whereas `OBJECT_ID()` parses a multi-part name and therefore wants the
-    // delimited form.
-    // Doubled single-quotes for the inner EXEC string literal.
-    const urlLiteral = escapeSqlLiteral(httpsUrl);
-    const ddl =
-      `IF SCHEMA_ID('${viewSchema}') IS NULL EXEC('CREATE SCHEMA [${viewSchema}]');\n` +
-      `IF OBJECT_ID('${objDdl}','V') IS NOT NULL DROP VIEW ${objDdl};\n` +
-      `EXEC('CREATE VIEW ${objDdl} AS SELECT * FROM OPENROWSET(BULK ''${urlLiteral}'', ` +
-      `FORMAT = ''DELTA'') AS r');`;
+    // delimited form. Values in nested dynamic SQL are escaped for each literal
+    // level (lib/install/provisioners/_serverless-ddl.ts).
+    const ddl = deltaTableViewDdl(viewSchema, viewLeaf, httpsUrl);
     try {
       await synapseExec(synapse, ddl);
       externalViews.push(obj);

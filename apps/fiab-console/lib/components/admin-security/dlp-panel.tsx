@@ -30,6 +30,9 @@ import { EmptyState } from '@/lib/components/empty-state';
 import { NotConfiguredBar, type NotConfiguredHint } from './not-configured-bar';
 import { DlpManagePolicies } from './dlp-manage-policies';
 import { IdentityPicker, type IdentityHit } from '../ui/identity-picker';
+import { AdminOnlyNotice, useTenantAdminGate } from '@/lib/components/shared/admin-only-notice';
+import { DLP_RESTRICT_ADMIN_ONLY } from '@/lib/util/admin-only-copy';
+import { isAdminOnlyRefusal, refusalText, type RefusalEnvelope } from '@/lib/util/admin-refusal';
 
 const useStyles = makeStyles({
   subTabs: { marginBottom: tokens.spacingVerticalM },
@@ -40,6 +43,7 @@ const useStyles = makeStyles({
   },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalS, alignItems: 'center' },
   fieldStack: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, maxWidth: '720px' },
+  gap: { marginTop: tokens.spacingVerticalM, marginBottom: tokens.spacingVerticalM },
 });
 
 interface ApiState<T> {
@@ -384,12 +388,12 @@ function AlertsSection() {
 
 type RestrictScope = 'adls-container' | 'adls-path' | 'warehouse' | 'warehouse-schema' | 'kql-database';
 
-const RESTRICT_SCOPES: { key: RestrictScope; label: string }[] = [
-  { key: 'adls-container', label: 'ADLS container (Storage RBAC)' },
-  { key: 'adls-path', label: 'ADLS path (POSIX ACL)' },
-  { key: 'warehouse', label: 'Warehouse (Synapse SQL role)' },
-  { key: 'warehouse-schema', label: 'Warehouse schema (DENY SELECT)' },
-  { key: 'kql-database', label: 'KQL database (ADX)' },
+const RESTRICT_SCOPES: { value: RestrictScope; label: string }[] = [
+  { value: 'adls-container', label: 'ADLS container (Storage RBAC)' },
+  { value: 'adls-path', label: 'ADLS path (POSIX ACL)' },
+  { value: 'warehouse', label: 'Warehouse (Synapse SQL role)' },
+  { value: 'warehouse-schema', label: 'Warehouse schema (DENY SELECT)' },
+  { value: 'kql-database', label: 'KQL database (ADX)' },
 ];
 
 interface RestrictResult {
@@ -420,6 +424,10 @@ function RestrictSection() {
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<RestrictResult | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  // Restrict is tenant-admin gated at the route (#4619): disable it for a
+  // non-admin and say why, and render a 403 admin_only as that notice.
+  const adminGate = useTenantAdminGate();
+  const [refused, setRefused] = useState<RefusalEnvelope | null>(null);
   const [history, setHistory] = useState<RestrictionRow[]>([]);
   const [historyLoaded, setHistoryLoaded] = useState(false);
   // A FAILED read must not be indistinguishable from an empty one: without
@@ -472,14 +480,14 @@ function RestrictSection() {
   const scopeRef = scope === 'kql-database' ? kqlDb
     : (scope === 'warehouse' || scope === 'warehouse-schema') ? 'warehouse' : container;
 
-  const canRun = !!principal && !running &&
+  const canRun = adminGate.allowed && !!principal && !running &&
     (!needsRef || !!scopeRef) &&
     (scope !== 'adls-path' || !!subPath.trim()) &&
     (scope !== 'warehouse-schema' || !!schema);
 
   const run = async () => {
     if (!principal) { setErr('Select a principal to restrict.'); return; }
-    setRunning(true); setErr(null); setResult(null);
+    setRunning(true); setErr(null); setResult(null); setRefused(null);
     try {
       const r = await clientFetch('/api/governance/dlp/restrict', {
         method: 'POST',
@@ -494,9 +502,11 @@ function RestrictSection() {
           principalType: principal.type === 'group' ? 'Group' : principal.type === 'spn' ? 'ServicePrincipal' : 'User',
         }),
       });
-      const j: RestrictResult = await r.json();
-      if (!r.ok || j.ok === false) {
-        setErr(j.error || `HTTP ${r.status}`);
+      const j: RestrictResult & RefusalEnvelope = await r.json();
+      if (isAdminOnlyRefusal(j)) {
+        setRefused(j);
+      } else if (!r.ok || j.ok === false) {
+        setErr(refusalText(j, r.status));
       } else {
         setResult(j);
         loadHistory();
@@ -518,15 +528,18 @@ function RestrictSection() {
         Synapse SQL <code>DENY</code>, or ADX — and records the change. No Microsoft Fabric or Power BI
         dependency; works against the Azure-native backend directly.
       </Caption1>
+      {adminGate.refused && !refused && (
+        <AdminOnlyNotice {...DLP_RESTRICT_ADMIN_ONLY} className={s.gap} />
+      )}
 
       <div className={s.fieldStack}>
         <Field label="Scope type">
           <Dropdown
-            value={RESTRICT_SCOPES.find((x) => x.key === scope)?.label}
+            value={RESTRICT_SCOPES.find((x) => x.value === scope)?.label}
             selectedOptions={[scope]}
             onOptionSelect={(_, d) => { setScope(d.optionValue as RestrictScope); setResult(null); setErr(null); }}
           >
-            {RESTRICT_SCOPES.map((x) => <Option key={x.key} value={x.key}>{x.label}</Option>)}
+            {RESTRICT_SCOPES.map((x) => <Option key={x.value} value={x.value}>{x.label}</Option>)}
           </Dropdown>
         </Field>
 
@@ -592,6 +605,7 @@ function RestrictSection() {
         </div>
       </div>
 
+      {refused && <AdminOnlyNotice reason={refused.reason} remediation={refused.remediation} className={s.gap} />}
       {err && (
         <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}>
           <MessageBarBody><MessageBarTitle>Restrict failed</MessageBarTitle>{err}</MessageBarBody>

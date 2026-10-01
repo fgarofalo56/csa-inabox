@@ -15,11 +15,19 @@
  *       adls/sas  → SAS token
  *       dataverse → abfss:// Synapse-Link export path
  *
+ * OWNERSHIP IS RECORDED AT MINT. The secret is written with Key Vault tags
+ * naming the signed-in principal (oid, UPN, tenant) and the lakehouse it was
+ * saved for; lib/azure/shortcut-secret-resolver.ts reads those tags (never the
+ * value) before any shortcut route may use the credential. The name ends in a
+ * random suffix, so two principals saving a credential for the same lakehouse,
+ * source type and shortcut name never write to the same secret.
+ *
  * Honest-gate (503) when no Key Vault is configured — names LOOM_SHORTCUT_KEYVAULT.
  * Auth: session-required. Runtime: nodejs, force-dynamic.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { randomBytes } from 'crypto';
 import {
   putShortcutSecret,
   shortcutKeyVaultConfigGate,
@@ -34,9 +42,24 @@ export const dynamic = 'force-dynamic';
 const SOURCE_TYPES = ['s3', 'gcs', 'adls', 'dataverse'] as const;
 type SourceType = (typeof SOURCE_TYPES)[number];
 
-/** Deterministic, collision-resistant secret name for a shortcut credential. */
-export function shortcutSecretName(lakehouseId: string, sourceType: string, name: string): string {
-  return sanitizeSecretName(`loom-sc-${sourceType}-${lakehouseId}-${name}`);
+/** Length of the random suffix (hex characters) every minted name ends in. */
+export const SHORTCUT_SECRET_SUFFIX_HEX = 12;
+
+/**
+ * A fresh secret name for a shortcut credential:
+ * `loom-sc-<sourceType>-<lakehouseId>-<name>-<random>`. The readable prefix is
+ * truncated so the random suffix always survives Key Vault's 127-character limit.
+ */
+export function shortcutSecretName(
+  lakehouseId: string,
+  sourceType: string,
+  name: string,
+  suffix: string = randomBytes(SHORTCUT_SECRET_SUFFIX_HEX / 2).toString('hex'),
+): string {
+  const readable = sanitizeSecretName(`loom-sc-${sourceType}-${lakehouseId}-${name}`)
+    .slice(0, 127 - SHORTCUT_SECRET_SUFFIX_HEX - 1)
+    .replace(/-+$/, '');
+  return `${readable}-${suffix}`;
 }
 
 /** Validate the structured value matches the source type (no freeform JSON UI). */
@@ -63,7 +86,7 @@ function validate(sourceType: SourceType, value: string): string | null {
   return null;
 }
 
-export const POST = withSession(async (req: NextRequest) => {
+export const POST = withSession(async (req: NextRequest, { session }) => {
 
   const gate = shortcutKeyVaultConfigGate();
   if (gate) {
@@ -89,7 +112,13 @@ export const POST = withSession(async (req: NextRequest) => {
 
   const secretName = shortcutSecretName(lakehouseId, sourceType, name);
   try {
-    const { name: stored } = await putShortcutSecret(secretName, secretValue.trim());
+    const claims = session.claims as { oid?: string; upn?: string; tid?: string; email?: string };
+    const { name: stored } = await putShortcutSecret(secretName, secretValue.trim(), {
+      oid: claims.oid,
+      upn: claims.upn || claims.email,
+      tid: claims.tid,
+      lakehouseId,
+    });
     // Return ONLY the secret name — the value never leaves this function.
     return NextResponse.json({ ok: true, data: { secretName: stored } });
   } catch (e: any) {

@@ -356,8 +356,14 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
       { path: '/governance/data-quality', label: 'DQ monitor' },
       { path: '/governance/mdm', label: 'MDM match-merge' },
     ],
+    // env-picker stays the declared Fix-it (pin a specific warehouse id). When
+    // the Console's own ensure-create is REFUSED for permission, the registry
+    // overlay (index.ts withRuntimeProducedOverlay) swaps this to `role-grant`
+    // naming the exact entitlement — #3744.
     fixit: { kind: 'env-picker' },
-    legacyCodes: ['warehouse_not_configured', 'dq_monitor_not_configured', 'mdm_not_configured'],
+    autoResolveNote: 'The Console produces LOOM_DATABRICKS_SQL_WAREHOUSE_ID itself once LOOM_DATABRICKS_HOSTNAME is bound: it adopts the existing \'loom-default\' SQL warehouse or creates it (serverless PRO, 2X-Small, auto-stop 10 min — the bootstrap\'s spec) over the workspace private endpoint, and persists the id. A pinned env value overrides it.',
+    // `warehouse_*` are the classified resolver failures (lib/azure/databricks-sql-warehouse.ts warehouseErrorBody).
+    legacyCodes: ['warehouse_not_configured', 'dq_monitor_not_configured', 'mdm_not_configured', 'warehouse_authentication', 'warehouse_permission', 'warehouse_network', 'warehouse_quota', 'warehouse_unknown'],
   },
   // issue #2624 (G2) — the gate that finally OWNS the two orphan codes the
   // Unity Catalog system-tables route emits. Before this they resolved to

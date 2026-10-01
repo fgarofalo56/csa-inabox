@@ -1,6 +1,6 @@
 /**
  * GENERATED — do not edit by hand. TYPE-ONLY (no runtime import is emitted).
- * Source: apps/fiab-console/app/api/**\/route.ts   (1694 routes)
+ * Source: apps/fiab-console/app/api/**\/route.ts   (1696 routes)
  * Regenerate: node scripts/ci/generate-client-route-map.mjs
  * Drift gate:  node scripts/ci/generate-client-route-map.mjs --check
  *
@@ -107,6 +107,7 @@ export type StaticApiRoute =
   | '/api/admin/gates'
   | '/api/admin/governance-catalog/reindex'
   | '/api/admin/health/exercise'
+  | '/api/admin/lakehouse-roots/keep'
   | '/api/admin/lineage/reconcile'
   | '/api/admin/load-sample-data'
   | '/api/admin/mcp-servers'
@@ -629,6 +630,7 @@ export type StaticApiRoute =
   | '/api/items/warehouse/migrate/scan'
   | '/api/items/workshop-app'
   | '/api/keyvault/secret-names'
+  | '/api/lakehouse/access'
   | '/api/lakehouse/ai-clean-suggest'
   | '/api/lakehouse/containers'
   | '/api/lakehouse/download'

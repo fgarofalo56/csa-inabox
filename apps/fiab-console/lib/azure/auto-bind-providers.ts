@@ -82,8 +82,9 @@ import {
   safePipelineName,
   safeAdxDatabaseName,
   safeAdlsRelPath,
-  lakehouseRootPath,
+  lakehouseItemRootPath,
   lakehouseContainerOrder,
+  isLakehouseItemRootOf,
 } from './backing-name';
 import { DEFAULT_PIPELINE_RUNTIME } from '@/lib/components/pipeline/types';
 import type { AutoBindContext, AutoBindPreflight, AutoBindProvider } from './auto-bind';
@@ -521,14 +522,20 @@ export const lakehouseAutoBind: AutoBindProvider = {
   provider: 'lakehouse-adls',
   itemTypes: ['lakehouse'],
 
-  // EXACTLY the expression `lib/install/provisioners/lakehouse.ts` uses for its
-  // root directory (`lakehouseRootPath`, itemId fallback included), so an
-  // installed lakehouse is ATTACHED here rather than duplicated under a second
-  // root with the user's Delta tables in the wrong one.
+  // The ITEM-UNIQUE root (`lakehouses/<name>--<itemId>`, see
+  // `lakehouseItemRootPath`): display names are not unique, so the item id is
+  // part of the path and each lakehouse gets a directory of its own. The
+  // installer (`lib/install/provisioners/lakehouse.ts`) writes this same root,
+  // with the same ownership marker, for a lakehouse created on or after
+  // LAKEHOUSE_ITEM_ROOT_SINCE; a lakehouse created earlier keeps the name-only
+  // `lakehouseRootPath` it was installed with. Either way the installer records
+  // its root in the provisioning receipt, which `resolveLakehouseStorage`
+  // reads first (steps 1/2).
   backingNameFor: (ctx) => ({
-    name: lakehouseRootPath(ctx.displayName, ctx.itemId),
+    name: lakehouseItemRootPath(ctx.displayName, ctx.itemId),
     // Report whether the DISPLAY NAME itself had to change; the structural
-    // `lakehouses/` prefix is not part of the mapping a human is inspecting.
+    // `lakehouses/` prefix and the `--<itemId>` suffix are not part of the
+    // mapping a human is inspecting.
     sanitized: safeAdlsRelPath(ctx.displayName) !== ctx.displayName,
   }),
 
@@ -564,15 +571,37 @@ export const lakehouseAutoBind: AutoBindProvider = {
     return { ok: true, coords: { container } };
   },
 
-  probe: async (name, coords) => {
-    const { getMetadata } = await import('./adls-client');
-    const meta = await getMetadata(coords.container, name);
-    return meta.exists;
+  /**
+   * A directory counts as THIS item's root when its ownership marker says so,
+   * or when it carries no marker and is either:
+   *   - this item's own id-bearing item root (`lakehouses/<name>--<itemId>`):
+   *     no other item's root can be at that path, and a first write (a table
+   *     save, an upload) creates it with no marker. It is adopted, and marked
+   *     for this item so later reads need no rule; or
+   *   - the root this item already has on record (`state.lakehouseRoot`,
+   *     written only by the server) from before markers existed.
+   * A directory marked for another item, or an unmarked name-only directory
+   * this item has no record of, is reported absent, so the engine creates this
+   * item's own root.
+   */
+  probe: async (name, coords, ctx) => {
+    const { readLakehouseRootOwner, stampLakehouseRootOwner } = await import('./lakehouse-abfss');
+    const r = await readLakehouseRootOwner(coords.container, name);
+    if (!r.exists) return false;
+    if (r.owner === ctx.itemId) return true;
+    if (r.owner !== null) return false;
+    if (isLakehouseItemRootOf(name, ctx.itemId)) {
+      // Best-effort: an unmarked own item root is this item's either way.
+      await stampLakehouseRootOwner(coords.container, name, ctx.itemId, r);
+      return true;
+    }
+    return name === stateString(ctx, 'lakehouseRoot');
   },
 
-  create: async (name, coords) => {
-    const { createDirectory } = await import('./adls-client');
-    await createDirectory(coords.container, name);
+  /** Creates the root with this item's ownership marker, never over an existing directory. */
+  create: async (name, coords, ctx) => {
+    const { createOwnedLakehouseRoot } = await import('./lakehouse-abfss');
+    await createOwnedLakehouseRoot(coords.container, name, ctx.itemId);
   },
 
   /**

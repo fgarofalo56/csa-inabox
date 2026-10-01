@@ -54,7 +54,20 @@ ENV LOOM_BUILD_SHA=${LOOM_BUILD_SHA}
 # step consistently V8-heap-aborts (SIGABRT ~4.5-5GB) at 5120 — two ACR builds
 # failed in a row (7eb2ee94, 2eaf8656). Safe headroom on the 16 GB loombuild S3
 # pool; this is a V8 heap ceiling, not a cgroup SIGKILL. (memory: csa_loom_acr_build_oom_incident)
-ENV NODE_OPTIONS=--max-old-space-size=6656
+# 8192 MiB (2026-09-30): the CI `next build` hit the same V8 abort at 6144
+# (5477 MB used / 6193 MB committed, compiler worker, SIGABRT), intermittently;
+# 6656 was only 512 MiB above that. Every builder of THIS Dockerfile is a
+# 16 GB machine: the ACR S3 agent pool (8 vCPU / 16 GB — Learn "Run an ACR
+# task on a dedicated agent pool"; loombuild / loombuild2, created --tier S3
+# in every console roll/build workflow) or a GitHub ubuntu-latest runner
+# (4 vCPU / 16 GB, docker build). 8192 heap + ~2 GB native + ~1 GB next parent
+# + OS/buildkit leaves ~3 GB spare — NOT safe on the 8 GB DEFAULT ACR agent,
+# which is why the console must stay on the S3 pool (gov-console-roll's
+# `bypass_agent_pool` diagnostic builds there on purpose and is documented as
+# EXPECTED to fail — that stays true, and more so, at 8192). Kept EQUAL to
+# fiab-console-ci.yml's build step; scripts/ci/__tests__/next-build-heap.test.mjs
+# pins the floor, the ceiling and the equality.
+ENV NODE_OPTIONS=--max-old-space-size=8192
 RUN npm install -g pnpm@9 && \
     pnpm build
 
@@ -149,8 +162,26 @@ COPY --from=builder --chown=nextjs:nodejs /app/deploy-templates ./deploy-templat
 
 # Overwrite any source-tree marker with one stamped at build time.
 # Validator probes /build-marker.txt and grep's for sha=<expected>.
+#
+# The same step records WHEN this image was built, in ISO-8601 UTC, beside
+# server.js (#4798). The brain security graph is committed and baked into the
+# image, so a graph in an image built N days ago is at least N days old, and
+# lib/brain/security/extract/artifact.ts refuses a graph from an image older
+# than 90 days. That refusal is sound; a pass is NOT a freshness proof, because a
+# fresh build of an old ref passes. The build-marker written on the same line
+# (and server.js) mark this directory as a built image, so a runtime that finds
+# them without this date refuses rather than treating itself as a dev run.
+# The date is computed HERE, not passed as a build-arg, so every build
+# path that uses this Dockerfile gets it with no workflow plumbing, and it is
+# never committed (a committed timestamp conflicted between every pair of PRs).
+# Written as root before USER, so the runtime user can read it but not rewrite
+# it. The file name is pinned by lib/brain/security/extract/build-date.ts.
+# A build that reuses a cached layer (same sha AND stamp args) records the
+# cached layer's date, which is never LATER than the truth, so a cache hit can
+# only make the refusal fire early, never late.
 RUN echo "loom-build-marker sha=${LOOM_BUILD_SHA} stamp=${LOOM_BUILD_TIMESTAMP} token=LOOM_LIVE_BUILD" > /app/public/build-marker.txt && \
-    chown nextjs:nodejs /app/public/build-marker.txt
+    chown nextjs:nodejs /app/public/build-marker.txt && \
+    date -u +%Y-%m-%dT%H:%M:%SZ > /app/loom-image-built-at.txt
 
 USER nextjs
 

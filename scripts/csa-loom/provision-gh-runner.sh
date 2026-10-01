@@ -79,7 +79,7 @@ CPU="${CPU:-1.0}"
 MEMORY="${MEMORY:-2.0Gi}"
 
 # Runner image build pins (passed through to the Dockerfile ARGs).
-RUNNER_VERSION="${RUNNER_VERSION:-2.328.0}"
+RUNNER_VERSION="${RUNNER_VERSION:-2.337.0}"
 RUNNER_SHA256="${RUNNER_SHA256:-}"   # optional override; Dockerfile has a pinned default
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

@@ -8,17 +8,16 @@
  * body: { modelId }
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { getModel, appendMdmRun, listCrosswalk, type MdmRunRecord } from '@/lib/azure/mdm-store';
 import { runMerge, mdmConfigGate } from '@/lib/azure/mdm-match-merge';
 import { apiServerError } from '@/lib/api/respond';
+import { WarehouseResolutionError, warehouseErrorBody, warehouseErrorStatus } from '@/lib/azure/databricks-sql-warehouse';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session: s }) => {
   const tenantId = s.claims.oid;
 
   const gate = mdmConfigGate();
@@ -49,6 +48,11 @@ export async function POST(req: NextRequest) {
     await appendMdmRun(tenantId, rec);
     return NextResponse.json({ ok: true, result, run: rec });
   } catch (e: any) {
+    // A classified warehouse-resolution failure keeps its kind, remediation and
+    // entitlement (403 permission / 503 network / 502 unknown) — never a generic 500.
+    if (e instanceof WarehouseResolutionError) {
+      return NextResponse.json(warehouseErrorBody(e), { status: warehouseErrorStatus(e) });
+    }
     return apiServerError(e);
   }
-}
+});

@@ -9,14 +9,17 @@ import { clientFetch } from '@/lib/client-fetch';
  * catalog (POST …/sharing/providers/[name] {action:'mount'}). This panel is the
  * "use it" path Loom previously lacked: browse the catalog's schemas → tables,
  * click a table to load a 100-row preview, and run free-form read-only SQL —
- * all against the real Databricks SQL warehouse (LOOM_DATABRICKS_SQL_WAREHOUSE_ID).
+ * all against the real Databricks SQL warehouse (the env pin, else the
+ * `loom-default` warehouse the Console creates or adopts itself — #3744).
  *
  *   Schema/table browse : GET  /api/catalog/browse?source=unity-catalog&path=host|catalog[|schema]
  *   Query / preview      : POST /api/marketplace/sharing/query { catalog, schema?, sql? }
  *
- * Honest gate (no-vaporware.md): when the warehouse isn't configured the query
- * route returns 503 { gate, missing } and a Fluent MessageBar names the exact
- * env var (LOOM_DATABRICKS_SQL_WAREHOUSE_ID) — the full surface still renders.
+ * Honest gate (no-vaporware.md): when no Databricks workspace is bound, or the
+ * Console could not produce the warehouse, the query route returns { gate,
+ * kind, error, remediation } and the registry-driven HonestGate names the
+ * CLASSIFIED cause (not configured / permission / network / quota / unknown)
+ * with a Fix-it matched to it — the full surface still renders.
  *
  * Fluent v9 + Loom design tokens only (no hard-coded px/hex). Reuses Monaco
  * (MonacoTextarea, language 'sql') for the SQL editor and the shared results
@@ -41,6 +44,9 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { LOOM_ACCENT } from '@/lib/components/shared/accent-tokens';
 import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
+import { HonestGate } from '@/lib/components/shared/honest-gate';
+import { surfaceGateFrom, type SurfaceGate } from '@/lib/gates/surface-gate';
+import { buildShareShortcutRequest } from './share-shortcut-request';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
@@ -92,7 +98,7 @@ interface QueryData {
   truncated: boolean;
   executionMs: number;
 }
-interface Gate { error: string; missing?: string }
+
 
 function fmtCell(v: unknown): string {
   if (v === null || v === undefined) return 'NULL';
@@ -146,7 +152,7 @@ export function ShareExplorerPanel({ catalog, host, providerName, shareName }: {
   const [result, setResult] = useState<QueryData | null>(null);
   const [running, setRunning] = useState(false);
   const [queryErr, setQueryErr] = useState<string | null>(null);
-  const [gate, setGate] = useState<Gate | null>(null);
+  const [gate, setGate] = useState<SurfaceGate | null>(null);
   const [filter, setFilter] = useState('');
 
   // --- browse: schemas in the catalog ---
@@ -189,7 +195,10 @@ export function ShareExplorerPanel({ catalog, host, providerName, shareName }: {
         body: JSON.stringify({ catalog, schema, sql: statement }),
       });
       const j = await r.json().catch(() => ({}));
-      if (r.status === 503 && j?.gate) { setGate({ error: j.error, missing: j.missing }); setResult(null); return; }
+      // #4776 — not-configured AND every classified warehouse failure render
+      // through HonestGate (registry-driven, with a Fix-it matched to the cause).
+      const g = surfaceGateFrom(j);
+      if (g) { setGate(g); setResult(null); return; }
       if (!j.ok) { setQueryErr(j.error || `HTTP ${r.status}`); setResult(null); return; }
       setResult(j.data as QueryData);
     } catch (e: any) {
@@ -236,12 +245,13 @@ export function ShareExplorerPanel({ catalog, host, providerName, shareName }: {
       />
 
       {gate && (
-        <MessageBar intent="warning">
-          <MessageBarBody>
-            <MessageBarTitle>SQL warehouse not configured</MessageBarTitle>
-            {gate.error}
-          </MessageBarBody>
-        </MessageBar>
+        <HonestGate
+          gateId={gate.gateId}
+          surface="Share explorer"
+          missing={gate.missing}
+          detail={gate.error}
+          classified={gate.classified}
+        />
       )}
 
       <div className={s.split}>
@@ -544,15 +554,7 @@ function ShareShortcutDialog({ open, onClose, providerName, shareName, schema, t
       const r = await clientFetch('/api/lakehouse/shortcuts', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          lakehouseId: lhId,
-          name: (name.trim() || table).replace(/[^A-Za-z0-9 _.-]/g, '_'),
-          kind: 'tables',
-          targetType: 'delta_sharing',
-          targetUri: `delta-sharing://${shareName}/${schema}/${table}`,
-          credentialRef: { kind: 'deltaSharing', keyVaultSecret: `loom-dsp-${providerName}` },
-          format: 'delta',
-        }),
+        body: JSON.stringify(buildShareShortcutRequest({ lakehouseId: lhId, name, providerName, shareName, schema, table })),
       });
       const j = await r.json().catch(() => null);
       if (!j?.ok) {

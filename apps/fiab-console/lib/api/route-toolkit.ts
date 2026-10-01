@@ -34,7 +34,7 @@ import type { NextRequest, NextResponse } from 'next/server';
 import { getSession, type SessionPayload } from '@/lib/auth/session';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { loadOwnedItem } from '@/app/api/items/_lib/item-crud';
-import { requireTenantAdmin, enforceCapability, type FeatureRole } from '@/lib/auth/feature-gate';
+import { requireTenantAdmin, enforceCapability, type FeatureRole, type TenantAdminRefusal } from '@/lib/auth/feature-gate';
 import { denyIfNoDlzAccess, type DlzPane } from '@/lib/auth/dlz-gate';
 import { resolveApprovalAuthority, approvalAuthorityDenied } from '@/lib/access/approval-authority';
 import { apiUnauthorized, apiNotFound, apiServerError } from './respond';
@@ -162,10 +162,21 @@ export function withWorkspaceOwner<P extends { id: string } = { id: string }>(
  *   export const PUT = withTenantAdmin(
  *     withBackendGate('svc-purview-uc', async (req, { session, params }) => { … }),
  *   );
+ *
+ * The optional `refusal` is passed straight to `requireTenantAdmin` to say, in
+ * the 403 envelope, what THIS surface administers; omitted, the body is the
+ * canonical one.
  */
-export function withTenantAdmin<P = Record<string, string>>(handler: SessionHandler<P>): RouteHandler<P> {
+export function withTenantAdmin<P = Record<string, string>>(
+  handler: SessionHandler<P>,
+  refusal?: TenantAdminRefusal,
+): RouteHandler<P> {
   return withSession<P>((req, sctx) => {
-    const gate = requireTenantAdmin(sctx.session);
+    // No refusal → the one-argument call, exactly as before (callers and tests
+    // pin `requireTenantAdmin(session)`). One call site, bound and returned, so
+    // check-route-guards sees the result consumed.
+    const args: [SessionPayload, TenantAdminRefusal?] = refusal ? [sctx.session, refusal] : [sctx.session];
+    const gate = requireTenantAdmin(...args);
     if (gate) return gate;
     return handler(req, sctx);
   });

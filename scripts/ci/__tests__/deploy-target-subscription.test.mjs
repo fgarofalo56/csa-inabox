@@ -45,8 +45,10 @@
  *
  *   F1  the workflow population filter was keyed to the SPELLING #3888 used, so
  *       7 of 8 ordinary bash emptiness idioms walked past it, and one step —
- *       the one that binds deploy_sub to ADMIN_SUB — was outside its population
- *       entirely. It is now keyed to the property, with a per-idiom control.
+ *       the one that then bound deploy_sub to ADMIN_SUB — was outside its
+ *       population entirely. It is now keyed to the property, with a per-idiom
+ *       control. (That step has since moved ADMIN_SUB to target_sub; the
+ *       second-name shape it exposed is still injected — see OFFENDING_IDIOMS.)
  *   F2  no case supplied BOTH an explicit subscription and a login one, so
  *       swapping their precedence (a cross-subscription deploy) left the suite
  *       green. Both the assertion and its mutation control are below.
@@ -526,9 +528,10 @@ function aliasRe(name) {
  * Every SHELL VARIABLE NAME in `text` carrying the guard's `deploy_sub` value.
  *
  * Keyed to the OUTPUT, not to a variable name. The filter this replaced was
- * keyed to the literal string `DEPLOY_SUB`, so the one step that binds the same
- * output to `ADMIN_SUB` (the dlz_adopt step) was outside its population
- * entirely — it could not have caught an offender there however it was written.
+ * keyed to the literal string `DEPLOY_SUB`, so the one step that then bound the
+ * same output to `ADMIN_SUB` (the dlz_adopt step, before it moved to
+ * target_sub) was outside its population entirely — it could not have caught an
+ * offender there however it was written.
  *
  * A second pass follows PLAIN copies (`SUB="$DEPLOY_SUB"`) TO FIXPOINT. Before
  * #3994 it iterated a snapshot of the set taken before the pass, so it was
@@ -542,7 +545,7 @@ function aliasRe(name) {
  *     needs.
  *   - the POPULATION test calls it on the WHOLE FILE, where a `SUB=` anywhere
  *     does widen the set globally. That over-collection is intended and
- *     fail-closed: a new laundering name trips the `['ADMIN_SUB', 'DEPLOY_SUB']`
+ *     fail-closed: a new laundering name trips the `['DEPLOY_SUB']`
  *     assertion, which is the entire point of that test.
  */
 function boundDeploySubNames(text) {
@@ -603,8 +606,9 @@ function deploySubTestableRefs(text) {
  *   `-n REF` opening a `then`, with the fatal branch in the `else` (#3994 P2)
  *
  * REF itself is covered in three forms, all by the per-shape control:
- *   a bound shell name (`DEPLOY_SUB`), and the second name the workflow binds
- *   the same output to (`ADMIN_SUB`); a name laundered through any depth of
+ *   a bound shell name (`DEPLOY_SUB`), and a SECOND name bound straight to the
+ *   same output (the shape `ADMIN_SUB` had until the dlz_adopt step moved to
+ *   target_sub; now injected as `OTHER_SUB`); a name laundered through any depth of
  *   plain copy, with or without an `export`/`local` prefix or a trailing
  *   comment (#3994 P3/P4/P5); and the raw `${{ }}` output expression written
  *   inline with no shell variable at all (#3994 P1, {@link RAW_OUTPUT_REF}).
@@ -767,11 +771,16 @@ function withMutatedWorkflow(needle, replacement, fn) {
 }
 
 /**
- * Injection anchors — one step per bound name, each verified unique above.
- * `ADMIN_SUB_ANCHOR` sits in the ONLY step the previous filter could not see.
+ * Injection anchor, verified unique above. There used to be a second one,
+ * `ADMIN_SUB_ANCHOR`, in the dlz_adopt step — the ONLY step the previous filter
+ * could not see, because it bound deploy_sub to a name other than DEPLOY_SUB.
+ * That step now binds ADMIN_SUB to target_sub (see "ADMIN_SUB is bound to the
+ * RESOLVED target_sub" below), so an emptiness test there is no longer an
+ * offender and the anchor could only have produced a false kill. The shape it
+ * witnessed — a second name bound straight to the output — is still injected,
+ * synthetically, by the `a second name bound straight to the output` entry.
  */
 const DEPLOY_SUB_ANCHOR = '          echo "Registering providers on sub $(az account show --query id -o tsv)…"\n';
-const ADMIN_SUB_ANCHOR = '          INPUT_DLZ_SUBSCRIPTION=""; INPUT_DLZ_DOMAIN=""\n';
 
 /**
  * One entry per bash emptiness idiom, each a THIRD offending sibling added to a
@@ -798,11 +807,15 @@ const OFFENDING_IDIOMS = [
     'if [ x"$DEPLOY_SUB" = x ]; then\n            exit 1\n          fi\n'],
   ['laundered through a plain alias', DEPLOY_SUB_ANCHOR,
     'SUB="$DEPLOY_SUB"\n          if [ -z "$SUB" ]; then\n            exit 1\n          fi\n'],
-  // The blind spot, not merely an unmatched spelling: this step binds the same
-  // output to ADMIN_SUB, so the old filter's consumer population (16 of the 17
-  // binding sites) did not contain it at all.
-  ['on the ADMIN_SUB-bound step', ADMIN_SUB_ANCHOR,
-    'if [ -z "${ADMIN_SUB:-}" ]; then\n            exit 1\n          fi\n'],
+  // The blind spot, not merely an unmatched spelling: a SECOND name bound
+  // straight to the output. The dlz_adopt step used to do exactly this with
+  // ADMIN_SUB, and the old filter's consumer population (16 of the 17 binding
+  // sites) did not contain it at all. That step now reads target_sub, so the
+  // shape is injected here with a name the workflow does not use: a detector
+  // that only follows DEPLOY_SUB and its plain copies reports 0 offenders.
+  ['a second name bound straight to the output', DEPLOY_SUB_ANCHOR,
+    'OTHER_SUB="${{ steps.topology_guard.outputs.deploy_sub }}"\n'
+    + '          if [ -z "${OTHER_SUB:-}" ]; then\n            exit 1\n          fi\n'],
 
   // --- #3994: seven shapes measured as SURVIVORS of the eight above. ---
   // Each was injected at these same anchors and produced 0 offenders before the
@@ -848,16 +861,26 @@ test('POPULATION — the deploy_sub binding sites are enumerated EXACTLY', () =>
   // control-plane calls. Both use `${DEPLOY_SUB:+--subscription ...}` and
   // neither tests the value for emptiness, so the offender assertion below is
   // still empty — confirmed by running it.
+  //
+  // 19 -> 18: the dlz_adopt step's `ADMIN_SUB:` binding LEFT this population.
+  // It read deploy_sub, which is '' on every scheduled run, so the discover
+  // script got an admin RG with no admin subscription and silently skipped the
+  // admin-RG fallback — LOOM_SERVICEBUS_NAMESPACE and LOOM_BATCH_ACCOUNT then
+  // rendered empty on the live console (run 36428134174). It needs a LITERAL
+  // subscription id, the #3916 case, so it now reads target_sub; the positive
+  // pin on that binding is the "ADMIN_SUB is bound to the RESOLVED target_sub"
+  // test below. Breaks on: 19 if the binding is reverted to deploy_sub, 17 if
+  // any other consumer leaves.
   const bindings = [...src.matchAll(new RegExp(DEPLOY_SUB_BINDING, 'g'))];
-  assert.equal(bindings.length, 19, 'the deploy_sub consumer population changed');
+  assert.equal(bindings.length, 18, 'the deploy_sub consumer population changed');
 
   const consumerSteps = steps.filter((s) => new RegExp(DEPLOY_SUB_BINDING).test(s));
-  assert.equal(consumerSteps.length, 19,
+  assert.equal(consumerSteps.length, 18,
     'binding sites and consumer steps diverged — a step binds deploy_sub twice, or the split lost one');
 
   assert.deepEqual(
     [...boundDeploySubNames(src)].sort(),
-    ['ADMIN_SUB', 'DEPLOY_SUB'],
+    ['DEPLOY_SUB'],
     'a new name now carries deploy_sub — confirm nothing hard-fails on it',
   );
 });
@@ -907,7 +930,7 @@ test('CONTROL (PER-SHAPE) — every emptiness idiom is caught, on every bound na
       'string comparison against ""',
       'the portable x-prefix idiom',
       'laundered through a plain alias',
-      'on the ADMIN_SUB-bound step',
+      'a second name bound straight to the output',
       'the raw output expression, inline',
       '-n with the fatal branch in the else',
       'laundered through an export-prefixed alias',
@@ -923,11 +946,14 @@ test('CONTROL (PER-SHAPE) — every emptiness idiom is caught, on every bound na
   );
 
   // The second half of this test's title, which the labels alone do NOT pin.
-  // Repointing the ADMIN_SUB entry at DEPLOY_SUB_ANCHOR is a one-token edit
-  // that leaves the label list byte-identical while making "on every bound
-  // name" false — and ADMIN_SUB is precisely the name the old filter could not
-  // see. So derive the covered names from the anchors themselves and require
-  // them to be the FULL set the workflow binds, not a subset.
+  // Repointing an entry at a different anchor is a one-token edit that leaves
+  // the label list byte-identical, and a new step binding deploy_sub to a new
+  // name widens the workflow's set without adding an anchor there. Either makes
+  // "on every bound name" false. (ADMIN_SUB was that name, and precisely the one
+  // the old filter could not see, until the dlz_adopt step moved to target_sub;
+  // today the set is DEPLOY_SUB alone.) So derive the covered names from the
+  // anchors themselves and require them to be the FULL set the workflow binds,
+  // not a subset.
   const src = fs.readFileSync(WORKFLOW, 'utf8').replace(/\r\n/g, '\n');
   const steps = src.split(/^ {6}- name: /m).slice(1);
   const covered = new Set();
@@ -1010,4 +1036,33 @@ test('POPULATION — every consumer of target_sub reads it from the guard', () =
     ['${{ steps.topology_guard.outputs.target_sub }}'],
     'a TARGET_SUB was wired from something other than the guard output',
   );
+});
+
+test('ADMIN_SUB is bound to the RESOLVED target_sub, and reaches the discover script', () => {
+  // The positive half of the 19 -> 18 population change above. The dlz_adopt
+  // step hands ADMIN_SUB to discover-dlz-adopt-plan.sh as --admin-subscription,
+  // beside --admin-rg. That admin-RG probe needs a LITERAL subscription id; bound
+  // to deploy_sub it received '' on every scheduled run, skipped the probe, and
+  // blanked LOOM_SERVICEBUS_NAMESPACE / LOOM_BATCH_ACCOUNT (run 36428134174).
+  //
+  // Breaks on: the binding reverted to `outputs.deploy_sub` (the defect), bound
+  // to `inputs.subscription` (the same '' on a schedule), removed, or duplicated;
+  // or the discover call passing --admin-subscription from any other variable.
+  const src = fs.readFileSync(WORKFLOW, 'utf8').replace(/\r\n/g, '\n');
+  const steps = src.split(/^ {6}- name: /m).slice(1);
+  const adopt = steps.filter((s) => /^ {8}id: dlz_adopt\s*$/m.test(s));
+  assert.equal(adopt.length, 1, `found ${adopt.length} steps with id dlz_adopt, not one — the pin below would read nothing`);
+
+  const bound = [...adopt[0].matchAll(/^ {10}ADMIN_SUB:\s*(.+?)\s*$/gm)].map((m) => m[1]);
+  assert.deepEqual(
+    bound,
+    ['${{ steps.topology_guard.outputs.target_sub }}'],
+    'the dlz_adopt step must bind ADMIN_SUB exactly once, to target_sub. deploy_sub is \'\' on every '
+    + 'scheduled run, and an empty admin subscription silently drops the servicebus/batch adopt keys (#3916).',
+  );
+
+  const discover = adopt[0].match(/discover-dlz-adopt-plan\.sh[\s\S]*?--admin-subscription\s+("[^"\n]*"|\S+)[\s\S]*?--admin-rg\s/);
+  assert.ok(discover, 'the dlz_adopt step no longer calls discover-dlz-adopt-plan.sh with --admin-subscription and --admin-rg');
+  assert.equal(discover[1], '"$ADMIN_SUB"',
+    'the discover call passes --admin-subscription from something other than the bound ADMIN_SUB');
 });

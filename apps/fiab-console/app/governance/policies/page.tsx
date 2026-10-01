@@ -18,6 +18,9 @@ import {
 } from '@fluentui/react-icons';
 import { GovernanceShell } from '@/lib/components/governance-shell';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { AdminOnlyNotice, useTenantAdminGate } from '@/lib/components/shared/admin-only-notice';
+import { DLP_RESTRICT_ADMIN_ONLY } from '@/lib/util/admin-only-copy';
+import { isAdminOnlyRefusal, refusalText } from '@/lib/util/admin-refusal';
 
 interface DlpPreset {
   id: string; name: string; description: string; category: string; icon: string;
@@ -120,6 +123,8 @@ function kindColor(k: string): any {
 
 export default function PoliciesPage() {
   const s = useStyles();
+  // Restrict-access and preset enable are tenant-admin gated at their routes (#4619).
+  const adminGate = useTenantAdminGate();
   const [policies, setPolicies] = useState<Policy[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -145,6 +150,8 @@ export default function PoliciesPage() {
   const [rstSubPath, setRstSubPath] = useState('');
   const [rstPathItems, setRstPathItems] = useState<Array<{ name: string; isDirectory: boolean }>>([]);
   const [rstPathLoading, setRstPathLoading] = useState(false);
+  // Why the last listing returned no rows, when the route refused or failed it.
+  const [rstPathError, setRstPathError] = useState<string | null>(null);
   const [rstSchema, setRstSchema] = useState('');
   const [rstSchemas, setRstSchemas] = useState<string[]>([]);
   const [rstSchemaGate, setRstSchemaGate] = useState<string | null>(null);
@@ -233,13 +240,16 @@ export default function PoliciesPage() {
 
   // Drill the directory tree of an ADLS container for the restrict path picker.
   const loadRstPaths = useCallback(async (container: string, prefix: string) => {
-    if (!container) { setRstPathItems([]); return; }
+    if (!container) { setRstPathItems([]); setRstPathError(null); return; }
     setRstPathLoading(true);
     try {
       const r = await clientFetch(`/api/lakehouse/paths?container=${encodeURIComponent(container)}&prefix=${encodeURIComponent(prefix)}`);
       const j = await r.json();
       setRstPathItems(j.ok ? (j.paths || []).map((p: any) => ({ name: p.name, isDirectory: !!p.isDirectory })) : []);
-    } catch { setRstPathItems([]); }
+      // Listing a container directly is limited to tenant admins. Keep the route's reason visible so
+      // an empty list is not read as an empty container; the path can still be typed below.
+      setRstPathError(j.ok ? null : (j.error || `Could not list ${container} (HTTP ${r.status}).`));
+    } catch (e: any) { setRstPathItems([]); setRstPathError(`Could not list ${container}: ${e?.message || e}`); }
     finally { setRstPathLoading(false); }
   }, []);
 
@@ -344,7 +354,7 @@ export default function PoliciesPage() {
         body: JSON.stringify({ presetId: preset.id }),
       });
       const j = await r.json();
-      if (!j.ok) { setActionErr(j.error || `HTTP ${r.status}`); return; }
+      if (!j.ok) { setActionErr(refusalText(j, r.status)); return; }
       if (j.policies) setPolicies(j.policies);
       setEnabledSources((prev) => prev.includes(`preset:${preset.id}`) ? prev : [...prev, `preset:${preset.id}`]);
       load();
@@ -418,7 +428,8 @@ export default function PoliciesPage() {
         }),
       });
       const j = await r.json();
-      if (!j.ok) { setRstMsg({ intent: 'error', title: `Restrict failed (HTTP ${r.status})`, body: j?.error || 'Unknown error' }); return; }
+      if (isAdminOnlyRefusal(j)) { setRstMsg({ intent: 'warning', title: 'Tenant admins only', body: refusalText(j, r.status) }); return; }
+      if (!j.ok) { setRstMsg({ intent: 'error', title: `Restrict failed (HTTP ${r.status})`, body: refusalText(j, r.status) }); return; }
       if (j.skippedExempt) {
         setRstMsg({ intent: 'warning', title: 'Principal exempt', body: j.detail || 'Left intact (on exempt list).' });
       } else if (!j.restricted) {
@@ -467,7 +478,7 @@ export default function PoliciesPage() {
       body.principalType = accPicked.type;
       body.scopeType = accScope;
       if (accScope === 'adls-container') {
-        if (!accContainer.trim()) { setActionErr('Enter the ADLS container the grant applies to.'); return; }
+        if (!accContainer.trim()) { setActionErr('Select the ADLS container the grant applies to.'); return; }
         body.scopeRef = accContainer.trim();
       } else if (accScope === 'kql-database') {
         if (!accKqlDb) { setActionErr('Pick the KQL database the grant applies to.'); return; }
@@ -982,7 +993,12 @@ export default function PoliciesPage() {
                     {accScope === 'adls-container' && (
                       <Field label="ADLS container"
                         hint="The data-lake container the grant applies to — Loom enforces it as real Storage RBAC.">
-                        <Input value={accContainer} placeholder="bronze" onChange={(_, d) => setAccContainer(d.value)} />
+                        <Dropdown placeholder={containers.length ? 'Select…' : 'No containers found'} disabled={!containers.length}
+                          value={accContainer} selectedOptions={accContainer ? [accContainer] : []}
+                          onOptionSelect={(_, d) => setAccContainer(d.optionValue || '')}
+                          data-testid="access-adls-container">
+                          {containers.map((c) => <Option key={c} value={c}>{c}</Option>)}
+                        </Dropdown>
                       </Field>
                     )}
                     {accScope === 'kql-database' && (
@@ -1023,6 +1039,7 @@ export default function PoliciesPage() {
             <DialogTitle>Restrict access (DLP)</DialogTitle>
             <DialogContent>
               <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM }}>
+                {adminGate.refused && <AdminOnlyNotice {...DLP_RESTRICT_ADMIN_ONLY} />}
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                   Revokes a principal&apos;s <strong>real</strong> data-plane access on a scope.
                   ADLS containers revoke a Storage RBAC role assignment (ARM read-back); ADLS paths
@@ -1044,6 +1061,7 @@ export default function PoliciesPage() {
                       onOptionSelect={(_, d) => {
                         const v = (d.optionValue as typeof rstScope) || 'adls-container';
                         setRstScope(v); setRstRef(''); setRstSubPath(''); setRstPathItems([]); setRstSchema('');
+                        setRstPathError(null);
                         if (v === 'warehouse-schema') loadRstSchemas();
                       }}>
                       <Option value="adls-container">ADLS container</Option>
@@ -1107,8 +1125,18 @@ export default function PoliciesPage() {
                         )}
                         {rstPathLoading && <Spinner size="tiny" />}
                       </div>
+                      {rstPathError && (
+                        <MessageBar intent="warning" data-testid="rst-path-error">
+                          <MessageBarBody>
+                            <MessageBarTitle>Sub-paths could not be listed</MessageBarTitle>
+                            {rstPathError} Type the path below instead.
+                          </MessageBarBody>
+                        </MessageBar>
+                      )}
+                      <Input aria-label="Path under the container (typed)" placeholder="folder/sub-folder"
+                        value={rstSubPath} onChange={(_, d) => setRstSubPath(d.value.replace(/^\/+/, ''))} />
                       <div className={s.pickList}>
-                        {rstPathItems.length === 0 && !rstPathLoading && (
+                        {rstPathItems.length === 0 && !rstPathLoading && !rstPathError && (
                           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No sub-paths here.</Caption1>
                         )}
                         {rstPathItems.map((p) => {
@@ -1200,7 +1228,7 @@ export default function PoliciesPage() {
             </DialogContent>
             <DialogActions>
               <Button appearance="secondary" onClick={() => setRstOpen(false)}>Close</Button>
-              <Button appearance="primary" onClick={doRestrict} disabled={rstBusy || !rstPicked}>
+              <Button appearance="primary" onClick={doRestrict} disabled={!adminGate.allowed || rstBusy || !rstPicked}>
                 {rstBusy ? 'Revoking…' : 'Revoke access'}
               </Button>
             </DialogActions>

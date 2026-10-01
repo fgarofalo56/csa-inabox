@@ -459,7 +459,7 @@ ARMS: list[tuple[str, str, str, str]] = [
         "GH1 the ledger closes and GitHub never hears (#4545 verbatim)",
         "tick.py",
         ("    close_note = close_issue_on_github(\n"
-         "        policy, repo, number, CLOSED, detail, kind, issue_class)"),
+         "        policy, repo, number, CLOSED, detail, kind, issue_class, binding)"),
         '    close_note = "the ledger is the only record"',
     ),
     (
@@ -467,9 +467,9 @@ ARMS: list[tuple[str, str, str, str]] = [
          "upstream and every run-backed item is left open"),
         "tick.py",
         ("    close_note = close_issue_on_github(\n"
-         "        policy, repo, number, CLOSED, detail, kind, issue_class)"),
+         "        policy, repo, number, CLOSED, detail, kind, issue_class, binding)"),
         ("    close_note = (close_issue_on_github(\n"
-         "        policy, repo, number, CLOSED, detail, kind, issue_class)\n"
+         "        policy, repo, number, CLOSED, detail, kind, issue_class, binding)\n"
          '                  if from_pr else "run-backed items close quietly")'),
     ),
     (
@@ -517,13 +517,13 @@ ARMS: list[tuple[str, str, str, str]] = [
          "#4545 reproduced by the fix for it"),
         "tick.py",
         ("    close_note = close_issue_on_github(\n"
-         "        policy, repo, number, CLOSED, detail, kind, issue_class)\n"
+         "        policy, repo, number, CLOSED, detail, kind, issue_class, binding)\n"
          "    # EVERY FAILURE FROM HERE ON IS A POST-CLOSE FAILURE"),
         ("    _record_close_in_ledger(\n"
          '        led, item, number, kind, ref, f"receipt verified by tick: {detail}"\n'
          "    )\n"
          "    close_note = close_issue_on_github(\n"
-         "        policy, repo, number, CLOSED, detail, kind, issue_class)\n"
+         "        policy, repo, number, CLOSED, detail, kind, issue_class, binding)\n"
          "    # EVERY FAILURE FROM HERE ON IS A POST-CLOSE FAILURE"),
     ),
     (
@@ -552,7 +552,7 @@ ARMS: list[tuple[str, str, str, str]] = [
          "the only test named for the comment asserted its ABSENCE"),
         "tick.py",
         ('            ["gh", "issue", "close", str(number), "--repo", repo,\n'
-         '             "--comment", _receipt_comment(kind, issue_class, detail)]'),
+         '             "--comment", _receipt_comment(kind, issue_class, detail, binding)]'),
         ('            ["gh", "issue", "close", str(number), "--repo", repo,\n'
          "             ]"),
     ),
@@ -4336,6 +4336,302 @@ ARMS: list[tuple[str, str, str, str]] = [
         "    if isinstance(declared, str):",
         "    if False:",
     ),
+    # -- #4764: an item the deploy-failure WATCHER filed ----------------------
+    # Every arm below was run against `test_watcher_receipts.py` in a sandbox
+    # copy with the anchor meta-test deselected, before being added here.
+    (
+        ("WR1 the workflow-identity comparison on the watcher route is "
+         "deleted, so a green POLICY-producer roll closes an item filed about "
+         "a different workflow - the #4709 defect on the new route"),
+        "tick.py",
+        '    actual = run.get("workflowDatabaseId")\n    if actual != expected:',
+        '    actual = run.get("workflowDatabaseId")\n    if False:',
+    ),
+    (
+        ("WR2 identity is matched by DISPLAY NAME instead of workflow id - "
+         "#4390's runs report a display name, and a display name is not unique"),
+        "tick.py",
+        '    actual = run.get("workflowDatabaseId")\n',
+        ('    actual, expected = (run.get("workflowName"), '
+         'failure_run.get("workflowName"))\n'),
+    ),
+    (
+        ("WR3 the time bound is deleted, so a green run from BEFORE the "
+         "recorded failure closes it"),
+        "tick.py",
+        "    if created <= filing.recorded_at:",
+        "    if False:",
+    ),
+    (
+        "WR4 the time bound admits a run created in the SAME SECOND as the record",
+        "tick.py",
+        "    if created <= filing.recorded_at:",
+        "    if created < filing.recorded_at:",
+    ),
+    (
+        ("WR5 the OLDEST watcher record is read instead of the newest, so the "
+         "time bound is the first failure and every later one is ignored"),
+        "tick.py",
+        "    recorded_at, newest_body = max(records, key=lambda record: record[0])",
+        "    recorded_at, newest_body = min(records, key=lambda record: record[0])",
+    ),
+    (
+        ("WR6 comments are no longer filtered by author, so a HUMAN's triage "
+         "comment quoting a run line becomes the newest failure record"),
+        "tick.py",
+        ('        if isinstance(comment, dict) and _login(comment.get("author")) '
+         "== WATCHER_LOGIN:"),
+        "        if isinstance(comment, dict):",
+    ),
+    (
+        ("WR7 the issue-author check is dropped, so any issue TITLED like the "
+         "watcher's takes the watcher route"),
+        "tick.py",
+        '    if workflow is None or _login(parsed.get("author")) != WATCHER_LOGIN:',
+        "    if workflow is None:",
+    ),
+    (
+        "WR8 the default-branch check is deleted, so a green BRANCH run closes the item",
+        "tick.py",
+        '    if run.get("headBranch") != default_branch:',
+        "    if False:",
+    ),
+    (
+        ("WR9 the watcher route stops checking STATUS, so an in-progress re-run "
+         "carrying a previous attempt's success is read as a verdict"),
+        "tick.py",
+        '    if status != "completed":',
+        "    if False:",
+    ),
+    (
+        "WR10 the watcher route stops checking the run's CONCLUSION",
+        "tick.py",
+        '    if conclusion != "success":',
+        "    if False:",
+    ),
+    (
+        ("WR11 a SKIPPED deploy job stops being refused by its conclusion. "
+         "MESSAGE-PINNED, disclosed: `_job_did_work` still refuses a skipped job "
+         "(it has no steps), so this changes the stated reason, not the outcome"),
+        "tick.py",
+        '            if job.get("conclusion") != "success":',
+        "            if False:",
+    ),
+    (
+        ("WR12 a job that concluded success having run ONLY GitHub's bookkeeping "
+         "steps is accepted - green over nothing"),
+        "tick.py",
+        "            if not _job_did_work(job):",
+        "            if False:",
+    ),
+    (
+        "WR13 `Set up job` / `Complete job` start counting as work",
+        "tick.py",
+        "                and name not in _JOB_BOOKKEEPING_STEPS\n",
+        "                and True\n",
+    ),
+    (
+        ("WR14 a recorded failure with NO failed job stops refusing, so the "
+         "job check iterates nothing and any green run of the workflow passes"),
+        "tick.py",
+        "    if not failed_jobs:",
+        "    if False:",
+    ),
+    (
+        ("WR15 a green run MISSING the job that failed stops refusing - the "
+         "loop over its same-named jobs iterates nothing"),
+        "tick.py",
+        "        if not jobs_named:",
+        "        if False:",
+    ),
+    (
+        ("WR16 a failure run with NO workflow id stops refusing, so None == None "
+         "and a run of an unknown workflow is accepted"),
+        "tick.py",
+        ("    if not expected:\n        raise ReceiptRefusedError(\n"
+         '            f"the failed run #{number} records'),
+        ("    if False:\n        raise ReceiptRefusedError(\n"
+         '            f"the failed run #{number} records'),
+    ),
+    (
+        ("WR17 an UNREADABLE issue is read as 'not a watcher issue', so a "
+         "network blip picks the receipt route - R7"),
+        "tick.py",
+        ("    if rc != 0:\n        raise ReceiptRefusedError(\n"
+         '            f"could not read #{number} to establish whether the deploy-failure "'),
+        ("    if rc != 0:\n        return None\n        raise ReceiptRefusedError(\n"
+         '            f"could not read #{number} to establish whether the deploy-failure "'),
+    ),
+    (
+        ("WR18 the watcher route publishes the POLICY comment, which claims a "
+         "producer and a boundary that route never consulted"),
+        "tick.py",
+        "        binding = BINDING_WATCHER_WORKFLOW",
+        "        binding = BINDING_POLICY",
+    ),
+    (
+        ("WR19 the watcher route is bypassed at the call site, so every "
+         "watcher item is refused again - #4764 itself"),
+        "tick.py",
+        "          and (filing := watcher_filing(repo, number)) is not None):",
+        "          and (filing := None) is not None):",
+    ),
+    (
+        "WR20 the watcher branch of the public comment is deleted",
+        "tick.py",
+        "    if binding == BINDING_WATCHER_WORKFLOW:\n",
+        "    if False:\n",
+    ),
+    (
+        ("WR21 the run-line pattern loses MULTILINE, so `^` anchors only at the "
+         "start of a record and no watcher record ever names a run"),
+        "tick.py",
+        "    re.MULTILINE,\n)",
+        "    0,\n)",
+    ),
+    (
+        "WR22 a record naming a run in ANOTHER repository stops refusing",
+        "tick.py",
+        "    if foreign:",
+        "    if False:",
+    ),
+    (
+        "WR23 a record naming TWO runs picks one instead of refusing",
+        "tick.py",
+        "    if len(ids) > 1:",
+        "    if False:",
+    ),
+    (
+        ("WR24 a newest record naming NO run stops refusing. KILLED BY A CRASH, "
+         "disclosed: `ids[0]` raises IndexError, which the test's "
+         "`pytest.raises(ReceiptRefusedError)` does not catch"),
+        "tick.py",
+        "    if not runs:",
+        "    if False:",
+    ),
+    (
+        ("WR25 the watcher route is taken for EVERY kind, so a watcher-titled "
+         "console item closes on a deploy run instead of a browser walk"),
+        "tick.py",
+        '    elif (kind == "deploy-run"\n',
+        "    elif (True\n",
+    ),
+    # -- #4764 round 2: review A-1/B-2 (a whatif-only DRY RUN was accepted for
+    # a failed apply), A-2 (red since), A-3 (event), A-4 (record marker). Each
+    # run RED against `test_watcher_receipts.py` in a sandbox copy first.
+    (
+        ("WR26 the failed STEP is no longer required to be green, so a "
+         "whatif-only dry run whose job ran checkout and login while SKIPPING "
+         "`Provision (idempotent)` closes the failure in that step - review A's "
+         "measured 34217993648 / 34262376463"),
+        "tick.py",
+        '                if any(s.get("conclusion") != "success" for s in same_steps):',
+        "                if False:",
+    ),
+    (
+        "WR27 a job MISSING the step that failed stops refusing",
+        "tick.py",
+        "                if not same_steps:",
+        "                if False:",
+    ),
+    (
+        ("WR28 a failed job with NO failed step recorded stops refusing, so the "
+         "step loop checks nothing and a job-level green passes"),
+        "tick.py",
+        "        if not failed_steps:",
+        "        if False:",
+    ),
+    (
+        ("WR29 a completed run RED SINCE the offered one stops refusing, so a "
+         "path that went red again - through a notice that was never posted - "
+         "closes on its last green run"),
+        "tick.py",
+        "    if red_since:",
+        "    if False:",
+    ),
+    (
+        ("WR30 the red-since filter loses its TIME bound, so a red run that "
+         "began AND finished before the offered one refuses a valid receipt"),
+        "tick.py",
+        "        if began >= created or ended >= created:",
+        "        if True:",
+    ),
+    (
+        ("WR31 a FULL page of later runs is read as complete, so the red run on "
+         "the page it did not fetch is invisible"),
+        "tick.py",
+        "    if len(parsed) >= _LATER_RUNS_LIMIT:",
+        "    if False:",
+    ),
+    (
+        ("WR32 a pull_request run stops being refused, so a fork branch named "
+         "`main` passes the default-branch check"),
+        "tick.py",
+        "    if not event or event in _PULL_REQUEST_EVENTS:",
+        "    if False:",
+    ),
+    (
+        ("WR33 the notice MARKER stops filtering records, so any `github-actions` "
+         "post - not only a failure notice - can become the newest record"),
+        "tick.py",
+        '        if WATCHER_CLOSE_MARKER in str(body or "")\n',
+        "        if True\n",
+    ),
+    (
+        ("WR34 an issue with NO notice stops refusing. KILLED BY A CRASH, "
+         "disclosed: `max([])` raises ValueError, which "
+         "`pytest.raises(ReceiptRefusedError)` does not catch"),
+        "tick.py",
+        ("    if not records:\n        raise ReceiptRefusedError(\n"
+         '            f"#{number} was opened by {WATCHER_LOGIN}'),
+        ("    if False:\n        raise ReceiptRefusedError(\n"
+         '            f"#{number} was opened by {WATCHER_LOGIN}'),
+    ),
+    (
+        ("WR35 the call site stops passing the runs it READ into the verifier, "
+         "so red-since is checked against nothing at the seam"),
+        "tick.py",
+        "    refuse_if_red_since(run, later, branch)",
+        "    refuse_if_red_since(run, [], branch)",
+    ),
+    (
+        ("WR36 a step SKIPPED in the recorded failure is counted as failed, so a "
+         "real receipt whose run skips the same conditional step - `Azure login "
+         "(Gov)` on a Commercial roll - is refused"),
+        "tick.py",
+        '            if step.get("conclusion") not in ("success", "skipped")\n        ]',
+        '            if step.get("conclusion") not in ("success",)\n        ]',
+    ),
+    # -- #4764 round 3: review B (the red-since claim was wider than the
+    # created-after query) and its ordering nit. Each run RED first.
+    (
+        ("WR37 the red-since filter reads only CREATION, so a run that began "
+         "before the offered one and FINISHED red after it is unseen - the "
+         "overlap `deploy-fiab-commercial` allows, having no concurrency group"),
+        "tick.py",
+        "        if began >= created or ended >= created:",
+        "        if began >= created:",
+    ),
+    (
+        ("WR38 the listing stops reaching BACK, so a run created before the "
+         "offered one is never listed and the finished-after test has nothing "
+         "to read"),
+        "tick.py",
+        "    lower = (since - _OVERLAP_WINDOW).strftime(",
+        "    lower = (since).strftime(",
+    ),
+    (
+        ("WR39 the listing runs BEFORE the offered run is checked, so a run of "
+         "the wrong workflow is refused for a failed listing instead of for "
+         "its own defect"),
+        "tick.py",
+        ("    ref = verify_watcher_run_receipt(number, filing, failure, run, branch)\n"
+         "    later = _later_runs(repo, run.get(\"workflowDatabaseId\"), branch,\n"
+         "                        _parse_time(run.get(\"createdAt\"), \"the run's creation time\"))\n"),
+        ("    later = _later_runs(repo, run.get(\"workflowDatabaseId\"), branch,\n"
+         "                        _parse_time(run.get(\"createdAt\"), \"the run's creation time\"))\n"
+         "    ref = verify_watcher_run_receipt(number, filing, failure, run, branch)\n"),
+    ),
     # -- #4728: the dependency-bump review exemption ------------------------
     #
     # This change LOOSENS gate 3b, so every arm below turns it into a wider
@@ -4511,6 +4807,108 @@ ARMS: list[tuple[str, str, str, str]] = [
         "        elif parts[-1] == entry:",
         "        elif entry in parts:",
     ),
+    #
+    # CH1 to CH4 (#4811) pin the re-pin CHAIN walk in `resolve_repin_chain`.
+    # Before #4811 the gate walked exactly one hop: a PR updated from main
+    # twice lost a verdict that measured every byte it still carries, and a
+    # second APPROVE had to be solicited for a content-free push. Witnesses
+    # live in `__tests__/test_repin_chain.py` (fixture repos, real git).
+    (
+        ("CH1 the chain walk stops after ONE hop -- exactly the pre-#4811 "
+         "gate. A two-hop content-free chain re-pins to the SECOND update's "
+         "first parent instead of the approved commit, so an APPROVE of the "
+         "reviewed bytes reads stale"),
+        "gates.py",
+        "        transferred.append(hop)\n",
+        "        transferred.append(hop)\n        break\n",
+    ),
+    (
+        ("CH2 the content check is dropped, so a merge whose tree is NOT the "
+         "auto-merge of its parents (an evil merge that authored content) "
+         "transfers, and a verdict older than that content is counted live"),
+        "gates.py",
+        "    if automerge_tree != head_tree:",
+        "    if False:",
+    ),
+    (
+        ("CH3 the main-ancestry check is dropped, so a clean merge of a branch "
+         "that is NOT on the base tip transfers -- importing content no "
+         "reviewer of this PR measured, under a verdict that predates it"),
+        "gates.py",
+        "    if hop.base_side_on_main is not True:",
+        "    if False:",
+    ),
+    (
+        ("CH4 the `else` site of the bound is bypassed, so facts that end "
+         "before a content commit fall through and pin at the last hop's "
+         "parent -- a commit whose facts were never read. (Over-the-bound "
+         "walks are ALSO refused after the loop since round 2; that site is "
+         "CH5.)"),
+        "gates.py",
+        "    else:\n        return _chain_refused(transferred, max_hops)\n",
+        "    else:\n        pass\n",
+    ),
+    #
+    # CH5 to CH10: round 2 of #4843's review. Each names the finding it pins.
+    (
+        ("CH5 (A2) the bound is checked only when the facts run out, so more "
+         "than `max_hops` base updates FOLLOWED by a content commit still pin "
+         "-- 21 hops down, past the bound the docstring promises"),
+        "gates.py",
+        "    if len(transferred) > max_hops:\n        # THE BOUND HOLDS",
+        "    if False:\n        # THE BOUND HOLDS",
+    ),
+    (
+        ("CH6 (B1, R7) the chain walk stops naming the commit under test, so "
+         "the one-hop wording says `head has 1 parent(s)` about a commit two "
+         "hops below the head -- a false statement about which commit refused"),
+        "gates.py",
+        '        subject=f"commit {hop.sha[:12]}",\n',
+        "",
+    ),
+    (
+        ("CH7 (B2) the 2+3 detail names the re-pin only when it succeeds, so "
+         "a refused walk and a walk that never ran print the same line"),
+        "merge_gate.py",
+        "    else:\n        # The REFUSAL is said out loud too.",
+        "    elif False:\n        # The REFUSAL is said out loud too.",
+    ),
+    (
+        ("CH8 (B3) an unreadable pin date is not refused, so `resolve_repin` "
+         "returns ok=True with an EMPTY date and every verdict compares "
+         "against the empty string"),
+        "merge_gate.py",
+        "    if not date:",
+        "    if False:",
+    ),
+    (
+        ("CH9 (B5) the pin date is formatted in LOCAL time, so on any non-UTC "
+         "box it is shifted by the zone offset and verdicts go live or stale "
+         "by hours. Killable on a UTC runner only through the child-process "
+         "TZ test"),
+        "merge_gate.py",
+        "_dt.datetime.fromtimestamp(epoch, _dt.timezone.utc)",
+        "_dt.datetime.fromtimestamp(epoch)",
+    ),
+    (
+        ("CH10 (A1) the PR-head fetch moves back BELOW gate 1's merge-base, so "
+         "an unfetched head makes gate 1 read `cannot resolve base` (#4648)"),
+        "merge_gate.py",
+        ('    rc, _, err = sh(["git", "fetch", "--quiet", "origin", f"pull/{number}/head"])\n'
+         '    if rc != 0:\n'
+         '        print(f"WARNING: git fetch pull/{number}/head failed: {err[:200]} - gate 1 "\n'
+         '              "and the re-pin will refuse on any commit they cannot read",\n'
+         '              file=sys.stderr)\n'
+         '    rc, out, err = sh(["git", "merge-base", origin_main_sha, head])\n'
+         '    base_sha = out.strip() if rc == 0 else ""\n'),
+        ('    rc, out, err = sh(["git", "merge-base", origin_main_sha, head])\n'
+         '    base_sha = out.strip() if rc == 0 else ""\n'
+         '    rc, _, err = sh(["git", "fetch", "--quiet", "origin", f"pull/{number}/head"])\n'
+         '    if rc != 0:\n'
+         '        print(f"WARNING: git fetch pull/{number}/head failed: {err[:200]} - gate 1 "\n'
+         '              "and the re-pin will refuse on any commit they cannot read",\n'
+         '              file=sys.stderr)\n'),
+    ),
 ]
 
 
@@ -4668,6 +5066,12 @@ EXPECTED_SANDBOX_SKIPS = (
     # and is what actually kills AS3 here.
     "test_ci_green_as_of.py::test_the_producer_reads_the_declaration_at_the_sha_not_off_disk",
     "test_ci_green_as_of.py::test_the_rename_fixture_matches_what_policy_json_actually_carried",
+    # #4764. Reads `.github/scripts/deploy-notify-failure.mjs` to keep the
+    # transcribed watcher title and run-line shapes honest against the script
+    # that files them. The sandbox copies only `tools/drain`, so it skips.
+    # DECLARED, and said out loud: IT KILLS NO ARM. The WR arms are killed by
+    # the fixture tests in `test_watcher_receipts.py`, which need no checkout.
+    "test_watcher_receipts.py::test_the_watcher_shapes_are_lifted_from_the_script_that_files_them",
 )
 
 

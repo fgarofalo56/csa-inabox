@@ -658,10 +658,15 @@ const NON_AUTHORIZER_BODY_PINS = new Map([
   ['lib/auth/workspace-access.ts:listAccessibleWorkspaces', '6b7f66ea5819'],
   ['lib/auth/workspace-access.ts:ambientAccessOptsFor', '2068414aa6c6'],
   ['lib/auth/workspace-denial.ts:workspaceDenialResponse', '174876032ce1'],
-  ['lib/auth/feature-gate.ts:requireTenantAdmin', 'a142fcaad130'],
-  ['lib/auth/feature-gate.ts:enforceCapability', '3bf4e9b55806'],
-  ['lib/auth/feature-gate.ts:isTenantAdmin', '150938bad034'],
-  ['lib/auth/feature-gate.ts:checkCapability', 'dfcb5d1dbb8d'],
+  // #4805 re-pinned these four: each body gained ONLY an early device-code
+  // refusal (a least-privilege DENY for non-interactive sign-in, never a grant);
+  // none reads a workspace document, so every reason above still holds.
+  // requireTenantAdmin also carries #4788's optional `refusal` text override
+  // (it rewords the 403 only), so its pin is the digest of the merged body.
+  ['lib/auth/feature-gate.ts:requireTenantAdmin', 'f4c06a6a9c09'],
+  ['lib/auth/feature-gate.ts:enforceCapability', 'e9e7b6f8ad80'],
+  ['lib/auth/feature-gate.ts:isTenantAdmin', '4284fea3226f'],
+  ['lib/auth/feature-gate.ts:checkCapability', 'cc57f264b504'],
   ['lib/auth/feature-catalog.ts:capabilityIdForItemType', '5464653183fe'],
   ['lib/auth/domain-role.ts:isTenantAdminTier', 'c11fb15031ec'],
   ['lib/auth/domain-role.ts:resolveDomainTier', 'fc460f8a64d6'],
@@ -4959,6 +4964,46 @@ const ADMIN_SHAPE_UNSCOPED = new Map([
         '`requires` tokens pin the fix (#4007): drop the comparison and this entry no longer ' +
         'describes the code, so the build reddens. Section 8i is the SHAPE-keyed backstop that ' +
         'does not depend on this entry, on the function name, or on any of the three spellings.',
+    },
+  ],
+  [
+    'app/api/lakehouse/_lib/item-scope.ts:scopeItemPath',
+    {
+      verdict: 'ORG-WIDE',
+      requires: ['isTenantAdmin(', 'authorizeLakehouse('],
+      why:
+        'ORG-WIDE (the admin branch only). The `isTenantAdmin` test is reached ONLY when the request ' +
+        'carries no `lakehouseId`: the caller then names a deployment storage container and path ' +
+        'directly, no workspace and no item is in play, and a non-admin is answered 403 before any ' +
+        'storage call. Every request that names a lakehouse takes the other branch, ' +
+        '`authorizeLakehouse(session, lakehouseId, ...)`, which delegates to ' +
+        '`resolveItemAccessByOid` (checked by 8a-8e) and never consults the admin flag. Both tokens ' +
+        'are pinned: drop the item branch and this entry no longer describes the function.',
+    },
+  ],
+  [
+    'app/api/lakehouse/paths/route.ts:GET',
+    {
+      verdict: 'ORG-WIDE',
+      requires: ['isTenantAdmin(', 'authorizeLakehouse('],
+      why:
+        'ORG-WIDE (the admin branch only). Same shape as `scopeItemPath` above: the `isTenantAdmin` ' +
+        'test guards the listing form that names a deployment container with no `lakehouseId`, where ' +
+        'no workspace or item is in play, and refuses a non-admin with 403 before any storage call. ' +
+        'The `lakehouseId` form is decided by `authorizeLakehouse` (-> `resolveItemAccessByOid`) and ' +
+        'does not read the admin flag.',
+    },
+  ],
+  [
+    'app/api/lakehouse/permissions/route.ts:DELETE',
+    {
+      verdict: 'ORG-WIDE',
+      requires: ['isTenantAdmin(', 'revokeContainerRoleAssignmentInScope('],
+      why:
+        'ORG-WIDE (function scope). Tenant-admin-or-403, same as POST in this file; no workspace or ' +
+        'item is resolved. The object tab revokes only an id that is shaped as a role assignment on ' +
+        'the named container AND appears in that container\'s listing ' +
+        '(revokeContainerRoleAssignmentInScope).',
     },
   ],
 ]);

@@ -48,14 +48,14 @@ export function useLakehouseSecondary({
     if (!activeContainer) return;
     setHistoryLoading(true); setHistoryError(null); setHistoryRows(null); setHistoryRestoreMsg(null); setHistoryPreviewResult(null);
     try {
-      const qs = new URLSearchParams({ container: activeContainer, tablePath });
+      const qs = new URLSearchParams({ lakehouseId: id, container: activeContainer, tablePath });
       const r = await clientFetch(`/api/lakehouse/history?${qs.toString()}`);
       const j = await parseJsonOrError<{ ok: boolean; error?: string; versions?: HistoryRow[] }>(r, 'Load history');
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setHistoryRows(j.versions || []);
     } catch (e: any) { setHistoryError(e?.message || String(e)); setHistoryRows([]); }
     finally { setHistoryLoading(false); }
-  }, [activeContainer]);
+  }, [activeContainer, id]);
 
   const restoreToVersion = useCallback(async (tablePath: string, version: number) => {
     if (!activeContainer) return;
@@ -69,7 +69,7 @@ export function useLakehouseSecondary({
     try {
       const r = await clientFetch('/api/lakehouse/history', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ container: activeContainer, tablePath, version, action: 'restore' }),
+        body: JSON.stringify({ lakehouseId: id, container: activeContainer, tablePath, version, action: 'restore' }),
       });
       const j = await parseJsonOrError<{ ok: boolean; error?: string; gated?: boolean; hint?: string }>(r, 'Restore');
       if (!j.ok) {
@@ -80,7 +80,7 @@ export function useLakehouseSecondary({
       }
     } catch (e: any) { setHistoryRestoreMsg({ ok: false, text: e?.message || String(e) }); }
     finally { setHistoryRestoring(null); }
-  }, [activeContainer, loadHistory, confirm]);
+  }, [activeContainer, loadHistory, confirm, id]);
 
   const previewAsOf = useCallback(async (tablePath: string, version: number) => {
     if (!activeContainer) return;
@@ -88,7 +88,7 @@ export function useLakehouseSecondary({
     try {
       const r = await clientFetch('/api/lakehouse/history', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ container: activeContainer, tablePath, version, action: 'preview' }),
+        body: JSON.stringify({ lakehouseId: id, container: activeContainer, tablePath, version, action: 'preview' }),
       });
       const j = await parseJsonOrError<PreviewResponse & { gated?: boolean; hint?: string }>(r, 'Preview as of');
       if (!j.ok && (j as any).gated) {
@@ -98,7 +98,7 @@ export function useLakehouseSecondary({
       }
     } catch (e: any) { setHistoryPreviewResult({ ok: false, error: e?.message || String(e) }); }
     finally { setHistoryPreviewLoading(false); }
-  }, [activeContainer]);
+  }, [activeContainer, id]);
 
   const openTableHistory = useCallback((tablePath: string) => {
     setHistoryTable(tablePath);

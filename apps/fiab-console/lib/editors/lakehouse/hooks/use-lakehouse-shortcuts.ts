@@ -200,8 +200,12 @@ export function useLakehouseShortcuts({
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ lakehouseId: row.lakehouseId, id: row.id }),
       });
-      await parseJsonOrError<{ ok: boolean; error?: string }>(r, 'Test shortcut');
+      const j = await parseJsonOrError<{ ok: boolean; error?: string }>(r, 'Test shortcut');
+      // Reload first: a failed probe writes the row's status, and loadShortcuts
+      // clears shortcutsError, so the message is set after it. A refused
+      // credential leaves the row unchanged and is reported only here.
       await loadShortcuts();
+      if (!j.ok) setShortcutsError(j.error || `Test shortcut failed (HTTP ${r.status}).`);
     } catch (e: any) { setShortcutsError(e?.message || String(e)); }
     finally { setShortcutsBusy(false); }
   }, [loadShortcuts]);

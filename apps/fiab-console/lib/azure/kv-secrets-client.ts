@@ -23,6 +23,7 @@ import { kvScope, kvUrlFromName } from '@/lib/azure/cloud-endpoints';
 import { PagingBudget, PAGE_DEADLINE, isContinuationAllowed } from '@/lib/azure/paging-budget';
 import { resolveSameOriginUrl } from '@/lib/util/same-origin-url';
 import { assertSecretReadAllowed, type KvSecretPurpose } from '@/lib/azure/kv-secret-purpose';
+import { sanitizeSecretName } from '@/lib/azure/kv-secret-name';
 
 export type { KvSecretPurpose } from '@/lib/azure/kv-secret-purpose';
 export { KeyVaultSecretPolicyError } from '@/lib/azure/kv-secret-purpose';
@@ -79,15 +80,72 @@ export function shortcutKeyVaultConfigGate(): { missing: string; detail: string 
   return null;
 }
 
-/** PUT a secret into the SHORTCUT vault; returns the secret name actually used. */
-export async function putShortcutSecret(name: string, value: string): Promise<{ name: string }> {
+/**
+ * Who a shortcut credential was saved FOR, recorded as Key Vault secret tags at
+ * the moment Loom mints it (`putShortcutSecret(name, value, owner)`), and read
+ * back by `lib/azure/shortcut-secret-resolver.ts` before the value is read.
+ * Tags are metadata: listing a secret's versions returns them without the value.
+ */
+export interface ShortcutSecretOwnerRecord {
+  /** Entra object id of the principal that saved the credential. */
+  oid?: string;
+  /** UPN of that principal (lower-cased on write). */
+  upn?: string;
+  /** Entra tenant id of that principal. */
+  tid?: string;
+  /** The lakehouse key the credential was saved for (registry partition key). */
+  lakehouseId?: string;
+  /** The lakehouse-shortcut ITEM id the credential was saved for. */
+  itemId?: string;
+  /** The workspace of that item. */
+  workspaceId?: string;
+}
+
+/** Tag names used for {@link ShortcutSecretOwnerRecord}. Exported so tests pin the wire shape. */
+export const SHORTCUT_OWNER_TAGS = {
+  purpose: 'loom-purpose',
+  oid: 'loom-owner-oid',
+  upn: 'loom-owner-upn',
+  tid: 'loom-owner-tid',
+  lakehouseId: 'loom-lakehouse',
+  itemId: 'loom-item',
+  workspaceId: 'loom-workspace',
+} as const;
+
+/** Key Vault tag values are limited to 256 characters. */
+const KV_TAG_VALUE_MAX = 256;
+
+function ownerTags(owner: ShortcutSecretOwnerRecord): Record<string, string> {
+  const tags: Record<string, string> = { [SHORTCUT_OWNER_TAGS.purpose]: 'shortcut-credential' };
+  const put = (k: string, v: string | undefined, lower = false) => {
+    const s = (v || '').trim();
+    if (s) tags[k] = (lower ? s.toLowerCase() : s).slice(0, KV_TAG_VALUE_MAX);
+  };
+  put(SHORTCUT_OWNER_TAGS.oid, owner.oid, true);
+  put(SHORTCUT_OWNER_TAGS.upn, owner.upn, true);
+  put(SHORTCUT_OWNER_TAGS.tid, owner.tid, true);
+  put(SHORTCUT_OWNER_TAGS.lakehouseId, owner.lakehouseId);
+  put(SHORTCUT_OWNER_TAGS.itemId, owner.itemId);
+  put(SHORTCUT_OWNER_TAGS.workspaceId, owner.workspaceId);
+  return tags;
+}
+
+/**
+ * PUT a secret into the SHORTCUT vault; returns the secret name actually used.
+ * `owner` is recorded as secret tags (see {@link ShortcutSecretOwnerRecord}).
+ */
+export async function putShortcutSecret(
+  name: string,
+  value: string,
+  owner?: ShortcutSecretOwnerRecord,
+): Promise<{ name: string }> {
   const base = shortcutVaultUrl();
   if (!base) throw new KeyVaultError('Shortcut Key Vault not configured (LOOM_SHORTCUT_KEYVAULT)', 503);
   const secretName = sanitizeSecretName(name);
   const res = await fetchWithTimeout(`${base}/secrets/${encodeURIComponent(secretName)}?api-version=${KV_API}`, {
     method: 'PUT',
     headers: { authorization: `Bearer ${await token()}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ value }),
+    body: JSON.stringify(owner ? { value, tags: ownerTags(owner) } : { value }),
     cache: 'no-store',
   });
   if (!res.ok) {
@@ -95,6 +153,56 @@ export async function putShortcutSecret(name: string, value: string): Promise<{ 
     throw new KeyVaultError(`Key Vault set-secret failed (${res.status}): ${body.slice(0, 300)}`, res.status);
   }
   return { name: secretName };
+}
+
+/**
+ * The owner record of a SHORTCUT-vault secret, read from its tags WITHOUT
+ * reading its value (the versions listing returns attributes and tags only).
+ *
+ *   { exists: false }                 — no such secret (404)
+ *   { exists: true, owner: null }     — the secret carries no owner tags (saved
+ *                                       before owners were recorded)
+ *   { exists: true, owner: {...} }    — the newest ENABLED version's owner
+ *
+ * Any other failure throws {@link KeyVaultError}; an unreadable record is never
+ * reported as "no record".
+ */
+export async function getShortcutSecretOwnerRecord(
+  name: string,
+): Promise<{ exists: boolean; owner: ShortcutSecretOwnerRecord | null }> {
+  const base = shortcutVaultUrl();
+  if (!base) throw new KeyVaultError('Shortcut Key Vault not configured (LOOM_SHORTCUT_KEYVAULT)', 503);
+  let next = `${base}/secrets/${encodeURIComponent(name)}/versions?api-version=${KV_API}&maxresults=25`;
+  let newest: { created: number; tags: Record<string, string> } | null = null;
+  let sawAny = false;
+  for (let page = 0; page < 4 && next; page += 1) {
+    const res = await fetchWithTimeout(resolveSameOriginUrl(next, base, 'the Key Vault token'), {
+      headers: { authorization: `Bearer ${await token()}` },
+      cache: 'no-store',
+    });
+    if (res.status === 404) return { exists: false, owner: null };
+    if (!res.ok) throw new KeyVaultError(`Key Vault list-secret-versions failed (${res.status})`, res.status);
+    const j: any = await res.json().catch(() => ({}));
+    const versions: any[] = Array.isArray(j?.value) ? j.value : [];
+    for (const v of versions) {
+      sawAny = true;
+      if (v?.attributes?.enabled === false) continue;
+      const created = Number(v?.attributes?.created || 0);
+      if (!newest || created > newest.created) newest = { created, tags: (v?.tags || {}) as Record<string, string> };
+    }
+    next = typeof j?.nextLink === 'string' && j.nextLink ? j.nextLink : '';
+  }
+  if (!sawAny) return { exists: false, owner: null };
+  const t = newest?.tags || {};
+  const owner: ShortcutSecretOwnerRecord = {
+    oid: t[SHORTCUT_OWNER_TAGS.oid] || undefined,
+    upn: t[SHORTCUT_OWNER_TAGS.upn] || undefined,
+    tid: t[SHORTCUT_OWNER_TAGS.tid] || undefined,
+    lakehouseId: t[SHORTCUT_OWNER_TAGS.lakehouseId] || undefined,
+    itemId: t[SHORTCUT_OWNER_TAGS.itemId] || undefined,
+    workspaceId: t[SHORTCUT_OWNER_TAGS.workspaceId] || undefined,
+  };
+  return { exists: true, owner: owner.oid || owner.upn ? owner : null };
 }
 
 /** Soft-delete a secret from the SHORTCUT vault (best-effort — never throws). */
@@ -111,10 +219,11 @@ export async function deleteShortcutSecret(name: string): Promise<void> {
 /**
  * GET the current value of a secret from the SHORTCUT vault.
  *
- * `purpose` is REQUIRED for the same reason it is on {@link getKeyVaultSecretValue}:
- * the ONLY caller (`/api/lakehouse/shortcuts/browse`) takes `name` straight from a
- * `?kvSecret=` query parameter, so any authenticated user chooses which secret the
- * Console reads with its managed identity. And the vault it reads is the MAIN Loom
+ * `purpose` is REQUIRED for the same reason it is on {@link getKeyVaultSecretValue}.
+ * The ONLY caller is `lib/azure/shortcut-secret-resolver.ts` (for the browse tree),
+ * which applies the name grammar and the ownership check first;
+ * `scripts/ci/check-shortcut-secret-resolver.mjs` fails the build on any other
+ * importer. The vault it reads is the MAIN Loom
  * vault in every shipped deployment — `admin-plane/main.bicep` sets
  * LOOM_SHORTCUT_KEYVAULT to the admin-plane vault unless an operator overrides it,
  * and no params file does — so that name-space includes the platform's own
@@ -152,10 +261,8 @@ async function token(): Promise<string> {
   return t.token;
 }
 
-/** Secret names must be 1-127 chars of [0-9a-zA-Z-]. */
-export function sanitizeSecretName(raw: string): string {
-  return (raw || '').replace(/[^0-9a-zA-Z-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 127) || 'loom-secret';
-}
+/** Secret names must be 1-127 chars of [0-9a-zA-Z-]. Defined in the dependency-free kv-secret-name module. */
+export { sanitizeSecretName } from '@/lib/azure/kv-secret-name';
 
 /** PUT a secret value; returns the secret name actually used. */
 export async function putKeyVaultSecret(name: string, value: string): Promise<{ name: string }> {
