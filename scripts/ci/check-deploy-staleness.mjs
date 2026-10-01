@@ -103,6 +103,12 @@ export const WATCHED = [
       // that either, so this closes a pre-existing gap as well as the new one.
       'scripts/ci/acr-dataplane-gate.sh',
       'scripts/ci/acr-login-retry.sh',
+      // The loom-unity deploy step decides its registry pull identity (and may
+      // grant AcrPull) through ensure-acr-pull-identity.sh, and waits on and
+      // classifies the revision through containerapp-revision-check.sh. A
+      // commit to either changes what this lane deploys or whether it stops.
+      'scripts/csa-loom/ensure-acr-pull-identity.sh',
+      'scripts/csa-loom/containerapp-revision-check.sh',
     ],
     maxDays: 14,
   },

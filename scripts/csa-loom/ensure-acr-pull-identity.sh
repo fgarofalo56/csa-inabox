@@ -1,54 +1,59 @@
 #!/usr/bin/env bash
 # =============================================================================
-# ensure-acr-pull-identity.sh — choose a registry pull identity that can pull
+# ensure-acr-pull-identity.sh — make sure loom-unity's dedicated identity can
+# pull from the registry, or stop with the exact grant to run
 # =============================================================================
 #
 # WHY THIS EXISTS
 #
 # gov-uc-purview-wire.yml deployed loom-unity with the dedicated
-# `uami-loom-unity-<region>` as its registry pull identity whenever that
-# identity existed, without checking that it could pull. On 2026-09-30 (run
-# 36774518931) it existed but held no pull role on the Gov ACR, the new
-# revision never started, and ARM reported only "Operation expired". The
-# gov-bff-verify diagnostics (run 36804850561) then read `acrpull=no` for it.
-# admin-plane/main.bicep grants this identity AcrPull (loomUnityAcrPull), but
-# only on a deploy where `loomUnityActive && !skipRoleGrants` reached that
-# resource.
+# `uami-loom-unity-<region>` as its registry pull identity without checking
+# that it could pull. On 2026-09-30 (run 36774518931) the new revision never
+# started and ARM reported only "Operation expired"; the next day the
+# gov-bff-verify diagnostics (run 36804850561) read `acrpull=no` for that
+# identity, the probable cause. admin-plane/main.bicep grants it AcrPull
+# (loomUnityAcrPull), but only on a deploy that reached that resource with
+# `loomUnityActive && !skipRoleGrants`.
+#
+# The catalog runs ONLY as the dedicated identity: `unityUamiId` is the app's
+# own identity and AZURE_CLIENT_ID as well as its pull identity
+# (loom-unity-app.bicep), and main.bicep's loomUnityUami is "never the Console
+# UAMI". So there is NO fallback to another identity: if the dedicated one
+# cannot pull, this script stops and prints the grant to run.
 #
 # WHAT IT DOES
 #
-#   1. Reads the preferred identity (by name) and the registry id.
-#   2. If the preferred identity holds a pull-capable role on the registry
-#      (AcrPull, AcrPush, Contributor or Owner, at or above the registry
-#      scope), it is chosen. No grant.
-#   3. If it holds none, grants AcrPull (role definition
-#      7f951dda-4ed3-4680-a7ca-43fe172d538d, the same id main.bicep uses) on
-#      the registry scope to that identity's principal, then polls the role
-#      assignment list (bounded) and settles before choosing it.
-#   4. If the grant cannot be made, or does not become visible, or the preferred
-#      identity does not exist, the fallback identity (the Console UAMI) is
-#      chosen when IT holds a pull-capable role, with a ::notice:: saying why.
-#   5. If neither can pull, it fails closed with an ::error:: naming the role,
-#      the scope and the principal kind, and the command that fixes it.
+#   1. Reads the dedicated identity (by name) and the registry id. If the
+#      identity does not exist, it stops (exit 1) with how to create it.
+#   2. If the identity holds a pull-capable role on the registry (AcrPull,
+#      AcrPush, Contributor or Owner, at the registry scope or inherited from
+#      above it), it is used. No grant.
+#   3. Otherwise it tries to grant AcrPull (role definition
+#      7f951dda-4ed3-4680-a7ca-43fe172d538d, the id main.bicep uses) on the
+#      registry scope, then polls the role assignment list (bounded) and
+#      settles. If the grant is refused, fails, or never becomes visible, it
+#      stops (exit 1) with the grant command for an operator who holds
+#      Microsoft.Authorization/roleAssignments/write.
 #
-# Role assignments inherited through a GROUP are not listed by
-# `az role assignment list`, so "none visible" is not proof of absence; every
-# message that relies on it says so.
+# This script's role query (`az role assignment list --scope <registry>
+# --include-inherited`) does not list assignments that reach the identity
+# through a GROUP, so "none visible" is not proof of absence; messages that
+# rely on it say so.
 #
 # It never prints a principal id or a client id. Azure error text it quotes is
-# reduced to one line, GUIDs are masked, and `##[` is broken, so a quoted error
-# cannot act as a workflow command.
+# reduced to one line with GUIDs masked and `::` / `##[` broken, so it cannot
+# act as a workflow command.
 #
 # USAGE
-#   ensure-acr-pull-identity.sh --acr NAME --rg RG --preferred-uami NAME \
-#       --fallback-uami-id RESOURCE_ID --out FILE
+#   ensure-acr-pull-identity.sh --acr NAME --rg RG --identity NAME --out FILE
 #
-# Writes to FILE (one KEY=VALUE per line): UAMI_ID, UAMI_CLIENT_ID, UAMI_NAME,
-# PULL_ROLE, GRANTED (yes|no).
+# Writes to FILE (KEY=VALUE per line): UAMI_ID, UAMI_CLIENT_ID, UAMI_NAME,
+# PULL_ROLE, GRANTED (yes = granted by this run | already = the assignment
+# already existed | no = not needed).
 #
 # EXIT CODES
-#   0   an identity that can pull was chosen and written to FILE
-#   1   neither identity can pull (fail closed)
+#   0   the identity can pull; FILE written
+#   1   it cannot, and this run could not make it (stop; grant printed)
 #   2   a read the decision depends on failed, so the answer is unknown
 #   64  usage error
 #
@@ -65,24 +70,23 @@ POLL_ATTEMPTS="${LOOM_PULL_GRANT_POLL_ATTEMPTS:-12}"
 POLL_SECONDS="${LOOM_PULL_GRANT_POLL_SECONDS:-10}"
 SETTLE_SECONDS="${LOOM_PULL_GRANT_SETTLE_SECONDS:-30}"
 
-ACR="" RG="" PREF="" FB_ID="" OUT=""
+ACR="" RG="" IDN="" OUT=""
 PR_STATE="" PR_ROLE="" PR_WHY=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --acr) ACR="${2:-}"; shift 2 ;;
     --rg) RG="${2:-}"; shift 2 ;;
-    --preferred-uami) PREF="${2:-}"; shift 2 ;;
-    --fallback-uami-id) FB_ID="${2:-}"; shift 2 ;;
+    --identity) IDN="${2:-}"; shift 2 ;;
     --out) OUT="${2:-}"; shift 2 ;;
     *) echo "::error::ensure-acr-pull-identity: unknown argument '$1'"; exit 64 ;;
   esac
 done
-if [ -z "$ACR" ] || [ -z "$RG" ] || [ -z "$PREF" ] || [ -z "$FB_ID" ] || [ -z "$OUT" ]; then
-  echo "::error::ensure-acr-pull-identity: --acr, --rg, --preferred-uami, --fallback-uami-id and --out are all required"
+if [ -z "$ACR" ] || [ -z "$RG" ] || [ -z "$IDN" ] || [ -z "$OUT" ]; then
+  echo "::error::ensure-acr-pull-identity: --acr, --rg, --identity and --out are all required"
   exit 64
 fi
 
-# One line, GUIDs masked, `##[` broken: safe to put inside an annotation.
+# One line, GUIDs masked, `::` and `##[` broken: safe inside an annotation.
 mask() {
   tr '\r\n' '  ' | sed -E \
     -e 's/[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}/<guid>/g' \
@@ -127,90 +131,75 @@ pull_role() {
   if [ -n "$PR_ROLE" ]; then PR_STATE=yes; else PR_STATE=no; fi
 }
 
-write_out() {  # ID CLIENT_ID NAME ROLE GRANTED
+grant_cmd() {
+  printf '%s' "az role assignment create --assignee-object-id \"\$(az identity show -n $IDN -g $RG --query principalId -o tsv)\" --assignee-principal-type ServicePrincipal --role $ACRPULL_ROLE_ID --scope \"\$(az acr show -n $ACR --query id -o tsv)\""
+}
+
+# stop WHY: fail closed with the exact grant for an operator to run.
+stop() {
+  echo "::error::loom-unity's pull identity $IDN cannot pull from registry $ACR: $1. The catalog runs only as this identity, so the deployment stops here. Remediation: as a principal that holds Microsoft.Authorization/roleAssignments/write on the registry (Owner or User Access Administrator), grant AcrPull (role definition $ACRPULL_ROLE_ID) on the registry scope to the user-assigned managed identity $IDN in resource group $RG (principal type ServicePrincipal; its principal id is read by the inner command): $(grant_cmd) -- then re-dispatch this workflow."
+  exit 1
+}
+
+write_out() {  # ID CLIENT_ID ROLE GRANTED
   {
     printf 'UAMI_ID=%s\n' "$1"
     printf 'UAMI_CLIENT_ID=%s\n' "$2"
-    printf 'UAMI_NAME=%s\n' "$3"
-    printf 'PULL_ROLE=%s\n' "$4"
-    printf 'GRANTED=%s\n' "$5"
+    printf 'UAMI_NAME=%s\n' "$IDN"
+    printf 'PULL_ROLE=%s\n' "$3"
+    printf 'GRANTED=%s\n' "$4"
   } > "$OUT"
-}
-
-remediation() {  # IDENTITY_NAME IDENTITY_RG
-  printf '%s' "Grant AcrPull (role definition $ACRPULL_ROLE_ID) on registry $ACR to the user-assigned managed identity $1 (principal type ServicePrincipal), as a principal that holds Microsoft.Authorization/roleAssignments/write on the registry: az role assignment create --assignee-object-id \"\$(az identity show -n $1 -g $2 --query principalId -o tsv)\" --assignee-principal-type ServicePrincipal --role $ACRPULL_ROLE_ID --scope \"\$(az acr show -n $ACR --query id -o tsv)\". Then re-dispatch this workflow."
 }
 
 # ---- registry -----------------------------------------------------------------
 azq acr show -n "$ACR" --query id -o tsv
 ACR_ID="$AZ_OUT"
 if [ "$AZ_RC" -ne 0 ] || [ -z "$ACR_ID" ]; then
-  echo "::error::Could not read registry $ACR (az exit $AZ_RC: $(printf '%s' "$AZ_ERR" | mask)). Which identity can pull from it is therefore UNKNOWN; refusing to deploy on an unverified pull identity."
+  echo "::error::Could not read registry $ACR (az exit $AZ_RC: $(printf '%s' "$AZ_ERR" | mask)). Whether $IDN can pull from it is therefore UNKNOWN; refusing to deploy on an unverified pull identity."
   exit 2
 fi
 
-# ---- fallback identity (the Console UAMI) ------------------------------------
-FB_NAME="${FB_ID##*/}"
-FB_RG=$(printf '%s' "$FB_ID" | sed -nE 's#.*/resource[Gg]roups/([^/]+)/.*#\1#p')
-use_fallback() {  # WHY_THE_PREFERRED_IDENTITY_WAS_NOT_USED  REMEDIATION_TARGET_NAME REMEDIATION_TARGET_RG
-  local why="$1" fb_pid fb_cid
-  azq identity show --ids "$FB_ID" --query "[principalId, clientId]" -o tsv
-  if [ "$AZ_RC" -ne 0 ]; then
-    echo "::error::$why. The fallback identity $FB_NAME could not be read either (az exit $AZ_RC: $(printf '%s' "$AZ_ERR" | mask)), so no pull identity can be verified. Refusing to deploy."
-    exit 2
-  fi
-  IFS=$'\t' read -r fb_pid fb_cid <<< "$AZ_OUT"
-  if [ -z "${fb_pid:-}" ] || [ -z "${fb_cid:-}" ]; then
-    echo "::error::$why. The fallback identity $FB_NAME returned no principalId or clientId, so it cannot be verified as a pull identity. Refusing to deploy."
-    exit 2
-  fi
-  pull_role "$fb_pid"
-  case "$PR_STATE" in
-    yes)
-      write_out "$FB_ID" "$fb_cid" "$FB_NAME" "$PR_ROLE" no
-      echo "::notice::loom-unity will pull with the Console UAMI $FB_NAME (role $PR_ROLE on registry $ACR) because $why."
-      exit 0 ;;
-    no)
-      echo "::error::No pull identity can pull from registry $ACR: $why, and the Console UAMI $FB_NAME holds no AcrPull, AcrPush, Contributor or Owner assignment visible at or above the registry (group-inherited assignments are not listed). Refusing to deploy a revision that cannot pull its image. $(remediation "$2" "$3")"
-      exit 1 ;;
-    *)
-      echo "::error::$why, and the role assignments of the Console UAMI $FB_NAME could not be read ($PR_WHY), so whether it can pull is UNKNOWN. Refusing to deploy."
-      exit 2 ;;
-  esac
-}
-
-# ---- preferred identity --------------------------------------------------------
-azq identity show -n "$PREF" -g "$RG" --query "[id, principalId, clientId]" -o tsv
+# ---- the dedicated identity ---------------------------------------------------
+# A list multiselect with `-o tsv` prints ONE VALUE PER LINE (see
+# scripts/ci/__tests__/roll-health-verdict.test.mjs), so read line by line.
+azq identity show -n "$IDN" -g "$RG" --query "[id, principalId, clientId]" -o tsv
 if [ "$AZ_RC" -ne 0 ]; then
   if [ "$(err_class)" = notfound ]; then
-    use_fallback "the dedicated identity $PREF does not exist in $RG" "$FB_NAME" "${FB_RG:-$RG}"
+    echo "::error::The dedicated identity $IDN does not exist in resource group $RG (az answered not-found). loom-unity runs only as this identity, so the deployment stops here. Remediation: deploy the admin plane (admin-plane/main.bicep creates it as loomUnityUami and grants it AcrPull when loomUnityActive), or create it with: az identity create -n $IDN -g $RG -- and grant it AcrPull on registry $ACR: $(grant_cmd) -- then re-dispatch this workflow."
+    exit 1
   fi
-  use_fallback "the dedicated identity $PREF could not be read (az exit $AZ_RC: $(printf '%s' "$AZ_ERR" | mask))" "$PREF" "$RG"
+  echo "::error::The dedicated identity $IDN could not be read (az exit $AZ_RC: $(printf '%s' "$AZ_ERR" | mask)). Whether it exists or can pull is UNKNOWN; refusing to deploy."
+  exit 2
 fi
-IFS=$'\t' read -r P_ID P_PID P_CID <<< "$AZ_OUT"
+{ read -r P_ID; read -r P_PID; read -r P_CID; } <<< "$AZ_OUT"
 if [ -z "${P_ID:-}" ] || [ -z "${P_PID:-}" ] || [ -z "${P_CID:-}" ]; then
-  use_fallback "the dedicated identity $PREF returned no id, principalId or clientId" "$PREF" "$RG"
+  echo "::error::Reading the dedicated identity $IDN succeeded but did not yield its id, principalId and clientId (expected three lines, one value each). Refusing to deploy on an identity this run could not resolve."
+  exit 2
 fi
 
 pull_role "$P_PID"
-if [ "$PR_STATE" = yes ]; then
-  write_out "$P_ID" "$P_CID" "$PREF" "$PR_ROLE" no
-  echo "::notice::loom-unity will pull with the dedicated identity $PREF (role $PR_ROLE on registry $ACR). No grant needed."
-  exit 0
-fi
-if [ "$PR_STATE" = unknown ]; then
-  use_fallback "the role assignments of the dedicated identity $PREF could not be read ($PR_WHY)" "$PREF" "$RG"
-fi
+case "$PR_STATE" in
+  yes)
+    write_out "$P_ID" "$P_CID" "$PR_ROLE" no
+    echo "::notice::loom-unity pulls with its dedicated identity $IDN (role $PR_ROLE on registry $ACR). No grant needed."
+    exit 0 ;;
+  unknown)
+    echo "::error::The role assignments of $IDN on registry $ACR could not be read ($PR_WHY), so whether it can pull is UNKNOWN. Refusing to deploy."
+    exit 2 ;;
+esac
 
-# ---- grant AcrPull to the preferred identity ---------------------------------
-echo "The dedicated identity $PREF holds no pull-capable role visible on registry $ACR. Granting AcrPull ($ACRPULL_ROLE_ID) on the registry scope."
+# ---- grant AcrPull -------------------------------------------------------------
+echo "The dedicated identity $IDN holds no AcrPull, AcrPush, Contributor or Owner assignment visible at or above registry $ACR (this query does not list group-inherited assignments). Trying to grant AcrPull ($ACRPULL_ROLE_ID) on the registry scope."
+GRANTED=yes
 azq role assignment create --assignee-object-id "$P_PID" --assignee-principal-type ServicePrincipal \
   --role "$ACRPULL_ROLE_ID" --scope "$ACR_ID" -o none
 if [ "$AZ_RC" -ne 0 ]; then
   case "$(err_class)" in
-    exists) echo "The assignment already exists (az reported RoleAssignmentExists); waiting for it to become visible." ;;
-    authz) use_fallback "the deploy principal could not grant AcrPull to $PREF: it lacks Microsoft.Authorization/roleAssignments/write on registry $ACR (az exit $AZ_RC)" "$PREF" "$RG" ;;
-    *) use_fallback "granting AcrPull to $PREF failed (az exit $AZ_RC: $(printf '%s' "$AZ_ERR" | mask))" "$PREF" "$RG" ;;
+    exists)
+      GRANTED=already
+      echo "az reported RoleAssignmentExists: AcrPull was already granted, though the read above did not show it. Waiting for it to become visible." ;;
+    authz) stop "the deploy principal could not grant AcrPull: it lacks Microsoft.Authorization/roleAssignments/write on the registry (az exit $AZ_RC)" ;;
+    *) stop "granting AcrPull failed (az exit $AZ_RC: $(printf '%s' "$AZ_ERR" | mask))" ;;
   esac
 fi
 
@@ -219,12 +208,16 @@ while [ "$i" -lt "$POLL_ATTEMPTS" ]; do
   i=$((i + 1))
   pull_role "$P_PID"
   if [ "$PR_STATE" = yes ]; then
-    echo "AcrPull for $PREF is visible after $i read(s); settling ${SETTLE_SECONDS}s for the registry to observe it."
+    echo "AcrPull for $IDN is visible after $i read(s); settling ${SETTLE_SECONDS}s for the registry to observe it."
     sleep "$SETTLE_SECONDS"
-    write_out "$P_ID" "$P_CID" "$PREF" "$PR_ROLE" yes
-    echo "::notice::Granted AcrPull on registry $ACR to the dedicated identity $PREF; loom-unity will pull with it."
+    write_out "$P_ID" "$P_CID" "$PR_ROLE" "$GRANTED"
+    if [ "$GRANTED" = already ]; then
+      echo "::notice::AcrPull on registry $ACR was already granted to $IDN (RoleAssignmentExists); loom-unity pulls with it."
+    else
+      echo "::notice::Granted AcrPull on registry $ACR to the dedicated identity $IDN; loom-unity pulls with it."
+    fi
     exit 0
   fi
   [ "$i" -lt "$POLL_ATTEMPTS" ] && sleep "$POLL_SECONDS"
 done
-use_fallback "AcrPull was assigned to $PREF but did not become visible after $POLL_ATTEMPTS reads (last read: ${PR_WHY:-$PR_STATE})" "$PREF" "$RG"
+stop "AcrPull was assigned but did not become visible after $POLL_ATTEMPTS reads (last read: ${PR_WHY:-$PR_STATE}); if it appears later, re-dispatch"
