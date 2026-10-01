@@ -53,7 +53,14 @@ import type {
   ShortcutEngine,
   ShortcutCredentialRef,
 } from './lakehouse-shortcuts';
-import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { escapeSqlLiteral, sqlLiteralAt } from '@/lib/sql/quoting';
+
+/**
+ * Every value interpolated into a T-SQL literal in this file goes through
+ * `sqlLiteralAt` (lib/sql/quoting.ts), at the literal depth it sits at.
+ * Re-exported for the callers and tests that import it from here.
+ */
+export { sqlLiteralAt };
 
 /** An honest-gate result — the control rendered, but a credential/resource is missing. */
 export interface EngineGate {
@@ -111,20 +118,6 @@ export interface AbfssParts {
  *   onelake://<workspace>/<lakehouse>/<path>  (internal Loom OneLake, cross-workspace)
  *   internal://<container>/<path>  (internal Loom lakehouse, account-relative)
  */
-/**
- * Escape `value` for placement inside `levels` nested T-SQL string literals.
- * One level (`'…'`) doubles each quote. A literal inside `EXEC('…')` is two
- * levels, so each quote becomes four: the outer literal decodes `''''` to
- * `''`, which the inner literal decodes to `'`. Every value interpolated into
- * a T-SQL literal in this file goes through here.
- */
-export function sqlLiteralAt(value: string, levels: 1 | 2): string {
-  if (levels !== 1 && levels !== 2) throw new Error(`sqlLiteralAt: unsupported literal depth ${String(levels)}`);
-  let out = String(value);
-  for (let i = 0; i < levels; i++) out = escapeSqlLiteral(out);
-  return out;
-}
-
 export function parseAbfss(targetUri: string, internalAccount?: () => string): AbfssParts | null {
   const u = (targetUri || '').trim();
   let m = u.match(ABFSS_RE);

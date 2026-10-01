@@ -9,29 +9,50 @@
  * outbound fetch is described by {@link networkFailureReason}, never by its
  * message.
  */
-import { redactUrlSecrets } from '@/lib/azure/redact-url-secrets';
 
 /** Any `scheme://…` run inside free text. */
 const URL_IN_TEXT_RE = /\b([a-z][a-z0-9+.-]{1,15}):\/\/([^\s"'<>]+)/gi;
 
-/**
- * A SAS parameter that starts the text or follows whitespace, a quote or
- * punctuation (a bare token such as `sig=…` pasted without its URL).
- * `redactUrlSecrets` covers the `?name=` / `&name=` forms.
+/*
+ * A SAS value ends at `&`, whitespace, a quote, `<`/`>`, `)`, `]` or `;` — none
+ * of which a SAS value contains — so text that closes around it (a bracket, a
+ * parenthesis, a connection-string separator) survives the redaction.
  */
-const BARE_SAS_PARAM_RE = /(^|[\s"'(<,;:=])((?:sig|signature|sv|se|sp|skoid|key)=)([^&\s"'<>]*)/gi;
+
+/**
+ * A SAS parameter `name=value`: after `?`/`&`, at the start of the text, or after
+ * any character that cannot be part of a longer name (so `assign=` and
+ * `turnkey=` are left alone).
+ */
+const SAS_PARAM_RE = /(?<![A-Za-z0-9_])((?:sig|signature|sv|se|sp|skoid|key)=)([^&\s"'<>)\];]*)/gi;
+
+/** A function key `code=`, only in a query — elsewhere `code=` is usually an error code. */
+const QUERY_CODE_RE = /([?&]code=)([^&\s"'<>)\];]*)/gi;
+
+/** The same parameters URL-encoded (`sig%3D…`); the value ends at an encoded `&` (`%26`). */
+const ENCODED_SAS_PARAM_RE =
+  /(?:(?<=%26|%3[Ff])|(?<![A-Za-z0-9_%]))((?:sig|signature|sv|se|sp|skoid|key)%3[Dd])((?:(?!%26)[^&\s"'<>)\];])*)/gi;
+
+/** A storage / Event Hubs / Service Bus connection-string secret; the value ends at `;`. */
+const CONNECTION_STRING_SECRET_RE =
+  /(?<![A-Za-z0-9_])((?:AccountKey|SharedAccessKey|SharedAccessSignature)=)([^;\s"'<>]*)/gi;
+
+/** The same names as JSON members (`"sig":"…"`), including JSON escaped inside a string. */
+const JSON_SECRET_RE =
+  /(\\?"(?:sig|signature|sv|se|sp|skoid|key|accountKey|sharedAccessKey|sharedAccessSignature)\\?"\s*:\s*\\?")([^"\\]*)/gi;
 
 /**
  * Strip the query string, fragment and (for http/https) user-info from every
  * URL in `text`. For `abfss://container@account…` the part before `@` is a
- * container name, not a credential, so it is kept.
+ * container name, not a credential, so it is kept. A `)` or `]` that closed
+ * around the URL is kept too.
  */
 export function stripUrlQueryAndCredentials(text: string): string {
   if (!text) return text;
   return String(text).replace(URL_IN_TEXT_RE, (_m, scheme: string, rest: string) => {
     let body = rest;
     const cut = body.search(/[?#]/);
-    if (cut >= 0) body = body.slice(0, cut);
+    if (cut >= 0) body = body.slice(0, cut) + (body.slice(cut).match(/[)\]]+$/)?.[0] ?? '');
     if (/^https?$/i.test(scheme)) {
       const slash = body.indexOf('/');
       const authority = slash >= 0 ? body.slice(0, slash) : body;
@@ -43,15 +64,22 @@ export function stripUrlQueryAndCredentials(text: string): string {
 }
 
 /**
- * The ONE redactor for shortcut error text: URLs lose their query, fragment and
- * credentials, any remaining `?sig=` / `&sig=`-style secret parameter (a SAS
- * outside a URL) has its value replaced (`redactUrlSecrets`), and so does a
- * bare `sig=…` token with no `?` or `&` before it.
+ * The ONE redactor for shortcut error text. URLs lose their query, fragment and
+ * credentials; then every remaining secret value is replaced with `REDACTED`:
+ * connection-string keys (`AccountKey=`, `SharedAccessKey=`,
+ * `SharedAccessSignature=`), JSON members (`"sig":"…"`), URL-encoded SAS
+ * parameters (`sig%3D…`), a query `code=`, and SAS parameters bare or in a
+ * query (`sig=…`, `?sv=…&sig=…`, `[sig=…]`, `(sig=…)`).
  */
 export function redactErrorText(text: string): string {
   if (!text) return text;
-  return redactUrlSecrets(stripUrlQueryAndCredentials(String(text)))
-    .replace(BARE_SAS_PARAM_RE, (_m, lead: string, name: string) => `${lead}${name}REDACTED`);
+  const keep = (_m: string, name: string) => `${name}REDACTED`;
+  return stripUrlQueryAndCredentials(String(text))
+    .replace(CONNECTION_STRING_SECRET_RE, keep)
+    .replace(JSON_SECRET_RE, keep)
+    .replace(ENCODED_SAS_PARAM_RE, keep)
+    .replace(QUERY_CODE_RE, keep)
+    .replace(SAS_PARAM_RE, keep);
 }
 
 /**

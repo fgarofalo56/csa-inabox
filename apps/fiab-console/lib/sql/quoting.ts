@@ -226,3 +226,25 @@ export function quoteIdent(name: string, dialect?: SqlDialect): string {
 export function bracket(name: string): string {
   return quoteIdent(name);
 }
+
+/**
+ * Escape `value` for placement inside `levels` nested T-SQL string literals.
+ * One level (`'…'`) doubles each quote. A literal inside `EXEC('…')` is two
+ * levels, so each quote becomes four: the outer literal decodes `''''` to
+ * `''`, which the inner literal decodes to `'`.
+ */
+export function sqlLiteralAt(value: string, levels: 1 | 2): string {
+  if (levels !== 1 && levels !== 2) throw new Error(`sqlLiteralAt: unsupported literal depth ${String(levels)}`);
+  let out = String(value);
+  for (let i = 0; i < levels; i++) out = escapeSqlLiteral(out);
+  return out;
+}
+
+/**
+ * A bracket-quoted T-SQL identifier placed inside `levels` nested string
+ * literals (`EXEC('CREATE VIEW [s].[v] …')`): `]` is doubled for the
+ * identifier, then each quote once per literal level.
+ */
+export function bracketAt(name: string, levels: 1 | 2): string {
+  return sqlLiteralAt(bracket(name), levels);
+}

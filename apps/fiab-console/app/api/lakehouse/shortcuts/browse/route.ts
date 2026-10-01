@@ -14,7 +14,8 @@
  *   region     = AWS region                     (s3)
  *   account    = storage account                (adls)
  *   container  = filesystem/container           (adls)
- *   lakehouseId = the lakehouse the wizard is creating the shortcut in (optional)
+ *   lakehouseId = the lakehouse the wizard is creating the shortcut in
+ *                 (required for s3/gcs/dataverse; 400 item_required without it)
  *
  * Credentials are read from Key Vault by NAME (never passed in the URL, never
  * echoed). ADLS browses on the Console UAMI (no credential). Returns
@@ -42,10 +43,11 @@
  * sources: a resolved value is never interpolated into an error (parseAbfss),
  * and `region` cannot move the S3 request to another authority (listS3Objects).
  *
- * When the request names `lakehouseId`, the ownership check also compares the
- * lakehouse the credential was saved for, as the create and Test routes do. The
- * parameter can only narrow the check: it never grants a read the principal
- * check refuses, so it needs no item authorization of its own.
+ * Every credentialed browse names `lakehouseId`, and the ownership check
+ * compares the lakehouse the credential was saved for, as the create and Test
+ * routes do. The parameter can only narrow the check: it never grants a read
+ * the principal check refuses, so it needs no item authorization of its own.
+ * ADLS browse resolves no credential and does not take it.
  *
  * Auth: session-required. Runtime: nodejs, force-dynamic.
  * Per .claude/rules/no-vaporware.md — real S3/GCS/ADLS REST, no mock arrays.
@@ -116,6 +118,15 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
       if (!kvSecret) {
         return NextResponse.json({ ok: false, error: 'kvSecret (Key Vault secret name) is required' }, { status: 400 });
       }
+      // The lakehouse is required whenever a saved credential is resolved, so
+      // the ownership check always compares the lakehouse it was saved for.
+      const lakehouseId = (sp.get('lakehouseId') || '').trim();
+      if (!lakehouseId) {
+        return NextResponse.json(
+          { ok: false, code: 'item_required', error: 'lakehouseId is required to browse with a saved credential.' },
+          { status: 400 },
+        );
+      }
       // Validate every caller-supplied coordinate that shapes a DESTINATION
       // before the credential is resolved. `region` is interpolated into the S3
       // request authority, so it is checked here rather than after the read —
@@ -124,7 +135,6 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
       if (sourceType === 's3') assertValidAwsRegion(s3Region);
 
       const claims = session.claims as { oid?: string; upn?: string; email?: string; tid?: string };
-      const lakehouseId = (sp.get('lakehouseId') || '').trim() || undefined;
       const secretValue = (await resolveShortcutSecret(
         kvSecret,
         {
