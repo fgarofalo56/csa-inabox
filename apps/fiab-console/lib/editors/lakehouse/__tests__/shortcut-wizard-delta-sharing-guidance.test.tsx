@@ -71,10 +71,14 @@ describe('shortcut wizard — Delta Sharing guidance', () => {
     expect(banner).not.toBeNull();
     const text = banner.textContent || '';
     expect(text).toContain('Add provider');
-    expect(text).toContain('Explore & query');
+    // WHAT BREAKS IT: a path that skips Subscribe (Explore & query lists only
+    // subscribed shares), renewal advice without the unmount step or without the
+    // same provider name.
+    expect(text).toContain('Shared with me → Subscribe to the share → Explore & query');
     expect(text).toContain('Create lakehouse shortcut');
     expect(text).toContain('Saving a credential file from this wizard is not available');
-    expect(text).toContain('remove the provider');
+    expect(text).toContain('unmount the provider\'s subscribed catalogs (Remove is refused while they are mounted)');
+    expect(text).toContain('add it again under the same provider name with that file');
     expect(text).not.toContain('Shortcut into lakehouse');
     expect(text).not.toContain('loom-sc-');
     expect(text).not.toContain('Save to Key Vault');

@@ -52,26 +52,58 @@ describe('redactErrorText', () => {
     expect(out).toContain('sig=REDACTED');
   });
 
-  // The five shapes a SAS takes in error text. WHAT BREAKS IT: shape 5 (a bare
-  // `sig=` that starts the text, with no `?` or `&` before it) survives
-  // `redactUrlSecrets` alone, so dropping BARE_SAS_PARAM_RE turns that row red.
-  // Each row pairs the absence check with the text that must survive.
+  // The shapes a secret takes in error text, each checked for the EXACT output
+  // (so a lost bracket or an over-long cut fails, not only a leak). Which rows
+  // witness which pattern — the input that turns them red:
+  //   - SAS_PARAM_RE removed: 'bare sv=…&sig=…' (after a space, no `?`/`&`
+  //     before `sv=`), 'bare token starting with sig=', '[sig=…]', '(sig=…)',
+  //     'host without a scheme' and 'query in parentheses'.
+  //   - its value class allowed to run over `)`/`]` (the round-3 class):
+  //     '(sig=…)', '[sig=…]' and 'query in parentheses' lose their closer.
+  //   - its lead anchor narrowed back to the round-3 set (no `[`): '[sig=…]'
+  //     only.
+  //   - CONNECTION_STRING_SECRET_RE removed: 'AccountKey=', 'SharedAccessKey='.
+  //   - JSON_SECRET_RE removed: the two JSON rows.
+  //   - ENCODED_SAS_PARAM_RE removed: 'URL-encoded sig%3D'.
+  //   - QUERY_CODE_RE removed: 'function key ?code='.
+  //   - the URL cut dropping a trailing `)`: 'URL in parentheses'.
+  // 'https URL' and 'URL user-info' are witnesses for stripUrlQueryAndCredentials
+  // only; no SAS pattern is reached by them.
   it.each([
     ['https URL', `GET https://acct.blob.core.windows.net/c/p?sv=2024&sig=${SENTINEL} 403`, 'GET https://acct.blob.core.windows.net/c/p 403'],
     ['host without a scheme', `acct.blob.core.windows.net/c?sv=2024&sig=${SENTINEL}`, 'acct.blob.core.windows.net/c?sv=REDACTED&sig=REDACTED'],
     ['bare sv=…&sig=…', `token was sv=2024&sig=${SENTINEL}&se=2030`, 'token was sv=REDACTED&sig=REDACTED&se=REDACTED'],
     ['URL user-info', `proxy https://user:${SENTINEL}@proxy.example.net/p`, 'proxy https://proxy.example.net/p'],
     ['bare token starting with sig=', `sig=${SENTINEL}&se=2030 was rejected`, 'sig=REDACTED&se=REDACTED was rejected'],
-  ])('redacts a SAS given as %s', (_label, input, expected) => {
+    ['[sig=…]', `token [sig=${SENTINEL}] rejected`, 'token [sig=REDACTED] rejected'],
+    ['(sig=…)', `rejected (sig=${SENTINEL}) at 12:00`, 'rejected (sig=REDACTED) at 12:00'],
+    ['query in parentheses', `(acct.blob.core.windows.net/c?sig=${SENTINEL})`, '(acct.blob.core.windows.net/c?sig=REDACTED)'],
+    ['URL in parentheses', `(see https://acct.blob.core.windows.net/c?sig=${SENTINEL}) retry`, '(see https://acct.blob.core.windows.net/c) retry'],
+    ['AccountKey=', `DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=${SENTINEL}+a/b==;EndpointSuffix=core.windows.net`,
+      'DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=REDACTED;EndpointSuffix=core.windows.net'],
+    ['SharedAccessKey=', `Endpoint=sb://ns.servicebus.windows.net/;SharedAccessKeyName=root;SharedAccessKey=${SENTINEL}=`,
+      'Endpoint=sb://ns.servicebus.windows.net/;SharedAccessKeyName=root;SharedAccessKey=REDACTED'],
+    ['JSON "sig":"…"', `{"error":{"sig":"${SENTINEL}","sv": "2024-11-04"}}`, '{"error":{"sig":"REDACTED","sv": "REDACTED"}}'],
+    ['JSON escaped in a string', `detail: "{\\"sig\\":\\"${SENTINEL}\\"}"`, 'detail: "{\\"sig\\":\\"REDACTED\\"}"'],
+    ['URL-encoded sig%3D', `redirect=https%3A%2F%2Facct.blob.core.windows.net%2Fc%3Fsv%3D2024%26sig%3D${SENTINEL}%26se%3D2030 failed`,
+      'redirect=https%3A%2F%2Facct.blob.core.windows.net%2Fc%3Fsv%3DREDACTED%26sig%3DREDACTED%26se%3DREDACTED failed'],
+    ['function key ?code=', `POST func.azurewebsites.net/api/x?code=${SENTINEL} 401`, 'POST func.azurewebsites.net/api/x?code=REDACTED 401'],
+  ])('redacts a secret given as %s', (_label, input, expected) => {
     const out = redactErrorText(input);
     expect(out).not.toContain(SENTINEL);
     expect(out).toBe(expected);
   });
 
-  it('leaves a word that merely ends in a parameter name alone', () => {
-    // WHAT BREAKS IT: a bare-token pattern with no leading anchor, which would
-    // rewrite `assign=` and `turnkey=` as if they were `sig=` / `key=`.
+  it('leaves a word that merely ends in a parameter name, and an error code, alone', () => {
+    // WHAT BREAKS IT: a SAS pattern with no leading anchor (rewrites `assign=` /
+    // `turnkey=` as `sig=` / `key=`), a bare or JSON `code` redaction (rewrites
+    // an ARM error code), or a connection-string pattern that matches
+    // `SharedAccessKeyName=`.
     expect(redactErrorText('assign=keepme turnkey=keepme')).toBe('assign=keepme turnkey=keepme');
+    expect(redactErrorText('{"code": "AuthorizationFailed"} code=AuthorizationFailure'))
+      .toBe('{"code": "AuthorizationFailed"} code=AuthorizationFailure');
+    expect(redactErrorText('SharedAccessKeyName=RootManageSharedAccessKey;'))
+      .toBe('SharedAccessKeyName=RootManageSharedAccessKey;');
   });
 
   it('networkFailureReason returns a symbol, never the message', () => {

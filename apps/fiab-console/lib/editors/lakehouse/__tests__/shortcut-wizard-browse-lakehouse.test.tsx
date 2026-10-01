@@ -1,17 +1,18 @@
 /**
  * Shortcut wizard, remote browse: the browse request names the lakehouse the
- * shortcut is being created in. The browse route checks a saved credential
- * against the lakehouse it was saved for only when the request carries
- * `lakehouseId`, so a tree that omits it never gets that check.
+ * shortcut is being created in. The browse route refuses a credentialed browse
+ * (S3, GCS, Dataverse) that does not carry `lakehouseId` (400 `item_required`),
+ * so a tree that omits it cannot browse at all.
  *
  * The REAL RemoteBrowseTree and the REAL dialog run; only `clientFetch` and the
  * credential form (which has its own tests) are replaced.
  *
  * WHAT BREAKS EACH LOAD-BEARING ASSERTION (assertion-design.md):
- *   - dialog → `lakehouseId=lh-7`: dropping `qs.set('lakehouseId', …)` in the
- *     tree's fetchLevel, OR dropping `lakehouseId={shortcutLakehouseId}` at the
- *     dialog's external-source RemoteBrowseTree. Either leaves the query without
- *     the key and `get('lakehouseId')` returns null, not 'lh-7'.
+ *   - dialog → `lakehouseId=lh-7`: dropping `lakehouseId` from the object the
+ *     tree's fetchLevel loops over to build the query, OR dropping
+ *     `lakehouseId={shortcutLakehouseId}` at the dialog's external-source
+ *     RemoteBrowseTree. Either leaves the query without the key and
+ *     `get('lakehouseId')` returns null, not 'lh-7'.
  *   - the other parameters are asserted in the same URL, so a fixture that never
  *     reaches the browse call cannot pass (no browse URL → the find is undefined).
  *   - tree without the prop → no key: sending a placeholder (e.g. '' or

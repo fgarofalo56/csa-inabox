@@ -96,13 +96,17 @@ const ROW_HINT = 'Delete the shortcut and re-create it with a credential saved v
  * is the one Loom stores when a provider is added under Data shares, so the
  * guidance points there — to actions that exist.
  */
-const SHARE_PATH = 'Data shares → Shared with me → Explore & query → select the table → Create lakehouse shortcut';
+const SHARE_PATH =
+  'Data shares → Shared with me → Subscribe to the share → Explore & query → select the table → Create lakehouse shortcut';
 const DS_SAVE_HINT =
   `Saving a Delta Sharing credential file from the shortcut wizard is not available. Use ${SHARE_PATH}, ` +
   "or enter a registered provider's credential name (loom-dsp-<provider>).";
 const DS_ROW_HINT = `Delete the shortcut and re-create it from ${SHARE_PATH}.`;
-/** A loom-dsp- name whose provider is no longer registered. */
-const READD_HINT = 'Re-add the provider under Data shares → Add provider, then retry.';
+/**
+ * A loom-dsp- name whose provider is no longer registered. The credential is
+ * named from the provider name, so only the same name restores it.
+ */
+const READD_HINT = 'Re-add the provider under Data shares → Add provider with the same provider name, then retry.';
 /** Naming an arbitrary Key Vault secret in the wizard is not supported yet. */
 const TYPED_NAME_NOTE = 'Naming any other Key Vault secret here is not supported yet (#4854).';
 
