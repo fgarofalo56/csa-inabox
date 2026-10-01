@@ -1,8 +1,8 @@
 /**
  * Shortcut wizard, remote browse: the browse request names the lakehouse the
- * shortcut is being created in. The browse route refuses a credentialed browse
- * (S3, GCS, Dataverse) that does not carry `lakehouseId` (400 `item_required`),
- * so a tree that omits it cannot browse at all.
+ * shortcut is being created in. The browse route refuses a browse of any source
+ * (ADLS, S3, GCS, Dataverse) that does not carry `lakehouseId` (400
+ * `item_required`), so a tree that omits it cannot browse at all.
  *
  * The REAL RemoteBrowseTree and the REAL dialog run; only `clientFetch` and the
  * credential form (which has its own tests) are replaced.
@@ -10,8 +10,8 @@
  * WHAT BREAKS EACH LOAD-BEARING ASSERTION (assertion-design.md):
  *   - dialog → `lakehouseId=lh-7`: dropping `lakehouseId` from the object the
  *     tree's fetchLevel loops over to build the query, OR dropping
- *     `lakehouseId={shortcutLakehouseId}` at the dialog's external-source
- *     RemoteBrowseTree. Either leaves the query without the key and
+ *     `lakehouseId={shortcutLakehouseId}` at the dialog's external-source or
+ *     ADLS picker RemoteBrowseTree. Either leaves the query without the key and
  *     `get('lakehouseId')` returns null, not 'lh-7'.
  *   - the other parameters are asserted in the same URL, so a fixture that never
  *     reaches the browse call cannot pass (no browse URL → the find is undefined).
@@ -50,14 +50,18 @@ const browseQueries = () =>
     .filter((u) => u.startsWith('/api/lakehouse/shortcuts/browse?'))
     .map((u) => new URLSearchParams(u.slice(u.indexOf('?') + 1)));
 
-function mountExternalStep(scType: 'dataverse' | 's3', extCreds: Record<string, string>) {
+function mountExternalStep(
+  scType: 'dataverse' | 's3' | 'adls',
+  extCreds: Record<string, string>,
+  adls: { scAcctHost?: string; scAdlsContainer?: string } = {},
+) {
   const noop = vi.fn();
   const ctx: any = {
     scWizardOpen: true, setScWizardOpen: noop, scStep: 2, setScStep: noop,
     scType, setScType: noop,
     scAdlsMode: 'picker', setScAdlsMode: noop,
-    scAcctHost: '', setScAcctHost: noop, storageAccts: [], storageAcctsLoading: false,
-    scAdlsContainer: '', setScAdlsContainer: noop, scAdlsPath: '', setScAdlsPath: noop,
+    scAcctHost: adls.scAcctHost ?? '', setScAcctHost: noop, storageAccts: [], storageAcctsLoading: false,
+    scAdlsContainer: adls.scAdlsContainer ?? '', setScAdlsContainer: noop, scAdlsPath: '', setScAdlsPath: noop,
     scInternalContainer: '', setScInternalContainer: noop, scInternalPath: '', setScInternalPath: noop, containers: [],
     scTargetUri: '', setScTargetUri: noop,
     scExtSas: '', setScExtSas: noop, scExtSasBusy: false, scExtSasErr: null, stashExternalSas: noop,
@@ -125,5 +129,19 @@ describe('shortcut wizard — the browse request names the lakehouse', () => {
     expect(q.get('sourceType')).toBe('adls');
     expect(q.get('account')).toBe('partneracct');
     expect(q.get('container')).toBe('exports');
+  });
+
+  it('ADLS: the dialog\'s picker tree sends lakehouseId with the account and container', async () => {
+    // WHAT BREAKS IT: dropping `lakehouseId={shortcutLakehouseId}` at the
+    // dialog's ADLS RemoteBrowseTree. The route answers 400 item_required to an
+    // ADLS browse without it, so the picker could not browse at all. The
+    // account is the host's first label, so 'partneracct' also pins that split.
+    mountExternalStep('adls', {}, { scAcctHost: 'partneracct.dfs.core.windows.net', scAdlsContainer: 'exports' });
+    await waitFor(() => expect(browseQueries().length).toBeGreaterThan(0));
+    const q = browseQueries()[0];
+    expect(q.get('sourceType')).toBe('adls');
+    expect(q.get('account')).toBe('partneracct');
+    expect(q.get('container')).toBe('exports');
+    expect(q.get('lakehouseId')).toBe('lh-7');
   });
 });

@@ -14907,6 +14907,33 @@
           }
         },
         {
+          "id": "sec:authorizer:apps/fiab-console/app/api/lakehouse/shortcuts/browse/route.ts#GET",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "GET /api/lakehouse/shortcuts/browse",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "GET /api/lakehouse/shortcuts/browse",
+            "params": [],
+            "resourceScoped": false,
+            "callerNamedResourceInputs": [],
+            "allowPaths": [
+              {
+                "id": "get:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": false,
+            "privilegedSinkKinds": []
+          }
+        },
+        {
           "id": "sec:verdict-call:apps/fiab-console/app/api/landing-zones/[id]/attach/preflight/route.ts#POST:enforceCapability:3",
           "kind": "verdict-call",
           "provenance": "declared",
@@ -49418,6 +49445,11 @@
         {
           "nodeId": "sec:authorizer:apps/fiab-console/app/api/lakehouse/permissions/route.ts#DELETE",
           "codeModuleId": "code:apps/fiab-console/app/api/lakehouse/permissions/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/lakehouse/shortcuts/browse/route.ts#GET",
+          "codeModuleId": "code:apps/fiab-console/app/api/lakehouse/shortcuts/browse/route.ts",
           "deployedAs": "loom-console"
         },
         {

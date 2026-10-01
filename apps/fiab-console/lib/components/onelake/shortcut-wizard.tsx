@@ -1143,7 +1143,7 @@ interface RemoteBrowseTreeProps {
   container?: string;
   /** KV secret name (s3/gcs/dataverse). */
   kvSecret?: string;
-  /** Lakehouse being edited; browse requires it for s3/gcs/dataverse (400 item_required). */
+  /** Lakehouse being edited; browse requires it for every source (400 item_required). */
   lakehouseId?: string;
   /** Called when the user clicks a folder or file in the tree. */
   onSelect: (path: string, isDirectory: boolean) => void;

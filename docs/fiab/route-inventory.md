@@ -15,9 +15,9 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | --- | ---: |
 | Total routes | 1696 |
 | Public (no session) | 59 |
-| Session-only | 637 |
+| Session-only | 636 |
 | Owner-scoped | 683 |
-| Admin | 317 |
+| Admin | 318 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 499 |
 | Areas | 122 |
@@ -1878,7 +1878,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `lakehouse/references/route.ts` | GET POST | owner-scoped |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity |
 | `lakehouse/schemas/route.ts` | GET POST PATCH DELETE | session-only | ● | Cosmos, Synapse |
 | `lakehouse/settings/route.ts` | GET PUT | session-only | ● | ADLS, Azure Monitor, Azure Storage, Cosmos |
-| `lakehouse/shortcuts/browse/route.ts` | GET | session-only | ● | ADLS, ARM, Azure Monitor, Azure Storage, Cosmos, Key Vault, Managed Identity |
+| `lakehouse/shortcuts/browse/route.ts` | GET | admin | ● | ADLS, ARM, Azure Monitor, Azure Storage, Cosmos, Key Vault, Managed Identity, Microsoft Graph |
 | `lakehouse/shortcuts/credentials/route.ts` | POST | session-only | ● | Key Vault |
 | `lakehouse/shortcuts/route.ts` | GET POST DELETE | session-only |  | ADLS, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Key Vault, Managed Identity, Microsoft Graph, Synapse SQL |
 | `lakehouse/shortcuts/sharepoint/route.ts` | GET | session-only | ● | Microsoft Graph |

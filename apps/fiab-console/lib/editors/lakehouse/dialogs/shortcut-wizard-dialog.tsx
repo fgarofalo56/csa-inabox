@@ -128,6 +128,7 @@ export function ShortcutWizardDialog() {
                               sourceType="adls"
                               account={scAcctHost.split('.')[0]}
                               container={scAdlsContainer}
+                              lakehouseId={shortcutLakehouseId}
                               onSelect={(path) => { setExtCreds((c) => ({ ...c, selectedPath: path })); setScAdlsPath(path); }}
                               selectedPath={extCreds.selectedPath}
                             />
