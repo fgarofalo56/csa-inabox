@@ -14,6 +14,14 @@ interface Params {
   confirm: (opts: { title: string; body: string; danger?: boolean; confirmLabel?: string }) => Promise<boolean>;
 }
 
+/** A refused request: the route's `error`, with its `remediation` kept apart. */
+class RefusalError extends Error {
+  constructor(message: string, readonly remediation?: string) {
+    super(message);
+    this.name = 'RefusalError';
+  }
+}
+
 export function useLakehousePermissions({ lakehouseId, activeContainer, confirm }: Params) {
   // The permissions GET is scoped to one lakehouse, so every read names it.
   const readUrl = useCallback(
@@ -27,6 +35,18 @@ export function useLakehousePermissions({ lakehouseId, activeContainer, confirm 
   const [permsRoles, setPermsRoles] = useState<PermRole[]>([]);
   const [permsBusy, setPermsBusy] = useState(false);
   const [permsError, setPermsError] = useState<string | null>(null);
+  // A refusal's next step, shown on its own line under `permsError`. It is
+  // stored with the error text it belongs to and shown only while that text is
+  // the current error, so clearing or replacing the error (any of the
+  // setPermsError calls below) never leaves a stale remediation on screen.
+  const [remediationOf, setRemediationOf] = useState<{ error: string; remediation: string } | null>(null);
+  const permsRemediation = remediationOf && remediationOf.error === permsError ? remediationOf.remediation : null;
+  /** Show a refused object-tab request: its error, and its remediation when it has one. */
+  const showRefusal = useCallback((e: any) => {
+    const error = e?.message || String(e);
+    setPermsError(error);
+    setRemediationOf(e?.remediation ? { error, remediation: String(e.remediation) } : null);
+  }, []);
   // True when the last object-tab listing was refused with a `code` (the route's
   // coded refusals: 409 binding or account unusable, 404 item_not_found, 403
   // outside_item_root or a denied role read, ...). A grant names the same item,
@@ -82,7 +102,8 @@ export function useLakehousePermissions({ lakehouseId, activeContainer, confirm 
   }, [principalQuery, permsTab]);
 
   // ── RBAC callbacks ────────────────────────────────────────────────────────
-  // A refusal's `remediation` is shown with its `error`, in the same MessageBar.
+  // A refusal's `remediation` is kept apart from its `error`: the dialog shows
+  // it on its own line in the same MessageBar.
   const loadPerms = useCallback(async () => {
     if (!activeContainer) return;
     setPermsBusy(true); setPermsError(null); setPermsListRefused(false); setPermsListFailed(false);
@@ -91,7 +112,7 @@ export function useLakehousePermissions({ lakehouseId, activeContainer, confirm 
       const j = await parseJsonOrError<{ ok: boolean; error?: string; code?: string; remediation?: string; assignments?: PermAssignment[]; knownRoles?: PermRole[] }>(r, 'List permissions');
       if (!j.ok) {
         if (j.code) setPermsListRefused(true);
-        throw new Error([j.error || `HTTP ${r.status}`, j.remediation].filter(Boolean).join(' '));
+        throw new RefusalError(j.error || `HTTP ${r.status}`, j.remediation);
       }
       setPermsRows(j.assignments || []);
       setPermsRoles(j.knownRoles || []);
@@ -99,10 +120,10 @@ export function useLakehousePermissions({ lakehouseId, activeContainer, confirm 
       // Rows from an earlier listing are not this container's current rows.
       setPermsRows([]);
       setPermsListFailed(true);
-      setPermsError(e?.message || String(e));
+      showRefusal(e);
     }
     finally { setPermsBusy(false); }
-  }, [activeContainer, readUrl]);
+  }, [activeContainer, readUrl, showRefusal]);
 
   const openPerms = useCallback(() => {
     if (!lakehouseId) return; // unsaved lakehouse: no item to read through
@@ -124,12 +145,12 @@ export function useLakehousePermissions({ lakehouseId, activeContainer, confirm 
         body: JSON.stringify({ tab: 'object', lakehouseId, container: activeContainer, principalId: newPrincipalId.trim(), principalType: newPrincipalType, role: newRole }),
       });
       const j = await parseJsonOrError<{ ok: boolean; error?: string; remediation?: string }>(r, 'Grant permission');
-      if (!j.ok) throw new Error([j.error || `HTTP ${r.status}`, j.remediation].filter(Boolean).join(' '));
+      if (!j.ok) throw new RefusalError(j.error || `HTTP ${r.status}`, j.remediation);
       setNewPrincipalId('');
       await loadPerms();
-    } catch (e: any) { setPermsError(e?.message || String(e)); }
+    } catch (e: any) { showRefusal(e); }
     finally { setPermsBusy(false); }
-  }, [lakehouseId, activeContainer, newPrincipalId, newPrincipalType, newRole, loadPerms]);
+  }, [lakehouseId, activeContainer, newPrincipalId, newPrincipalType, newRole, loadPerms, showRefusal]);
 
   const revokePerm = useCallback(async (armId: string) => {
     if (!lakehouseId || !activeContainer) return;
@@ -138,11 +159,11 @@ export function useLakehousePermissions({ lakehouseId, activeContainer, confirm 
       const qs = new URLSearchParams({ tab: 'object', lakehouseId, container: activeContainer, id: armId });
       const r = await clientFetch(`/api/lakehouse/permissions?${qs.toString()}`, { method: 'DELETE' });
       const j = await parseJsonOrError<{ ok: boolean; error?: string; remediation?: string }>(r, 'Revoke permission');
-      if (!j.ok) throw new Error([j.error || `HTTP ${r.status}`, j.remediation].filter(Boolean).join(' '));
+      if (!j.ok) throw new RefusalError(j.error || `HTTP ${r.status}`, j.remediation);
       await loadPerms();
-    } catch (e: any) { setPermsError(e?.message || String(e)); }
+    } catch (e: any) { showRefusal(e); }
     finally { setPermsBusy(false); }
-  }, [lakehouseId, activeContainer, loadPerms]);
+  }, [lakehouseId, activeContainer, loadPerms, showRefusal]);
 
   // ── SQL-plane callbacks ───────────────────────────────────────────────────
   const loadSqlPerms = useCallback(async (t: PermsTab) => {
@@ -279,7 +300,7 @@ export function useLakehousePermissions({ lakehouseId, activeContainer, confirm 
   return {
     permsOpen, setPermsOpen, openPerms,
     permsRows, setPermsRows, permsRoles, setPermsRoles,
-    permsBusy, setPermsBusy, permsError, setPermsError, permsListRefused, permsListFailed,
+    permsBusy, setPermsBusy, permsError, setPermsError, permsRemediation, permsListRefused, permsListFailed,
     newPrincipalId, setNewPrincipalId,
     newPrincipalType, setNewPrincipalType,
     newRole, setNewRole,

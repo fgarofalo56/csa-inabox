@@ -18,7 +18,7 @@ export function PermissionsDialog() {
   const ctx = useLakehouseCtx();
   const {
     permsOpen, setPermsOpen, permsTab, selectPermsTab,
-    permsBusy, permsError, permsListRefused, permsListFailed, sqlGate,
+    permsBusy, permsError, permsRemediation, permsListRefused, permsListFailed, sqlGate,
     permsRows, permsRoles, revokePerm, grantPerm,
     newPrincipalId, setNewPrincipalId, newPrincipalType, setNewPrincipalType, newRole, setNewRole,
     sqlGrants, revokeSqlGrant, grantSqlTable, grantSqlColumn,
@@ -97,7 +97,17 @@ export function PermissionsDialog() {
 
             {permsBusy && <Spinner size="tiny" label="Working…" labelPosition="after" />}
             {permsError && (
-              <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Permissions error</MessageBarTitle>{permsError}</MessageBarBody></MessageBar>
+              <MessageBar intent="error">
+                <MessageBarBody>
+                  <MessageBarTitle>Permissions error</MessageBarTitle>
+                  <div>{permsError}</div>
+                  {permsRemediation && (
+                    <div data-testid="perms-remediation" style={{ marginTop: tokens.spacingVerticalXS }}>
+                      <strong>Next step:</strong> {permsRemediation}
+                    </div>
+                  )}
+                </MessageBarBody>
+              </MessageBar>
             )}
             {permsTab !== 'object' && sqlGate && (
               <MessageBar intent="warning">

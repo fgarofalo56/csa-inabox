@@ -3,9 +3,9 @@
  *
  *   - A failed listing clears the rows of the previous listing, so the dialog
  *     never shows rows it could not confirm next to the error.
- *   - A refusal's `remediation` is shown with its `error` (the listing, the
- *     grant, the revoke and Share), in the one error string the surface
- *     renders.
+ *   - A refusal's `remediation` reaches the surface. The permissions hook keeps
+ *     it apart from `error` (`permsRemediation`, shown on its own line), and
+ *     only while that error is current; Share still shows the two in one string.
  *   - A listing refused with a `code` (409, 404 item_not_found, 403
  *     outside_item_root, ...) sets `permsListRefused` (the dialog disables Grant
  *     role on it); a failure without a code does not, and a later successful
@@ -79,8 +79,9 @@ describe('useLakehousePermissions — a refused listing', () => {
     await act(async () => { await result.current.loadPerms(); });
     // Breaks if the catch does not call setPermsRows([]): ROW stays.
     expect(result.current.permsRows).toEqual([]);
-    // Breaks if the remediation is dropped (the string is ERR alone).
-    expect(result.current.permsError).toBe(`${ERR} ${FIX}`);
+    // Breaks if the remediation is dropped (null) or joined into the error
+    // (the error is then `${ERR} ${FIX}`).
+    expect([result.current.permsError, result.current.permsRemediation]).toEqual([ERR, FIX]);
     // Breaks if a coded 409 listing does not set the flag.
     expect(result.current.permsListRefused).toBe(true);
     // Breaks if the listing catch does not set permsListFailed.
@@ -127,7 +128,7 @@ describe('useLakehousePermissions — a refused listing', () => {
     await act(async () => { await result.current.grantPerm(); });
     // Precondition: the grant error is shown, so a flag keyed on permsError
     // would read "failed" here.
-    expect(result.current.permsError).toBe(`${ERR} ${FIX}`);
+    expect([result.current.permsError, result.current.permsRemediation]).toEqual([ERR, FIX]);
     // Breaks if the grant catch sets permsListFailed: the listing succeeded.
     expect(result.current.permsListFailed).toBe(false);
     expect(result.current.permsRows).toEqual([]);
@@ -140,16 +141,32 @@ describe('the write hooks show remediation with the error', () => {
     const { result } = mountPerms();
     await act(async () => { result.current.setNewPrincipalId('p9'); });
     await act(async () => { await result.current.grantPerm(); });
-    // Breaks if the grant throw reads j.error only.
-    expect(result.current.permsError).toBe(`${ERR} ${FIX}`);
+    // Breaks if the grant drops the remediation (null) or joins it into the error.
+    expect([result.current.permsError, result.current.permsRemediation]).toEqual([ERR, FIX]);
   });
 
   it('a refused revoke shows error + remediation', async () => {
     installFetch([unreadable(FIX)]);
     const { result } = mountPerms();
     await act(async () => { await result.current.revokePerm(ROW.id); });
-    // Breaks if the revoke throw reads j.error only.
-    expect(result.current.permsError).toBe(`${ERR} ${FIX}`);
+    // Breaks if the revoke drops the remediation (null) or joins it into the error.
+    expect([result.current.permsError, result.current.permsRemediation]).toEqual([ERR, FIX]);
+  });
+
+  it('a remediation is not shown under a later error, or after a success', async () => {
+    installFetch([unreadable(FIX), uncoded(502), unreadable(FIX), ok([])]);
+    const { result } = mountPerms();
+    await act(async () => { await result.current.loadPerms(); });
+    expect(result.current.permsRemediation).toBe(FIX);
+    await act(async () => { await result.current.loadPerms(); });
+    // Breaks if the remediation is kept apart from the error it belongs to:
+    // FIX would still show under UPSTREAM, which has no remediation.
+    expect([result.current.permsError, result.current.permsRemediation]).toEqual([UPSTREAM, null]);
+    await act(async () => { await result.current.loadPerms(); });
+    expect(result.current.permsRemediation).toBe(FIX);
+    await act(async () => { await result.current.loadPerms(); });
+    // Breaks the same way after a successful listing: no error, no remediation.
+    expect([result.current.permsError, result.current.permsRemediation]).toEqual([null, null]);
   });
 
   it('a refused Share shows error + remediation', async () => {

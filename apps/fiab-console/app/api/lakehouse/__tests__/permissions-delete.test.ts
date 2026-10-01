@@ -322,11 +322,11 @@ describe('object-tab writes act on the item\'s bound storage account', () => {
   // is then the error's bare 403 with no `code` and no `remediation`.
   it.each([
     ['POST', () => {
-      (grantContainerRole as any).mockRejectedValue(new StorageRoleDeniedError(BOUND, 'grant', 'denied'));
+      (grantContainerRole as any).mockRejectedValue(new StorageRoleDeniedError(BOUND, 'grant', 'corr-write-1'));
       return POST(postReq(grantBody()));
     }, { grant: 1, revoke: 0 }],
     ['DELETE', () => {
-      (revokeContainerRoleAssignment as any).mockRejectedValue(new StorageRoleDeniedError(BOUND, 'revoke', 'denied'));
+      (revokeContainerRoleAssignment as any).mockRejectedValue(new StorageRoleDeniedError(BOUND, 'revoke', 'corr-write-1'));
       return DELETE(delReq(objectQs(LISTED)));
     }, { grant: 0, revoke: 1 }],
   ])('%s answers 403 storage_role_write_denied when Azure refuses the role write', async (_v, call, reached) => {
@@ -336,7 +336,25 @@ describe('object-tab writes act on the item\'s bound storage account', () => {
     expect([j.ok, j.code]).toEqual([false, 'storage_role_write_denied']);
     expect(j.remediation).toContain(`Role Based Access Control Administrator on storage account "${BOUND}"`);
     expect(j.remediation).toContain('platform/fiab/bicep/modules/landing-zone/storage-rbac-admin.bicep');
+    // Breaks if the route drops the correlation id, or adds a field (such as
+    // ARM's own message) beyond the five below.
+    expect([j.correlationId, Object.keys(j).sort()])
+      .toEqual(['corr-write-1', ['code', 'correlationId', 'error', 'ok', 'remediation']]);
+    expect(j.error).toContain('correlation id corr-write-1.');
     expect({ grant: writeCalls().grant.length, revoke: writeCalls().revoke.length }).toEqual(reached);
+  });
+
+  // A revoke first lists the container's assignments, so Azure refusing that
+  // READ answers storage_role_read_denied ("Nothing was listed or changed."),
+  // and nothing is deleted. Breaks if the DELETE maps it to write_denied, or
+  // calls the revoke after a refused listing.
+  it('DELETE answers 403 storage_role_read_denied when Azure refuses the listing before the revoke', async () => {
+    (listContainerRoleAssignments as any).mockRejectedValue(new StorageRoleDeniedError(BOUND, 'list', 'corr-read-1'));
+    const res = await DELETE(delReq(objectQs(LISTED)));
+    const j = await res.json();
+    expect([res.status, j.code, j.correlationId, writeCalls().revoke.length])
+      .toEqual([403, 'storage_role_read_denied', 'corr-read-1', 0]);
+    expect(j.error).toContain('Nothing was listed or changed.');
   });
 
   // CONTROL: another write failure is not given that code. Breaks if the

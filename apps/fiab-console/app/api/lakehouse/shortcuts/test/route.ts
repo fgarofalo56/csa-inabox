@@ -12,7 +12,12 @@
  * status and, for a Delta Sharing Tables shortcut, its credential file. The row
  * is read under the item id, or under the earlier container key when this item
  * is the one lakehouse bound to that container (`_lib/shortcut-rows`), and
- * written back under the same key. Refusals carry a `code` and a `remediation`.
+ * written back under the same key. The input, access and row refusals (400
+ * `bad_request`, 403 `read_only`, 404 `item_not_found`, 404 `not_found`) carry
+ * a `code` and a `remediation`. A credential the shortcut-secret resolver
+ * refuses (for example 403 `shortcut_secret_not_owned`) carries a `code`, and
+ * its next step is written in `error`. A failed probe answers with `error` and
+ * a `code`.
  * Design: docs/fiab/design/lakehouse-shortcuts.md.
  */
 

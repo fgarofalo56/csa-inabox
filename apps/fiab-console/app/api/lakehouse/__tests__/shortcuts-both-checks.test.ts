@@ -86,6 +86,35 @@ const HOST_PATH = 'https://partner.dfs.core.windows.net/data';
 const SENTINEL = 'fixture-sig-sentinel';
 const errorWithQuery = () => new ShortcutSourceError(`ADLS list failed at ${HOST_PATH}?resource=filesystem&sig=${SENTINEL}`, 'adls_list_failed', 502);
 
+/**
+ * True when `text` names HOST_PATH: every URL in it is PARSED, and its origin
+ * plus path is compared with `===`. Not `text.includes(HOST_PATH)`: that is
+ * also satisfied by a different host that merely contains this one, and CodeQL
+ * flags it (js/incomplete-url-substring-sanitization). False when the route
+ * drops the URL from the message (for example a generic "list failed" text),
+ * or names another host or path.
+ */
+const namesHostPath = (text: unknown): boolean =>
+  (String(text ?? '').match(/https?:\/\/[^\s'"<>]+/g) ?? []).some((raw) => {
+    try {
+      const u = new URL(raw);
+      return `${u.origin}${u.pathname}` === HOST_PATH;
+    } catch {
+      return false;
+    }
+  });
+// The helper's own controls: the fixture URL matches, and a host that only
+// CONTAINS the expected one does not (the case `.includes` would accept).
+describe('namesHostPath (the URL check the redaction tests use)', () => {
+  it('matches the fixture URL and refuses a host that only contains it', () => {
+    expect([
+      namesHostPath(`failed at ${HOST_PATH}?sig=x`),
+      namesHostPath('failed at https://partner.dfs.core.windows.net.example/data'),
+      namesHostPath('list failed'),
+    ]).toEqual([true, false, false]);
+  });
+});
+
 const me = { claims: { oid: 'oid-me', upn: 'me@contoso.com', tid: 't1' } };
 const recordFor = (oid: string, tid?: string) => ({ exists: true, owner: { oid, lakehouseId: LH, ...(tid ? { tid } : {}) } });
 const grant = (canWrite: boolean) => async (_s: unknown, id: string) => ({
@@ -143,7 +172,7 @@ describe('GET /api/lakehouse/shortcuts — item check and redacted errors', () =
     (listShortcuts as any).mockRejectedValue(errorWithQuery());
     const res = await GET(urlReq(`lakehouseId=${LH}`));
     const j = await res.json();
-    expect([res.status, j.error.includes(HOST_PATH), JSON.stringify(j).includes(SENTINEL)]).toEqual([502, true, false]);
+    expect([res.status, namesHostPath(j.error), JSON.stringify(j).includes(SENTINEL)]).toEqual([502, true, false]);
   });
 });
 
@@ -207,7 +236,7 @@ describe('POST /api/lakehouse/shortcuts (create) — item check, owner check, re
     const res = await CREATE(postReq(sasBody));
     const j = await res.json();
     const stored = (createShortcut as any).mock.calls[0]?.[0];
-    expect([res.status, j.code, j.error.includes(HOST_PATH), JSON.stringify(j).includes(SENTINEL), String(stored?.statusDetail).includes(SENTINEL)])
+    expect([res.status, j.code, namesHostPath(j.error), JSON.stringify(j).includes(SENTINEL), String(stored?.statusDetail).includes(SENTINEL)])
       .toEqual([502, 'adls_list_failed', true, false, false]);
   });
 });
@@ -239,7 +268,7 @@ describe('DELETE /api/lakehouse/shortcuts — item check and redacted errors', (
     (deleteShortcut as any).mockRejectedValue(errorWithQuery());
     const res = await DELETE(urlReq(`lakehouseId=${LH}&id=${ROW_ID}`));
     const j = await res.json();
-    expect([res.status, j.error.includes(HOST_PATH), JSON.stringify(j).includes(SENTINEL)]).toEqual([502, true, false]);
+    expect([res.status, namesHostPath(j.error), JSON.stringify(j).includes(SENTINEL)]).toEqual([502, true, false]);
   });
 });
 
@@ -300,7 +329,7 @@ describe('POST /api/lakehouse/shortcuts/test — item check, owner and tenant ch
     const res = await run();
     const j = await res.json();
     const detail = (updateShortcutStatus as any).mock.calls[0]?.[3];
-    expect([res.status, j.code, j.error.includes(HOST_PATH), JSON.stringify(j).includes(SENTINEL), String(detail).includes(SENTINEL)])
+    expect([res.status, j.code, namesHostPath(j.error), JSON.stringify(j).includes(SENTINEL), String(detail).includes(SENTINEL)])
       .toEqual([502, 'adls_list_failed', true, false, false]);
   });
 });

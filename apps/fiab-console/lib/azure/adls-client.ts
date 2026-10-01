@@ -12,6 +12,8 @@
  */
 
 import { trimSlashes } from '@/lib/util/trim';
+import { logSafe } from '@/lib/util/log-safe';
+import { randomUuid } from '@/lib/util/random-id';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { type TokenCredential } from '@azure/identity';
 import { workspaceScopedCredential } from '@/lib/azure/workspace-credential-factory';
@@ -980,7 +982,8 @@ export function storageRoleAdminRemediation(account: string): string {
     + 'Storage Blob Data Contributor or Storage Blob Data Owner. That role also lets Loom locate the '
     + `account. The platform grants it with ${STORAGE_RBAC_ADMIN_BICEP}: deploy that module to the `
     + `account's resource group with storageAccountName="${account}" and consolePrincipalId set to the `
-    + 'Console identity, then retry.'
+    + "Console identity's principal (object) id, not its client id. A new role assignment can take a few "
+    + 'minutes to take effect, so if the next attempt is still refused, wait a few minutes and retry.'
   );
 }
 
@@ -990,30 +993,45 @@ export type StorageRoleOperation = 'list' | 'grant' | 'revoke';
 /**
  * Azure Resource Manager answered 403 to a role-assignment read, create or
  * delete on a storage account. The lakehouse permissions routes answer it with
- * a 403 that carries `code` and `remediation`, instead of the raw ARM error.
+ * a 403 that carries `code`, `remediation` and `correlationId`. ARM's own
+ * message is not part of this error: it can name identity object ids,
+ * subscriptions and resource groups, so {@link roleAssignmentCall} logs it on
+ * the server under `correlationId` and the response names only the refused
+ * operation and that id.
+ *
+ * A revoke lists the assignments first, so a 403 on that read is
+ * `storage_role_read_denied` ("Nothing was listed or changed."), not
+ * `storage_role_write_denied`.
  */
 export class StorageRoleDeniedError extends Error {
   readonly code: 'storage_role_read_denied' | 'storage_role_write_denied';
   readonly account: string;
   readonly operation: StorageRoleOperation;
   readonly remediation: string;
+  readonly correlationId: string;
   readonly status = 403 as const;
-  constructor(account: string, operation: StorageRoleOperation, armMessage?: string) {
+  constructor(account: string, operation: StorageRoleOperation, correlationId: string) {
     const what = operation === 'list'
       ? 'listing role assignments'
       : operation === 'grant' ? 'creating a role assignment' : 'deleting a role assignment';
-    const outcome = operation === 'list' ? 'Nothing was listed.'
+    const outcome = operation === 'list' ? 'Nothing was listed or changed.'
       : operation === 'grant' ? 'Nothing was granted.' : 'Nothing was removed.';
     super(
-      `Azure refused ${what} on storage account "${account}" for the Console identity (HTTP 403). ${outcome}`
-      + (armMessage ? ` Azure said: ${armMessage}` : ''),
+      `Azure refused ${what} on storage account "${account}" for the Console identity (HTTP 403). ${outcome} `
+      + `Azure's reason is in the Console server log under correlation id ${correlationId}.`,
     );
     this.name = 'StorageRoleDeniedError';
     this.code = operation === 'list' ? 'storage_role_read_denied' : 'storage_role_write_denied';
     this.account = account;
     this.operation = operation;
     this.remediation = storageRoleAdminRemediation(account);
+    this.correlationId = correlationId;
   }
+}
+
+/** A random id that joins a refusal's response to its server log line. */
+function newCorrelationId(): string {
+  return randomUuid();
 }
 
 /** The storage account named in an ARM id (`.../storageAccounts/<name>/...`), or ''. */
@@ -1022,8 +1040,10 @@ function storageAccountOfArmId(id: string): string {
 }
 
 /**
- * `armCall` for a role-assignment request on `account`: a 403 from ARM becomes
- * a {@link StorageRoleDeniedError}; any other failure is rethrown unchanged.
+ * `armCall` for a role-assignment request on `account`: a 403 from ARM is
+ * logged on the server (ARM's message, under a new correlation id) and becomes
+ * a {@link StorageRoleDeniedError} that carries only that id; any other failure
+ * is rethrown unchanged.
  */
 async function roleAssignmentCall<T>(
   url: string,
@@ -1034,7 +1054,14 @@ async function roleAssignmentCall<T>(
   try {
     return await armCall<T>(url, init);
   } catch (e: any) {
-    if (e?.status === 403) throw new StorageRoleDeniedError(account, operation, e?.message);
+    if (e?.status === 403) {
+      const correlationId = newCorrelationId();
+      console.error(
+        '[adls-client] role-assignment request refused (HTTP 403)',
+        { correlationId, account, operation, armMessage: logSafe(e?.message, 1000) },
+      );
+      throw new StorageRoleDeniedError(account, operation, correlationId);
+    }
     throw e;
   }
 }

@@ -139,12 +139,20 @@ function itemRequired(verb: 'Listing' | 'Granting' | 'Revoking'): NextResponse {
  * The error response for a failure inside a handler. A bound storage account
  * that Resource Graph could not place is a 409, and a role-assignment read,
  * create or delete that Azure refused is a 403 (`storage_role_read_denied` /
- * `storage_role_write_denied`); both carry the remediation. Anything else keeps
- * its own status (502 when it has none).
+ * `storage_role_write_denied`); both carry the remediation. The 403 also
+ * carries `correlationId`: Azure's own message is logged on the server under
+ * that id and is not part of the response. A revoke lists the assignments
+ * first, so a refused read there is `storage_role_read_denied`. Anything else
+ * keeps its own status (502 when it has none).
  */
 function failure(e: any): NextResponse {
   if (e instanceof StorageAccountNotLocatedError) return refuse(409, e.message, e.code, e.remediation);
-  if (e instanceof StorageRoleDeniedError) return refuse(403, e.message, e.code, e.remediation);
+  if (e instanceof StorageRoleDeniedError) {
+    return NextResponse.json(
+      { ok: false, error: e.message, code: e.code, remediation: e.remediation, correlationId: e.correlationId },
+      { status: 403 },
+    );
+  }
   return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
 }
 

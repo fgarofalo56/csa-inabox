@@ -9,6 +9,7 @@
  *     focusable but inert (`aria-disabled`, no `disabled` attribute), points
  *     at a visible reason, and a click grants nothing. Without the refusal it
  *     is live.
+ *   - A refusal's remediation renders on its own line, under the error.
  */
 import React from 'react';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
@@ -34,11 +35,13 @@ const GRANT_ERROR = 'Azure refused creating a role assignment on storage account
 
 function mount(opts: {
   permsError: string | null; permsListRefused: boolean; permsListFailed: boolean; newPrincipalId?: string;
+  permsRemediation?: string | null;
 }) {
   const grantPerm = vi.fn();
   const ctx: any = {
     permsOpen: true, setPermsOpen: vi.fn(), permsTab: 'object', selectPermsTab: vi.fn(),
-    permsBusy: false, permsError: opts.permsError, permsListRefused: opts.permsListRefused,
+    permsBusy: false, permsError: opts.permsError, permsRemediation: opts.permsRemediation ?? null,
+    permsListRefused: opts.permsListRefused,
     permsListFailed: opts.permsListFailed, sqlGate: null,
     permsRows: [],
     permsRoles: [{ name: 'Storage Blob Data Reader' }],
@@ -97,6 +100,27 @@ describe('PermissionsDialog — an empty list after a failed listing is not repo
     // Breaks if the guard hides the sentence even when the listing succeeded
     // with zero rows (for example the guard inverted).
     expect(screen.getByText(EMPTY_SENTENCE)).toBeTruthy();
+  });
+});
+
+describe('PermissionsDialog — the error and its next step are separate lines', () => {
+  const FIX = 'Grant the Console identity Role Based Access Control Administrator on storage account "acct".';
+
+  it('the remediation renders in its own element, not inside the error line', () => {
+    mount({ permsError: GRANT_ERROR, permsRemediation: FIX, permsListRefused: false, permsListFailed: false });
+    const errLine = screen.getByText(GRANT_ERROR);
+    const fixLine = screen.getByTestId('perms-remediation');
+    // Breaks if the dialog does not render the remediation (getByTestId throws),
+    // or renders it inside the error line (the error element then contains FIX).
+    expect([fixLine.textContent?.includes(FIX), errLine.textContent?.includes(FIX), errLine.contains(fixLine)])
+      .toEqual([true, false, false]);
+  });
+
+  it('no remediation: only the error line renders (control)', () => {
+    mount({ permsError: GRANT_ERROR, permsListRefused: false, permsListFailed: false });
+    // Breaks if an empty "Next step" line renders without a remediation; the
+    // error itself is still shown.
+    expect([!!screen.getByText(GRANT_ERROR), screen.queryByTestId('perms-remediation')]).toEqual([true, null]);
   });
 });
 

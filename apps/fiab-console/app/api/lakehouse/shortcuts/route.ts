@@ -11,8 +11,12 @@
  * access; POST and DELETE change the lakehouse and need edit rights. The
  * shortcut registry is keyed by the item id; rows saved under the earlier
  * container-name key are listed and deleted through `_lib/shortcut-rows` when
- * this item is the one lakehouse bound to that container. Every refusal carries
- * a stable `code` and a `remediation`.
+ * this item is the one lakehouse bound to that container. The input and access
+ * refusals (400 `bad_request`, 403 `read_only`, 404 `item_not_found`) carry a
+ * stable `code` and a `remediation`. A credential the shortcut-secret resolver
+ * refuses (for example 403 `shortcut_secret_not_owned`) carries a `code`, and
+ * its next step is written in `error`. Registry, target and engine failures
+ * answer with `error`, a `code` where the failure has one, and some a `hint`.
  *
  * Runtime: nodejs, force-dynamic.
  * Design: docs/fiab/design/lakehouse-shortcuts.md.

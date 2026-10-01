@@ -46,7 +46,13 @@ vi.mock('@/lib/azure/fetch-with-timeout', () => ({
   },
 }));
 
-const ARM_MESSAGE = 'The client does not have authorization to perform this action.';
+// Shaped like ARM's real 403 text: it names an identity's object id and a
+// subscription / resource-group scope, which must not reach a response.
+// Low-entropy placeholders.
+const ARM_OBJECT_ID = '00000000-0000-0000-0000-00000000abcd';
+const ARM_SCOPE = '/subscriptions/sub-fixture/resourceGroups/rg-fixture';
+const ARM_MESSAGE = `The client 'console-uami' with object id '${ARM_OBJECT_ID}' does not have authorization to perform `
+  + `action 'Microsoft.Authorization/roleAssignments/write' over scope '${ARM_SCOPE}/providers/Microsoft.Storage/storageAccounts/boundacct'.`;
 const PRIMARY = 'primaryacct';
 const BOUND = 'boundacct';
 const saved = process.env.LOOM_BRONZE_URL;
@@ -162,6 +168,10 @@ describe('an account Resource Graph does not place', () => {
     expect(err.remediation).toContain(`with ${STORAGE_RBAC_ADMIN_BICEP}`);
     expect(err.remediation).toContain(`storageAccountName="${BOUND}"`);
     expect(err.remediation).not.toContain('Reader on the subscription');
+    // Breaks if the parameter is described as just "the Console identity" (a
+    // client id there fails the module), or the propagation delay is dropped.
+    expect(err.remediation).toContain("consolePrincipalId set to the Console identity's principal (object) id, not its client id.");
+    expect(err.remediation).toContain('A new role assignment can take a few minutes to take effect');
   });
 
   it('the listing refuses with a named error and calls no ARM', async () => {
@@ -221,22 +231,39 @@ describe('a 403 from ARM on a role-assignment request', () => {
     await expect(listContainerRoleAssignments('landing', BOUND)).rejects.toMatchObject({
       name: 'StorageRoleDeniedError', code: 'storage_role_read_denied', operation: 'list',
       account: BOUND, status: 403, remediation,
+      // A revoke lists first, so this sentence must also read right after Revoke.
+      message: expect.stringContaining('Nothing was listed or changed.'),
     });
     expect(rec.urls).toHaveLength(1);
   });
 
-  it('the grant rejects with storage_role_write_denied, the remediation and the ARM message', async () => {
+  it('the grant rejects with storage_role_write_denied and a correlation id; ARM\'s text is logged, not returned', async () => {
     rec.armStatus = 403;
-    const { grantContainerRole } = await import('../adls-client');
-    const err: any = await grantContainerRole('landing', 'p1', 'Storage Blob Data Reader', 'User', BOUND).catch((e) => e);
-    // Breaks if the grant PUT uses armCall directly (plain Error, no code).
-    expect(err).toMatchObject({
-      name: 'StorageRoleDeniedError', code: 'storage_role_write_denied', operation: 'grant',
-      account: BOUND, status: 403, remediation,
-    });
-    expect(err.message).toContain('Nothing was granted.');
-    // Breaks if Azure's own reason is dropped from the message.
-    expect(err.message).toContain(ARM_MESSAGE);
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { grantContainerRole } = await import('../adls-client');
+      const err: any = await grantContainerRole('landing', 'p1', 'Storage Blob Data Reader', 'User', BOUND).catch((e) => e);
+      // Breaks if the grant PUT uses armCall directly (plain Error, no code).
+      expect(err).toMatchObject({
+        name: 'StorageRoleDeniedError', code: 'storage_role_write_denied', operation: 'grant',
+        account: BOUND, status: 403, remediation,
+      });
+      expect(err.message).toContain('Nothing was granted.');
+      // Breaks if ARM's message is appended again (the pre-change ` Azure said: ...`):
+      // the object id and the subscription scope would then be in the message.
+      expect([err.message.includes(ARM_OBJECT_ID), err.message.includes(ARM_SCOPE), err.message.includes(ARM_MESSAGE)])
+        .toEqual([false, false, false]);
+      // Breaks if the error carries no id, or the message does not name it.
+      expect(err.correlationId).toMatch(/^[0-9a-f-]{8,}$/i);
+      expect(err.message).toContain(`correlation id ${err.correlationId}.`);
+      // Breaks if ARM's text is not logged, or is logged under another id.
+      expect(logged).toHaveBeenCalledTimes(1);
+      expect(logged.mock.calls[0][1]).toEqual({
+        correlationId: err.correlationId, account: BOUND, operation: 'grant', armMessage: ARM_MESSAGE,
+      });
+    } finally {
+      logged.mockRestore();
+    }
   });
 
   it('the revoke rejects with storage_role_write_denied for the account in the id', async () => {

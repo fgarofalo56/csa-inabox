@@ -302,12 +302,16 @@ describe('GET /api/lakehouse/permissions?tab=object — a bound account Resource
   // a bare 403 with ARM's message and no `code` or `remediation`.
   it('a role read Azure refuses answers 403 storage_role_read_denied with the remediation', async () => {
     (getSession as any).mockReturnValue(member);
-    (listContainerRoleAssignments as any).mockRejectedValue(new StorageRoleDeniedError(ACCOUNT, 'list', 'denied'));
+    (listContainerRoleAssignments as any).mockRejectedValue(new StorageRoleDeniedError(ACCOUNT, 'list', 'corr-read-1'));
     const res = await GET(getReq({ lakehouseId: LH, tab: 'object' }));
     expect(res.status).toBe(403);
     const j = await res.json();
     expect([j.ok, j.code]).toEqual([false, 'storage_role_read_denied']);
     expect(j.remediation).toContain(`Role Based Access Control Administrator on storage account "${ACCOUNT}"`);
+    // Breaks if the route drops the correlation id, or adds a field (such as
+    // ARM's own message) beyond the five below.
+    expect([j.correlationId, Object.keys(j).sort()])
+      .toEqual(['corr-read-1', ['code', 'correlationId', 'error', 'ok', 'remediation']]);
   });
 
   // CONTROL: any other listing failure keeps the generic answer. FAILS IF
