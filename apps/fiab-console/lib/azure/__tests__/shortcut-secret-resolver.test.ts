@@ -344,7 +344,9 @@ describe('refusal guidance follows the target type', () => {
     const err = await resolveShortcutSecret('partner-token', DS_ME).catch((e) => e);
     expect(err).toBeInstanceOf(KeyVaultSecretPolicyError);
     expect(err.message).toContain('not supported yet (#4854)');
-    expect(err.message).toContain('Explore & query');
+    // WHAT BREAKS IT: a share path that skips the subscribe step — Explore &
+    // query lists only subscribed (mounted) shares.
+    expect(err.message).toContain('Shared with me → Subscribe to the share → Explore & query');
     expect(err.message).toContain('Create lakehouse shortcut');
     expect(err.message).toContain('loom-dsp-');
     expect(err.message).not.toContain('Save to Key Vault');
@@ -373,7 +375,10 @@ describe('refusal guidance follows the target type', () => {
       const err = await resolveShortcutSecret('loom-dsp-someone-else', owner).catch((e) => e);
       expect(err).toBeInstanceOf(ShortcutSecretOwnershipError);
       expect(err.message).toMatch(/^Test uses the credential of the shortcut's owner\./);
-      expect(err.message).toContain('Re-add the provider under Data shares → Add provider, then retry.');
+      // WHAT BREAKS IT: re-add advice without "same provider name" — the
+      // credential is named from the provider name, so another name saves a
+      // secret this row does not bind.
+      expect(err.message).toContain('Re-add the provider under Data shares → Add provider with the same provider name, then retry.');
       expect(err.message).not.toContain('Save to Key Vault');
       noCalls();
     },
