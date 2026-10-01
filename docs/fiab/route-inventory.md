@@ -13,10 +13,10 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1695 |
+| Total routes | 1696 |
 | Public (no session) | 59 |
-| Session-only | 638 |
-| Owner-scoped | 681 |
+| Session-only | 637 |
+| Owner-scoped | 683 |
 | Admin | 317 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 499 |
@@ -1861,6 +1861,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
+| `lakehouse/access/route.ts` | GET | owner-scoped |  | Cosmos, Microsoft Graph |
 | `lakehouse/ai-clean-suggest/route.ts` | POST | session-only | ● | AML, ARM, Azure AI Services, Azure Cache for Redis, Azure OpenAI, Cosmos |
 | `lakehouse/containers/route.ts` | GET | session-only |  | ADLS, ARM, Azure Storage, Managed Identity |
 | `lakehouse/download/route.ts` | GET | owner-scoped |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Purview |
@@ -1877,14 +1878,14 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `lakehouse/references/route.ts` | GET POST | owner-scoped |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity |
 | `lakehouse/schemas/route.ts` | GET POST PATCH DELETE | session-only | ● | Cosmos, Synapse |
 | `lakehouse/settings/route.ts` | GET PUT | session-only | ● | ADLS, Azure Monitor, Azure Storage, Cosmos |
-| `lakehouse/shortcuts/browse/route.ts` | GET | session-only | ● | ADLS, ARM, Azure Storage, Key Vault, Managed Identity |
+| `lakehouse/shortcuts/browse/route.ts` | GET | session-only | ● | ADLS, ARM, Azure Monitor, Azure Storage, Cosmos, Key Vault, Managed Identity |
 | `lakehouse/shortcuts/credentials/route.ts` | POST | session-only | ● | Key Vault |
 | `lakehouse/shortcuts/route.ts` | GET POST DELETE | session-only |  | ADLS, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Key Vault, Managed Identity, Microsoft Graph, Synapse SQL |
 | `lakehouse/shortcuts/sharepoint/route.ts` | GET | session-only | ● | Microsoft Graph |
 | `lakehouse/shortcuts/test/route.ts` | POST | session-only | ● | ADLS, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Key Vault, Managed Identity, Microsoft Graph, Synapse SQL |
 | `lakehouse/table-stats/route.ts` | GET | session-only | ● | ADLS, Azure Storage, Synapse |
 | `lakehouse/tables/route.ts` | GET | owner-scoped |  | ADLS, ARM, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
-| `lakehouse/transform-preview/route.ts` | GET POST | session-only | ● | ADLS, Azure Storage, Synapse |
+| `lakehouse/transform-preview/route.ts` | GET POST | owner-scoped | ● | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Synapse |
 | `lakehouse/upload/route.ts` | POST | session-only |  | ADLS, ARM, Azure Storage, Managed Identity |
 
 ## landing-zones
@@ -2846,9 +2847,9 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/app/api/items/sql-database/route.ts` | Azure SQL, PostgreSQL |
 | `apps/fiab-console/app/api/items/stream-analytics-job/[name]/test/route.ts` | Stream Analytics |
 | `apps/fiab-console/app/api/items/user-data-function/[id]/invoke/route.ts` | Fabric |
+| `apps/fiab-console/app/api/lakehouse/_lib/container-role-assignment.ts` | Azure RBAC |
 | `apps/fiab-console/app/api/lakehouse/settings/route.ts` | ADLS |
 | `apps/fiab-console/app/api/lakehouse/table-stats/route.ts` | ADLS |
-| `apps/fiab-console/app/api/lakehouse/transform-preview/route.ts` | ADLS |
 | `apps/fiab-console/app/api/lakehouse/upload/route.ts` | ADLS |
 | `apps/fiab-console/app/api/landing-zones/[id]/attach/preflight/route.ts` | Resource Graph |
 | `apps/fiab-console/app/api/landing-zones/[id]/attach/route.ts` | Resource Graph |

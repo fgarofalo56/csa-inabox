@@ -1050,9 +1050,11 @@ describe('ROUND 6 — the securable IMPORT choke point (check 8)', () => {
     // No whole-tree scan: `securableRawImports` is pure, and the tree-wide PASS
     // (which now includes check 8) is asserted once at the top of this file.
     //
-    // The routes really do import getKeyVaultSecret from that module and the
-    // facade really does import all five. If either tripped, check 8 would be
-    // unusable and would get disabled rather than fixed.
+    // The resolver really does import getKeyVaultSecret from that module (it is
+    // the only permitted importer — scripts/ci/check-shortcut-secret-resolver.mjs),
+    // the engine module imports keyVaultConfigGate, and the facade imports all
+    // five. If any tripped, check 8 would be unusable and would get disabled
+    // rather than fixed.
     const s = realSources();
     expect(securableRawImports(s.get(SECURABLE_CHOKEPOINT)!).sort()).toEqual([
       'deleteUcExternalLocation',
@@ -1062,7 +1064,9 @@ describe('ROUND 6 — the securable IMPORT choke point (check 8)', () => {
       'ensureUcGcpStorageCredential',
     ]);
     expect(securableRawImports(s.get('lib/azure/shortcut-engines.ts')!).sort())
-      .toEqual(['getKeyVaultSecret', 'keyVaultConfigGate']);
+      .toEqual(['keyVaultConfigGate']);
+    expect(securableRawImports(s.get('lib/azure/shortcut-secret-resolver.ts')!).sort())
+      .toEqual(['getKeyVaultSecret']);
     for (const route of ['app/api/lakehouse/shortcuts/route.ts', 'app/api/lakehouse/shortcuts/test/route.ts']) {
       for (const name of securableRawImports(s.get(route)!)) {
         expect(SECURABLE_RAW_PUBLIC.has(name), `${route} imports non-public ${name}`).toBe(true);

@@ -46,6 +46,7 @@ import { LOOM_ACCENT } from '@/lib/components/shared/accent-tokens';
 import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
 import { HonestGate } from '@/lib/components/shared/honest-gate';
 import { surfaceGateFrom, type SurfaceGate } from '@/lib/gates/surface-gate';
+import { buildShareShortcutRequest } from './share-shortcut-request';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
@@ -553,15 +554,7 @@ function ShareShortcutDialog({ open, onClose, providerName, shareName, schema, t
       const r = await clientFetch('/api/lakehouse/shortcuts', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          lakehouseId: lhId,
-          name: (name.trim() || table).replace(/[^A-Za-z0-9 _.-]/g, '_'),
-          kind: 'tables',
-          targetType: 'delta_sharing',
-          targetUri: `delta-sharing://${shareName}/${schema}/${table}`,
-          credentialRef: { kind: 'deltaSharing', keyVaultSecret: `loom-dsp-${providerName}` },
-          format: 'delta',
-        }),
+        body: JSON.stringify(buildShareShortcutRequest({ lakehouseId: lhId, name, providerName, shareName, schema, table })),
       });
       const j = await r.json().catch(() => null);
       if (!j?.ok) {

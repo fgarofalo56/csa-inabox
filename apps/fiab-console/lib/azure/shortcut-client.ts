@@ -23,6 +23,7 @@
 
 import { trimLeadingSlashes, trimSlashes, trimTrailingSlashes } from '@/lib/util/trim';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { networkFailureReason } from '@/lib/azure/shortcut-error-hygiene';
 import {
   parseAbfss as parseEngineAbfss,
   resolveAndTestAdls,
@@ -446,7 +447,7 @@ export async function listS3Objects(args: S3BrowseArgs): Promise<BrowseResult> {
   try {
     res = await fetchWithTimeout(url, { method: 'GET', headers: { ...headers, authorization }, cache: 'no-store' });
   } catch (e: any) {
-    throw new ShortcutSourceError(`S3 endpoint unreachable: ${e?.message || e}`, 's3_unreachable', 502);
+    throw new ShortcutSourceError(`S3 endpoint unreachable (${networkFailureReason(e)}).`, 's3_unreachable', 502);
   }
   const text = await res.text().catch(() => '');
   if (res.status === 403) {
@@ -549,7 +550,7 @@ async function gcsAccessToken(sa: GcsServiceAccount): Promise<string> {
       cache: 'no-store',
     });
   } catch (e: any) {
-    throw new ShortcutSourceError(`GCS token endpoint unreachable: ${e?.message || e}`, 'gcs_unreachable', 502);
+    throw new ShortcutSourceError(`GCS token endpoint unreachable (${networkFailureReason(e)}).`, 'gcs_unreachable', 502);
   }
   if (!res.ok) {
     const body = await res.text().catch(() => '');
@@ -581,7 +582,7 @@ export async function listGcsObjects(args: GcsBrowseArgs): Promise<BrowseResult>
   try {
     res = await fetchWithTimeout(url, { headers: { authorization: `Bearer ${token}` }, cache: 'no-store' });
   } catch (e: any) {
-    throw new ShortcutSourceError(`GCS endpoint unreachable: ${e?.message || e}`, 'gcs_unreachable', 502);
+    throw new ShortcutSourceError(`GCS endpoint unreachable (${networkFailureReason(e)}).`, 'gcs_unreachable', 502);
   }
   if (res.status === 401 || res.status === 403) {
     throw new ShortcutSourceError(
@@ -822,7 +823,9 @@ export async function listAdlsWithSas(args: AdlsSasBrowseArgs): Promise<BrowseRe
   try {
     res = await fetchWithTimeout(url, { method: 'GET', cache: 'no-store' });
   } catch (e: any) {
-    throw new ShortcutSourceError(`ADLS endpoint unreachable: ${e?.message || e}`, 'adls_unreachable', 502);
+    // The request URL carries the SAS in its query, and a timeout's message
+    // names the URL — report a symbolic reason only.
+    throw new ShortcutSourceError(`ADLS endpoint unreachable (${networkFailureReason(e)}).`, 'adls_unreachable', 502);
   }
   const text = await res.text().catch(() => '');
   if (res.status === 403) {
