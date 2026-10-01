@@ -13,6 +13,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   analyzeLakehouseQuery, confineQueryLocation, spellsName, REFUSED_WORD_NAMES, type ItemStorageLocation,
+  type QueryRefusal,
 } from '../_lib/query-scope';
 import { LAKEHOUSE_COLUMNS_SQL } from '@/lib/components/shared/entity-diagram-sources';
 import { lexTsql } from '@/lib/sql/tsql-lexer';
@@ -43,15 +44,37 @@ const asSentence = (construct: string) => construct.charAt(0).toUpperCase() + co
 /** A name with every printable ASCII character written as its fullwidth form (U+FF01-U+FF5E). */
 const fullwidth = (s: string) => s.replace(/[!-~]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 0xfee0));
 
+/** The reason a name with letters outside ASCII is refused for what it reads as, before the rule's own reason. */
+const READ_AS = 'non-ASCII letters in this name may be read as their plain form or ignored, so it reads as';
+
+/**
+ * Check a refusal against a construct written as `the <kind> <name>`, or, for a name with letters outside
+ * ASCII, as `the <kind> [<part>] (read as <name>)`. The second form is refused as `the name [<part>]`, and
+ * its message says what it reads as: `… so it reads as the <kind> <name>; …`. Breaks if the name, the kind
+ * or the reading in the message differs from the row.
+ */
+function expectConstruct(out: QueryRefusal, construct: string): void {
+  const m = /^the (.+?) ((?:[^\s[]*\.)?\[.*\]) \(read as (.+)\)$/su.exec(construct);
+  if (m === null) {
+    expect(out.construct).toBe(construct);
+    expect(out.error).toContain(`${asSentence(construct)} is not accepted`);
+    return;
+  }
+  expect(out.construct).toBe(`the name ${m[2]}`);
+  expect(out.error).toContain(`The name ${m[2]} is not accepted: ${READ_AS} the ${m[1]} ${m[3]}; `);
+}
+
 /*
- * Every entry of the two Microsoft Learn pages, written out by hand from the pages, NOT derived from
+ * Every entry of three Microsoft Learn pages, written out by hand from the pages, NOT derived from
  * the classifier: a function the classifier does not list has a row here that fails.
  *
  *   https://learn.microsoft.com/en-us/sql/t-sql/functions/metadata-functions-transact-sql
  *   https://learn.microsoft.com/en-us/sql/t-sql/functions/security-functions-transact-sql
+ *   https://learn.microsoft.com/en-us/sql/t-sql/functions/cryptographic-functions-transact-sql
  *
- * Fetched 2026-09-30 (metadata page updated_at 2026-09-21, security page updated_at 2026-08-24).
- * The one exception is PARSENAME, which splits a string and reads nothing; it must stay ACCEPTED.
+ * Fetched 2026-09-30 (metadata page updated_at 2026-09-21, security page updated_at 2026-08-24,
+ * cryptographic page updated_at 2026-08-24). The exceptions, which must stay ACCEPTED, are listed in
+ * EXCEPTIONS with the reason for each.
  */
 const LEARN_METADATA_PAGE = [
   'SERVERPROPERTY', 'DB_ID', 'DB_NAME', 'DATABASEPROPERTYEX', 'ORIGINAL_DB_NAME', 'APP_NAME',
@@ -69,26 +92,44 @@ const LEARN_SECURITY_PAGE = [
   'SUSER_SNAME', 'IS_MEMBER', 'SYSTEM_USER', 'IS_ROLEMEMBER', 'SUSER_NAME', 'IS_SRVROLEMEMBER', 'USER_ID',
   'LOGINPROPERTY', 'USER_NAME', 'ORIGINAL_LOGIN', 'PERMISSIONS', 'xp_logininfo', 'xp_enumgroups',
 ];
-const EXCEPTIONS: Record<string, string> = { PARSENAME: 'splits a string and reads nothing' };
+const LEARN_CRYPTOGRAPHIC_PAGE = [
+  'ENCRYPTBYKEY', 'DECRYPTBYKEY', 'ENCRYPTBYPASSPHRASE', 'DECRYPTBYPASSPHRASE', 'KEY_ID', 'KEY_GUID',
+  'DECRYPTBYKEYAUTOASYMKEY', 'KEY_NAME', 'SYMKEYPROPERTY', 'ENCRYPTBYASYMKEY', 'DECRYPTBYASYMKEY',
+  'ENCRYPTBYCERT', 'DECRYPTBYCERT', 'ASYMKEYPROPERTY', 'ASYMKEY_ID', 'SIGNBYASYMKEY', 'VERIFYSIGNEDBYASYMKEY',
+  'SIGNBYCERT', 'VERIFYSIGNEDBYCERT', 'IS_OBJECTSIGNED', 'DecryptByKeyAutoCert', 'HASHBYTES', 'CERTENCODED',
+  'CERTPRIVATEKEY',
+];
+const EXCEPTIONS: Record<string, string> = {
+  PARSENAME: 'splits a string and reads nothing',
+  HASHBYTES: 'hashes its argument and reads nothing the server holds',
+  ENCRYPTBYPASSPHRASE: 'takes its passphrase as an argument and reads nothing the server holds',
+  DECRYPTBYPASSPHRASE: 'takes its passphrase as an argument and reads nothing the server holds',
+};
 // Learn documents these three as called without parentheses.
 const WORDS_WITHOUT_PARENTHESES = new Set(['CURRENT_USER', 'SESSION_USER', 'SYSTEM_USER']);
 
 /**
- * Refused though neither page lists them, each with the reason its kind names: database names and
- * table names that may carry a database (metadata), certificate and key ids (security), and the
- * session's host and connection (session). Removing one from the classifier turns exactly its row red.
+ * Refused though no page lists them, each with the reason its kind names: database names and table
+ * names that may carry a database (metadata), certificate ids and properties (cryptographic), and the
+ * session's settings, host and connection (session). Removing one from the classifier turns exactly
+ * its row red.
  */
-const ALSO_REFUSED: Array<[string, 'metadata' | 'security' | 'session']> = [
+type Kind = 'metadata' | 'security' | 'cryptographic' | 'session';
+const ALSO_REFUSED: Array<[string, Kind]> = [
   ['HAS_DBACCESS', 'metadata'], ['DATABASEPROPERTY', 'metadata'], ['GETANSINULL', 'metadata'],
   ['IDENT_CURRENT', 'metadata'], ['IDENT_SEED', 'metadata'], ['IDENT_INCR', 'metadata'],
-  ['FILEPROPERTYEX', 'metadata'], ['CERT_ID', 'security'], ['KEY_ID', 'security'],
+  ['FILEPROPERTYEX', 'metadata'], ['CERT_ID', 'cryptographic'], ['CERTPROPERTY', 'cryptographic'],
   ['HOST_NAME', 'session'], ['HOST_ID', 'session'], ['CONNECTIONPROPERTY', 'session'],
+  ['SESSIONPROPERTY', 'session'], ['CONTEXT_INFO', 'session'],
 ];
 
 /** Every function above called with parentheses, as Learn writes it: the property test's function targets. */
-const CALLED_FUNCTIONS = [...LEARN_METADATA_PAGE, ...LEARN_SECURITY_PAGE, ...ALSO_REFUSED.map(([f]) => f)]
-  .filter((f, k, all) => /^[A-Z_]+$/.test(f) && !(f in EXCEPTIONS) && !WORDS_WITHOUT_PARENTHESES.has(f)
-    && all.indexOf(f) === k);
+const CALLED_FUNCTIONS = [
+  ...LEARN_METADATA_PAGE, ...LEARN_SECURITY_PAGE, ...LEARN_CRYPTOGRAPHIC_PAGE, ...ALSO_REFUSED.map(([f]) => f),
+  // The xp_ entries are extended stored procedures, run only by EXEC, never called in a SELECT; the
+  // procedure rows below cover them.
+].filter((f, k, all) => /^[A-Za-z_]+$/.test(f) && !f.startsWith('xp_') && !(f in EXCEPTIONS)
+  && !WORDS_WITHOUT_PARENTHESES.has(f) && all.indexOf(f) === k);
 
 /**
  * The compatibility views the classifier refuses, written out. The property test below is about how a
@@ -229,13 +270,15 @@ describe('analyzeLakehouseQuery — every refused word, written out', () => {
   });
 });
 
-describe('analyzeLakehouseQuery — metadata, security and session functions', () => {
+describe('analyzeLakehouseQuery — metadata, security, cryptographic and session functions', () => {
   const METADATA_WHY = 'metadata functions are not run from this tab for a caller who is not a tenant admin; '
     + 'several of them take another database\'s id or name';
   const SECURITY_WHY = 'security functions are not run from this tab for a caller who is not a tenant admin; '
     + 'they return or test logins, users, roles, permissions, certificates or keys';
   const SESSION_WHY = 'functions that describe the session, its connection or its host are not run from this tab '
     + 'for a caller who is not a tenant admin';
+  const CRYPTO_WHY = 'cryptographic functions that use or describe the server\'s keys and certificates are not run '
+    + 'from this tab for a caller who is not a tenant admin';
 
   // The calls named in review, each with the arguments it was written with. Each row breaks if its
   // function is dropped from the list, or if the call rule stops firing (the construct would then be
@@ -262,10 +305,17 @@ describe('analyzeLakehouseQuery — metadata, security and session functions', (
     ['SELECT NEXT VALUE FOR dbo.s', 'the metadata function NEXT VALUE FOR', METADATA_WHY],
     ['SELECT SUSER_SNAME()', 'the security function SUSER_SNAME', SECURITY_WHY],
     ['SELECT SUSER_NAME()', 'the security function SUSER_NAME', SECURITY_WHY],
-    ["SELECT CERT_ID('c')", 'the security function CERT_ID', SECURITY_WHY],
-    ["SELECT KEY_ID('k')", 'the security function KEY_ID', SECURITY_WHY],
+    ["SELECT CERT_ID('c')", 'the cryptographic function CERT_ID', CRYPTO_WHY],
+    ["SELECT KEY_ID('k')", 'the cryptographic function KEY_ID', CRYPTO_WHY],
+    ["SELECT KEY_GUID('k')", 'the cryptographic function KEY_GUID', CRYPTO_WHY],
+    ['SELECT KEY_NAME(256)', 'the cryptographic function KEY_NAME', CRYPTO_WHY],
+    ["SELECT ASYMKEY_ID('k')", 'the cryptographic function ASYMKEY_ID', CRYPTO_WHY],
+    ["SELECT CERTPROPERTY(256, 'Subject')", 'the cryptographic function CERTPROPERTY', CRYPTO_WHY],
+    ["SELECT SYMKEYPROPERTY(256, 'algorithm_desc')", 'the cryptographic function SYMKEYPROPERTY', CRYPTO_WHY],
     ['SELECT HOST_NAME()', 'the session function HOST_NAME', SESSION_WHY],
     ["SELECT CONNECTIONPROPERTY('client_net_address')", 'the session function CONNECTIONPROPERTY', SESSION_WHY],
+    ["SELECT SESSIONPROPERTY('ANSI_NULLS')", 'the session function SESSIONPROPERTY', SESSION_WHY],
+    ['SELECT CONTEXT_INFO()', 'the session function CONTEXT_INFO', SESSION_WHY],
     // Position and spelling: in a WHERE clause, lower case, qualified, bracketed.
     ["SELECT a FROM t WHERE a = DB_ID('x')", 'the metadata function DB_ID', METADATA_WHY],
     ['select db_name(5)', 'the metadata function db_name', METADATA_WHY],
@@ -276,9 +326,11 @@ describe('analyzeLakehouseQuery — metadata, security and session functions', (
     ['SELECT [DB_NAME ](5)', 'the metadata function DB_NAME', METADATA_WHY],
     ['SELECT DB_NAME /* c */ (5)', 'the metadata function DB_NAME', METADATA_WHY],
     ['SELECT DB_NAME\t(5)', 'the metadata function DB_NAME', METADATA_WHY],
-    // A fullwidth name, shown with the name it reads as.
-    [`SELECT [${fullwidth('DB_NAME')}](5)`, `the metadata function [${fullwidth('DB_NAME')}] (read as DB_NAME)`, METADATA_WHY],
-    [`SELECT [${fullwidth('suser_sname')}]()`, `the security function [${fullwidth('suser_sname')}] (read as SUSER_SNAME)`, SECURITY_WHY],
+    // A fullwidth name: the message says what it reads as, then the function's reason.
+    [`SELECT [${fullwidth('DB_NAME')}](5)`, `the name [${fullwidth('DB_NAME')}]`,
+      `${READ_AS} the metadata function DB_NAME; ${METADATA_WHY}`],
+    [`SELECT [${fullwidth('suser_sname')}]()`, `the name [${fullwidth('suser_sname')}]`,
+      `${READ_AS} the security function SUSER_SNAME; ${SECURITY_WHY}`],
     // Written without parentheses, these words are the function.
     ['SELECT CURRENT_USER', 'the security function CURRENT_USER', SECURITY_WHY],
     ['SELECT (CURRENT_USER)', 'the security function CURRENT_USER', SECURITY_WHY],
@@ -305,7 +357,7 @@ describe('analyzeLakehouseQuery — metadata, security and session functions', (
   });
 
   /** The query that calls an entry as Learn writes it, and the construct its refusal must name. */
-  function probe(entry: string, kind: 'metadata' | 'security'): [string, string] {
+  function probe(entry: string, kind: Exclude<Kind, 'session'>): [string, string] {
     if (entry.startsWith('@@')) return [`SELECT ${entry}`, `the variable ${entry}`];
     if (entry.startsWith('sys.')) return [`SELECT * FROM ${entry}(NULL)`, `the sys schema object ${entry}`];
     if (entry.startsWith('xp_')) return [`SELECT 1 ${entry}`, `the system procedure ${entry}`];
@@ -316,10 +368,13 @@ describe('analyzeLakehouseQuery — metadata, security and session functions', (
   for (const [page, entries, kind] of [
     ['metadata', LEARN_METADATA_PAGE, 'metadata'],
     ['security', LEARN_SECURITY_PAGE, 'security'],
+    ['cryptographic', LEARN_CRYPTOGRAPHIC_PAGE, 'cryptographic'],
   ] as const) {
     for (const entry of entries) {
-      // An entry on both pages takes the metadata reason.
-      const [sql, construct] = probe(entry, LEARN_METADATA_PAGE.includes(entry) ? 'metadata' : kind);
+      // An entry on more than one page takes the reason of the first page that lists it.
+      const first = LEARN_METADATA_PAGE.includes(entry) ? 'metadata'
+        : LEARN_SECURITY_PAGE.includes(entry) ? 'security' : kind;
+      const [sql, construct] = probe(entry, first);
       if (entry in EXCEPTIONS) {
         it(`accepts ${entry} from the ${page} page: it ${EXCEPTIONS[entry]}`, () => {
           expect(analyze(sql)).toEqual({ ok: true, locations: [] });
@@ -335,7 +390,9 @@ describe('analyzeLakehouseQuery — metadata, security and session functions', (
     }
   }
 
-  const KIND_WHY = { metadata: METADATA_WHY, security: SECURITY_WHY, session: SESSION_WHY } as const;
+  const KIND_WHY = {
+    metadata: METADATA_WHY, security: SECURITY_WHY, cryptographic: CRYPTO_WHY, session: SESSION_WHY,
+  } as const;
   for (const [fn, kind] of ALSO_REFUSED) {
     it(`refuses a call to ${fn}, with the ${kind} reason`, () => {
       const out = analyze(`SELECT ${fn}(1) FROM t`);
@@ -602,6 +659,32 @@ describe('analyzeLakehouseQuery — refused queries name the construct', () => {
     // A fullwidth letter may also read as nothing: sys + x + processes spells sysprocesses.
     ['a fullwidth letter inside a near-miss of a compatibility view', 'SELECT * FROM [sys\uff58processes]',
       'the system compatibility view [sys\uff58processes] (read as sysprocesses)'],
+    // A character whose decomposition is part ASCII, part not, reads as its ASCII letters: l with a middle
+    // dot as l, n with an apostrophe as n, the degree Celsius sign as c, a with a half ring as a. Each is
+    // accepted if the fold is dropped whenever its decomposition is not all ASCII.
+    ['a middle-dot l inside syslogins', 'SELECT * FROM [sys\u0140ogins]',
+      'the system compatibility view [sys\u0140ogins] (read as syslogins)'],
+    ['an apostrophe n inside syscolumns', 'SELECT * FROM [syscolum\u0149s]',
+      'the system compatibility view [syscolum\u0149s] (read as syscolumns)'],
+    ['a middle-dot l inside sysfiles', 'SELECT * FROM [sysfi\u0140es]',
+      'the system compatibility view [sysfi\u0140es] (read as sysfiles)'],
+    ['a degree Celsius sign inside syscolumns', 'SELECT * FROM [sys\u2103olumns]',
+      'the system compatibility view [sys\u2103olumns] (read as syscolumns)'],
+    ['an a with a half ring inside sysdatabases', 'SELECT * FROM [sysdat\u1e9abases]',
+      'the system compatibility view [sysdat\u1e9abases] (read as sysdatabases)'],
+    ['an apostrophe n inside sysindexes', 'SELECT * FROM [sysi\u0149dexes]',
+      'the system compatibility view [sysi\u0149dexes] (read as sysindexes)'],
+    ['an apostrophe n inside a called fn_ function', 'SELECT * FROM [f\u0149_dblog](NULL, NULL)',
+      'the system function [f\u0149_dblog] (read as fn_dblog)'],
+    ['an apostrophe n inside a called DB_NAME', 'SELECT [DB_\u0149AME](5)',
+      'the metadata function [DB_\u0149AME] (read as DB_NAME)'],
+    ['a capital middle-dot L inside a called COL_NAME', 'SELECT [CO\u013f_NAME](1)',
+      'the metadata function [CO\u013f_NAME] (read as COL_NAME)'],
+    // Thorn reads as th. Accepted if the expansion is missing.
+    ['a thorn inside a called COL_LENGTH', "SELECT [COL_LENG\u00fe]('t', 'c')",
+      'the metadata function [COL_LENG\u00fe] (read as COL_LENGTH)'],
+    ['a capital thorn inside a called COL_LENGTH', "SELECT [COL_LENG\u00de]('t', 'c')",
+      'the metadata function [COL_LENG\u00de] (read as COL_LENGTH)'],
     // Code points whose comparison cannot be known, refused outright.
     ['an unassigned code point in a name', 'SELECT t.[a\u0378b] FROM t', 'the name part [a\\u{378}b]'],
     ['a private-use code point in a name', 'SELECT t.[a\ue000b] FROM t', 'the name part [a\\u{e000}b]'],
@@ -623,10 +706,9 @@ describe('analyzeLakehouseQuery — refused queries name the construct', () => {
       const out = analyze(sql);
       expect(out.ok).toBe(false);
       if (out.ok) return;
-      expect(out.construct).toBe(construct);
+      expectConstruct(out, construct);
       expect(out.status).toBe(400);
       expect(out.code).toBe('query_construct_not_accepted');
-      expect(out.error).toContain(`${asSentence(construct)} is not accepted`);
     });
   }
 
@@ -643,16 +725,62 @@ describe('analyzeLakehouseQuery — refused queries name the construct', () => {
     }
   });
 
-  it('a name refused for the name it reads as says SELECT * returns the column', () => {
-    // Breaks if the hint is dropped, or added to a refusal of a name written in ASCII.
-    const read = analyze('SELECT t.[\uff53\uff59\uff53processes] FROM t');
+  it('a fold of several letters that runs past the end of a prefix target completes the prefix', () => {
+    // U+01C6 (dz with caron) folds to dz. As a prefix, dz covers d and runs past it: matched after one
+    // character. As a whole name it spells dz, not d. Breaks if the prefix match needs the fold to end
+    // inside the target (the first expectation), or if the overrun is accepted for a whole name (the
+    // second). No character's fold runs past the end of ## or fn_ today, so this pins the rule directly.
+    expect(spellsName('\u01c6', 'd', true).end).toBe(1);
+    expect(spellsName('\u01c6', 'd').end).toBe(-1);
+    expect(spellsName('\u01c6', 'dz').end).toBe(1);
+    expect(spellsName('x\u01c6', 'd', true).end).toBe(-1);
+  });
+
+  it('ae, oe and thorn, in both cases, read as ae, oe and th', () => {
+    // Breaks if an expansion, or its capital, is dropped: the letter would then read only as nothing.
+    for (const [c, t] of [['\u00e6', 'ae'], ['\u00c6', 'ae'], ['\u0153', 'oe'], ['\u0152', 'oe'], ['\u00fe', 'th'], ['\u00de', 'th']]) {
+      expect(spellsName(c, t).end, c).toBe(1);
+    }
+  });
+
+  it('a name refused for what it reads as says why, and offers SELECT * only in a column position', () => {
+    // Breaks if the reason stops saying why the name reads as a system name, if SELECT * is offered for a
+    // table, a join or a call (where it does not help), if the tenant-admin route is dropped, or if the
+    // hint is added to a refusal of a name written in ASCII.
+    const name = '\uff53\uff59\uff53processes';
+    const COLUMN_HINT = 'If it is a column of yours, SELECT * returns it without naming it, or ask a tenant admin to run the query.';
+    const TABLE_HINT = 'If it is a table of yours, ask a tenant admin to run the query.';
+    const CALL_HINT = 'If it is a function of yours, ask a tenant admin to run the query.';
+    const rows: Array<[string, string]> = [
+      [`SELECT t.[${name}] FROM t`, COLUMN_HINT],
+      [`SELECT a FROM t WHERE [${name}] = 1`, COLUMN_HINT],
+      [`SELECT * FROM (SELECT [${name}] FROM t) AS x`, COLUMN_HINT],
+      // A subquery that closes inside WHERE leaves WHERE in force: read as a table only if the inner FROM
+      // stays in force after it, because the closing parenthesis did not end the subquery's clause, or the
+      // opening one did not start a new one.
+      [`SELECT a FROM t WHERE b IN (SELECT c FROM u) AND [${name}] = 1`, COLUMN_HINT],
+      [`SELECT * FROM [${name}]`, TABLE_HINT],
+      [`SELECT * FROM dbo.[${name}]`, TABLE_HINT],
+      [`SELECT * FROM t JOIN [${name}] ON 1 = 1`, TABLE_HINT],
+      // After a subquery closes, the FROM clause it sits in decides.
+      [`SELECT * FROM (SELECT a FROM t) AS x JOIN [${name}] ON 1 = 1`, TABLE_HINT],
+      [`SELECT [${fullwidth('DB_NAME')}](5)`, CALL_HINT],
+    ];
+    for (const [sql, hint] of rows) {
+      const out = analyze(sql);
+      expect(out.ok, sql).toBe(false);
+      if (out.ok) continue;
+      expect(out.error, sql).toContain(READ_AS);
+      expect(out.remediation, sql).toContain(hint);
+      if (hint !== COLUMN_HINT) expect(out.remediation, sql).not.toContain('SELECT * returns it');
+    }
     const ascii = analyze('SELECT t.[sysprocesses] FROM t');
-    expect(read.ok || ascii.ok).toBe(false);
-    if (read.ok || ascii.ok) return;
-    expect(read.remediation).toContain('If it is a column of yours, SELECT * returns it without naming it.');
+    expect(ascii.ok).toBe(false);
+    if (ascii.ok) return;
+    expect(ascii.construct).toBe('the system compatibility view sysprocesses');
+    expect(ascii.error).not.toContain(READ_AS);
     expect(ascii.remediation).not.toContain('SELECT * returns it');
     expect(ascii.remediation).toContain('INFORMATION_SCHEMA.COLUMNS');
-    expect(read.remediation).not.toContain('ASCII alias');
   });
 
   it('a fullwidth name that holds a refused name in order is refused, where its ASCII twin is not', () => {
@@ -664,14 +792,12 @@ describe('analyzeLakehouseQuery — refused queries name the construct', () => {
     expect(analyze('SELECT [FIN_YEAR](1)')).toEqual({ ok: true, locations: [] });
     const view = analyze(`SELECT t.[${fullwidth('SYSTEM_OBJECTS')}] FROM t`);
     expect(view.ok).toBe(false);
-    if (!view.ok) {
-      expect(view.construct).toBe(`the system compatibility view [${fullwidth('SYSTEM_OBJECTS')}] (read as sysobjects)`);
-    }
+    if (!view.ok) expectConstruct(view, `the system compatibility view [${fullwidth('SYSTEM_OBJECTS')}] (read as sysobjects)`);
     // Not called, the same name is accepted: the fn_ rule applies only to a call.
     expect(analyze(`SELECT t.[${fullwidth('FIN_YEAR')}] FROM t`)).toEqual({ ok: true, locations: [] });
     const called = analyze(`SELECT [${fullwidth('FIN_YEAR')}](1)`);
     expect(called.ok).toBe(false);
-    if (!called.ok) expect(called.construct).toBe(`the system function [${fullwidth('FIN_YEAR')}] (read as fn_year)`);
+    if (!called.ok) expectConstruct(called, `the system function [${fullwidth('FIN_YEAR')}] (read as fn_year)`);
   });
 
   it('a 2000-character name is matched in at most (length + 1) x (target length + 1) steps, with no cap', () => {
@@ -806,8 +932,14 @@ describe('analyzeLakehouseQuery — every reading of a refused name is refused (
     i: ['\u0131', '\u00ed', '\u0130'], o: ['\u00f6'], u: ['\u00fc'], c: ['\u00e7'], n: ['\u00f1'],
     x: ['\u2093'], j: ['\u2c7c'], _: ['\uff3f'], '#': ['\uff03'],
   };
+  // Stand-ins whose decomposition is part ASCII, part not: middle-dot l and L, apostrophe n, a with a half
+  // ring, and the degree Celsius and Fahrenheit signs. Each reads as its ASCII letter.
+  const MIXED: Record<string, string[]> = {
+    l: ['\u0140', '\u013f'], n: ['\u0149'], a: ['\u1e9a'], c: ['\u2103'], f: ['\u2109'],
+  };
+  const MIXED_SET = new Set(Object.values(MIXED).flat());
   function standIns(c: string): string[] {
-    const out = [...(EXTRA_STAND_INS[c] ?? [])];
+    const out = [...(EXTRA_STAND_INS[c] ?? []), ...(MIXED[c] ?? []), ...(MIXED[c] ?? [])];
     if (/^[a-z]$/.test(c)) {
       const k = c.charCodeAt(0) - 0x61;
       out.push(
@@ -819,23 +951,29 @@ describe('analyzeLakehouseQuery — every reading of a refused name is refused (
     return out;
   }
   // Ligatures standing for two letters.
-  const LIGATURES: Record<string, string> = { fi: '\ufb01', fl: '\ufb02', ss: '\u00df' };
+  const LIGATURES: Record<string, string> = { fi: '\ufb01', fl: '\ufb02', ss: '\u00df', th: '\u00fe' };
 
   const next = seeded(0x4822);
   const pick = (xs: string[]) => xs[Math.floor(next() * xs.length)];
-  const counts = { withStandIn: 0, withInsert: 0, withBoth: 0, variants: 0 };
+  const counts = { withStandIn: 0, withInsert: 0, withBoth: 0, withMixed: 0, variants: 0 };
   /** A spelling of `name` with at least one character outside ASCII. */
   function variant(name: string): string {
     const t = name.toLowerCase();
     let out = '';
     let standIn = false;
     let insert = false;
+    let mixed = false;
     for (let j = 0; j < t.length;) {
       if (next() < 0.3) { out += pick(INSERTS); insert = true; }
       const pair = LIGATURES[t.slice(j, j + 2)];
       if (pair !== undefined && next() < 0.5) { out += pair; standIn = true; j += 2; continue; }
       const alts = standIns(t[j]);
-      if (alts.length > 0 && next() < 0.4) { out += pick(alts); standIn = true; } else out += next() < 0.5 ? t[j] : t[j].toUpperCase();
+      if (alts.length > 0 && next() < 0.4) {
+        const s = pick(alts);
+        out += s;
+        standIn = true;
+        if (MIXED_SET.has(s)) mixed = true;
+      } else out += next() < 0.5 ? t[j] : t[j].toUpperCase();
       j += 1;
     }
     if (!insert && !standIn) { out += pick(INSERTS); insert = true; }
@@ -843,6 +981,7 @@ describe('analyzeLakehouseQuery — every reading of a refused name is refused (
     if (standIn) counts.withStandIn += 1;
     if (insert) counts.withInsert += 1;
     if (standIn && insert) counts.withBoth += 1;
+    if (mixed) counts.withMixed += 1;
     return out;
   }
 
@@ -851,28 +990,29 @@ describe('analyzeLakehouseQuery — every reading of a refused name is refused (
   for (const view of COMPATIBILITY_VIEWS) {
     for (let n = 0; n < PER_TARGET; n += 1) {
       const v = variant(view);
-      const refused = /^the system compatibility view \[.*\] \(read as sys[a-z]+\)$/su;
+      const refused = /so it reads as the system compatibility view sys[a-z]+; /su;
       cases.push([`SELECT * FROM [${v}]`, refused], [`SELECT * FROM dbo.[${v}]`, refused]);
     }
   }
   for (let n = 0; n < PER_TARGET * 4; n += 1) {
-    cases.push([`SELECT * FROM [${variant('##')}shared]`, /^the global temporary table \[.*\] \(read as ##/su]);
-    cases.push([`SELECT * FROM [${variant('fn_')}dblog](NULL, NULL)`, /^the system function \[.*\] \(read as fn_/su]);
+    cases.push([`SELECT * FROM [${variant('##')}shared]`, /so it reads as the global temporary table ##/su]);
+    cases.push([`SELECT * FROM [${variant('fn_')}dblog](NULL, NULL)`, /so it reads as the system function fn_/su]);
   }
   for (const fn of CALLED_FUNCTIONS) {
     for (let n = 0; n < PER_TARGET; n += 1) {
-      cases.push([`SELECT [${variant(fn)}](1)`, /^the (metadata|security|session) function \[.*\] \(read as [A-Z_]+\)$/su]);
+      cases.push([`SELECT [${variant(fn)}](1)`, /so it reads as the (metadata|security|cryptographic|session) function [A-Z_]+; /su]);
     }
   }
 
   it('refuses every generated spelling, naming what it reads as', () => {
     // Breaks if a character outside ASCII may not read as nothing (every row with an insert), if the fold
-    // is not used (every row with a stand-in), or if the two cannot mix in one name (rows with both).
+    // is not used (every row with a stand-in), if the ASCII letters of a mixed decomposition are dropped
+    // (rows with a mixed stand-in), or if the readings cannot mix in one name (rows with both).
     const failures: Array<[string, string]> = [];
-    for (const [sql, construct] of cases) {
+    for (const [sql, readsAs] of cases) {
       const out = analyze(sql);
       if (out.ok) failures.push([sql, 'accepted']);
-      else if (!construct.test(out.construct)) failures.push([sql, out.construct]);
+      else if (!/^the name \[.*\]$/su.test(out.construct) || !readsAs.test(out.error)) failures.push([sql, out.error]);
     }
     expect(failures).toEqual([]);
   });
@@ -885,6 +1025,7 @@ describe('analyzeLakehouseQuery — every reading of a refused name is refused (
     expect(counts.withStandIn).toBeGreaterThan(300);
     expect(counts.withInsert).toBeGreaterThan(300);
     expect(counts.withBoth).toBeGreaterThan(200);
+    expect(counts.withMixed).toBeGreaterThan(50);
   });
 });
 
@@ -913,6 +1054,11 @@ describe('analyzeLakehouseQuery — ordinary names in other scripts are accepted
     ['Czech with many accented letters',
       'P\u0159\u00edr\u016fstek_\u00fa\u010dt\u016f_z\u00e1kazn\u00edk\u016f_\u011b\u0161\u010d\u0159\u017e\u00fd\u00e1\u00ed\u00e9'],
     ['fullwidth SHIP_DATE', '\uff33\uff28\uff29\uff30\uff3f\uff24\uff21\uff34\uff25'],
+    ['Norwegian with ae, a ring and o stroke', 'Bl\u00e5b\u00e6rsyltet\u00f8y'],
+    ['Icelandic with a capital thorn', '\u00de\u00f3r\u00f0ur_nafn'],
+    ['French with oe', '\u0152uvre_prix'],
+    ['Catalan with a middle-dot l', 'Co\u0140lecci\u00f3'],
+    ['a degree Celsius sign', 'Temp_\u2103'],
   ];
   for (const [label, name] of NAMES) {
     it(`accepts ${label} as a column, a table and a qualified table`, () => {

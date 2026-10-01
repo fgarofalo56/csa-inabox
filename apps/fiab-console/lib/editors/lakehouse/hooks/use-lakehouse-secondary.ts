@@ -322,8 +322,8 @@ export function useLakehouseSecondary({
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ tab: 'object', lakehouseId: id, container: activeContainer, principalId: sharePrincipal.trim(), principalType: sharePrincipalType, role: shareRole }),
       });
-      const j = await parseJsonOrError<{ ok: boolean; error?: string }>(r, 'Share');
-      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; remediation?: string }>(r, 'Share');
+      if (!j.ok) throw new Error([j.error || `HTTP ${r.status}`, j.remediation].filter(Boolean).join(' '));
       setShareSuccess(`Granted ${shareRole} to ${sharePrincipal.trim()} at ${new Date().toLocaleTimeString()}.`);
       setSharePrincipal('');
     } catch (e: any) { setShareError(e?.message || String(e)); }

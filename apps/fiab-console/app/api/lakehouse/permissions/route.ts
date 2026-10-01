@@ -19,8 +19,10 @@
  * Every GET names the lakehouse it is for (`lakehouseId=`), authorized for read
  * through `authorizeItem` (404 when the caller cannot reach it). For tab=object
  * the container must be that lakehouse's storage container, and the role
- * assignments are listed on the item's bound storage account. Only a tenant
- * admin may list without `lakehouseId` (the configured account's container).
+ * assignments are listed on the item's bound storage account; a tab=object GET
+ * without `lakehouseId` is a 400 `item_required` for every caller, the same
+ * answer the grant and the revoke give. Only a tenant admin may list the
+ * SQL-plane tabs without `lakehouseId`.
  *
  * The object-tab WRITES (grant, revoke) are tenant-admin only and also name the
  * lakehouse (`lakehouseId`, required): they act on the same container and the
@@ -59,6 +61,7 @@ import {
   listContainerRoleAssignments,
   grantContainerRole,
   listKnownBlobDataRoles,
+  StorageAccountNotLocatedError,
   type ContainerRoleAssignment,
 } from '@/lib/azure/adls-client';
 import { revokeContainerRoleAssignmentInScope } from '../_lib/container-role-assignment';
@@ -113,16 +116,28 @@ function containerMismatch(container: string, own: string): NextResponse {
   );
 }
 
-/** The 400 for an object-tab write that does not name its lakehouse. */
-function itemRequired(verb: 'Granting' | 'Revoking'): NextResponse {
-  const action = verb === 'Granting' ? 'granted' : 'removed';
+/** The 400 for an object-tab request that does not name its lakehouse. */
+function itemRequired(verb: 'Listing' | 'Granting' | 'Revoking'): NextResponse {
+  const subject = verb === 'Listing' ? 'container role assignments need' : 'a container role needs';
+  const action = verb === 'Listing' ? 'listed' : verb === 'Granting' ? 'granted' : 'removed';
+  const reach = verb === 'Listing' ? 'reads' : 'acts on';
   return refuse(
     400,
-    `${verb} a container role needs the lakehouse it belongs to (lakehouseId), so Loom acts on the storage `
+    `${verb} ${subject} the lakehouse they belong to (lakehouseId), so Loom ${reach} the storage `
     + `account that lakehouse is bound to. Nothing was ${action}.`,
     'item_required',
     'Open the lakehouse and use its Permissions dialog or Share, so the request names the item.',
   );
+}
+
+/**
+ * The error response for a failure inside a handler. A bound storage account
+ * that Resource Graph could not place is a 409 with its remediation; anything
+ * else keeps its own status (502 when it has none).
+ */
+function failure(e: any): NextResponse {
+  if (e instanceof StorageAccountNotLocatedError) return refuse(409, e.message, e.code, e.remediation);
+  return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
 }
 
 /**
@@ -260,14 +275,16 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
 
   // Reads are scoped to one lakehouse: `lakehouseId` is authorized for read
   // (404 when the caller cannot reach it, as every other lakehouse route
-  // answers). Without an item only a tenant admin may list, since the listing
-  // is then not tied to anything the caller can open.
+  // answers). The object tab always needs the item, as the grant and the
+  // revoke do, so every row it lists is one a revoke can act on. Without an
+  // item only a tenant admin may list the SQL-plane tabs, since the listing is
+  // then not tied to anything the caller can open.
   const lakehouseId = (sp.get('lakehouseId') || '').trim();
-  let boundContainer: string | null = null;
-  // The account the object-tab listing runs on. Set from the item's binding
-  // whenever `lakehouseId` is named; undefined only on the tenant-admin form
-  // without an item, which lists the configured account's container.
-  let listAccount: string | undefined;
+  if (tab === 'object' && !lakehouseId) return itemRequired('Listing');
+  // The object tab's container and the account it is listed on, both from
+  // the item's binding.
+  let boundContainer = '';
+  let listAccount = '';
   if (!lakehouseId) {
     if (!isTenantAdmin(session)) {
       return refuse(
@@ -293,8 +310,7 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
   try {
     if (tab === 'object') {
       const container = sp.get('container') || boundContainer;
-      if (!container) return NextResponse.json({ ok: false, error: 'container query param required' }, { status: 400 });
-      if (boundContainer !== null && container !== boundContainer) return containerMismatch(container, boundContainer);
+      if (container !== boundContainer) return containerMismatch(container, boundContainer);
       const raw = await listContainerRoleAssignments(container, listAccount);
       const assignments = await enrichUpns(raw);
       const knownRoles = listKnownBlobDataRoles();
@@ -333,7 +349,7 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
     const grants = await listTableGrants(target);
     return NextResponse.json({ ok: true, grants });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
+    return failure(e);
   }
 });
 
@@ -447,7 +463,7 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
     const res = await createRlsPolicy(target, { objectId, filterColumnId, subject });
     return NextResponse.json({ ok: true, ...res });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
+    return failure(e);
   }
 });
 
@@ -519,6 +535,6 @@ export const DELETE = withSession(async (req: NextRequest, { session }) => {
     const res = await dropRlsPolicy(target, policyObjectId);
     return NextResponse.json({ ok: true, ...res });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
+    return failure(e);
   }
 });

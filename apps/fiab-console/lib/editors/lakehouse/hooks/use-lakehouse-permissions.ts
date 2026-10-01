@@ -27,6 +27,10 @@ export function useLakehousePermissions({ lakehouseId, activeContainer, confirm 
   const [permsRoles, setPermsRoles] = useState<PermRole[]>([]);
   const [permsBusy, setPermsBusy] = useState(false);
   const [permsError, setPermsError] = useState<string | null>(null);
+  // True when the last object-tab listing was refused with a 409 (the item's
+  // storage binding or its account could not be used). A grant would be
+  // refused for the same reason, so the dialog disables Grant role and says why.
+  const [permsListRefused, setPermsListRefused] = useState(false);
   const [newPrincipalId, setNewPrincipalId] = useState('');
   const [newPrincipalType, setNewPrincipalType] = useState<'User' | 'Group' | 'ServicePrincipal'>('User');
   const [newRole, setNewRole] = useState('Storage Blob Data Reader');
@@ -71,16 +75,24 @@ export function useLakehousePermissions({ lakehouseId, activeContainer, confirm 
   }, [principalQuery, permsTab]);
 
   // ── RBAC callbacks ────────────────────────────────────────────────────────
+  // A refusal's `remediation` is shown with its `error`, in the same MessageBar.
   const loadPerms = useCallback(async () => {
     if (!activeContainer) return;
-    setPermsBusy(true); setPermsError(null);
+    setPermsBusy(true); setPermsError(null); setPermsListRefused(false);
     try {
       const r = await clientFetch(readUrl({ container: activeContainer }));
-      const j = await parseJsonOrError<{ ok: boolean; error?: string; assignments?: PermAssignment[]; knownRoles?: PermRole[] }>(r, 'List permissions');
-      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; remediation?: string; assignments?: PermAssignment[]; knownRoles?: PermRole[] }>(r, 'List permissions');
+      if (!j.ok) {
+        if (r.status === 409) setPermsListRefused(true);
+        throw new Error([j.error || `HTTP ${r.status}`, j.remediation].filter(Boolean).join(' '));
+      }
       setPermsRows(j.assignments || []);
       setPermsRoles(j.knownRoles || []);
-    } catch (e: any) { setPermsError(e?.message || String(e)); }
+    } catch (e: any) {
+      // Rows from an earlier listing are not this container's current rows.
+      setPermsRows([]);
+      setPermsError(e?.message || String(e));
+    }
     finally { setPermsBusy(false); }
   }, [activeContainer, readUrl]);
 
@@ -103,8 +115,8 @@ export function useLakehousePermissions({ lakehouseId, activeContainer, confirm 
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ tab: 'object', lakehouseId, container: activeContainer, principalId: newPrincipalId.trim(), principalType: newPrincipalType, role: newRole }),
       });
-      const j = await parseJsonOrError<{ ok: boolean; error?: string }>(r, 'Grant permission');
-      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; remediation?: string }>(r, 'Grant permission');
+      if (!j.ok) throw new Error([j.error || `HTTP ${r.status}`, j.remediation].filter(Boolean).join(' '));
       setNewPrincipalId('');
       await loadPerms();
     } catch (e: any) { setPermsError(e?.message || String(e)); }
@@ -117,8 +129,8 @@ export function useLakehousePermissions({ lakehouseId, activeContainer, confirm 
     try {
       const qs = new URLSearchParams({ tab: 'object', lakehouseId, container: activeContainer, id: armId });
       const r = await clientFetch(`/api/lakehouse/permissions?${qs.toString()}`, { method: 'DELETE' });
-      const j = await parseJsonOrError<{ ok: boolean; error?: string }>(r, 'Revoke permission');
-      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; remediation?: string }>(r, 'Revoke permission');
+      if (!j.ok) throw new Error([j.error || `HTTP ${r.status}`, j.remediation].filter(Boolean).join(' '));
       await loadPerms();
     } catch (e: any) { setPermsError(e?.message || String(e)); }
     finally { setPermsBusy(false); }
@@ -259,7 +271,7 @@ export function useLakehousePermissions({ lakehouseId, activeContainer, confirm 
   return {
     permsOpen, setPermsOpen, openPerms,
     permsRows, setPermsRows, permsRoles, setPermsRoles,
-    permsBusy, setPermsBusy, permsError, setPermsError,
+    permsBusy, setPermsBusy, permsError, setPermsError, permsListRefused,
     newPrincipalId, setNewPrincipalId,
     newPrincipalType, setNewPrincipalType,
     newRole, setNewRole,
