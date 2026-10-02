@@ -10,9 +10,10 @@
 // was produced before the request reached the console. Before this change,
 // the two scheduled workflows sent every 403 to the catch-all arm: they printed
 // `::warning::` and exited 0, so a run that did no work showed as green. The
-// change makes an HTML 403 an `::error::` with exit 1 that names #4869. It
-// keeps the console's own JSON 403 on its existing path, and it keeps 000 as
-// the transient warning.
+// change makes EVERY 403 fail the run (`::error::`, exit 1) -- an HTML body
+// names #4869 as the cause, any other body just names the status -- and it
+// keeps 000 as the transient warning for these two callers (keep-warm already
+// failed every non-2xx, including 000, before this change).
 //
 // ── WHAT IS UNDER TEST ──────────────────────────────────────────────────────
 // Each step's `run:` block is taken from the parsed workflow when the test runs
@@ -61,8 +62,13 @@ const WORKFLOWS = [
     prefix: 'consolidate',
     okLine: 'consolidation pass complete',
     okBody: '{"ok":true}',
-    // Pre-existing behaviour this change must NOT alter.
-    jsonForbiddenFails: false,
+    // Round-2 (#4868 review): the operator decision is fail VISIBLY on ANY
+    // 403, not only an HTML one. `exit 1` now sits outside the body-shape
+    // case, which only still picks the message. Breaks (goes RED) if the
+    // HTML-only edit is reapplied -- `exit 1` moved back inside the
+    // '<!doctype html'*|'<html'* arm, leaving a JSON 403 to the catch-all
+    // warning again.
+    jsonForbiddenFails: true,
     unreachableFails: false,
   },
   {
@@ -73,7 +79,8 @@ const WORKFLOWS = [
     prefix: 'learn',
     okLine: 'learner run complete',
     okBody: '{"ok":true}',
-    jsonForbiddenFails: false,
+    // See the memory-consolidate comment above -- same round-2 decision.
+    jsonForbiddenFails: true,
     unreachableFails: false,
   },
   {
@@ -84,7 +91,8 @@ const WORKFLOWS = [
     prefix: 'keep-warm',
     okLine: 'warm pool topped up',
     okBody: '{"ok":true,"keptWarm":true}',
-    // keep-warm already failed every non-2xx before this change.
+    // keep-warm already failed every non-2xx before this change, and already
+    // asserted here: a JSON 403 fails per the same gate the test runs below.
     jsonForbiddenFails: true,
     unreachableFails: true,
   },

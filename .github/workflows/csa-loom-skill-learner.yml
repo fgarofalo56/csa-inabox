@@ -86,10 +86,10 @@ jobs:
             403)
               case "${lead,,}" in
                 '<!doctype html'*|'<html'*)
-                  echo "::error::learn 403 — the request was refused before it reached the Console (HTML 403). This job must reach the Console from inside the network; see #4869."
-                  exit 1;;
-                *) echo "::warning::learn returned $code — see body above";;
-              esac;;
+                  echo "::error::learn 403 — the request was refused before it reached the Console (HTML 403). This job must reach the Console from inside the network; see #4869.";;
+                *) echo "::error::learn returned $code — see body above";;
+              esac
+              exit 1;;
             000)
               # R7: we know the request did not complete. We do NOT know that the
               # console is down -- DNS, TLS, egress and a timeout all land here.
