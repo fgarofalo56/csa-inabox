@@ -1011,7 +1011,10 @@ def test_negative_control_an_unreadable_delta_returns_none_not_an_empty_list(
 # controls makes each one's test pass for the other's reason. The assertions
 # below are on the GATE's own `ok`, which is what MG3 actually mutates.
 def test_negative_control_no_review_blocks():
-    result = _run(comments=[])
+    """`changed_files` overridden to a sensitive path: the default fixture's
+    path is ordinary and needs ZERO reviewers (operator decision 2026-10-02),
+    under which `comments=[]` would block nothing at gate 2+3 at all."""
+    result = _run(comments=[], changed_files=["tools/drain/gates.py"])
     assert result["verdict"] == "NO-GO"
     assert not _gate(result, "2+3")["ok"]
     assert "no live APPROVE" in _gate(result, "2+3")["detail"]
@@ -1063,30 +1066,35 @@ def test_the_2_3_detail_names_the_carrier_of_a_discharge_not_only_its_target():
     assert "('REQUEST-CHANGES', 1, ())" in detail, detail
 
 
-def test_negative_control_a_guard_diff_needs_two_approvals():
+def test_negative_control_a_sensitive_path_diff_needs_exactly_one_approval():
     """The reviewer count ENFORCED, not described. Stated in a brief and
-    enforced nowhere, it was the shape this module exists to end: a `tools/drain`
-    PR that `review_requirement` says needs two reviewers merged GO on one
-    APPROVE. And here the diff EXISTS, so the decision is made on the real
-    changed files rather than on a lane-to-path guess."""
-    one = _run(changed_files=["tools/drain/gates.py"])
-    assert one["verdict"] == "NO-GO"
-    assert not _gate(one, "3b")["ok"]
-    assert "1 live APPROVE of 2 required" in _gate(one, "3b")["detail"]
+    enforced nowhere, it was the shape this module exists to end: a
+    `tools/drain` PR that `review_requirement` says needs a reviewer merged GO
+    with no live verdict at all. And here the diff EXISTS, so the decision is
+    made on the real changed files rather than on a lane-to-path guess.
 
-    two = _run(changed_files=["tools/drain/gates.py"], comments=[
-        APPROVAL,
-        {"id": 2, "body": "## Independent re-review - APPROVE\n\nsecond pair of eyes.",
-         "created_at": "2026-09-11T12:00:00Z"},
-    ])
-    assert two["verdict"] == "GO", two["blocking"]
+    PRE-2026-10-02 this fragment needed TWO reviewers; operator decision
+    2026-10-02 lowered every sensitive-path fragment to ONE. `zero` (not the
+    default fixture's one APPROVE) is the discriminating case now -- the
+    default already carries one APPROVE, which is exactly enough."""
+    zero = _run(changed_files=["tools/drain/gates.py"], comments=[])
+    assert zero["verdict"] == "NO-GO"
+    assert not _gate(zero, "3b")["ok"]
+    assert "0 live APPROVE of 1 required" in _gate(zero, "3b")["detail"]
+
+    one = _run(changed_files=["tools/drain/gates.py"])
+    assert one["verdict"] == "GO", one["blocking"]
 
 
 def test_negative_control_an_empty_changed_file_list_fails_closed():
     """A failing `gh pr diff` raises in `collect`, but an EMPTY list would
     otherwise be indistinguishable from "an ordinary diff touching nothing that
-    escalates" -- same boundary, other side."""
-    result = _run(changed_files=[])
+    escalates" -- same boundary, other side.
+
+    `comments=[]`: an unknown footprint now fails closed to ONE reviewer
+    (operator decision 2026-10-02), not two, so the default fixture's single
+    APPROVE is already enough -- zero live verdicts is what makes this NO-GO."""
+    result = _run(changed_files=[], comments=[])
     assert result["verdict"] == "NO-GO"
     assert "not known" in _gate(result, "3b")["detail"]
 
@@ -1118,77 +1126,110 @@ BUMP_LOCK = "requirements/locks/base/requirements.txt"
 
 
 def test_the_bump_exemption_reads_the_real_author_not_a_constant():
-    """Same files, two authors, two different reviewer COUNTS.
+    """Same files, two authors, two different REASONS -- not two different
+    COUNTS any more.
+
+    PRE-2026-10-02 an ordinary diff's default was 1 and the bump exemption's
+    was 0, so the two rows read different NUMBERS. Operator decision
+    2026-10-02 dropped the ordinary default to 0 too, so BOTH rows now read
+    `of 0 required` -- the count alone has lost its kill power for this
+    mutation. The author expression is still load-bearing, just through the
+    REASON text gate 3b prints beside the count: a human gets "default for an
+    ordinary lane" and an honest "is not a declared bump author"; the bot gets
+    the bump-exemption sentence.
 
     WHAT VALUE WOULD MAKE THIS FAIL: any constant substituted for the author
     expression in `merge_gate.run_gates` -- the reviewer's one-line insertion
     above, a hard-coded bot login, or a hard-coded human one. Under the bot
-    constant the human row reads `of 0 required`; under a human constant the
-    bot row reads `of 1 required`. Asserted on the COUNT in gate 3b's detail
-    rather than on `ok`, because with one APPROVE present both rows are `ok`
-    and an assertion on `ok` would have no kill power here.
+    constant the human row would ALSO carry the bump-exemption sentence;
+    under a human constant the bot row would carry "default for an ordinary
+    lane" instead.
     """
     human = _run(author={"login": "fgarofalo56"}, changed_files=[BUMP_LOCK])
-    assert "of 1 required" in _gate(human, "3b")["detail"], _gate(human, "3b")["detail"]
-    assert "is not a declared bump author" in _gate(human, "3b")["detail"]
+    human_detail = _gate(human, "3b")["detail"]
+    assert "of 0 required - default for an ordinary lane" in human_detail, human_detail
+    assert "is not a declared bump author" in human_detail, human_detail
 
     bot = _run(author={"login": BUMP_BOT}, changed_files=[BUMP_LOCK])
-    assert "of 0 required" in _gate(bot, "3b")["detail"], _gate(bot, "3b")["detail"]
+    bot_detail = _gate(bot, "3b")["detail"]
+    assert "of 0 required - a dependency bump confined to the bump allowlist" in bot_detail, (
+        bot_detail
+    )
 
 
-def test_a_bot_bump_still_needs_one_approve_from_gate_2_3():
-    """THE SCOPE OF THIS EXEMPTION, pinned so the claim cannot drift.
+def test_a_bot_bump_now_needs_zero_reviewers_from_gate_2_3_too():
+    """THE SCOPE OF THIS EXEMPTION, pinned so the claim cannot drift --
+    UPDATED 2026-10-02, completing rather than narrowing operator decision
+    2026-09-21 ("dependency bumps merge on CI-green alone").
 
-    The operator decision this serves says bumps merge on CI-green alone. This
-    implements PART of it: gate 3b's count drops to zero, and `reduce_verdicts`
-    (gate 2+3) still refuses on `no live APPROVE at head`. So the bar moves
-    from two reviewers to ONE, not to zero, and the run below says so out loud.
+    PRE-2026-10-02 this implemented only PART of that decision: gate 3b's
+    count dropped to zero, but `reduce_verdicts` (gate 2+3) still refused
+    unconditionally on "no live APPROVE at head", so the bar moved from two
+    reviewers to ONE, never to zero. Operator decision 2026-10-02 makes that
+    refusal conditional on `required > 0`, and gate 2+3 is now called with
+    `required=needed` -- gate 3b's own count. A qualifying lock-only bump,
+    whose `dependency_bump_reviewers` is 0, now needs ZERO live verdicts of
+    ANY kind: gate 2+3 and gate 3b both pass on CI-green alone.
 
-    WHAT VALUE WOULD MAKE THIS FAIL: extending the exemption into
-    `reduce_verdicts` -- which is a strictly larger loosening than the one
-    granted, and would turn this from a NO-GO into a GO with no review at all.
-    It also fails if gate 3b stops reaching zero, which is the other direction.
+    WHAT VALUE WOULD MAKE THIS FAIL: `required=needed` reverting to the old
+    unconditional call (`gates.reduce_verdicts(live, near)` with no
+    `required=`) -- this fixture carries ZERO comments, so `reduce_verdicts`'s
+    default (`required=1`) would refuse it, which is exactly the PRE-2026-10-02
+    behaviour this test now pins as retired.
     """
     result = _run(author={"login": BUMP_BOT}, changed_files=[BUMP_LOCK], comments=[])
     three_b = _gate(result, "3b")
     assert three_b["ok"] is True, three_b["detail"]
     assert "0 live APPROVE of 0 required" in three_b["detail"], three_b["detail"]
 
-    assert result["verdict"] == "NO-GO", result["findings"]
-    assert "no live APPROVE at head" in _gate(result, "2+3")["detail"]
-    # THE SOLE blocker, not merely one of them. That is the measurement that
-    # distinguishes "gate 3b was waived" from "nothing was waived": every other
-    # gate on a zero-reviewer bump is already GO, and review is the one thing
-    # left standing.
-    assert [f["gate"] for f in result["blocking"]] == [
-        "2+3 verdicts (conjunction, pinned to head)"
-    ], result["blocking"]
+    two_three = _gate(result, "2+3")
+    assert two_three["ok"] is True, two_three["detail"]
+    assert "no reviewer required" in two_three["detail"], two_three["detail"]
+    assert "required=0 (gate 3b's count)" in two_three["detail"], two_three["detail"]
 
-    # AND IT GOES when a single reviewer posts. Without this the assertion
-    # above is satisfied by a gate that can never pass at all.
+    assert result["verdict"] == "GO", result["findings"]
+    assert result["blocking"] == [], result["blocking"]
+
+    # THE CONTROL: a live REQUEST-CHANGES still blocks a zero-reviewer bump.
+    # Without this, "required=0" could mean "nothing can ever block this PR
+    # again", which is the strictly-larger loosening `reduce_verdicts`'s own
+    # docstring says this decision does NOT grant.
+    blocked = _run(author={"login": BUMP_BOT}, changed_files=[BUMP_LOCK], comments=[
+        {"id": 1, "body": "## Independent review - REQUEST-CHANGES\n\nno.",
+         "created_at": "2026-09-11T11:00:00Z"},
+    ])
+    assert blocked["verdict"] == "NO-GO", blocked["findings"]
+    assert not _gate(blocked, "2+3")["ok"]
+    assert "REQUEST-CHANGES" in _gate(blocked, "2+3")["detail"]
+
+    # AND IT STILL GOES when a single reviewer posts, same as before.
     approved = _run(author={"login": BUMP_BOT}, changed_files=[BUMP_LOCK])
     assert approved["verdict"] == "GO", approved["blocking"]
 
 
 def test_a_bot_pr_outside_the_allowlist_gets_the_ordinary_requirement():
-    """The caller composes the matcher with the escalation loop, end to end.
+    """The caller composes the matcher with the sensitive-path loop, end to
+    end.
 
     WHAT VALUE WOULD MAKE THIS FAIL: a matcher with no right boundary --
     `evil/requirements/x.py` matched the first version of this allowlist by
-    embedded substring and took the exemption at zero reviewers. It also fails
-    if the exemption is hoisted above the escalation-path loop, which is what
-    lets the guard-path row below still demand two. (PRE-2026-10-01 that row
+    embedded substring and took the exemption at zero reviewers (which, as of
+    2026-10-02, is indistinguishable from the ordinary default by COUNT alone
+    -- `test_the_bump_exemption_reads_the_real_author_not_a_constant` is where
+    that distinction is pinned by REASON text instead). It also fails if the
+    exemption is hoisted above the sensitive-path loop, which is what lets the
+    guard-path row below still demand a reviewer. (PRE-2026-10-01 that row
     used `.github/workflows/copilot-evals.yml`; the 2026-10-01 narrowing
-    dropped `.github/workflows` from the authority, so it is re-pointed at
-    `dev-loop/gates`, which the narrowed authority still protects.)
+    dropped `.github/workflows` from the authority; 2026-10-02 lowered the
+    guard-path requirement itself from TWO to ONE.)
     """
     smuggled = _run(author={"login": BUMP_BOT}, changed_files=["evil/requirements/x.py"])
-    assert "of 1 required" in _gate(smuggled, "3b")["detail"], _gate(smuggled, "3b")["detail"]
+    assert "of 0 required" in _gate(smuggled, "3b")["detail"], _gate(smuggled, "3b")["detail"]
     assert "outside the allowlist" in _gate(smuggled, "3b")["detail"]
 
     guard_path = _run(author={"login": BUMP_BOT},
                       changed_files=["dev-loop/gates/validate-all.ps1"])
-    assert "of 2 required" in _gate(guard_path, "3b")["detail"], _gate(guard_path, "3b")["detail"]
+    assert "of 1 required" in _gate(guard_path, "3b")["detail"], _gate(guard_path, "3b")["detail"]
 
 
 def test_the_approval_gate_does_not_claim_to_measure_independence():
@@ -1213,20 +1254,31 @@ def test_an_ordinary_diff_merges_on_one_approval():
 
 def test_negative_control_the_count_is_taken_from_the_real_changed_files():
     """Not from a lane guess: `gh pr diff --name-only` has already answered the
-    question the brief could only guess at. Narrowed 2026-10-01 to the five
-    fragments the authority still protects -- `test_these_dropped_paths_now_
-    merge_on_one_approval` below pins the seven PRE-2026-10-01 fragments this
-    test used to cover, which now merge on one."""
+    question the brief could only guess at.
+
+    `comments=[]`: operator decision 2026-10-02 lowered these five fragments'
+    requirement from TWO reviewers to ONE, and the default fixture already
+    carries one APPROVE -- enough to satisfy a requirement of one. Zero live
+    verdicts is what makes each of these NO-GO now. `test_these_dropped_
+    paths_now_merge_on_one_approval` below pins the seven paths that need
+    NO reviewer at all today."""
     for path in ("tools/drain/gates.py", "dev-loop/gates/validate-all.ps1",
                  ".github/CODEOWNERS", "apps/fiab-console/lib/auth/authflow.ts",
                  "apps/fiab-console/middleware.ts"):
-        result = _run(changed_files=[path])
-        assert result["verdict"] == "NO-GO", f"{path} merged on one approval"
+        result = _run(changed_files=[path], comments=[])
+        assert result["verdict"] == "NO-GO", f"{path} merged with no review"
         # ...on 3b's own `ok`, not on the composed verdict. It discriminates
         # today -- 3b is the only failing gate on these fixtures -- but the
         # composed verdict is the form that let MG3 go from KILLED to SURVIVED
         # once two gates started blocking on the same input.
         assert not _gate(result, "3b")["ok"], path
+
+    # THE CONTROL: one approval is enough for every one of these now.
+    for path in ("tools/drain/gates.py", "dev-loop/gates/validate-all.ps1",
+                 ".github/CODEOWNERS", "apps/fiab-console/lib/auth/authflow.ts",
+                 "apps/fiab-console/middleware.ts"):
+        result = _run(changed_files=[path])
+        assert result["verdict"] == "GO", f"{path}: {result['blocking']}"
 
 
 def test_these_dropped_paths_now_merge_on_one_approval():
@@ -1446,42 +1498,64 @@ def test_3b_still_escalates_on_a_blocking_first_verdict_when_enabled():
     assert _gate(result, "2+3")["ok"]
 
 
-def test_negative_control_3b_fails_closed_when_the_stream_cannot_be_resolved(tmp_path):
-    """Three ways it fails, one meaning: the harness cannot place the work.
+def test_negative_control_3b_no_longer_fails_closed_when_the_stream_cannot_be_resolved(tmp_path):
+    """Three ways resolution fails, one meaning: the harness cannot place the
+    work. UPDATED 2026-10-02: an unresolved stream no longer escalates the
+    REVIEW COUNT at all (operator decision: "unknown stream no longer
+    escalates"), so gate 3b now PASSES in all three shapes below -- the
+    default fixture's changed path is ordinary and needs zero reviewers
+    either way. What survives is the AUDIT TRAIL: `why_stream`'s text is still
+    folded into gate 3b's detail, unconditionally, so a reader can still see
+    WHY the stream did not resolve even though it no longer blocks anything.
 
-    Every sibling control in this package fails closed. This one is the merge
-    gate's half of `escalate_when_footprint_unknown` -- at brief time the stream
-    is the fact and the paths are the guess; here it is the other way round.
-
-    Kills MGE and MG10. (Not MG9, as an earlier draft claimed: this fixture
-    leaves mergeable=MERGEABLE, so gate 0 passes under MG9 too.)"""
+    Kills MGE: the mutant that replaces a missing ledger's `(None, "...")`
+    with `("W9-rest", "no ledger")` is now caught on the FULL "cannot be
+    resolved" phrase rather than on the review count (both the real and the
+    mutant text used to share the substring "no ledger", which no longer
+    discriminates once the count is identical either way). MG10 ("an
+    unresolvable stream falls OPEN to the default") is RETIRED, not kept
+    here: `stream_known` is no longer read by `review_requirement` at all, so
+    the mutation it names has become an equivalent no-op (see
+    `mutate_gates.py`'s own removal note).
+    """
     empty = str(tmp_path / "nothing.json")
     no_ref = _run(body="a change with no issue reference", commits=[])
-    assert not _gate(no_ref, "3b")["ok"]
+    assert _gate(no_ref, "3b")["ok"]
     assert "no issue" in _gate(no_ref, "3b")["detail"]
 
     no_ledger = _run(state_path=empty)
-    assert not _gate(no_ledger, "3b")["ok"]
-    assert "no ledger" in _gate(no_ledger, "3b")["detail"]
+    assert _gate(no_ledger, "3b")["ok"]
+    # THE FULL PHRASE, not just "no ledger" -- `load_ledger`'s own `why` is
+    # WRAPPED by `ledger_stream` into "<why>, so the stream cannot be
+    # resolved", and MGE's mutant hardcodes the bare `"no ledger"` with no
+    # such wrapping. Asserting only the substring both share is how this kill
+    # was lost when the review count stopped discriminating them.
+    no_ledger_detail = _gate(no_ledger, "3b")["detail"]
+    assert "no ledger" in no_ledger_detail, no_ledger_detail
+    assert "so the stream cannot be resolved" in no_ledger_detail, no_ledger_detail
 
     unknown = _ledger_with(tmp_path, 999, stream="W9-rest", lane="lane:docs")
-    assert not _gate(_run(state_path=unknown), "3b")["ok"]
+    assert _gate(_run(state_path=unknown), "3b")["ok"]
 
 
-def test_negative_control_a_bare_refs_resolves_the_stream(tmp_path):
+def test_a_bare_refs_still_resolves_the_stream_but_no_longer_escalates(tmp_path):
     """`Refs #N` carries no closing verb, so the closing scan sees it in
     NEITHER `hard` nor `near` -- and `Refs #N` is how nearly every PR in this
     repo names the item it is work on, this one included. Reusing the closing
     scan for the stream lookup would have read "references no issue" on most
-    PRs and escalated all of them for the wrong reason. A control that fires on
-    everything teaches the reader to skim it. (PRE-2026-10-01 this used
-    W1-deploy; the 2026-10-01 lean-review narrowing dropped it from the
-    escalating streams, so it is re-pointed at W2-security.)"""
+    PRs, and (PRE-2026-10-02) escalated all of them for the wrong reason: a
+    control that fires on everything teaches the reader to skim it.
+
+    UPDATED 2026-10-02: `ledger_stream`'s resolution is UNCHANGED (W2-security
+    still wins, still shows up in gate 3b's detail for audit purposes), but
+    stream no longer drives a review-count decision at all, so this now
+    passes -- the default fixture's changed path is ordinary and needs zero
+    reviewers regardless of which stream the PR's work sits in."""
     w2 = _ledger_with(tmp_path, 4468, stream="W2-security", lane="lane:docs")
     result = _run(body="Refs #4468 - stays open pending its receipt.",
                   commits=[], allow_close=[], state_path=w2)
     gate = _gate(result, "3b")
-    assert not gate["ok"]
+    assert gate["ok"]
     assert "W2-security" in gate["detail"]
     assert result["will_close"] == [], "a bare Refs must NOT read as a close"
 
@@ -1492,10 +1566,20 @@ def test_negative_control_a_corrupt_ledger_fails_closed_instead_of_raising(tmp_p
     program: a corrupt `state.json` raised `JSONDecodeError` and a schema
     mismatch raised `SystemExit`, neither caught. deploy-integrity R6 -- "a
     failure whose only output is a stack trace" -- in the program that decides
-    every merge. Kills MG20."""
+    every merge. Kills MG20.
+
+    `changed_files` + `comments=[]`: a corrupt ledger no longer fails the
+    MERGE closed on its own (operator decision 2026-10-02 -- stream
+    resolution does not drive a review count any more), only the ledger
+    READ itself must fail closed rather than raise, which `why_stream`'s
+    text still shows regardless of count. A sensitive path with zero
+    approvals is what makes the overall verdict NO-GO here, so this fixture
+    still exercises MG20's target end to end.
+    """
     corrupt = tmp_path / "corrupt.json"
     corrupt.write_text("{not json", encoding="utf-8")
-    result = _run(state_path=str(corrupt))
+    result = _run(state_path=str(corrupt), changed_files=["tools/drain/gates.py"],
+                 comments=[])
     assert result["verdict"] == "NO-GO"
     detail = _gate(result, "3b")["detail"]
     assert "unreadable" in detail
@@ -1503,7 +1587,8 @@ def test_negative_control_a_corrupt_ledger_fails_closed_instead_of_raising(tmp_p
 
     wrong_schema = tmp_path / "schema.json"
     wrong_schema.write_text(json.dumps({"schema": 99, "items": {}}), encoding="utf-8")
-    result = _run(state_path=str(wrong_schema))
+    result = _run(state_path=str(wrong_schema), changed_files=["tools/drain/gates.py"],
+                 comments=[])
     assert result["verdict"] == "NO-GO"
     assert "refused to load" in _gate(result, "3b")["detail"]
 
@@ -1515,7 +1600,12 @@ def test_negative_control_every_malformed_ledger_shape_fails_closed(tmp_path):
     says out loud in this same round, so a dropped key is the ordinary case.
 
     A function whose contract is "NEVER raises" cannot have an exception
-    allow-list. Kills MG20."""
+    allow-list. Kills MG20.
+
+    `changed_files` + `comments=[]`, same reason as the sibling test above:
+    under the new default a malformed ledger no longer fails the OVERALL
+    merge on its own, so a sensitive path with zero approvals is what makes
+    `result["verdict"]` discriminating again."""
     shapes = {
         "top-level array": "[]",
         "top-level string": '"nope"',
@@ -1531,7 +1621,8 @@ def test_negative_control_every_malformed_ledger_shape_fails_closed(tmp_path):
         led, why = merge_gate.load_ledger(POLICY, str(path))   # must not RAISE
         assert led is None, label
         assert "unreadable" in why or "refused to load" in why, f"{label}: {why}"
-        result = _run(state_path=str(path))
+        result = _run(state_path=str(path), changed_files=["tools/drain/gates.py"],
+                     comments=[])
         assert result["verdict"] == "NO-GO", label
 
 
@@ -1612,7 +1703,7 @@ def test_the_strongest_stream_wins_when_a_pr_references_several(tmp_path):
     assert stream == "W2-security", why
 
 
-def test_negative_control_a_stale_mention_cannot_buy_a_weaker_gate(tmp_path):
+def test_a_stale_mention_still_cannot_buy_a_weaker_stream_resolution(tmp_path):
     """THE INVERSION, found independently by both reviewers, in the feature the
     same round had just added. Measured at ba62873:
 
@@ -1620,14 +1711,25 @@ def test_negative_control_a_stale_mention_cannot_buy_a_weaker_gate(tmp_path):
         the SAME diff with NO reference at all               -> 2 reviewers
 
     Referencing an issue bought a WEAKER gate than referencing nothing, which
-    inverts the fail-closed design. Not a malice case: an agent-written PR body
-    copy-pasting a stale number is ordinary, and `KICKOFF.md` reuses `#4468` as
-    an example number throughout its own text.
+    inverted the fail-closed design that was live PRE-2026-10-02. Not a
+    malice case: an agent-written PR body copy-pasting a stale number is
+    ordinary, and `KICKOFF.md` reuses `#4468` as an example number throughout
+    its own text.
+
+    UPDATED 2026-10-02: stream resolution no longer drives a review count at
+    all, so EVERY `_gate(..., "3b")["ok"]` below is now `True` -- the default
+    fixture's changed path is ordinary and needs zero reviewers regardless of
+    what `ledger_stream` concludes. What this test still pins, and still
+    kills MG22/MG23 for, is `ledger_stream`'s OWN resolution, which is
+    UNCHANGED and still folded into gate 3b's detail for audit purposes: a
+    mention must still read as only a mention, a declared-but-unscheduled
+    close must still read as the author's word alone, and a declared,
+    in-flight close must still be the one shape that reads as a real
+    resolution.
 
     `Closes #N` is an ASSERTION about what this PR is -- and gate 6 refuses it
     unless it is also declared with `--allow-close`, so it is corroborated.
-    `Refs #N` is an ASIDE: good enough to raise the requirement, not good enough
-    to lower it. Kills MG22, MG23."""
+    `Refs #N` is an ASIDE."""
     from ledger import Ledger
 
     path = str(tmp_path / "state.json")
@@ -1638,14 +1740,14 @@ def test_negative_control_a_stale_mention_cannot_buy_a_weaker_gate(tmp_path):
     mention_only = _run(body="Related to #10 in passing.", commits=[],
                         state_path=path)
     gate = _gate(mention_only, "3b")
-    assert not gate["ok"], gate["detail"]
+    assert gate["ok"], gate["detail"]
     assert "only MENTIONED" in gate["detail"]
 
     # The floor: no reference at all is ALSO unknown. The two must not disagree,
     # because the whole defect was that one was weaker than the other.
     no_ref = _run(body="a change with no issue reference", commits=[],
                   state_path=path)
-    assert not _gate(no_ref, "3b")["ok"]
+    assert _gate(no_ref, "3b")["ok"]
 
     # A DECLARED close of an item the harness NEVER SCHEDULED does not resolve
     # it either -- reviewer B walked straight through round 6's fix with exactly
@@ -1654,7 +1756,7 @@ def test_negative_control_a_stale_mention_cannot_buy_a_weaker_gate(tmp_path):
     # saying otherwise was an R7 error in a round whose subject was an R7 error.
     still_unknown = _run(body="Closes #10", commits=[], allow_close=[10],
                          state_path=path)
-    assert not _gate(still_unknown, "3b")["ok"]
+    assert _gate(still_unknown, "3b")["ok"]
     assert "the author's word alone" in _gate(still_unknown, "3b")["detail"]
     # ...and it does NOT claim a binding that does not exist. `Item.pr` has no
     # writer, so "bound to PR None" was what this said about all 299 items: a
@@ -1675,7 +1777,7 @@ def test_negative_control_a_stale_mention_cannot_buy_a_weaker_gate(tmp_path):
     # mutation it is named for.
     still_a_mention = _run(body="Related to #10 in passing.", commits=[],
                            state_path=path)
-    assert not _gate(still_a_mention, "3b")["ok"]
+    assert _gate(still_a_mention, "3b")["ok"]
     assert "only MENTIONED" in _gate(still_a_mention, "3b")["detail"]
 
     # It resolves ONLY when the item is both DECLARED closed and in flight. That
@@ -1753,9 +1855,11 @@ def test_negative_control_a_close_the_ledger_binds_to_another_pr_is_refused(tmp_
     result = _run(body="Closes #10", commits=[], allow_close=[10], state_path=path)
     assert not _gate(result, "6 ")["ok"]
     assert "POACHED" in _gate(result, "6 ")["detail"]
-    # ...and it no longer resolves the stream either: the ledger says that item
-    # is another PR's work, so this PR is again unplaceable.
-    assert not _gate(result, "3b")["ok"]
+    # ...the stream still does not resolve -- the ledger says that item is
+    # another PR's work, so this PR is again unplaceable -- but (2026-10-02)
+    # that no longer makes gate 3b fail on its own: the default fixture's
+    # changed path is ordinary and needs zero reviewers regardless.
+    assert _gate(result, "3b")["ok"]
     # Silent when it cannot tell: no ledger, or no binding, is not a conflict.
     assert merge_gate.poached_closes([10], POLICY, str(tmp_path / "none.json"), pr=2) == []
     assert merge_gate.poached_closes([], POLICY, path, pr=2) == []
@@ -1804,13 +1908,15 @@ def test_poached_closes_refuses_a_bound_item(tmp_path, monkeypatch):
     assert "POACHED" in _gate(result, "6 ")["detail"]
 
 
-def test_a_mention_of_an_escalating_item_still_escalates(tmp_path):
-    """The half that must NOT be lost to the fix above. A mention may only
-    raise the requirement -- but it must still raise it, or `Refs #N` on an
-    escalating item goes back to one reviewer, which is the hole the whole
-    trigger was added to close. (PRE-2026-10-01 this used W1-deploy; the
-    2026-10-01 lean-review narrowing dropped it from the escalating streams,
-    so it is re-pointed at W2-security.)"""
+def test_a_mention_of_a_once_escalating_item_no_longer_escalates(tmp_path):
+    """UPDATED 2026-10-02: a mention's stream resolution is UNCHANGED (W2-
+    security still resolves and still appears in gate 3b's detail), but no
+    stream -- mentioned, declared, or unresolved -- raises the review count
+    any more. PRE-2026-10-02 this pinned the opposite: a mention of an
+    escalating item still had to raise the requirement, or `Refs #N` on one
+    went back to one reviewer. That requirement is retired along with the
+    stream-escalation mechanism itself; see `gates.py`'s own
+    `test_no_stream_escalates_any_more_resolved_or_not` for the direct pin."""
     from ledger import Ledger
 
     path = str(tmp_path / "state.json")
@@ -1819,7 +1925,7 @@ def test_a_mention_of_an_escalating_item_still_escalates(tmp_path):
     led.save()
     result = _run(body="Refs #4487 - the security path.", commits=[], state_path=path)
     gate = _gate(result, "3b")
-    assert not gate["ok"]
+    assert gate["ok"]
     assert "W2-security" in gate["detail"]
     assert result["will_close"] == [], "a bare Refs must not read as a close"
 
@@ -1834,8 +1940,15 @@ def test_negative_control_declaring_one_does_not_allow_another():
 
 
 def test_the_verdict_is_the_conjunction_of_every_gate():
-    """Not of the last one, and not of a hand-picked subset."""
-    result = _run(mergeable="CONFLICTING", comments=[])
+    """Not of the last one, and not of a hand-picked subset.
+
+    `changed_files` is overridden to a SENSITIVE path so gate 2+3 and gate 3b
+    both have something to block on: the default fixture's path is ordinary
+    and needs ZERO reviewers (operator decision 2026-10-02), under which an
+    empty `comments=[]` blocks nothing on the review axis at all, leaving only
+    gate 0 -- which would make this fixture assert a conjunction of ONE.
+    """
+    result = _run(mergeable="CONFLICTING", comments=[], changed_files=["tools/drain/gates.py"])
     assert result["verdict"] == "NO-GO"
     assert len(result["blocking"]) >= 2
     assert all(f in result["findings"] for f in result["blocking"])
@@ -1964,25 +2077,27 @@ def test_main_accepts_a_declared_close_the_ledger_backs(monkeypatch, tmp_path):
     assert _main_over(monkeypatch, tmp_path, ["1", "--allow-close", "4468"], data) == 0
 
 
-def test_negative_control_main_escalates_on_the_stream_of_the_issue_it_closes(
+def test_negative_control_main_no_longer_escalates_on_the_stream_of_the_issue_it_closes(
     monkeypatch, tmp_path
 ):
-    """The trigger that was inert at the enforcement point for three rounds.
+    """PRE-2026-10-02 this pinned "the trigger that was inert at the
+    enforcement point for three rounds": same PR, same one approval, same
+    diff -- `domains/sales/models/x.sql`, which touches no sensitive path --
+    with only the ISSUE'S STREAM differing, and the W2-security case used to
+    need a second reviewer that was never posted, so `main()` returned 1
+    (NO-GO).
 
-    Same PR, same one approval, same diff -- `domains/sales/models/x.sql`, which
-    touches no escalating path. The ONLY difference from the control above is
-    the stream the ledger has this issue in. Measured before the fix: GO.
-
-    W2-security is the case used here (PRE-2026-10-01 this was W1-deploy; the
-    2026-10-01 lean-review narrowing dropped it from the escalating streams).
-    The point survives the swap unchanged: a security fix routinely lands in
-    `csa_platform/security/` and similar, none of which is in the five
-    fragments, so the path trigger never fires for it either -- the STREAM is
-    what has to catch it."""
+    UPDATED 2026-10-02: stream no longer drives a review count at all (not
+    even W2-security, the harness's own security stream), so this exact
+    fixture now returns 0 (GO) through the real `main()` wiring -- end to end,
+    not just at the pure `gates.review_requirement` level
+    `test_no_stream_escalates_any_more_resolved_or_not` in `test_policy.py`
+    pins directly. Breaks if stream-based escalation is ever reintroduced at
+    EITHER level without updating this fixture."""
     _ledger_with(tmp_path, 4468, stream="W2-security", lane="lane:docs",
                  receipt="ci-green")
     data = _data(body="Closes #4468")
-    assert _main_over(monkeypatch, tmp_path, ["1", "--allow-close", "4468"], data) == 1
+    assert _main_over(monkeypatch, tmp_path, ["1", "--allow-close", "4468"], data) == 0
 
 
 def test_negative_control_main_refuses_a_before_file_from_another_pr(monkeypatch, tmp_path):
@@ -2290,12 +2405,19 @@ def test_negative_control_without_the_re_pin_the_same_verdict_is_stale():
     If this passed, the test above would prove nothing, because the verdict
     would have been counted for some reason other than the re-pin.
 
+    `changed_files` is overridden to a SENSITIVE path (needed=1), unlike the
+    sibling test above: the default fixture's path is ordinary and now needs
+    ZERO reviewers (operator decision 2026-10-02), under which gate 2+3 would
+    pass with NO live verdict at all and this test would prove nothing about
+    the re-pin either.
+
     Breaks if: the re-pin is applied unconditionally, or `repin.ok` stops being
     consulted -- either would make a stale verdict live on an ordinary push.
     """
     result = _run(
         head_date=_STALE_HEAD_DATE,
         repin={"ok": False, "why": "head is not a base update", "date": ""},
+        changed_files=["tools/drain/gates.py"],
     )
     gate = _gate(result, "2+3")
     assert not gate["ok"], (
@@ -2312,11 +2434,15 @@ def test_a_refused_re_pin_never_borrows_the_parent_date():
     every refusal silently transfer, which is the failure mode that looks
     exactly like success.
 
+    `changed_files` overridden to a sensitive path for the same reason as the
+    sibling test above -- see its docstring.
+
     Breaks if: the selection becomes `repin["date"] or data["head_date"]`.
     """
     result = _run(
         head_date=_STALE_HEAD_DATE,
         repin={"ok": False, "why": "head tree != auto-merge", "date": _PARENT_DATE},
+        changed_files=["tools/drain/gates.py"],
     )
     gate = _gate(result, "2+3")
     assert not gate["ok"], (

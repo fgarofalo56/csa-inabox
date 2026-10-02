@@ -13,7 +13,7 @@
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { DefaultAzureCredential, ManagedIdentityCredential, ChainedTokenCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
-import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { escapeSparkSqlLiteral } from '@/lib/sql/quoting';
 import { recordDatabricksUnityAccess } from '@/lib/azure/unity-audit';
 
 const DBX_SCOPE = '2ff814a6-3304-4ab8-85cb-cd0e6f879c1d/.default';
@@ -1765,7 +1765,7 @@ export async function createUcTableFromFile(
   }
   // Identifier hygiene — only allow safe identifier chars in names we splice
   // into the SQL statement. The file PATH is bound via a `read_files()` string
-  // literal (single-quoted, with quotes escaped), so it cannot break out.
+  // literal, escaped with escapeSparkSqlLiteral (Spark SQL literal grammar).
   const ident = (v: string) => {
     if (!/^[A-Za-z0-9_]+$/.test(v)) throw new Error(`Invalid identifier: ${v}`);
     return v;
@@ -1785,7 +1785,7 @@ export async function createUcTableFromFile(
     opts.push(`header => ${spec.header === false ? 'false' : 'true'}`);
     opts.push(`inferSchema => true`);
   }
-  const literalPath = escapeSqlLiteral(stagedPath);
+  const literalPath = escapeSparkSqlLiteral(stagedPath);
   const fqtn = `\`${cat}\`.\`${sch}\`.\`${tbl}\``;
   const createSql =
     `CREATE TABLE ${fqtn} AS SELECT * FROM read_files('${literalPath}', ${opts.join(', ')})`;

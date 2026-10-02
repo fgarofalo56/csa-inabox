@@ -1,7 +1,7 @@
 /**
  * Pure-builder acceptance for the streaming-table / materialized-view SQL
  * builders (Wave 10, DBX-7). No DOM — exercises DDL generation, schedule
- * formatting, refresh + alter statements, validation, and injection-safe
+ * formatting, refresh + alter statements, validation, and literal
  * quoting.
  */
 import { describe, it, expect } from 'vitest';
@@ -65,8 +65,13 @@ describe('formatSchedule', () => {
     expect(formatSchedule({ kind: 'every', everyNumber: 2, everyUnit: 'DAYS' })).toBe('SCHEDULE EVERY 2 DAYS');
     expect(formatSchedule({ kind: 'cron', cron: '0 */15 * * * ?' })).toBe("SCHEDULE CRON '0 */15 * * * ?'");
   });
-  it('escapes a single quote in the cron literal (injection-safe)', () => {
-    expect(formatSchedule({ kind: 'cron', cron: "x' OR '1'='1" })).toContain("CRON 'x'' OR ''1''=''1'");
+  it('escapes the cron literal by the Spark SQL rule (backslash, not doubling)', () => {
+    // Databricks SQL reads `\'` as a quote inside a literal. Breaks if the site
+    // goes back to T-SQL doubling (the output would be `'x'' OR ''1''=''1'`),
+    // and the second case breaks if the backslash is not escaped first
+    // (`'a\'` would never close).
+    expect(formatSchedule({ kind: 'cron', cron: "x' OR '1'='1" })).toContain("CRON 'x\\' OR \\'1\\'=\\'1'");
+    expect(formatSchedule({ kind: 'cron', cron: 'a\\' })).toContain("CRON 'a\\\\'");
   });
 });
 

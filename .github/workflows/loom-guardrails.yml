@@ -159,6 +159,9 @@ jobs:
       - name: sql-quoting (inline identifier/literal quoting outside lib/sql/quoting.ts)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-sql-quoting.mjs
+      - name: sql-literal-dialect (Spark SQL / KQL literals use the backslash rule, not T-SQL doubling)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-sql-literal-dialect.mjs
       - name: bff-errors (raw exception text on 500 + raw-envelope helpers)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-bff-errors.mjs

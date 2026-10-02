@@ -1619,40 +1619,26 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None,
     live, near = gates.parse_verdicts(
         data["comments"], pin_date, policy["verdict_parsing"]["token_window_chars"]
     )
-    ok, why = gates.reduce_verdicts(live, near)
-    # THE CARRIER IS NAMED, not just the target (#4704 consequence review).
-    # `reduce_verdicts`' reason says WHICH block was discharged; without
-    # `supersedes` here nothing in the run output says BY WHICH COMMENT, and
-    # nothing durable records it either -- `before-*.json` holds only
-    # pr/head/open_issues and the squash body is untouched. The only permanent
-    # record would be a GitHub comment a reader has to know to go looking for,
-    # which is a poor audit trail for the one act in this gate that makes a
-    # block go away. Empty for every verdict that carries no discharge, so the
-    # ordinary line is unchanged in length.
-    detail = why + (
-        f" | live={[(v.token, v.comment_id, v.supersedes) for v in live]}"
-        f" near={[(n.comment_id, n.kind, n.blocks) for n in near]}"
-    )
-    if repin["ok"]:
-        # Said out loud on every run it applies to. A verdict counted as live
-        # against a date that is NOT the head's is a material fact about how
-        # this decision was reached, and burying it would make the gate's
-        # output disagree with its own rule. `why` names EVERY hop crossed --
-        # sha, tree, both parents -- so a human can re-run each `merge-tree`
-        # and audit the transfer (#4811).
-        detail += f" | RE-PINNED to {repin['date']}: {repin['why']}"
-    else:
-        # The REFUSAL is said out loud too. Printed only on success, a gate that
-        # re-pinned nothing looked identical to one whose walk never ran, and a
-        # reviewer asking "why is my APPROVE stale after update-branch?" had
-        # nothing in the output to read. The reason names the commit that ended
-        # the walk and which test it failed.
-        detail += f" | NOT re-pinned: {repin.get('why') or 'no reason recorded'}"
-    record("2+3 verdicts (conjunction, pinned to head)", ok, detail)
 
-    # The closing scan is computed HERE, above 3b, because 3b needs the issue
-    # numbers to resolve the item's STREAM -- and it is RECORDED as gate 6 below,
-    # in its own place, so the output still reads in gate order.
+    # `needed` (gate 3b's reviewer count) now has to EXIST before gate 2+3
+    # runs -- operator decision 2026-10-02: `reduce_verdicts` below takes
+    # `required=needed`, so the "no live APPROVE at all" floor is now
+    # CONDITIONAL on the same count gate 3b reports. Everything from here to
+    # the `reduce_verdicts` call is therefore hoisted above where it used to
+    # sit (between gate 2+3 and gate 3b) -- moved, not changed: every line is
+    # the SAME line it was, just read earlier.
+    #
+    # `footprint_known` is derived, not asserted. A failing `gh pr diff` raises
+    # in `collect`, but an EMPTY list would otherwise be indistinguishable from
+    # "an ordinary diff touching nothing that escalates" -- same boundary, other
+    # side, which is the shape this repo names most often.
+    changed = data.get("changed_files") or []
+
+    # The closing scan is computed HERE, above BOTH 2+3 and 3b: 3b needs the
+    # issue numbers to resolve the item's STREAM, and (since 2026-10-02) gate
+    # 2+3 needs `needed`, which in turn needs the STREAM -- it is still
+    # RECORDED as gate 6 below, in its own place, so the output still reads in
+    # gate order.
     messages = [
         f"{c.get('messageHeadline', '')}\n{c.get('messageBody', '')}"
         for c in (pr.get("commits") or [])
@@ -1664,10 +1650,13 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None,
     # closing scan is VERB-ANCHORED -- `hard` needs a closing verb adjacent to
     # the reference, `near` needs one within 80 chars -- so `Refs #4487` is in
     # neither, and `Refs #N` is how nearly every PR here names its item. Reusing
-    # the closing scan would have read "references no issue" on most PRs and,
-    # since an unresolvable stream fails closed, escalated all of them for the
-    # wrong reason: a control that fires on everything teaches the reader to
-    # skim it.
+    # the closing scan would have read "references no issue" on most PRs, and
+    # (PRE-2026-10-02) an unresolvable stream failed closed -- escalating all of
+    # them for the wrong reason: a control that fires on everything teaches the
+    # reader to skim it. An unresolvable stream no longer escalates at all
+    # (operator decision 2026-10-02), but the closing scan still has to run
+    # here for `ledger_stream`'s OWN reporting, which this gate's detail still
+    # carries.
     #
     # Kept SEPARATE from `will_close`, not unioned into it. `ledger_stream` uses
     # the two differently: a mention may only ESCALATE, while a declared close
@@ -1676,39 +1665,29 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None,
     mentioned = gates.referenced_issues(pr.get("body") or "", messages,
                                         repo=policy.get("repo"))
 
-    # 3b -- HOW MANY independent reviewers, enforced here rather than described
-    # in a brief. `review_requirement` is computed from the PR's REAL changed
-    # files, not from a lane guess, because here the diff exists. Stated in a
-    # brief and enforced nowhere, the count was the shape this module was
-    # written to end: "the briefs restated the gates as instructions to an
-    # agent, so at run time GO/NO-GO was still a judgement".
-    approvals = [v for v in live if v.token == "APPROVE"]
-    # `footprint_known` is derived, not asserted. A failing `gh pr diff` raises
-    # in `collect`, but an EMPTY list would otherwise be indistinguishable from
-    # "an ordinary diff touching nothing that escalates" -- same boundary, other
-    # side, which is the shape this repo names most often.
-    changed = data.get("changed_files") or []
-    # TWO OF THE FOUR TRIGGERS USED TO BE INERT HERE.
+    # `review_requirement` is computed from the PR's REAL changed files, not
+    # from a lane guess, because here the diff exists. Stated in a brief and
+    # enforced nowhere, the count was the shape this module was written to
+    # end: "the briefs restated the gates as instructions to an agent, so at
+    # run time GO/NO-GO was still a judgement".
     #
-    # `review_requirement` implements all four, and this caller passed only the
-    # path set -- so `escalate_on_blocking_first_verdict` and the STREAM list
-    # were live in `gates.py`, described in the brief, and enforced by nothing.
-    # An unconsulted ARGUMENT is the same defect as an unconsulted policy key,
-    # which is the one this module already found twice. Measured by a reviewer:
-    # a `csa_platform/security/auth.py` diff on a W2-security item, and an
-    # `azure-functions/` diff on a W1-deploy item -- the stream R1 says preempts
-    # everything -- both merged GO on ONE approval. And the block-push-reapprove
-    # rhythm of this very PR: after a push the earlier block is correctly no
-    # longer live, so nothing raised the count.
+    # THE STREAM-BASED TRIGGERS ARE RETIRED (operator decision 2026-10-02):
+    # `review_requirement` no longer reads `stream`/`stream_known` for its
+    # decision at all, so neither can be INERT here the way the other two
+    # triggers once were -- there is no escalation left for a caller to starve
+    # of its real argument. `stream`/`why_stream` are still computed and still
+    # printed below, because `ledger_stream`'s resolution is still real
+    # information about WHICH issue this PR's work sits under, even though it
+    # no longer changes the reviewer count.
     #
-    # R6/R9 kill their mutations through `test_policy.py` calling
+    # R9 kills its mutation through `test_policy.py` calling
     # `review_requirement` DIRECTLY, so the matrix proved the function honours
-    # the triggers and proved nothing about the caller feeding them. Same
-    # boundary, other side. MG14/MG15/MG10/MG11/MG12/MG13/MGE are pointed at
-    # this call. (An earlier draft of this line said MG8/MG9 -- those are gate
-    # 6's union and gate 0's allow-list, which touch nothing here. A reviewer
-    # auditing the matrix follows these labels to decide whether an arm is
-    # covered, so a wrong one is a claim about a control, not a typo.)
+    # the trigger and proved nothing about the caller feeding it. MG14/MG12 are
+    # pointed at this call. (An earlier draft of this line said MG8/MG9 --
+    # those are gate 6's union and gate 0's allow-list, which touch nothing
+    # here. A reviewer auditing the matrix follows these labels to decide
+    # whether an arm is covered, so a wrong one is a claim about a control, not
+    # a typo.)
     prior_verdict = gates.worst_verdict_in_history(
         data["comments"], policy["verdict_parsing"]["token_window_chars"]
     )
@@ -1737,6 +1716,46 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None,
         stream_known=stream is not None,
         dependency_bump=is_bump,
     )
+
+    ok, why = gates.reduce_verdicts(live, near, required=needed)
+    # THE CARRIER IS NAMED, not just the target (#4704 consequence review).
+    # `reduce_verdicts`' reason says WHICH block was discharged; without
+    # `supersedes` here nothing in the run output says BY WHICH COMMENT, and
+    # nothing durable records it either -- `before-*.json` holds only
+    # pr/head/open_issues and the squash body is untouched. The only permanent
+    # record would be a GitHub comment a reader has to know to go looking for,
+    # which is a poor audit trail for the one act in this gate that makes a
+    # block go away. Empty for every verdict that carries no discharge, so the
+    # ordinary line is unchanged in length.
+    detail = why + (
+        f" | live={[(v.token, v.comment_id, v.supersedes) for v in live]}"
+        f" near={[(n.comment_id, n.kind, n.blocks) for n in near]}"
+    )
+    if repin["ok"]:
+        # Said out loud on every run it applies to. A verdict counted as live
+        # against a date that is NOT the head's is a material fact about how
+        # this decision was reached, and burying it would make the gate's
+        # output disagree with its own rule. `why` names EVERY hop crossed --
+        # sha, tree, both parents -- so a human can re-run each `merge-tree`
+        # and audit the transfer (#4811).
+        detail += f" | RE-PINNED to {repin['date']}: {repin['why']}"
+    else:
+        # The REFUSAL is said out loud too. Printed only on success, a gate that
+        # re-pinned nothing looked identical to one whose walk never ran, and a
+        # reviewer asking "why is my APPROVE stale after update-branch?" had
+        # nothing in the output to read. The reason names the commit that ended
+        # the walk and which test it failed.
+        detail += f" | NOT re-pinned: {repin.get('why') or 'no reason recorded'}"
+    # `required=needed` is said out loud too (operator decision 2026-10-02): a
+    # reader seeing this gate pass with ZERO live verdicts needs to see, in
+    # THIS gate's own output, that zero was what gate 3b required -- not go
+    # looking in gate 3b's separate line to understand why this one passed.
+    detail += f" | required={needed} (gate 3b's count): {why_needed}"
+    record("2+3 verdicts (conjunction, pinned to head)", ok, detail)
+
+    # 3b -- HOW MANY independent reviewers, ENFORCED here (the count was
+    # computed above, alongside gate 2+3, for the reason given there).
+    approvals = [v for v in live if v.token == "APPROVE"]
     # NAMED "approval count", not "independent reviewers". The gate counts
     # APPROVE comments; it cannot tell two reviewers from one reviewer posting
     # twice -- `collect` projects comments to {id, body, created_at} and drops

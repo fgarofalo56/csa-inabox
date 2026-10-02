@@ -16,7 +16,7 @@
  * PURE — string building only.
  */
 
-import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { escapeSparkSqlLiteral, escapeSqlLiteral } from '@/lib/sql/quoting';
 import type {
   TransformModel, TransformProject, TransformSource, TransformTarget,
 } from './transform-project-model';
@@ -281,9 +281,14 @@ function sqlMeshExternalModels(sources: TransformSource[]): string {
   return out.join('\n');
 }
 
-function sqlMeshAudits(models: TransformModel[]): string {
+function sqlMeshAudits(models: TransformModel[], engine: TransformTarget['engine']): string {
   // SQLMesh expresses dbt's generic tests as AUDITs. Emit the ones the visual
   // test picker can produce; anything else is simply not emitted (never faked).
+  // Audit SQL is parsed in the project dialect (sqlMeshConfig): a `databricks`
+  // project reads string literals with the Spark SQL backslash rule, the tsql /
+  // duckdb projects with quote doubling.
+  const auditLiteral = (v: string): string =>
+    engine === 'databricks' ? escapeSparkSqlLiteral(v) : escapeSqlLiteral(v);
   const blocks: string[] = [];
   for (const m of models) {
     for (const t of m.tests || []) {
@@ -293,7 +298,7 @@ function sqlMeshAudits(models: TransformModel[]): string {
       } else if (t.type === 'unique') {
         blocks.push(`AUDIT (\n  name assert_${m.name}_${t.column}_unique\n);\n\nSELECT ${t.column} FROM @this_model GROUP BY ${t.column} HAVING COUNT(*) > 1;\n`);
       } else if (t.type === 'accepted_values' && (t.values || []).length) {
-        const values = (t.values || []).map((v) => `'${escapeSqlLiteral(v)}'`).join(', ');
+        const values = (t.values || []).map((v) => `'${auditLiteral(v)}'`).join(', ');
         blocks.push(`AUDIT (\n  name assert_${m.name}_${t.column}_accepted_values\n);\n\nSELECT * FROM @this_model WHERE ${t.column} NOT IN (${values});\n`);
       }
     }
@@ -312,7 +317,7 @@ export function generateTransformProject(p: TransformProject): GeneratedFile[] {
     for (const m of p.models) files.push(sqlMeshModelFile(m, schema));
     const external = sqlMeshExternalModels(p.sources || []);
     if (external) files.push({ path: 'external_models.yaml', content: external });
-    const audits = sqlMeshAudits(p.models || []);
+    const audits = sqlMeshAudits(p.models || [], p.target.engine);
     if (audits) files.push({ path: 'audits/loom_audits.sql', content: audits });
     return files;
   }

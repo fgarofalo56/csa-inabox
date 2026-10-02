@@ -553,6 +553,14 @@ function scalarPredicate(ref: string, f: ReportFilterInput, pb: ReturnType<typeo
     }
     case 'contains': {
       if (f.value == null || f.value === '') return null;
+      // T-SQL / Postgres form. Spark / Databricks SQL needs a branch before a
+      // filter reaches this: its string grammar reads `'\'` as an escaped quote
+      // (the literal does not close; a lone backslash is `'\\'`), and its LIKE
+      // accepts the escape character only before `_`, `%` or itself
+      // (`StringUtils.escapeLikeRegex`), so `likePattern`'s `\[` is refused.
+      // Today the one databricks-sql source (report-model-resolver.ts, the
+      // Databricks executor) compiles with `canParam: false`, so no filter
+      // arrives here in that dialect.
       return `${ref} LIKE ${pb.add(likePattern(f.value))} ESCAPE '\\'`;
     }
     case 'between': {
