@@ -1660,8 +1660,11 @@ ARMS: list[tuple[str, str, str, str]] = [
     ),
     (
         ("R16 `apps/fiab-console/middleware.ts` drops out -- the console's edge "
-         "middleware, replaced in place with a duplicate of an already-present "
-         "entry so the array stays valid JSON of the same length"),
+         "middleware. Anchored on the PAIR with the preceding item so the "
+         "orphaned trailing comma drops with it; the array shrinks by one "
+         "entry and stays valid JSON, the same technique R10 uses to drop the "
+         "last entry of a list (R12/R14/R15 remove a MIDDLE entry instead, so "
+         "their anchor is just that one line plus its own trailing comma)"),
         "policy.json",
         '      "apps/fiab-console/lib/auth",\n      "apps/fiab-console/middleware.ts"',
         '      "apps/fiab-console/lib/auth"',
