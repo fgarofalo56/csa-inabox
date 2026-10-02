@@ -108,6 +108,14 @@ const NOT_RECYCLED = '(NOT IS_DEFINED(c.state._recycled) OR c.state._recycled = 
  *                          deleteKeyVaultSecret(). A SECOND item type, which is
  *                          why this list is keyed by KEY NAME and applied to
  *                          every item type rather than to one route.
+ *   state.sqlDatabase / state.sqlEndpointDatabase
+ *                        → items/lakehouse/[id]/query, which runs a tenant
+ *                          admin's SQL in the database the item records. The
+ *                          SQL tab runs in a server-chosen database, so these
+ *                          are written by the server only (the mirrored-
+ *                          databricks pairing writes `sqlDatabase` with
+ *                          `items.item().replace()`, which this rule does not
+ *                          cover, and no editor writes either key).
  *
  * None of these needed elevated privilege: a shortcut in the caller's OWN
  * workspace was enough, because the escalation is state the caller may write
@@ -148,6 +156,8 @@ export const SERVER_OWNED_STATE_KEYS: readonly string[] = [
   'keyVaultSecret',
   'engineObject',
   '_recycled',
+  'sqlDatabase',
+  'sqlEndpointDatabase',
 ];
 const SERVER_OWNED_SET = new Set<string>(SERVER_OWNED_STATE_KEYS);
 
