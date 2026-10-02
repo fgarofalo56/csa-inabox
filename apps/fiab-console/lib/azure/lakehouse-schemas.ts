@@ -44,6 +44,13 @@ export interface LakehouseSchemaDoc {
   status: SchemaStatus;
   /** Last engine error / honest-gate hint when status != 'active'. */
   statusDetail?: string;
+  /**
+   * The Spark database that holds this schema, in the lakehouse item's own
+   * namespace (`lh_<digest>_<name>`, set by the schemas route). Rows written
+   * before item namespaces existed have none; the route never drops or moves
+   * Spark objects for those.
+   */
+  sparkDatabase?: string;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
@@ -57,6 +64,7 @@ export interface SchemaDef {
   description?: string;
   status?: SchemaStatus;
   statusDetail?: string;
+  sparkDatabase?: string;
   createdBy: string;
 }
 
@@ -133,6 +141,7 @@ export async function createSchemaDoc(def: SchemaDef): Promise<LakehouseSchemaDo
     isDefault: false,
     status: def.status ?? 'active',
     statusDetail: def.statusDetail,
+    ...(def.sparkDatabase ? { sparkDatabase: def.sparkDatabase } : {}),
     createdBy: existing?.createdBy ?? def.createdBy,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,

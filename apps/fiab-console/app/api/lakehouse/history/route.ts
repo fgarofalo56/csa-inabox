@@ -107,10 +107,13 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
   if (scoped instanceof NextResponse) return scoped;
   const container = scoped.container as KnownContainer;
   const tablePath = scoped.path;
+  // The item's bound storage account (null only on the tenant-admin storage
+  // form, which reads the deployment's primary account).
+  const account = scoped.account ?? undefined;
 
   try {
     const logDir = `${tablePath}/_delta_log`;
-    const entries = await listPaths(container, logDir, 500);
+    const entries = await listPaths(container, logDir, 500, account);
     // Commit files are zero-padded 20-digit decimals: 00000000000000000001.json.
     // Skip checkpoints (.checkpoint.parquet), CRC files (.crc) and directories.
     const commitFiles = entries
@@ -127,7 +130,7 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
     await Promise.all(
       commitFiles.map(async (cf) => {
         try {
-          const { body } = await downloadFile(container, cf.name);
+          const { body } = await downloadFile(container, cf.name, account);
           const text = body.toString('utf8');
           let commitInfo: any = null;
           for (const line of text.split('\n')) {
@@ -285,10 +288,11 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   // Build the abfss URI for the Delta table from the SCOPED container and path,
   // unchanged. Nothing is rewritten after the scope check: a value the
   // backtick-quoted literal cannot carry is refused, never edited into a
-  // different path.
+  // different path. The account is the item's bound account; only the
+  // tenant-admin storage form (no item) names the deployment's primary one.
   let account: string;
   try {
-    account = getAccountName();
+    account = scoped.account ?? getAccountName();
   } catch (e: any) {
     return NextResponse.json(
       { ok: false, error: e?.message || 'Could not resolve ADLS account name' },

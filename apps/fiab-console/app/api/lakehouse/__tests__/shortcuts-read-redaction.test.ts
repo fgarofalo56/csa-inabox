@@ -32,8 +32,13 @@ const fakeContainer = {
 vi.mock('@/lib/auth/session', () => ({ getSession: vi.fn() }));
 vi.mock('@/lib/azure/cosmos-client', () => ({ lakehouseShortcutsContainer: async () => fakeContainer }));
 vi.mock('@/app/api/items/_lib/item-crud', () => ({ loadOwnedItem: vi.fn() }));
+// This branch's routes authorize the lakehouse item before any registry read.
+vi.mock('@/lib/auth/item-access', () => ({ resolveItemAccessByOid: vi.fn() }));
+vi.mock('../_lib/legacy-container-key', () => ({ legacyContainerKeyFor: vi.fn() }));
 
 import { getSession } from '@/lib/auth/session';
+import { resolveItemAccessByOid } from '@/lib/auth/item-access';
+import { legacyContainerKeyFor } from '../_lib/legacy-container-key';
 import { loadOwnedItem } from '@/app/api/items/_lib/item-crud';
 import { GET as LAKEHOUSE_GET } from '../shortcuts/route';
 import { GET as ITEM_GET } from '@/app/api/items/[type]/[id]/shortcuts/route';
@@ -49,6 +54,10 @@ beforeEach(() => {
   });
   (getSession as any).mockReturnValue({ claims: { oid: 'oid-a', upn: 'a@contoso.com', tid: 't1' } });
   (loadOwnedItem as any).mockResolvedValue({ id: 'lh1', itemType: 'lakehouse' });
+  (resolveItemAccessByOid as any).mockImplementation(async (_s: unknown, id: string) => ({
+    item: { id, workspaceId: 'ws-1', itemType: 'lakehouse' }, role: 'Member', via: 'workspace', canWrite: true,
+  }));
+  (legacyContainerKeyFor as any).mockResolvedValue(null);
 });
 
 function expectRedacted(body: any) {

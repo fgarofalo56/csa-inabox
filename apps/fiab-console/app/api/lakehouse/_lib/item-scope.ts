@@ -54,16 +54,18 @@ export function lakehouseStorageWithheldResponse(reason: LakehouseStorageWithhel
 }
 
 /**
- * True when `raw` holds a C0 control character (U+0000-U+001F) or DEL (U+007F).
- * No ADLS path a user can create through Loom contains one, and a path is
- * carried into generated code, log lines and file names, where a line break or
- * other control character changes what the text means. Such a path is refused.
+ * True when `raw` holds a C0 control character (U+0000-U+001F), DEL (U+007F),
+ * a C1 control character (U+0080-U+009F, which includes NEL U+0085), or the
+ * Unicode line / paragraph separators (U+2028, U+2029). No ADLS path a user can
+ * create through Loom contains one, and a path is carried into generated code,
+ * log lines and file names, where a line break or other control character
+ * changes what the text means. Such a path is refused.
  */
 export function hasPathControlChar(raw: string): boolean {
   const s = String(raw ?? '');
   for (let i = 0; i < s.length; i += 1) {
     const c = s.charCodeAt(i);
-    if (c <= 0x1f || c === 0x7f) return true;
+    if (c <= 0x1f || (c >= 0x7f && c <= 0x9f) || c === 0x2028 || c === 0x2029) return true;
   }
   return false;
 }

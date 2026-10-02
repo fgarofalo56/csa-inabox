@@ -44,6 +44,7 @@ vi.mock('@/lib/azure/lakehouse-abfss', async () => {
   const resolveLakehouseAbfss = vi.fn();
   return {
     lakehouseStorageWithheldMessage: actual.lakehouseStorageWithheldMessage,
+    lakehouseStorageWithheldFields: actual.lakehouseStorageWithheldFields,
     resolveLakehouseAbfss,
     resolveLakehouseStorage: async (...a: any[]) => {
       const b: any = await resolveLakehouseAbfss(...a);

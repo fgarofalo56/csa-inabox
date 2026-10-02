@@ -114,6 +114,20 @@ jobs:
               echo "::error::keep-warm 401 — LOOM_INTERNAL_TOKEN mismatch between the secret and the console env"
               exit 1
               ;;
+            403)
+              # The console's internal routes answer JSON. An HTML 403 was
+              # produced before the request reached the console (#4869).
+              lead="${body#"${body%%[![:space:]]*}"}"
+              case "${lead,,}" in
+                '<!doctype html'*|'<html'*)
+                  echo "::error::keep-warm 403 — the request was refused before it reached the Console (HTML 403). This job must reach the Console from inside the network; see #4869."
+                  ;;
+                *)
+                  echo "::error::keep-warm returned $code — see body above"
+                  ;;
+              esac
+              exit 1
+              ;;
             000)
               # R7: we know the request did not complete. We do NOT know that the
               # console is down — DNS, TLS, egress and a timeout all land here.

@@ -30,7 +30,7 @@ import { useQuery } from '@tanstack/react-query';
 import {
   Badge, Button, Caption1, Spinner, Subtitle2, Switch, Tab, TabList, Tooltip,
   Table, TableBody, TableCell, TableHeader, TableHeaderCell, TableRow,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBar, MessageBarActions, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -43,6 +43,7 @@ import { HonestGate } from '@/lib/components/shared/honest-gate';
 import { LearnPopover } from '@/lib/components/ui/learn-popover';
 import { buildConnectSnippets, type ConnectSnippet } from '@/lib/azure/iceberg-metadata';
 import { useLakehouseCtx } from '../lakehouse-editor-context';
+import { useLakehouseReadOnly, LAKEHOUSE_READ_ONLY_TITLE } from '../hooks/use-lakehouse-access';
 import type { InteropTableRow, InteropResponse } from '../types';
 
 const useLocalStyles = makeStyles({
@@ -91,8 +92,8 @@ const useLocalStyles = makeStyles({
   tableWrap: { overflowX: 'auto', minWidth: 0 },
 });
 
-async function fetchInterop(container: string): Promise<InteropResponse> {
-  const res = await clientFetch(`/api/lakehouse/interop?container=${encodeURIComponent(container)}`, {
+async function fetchInterop(lakehouseId: string): Promise<InteropResponse> {
+  const res = await clientFetch(`/api/lakehouse/interop?lakehouseId=${encodeURIComponent(lakehouseId)}`, {
     cache: 'no-store',
   });
   const json = (await res.json().catch(() => ({}))) as InteropResponse;
@@ -105,17 +106,26 @@ async function fetchInterop(container: string): Promise<InteropResponse> {
 export function InteropPane() {
   const s = useLocalStyles();
   const ctx = useLakehouseCtx();
+  // Exposing or retiring an Iceberg view writes metadata, so it needs Edit. The
+  // catalog card, the snippets and Refresh stay available to a read-only role.
+  const readOnly = useLakehouseReadOnly(ctx.id, ctx.isNewItem);
   const { activeContainer, liveTables, liveTablesLoading, liveTablesGate, setActionError, setActionStatus } = ctx;
   const container = activeContainer || '';
+  // Interop state belongs to the lakehouse ITEM; an unsaved item has none yet.
+  const lakehouseId = ctx.isNewItem ? '' : ctx.id;
 
   const [engine, setEngine] = useState<ConnectSnippet['id']>('spark');
   const [busyTable, setBusyTable] = useState<string | null>(null);
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
+  // A catalog name held by another table, with the namespace the route offers instead.
+  const [conflict, setConflict] = useState<{
+    table: string; note: string; remediation: string; suggestedNamespace?: string;
+  } | null>(null);
 
   const interopQ = useQuery({
-    queryKey: ['lakehouse-interop', container],
-    queryFn: () => fetchInterop(container),
-    enabled: !!container,
+    queryKey: ['lakehouse-interop', lakehouseId],
+    queryFn: () => fetchInterop(lakehouseId),
+    enabled: !!lakehouseId && !!container,
     staleTime: 15_000,
   });
 
@@ -141,38 +151,50 @@ export function InteropPane() {
   }, [liveTables, interopQ.data, stateByTable]);
 
   const catalog = interopQ.data?.catalog;
+  const defaultNamespace = interopQ.data?.defaultNamespace || '';
   const snippets = useMemo(() => {
     const sel = selectedTable ? stateByTable.get(selectedTable.toLowerCase()) : null;
     return buildConnectSnippets({
       catalogUri: catalog?.uri || '',
       warehouse: catalog?.warehouse || 'loom',
-      namespace: sel?.namespace || container || 'default',
+      namespace: sel?.namespace || defaultNamespace || 'default',
       table: sel?.icebergTableName || (selectedTable ?? undefined),
       catalogAlias: 'loom',
     });
-  }, [catalog, container, selectedTable, stateByTable]);
+  }, [catalog, defaultNamespace, selectedTable, stateByTable]);
 
   const active = snippets.find((x) => x.id === engine) || snippets[0];
 
-  const toggle = useCallback(async (table: string, next: boolean) => {
+  const toggle = useCallback(async (table: string, next: boolean, namespace?: string) => {
     setBusyTable(table);
     setActionError(null);
+    setConflict(null);
     try {
       const res = await clientFetch('/api/lakehouse/interop', {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ container, tableName: table, iceberg: next }),
+        body: JSON.stringify({ lakehouseId, tableName: table, iceberg: next, ...(namespace ? { namespace } : {}) }),
       });
-      const json = (await res.json().catch(() => ({}))) as InteropResponse & { catalogNote?: string };
+      const json = (await res.json().catch(() => ({}))) as InteropResponse;
       if (!res.ok || json?.ok !== true) {
-        throw new Error(json?.error || `Could not update interop for ${table} (HTTP ${res.status})`);
+        throw new Error(
+          [json?.error || `Could not update interop for ${table} (HTTP ${res.status})`, json?.remediation].filter(Boolean).join(' '),
+        );
       }
       setActionStatus(
         next
           ? `Iceberg metadata job submitted for ${table} on pool ${json.pool || 'default'} — the table stays Delta ✓ and becomes Iceberg ✓ once the job completes.`
           : `Iceberg metadata generation disabled for ${table}. Delta readability is unchanged.`,
       );
-      if (json.catalogNote) setActionStatus(json.catalogNote);
+      if (json.catalogNote && json.catalogCode !== 'catalog_name_taken') setActionStatus(json.catalogNote);
+      if (json.catalogCode === 'catalog_name_taken') {
+        setConflict({
+          table,
+          note: json.catalogNote || '',
+          remediation: json.catalogRemediation || '',
+          suggestedNamespace: json.suggestedNamespace,
+        });
+      }
       setSelectedTable(table);
       await interopQ.refetch();
     } catch (e) {
@@ -180,7 +202,7 @@ export function InteropPane() {
     } finally {
       setBusyTable(null);
     }
-  }, [container, interopQ, setActionError, setActionStatus]);
+  }, [lakehouseId, interopQ, setActionError, setActionStatus]);
 
   const copy = useCallback((text: string) => {
     try { void navigator.clipboard?.writeText(text); } catch { /* clipboard unavailable */ }
@@ -238,6 +260,29 @@ export function InteropPane() {
             <MessageBarTitle>Lake storage not configured</MessageBarTitle>
             {interopQ.data.accountGate}
           </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {conflict && (
+        <MessageBar intent="warning" layout="multiline">
+          <MessageBarBody>
+            <MessageBarTitle>Catalog name in use</MessageBarTitle>
+            {conflict.note} {conflict.remediation}
+          </MessageBarBody>
+          {conflict.suggestedNamespace && (
+            <MessageBarActions>
+              <Button
+                appearance="primary"
+                size="small"
+                disabled={busyTable === conflict.table}
+                disabledFocusable={readOnly}
+                title={readOnly ? LAKEHOUSE_READ_ONLY_TITLE : undefined}
+                onClick={() => { void toggle(conflict.table, true, conflict.suggestedNamespace); }}
+              >
+                Register as {conflict.suggestedNamespace}.{stateByTable.get(conflict.table.toLowerCase())?.icebergTableName || conflict.table}
+              </Button>
+            </MessageBarActions>
+          )}
         </MessageBar>
       )}
 
@@ -338,14 +383,15 @@ export function InteropPane() {
                       </div>
                     </TableCell>
                     <TableCell>
-                      <span className={s.mono}>{state?.namespace || `${container} (default)`}</span>
+                      <span className={s.mono}>{state?.namespace || (defaultNamespace ? `${defaultNamespace} (default)` : '—')}</span>
                     </TableCell>
                     <TableCell>
                       <Switch
                         checked={!!state?.iceberg}
-                        disabled={busyTable === name}
+                        disabled={busyTable === name || readOnly}
+                        root={{ title: readOnly ? LAKEHOUSE_READ_ONLY_TITLE : undefined }}
                         aria-label={`Expose ${name} as Iceberg`}
-                        onChange={(_, d) => { void toggle(name, !!d.checked); }}
+                        onChange={(_, d) => { if (!readOnly) void toggle(name, !!d.checked); }}
                       />
                     </TableCell>
                   </TableRow>

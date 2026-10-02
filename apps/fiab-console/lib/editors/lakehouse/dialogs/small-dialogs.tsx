@@ -15,6 +15,7 @@ import {
 import { useRouter } from 'next/navigation';
 import { useStyles, leafName, formatBytes } from '../shared';
 import { useLakehouseCtx } from '../lakehouse-editor-context';
+import { useLakehouseReadOnly, LAKEHOUSE_READ_ONLY_TITLE, LAKEHOUSE_READ_ONLY_SUBTEXT } from '../hooks/use-lakehouse-access';
 import { IdentityPicker } from '@/lib/components/ui/identity-picker';
 
 // ── Context Menu ──────────────────────────────────────────────────────────────
@@ -25,6 +26,12 @@ export function ContextMenu() {
     selectFile, setTab, onOpenInNotebook, onLoadToTables, onDownload, openLabelDialog,
     loadPaths, activeContainer, openShortcutWizard, onDelete, setPropsEntry,
   } = ctx;
+  // The entries that change the lakehouse stay listed but disabled (a disabled
+  // MenuItem stays focusable), with the reason, when the role is read-only.
+  const readOnly = useLakehouseReadOnly(ctx.id, ctx.isNewItem);
+  const roTitle = readOnly ? LAKEHOUSE_READ_ONLY_TITLE : undefined;
+  // Visible under each closed item, so the reason does not depend on hover.
+  const roSub = readOnly ? LAKEHOUSE_READ_ONLY_SUBTEXT : undefined;
 
   return (
     <Menu
@@ -46,7 +53,7 @@ export function ContextMenu() {
               <MenuItem icon={<Eye20Regular />} onClick={() => { if (ctxEntry) { selectFile(ctxEntry); setTab('preview'); } setCtxOpen(false); }}>Preview</MenuItem>
               <MenuItem icon={<Play20Regular />} onClick={() => { if (ctxEntry) { selectFile(ctxEntry); setTab('sql'); } setCtxOpen(false); }}>Query this file</MenuItem>
               <MenuItem icon={<BookOpen20Regular />} onClick={() => { if (ctxEntry) onOpenInNotebook(ctxEntry); setCtxOpen(false); }}>Open in notebook</MenuItem>
-              <MenuItem icon={<TableSimple20Regular />} onClick={() => { if (ctxEntry) onLoadToTables(ctxEntry); setCtxOpen(false); }}>Load to Tables (Delta)</MenuItem>
+              <MenuItem icon={<TableSimple20Regular />} disabled={readOnly} title={roTitle} subText={roSub} onClick={() => { if (ctxEntry) onLoadToTables(ctxEntry); setCtxOpen(false); }}>Load to Tables (Delta)</MenuItem>
               <MenuItem icon={<ArrowDownload20Regular />} onClick={() => { if (ctxEntry) onDownload(ctxEntry); setCtxOpen(false); }}>Download</MenuItem>
               <MenuItem icon={<ShieldTask20Regular />} onClick={() => { if (ctxEntry) openLabelDialog(ctxEntry); setCtxOpen(false); }}>Download with label…</MenuItem>
             </>
@@ -54,7 +61,7 @@ export function ContextMenu() {
           {ctxEntry && ctxEntry.isDirectory && (
             <>
               <MenuItem icon={<Folder20Regular />} onClick={() => { if (ctxEntry && activeContainer) loadPaths(activeContainer, ctxEntry.name); setCtxOpen(false); }}>Open</MenuItem>
-              <MenuItem icon={<LinkMultiple20Regular />} onClick={() => {
+              <MenuItem icon={<LinkMultiple20Regular />} disabled={readOnly} title={roTitle} subText={roSub} onClick={() => {
                 const folder = ctxEntry?.name || '';
                 const isTables = /(^|\/)Tables(\/|$)/i.test(folder);
                 const parent = folder.replace(/^Tables\/?|^Files\/?/i, '').replace(/\/+$/, '');
@@ -66,7 +73,7 @@ export function ContextMenu() {
             </>
           )}
           <MenuItem icon={<Info20Regular />} onClick={() => { setPropsEntry(ctxEntry); setCtxOpen(false); }}>Properties</MenuItem>
-          <MenuItem icon={<Delete20Regular />} onClick={() => { if (ctxEntry) onDelete(ctxEntry); setCtxOpen(false); }}>Delete</MenuItem>
+          <MenuItem icon={<Delete20Regular />} disabled={readOnly} title={roTitle} subText={roSub} onClick={() => { if (ctxEntry) onDelete(ctxEntry); setCtxOpen(false); }}>Delete</MenuItem>
         </MenuList>
       </MenuPopover>
     </Menu>
@@ -386,6 +393,13 @@ export function MoveTableDialog() {
     moveTableName, moveTableFrom, moveTableTo, setMoveTableTo,
     moveTableBusy, moveTableStatus, moveTableError, submitMoveTable, schemas,
   } = ctx;
+  // Only schemas that own a Spark database of this item can receive a table;
+  // the default dbo schema and schemas registered before per-schema databases cannot.
+  const movable = (sch: { name: string; sparkDatabase?: string; legacy?: boolean }) =>
+    !!sch.sparkDatabase && !sch.legacy && sch.name.toLowerCase() !== 'dbo';
+  const targets = (schemas || []).filter((sch) => movable(sch) && sch.name !== moveTableFrom);
+  const fromDb = (schemas || []).find((sch) => sch.name === moveTableFrom)?.sparkDatabase || moveTableFrom;
+  const toDb = (schemas || []).find((sch) => sch.name === moveTableTo)?.sparkDatabase || '<schema database>';
 
   return (
     <Dialog open={moveTableOpen} onOpenChange={(_, d) => setMoveTableOpen(d.open)}>
@@ -399,22 +413,26 @@ export function MoveTableDialog() {
             <Field label="From schema">
               <Input value={moveTableFrom} readOnly />
             </Field>
-            <Field label="To schema" required hint="Pick the destination schema. Create new schemas in the Schemas tab.">
+            <Field label="To schema" required
+              hint={targets.length === 0
+                ? 'No other schema can receive this table yet. Create a schema in the Schemas tab first.'
+                : 'Pick the destination schema. Create new schemas in the Schemas tab.'}>
               <Dropdown
                 selectedOptions={moveTableTo ? [moveTableTo] : []}
                 value={moveTableTo}
                 placeholder="Select a schema"
+                disabled={targets.length === 0}
                 onOptionSelect={(_, d) => setMoveTableTo(d.optionValue || '')}
               >
-                {(schemas || []).filter((sch) => sch.name !== moveTableFrom).map((sch) => (
-                  <Option key={sch.name} value={sch.name}>{`${sch.name}${sch.isDefault ? ' (default)' : ''}`}</Option>
+                {targets.map((sch) => (
+                  <Option key={sch.name} value={sch.name}>{sch.name}</Option>
                 ))}
               </Dropdown>
             </Field>
             <MessageBar intent="info">
               <MessageBarBody>
-                Runs <code>ALTER TABLE {moveTableFrom}.{moveTableName} RENAME TO {moveTableTo || '<schema>'}.{moveTableName}</code> on the Spark pool.
-                The table stays queryable via its new 4-part name.
+                Runs <code>ALTER TABLE {fromDb}.{moveTableName} RENAME TO {toDb}.{moveTableName}</code> on the Spark pool.
+                Each schema is its own Spark database in this lakehouse.
               </MessageBarBody>
             </MessageBar>
             {moveTableStatus && <MessageBar intent="success"><MessageBarBody>{moveTableStatus}</MessageBarBody></MessageBar>}
