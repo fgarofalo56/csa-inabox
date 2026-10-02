@@ -6,22 +6,35 @@
  *   POST   /api/lakehouse/shortcuts                      → create (registry + engine)
  *   DELETE /api/lakehouse/shortcuts?lakehouseId=<id>&id=<id> → drop engine obj + row
  *
- * Auth: session-required. Runtime: nodejs, force-dynamic.
+ * Item scope: `lakehouseId` is the lakehouse ITEM, authorized through
+ * `authorizeItem` (404 when the caller cannot reach it). GET needs read
+ * access; POST and DELETE change the lakehouse and need edit rights. The
+ * shortcut registry is keyed by the item id; rows saved under the earlier
+ * container-name key are listed and deleted through `_lib/shortcut-rows` when
+ * this item is the one lakehouse bound to that container. The input and access
+ * refusals (400 `bad_request`, 403 `read_only`, 404 `item_not_found`) carry a
+ * stable `code` and a `remediation`. A credential the shortcut-secret resolver
+ * refuses (for example 403 `shortcut_secret_not_owned`) carries a `code`, and
+ * its next step is written in `error`. Registry, target and engine failures
+ * answer with `error`, a `code` where the failure has one, and some a `hint`.
+ * An `adls` or `internal` POST target is additionally scoped to the
+ * containers `lakehouseId`'s workspace binds, per `_lib/adls-scope.ts`.
+ *
+ * Runtime: nodejs, force-dynamic.
  * Design: docs/fiab/design/lakehouse-shortcuts.md.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getAccountName } from '@/lib/azure/adls-client';
 import {
-  listShortcuts,
   createShortcut,
   deleteShortcut,
-  getShortcut,
   type ShortcutTargetType,
   type ShortcutKind,
   type ShortcutCredentialRef,
 } from '@/lib/azure/lakehouse-shortcuts';
 import {
+  parseAbfss as parseTargetAbfss,
   resolveAndTestAdls,
   createTablesShortcut,
   dropShortcutObject,
@@ -33,6 +46,8 @@ import {
   type ExternalBinding,
 } from '@/lib/azure/shortcut-engines';
 import { parseAbfss as parseExternalAbfss, listAdlsWithSas, ShortcutSourceError } from '@/lib/azure/shortcut-client';
+import { adlsLocationPermitted, adlsLocationRefusal, resolveAdlsScope } from '../_lib/adls-scope';
+import type { SessionPayload } from '@/lib/auth/session';
 import {
   resolveShortcutSecret,
   assertShortcutSecretUsable,
@@ -41,12 +56,25 @@ import {
 } from '@/lib/azure/shortcut-secret-resolver';
 import { redactErrorText } from '@/lib/azure/shortcut-error-hygiene';
 import { withSession } from '@/lib/api/route-toolkit';
+import { authorizeItem } from '../_lib/refusal-envelope';
+import { findShortcutRow, listShortcutsForItem } from '../_lib/shortcut-rows';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+const READ_ONLY_MESSAGE =
+  'Your role on this lakehouse is read-only, so Loom did not change its shortcuts. A workspace '
+  + 'Member/Admin, or an item grant that includes Edit, can make this change.';
+
 const TARGET_TYPES: ShortcutTargetType[] = ['adls', 'internal', 's3', 'gcs', 'dataverse', 'delta_sharing'];
 const KINDS: ShortcutKind[] = ['files', 'tables'];
+
+/** A 400 with the stable `bad_request` code and the step that corrects it. */
+function badRequest(error: string, remediation: string): NextResponse {
+  return NextResponse.json({ ok: false, error, code: 'bad_request', remediation }, { status: 400 });
+}
+
+const REOPEN_REMEDIATION = 'Open the lakehouse from its workspace and retry.';
 
 function isGate(x: unknown): x is EngineGate {
   return !!x && typeof x === 'object' && (x as EngineGate).gated === true;
@@ -58,6 +86,67 @@ function isGate(x: unknown): x is EngineGate {
  */
 function sanitize(e: any): string {
   return redactErrorText((e?.message || String(e)).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()).slice(0, 500);
+}
+
+/**
+ * True when any segment of `path` -- raw or percent-decoded -- is `.` or `..`.
+ * The parsed target reaches the Synapse OPENROWSET URL and the Databricks
+ * external-table path unnormalized, so a segment that decodes to a
+ * back-reference (`..`, `%2e%2e`, `%2E%2e`) must be refused here rather than
+ * left for storage to interpret. A malformed percent escape is not treated as
+ * a dot segment; it is left to the existing reachability check.
+ */
+function hasDotSegment(path: string): boolean {
+  for (const raw of path.split('/')) {
+    if (!raw) continue;
+    let decoded = raw;
+    try {
+      decoded = decodeURIComponent(raw);
+    } catch {
+      // A malformed escape is not a dot segment; leave it to the existing
+      // reachability check to refuse as unparseable.
+    }
+    if (decoded === '.' || decoded === '..') return true;
+  }
+  return false;
+}
+
+/**
+ * ADLS shortcuts and browse share one container scope (`_lib/adls-scope.ts`).
+ * An ADLS or internal target, read on the Console identity, is scoped to the
+ * lakehouse ITEM named by the already-authorized `lakehouseId` (never a
+ * separate caller-supplied value) and a location inside that item's scope
+ * (403 with the allowed locations). The target is parsed exactly as
+ * `resolveAndTestAdls` parses it; a target that does not parse is left to its
+ * 400 `bad_target`, before any storage call. A `.`/`..` path segment, raw or
+ * percent-encoded, is refused before the scope check runs. Returns null when
+ * the target may be used.
+ */
+async function adlsTargetRefusal(session: SessionPayload, lakehouseId: string, targetUri: string): Promise<NextResponse | null> {
+  let parts: { account: string; container: string; path: string } | null;
+  try {
+    parts = parseTargetAbfss(targetUri, getAccountName);
+  } catch {
+    parts = null;
+  }
+  if (!parts) return null;
+  if (hasDotSegment(parts.path)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        code: 'bad_target',
+        error: 'targetUri may not contain a "." or ".." path segment, raw or percent-encoded.',
+      },
+      { status: 400 },
+    );
+  }
+  const scope = await resolveAdlsScope(session, lakehouseId, {
+    write: true,
+    readOnlyMessage: 'Your role on this lakehouse is read-only, so Loom did not create the shortcut. A workspace '
+      + 'Member/Admin, or an item grant that includes Edit, can make this change.',
+  });
+  if (scope instanceof NextResponse) return scope;
+  return adlsLocationPermitted(scope, parts.account, parts.container) ? null : adlsLocationRefusal(scope, 'shortcut');
 }
 
 /**
@@ -73,10 +162,12 @@ function secretRefused(e: any) {
 export const GET = withSession(async (req: NextRequest, { session }) => {
 
   const lakehouseId = req.nextUrl.searchParams.get('lakehouseId')?.trim();
-  if (!lakehouseId) return NextResponse.json({ ok: false, error: 'lakehouseId is required' }, { status: 400 });
+  if (!lakehouseId) return badRequest('lakehouseId is required', REOPEN_REMEDIATION);
 
   try {
-    const data = await listShortcuts(lakehouseId);
+    const access = await authorizeItem(session, lakehouseId);
+    if (access instanceof NextResponse) return access;
+    const data = await listShortcutsForItem(lakehouseId, access.item.workspaceId);
     return NextResponse.json({ ok: true, data });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: sanitize(e), code: e?.code }, { status: 502 });
@@ -114,16 +205,22 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   const format = body?.format as ('delta' | 'parquet' | 'csv' | 'json' | undefined);
   const credentialRef = body?.credentialRef as ShortcutCredentialRef | undefined;
 
-  if (!lakehouseId) return NextResponse.json({ ok: false, error: 'lakehouseId is required' }, { status: 400 });
-  if (!name) return NextResponse.json({ ok: false, error: 'name is required' }, { status: 400 });
+  if (!lakehouseId) return badRequest('lakehouseId is required', REOPEN_REMEDIATION);
+  if (!name) return badRequest('name is required', 'Enter a name for the shortcut.');
   if (!/^[A-Za-z0-9 _.-]{1,128}$/.test(name)) {
-    return NextResponse.json({ ok: false, error: 'name must be 1-128 chars (letters, digits, space, _ . -)' }, { status: 400 });
+    return badRequest('name must be 1-128 chars (letters, digits, space, _ . -)', 'Rename the shortcut using letters, digits, spaces, _ . or -.');
   }
-  if (!KINDS.includes(kind)) return NextResponse.json({ ok: false, error: `kind must be one of ${KINDS.join(', ')}` }, { status: 400 });
+  if (!KINDS.includes(kind)) {
+    return badRequest(`kind must be one of ${KINDS.join(', ')}`, 'Create the shortcut under Files or Tables.');
+  }
   if (!TARGET_TYPES.includes(targetType)) {
-    return NextResponse.json({ ok: false, error: `targetType must be one of ${TARGET_TYPES.join(', ')}` }, { status: 400 });
+    return badRequest(`targetType must be one of ${TARGET_TYPES.join(', ')}`, 'Pick a source from the New shortcut wizard.');
   }
-  if (!targetUri) return NextResponse.json({ ok: false, error: 'targetUri is required' }, { status: 400 });
+  if (!targetUri) return badRequest('targetUri is required', 'Choose the target location in the New shortcut wizard.');
+
+  // Authorize the item before any credential read, probe or engine call.
+  const access = await authorizeItem(session, lakehouseId, { write: true, readOnlyMessage: READ_ONLY_MESSAGE });
+  if (access instanceof NextResponse) return access;
 
   const createdBy = session.claims.upn;
   const createdByOid = (session.claims as { oid?: string }).oid;
@@ -265,6 +362,13 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
     }
   } else {
     // --- ADLS Gen2 / internal Loom lakehouse: real UAMI resolve + reachability test. ---
+    // Both target types reach the same reachability test below on the same
+    // identity, so both are scoped: a non-admin may use only a location
+    // `lakehouseId`'s scope permits (`_lib/adls-scope.ts`).
+    if (targetType === 'adls' || targetType === 'internal') {
+      const refused = await adlsTargetRefusal(session, lakehouseId, targetUri);
+      if (refused) return refused;
+    }
     try {
       const resolved = await resolveAndTestAdls(targetType, targetUri, getAccountName);
       abfssUri = resolved.abfssUri!;
@@ -373,16 +477,22 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   return NextResponse.json({ ok: true, data: row });
 });
 
-export const DELETE = withSession(async (req: NextRequest) => {
+export const DELETE = withSession(async (req: NextRequest, { session }) => {
 
   const lakehouseId = req.nextUrl.searchParams.get('lakehouseId')?.trim();
   const id = req.nextUrl.searchParams.get('id')?.trim();
   if (!lakehouseId || !id) {
-    return NextResponse.json({ ok: false, error: 'lakehouseId and id are required' }, { status: 400 });
+    return badRequest('lakehouseId and id are required', 'Refresh the shortcut list and delete the shortcut from it.');
   }
 
   try {
-    const existing = await getShortcut(lakehouseId, id);
+    const access = await authorizeItem(session, lakehouseId, { write: true, readOnlyMessage: READ_ONLY_MESSAGE });
+    if (access instanceof NextResponse) return access;
+    // The row and the registry key it is stored under (the item id, or the
+    // earlier container key for a row saved before item keys).
+    const found = await findShortcutRow(lakehouseId, access.item.workspaceId, id);
+    const key = found?.key ?? lakehouseId;
+    const existing = found?.row ?? null;
     if (existing) {
       // Drop the engine object (external table) — NEVER the underlying bytes.
       await dropShortcutObject({ engine: existing.engine, engineObject: existing.engineObject }).catch(() => {
@@ -392,19 +502,19 @@ export const DELETE = withSession(async (req: NextRequest) => {
       // credential — drop them too (deterministic names). Best-effort; never
       // deletes source bytes.
       if ((existing.targetType === 's3' || existing.targetType === 'gcs') && existing.engine === 'databricks') {
-        await dropExternalBinding(lakehouseId, existing.name, existing.credentialRef?.storageCredentialName).catch(() => {
+        await dropExternalBinding(key, existing.name, existing.credentialRef?.storageCredentialName).catch(() => {
           /* best-effort */
         });
       }
       // Delta Sharing Tables shortcuts wrote a credential file to a UC Volume —
       // remove it (best-effort). Never touches the shared source data.
       if (existing.targetType === 'delta_sharing' && existing.engine === 'databricks') {
-        await dropDeltaSharingCredential(lakehouseId, existing.name).catch(() => {
+        await dropDeltaSharingCredential(key, existing.name).catch(() => {
           /* best-effort */
         });
       }
     }
-    await deleteShortcut(lakehouseId, id);
+    await deleteShortcut(key, id);
     return NextResponse.json({ ok: true, data: { id } });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: sanitize(e), code: e?.code }, { status: 502 });

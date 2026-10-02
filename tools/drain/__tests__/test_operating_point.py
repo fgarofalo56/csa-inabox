@@ -81,7 +81,7 @@ def test_the_model_agrees_with_the_gate_on_every_shape(tmp_path, monkeypatch):
     rows = []
     number = 1
     states = ("ready", "closed", *merge_gate.SCHEDULED_STATES)
-    for stream in ("W9-rest", "W1-deploy"):          # non-escalating, escalating
+    for stream in ("W9-rest", "W2-security"):        # non-escalating, escalating
         for state in states:
             for pr in (None, 1, 99):                  # unbound, ours, another's
                 rows.append((number, stream, state, pr, None))
@@ -123,39 +123,57 @@ def test_merge_time_counts_the_gate_not_the_receipt(tmp_path):
     """`receipt_ok` is gate 6's, not 3b's. The first version conflated them and
     reported 100% two-reviewer over a ledger where one item asks for one.
 
-    The receipt count is reported SEPARATELY, because it is the thing that
-    actually stops that item -- a different gate, and the operator should see
-    both numbers rather than one that silently merges them."""
+    UPDATED 2026-10-02: the model's synthetic diff (`changed_paths=
+    ["docs/x.md"]`) is never sensitive and stream no longer drives a count at
+    all, so EVERY row below now resolves to `needed=0` regardless of state,
+    binding, or stream -- the WHOLE one-vs-two distinction this test used to
+    pin is retired along with stream-based escalation. This is also why
+    `mutate_gates.py`'s OP1-OP4 arms (which mutated the `stream_known`
+    computation and its `needed == 1` fold this test exercises) are RETIRED
+    rather than re-anchored: this test's own full suite stays green under
+    each of their four mutations now, measured directly on a sandbox copy.
+    `test_a_hundred_live_items_the_model_matches_the_gate` is what still
+    proves the model agrees with the real gate item by item; this test now
+    only pins that agreement at the degenerate all-zero point."""
     led = _ledger(tmp_path, [
-        (1, "W9-rest", "in-flight", None, None),     # 3b says ONE, no receipt
-        (2, "W9-rest", "in-flight", None, "ci-green"),  # ONE, and receipted
-        (3, "W9-rest", "ready", None, None),         # never scheduled -> TWO
-        (4, "W1-deploy", "in-flight", None, None),   # escalating stream -> TWO
+        (1, "W9-rest", "in-flight", None, None),
+        (2, "W9-rest", "in-flight", None, "ci-green"),
+        (3, "W9-rest", "ready", None, None),
+        (4, "W2-security", "in-flight", None, None),
     ])
     counts, one_reviewer, receipted = operating_point.merge_time(POLICY, led, pr=1)
-    assert counts[1] == 2, counts
-    assert counts[2] == 2, counts
-    assert one_reviewer == 2
-    assert receipted == 1, "only #2 could actually reach GO"
+    assert counts[0] == 4, counts
+    assert one_reviewer == 0
+    assert receipted == 0
 
 
 def test_negative_control_an_item_bound_to_another_pr_is_not_corroborated(tmp_path):
     """The row that caught the second defect, on its own so a failure names it.
     `item.pr is not None` accepted; `item.pr == pr` refuses. `tick.py
-    --bind-pr` writes `Item.pr` (#4489), so this row measures real bindings."""
+    --bind-pr` writes `Item.pr` (#4489), so this row measures real bindings.
+
+    UPDATED 2026-10-02: `stream_known` no longer changes `needed` (stream is
+    not read by `review_requirement` at all), so this now reads `needed=0`
+    regardless of corroboration -- the corroboration LOGIC above (`item.pr ==
+    pr`) is unchanged and still computed, it simply no longer has anywhere
+    left to make a visible difference in this model's COUNT."""
     led = _ledger(tmp_path, [(1, "W9-rest", "in-flight", 99, None)])
     counts, _one, _receipted = operating_point.merge_time(POLICY, led, pr=1)
-    assert counts[2] == 1, counts
-    assert counts[1] == 0, "an item another PR owns cannot corroborate this one"
+    assert counts[0] == 1, counts
 
 
 def test_brief_time_and_merge_time_are_different_questions(tmp_path):
     """They are quoted side by side in `policy.json` and are NOT comparable:
     brief time decides from a LANE before the diff exists, merge time from the
-    real diff and the ledger. The same item can legitimately differ."""
+    real diff and the ledger. The same item can legitimately differ.
+
+    UPDATED 2026-10-02: both now read 0 for this row (an unlaned-equivalent
+    `W9-rest` item with no binding), which is no longer a useful
+    discriminator on its own -- `test_the_brief_states_the_review_
+    requirement` and its siblings in `test_tick.py` are where brief-time's
+    OWN nonzero cases (an unknown footprint, a sensitive lane) are pinned."""
     led = _ledger(tmp_path, [(1, "W9-rest", "ready", None, None)])
     brief, _reasons, _per_stream = operating_point.brief_time(POLICY, led)
     merge, _one, _receipted = operating_point.merge_time(POLICY, led, pr=1)
-    # brief: laned, non-escalating stream -> ONE. merge: never scheduled -> TWO.
-    assert brief[1] == 1, brief
-    assert merge[2] == 1, merge
+    assert brief[0] == 1, brief
+    assert merge[0] == 1, merge

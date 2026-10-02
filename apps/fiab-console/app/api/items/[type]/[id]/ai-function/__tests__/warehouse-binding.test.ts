@@ -28,6 +28,25 @@ vi.mock('@/lib/auth/session', async (importOriginal) => ({
 }));
 vi.mock('@/lib/auth/workspace-guard', () => ({ authorizeItemWorkspace: vi.fn() }));
 
+// The ROUTE's OWN `[type]/[id]` item-scope gate (#4861) is a SEPARATE
+// authorization layer ahead of the warehouse-target check this file exercises
+// — it is pinned by its own tests (route.test.ts, route-real-ladder.test.ts).
+// Bypassed here (session-gated passthrough) so the `authorizeItemWorkspace`
+// spy below counts only the warehouse-binding ladder calls this file is about;
+// RED if the bypass itself stopped checking the session, since `withSession`
+// already 401s first and this would never be reached either way.
+vi.mock('@/app/api/items/_lib/synapse-item-scope', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/app/api/items/_lib/synapse-item-scope')>()),
+  guardSynapseItemRequest: vi.fn(async () => {
+    const { getSession } = await import('@/lib/auth/session');
+    const session = getSession();
+    if (!session) {
+      return { res: NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 }) };
+    }
+    return { ctx: { session, item: null, database: null } };
+  }),
+}));
+
 /** Warehouse items. `wh-item-nows` has no workspace (the fail-closed case). */
 const ITEMS = [
   { id: 'wh-item-read', itemType: 'databricks-sql-warehouse', workspaceId: 'ws-read' },

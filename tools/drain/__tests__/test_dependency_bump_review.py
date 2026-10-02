@@ -5,13 +5,21 @@ existed only as prose until 2026-09-27. `review_requirement` never read it, so
 a bot PR (which references no ledger item, so its stream never resolves)
 escalated to TWO reviewers to re-derive by hand what CI had already measured.
 
-WHAT IS ENCODED HERE IS PART OF THAT DECISION, NOT ALL OF IT, and the tests say
-so rather than implying more: gate 2+3 (`gates.reduce_verdicts`) ends with an
-unconditional "no live APPROVE at head" that this change does not touch, so a
-qualifying bump needs ONE reviewer instead of two, never zero.
-`test_the_exemption_does_not_reach_gate_2_3` pins that boundary, and
-`test_merge_gate.py::test_a_bot_bump_still_needs_one_approve_from_gate_2_3`
-pins it through the real gate.
+WHAT WAS ENCODED HERE WAS PART OF THAT DECISION, NOT ALL OF IT, until
+2026-10-02: gate 2+3 (`gates.reduce_verdicts`) used to end with an
+UNCONDITIONAL "no live APPROVE at head" this change did not touch, so a
+qualifying bump needed ONE reviewer instead of two, never zero.
+`test_the_exemption_does_not_reach_gate_2_3` pinned that boundary as it stood
+then, and still documents the SHAPE of the floor (unconditional unless
+`required=0`).
+
+COMPLETED 2026-10-02: operator decision "one reviewer on sensitive paths, zero
+elsewhere on green CI" makes gate 2+3's floor conditional on `required`, which
+is now gate 3b's own count -- so a qualifying bump (`dependency_bump_reviewers
+== 0`) reaches gate 2+3 with `required=0` too, and genuinely needs ZERO live
+verdicts of any kind.
+`test_merge_gate.py::test_a_bot_bump_now_needs_zero_reviewers_from_gate_2_3_too`
+pins the completed state through the real gate.
 
 THIS EXEMPTION LOOSENS A SAFETY GATE, so every test here names the input that
 would make it fail, and the fail-closed arms are tested individually rather
@@ -72,18 +80,20 @@ def test_a_lock_only_bot_bump_needs_no_reviewers():
     assert "reviewer COUNT only" in why, why
 
 
-def test_the_exemption_does_not_reach_gate_2_3():
-    """THE SCOPE, asserted rather than described.
+def test_the_exemption_does_not_reach_gate_2_3_through_its_default_required():
+    """THE SHAPE, asserted rather than described -- RETRACTED AND NARROWED
+    2026-10-02 from its original claim (see the module docstring): this no
+    longer proves gate 2+3 is unreachable by a bump, because it IS reachable
+    now, through `required=needed` -- `test_merge_gate.py::test_a_bot_bump_
+    now_needs_zero_reviewers_from_gate_2_3_too` pins that end to end.
 
-    `reduce_verdicts` is gate 2+3 and is computed before `review_requirement`
-    ever runs. It ends with an unconditional refusal when no live APPROVE
-    exists, and nothing in this change touches it. So the exemption lowers the
-    bar from two reviewers to ONE.
+    What THIS still proves: `reduce_verdicts`'s OWN DEFAULT (`required=1`,
+    unchanged) still refuses with no live APPROVE and no `required=` passed,
+    which is the shape every PRE-2026-10-02 caller in this suite relies on.
 
-    WHAT VALUE WOULD MAKE THIS FAIL: any future edit that teaches
-    `reduce_verdicts` about bumps. That would be a strictly larger loosening
-    than the one granted -- a real change merging with no human or agent
-    verdict at all -- and this assertion is what stops it arriving quietly.
+    WHAT VALUE WOULD MAKE THIS FAIL: changing `reduce_verdicts`'s default
+    away from 1, which would silently loosen every caller that never passes
+    `required=` explicitly -- not just the bump exemption.
     """
     ok, why = gates.reduce_verdicts([], [])
     assert ok is False, why
@@ -97,32 +107,57 @@ def test_the_exemption_does_not_reach_gate_2_3():
     ok, why = gates.reduce_verdicts([approve], [])
     assert ok is True, why
 
+    # ...and `required=0` (what the real caller now passes for a qualifying
+    # bump) DOES reach zero, which is the completed decision.
+    ok, why = gates.reduce_verdicts([], [], required=0)
+    assert ok is True, why
 
-def test_the_exemption_does_not_apply_to_a_workflow_bump():
-    """A bump that edits `.github/workflows` still needs TWO.
+
+def test_the_exemption_does_not_apply_to_an_escalating_path_bump():
+    """A bump that touches a SENSITIVE-path fragment still needs ONE reviewer,
+    not zero -- operator decision 2026-10-02 lowered this floor from TWO to
+    ONE (it used to be `escalate_to_two_when_path_contains`'s two reviewers;
+    that list is retired and its fragments now live in
+    `sensitive_path_prefixes`, returning `sensitive_reviewers` (1)).
 
     WHAT VALUE WOULD MAKE THIS FAIL: moving the exemption ABOVE the
-    escalation-path loop in `review_requirement`. That single reordering is
+    sensitive-path loop in `review_requirement`. That single reordering is
     the dangerous version of this change: CI-green proves least precisely
     where the diff can alter what CI runs.
     """
-    needed, why = _req(changed_paths=[".github/workflows/copilot-evals.yml"])
-    assert needed == 2, (needed, why)
-    assert ".github/workflows" in why, why
+    needed, why = _req(changed_paths=["tools/drain/package-lock.json"])
+    assert needed == 1, (needed, why)
+    assert "tools/drain" in why, why
 
-    needed, why = _req(changed_paths=["portal/react-webapp/package-lock.json"])
-    assert needed == 2, (needed, why)
-    assert "portal/" in why, why
+    needed, why = _req(changed_paths=["apps/fiab-console/middleware.ts"])
+    assert needed == 1, (needed, why)
+    assert "apps/fiab-console/middleware.ts" in why, why
 
 
-def test_a_blocking_verdict_still_escalates_a_bump():
-    """Being a bot does not reduce a block.
+def test_a_blocking_verdict_no_longer_raises_the_bump_count_by_default():
+    """Operator directive 2026-10-01 (`_lean_review_2026_10_01`):
+    `escalate_on_blocking_first_verdict` ships `false`, so a REQUEST-CHANGES
+    prior verdict no longer raises `review_requirement`'s COUNT for a bot bump
+    either -- it falls through to the exemption's own `dependency_bump_
+    reviewers` (0). Gate 2+3 (`reduce_verdicts`) is untouched by this change
+    and still refuses to merge without a live APPROVE, which is the actual
+    safety net against a bot bump riding past a real finding.
 
-    WHAT VALUE WOULD MAKE THIS FAIL: moving the exemption above the
-    prior-verdict check. A reviewer who found a real defect in a bump would
-    then be overruled by the bump's own exemption on the next gate run.
+    WHAT VALUE WOULD MAKE THIS FAIL: the `and prior_verdict` guard in
+    `review_requirement` reading a hardcoded `True` instead of the policy key.
     """
     needed, why = _req(prior_verdict="REQUEST-CHANGES")
+    assert needed == 0, (needed, why)
+    assert "reviewer COUNT only" in why, why
+
+    # The control: restoring the key still escalates a bump on a block, so the
+    # mechanism did not disappear -- only its shipped default did.
+    restored = {**POLICY, "review": {**POLICY["review"],
+                                     "escalate_on_blocking_first_verdict": True}}
+    needed, why = gates.review_requirement(
+        restored, changed_paths=LOCKS, prior_verdict="REQUEST-CHANGES",
+        stream=None, footprint_known=True, stream_known=False, dependency_bump=True,
+    )
     assert needed == 2, (needed, why)
     assert "reviewer returned" in why, why
 
@@ -144,9 +179,11 @@ def test_the_footprint_conjunct_is_load_bearing():
 
     WHAT VALUE WOULD MAKE THIS FAIL: deleting `and footprint_known` from the
     exemption branch. This call is the only site in the suite that varies it.
+    An unknown footprint fails closed to `sensitive_reviewers` (1), per
+    operator decision 2026-10-02 -- it used to be 2.
     """
     needed, why = _req(footprint_known=False)
-    assert needed == 2, (needed, why)
+    assert needed == 1, (needed, why)
     assert "footprint is not known" in why, why
 
 
@@ -353,9 +390,12 @@ def test_the_allowlist_admits_a_real_lock_by_directory_or_by_filename(path):
     the grammar are exercised, so the negative rows below cannot be satisfied
     by a matcher that simply refuses everything.
 
-    The last row is exempt by the allowlist and still refused by the
-    escalation-path loop, which is the layering this change relies on -- so
-    `is_dependency_bump` alone is NOT the safety boundary.
+    The last row is exempt by the allowlist; PRE-2026-10-01 it was ALSO
+    refused by the escalation-path loop (`portal/` was in the authority then),
+    which was the layering this change relied on. The 2026-10-01 narrowing
+    dropped `portal/` from the authority, so that second layer no longer
+    applies to this row -- `test_a_blocking_verdict_no_longer_raises_the_
+    bump_count_by_default` in this file pins the layering that remains.
 
     WHAT VALUE WOULD MAKE THIS FAIL: narrowing the directory rule to an exact
     path, or the filename rule to top-level only.
@@ -436,9 +476,16 @@ def test_the_allowlist_matches_whole_segments_not_substrings(path):
     assert ok is False, f"{path} must not be on the bump allowlist: {why}"
     assert "outside the allowlist" in why, why
 
-    needed, _ = gates.review_requirement(
-        POLICY, changed_paths=[path], stream_known=False, dependency_bump=ok)
-    assert needed >= 1, f"{path} reached zero reviewers"
+    # THE `needed >= 1` CHECK BELOW IS RETIRED, DISCLOSED RATHER THAN SILENTLY
+    # DROPPED (`assertion-design.md` "done" #5). Operator decision 2026-10-02
+    # made `independent_reviewers_default` 0, so a NON-SENSITIVE path now
+    # reaches zero reviewers whether or not it is (wrongly) treated as a
+    # qualifying bump -- `review_requirement`'s COUNT can no longer
+    # distinguish "wrongly exempted as a bump" from "an ordinary diff" for any
+    # path outside `sensitive_path_prefixes`, which none of these are. The
+    # kill power for a degraded matcher now lives ENTIRELY in the two
+    # assertions above, on `gates.is_dependency_bump` directly -- unaffected
+    # by this change, since that function's own boundary logic is untouched.
 
 
 @pytest.mark.parametrize(("path", "arm"), [
@@ -490,9 +537,12 @@ def test_the_allowlist_has_a_boundary_in_every_direction(path, arm):
     assert ok is False, f"{path} must not be on the bump allowlist ({arm}): {why}"
     assert "outside the allowlist" in why, why
 
-    needed, _ = gates.review_requirement(
-        POLICY, changed_paths=[path], stream_known=False, dependency_bump=ok)
-    assert needed >= 1, f"{path} reached zero reviewers"
+    # `needed >= 1` is RETIRED here too, for the same reason disclosed above
+    # `test_one_path_outside_the_allowlist_voids_the_exemption`'s matching
+    # block: operator decision 2026-10-02 made the ordinary default 0, so this
+    # review-count channel can no longer discriminate a degraded matcher from
+    # a correct one for a non-sensitive path. The matcher's own kill power is
+    # unaffected, below and in the two assertions above.
 
     # POSITIVE CONTROL, so these rows cannot be satisfied by a matcher that
     # refuses everything: the un-degraded neighbour of each row is still

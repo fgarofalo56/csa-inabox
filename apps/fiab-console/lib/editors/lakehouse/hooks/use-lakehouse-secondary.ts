@@ -111,6 +111,7 @@ export function useLakehouseSecondary({
   const [schemas, setSchemas] = useState<SchemaRow[] | null>(null);
   const [schemasBusy, setSchemasBusy] = useState(false);
   const [schemasError, setSchemasError] = useState<string | null>(null);
+  const [schemasNotice, setSchemasNotice] = useState<string | null>(null);
   const [newSchemaOpen, setNewSchemaOpen] = useState(false);
   const [newSchemaName, setNewSchemaName] = useState('');
   const [newSchemaDesc, setNewSchemaDesc] = useState('');
@@ -124,56 +125,67 @@ export function useLakehouseSecondary({
   const [moveTableError, setMoveTableError] = useState<string | null>(null);
   const [moveTableStatus, setMoveTableStatus] = useState<string | null>(null);
 
+  // Schemas belong to the lakehouse ITEM (the registry is keyed by its id);
+  // an unsaved item has none yet.
+  const schemaItemId = isNewItem ? '' : id;
+
   useEffect(() => {
-    if (tab === 'schemas' && shortcutLakehouseId) void loadSchemas();
+    if (tab === 'schemas' && schemaItemId) void loadSchemas();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, shortcutLakehouseId]);
+  }, [tab, schemaItemId]);
 
   const loadSchemas = useCallback(async () => {
-    if (!shortcutLakehouseId) return;
+    if (!schemaItemId) return;
     setSchemasBusy(true); setSchemasError(null);
     try {
-      const r = await clientFetch(`/api/lakehouse/schemas?lakehouseId=${encodeURIComponent(shortcutLakehouseId)}`);
+      const r = await clientFetch(`/api/lakehouse/schemas?lakehouseId=${encodeURIComponent(schemaItemId)}`);
       const j = await parseJsonOrError<{ ok: boolean; error?: string; schemas?: SchemaRow[] }>(r, 'List schemas');
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setSchemas(j.schemas || []);
     } catch (e: any) { setSchemasError(e?.message || String(e)); setSchemas([]); }
     finally { setSchemasBusy(false); }
-  }, [shortcutLakehouseId]);
+  }, [schemaItemId]);
 
   const createSchema = useCallback(async () => {
-    if (!shortcutLakehouseId || !newSchemaName.trim()) return;
+    if (!schemaItemId || !newSchemaName.trim()) return;
     setNewSchemaBusy(true); setNewSchemaError(null);
     try {
       const r = await clientFetch('/api/lakehouse/schemas', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ lakehouseId: shortcutLakehouseId, name: newSchemaName.trim(), description: newSchemaDesc.trim() || undefined }),
+        body: JSON.stringify({ lakehouseId: schemaItemId, name: newSchemaName.trim(), description: newSchemaDesc.trim() || undefined }),
       });
-      const j = await parseJsonOrError<{ ok: boolean; error?: string; hint?: string }>(r, 'Create schema');
-      if (!j.ok && r.status !== 503) throw new Error(j.hint || j.error || `HTTP ${r.status}`);
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; hint?: string; remediation?: string; note?: string }>(r, 'Create schema');
+      if (!j.ok && r.status !== 503) throw new Error(j.hint || [j.error || `HTTP ${r.status}`, j.remediation].filter(Boolean).join(' '));
+      setSchemasNotice(j.ok && j.note ? j.note : null);
       setNewSchemaOpen(false); setNewSchemaName(''); setNewSchemaDesc('');
       await loadSchemas();
     } catch (e: any) { setNewSchemaError(e?.message || String(e)); }
     finally { setNewSchemaBusy(false); }
-  }, [shortcutLakehouseId, newSchemaName, newSchemaDesc, loadSchemas]);
+  }, [schemaItemId, newSchemaName, newSchemaDesc, loadSchemas]);
 
   const deleteSchema = useCallback(async (name: string) => {
-    if (!shortcutLakehouseId) return;
+    if (!schemaItemId) return;
+    const row = (schemas || []).find((s) => s.name === name);
     const ok = await confirm({
       title: `Delete schema "${name}"?`,
-      body: 'This runs DROP SCHEMA … CASCADE and removes the catalog entry. This cannot be undone.',
-      danger: true, confirmLabel: 'Drop schema',
+      body: row?.sparkDatabase && !row.legacy
+        ? `This removes the schema from this lakehouse and drops its Spark database ${row.sparkDatabase} `
+          + 'with every table in it (DROP SCHEMA … CASCADE). This cannot be undone.'
+        : 'This removes the schema from this lakehouse\'s list. It was registered before lakehouse schemas had '
+          + 'their own Spark databases, so Loom does not drop any Spark schema for it.',
+      danger: true, confirmLabel: 'Delete schema',
     });
     if (!ok) return;
-    setSchemasBusy(true); setSchemasError(null);
+    setSchemasBusy(true); setSchemasError(null); setSchemasNotice(null);
     try {
-      const r = await clientFetch(`/api/lakehouse/schemas?lakehouseId=${encodeURIComponent(shortcutLakehouseId)}&name=${encodeURIComponent(name)}`, { method: 'DELETE' });
-      const j = await parseJsonOrError<{ ok: boolean; error?: string }>(r, 'Delete schema');
-      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      const r = await clientFetch(`/api/lakehouse/schemas?lakehouseId=${encodeURIComponent(schemaItemId)}&name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; remediation?: string; note?: string; data?: { sparkSchemaKept?: boolean } }>(r, 'Delete schema');
+      if (!j.ok) throw new Error([j.error || `HTTP ${r.status}`, j.remediation].filter(Boolean).join(' '));
+      if (j.note) setSchemasNotice(j.note);
       await loadSchemas();
     } catch (e: any) { setSchemasError(e?.message || String(e)); }
     finally { setSchemasBusy(false); }
-  }, [shortcutLakehouseId, loadSchemas, confirm]);
+  }, [schemaItemId, schemas, loadSchemas, confirm]);
 
   const openMoveTable = useCallback((tableName: string, fromSchema: string) => {
     setMoveTableName(tableName); setMoveTableFrom(fromSchema || 'dbo');
@@ -183,20 +195,24 @@ export function useLakehouseSecondary({
   }, [schemas, loadSchemas]);
 
   const submitMoveTable = useCallback(async () => {
-    if (!shortcutLakehouseId || !moveTableName.trim() || !moveTableTo.trim()) return;
+    if (!schemaItemId || !moveTableName.trim() || !moveTableTo.trim()) return;
     setMoveTableBusy(true); setMoveTableError(null);
     try {
       const r = await clientFetch('/api/lakehouse/schemas', {
         method: 'PATCH', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ lakehouseId: shortcutLakehouseId, tableName: moveTableName.trim(), fromSchema: moveTableFrom, toSchema: moveTableTo.trim() }),
+        body: JSON.stringify({ lakehouseId: schemaItemId, tableName: moveTableName.trim(), fromSchema: moveTableFrom, toSchema: moveTableTo.trim() }),
       });
-      const j = await parseJsonOrError<{ ok: boolean; error?: string; hint?: string; data?: { namespace?: string } }>(r, 'Move table');
-      if (!j.ok) throw new Error(j.hint || j.error || `HTTP ${r.status}`);
-      setMoveTableStatus(`Moved to ${moveTableTo.trim()} — queryable as ${j.data?.namespace || `${shortcutLakehouseId}.${moveTableTo.trim()}.${moveTableName.trim()}`}`);
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; hint?: string; remediation?: string; data?: { sparkTable?: string } }>(r, 'Move table');
+      if (!j.ok) throw new Error(j.hint || [j.error || `HTTP ${r.status}`, j.remediation].filter(Boolean).join(' '));
+      setMoveTableStatus(
+        j.data?.sparkTable
+          ? `Moved to ${moveTableTo.trim()}. In a notebook, query it as ${j.data.sparkTable}.`
+          : `Moved to ${moveTableTo.trim()}.`,
+      );
       if (activeContainer) await loadPaths(activeContainer, tablesPrefix);
     } catch (e: any) { setMoveTableError(e?.message || String(e)); }
     finally { setMoveTableBusy(false); }
-  }, [shortcutLakehouseId, moveTableName, moveTableFrom, moveTableTo, activeContainer, tablesPrefix, loadPaths]);
+  }, [schemaItemId, moveTableName, moveTableFrom, moveTableTo, activeContainer, tablesPrefix, loadPaths]);
 
   // ── References ────────────────────────────────────────────────────────────
   const [references, setReferences] = useState<ReferenceLakehouse[] | null>(null);
@@ -205,6 +221,8 @@ export function useLakehouseSecondary({
   const [workspaceLakehouses, setWorkspaceLakehouses] = useState<{ id: string; displayName: string }[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [refOpenPrefixes, setRefOpenPrefixes] = useState<Record<string, PathEntry[] | 'loading' | { error: string }>>({});
+  // The route's `note` for an empty listing (which container holds the files), by the same key.
+  const [refPathNotes, setRefPathNotes] = useState<Record<string, string>>({});
   const [refSelection, setRefSelection] = useState<RefSelection | null>(null);
   const [refPreview, setRefPreview] = useState<PreviewResponse | null>(null);
   const [refPreviewLoading, setRefPreviewLoading] = useState(false);
@@ -259,7 +277,12 @@ export function useLakehouseSecondary({
     try {
       const qs = new URLSearchParams({ refId, container, prefix });
       const r = await clientFetch(`/api/lakehouse/references/paths?${qs.toString()}`);
-      const j = await parseJsonOrError<{ ok: boolean; error?: string; paths?: PathEntry[] }>(r, 'Reference paths');
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; paths?: PathEntry[]; note?: string }>(r, 'Reference paths');
+      setRefPathNotes((n) => {
+        const next = { ...n };
+        if (j.ok && j.note) next[key] = j.note; else delete next[key];
+        return next;
+      });
       setRefOpenPrefixes((p) => ({ ...p, [key]: j.ok ? (j.paths ?? []) : { error: j.error || `HTTP ${r.status}` } }));
     } catch (e: any) { setRefOpenPrefixes((p) => ({ ...p, [key]: { error: e?.message || String(e) } })); }
   }, [refCacheKey]);
@@ -269,8 +292,9 @@ export function useLakehouseSecondary({
     setRefSelection({ refId: ref.id, displayName: ref.displayName, account: ref.account, container, entry });
     setRefPreview(null); setRefPreviewLoading(true);
     try {
-      const qs = new URLSearchParams({ container, path: entry.name });
-      if (ref.account) qs.set('account', ref.account);
+      // The referenced item is authorized server-side; its storage account comes
+      // from the item, not from the request.
+      const qs = new URLSearchParams({ refId: ref.id, container, path: entry.name });
       const r = await clientFetch(`/api/lakehouse/preview?${qs.toString()}`);
       const j = await parseJsonOrError<PreviewResponse>(r, 'Reference preview');
       setRefPreview(j);
@@ -287,21 +311,24 @@ export function useLakehouseSecondary({
   const [shareError, setShareError] = useState<string | null>(null);
   const [shareSuccess, setShareSuccess] = useState<string | null>(null);
 
+  // Share is the Permissions grant under another name: it names the lakehouse,
+  // and the server grants on the container and storage account the item is
+  // bound to. An unsaved item has neither, so nothing is sent.
   const grantShare = useCallback(async () => {
-    if (!activeContainer || !sharePrincipal.trim()) return;
+    if (isNewItem || !id || !activeContainer || !sharePrincipal.trim()) return;
     setShareBusy(true); setShareError(null); setShareSuccess(null);
     try {
       const r = await clientFetch('/api/lakehouse/permissions', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ container: activeContainer, principalId: sharePrincipal.trim(), principalType: sharePrincipalType, role: shareRole }),
+        body: JSON.stringify({ tab: 'object', lakehouseId: id, container: activeContainer, principalId: sharePrincipal.trim(), principalType: sharePrincipalType, role: shareRole }),
       });
-      const j = await parseJsonOrError<{ ok: boolean; error?: string }>(r, 'Share');
-      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; remediation?: string }>(r, 'Share');
+      if (!j.ok) throw new Error([j.error || `HTTP ${r.status}`, j.remediation].filter(Boolean).join(' '));
       setShareSuccess(`Granted ${shareRole} to ${sharePrincipal.trim()} at ${new Date().toLocaleTimeString()}.`);
       setSharePrincipal('');
     } catch (e: any) { setShareError(e?.message || String(e)); }
     finally { setShareBusy(false); }
-  }, [activeContainer, sharePrincipal, sharePrincipalType, shareRole]);
+  }, [isNewItem, id, activeContainer, sharePrincipal, sharePrincipalType, shareRole]);
 
   // ── Data Agent ────────────────────────────────────────────────────────────
   const [daOpen, setDaOpen] = useState(false);
@@ -360,7 +387,7 @@ export function useLakehouseSecondary({
     historyPreviewVersion, historyPreviewResult, historyPreviewLoading,
     loadHistory, restoreToVersion, previewAsOf, openTableHistory,
     // Schemas
-    schemas, schemasBusy, schemasError,
+    schemas, schemasBusy, schemasError, schemasNotice,
     newSchemaOpen, setNewSchemaOpen,
     newSchemaName, setNewSchemaName,
     newSchemaDesc, setNewSchemaDesc,
@@ -374,7 +401,7 @@ export function useLakehouseSecondary({
     references, refsLoading, refsError,
     workspaceLakehouses,
     pickerOpen, setPickerOpen,
-    refOpenPrefixes, refSelection, setRefSelection, refPreview, setRefPreview, refPreviewLoading,
+    refOpenPrefixes, refPathNotes, refSelection, setRefSelection, refPreview, setRefPreview, refPreviewLoading,
     addReference, removeReference, loadRefPaths, selectRefFile, loadReferences,
     // Share
     shareOpen, setShareOpen,

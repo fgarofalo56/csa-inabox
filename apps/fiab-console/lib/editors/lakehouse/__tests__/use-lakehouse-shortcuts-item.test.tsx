@@ -1,0 +1,166 @@
+/**
+ * useLakehouseShortcuts — Test and Delete name the open lakehouse ITEM.
+ *
+ * A row saved before item keys carries its storage container name (`bronze`)
+ * in `lakehouseId`; the routes resolve such a row from the item id. The row
+ * below therefore uses a `lakehouseId` that differs from the open item, so the
+ * assertions break if the hook sends the row's own `lakehouseId` (`bronze`)
+ * instead of `lh-item-1`, and the positive arm breaks if no request is sent.
+ */
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { renderHook, act, cleanup } from '@testing-library/react';
+import { useLakehouseShortcuts } from '../hooks/use-lakehouse-shortcuts';
+import type { ShortcutRow } from '../types';
+import { refusalFieldsFor } from '@/app/api/lakehouse/_lib/refusal-envelope';
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
+
+const ITEM_ID = 'lh-item-1';
+const LEGACY_ROW: ShortcutRow = {
+  id: 'sc-1', lakehouseId: 'bronze', name: 'orders', kind: 'files', parentPath: '', fullPath: 'Files/orders',
+  targetType: 'adls', targetUri: 'abfss://raw@acct.dfs.core.windows.net/orders', status: 'active',
+  createdBy: 'owner@contoso.com', createdAt: '2026-01-01T00:00:00Z',
+};
+
+interface Call { url: string; init?: RequestInit }
+
+function installFetch(): Call[] {
+  const calls: Call[] = [];
+  vi.spyOn(global, 'fetch').mockImplementation(async (input: any, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : String(input?.url ?? input);
+    calls.push({ url, init });
+    const body = url.includes('/api/lakehouse/shortcuts?') && !init?.method
+      ? { ok: true, data: [LEGACY_ROW] }
+      : { ok: true, data: LEGACY_ROW };
+    return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } }) as any;
+  });
+  return calls;
+}
+
+function mount(shortcutLakehouseId: string) {
+  return renderHook(() => useLakehouseShortcuts({
+    shortcutLakehouseId, schemasEnabled: false, containers: null, schemas: null, bundleShortcuts: [],
+    loadSchemas: async () => {}, confirm: async () => true, setSqlText: () => {}, setTab: () => {}, tab: 'files',
+  }));
+}
+
+describe('useLakehouseShortcuts: row actions name the open item', () => {
+  it('Test posts the open item id, not the row registry key', async () => {
+    const calls = installFetch();
+    const { result } = mount(ITEM_ID);
+    await act(async () => { await result.current.testShortcut(LEGACY_ROW); });
+    const post = calls.find((c) => c.url.includes('/api/lakehouse/shortcuts/test'));
+    expect(post, 'Test sent no request').toBeTruthy();
+    expect(JSON.parse(String(post!.init?.body))).toEqual({ lakehouseId: ITEM_ID, id: 'sc-1' });
+  });
+
+  it('Delete names the open item id, not the row registry key', async () => {
+    const calls = installFetch();
+    const { result } = mount(ITEM_ID);
+    await act(async () => { await result.current.deleteShortcutRow(LEGACY_ROW); });
+    const del = calls.find((c) => c.init?.method === 'DELETE');
+    expect(del, 'Delete sent no request').toBeTruthy();
+    const qs = new URL(del!.url, 'http://x').searchParams;
+    expect(qs.get('lakehouseId')).toBe(ITEM_ID);
+    expect(qs.get('id')).toBe('sc-1');
+  });
+
+  it('an unsaved item sends nothing', async () => {
+    const calls = installFetch();
+    const { result } = mount('');
+    await act(async () => {
+      await result.current.testShortcut(LEGACY_ROW);
+      await result.current.deleteShortcutRow(LEGACY_ROW);
+    });
+    expect(calls.map((c) => c.url)).toEqual([]);
+  });
+});
+
+/** Answer the Test POST with `status` + `body`; the list GET answers the row. */
+function installTestAnswer(status: number, body: Record<string, unknown>): Call[] {
+  const calls: Call[] = [];
+  vi.spyOn(global, 'fetch').mockImplementation(async (input: any, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : String(input?.url ?? input);
+    calls.push({ url, init });
+    const isTest = url.includes('/api/lakehouse/shortcuts/test');
+    return new Response(JSON.stringify(isTest ? body : { ok: true, data: [LEGACY_ROW] }), {
+      status: isTest ? status : 200, headers: { 'content-type': 'application/json' },
+    }) as any;
+  });
+  return calls;
+}
+
+// The Test result reaches the user. Before this, the hook parsed the answer and
+// discarded it, so a refusal read as a successful Test. Each case FAILS IF the
+// hook ignores `ok:false` (shortcutsError stays null) or drops `remediation`.
+function readOnlyBody() {
+  const error = 'Your role on this lakehouse is read-only, so Loom did not re-test its shortcuts. A workspace '
+    + 'Member/Admin, or an item grant that includes Edit, can run the test.';
+  const fields = refusalFieldsFor(403, error, { readOnlyMessage: error });
+  // Breaks if the helper stops classifying this text as read-only (the fixture
+  // would silently lose its code and remediation).
+  expect(fields?.code).toBe('read_only');
+  return { ok: false, error, ...fields! };
+}
+describe('useLakehouseShortcuts: Test shows a refused or failed result', () => {
+  it.each([
+    // The read-only answer, built by the same refusal-envelope helper the route
+    // uses (code + remediation), over the route's own message text (verbatim
+    // from shortcuts/test/route.ts; a route file cannot export it). A change to
+    // the helper's remediation therefore moves this fixture with it.
+    ['a 403 (read-only role)', 403, readOnlyBody()],
+    // Verbatim from app/api/lakehouse/shortcuts/test/route.ts (row not found).
+    ['a 404 (shortcut not found)', 404, {
+      ok: false, error: 'shortcut not found', code: 'not_found',
+      remediation: 'Refresh the shortcut list; the shortcut may have been deleted.',
+    }],
+  ])('%s is shown with its next step', async (_label, status, body) => {
+    installTestAnswer(status, body);
+    const { result } = mount(ITEM_ID);
+    await act(async () => { await result.current.testShortcut(LEGACY_ROW); });
+    expect(result.current.shortcutsError).toBe(`${body.error} ${body.remediation}`);
+  });
+
+  it('a failed probe is shown AND the list is reloaded (the status was written back)', async () => {
+    const calls = installTestAnswer(502, { ok: false, error: 'engine unreachable', code: 'unreachable', data: LEGACY_ROW });
+    const { result } = mount(ITEM_ID);
+    await act(async () => { await result.current.testShortcut(LEGACY_ROW); });
+    expect(result.current.shortcutsError).toBe('engine unreachable');
+    // FAILS IF the hook throws before reloading: no list GET after the POST.
+    const urls = calls.map((c) => c.url);
+    const post = urls.findIndex((u) => u.includes('/api/lakehouse/shortcuts/test'));
+    expect(urls.slice(post + 1).some((u) => u.includes('/api/lakehouse/shortcuts?'))).toBe(true);
+  });
+
+  it('a passing Test leaves no error (positive arm)', async () => {
+    installTestAnswer(200, { ok: true, data: LEGACY_ROW });
+    const { result } = mount(ITEM_ID);
+    await act(async () => { await result.current.testShortcut(LEGACY_ROW); });
+    expect(result.current.shortcutsError).toBeNull();
+    expect(result.current.shortcuts).toEqual([LEGACY_ROW]);
+  });
+});
+
+describe('useLakehouseShortcuts: bundle registration posts the open item id, with no separate itemId field', () => {
+  it('registerBundleShortcut sends lakehouseId === the mounted item id, and nothing else names an item', async () => {
+    // WHAT BREAKS IT: mounting with a DIFFERENT registry key (for example the
+    // pre-#4790 `activeContainer || id` shape, which could diverge from the
+    // item id) would move `lakehouseId` in the posted body away from ITEM_ID.
+    // The retired separate `itemId` field is also asserted absent: a caller
+    // re-adding it would pass `toHaveProperty` on the OLD shape but fail the
+    // `not.toHaveProperty` here.
+    const calls = installFetch();
+    const { result } = mount(ITEM_ID);
+    await act(async () => {
+      await result.current.registerBundleShortcut({ name: 'orders', kind: 'files', parentPath: '', target: 'abfss://raw@acct.dfs.core.windows.net/orders' });
+    });
+    const post = calls.find((c) => c.url.endsWith('/api/lakehouse/shortcuts') && c.init?.method === 'POST');
+    expect(post, 'registerBundleShortcut sent no request').toBeTruthy();
+    const body = JSON.parse(String(post!.init?.body));
+    expect(body.lakehouseId).toBe(ITEM_ID);
+    expect(body).not.toHaveProperty('itemId');
+  });
+});

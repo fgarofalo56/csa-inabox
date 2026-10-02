@@ -4995,15 +4995,56 @@ const ADMIN_SHAPE_UNSCOPED = new Map([
     },
   ],
   [
+    'app/api/lakehouse/_lib/adls-scope.ts:resolveAdlsScope',
+    {
+      verdict: 'UNRESOLVED',
+      requires: ['authorizeLakehouse(', 'isTenantAdmin('],
+      why:
+        'UNRESOLVED (recorded here so it prints on every run; this guard does not clear it). ADLS ' +
+        'shortcuts and browse share one container scope, decided in this function. The lakehouse item ' +
+        'is resolved FIRST: `authorizeLakehouse(session, lakehouseId)` (-> `resolveItemAccessByOid`, ' +
+        'checked by 8a-8e) answers 404 before the admin flag is read, and both callers answer 400 ' +
+        'without an item id. The `isTenantAdmin` test then widens STORAGE reach on the Console ' +
+        'identity rather than workspace reach: a tenant admin may use any account and container, ' +
+        'while everyone else is limited to the deployment\'s lake containers and the containers ' +
+        'readable lakehouses in that workspace record (403 otherwise). Neither NARROWS (the flag ' +
+        'grants) nor ORG-WIDE (an item is in play) describes that, and this guard bounds workspaces, ' +
+        'not storage accounts. Both tokens are pinned: drop the item check and this entry no longer ' +
+        'describes the function.',
+    },
+  ],
+  [
     'app/api/lakehouse/permissions/route.ts:DELETE',
     {
       verdict: 'ORG-WIDE',
-      requires: ['isTenantAdmin(', 'revokeContainerRoleAssignmentInScope('],
+      requires: ['isTenantAdmin(', 'objectTabBinding(', 'revokeContainerRoleAssignmentInScope('],
       why:
-        'ORG-WIDE (function scope). Tenant-admin-or-403, same as POST in this file; no workspace or ' +
-        'item is resolved. The object tab revokes only an id that is shaped as a role assignment on ' +
-        'the named container AND appears in that container\'s listing ' +
-        '(revokeContainerRoleAssignmentInScope).',
+        'ORG-WIDE (function scope). Tenant-admin-or-403, same as POST in this file; the admin flag ' +
+        'is the write authority. The object tab also requires `lakehouseId`: `objectTabBinding` ' +
+        'authorizes that item for READ (`authorizeItem` -> `resolveItemAccessByOid`, which does not ' +
+        'read the admin flag) and resolves its container and bound storage account, answering 409 ' +
+        'when the account cannot be read. It revokes only an id that is shaped as a role assignment ' +
+        'on that container AND appears in that container\'s listing on that account ' +
+        '(revokeContainerRoleAssignmentInScope). The item step narrows the admin write; it never ' +
+        'widens it.',
+    },
+  ],
+  [
+    'app/api/lakehouse/permissions/route.ts:GET',
+    {
+      verdict: 'ORG-WIDE',
+      requires: ['isTenantAdmin(', 'authorizeItem(', 'objectTabBinding('],
+      why:
+        'ORG-WIDE (the admin branch only). Same shape as `paths/route.ts:GET` above: the ' +
+        '`isTenantAdmin` test is reached ONLY when the request carries no `lakehouseId`, where no ' +
+        'workspace or item is in play, and a non-admin is answered 403 before any listing. Every ' +
+        'request that names a lakehouse is decided by `authorizeItem` (`authorizeLakehouse` with the ' +
+        'refusal code and remediation added; -> `resolveItemAccessByOid`), which does not read the ' +
+        'admin flag; the object tab reaches it through `objectTabBinding`. The object tab then lists ' +
+        'role assignments only on the item\'s own container, on its bound storage account. The ' +
+        'SQL-plane tabs list the shared dedicated pool\'s catalogue for any caller the item check ' +
+        'admits (not narrowed to the item\'s tables; #4850). Both tokens are pinned: drop the item branch and ' +
+        'this entry no longer describes the function.',
     },
   ],
   [

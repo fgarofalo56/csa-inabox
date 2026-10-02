@@ -69,6 +69,7 @@ import { LINKABLE_ITEM_TYPE, linkOfferFor, runErrorFrom, type LinkOffer, type Ru
 // AiFn is a server type; import as type-only so this client bundle never pulls
 // in the server module (which imports @azure/identity).
 import type { AiFn } from '@/lib/azure/ai-functions-client';
+import { escapeSparkSqlLiteral } from '@/lib/sql/quoting';
 
 /** The nine AI functions (kept in sync with AI_FN_NAMES on the server). The
  *  first seven run in-database on Databricks (Comm/GCC) or via AOAI chat; embed
@@ -90,6 +91,62 @@ const FN_OPTIONS: { key: AiFn; label: string; desc: string }[] = [
 const DBX_SUPPORTED = new Set<AiFn>([
   'sentiment', 'classify', 'translate', 'summarize', 'extract', 'fix_grammar', 'generate_response',
 ]);
+
+export interface DatabricksAiSnippetInput {
+  fn: AiFn;
+  column: string;
+  table?: string;
+  labels?: string[];
+  fields?: string[];
+  targetLang?: string;
+}
+
+/**
+ * The Databricks AI SQL snippet the dialog displays and inserts. Labels, fields
+ * and the target language are Databricks string literals, so they are escaped
+ * by the Spark SQL literal grammar (escapeSparkSqlLiteral), the same rule the
+ * server route applies. Every character is carried, so this never throws; it
+ * returns '' only when no column is chosen (see {@link aiSnippetBlockedReason}).
+ */
+export function buildDatabricksAiSnippet(input: DatabricksAiSnippetInput): string {
+  const { fn, column, table, targetLang } = input;
+  if (!column.trim()) return '';
+  const col = column.includes('`') ? column : `\`${column.trim()}\``;
+  const tbl = table && (table.includes('`') || table.includes('.')) ? table : (table ? `\`${table}\`` : '<table>');
+  const lit = (v: string) => `'${escapeSparkSqlLiteral(v)}'`;
+  let expr: string;
+  switch (fn) {
+    case 'sentiment': expr = `ai_analyze_sentiment(${col})`; break;
+    case 'summarize': expr = `ai_summarize(${col})`; break;
+    case 'classify': {
+      const ls = input.labels && input.labels.length ? input.labels : ['positive', 'negative', 'neutral'];
+      expr = `ai_classify(${col}, ARRAY(${ls.map(lit).join(', ')}))`;
+      break;
+    }
+    case 'translate':
+      expr = `ai_translate(${col}, ${lit(targetLang || 'English')})`;
+      break;
+    case 'extract': {
+      const fs = input.fields && input.fields.length ? input.fields : ['entity'];
+      expr = `ai_extract(${col}, ARRAY(${fs.map(lit).join(', ')}))`;
+      break;
+    }
+    case 'fix_grammar': expr = `ai_fix_grammar(${col})`; break;
+    case 'generate_response': expr = `ai_gen(${col})`; break;
+    default: expr = `ai_query(${col})`;
+  }
+  return `SELECT ${col}, ${expr} AS ai_result\nFROM ${tbl}\nLIMIT 50;`;
+}
+
+/**
+ * Why the dialog has no AI SQL to insert, or null when it has one. Shown as the
+ * snippet field's hint and the Insert button's tooltip, so a disabled Insert is
+ * never unexplained.
+ */
+export function aiSnippetBlockedReason(input: { column: string }): string | null {
+  if (!input.column.trim()) return 'Choose a column to generate the AI SQL.';
+  return null;
+}
 
 const useStyles = makeStyles({
   body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minWidth: '520px' },
@@ -178,6 +235,10 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
   const setError = useCallback((message: string | null) => {
     setErrorState(message === null ? null : { message, aoaiFallback: false });
   }, []);
+  // The route answers an unsaved item (`/items/<type>/new`) with 200
+  // `{ ok:false, code:'unsaved_item' }`. That is guidance, not a failure, so it
+  // renders as a warning (the sibling convention in warehouse-alerts.tsx).
+  const [unsavedNotice, setUnsavedNotice] = useState<string | null>(null);
 
   // #3669 — "Use Azure OpenAI instead" after a warehouse refusal; cleared when the
   // dialog reopens or the warehouse changes.
@@ -301,33 +362,18 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
   // Build the Databricks AI SQL snippet (for Insert + as the displayed contract).
   const generatedSql = useMemo(() => {
     if (!useDbx || !column.trim()) return '';
-    const col = column.includes('`') ? column : `\`${column.trim()}\``;
-    const tbl = table && (table.includes('`') || table.includes('.')) ? table : (table ? `\`${table}\`` : '<table>');
-    let expr: string;
-    switch (fn) {
-      case 'sentiment': expr = `ai_analyze_sentiment(${col})`; break;
-      case 'summarize': expr = `ai_summarize(${col})`; break;
-      case 'classify': {
-        const ls = (optionsPayload.labels as string[] | undefined) || ['positive', 'negative', 'neutral'];
-        expr = `ai_classify(${col}, ARRAY(${ls.map((l) => `'${l.replace(/'/g, "''")}'`).join(', ')}))`;
-        break;
-      }
-      case 'translate':
-        expr = `ai_translate(${col}, '${(targetLang || 'English').replace(/'/g, "''")}')`;
-        break;
-      case 'extract': {
-        const fs = (optionsPayload.fields as string[] | undefined) || ['entity'];
-        expr = `ai_extract(${col}, ARRAY(${fs.map((f) => `'${f.replace(/'/g, "''")}'`).join(', ')}))`;
-        break;
-      }
-      case 'fix_grammar': expr = `ai_fix_grammar(${col})`; break;
-      case 'generate_response': expr = `ai_gen(${col})`; break;
-      default: expr = `ai_query(${col})`;
-    }
-    return `SELECT ${col}, ${expr} AS ai_result\nFROM ${tbl}\nLIMIT 50;`;
+    return buildDatabricksAiSnippet({
+      fn,
+      column,
+      table,
+      labels: optionsPayload.labels as string[] | undefined,
+      fields: optionsPayload.fields as string[] | undefined,
+      targetLang,
+    });
   }, [useDbx, column, table, fn, optionsPayload, targetLang]);
+  const snippetBlockedReason = useDbx ? aiSnippetBlockedReason({ column }) : null;
 
-  const reset = useCallback(() => { setResult(null); setError(null); }, [setError]);
+  const reset = useCallback(() => { setResult(null); setError(null); setUnsavedNotice(null); }, [setError]);
 
   const insert = useCallback(() => {
     if (generatedSql && onInsert) {
@@ -367,6 +413,10 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
         }),
       });
       const j = await r.json();
+      if (!j.ok && j.code === 'unsaved_item') {
+        setUnsavedNotice(j.error || 'AI functions run in the name of a saved item.');
+        return;
+      }
       if (!j.ok) {
         // #3669 — keep the code and the server's remediation, not just the error.
         setErrorState(runErrorFrom(j, r.status));
@@ -556,7 +606,10 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
                   )}
 
                   {useDbx ? (
-                    <Field label="Generated AI SQL" hint="Inserted into the query editor or run against the warehouse">
+                    <Field
+                      label="Generated AI SQL"
+                      hint={snippetBlockedReason ?? 'Inserted into the query editor or run against the warehouse'}
+                    >
                       <Textarea value={generatedSql} readOnly textarea={{ className: s.mono }} resize="vertical" rows={4} />
                     </Field>
                   ) : (
@@ -569,6 +622,15 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
                         rows={3}
                       />
                     </Field>
+                  )}
+
+                  {unsavedNotice && (
+                    <MessageBar intent="warning">
+                      <MessageBarBody>
+                        <MessageBarTitle>Save this item first</MessageBarTitle>
+                        {unsavedNotice}
+                      </MessageBarBody>
+                    </MessageBar>
                   )}
 
                   {error && (
@@ -661,7 +723,14 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
           <DialogActions>
             <Button appearance="secondary" onClick={() => onOpenChange(false)}>Close</Button>
             {useDbx && onInsert && (
-              <Button appearance="outline" disabled={!generatedSql} onClick={insert}>Insert SQL</Button>
+              <Button
+                appearance="outline"
+                disabled={!generatedSql}
+                title={snippetBlockedReason ?? undefined}
+                onClick={insert}
+              >
+                Insert SQL
+              </Button>
             )}
             {!probe?.gated && (
               <Button appearance="primary" icon={running ? <Spinner size="tiny" /> : <Sparkle20Regular />} disabled={running || probing} onClick={run}>

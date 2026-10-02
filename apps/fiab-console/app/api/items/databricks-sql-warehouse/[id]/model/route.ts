@@ -13,7 +13,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { executeStatement, getWarehouse } from '@/lib/azure/databricks-client';
 import {
   readModelState, writeModelState,
@@ -21,7 +20,8 @@ import {
   normalizeMeasure, upsertMeasure,
   type StoredMeasure, type StoredRelationship,
 } from '../../../_lib/model-store';
-import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { escapeSparkSqlLiteral } from '@/lib/sql/quoting';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -66,7 +66,7 @@ async function readTables(warehouseId: string, catalog: string, schema: string):
        FROM ${bt(catalog)}.information_schema.table_constraints tc
        JOIN ${bt(catalog)}.information_schema.key_column_usage kcu
          ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
-       WHERE tc.constraint_type = 'PRIMARY KEY' AND tc.table_schema = '${escapeSqlLiteral(schema)}'`,
+       WHERE tc.constraint_type = 'PRIMARY KEY' AND tc.table_schema = '${escapeSparkSqlLiteral(schema)}'`,
       catalog,
       schema,
     );
@@ -110,7 +110,7 @@ async function readUcRelationships(warehouseId: string, catalog: string, schema:
          ON rc.constraint_name = tc.constraint_name AND rc.constraint_schema = tc.table_schema
        JOIN ${bt(catalog)}.information_schema.key_column_usage kcu2
          ON kcu2.constraint_name = rc.unique_constraint_name AND kcu2.table_schema = rc.unique_constraint_schema
-       WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = '${escapeSqlLiteral(schema)}'`,
+       WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = '${escapeSparkSqlLiteral(schema)}'`,
       catalog,
       schema,
     );
@@ -143,10 +143,8 @@ function mergeRelationships(cosmos: StoredRelationship[], uc: StoredRelationship
   return [...cosmos, ...uc.filter((r) => !seen.has(key(r)))];
 }
 
-export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const { id } = await ctx.params;
+export const GET = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const { id } = params;
   const warehouseId = req.nextUrl.searchParams.get('warehouseId') || '';
   const catalog = req.nextUrl.searchParams.get('catalog') || '';
   const schema = req.nextUrl.searchParams.get('schema') || '';
@@ -192,12 +190,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const { id } = await ctx.params;
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const { id } = params;
   const kind = req.nextUrl.searchParams.get('kind');
   const warehouseId = req.nextUrl.searchParams.get('warehouseId') || '';
   const defCatalog = req.nextUrl.searchParams.get('catalog') || '';
@@ -244,12 +240,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const next = upsertRelationship(model, rel);
   await writeModelState(id, ITEM_TYPE, session.claims.oid, next);
   return NextResponse.json({ ok: true, relationship: rel, model: next });
-}
+});
 
-export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const { id } = await ctx.params;
+export const DELETE = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const { id } = params;
   const relId = req.nextUrl.searchParams.get('relId');
   const warehouseId = req.nextUrl.searchParams.get('warehouseId') || '';
   const defCatalog = req.nextUrl.searchParams.get('catalog') || '';
@@ -273,4 +267,4 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: stri
   const next = removeRelationship(model, relId);
   await writeModelState(id, ITEM_TYPE, session.claims.oid, next);
   return NextResponse.json({ ok: true, model: next });
-}
+});

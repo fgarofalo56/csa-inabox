@@ -116,7 +116,7 @@ async function parseUploadResponse(
   r: Response,
 ): Promise<{ ok: boolean; error?: string; sparkFormatLabel?: string }> {
   const ct = r.headers.get('content-type') || '';
-  let body: { ok?: boolean; error?: string; sparkFormat?: { label?: string } } | null = null;
+  let body: { ok?: boolean; error?: string; remediation?: string; sparkFormat?: { label?: string } } | null = null;
   if (ct.includes('application/json')) {
     try { body = await r.json(); } catch { /* fall through */ }
   }
@@ -126,7 +126,8 @@ async function parseUploadResponse(
   let bodyText = '';
   if (!body) { try { bodyText = (await r.text()).slice(0, 200); } catch { /* ignore */ } }
   const detail =
-    body?.error
+    // A refusal carries what to do about it (e.g. a read-only role); keep it with the error.
+    (body?.error ? [body.error, body.remediation].filter(Boolean).join(' ') : '')
     || (r.status === 413 ? 'File too large (max 4 GB).'
       : r.status === 502 ? 'Upstream storage error (502). Check ADLS network / role assignments.'
       : r.status === 401 ? 'Sign-in expired. Reload and re-authenticate.'
@@ -135,6 +136,8 @@ async function parseUploadResponse(
 }
 
 interface StartUploadArgs {
+  /** The lakehouse item the file is uploaded to (the route authorizes it). */
+  lakehouseId: string;
   lakehouseName: string;
   container: string;
   /** Full target path within the container, e.g. "silver/data.parquet". */
@@ -233,7 +236,7 @@ interface JobsState {
 export const useJobsStore = create<JobsState>((set, get) => ({
   jobs: [],
 
-  startUpload: ({ lakehouseName, container, path, file, onDone }) => {
+  startUpload: ({ lakehouseId, lakehouseName, container, path, file, onDone }) => {
     const id = nextId();
     const ac = new AbortController();
     controllers.set(id, ac);
@@ -250,6 +253,7 @@ export const useJobsStore = create<JobsState>((set, get) => ({
     };
 
     const fd = new FormData();
+    fd.set('lakehouseId', lakehouseId);
     fd.set('container', container);
     fd.set('path', path);
     fd.set('file', file);

@@ -159,6 +159,9 @@ jobs:
       - name: sql-quoting (inline identifier/literal quoting outside lib/sql/quoting.ts)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-sql-quoting.mjs
+      - name: sql-literal-dialect (Spark SQL / KQL literals use the backslash rule, not T-SQL doubling)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-sql-literal-dialect.mjs
       - name: bff-errors (raw exception text on 500 + raw-envelope helpers)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-bff-errors.mjs
@@ -856,6 +859,18 @@ jobs:
       - name: image-preflight self-test (assert-acr-image-tags — PR #2640)
         if: ${{ !cancelled() }}
         run: bash scripts/ci/test-assert-acr-image-tags.sh
+      # RVP0 — the self-hosted runner image pinned actions/runner 2.328.0 for
+      # 350 days after it was superseded, and on 2026-09-29 GitHub refused to
+      # register it ("minimum runner version ... is now 2.329.0"), stranding
+      # every [self-hosted, loom-aca] workflow. This is the HERMETIC half: the
+      # Dockerfile pin is well-formed, at/above the last minimum GitHub reported,
+      # and the provision script carries no default that would override it. The
+      # CALENDAR half (how long the pin has been superseded) runs daily in its
+      # own workflow, runner-version-pin.yml, not here, so a release date cannot
+      # red every PR.
+      - name: runner-version-pin (RVP0 — the self-hosted runner can still register)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-runner-version-pin.mjs
       # MIR0 above proves the mirror is WIRED. This proves its digest read-back
       # can tell "verified" from "mismatch" from "could not read" — which it
       # could not: `2>&1` merged az's PREVIEW banner for the `acr manifest`

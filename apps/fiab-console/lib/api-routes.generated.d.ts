@@ -649,6 +649,7 @@ export type StaticApiRoute =
   | '/api/lakehouse/schemas'
   | '/api/lakehouse/settings'
   | '/api/lakehouse/shortcuts'
+  | '/api/lakehouse/shortcuts/adls-scope'
   | '/api/lakehouse/shortcuts/browse'
   | '/api/lakehouse/shortcuts/credentials'
   | '/api/lakehouse/shortcuts/sharepoint'
