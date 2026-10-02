@@ -75,12 +75,21 @@ describe('fetchFeatureAdoption', () => {
     ]);
   });
 
-  it('injects a sanitized feature filter for drill-through', async () => {
+  it('escapes the drill-through feature filter by the KQL rule', async () => {
     queryLogs.mockResolvedValue({ columns: ['feature', 'events', 'users'], rows: [], rowCount: 0 });
     await fetchFeatureAdoption(7, "items'; drop");
     const kql = queryLogs.mock.calls[0][0] as string;
-    // single quotes are doubled (KQL escaping) — no raw injection.
-    expect(kql).toContain("feature == 'items''; drop'");
+    // KQL regular literals take `\'` for a quote. Breaks if the site goes back
+    // to doubling: `feature == 'items''; drop'`.
+    expect(kql).toContain("feature == 'items\\'; drop'");
+  });
+
+  it('keeps a backslash in the feature filter as data', async () => {
+    // Breaks if the backslash is not escaped first: `'a\'` never closes.
+    queryLogs.mockResolvedValue({ columns: ['feature', 'events', 'users'], rows: [], rowCount: 0 });
+    await fetchFeatureAdoption(7, 'a\\');
+    const kql = queryLogs.mock.calls[0][0] as string;
+    expect(kql).toContain("feature == 'a\\\\'");
   });
 });
 

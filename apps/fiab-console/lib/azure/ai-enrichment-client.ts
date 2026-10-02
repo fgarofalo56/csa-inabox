@@ -26,7 +26,7 @@
  * concurrency+retry orchestrator (which takes the per-row enrich fn injected).
  */
 
-import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { escapeSparkSqlLiteral } from '@/lib/sql/quoting';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Operations
@@ -169,15 +169,15 @@ export function buildAiSqlExpr(op: EnrichmentOp, colExpr: string, opts: Enrichme
       return `ai_gen(${colExpr})`;
     case 'classify': {
       const labels = (opts.labels && opts.labels.length ? opts.labels : ['positive', 'negative', 'neutral'])
-        .map((l) => `'${escapeSqlLiteral(String(l))}'`)
+        .map((l) => `'${escapeSparkSqlLiteral(String(l))}'`)
         .join(', ');
       return `ai_classify(${colExpr}, ARRAY(${labels}))`;
     }
     case 'translate':
-      return `ai_translate(${colExpr}, '${escapeSqlLiteral(String(opts.targetLang || 'English'))}')`;
+      return `ai_translate(${colExpr}, '${escapeSparkSqlLiteral(String(opts.targetLang || 'English'))}')`;
     case 'extract': {
       const fields = (opts.fields && opts.fields.length ? opts.fields : ['entity'])
-        .map((f) => `'${escapeSqlLiteral(String(f))}'`)
+        .map((f) => `'${escapeSparkSqlLiteral(String(f))}'`)
         .join(', ');
       return `ai_extract(${colExpr}, ARRAY(${fields}))`;
     }
@@ -250,7 +250,7 @@ export interface ValuesCtasParams {
  * Build a CTAS that materialises the AOAI per-row results as a new two-column
  * Delta table `(source_value, <outputColumn>)`. Used by the `custom_prompt` /
  * Gov AOAI run path (the ops with no `ai_*` builtin). Every literal is escaped
- * via `escapeSqlLiteral`; the table + output-column names are sanitized. Throws
+ * via `escapeSparkSqlLiteral` (Spark SQL literal grammar); the table + output-column names are sanitized. Throws
  * on an empty `pairs` (nothing to write).
  */
 export function buildValuesCtas(p: ValuesCtasParams): string {
@@ -260,7 +260,7 @@ export function buildValuesCtas(p: ValuesCtasParams): string {
   const outCol = sanitizeIdent(p.outputColumn, 'output column');
   if (!p.pairs.length) throw new Error('no enriched rows to write.');
   const values = p.pairs
-    .map((r) => `('${escapeSqlLiteral(r.source ?? '')}', '${escapeSqlLiteral(r.output ?? '')}')`)
+    .map((r) => `('${escapeSparkSqlLiteral(r.source ?? '')}', '${escapeSparkSqlLiteral(r.output ?? '')}')`)
     .join(',\n  ');
   return (
     `CREATE TABLE \`${cat}\`.\`${sch}\`.\`${dest}\` USING DELTA AS\n` +
