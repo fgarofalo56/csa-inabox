@@ -161,9 +161,17 @@ def _approval(at: str, cid: int = 1) -> dict:
 
 
 def _verdict_gate(repin: dict, head_date: str, approved_at: str) -> dict:
-    """Gate 2+3 through the REAL `run_gates`, with the repin `resolve_repin` made."""
+    """Gate 2+3 through the REAL `run_gates`, with the repin `resolve_repin` made.
+
+    `changed_files` forced to a SENSITIVE path: the default fixture's path is
+    ordinary and needs ZERO reviewers (operator decision 2026-10-02), under
+    which gate 2+3 passes with `required=0` whether or not the lone APPROVE
+    is live -- which would make every staleness assertion in this file prove
+    nothing about the re-pin chain.
+    """
     result = tmg._run(head_date=head_date, repin=repin,
-                      comments=[_approval(approved_at)])
+                      comments=[_approval(approved_at)],
+                      changed_files=["tools/drain/gates.py"])
     return tmg._gate(result, "2+3")
 
 
