@@ -77,6 +77,7 @@ import { clientFetch } from '@/lib/client-fetch';
 import { CONNECTORS, connectorByType, type ConnectorDef } from '@/lib/pipeline/connector-catalog';
 import { AddExistingConnectionWizard } from '@/lib/components/connections/add-existing-wizard';
 import { EmptyState } from '@/lib/components/empty-state';
+import { AdlsPathPicker } from '@/lib/components/storage/adls-path-picker';
 import { itemVisual, readableAccent } from '@/lib/components/ui/item-type-visual';
 import { useTheme } from '@/lib/theme/theme-context';
 import { CONN_TYPE_LABEL, CONN_TILE_SLUG } from '@/lib/azure/connectable-types';
@@ -225,6 +226,14 @@ const FILE_FORMATS = ['delta', 'parquet', 'csv', 'json'] as const;
 const ADLS_CONTAINERS = ['bronze', 'silver', 'gold', 'landing', 'csv-imports'] as const;
 /** Where uploads stage in the landing container. */
 const UPLOAD_CONTAINER = 'landing';
+
+/** Item types whose editors open this gallery; an upload is stored with, and authorized against, that item. */
+export type GetDataHostItemType = 'report' | 'semantic-model' | 'paginated-report';
+const HOST_LABEL: Record<GetDataHostItemType, string> = {
+  report: 'report',
+  'semantic-model': 'semantic model',
+  'paginated-report': 'paginated report',
+};
 
 // ---------------------------------------------------------------------------
 
@@ -639,7 +648,7 @@ function SectionHead({ icon, children }: { icon: React.ReactNode; children: Reac
 }
 
 function BindStep({
-  connType, def, connections, connsLoading, reportId,
+  connType, def, connections, connsLoading, reportId, hostItemType = 'report',
   preselectConnectionId, onReloadConns, onOpenWizard, onBack, onChosen,
 }: {
   /** Mapped report ConnType, or undefined when the connector is not a source. */
@@ -648,6 +657,7 @@ function BindStep({
   connections: LoomConnectionView[] | null;
   connsLoading: boolean;
   reportId?: string;
+  hostItemType?: GetDataHostItemType;
   preselectConnectionId?: string;
   onReloadConns: () => void;
   onOpenWizard: () => void;
@@ -776,13 +786,20 @@ function BindStep({
   const upload = useCallback(async (file: File) => {
     setUploadBusy(true); setUploadErr(null); setUploaded(null); setPreview(null);
     try {
+      // An uploaded file is stored with the item the gallery is open in, so that item must exist.
+      if (!reportId || reportId === 'new') {
+        setUploadErr(`Save the ${HOST_LABEL[hostItemType]} first. An uploaded file is stored with the item it feeds.`);
+        return;
+      }
       const form = new FormData();
+      form.append('reportId', reportId);
+      form.append('reportItemType', hostItemType);
       form.append('container', UPLOAD_CONTAINER);
-      form.append('path', `report-uploads/${reportId || 'adhoc'}/${file.name}`);
+      form.append('path', `report-uploads/${reportId}/${file.name}`);
       form.append('file', file);
       const r = await clientFetch('/api/lakehouse/upload', { method: 'POST', credentials: 'include', body: form });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok || !j?.ok) { setUploadErr(j?.error || `HTTP ${r.status}`); return; }
+      if (!r.ok || !j?.ok) { setUploadErr([j?.error || `HTTP ${r.status}`, j?.remediation].filter(Boolean).join(' ')); return; }
       const fmt = String(j?.sparkFormat?.format || '').toLowerCase();
       setUploaded({
         fileName: String(j.filename || file.name),
@@ -795,10 +812,10 @@ function BindStep({
     } finally {
       setUploadBusy(false);
     }
-  }, [reportId]);
+  }, [reportId, hostItemType]);
 
   const runPreview = useCallback(async () => {
-    if (!reportId || !draft) return;
+    if (!reportId || hostItemType !== 'report' || !draft) return;
     setPreviewBusy(true); setPreviewErr(null); setPreview(null);
     try {
       const r = await clientFetch(
@@ -821,7 +838,7 @@ function BindStep({
     } finally {
       setPreviewBusy(false);
     }
-  }, [reportId, draft]);
+  }, [reportId, hostItemType, draft]);
 
   // ── honest gates for non-bindable connectors ───────────────────────────────
   function gateMessage(): { title: string; body: string } {
@@ -1083,10 +1100,20 @@ function BindStep({
 
               {storageMode === 'connection' && (
                 <div className={s.inlineFields}>
-                  <Field label="Path within the storage account" required className={s.inlineField}
-                    hint="Container/path or abfss URL to the Delta folder / file.">
-                    <Input value={filePath} placeholder="bronze/sales/orders" onChange={(_, d) => { setFilePath(d.value); setPreview(null); }} />
-                  </Field>
+                  {/* Browsed, not typed: the picker walks the real ADLS data plane and
+                      emits an abfss URI, which the report resolver reads as-is.
+                      The picker is NOT limited to the connection's account: it offers
+                      any account the caller can list, and the resolver's storage-adls
+                      branch reads the host in the picked URI (resolveFileTarget). The
+                      hint says exactly that, rather than promising a restriction. */}
+                  <div className={s.inlineField}>
+                    <AdlsPathPicker
+                      label="Delta folder or file"
+                      hint="Browse any storage account you can list. The report reads exactly the location you pick."
+                      value={filePath}
+                      onChange={(loc) => { setFilePath(loc?.uri ?? ''); setPreview(null); }}
+                    />
+                  </div>
                   <Field label="Format" required className={s.inlineField}>
                     <Dropdown value={format} selectedOptions={[format]}
                       onOptionSelect={(_, d) => { setFormat(String(d.optionValue || 'delta')); setPreview(null); }}>
@@ -1112,8 +1139,8 @@ function BindStep({
             </div>
           )}
 
-          {/* Optional live preview (only when a reportId is in scope) ────────── */}
-          {reportId && draft && (
+          {/* Optional live preview (report hosts only: it runs the report connector-preview route) ── */}
+          {reportId && hostItemType === 'report' && draft && (
             <div className={s.actions}>
               <Button appearance="secondary" icon={previewBusy ? <Spinner size="tiny" /> : <TableSearch20Regular />}
                 disabled={previewBusy} onClick={runPreview}>
@@ -1193,8 +1220,13 @@ export type GetDataChosen = (ds: ReportDataSource, meta?: GetDataChosenMeta) => 
 
 export interface GetDataGalleryProps {
   open: boolean;
-  /** Report item id — scopes uploads + enables the optional live preview. */
+  /**
+   * Id of the item the gallery is open in — scopes uploads (all host types) and
+   * enables the optional live preview (report hosts only).
+   */
   reportId?: string;
+  /** Type of the host item named by `reportId`; defaults to `report`. */
+  hostItemType?: GetDataHostItemType;
   /** Report's workspace — SCOPES the "Pick a Loom item" source list to it. */
   workspaceId?: string;
   /** Fires with the chosen connection / file-upload / adls-file source. */
@@ -1207,7 +1239,7 @@ type View =
   | { step: 'loom' }
   | { step: 'bind'; connType?: ReportConnType; def: ConnectorDef; preselectConnectionId?: string };
 
-export function GetDataGallery({ open, reportId, workspaceId, onChosen, onDismiss }: GetDataGalleryProps) {
+export function GetDataGallery({ open, reportId, hostItemType = 'report', workspaceId, onChosen, onDismiss }: GetDataGalleryProps) {
   const s = useStyles();
   const [view, setView] = useState<View>({ step: 'gallery' });
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -1301,6 +1333,7 @@ export function GetDataGallery({ open, reportId, workspaceId, onChosen, onDismis
                 connections={connections}
                 connsLoading={connsLoading}
                 reportId={reportId}
+                hostItemType={hostItemType}
                 preselectConnectionId={view.preselectConnectionId}
                 onReloadConns={loadConnections}
                 onOpenWizard={() => setWizardOpen(true)}

@@ -3138,12 +3138,6 @@ export function ComputeEditor({ item, id }: { item: FabricItemType; id: string }
 // 8. DatasetEditor
 // =====================================================================
 
-// The five DLZ medallion containers the lakehouse data-plane allow-lists; a
-// dataset whose dataUri lands in one of these previews + profiles against the
-// PRIMARY account without an explicit account param. Others still preview via
-// the account-scoped route, but Spark profiling (table-stats) is gated to these.
-const DLZ_KNOWN_CONTAINERS = ['bronze', 'silver', 'gold', 'landing', 'csv-imports'];
-
 /** One row of GET /api/foundry/datastores (shapeDatastore in foundry-client.ts). */
 interface FoundryDatastoreRow {
   name: string;
@@ -3152,23 +3146,6 @@ interface FoundryDatastoreRow {
   description?: string;
   accountName?: string;
   containerName?: string;
-}
-
-interface ParsedAdls { account: string; container: string; path: string; }
-
-/**
- * Parse an `abfss://<container>@<account>.dfs.<suffix>/<path>` or
- * `https://<account>.dfs.<suffix>/<container>/<path>` data-asset URI into its
- * {account, container, path}. Returns null for non-ADLS URIs (azureml://, etc.)
- * so the caller can surface an honest "not previewable" gate instead of guessing.
- */
-function parseAdlsUri(uri: string | undefined): ParsedAdls | null {
-  if (!uri) return null;
-  const abfss = uri.match(/^abfss:\/\/([^@/]+)@([^./]+)\.dfs\.[^/]+\/(.*)$/i);
-  if (abfss) return { container: abfss[1], account: abfss[2], path: abfss[3] };
-  const https = uri.match(/^https:\/\/([^./]+)\.dfs\.[^/]+\/([^/]+)\/(.*)$/i);
-  if (https) return { account: https[1], container: https[2], path: https[3] };
-  return null;
 }
 
 /** A folder path the user is currently sitting in (prefix), plus its breadcrumb. */
@@ -3481,64 +3458,78 @@ function DatastoreBrowsePanel({ onPick }: {
 }
 
 /**
- * DatasetPreviewPanel — live data preview + schema profiler for a registered
- * data asset version. Parses the asset's abfss/https dataUri, fetches up to 50
- * rows via /api/lakehouse/preview (Synapse Serverless OPENROWSET), and renders
- * the shared DeltaPreviewGrid. The "Profile schema" action runs a real Spark
- * summary() via /api/lakehouse/table-stats (polled) so per-column min/max/mean/
- * stddev/null-count + a distribution histogram fill the grid's stats panel.
+ * DatasetPreviewPanel — live data preview + schema profile for a registered
+ * data asset. Both read GET /api/items/dataset/<id>/preview, which resolves the
+ * asset's dataUri server-side and samples it through Synapse Serverless
+ * OPENROWSET: the preview asks for 50 rows, and "Profile schema" asks for a
+ * larger sample whose per-column profile (count / null count / min / max /
+ * mean / stddev) the route computes and returns as `profile`.
  */
-function DatasetPreviewPanel({ uri }: { uri: string | undefined }) {
-  const parsed = useMemo(() => parseAdlsUri(uri), [uri]);
-  const [pv, setPv] = useState<{ loading: boolean; cols: string[]; rows: unknown[][]; total: number; ms?: number; truncated?: boolean; error?: string } | null>(null);
+const DATASET_PREVIEW_TOP = 50;
+const DATASET_PROFILE_TOP = 1000;
+
+function DatasetPreviewPanel({ datasetId, project, uri }: { datasetId: string; project: string; uri: string | undefined }) {
+  const [pv, setPv] = useState<{ loading: boolean; cols: string[]; rows: unknown[][]; total: number; ms?: number; truncated?: boolean; error?: string; notDeployed?: boolean } | null>(null);
   const [stats, setStats] = useState<Record<string, ColStat> | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
   const [statsError, setStatsError] = useState<string | null>(null);
-  const known = parsed ? DLZ_KNOWN_CONTAINERS.includes(parsed.container) : false;
+  const [sampled, setSampled] = useState<number | null>(null);
+
+  const readSample = useCallback(async (top: number) => {
+    const qs = new URLSearchParams({ top: String(top) });
+    if (project) qs.set('project', project);
+    const r = await clientFetch(`/api/items/dataset/${encodeURIComponent(datasetId)}/preview?${qs.toString()}`);
+    const j = await r.json().catch(() => ({}));
+    return { status: r.status, j };
+  }, [datasetId, project]);
 
   const runPreview = useCallback(async () => {
-    if (!parsed) return;
     setPv({ loading: true, cols: [], rows: [], total: 0 });
-    const qs = new URLSearchParams({ container: parsed.container, path: parsed.path });
-    if (!known) qs.set('account', parsed.account);
-    const r = await clientFetch(`/api/lakehouse/preview?${qs.toString()}`);
-    const j = await r.json();
-    if (!j.ok) { setPv({ loading: false, cols: [], rows: [], total: 0, error: j.error || 'Preview failed' }); return; }
-    if (j.previewable === false) { setPv({ loading: false, cols: [], rows: [], total: 0, error: j.message || 'Not tabular — not previewable.' }); return; }
-    const allRows = (j.rows || []) as unknown[][];
-    setPv({ loading: false, cols: j.columns || [], rows: allRows.slice(0, 50), total: j.rowCount ?? allRows.length, ms: j.executionMs, truncated: allRows.length > 50 || !!j.truncated });
-  }, [parsed, known]);
+    try {
+      const { status, j } = await readSample(DATASET_PREVIEW_TOP);
+      if (!j.ok) { setPv({ loading: false, cols: [], rows: [], total: 0, error: j.error || `Preview failed (HTTP ${status}).`, notDeployed: !!j.notDeployed }); return; }
+      if (j.previewable === false) { setPv({ loading: false, cols: [], rows: [], total: 0, error: j.message || 'Not tabular — not previewable.' }); return; }
+      const allRows = (j.rows || []) as unknown[][];
+      setPv({ loading: false, cols: j.columns || [], rows: allRows.slice(0, DATASET_PREVIEW_TOP), total: j.rowCount ?? allRows.length, ms: j.executionMs, truncated: allRows.length > DATASET_PREVIEW_TOP || !!j.truncated });
+    } catch (e: any) {
+      setPv({ loading: false, cols: [], rows: [], total: 0, error: e?.message || String(e) });
+    }
+  }, [readSample]);
 
-  useEffect(() => { if (parsed) runPreview(); else setPv(null); }, [parsed, runPreview]);
+  useEffect(() => { if (uri) runPreview(); else setPv(null); }, [uri, runPreview]);
 
   const profile = useCallback(async () => {
-    if (!parsed || !known) return;
-    setStatsLoading(true); setStatsError(null); setStats(null);
-    let qs = new URLSearchParams({ container: parsed.container, path: parsed.path });
-    let r = await clientFetch(`/api/lakehouse/table-stats?${qs.toString()}`);
-    let j = await r.json();
-    for (let i = 0; i < 40 && j.ok && j.status !== 'available'; i++) {
-      await new Promise((res) => setTimeout(res, 3000));
-      qs = new URLSearchParams({ jobId: j.jobId, container: parsed.container, path: parsed.path });
-      r = await clientFetch(`/api/lakehouse/table-stats?${qs.toString()}`); j = await r.json();
+    setStatsLoading(true); setStatsError(null); setStats(null); setSampled(null);
+    try {
+      const { status, j } = await readSample(DATASET_PROFILE_TOP);
+      if (j.ok && j.previewable !== false && j.profile) {
+        setStats(j.profile as Record<string, ColStat>);
+        setSampled(typeof j.rowCount === 'number' ? j.rowCount : (j.rows || []).length);
+      } else {
+        setStatsError(j.error || j.message || `Profile failed (HTTP ${status}).`);
+      }
+    } catch (e: any) {
+      setStatsError(e?.message || String(e));
+    } finally {
+      setStatsLoading(false);
     }
-    if (j.ok && j.status === 'available') setStats(j.stats || {});
-    else setStatsError(j.error || 'Profiler timed out.');
-    setStatsLoading(false);
-  }, [parsed, known]);
+  }, [readSample]);
 
   if (!uri) return <Caption1>This version has no data URI.</Caption1>;
-  if (!parsed) return <ErrorBar msg={`URI is not an ADLS path (${uri}). In-browser preview supports abfss:// / https:// DLZ paths.`} notDeployed />;
   if (pv?.loading || !pv) return <TableSkeleton rows={6} />;
-  if (pv.error) return <ErrorBar msg={pv.error} />;
+  if (pv.error) return <ErrorBar msg={pv.error} notDeployed={pv.notDeployed} />;
   return (
     <>
       <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' }}>
         <Button size="small" icon={<TableSimple20Regular />} onClick={runPreview}>Reload preview</Button>
-        <Button size="small" appearance="primary" disabled={!known || statsLoading} onClick={profile}>{statsLoading ? 'Profiling…' : 'Profile schema'}</Button>
-        {!known && <Caption1>Schema profiler runs on the DLZ medallion containers (bronze/silver/gold/landing/csv-imports); this asset is in <code>{parsed.container}</code>.</Caption1>}
+        <Button size="small" appearance="primary" disabled={statsLoading} onClick={profile}>{statsLoading ? 'Profiling…' : 'Profile schema'}</Button>
+        <Caption1>
+          {sampled !== null
+            ? `Profile computed over a sample of ${sampled} row${sampled === 1 ? '' : 's'}.`
+            : `The profile is computed over a sample of up to ${DATASET_PROFILE_TOP} rows.`}
+        </Caption1>
       </div>
-      <DeltaPreviewGrid columns={pv.cols} rows={pv.rows} rowCount={Math.min(pv.total, 50)} executionMs={pv.ms} truncated={pv.truncated}
+      <DeltaPreviewGrid columns={pv.cols} rows={pv.rows} rowCount={Math.min(pv.total, DATASET_PREVIEW_TOP)} executionMs={pv.ms} truncated={pv.truncated}
         columnStats={stats} statsLoading={statsLoading} statsError={statsError} mode="file" />
     </>
   );
@@ -3727,7 +3718,7 @@ export function DatasetEditor({ item, id }: { item: FabricItemType; id: string }
             </div>
             </>
           )}
-          {tab === 'preview' && <DatasetPreviewPanel uri={activeUri} />}
+          {tab === 'preview' && <DatasetPreviewPanel datasetId={id} project={project} uri={activeUri} />}
           {tab === 'lineage' && (
             lineage.loading ? <TableSkeleton rows={3} /> : lineage.error ? <ErrorBar msg={lineage.error} notDeployed={lineage.notDeployed} /> : (
               (lineage.data?.producers?.length || lineage.data?.consumers?.length) ? (

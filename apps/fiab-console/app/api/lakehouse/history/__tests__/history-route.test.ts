@@ -498,3 +498,60 @@ describe('/api/lakehouse/history — the request is confined to the bound contai
     expect(unverified.fixHref).toBeUndefined();
   });
 });
+
+describe("/api/lakehouse/history — reads and writes the item's bound storage account", () => {
+  // The item is bound to `lhbound`; the deployment's primary account is
+  // `loomdlz` (getAccountName). The two names differ, so an arm that reads the
+  // primary is distinguishable from one that reads the binding.
+  const BOUND = 'lhbound';
+  beforeEach(() => {
+    (resolveLakehouseAbfss as any).mockResolvedValue({
+      abfss: `abfss://${CONTAINER}@${BOUND}.dfs.core.windows.net/${ROOT}`,
+      container: CONTAINER,
+      root: ROOT,
+    });
+  });
+
+  // FAILS IF GET lists or reads the version log on the primary account: the
+  // account column of both row sets becomes `undefined` (the primary) instead
+  // of `lhbound`.
+  it('GET lists and reads _delta_log on the bound account', async () => {
+    expect(BOUND).not.toBe((getAccountName as any)());
+    (getSession as any).mockReturnValue(MEMBER);
+    const commit = `${TABLE}/_delta_log/00000000000000000003.json`;
+    (listPaths as any).mockResolvedValue([{ name: commit, isDirectory: false, size: 10 }]);
+    (downloadFile as any).mockResolvedValue({
+      body: Buffer.from(JSON.stringify({ commitInfo: { timestamp: 1, operation: 'WRITE' } }), 'utf8'),
+    });
+    const res = await GET(getReq({ lakehouseId: LH, container: CONTAINER, tablePath: TABLE }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).versions.map((v: any) => v.version)).toEqual([3]);
+    expect((listPaths as any).mock.calls).toEqual([[CONTAINER, `${TABLE}/_delta_log`, 500, BOUND]]);
+    expect((downloadFile as any).mock.calls).toEqual([[CONTAINER, commit, BOUND]]);
+  });
+
+  // FAILS IF the statement names the primary account: the SQL would carry
+  // `@loomdlz.` instead of `@lhbound.`.
+  it('POST names the bound account in the time-travel statement', async () => {
+    (getSession as any).mockReturnValue(MEMBER);
+    (databricksConfigGate as any).mockReturnValue(null);
+    (listWarehouses as any).mockResolvedValue([{ id: 'wh1', name: 'w', state: 'RUNNING' }]);
+    (executeStatement as any).mockResolvedValue({ columns: ['id'], rows: [[1]], rowCount: 1, executionMs: 1, truncated: false });
+    const res = await POST(postReq({ lakehouseId: LH, container: CONTAINER, tablePath: TABLE, version: 2, action: 'preview' }));
+    expect(res.status).toBe(200);
+    expect((executeStatement as any).mock.calls[0][1])
+      .toBe(`SELECT * FROM delta.\`abfss://${CONTAINER}@${BOUND}.dfs.core.windows.net/${TABLE}\` VERSION AS OF 2 LIMIT 100`);
+  });
+
+  // POSITIVE arm: the tenant-admin storage form has no item, so no account is
+  // passed and adls-client reads the primary. FAILS IF the storage form is
+  // refused (403, row set []) or passes an account that did not come from a
+  // binding (the fourth column would not be `undefined`).
+  it('the tenant-admin storage form still reads the primary account', async () => {
+    (getSession as any).mockReturnValue(ADMIN);
+    (listPaths as any).mockResolvedValue([]);
+    const res = await GET(getReq({ container: 'bronze', tablePath: 'Tables/x' }));
+    expect(res.status).toBe(200);
+    expect((listPaths as any).mock.calls).toEqual([['bronze', 'Tables/x/_delta_log', 500, undefined]]);
+  });
+});
