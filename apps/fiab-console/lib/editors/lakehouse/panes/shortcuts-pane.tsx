@@ -22,7 +22,7 @@ export function ShortcutsPane() {
   const readOnly = useLakehouseReadOnly(ctx.id, ctx.isNewItem);
   const roTitle = readOnly ? LAKEHOUSE_READ_ONLY_TITLE : undefined;
   const {
-    shortcutLakehouseId, shortcuts, shortcutsBusy, shortcutsError, shortcutsListFailed, loadShortcuts,
+    shortcutLakehouseId, lakehouseName, shortcuts, shortcutsBusy, shortcutsError, shortcutsListFailed, loadShortcuts,
     selectedShortcut, setSelectedShortcut,
     openShortcutWizard, testShortcut, deleteShortcutRow, queryShortcut,
     bundleShortcuts, regBusy, registerBundleShortcut, registerAllBundleShortcuts,
@@ -41,7 +41,7 @@ export function ShortcutsPane() {
       style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, flex: 1, minHeight: 0 }}
     >
       <div className={s.toolbar}>
-        <Badge appearance="filled" color="brand">{shortcutLakehouseId || 'no lakehouse'}</Badge>
+        <Badge appearance="filled" color="brand">{shortcutLakehouseId ? lakehouseName : 'no lakehouse'}</Badge>
         <Caption1>Shortcuts — virtualize external storage into the lakehouse without copying data (zero-copy)</Caption1>
         <Button appearance="primary" icon={<Add20Regular />} disabled={!shortcutLakehouseId}
           disabledFocusable={readOnly} title={roTitle}

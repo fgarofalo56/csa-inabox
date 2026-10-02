@@ -18,6 +18,22 @@ import { useLakehouseReadOnly, LAKEHOUSE_READ_ONLY_TITLE, LAKEHOUSE_READ_ONLY_SU
 import type { LiveCatalogTable } from '../types';
 import type { PathEntry } from '../shared';
 
+/**
+ * A lakehouse display name can hold any character the user typed -- item
+ * create/update only `trim()` it (app/api/items/_lib/item-crud.ts), so it can
+ * carry a line break. Rendered raw into the Query template's comment line
+ * below, a line break ends the `--` comment and the rest of the name becomes
+ * its own SQL statement. Replacing control characters -- C0, DEL, and the
+ * U+2028/U+2029 line separators, the same class item-scope.ts's
+ * `hasPathControlChar` refuses for storage paths -- with a space keeps the
+ * name on one line and leaves an ordinary name unchanged.
+ * Breaking value: a name containing U+000A.
+ */
+function sqlCommentSafe(name: string): string {
+  // eslint-disable-next-line no-control-regex
+  return name.replace(/[\u0000-\u001F\u007F\u2028\u2029]/g, ' ');
+}
+
 export function TablesPane() {
   const s = useStyles();
   const ctx = useLakehouseCtx();
@@ -267,7 +283,7 @@ export function TablesPane() {
                                         </Button>
                                         <Button size="small" appearance="outline"
                                           onClick={() => {
-                                            setSqlText(`-- 4-part name: ${lakehouseName}.${schemaName}.${tableName}\n-- Serverless view (if registered): SELECT TOP 100 * FROM loom_lakehouse.${schemaName}.${tableName};\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.${dfsHostSuffix}/${activeContainer}/${t.name}', FORMAT='DELTA') AS r;`);
+                                            setSqlText(`-- 4-part name: ${sqlCommentSafe(lakehouseName)}.${schemaName}.${tableName}\n-- Serverless view (if registered): SELECT TOP 100 * FROM loom_lakehouse.${schemaName}.${tableName};\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.${dfsHostSuffix}/${activeContainer}/${t.name}', FORMAT='DELTA') AS r;`);
                                             setTab('sql');
                                           }}>
                                           Query

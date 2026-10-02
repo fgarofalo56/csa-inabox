@@ -4,8 +4,9 @@
  *
  * `shortcutLakehouseId` is the lakehouse ITEM id: the shortcut, schema and
  * browse requests are authorized against it. It is not a name a person knows,
- * so the shortcut wizard's caption, the Tables pane's 4-part name cell and the
- * Query template's 4-part name comment render `lakehouseName` instead.
+ * so the shortcut wizard's caption, the Shortcuts and Schemas panes' toolbar
+ * badges, the Tables pane's 4-part name cell and the Query template's 4-part
+ * name comment render `lakehouseName` instead.
  *
  * The fixture gives the three candidate values distinct strings, so each
  * assertion names the value that turns it red:
@@ -21,6 +22,8 @@ import { LakehouseEditorContext } from '../lakehouse-editor-context';
 import type { LakehouseEditorCtx } from '../lakehouse-editor-context';
 import { TablesPane } from '../panes/tables-pane';
 import { ShortcutWizardDialog } from '../dialogs/shortcut-wizard-dialog';
+import { ShortcutsPane } from '../panes/shortcuts-pane';
+import { SchemasPane } from '../panes/schemas-pane';
 
 const NAME = 'Contoso Sales';
 const ITEM_ID = 'lh-1';
@@ -75,6 +78,21 @@ describe('TablesPane (schema-enabled): the 4-part name names the lakehouse', () 
     // Breaks if the edit also replaced the storage path with the name.
     expect(sql).toContain(`/${CONTAINER}/Tables/sales/orders'`);
   });
+
+  it('a lakehouse name holding a line break does not end the comment early', async () => {
+    // Item create/update only trim() the name, so it can hold U+000A. Breaking
+    // value: a name containing U+000A, which -- unfixed -- ends the `--`
+    // comment and turns 'SELECT 1; --' into its own, unprefixed SQL line.
+    const ctx = { ...tablesCtx(), lakehouseName: 'Contoso\nSELECT 1; --' };
+    mount(<TablesPane />, ctx);
+    const table = await screen.findByRole('table', { name: 'Tables in sales' });
+    const query = Array.from(table.querySelectorAll('button')).find((b) => b.textContent === 'Query');
+    fireEvent.click(query!);
+    const sql = String(ctx.setSqlText.mock.calls[0][0]);
+    const lines = sql.split('\n');
+    expect(lines[0]).toBe('-- 4-part name: Contoso SELECT 1; --.sales.orders');
+    expect(lines[1]).toMatch(/^-- Serverless view/);
+  });
 });
 
 function wizardCtx() {
@@ -107,5 +125,40 @@ describe('Shortcut wizard: step 1 names the lakehouse', () => {
     const caption = await screen.findByText(/Choose the source to virtualize into/);
     // Breaks if the caption renders shortcutLakehouseId ('lh-1').
     expect(caption.querySelector('strong')?.textContent).toBe(NAME);
+  });
+});
+
+function shortcutsPaneCtx() {
+  return {
+    shortcuts: [], shortcutsBusy: false, shortcutsError: null, shortcutsListFailed: false,
+    loadShortcuts: vi.fn(), selectedShortcut: null, setSelectedShortcut: vi.fn(),
+    openShortcutWizard: vi.fn(), testShortcut: vi.fn(), deleteShortcutRow: vi.fn(), queryShortcut: vi.fn(),
+    bundleShortcuts: [], regBusy: null, registerBundleShortcut: vi.fn(), registerAllBundleShortcuts: vi.fn(),
+    setSqlText: vi.fn(), setTab: vi.fn(),
+  };
+}
+
+function schemasPaneCtx() {
+  return {
+    schemasEnabled: true, schemas: [], schemasBusy: false, schemasError: null, schemasNotice: null,
+    loadSchemas: vi.fn(), deleteSchema: vi.fn(),
+    newSchemaOpen: false, setNewSchemaOpen: vi.fn(), newSchemaName: '', setNewSchemaName: vi.fn(),
+    newSchemaDesc: '', setNewSchemaDesc: vi.fn(), newSchemaBusy: false, newSchemaError: null, createSchema: vi.fn(),
+  };
+}
+
+describe('Shortcuts and Schemas panes: the toolbar badge names the lakehouse', () => {
+  it('ShortcutsPane badge shows the lakehouse name, not its item id', async () => {
+    mount(<ShortcutsPane />, shortcutsPaneCtx());
+    // Breaks if the badge renders shortcutLakehouseId ('lh-1') instead of the name.
+    expect(await screen.findByText(NAME)).toBeTruthy();
+    expect(screen.queryByText(ITEM_ID)).toBeNull();
+  });
+
+  it('SchemasPane badge shows the lakehouse name, not its item id', async () => {
+    mount(<SchemasPane />, schemasPaneCtx());
+    // Breaks if the badge renders shortcutLakehouseId ('lh-1') instead of the name.
+    expect(await screen.findByText(NAME)).toBeTruthy();
+    expect(screen.queryByText(ITEM_ID)).toBeNull();
   });
 });
