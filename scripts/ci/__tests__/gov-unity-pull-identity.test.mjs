@@ -495,8 +495,30 @@ test('WORKFLOW: the ensure call has no fallback chained after it, and the deploy
   const assigns = lines.filter((l) => l.startsWith('UNITY_UAMI_ID='));
   assert.equal(assigns.length, 1, `UNITY_UAMI_ID must be assigned exactly once:\n${assigns.join('\n')}`);
   assert.equal(assigns[0], `UNITY_UAMI_ID=$(sed -n 's/^UAMI_ID=//p' "$PULL_OUT")`);
+  // Breaks if: the bash-level reference `$UAMI_ID` / `${UAMI_ID` reappears
+  // (direct read of the Console identity), OR a GitHub Actions EXPRESSION
+  // reappears anywhere in the step -- `${{ env.UAMI_ID }}` in the run script
+  // itself, or in a step-level `env:` mapping such as
+  // `UNITY_UAMI_ID: ${{ env.UAMI_ID }}` -- since both are a fallback to the
+  // Console identity that the bash-only check cannot see (GH Actions
+  // substitutes `${{ }}` before the shell ever runs). `\bUAMI_ID\b` does not
+  // match inside `UNITY_UAMI_ID`/`UNITY_UAMI_CLIENT_ID` (no word boundary
+  // before "UAMI_ID" when it is preceded by "UNITY_", since `_` is a word
+  // character), so neither check flags this test's own pinned assignments.
   const nonComment = lines.filter((l) => !l.startsWith('#'));
-  assert.ok(nonComment.every((l) => !/\$\{?UAMI_ID\b/.test(l)), 'the deploy step must not reference the Console identity $UAMI_ID directly');
+  const directRef = /\$\{?UAMI_ID\b/;
+  const expressionRef = /\$\{\{[^}]*\bUAMI_ID\b[^}]*\}\}/;
+  assert.ok(nonComment.every((l) => !directRef.test(l)), 'the deploy step must not reference the Console identity $UAMI_ID directly');
+  assert.ok(nonComment.every((l) => !expressionRef.test(l)), 'the deploy step must not reference the Console identity via a ${{ ... UAMI_ID ... }} expression (run script or step env:)');
+  // Breaks if: the bicep deployment is pointed at the Console identity (or
+  // anything but the pull-identity-ensure output) by editing either
+  // parameter's value instead of the variable name.
+  const unityUamiParam = lines.filter((l) => l.startsWith('unityUamiId='));
+  const unityUamiClientParam = lines.filter((l) => l.startsWith('unityUamiClientId='));
+  assert.equal(unityUamiParam.length, 1, `unityUamiId= must appear exactly once:\n${unityUamiParam.join('\n')}`);
+  assert.equal(unityUamiClientParam.length, 1, `unityUamiClientId= must appear exactly once:\n${unityUamiClientParam.join('\n')}`);
+  assert.match(unityUamiParam[0], /^unityUamiId="\$UNITY_UAMI_ID"/, unityUamiParam[0]);
+  assert.match(unityUamiClientParam[0], /^unityUamiClientId="\$UNITY_UAMI_CLIENT_ID"/, unityUamiClientParam[0]);
 });
 
 test('WORKFLOW: the discovery notice prints names, not resource ids', () => {
