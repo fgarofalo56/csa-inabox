@@ -12,12 +12,17 @@ import {
 } from '@fluentui/react-icons';
 import { useStyles } from '../shared';
 import { useLakehouseCtx } from '../lakehouse-editor-context';
+import { useLakehouseReadOnly, LAKEHOUSE_READ_ONLY_TITLE } from '../hooks/use-lakehouse-access';
 
 export function ShortcutsPane() {
   const s = useStyles();
   const ctx = useLakehouseCtx();
+  // Creating, registering, re-testing (it writes the status back) and deleting a
+  // shortcut all need Edit; a read-only role can still list and query them.
+  const readOnly = useLakehouseReadOnly(ctx.id, ctx.isNewItem);
+  const roTitle = readOnly ? LAKEHOUSE_READ_ONLY_TITLE : undefined;
   const {
-    shortcutLakehouseId, shortcuts, shortcutsBusy, shortcutsError, loadShortcuts,
+    shortcutLakehouseId, lakehouseName, shortcuts, shortcutsBusy, shortcutsError, shortcutsListFailed, loadShortcuts,
     selectedShortcut, setSelectedShortcut,
     openShortcutWizard, testShortcut, deleteShortcutRow, queryShortcut,
     bundleShortcuts, regBusy, registerBundleShortcut, registerAllBundleShortcuts,
@@ -28,7 +33,7 @@ export function ShortcutsPane() {
     <div
       onKeyDown={(e) => {
         // F11 retries the selected broken shortcut (re-test/restore).
-        if (e.key === 'F11' && selectedShortcut && selectedShortcut.status === 'error' && !shortcutsBusy) {
+        if (e.key === 'F11' && selectedShortcut && selectedShortcut.status === 'error' && !shortcutsBusy && !readOnly) {
           e.preventDefault();
           testShortcut(selectedShortcut);
         }
@@ -36,9 +41,10 @@ export function ShortcutsPane() {
       style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, flex: 1, minHeight: 0 }}
     >
       <div className={s.toolbar}>
-        <Badge appearance="filled" color="brand">{shortcutLakehouseId || 'no lakehouse'}</Badge>
+        <Badge appearance="filled" color="brand">{shortcutLakehouseId ? lakehouseName : 'no lakehouse'}</Badge>
         <Caption1>Shortcuts — virtualize external storage into the lakehouse without copying data (zero-copy)</Caption1>
         <Button appearance="primary" icon={<Add20Regular />} disabled={!shortcutLakehouseId}
+          disabledFocusable={readOnly} title={roTitle}
           onClick={() => openShortcutWizard()} style={{ marginLeft: 'auto' }}>
           New shortcut
         </Button>
@@ -49,11 +55,21 @@ export function ShortcutsPane() {
       </div>
 
       {shortcutsError && (
-        <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Shortcuts error</MessageBarTitle>{shortcutsError}</MessageBarBody></MessageBar>
+        <MessageBar intent="error">
+          <MessageBarBody>
+            <MessageBarTitle>Shortcuts error</MessageBarTitle>
+            {shortcutsError}
+            {shortcutsListFailed && (
+              <div>The shortcut list could not be read, so it is not shown here. Use <strong>Refresh</strong> to try again.</div>
+            )}
+          </MessageBarBody>
+        </MessageBar>
       )}
       {shortcutsBusy && shortcuts === null && <Spinner size="small" label="Loading shortcuts…" labelPosition="after" />}
 
-      {shortcuts !== null && shortcuts.length === 0 && !shortcutsBusy && (
+      {/* An empty list after a FAILED listing is unknown, not empty: no empty
+          state, and no Register actions for the bundle's shortcuts. */}
+      {shortcuts !== null && shortcuts.length === 0 && !shortcutsBusy && !shortcutsListFailed && (
         <>
           <MessageBar intent="info">
             <MessageBarBody>
@@ -71,7 +87,7 @@ export function ShortcutsPane() {
                   <strong>Planned shortcuts from the installed app bundle</strong> — register each into the live backend.
                 </Caption1>
                 <Button size="small" appearance="primary" style={{ marginLeft: 'auto' }}
-                  onClick={registerAllBundleShortcuts} disabled={!!regBusy}>
+                  onClick={registerAllBundleShortcuts} disabled={!!regBusy} disabledFocusable={readOnly} title={roTitle}>
                   {regBusy ? 'Registering…' : 'Register all'}
                 </Button>
               </div>
@@ -100,7 +116,8 @@ export function ShortcutsPane() {
                             {live ? (
                               <Badge appearance="tint" color="success">Registered</Badge>
                             ) : (
-                              <Button size="small" appearance="outline" onClick={() => registerBundleShortcut(sc)} disabled={regBusy === sc.name}>
+                              <Button size="small" appearance="outline" onClick={() => registerBundleShortcut(sc)} disabled={regBusy === sc.name}
+                                disabledFocusable={readOnly} title={roTitle}>
                                 {regBusy === sc.name ? 'Registering…' : 'Register'}
                               </Button>
                             )}
@@ -158,8 +175,8 @@ export function ShortcutsPane() {
                     <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center' }}>
                       {sc.status === 'error' && (
                         <Button size="small" appearance="outline" icon={<ArrowSync20Regular />}
-                          onClick={() => testShortcut(sc)} disabled={shortcutsBusy}
-                          title={`Retry — re-test the shortcut after fixing ${sc.targetType === 'delta_sharing' ? 'the Key Vault credential file' : 'the underlying issue'} (F11 on the selected row)`}>
+                          onClick={() => testShortcut(sc)} disabled={shortcutsBusy} disabledFocusable={readOnly}
+                          title={readOnly ? LAKEHOUSE_READ_ONLY_TITLE : `Retry — re-test the shortcut after fixing ${sc.targetType === 'delta_sharing' ? 'the Key Vault credential file' : 'the underlying issue'} (F11 on the selected row)`}>
                           Retry
                         </Button>
                       )}
@@ -178,8 +195,8 @@ export function ShortcutsPane() {
                             {!(sc.kind === 'tables' && sc.engineObject) && (
                               <MenuItem icon={<Play20Regular />} onClick={() => queryShortcut(sc)}>Query (SQL)</MenuItem>
                             )}
-                            <MenuItem icon={<ArrowSync20Regular />} onClick={() => testShortcut(sc)}>Test</MenuItem>
-                            <MenuItem icon={<Delete20Regular />} onClick={() => deleteShortcutRow(sc)}>Delete</MenuItem>
+                            <MenuItem icon={<ArrowSync20Regular />} disabled={readOnly} title={roTitle} onClick={() => testShortcut(sc)}>Test</MenuItem>
+                            <MenuItem icon={<Delete20Regular />} disabled={readOnly} title={roTitle} onClick={() => deleteShortcutRow(sc)}>Delete</MenuItem>
                           </MenuList>
                         </MenuPopover>
                       </Menu>

@@ -573,6 +573,7 @@ function PaginatedReportDesigner({ item, id }: { item: FabricItemType; id: strin
       {def && (
         <>
           <DataSourceDialog
+            itemId={id}
             open={dsDialog.open}
             editing={dsDialog.editing}
             workspaceId={workspaceId}
@@ -705,7 +706,9 @@ function TablixDesignSurface({ tablix, dataset, onChange, onDelete }: {
 }
 
 // --- Data source dialog ---
-function DataSourceDialog({ open, editing, workspaceId, onClose, onSave, onDelete }: {
+function DataSourceDialog({ itemId, open, editing, workspaceId, onClose, onSave, onDelete }: {
+  /** The paginated report item; the Get Data gallery stores an upload with it. */
+  itemId: string;
   open: boolean; editing?: RdlDataSource; workspaceId?: string;
   onClose: () => void; onSave: (ds: RdlDataSource) => void; onDelete?: (id: string) => void;
 }) {
@@ -798,10 +801,12 @@ function DataSourceDialog({ open, editing, workspaceId, onClose, onSave, onDelet
     {/* WAVE 3 — the shared connector gallery. A connection-backed pick fills the
         RDL fields from the connection's real host/database; a file / ADLS /
         unmapped connector shows an honest gate instead of fabricating coords.
-        No reportId → the gallery's upload/preview scope stays generic (this is a
-        paginated-report, not a report route). */}
+        An upload is stored with, and authorized against, this paginated report;
+        the report-only live preview stays off for this host. */}
     <GetDataGallery
       open={galleryOpen}
+      reportId={itemId}
+      hostItemType="paginated-report"
       workspaceId={workspaceId}
       onChosen={(ds, meta) => {
         const fill = rdlFillFromReportSource(ds, {

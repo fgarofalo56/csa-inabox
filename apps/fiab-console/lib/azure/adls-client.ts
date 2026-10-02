@@ -12,6 +12,8 @@
  */
 
 import { trimSlashes } from '@/lib/util/trim';
+import { logSafe } from '@/lib/util/log-safe';
+import { randomUuid } from '@/lib/util/random-id';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { type TokenCredential } from '@azure/identity';
 import { workspaceScopedCredential } from '@/lib/azure/workspace-credential-factory';
@@ -617,8 +619,10 @@ export async function uploadFile(
   path: string,
   body: Buffer,
   contentType: string,
+  /** The storage account to write to; omitted means the container's configured account. */
+  account?: string,
 ): Promise<{ ok: true; size: number; etag?: string }> {
-  const fs = getFileSystem(container);
+  const fs = getFileSystem(container, account);
   const file = fs.getFileClient(path);
   await file.upload(body, {
     pathHttpHeaders: { contentType },
@@ -635,8 +639,9 @@ export async function uploadFile(
 export async function downloadFile(
   container: string,
   path: string,
+  account?: string,
 ): Promise<{ body: Buffer; contentType?: string; size: number }> {
-  const fs = getFileSystem(container);
+  const fs = getFileSystem(container, account);
   const file = fs.getFileClient(path);
   const buf = await file.readToBuffer();
   let contentType: string | undefined;
@@ -929,6 +934,143 @@ export function listKnownBlobDataRoles(): Array<{ name: string; id: string }> {
   return Object.entries(BLOB_DATA_ROLES).map(([name, id]) => ({ name, id }));
 }
 
+/** The configured account, or null when no LOOM_*_URL names one. */
+function configuredAccountOrNull(): string | null {
+  try { return getAccountName(); } catch { return null; }
+}
+
+/**
+ * Resource Graph did not place a storage account that is not the configured
+ * one. `LOOM_SUBSCRIPTION_ID` / `LOOM_DLZ_RG` describe the configured account
+ * only, so a scope built from them for any other account would name a
+ * subscription or resource group that account is not in. This is thrown
+ * instead; the lakehouse permissions routes answer it with a 409 that carries
+ * `remediation`.
+ */
+export class StorageAccountNotLocatedError extends Error {
+  readonly code = 'storage_account_not_located' as const;
+  readonly account: string;
+  readonly remediation: string;
+  constructor(account: string) {
+    super(
+      `Loom could not find storage account "${account}" through Azure Resource Graph, so it did not read or `
+      + 'change role assignments there. The Console identity may not be able to read the account, the '
+      + 'account may no longer exist, or the Resource Graph query may have failed.',
+    );
+    this.name = 'StorageAccountNotLocatedError';
+    this.account = account;
+    this.remediation = storageRoleAdminRemediation(account);
+  }
+}
+
+/** The bicep module that grants the Console identity its role on a storage account. */
+export const STORAGE_RBAC_ADMIN_BICEP = 'platform/fiab/bicep/modules/landing-zone/storage-rbac-admin.bicep';
+
+/**
+ * The remediation for a storage account whose role assignments the Console
+ * identity cannot read, create or delete. Listing, granting and revoking
+ * container roles need one role on the account: Role Based Access Control
+ * Administrator, constrained by an ABAC condition to the three Storage Blob
+ * Data roles. The role includes read access to the account, which is also what
+ * Resource Graph needs to locate it. {@link STORAGE_RBAC_ADMIN_BICEP} grants
+ * exactly this on the platform's own storage account.
+ */
+export function storageRoleAdminRemediation(account: string): string {
+  return (
+    'Grant the Console identity Role Based Access Control Administrator on storage account '
+    + `"${account}", constrained (ABAC condition) to assigning only Storage Blob Data Reader, `
+    + 'Storage Blob Data Contributor or Storage Blob Data Owner. That role also lets Loom locate the '
+    + `account. The platform grants it with ${STORAGE_RBAC_ADMIN_BICEP}: deploy that module to the `
+    + `account's resource group with storageAccountName="${account}" and consolePrincipalId set to the `
+    + "Console identity's principal (object) id, not its client id. A new role assignment can take a few "
+    + 'minutes to take effect, so if the next attempt is still refused, wait a few minutes and retry.'
+  );
+}
+
+/** The role-assignment operations on a container that can be refused. */
+export type StorageRoleOperation = 'list' | 'grant' | 'revoke';
+
+/**
+ * Azure Resource Manager answered 403 to a role-assignment read, create or
+ * delete on a storage account. The lakehouse permissions routes answer it with
+ * a 403 that carries `code`, `remediation` and `correlationId`. ARM's own
+ * message is not part of this error: it can name identity object ids,
+ * subscriptions and resource groups, so {@link roleAssignmentCall} logs it on
+ * the server under `correlationId` and the response names only the refused
+ * operation and that id.
+ *
+ * A revoke lists the assignments first, so a 403 on that read is
+ * `storage_role_read_denied` ("Nothing was listed or changed."), not
+ * `storage_role_write_denied`.
+ */
+export class StorageRoleDeniedError extends Error {
+  readonly code: 'storage_role_read_denied' | 'storage_role_write_denied';
+  readonly account: string;
+  readonly operation: StorageRoleOperation;
+  readonly remediation: string;
+  readonly correlationId: string;
+  readonly status = 403 as const;
+  constructor(account: string, operation: StorageRoleOperation, correlationId: string) {
+    const what = operation === 'list'
+      ? 'listing role assignments'
+      : operation === 'grant' ? 'creating a role assignment' : 'deleting a role assignment';
+    const outcome = operation === 'list' ? 'Nothing was listed or changed.'
+      : operation === 'grant' ? 'Nothing was granted.' : 'Nothing was removed.';
+    super(
+      `Azure refused ${what} on storage account "${account}" for the Console identity (HTTP 403). ${outcome} `
+      + `Azure's reason is in the Console server log under correlation id ${correlationId}.`,
+    );
+    this.name = 'StorageRoleDeniedError';
+    this.code = operation === 'list' ? 'storage_role_read_denied' : 'storage_role_write_denied';
+    this.account = account;
+    this.operation = operation;
+    this.remediation = storageRoleAdminRemediation(account);
+    this.correlationId = correlationId;
+  }
+}
+
+/** A random id that joins a refusal's response to its server log line. */
+function newCorrelationId(): string {
+  return randomUuid();
+}
+
+/** The storage account named in an ARM id (`.../storageAccounts/<name>/...`), or ''. */
+function storageAccountOfArmId(id: string): string {
+  return /\/storageAccounts\/([^/]+)/i.exec(id)?.[1] ?? '';
+}
+
+/**
+ * `armCall` for a role-assignment request on `account`: a 403 from ARM is
+ * logged on the server (ARM's message, under a new correlation id) and becomes
+ * a {@link StorageRoleDeniedError} that carries only that id; any other failure
+ * is rethrown unchanged.
+ */
+async function roleAssignmentCall<T>(
+  url: string,
+  init: RequestInit,
+  account: string,
+  operation: StorageRoleOperation,
+): Promise<T> {
+  try {
+    return await armCall<T>(url, init);
+  } catch (e: any) {
+    if (e?.status === 403) {
+      const correlationId = newCorrelationId();
+      // ONE line: the Console's logs are read one row per line
+      // (ContainerAppConsoleLogs_CL `Log_s`), so a search for the id must return
+      // the account, the operation and Azure's reason with it. An object
+      // argument is printed over several lines by util.inspect. `error` is in
+      // the text so the stock "error-like lines" query matches it.
+      console.error(
+        `[adls-client] error: role-assignment request refused (HTTP 403) correlationId=${correlationId} `
+        + `account=${logSafe(account, 100)} operation=${operation} arm=${logSafe(e?.message, 1000)}`,
+      );
+      throw new StorageRoleDeniedError(account, operation, correlationId);
+    }
+    throw e;
+  }
+}
+
 /**
  * Resolve the storage account's REAL ARM coordinates ({sub, rg}).
  *
@@ -937,15 +1079,24 @@ export function listKnownBlobDataRoles(): Array<{ name: string; id: string }> {
  * `rg-csa-loom-dlz-…` name) that the DLZ storage account does NOT live in — so
  * an ARM call built from env 404s ("Resource group '…' could not be found").
  * We discover where the account ACTUALLY lives BY NAME via Azure Resource Graph
- * (cached per-process), and only fall back to env when discovery returns
- * nothing. ARG is authoritative, so this fixes the wrong-RG case transparently.
+ * (cached per-process). ARG is authoritative, so this fixes the wrong-RG case
+ * transparently.
+ *
+ * The env fallback applies to the configured account only, since that is the
+ * account those values describe. Any other account (a lakehouse bound
+ * elsewhere) that ARG does not place throws {@link StorageAccountNotLocatedError}.
  */
-async function resolveStorageCoords(): Promise<{ sub: string; rg: string }> {
-  const account = getAccountName();
+async function resolveStorageCoords(account: string = getAccountName()): Promise<{ sub: string; rg: string }> {
   const coords = await discoverResourceCoordsByName({
     resourceType: 'Microsoft.Storage/storageAccounts',
     name: account,
   }).catch(() => null);
+  if (coords?.subscriptionId && coords.resourceGroup) {
+    return { sub: coords.subscriptionId, rg: coords.resourceGroup };
+  }
+  if (account.toLowerCase() !== configuredAccountOrNull()?.toLowerCase()) {
+    throw new StorageAccountNotLocatedError(account);
+  }
   const sub = coords?.subscriptionId || process.env.LOOM_SUBSCRIPTION_ID;
   const rg = coords?.resourceGroup || process.env.LOOM_DLZ_RG;
   if (!sub || !rg) {
@@ -958,14 +1109,18 @@ async function resolveStorageCoords(): Promise<{ sub: string; rg: string }> {
   return { sub, rg };
 }
 
-async function resolveStorageScope(container: string): Promise<string> {
+async function resolveStorageScope(container: string, account: string = getAccountName()): Promise<string> {
   // Storage RBAC supports scoping to a single container via the
   // `blobServices/default/containers/<name>` sub-resource path on the
   // storage account ARM id. Coordinates are resolved by name (self-heal) so a
-  // wrong env RG never breaks the Permissions surface.
-  const { sub, rg } = await resolveStorageCoords();
-  const account = getAccountName();
-  return `/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.Storage/storageAccounts/${account}/blobServices/default/containers/${container}`;
+  // wrong env RG never breaks the Permissions surface. `account` defaults to the
+  // configured account; a lakehouse bound elsewhere passes its own.
+  return containerScope(await resolveStorageCoords(account), account, container);
+}
+
+/** The ARM scope of one container on `account`, from coordinates already resolved for that account. */
+function containerScope(coords: { sub: string; rg: string }, account: string, container: string): string {
+  return `/subscriptions/${coords.sub}/resourceGroups/${coords.rg}/providers/Microsoft.Storage/storageAccounts/${account}/blobServices/default/containers/${container}`;
 }
 
 async function armCall<T = any>(url: string, init: RequestInit = {}): Promise<T> {
@@ -992,10 +1147,14 @@ async function armCall<T = any>(url: string, init: RequestInit = {}): Promise<T>
   return json as T;
 }
 
-export async function listContainerRoleAssignments(container: string): Promise<ContainerRoleAssignment[]> {
-  const scope = await resolveStorageScope(container);
+/** Role assignments at one container's scope, on `account` (default: the configured account). */
+export async function listContainerRoleAssignments(container: string, account?: string): Promise<ContainerRoleAssignment[]> {
+  // An empty `account` means the configured account, as it does for the grant
+  // (`account || getAccountName()` there).
+  const target = account || getAccountName();
+  const scope = await resolveStorageScope(container, target);
   const url = `${armBase()}${scope}/providers/Microsoft.Authorization/roleAssignments?api-version=2022-04-01&$filter=atScope()`;
-  const res = await armCall<{ value: any[] }>(url);
+  const res = await roleAssignmentCall<{ value: any[] }>(url, {}, target, 'list');
   const out: ContainerRoleAssignment[] = [];
   for (const r of (res.value || [])) {
     const roleDef = r.properties?.roleDefinitionId || '';
@@ -1019,6 +1178,8 @@ export async function grantContainerRole(
   principalId: string,
   roleNameOrId: string,
   principalType: 'User' | 'Group' | 'ServicePrincipal' = 'User',
+  /** The storage account the container is on (default: the configured account). */
+  account?: string,
 ): Promise<ContainerRoleAssignment> {
   // ALLOW-LIST ONLY. This used to be `BLOB_DATA_ROLES[x] || x`, so an
   // unrecognised name fell through and was used as a RAW role-definition GUID.
@@ -1043,9 +1204,13 @@ export async function grantContainerRole(
 
   // Self-heal coords (see resolveStorageCoords): the role-definition id must be
   // scoped to the SAME subscription the account lives in, not the env default.
-  const { sub } = await resolveStorageCoords();
-  const scope = await resolveStorageScope(container);
-  const roleDefinitionId = `/subscriptions/${sub}/providers/Microsoft.Authorization/roleDefinitions/${roleGuid}`;
+  // The coordinates are resolved once, for `account`, and used for both the
+  // scope and the role definition, so a lakehouse bound to another account is
+  // granted on that account's container.
+  const target = account || getAccountName();
+  const coords = await resolveStorageCoords(target);
+  const scope = containerScope(coords, target, container);
+  const roleDefinitionId = `/subscriptions/${coords.sub}/providers/Microsoft.Authorization/roleDefinitions/${roleGuid}`;
   // ARM role-assignment names are random GUIDs. Use crypto.randomUUID() so
   // re-grants get distinct ids; the principalId+role pair would 409 anyway
   // if it already exists at the scope.
@@ -1054,7 +1219,7 @@ export async function grantContainerRole(
       ? crypto.randomUUID()
       : `${Date.now()}-${Math.random().toString(16).slice(2)}-${Math.random().toString(16).slice(2)}`;
   const url = `${armBase()}${scope}/providers/Microsoft.Authorization/roleAssignments/${guid}?api-version=2022-04-01`;
-  const res = await armCall<any>(url, {
+  const res = await roleAssignmentCall<any>(url, {
     method: 'PUT',
     body: JSON.stringify({
       properties: {
@@ -1063,7 +1228,7 @@ export async function grantContainerRole(
         principalType,
       },
     }),
-  });
+  }, target, 'grant');
   return {
     id: res.id,
     principalId,
@@ -1075,7 +1240,7 @@ export async function grantContainerRole(
 
 export async function revokeContainerRoleAssignment(roleAssignmentArmId: string): Promise<void> {
   const url = `${armBase()}${roleAssignmentArmId}?api-version=2022-04-01`;
-  await armCall<void>(url, { method: 'DELETE' });
+  await roleAssignmentCall<void>(url, { method: 'DELETE' }, storageAccountOfArmId(roleAssignmentArmId), 'revoke');
 }
 
 // ============================================================

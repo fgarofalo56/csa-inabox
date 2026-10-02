@@ -1,17 +1,31 @@
 /**
- * GET /api/lakehouse/preview?container=&path=&format=&top=
+ * GET /api/lakehouse/preview?lakehouseId=|refId=&container=&path=&format=&top=
  * Previews the first N rows of a file via Synapse Serverless OPENROWSET.
  * Format defaults to detect from extension. _delta_log/ in the path
  * forces FORMAT='DELTA'. `top` is the row sample size (default 100,
  * clamped 1..1000) — Fabric's lakehouse table preview maxes at 1000 rows.
+ *
+ * Three request forms, each deciding the file before any query runs:
+ *
+ *   ITEM FORM (`lakehouseId`) — read access to the lakehouse item; the path
+ *   must sit strictly below the item's root in its own container.
+ *
+ *   REFERENCE FORM (`refId`) — Reference-Lakehouse federation (F8): read access
+ *   to the REFERENCED lakehouse item; the path must sit below that item's root,
+ *   and its storage account is the host of that item's binding (`scopeReferencePath`).
+ *
+ *   STORAGE FORM (neither) — names a container + path on the primary account
+ *   directly. Only a tenant admin may use it.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { KNOWN_CONTAINERS, pathToHttpsUrl, pathToHttpsUrlFor } from '@/lib/azure/adls-client';
 import { executeQuery, serverlessTarget } from '@/lib/azure/synapse-sql-client';
 import { classifyTransientSynapseError } from '@/lib/azure/synapse-transient';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { withSession } from '@/lib/api/route-toolkit';
+import { scopeItem } from '../_lib/refusal-envelope';
+import { scopeReferencePath } from '../_lib/reference-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -65,32 +79,60 @@ function parseTop(raw: string | null): number {
   return Math.min(n, MAX_TOP);
 }
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest, { session }) => {
+  const sp = req.nextUrl.searchParams;
+  const lakehouseId = (sp.get('lakehouseId') || '').trim();
+  const refId = (sp.get('refId') || '').trim();
+  const rawContainer = (sp.get('container') || '').trim();
+  const rawPath = sp.get('path') || '';
+  const explicit = sp.get('format');
+  const top = parseTop(sp.get('top'));
 
-  const container = req.nextUrl.searchParams.get('container') || '';
-  const path = req.nextUrl.searchParams.get('path') || '';
-  const explicit = req.nextUrl.searchParams.get('format');
-  const top = parseTop(req.nextUrl.searchParams.get('top'));
-  // Reference-Lakehouse federation (F8): an explicit `account` previews a file
-  // that lives in a REFERENCED lakehouse's storage account (any account the
-  // Console UAMI + Synapse Serverless MI hold Storage Blob Data Reader on). When
-  // omitted, the PRIMARY LOOM account is used and the standard medallion
-  // container allow-list applies.
-  const account = (req.nextUrl.searchParams.get('account') || '').trim();
-
-  if (!container || !path) {
-    return NextResponse.json({ ok: false, error: 'container and path are required' }, { status: 400 });
+  if (!rawPath) {
+    return NextResponse.json({ ok: false, error: 'path is required' }, { status: 400 });
   }
-  if (account) {
-    // Validate the account name (storage account naming: 3-24 lowercase
-    // alphanumerics) to prevent host injection into the OPENROWSET URL.
-    if (!/^[a-z0-9]{3,24}$/.test(account)) {
-      return NextResponse.json({ ok: false, error: `invalid storage account: ${account}` }, { status: 400 });
-    }
-  } else if (!(KNOWN_CONTAINERS as readonly string[]).includes(container)) {
-    return NextResponse.json({ ok: false, error: `unknown container: ${container}` }, { status: 404 });
+  if (sp.get('account') && !refId) {
+    return NextResponse.json(
+      { ok: false, error: 'account is not accepted here; preview a referenced lakehouse with refId.' },
+      { status: 400 },
+    );
+  }
+
+  let container: string;
+  let path: string;
+  let account: string | undefined;
+  if (refId && !lakehouseId) {
+    const scoped = await scopeReferencePath(session, refId, rawContainer, rawPath, true);
+    if (scoped instanceof NextResponse) return scoped;
+    ({ container, path, account } = scoped);
+  } else {
+    const scoped = await scopeItem(
+      session,
+      { lakehouseId, container: rawContainer, rawPath },
+      { knownContainers: KNOWN_CONTAINERS },
+    );
+    if (scoped instanceof NextResponse) return scoped;
+    ({ container, path } = scoped);
+    // The item's BOUND account (null only on the tenant-admin storage form,
+    // which reads the deployment's primary account).
+    account = scoped.account ?? undefined;
+  }
+
+  // The BULK URL below is built from the path as-is, with no per-segment
+  // encoding, and the reader decodes percent sequences. A '%' in a segment could
+  // therefore decode to '/' or '..' after the root check above has passed, so
+  // this route refuses any '%' (not only '%2...') rather than re-encoding every
+  // path. A file whose name contains '%' can still be downloaded.
+  if (path.includes('%')) {
+    return NextResponse.json(
+      {
+        ok: false,
+        code: 'bad_request',
+        error: "Preview can't read a path that contains '%'.",
+        remediation: 'Download the file to read it instead: Download is not limited this way.',
+      },
+      { status: 400 },
+    );
   }
 
   const fmt = detectFormat(path, explicit);
@@ -175,4 +217,4 @@ FROM OPENROWSET(BULK '${safeUrl}', FORMAT = '${fmt}') AS r;`;
       { status: 502 },
     );
   }
-}
+});
