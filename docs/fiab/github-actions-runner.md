@@ -133,10 +133,16 @@ KEYVAULT_NAME=<loom-kv> PAT_SECRET_NAME=gh-actions-pat \
 
 The script (idempotent — create-or-update):
 
-1. Toggles ACR public access on (the Loom ACR is PE-only), `az acr build`s
+1. Takes the ACR firewall lease (the Loom ACR is PE-only; see
+   `docs/fiab/acr-firewall-lease.md`), `az acr build`s
    `platform/runners/github-actions/Dockerfile` to
-   `acrloom<hash>.azurecr.io/gh-aca-runner:latest`, then restores ACR
-   public access = Disabled (always, even on build failure).
+   `acrloom<hash>.azurecr.io/gh-actions-runner:latest` (`IMAGE_REPO` /
+   `IMAGE_TAG` override it), then releases the lease and verifies the
+   registry re-locked (always, even on build failure). A failed build or an
+   unverified re-lock exits non-zero with a `[FATAL]` naming the step, and the
+   job is not touched.
+   The image repository is `gh-actions-runner`, not the job name
+   `gh-aca-runner`: that is the repository the live job pulls from.
 2. `az containerapp job create`/`update` an **Event**-triggered job:
    `--min-executions 0 --max-executions 5 --polling-interval 30`,
    `--scale-rule-type github-runner` with metadata
@@ -149,11 +155,44 @@ If `GITHUB_PAT` is unset and no Key Vault source is given, the script **errors
 loudly and exits non-zero** — it never silently skips.
 
 > **Runner version pin.** The image pins the runner version + a `sha256sum -c`
-> checksum via build ARGs `RUNNER_VERSION` / `RUNNER_SHA256` (default `v2.337.0`);
-> the build fails loudly on a mismatch. Bump both together and confirm the SHA256
-> against the [release page](https://github.com/actions/runner/releases) before
-> the first build, or override per-run:
+> checksum via build ARGs `RUNNER_VERSION` / `RUNNER_SHA256` in
+> `platform/runners/github-actions/Dockerfile` (currently `v2.337.0`); the
+> Dockerfile owns the default and the provision script passes neither unless you
+> override both. The build fails loudly on a mismatch. Bump both together and
+> confirm the SHA256 against the [release page](https://github.com/actions/runner/releases)
+> before the first build, or override per-run:
 > `RUNNER_VERSION=2.x.y RUNNER_SHA256=<hex> ./scripts/csa-loom/provision-gh-runner.sh`.
+>
+> **The pin has an expiry.** GitHub refuses to register a runner below a moving
+> minimum version. The image does not disable self-update, but that does not
+> help: each execution is a fresh replica that starts from the pinned binary,
+> and registration happens before any update could run, so a pin below the
+> minimum can never register. On 2026-09-29 GitHub refused `2.328.0` (minimum
+> `2.329.0`) and every `[self-hosted, loom-aca]` workflow stranded.
+> `scripts/ci/check-runner-version-pin.mjs` guards it. On every PR
+> (`loom-guardrails.yml`) it checks the pin is well-formed and at or above the last
+> reported minimum. Daily, in its own workflow (`runner-version-pin.yml`,
+> GitHub-hosted), it reads two signals and fails on either:
+>
+> - **GitHub's deprecation schedule** for the pinned version
+>   (`GET /repos/{owner}/{repo}/actions/runners/deprecations/{version}`). It fails
+>   when `runtime_deprecates_at` or `registration_deprecates_at` is past or less
+>   than 30 days away. GitHub documents this endpoint under the "Administration"
+>   repository permission, which a workflow `GITHUB_TOKEN` cannot be granted, so
+>   in the daily run the read is expected to be refused. The run then says, on
+>   every line, that its verdict is **heuristic**, and why.
+> - **The release-age heuristic.** GitHub's docs say a runner that is not updated
+>   within 30 days of a new release will not be queued jobs. The check warns once
+>   the pin has been superseded for more than 14 days (a notice only) and fails
+>   at more than 30.
+>
+> A failure opens or updates the issue "deploy: runner-version-pin is failing",
+> and the issue names which failure it was. `runner-version-pin.pin-deprecation-scheduled`
+> and `runner-version-pin.pin-superseded` mean the pin is stale: bump it and
+> rebuild the image under a new tag. The `releases-*` kinds mean the releases
+> API could not be read, refused the token, or gave an unusable answer, so the
+> pin's age was not established. Follow the issue's remediation line; do not
+> bump the pin on one of those.
 
 The durable IaC mirror is
 `platform/fiab/bicep/modules/admin-plane/gh-runner-job.bicep` (see the `// TODO`
