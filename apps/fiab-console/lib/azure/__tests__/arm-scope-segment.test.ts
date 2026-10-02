@@ -1,7 +1,8 @@
 /**
  * Role-assignment scope segments: each caller-supplied name becomes exactly
  * ONE ARM path segment, percent-encoded, and ids passed to revoke must be
- * container-scoped role assignments on the configured account.
+ * container-scoped role assignments (on any account named by the id itself —
+ * see `adls-role-scope-account.test.ts` for the multi-account revoke path).
  *
  * Each case names the value that breaks it (assertion-design.md).
  */
@@ -177,9 +178,18 @@ describe('adls-client role-assignment scope', () => {
     const subScoped = `/subscriptions/${SUB}/providers/Microsoft.Authorization/roleAssignments/${RA_GUID}`;
     // Breaks if revoke stops validating: the DELETE would be issued for this id.
     await expect(revokeContainerRoleAssignment(subScoped)).rejects.toThrow(ArmScopeSegmentError);
-    await expect(revokeContainerRoleAssignment(containerRaId('bronze', 'otheraccount')))
-      .rejects.toThrow(ArmScopeSegmentError);
     expect(armFetch).not.toHaveBeenCalled();
+  });
+
+  it('revokeContainerRoleAssignment DELETEs a container-scoped id on an account OTHER than the configured one', async () => {
+    // The account is read from the id, not fixed to the configured account —
+    // see adls-role-scope-account.test.ts for the full multi-account + 403 path.
+    // Breaks if revoke goes back to requiring the configured account: this id
+    // names 'otheraccount', not ACCOUNT, and would be refused with no ARM call.
+    const { revokeContainerRoleAssignment } = await import('../adls-client');
+    await revokeContainerRoleAssignment(containerRaId('bronze', 'otheraccount'));
+    expect(armFetch).toHaveBeenCalledTimes(1);
+    expect(String(armFetch.mock.calls[0][0])).toContain(containerRaId('bronze', 'otheraccount'));
   });
 
   it('revokeContainerRoleAssignment DELETEs a valid container-scoped id', async () => {

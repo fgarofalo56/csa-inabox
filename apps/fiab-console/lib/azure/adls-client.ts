@@ -1036,6 +1036,17 @@ function newCorrelationId(): string {
 }
 
 /**
+ * The storage account named in an ARM id (`.../storageAccounts/<name>/...`),
+ * or '' if none is found. This is a loose, non-anchored extraction used only
+ * to pick a CANDIDATE account to validate and report; {@link
+ * assertContainerRoleAssignmentId}'s own anchored regex is what actually
+ * decides whether the id is accepted.
+ */
+function storageAccountOfArmId(id: string): string {
+  return /\/storageAccounts\/([^/]+)/i.exec(id)?.[1] ?? '';
+}
+
+/**
  * `armCall` for a role-assignment request on `account`: a 403 from ARM is
  * logged on the server (ARM's message, under a new correlation id) and becomes
  * a {@link StorageRoleDeniedError} that carries only that id; any other failure
@@ -1252,14 +1263,18 @@ export async function grantContainerRole(
 
 /**
  * Delete a container-scoped Storage role assignment. The id must be a
- * role assignment at a container scope on the configured storage account
- * (the only kind `grantContainerRole` creates and `listContainerRoleAssignments`
- * returns); any other id is refused without an ARM call.
+ * role assignment at a container scope on SOME storage account (the only
+ * kind `grantContainerRole` creates and `listContainerRoleAssignments`
+ * returns); any other id is refused without an ARM call. The account is read
+ * from the id itself, not fixed to the configured account, so a lakehouse
+ * bound elsewhere (as `grantContainerRole`/`listContainerRoleAssignments`
+ * already support) can also be revoked there.
  */
 export async function revokeContainerRoleAssignment(roleAssignmentArmId: string): Promise<void> {
-  const id = assertContainerRoleAssignmentId(roleAssignmentArmId, getAccountName());
+  const target = storageAccountOfArmId(roleAssignmentArmId);
+  const id = assertContainerRoleAssignmentId(roleAssignmentArmId, target);
   const url = `${armBase()}${id}?api-version=2022-04-01`;
-  await roleAssignmentCall<void>(url, { method: 'DELETE' }, getAccountName(), 'revoke');
+  await roleAssignmentCall<void>(url, { method: 'DELETE' }, target, 'revoke');
 }
 
 // ============================================================
