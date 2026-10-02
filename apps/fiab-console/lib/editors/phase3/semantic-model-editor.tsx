@@ -1285,10 +1285,13 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
             {/* WAVE 3 — the shared connector gallery. A connection-backed / uploaded
                 pick yields a REAL Power Query M Source step from its actual
                 coordinates (mExprFromReportSource); a connector Loom can't turn
-                into ingest M shows an honest gate. No reportId → the gallery's
-                upload/preview scope stays generic (this is a semantic-model). */}
+                into ingest M shows an honest gate. An upload is stored with, and
+                authorized against, this semantic model; the report-only live
+                preview stays off for this host. */}
             <GetDataGallery
               open={connectorGalleryOpen}
+              reportId={id}
+              hostItemType="semantic-model"
               onChosen={(ds, meta) => {
                 setConnectorGalleryOpen(false);
                 const res = mExprFromReportSource(ds, {

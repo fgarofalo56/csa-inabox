@@ -58,6 +58,8 @@ export interface InteropTableRow {
   updatedBy: string;
   /** Bare Iceberg table id (last path segment) — added by the BFF. */
   icebergTableName?: string;
+  /** True for a row read from the earlier container-keyed state. */
+  legacy?: boolean;
 }
 
 /** The gate block the shared HonestGate renderer consumes. */
@@ -70,11 +72,20 @@ export interface InteropGateBlock {
 export interface InteropResponse {
   ok: boolean;
   error?: string;
+  /** What to do about a refusal (e.g. a read-only role), shown after `error`. */
+  remediation?: string;
   container?: string;
   account?: string | null;
   accountGate?: string;
   storeError?: string;
   catalogNote?: string;
+  /** `catalog_name_taken` when the catalog name belongs to another table. */
+  catalogCode?: string;
+  catalogRemediation?: string;
+  /** The lakehouse's own namespace, offered when the name tried was taken. */
+  suggestedNamespace?: string;
+  /** The lakehouse's default Iceberg namespace root (`lh_<12 hex>`). */
+  defaultNamespace?: string;
   pool?: string;
   defaultPool?: string;
   catalog?: {
@@ -126,6 +137,10 @@ export interface SchemaRow {
   id: string; lakehouseId: string; name: string; description?: string;
   isDefault: boolean; status: 'active' | 'pending' | 'error'; statusDetail?: string;
   createdBy?: string; createdAt?: string;
+  /** The Spark database that holds this schema's tables, in this item's own namespace. */
+  sparkDatabase?: string;
+  /** Registered before lakehouse schemas had their own Spark databases. */
+  legacy?: boolean;
 }
 
 // ---- Check variables (a read-only Variable Library health check) ----

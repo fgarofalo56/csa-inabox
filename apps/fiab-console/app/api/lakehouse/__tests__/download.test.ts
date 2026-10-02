@@ -43,12 +43,17 @@ vi.mock('@/lib/azure/lakehouse-abfss', async () => {
   };
 });
 vi.mock('@/lib/auth/item-access', () => ({ resolveItemAccessByOid: vi.fn() }));
+vi.mock('@/lib/azure/purview-mip-client', async () => {
+  const actual: any = await vi.importActual('@/lib/azure/purview-mip-client');
+  return { ...actual, getLabelForAdlsPath: vi.fn() };
+});
 
 import { GET } from '../download/route';
 import { getSession } from '@/lib/auth/session';
 import { downloadFile } from '@/lib/azure/adls-client';
 import { resolveLakehouseAbfss } from '@/lib/azure/lakehouse-abfss';
 import { resolveItemAccessByOid } from '@/lib/auth/item-access';
+import { getLabelForAdlsPath } from '@/lib/azure/purview-mip-client';
 
 function getReq(qs: string) { return { nextUrl: new URL(`http://x/api/lakehouse/download?${qs}`) } as any; }
 
@@ -112,7 +117,8 @@ describe('GET /api/lakehouse/download — storage form (tenant admin)', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('content-disposition')).toContain('attachment; filename="a.csv"');
     expect(res.headers.get('content-type')).toBe('text/csv');
-    expect((downloadFile as any).mock.calls).toEqual([['bronze', 'data/a.csv']]);
+    // No item, so no account: adls-client reads the deployment's primary.
+    expect((downloadFile as any).mock.calls).toEqual([['bronze', 'data/a.csv', undefined]]);
   });
 
   it('404 when ADLS reports file not found', async () => {
@@ -141,7 +147,7 @@ describe('GET /api/lakehouse/download — item form', () => {
     (getSession as any).mockReturnValue(member);
     const res = await GET(getReq(`lakehouseId=${LH}&container=${CONTAINER}&path=${encodeURIComponent(INSIDE)}`));
     expect(res.status).toBe(200);
-    expect((downloadFile as any).mock.calls).toEqual([[CONTAINER, INSIDE]]);
+    expect((downloadFile as any).mock.calls).toEqual([[CONTAINER, INSIDE, 'acct']]);
     expect((resolveItemAccessByOid as any).mock.calls).toEqual([[member, LH, 'lakehouse']]);
   });
 
@@ -185,5 +191,46 @@ describe('GET /api/lakehouse/download — item form', () => {
     const res = await GET(getReq(`lakehouseId=${LH}&container=gold&path=${encodeURIComponent(INSIDE)}`));
     expect(res.status).toBe(403);
     expect((downloadFile as any).mock.calls).toEqual([]);
+  });
+});
+
+describe("GET /api/lakehouse/download — reads the item's bound storage account", () => {
+  // The item is bound to `lhbound`, not the deployment's primary account.
+  const BOUND = 'lhbound';
+  let savedPurview: string | undefined;
+  beforeEach(() => {
+    savedPurview = process.env.LOOM_PURVIEW_ACCOUNT;
+    (resolveLakehouseAbfss as any).mockResolvedValue({
+      abfss: `abfss://${CONTAINER}@${BOUND}.dfs.core.windows.net/${ROOT}`,
+      container: CONTAINER,
+      root: ROOT,
+    });
+  });
+  afterEach(() => {
+    if (savedPurview === undefined) delete process.env.LOOM_PURVIEW_ACCOUNT;
+    else process.env.LOOM_PURVIEW_ACCOUNT = savedPurview;
+  });
+
+  // FAILS IF the bytes are read from the primary account: the third column of
+  // the row set becomes `undefined` instead of `lhbound`.
+  it('reads the file from the bound account', async () => {
+    (getSession as any).mockReturnValue(member);
+    const res = await GET(getReq(`lakehouseId=${LH}&container=${CONTAINER}&path=${encodeURIComponent(INSIDE)}`));
+    expect(res.status).toBe(200);
+    expect((downloadFile as any).mock.calls).toEqual([[CONTAINER, INSIDE, BOUND]]);
+  });
+
+  // The catalog label lookup names the same account the bytes came from.
+  // FAILS IF it names the primary: the first column would be the primary
+  // account's name, not `lhbound`.
+  it('looks up the Purview label on the bound account', async () => {
+    process.env.LOOM_PURVIEW_ACCOUNT = 'pv';
+    (getSession as any).mockReturnValue(member);
+    (getLabelForAdlsPath as any).mockResolvedValue(null);
+    const pdf = `${ROOT}/Files/report.pdf`;
+    const res = await GET(getReq(`lakehouseId=${LH}&container=${CONTAINER}&path=${encodeURIComponent(pdf)}`));
+    expect(res.status).toBe(200);
+    expect(res.headers.get('x-loom-mip-status')).toBe('no-label');
+    expect((getLabelForAdlsPath as any).mock.calls).toEqual([[BOUND, CONTAINER, pdf]]);
   });
 });
