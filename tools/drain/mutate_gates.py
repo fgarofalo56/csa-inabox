@@ -5085,6 +5085,14 @@ EXPECTED_SANDBOX_SKIPS = (
     # DECLARED, and said out loud: IT KILLS NO ARM. The WR arms are killed by
     # the fixture tests in `test_watcher_receipts.py`, which need no checkout.
     "test_watcher_receipts.py::test_the_watcher_shapes_are_lifted_from_the_script_that_files_them",
+    # #4865. Reads `scripts/ci/eval-measurement.mjs` to keep the transcribed
+    # "Copilot quality: not measured" check-run name honest against the
+    # module that actually publishes it. The sandbox copies only
+    # `tools/drain`, so `_repo_root()` is None and it skips. DECLARED, and
+    # said out loud: IT KILLS NO ARM. The NOT_EVIDENCE_CONTEXTS arms are
+    # killed by the two behaviour tests beside it, which carry the literal
+    # name from `gates.NOT_EVIDENCE_CONTEXTS` and need no checkout.
+    "test_gates.py::test_the_published_not_measured_name_is_the_one_the_gate_reads",
 )
 
 
