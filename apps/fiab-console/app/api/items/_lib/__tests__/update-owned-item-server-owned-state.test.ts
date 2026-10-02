@@ -116,6 +116,19 @@ describe('#3611 — updateOwnedItem enforces server-owned state too', () => {
     expect(({} as any).pollutedViaUpdateOwnedItem).toBeUndefined();
   });
 
+  it('refuses to set the SQL tab database keys, written out by name', async () => {
+    // A literal pair, not the loop below: removing either key from
+    // SERVER_OWNED_STATE_KEYS turns its own assertion red.
+    await expect(updateOwnedItem(ITEM.id, ITEM.itemType, TENANT, {
+      state: { sourceType: 's3', sqlDatabase: 'loom_lakehouse' },
+    })).rejects.toBeInstanceOf(ServerOwnedStateError);
+    await expect(updateOwnedItem(ITEM.id, ITEM.itemType, TENANT, {
+      state: { sourceType: 's3', sqlEndpointDatabase: 'loom_lakehouse' },
+    })).rejects.toBeInstanceOf(ServerOwnedStateError);
+
+    expect(replaced).toHaveLength(0);
+  });
+
   /**
    * EVERY key, driven off the exported list rather than a hand-written copy.
    *
