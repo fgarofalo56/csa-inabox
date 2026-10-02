@@ -538,6 +538,36 @@
         "signalId": null,
         "retryable": false
       }
+    },
+    {
+      "name": "transient — the roll could not take the ACR lease within its shared budget (#4823), helper line + roll message",
+      "source": "The helper line is verbatim from loom-dataplane-roll run 36665140502 (2026-09-30T04:05:24Z); the second line is roll-lease-budget.mjs describeUnacquired()'s held-by-other message, generated from the module itself.",
+      "input": "[acr-lease] TIMED OUT after 25m waiting for the ACR firewall lease on '<acr>'. Current holder: 'gha:fgarofalo56/csa-inabox:36665091682:1' (https://github.com/fgarofalo56/csa-inabox/actions/runs/36665091682). This job did NOT open the registry and did NOT disturb the holder. Wait for that run to finish and re-run this one, or — if the holder is known dead — run: scripts/csa-loom/acr-firewall-lease.sh sweep --acr <acr> --force\nThe acquire gave up after this step's 0m allowance; when read back after the acquire gave up, the ACR firewall lease on '<acr>' was held by 'gha:fgarofalo56/csa-inabox:36665091682:1' (https://github.com/fgarofalo56/csa-inabox/actions/runs/36665091682), LIVE for another 5613s. That read-back is a later snapshot and does not by itself establish who held the lease throughout the wait. If the acquire timed out, its own `TIMED OUT … Current holder:` line above names the holder it actually saw. This step was allowed to wait up to 0m — what remained of this job's 20m lease-wait budget, a deadline shared by every lease acquire in the job so their waits cannot add up past timeout-minutes. Contention for the lease, not a defect in this run.",
+      "expect": {
+        "class": "transient",
+        "signalId": "transient.acr-lease-held-past-roll-budget",
+        "retryable": true
+      }
+    },
+    {
+      "name": "unknown — the lease helper's give-up line ALONE stays unclassified (permanent control: il5 redeploy-gov.sh runs it inside deploy-retry)",
+      "source": "The same verbatim helper line from run 36665140502, without the roll lane's budget message. preflight-image-tags.sh prints exactly this inside redeploy-gov.sh, which deploy-fiab-il5.yml wraps in deploy-retry.mjs --class-allow transient; classifying it would add a retry to that lane.",
+      "input": "[acr-lease] TIMED OUT after 25m waiting for the ACR firewall lease on '<acr>'. Current holder: 'gha:fgarofalo56/csa-inabox:36665091682:1' (https://github.com/fgarofalo56/csa-inabox/actions/runs/36665091682). This job did NOT open the registry and did NOT disturb the holder. Wait for that run to finish and re-run this one, or — if the holder is known dead — run: scripts/csa-loom/acr-firewall-lease.sh sweep --acr <acr> --force",
+      "expect": {
+        "class": "unknown",
+        "signalId": null,
+        "retryable": false
+      }
+    },
+    {
+      "name": "transient — the job exceeded timeout-minutes, GitHub annotation verbatim (#4823)",
+      "source": "GitHub Actions annotation on loom-dataplane-roll run 36665140502 (2026-09-30), read with `gh run view`.",
+      "input": "The job has exceeded the maximum execution time of 45m0s",
+      "expect": {
+        "class": "transient",
+        "signalId": "transient.job-exceeded-timeout-minutes",
+        "retryable": true
+      }
     }
   ]
 }
