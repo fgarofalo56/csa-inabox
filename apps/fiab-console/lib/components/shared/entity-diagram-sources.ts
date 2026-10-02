@@ -200,6 +200,15 @@ function normalizeCardinality(c: unknown): EntityCardinality {
  * enrichment never blocks the table topology: if the serverless endpoint is
  * unconfigured the tables still render with a `notice`.
  */
+/**
+ * The column-enrichment query the lakehouse diagram sends to
+ * `POST /api/items/lakehouse/{id}/query`. Exported so the route's item-scope
+ * tests run this exact text through the SQL classifier a reader's query passes.
+ */
+export const LAKEHOUSE_COLUMNS_SQL =
+  'SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE, ORDINAL_POSITION '
+  + 'FROM INFORMATION_SCHEMA.COLUMNS ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION';
+
 export async function readLakehouseGraph(source: EntitySource, doFetch: EntityFetch): Promise<EntityGraph> {
   // Scope the scan to THIS lakehouse item (+ its workspace) so the diagram only
   // ever shows the opened lakehouse's own tables — never a sibling lakehouse's
@@ -240,8 +249,7 @@ export async function readLakehouseGraph(source: EntitySource, doFetch: EntityFe
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          sql: 'SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE, ORDINAL_POSITION '
-            + 'FROM INFORMATION_SCHEMA.COLUMNS ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION',
+          sql: LAKEHOUSE_COLUMNS_SQL,
         }),
       });
       const qj = await readJson(q);

@@ -41,6 +41,7 @@ import { DeltaPreviewGrid, type ColStat } from './components/delta-preview-grid'
 import { EmptyState } from '@/lib/components/empty-state';
 import { HonestGate } from '@/lib/components/shared/honest-gate';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { DATASET_ITEM_NOT_FOUND, DatasetItemMappingNotice } from './dataset-item-mapping-notice';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
@@ -222,7 +223,7 @@ function renderHighlights(
   );
 }
 
-interface FetchState<T> { loading: boolean; data: T | null; error?: string; hint?: string; notDeployed?: boolean; }
+interface FetchState<T> { loading: boolean; data: T | null; error?: string; hint?: string; notDeployed?: boolean; code?: string; }
 
 function useApi<T>(url: string | null, deps: unknown[] = []) {
   const [state, setState] = useState<FetchState<T>>({ loading: false, data: null });
@@ -233,7 +234,7 @@ function useApi<T>(url: string | null, deps: unknown[] = []) {
       const r = await fetch(url);
       const j = await r.json();
       if (!j.ok) {
-        setState({ loading: false, data: null, error: j.error || `HTTP ${r.status}`, hint: j.hint, notDeployed: j.notDeployed });
+        setState({ loading: false, data: null, error: j.error || `HTTP ${r.status}`, hint: j.hint, notDeployed: j.notDeployed, code: j.code });
         return;
       }
       setState({ loading: false, data: j as unknown as T });
@@ -3663,7 +3664,7 @@ export function DatasetEditor({ item, id }: { item: FabricItemType; id: string }
 
   return <Shell item={item} id={id} ribbon={ribbon}>
     <div className={s.pad}>
-      {detail.loading ? <TableSkeleton rows={4} /> : detail.error ? <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} /> : detail.data?.asset && (
+      {detail.loading ? <TableSkeleton rows={4} /> : detail.error && detail.code === DATASET_ITEM_NOT_FOUND ? <DatasetItemMappingNotice /> : detail.error ? <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} /> : detail.data?.asset && (
         <>
           <SectionHead icon={<Database20Regular />}>{detail.data.asset.name}</SectionHead>
           <Body1>{detail.data.asset.description || '—'}</Body1>
