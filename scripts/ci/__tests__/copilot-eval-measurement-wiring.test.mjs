@@ -77,6 +77,15 @@ test('evals job exports measurement / gate_reported_only / gate_rc FROM the gate
   assert.match(header, /^ {6}gate_rc: \$\{\{ steps\.gate\.outputs\.gate_rc \}\}$/m);
 });
 
+test('evals job ALSO exports coverage_unknown from the gate step (#4865 round 3)', () => {
+  // Breaks if `coverage_unknown` is dropped from the job outputs, or still
+  // read from a step other than `gate` -- the label step would then read ''
+  // and never qualify the PASS heading when judgeCoverage is unrecorded.
+  const job = EVALS_JOB();
+  const header = job.slice(0, at(job, '\n    steps:\n'));
+  assert.match(header, /^ {6}coverage_unknown: \$\{\{ steps\.gate\.outputs\.coverage_unknown \}\}$/m);
+});
+
 test('the gate step (id: gate) writes gate_reported_only and gate_rc, so the outputs above are not empty', () => {
   // Breaks if the gate step stops appending either key to $GITHUB_OUTPUT:
   // the job output would silently be '' and the REPORTED label unreachable.
@@ -127,6 +136,16 @@ test('report-outcome labels the summary through eval-measurement --label, with t
   assert.doesNotMatch(say, /echo .*— PASS/);
 });
 
+test('the label step ALSO feeds coverage_unknown to --label (#4865 round 3)', () => {
+  // Breaks if COVERAGE_UNKNOWN is read from a literal or a different output,
+  // or if --coverage-unknown is dropped from the call: a PASS over a run
+  // whose judgeCoverage was never recorded (#4875) would then read as plain
+  // "PASS" again, the should-fix this test pins.
+  const say = stepNamed(REPORT_JOB(), 'Say so in the job summary').body;
+  assert.match(say, /COVERAGE_UNKNOWN: \$\{\{ needs\.evals\.outputs\.coverage_unknown \}\}/);
+  assert.match(say, /--coverage-unknown "\$COVERAGE_UNKNOWN"/);
+});
+
 test('report-outcome checks the repo out BEFORE it runs a repo script', () => {
   // Breaks if the checkout step is dropped from report-outcome: the --label
   // call would fail with "Cannot find module" on every run.
@@ -168,14 +187,25 @@ test('checks: write is granted to report-outcome ONLY, not to the workflow or th
 test('the publish step runs only on same-repo PRs, for EXACTLY the module\'s not-judged states', () => {
   // Breaks if the state list in `if:` drifts from NOT_MEASURED_STATES (e.g.
   // `judged` added, or `partial` dropped), or if the pull_request / same-repo
-  // conditions are removed (a fork token cannot create a check-run). The list
-  // is lifted from the step and compared with the module's export.
+  // conditions are removed (a fork token cannot create a check-run). The
+  // WHOLE `if:` expression is then compared, whitespace-normalised, instead
+  // of matching three independent substrings: arm W1 (the first `&&` changed
+  // to `||`) still matches each substring check individually, but changes
+  // what the step actually runs on -- `a || (b && c)` would publish on every
+  // pull_request, including fork PRs. Only comparing the full boolean kills it.
   const body = PUBLISH();
   const m = /contains\(fromJSON\('(\[[^\]]*\])'\), needs\.evals\.outputs\.measurement\)/.exec(body);
   assert.ok(m, 'the contains(fromJSON(...), needs.evals.outputs.measurement) condition is present');
   assert.deepEqual(JSON.parse(m[1]), [...NOT_MEASURED_STATES]);
-  assert.match(body, /github\.event_name == 'pull_request'/);
-  assert.match(body, /github\.event\.pull_request\.head\.repo\.full_name == github\.repository/);
+
+  const ifStart = at(body, 'if: >-');
+  const ifEnd = at(body, '\n        env:');
+  assert.ok(ifEnd > ifStart, 'the if: block ends before env:');
+  const normalized = body.slice(ifStart, ifEnd).replace(/\s+/g, ' ').trim();
+  assert.equal(
+    normalized,
+    `if: >- \${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["deterministic-only","partial","none"]'), needs.evals.outputs.measurement) }}`,
+  );
 });
 
 test('the publish step builds the body with --check-run from the evals outputs and POSTs it, nothing discarded', () => {

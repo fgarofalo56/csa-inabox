@@ -196,6 +196,7 @@ jobs:
     outputs:
       measurement: ${{ steps.gate.outputs.measurement }}
       measurement_text: ${{ steps.gate.outputs.measurement_text }}
+      coverage_unknown: ${{ steps.gate.outputs.coverage_unknown }}
       gate_reported_only: ${{ steps.gate.outputs.gate_reported_only }}
       gate_rc: ${{ steps.gate.outputs.gate_rc }}
     steps:
@@ -975,6 +976,7 @@ jobs:
           MEASUREMENT: ${{ needs.evals.outputs.measurement }}
           REPORTED_ONLY: ${{ needs.evals.outputs.gate_reported_only }}
           GATE_RC: ${{ needs.evals.outputs.gate_rc }}
+          COVERAGE_UNKNOWN: ${{ needs.evals.outputs.coverage_unknown }}
           EVALS_RESULT: ${{ needs.evals.result }}
         run: |
           set -euo pipefail
@@ -982,7 +984,8 @@ jobs:
             --category "$CATEGORY" \
             --measurement "$MEASUREMENT" \
             --reported-only "$REPORTED_ONLY" \
-            --gate-rc "$GATE_RC" >> "$GITHUB_STEP_SUMMARY"
+            --gate-rc "$GATE_RC" \
+            --coverage-unknown "$COVERAGE_UNKNOWN" >> "$GITHUB_STEP_SUMMARY"
           case "$CATEGORY" in
             success|failure) ;;
             *)

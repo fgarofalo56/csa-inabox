@@ -49,12 +49,18 @@
  *   - a finite `groundingAvg` on a surface with `questions: 0` is NOT judged:
  *     there is nothing it could be an average of.
  *
- * A surface is FULLY JUDGED iff it has a grounding score AND its declared
+ * A surface is FULLY JUDGED iff it has a grounding score, its `rowsAttempted`
+ * (when present) is not greater than `questions`, AND its declared
  * `passPredicate.judgeCoverage` is not a finite number below 1. `groundingAvg`
  * is finite as soon as ONE row is scored (a judge budget that ran out
  * mid-surface), so a surface at coverage 0.2 is PARTLY judged and is never
- * counted as fully judged. A receipt that omits `judgeCoverage` (images
- * before #2992) is read as before: a grounding score is a judged surface.
+ * counted as fully judged. A surface that lost probe rows — `questions: 12,
+ * rowsAttempted: 15` — is PARTLY judged too: the judge never saw the 3 rows
+ * that failed to probe, so "fully scored" is a claim the receipt does not
+ * support, even when every surviving row was scored and no `judgeCoverage`
+ * is declared. A receipt that omits `judgeCoverage` (images before #2992) is
+ * read as before: a grounding score over every attempted row is a judged
+ * surface.
  *
  * MEASUREMENT STATES
  *   none                no probed surface returned an answer
@@ -74,6 +80,7 @@
  *
  *   node scripts/ci/eval-measurement.mjs --label --category <c>
  *        [--measurement <m>] [--reported-only true|false] [--gate-rc <n>]
+ *        [--coverage-unknown true|false]
  *     Prints the job-summary heading for the report-outcome job. LABELS only;
  *     it never changes a job conclusion.
  *
@@ -115,9 +122,12 @@ export function isJudgedSurface(s) {
   return qs(s) > 0 && typeof s?.groundingAvg === 'number' && Number.isFinite(s.groundingAvg);
 }
 
-/** True iff the judge scored the surface AND its declared coverage is not below 1. */
+/** True iff the judge scored the surface over every attempted row, and its
+ * declared coverage (if any) is not below 1. */
 export function isFullyJudgedSurface(s) {
   if (!isJudgedSurface(s)) return false;
+  const attempted = attemptedRows(s);
+  if (attempted > 0 && attempted > qs(s)) return false;
   const c = judgeCoverageOf(s);
   return c === null || c >= 1;
 }
@@ -144,6 +154,14 @@ export function classifyMeasurement(run) {
   else if (fully.length < probed.length) measurement = 'partial';
   else measurement = 'judged';
   const name = (s) => String(s.surface ?? '?');
+  // True iff EVERY surface counted as fully judged has no declared
+  // `judgeCoverage` at all -- the shape every run takes while the deployed
+  // evaluator image lags main and never emits `passPredicate` (#4875). In
+  // that shape "fully scored" is not an established fact, only "has a
+  // grounding score": `isFullyJudgedSurface` reads a missing coverage as
+  // fully judged (unchanged, for images before #2992), but the TEXT must not
+  // claim coverage it was never told.
+  const coverageUnknown = fully.length > 0 && fully.every((s) => judgeCoverageOf(s) === null);
   return {
     measurement,
     totalSurfaces: surfaces.length,
@@ -152,15 +170,26 @@ export function classifyMeasurement(run) {
     partlyJudgedSurfaces: withScore.length - fully.length,
     totalQuestions,
     judgedQuestions,
+    coverageUnknown,
     // Probed, and the judge produced no score at all (includes surfaces where
     // no probe row returned an answer).
     unjudged: probed.filter((s) => !isJudgedSurface(s)).map(name),
     // Probed and returned no answer at all: every attempted row failed.
     unanswered: probed.filter((s) => qs(s) === 0).map((s) => ({ surface: name(s), rowsAttempted: attemptedRows(s) })),
-    // A grounding score, but a declared judge coverage below 1.
+    // A grounding score, but either dropped probe rows the judge never saw,
+    // or a declared judge coverage below 1.
     partlyJudged: withScore
       .filter((s) => !isFullyJudgedSurface(s))
-      .map((s) => ({ surface: name(s), judgeCoverage: judgeCoverageOf(s) })),
+      .map((s) => {
+        const attempted = attemptedRows(s);
+        return {
+          surface: name(s),
+          questions: qs(s),
+          rowsAttempted: attempted,
+          droppedRows: attempted > 0 && attempted > qs(s),
+          judgeCoverage: judgeCoverageOf(s),
+        };
+      }),
   };
 }
 
@@ -175,9 +204,13 @@ export function describeMeasurement(m) {
     `the grounding judge fully scored ${m.judgedSurfaces} of the ${m.probedSurfaces} surface(s) that were probed ` +
     `(${m.totalSurfaces} in the receipt); ${m.judgedQuestions} of the ${m.totalQuestions} question(s) that returned ` +
     'an answer are on fully scored surfaces';
+  const coverageUnknownNote =
+    ' Judge coverage is UNKNOWN for this run: the receipt does not record `passPredicate.judgeCoverage` on any ' +
+    'surface (the deployed evaluator image lags main, #4875), so only a grounding score is established -- full ' +
+    'judge coverage is not.';
   switch (m.measurement) {
     case 'judged':
-      return `JUDGED — ${counts}.`;
+      return `JUDGED — ${counts}.${m.coverageUnknown ? coverageUnknownNote : ''}`;
     case 'partial': {
       const parts = [];
       const unanswered = new Map(m.unanswered.map((u) => [u.surface, u.rowsAttempted]));
@@ -190,7 +223,17 @@ export function describeMeasurement(m) {
       }
       if (m.partlyJudged.length) {
         parts.push(
-          `Partly judged: ${m.partlyJudged.map((p) => `${p.surface} (judge coverage ${pct(p.judgeCoverage)})`).join(', ')}.`,
+          `Partly judged: ${m.partlyJudged
+            .map((p) => {
+              if (p.droppedRows) {
+                return `${p.surface} (${p.questions} of ${p.rowsAttempted} probed row(s) returned an answer)`;
+              }
+              if (typeof p.judgeCoverage !== 'number' || !Number.isFinite(p.judgeCoverage)) {
+                return `${p.surface} (judge coverage unknown)`;
+              }
+              return `${p.surface} (judge coverage ${pct(p.judgeCoverage)})`;
+            })
+            .join(', ')}.`,
         );
       }
       return `PARTIALLY MEASURED — ${counts}. ${parts.join(' ')} Only the fully scored surfaces carry a quality result.`;
@@ -257,15 +300,19 @@ export function measurementBanner(m) {
  * The report-outcome job-summary heading. `category` is run-outcome.mjs's
  * category for the evals job. A `success` is called PASS only when the judge
  * fully scored every probed surface AND the gate recorded that it enforced
- * (`reportedOnly === 'false'`; an unrecorded value is not PASS). A `failure`
- * is called a real verdict only over a judged run. Everything else says what
- * it actually was.
+ * (`reportedOnly === 'false'`; an unrecorded value is not PASS). `PASS` over a
+ * run whose `judgeCoverage` was never recorded (`coverageUnknown`) is
+ * qualified: the run is still PASS (the gate itself does not know coverage is
+ * missing), but the heading says so rather than implying full coverage was
+ * established. A `failure` is called a real verdict only over a judged run.
+ * Everything else says what it actually was.
  */
-export function outcomeLabel({ category, measurement, reportedOnly, gateRc }) {
+export function outcomeLabel({ category, measurement, reportedOnly, gateRc, coverageUnknown }) {
   const what = 'Copilot quality evals';
   const m = MEASUREMENTS.includes(measurement) ? measurement : 'unrecorded';
   const rc = String(gateRc ?? '').trim() || 'unrecorded';
   const ro = String(reportedOnly ?? '').trim();
+  const cu = String(coverageUnknown ?? '').trim() === 'true';
   if (category === 'failure') {
     if (m === 'judged') return `### ${what} — FAIL (a real verdict; see the eval job)`;
     if (m === 'partial') {
@@ -296,6 +343,9 @@ export function outcomeLabel({ category, measurement, reportedOnly, gateRc }) {
   }
   if (ro !== 'false') {
     return `### ${what} — JUDGED, ENFORCEMENT UNRECORDED (gate rc=${rc}; the gate did not record whether it enforced, so this is not reported as PASS)`;
+  }
+  if (cu) {
+    return `### ${what} — PASS (judge coverage not recorded by this evaluator; #4875)`;
   }
   return `### ${what} — PASS`;
 }
@@ -335,6 +385,7 @@ export function main(argv = process.argv.slice(2), env = process.env) {
         measurement: args.measurement,
         reportedOnly: args['reported-only'],
         gateRc: args['gate-rc'],
+        coverageUnknown: args['coverage-unknown'],
       }),
     );
     return 0;
@@ -379,6 +430,7 @@ export function main(argv = process.argv.slice(2), env = process.env) {
         `judged_surfaces=${m.judgedSurfaces}`,
         `total_questions=${m.totalQuestions}`,
         `judged_questions=${m.judgedQuestions}`,
+        `coverage_unknown=${m.coverageUnknown}`,
         // One line by construction; newlines are folded anyway so a future
         // multi-line description cannot break the key=value output format.
         `measurement_text=${describeMeasurement(m).replace(/[\r\n]+/g, ' ')}`,

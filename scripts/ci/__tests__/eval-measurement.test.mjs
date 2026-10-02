@@ -213,6 +213,71 @@ test('judgeCoverage 1 is fully judged, and a receipt without judgeCoverage keeps
   assert.equal(classifyMeasurement({ surfaces: SURFACES.map((s) => partlyJudged(s, 1)) }).measurement, 'judged');
 });
 
+// A surface that lost probe rows AFTER the judge started scoring: the
+// surviving rows were all scored (groundingAvg finite), but some attempted
+// rows never reached the judge at all. No `passPredicate` is declared, so
+// `judgeCoverageOf` alone cannot see the gap.
+const droppedRows = (surface, questions, rowsAttempted) => ({ ...judged(surface, questions), rowsAttempted });
+
+test('a surface that lost probe rows is PARTIAL even with no judgeCoverage declared (#4865 round 3)', () => {
+  // Breaking value: `questions: 12, rowsAttempted: 15`, every surviving row
+  // scored, no `passPredicate`. The old predicate read only
+  // `judgeCoverageOf` (null here), so this surface was "fully judged" and a
+  // run with one such surface still read `judged` / PASS over 3 rows the
+  // judge never saw.
+  assert.equal(isFullyJudgedSurface(droppedRows('rbac', 12, 15)), false);
+  const run = { surfaces: SURFACES.map((s) => (s === 'rbac' ? droppedRows(s, 12, 15) : judged(s))) };
+  const m = classifyMeasurement(run);
+  assert.equal(m.measurement, 'partial');
+  assert.match(describeMeasurement(m), /Partly judged: rbac \(12 of 15 probed row\(s\) returned an answer\)/);
+});
+
+test('a surface where every attempted row was scored stays fully judged (positive pair)', () => {
+  // Pins the boundary: `rowsAttempted` EQUAL to `questions` must not trip the
+  // new check, or every ordinary judged surface that declares `rowsAttempted`
+  // would turn partial.
+  assert.equal(isFullyJudgedSurface(droppedRows('rbac', 15, 15)), true);
+  assert.equal(classifyMeasurement({ surfaces: SURFACES.map((s) => droppedRows(s, 15, 15)) }).measurement, 'judged');
+});
+
+test('a judged run with no judgeCoverage anywhere reports coverage as UNKNOWN, not "fully scored" unqualified (#4865 round 3, #4875)', () => {
+  // Breaking value: every surface judged, none carries `passPredicate` — the
+  // shape every live receipt takes while the deployed evaluator image lags
+  // main and never emits it (#4875). Saying "fully scored" with no
+  // qualification claims coverage the receipt never recorded.
+  const m = classifyMeasurement(ALL_JUDGED);
+  assert.equal(m.coverageUnknown, true);
+  const text = describeMeasurement(m);
+  assert.match(text, /^JUDGED —/);
+  assert.match(text, /Judge coverage is UNKNOWN/);
+  assert.match(text, /#4875/);
+  const label = outcomeLabel({
+    category: 'success',
+    measurement: 'judged',
+    reportedOnly: 'false',
+    gateRc: '0',
+    coverageUnknown: 'true',
+  });
+  assert.equal(label, '### Copilot quality evals — PASS (judge coverage not recorded by this evaluator; #4875)');
+});
+
+test('a judged run whose surfaces DO declare judgeCoverage is reported plainly, not UNKNOWN (positive pair)', () => {
+  // Breaks if `coverageUnknown` is set whenever `passPredicate` is merely
+  // absent on SOME surface, or never clears once a receipt declares it.
+  const run = { surfaces: SURFACES.map((s) => partlyJudged(s, 1)) };
+  const m = classifyMeasurement(run);
+  assert.equal(m.coverageUnknown, false);
+  assert.doesNotMatch(describeMeasurement(m), /UNKNOWN/);
+  const label = outcomeLabel({
+    category: 'success',
+    measurement: 'judged',
+    reportedOnly: 'false',
+    gateRc: '0',
+    coverageUnknown: 'false',
+  });
+  assert.equal(label, '### Copilot quality evals — PASS');
+});
+
 test('the NOT MEASURED sentence does not assert WHY the judge scored nothing', () => {
   // Breaking value: the previous sentence "The judge was deferred on every
   // surface", which the receipt cannot establish — a judge that errored on

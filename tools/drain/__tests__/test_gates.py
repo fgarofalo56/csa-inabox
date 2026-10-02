@@ -906,30 +906,52 @@ def test_a_rollup_with_no_advisory_red_is_go():
     assert "3 clean of 3 advisory" in why, why
 
 
-# #4346 -- the eval's neutral "not measured" check-run. LIFTED from the module
-# that publishes it, never retyped here, so a rename on the publishing side
-# fails this file instead of silently turning the check back into clean
-# coverage.
-_EVAL_MEASUREMENT = os.path.join(
-    os.path.dirname(__file__), "..", "..", "..", "scripts", "ci", "eval-measurement.mjs"
-)
+# #4346 -- the eval's neutral "not measured" check-run.
 
 
-def _lift_not_measured_check_name() -> str:
+def _lift_not_measured_check_name(path) -> str:
+    """LIFTED from the module that publishes it, never retyped here, so a
+    rename on the publishing side fails this file instead of silently turning
+    the check back into clean coverage. Takes an explicit path so the only
+    caller that needs a real checkout (the drift test below) is the only one
+    that resolves it."""
     import re
 
-    with open(_EVAL_MEASUREMENT, encoding="utf-8") as fh:
+    with open(path, encoding="utf-8") as fh:
         src = fh.read()
     hits = re.findall(r"^export const NOT_MEASURED_CHECK_NAME = '([^']+)';$", src, re.M)
-    assert len(hits) == 1, f"expected exactly one NOT_MEASURED_CHECK_NAME in {_EVAL_MEASUREMENT}, found {hits!r}"
+    assert len(hits) == 1, f"expected exactly one NOT_MEASURED_CHECK_NAME in {path}, found {hits!r}"
     return hits[0]
+
+
+def _not_evidence_context_name() -> str:
+    """The literal name for the two behaviour tests below, taken from
+    `gates.NOT_EVIDENCE_CONTEXTS` -- not from the published module -- so they
+    need no checkout and still run (and kill) in the mutation sandbox, which
+    copies only `tools/drain`. The drift test ties this literal back to the
+    module that actually publishes it; breaks if the set stops holding
+    exactly one name."""
+    assert len(gates.NOT_EVIDENCE_CONTEXTS) == 1, sorted(gates.NOT_EVIDENCE_CONTEXTS)
+    (name,) = gates.NOT_EVIDENCE_CONTEXTS
+    return name
 
 
 def test_the_published_not_measured_name_is_the_one_the_gate_reads():
     """Breaks if `NOT_MEASURED_CHECK_NAME` in eval-measurement.mjs and
     `NOT_EVIDENCE_CONTEXTS` here drift apart -- the publisher would then emit a
-    name this gate scores as ordinary clean coverage."""
-    name = _lift_not_measured_check_name()
+    name this gate scores as ordinary clean coverage.
+
+    SKIPS only when `_repo_root()` is None -- i.e. genuinely out of tree, which
+    in practice means the mutation sandbox (it copies only `tools/drain`, so
+    `scripts/ci` is absent). Declared in `mutate_gates.EXPECTED_SANDBOX_SKIPS`:
+    a skip here kills no arm, and the two behaviour tests below carry the
+    literal name instead, so they still run -- and still kill -- there."""
+    root = _repo_root()
+    if root is None:
+        pytest.skip("out of tree: no .github/workflows + scripts/ci above this file "
+                    "(the mutation sandbox copies only tools/drain)")
+    eval_measurement = root / "scripts" / "ci" / "eval-measurement.mjs"
+    name = _lift_not_measured_check_name(eval_measurement)
     assert name == "Copilot quality: not measured", name
     assert name in gates.NOT_EVIDENCE_CONTEXTS, sorted(gates.NOT_EVIDENCE_CONTEXTS)
 
@@ -944,7 +966,7 @@ def test_a_neutral_not_measured_check_is_not_evidence_and_not_green_coverage():
     it is informational and must not hold a merge). The positive pair is
     `PR Summary` NEUTRAL, which must stay clean: breaks if every NEUTRAL is
     turned into not-evidence."""
-    name = _lift_not_measured_check_name()
+    name = _not_evidence_context_name()
     checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
         _adv("CodeQL", "SUCCESS"),
         _adv("PR Summary", "NEUTRAL"),
@@ -966,13 +988,14 @@ def test_the_not_measured_name_with_a_non_neutral_conclusion_is_read_normally():
     """Only a NEUTRAL on that name is not-evidence. Breaks if the name alone is
     matched: a SUCCESS would vanish from `clean` and a FAILURE from `red`
     (an advisory red that no longer blocks)."""
-    name = _lift_not_measured_check_name()
+    name = _not_evidence_context_name()
     base = [_run(n, "SUCCESS") for n in REQUIRED]
 
-    split = gates.classify_advisory_checks(base + [_adv(name, "SUCCESS")], REQUIRED)
-    assert split.clean == [name] and split.not_evidence == [], split
+    split = gates.classify_advisory_checks([*base, _adv(name, "SUCCESS")], REQUIRED)
+    assert split.clean == [name], split
+    assert split.not_evidence == [], split
 
-    ok, why = gates.advisory_verdict(base + [_adv(name, "FAILURE")], REQUIRED, True)
+    ok, why = gates.advisory_verdict([*base, _adv(name, "FAILURE")], REQUIRED, True)
     assert not ok, why
     assert f"ADV-RED 1: {name} (FAILURE)" in why, why
     assert "NOT EVIDENCE" not in why, why
