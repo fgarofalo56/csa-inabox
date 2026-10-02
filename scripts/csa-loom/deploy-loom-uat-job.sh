@@ -126,10 +126,12 @@ bash "$SCRIPT_DIR/acr-firewall-lease.sh" acquire --acr "$ACR_NAME" --subscriptio
 # Release the lease + restore .dockerignore on ANY exit, including a failed
 # build. `release` re-locks only if this process is still the recorded holder,
 # and re-locks unconditionally when nobody is (fail closed).
-uat_cleanup() {
-  # Preserve whatever exit status the script was already terminating with, so a
-  # successful re-lock never masks a failed build.
-  local rc=$?
+# Restore .dockerignore + release the lease and VERIFY the registry re-locked.
+# RETURNS 0 or 1; it never exits. #4827: this used to end in `exit "$rc"` and
+# was also called inline at step 3, where `rc` was the preceding echo's 0 -- so
+# the script exited 0 right there and steps 4-5 (job create/update, the
+# session-secret wiring) never ran on a successful build.
+uat_release() {
   if [ -f "$APP_DIR/.dockerignore.bak" ]; then
     mv "$APP_DIR/.dockerignore.bak" "$APP_DIR/.dockerignore" || true
   fi
@@ -137,18 +139,30 @@ uat_cleanup() {
   # publicNetworkAccess=Disabled + defaultAction=Deny and exits non-zero when it
   # cannot confirm that; discarding the verdict restores the whole defect — a
   # script that exits 0 over a publicly reachable registry.
-  #
-  # MEASURED: a bare non-zero command in an EXIT trap does NOT change the
-  # script's exit status (bash 5.3: `cleanup(){ false; }; trap cleanup EXIT;
-  # exit 0` still exits 0). So deleting `|| true` alone would have been
-  # cosmetic — the failure has to be turned into an explicit `exit`.
   if ! bash "$SCRIPT_DIR/acr-firewall-lease.sh" release --acr "$ACR_NAME" --subscription "$SUB"; then
     echo "[deploy-loom-uat-job] ERROR: could NOT verify $ACR_NAME re-locked — it may be PUBLICLY REACHABLE. See the remediation above; the scheduled acr-firewall-sweeper will retry." >&2
+    return 1
+  fi
+  return 0
+}
+
+# The FAILURE path only: anything that ends the script before step 3's explicit
+# release (a FATAL, a failed command under set -e, a signal) still restores
+# .dockerignore and re-locks. It preserves the status the script was already
+# terminating with, so a successful re-lock never masks a failed build.
+#
+# MEASURED: a bare non-zero command in an EXIT trap does NOT change the
+# script's exit status (bash 5.3: `cleanup(){ false; }; trap cleanup EXIT;
+# exit 0` still exits 0). So a failed release has to become an explicit `exit`.
+uat_cleanup_on_exit() {
+  local rc=$?
+  if ! uat_release; then
+    if [ "$rc" -ne 0 ]; then exit "$rc"; fi
     exit 1
   fi
   exit "$rc"
 }
-trap uat_cleanup EXIT
+trap uat_cleanup_on_exit EXIT
 
 # ---------------------------------------------------------------------------
 # Step 2 — Build + push loom-uat:latest via ACR Tasks
@@ -167,24 +181,36 @@ grep -vxE 'e2e|tests' "$APP_DIR/.dockerignore.bak" > "$APP_DIR/.dockerignore"
 # --no-logs: the Windows az CLI crashes rendering ACR build logs that contain
 # thin-space/Unicode chars (pnpm output) — 'charmap' codec can't encode  .
 # Skip streaming; az still waits for the run + returns its success/fail status.
+build_rc=0
 ( cd "$APP_DIR" && az acr build \
   --registry "$ACR_NAME" \
   --image "loom-uat:latest" \
   --file "Dockerfile.uat" \
   --subscription "$SUB" \
   --no-logs \
-  . )
-echo "[deploy-loom-uat-job] Image built: $UAT_IMAGE"
+  . ) || build_rc=$?
 
 # ---------------------------------------------------------------------------
 # Step 3 — Release the ACR firewall lease + restore .dockerignore
 # ---------------------------------------------------------------------------
-# Released eagerly here so the registry isn't held open through Steps 4-5; the
-# EXIT trap makes this idempotent (a second `release` finds no live holder or a
-# registry that is already locked).
+# Released eagerly here (even on a failed build) so the registry isn't held
+# open through Steps 4-5. The helper RETURNS, so the build's status below is
+# still reachable; the EXIT trap is cleared only after a VERIFIED release. If
+# the release cannot be verified the trap stays set, so the exit re-attempts it
+# once more before the script fails.
 echo ""
 echo "[deploy-loom-uat-job] 3/5 Releasing the ACR firewall lease + restoring .dockerignore..."
-uat_cleanup
+if ! uat_release; then
+  echo "[deploy-loom-uat-job][FATAL] step 3/5: the ACR firewall lease release could not verify $ACR_NAME re-locked (build rc=$build_rc). Job not deployed." >&2
+  exit 1
+fi
+trap - EXIT
+
+if [[ $build_rc -ne 0 ]]; then
+  echo "[deploy-loom-uat-job][FATAL] step 2/5: az acr build of loom-uat:latest exited $build_rc. The registry was re-locked and .dockerignore restored; steps 4-5 (create/update job 'loom-uat', session-secret) were NOT run. The build's own log is in ACR Tasks: az acr task list-runs -r $ACR_NAME --subscription $SUB -o table" >&2
+  exit "$build_rc"
+fi
+echo "[deploy-loom-uat-job] Image built: $UAT_IMAGE"
 
 # ---------------------------------------------------------------------------
 # Step 4 — Resolve CAE resource ID

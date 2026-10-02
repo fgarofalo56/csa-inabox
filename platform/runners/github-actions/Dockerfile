@@ -2,7 +2,8 @@
 # ---------------------------------------------------------------------------
 # CSA Loom — self-hosted GitHub Actions runner for Azure Container Apps Jobs
 # ---------------------------------------------------------------------------
-# Image: acrloomk6mvh5sm6z7do.azurecr.io/gh-aca-runner:latest
+# Image: acrloomk6mvh5sm6z7do.azurecr.io/gh-actions-runner:<tag>
+#   (repository gh-actions-runner; the Container Apps Job is gh-aca-runner)
 #
 # WHAT this carries (so build/roll/UAT run on it, in-VNet):
 #   - GitHub Actions runner agent (pinned + checksum-verified, ephemeral)
@@ -32,8 +33,13 @@ FROM ubuntu:22.04
 #   az acr build --build-arg RUNNER_VERSION=2.x.y --build-arg RUNNER_SHA256=<hex> ...
 # For an arm64 build, pass the matching linux-arm64 hash, e.g. v2.337.0:
 #   RUNNER_SHA256=9b1dc70626422526e3c94767cf024896beb15da5342a3f4819bf2feac13e0393
-# GitHub refuses registration below a moving minimum runner version. On
-# 2026-09-29 that minimum was 2.329.0, and a 2.328.0 image could not register.
+#
+# WHY this pin is watched: GitHub refuses registration from runners below a
+# moving minimum version. On 2026-09-29 the minimum became 2.329.0 and this
+# image, pinned at 2.328.0, stopped registering -- every [self-hosted, loom-aca]
+# workflow queued with no runner. scripts/ci/check-runner-version-pin.mjs fails
+# CI when this pin falls too far behind the latest actions/runner release, so
+# the next bump is forced by a red check instead of a dead runner fleet.
 ARG RUNNER_VERSION=2.337.0
 ARG RUNNER_SHA256=70920811a4f8ad4328818682bca5c6469c1c942fab52448868071d0063816613
 ARG TARGETARCH=amd64
