@@ -2110,36 +2110,30 @@ ARMS: list[tuple[str, str, str, str]] = [
     # -- the measurement script MODELS the gates. A wrong model is worse than
     # none, and it shipped with ZERO arms and ZERO tests -- which is how both
     # reviewers came to find the same defect in it in the same round.
-    (
-        ("OP1 the model ANDs the RECEIPT into the stream test again, so it "
-         "reports gate 6's answer under gate 3b's name"),
-        "operating_point.py",
-        "        stream_known = (\n            item.pr == pr if item.pr is not None",
-        ("        stream_known = led.receipt_ok(item)[0] and (\n"
-         "            item.pr == pr if item.pr is not None"),
-    ),
-    (
-        ("OP2 the model accepts an item bound to ANY PR rather than THIS one, "
-         "over-reporting the permissive population in the unsafe direction"),
-        "operating_point.py",
-        "            item.pr == pr if item.pr is not None",
-        "            item.pr is not None if item.pr is not None",
-    ),
-    (
-        ("OP3 the model hardcodes the scheduled states instead of importing "
-         "them, so a fourth state diverges it in silence"),
-        "operating_point.py",
-        "            else item.state in merge_gate.SCHEDULED_STATES",
-        '            else item.state in ("in-flight", "in-review")',
-    ),
-    (
-        ("OP4 the receipt count is folded back into the 3b number, so the two "
-         "gates are reported as one again"),
-        "operating_point.py",
-        "        if needed == 1:\n            one_reviewer += 1",
-        ("        if needed == 1 and led.receipt_ok(item)[0]:\n"
-         "            one_reviewer += 1"),
-    ),
+    #
+    # OP1-OP4 (the arms that lived here, mutating `merge_time`'s `stream_known`
+    # computation and its `needed == 1` fold) are RETIRED 2026-10-02, not
+    # re-anchored -- found by an independent reviewer on PR #4883 as a SHARD
+    # 3-6 regression (Drain Mutation Matrix, run 37024637726 on main's tip
+    # green; RED at bbe489bbd0f80d00efbfca6aa6910caee99ca824). Root cause is
+    # the SAME as MG10/MG15/R6 above: `review_requirement` no longer reads
+    # `stream` or `stream_known` at all (operator decision 2026-10-02 --
+    # stream never drives a review count, resolved or not), so `merge_time`'s
+    # `needed` for its synthetic `"docs/x.md"` probe is ALWAYS the ordinary
+    # default regardless of what OP1-OP4 mutate. Each one used to change
+    # `stream_known` (receipt-conflation, PR-binding laxity, a hardcoded
+    # states tuple), which fed `stream=`/`stream_known=` into
+    # `review_requirement` -- inputs that function now ignores outright. A
+    # genuine equivalent mutant, not a gap: no input through `merge_time`'s
+    # PUBLIC return value can tell the mutated computation from the correct
+    # one any more. `operating_point.py::merge_time`'s own docstring carries
+    # the matching disclosure at its source. Confirmed by direct measurement
+    # (not assumed): each of the four code changes was applied to a SANDBOX
+    # copy of `operating_point.py` and `test_operating_point.py`'s full suite
+    # was run against it -- all four stayed GREEN, where before 2026-10-02 at
+    # least one assertion in every one of `test_merge_time_counts_the_gate_
+    # not_the_receipt`, `test_negative_control_an_item_bound_to_another_pr_
+    # is_not_corroborated` would have gone RED.
     (
         ("MG32 every unannounced block gets the no-marker sentence, so the two "
          "kinds it is untrue for are reported as something they are not"),

@@ -127,7 +127,11 @@ def test_merge_time_counts_the_gate_not_the_receipt(tmp_path):
     ["docs/x.md"]`) is never sensitive and stream no longer drives a count at
     all, so EVERY row below now resolves to `needed=0` regardless of state,
     binding, or stream -- the WHOLE one-vs-two distinction this test used to
-    pin is retired along with stream-based escalation.
+    pin is retired along with stream-based escalation. This is also why
+    `mutate_gates.py`'s OP1-OP4 arms (which mutated the `stream_known`
+    computation and its `needed == 1` fold this test exercises) are RETIRED
+    rather than re-anchored: this test's own full suite stays green under
+    each of their four mutations now, measured directly on a sandbox copy.
     `test_a_hundred_live_items_the_model_matches_the_gate` is what still
     proves the model agrees with the real gate item by item; this test now
     only pins that agreement at the degenerate all-zero point."""
