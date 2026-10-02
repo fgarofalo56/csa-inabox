@@ -12,9 +12,16 @@
  * Real backend only: ARM (asset) + Synapse Serverless (OPENROWSET). Honest 503
  * when Serverless is unconfigured; honest 422 when the dataUri is not ADLS;
  * metadata-only ok for non-tabular files. No mock rows.
+ *
+ * Item scope: the caller needs read access to the dataset ITEM `[id]`
+ * (`resolveItemAccessByOid`), as on the lakehouse routes; a tenant admin may
+ * preview a data asset by name. See `../../_lib/dataset-item-scope.ts`.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
+import { resolveItemAccessByOid } from '@/lib/auth/item-access';
+import { datasetItemNotFound } from '../../_lib/dataset-item-scope';
 import { getDataAsset, FoundryError, NotDeployedError } from '@/lib/azure/foundry-client';
 import { KNOWN_CONTAINERS, pathToHttpsUrl, pathToHttpsUrlFor } from '@/lib/azure/adls-client';
 import { executeQuery, serverlessTarget } from '@/lib/azure/synapse-sql-client';
@@ -88,11 +95,12 @@ function profileRows(columns: string[], rows: unknown[][]) {
   return out;
 }
 
-export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const { id } = params;
+  // Item scope: read access to the dataset item, or a tenant admin naming an asset directly.
+  const access = await resolveItemAccessByOid(session, id, 'dataset');
+  if (!access && !isTenantAdmin(session)) return datasetItemNotFound();
 
-  const { id } = await ctx.params;
   const project = req.nextUrl.searchParams.get('project') || undefined;
   const version = req.nextUrl.searchParams.get('version') || undefined;
   const top = parseTop(req.nextUrl.searchParams.get('top'));
@@ -148,4 +156,4 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   } catch (e: any) {
     return NextResponse.json({ ok: false, format: fmt, bulkUrl: url, sql, error: e?.message || String(e), code: e?.code, sqlNumber: e?.number }, { status: 502 });
   }
-}
+});
