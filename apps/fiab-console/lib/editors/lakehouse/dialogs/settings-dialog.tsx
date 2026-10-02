@@ -9,9 +9,11 @@ import { Copy20Regular } from '@fluentui/react-icons';
 import { sparkConfigWarnings, cloudFabricNote } from '../../lakehouse-spark-conf';
 import { useStyles, leafName } from '../shared';
 import { useLakehouseCtx } from '../lakehouse-editor-context';
+import { useLakehouseReadOnly, LAKEHOUSE_READ_ONLY_TITLE } from '../hooks/use-lakehouse-access';
 
 export function SettingsDialog() {
   const ctx = useLakehouseCtx();
+  const readOnly = useLakehouseReadOnly(ctx.id, ctx.isNewItem);
   const {
     settingsOpen, setSettingsOpen, settings, setSettings,
     settingsBusy, settingsError, saveSettings, sparkPools,
@@ -329,8 +331,11 @@ export function SettingsDialog() {
             ))}
           </DialogContent>
           <DialogActions>
+            {readOnly && <Caption1 style={{ marginRight: 'auto' }}>{LAKEHOUSE_READ_ONLY_TITLE}</Caption1>}
             <Button appearance="secondary" onClick={() => setSettingsOpen(false)} disabled={settingsBusy}>Cancel</Button>
-            <Button appearance="primary" onClick={saveSettings} disabled={settingsBusy}>
+            <Button appearance="primary" onClick={readOnly ? undefined : saveSettings}
+              disabledFocusable={readOnly} disabled={settingsBusy}
+              title={readOnly ? LAKEHOUSE_READ_ONLY_TITLE : undefined}>
               {settingsBusy ? 'Saving…' : 'Save settings'}
             </Button>
           </DialogActions>

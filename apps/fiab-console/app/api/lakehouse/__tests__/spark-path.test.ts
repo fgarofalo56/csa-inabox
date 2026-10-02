@@ -30,6 +30,31 @@ describe('pathSegments — control characters', () => {
     },
   );
 
+  it.each([
+    ['C1 start U+0080', '\u0080'],
+    ['NEL U+0085', '\u0085'],
+    ['C1 end U+009F', '\u009f'],
+    ['LINE SEPARATOR U+2028', '\u2028'],
+    ['PARAGRAPH SEPARATOR U+2029', '\u2029'],
+  ])('refuses a path holding %s', (_label, ch) => {
+    // Breaks if the refusal stops at C0 + DEL (these then pass), or if either
+    // end of the C1 range is dropped (U+0080 / U+009F are the boundaries).
+    expect(pathSegments(`a/b${ch}c/t.parquet`)).toBeNull();
+    expect(hasPathControlChar(`b${ch}c`)).toBe(true);
+  });
+
+  it.each([
+    ['NBSP U+00A0 (one past C1)', '\u00a0'],
+    ['U+2027 (one before LINE SEPARATOR)', '\u2027'],
+    ['U+202A (one past PARAGRAPH SEPARATOR)', '\u202a'],
+  ])('accepts the neighbouring code point %s', (_label, ch) => {
+    // Positive arm for the ranges above (U+202A is a format character, not a
+    // printable one; it is here only as the upper neighbour): breaks if a bound is widened
+    // (e.g. `c <= 0xa0`, or a `0x2027..0x202a` span) and printable names are refused.
+    expect(pathSegments(`a/b${ch}c/t.parquet`)).toEqual(['a', `b${ch}c`, 't.parquet']);
+    expect(hasPathControlChar(`b${ch}c`)).toBe(false);
+  });
+
   it('keeps accepting printable names, including a space and non-ASCII', () => {
     // Positive arm: breaks if the check refuses everything above 0x1f too.
     expect(pathSegments('a/b c/ü-x/t.parquet')).toEqual(['a', 'b c', 'ü-x', 't.parquet']);

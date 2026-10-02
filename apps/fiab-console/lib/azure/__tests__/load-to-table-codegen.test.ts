@@ -5,9 +5,18 @@ import {
   abfssUrl,
   readExprFor,
   buildLoadToTablePySpark,
+  loadTargetTableName,
   parseLoadRowCount,
   SUPPORTED_LOAD_FORMATS,
 } from '../load-to-table-codegen';
+
+describe('loadTargetTableName', () => {
+  it('qualifies the table with the database when one is given, and not otherwise', () => {
+    // Breaks if the database is dropped (bare name) or always prefixed (".sales").
+    expect(loadTargetTableName({ tableName: 'sales', database: 'lh_0123456789ab_dbo' })).toBe('lh_0123456789ab_dbo.sales');
+    expect(loadTargetTableName({ tableName: 'sales' })).toBe('sales');
+  });
+});
 
 describe('validateLoadTableName', () => {
   it('accepts valid names', () => {
@@ -42,6 +51,18 @@ describe('abfssUrl', () => {
     expect(abfssUrl('acct', 'bronze', '/Files/x.csv')).toBe(
       'abfss://bronze@acct.dfs.core.windows.net/Files/x.csv',
     );
+  });
+  it('names the GCC-High DFS host when LOOM_CLOUD is gcc-high', () => {
+    const prev = process.env.LOOM_CLOUD;
+    process.env.LOOM_CLOUD = 'gcc-high';
+    try {
+      // Breaks if the suffix is hard-coded to `.dfs.core.windows.net`.
+      expect(abfssUrl('govacct', 'bronze', '/Files/x.csv')).toBe(
+        'abfss://bronze@govacct.dfs.core.usgovcloudapi.net/Files/x.csv',
+      );
+    } finally {
+      if (prev === undefined) delete process.env.LOOM_CLOUD; else process.env.LOOM_CLOUD = prev;
+    }
   });
 });
 
@@ -87,10 +108,50 @@ describe('buildLoadToTablePySpark', () => {
     });
     expect(code).toContain('.mode("append")');
   });
+  it('writes under <tablesRoot>/Tables/ when a lakehouse root is given', () => {
+    const code = buildLoadToTablePySpark({
+      container: 'landing', account: 'loomstg', path: 'lakehouses/Sales--lh1/Files/s.csv',
+      tableName: 'sales', writeMode: 'overwrite', format: 'csv', tablesRoot: '/lakehouses/Sales--lh1/',
+    });
+    // Exact target: breaks if the root is dropped (container-level Tables/) or
+    // its slashes are not trimmed (a doubled or leading separator).
+    expect(code).toContain('.option("path", "abfss://landing@loomstg.dfs.core.windows.net/lakehouses/Sales--lh1/Tables/sales")');
+    expect(code).not.toContain('loomstg.dfs.core.windows.net/Tables/sales');
+  });
   it('throws on invalid table name', () => {
     expect(() => buildLoadToTablePySpark({
       container: 'bronze', account: 'a', path: 'x.csv', tableName: 'Bad-Name', writeMode: 'overwrite', format: 'csv',
     })).toThrow();
+  });
+  it('registers <database>.<table> and creates the database first when a database is given', () => {
+    const code = buildLoadToTablePySpark({
+      container: 'landing', account: 'a', path: 'x.csv', tableName: 'sales', writeMode: 'overwrite', format: 'csv',
+      database: 'lh_0123456789ab_dbo',
+    });
+    // Breaks if the bare name is still registered, or the CREATE comes after the write.
+    expect(code).toContain('.saveAsTable("lh_0123456789ab_dbo.sales")');
+    expect(code).not.toContain('.saveAsTable("sales")');
+    const create = code.indexOf('spark.sql("CREATE DATABASE IF NOT EXISTS `lh_0123456789ab_dbo`")');
+    expect(create).toBeGreaterThan(-1);
+    expect(create).toBeLessThan(code.indexOf('.saveAsTable('));
+    expect(code).toContain('LOOM_LOAD_RESULT rows={_loom_rows} table=lh_0123456789ab_dbo.sales');
+  });
+  it.each([
+    ['a quote', 'db"x'],
+    ['a backtick', 'db`x'],
+    ['a dot', 'db.x'],
+    ['upper case', 'DB'],
+    ['129 chars', `d${'b'.repeat(128)}`],
+  ])('refuses a database name with %s', (_label, database) => {
+    expect(() => buildLoadToTablePySpark({
+      container: 'landing', account: 'a', path: 'x.csv', tableName: 'sales', writeMode: 'overwrite', format: 'csv', database,
+    })).toThrow(/Invalid Spark database name/);
+  });
+  it('accepts a 128-char database name (the metastore limit)', () => {
+    expect(() => buildLoadToTablePySpark({
+      container: 'landing', account: 'a', path: 'x.csv', tableName: 'sales', writeMode: 'overwrite', format: 'csv',
+      database: `d${'b'.repeat(127)}`,
+    })).not.toThrow();
   });
   it('covers every supported format without throwing', () => {
     for (const format of SUPPORTED_LOAD_FORMATS) {
@@ -98,6 +159,37 @@ describe('buildLoadToTablePySpark', () => {
         container: 'gold', account: 'a', path: `x.${format}`, tableName: 'tbl', writeMode: 'overwrite', format,
       })).not.toThrow();
     }
+  });
+
+  // Generated comments are rendered as quoted literals. The source path holds
+  // line breaks around `print(1)`. FAILS IF the `# Source:` line interpolates
+  // the raw URL: the job then has a line that is exactly `print(1)`, and the
+  // source comment is no longer the one quoted line asserted below.
+  it('keeps a source path with line breaks on its one comment line', () => {
+    const code = buildLoadToTablePySpark({
+      container: 'landing', account: 'loomstg', path: 'Files/a\nprint(1)\n.csv',
+      tableName: 'sales', writeMode: 'overwrite', format: 'csv',
+    });
+    const lines = code.split('\n');
+    expect(lines).not.toContain('print(1)');
+    expect(lines[1]).toBe('# Source: "abfss://landing@loomstg.dfs.core.windows.net/Files/a\\nprint(1)\\n.csv"');
+    // The read still names the same path, quoted (readExprFor).
+    expect(code).toContain('.csv("abfss://landing@loomstg.dfs.core.windows.net/Files/a\\nprint(1)\\n.csv")');
+  });
+
+  // Same for the target: the item root holds line breaks around `print(2)`.
+  // FAILS IF the `# Target:` line interpolates the raw target URL: a line that
+  // is exactly `print(2)` appears.
+  it('keeps a target root with line breaks on its one comment line', () => {
+    const code = buildLoadToTablePySpark({
+      container: 'landing', account: 'loomstg', path: 'Files/s.csv',
+      tableName: 'sales', writeMode: 'append', format: 'csv', tablesRoot: 'lakehouses/a\nprint(2)\n#',
+    });
+    const lines = code.split('\n');
+    expect(lines).not.toContain('print(2)');
+    expect(lines[2]).toBe(
+      '# Target: sales (Delta, append) at "abfss://landing@loomstg.dfs.core.windows.net/lakehouses/a\\nprint(2)\\n#/Tables/sales"',
+    );
   });
 });
 

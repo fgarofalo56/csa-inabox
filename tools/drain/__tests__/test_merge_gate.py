@@ -353,8 +353,14 @@ def _run(**over):
     allow_close = over.pop("allow_close", None)
     if allow_close is None:
         allow_close = [4468]
+    # `policy` is an escape hatch for the handful of tests that need to prove
+    # a DISABLED-BY-DEFAULT mechanism still works when explicitly turned back
+    # on (e.g. `escalate_on_blocking_first_verdict`) -- the real gate's wiring,
+    # not just the pure `gates.review_requirement` function. Defaults to the
+    # real shipped POLICY so every other test is unaffected.
+    policy = over.pop("policy", None) or POLICY
     return merge_gate.run_gates(
-        _data(**over), POLICY, allow_close, state_path=state_path
+        _data(**over), policy, allow_close, state_path=state_path
     )
 
 
@@ -1171,15 +1177,18 @@ def test_a_bot_pr_outside_the_allowlist_gets_the_ordinary_requirement():
     `evil/requirements/x.py` matched the first version of this allowlist by
     embedded substring and took the exemption at zero reviewers. It also fails
     if the exemption is hoisted above the escalation-path loop, which is what
-    lets the workflow row below still demand two.
+    lets the guard-path row below still demand two. (PRE-2026-10-01 that row
+    used `.github/workflows/copilot-evals.yml`; the 2026-10-01 narrowing
+    dropped `.github/workflows` from the authority, so it is re-pointed at
+    `dev-loop/gates`, which the narrowed authority still protects.)
     """
     smuggled = _run(author={"login": BUMP_BOT}, changed_files=["evil/requirements/x.py"])
     assert "of 1 required" in _gate(smuggled, "3b")["detail"], _gate(smuggled, "3b")["detail"]
     assert "outside the allowlist" in _gate(smuggled, "3b")["detail"]
 
-    workflow = _run(author={"login": BUMP_BOT},
-                    changed_files=[".github/workflows/copilot-evals.yml"])
-    assert "of 2 required" in _gate(workflow, "3b")["detail"], _gate(workflow, "3b")["detail"]
+    guard_path = _run(author={"login": BUMP_BOT},
+                      changed_files=["dev-loop/gates/validate-all.ps1"])
+    assert "of 2 required" in _gate(guard_path, "3b")["detail"], _gate(guard_path, "3b")["detail"]
 
 
 def test_the_approval_gate_does_not_claim_to_measure_independence():
@@ -1203,12 +1212,14 @@ def test_an_ordinary_diff_merges_on_one_approval():
 
 
 def test_negative_control_the_count_is_taken_from_the_real_changed_files():
-    """Not from a lane guess. A console diff filed under any lane still needs
-    two, because here `gh pr diff --name-only` has already answered the question
-    the brief could only guess at."""
-    for path in ("apps/fiab-console/app/page.tsx", "platform/fiab/bicep/main.bicep",
-                 ".github/workflows/deploy-fiab-commercial.yml", "scripts/ci/check-x.mjs",
-                 "dev-loop/gates/validate-all.ps1", "deploy/main.bicep"):
+    """Not from a lane guess: `gh pr diff --name-only` has already answered the
+    question the brief could only guess at. Narrowed 2026-10-01 to the five
+    fragments the authority still protects -- `test_these_dropped_paths_now_
+    merge_on_one_approval` below pins the seven PRE-2026-10-01 fragments this
+    test used to cover, which now merge on one."""
+    for path in ("tools/drain/gates.py", "dev-loop/gates/validate-all.ps1",
+                 ".github/CODEOWNERS", "apps/fiab-console/lib/auth/authflow.ts",
+                 "apps/fiab-console/middleware.ts"):
         result = _run(changed_files=[path])
         assert result["verdict"] == "NO-GO", f"{path} merged on one approval"
         # ...on 3b's own `ok`, not on the composed verdict. It discriminates
@@ -1216,6 +1227,19 @@ def test_negative_control_the_count_is_taken_from_the_real_changed_files():
         # composed verdict is the form that let MG3 go from KILLED to SURVIVED
         # once two gates started blocking on the same input.
         assert not _gate(result, "3b")["ok"], path
+
+
+def test_these_dropped_paths_now_merge_on_one_approval():
+    """Operator directive 2026-10-01 (`_lean_review_2026_10_01`): these seven
+    fragments all needed two reviewers before the lean-review narrowing and
+    need only one now. Breaks if any is re-added to the authority without a
+    test update."""
+    for path in ("apps/fiab-console/app/page.tsx", "platform/fiab/bicep/main.bicep",
+                 ".github/workflows/deploy-fiab-commercial.yml", "scripts/ci/check-x.mjs",
+                 "deploy/main.bicep", ".gitignore", "Makefile"):
+        result = _run(changed_files=[path])
+        assert result["verdict"] == "GO", f"{path}: {result['blocking']}"
+        assert _gate(result, "3b")["ok"], path
 
 
 def test_negative_control_a_red_required_context_blocks():
@@ -1370,19 +1394,20 @@ def test_a_declared_auto_close_is_allowed():
     assert result["verdict"] == "GO", result["blocking"]
 
 
-def test_negative_control_3b_escalates_on_a_blocking_first_verdict():
-    """The block-push-reapprove rhythm, which is the ordinary shape of a review
-    round here -- this PR went through it five times.
+def test_negative_control_3b_no_longer_escalates_on_a_blocking_first_verdict_by_default():
+    """PRE-2026-10-01 this named the block-push-reapprove hole: a reviewer
+    blocks, the author pushes, the block is correctly no longer LIVE (a
+    verdict is pinned to the head it measured), and nothing then raised the
+    count -- so one approval merged what a reviewer had just rejected. Fixed by
+    making a blocking HISTORY (not just the live state) raise the count.
 
-    A reviewer blocks; the author pushes; the block is correctly no longer LIVE,
-    because a verdict is pinned to the head it measured. Nothing then raised the
-    count, so one approval merged what a reviewer had just rejected. The
-    HISTORY question and the CURRENT-STATE question are different questions,
-    and `first_verdict_token` deliberately does not pin.
-
-    Kills MG14 and MG12. (Not MG8, as an earlier draft claimed: under MG8 this
-    fixture has api_says=[] and scan.hard=[], so will_close is [] either way and
-    gate 6 stays green -- the test would have passed on 3b alone.)"""
+    The 2026-10-01 lean-review directive (`_lean_review_2026_10_01`) turned
+    that trigger OFF by default (`escalate_on_blocking_first_verdict: false`),
+    so this now pins the opposite: with the shipped policy, the same fixture
+    merges on one approval, because `reduce_verdicts` (gate 2+3) -- which is
+    untouched -- is the control actually standing between a reviewer's block
+    and the merge for this shape. `test_3b_still_escalates_on_a_blocking_
+    first_verdict_when_enabled` below proves the old mechanism still exists."""
     blocked_then_approved = [
         {"id": 1, "body": "## Independent review - REQUEST-CHANGES\n\nthe guard is open.",
          "created_at": "2026-09-11T09:00:00Z"},           # before the push
@@ -1390,6 +1415,29 @@ def test_negative_control_3b_escalates_on_a_blocking_first_verdict():
          "created_at": "2026-09-11T11:00:00Z"},           # after it
     ]
     result = _run(comments=blocked_then_approved)
+    gate = _gate(result, "3b")
+    assert gate["ok"], gate["detail"]
+    assert _gate(result, "2+3")["ok"]
+
+
+def test_3b_still_escalates_on_a_blocking_first_verdict_when_enabled():
+    """The mechanism the test above used to pin by default still exists -- it
+    is only the shipped DEFAULT that changed on 2026-10-01. Driven through a
+    policy override and the real gate (not the pure function) so the wiring
+    end to end is what is proven, which is what `_run(policy=...)` exists for.
+
+    Kills MG14 and MG12 the same way the pre-2026-10-01 version did. (Not MG8:
+    under MG8 this fixture has api_says=[] and scan.hard=[], so will_close is
+    [] either way and gate 6 stays green -- the test would pass on 3b alone.)"""
+    blocked_then_approved = [
+        {"id": 1, "body": "## Independent review - REQUEST-CHANGES\n\nthe guard is open.",
+         "created_at": "2026-09-11T09:00:00Z"},
+        {"id": 2, "body": "## Independent re-review - APPROVE\n\nfixed.",
+         "created_at": "2026-09-11T11:00:00Z"},
+    ]
+    escalates = {**POLICY, "review": {**POLICY["review"],
+                                      "escalate_on_blocking_first_verdict": True}}
+    result = _run(comments=blocked_then_approved, policy=escalates)
     gate = _gate(result, "3b")
     assert not gate["ok"], gate["detail"]
     assert "REQUEST-CHANGES" in gate["detail"]
@@ -1426,13 +1474,15 @@ def test_negative_control_a_bare_refs_resolves_the_stream(tmp_path):
     repo names the item it is work on, this one included. Reusing the closing
     scan for the stream lookup would have read "references no issue" on most
     PRs and escalated all of them for the wrong reason. A control that fires on
-    everything teaches the reader to skim it."""
-    w1 = _ledger_with(tmp_path, 4468, stream="W1-deploy", lane="lane:docs")
+    everything teaches the reader to skim it. (PRE-2026-10-01 this used
+    W1-deploy; the 2026-10-01 lean-review narrowing dropped it from the
+    escalating streams, so it is re-pointed at W2-security.)"""
+    w2 = _ledger_with(tmp_path, 4468, stream="W2-security", lane="lane:docs")
     result = _run(body="Refs #4468 - stays open pending its receipt.",
-                  commits=[], allow_close=[], state_path=w1)
+                  commits=[], allow_close=[], state_path=w2)
     gate = _gate(result, "3b")
     assert not gate["ok"]
-    assert "W1-deploy" in gate["detail"]
+    assert "W2-security" in gate["detail"]
     assert result["will_close"] == [], "a bare Refs must NOT read as a close"
 
 
@@ -1546,17 +1596,20 @@ def test_a_worktree_falls_back_to_the_primary_checkouts_ledger(monkeypatch, tmp_
 
 def test_the_strongest_stream_wins_when_a_pr_references_several(tmp_path):
     """Conjunction, the same reduction `reduce_verdicts` uses. A PR touching a
-    W9-rest item and a W1-deploy item is a W1-deploy change; taking the first
-    one found would make the answer depend on issue-number order."""
+    W9-rest item and a W2-security item is a W2-security change; taking the
+    first one found would make the answer depend on issue-number order.
+    (PRE-2026-10-01 this used W1-deploy; the 2026-10-01 lean-review narrowing
+    dropped it from the escalating streams, so it is re-pointed at
+    W2-security, which still escalates.)"""
     from ledger import Ledger
 
     path = str(tmp_path / "state.json")
     led = Ledger(path, receipts=POLICY["receipts"])
     led.upsert(4468, "x", "W9-rest", lane="lane:docs", size=1)
-    led.upsert(4487, "x", "W1-deploy", lane="lane:docs", size=1)
+    led.upsert(4487, "x", "W2-security", lane="lane:docs", size=1)
     led.save()
     stream, why = merge_gate.ledger_stream([], [4468, 4487], POLICY, path)
-    assert stream == "W1-deploy", why
+    assert stream == "W2-security", why
 
 
 def test_negative_control_a_stale_mention_cannot_buy_a_weaker_gate(tmp_path):
@@ -1753,19 +1806,21 @@ def test_poached_closes_refuses_a_bound_item(tmp_path, monkeypatch):
 
 def test_a_mention_of_an_escalating_item_still_escalates(tmp_path):
     """The half that must NOT be lost to the fix above. A mention may only
-    raise the requirement -- but it must still raise it, or `Refs #N` on a
-    W1-deploy item goes back to one reviewer, which is the hole the whole
-    trigger was added to close."""
+    raise the requirement -- but it must still raise it, or `Refs #N` on an
+    escalating item goes back to one reviewer, which is the hole the whole
+    trigger was added to close. (PRE-2026-10-01 this used W1-deploy; the
+    2026-10-01 lean-review narrowing dropped it from the escalating streams,
+    so it is re-pointed at W2-security.)"""
     from ledger import Ledger
 
     path = str(tmp_path / "state.json")
     led = Ledger(path, receipts=POLICY["receipts"])
-    led.upsert(4487, "a deploy fix", "W1-deploy", lane="lane:docs", size=1)
+    led.upsert(4487, "a security fix", "W2-security", lane="lane:docs", size=1)
     led.save()
-    result = _run(body="Refs #4487 - the deploy path.", commits=[], state_path=path)
+    result = _run(body="Refs #4487 - the security path.", commits=[], state_path=path)
     gate = _gate(result, "3b")
     assert not gate["ok"]
-    assert "W1-deploy" in gate["detail"]
+    assert "W2-security" in gate["detail"]
     assert result["will_close"] == [], "a bare Refs must not read as a close"
 
 
@@ -1918,12 +1973,14 @@ def test_negative_control_main_escalates_on_the_stream_of_the_issue_it_closes(
     touches no escalating path. The ONLY difference from the control above is
     the stream the ledger has this issue in. Measured before the fix: GO.
 
-    W1-deploy is the case that matters: R1 makes a broken deploy path preempt
-    all feature work, and its fixes routinely land in `azure-functions/`,
-    `apps/fiab-*` and `csa_platform/` -- none of which is in the twelve
-    fragments, so the path trigger never fired for them either."""
-    _ledger_with(tmp_path, 4468, stream="W1-deploy", lane="lane:docs",
-                 receipt="deploy-run")
+    W2-security is the case used here (PRE-2026-10-01 this was W1-deploy; the
+    2026-10-01 lean-review narrowing dropped it from the escalating streams).
+    The point survives the swap unchanged: a security fix routinely lands in
+    `csa_platform/security/` and similar, none of which is in the five
+    fragments, so the path trigger never fires for it either -- the STREAM is
+    what has to catch it."""
+    _ledger_with(tmp_path, 4468, stream="W2-security", lane="lane:docs",
+                 receipt="ci-green")
     data = _data(body="Closes #4468")
     assert _main_over(monkeypatch, tmp_path, ["1", "--allow-close", "4468"], data) == 1
 

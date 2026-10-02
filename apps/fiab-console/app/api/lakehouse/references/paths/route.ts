@@ -9,77 +9,51 @@
  * is intentionally NO PUT/POST/DELETE here — references are read-only, and the
  * absence of write handlers is the enforcement layer (a disabled-button tooltip
  * in the UI is the affordance, not the guarantee).
+ *
+ * Item scope: the referenced lakehouse is authorized for read with the
+ * caller's own access to it (`scopeReferenceListing`), and the prefix is confined
+ * to that item's root in its own container. An empty prefix lists the root;
+ * a container the item has no storage in lists nothing (`paths: []` + `note`).
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
-import { KNOWN_CONTAINERS, listPaths } from '@/lib/azure/adls-client';
-import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import { listPaths } from '@/lib/azure/adls-client';
 import { apiError } from '@/lib/api/respond';
+import { withSession } from '@/lib/api/route-toolkit';
+import { scopeReferenceListing } from '../../_lib/reference-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-interface LakehouseState {
-  storageAccount?: string;
-  ownedContainers?: string[];
-  [k: string]: unknown;
-}
 
 function err(error: string, status: number, code?: string) {
   return apiError(error, status, code === undefined ? undefined : { code });
 }
 
-async function loadLakehouse(itemId: string, tenantId: string): Promise<WorkspaceItem | null> {
-  const items = await itemsContainer();
-  const { resources } = await items.items
-    .query<WorkspaceItem>({
-      query: "SELECT * FROM c WHERE c.id = @id AND c.itemType = 'lakehouse'",
-      parameters: [{ name: '@id', value: itemId }],
-    })
-    .fetchAll();
-  const item = resources[0];
-  if (!item) return null;
-  const ws = await workspacesContainer();
-  try {
-    const { resource } = await ws.item(item.workspaceId, tenantId).read<Workspace>();
-    if (!resource || resource.tenantId !== tenantId) return null;
-  } catch (e: any) {
-    if (e?.code === 404) return null;
-    throw e;
-  }
-  return item;
-}
-
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return err('unauthenticated', 401, 'unauthorized');
-
-  const refId = req.nextUrl.searchParams.get('refId') || '';
-  const container = req.nextUrl.searchParams.get('container') || '';
+export const GET = withSession(async (req: NextRequest, { session }) => {
+  const refId = (req.nextUrl.searchParams.get('refId') || '').trim();
+  const container = (req.nextUrl.searchParams.get('container') || '').trim();
   const prefix = req.nextUrl.searchParams.get('prefix') || '';
   const maxResults = Number(req.nextUrl.searchParams.get('maxResults') || '200');
 
   if (!refId) return err('refId is required', 400, 'missing_refId');
-  if (!container) return err('container is required', 400, 'missing_container');
 
   try {
-    const ref = await loadLakehouse(refId, session.claims.oid);
-    if (!ref) return err('referenced lakehouse not found', 404, 'not_found');
-
-    const state = (ref.state as LakehouseState | undefined) ?? {};
-    const account = state.storageAccount || undefined; // undefined → primary LOOM account
-    const allowed = Array.isArray(state.ownedContainers) && state.ownedContainers.length
-      ? state.ownedContainers
-      : [...KNOWN_CONTAINERS];
-    if (!allowed.includes(container)) {
-      return err(`container not owned by referenced lakehouse: ${container}`, 404, 'unknown_container');
+    const scoped = await scopeReferenceListing(session, refId, container, prefix);
+    if (scoped instanceof NextResponse) return scoped;
+    if ('otherContainer' in scoped) {
+      // The references tree shows a node per container; only the bound one has content.
+      return NextResponse.json({
+        ok: true, refId, account: scoped.account || '', container, prefix: '', paths: [],
+        note: `This lakehouse stores its files in the ${scoped.boundContainer} container.`,
+      });
     }
 
-    const paths = await listPaths(container, prefix, Math.min(maxResults, 1000), account);
-    return NextResponse.json({ ok: true, refId, account: account || '', container, prefix, paths });
+    const limit = Number.isFinite(maxResults) && maxResults > 0 ? Math.min(maxResults, 1000) : 200;
+    const paths = await listPaths(scoped.container, scoped.path, limit, scoped.account);
+    return NextResponse.json({
+      ok: true, refId, account: scoped.account || '', container: scoped.container, prefix: scoped.path, paths,
+    });
   } catch (e: any) {
     const status = e?.statusCode === 404 ? 404 : 502;
     return err(e?.message || String(e), status, e?.code);
   }
-}
+});

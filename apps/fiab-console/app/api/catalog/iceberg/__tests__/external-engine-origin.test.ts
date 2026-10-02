@@ -42,6 +42,25 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
 }));
 vi.mock('@/lib/admin/audit-stream', () => ({ emitAuditEvent: () => {} }));
 vi.mock('@/lib/azure/adls-client', () => ({ getAccountName: () => 'loomlake' }));
+// The interop route authorizes the lakehouse item and reads its binding; these
+// doubles admit the fixture item so the handler reaches the payload under test.
+vi.mock('@/lib/auth/item-access', () => ({
+  resolveItemAccessByOid: async () => ({
+    item: { id: 'lh-1', workspaceId: 'ws-1', itemType: 'lakehouse' }, role: 'Viewer', via: 'workspace', canWrite: false,
+  }),
+}));
+vi.mock('@/lib/azure/lakehouse-abfss', () => {
+  const bound = {
+    abfss: 'abfss://bronze@loomlake.dfs.core.windows.net/lakehouses/Sales--lh-1', container: 'bronze', root: 'lakehouses/Sales--lh-1',
+  };
+  return {
+    resolveLakehouseAbfss: async () => bound,
+    // The item binding resolves through `resolveLakehouseStorage`; the lakehouse
+    // list feeds the earlier container-keyed interop lookup.
+    resolveLakehouseStorage: async () => ({ ok: true, bound }),
+    listLakehouseRootFacts: async () => [],
+  };
+});
 vi.mock('@/lib/azure/iceberg-catalog-client', async (orig) => ({
   ...(await orig<any>()),
   listNamespacesResolved: async () => [],
@@ -226,7 +245,7 @@ describe('GET /api/lakehouse/interop', () => {
   it('#3467 — emits the FORWARDED origin, never the container address', async () => {
     const { GET } = await import('@/app/api/lakehouse/interop/route');
     const res = await GET(
-      req('http://0.0.0.0:3000/api/lakehouse/interop?container=bronze', { headers: FORWARDED }),
+      req('http://0.0.0.0:3000/api/lakehouse/interop?lakehouseId=lh-1', { headers: FORWARDED }),
       {} as any,
     );
     expect(res.status).toBe(200);
@@ -238,7 +257,7 @@ describe('GET /api/lakehouse/interop', () => {
 
   it('CONTROL: a direct request on a real origin is unaffected', async () => {
     const { GET } = await import('@/app/api/lakehouse/interop/route');
-    const res = await GET(req('https://loom.test/api/lakehouse/interop?container=bronze'), {} as any);
+    const res = await GET(req('https://loom.test/api/lakehouse/interop?lakehouseId=lh-1'), {} as any);
     const body = await res.json();
     expect(body.catalog.uri).toBe('https://loom.test/api/catalog/iceberg');
   });
