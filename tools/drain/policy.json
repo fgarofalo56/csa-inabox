@@ -60,30 +60,19 @@
     "_escalate": "MACHINE-READABLE ON PURPOSE. The first version of this key was four English sentences while a hardcoded ESCALATION_PATHS tuple did the work -- so the list could be emptied, inverted or deleted and every decision stayed identical. That is the marker_any_of defect this module found and fixed two rounds ago, reintroduced one release later. That constant is now DELETED: gates.escalation_paths(policy) and gates.escalation_streams(policy) READ these lists, and eight mutation arms that edit ONLY this file are killed by the suite -- which is what gives the authority a blast radius.",
     "escalate_to_two_when_path_contains": [
       "tools/drain",
-      "scripts/ci",
       "dev-loop/gates",
-      ".github/workflows",
       ".github/CODEOWNERS",
-      ".gitignore",
-      "Makefile",
-      "pyproject.toml",
-      "platform/fiab/bicep",
-      "deploy/",
-      "apps/fiab-console",
-      "portal/"
+      "apps/fiab-console/lib/auth",
+      "apps/fiab-console/middleware.ts"
     ],
-    "_paths": "The last five were missing and each decides something this list exists to protect. .gitignore is #4468's ENTIRE THESIS -- an entry in it is what hid the merge gate. CODEOWNERS decides who must review. Makefile is the `make validate` entry point and pyproject.toml is the ruff/mypy config every guard runs under. portal/ is the OTHER web front-end, and ux-baseline.md scopes 'every CSA Loom front-end surface', not only apps/fiab-console.",
-    "_streams": "W6-ci is here because the policy's own sentence says 'or any guard' and W6-ci IS the guard stream. It was covered only incidentally -- stream_for assigns W6-ci BECAUSE the item carries lane:ci, which maps to scripts/ci, which escalates by path. But `stream` is pinned from the inventory snapshot while `lane` is refreshed from live labels every tick, so a relabel decouples them: measured, W6-ci with lane:dataplane got ONE reviewer. W4/W8/W9 are deliberately absent.",
+    "_paths": "PRE-2026-10-01 HISTORY, kept because it explains why a now-removed entry was once added: .gitignore was #4468's ENTIRE THESIS -- an entry in it is what hid the merge gate. CODEOWNERS decides who must review. Makefile was the `make validate` entry point and pyproject.toml was the ruff/mypy config every guard runs under. portal/ was the OTHER web front-end. See `_lean_review_2026_10_01` for the list actually shipped today and why it is narrower.",
+    "_streams": "PRE-2026-10-01 HISTORY. W6-ci used to be here because the policy's own sentence said 'or any guard' and W6-ci IS the guard stream. It was covered only incidentally -- stream_for assigns W6-ci BECAUSE the item carries lane:ci, which maps to scripts/ci, which escalated by path back when scripts/ci was in the path list. But `stream` is pinned from the inventory snapshot while `lane` is refreshed from live labels every tick, so a relabel decoupled them: measured, W6-ci with lane:dataplane got ONE reviewer. W4/W8/W9 were deliberately absent. See `_lean_review_2026_10_01` for the list actually shipped today.",
     "escalate_to_two_when_stream_is": [
       "W0-harness",
-      "W1-deploy",
-      "W2-security",
-      "W3-gov",
-      "W5-console",
-      "W6-ci",
-      "W7-bicep"
+      "W2-security"
     ],
-    "escalate_on_blocking_first_verdict": true,
+    "_lean_review_2026_10_01": "OPERATOR COST DIRECTIVE, 2026-10-01: review spend had become the dominant cost at ~$67k/28d, most of it huge-context sessions burning a second independent reviewer on diffs where it rarely changed the verdict. The operator's instruction: one reviewer by default; escalate to two ONLY where it has actually earned its cost -- the harness's own tooling and gates, CODEOWNERS (who-must-review itself), and the two console surfaces with the sharpest blast radius if a single reviewer misses something (auth/session handling and its edge middleware) -- and only the W0-harness and W2-security streams, the merge-gate program itself and the security stream. Everything the PRE-2026-10-01 lists above also covered -- scripts/ci, .github/workflows, .gitignore, Makefile, pyproject.toml, platform/fiab/bicep, deploy/, the rest of apps/fiab-console, portal/, W1-deploy, W3-gov, W5-console, W6-ci, W7-bicep -- now gets the ordinary one-reviewer requirement by default, same as any other lane. `escalate_on_blocking_first_verdict` is also false for the same reason: a prior blocking verdict no longer raises review_requirement's COUNT on its own. This narrows ONLY gate 3b's reviewer COUNT -- gate 2+3 (`reduce_verdicts`) is untouched, still refuses to merge without a live APPROVE at head, and still blocks on a live REQUEST-CHANGES regardless of count. A reviewer who blocks still blocks the merge; they are just no longer automatically joined by a second reviewer purely because they blocked.",
+    "escalate_on_blocking_first_verdict": false,
     "escalate_when_footprint_unknown": true,
     "escalate_when_stream_unknown": true,
     "_stream_unknown": "FAILS CLOSED, and it is the merge-gate half of escalate_when_footprint_unknown. At BRIEF time the stream is a fact and the paths are a guess; at MERGE time the paths are a fact and the stream has to be resolved from the ledger via the issues the PR references. All three ways that fails - the PR references no issue, there is no ledger, or the issue is not in it - mean the harness cannot place the work, so it escalates rather than falling through to the default. Measured 2026-09-12: with only the path set passed, a csa_platform/security/auth.py diff on a W2-security item and an azure-functions/ diff on a W1-deploy item BOTH returned GO on one approval - and W1-deploy is the stream R1 says preempts everything. MEASURED CONSEQUENCE, recorded rather than discovered later: the one-reviewer path needs a DECLARED close (Closes #N + --allow-close N) of an item the harness has IN FLIGHT - a MENTION only escalates, because a stale copy-pasted number must never buy a weaker gate - and --allow-close is itself refused until the item holds its receipt, which 0 of 299 do today. So the MERGE-GATE operating point is 100% two-reviewer (python tools/drain/operating_point.py --merge-gate). That is a DIFFERENT MEASUREMENT POINT from the 93% in _operating_point below, which is taken at BRIEF time from a lane before the diff exists and whose largest driver - footprint not known - cannot exist at merge time. They are not comparable and neither is 'up from' the other. It does NOT relax on its own: an item earns a receipt only through record_receipt(), which is now called in production by tick.py --record-receipt (it VERIFIES the evidence before writing, but does not verify the evidence is ABOUT the item - that binding is #4489). RE-MEASURE with tools/drain/operating_point.py --merge-gate once receipts exist; if it has not moved, bring the number back to the operator, because WIP is capped at 4 lanes and the ceiling is review capacity.",
