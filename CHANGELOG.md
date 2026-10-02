@@ -25,6 +25,59 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.110.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.109.0...csa-inabox-v0.110.0) (2026-10-02)
+
+
+### Features
+
+* **console:** produce the Databricks SQL warehouse id in the Console instead of gating on it ([#4776](https://github.com/fgarofalo56/csa-inabox/issues/4776)) ([f9c1b59](https://github.com/fgarofalo56/csa-inabox/commit/f9c1b59a54b247a10ea805049edca3acf00e2151))
+
+
+### Bug Fixes
+
+* **admin-plane:** bind the posture Function key only when it is known to exist, not whenever the URL is set ([#4770](https://github.com/fgarofalo56/csa-inabox/issues/4770)) ([56e3e11](https://github.com/fgarofalo56/csa-inabox/commit/56e3e117c4851ad89155e897506bd6aff98ad93c))
+* **auth:** device-code sign-in for the CLI and VS Code extension, with non-interactive guardrails ([#4812](https://github.com/fgarofalo56/csa-inabox/issues/4812)) ([06bc0ff](https://github.com/fgarofalo56/csa-inabox/commit/06bc0ff152eaf51ee085944f058baf77ed879c2a))
+* **bootstrap:** scope admin-RG az calls to ADMIN_SUB and surface the Databricks warehouse API error ([#4767](https://github.com/fgarofalo56/csa-inabox/issues/4767)) ([7da92c5](https://github.com/fgarofalo56/csa-inabox/commit/7da92c50b7df330baa9af704ce3ab897289aec3f))
+* **brain:** make security-graph.json merge-stable by not committing run tallies ([#4803](https://github.com/fgarofalo56/csa-inabox/issues/4803)) ([956e31d](https://github.com/fgarofalo56/csa-inabox/commit/956e31d4a244d18519370ebc8c7793ed900ca9b5))
+* **ci:** gov-bff-verify reads every loom-unity revision, not only the active one ([#4858](https://github.com/fgarofalo56/csa-inabox/issues/4858)) ([5351562](https://github.com/fgarofalo56/csa-inabox/commit/5351562bfcb5c80f22ed8a045e5935a3627bc9d1))
+* **ci:** raise the console next build heap to 8192 MiB in CI and the image ([#4839](https://github.com/fgarofalo56/csa-inabox/issues/4839)) ([53f7abd](https://github.com/fgarofalo56/csa-inabox/commit/53f7abde7945eccd01ff0e2b6df48844a34030cd))
+* **cost:** read the tag VALUE column, and stop reporting a failed tag query as no tags ([#4771](https://github.com/fgarofalo56/csa-inabox/issues/4771)) ([1499db9](https://github.com/fgarofalo56/csa-inabox/commit/1499db9b382b2024160511a27e0e4914ca1d958d))
+* **deploy:** carry the admin sub, schema group and SQL warehouse through the adopt plan ([#4769](https://github.com/fgarofalo56/csa-inabox/issues/4769)) ([0ca979a](https://github.com/fgarofalo56/csa-inabox/commit/0ca979a6f788e1fc61933a358ec3574e91a18088))
+* **deps:** pin click in update-locks.sh container install ([#4877](https://github.com/fgarofalo56/csa-inabox/issues/4877)) ([7d64c0b](https://github.com/fgarofalo56/csa-inabox/commit/7d64c0ba7b5e79c651a8e7bbb32640de2ca36d22))
+* **drain:** close a watcher-filed deploy item on a green run of its own workflow ([#4791](https://github.com/fgarofalo56/csa-inabox/issues/4791)) ([0b9d875](https://github.com/fgarofalo56/csa-inabox/commit/0b9d875f7d0162d35765caaad47c8dfe6d9f0315))
+* **drain:** escalate to two reviewers only where it earns its cost ([#4879](https://github.com/fgarofalo56/csa-inabox/issues/4879)) ([84fd815](https://github.com/fgarofalo56/csa-inabox/commit/84fd815bc68e9b6a078aa113cd1beed1257f9cfc))
+* **drain:** key receipt producers by BOUNDARY, so a Commercial run cannot close a LABELLED Gov item ([#4728](https://github.com/fgarofalo56/csa-inabox/issues/4728)) ([159d34c](https://github.com/fgarofalo56/csa-inabox/commit/159d34c04bf3a11a937e504359aec920e9681a49)), closes [#4709](https://github.com/fgarofalo56/csa-inabox/issues/4709)
+* **drain:** walk the re-pin chain, so a PR updated from main twice keeps the verdict that measured its bytes ([#4843](https://github.com/fgarofalo56/csa-inabox/issues/4843)) ([2312440](https://github.com/fgarofalo56/csa-inabox/commit/2312440a7a8cd023c4bea3c5ec9d8e2b97dc62c6))
+* **front-door:** keep the security policy's domains in sync with the route ([#4868](https://github.com/fgarofalo56/csa-inabox/issues/4868)) ([1b7c54b](https://github.com/fgarofalo56/csa-inabox/commit/1b7c54baf6ae30a11c6dc510c36e85d83a42be2b))
+* **govern:** clear the on-open re-read timer on unmount, so it cannot fire after vitest tears down jsdom ([#4844](https://github.com/fgarofalo56/csa-inabox/issues/4844)) ([de60ba8](https://github.com/fgarofalo56/csa-inabox/commit/de60ba8e07c10d903d80d5b96a282917cbb20057))
+* **lakehouse:** consistent item-scoped authorization and input validation across lakehouse routes ([#4785](https://github.com/fgarofalo56/csa-inabox/issues/4785)) ([bebd7dd](https://github.com/fgarofalo56/csa-inabox/commit/bebd7ddf002fe007c9beb1dae6fcffce08be24ba))
+* **lakehouse:** consistent item-scoped authorization and input validation across lakehouse routes (part 2) ([#4790](https://github.com/fgarofalo56/csa-inabox/issues/4790)) ([e29b23d](https://github.com/fgarofalo56/csa-inabox/commit/e29b23dbef3f93e120db886ed1e0fa52326e28d1))
+* **lakehouse:** resolve shortcut secrets through the shared secret-name policy ([#4852](https://github.com/fgarofalo56/csa-inabox/issues/4852)) ([4c6339f](https://github.com/fgarofalo56/csa-inabox/commit/4c6339f58faaf63f1e71e45f7f66b9e0ede1aa4c))
+* **lakehouse:** resolve the container auto-bind created the root in, and let the monitor see its own ([#4768](https://github.com/fgarofalo56/csa-inabox/issues/4768)) ([e00990a](https://github.com/fgarofalo56/csa-inabox/commit/e00990a69359c54a14f1c0cc0b7e7c7107d93c42))
+* **lakehouse:** scope lakehouse storage paths and roots to the owning item ([#4777](https://github.com/fgarofalo56/csa-inabox/issues/4777)) ([abfc65d](https://github.com/fgarofalo56/csa-inabox/commit/abfc65d9db22c4abc57c2ac26627953e38d485a1))
+* **lakehouse:** shortcut credential follow-ups — browse lakehouse, Test tenant, redaction shapes, nested T-SQL, Delta Sharing guidance ([#4860](https://github.com/fgarofalo56/csa-inabox/issues/4860)) ([b1cffd6](https://github.com/fgarofalo56/csa-inabox/commit/b1cffd67cea44d7a618405cdb2399dee4260a41b))
+* **loom-unity:** authorize the Iceberg REST routes by catalog grants, so the Console's federation read is not refused 403 ([#4783](https://github.com/fgarofalo56/csa-inabox/issues/4783)) ([9a475e4](https://github.com/fgarofalo56/csa-inabox/commit/9a475e40180d412cf867bb1d4e2393d13821c4d6))
+* **loom-unity:** serve the Iceberg namespace list with the scoped upstream policy ([#4809](https://github.com/fgarofalo56/csa-inabox/issues/4809)) ([1cfe777](https://github.com/fgarofalo56/csa-inabox/commit/1cfe777d440216e64a7e2caa6de55cd5de196b02))
+* **roll:** give every lease wait one shared deadline, and report a timeout-cancel ([#4830](https://github.com/fgarofalo56/csa-inabox/issues/4830)) ([3512053](https://github.com/fgarofalo56/csa-inabox/commit/351205399ed3731ede73f3c87fd925fc0d4a51ac))
+* **runner:** bump the self-hosted runner pin to 2.337.0 ([#4820](https://github.com/fgarofalo56/csa-inabox/issues/4820)) ([857a499](https://github.com/fgarofalo56/csa-inabox/commit/857a49941fdca056eded3af3f3b368662813fd9b))
+* **runner:** bump the self-hosted runner to actions/runner 2.337.0 and alarm before GitHub refuses the pin ([#4801](https://github.com/fgarofalo56/csa-inabox/issues/4801)) ([385d00b](https://github.com/fgarofalo56/csa-inabox/commit/385d00b64127358bd97f38f6d13a49f8a7766697))
+* **thread:** keep the materialize-to-kql table name and the mirror-to-lakehouse folder to one path segment ([#4829](https://github.com/fgarofalo56/csa-inabox/issues/4829)) ([631a637](https://github.com/fgarofalo56/csa-inabox/commit/631a6376d1689f4e9c20b61b50f0417defdcc61c))
+
+
+### Security
+
+* **console:** bind the session-only storage routes from [#4619](https://github.com/fgarofalo56/csa-inabox/issues/4619) to an authorization and validate their paths ([#4788](https://github.com/fgarofalo56/csa-inabox/issues/4788)) ([b72dccd](https://github.com/fgarofalo56/csa-inabox/commit/b72dccd46c13cfdf29411d774280709c726d8eb9))
+
+
+### Tests
+
+* **health-check:** witness the Logic App trigger and Function receiver wiring shipped in [#4756](https://github.com/fgarofalo56/csa-inabox/issues/4756) ([#4794](https://github.com/fgarofalo56/csa-inabox/issues/4794)) ([68868c1](https://github.com/fgarofalo56/csa-inabox/commit/68868c14124f64a4e635e454b61cba3fb5bf4994))
+
+
+### Continuous Integration
+
+* **evals:** run the Copilot eval sweep on a PR only when the PR changes what that run executes ([#4848](https://github.com/fgarofalo56/csa-inabox/issues/4848)) ([feeb26b](https://github.com/fgarofalo56/csa-inabox/commit/feeb26b6fb4a554ae0c9c2ae82bcc743b02316bc))
+
 ## [0.109.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.108.0...csa-inabox-v0.109.0) (2026-09-29)
 
 

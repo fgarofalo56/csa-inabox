@@ -80,6 +80,39 @@ describe('buildAbfssUri', () => {
       'abfss://bronze@loomdlz01.dfs.core.windows.net/Tables/orders',
     );
   });
+  it('places Tables/ under the lakehouse root when one is given (slashes trimmed)', () => {
+    // Breaks if the root is dropped, or if its slashes double the separator.
+    expect(buildAbfssUri('landing', 'loomdlz01', 'dbo/orders', '/lakehouses/Sales--lh1/')).toBe(
+      'abfss://landing@loomdlz01.dfs.core.windows.net/lakehouses/Sales--lh1/Tables/dbo/orders',
+    );
+  });
+  it('names the GCC-High DFS host when LOOM_CLOUD is gcc-high', () => {
+    const prev = process.env.LOOM_CLOUD;
+    process.env.LOOM_CLOUD = 'gcc-high';
+    try {
+      // Breaks if the suffix is hard-coded to `.dfs.core.windows.net`.
+      expect(buildAbfssUri('landing', 'govacct', 'orders', 'lakehouses/Sales--lh1')).toBe(
+        'abfss://landing@govacct.dfs.core.usgovcloudapi.net/lakehouses/Sales--lh1/Tables/orders',
+      );
+    } finally {
+      if (prev === undefined) delete process.env.LOOM_CLOUD; else process.env.LOOM_CLOUD = prev;
+    }
+  });
+  it('buildMaintenancePySpark targets the rooted table when tablesRoot is set', () => {
+    const { code } = buildMaintenancePySpark(
+      { container: 'landing', tableName: 'orders', pool: 'p', compaction: true, vacuumRetentionHours: 0, zorderColumns: [], tablesRoot: 'lakehouses/Sales--lh1' },
+      'loomdlz01',
+    );
+    expect(code).toContain('abfss://landing@loomdlz01.dfs.core.windows.net/lakehouses/Sales--lh1/Tables/orders');
+    expect(code).not.toContain('loomdlz01.dfs.core.windows.net/Tables/orders');
+  });
+  it('validateMaintenanceRequest never copies a tablesRoot from the request body', () => {
+    const r = validateMaintenanceRequest({
+      container: 'landing', tableName: 'orders', pool: 'p', compaction: true, tablesRoot: 'lakehouses/Other--x',
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.tablesRoot).toBeUndefined();
+  });
 });
 
 describe('buildMaintenancePlan', () => {
