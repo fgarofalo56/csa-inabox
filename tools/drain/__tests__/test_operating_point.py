@@ -68,12 +68,33 @@ def _real(policy, number, pr):
     return needed
 
 
+#: Operator decision 2026-10-02 shipped `escalate_when_stream_unknown: false`,
+#: so under the REAL policy `stream_known`'s value never changes `needed` --
+#: every row below reads 0 regardless of state, stream, or binding. That makes
+#: `test_the_model_agrees_with_the_gate_on_every_shape` compare `0 == 0` for
+#: every row under `POLICY` alone, which is satisfied whether or not the MODEL
+#: computes `stream_known` correctly -- the exact "model agrees with the gate"
+#: property this file's whole docstring is about would stop being measured,
+#: and OP3 (hardcoding two of three `SCHEDULED_STATES`) SURVIVED on exactly
+#: this blind spot. Driving the comparison through this REOPENED override
+#: too -- the same pattern used in `test_merge_gate.py` -- restores it: with
+#: the mechanism turned back on, `stream_known` (and therefore the omitted
+#: third state) changes the answer, so the model and the real composition can
+#: disagree again, and the assertion has somewhere to fail.
+REOPENED = {**POLICY, "review": {**POLICY["review"],
+                                 "escalate_when_stream_unknown": True}}
+
+
 def test_the_model_agrees_with_the_gate_on_every_shape(tmp_path, monkeypatch):
     """THE contract. Every combination of the inputs gate 3b consults, driven
     through BOTH the model and the real composition, asserted equal.
 
     `item.pr = 99` with the PR under test being 1 is the row that caught the
-    second defect: the gate refuses (bound elsewhere), the model accepted."""
+    second defect: the gate refuses (bound elsewhere), the model accepted.
+
+    Driven through BOTH `POLICY` (the shipped reality) and `REOPENED` (see
+    that constant's docstring for why it is load-bearing, not decorative,
+    post-2026-10-02)."""
     # EVERY scheduled state, taken from the constant rather than typed out. The
     # first version listed three states by hand and omitted `awaiting-receipt`,
     # so arm OP3 -- dropping one state from the model -- SURVIVED. A fixture
@@ -101,21 +122,23 @@ def test_the_model_agrees_with_the_gate_on_every_shape(tmp_path, monkeypatch):
     # the code path production takes, and a test that bypasses it tests
     # something else.
     mismatches = []
-    for row in rows:
-        num, stream, state, pr, _receipt = row
-        one = tmp_path / f"row{num}"
-        one.mkdir()
-        led = _ledger(one, [row])
-        monkeypatch.setattr(merge_gate, "HERE", str(one))
+    for policy in (POLICY, REOPENED):
+        for row in rows:
+            num, stream, state, pr, _receipt = row
+            one = tmp_path / f"row{num}-{'shipped' if policy is POLICY else 'reopened'}"
+            one.mkdir()
+            led = _ledger(one, [row])
+            monkeypatch.setattr(merge_gate, "HERE", str(one))
 
-        counts, _one_reviewer, _receipted = operating_point.merge_time(
-            POLICY, led, pr=1)
-        model = next(iter(counts))
-        real = _real(POLICY, num, pr=1)
-        if model != real:
-            mismatches.append(
-                f"#{num} {stream} state={state} pr={pr} model={model} real={real}"
-            )
+            counts, _one_reviewer, _receipted = operating_point.merge_time(
+                policy, led, pr=1)
+            model = next(iter(counts))
+            real = _real(policy, num, pr=1)
+            if model != real:
+                mismatches.append(
+                    f"[{'shipped' if policy is POLICY else 'reopened'}] "
+                    f"#{num} {stream} state={state} pr={pr} model={model} real={real}"
+                )
     assert mismatches == [], "\n".join(mismatches)
 
 

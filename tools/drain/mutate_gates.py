@@ -2269,8 +2269,22 @@ ARMS: list[tuple[str, str, str, str]] = [
         "        prior_verdict=None,",
     ),
     (
-        ("MG15 the merge gate stops passing the STREAM, so a W1-deploy PR outside "
-        "the twelve paths merges on one approval"),
+        ("MG15 the merge gate stops passing the STREAM. CONFIRMED EQUIVALENT "
+        "MUTANT as of operator decision 2026-10-02 (`_sensitive_review_"
+        "2026_10_02`): `review_requirement` no longer reads its `stream` "
+        "parameter for ANY decision or ANY returned string -- stream-VALUE "
+        "escalation was removed from the function entirely, not merely "
+        "gated by policy -- so `stream=None` versus `stream=stream` at this "
+        "call site is byte-identical at runtime. Measured: zero divergent "
+        "assertions over the full suite, both the dedicated review-count "
+        "tests and the broader composition. DISCLOSED rather than counted "
+        "as a gap, per `assertion-design.md` 'done' #5 and the GH33 "
+        "precedent -- it is EXPECTED to show SURVIVED and that is not a "
+        "regression. `stream_known` (computed independently at the call "
+        "site, two lines below this one) is the live half of the same "
+        "fact and is covered by MG10/MGE; this arm is kept, not deleted, "
+        "so a FUTURE caller that makes `stream` meaningful again regains "
+        "an arm already pointed at it"),
         "merge_gate.py",
         "        stream=stream,",
         "        stream=None,",
