@@ -697,10 +697,15 @@ def test_negative_control_an_estate_item_demands_an_estate_receipt(tmp_path):
 
 
 def test_the_brief_states_the_review_requirement(tmp_path):
-    """The lane is TOLD how many reviewers it needs, not left to infer it."""
+    """The lane is TOLD how many reviewers it needs, not left to infer it.
+    PRE-2026-10-01 this used W5-console/lane:console; the 2026-10-01 lean-
+    review narrowing (`_lean_review_2026_10_01`) dropped W5-console from the
+    escalating streams and narrowed the console path to `lib/auth` +
+    `middleware.ts`, so a bare lane:console item no longer escalates. The
+    two-reviewer example is re-pointed at an escalating STREAM instead."""
     led = _led(tmp_path)
-    console = led.upsert(9, "an editor", "W5-console", lane="lane:console", size=5)
-    assert "2 reviewer(s)" in tick.write_brief(console, POLICY)
+    security = led.upsert(9, "a security fix", "W2-security", lane="lane:docs", size=5)
+    assert "2 reviewer(s)" in tick.write_brief(security, POLICY)
     ordinary = led.upsert(10, "a dbt model", "W8-dataplane", lane="lane:dataplane", size=3)
     assert "1 reviewer(s)" in tick.write_brief(ordinary, POLICY)
 
@@ -719,13 +724,18 @@ def test_negative_control_an_unlaned_item_escalates_rather_than_defaulting(tmp_p
 
 
 def test_negative_control_every_lane_gets_the_count_its_stream_deserves(tmp_path):
-    """Two arms that deleted the bicep and ci rows from LANE_PATHS both SURVIVED
-    a full suite: 31 and 33 laned items would silently drop to one reviewer over
-    a green matrix. Each lane is pinned individually."""
+    """PRE-2026-10-01 this pinned console/bicep/ci at 2, guarding against a
+    silently-deleted `LANE_PATHS` row (two arms that did exactly that both
+    SURVIVED a full suite: 31 and 33 laned items would silently drop to one,
+    over a green matrix). The 2026-10-01 lean-review narrowing dropped the
+    bare console/bicep/ci fragments from the authority outright, so this now
+    pins the OPPOSITE for those three -- and keeps one escalating case
+    (W2-security) to prove the brief still reports 2 where the narrowed
+    authority actually calls for it."""
     led = _led(tmp_path)
-    cases = [("lane:console", "W9-rest", 2), ("lane:bicep", "W9-rest", 2),
-             ("lane:ci", "W9-rest", 2), ("lane:dataplane", "W9-rest", 1),
-             ("lane:docs", "W9-rest", 1), ("lane:dataplane", "W1-deploy", 2)]
+    cases = [("lane:console", "W9-rest", 1), ("lane:bicep", "W9-rest", 1),
+             ("lane:ci", "W9-rest", 1), ("lane:dataplane", "W9-rest", 1),
+             ("lane:docs", "W9-rest", 1), ("lane:dataplane", "W2-security", 2)]
     for i, (lane, stream, expected) in enumerate(cases):
         item = led.upsert(800 + i, "x", stream, lane=lane, size=1)
         assert f"{expected} reviewer(s)" in tick.write_brief(item, POLICY), (

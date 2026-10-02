@@ -1619,16 +1619,24 @@ ARMS: list[tuple[str, str, str, str]] = [
         "    if False:",
     ),
     (
-        "R10 W6-ci drops out of the escalating streams (the GUARD stream)",
+        # #4873 / PRP-01 section 2, 2026-10-01: the operator's cost directive
+        # narrowed both escalation lists. R10/R12/R14/R15/R16 used to anchor on
+        # the PRE-2026-10-01 rows (W6-ci, .gitignore, Makefile, pyproject.toml,
+        # portal/) -- all five are gone from policy.json now, so all five arms
+        # had ZERO matches and `test_every_arm_anchor_is_present_and_unique_in_
+        # the_current_source` is what caught it. Repointed at the five rows the
+        # narrowed authority actually ships, so the mutation-coverage property
+        # this file exists for -- every live row has an arm that proves a test
+        # depends on it -- holds for the new list too, not just the old one.
+        "R10 W2-security drops out of the escalating streams (the security stream)",
         "policy.json",
-        '      "W6-ci",\n      "W7-bicep"',
-        '      "W7-bicep"',
+        '      "W0-harness",\n      "W2-security"',
+        '      "W0-harness"',
     ),
     (
-        ("R12 `.gitignore` drops out of the escalating paths -- #4468's ENTIRE "
-         "THESIS, since an entry in it is what hid the merge gate"),
+        "R12 `tools/drain` drops out of the escalating paths -- the harness's own tooling",
         "policy.json",
-        '      ".gitignore",\n',
+        '      "tools/drain",\n',
         "",
     ),
     (
@@ -1638,23 +1646,25 @@ ARMS: list[tuple[str, str, str, str]] = [
         "",
     ),
     (
-        "R14 `Makefile` drops out -- the `make validate` entry point",
+        "R14 `dev-loop/gates` drops out -- the `make validate` gate scripts themselves",
         "policy.json",
-        '      "Makefile",\n',
+        '      "dev-loop/gates",\n',
         "",
     ),
     (
-        "R15 `pyproject.toml` drops out -- the ruff/mypy config every guard runs under",
+        ("R15 `apps/fiab-console/lib/auth` drops out of the escalating paths -- "
+         "the console's own session/auth handling"),
         "policy.json",
-        '      "pyproject.toml",\n',
+        '      "apps/fiab-console/lib/auth",\n',
         "",
     ),
     (
-        ("R16 `portal/` drops out -- the OTHER front-end, and ux-baseline scopes "
-         "EVERY Loom surface, not only apps/fiab-console"),
+        ("R16 `apps/fiab-console/middleware.ts` drops out -- the console's edge "
+         "middleware, replaced in place with a duplicate of an already-present "
+         "entry so the array stays valid JSON of the same length"),
         "policy.json",
-        '      "portal/"\n',
-        '      "apps/fiab-console"\n',
+        '      "apps/fiab-console/lib/auth",\n      "apps/fiab-console/middleware.ts"',
+        '      "apps/fiab-console/lib/auth"',
     ),
     # -- ROUND 14: round 13's fix landed on ONE OF THREE ROUTES --------------
     # An independent reviewer found the SEVENTH and EIGHTH readers of
