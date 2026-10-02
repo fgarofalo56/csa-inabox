@@ -24,6 +24,7 @@ import {
   type CheckHistory,
 } from '@/lib/azure/dq-transform-checks';
 import type { DqCheck, DqCheckTarget } from '@/lib/azure/dq-check-compile';
+import { isSafeDqIdent } from '@/lib/azure/dq-check-compile';
 import type { TransformEngine } from '@/lib/transform/transform-project-model';
 import { writeDqFindings } from '@/lib/azure/dq-finding-store';
 import { updateOwnedItem } from '../../../_lib/item-crud';
@@ -44,7 +45,10 @@ function sanitizeChecks(raw: unknown): DqCheck[] {
     const rule = typeof o.rule === 'string' ? o.rule : '';
     if (!QUALITY_RULE_VALUES.includes(rule)) continue;
     const table = typeof o.table === 'string' ? o.table.trim() : '';
-    if (!table) continue;
+    // Table names reach a Jinja `source()` string at compile time; reject a
+    // non-identifier table here too, so the compiler's skip (dq-check-compile.ts)
+    // is the last line of defense, not the only one.
+    if (!table || !isSafeDqIdent(table)) continue;
     out.push({
       id: (typeof o.id === 'string' && o.id.trim()) ? o.id.trim().slice(0, 60) : crypto.randomUUID(),
       table: table.slice(0, 200),

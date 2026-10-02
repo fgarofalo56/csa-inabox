@@ -59,7 +59,7 @@ import {
   executeQuery,
 } from '@/lib/azure/synapse-sql-client';
 import { executeStatement } from '@/lib/azure/databricks-client';
-import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { escapeSparkSqlLiteral } from '@/lib/sql/quoting';
 import { stripTrailingSemicolons } from '@/lib/util/trim';
 import { withSession } from '@/lib/api/route-toolkit';
 
@@ -143,7 +143,7 @@ async function databricksSchemaContext(
       warehouseId,
       `SELECT table_name, column_name, data_type
          FROM \`${catalog}\`.information_schema.columns
-        WHERE table_schema = '${escapeSqlLiteral(schema)}'
+        WHERE table_schema = '${escapeSparkSqlLiteral(schema)}'
         ORDER BY table_name, ordinal_position
         LIMIT 400`,
     );

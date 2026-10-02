@@ -26,6 +26,7 @@ import {
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
 import { DOMAIN_TAG_KEY } from '@/lib/azure/domain-registry';
+import { escapeKqlLiteral } from '@/lib/sql/quoting';
 
 const ARM = armBase();
 const ARM_SCOPE = armScope();
@@ -81,10 +82,13 @@ export async function domainResourceInventory(
 ): Promise<InventoryResource[]> {
   // KQL: match the chargeback tag value case-insensitively. ARG indexes the
   // `tags` bag; `tags['loom-domain']` is the documented tag-filter syntax.
-  const tagValue = `${DOMAIN_TAG_KEY}:${domainId}`;
+  // Every value is a KQL string literal, escaped by the KQL literal rule.
+  const key = escapeKqlLiteral(DOMAIN_TAG_KEY);
+  const tagValue = escapeKqlLiteral(`${DOMAIN_TAG_KEY}:${domainId}`);
+  const bareValue = escapeKqlLiteral(domainId);
   const query = [
     'Resources',
-    `| where tags['${DOMAIN_TAG_KEY}'] =~ '${tagValue}' or tags['${DOMAIN_TAG_KEY}'] =~ '${domainId}'`,
+    `| where tags['${key}'] =~ '${tagValue}' or tags['${key}'] =~ '${bareValue}'`,
     '| project name, type, kind, resourceGroup, location, subscriptionId, tags',
     '| order by type asc, name asc',
   ].join('\n');

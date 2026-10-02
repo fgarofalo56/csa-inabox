@@ -37,7 +37,7 @@ import {
 } from './cloud-endpoints';
 import { DOMAIN_TAG_KEY } from './domain-registry';
 import { walkPagedList, PagingBudget, PAGE_DEADLINE, type PagedEnvelope } from './paging-budget';
-import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { escapeKqlLiteral } from '@/lib/sql/quoting';
 
 const ARM_SCOPE = armScope();
 const SUBSCRIPTIONS_API = '2022-12-01';
@@ -480,7 +480,7 @@ export function applyLoomBindings(
  * {@link NetworkDiscoveryError} on a non-OK ARG response (caller swallows). */
 async function queryResourceBindings(resourceIds: string[]): Promise<LoomServiceBinding[]> {
   const idList = resourceIds
-    .map((id) => `'${escapeSqlLiteral(id)}'`)
+    .map((id) => `'${escapeKqlLiteral(id)}'`)
     .join(', ');
   const query = [
     'Resources',

@@ -35,7 +35,7 @@ metrics:
     filter: is_refund = 0
 `);
 
-describe('RLS injection — Synapse T-SQL', () => {
+describe('RLS predicate — Synapse T-SQL', () => {
   it('ANDs the identity predicate after the metric filter (bound param)', () => {
     const c = compileMetricQuery({
       spec: SPEC,
@@ -63,7 +63,7 @@ describe('RLS injection — Synapse T-SQL', () => {
     expect(b.params.find((p) => p.name === 'p1')?.value).toBe('East');
   });
 
-  it('is injection-safe — a malicious RLS value is bound, never spliced', () => {
+  it('binds an RLS value containing quotes as a parameter, never splicing it into the text', () => {
     const c = compileMetricQuery({
       spec: SPEC,
       metric: 'net_revenue',
@@ -107,7 +107,7 @@ describe('RLS injection — Synapse T-SQL', () => {
   });
 });
 
-describe('RLS injection — ADX KQL', () => {
+describe('RLS predicate — ADX KQL', () => {
   it('two identities → DIFFERENT compiled WHERE (escaped literal, no binding)', () => {
     const a = compileMetricQuery({ spec: SPEC, metric: 'net_revenue', rls: rlsClaimsToFilters({ region: 'West' }), engine: 'adx' });
     const b = compileMetricQuery({ spec: SPEC, metric: 'net_revenue', rls: rlsClaimsToFilters({ region: 'East' }), engine: 'adx' });
@@ -117,15 +117,17 @@ describe('RLS injection — ADX KQL', () => {
     expect(a.sql).not.toBe(b.sql); // the WHERE literal differs directly in KQL
   });
 
-  it('escapes a malicious RLS literal through the central quoting helper', () => {
+  it('escapes an RLS literal containing quotes through the central quoting helper', () => {
     const c = compileMetricQuery({
       spec: SPEC,
       metric: 'net_revenue',
       rls: rlsClaimsToFilters({ region: "x' or '1'=='1" }),
       engine: 'adx',
     });
-    // single quotes are doubled by escapeSqlLiteral — the predicate can't break out.
-    expect(c.sql).toContain("['region'] == 'x'' or ''1''==''1'");
+    // KQL regular literals use backslash escapes (escapeKqlLiteral), so each
+    // quote in the claim becomes `\'` and the whole claim stays one literal.
+    // Breaks if the ADX path goes back to doubling: `'x'' or ''1''==''1'`.
+    expect(c.sql).toContain("['region'] == 'x\\' or \\'1\\'==\\'1'");
   });
 });
 

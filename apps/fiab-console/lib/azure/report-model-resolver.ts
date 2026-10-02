@@ -94,7 +94,7 @@ import { pathToHttpsUrl, downloadFile } from '@/lib/azure/adls-client';
 import { parseDeltaSchema } from '@/lib/azure/delta-schema-parse';
 import { resolveMlvDeltaUrl } from '@/lib/azure/materialized-lake-view-engine';
 import { safeSegment, type MlvSpec } from '@/lib/azure/materialized-lake-view-model';
-import { escapeSqlLiteral, quoteIdent, bracket as qbracket } from '@/lib/sql/quoting';
+import { escapeLiteralFor, escapeSqlLiteral, quoteIdent, bracket as qbracket } from '@/lib/sql/quoting';
 import { stripTrailingSemicolons } from '@/lib/util/trim';
 
 export const SEMANTIC_MODEL_ITEM_TYPE = 'semantic-model';
@@ -1098,9 +1098,11 @@ function relationRef(dialect: ReportSqlDialect, schema: string | undefined, tabl
   return (schema ? `${quoteIdent(schema, dialect)}.` : '') + quoteIdent(table, dialect);
 }
 
-/** A single-quoted SQL string literal (doubles embedded quotes). */
-function sqlLiteral(v: string): string {
-  return `'${escapeSqlLiteral(v)}'`;
+/** A single-quoted SQL string literal, escaped per dialect (escapeLiteralFor:
+ *  the Spark SQL backslash rule for `databricks-sql`, quote doubling for the
+ *  T-SQL family and Postgres). */
+function sqlLiteral(dialect: ReportSqlDialect, v: string): string {
+  return `'${escapeLiteralFor(v, dialect)}'`;
 }
 
 /** `SELECT TOP n *` (T-SQL family) / `SELECT * … LIMIT n` (Postgres/Databricks/MySQL). */
@@ -1201,8 +1203,8 @@ function makeSqlExecutor(w: SqlExecutorWiring): ConnectionExecutor {
       // Real schema via INFORMATION_SCHEMA (gives column types for summarizeBy).
       try {
         const where =
-          `WHERE TABLE_NAME = ${sqlLiteral(objectRef.table)}` +
-          (objectRef.schema ? ` AND TABLE_SCHEMA = ${sqlLiteral(objectRef.schema)}` : '');
+          `WHERE TABLE_NAME = ${sqlLiteral(dialect, objectRef.table)}` +
+          (objectRef.schema ? ` AND TABLE_SCHEMA = ${sqlLiteral(dialect, objectRef.schema)}` : '');
         const meta = await run(
           `SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS ${where} ORDER BY ORDINAL_POSITION`,
         );

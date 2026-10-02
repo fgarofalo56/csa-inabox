@@ -20,8 +20,8 @@
  *     central `@/lib/sql/quoting` helpers (bracket/quoteIdent).
  *   • Filter VALUES are NEVER spliced: the T-SQL engines bind them as TDS
  *     parameters (`@p0`, `@p1`, …); the KQL engine escapes them through the
- *     central `escapeSqlLiteral` (the documented SQL/KQL/DAX single-quote-doubling
- *     helper).
+ *     central `escapeKqlLiteral` (the KQL string-literal grammar: backslash
+ *     escapes; control characters are encoded as `\uXXXX`, never refused).
  *
  * MOAT / IL5: the compiled query executes ENTIRELY in-boundary (Synapse / ADX /
  * lakehouse — all Gov-GA), so a metric compiles + serves with zero external
@@ -31,7 +31,7 @@
  * picks the cloud-correct endpoint via the existing clients.
  */
 
-import { bracket, escapeSqlLiteral } from '@/lib/sql/quoting';
+import { bracket, escapeKqlLiteral } from '@/lib/sql/quoting';
 import type { SynapseQueryParam } from '@/lib/azure/synapse-sql-client';
 import {
   resolveMetricMeasure,
@@ -308,18 +308,25 @@ const KQL_TIMESPAN: Record<string, string> = {
   year: '365d',
 };
 
+/**
+ * Escape a value for a KQL single-quoted string literal. Every character is
+ * carried: control characters are encoded (`\t`/`\n`/`\r`, else `\uXXXX`).
+ */
+function kqlString(value: string): string {
+  return escapeKqlLiteral(value);
+}
+
 /** Bracket-quote a KQL entity name: `['name']` (names are whitelisted from the spec). */
 function kqlIdent(name: string): string {
-  // Defence-in-depth: strip anything outside the whitelisted grammar. Names reach
-  // here ONLY from the governed spec (already validated), so this never alters a
-  // legitimate name — it just guarantees no control chars can appear.
-  return `['${escapeSqlLiteral(String(name))}']`;
+  // Names reach here ONLY from the governed spec (already validated). The
+  // bracketed form takes a KQL string literal, so it is escaped by that grammar.
+  return `['${kqlString(String(name))}']`;
 }
 
 /** A KQL scalar literal — numbers inline, strings single-quoted + escaped. */
 function kqlLiteral(value: string | number): string {
   if (typeof value === 'number' && Number.isFinite(value)) return String(value);
-  return `'${escapeSqlLiteral(String(value))}'`;
+  return `'${kqlString(String(value))}'`;
 }
 
 function kqlDimExpr(dim: MfDimension, grainOverride: string | undefined): string {

@@ -58,14 +58,14 @@ describe('compileMetricQuery — Synapse T-SQL golden', () => {
     expect(c.sql).toBe('SELECT SUM([amount]) AS [net_revenue] FROM [dbo].[fct_sales] WHERE [is_refund] = @p0');
   });
 
-  it('binds a requested filter as a parameter (injection-safe) and supports IN', () => {
+  it('binds a requested filter as a parameter and supports IN', () => {
     const c = compileMetricQuery({
       spec: SPEC,
       metric: 'net_revenue',
       filters: [{ dimension: 'region', op: 'in', value: ["West'; DROP TABLE x--", 'East'] }],
       engine: 'synapse',
     });
-    // Malicious value never reaches the SQL text — only @-markers do.
+    // The value never reaches the SQL text — only @-markers do.
     expect(c.sql).toContain('[region] IN (@p1, @p2)');
     expect(c.sql).not.toContain('DROP TABLE');
     expect(c.params).toEqual([
@@ -91,18 +91,43 @@ describe('compileMetricQuery — ADX KQL golden', () => {
     );
   });
 
-  it('escapes a string filter value through the central helper (single-quote doubling)', () => {
+  it('escapes a string filter value by the KQL rule (backslash, not doubling)', () => {
     const c = compileMetricQuery({
       spec: SPEC,
       metric: 'net_revenue',
       filters: [{ dimension: 'region', op: '=', value: "O'Brien" }],
       engine: 'adx',
     });
-    expect(c.sql).toContain("['region'] == 'O''Brien'");
+    // Breaks if the ADX path doubles the quote: `'O''Brien'`.
+    expect(c.sql).toContain("['region'] == 'O\\'Brien'");
+  });
+
+  it('keeps a trailing backslash inside the KQL literal', () => {
+    // Breaks if the backslash is not escaped: `'C:\'` never closes in KQL.
+    const c = compileMetricQuery({
+      spec: SPEC,
+      metric: 'net_revenue',
+      filters: [{ dimension: 'region', op: '=', value: 'C:\\' }],
+      engine: 'adx',
+    });
+    expect(c.sql).toContain("['region'] == 'C:\\\\'");
+  });
+
+  it('encodes a control character in an ADX filter value as \\uXXXX', () => {
+    // Breaks if kqlString refuses control characters (the round-1 behaviour
+    // threw a 400) or sends NUL / U+001B raw into the query text.
+    const c = compileMetricQuery({
+      spec: SPEC,
+      metric: 'net_revenue',
+      filters: [{ dimension: 'region', op: '=', value: 'a\u0000b\u001b' }],
+      engine: 'adx',
+    });
+    expect(c.sql).toContain("['region'] == 'a\\u0000b\\u001B'");
+    expect(c.sql).not.toMatch(/[\u0000\u001b]/);
   });
 });
 
-describe('compileMetricQuery — validation / injection guards', () => {
+describe('compileMetricQuery — validation guards', () => {
   it('rejects a dimension not declared on the model (whitelist)', () => {
     expect(() =>
       compileMetricQuery({ spec: SPEC, metric: 'net_revenue', dimensions: ['secret'], engine: 'synapse' }),
