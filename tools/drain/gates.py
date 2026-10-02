@@ -6140,7 +6140,12 @@ def is_dependency_bump(policy: dict, author: str | None,
 
 def review_requirement(policy: dict, changed_paths: list[str] | None = None,
                        prior_verdict: str | None = None,
-                       stream: str | None = None,
+                       stream: str | None = None,  # noqa: ARG001 - kept for the
+                       # call-site signature (every caller passes it by name);
+                       # unread since stream-VALUE escalation was removed
+                       # 2026-10-02 (disclosed equivalent mutant MG15, see
+                       # `mutate_gates.py`). `stream_known` below is the live
+                       # half of the same fact and IS consulted.
                        footprint_known: bool = True,
                        stream_known: bool = True,
                        dependency_bump: bool = False) -> tuple[int, str]:
