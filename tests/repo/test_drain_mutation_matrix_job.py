@@ -84,17 +84,24 @@ What is asserted here, and the value that breaks each
 13. ``test_the_matrix_result_is_reported_on_the_pr`` -- dropping either drain
     job from ``pr-summary``. An advisory check nobody surfaces is the "control
     that stops reporting" failure #4712 is about.
-14. ``test_the_change_detector_flag_reaches_both_drain_jobs`` -- the merge
-    job's ``if:`` referencing an output the shard job never republishes (a
-    rename on one side of the relay), which degrades the comparison to
-    always-empty-string-equals-``'true'`` -- the matrix silently never runs,
-    regardless of what the detector said.
-15. ``test_the_change_detector_is_scoped_to_tools_drain_and_this_workflow`` --
+14. ``test_the_shard_jobs_if_fails_open_when_the_detector_itself_fails`` -- the
+    shard job's ``if:`` losing its ``needs.drain-mutation-detect.result !=
+    'success'`` half, which would silently SKIP the whole matrix whenever the
+    detector job merely ERRORED (a checkout timeout, a network flake) rather
+    than genuinely deciding ``relevant=false`` -- caught in review before this
+    file's first version merged.
+15. ``test_the_merge_jobs_if_runs_whenever_the_shard_job_was_not_skipped`` --
+    the merge job's ``if:`` reading an ``outputs`` value off the (matrix)
+    shard job instead of its ``result`` -- a matrix job's custom ``outputs``
+    is documented by GitHub as coming from "one of" the legs, not which, so
+    it is not a signal this file can rely on the way ``result`` already is
+    two lines below for ``--needs-result``.
+16. ``test_the_change_detector_is_scoped_to_tools_drain_and_this_workflow`` --
     narrowing the detector's scope past ``tools/drain/`` + this workflow file
     (e.g. to ``tools/drain/mutate_gates.py`` alone, which would miss a mutated
     ``gates.py`` changing what SURVIVES), or adding a second ``relevant=false``
     branch elsewhere in the step.
-16. ``test_the_change_detector_fails_open_on_every_unanswerable_branch`` -- any
+17. ``test_the_change_detector_fails_open_on_every_unanswerable_branch`` -- any
     of the three fail-open branches (a non-pull_request/non-merge_group event,
     a ``merge_group`` with no ``base_sha``, an unresolvable ``git diff``)
     defaulting to ``relevant=false`` instead of ``relevant=true``, or the
@@ -108,9 +115,16 @@ wall-time cost in the repo, confirmed running at full cost on 9 recent PRs
 that touched zero files under ``tools/drain``. What replaces it is a
 dependency-free, fail-open change detector (``drain-mutation-detect``) scoped
 to exactly the footprint ``mutate_gates.py`` can mutate plus this workflow
-file -- items 5, 6, 14, 15 and 16 are what this file now asserts about it, and
-together they are the reason a narrowed or bypassed detector is still RED
-rather than quiet.
+file -- items 5, 6, 14, 15, 16 and 17 are what this file now asserts about it,
+and together they are the reason a narrowed or bypassed detector is still RED
+rather than quiet. Items 14 and 15 exist because the FIRST version of this
+detector reached review with a real gap: its shard-side ``if:`` read only the
+detector's OUTPUT, so a detector job that merely ERRORED (not one that
+cleanly decided ``relevant=false``) would have silently skipped the whole
+matrix -- GitHub Actions implicitly ANDs ``success()`` into any ``if:`` that
+does not itself name a status-check function, which is precisely the
+"control that watches nothing" shape this file exists to catch, one hop
+upstream of where the rest of it looks.
 """
 
 from __future__ import annotations
@@ -370,14 +384,18 @@ def test_the_shard_count_agrees_in_all_four_places() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 5-9: it runs unconditionally, and its verdict is never silently skipped
+# 5-9: it is gated ONLY by the change detector, and its verdict is never
+# silently skipped once it decides to run
 # --------------------------------------------------------------------------- #
 
 def test_the_shard_job_is_gated_by_the_change_detector() -> None:
     """BREAKS ON: the shard job's `if:` not reading
-    `needs.drain-mutation-detect.outputs.relevant` -- e.g. `if: true`,
-    `if: github.event_name == 'pull_request'`, or restoring the pre-split
-    step-level gate `steps.relevant.outputs.run == 'true'` on the job instead.
+    `needs.drain-mutation-detect.outputs.relevant`, OR reading it WITHOUT the
+    `needs.drain-mutation-detect.result != 'success'` fail-open half (e.g.
+    `if: needs.drain-mutation-detect.outputs.relevant == 'true'` alone), OR
+    dropping the `!cancelled()` guard, OR dropping the parentheses around the
+    `||` (which would silently change what the expression means, since `&&`
+    binds tighter than `||` in this expression language).
 
     SUPERSEDES the pre-2026-10-02 `test_the_shard_job_is_unconditional`, which
     asserted `"if" not in job`. That assertion is the one REVERSED here,
@@ -385,8 +403,10 @@ def test_the_shard_job_is_gated_by_the_change_detector() -> None:
     run was the single biggest CI wall-time cost in the repo (confirmed
     running at full cost on 9 recent PRs touching zero files under
     `tools/drain`). The job may now be gated, but ONLY by the detector added
-    for this -- not by a hardcoded condition, and not by reviving the
-    pre-split per-step gate this file used to forbid outright.
+    for this, and the gate itself must fail OPEN when the detector job
+    errors -- see `test_the_shard_jobs_if_fails_open_when_the_detector_itself_
+    fails` for the BEHAVIOURAL version of that claim; this pins the literal
+    it depends on.
     """
     job = _job(SHARD_JOB)
     assert job.get("needs") == DETECTOR_JOB, (
@@ -395,20 +415,26 @@ def test_the_shard_job_is_gated_by_the_change_detector() -> None:
         "out of scope for this job's `if:` and GitHub Actions refuses the "
         "expression outright."
     )
-    expected_if = f"needs.{DETECTOR_JOB}.outputs.{DETECTOR_FLAG} == 'true'"
+    expected_if = (
+        f"${{{{ !cancelled() && (needs.{DETECTOR_JOB}.result != 'success' || "
+        f"needs.{DETECTOR_JOB}.outputs.{DETECTOR_FLAG} == 'true') }}}}"
+    )
     assert str(job.get("if") or "").strip() == expected_if, (
         f"job {SHARD_JOB!r} has `if: {job.get('if')!r}`, expected "
         f"{expected_if!r}. A job-level `if:` here is now REQUIRED, but it "
-        f"must be driven by {DETECTOR_JOB!r}'s output -- any other condition "
-        "(including `if: true`) would run or skip the matrix independent of "
-        "whether anything under tools/drain/** actually changed."
+        f"must be driven by {DETECTOR_JOB!r}'s RESULT as well as its output: "
+        "GitHub Actions implicitly ANDs `success()` into any `if:` lacking a "
+        "status-check function, so `outputs.relevant == 'true'` alone would "
+        "silently skip this job whenever the detector job merely ERRORED."
     )
 
 
 def test_the_adjudicator_runs_even_when_a_shard_fails() -> None:
     """BREAKS ON: removing the merge job's `!cancelled()` half, or its
-    `needs.drain-mutation-shard.outputs.relevant == 'true'` half, or writing
-    any other condition there.
+    `needs.drain-mutation-shard.result != 'skipped'` half, or writing any
+    other condition there (in particular reading an `outputs` value off the
+    shard job instead of `result` -- see that job's own comment for why a
+    matrix job's `outputs` is the wrong signal to gate on).
 
     `!cancelled()` is the ONE place a job-level `if:` is required rather than
     forbidden on the pre-2026-10-02 shape of this guard, and the direction is
@@ -419,25 +445,24 @@ def test_the_adjudicator_runs_even_when_a_shard_fails() -> None:
     difference between a finding and a silence.
 
     The second half is the one ADDED 2026-10-02: without it, the adjudicator
-    would run even when the change detector said `relevant=false`, which is
-    exactly the "compound condition silently relaxes to always-runs" shape
-    (14) also guards, from the other job.
+    would run even when the shard job was genuinely SKIPPED (a clean
+    `relevant=false` verdict), which is exactly the "compound condition
+    silently relaxes to always-runs" shape
+    `test_the_merge_jobs_if_runs_whenever_the_shard_job_was_not_skipped` also
+    guards, behaviourally, from the other job.
 
     Pinned to the exact literal rather than "some `if:` exists", because
     `always()` would ALSO run it on a cancelled RUN -- adjudicating shards that
     a human deliberately stopped -- and `success()` would reintroduce the skip.
     """
     actual = _job(MERGE_JOB).get("if")
-    expected = (
-        f"${{{{ !cancelled() && needs.{SHARD_JOB}.outputs.{DETECTOR_FLAG} "
-        "== 'true' }}"
-    )
+    expected = f"${{{{ !cancelled() && needs.{SHARD_JOB}.result != 'skipped' }}}}"
     assert actual == expected, (
         f"job {MERGE_JOB!r} has `if: {actual!r}`, expected {expected!r}. "
         "Absent the first half, a failing shard SKIPS the adjudicator and the "
         "survivor is never reported; `always()` would adjudicate a run the "
         "operator cancelled. Absent the second half, the adjudicator runs "
-        "regardless of what the change detector said."
+        "regardless of whether the shard job ever attempted the matrix."
     )
 
 
@@ -669,49 +694,114 @@ def _detector_body() -> str:
     return str(_step_running(DETECTOR_JOB, "GITHUB_OUTPUT").get("run") or "")
 
 
-def test_the_change_detector_flag_reaches_both_drain_jobs() -> None:
-    """BREAKS ON: the merge job's `if:` referencing an output the shard job
-    never republishes -- a rename on EITHER side of the relay -- or the
-    compound condition being hardcoded to something that does not actually
-    read the detector (e.g. `if: true`). Both degrade the comparison to
-    always-empty-string-equals-'true', i.e. the matrix silently never runs
-    regardless of what changed, which is the "control that watches nothing"
-    shape this whole file exists to catch.
+def _eval_gha_if(expr: str, *, run_cancelled: bool, needs: dict[str, str]) -> bool:
+    """Evaluate a restricted subset of GitHub Actions `if:` expression syntax
+    against a SYNTHETIC `needs` context.
 
-    THE MERGE JOB CANNOT READ `needs.drain-mutation-detect` DIRECTLY: doing so
-    would require adding the detector to its own `needs:`, which
-    `test_a_job_adjudicates_the_shards` pins to the bare string `SHARD_JOB` --
-    so the flag is RELAYED: detector -> `SHARD_JOB`'s own `outputs.relevant`
-    -> the merge job's `if:`. This walks that whole chain, cross-checking the
-    SAME output reference the way `test_the_shard_count_agrees_in_all_four_
-    places` cross-checks the SAME shard count.
+    This LIFTS the real `if:` string read off the job at runtime (never a
+    hand-retyped copy of it -- `assertion-design.md` item 3) and translates
+    ONLY its operators to Python's, so the thing being evaluated is always
+    whatever the workflow actually says, not this test's idea of it. `needs`
+    maps `"<job>.result"` and `"<job>.outputs.<key>"` suffixes (the part after
+    `needs.`) to the string they would hold in that context; a key the caller
+    does not supply is left UNRESOLVED and trips the assertion below rather
+    than silently evaluating as `None`/`False`, which could hide the exact
+    "looks-plausible, isn't" failure mode this whole file exists to catch.
     """
-    shard = _job(SHARD_JOB)
-    assert shard.get("needs") == DETECTOR_JOB, (
-        f"{SHARD_JOB!r} needs {shard.get('needs')!r}, expected {DETECTOR_JOB!r}. "
-        f"Without this, `needs.{DETECTOR_JOB}` is out of scope for its `if:`."
+    body = expr.strip()
+    assert body.startswith("${{") and body.endswith("}}"), f"not a GHA expression: {expr!r}"
+    body = body[3:-2].strip()
+    body = body.replace("!cancelled()", repr(not run_cancelled))
+    for ref, value in sorted(needs.items(), key=lambda kv: -len(kv[0])):
+        body = body.replace(f"needs.{ref}", repr(value))
+    assert "needs." not in body, (
+        f"unresolved `needs.` reference left in {body!r} after substituting "
+        f"{sorted(needs)} -- the synthetic context is missing a key this "
+        "expression actually reads, which would make this evaluate the WRONG "
+        "expression and still return a plausible-looking bool."
     )
-    expected_shard_if = f"needs.{DETECTOR_JOB}.outputs.{DETECTOR_FLAG} == 'true'"
-    assert str(shard.get("if") or "").strip() == expected_shard_if, (
-        f"{SHARD_JOB!r} has `if: {shard.get('if')!r}`, expected "
-        f"{expected_shard_if!r}."
+    assert "cancelled(" not in body, f"unresolved cancelled() left in {body!r}"
+    py = body.replace("&&", " and ").replace("||", " or ")
+    return bool(eval(py, {"__builtins__": {}}, {}))  # noqa: S307 -- fixed grammar, no external input
+
+
+def test_the_shard_jobs_if_fails_open_when_the_detector_itself_fails() -> None:
+    """BREAKS ON: the shard job's `if:` skipping when `drain-mutation-detect`
+    FAILS (a checkout timeout, a network flake -- ANY infra error, NOT a
+    `relevant=false` DECISION).
+
+    GitHub Actions implicitly ANDs `success()` into any `if:` that does not
+    itself name a status-check function, so
+    `if: needs.drain-mutation-detect.outputs.relevant == 'true'` ALONE -- the
+    very first shape this job carried -- would silently skip the whole matrix
+    whenever the detector job merely errored: the exact defect class this PR
+    exists to prevent, just moved one hop upstream. Caught in review
+    (2026-10-02) before merge; this is the regression test for that finding.
+
+    Evaluates the REAL `if:` string against four synthetic `needs` contexts
+    via `_eval_gha_if`, rather than string-matching, because the failure mode
+    here is specifically about what the expression COMPUTES, not what
+    substrings it contains.
+    """
+    expr = str(_job(SHARD_JOB).get("if") or "")
+
+    assert _eval_gha_if(
+        expr, run_cancelled=False,
+        needs={f"{DETECTOR_JOB}.result": "success",
+               f"{DETECTOR_JOB}.outputs.{DETECTOR_FLAG}": "false"},
+    ) is False, "a clean detector verdict of not-relevant must still skip"
+
+    assert _eval_gha_if(
+        expr, run_cancelled=False,
+        needs={f"{DETECTOR_JOB}.result": "success",
+               f"{DETECTOR_JOB}.outputs.{DETECTOR_FLAG}": "true"},
+    ) is True, "a clean detector verdict of relevant must run"
+
+    # THE REVIEWER'S SCENARIO: the detector job itself FAILED -- its output
+    # was never set, so GitHub would read it as empty, not 'true'/'false'.
+    assert _eval_gha_if(
+        expr, run_cancelled=False,
+        needs={f"{DETECTOR_JOB}.result": "failure",
+               f"{DETECTOR_JOB}.outputs.{DETECTOR_FLAG}": ""},
+    ) is True, "a FAILED detector job must fail OPEN (run), not skip silently"
+
+    assert _eval_gha_if(
+        expr, run_cancelled=True,
+        needs={f"{DETECTOR_JOB}.result": "success",
+               f"{DETECTOR_JOB}.outputs.{DETECTOR_FLAG}": "true"},
+    ) is False, "a cancelled RUN must not run more matrix work regardless of the detector"
+
+
+def test_the_merge_jobs_if_runs_whenever_the_shard_job_was_not_skipped() -> None:
+    """BREAKS ON: the merge job's `if:` reading an `outputs` value off the
+    (matrix) shard job instead of `result` -- GitHub's own docs only promise
+    the value comes from "one of" the matrix legs when more than one defines
+    the same output name, not which, so that is NOT a reliable fail-open
+    signal the way `result` (already used two lines below for
+    `--needs-result`, with the exact same semantics) is -- or dropping either
+    half of the compound.
+    """
+    expr = str(_job(MERGE_JOB).get("if") or "")
+
+    for result in ("success", "failure", "cancelled"):
+        assert _eval_gha_if(
+            expr, run_cancelled=False, needs={f"{SHARD_JOB}.result": result}
+        ) is True, (
+            f"shard result {result!r} means the shard genuinely attempted the "
+            "matrix and must still be adjudicated"
+        )
+
+    assert _eval_gha_if(
+        expr, run_cancelled=False, needs={f"{SHARD_JOB}.result": "skipped"}
+    ) is False, (
+        "a SKIPPED shard (the detector determined this PR's footprint did not "
+        "touch tools/drain/** or this workflow file) must skip cleanly, with "
+        "no red anywhere"
     )
-    republished = str((shard.get("outputs") or {}).get(DETECTOR_FLAG) or "").strip()
-    expected_republish = f"${{{{ needs.{DETECTOR_JOB}.outputs.{DETECTOR_FLAG} }}}}"
-    assert republished == expected_republish, (
-        f"{SHARD_JOB!r}.outputs.{DETECTOR_FLAG} is {republished!r}, expected "
-        f"{expected_republish!r}. Without this relay, the merge job's `if:` "
-        "reads an output that was never set -- indistinguishable from "
-        "`relevant=false` -- so the matrix would silently never run."
-    )
-    merge_if = str(_job(MERGE_JOB).get("if") or "")
-    expected_in_merge = f"needs.{SHARD_JOB}.outputs.{DETECTOR_FLAG} == 'true'"
-    assert expected_in_merge in merge_if, (
-        f"{MERGE_JOB!r}'s `if:` ({merge_if!r}) does not reference "
-        f"{expected_in_merge!r}. A rename on one side of the relay without the "
-        "other degrades this to comparing against an always-empty string, "
-        "i.e. the matrix never runs regardless of the detector."
-    )
+
+    assert _eval_gha_if(
+        expr, run_cancelled=True, needs={f"{SHARD_JOB}.result": "success"}
+    ) is False, "a cancelled RUN must not adjudicate, regardless of the shard's result"
 
 
 def test_the_change_detector_is_scoped_to_tools_drain_and_this_workflow() -> None:
