@@ -114,10 +114,13 @@ err_class() {
   esac
 }
 
-# pull_role PRINCIPAL: sets PR_STATE (yes|no|unknown), PR_ROLE, PR_WHY
+# pull_role PRINCIPAL: sets PR_STATE (yes|no|unknown), PR_ROLE, PR_WHY. PR_WHY
+# is reset on every call so a later successful (or differently-failed) read
+# is never shadowed by an earlier failure's message.
 pull_role() {
   local r
   PR_ROLE=""
+  PR_WHY=""
   azq role assignment list --scope "$ACR_ID" --include-inherited --fill-principal-name false \
     --query "[?principalId=='$1'].roleDefinitionName" -o tsv
   if [ "$AZ_RC" -ne 0 ]; then
@@ -220,4 +223,11 @@ while [ "$i" -lt "$POLL_ATTEMPTS" ]; do
   fi
   [ "$i" -lt "$POLL_ATTEMPTS" ] && sleep "$POLL_SECONDS"
 done
-stop "AcrPull was assigned but did not become visible after $POLL_ATTEMPTS reads (last read: ${PR_WHY:-$PR_STATE}); if it appears later, re-dispatch"
+# The decision this exit makes depends on what the LAST read actually showed:
+# if it failed, "no pull-capable role" was never established, so this is the
+# same unknown-read case the identity and registry reads already exit 2 for.
+if [ "$PR_STATE" = unknown ]; then
+  echo "::error::Whether $IDN can pull from registry $ACR is UNKNOWN: the last of $POLL_ATTEMPTS poll reads after the grant failed ($PR_WHY). AcrPull was requested but this run could not confirm it is visible. Refusing to deploy on an unverified pull identity; re-dispatch once the role assignment read succeeds."
+  exit 2
+fi
+stop "AcrPull was assigned but did not become visible after $POLL_ATTEMPTS reads; if it appears later, re-dispatch"

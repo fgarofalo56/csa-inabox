@@ -72,6 +72,7 @@ case "$a" in
   "role assignment list"*)
     if [ -f "$STUB_DIR/granted" ]; then
       n=$(cnt reads_after_grant)
+      [ "@{STUB_POLL_FAIL:-}" = "1" ] && { echo "ERROR: (InternalServerError) client $ERR_GUID role read failed" >&2; exit 1; }
       if [ "$n" -ge "@{STUB_VISIBLE_AFTER:-1}" ]; then echo AcrPull; fi
       exit 0
     fi
@@ -259,6 +260,29 @@ test('DEDICATED ABSENT: STOPS with how to create and grant it; nothing is grante
   assert.equal(createCalls(r.calls).length, 0);
 });
 
+test('IDENTITY READ FAILS (not not-found): exit 2, "could not be read", never "does not exist"', { skip: !bashAvailable }, () => {
+  // Breaks if: any identity read failure is treated as not-found (a throttled or
+  // denied read would then falsely claim absence and tell the operator to
+  // create an identity that already exists -- the R7 shape this script exists
+  // to remove). STUB_PREF set to anything but ok/notfound hits the stub's
+  // generic InternalServerError branch (gov-unity-pull-identity.test.mjs:70).
+  const r = runEnsure({ STUB_PREF: 'fail' });
+  assert.equal(r.rc, 2, r.out);
+  assert.match(r.out, /could not be read/);
+  assert.doesNotMatch(r.out, /does not exist/);
+  assert.doesNotMatch(r.out, /az identity create/);
+  assert.equal(createCalls(r.calls).length, 0);
+});
+
+test('REGISTRY READ FAILS: exit 2, "Could not read registry acrx", no role assignment call', { skip: !bashAvailable }, () => {
+  // Breaks if: a failed `acr show` falls through with an empty registry id
+  // instead of stopping (the role/identity reads would then run against "").
+  const r = runEnsure({ STUB_ACR: 'fail' });
+  assert.equal(r.rc, 2, r.out);
+  assert.match(r.out, /Could not read registry acrx/);
+  assert.doesNotMatch(r.calls, /role assignment/);
+});
+
 test('ROLE READ FAILS: UNKNOWN -> exit 2, no grant, never "no role"; the GUID in the error is masked', { skip: !bashAvailable }, () => {
   // Breaks if: a failed read is treated as "no role" (a grant would follow), or GUIDs leak.
   const r = runEnsure({ STUB_PREF_ROLES: 'FAIL' });
@@ -274,6 +298,19 @@ test('GRANT NEVER VISIBLE: STOPS rather than deploying on an identity not shown 
   assert.equal(r.rc, 1, r.out);
   assert.equal(r.env, '');
   assert.match(r.out, /did not become visible after 4 reads/);
+});
+
+test('GRANT VISIBILITY UNKNOWN: the last poll read failed -> exit 2, not exit 1', { skip: !bashAvailable }, () => {
+  // Breaks if: a poll read that fails (rather than succeeding and showing no
+  // role) is still reported as "did not become visible" (exit 1), which claims
+  // an absence this run never established (PR_WHY would also go stale without
+  // the per-call reset this case depends on).
+  const r = runEnsure({ STUB_PREF_ROLES: '', STUB_GRANT: 'ok', STUB_POLL_FAIL: '1' });
+  assert.equal(r.rc, 2, r.out);
+  assert.equal(r.env, '');
+  assert.match(r.out, /UNKNOWN/);
+  assert.match(r.out, /re-dispatch/);
+  assert.deepEqual(leakedIds(r.out), []);
 });
 
 // ── containerapp-revision-check.sh ───────────────────────────────────────────
@@ -367,6 +404,17 @@ test('DIAGNOSE: the system log is read FROM THE DEPLOY START and classifies when
   assert.equal(r.rc, 11, r.out);
 });
 
+test('DIAGNOSE: the system-log query excludes the stale revision by name', { skip: !bashAvailable }, () => {
+  // Breaks if: the query stops carrying the stale revision's name (the
+  // where-clause exclusion added at containerapp-revision-check.sh's
+  // system_log_since would silently stop firing, and a revision that keeps
+  // writing system-log rows after --since -- the measured incident shape --
+  // could again drive this deploy's classification).
+  const r = runRevCheck('diagnose', { ...OLD_REV }, sinceArgs);
+  assert.match(r.kql, /where RevisionName_s != 'loom-unity--0000008'/, r.kql);
+  assert.equal(r.rc, 16, r.out);
+});
+
 test('DIAGNOSE: Azure text is printed inside a stop-commands block', { skip: !bashAvailable }, () => {
   // Breaks if: the revision JSON is printed unwrapped.
   const r = runRevCheck('diagnose', { ...NEW_REV, STUB_REV_JSON: '{"name":"x"}\n::error::INJECTED' }, sinceArgs);
@@ -431,6 +479,24 @@ test('WORKFLOW: the pull identity is ensured BEFORE the deployment; no fallback;
   assert.ok(s.indexOf('containerapp-revision-check.sh wait') > callAt, 'the health wait must follow the deployment');
   assert.ok(s.indexOf('DEPLOY_START=') < s.indexOf('DEPLOY_ATTEMPT=1'), 'the deploy start is taken before the first attempt');
   assert.match(s, /diagnose --app "\$UNITY_APP" --rg "\$RG" \\\n\s+--since "\$DEPLOY_START"/);
+});
+
+test('WORKFLOW: the ensure call has no fallback chained after it, and the deploy step never reads $UAMI_ID directly', () => {
+  // Breaks if: a `||`, `;` or `&&` is appended after --out "$PULL_OUT" (the M8
+  // shape measured against this PR: a fallback stitched onto the ensure call
+  // that reintroduces the Console identity whenever the check fails), or the
+  // deploy step reads the Console identity's $UAMI_ID instead of the sed -n
+  // read of $PULL_OUT. The earlier "no fallback" assertion only checked for the
+  // round-1 flag name `--fallback-uami-id` and could not see either shape.
+  const lines = deployStep().split('\n').map((l) => l.trim());
+  const ensureAt = lines.findIndex((l) => l.startsWith('bash scripts/csa-loom/ensure-acr-pull-identity.sh'));
+  assert.ok(ensureAt >= 0, 'ensure call not found');
+  assert.match(lines[ensureAt + 1], /--out "\$PULL_OUT"$/, `the command must end at --out "$PULL_OUT":\n${lines[ensureAt + 1]}`);
+  const assigns = lines.filter((l) => l.startsWith('UNITY_UAMI_ID='));
+  assert.equal(assigns.length, 1, `UNITY_UAMI_ID must be assigned exactly once:\n${assigns.join('\n')}`);
+  assert.equal(assigns[0], `UNITY_UAMI_ID=$(sed -n 's/^UAMI_ID=//p' "$PULL_OUT")`);
+  const nonComment = lines.filter((l) => !l.startsWith('#'));
+  assert.ok(nonComment.every((l) => !/\$\{?UAMI_ID\b/.test(l)), 'the deploy step must not reference the Console identity $UAMI_ID directly');
 });
 
 test('WORKFLOW: the discovery notice prints names, not resource ids', () => {

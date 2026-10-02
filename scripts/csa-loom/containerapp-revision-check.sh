@@ -93,11 +93,14 @@ azq() {
   rm -f "$f"
 }
 
-# system_log_since: the environment's system log for this app from --since,
-# appended to STATE_TEXT. Reads Log Analytics (the table shape follows the
-# environment's log destination).
+# system_log_since STALE_REV: the environment's system log for this app from
+# --since, appended to STATE_TEXT. Reads Log Analytics (the table shape
+# follows the environment's log destination). STALE_REV, when given, is the
+# name of a revision this deploy did NOT create (the newest one found,
+# predating --since) -- its rows are excluded server-side so a still-running
+# old revision cannot drive this deploy's classification.
 system_log_since() {
-  local env_id dest law tbl appc t
+  local env_id dest law tbl appc revc t stale="${1:-}" rev_filter=""
   [ -n "$SINCE" ] || return 0
   azq containerapp show -n "$APP" -g "$RG" --query properties.environmentId -o tsv
   env_id="$AZ_OUT"
@@ -109,18 +112,21 @@ system_log_since() {
   azq containerapp env show --ids "$env_id" --query "properties.appLogsConfiguration.logAnalyticsConfiguration.customerId || ''" -o tsv
   law="$AZ_OUT"
   case "$dest" in
-    log-analytics) tbl=ContainerAppSystemLogs_CL; appc=ContainerAppName_s
+    log-analytics) tbl=ContainerAppSystemLogs_CL; appc=ContainerAppName_s; revc=RevisionName_s
       t="strcat(format_datetime(TimeGenerated,'yyyy-MM-dd HH:mm:ss'),' ',RevisionName_s,' ',tostring(column_ifexists('Type_s','')),' ',tostring(column_ifexists('Reason_s','')),' ',translate('\r\n\t',' ',Log_s))" ;;
-    azure-monitor) tbl=ContainerAppSystemLogs; appc=ContainerAppName
+    azure-monitor) tbl=ContainerAppSystemLogs; appc=ContainerAppName; revc=RevisionName
       t="strcat(format_datetime(TimeGenerated,'yyyy-MM-dd HH:mm:ss'),' ',RevisionName,' ',Type,' ',Reason,' ',translate('\r\n\t',' ',Log))" ;;
     *) echo "(system log not read: the environment's log destination is '${dest:-unknown}', not a Log Analytics workspace this script reads)"; return 0 ;;
   esac
   if [ -z "$law" ] || [[ "$law" =~ [^0-9A-Fa-f-] ]]; then
     echo "(system log not read: no Log Analytics workspace id on the environment)"; return 0
   fi
+  if [ -n "$stale" ]; then
+    rev_filter=" | where $revc != '$stale'"
+  fi
   azq extension add -n log-analytics -y --only-show-errors
   azq monitor log-analytics query -w "$law" -o tsv --query "[].line" --analytics-query \
-    "$tbl | where TimeGenerated >= datetime(${SINCE:0:19}Z) | where $appc == '$APP' | top 50 by TimeGenerated desc | order by TimeGenerated asc | project line=$t"
+    "$tbl | where TimeGenerated >= datetime(${SINCE:0:19}Z) | where $appc == '$APP'$rev_filter | top 50 by TimeGenerated desc | order by TimeGenerated asc | project line=$t"
   if [ "$AZ_RC" -ne 0 ]; then
     echo "(system log not read: the query exited $AZ_RC: $(printf '%s' "$AZ_ERR" | oneline))"; return 0
   fi
@@ -134,7 +140,7 @@ system_log_since() {
 }
 
 diagnose() {
-  local deploy_text="" rev="" created="" cls
+  local deploy_text="" rev="" created="" cls stale_rev=""
   STATE_TEXT=""
   if [ -n "$DEPLOY_STDERR" ] && [ -s "$DEPLOY_STDERR" ]; then
     echo "--- deployment error (first 40 lines) ---"
@@ -153,6 +159,7 @@ diagnose() {
     echo "No revision was created by this deploy: the newest, $rev (created ${created:0:19}Z), predates its start (${SINCE:0:19}Z), so its state is not reported."
     azq containerapp show -n "$APP" -g "$RG" --query properties.provisioningState -o tsv
     echo "$APP provisioningState: ${AZ_OUT:-<not read, az exit $AZ_RC>}"
+    stale_rev="$rev"
     rev=""
   fi
   if [ -n "$rev" ]; then
@@ -175,7 +182,7 @@ diagnose() {
       echo "(replicas of $rev could not be read: az exit $AZ_RC: $(printf '%s' "$AZ_ERR" | oneline))"
     fi
   fi
-  system_log_since
+  system_log_since "$stale_rev"
 
   local all="$deploy_text $STATE_TEXT"
   cls=unknown
