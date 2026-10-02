@@ -36,7 +36,7 @@
 
 import { trimChar } from '@/lib/util/trim';
 import { stripSqlCommentsAndLiterals } from '@/lib/util/sql-strip';
-import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { escapeSparkSqlLiteral } from '@/lib/sql/quoting';
 
 /** Authoring language for the MLV definition. */
 export type MlvLanguage = 'sql' | 'pyspark';
@@ -126,11 +126,11 @@ export function buildCreateMlvSql(spec: MlvSpec): string {
   lines.push(head);
 
   const opts: string[] = [];
-  if (spec.comment?.trim()) opts.push(`COMMENT '${escapeSqlLiteral(spec.comment.trim())}'`);
+  if (spec.comment?.trim()) opts.push(`COMMENT '${escapeSparkSqlLiteral(spec.comment.trim())}'`);
   if (spec.partitionCols?.length) opts.push(`PARTITIONED BY (${spec.partitionCols.join(', ')})`);
   if (spec.tableProperties && Object.keys(spec.tableProperties).length) {
     const tp = Object.entries(spec.tableProperties)
-      .map(([k, v]) => `'${k}' = '${escapeSqlLiteral(String(v))}'`)
+      .map(([k, v]) => `'${escapeSparkSqlLiteral(k)}' = '${escapeSparkSqlLiteral(String(v))}'`)
       .join(', ');
     opts.push(`TBLPROPERTIES (${tp})`);
   }
