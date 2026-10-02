@@ -1730,6 +1730,17 @@ RED_CONCLUSIONS = frozenset(
 # at the same head, because nothing was measured to discharge it with. A
 # SUCCESS is deliberately absent: that is a re-run that ran and passed.
 MEASURED_NOTHING = frozenset({"SKIPPED", "NEUTRAL"})
+# #4346 -- check-runs whose NEUTRAL conclusion is a statement that a run was
+# NOT measured, not a check that passed. The Copilot quality evals publish
+# "Copilot quality: not measured" (neutral) beside their own job when the
+# grounding judge did not fully score a PR run. Read as an ordinary advisory
+# NEUTRAL it lands in `clean` and is counted as green coverage -- the exact
+# reading the check exists to prevent. On the advisory path a NEUTRAL on one of
+# these names is reported as NOT EVIDENCE instead: never clean, never red.
+# The name is the constant NOT_MEASURED_CHECK_NAME in
+# scripts/ci/eval-measurement.mjs; `test_gates.py` lifts it from that file, so
+# a rename on either side fails a test instead of silently re-greening it.
+NOT_EVIDENCE_CONTEXTS = frozenset({"Copilot quality: not measured"})
 # Not finished. A required context that has not concluded is INCOMPLETE, never a
 # pass. `EXPECTED` is a StatusContext that has been announced and never
 # reported -- the check-run equivalent of never-created.
@@ -1879,12 +1890,18 @@ class AdvisorySplit:
     a name whose NEWEST run has not concluded while an OLDER run at the same
     head concluded RED. See `classify_advisory_checks` for why it is separate
     from both `red` and `wait`.
+
+    `not_evidence` (#4346) carries `"name (NEUTRAL)"` for a context in
+    `NOT_EVIDENCE_CONTEXTS` whose newest run is NEUTRAL. It is counted in
+    `population` and deliberately NOT in `clean`: it does not block, and it is
+    not green coverage either.
     """
 
     red: list[str]
     rerun: list[str]
     wait: list[str]
     clean: list[str]
+    not_evidence: list[str]
     population: int
     total_checks: int
 
@@ -2112,6 +2129,7 @@ def classify_advisory_checks(checks: list[dict], required: list[str]) -> Advisor
     rerun: list[str] = []
     wait: list[str] = []
     clean: list[str] = []
+    not_evidence: list[str] = []
     groups = _group_by_name(checks)
     for name, check in sorted(_newest_from_groups(groups).items()):
         if name in required_names:
@@ -2173,6 +2191,10 @@ def classify_advisory_checks(checks: list[dict], required: list[str]) -> Advisor
                     f"{name} (superseded by a {verdict} run, which measured nothing; "
                     f"the newest run that DID measure at this head was {prior_verdict})"
                 )
+            elif verdict == "NEUTRAL" and name in NOT_EVIDENCE_CONTEXTS:
+                # #4346: this NEUTRAL is the eval saying "not measured". It
+                # does not block, and it is not counted as clean coverage.
+                not_evidence.append(f"{name} ({verdict})")
             else:
                 clean.append(name)
         else:
@@ -2182,7 +2204,8 @@ def classify_advisory_checks(checks: list[dict], required: list[str]) -> Advisor
         rerun=rerun,
         wait=wait,
         clean=clean,
-        population=len(red) + len(rerun) + len(wait) + len(clean),
+        not_evidence=not_evidence,
+        population=len(red) + len(rerun) + len(wait) + len(clean) + len(not_evidence),
         total_checks=len(checks),
     )
 
@@ -2276,6 +2299,12 @@ def advisory_verdict(
         "counted as red, and a check still running can still turn red after this line."
         if split.wait else ""
     )
+    not_evidence = (
+        f" NOT EVIDENCE {len(split.not_evidence)}: {', '.join(split.not_evidence)} - a "
+        "neutral check published to say a run was NOT measured; it is not counted as "
+        "clean and is not a pass (#4346)."
+        if split.not_evidence else ""
+    )
     if split.red or split.rerun:
         blocking = [
             (f"ADV-RED {len(split.red)}: {'; '.join(split.red)}." if split.red else ""),
@@ -2293,7 +2322,7 @@ def advisory_verdict(
             "`rerun-ci` and `approve-parked-ci-run` are permitted unattended) and "
             "wait for the new answer. Do NOT merge past it. "
             f"[{split.population} advisory of {split.total_checks} published; "
-            f"{len(split.clean)} clean]" + waiting
+            f"{len(split.clean)} clean]" + waiting + not_evidence
         )
     return True, (
         f"no advisory context is red: {len(split.clean)} clean of {split.population} "
@@ -2301,7 +2330,7 @@ def advisory_verdict(
         "ATTACHED TO THIS HEAD only - a lane with no `pull_request` trigger publishes "
         "nothing here. The ACR image builds (#4547) DO have a push trigger, but it is "
         "`branches: [main]`, and a PR head is never on main - that branch filter is the "
-        "invariant, not an absent trigger." + waiting
+        "invariant, not an absent trigger." + waiting + not_evidence
     )
 
 
