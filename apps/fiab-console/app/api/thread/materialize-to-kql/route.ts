@@ -17,10 +17,44 @@
  *
  * Body: { from:{id,type,name}, values:{ table:'name|adlsPath', kqlDatabaseId, accelerate? } }
  * Returns: { ok, message, externalTable, database, link, linkLabel } | { ok:false, error }
+ *
+ * ── ACCESS ──────────────────────────────────────────────────────────────────
+ * The source lakehouse is only read, so a read role on it is enough. The
+ * target database is written (`.create-or-alter external table`, `.alter …
+ * policy`), so it is loaded write-scoped: a member who can see it but not write
+ * it gets 403 ("materializing requires write access to the target database")
+ * before any storage or ADX call; one who cannot see it gets 404.
+ *
+ * ── THE TABLE NAME IS ONE PATH SEGMENT ──────────────────────────────────────
+ * The storage location is built as `<lakehouse root>/Tables/<name>`, and
+ * `<name>` arrives in the request body. It is validated as a single path
+ * segment (`tableNameProblem`) BEFORE any Cosmos, storage or ADX call, and a
+ * name that is not one is refused with 400 rather than rewritten, so the
+ * location handed to ADX always names a folder directly under the item's own
+ * `Tables/`. The segment rules are the lakehouse path validator's
+ * (`pathSegments`, app/api/lakehouse/_lib/item-scope.ts); on top of it this
+ * route refuses control characters and the characters that carry meaning in the
+ * ADX storage connection string / URI (`;` separates the auth properties, `?`
+ * and `#` end the path, `%` is an escape, `@` separates a URI's user part from
+ * its host), because the name is placed into that string verbatim. Names are
+ * NOT restricted to `[A-Za-z0-9_]`: a Delta table folder with a hyphen or a
+ * space is a real table, and rewriting it would bind a different (usually
+ * missing) folder.
+ *
+ * On the ADX side the name never reaches a KQL identifier raw: the external
+ * table name is `adxIdent(...)` (`[A-Za-z0-9_]` only) and bracket-quoted by
+ * `qName`; the connection string is a verbatim literal (`kqlVerbatimSingle`);
+ * the docstring is `kqlEscapeDouble`-escaped.
+ *
+ * Route-toolkit: withSession (R3), behind a 1-arg `POST` adapter — this route
+ * is a Weave bridge that `app/api/estate/execute/route.ts` dynamic-imports as
+ * `(req: NextRequest) => Promise<Response>` (same shape as mirror-to-notebook).
  */
 import { trimEdges } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
+import type { SessionPayload } from '@/lib/auth/session';
+import { pathSegments } from '@/app/api/lakehouse/_lib/item-scope';
 import { loadOwnedItem } from '../../items/_lib/item-crud';
 import { recordThreadEdge } from '@/lib/thread/thread-edges';
 import { lakehouseStorageWithheldFields, resolveLakehouseStorage } from '@/lib/azure/lakehouse-abfss';
@@ -64,9 +98,35 @@ function kqlDatabaseName(item: { displayName: string; state?: unknown }): string
   return derived || defaultDatabase() || 'loomdb';
 }
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return bad('unauthenticated', 401);
+/** Control characters U+0000–U+001F and U+007F. */
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHAR_RE = /[\u0000-\u001f\u007f]/;
+/** Characters with meaning in the ADX storage connection string / URI. */
+const CONN_STRING_META_RE = /[;?#%@]/;
+
+/**
+ * Why `name` is not usable as the single `Tables/<name>` segment, or null when
+ * it is. Checked in this order so the message names the first rule it breaks.
+ */
+function tableNameProblem(name: string): string | null {
+  if (!name) return 'invalid table selection: the table name is empty';
+  if (CONTROL_CHAR_RE.test(name)) return 'invalid table name: it contains a control character';
+  // `pathSegments` treats "\" as a separator, refuses "." / ".." / NUL / an
+  // absolute form, and collapses doubled or trailing separators. Requiring its
+  // first segment to EQUAL the input is what makes this "one segment": any
+  // separator in the input is absent from every segment, so a multi-segment
+  // or collapsed input can never compare equal.
+  const segs = pathSegments(name);
+  if (!segs || segs[0] !== name) {
+    return 'invalid table name: expected a single folder name under Tables/ — no "/" or "\\", and not "." or ".."';
+  }
+  if (CONN_STRING_META_RE.test(name)) {
+    return 'invalid table name: ";", "?", "#", "%" and "@" are not accepted in a table name';
+  }
+  return null;
+}
+
+async function materialize(req: NextRequest, session: SessionPayload): Promise<NextResponse> {
   const oid = session.claims.oid;
 
   const body = await req.json().catch(() => ({} as any));
@@ -79,6 +139,12 @@ export async function POST(req: NextRequest) {
   if (from.type !== 'lakehouse' || !from.id) return bad('this edge is for lakehouse items', 400);
   if (!tableSel) return bad('pick a Delta table', 400);
   if (!kqlDatabaseId) return bad('pick a KQL database', 400);
+
+  // Shape check first: nothing is read or called for a name that is not one
+  // path segment.
+  const tableName = tableSel.split('|')[0]?.trim() ?? '';
+  const nameProblem = tableNameProblem(tableName);
+  if (nameProblem) return bad(nameProblem, 400);
 
   // Honest infra gate: no ADX cluster configured.
   const gate = kustoConfigGate();
@@ -95,12 +161,16 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Load both endpoints owner-scoped.
+  // Source lakehouse: read access is enough (it is only read).
   const lake = await loadOwnedItem(from.id, from.type, oid, { allowReadRoles: true });
   if (!lake) return bad('lakehouse not found', 404);
-  let kqlItem = await loadOwnedItem(kqlDatabaseId, 'kql-database', oid, { allowReadRoles: true });
-  if (!kqlItem) kqlItem = await loadOwnedItem(kqlDatabaseId, 'eventhouse', oid, { allowReadRoles: true });
-  if (!kqlItem) return bad('KQL database not found', 404);
+  // Target database: visible (read-scoped) decides 404; writable (the default,
+  // write-scoped load) decides 403 — the ADX commands below are writes.
+  let visibleKql = await loadOwnedItem(kqlDatabaseId, 'kql-database', oid, { allowReadRoles: true });
+  if (!visibleKql) visibleKql = await loadOwnedItem(kqlDatabaseId, 'eventhouse', oid, { allowReadRoles: true });
+  if (!visibleKql) return bad('KQL database not found', 404);
+  const kqlItem = await loadOwnedItem(kqlDatabaseId, visibleKql.itemType, oid);
+  if (!kqlItem) return bad('materializing requires write access to the target database', 403);
 
   // Resolve the lakehouse's REAL ADLS root, then the Delta table's abfss folder.
   const resolved = await resolveLakehouseStorage(from.id, lake.workspaceId);
@@ -122,8 +192,6 @@ export async function POST(req: NextRequest) {
     );
   }
   const root = resolved.bound;
-  const tableName = tableSel.split('|')[0]?.trim();
-  if (!tableName) return bad('invalid table selection', 400);
   const abfssUri = `${root.abfss.replace(/\/+$/, '')}/Tables/${tableName}`;
 
   const db = kqlDatabaseName(kqlItem);
@@ -181,5 +249,20 @@ export async function POST(req: NextRequest) {
       `${accelerated ? ' with query acceleration on' : ''}. Query it with KQL: external_table("${extName}") | take 100.${accelNote}`,
     link: `/items/${kqlItem.itemType}/${kqlItem.id}`,
     linkLabel: `Open ${kqlItem.itemType === 'eventhouse' ? 'the Eventhouse' : 'the KQL database'}`,
+  });
+}
+
+/**
+ * 1-arg adapter: keeps the Weave bridge contract (see the header); this route
+ * has no `[param]` segment. The handler is a named function CALLED from here,
+ * not a `const x = withSession(...)` binding, so the route-inventory analyzer
+ * (scripts/ci/_route-auth-scope.mjs), which follows call sites from the
+ * exported verb, still reaches the item loads and backend calls in its body.
+ * An unexpected throw becomes the toolkit's generic 500 (`apiServerError`,
+ * logged server-side) rather than propagating to the caller.
+ */
+export async function POST(req: NextRequest): Promise<Response> {
+  return withSession((r: NextRequest, { session }) => materialize(r, session))(req, {
+    params: Promise.resolve({}),
   });
 }
