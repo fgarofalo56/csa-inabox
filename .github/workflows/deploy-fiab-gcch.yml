@@ -9,7 +9,13 @@ name: deploy-fiab-gcch
 # The `Provision (with full Gov dispatch)` step below is gated
 # `if: github.event_name == 'schedule' || inputs.run_mode == 'full'`, and
 # run_mode DEFAULTS to whatif-only — so the DEFAULT dispatch of this workflow
-# SUCCEEDS having applied nothing to GCC-High.
+# SUCCEEDS having applied nothing to GCC-High. The `schedule` half of that
+# clause is now DEAD on purpose (#4233): `deploy-validate` carries its own
+# job-level `if: github.event_name != 'schedule' && …`, so a scheduled run
+# never reaches this step (or any other step of that job) at all — deploys
+# are dispatch-only. Left as written rather than rewritten, since the job-level
+# guard already makes the schedule branch unreachable and this step's history
+# (#3449, cited in its own comment) is about the dispatch path.
 #
 # This lane is now a WATCHED entry in scripts/ci/check-deploy-staleness.mjs, and
 # that watchdog clears an entry's drift on its newest SUCCESSFUL run. Until this
@@ -19,10 +25,13 @@ name: deploy-fiab-gcch
 # nothing" shape that watchdog exists to catch.
 #
 # The marker string is DRY_RUN_MARKER ('DRY RUN') in check-deploy-staleness.mjs,
-# which filters those runs out of the last-success search. Schedule runs
-# provision, so they carry no marker. Same contract, same wording, as
-# deploy-fiab-commercial.yml.
-run-name: deploy-fiab-gcch${{ (github.event_name == 'workflow_dispatch' && inputs.run_mode != 'full') && ' — DRY RUN (whatif-only, applies nothing)' || '' }}
+# which filters those runs out of the last-success search. Schedule runs used
+# to provision (before #4233), so they carried no marker; now that
+# `deploy-validate` is skipped outright on `schedule`, a scheduled run applies
+# NOTHING, and omitting the marker would let a schedule-only history read as a
+# deploy receipt — the exact misreport this lane's own watchdog exists to
+# catch, turned on itself. Schedule now carries the marker too.
+run-name: deploy-fiab-gcch${{ (github.event_name == 'schedule' && ' — DRY RUN (scheduled preflight only — secrets/pause check + What-If + image preflight; the approval-gated deploy is dispatch-only, #4233)') || ((github.event_name == 'workflow_dispatch' && inputs.run_mode != 'full') && ' — DRY RUN (whatif-only, applies nothing)') || '' }}
 
 on:
   schedule:
@@ -114,19 +123,29 @@ permissions:
 # independently of whether any run reported it. On the commercial lane neither
 # of those holds, which is why the same mechanism gets the opposite answer.
 #
-# RESIDUAL, stated rather than implied, and NOT asserted as fact — whether an
-# environment-`waiting` run counts as PENDING (cancellable) or IN-PROGRESS
-# (not) for the group is UNOBSERVED, and it decides the shape:
-#   - if `waiting` is PENDING: the pile caps at one and no hand-cancel is
-#     needed; each new cron run replaces the previous waiting one.
-#   - if `waiting` is IN-PROGRESS: the group's occupant is the oldest waiting
-#     scheduled run, the pile caps at two, and the stale occupant has to be
-#     cancelled by hand EACH cycle — not once — because the promoted run hits
-#     the same `gcc-high-deploy` gate and re-occupies the group. Every
-#     intervening scheduled run is then silently cancelled.
-# Either way this is strictly better than eleven, and either way approving a
-# stale occupant deploys the SHA it was triggered on, not head. The measurement
-# that settles it is tracked in #4233.
+# RESOLVED (#4233). The residual this paragraph used to state as unobserved —
+# whether an environment-`waiting` run counts as PENDING (cancellable) or
+# IN-PROGRESS (not) for the group — is now MEASURED: IN-PROGRESS. Run
+# 35234173588 (created 2026-09-17) ran its first two jobs, then sat `waiting`
+# at the `gcc-high-deploy` gate for ~12.7 days — holding
+# `deploy-fiab-gcch-schedule` the whole time — until it was cancelled
+# 2026-09-30T16:27:17Z. Every scheduled run created in that window (12 of
+# them, 35353326932 through 36596194636) queued at 0 jobs and was silently
+# dropped when the next day's cron superseded it. So the pile did NOT cap at
+# one or two; it froze at one WAITING occupant and discarded every run behind
+# it — the lane went dark, not red, for 13 days (deploy-integrity.md R3).
+#
+# THE FIX IS UPSTREAM OF THIS GROUP, NOT IN IT. `deploy-validate` (the only
+# job carrying `environment: gcc-high-deploy`) now has its own job-level
+# `if: github.event_name != 'schedule' && …`, so a scheduled run never asks the
+# environment for approval in the first place — it completes after `precheck`,
+# `pause-declaration` and `build-gov-images`, and this group is never occupied
+# by a `waiting` run at all. This block (the group key, `cancel-in-progress:
+# false`, and the reasoning below) is kept exactly as designed: an operator
+# `workflow_dispatch` still goes through `gcc-high-deploy` and still needs this
+# group to avoid piling behind another dispatch, and the analysis of
+# cancellation risk on the dispatch path (the ACR firewall lease, the killed
+# `az deployment sub create`) is unchanged.
 #
 # THE ELEVEN EXISTING `waiting` RUNS DO NOT OCCUPY THIS GROUP. A run executes
 # the workflow definition it was CREATED from, and all eleven were created from
@@ -257,8 +276,26 @@ jobs:
     # sovereign estate with no refusal at all. The declaration verdict costs no
     # Azure read, so it is populated on EVERY topology and every trigger; the
     # Teardown step below refuses on either half.
+    # SCHEDULE NEVER REACHES THE APPROVAL GATE (#4233). This job carries
+    # `environment: gcc-high-deploy` below, and GitHub evaluates a job's `if:`
+    # BEFORE it asks an environment's required reviewers for approval — so a
+    # job whose `if:` is already false for `schedule` never enters `waiting`
+    # at all, and never occupies `deploy-fiab-gcch-schedule`
+    # (`concurrency:` below) while it waits. Measured: run 35234173588
+    # (created 2026-09-17) sat `waiting` at this gate for ~12.7 days before
+    # being cancelled 2026-09-30, and every scheduled run created in that
+    # window (12 of them, 35353326932 through 36596194636) queued at 0 jobs
+    # and was silently dropped when the next day's cron superseded it. Deploys
+    # are dispatch-only now: a scheduled run still gets `precheck` (secrets
+    # check), `pause-declaration` (pause check) and `build-gov-images` (image
+    # build/preflight) — this job, the actual apply, and everything chained
+    # off it (`post-deploy-bootstrap` below) are skipped outright.
+    # `github.event_name != 'schedule'` is a CONJUNCT of the whole expression,
+    # not nested inside the existing `||` — a guard one disjunct away from the
+    # top is inert on exactly the trigger it exists for
+    # (gcch-standdown-completeness.test.mjs round 4 names that exact bypass).
     needs: [precheck, pause-declaration, build-gov-images]
-    if: always() && needs.precheck.outputs.configured == 'true'
+    if: always() && github.event_name != 'schedule' && needs.precheck.outputs.configured == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     environment: gcc-high-deploy   # requires manual approval
@@ -1850,7 +1887,14 @@ jobs:
   post-deploy-bootstrap:
     name: Post-deploy bootstrap (GCC-High)
     needs: deploy-validate
-    if: ${{ inputs.keep_resources && (github.event_name == 'schedule' || inputs.run_mode == 'full') && needs.deploy-validate.result == 'success' && needs.deploy-validate.outputs.estate_paused != 'true' }}
+    # The `schedule` disjunct is gone (#4233): `deploy-validate` above now
+    # carries a job-level `if: github.event_name != 'schedule' && …`, so on a
+    # scheduled run that job's `result` is `skipped`, never `success`, and
+    # `needs.deploy-validate.result == 'success'` already excludes this job on
+    # schedule by itself. Named explicitly rather than left to ride on that
+    # chain, since this job is exactly the kind of thing that "needs the
+    # environment approval" the schedule-preflight contract exists to skip.
+    if: ${{ inputs.keep_resources && inputs.run_mode == 'full' && needs.deploy-validate.result == 'success' && needs.deploy-validate.outputs.estate_paused != 'true' }}
     uses: ./.github/workflows/csa-loom-post-deploy-bootstrap.yml
     secrets: inherit
     with:
