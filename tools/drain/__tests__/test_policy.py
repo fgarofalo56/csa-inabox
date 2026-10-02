@@ -36,6 +36,16 @@ import gates
 POLICY_PATH = os.path.join(os.path.dirname(__file__), "..", "policy.json")
 POLICY = gates.load_policy(POLICY_PATH)
 
+#: `escalate_on_blocking_first_verdict` ships `false` as of the 2026-10-01 lean-
+#: review directive (`_lean_review_2026_10_01`), so a prior blocking verdict no
+#: longer raises `review_requirement`'s count by itself under the real POLICY.
+#: The SHAPE-MATCHING logic this used to drive (`worst_verdict_in_history`'s
+#: near-miss tagging, read through to the count) still exists -- it is just off
+#: by default -- so the tests that pin that logic drive it through an explicit
+#: override rather than through a branch the shipped policy no longer takes.
+POLICY_BLOCK_ESCALATES = {**POLICY, "review": {**POLICY["review"],
+                                               "escalate_on_blocking_first_verdict": True}}
+
 
 def test_every_policy_key_has_an_implementation():
     gates.assert_policy_matches_code(POLICY)
@@ -378,27 +388,40 @@ def test_the_default_is_read_from_the_authority():
     assert n == 3
 
 
-def test_negative_control_the_guard_stream_escalates_on_its_own():
-    """W6-ci IS the guard stream and the policy's own sentence says "or any
-    guard". It was covered only INCIDENTALLY -- `stream_for` assigns W6-ci
-    BECAUSE the item carries `lane:ci`, which maps to `scripts/ci`, which
-    escalates by path. But `stream` is pinned from the inventory snapshot while
-    `lane` is refreshed from live labels every tick, so a relabel decouples
-    them. Measured before the fix: W6-ci with `lane:dataplane` got ONE."""
+def test_negative_control_the_guard_stream_no_longer_escalates_on_its_own():
+    """PRE-2026-10-01 this pinned a historical defect: W6-ci was the guard
+    stream and got covered only INCIDENTALLY through a lane-to-path guess, so a
+    relabel could decouple them (measured: W6-ci with `lane:dataplane` got
+    ONE). The 2026-10-01 lean-review directive removed W6-ci from
+    `escalate_to_two_when_stream_is` outright -- it is not an escalating stream
+    any more, by any route -- so this now pins the OPPOSITE fact: a bare W6-ci
+    diff with no escalating path gets the ordinary count. Breaks if W6-ci is
+    ever added back to the shipped stream list without updating this test."""
     for lane_path in ("domains/", "docs/"):
         n, why = gates.review_requirement(POLICY, changed_paths=[lane_path], stream="W6-ci")
-        assert n == 2, f"W6-ci via {lane_path}: {why}"
+        assert n == 1, f"W6-ci via {lane_path} escalated under the narrowed policy: {why}"
 
 
 def test_the_stream_escalates_whatever_the_diff_touches():
     """A lane is a guess about the footprint; a stream is a fact about the work.
-    Every W0-harness item is a `tools/drain` diff by construction."""
-    for stream in ("W0-harness", "W1-deploy", "W2-security", "W5-console", "W7-bicep"):
+    Every W0-harness item is a `tools/drain` diff by construction. Narrowed
+    2026-10-01 to just the two streams the shipped policy still escalates on."""
+    for stream in ("W0-harness", "W2-security"):
         n, why = gates.review_requirement(POLICY, changed_paths=[], stream=stream)
         assert n == 2, f"{stream}: {why}"
     n, _ = gates.review_requirement(POLICY, changed_paths=["domains/x.sql"],
                                     stream="W8-dataplane")
     assert n == 1
+
+
+def test_negative_control_the_dropped_streams_no_longer_escalate():
+    """THE OTHER HALF of the narrowing, pinned so re-widening the list is a
+    conscious edit rather than a silent regression of the OLD behaviour this
+    policy used to have. Breaks if any of these five streams is restored to
+    `escalate_to_two_when_stream_is` without a matching test update."""
+    for stream in ("W1-deploy", "W3-gov", "W5-console", "W6-ci", "W7-bicep"):
+        n, why = gates.review_requirement(POLICY, changed_paths=[], stream=stream)
+        assert n == 1, f"{stream} escalated under the narrowed policy: {why}"
 
 
 def test_negative_control_an_unknown_footprint_fails_closed():
@@ -418,28 +441,58 @@ def test_every_lane_label_in_the_repo_maps_to_a_path():
         assert lane in gates.LANE_PATHS, lane
 
 
-def test_negative_control_each_escalating_lane_is_pinned_individually():
-    """Arms that deleted the bicep and ci rows both SURVIVED a full suite: 31 and
-    33 laned items would silently drop from two reviewers to one, over a green
-    93/93 matrix."""
-    for lane, expected in (("lane:console", 2), ("lane:bicep", 2),
-                           ("lane:ci", 2), ("lane:dataplane", 1), ("lane:docs", 1)):
+def test_negative_control_each_lane_is_pinned_individually():
+    """PRE-2026-10-01 this pinned console/bicep/ci at 2 (arms that deleted those
+    rows both SURVIVED a full suite: 31 and 33 laned items would silently drop
+    to one, over a green 93/93 matrix). The 2026-10-01 narrowing removed the
+    bare `apps/fiab-console`, `platform/fiab/bicep` and `scripts/ci` fragments
+    from the authority outright -- `LANE_PATHS` still maps those lanes to those
+    bare directories, so NONE of the five lanes below now escalates by path
+    alone. Breaks if a bare lane path is ever re-added to the authority without
+    updating this test, since that would silently re-escalate every item in
+    that lane regardless of which file within it changed."""
+    for lane in ("lane:console", "lane:bicep", "lane:ci", "lane:dataplane", "lane:docs"):
         n, why = gates.review_requirement(
             POLICY, changed_paths=[gates.LANE_PATHS[lane]], stream="W9-rest")
-        assert n == expected, f"{lane} -> {n}, expected {expected}: {why}"
+        assert n == 1, f"{lane} -> {n}, expected 1 under the narrowed policy: {why}"
 
 
 #: Every fragment in `escalate_to_two_when_path_contains`, with a real file
 #: that lands on it. The fragment itself is NOT the test input -- a test that
 #: fed the list back into itself would pass over an empty list and prove
 #: nothing. These paths are written out by hand so that deleting a row from the
-#: authority makes a NAMED case fail.
+#: authority makes a NAMED case fail. Narrowed 2026-10-01 (`_lean_review_
+#: 2026_10_01`) from twelve fragments to these five; the dropped seven are
+#: pinned as NO LONGER escalating by `test_negative_control_the_dropped_paths_
+#: no_longer_escalate` below.
 ESCALATING_PATHS = [
     ("tools/drain", "tools/drain/gates.py"),
-    ("scripts/ci", "scripts/ci/check-deploy-staleness.mjs"),
     ("dev-loop/gates", "dev-loop/gates/validate-all.ps1"),
-    (".github/workflows", ".github/workflows/deploy-fiab-commercial.yml"),
     (".github/CODEOWNERS", ".github/CODEOWNERS"),
+    ("apps/fiab-console/lib/auth", "apps/fiab-console/lib/auth/authflow.ts"),
+    ("apps/fiab-console/middleware.ts", "apps/fiab-console/middleware.ts"),
+]
+
+
+@pytest.mark.parametrize(("fragment", "path"), ESCALATING_PATHS)
+def test_negative_control_each_escalating_path_fragment_is_pinned(fragment, path):
+    """Both reviewers flagged the same asymmetry: the fragments reachable
+    through a LANE were pinned individually and the rest were covered only in
+    aggregate, so five rows could be deleted from the authority over a green
+    matrix.
+
+    Parametrized rather than looped so a deletion names the row it lost."""
+    n, why = gates.review_requirement(POLICY, changed_paths=[path], stream="W9-rest")
+    assert n == 2, f"{fragment!r} via {path}: {why}"
+
+
+#: PRE-2026-10-01 this authority covered twelve fragments; seven were dropped
+#: by the lean-review directive. Pinned here, with a real file per row, so the
+#: narrowing is a measured fact rather than an assumption -- and so re-adding
+#: any one of these without a matching test update is caught.
+DROPPED_PATHS = [
+    ("scripts/ci", "scripts/ci/check-deploy-staleness.mjs"),
+    (".github/workflows", ".github/workflows/deploy-fiab-commercial.yml"),
     (".gitignore", ".gitignore"),
     ("Makefile", "Makefile"),
     ("pyproject.toml", "pyproject.toml"),
@@ -450,18 +503,15 @@ ESCALATING_PATHS = [
 ]
 
 
-@pytest.mark.parametrize(("fragment", "path"), ESCALATING_PATHS)
-def test_negative_control_each_escalating_path_fragment_is_pinned(fragment, path):
-    """Both reviewers flagged the same asymmetry: the fragments reachable
-    through a LANE were pinned individually and the rest were covered only in
-    aggregate, so five rows could be deleted from the authority over a green
-    matrix. The five newest were the unpinned ones, and `.gitignore` is the
-    worst of them -- an entry in it is what hid the merge gate from every
-    reader for the length of this program, which is #4468's entire thesis.
-
-    Parametrized rather than looped so a deletion names the row it lost."""
+@pytest.mark.parametrize(("fragment", "path"), DROPPED_PATHS)
+def test_negative_control_each_dropped_path_no_longer_escalates(fragment, path):
+    """The flip side of the test above: these nine fragments (console narrowed
+    to just two sub-paths counts as one dropped fragment here, `apps/fiab-
+    console` bare) used to each need two reviewers and now need one, by
+    operator directive. Breaks if any is ever re-added to the authority
+    without updating this test."""
     n, why = gates.review_requirement(POLICY, changed_paths=[path], stream="W9-rest")
-    assert n == 2, f"{fragment!r} via {path}: {why}"
+    assert n == 1, f"{fragment!r} via {path} still escalates: {why}"
 
 
 def test_negative_control_the_pinned_paths_are_the_whole_authority():
@@ -613,7 +663,11 @@ def test_negative_control_the_history_scan_sees_every_shape_gate_two_three_block
         assert "REQUEST-CHANGES" in got, label
         assert got.startswith(gates.UNANNOUNCED_BLOCK), label
         assert f"({kind}," in got, f"{label}: wrong kind in {got}"
-        n, why = gates.review_requirement(POLICY, changed_paths=["docs/x.md"],
+        # POLICY_BLOCK_ESCALATES, not POLICY: the shipped default no longer
+        # routes a prior verdict into the count at all (`_lean_review_2026_10_
+        # 01`), so this integration check drives the override to keep proving
+        # the SHAPE-MATCHING logic still exists and is wired correctly.
+        n, why = gates.review_requirement(POLICY_BLOCK_ESCALATES, changed_paths=["docs/x.md"],
                                           prior_verdict=got)
         assert n == 2, label
         # THE REASON MUST BE TRUE OF THE COMMENT, not merely consistent with
@@ -640,9 +694,11 @@ def test_negative_control_an_unrecognised_kind_gets_no_confident_sentence():
     That is round 9's blocker, reachable again, over a 150/150 matrix. A
     fallback nobody drives is a control nobody has.
 
-    Kills MG36."""
+    Kills MG36. Driven through `POLICY_BLOCK_ESCALATES` -- see that constant's
+    docstring -- since the shipped default no longer routes a prior verdict
+    into the count at all."""
     tagged = f"{gates.UNANNOUNCED_BLOCK} (brand-new-kind, comment 7)"
-    n, why = gates.review_requirement(POLICY, changed_paths=["docs/x.md"],
+    n, why = gates.review_requirement(POLICY_BLOCK_ESCALATES, changed_paths=["docs/x.md"],
                                       prior_verdict=tagged)
     assert n == 2, "an unrecognised kind still fails closed"
     assert gates.UNANNOUNCED_REASON_UNKNOWN in why, why
@@ -800,29 +856,46 @@ def test_negative_control_an_unresolvable_stream_fails_closed():
     assert n == 1
 
 
+def test_a_blocking_first_verdict_no_longer_escalates_by_default():
+    """Operator directive 2026-10-01 (`_lean_review_2026_10_01`):
+    `escalate_on_blocking_first_verdict` ships `false`, so a REQUEST-CHANGES-
+    shaped prior verdict no longer raises the count on its own under the real
+    POLICY. Breaks if the shipped key reverts to `true`, or the `and
+    prior_verdict` guard in `review_requirement` stops reading it."""
+    for spelling in ("REQUEST-CHANGES", "CHANGES REQUIRED", "CANNOT-ASSESS"):
+        n, why = gates.review_requirement(POLICY, changed_paths=["docs/x.md"],
+                                          prior_verdict=spelling)
+        assert n == 1, f"{spelling!r} escalated under the lean default: {why}"
+
+
 def test_negative_control_a_blocking_first_verdict_is_matched_by_shape():
-    """`parse_verdicts` spends a whole apparatus on the fact that
+    """Shape, not spelling -- pinned against `POLICY_BLOCK_ESCALATES`, since the
+    shipped default (test above) no longer exercises this branch at all.
+    `parse_verdicts` spends a whole apparatus on the fact that
     "CHANGES REQUIRED" is a block written the wrong way. A reviewer count that
     recognised only the exact token would let formatting reduce a block to
     "one reviewer was enough"."""
     for spelling in ("REQUEST-CHANGES", "request-changes", "REQUEST-CHANGES ",
                      "## Independent review - REQUEST-CHANGES", "CHANGES REQUIRED",
                      "CANNOT-ASSESS"):
-        n, why = gates.review_requirement(POLICY, changed_paths=["docs/x.md"],
+        n, why = gates.review_requirement(POLICY_BLOCK_ESCALATES, changed_paths=["docs/x.md"],
                                           prior_verdict=spelling)
         assert n == 2, f"{spelling!r}: {why}"
-    n, _ = gates.review_requirement(POLICY, changed_paths=["docs/x.md"],
+    n, _ = gates.review_requirement(POLICY_BLOCK_ESCALATES, changed_paths=["docs/x.md"],
                                     prior_verdict="APPROVE")
     assert n == 1
 
 
 def test_negative_control_the_deploy_fragment_is_anchored():
-    """A bare substring made `docs/how-we-deploy/notes.md` escalate. Safe
-    direction, but a guard that cries wolf is a guard people route around."""
+    """PRE-2026-10-01 a bare substring made `docs/how-we-deploy/notes.md`
+    escalate while `deploy/` itself correctly required two. The 2026-10-01
+    narrowing dropped `deploy/` from the authority entirely, so both now get
+    the ordinary count -- pinned together so a reader does not mistake the
+    dropped escalation for a regression of the anchoring fix."""
     n, _ = gates.review_requirement(POLICY, changed_paths=["docs/how-we-deploy/notes.md"])
     assert n == 1
     n, _ = gates.review_requirement(POLICY, changed_paths=["deploy/main.bicep"])
-    assert n == 2
+    assert n == 1
 
 
 def test_an_ordinary_lane_gets_one_reviewer():
@@ -830,25 +903,28 @@ def test_an_ordinary_lane_gets_one_reviewer():
     assert n == 1, why
 
 
-def test_negative_control_a_guard_or_deploy_or_console_diff_escalates():
+def test_negative_control_a_guard_diff_still_escalates():
     """W0 took nine rounds with two reviewers because it WAS the merge gate. One
-    reviewer is the default -- but in six of those nine rounds the second
-    reviewer found something the first did not, so the paths whose failure modes
-    one reviewer has been observed to miss still get two."""
-    for path in ("tools/drain/gates.py", "scripts/ci/check-x.mjs",
-                 ".github/workflows/deploy-fiab-commercial.yml",
-                 "platform/fiab/bicep/main.bicep", "apps/fiab-console/app/page.tsx",
-                 "deploy/main.bicep"):
+    reviewer is the default -- but the paths whose failure modes one reviewer
+    has been observed to miss still get two. Narrowed 2026-10-01 to the five
+    fragments the authority still protects; `DROPPED_PATHS` above pins the
+    seven that no longer do."""
+    for path in ("tools/drain/gates.py", "dev-loop/gates/validate-all.ps1",
+                 ".github/CODEOWNERS", "apps/fiab-console/lib/auth/authflow.ts",
+                 "apps/fiab-console/middleware.ts"):
         n, why = gates.review_requirement(POLICY, changed_paths=[path])
         assert n == 2, f"{path} must escalate: {why}"
 
 
 def test_negative_control_a_finding_escalates_whatever_the_path():
+    """Driven through `POLICY_BLOCK_ESCALATES` -- the shipped default no
+    longer routes a prior verdict into the count at all, see that constant's
+    docstring."""
     for verdict in ("REQUEST-CHANGES", "CANNOT-ASSESS"):
-        n, why = gates.review_requirement(POLICY, changed_paths=["docs/x.md"],
+        n, why = gates.review_requirement(POLICY_BLOCK_ESCALATES, changed_paths=["docs/x.md"],
                                           prior_verdict=verdict)
         assert n == 2, why
-    n, _ = gates.review_requirement(POLICY, changed_paths=["docs/x.md"],
+    n, _ = gates.review_requirement(POLICY_BLOCK_ESCALATES, changed_paths=["docs/x.md"],
                                     prior_verdict="APPROVE")
     assert n == 1
 

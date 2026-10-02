@@ -98,31 +98,52 @@ def test_the_exemption_does_not_reach_gate_2_3():
     assert ok is True, why
 
 
-def test_the_exemption_does_not_apply_to_a_workflow_bump():
-    """A bump that edits `.github/workflows` still needs TWO.
+def test_the_exemption_does_not_apply_to_an_escalating_path_bump():
+    """A bump that touches an escalating-path fragment still needs TWO.
+
+    PRE-2026-10-01 this used `.github/workflows` and `portal/`, which the
+    2026-10-01 lean-review directive (`_lean_review_2026_10_01`) dropped from
+    `escalate_to_two_when_path_contains` -- so both rows are now re-pointed at
+    fragments the narrowed authority still protects.
 
     WHAT VALUE WOULD MAKE THIS FAIL: moving the exemption ABOVE the
     escalation-path loop in `review_requirement`. That single reordering is
     the dangerous version of this change: CI-green proves least precisely
     where the diff can alter what CI runs.
     """
-    needed, why = _req(changed_paths=[".github/workflows/copilot-evals.yml"])
+    needed, why = _req(changed_paths=["tools/drain/package-lock.json"])
     assert needed == 2, (needed, why)
-    assert ".github/workflows" in why, why
+    assert "tools/drain" in why, why
 
-    needed, why = _req(changed_paths=["portal/react-webapp/package-lock.json"])
+    needed, why = _req(changed_paths=["apps/fiab-console/middleware.ts"])
     assert needed == 2, (needed, why)
-    assert "portal/" in why, why
+    assert "apps/fiab-console/middleware.ts" in why, why
 
 
-def test_a_blocking_verdict_still_escalates_a_bump():
-    """Being a bot does not reduce a block.
+def test_a_blocking_verdict_no_longer_raises_the_bump_count_by_default():
+    """Operator directive 2026-10-01 (`_lean_review_2026_10_01`):
+    `escalate_on_blocking_first_verdict` ships `false`, so a REQUEST-CHANGES
+    prior verdict no longer raises `review_requirement`'s COUNT for a bot bump
+    either -- it falls through to the exemption's own `dependency_bump_
+    reviewers` (0). Gate 2+3 (`reduce_verdicts`) is untouched by this change
+    and still refuses to merge without a live APPROVE, which is the actual
+    safety net against a bot bump riding past a real finding.
 
-    WHAT VALUE WOULD MAKE THIS FAIL: moving the exemption above the
-    prior-verdict check. A reviewer who found a real defect in a bump would
-    then be overruled by the bump's own exemption on the next gate run.
+    WHAT VALUE WOULD MAKE THIS FAIL: the `and prior_verdict` guard in
+    `review_requirement` reading a hardcoded `True` instead of the policy key.
     """
     needed, why = _req(prior_verdict="REQUEST-CHANGES")
+    assert needed == 0, (needed, why)
+    assert "reviewer COUNT only" in why, why
+
+    # The control: restoring the key still escalates a bump on a block, so the
+    # mechanism did not disappear -- only its shipped default did.
+    restored = {**POLICY, "review": {**POLICY["review"],
+                                     "escalate_on_blocking_first_verdict": True}}
+    needed, why = gates.review_requirement(
+        restored, changed_paths=LOCKS, prior_verdict="REQUEST-CHANGES",
+        stream=None, footprint_known=True, stream_known=False, dependency_bump=True,
+    )
     assert needed == 2, (needed, why)
     assert "reviewer returned" in why, why
 
@@ -353,9 +374,12 @@ def test_the_allowlist_admits_a_real_lock_by_directory_or_by_filename(path):
     the grammar are exercised, so the negative rows below cannot be satisfied
     by a matcher that simply refuses everything.
 
-    The last row is exempt by the allowlist and still refused by the
-    escalation-path loop, which is the layering this change relies on -- so
-    `is_dependency_bump` alone is NOT the safety boundary.
+    The last row is exempt by the allowlist; PRE-2026-10-01 it was ALSO
+    refused by the escalation-path loop (`portal/` was in the authority then),
+    which was the layering this change relied on. The 2026-10-01 narrowing
+    dropped `portal/` from the authority, so that second layer no longer
+    applies to this row -- `test_a_blocking_verdict_no_longer_raises_the_
+    bump_count_by_default` in this file pins the layering that remains.
 
     WHAT VALUE WOULD MAKE THIS FAIL: narrowing the directory rule to an exact
     path, or the filename rule to top-level only.
