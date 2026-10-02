@@ -710,6 +710,29 @@ def test_the_brief_states_the_review_requirement(tmp_path):
     assert "1 reviewer(s)" in tick.write_brief(ordinary, POLICY)
 
 
+def test_the_brief_escalates_on_the_lanes_mapped_path_not_its_own_name(tmp_path, monkeypatch):
+    """`write_brief` must pass `gates.LANE_PATHS[item.lane]` -- the MAPPED
+    path -- to `review_requirement`, not `item.lane` itself. The two strings
+    are never equal ("lane:console" vs "apps/fiab-console"), so this always
+    discriminates IF some lane's mapped path sits inside the escalating
+    authority -- which no production lane's does any more after the
+    2026-10-01 narrowing (every `LANE_PATHS` value is a bare directory, and
+    the narrowed authority no longer lists any bare directory). Monkeypatched
+    onto a fragment the SHIPPED authority still escalates on, so this test
+    does not depend on which lane happens to be wired to what today, and
+    would have been silent before 2026-10-01 too if written this way then.
+
+    WHAT VALUE WOULD MAKE THIS FAIL: `tick.py` reading `item.lane or ""`
+    instead of `gates.LANE_PATHS.get(item.lane or "")` -- i.e. R1b in
+    `mutate_gates.py`. Under that mutation `changed_paths` becomes
+    `["lane:fixture"]`, which matches no escalating fragment, so this would
+    read "1 reviewer(s)" instead of "2 reviewer(s)"."""
+    monkeypatch.setitem(gates.LANE_PATHS, "lane:fixture", "tools/drain")
+    led = _led(tmp_path)
+    item = led.upsert(11, "x", "W9-rest", lane="lane:fixture", size=1)
+    assert "2 reviewer(s)" in tick.write_brief(item, POLICY)
+
+
 def test_negative_control_an_unlaned_item_escalates_rather_than_defaulting(tmp_path):
     """28 of 299 live items carry NO lane, so the brief passed `[""]`, matched
     nothing and asked for ONE reviewer -- including all four W0-harness items
