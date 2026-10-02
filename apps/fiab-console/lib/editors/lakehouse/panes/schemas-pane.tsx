@@ -18,7 +18,7 @@ export function SchemasPane() {
   const readOnly = useLakehouseReadOnly(ctx.id, ctx.isNewItem);
   const roTitle = readOnly ? LAKEHOUSE_READ_ONLY_TITLE : undefined;
   const {
-    shortcutLakehouseId, schemasEnabled, schemas, schemasBusy, schemasError, schemasNotice,
+    shortcutLakehouseId, lakehouseName, schemasEnabled, schemas, schemasBusy, schemasError, schemasNotice,
     loadSchemas, deleteSchema,
     newSchemaOpen, setNewSchemaOpen, newSchemaName, setNewSchemaName,
     newSchemaDesc, setNewSchemaDesc, newSchemaBusy, newSchemaError, createSchema,
@@ -27,7 +27,7 @@ export function SchemasPane() {
   return (
     <>
       <div className={s.toolbar}>
-        <Badge appearance="filled" color="brand">{shortcutLakehouseId || 'no lakehouse'}</Badge>
+        <Badge appearance="filled" color="brand">{shortcutLakehouseId ? lakehouseName : 'no lakehouse'}</Badge>
         <Caption1>
           Multi-schema namespace — <code>workspace.lakehouse.schema.table</code>. <strong>dbo</strong> is the default (immutable).
         </Caption1>

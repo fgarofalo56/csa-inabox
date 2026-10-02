@@ -21,6 +21,11 @@ interface Params {
   scWizardOpenExternal?: boolean;
 }
 
+/** A refusal's message followed by its next step, when the route sent one. */
+function withRemediation(message: string, remediation?: string): string {
+  return [message, remediation].filter(Boolean).join(' ');
+}
+
 export function useLakehouseShortcuts({
   shortcutLakehouseId, schemasEnabled, containers, schemas, bundleShortcuts,
   loadSchemas, confirm, setSqlText, setTab, tab,
@@ -30,6 +35,10 @@ export function useLakehouseShortcuts({
   const [shortcutsBusy, setShortcutsBusy] = useState(false);
   const [selectedShortcut, setSelectedShortcut] = useState<ShortcutRow | null>(null);
   const [shortcutsError, setShortcutsError] = useState<string | null>(null);
+  // True while the last listing failed. The list is then UNKNOWN, not empty, so
+  // the pane must not say "No shortcuts registered yet" or offer to register
+  // the bundle's shortcuts as if none existed.
+  const [shortcutsListFailed, setShortcutsListFailed] = useState(false);
   const [regBusy, setRegBusy] = useState<string | null>(null);
 
   // ── Shortcut wizard state ─────────────────────────────────────────────────
@@ -83,13 +92,13 @@ export function useLakehouseShortcuts({
   // ── Callbacks ─────────────────────────────────────────────────────────────
   const loadShortcuts = useCallback(async () => {
     if (!shortcutLakehouseId) return;
-    setShortcutsBusy(true); setShortcutsError(null);
+    setShortcutsBusy(true); setShortcutsError(null); setShortcutsListFailed(false);
     try {
       const r = await clientFetch(`/api/lakehouse/shortcuts?lakehouseId=${encodeURIComponent(shortcutLakehouseId)}`);
-      const j = await parseJsonOrError<{ ok: boolean; error?: string; data?: ShortcutRow[] }>(r, 'List shortcuts');
-      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; remediation?: string; data?: ShortcutRow[] }>(r, 'List shortcuts');
+      if (!j.ok) throw new Error(withRemediation(j.error || `HTTP ${r.status}`, j.remediation));
       setShortcuts(j.data || []);
-    } catch (e: any) { setShortcutsError(e?.message || String(e)); setShortcuts([]); }
+    } catch (e: any) { setShortcutsError(e?.message || String(e)); setShortcutsListFailed(true); setShortcuts([]); }
     finally { setShortcutsBusy(false); }
   }, [shortcutLakehouseId]);
 
@@ -166,8 +175,13 @@ export function useLakehouseShortcuts({
           schemaName: schemasEnabled && scKind === 'tables' ? scTargetSchema : undefined,
         }),
       });
-      const j = await parseJsonOrError<{ ok: boolean; error?: string; hint?: string }>(r, 'Create shortcut');
-      if (!j.ok) throw new Error(j.hint || j.error || `HTTP ${r.status}`);
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; hint?: string; remediation?: string; data?: unknown }>(r, 'Create shortcut');
+      if (!j.ok) {
+        // A 503 (engine not configured) or 502 (bind failed) still saved the
+        // row as pending or error, and answers it in `data`: reload so it shows.
+        if (j.data) await loadShortcuts();
+        throw new Error(withRemediation(j.hint || j.error || `HTTP ${r.status}`, j.remediation));
+      }
       setScWizardOpen(false);
       await loadShortcuts();
     } catch (e: any) { setScSubmitError(e?.message || String(e)); }
@@ -182,8 +196,13 @@ export function useLakehouseShortcuts({
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ lakehouseId: shortcutLakehouseId, name: sc.name, kind: sc.kind || 'files', parentPath: sc.parentPath || '', targetType: 'adls', targetUri: sc.target }),
       });
-      const j = await parseJsonOrError<{ ok: boolean; error?: string; hint?: string }>(r, 'Register shortcut');
-      if (!j.ok) throw new Error(j.hint || j.error || `HTTP ${r.status}`);
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; hint?: string; remediation?: string; data?: unknown }>(r, 'Register shortcut');
+      if (!j.ok) {
+        // A saved pending/error row is reloaded first: loadShortcuts clears
+        // shortcutsError, so the message is set after it (as Test does).
+        if (j.data) await loadShortcuts();
+        throw new Error(withRemediation(j.hint || j.error || `HTTP ${r.status}`, j.remediation));
+      }
       await loadShortcuts();
     } catch (e: any) { setShortcutsError(e?.message || String(e)); }
     finally { setRegBusy(null); }
@@ -205,11 +224,12 @@ export function useLakehouseShortcuts({
         body: JSON.stringify({ lakehouseId: shortcutLakehouseId, id: row.id }),
       });
       const j = await parseJsonOrError<{ ok: boolean; error?: string; remediation?: string }>(r, 'Test shortcut');
-      // Reload first: a failed probe still writes the row's status back. Then
-      // show the refusal or failure (loadShortcuts clears the error it finds).
+      // Reload first: a failed probe writes the row's status, and loadShortcuts
+      // clears shortcutsError, so the message is set after it. A refused
+      // credential leaves the row unchanged and is reported only here.
       await loadShortcuts();
       if (!j.ok) {
-        setShortcutsError([j.error || `Test shortcut failed (HTTP ${r.status}).`, j.remediation].filter(Boolean).join(' '));
+        setShortcutsError(withRemediation(j.error || `Test shortcut failed (HTTP ${r.status}).`, j.remediation));
       }
     } catch (e: any) { setShortcutsError(e?.message || String(e)); }
     finally { setShortcutsBusy(false); }
@@ -225,8 +245,8 @@ export function useLakehouseShortcuts({
     setShortcutsBusy(true); setShortcutsError(null);
     try {
       const r = await clientFetch(`/api/lakehouse/shortcuts?lakehouseId=${encodeURIComponent(shortcutLakehouseId)}&id=${encodeURIComponent(row.id)}`, { method: 'DELETE' });
-      const j = await parseJsonOrError<{ ok: boolean; error?: string }>(r, 'Delete shortcut');
-      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; remediation?: string }>(r, 'Delete shortcut');
+      if (!j.ok) throw new Error(withRemediation(j.error || `HTTP ${r.status}`, j.remediation));
       await loadShortcuts();
     } catch (e: any) { setShortcutsError(e?.message || String(e)); }
     finally { setShortcutsBusy(false); }
@@ -257,7 +277,7 @@ export function useLakehouseShortcuts({
   }, [setSqlText, setTab]);
 
   return {
-    shortcuts, shortcutsBusy, selectedShortcut, setSelectedShortcut, shortcutsError,
+    shortcuts, shortcutsBusy, selectedShortcut, setSelectedShortcut, shortcutsError, shortcutsListFailed,
     regBusy,
     scWizardOpen, setScWizardOpen,
     scStep, setScStep,

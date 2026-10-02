@@ -247,6 +247,29 @@ describe('lakehouse shell: permissions reads name this lakehouse', () => {
   });
 });
 
+describe('lakehouse shell: the shortcuts read names this lakehouse', () => {
+  /** `lakehouseId` of every shortcuts listing GET, in call order. */
+  const listings = (calls: Array<{ url: string; init?: RequestInit }>) =>
+    calls
+      .filter((c) => c.url.includes('/api/lakehouse/shortcuts?') && (c.init?.method ?? 'GET') === 'GET')
+      .map((c) => new URL(c.url, 'http://x').searchParams.get('lakehouseId'));
+
+  it('opening Shortcuts with a bound container lists through the item id', async () => {
+    const { calls } = mount(true, { '/api/lakehouse/shortcuts': () => ({ ok: true, data: [] }) });
+    // settled() waits for activeContainer === 'landing', so the container
+    // name is available to the shell when the tab opens.
+    await settled(true, calls);
+    // Fixture witness: the bound container was listed by name.
+    expect(calls.some((c) => c.url.includes('/api/lakehouse/paths?') && c.url.includes('container=landing'))).toBe(true);
+    await act(async () => { cap.ctx.setTab('shortcuts'); });
+    await waitFor(() => expect(listings(calls).length).toBeGreaterThan(0));
+    // Breaks if the shell hands the shortcuts hook the container name first
+    // (`activeContainer || id`, the shape before item scoping): the listing
+    // then carries `lakehouseId=landing`, which the route refuses with 404.
+    expect(listings(calls)).toEqual(listings(calls).map(() => 'lh-h'));
+  });
+});
+
 describe('lakehouse shell: query template host', () => {
   it("selecting a file writes a query template on the container URL's cloud host", async () => {
     const { calls } = mount(true, {

@@ -18,6 +18,22 @@ import { useLakehouseReadOnly, LAKEHOUSE_READ_ONLY_TITLE, LAKEHOUSE_READ_ONLY_SU
 import type { LiveCatalogTable } from '../types';
 import type { PathEntry } from '../shared';
 
+/**
+ * A lakehouse display name can hold any character the user typed -- item
+ * create/update only `trim()` it (app/api/items/_lib/item-crud.ts), so it can
+ * carry a line break. Rendered raw into the Query template's comment line
+ * below, a line break ends the `--` comment and the rest of the name becomes
+ * its own SQL statement. This replaces each C0 control character
+ * (U+0000-U+001F), DEL (U+007F), and the U+2028/U+2029 line separators with a
+ * space, which keeps the name on one line and leaves an ordinary name
+ * unchanged.
+ * Breaking value: a name containing U+000A.
+ */
+function sqlCommentSafe(name: string): string {
+  // eslint-disable-next-line no-control-regex
+  return name.replace(/[\u0000-\u001F\u007F\u2028\u2029]/g, ' ');
+}
+
 export function TablesPane() {
   const s = useStyles();
   const ctx = useLakehouseCtx();
@@ -25,7 +41,7 @@ export function TablesPane() {
   // (focusable, with the reason) when the caller's role is read-only.
   const readOnly = useLakehouseReadOnly(ctx.id, ctx.isNewItem);
   const {
-    activeContainer, schemasEnabled, shortcutLakehouseId, tablesPrefix,
+    activeContainer, schemasEnabled, lakehouseName, tablesPrefix,
     liveTables, liveTablesLoading, liveTablesError, liveTablesGate, loadLiveTables,
     seededTableInfo, bundleDeltaTables,
     openPrefixes, cacheKey, loadPaths,
@@ -257,7 +273,7 @@ export function TablesPane() {
                                 return (
                                   <TableRow key={t.name}>
                                     <TableCell><strong>{tableName}</strong></TableCell>
-                                    <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{shortcutLakehouseId}.{schemaName}.{tableName}</code></TableCell>
+                                    <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{lakehouseName}.{schemaName}.{tableName}</code></TableCell>
                                     <TableCell>
                                       <span style={{ display: 'inline-flex', gap: tokens.spacingHorizontalS }}>
                                         <Button size="small" appearance="primary" icon={<Eye20Regular />}
@@ -267,7 +283,7 @@ export function TablesPane() {
                                         </Button>
                                         <Button size="small" appearance="outline"
                                           onClick={() => {
-                                            setSqlText(`-- 4-part name: ${shortcutLakehouseId}.${schemaName}.${tableName}\n-- Serverless view (if registered): SELECT TOP 100 * FROM loom_lakehouse.${schemaName}.${tableName};\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.${dfsHostSuffix}/${activeContainer}/${t.name}', FORMAT='DELTA') AS r;`);
+                                            setSqlText(`-- 4-part name: ${sqlCommentSafe(lakehouseName)}.${schemaName}.${tableName}\n-- Serverless view (if registered): SELECT TOP 100 * FROM loom_lakehouse.${schemaName}.${tableName};\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.${dfsHostSuffix}/${activeContainer}/${t.name}', FORMAT='DELTA') AS r;`);
                                             setTab('sql');
                                           }}>
                                           Query

@@ -20,6 +20,8 @@ vi.mock('@/lib/azure/shortcut-engines', () => ({
   resolveAndTestAdls: vi.fn(), testEngineObject: vi.fn(), refreshDeltaSharingCredential: vi.fn(),
 }));
 vi.mock('@/lib/azure/shortcut-credentials', () => ({ getKeyVaultSecret: vi.fn() }));
+// The stored credential resolves as the row's creator; the mint record names them.
+vi.mock('@/lib/azure/kv-secrets-client', () => ({ getShortcutSecretOwnerRecord: vi.fn(), getShortcutSecretValue: vi.fn() }));
 vi.mock('@/lib/azure/shortcut-client', () => ({ parseAbfss: vi.fn(), listAdlsWithSas: vi.fn(), ShortcutSourceError: class extends Error {} }));
 vi.mock('@/lib/azure/graph-drive-client', () => ({ headDriveItem: vi.fn(), parseSharepointUri: vi.fn(), graphDriveConfigGate: vi.fn(() => null) }));
 vi.mock('../_lib/legacy-container-key', () => ({ legacyContainerKeyFor: vi.fn() }));
@@ -30,6 +32,7 @@ import { resolveItemAccessByOid } from '@/lib/auth/item-access';
 import { getShortcut, updateShortcutStatus } from '@/lib/azure/lakehouse-shortcuts';
 import { resolveAndTestAdls, testEngineObject, refreshDeltaSharingCredential } from '@/lib/azure/shortcut-engines';
 import { getKeyVaultSecret } from '@/lib/azure/shortcut-credentials';
+import { getShortcutSecretOwnerRecord } from '@/lib/azure/kv-secrets-client';
 import { parseAbfss, listAdlsWithSas } from '@/lib/azure/shortcut-client';
 import { headDriveItem, parseSharepointUri, graphDriveConfigGate } from '@/lib/azure/graph-drive-client';
 import { legacyContainerKeyFor } from '../_lib/legacy-container-key';
@@ -46,6 +49,7 @@ beforeEach(() => {
   (getSession as any).mockReturnValue(sess);
   (resolveItemAccessByOid as any).mockResolvedValue(access(true));
   (legacyContainerKeyFor as any).mockResolvedValue(null);
+  (getShortcutSecretOwnerRecord as any).mockResolvedValue({ exists: true, owner: { oid: 'oid-u', lakehouseId: 'bronze' } });
   (resolveAndTestAdls as any).mockResolvedValue({ abfssUri: ADLS_ROW.targetUri, reachable: true });
   (updateShortcutStatus as any).mockImplementation(async (_k: string, id: string, status: string) => ({ id, status }));
 });
@@ -139,7 +143,8 @@ describe('POST /api/lakehouse/shortcuts/test — write-back key per target type'
   const DS = {
     id: 'bronze:tables::ds', name: 'ds', kind: 'tables', targetType: 'delta_sharing',
     targetUri: 'https://sharing.example.test/delta-sharing', engine: 'databricks', engineObject: 'loom.sh.orders',
-    credentialRef: { kind: 'bearer', keyVaultSecret: 'ds-profile' },
+    credentialRef: { kind: 'bearer', keyVaultSecret: 'loom-sc-ds-profile' },
+    lakehouseId: 'bronze', createdBy: 'u@x', createdByOid: 'oid-u',
   };
   // Low-entropy placeholders: not credentials, never sent anywhere but the mock.
   const PROFILE = JSON.stringify({ endpoint: 'https://sharing.example.test/delta-sharing/', bearerToken: 'fixture-bearer', shareCredentialsVersion: 1 });
@@ -262,7 +267,8 @@ describe('POST /api/lakehouse/shortcuts/test — write-back key per target type'
   const SAS = {
     id: 'bronze:files::ext', name: 'ext', kind: 'files', targetType: 'adls',
     targetUri: 'abfss://data@partneracct.dfs.core.windows.net/orders',
-    credentialRef: { kind: 'sas', keyVaultSecret: 'partner-sas' },
+    credentialRef: { kind: 'sas', keyVaultSecret: 'loom-sc-partner-sas' },
+    lakehouseId: 'bronze', createdBy: 'u@x', createdByOid: 'oid-u',
   };
 
   it('SAS-authenticated ADLS: probes with the SAS and writes active under the legacy key', async () => {

@@ -142,8 +142,12 @@ export interface LakehouseEditorCtx {
   setPermsBusy: (v: boolean) => void;
   permsError: string | null;
   setPermsError: (e: string | null) => void;
-  /** The last object-tab listing was refused with a 409; Grant role is disabled until a listing succeeds. */
+  /** The next step for the current `permsError`, when the route sent one; shown on its own line. */
+  permsRemediation: string | null;
+  /** The last object-tab listing was refused with a `code`; Grant role is disabled until a listing succeeds. */
   permsListRefused: boolean;
+  /** The last object-tab listing failed for any reason; its rows are unknown, not empty. */
+  permsListFailed: boolean;
   newPrincipalId: string;
   setNewPrincipalId: (v: string) => void;
   newPrincipalType: 'User' | 'Group' | 'ServicePrincipal';
@@ -358,6 +362,8 @@ export interface LakehouseEditorCtx {
   selectedShortcut: ShortcutRow | null;
   setSelectedShortcut: (s: ShortcutRow | null) => void;
   shortcutsError: string | null;
+  /** True while the last listing failed: the list is unknown, not empty. */
+  shortcutsListFailed: boolean;
   scWizardOpen: boolean;
   setScWizardOpen: (v: boolean) => void;
   scStep: 1 | 2 | 3;

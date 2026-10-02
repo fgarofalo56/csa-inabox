@@ -54,7 +54,9 @@ vi.mock('@/lib/auth/item-access', () => ({ resolveItemAccessByOid: vi.fn() }));
 
 import { GET } from '../permissions/route';
 import { getSession } from '@/lib/auth/session';
-import { listContainerRoleAssignments, StorageAccountNotLocatedError } from '@/lib/azure/adls-client';
+import {
+  listContainerRoleAssignments, StorageAccountNotLocatedError, StorageRoleDeniedError,
+} from '@/lib/azure/adls-client';
 import {
   dedicatedTarget, listSqlTables, listSqlColumns, listTableGrants, listRlsPolicies, listColumnDenyGrants,
 } from '@/lib/azure/synapse-permissions-client';
@@ -254,6 +256,21 @@ describe('GET /api/lakehouse/permissions?tab=object — no lakehouseId', () => {
     expect((resolveItemAccessByOid as any).mock.calls).toEqual([]);
   });
 
+  // The listing refusal reads as one sentence and points at the Permissions
+  // dialog only: Share does not list. Breaks on the Round 7 text ("Listing
+  // container role assignments need the lakehouse they belong to") or if the
+  // Listing remediation names Share. The grant's remediation still names
+  // Share (permissions-delete.test.ts), so the difference is per verb.
+  it('the listing refusal text: "needs", and the remediation names the dialog, not Share', async () => {
+    (getSession as any).mockReturnValue(member);
+    const body = await (await GET(getReq({ tab: 'object', container: CONTAINER }))).json();
+    expect(body.error).toMatch(
+      /^Listing container role assignments needs the lakehouse they belong to \(lakehouseId\), so Loom reads /,
+    );
+    expect(body.remediation).toBe('Open the lakehouse and use its Permissions dialog, so the request names the item.');
+    expect(body.remediation).not.toMatch(/Share/);
+  });
+
   // POSITIVE, the same admin naming the item. FAILS IF the refusal above is
   // applied to every object-tab GET (400 here too).
   it('a tenant admin who names the lakehouse lists on its bound account', async () => {
@@ -267,15 +284,34 @@ describe('GET /api/lakehouse/permissions?tab=object — no lakehouseId', () => {
 describe('GET /api/lakehouse/permissions?tab=object — a bound account Resource Graph cannot place', () => {
   // FAILS IF the route does not map StorageAccountNotLocatedError: the answer
   // is then the generic 502 with no `code` and no `remediation`.
-  it('answers 409 storage_account_not_located with the Reader remediation', async () => {
+  it('answers 409 storage_account_not_located with the role-administrator remediation', async () => {
     (getSession as any).mockReturnValue(member);
     (listContainerRoleAssignments as any).mockRejectedValue(new StorageAccountNotLocatedError(ACCOUNT));
     const res = await GET(getReq({ lakehouseId: LH, tab: 'object' }));
     expect(res.status).toBe(409);
     const j = await res.json();
     expect([j.ok, j.code]).toEqual([false, 'storage_account_not_located']);
-    expect(j.remediation).toContain(`Reader on the subscription that holds storage account "${ACCOUNT}"`);
+    // Breaks if the remediation names Reader on the subscription (Round 7):
+    // that identity could locate the account but still not write a role there.
+    expect(j.remediation).toContain(`Role Based Access Control Administrator on storage account "${ACCOUNT}"`);
+    expect(j.remediation).toContain('platform/fiab/bicep/modules/landing-zone/storage-rbac-admin.bicep');
     expect(j.error).toContain(ACCOUNT);
+  });
+
+  // FAILS IF the route does not map StorageRoleDeniedError: the answer is then
+  // a bare 403 with ARM's message and no `code` or `remediation`.
+  it('a role read Azure refuses answers 403 storage_role_read_denied with the remediation', async () => {
+    (getSession as any).mockReturnValue(member);
+    (listContainerRoleAssignments as any).mockRejectedValue(new StorageRoleDeniedError(ACCOUNT, 'list', 'corr-read-1'));
+    const res = await GET(getReq({ lakehouseId: LH, tab: 'object' }));
+    expect(res.status).toBe(403);
+    const j = await res.json();
+    expect([j.ok, j.code]).toEqual([false, 'storage_role_read_denied']);
+    expect(j.remediation).toContain(`Role Based Access Control Administrator on storage account "${ACCOUNT}"`);
+    // Breaks if the route drops the correlation id, or adds a field (such as
+    // ARM's own message) beyond the five below.
+    expect([j.correlationId, Object.keys(j).sort()])
+      .toEqual(['corr-read-1', ['code', 'correlationId', 'error', 'ok', 'remediation']]);
   });
 
   // CONTROL: any other listing failure keeps the generic answer. FAILS IF

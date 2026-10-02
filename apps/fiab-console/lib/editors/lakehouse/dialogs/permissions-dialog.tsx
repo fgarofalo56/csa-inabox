@@ -18,7 +18,7 @@ export function PermissionsDialog() {
   const ctx = useLakehouseCtx();
   const {
     permsOpen, setPermsOpen, permsTab, selectPermsTab,
-    permsBusy, permsError, permsListRefused, sqlGate,
+    permsBusy, permsError, permsRemediation, permsListRefused, permsListFailed, sqlGate,
     permsRows, permsRoles, revokePerm, grantPerm,
     newPrincipalId, setNewPrincipalId, newPrincipalType, setNewPrincipalType, newRole, setNewRole,
     sqlGrants, revokeSqlGrant, grantSqlTable, grantSqlColumn,
@@ -97,7 +97,17 @@ export function PermissionsDialog() {
 
             {permsBusy && <Spinner size="tiny" label="Working…" labelPosition="after" />}
             {permsError && (
-              <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Permissions error</MessageBarTitle>{permsError}</MessageBarBody></MessageBar>
+              <MessageBar intent="error">
+                <MessageBarBody>
+                  <MessageBarTitle>Permissions error</MessageBarTitle>
+                  <div>{permsError}</div>
+                  {permsRemediation && (
+                    <div data-testid="perms-remediation" style={{ marginTop: tokens.spacingVerticalXS }}>
+                      <strong>Next step:</strong> {permsRemediation}
+                    </div>
+                  )}
+                </MessageBarBody>
+              </MessageBar>
             )}
             {permsTab !== 'object' && sqlGate && (
               <MessageBar intent="warning">
@@ -132,8 +142,9 @@ export function PermissionsDialog() {
                       <TableHeaderCell>Action</TableHeaderCell>
                     </TableRow></TableHeader>
                     <TableBody>
-                      {/* An empty list after a failed listing is unknown, not empty. */}
-                      {permsRows.length === 0 && !permsError && (
+                      {/* An empty list after a failed listing is unknown, not empty. A grant or
+                          revoke error after a successful empty listing leaves the list known. */}
+                      {permsRows.length === 0 && !permsListFailed && (
                         <TableRow><TableCell colSpan={4}><Caption1>No Storage Blob Data role assignments at the container scope.</Caption1></TableCell></TableRow>
                       )}
                       {permsRows.map((r) => (

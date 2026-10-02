@@ -46,7 +46,7 @@ export function ShortcutsPane() {
   const readOnly = useLakehouseReadOnly(ctx.id, ctx.isNewItem);
   const roTitle = readOnly ? LAKEHOUSE_READ_ONLY_TITLE : undefined;
   const {
-    shortcutLakehouseId, shortcuts, shortcutsBusy, shortcutsError, loadShortcuts,
+    shortcutLakehouseId, lakehouseName, shortcuts, shortcutsBusy, shortcutsError, shortcutsListFailed, loadShortcuts,
     selectedShortcut, setSelectedShortcut,
     openShortcutWizard, testShortcut, deleteShortcutRow, queryShortcut,
     bundleShortcuts, regBusy, registerBundleShortcut, registerAllBundleShortcuts,
@@ -65,7 +65,7 @@ export function ShortcutsPane() {
       style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, flex: 1, minHeight: 0 }}
     >
       <div className={s.toolbar}>
-        <Badge appearance="filled" color="brand">{shortcutLakehouseId || 'no lakehouse'}</Badge>
+        <Badge appearance="filled" color="brand">{shortcutLakehouseId ? lakehouseName : 'no lakehouse'}</Badge>
         <Caption1>Shortcuts — virtualize external storage into the lakehouse without copying data (zero-copy)</Caption1>
         <Button appearance="primary" icon={<Add20Regular />} disabled={!shortcutLakehouseId}
           disabledFocusable={readOnly} title={roTitle}
@@ -79,11 +79,21 @@ export function ShortcutsPane() {
       </div>
 
       {shortcutsError && (
-        <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Shortcuts error</MessageBarTitle>{shortcutsError}</MessageBarBody></MessageBar>
+        <MessageBar intent="error">
+          <MessageBarBody>
+            <MessageBarTitle>Shortcuts error</MessageBarTitle>
+            {shortcutsError}
+            {shortcutsListFailed && (
+              <div>The shortcut list could not be read, so it is not shown here. Use <strong>Refresh</strong> to try again.</div>
+            )}
+          </MessageBarBody>
+        </MessageBar>
       )}
       {shortcutsBusy && shortcuts === null && <Spinner size="small" label="Loading shortcuts…" labelPosition="after" />}
 
-      {shortcuts !== null && shortcuts.length === 0 && !shortcutsBusy && (
+      {/* An empty list after a FAILED listing is unknown, not empty: no empty
+          state, and no Register actions for the bundle's shortcuts. */}
+      {shortcuts !== null && shortcuts.length === 0 && !shortcutsBusy && !shortcutsListFailed && (
         <>
           <MessageBar intent="info">
             <MessageBarBody>

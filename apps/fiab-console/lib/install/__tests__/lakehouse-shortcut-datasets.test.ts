@@ -18,6 +18,7 @@
  * Every ADLS / Synapse / registry call is mocked; no real Azure traffic.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { literalAfter } from '@/lib/sql/__tests__/tsql-decode';
 
 const COLD_TRANSFORM_TIMEOUT_MS = 120_000;
 
@@ -172,6 +173,28 @@ describe('lakehouse shortcut dataset provisioning (no-vaporware)', () => {
     expect(row!.status).toBe('active');
     expect(row!.targetUri.startsWith('internal://')).toBe(true);
     expect(res.secondaryIds?.shortcutsActive).toContain('retail-orders-public');
+  });
+
+  it('a dataset file name with a quote reaches the view as the same URL (each literal level escaped)', { timeout: COLD_TRANSFORM_TIMEOUT_MS }, async () => {
+    // WHAT BREAKS IT: the provisioner building the view DDL with the URL escaped
+    // for one literal level (the pre-change `escapeSqlLiteral(httpsUrl)` inside
+    // EXEC('… BULK ''…'' …')). The inner literal then ends at the quote, so the
+    // decoded URL is cut short and the text after EXEC's literal is not `);`.
+    const res = await runLakehouse({
+      kind: 'lakehouse',
+      folders: [],
+      deltaTables: [],
+      shortcuts: [{ name: 'quoted', repoDataset: "samples/x/it's-orders.csv", format: 'csv', kind: 'files' }],
+    });
+    expect(res.status).toBe('created');
+    const upload = adlsUploads.find((u) => u.path.endsWith("it's-orders.csv"));
+    expect(upload).toBeTruthy();
+    const view = synapseDdl.find((s) => s.includes('CREATE VIEW lakehouse.shortcut_quoted'));
+    expect(view, synapseDdl.join(' | ')).toBeTruthy();
+    const createLine = view!.split('\n')[2];
+    const exec = literalAfter(createLine, 'EXEC(');
+    expect(createLine.slice(exec.end)).toBe(');');
+    expect(literalAfter(exec.value, 'BULK ').value).toBe(`https://acct.dfs.core.windows.net/landing/${upload!.path}`);
   });
 
   it('honest-gates a repoDataset that is missing from the deployed image (pending, not silent success)', { timeout: COLD_TRANSFORM_TIMEOUT_MS }, async () => {

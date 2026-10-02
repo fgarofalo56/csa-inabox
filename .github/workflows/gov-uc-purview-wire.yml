@@ -132,7 +132,7 @@ jobs:
           echo "CAE_ID=$CAE_ID" >> "$GITHUB_ENV"
           echo "UAMI_ID=$UAMI_ID" >> "$GITHUB_ENV"
           echo "LOCATION=$LOCATION" >> "$GITHUB_ENV"
-          echo "::notice::CAE=$CAE_ID UAMI=$UAMI_ID location=$LOCATION"
+          echo "::notice::CAE=${CAE_ID##*/} UAMI=${UAMI_ID##*/} location=$LOCATION"
 
       - name: Build loom-unity image on the Gov ACR
         if: ${{ inputs.skip_unity != 'true' }}
@@ -281,17 +281,25 @@ jobs:
             exit 1
           fi
           echo "::notice::Loom Unity authMode=$UNITY_AUTH_MODE, ingress pinned to $CAE_CIDR"
-          # Identity — prefer a dedicated least-privilege UAMI if one exists
-          # (uami-loom-unity-<location>); fall back to the Console UAMI. The
-          # Console identity is broadly permissioned and ACA exposes the app
-          # identity over IMDS to in-container code, so the dedicated identity is
-          # the right long-term home for this app.
-          UNITY_UAMI_ID=$(az identity show -n "uami-loom-unity-${LOCATION}" -g "$RG" --query id -o tsv 2>/dev/null | tr -d '\r' || true)
-          if [ -z "${UNITY_UAMI_ID:-}" ]; then
-            UNITY_UAMI_ID="$UAMI_ID"
-            echo "::notice::dedicated uami-loom-unity-${LOCATION} not present — using the Console UAMI."
+          # PULL IDENTITY. loom-unity runs only as its dedicated identity
+          # (uami-loom-unity-<location>): `unityUamiId` is the app identity and
+          # AZURE_CLIENT_ID as well as the registry pull identity, and
+          # admin-plane/main.bicep's loomUnityUami is "never the Console UAMI".
+          # On 2026-09-30 (run 36774518931) it held no pull role on the ACR, the
+          # new revision never started, and ARM said only "Operation expired".
+          # The script grants it AcrPull when it lacks one (if this deploy
+          # principal may), and otherwise STOPS with the exact grant to run. It
+          # prints no principal or client ids.
+          PULL_OUT=$(mktemp)
+          bash scripts/csa-loom/ensure-acr-pull-identity.sh --acr "$ACR" --rg "$RG" \
+            --identity "uami-loom-unity-${LOCATION}" --out "$PULL_OUT"
+          UNITY_UAMI_ID=$(sed -n 's/^UAMI_ID=//p' "$PULL_OUT")
+          UNITY_UAMI_CLIENT_ID=$(sed -n 's/^UAMI_CLIENT_ID=//p' "$PULL_OUT")
+          UNITY_UAMI_NAME=$(sed -n 's/^UAMI_NAME=//p' "$PULL_OUT")
+          if [ -z "$UNITY_UAMI_ID" ] || [ -z "$UNITY_UAMI_CLIENT_ID" ]; then
+            echo "::error::ensure-acr-pull-identity.sh exited 0 but wrote no identity id or client id. Refusing to deploy on an unresolved pull identity."
+            exit 1
           fi
-          UNITY_UAMI_CLIENT_ID=$(az identity show --ids "$UNITY_UAMI_ID" --query clientId -o tsv 2>/dev/null | tr -d '\r' || true)
           # AUTO-BIND — the OBJECT ID (principalId) of the identity the CONSOLE
           # runs as. That is the `sub` claim of the app-only token the Console
           # mints, and upstream verifyPrincipal resolves the caller from `email`
@@ -307,22 +315,59 @@ jobs:
             echo "::error::Could not resolve the Console managed identity's principalId, so the entrypoint cannot register it as an enabled Unity Catalog user. Deploying authMode=entra now would leave the catalog correct-but-unusable (every Console call 401s at the token exchange). Refusing. Re-run once the Console app has a user-assigned identity."
             exit 1
           fi
-          az deployment group create -g "$RG" \
-            -n "loom-unity-$(date -u +%Y%m%d%H%M%S)" \
-            -f platform/fiab/bicep/modules/compute/loom-unity-app.bicep \
-            -p location="$LOCATION" \
-               environmentId="$CAE_ID" \
-               unityUamiId="$UNITY_UAMI_ID" \
-               unityUamiClientId="$UNITY_UAMI_CLIENT_ID" \
-               acrLoginServer="$ACR_LOGIN" \
-               image="$ACR_LOGIN/loom-unity@$UNITY_DIGEST" \
-               dbEphemeral=true \
-               authMode="$UNITY_AUTH_MODE" \
-               entraClientId="$UNITY_CLIENT_ID" \
-               consolePrincipalId="$CONSOLE_PRINCIPAL_ID" \
-               consoleAllowedCidrs="[\"$CAE_CIDR\"]" \
-               complianceTags='{"env":"gov","boundary":"usgovvirginia"}' \
-            -o none
+          deploy_unity() {
+            az deployment group create -g "$RG" \
+              -n "loom-unity-$(date -u +%Y%m%d%H%M%S)" \
+              -f platform/fiab/bicep/modules/compute/loom-unity-app.bicep \
+              -p location="$LOCATION" \
+                 environmentId="$CAE_ID" \
+                 unityUamiId="$UNITY_UAMI_ID" \
+                 unityUamiClientId="$UNITY_UAMI_CLIENT_ID" \
+                 acrLoginServer="$ACR_LOGIN" \
+                 image="$ACR_LOGIN/loom-unity@$UNITY_DIGEST" \
+                 dbEphemeral=true \
+                 authMode="$UNITY_AUTH_MODE" \
+                 entraClientId="$UNITY_CLIENT_ID" \
+                 consolePrincipalId="$CONSOLE_PRINCIPAL_ID" \
+                 consoleAllowedCidrs="[\"$CAE_CIDR\"]" \
+                 complianceTags='{"env":"gov","boundary":"usgovvirginia"}' \
+              -o none
+          }
+          # On failure, classify (only from a revision this deploy created, and
+          # the system log since it started), print a remediation, and retry once
+          # only when the deployment error says another operation was in progress
+          # (class 10). Every other class stops here. Stderr of a SUCCESSFUL
+          # deployment is printed too, as a framed warning.
+          DEPLOY_START=$(date -u +%Y-%m-%dT%H:%M:%S)
+          DIAG_HINT="dispatch gov-bff-verify.yml and read its loom-unity diagnostics"
+          DEPLOY_ATTEMPT=1
+          while :; do
+            DEPLOY_ERR=$(mktemp)
+            DEPLOY_RC=0
+            deploy_unity 2>"$DEPLOY_ERR" || DEPLOY_RC=$?
+            if [ "$DEPLOY_RC" -eq 0 ]; then
+              if [ -s "$DEPLOY_ERR" ]; then
+                echo "::warning::the loom-unity deployment succeeded and wrote to stderr; the text follows."
+                DEPLOY_TOK=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+                echo "::stop-commands::$DEPLOY_TOK"
+                head -n 60 "$DEPLOY_ERR" | sed -E 's/[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}/<guid>/g'
+                echo "::$DEPLOY_TOK::"
+              fi
+              break
+            fi
+            DIAG_RC=0
+            bash scripts/csa-loom/containerapp-revision-check.sh diagnose --app "$UNITY_APP" --rg "$RG" \
+              --since "$DEPLOY_START" --attempt "$DEPLOY_ATTEMPT" --acr "$ACR" --identity-name "$UNITY_UAMI_NAME" \
+              --deploy-stderr "$DEPLOY_ERR" --diagnostics-hint "$DIAG_HINT" || DIAG_RC=$?
+            if [ "$DIAG_RC" -eq 10 ] && [ "$DEPLOY_ATTEMPT" -eq 1 ]; then
+              DEPLOY_ATTEMPT=2
+              echo "::notice::retrying the loom-unity deployment once in 60s (another operation was in progress)."
+              sleep 60
+              continue
+            fi
+            echo "::error::loom-unity deployment failed (az exit $DEPLOY_RC, attempt $DEPLOY_ATTEMPT); the classification and remediation are above."
+            exit 1
+          done
           echo "UNITY_CLIENT_ID=$UNITY_CLIENT_ID" >> "$GITHUB_ENV"
           echo "UNITY_AUTH_MODE=$UNITY_AUTH_MODE" >> "$GITHUB_ENV"
           # Gov posture: H2 on an Azure Files SMB mount fails to ATTACH on this
@@ -337,10 +382,11 @@ jobs:
           echo "UNITY_FQDN=$FQDN" >> "$GITHUB_ENV"
           echo "::notice::loom-unity internal FQDN: $FQDN (H2 local-ephemeral; wire LOOM_UNITY_DB_URL=postgres for durable metadata)"
           # Wait for the new revision to go healthy before the console reads it.
-          for i in $(seq 1 20); do
-            H=$(az containerapp revision show -n "$UNITY_APP" -g "$RG" --revision "$(az containerapp show -n "$UNITY_APP" -g "$RG" --query properties.latestRevisionName -o tsv | tr -d '\r')" --query properties.healthState -o tsv 2>/dev/null | tr -d '\r')
-            echo "loom-unity health=$H"; [ "$H" = "Healthy" ] && break; sleep 15
-          done
+          # This loop used to discard stderr and fall through after 20 polls
+          # whatever the health; it now fails the step, with a classification,
+          # when the latest revision does not report Healthy.
+          bash scripts/csa-loom/containerapp-revision-check.sh wait --app "$UNITY_APP" --rg "$RG" \
+            --since "$DEPLOY_START" --acr "$ACR" --identity-name "$UNITY_UAMI_NAME" --diagnostics-hint "$DIAG_HINT"
 
       - name: Verify the catalog is ENFORCED and USABLE before wiring the Console (#2643)
         if: ${{ inputs.skip_unity != 'true' }}

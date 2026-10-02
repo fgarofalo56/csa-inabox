@@ -2332,6 +2332,19 @@ export const TOUCH_EXEMPT = new Map([
     'apps/fiab-console/lib/components/workspace-settings-drawer.tsx',
     '#4619 touches only the storage binding, which is cleared; the two unrelated sites are tracked in #4816 (:412 a Power BI workspace picker, :934 a Key Vault secret reference for the Git PAT)',
   ],
+  // shortcut-wizard-dialog.tsx — touched only to correct the EXAMPLE text of its
+  // two typed Key Vault secret-name fields (:156 external ADLS SAS, :214 Delta
+  // Sharing credential file) to the `loom-sc-` name-space the shortcut routes
+  // accept. Placeholder and hint text add no site, so the file's baselined count
+  // (8) is unchanged. Clearing the two `secret-ref` sites means replacing the
+  // typed names with the Save to Key Vault flow — and Delta Sharing has no such
+  // flow yet (`CredSourceType` in lib/components/onelake/shortcut-wizard.tsx
+  // lists s3 | gcs | adls | dataverse). Dated exception with named acceptance —
+  // including DELETING this entry — in #4854.
+  [
+    'apps/fiab-console/lib/editors/lakehouse/dialogs/shortcut-wizard-dialog.tsx',
+    'touched only for the example text of the two typed secret-name fields (:156, :214); replacing them with Save to Key Vault (and adding it for Delta Sharing) is tracked in #4854',
+  ],
 ]);
 
 // ═══════════════════════════════════════════════════════════════════════════

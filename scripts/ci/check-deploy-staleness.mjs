@@ -103,6 +103,12 @@ export const WATCHED = [
       // that either, so this closes a pre-existing gap as well as the new one.
       'scripts/ci/acr-dataplane-gate.sh',
       'scripts/ci/acr-login-retry.sh',
+      // The loom-unity deploy step decides its registry pull identity (and may
+      // grant AcrPull) through ensure-acr-pull-identity.sh, and waits on and
+      // classifies the revision through containerapp-revision-check.sh. A
+      // commit to either changes what this lane deploys or whether it stops.
+      'scripts/csa-loom/ensure-acr-pull-identity.sh',
+      'scripts/csa-loom/containerapp-revision-check.sh',
     ],
     maxDays: 14,
   },
@@ -1130,6 +1136,17 @@ export const WATCHED = [
       // through a shared helper. Editing it changes whether the lane can
       // authenticate at all.
       'scripts/ci/acr-login-retry.sh',
+      // #4823 — every lease acquire in this lane waits only for what is left
+      // of the deadline this module computes, and it decides what a failed
+      // acquire and a timeout-cancel report (and whether the timeout files an
+      // issue). Editing it changes how long the lane waits and what it says,
+      // so it is not CI plumbing. It is executed by the workflow, which is how
+      // check-deploy-paths-coverage found it missing here.
+      'scripts/ci/roll-lease-budget.mjs',
+      // roll-lease-budget.mjs IMPORTS this, the publication boundary for every
+      // line it prints; listed with its importer for the same reason
+      // reconcile-policy.mjs is listed with roll-plan.mjs above.
+      'scripts/ci/_azure-redact.mjs',
     ],
     maxDays: 14,
   },

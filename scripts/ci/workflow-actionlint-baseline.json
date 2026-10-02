@@ -29,7 +29,7 @@
     "gov-provision-streaming-migrate.yml": 1,
     "gov-provision-wrangler.yml": 1,
     "gov-purview-verify.yml": 1,
-    "gov-uc-purview-wire.yml": 3,
+    "gov-uc-purview-wire.yml": 2,
     "gov-verify-facts.yml": 1,
     "loom-drift-check.yml": 6,
     "loom-parity-autopilot.yml": 1,
