@@ -10,10 +10,11 @@
  *      where the container scope ends in `/blobServices/default/containers/<container>`,
  *      with no `..`, query, or fragment.
  *   2. MEMBERSHIP — the id must be one of the assignments `listContainerRoleAssignments`
- *      reports for that container (an `atScope()` listing, filtered to the blob
- *      data roles this surface grants). So the subscription, resource group and
- *      account in the id are the ones the server resolves for the container, and
- *      only a role this dialog manages can be revoked through it.
+ *      reports for that container on the account the caller names (an `atScope()`
+ *      listing, filtered to the blob data roles this surface grants). So the
+ *      subscription, resource group and account in the id are the ones the server
+ *      resolves for the container, and only a role this dialog manages can be
+ *      revoked through it.
  *
  * The id handed to `revokeContainerRoleAssignment` is the one from the listing,
  * not the caller's string.
@@ -51,13 +52,18 @@ export type RevokeInScopeResult =
 
 /**
  * Revoke `id` only when it is a role assignment at `container`'s scope, as
- * listed for that container. Returns `invalid` for a malformed id or container
- * and `not-found` when the listing has no such assignment; deletes nothing in
- * either case.
+ * listed for that container on `account` (default: the configured account).
+ * Returns `invalid` for a malformed id or container and `not-found` when the
+ * listing has no such assignment; deletes nothing in either case.
+ *
+ * The listing and the revoke must name the same account the caller listed on:
+ * a lakehouse bound to another account has its container there, so an id from
+ * its listing is only found by listing that account.
  */
 export async function revokeContainerRoleAssignmentInScope(
   container: string,
   id: string,
+  account?: string,
 ): Promise<RevokeInScopeResult> {
   if (!isContainerRoleAssignmentId(id, container)) {
     return {
@@ -68,7 +74,7 @@ export async function revokeContainerRoleAssignmentInScope(
         + '(.../blobServices/default/containers/<container>/providers/Microsoft.Authorization/roleAssignments/<guid>).',
     };
   }
-  const listed = await listContainerRoleAssignments(container);
+  const listed = await listContainerRoleAssignments(container, account);
   const want = id.toLowerCase();
   const match = listed.find((a) => typeof a.id === 'string' && a.id.toLowerCase() === want);
   if (!match) {

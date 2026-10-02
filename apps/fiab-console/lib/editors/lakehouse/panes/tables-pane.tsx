@@ -12,21 +12,43 @@ import {
   CheckmarkCircle20Filled, ErrorCircle20Filled, Clock20Regular,
 } from '@fluentui/react-icons';
 import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
-import { useStyles, formatBytes, leafName } from '../shared';
+import { useStyles, formatBytes, leafName, templateDfsSuffix, bundleTableKey } from '../shared';
 import { useLakehouseCtx } from '../lakehouse-editor-context';
+import { useLakehouseReadOnly, LAKEHOUSE_READ_ONLY_TITLE, LAKEHOUSE_READ_ONLY_SUBTEXT } from '../hooks/use-lakehouse-access';
 import type { LiveCatalogTable } from '../types';
 import type { PathEntry } from '../shared';
+
+/**
+ * A lakehouse display name can hold any character the user typed -- item
+ * create/update only `trim()` it (app/api/items/_lib/item-crud.ts), so it can
+ * carry a line break. Rendered raw into the Query template's comment line
+ * below, a line break ends the `--` comment and the rest of the name becomes
+ * its own SQL statement. This replaces each C0 control character
+ * (U+0000-U+001F), DEL (U+007F), and the U+2028/U+2029 line separators with a
+ * space, which keeps the name on one line and leaves an ordinary name
+ * unchanged.
+ * Breaking value: a name containing U+000A.
+ */
+function sqlCommentSafe(name: string): string {
+  // eslint-disable-next-line no-control-regex
+  return name.replace(/[\u0000-\u001F\u007F\u2028\u2029]/g, ' ');
+}
 
 export function TablesPane() {
   const s = useStyles();
   const ctx = useLakehouseCtx();
+  // Maintain… and Move to schema… change the lakehouse, so they close
+  // (focusable, with the reason) when the caller's role is read-only.
+  const readOnly = useLakehouseReadOnly(ctx.id, ctx.isNewItem);
   const {
-    activeContainer, schemasEnabled, shortcutLakehouseId, tablesPrefix,
+    activeContainer, schemasEnabled, lakehouseName, tablesPrefix,
     liveTables, liveTablesLoading, liveTablesError, liveTablesGate, loadLiveTables,
     seededTableInfo, bundleDeltaTables,
     openPrefixes, cacheKey, loadPaths,
     previewTable, setSqlText, setTab, openTableHistory, setMaintainTable, setMaintainOpen, openMoveTable,
   } = ctx;
+  // The query templates below name the active cloud's DFS host (from the server's container URLs).
+  const dfsHostSuffix = templateDfsSuffix(ctx.containers);
 
   return (
     <>
@@ -105,7 +127,7 @@ export function TablesPane() {
                             <TableCell>
                               <Button appearance="subtle" size="small" icon={<Play20Regular />}
                                 onClick={() => {
-                                  setSqlText(`-- Read the app-seeded CSV for ${t.name}\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.dfs.core.windows.net/${t.container}/${t.csvPath}', FORMAT='CSV', PARSER_VERSION='2.0', HEADER_ROW=TRUE) AS r;`);
+                                  setSqlText(`-- Read the app-seeded CSV for ${t.name}\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.${dfsHostSuffix}/${t.container}/${t.csvPath}', FORMAT='CSV', PARSER_VERSION='2.0', HEADER_ROW=TRUE) AS r;`);
                                   setTab('sql');
                                 }}>
                                 Query CSV
@@ -158,7 +180,7 @@ export function TablesPane() {
                       </TableHeader>
                       <TableBody>
                         {bundleDeltaTables.map((t) => (
-                          <TableRow key={t.name}>
+                          <TableRow key={bundleTableKey(t)}>
                             <TableCell><strong>{t.name}</strong></TableCell>
                             <TableCell><code style={{ fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{t.ddl}</code></TableCell>
                             <TableCell className={s.cell}>{t.sampleRows?.length ?? 0}</TableCell>
@@ -171,7 +193,7 @@ export function TablesPane() {
                                   <MenuList>
                                     <MenuItem icon={<Play20Regular />}
                                       onClick={() => {
-                                        setSqlText(`-- Read Delta table (once materialized under ${tablesPrefix}/${t.name})\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.dfs.core.windows.net/${activeContainer || '<container>'}/${tablesPrefix}/${t.name}', FORMAT='DELTA') AS r;`);
+                                        setSqlText(`-- Read Delta table (once materialized under ${tablesPrefix}/${t.name})\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.${dfsHostSuffix}/${activeContainer || '<container>'}/${tablesPrefix}/${t.name}', FORMAT='DELTA') AS r;`);
                                         setTab('sql');
                                       }}>
                                       Query template
@@ -182,9 +204,10 @@ export function TablesPane() {
                                       History (time travel)
                                     </MenuItem>
                                     <MenuItem icon={<Wrench20Regular />}
-                                      disabled={!activeContainer}
-                                      title={!activeContainer ? 'Select a container first' : 'OPTIMIZE / VACUUM / ZORDER BY'}
-                                      onClick={() => { setMaintainTable(t.name); setMaintainOpen(true); }}>
+                                      disabled={!activeContainer || readOnly}
+                                      title={readOnly ? LAKEHOUSE_READ_ONLY_TITLE : !activeContainer ? 'Select a container first' : 'OPTIMIZE / VACUUM / ZORDER BY'}
+                                      subText={readOnly ? LAKEHOUSE_READ_ONLY_SUBTEXT : undefined}
+                                      onClick={() => { setMaintainTable(t.schema ? `${t.schema}/${leafName(t.name)}` : t.name); setMaintainOpen(true); }}>
                                       Maintain…
                                     </MenuItem>
                                   </MenuList>
@@ -250,7 +273,7 @@ export function TablesPane() {
                                 return (
                                   <TableRow key={t.name}>
                                     <TableCell><strong>{tableName}</strong></TableCell>
-                                    <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{shortcutLakehouseId}.{schemaName}.{tableName}</code></TableCell>
+                                    <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{lakehouseName}.{schemaName}.{tableName}</code></TableCell>
                                     <TableCell>
                                       <span style={{ display: 'inline-flex', gap: tokens.spacingHorizontalS }}>
                                         <Button size="small" appearance="primary" icon={<Eye20Regular />}
@@ -260,12 +283,17 @@ export function TablesPane() {
                                         </Button>
                                         <Button size="small" appearance="outline"
                                           onClick={() => {
-                                            setSqlText(`-- 4-part name: ${shortcutLakehouseId}.${schemaName}.${tableName}\n-- Serverless view (if registered): SELECT TOP 100 * FROM loom_lakehouse.${schemaName}.${tableName};\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.dfs.core.windows.net/${activeContainer}/${t.name}', FORMAT='DELTA') AS r;`);
+                                            setSqlText(`-- 4-part name: ${sqlCommentSafe(lakehouseName)}.${schemaName}.${tableName}\n-- Serverless view (if registered): SELECT TOP 100 * FROM loom_lakehouse.${schemaName}.${tableName};\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.${dfsHostSuffix}/${activeContainer}/${t.name}', FORMAT='DELTA') AS r;`);
                                             setTab('sql');
                                           }}>
                                           Query
                                         </Button>
                                         <Button size="small" appearance="outline" icon={<TableSimple20Regular />}
+                                          disabled={schemaName.toLowerCase() === 'dbo'}
+                                          disabledFocusable={readOnly}
+                                          title={readOnly ? LAKEHOUSE_READ_ONLY_TITLE : schemaName.toLowerCase() === 'dbo'
+                                            ? 'Tables in the default dbo schema stay in dbo. Create the table in a named schema to move it later.'
+                                            : 'Move this table to another schema of this lakehouse'}
                                           onClick={() => openMoveTable(tableName, schemaName)}>
                                           Move to schema…
                                         </Button>
@@ -275,8 +303,11 @@ export function TablesPane() {
                                         </Button>
                                         <Button size="small" appearance="outline" icon={<Wrench20Regular />}
                                           disabled={!activeContainer}
-                                          title={!activeContainer ? 'Select a container first' : 'OPTIMIZE / VACUUM / ZORDER BY'}
-                                          onClick={() => { setMaintainTable(t.name); setMaintainOpen(true); }}>
+                                          disabledFocusable={readOnly}
+                                          title={readOnly ? LAKEHOUSE_READ_ONLY_TITLE : !activeContainer ? 'Select a container first' : 'OPTIMIZE / VACUUM / ZORDER BY'}
+                                          // The maintenance route resolves `<item root>/Tables/<tableName>`, so it takes
+                                          // the path relative to Tables/, never the full listing path.
+                                          onClick={() => { setMaintainTable(`${schemaName}/${tableName}`); setMaintainOpen(true); }}>
                                           Maintain…
                                         </Button>
                                       </span>

@@ -10,7 +10,13 @@
  *   POST /api/lakehouse/maintenance   → submit a maintenance job (Livy session)
  *   GET  /api/lakehouse/maintenance   → list + lazily refresh this tenant's jobs
  *
- * Auth: session-required. Runtime: nodejs, force-dynamic.
+ * Item scope: POST names the lakehouse item (`lakehouseId`) and needs edit
+ * rights on it (VACUUM removes files). The container, root and storage account
+ * come from the item binding, and the table is `<root>/Tables/<tableName>`.
+ * GET lists only the caller's own jobs (the jobs container is partitioned by
+ * the caller's oid). Refusals carry a `code` and a `remediation`.
+ *
+ * Runtime: nodejs, force-dynamic.
  * Envelope: { ok, ... } / { ok:false, error, code?, hint? } with HTTP status.
  *
  * Grants this relies on (all pre-existing, see synapse-storage-rbac.bicep +
@@ -37,6 +43,8 @@ import {
   buildMaintenancePySpark,
 } from '@/lib/azure/delta-maintenance';
 import { withSession } from '@/lib/api/route-toolkit';
+import { abfssHost } from '../_lib/item-binding';
+import { authorizeAndBindItem } from '../_lib/refusal-envelope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -46,6 +54,7 @@ type JobState = 'starting' | 'submitting' | 'running' | 'succeeded' | 'failed' |
 interface MaintenanceJobDoc {
   id: string;
   tenantId: string;        // partition key (session oid)
+  lakehouseId?: string;    // the lakehouse item the job ran against
   container: string;
   tableName: string;
   pool: string;
@@ -63,6 +72,10 @@ interface MaintenanceJobDoc {
 
 const TERMINAL: JobState[] = ['succeeded', 'failed', 'cancelled'];
 
+function badRequest(error: string, remediation: string): NextResponse {
+  return NextResponse.json({ ok: false, error, code: 'bad_request', remediation }, { status: 400 });
+}
+
 /** Strip HTML + collapse whitespace so a firewall page / stack never leaks raw. */
 function sanitize(e: any): string {
   return (e?.message || String(e)).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 600);
@@ -71,15 +84,33 @@ function sanitize(e: any): string {
 export const POST = withSession(async (req: NextRequest, { session }) => {
 
   const body = await req.json().catch(() => ({}));
-  const v = validateMaintenanceRequest(body);
-  if (!v.ok) return NextResponse.json({ ok: false, error: v.error }, { status: 400 });
-  const reqVal = v.value;
+  const lakehouseId = typeof body?.lakehouseId === 'string' ? body.lakehouseId.trim() : '';
+  if (!lakehouseId) {
+    return badRequest(
+      'lakehouseId is required: maintenance runs on a table of a lakehouse item.',
+      'Reopen the lakehouse and run Maintenance from its table menu, so the request names the item.',
+    );
+  }
 
-  // Resolve the DLZ ADLS account from LOOM_{BRONZE,SILVER,GOLD,LANDING}_URL.
-  // Honest infra-gate if storage isn't wired up — never a Fabric gate.
+  const scope = await authorizeAndBindItem(session, lakehouseId, {
+    write: true,
+    readOnlyMessage:
+      'Your role on this lakehouse is read-only, so Loom did not run maintenance. A workspace '
+      + 'Member/Admin, or an item grant that includes Edit, can run OPTIMIZE / VACUUM on its tables.',
+  });
+  if (scope instanceof NextResponse) return scope;
+
+  // The container comes from the item binding, not the request.
+  const v = validateMaintenanceRequest({ ...body, container: scope.bound.container });
+  if (!v.ok) return badRequest(v.error, 'Correct the value named in the message in the Maintenance dialog and retry.');
+  const reqVal = { ...v.value, tablesRoot: scope.rootSegments.join('/') };
+
+  // The storage account comes from the item binding; fall back to the DLZ
+  // account from LOOM_{BRONZE,SILVER,GOLD,LANDING}_URL. Honest infra-gate if
+  // storage isn't wired up — never a Fabric gate.
   let account: string;
   try {
-    account = getAccountName();
+    account = abfssHost(scope.bound.abfss)?.split('.')[0] || getAccountName();
   } catch {
     return NextResponse.json({
       ok: false,
@@ -117,6 +148,7 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   const doc: MaintenanceJobDoc = {
     id: randomUUID(),
     tenantId: session.claims.oid,
+    lakehouseId,
     container: reqVal.container,
     tableName: reqVal.tableName,
     pool: reqVal.pool,

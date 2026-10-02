@@ -60,6 +60,14 @@ import { validateWhereClause, RLS_WHERE_MAX } from '@/lib/azure/rls-predicate';
 // OneLakeSecurityTab — column-level security (CLS)
 // ───────────────────────────────────────────────────────────────────────────
 
+/**
+ * A read URL for /api/lakehouse/permissions. The GET is scoped to one
+ * lakehouse and authorized against it, so every read names `lakehouseId`.
+ */
+export function permissionsReadUrl(lakehouseId: string, q: Record<string, string>): string {
+  return `/api/lakehouse/permissions?${new URLSearchParams({ ...q, lakehouseId }).toString()}`;
+}
+
 interface SqlTable { objectId: number; schema: string; name: string; type: string }
 interface SqlColumn { columnId: number; name: string; dataType: string }
 interface DenyRow { principal: string; schema: string; table: string; column: string | null }
@@ -132,7 +140,7 @@ export function OneLakeSecurityTab({ lakehouseId }: { lakehouseId: string }) {
   const loadState = useCallback(async () => {
     setError(null);
     try {
-      const r = await clientFetch('/api/lakehouse/permissions?tab=cls');
+      const r = await clientFetch(permissionsReadUrl(lakehouseId, { tab: 'cls' }));
       const j = await r.json();
       if (j.gate) { setGate({ missing: j.missing, hint: j.hint }); return; }
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
@@ -142,18 +150,18 @@ export function OneLakeSecurityTab({ lakehouseId }: { lakehouseId: string }) {
     } catch (e: any) {
       setError(e?.message || String(e));
     }
-  }, []);
+  }, [lakehouseId]);
 
   const loadTables = useCallback(async () => {
     try {
-      const r = await clientFetch('/api/lakehouse/permissions?tab=cls&list=tables');
+      const r = await clientFetch(permissionsReadUrl(lakehouseId, { tab: 'cls', list: 'tables' }));
       const j = await r.json();
       if (j.gate) { setGate({ missing: j.missing, hint: j.hint }); return; }
       if (j.ok) setTables(Array.isArray(j.tables) ? j.tables : []);
     } catch (e: any) {
       setError(e?.message || String(e));
     }
-  }, []);
+  }, [lakehouseId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -169,14 +177,14 @@ export function OneLakeSecurityTab({ lakehouseId }: { lakehouseId: string }) {
     setNotice(null);
     if (objectId == null) return;
     try {
-      const r = await clientFetch(`/api/lakehouse/permissions?tab=cls&list=columns&objectId=${objectId}`);
+      const r = await clientFetch(permissionsReadUrl(lakehouseId, { tab: 'cls', list: 'columns', objectId: String(objectId) }));
       const j = await r.json();
       if (j.ok) setColumns(Array.isArray(j.columns) ? j.columns : []);
       else if (j.error) setError(j.error);
     } catch (e: any) {
       setError(e?.message || String(e));
     }
-  }, []);
+  }, [lakehouseId]);
 
   // ── conflict detection: a selected column that already has a column-level
   //    GRANT for this principal+table is dead weight (DENY wins). ──
@@ -237,7 +245,7 @@ export function OneLakeSecurityTab({ lakehouseId }: { lakehouseId: string }) {
     setBusy(true); setError(null); setNotice(null);
     try {
       // resolve the column_id of the denied column on that table
-      const cr = await clientFetch(`/api/lakehouse/permissions?tab=cls&list=columns&objectId=${tbl.objectId}`);
+      const cr = await clientFetch(permissionsReadUrl(lakehouseId, { tab: 'cls', list: 'columns', objectId: String(tbl.objectId) }));
       const cj = await cr.json();
       const hit = (cj.columns || []).find((c: SqlColumn) => c.name === row.column);
       if (!hit) throw new Error(`Column ${row.column} no longer exists on ${row.schema}.${row.table}`);
@@ -255,7 +263,7 @@ export function OneLakeSecurityTab({ lakehouseId }: { lakehouseId: string }) {
     } finally {
       setBusy(false);
     }
-  }, [tables, loadState]);
+  }, [tables, loadState, lakehouseId]);
 
   // existing deny rows that ALSO have a matching column-level grant (conflict).
   const denyConflictKeys = useMemo(() => {
@@ -460,6 +468,20 @@ export function OneLakeSecurityTab({ lakehouseId }: { lakehouseId: string }) {
 // Max predicate length — re-exported from the shared sanitizer.
 const MAX_CHARS = RLS_WHERE_MAX;
 
+/**
+ * The text shown for a refused RLS test or save. A tenant-admin refusal from
+ * `requireTenantAdmin` carries `error: 'forbidden'` with the sentence in
+ * `reason`; the permissions write refusal carries it in `error`. Either way the
+ * next step in `remediation` is shown after it.
+ */
+export function rlsRefusalText(
+  j: { gate?: boolean; missing?: string; reason?: string; error?: string; remediation?: string } | null | undefined,
+  status: number,
+): string {
+  if (j?.gate) return `Synapse Dedicated SQL pool not configured (${j.missing}).`;
+  return [j?.reason || j?.error || `HTTP ${status}`, j?.remediation].filter(Boolean).join(' ');
+}
+
 /** Client-side wrapper over the shared validator — returns an error string or null. */
 export function validateRlsPredicate(s: string): string | null {
   const v = validateWhereClause(s);
@@ -507,6 +529,8 @@ export interface OnelakeRlsTable {
 }
 
 export interface OnelakeRlsPredicateEditorProps {
+  /** The lakehouse item the column list is read for (the permissions GET is scoped to it). */
+  lakehouseId: string;
   /** Tables/views from the parent's catalog list (Synapse Dedicated SQL pool). */
   tables: OnelakeRlsTable[];
   /** Signed-in admin's UPN — seeds the "Test as identity" field. */
@@ -565,7 +589,7 @@ function registerRlsCompletions(monaco: any) {
   });
 }
 
-export function OnelakeRlsPredicateEditor({ tables, defaultIdentity, onSaved }: OnelakeRlsPredicateEditorProps) {
+export function OnelakeRlsPredicateEditor({ lakehouseId, tables, defaultIdentity, onSaved }: OnelakeRlsPredicateEditorProps) {
   const styles = useRlsStyles();
   // Only base tables (type 'U') can carry an RLS policy — match the fixed form.
   const rlsTables = useMemo(() => tables.filter((t) => t.type === 'U'), [tables]);
@@ -596,7 +620,7 @@ export function OnelakeRlsPredicateEditor({ tables, defaultIdentity, onSaved }: 
   const loadColumns = useCallback(async (oid: number) => {
     setColsLoading(true);
     try {
-      const r = await clientFetch(`/api/lakehouse/permissions?tab=column&list=columns&objectId=${oid}`);
+      const r = await clientFetch(permissionsReadUrl(lakehouseId, { tab: 'column', list: 'columns', objectId: String(oid) }));
       const j = await r.json();
       setCols(j.ok ? j.columns || [] : []);
     } catch {
@@ -604,7 +628,7 @@ export function OnelakeRlsPredicateEditor({ tables, defaultIdentity, onSaved }: 
     } finally {
       setColsLoading(false);
     }
-  }, []);
+  }, [lakehouseId]);
 
   const onPickTable = useCallback(
     (oid: number | null) => {
@@ -642,7 +666,7 @@ export function OnelakeRlsPredicateEditor({ tables, defaultIdentity, onSaved }: 
       });
       const j = await r.json();
       if (!j.ok) {
-        setTestError(j.gate ? `Synapse Dedicated SQL pool not configured (${j.missing}).` : j.error || `HTTP ${r.status}`);
+        setTestError(rlsRefusalText(j, r.status));
         return;
       }
       setTestResult({
@@ -673,7 +697,7 @@ export function OnelakeRlsPredicateEditor({ tables, defaultIdentity, onSaved }: 
       });
       const j = await r.json();
       if (!j.ok) {
-        setSaveError(j.gate ? `Synapse Dedicated SQL pool not configured (${j.missing}).` : j.error || `HTTP ${r.status}`);
+        setSaveError(rlsRefusalText(j, r.status));
         return;
       }
       setSaveReceipt({ policyName: j.policyName, functionName: j.functionName });

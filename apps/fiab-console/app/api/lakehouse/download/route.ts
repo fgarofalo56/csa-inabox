@@ -59,6 +59,7 @@ async function resolveLabel(
   req: NextRequest,
   container: string,
   path: string,
+  boundAccount: string | null,
 ): Promise<MipLabelInfo | null> {
   const labelId = req.nextUrl.searchParams.get('labelId') || '';
   const labelName = req.nextUrl.searchParams.get('labelName') || '';
@@ -73,7 +74,7 @@ async function resolveLabel(
   }
   if (!process.env.LOOM_PURVIEW_ACCOUNT) return null;
   try {
-    const account = getAccountName();
+    const account = boundAccount ?? getAccountName();
     return await getLabelForAdlsPath(account, container, path);
   } catch {
     return null; // Purview lookup failed — download proceeds unstamped.
@@ -97,10 +98,12 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
     { knownContainers: KNOWN_CONTAINERS },
   );
   if (scoped instanceof NextResponse) return scoped;
-  const { container, path } = scoped;
+  // `account` is the storage account the item is bound to; null only on the
+  // tenant-admin storage form, which reads the deployment's primary account.
+  const { container, path, account } = scoped;
 
   try {
-    const { body, contentType } = await downloadFile(container, path);
+    const { body, contentType } = await downloadFile(container, path, account ?? undefined);
     const filename = leaf(path) || 'download.bin';
 
     // ---- MIP stamp (never blocks the download) ----------------------------
@@ -117,7 +120,7 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
         mipStatus = 'not-configured';
       } else {
         try {
-          const label = await resolveLabel(req, container, path);
+          const label = await resolveLabel(req, container, path, account);
           if (!label) {
             mipStatus = 'no-label';
           } else {

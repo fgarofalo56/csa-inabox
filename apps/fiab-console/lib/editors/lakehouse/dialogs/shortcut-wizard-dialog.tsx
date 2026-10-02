@@ -32,7 +32,7 @@ export function ShortcutWizardDialog() {
     scFormat, setScFormat,
     scTargetSchema, setScTargetSchema,
     scSubmitError, scSubmitting, submitShortcut,
-    shortcutLakehouseId, schemas, schemasEnabled,
+    shortcutLakehouseId, lakehouseName, schemas, schemasEnabled,
   } = ctx;
 
   return (
@@ -43,7 +43,7 @@ export function ShortcutWizardDialog() {
           <DialogContent>
             {scStep === 1 && (
               <>
-                <Caption1>Choose the source to virtualize into <strong>{shortcutLakehouseId}</strong>. ADLS Gen2 and internal Loom lakehouse work on the Console UAMI; external clouds (S3, GCS, Dataverse) store credentials in Key Vault.</Caption1>
+                <Caption1>Choose the source to virtualize into <strong>{lakehouseName}</strong>. ADLS Gen2 and internal Loom lakehouse work on the Console UAMI; external clouds (S3, GCS, Dataverse) store credentials in Key Vault.</Caption1>
                 <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalM }}>
                   {SHORTCUT_SOURCE_CARDS.map((src) => (
                     <Button
