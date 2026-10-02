@@ -262,8 +262,45 @@ jobs:
       || (github.event.workflow_run.conclusion == 'success'
           && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
+    # ── #4823 — THE LEASE WAITS MUST FIT INSIDE THIS NUMBER ──────────────────
+    #
+    # Three steps take the ACR firewall lease (preflight, digest re-assertion,
+    # :v0.1 pin). Each used to inherit acr-firewall-lease.sh's default bounded
+    # wait of 25 minutes, so the waits could add up to 75 against a 45-minute
+    # job. Measured, run 36665140502: setup took 3m35s, step 16 waited its full
+    # 25m behind build-fiab-images-acr-tasks (a 120-minute lease), step 19
+    # started a second 25m wait and the job was killed at 45m15s — `cancelled`,
+    # which skipped the failure notice. 4 of the last 10 rolls ended that way.
+    #
+    # Now every acquire waits only for what is LEFT of ONE job-level deadline
+    # (ROLL_LEASE_DEADLINE, written by the resolve step from the budget below).
+    # The waits therefore cannot sum past LOOM_ROLL_LEASE_BUDGET_MINUTES, and
+    # that single number is what must leave headroom under timeout-minutes.
+    # scripts/ci/__tests__/roll-lease-budget.test.mjs reads BOTH values from
+    # this file and fails if budget + 15 minutes of non-wait work reaches the
+    # timeout. The 'Notify on a timeout-cancel' step's ROLL_JOB_TIMEOUT_MINUTES
+    # must equal timeout-minutes (same test) — the `env` context is not
+    # available to `timeout-minutes`, so the value cannot be shared by reference.
     timeout-minutes: 45
+    env:
+      LOOM_ROLL_LEASE_BUDGET_MINUTES: '20'
+      # #4823 — this run's estate overrides, so a lease refusal or a timeout
+      # can print the EXACT command that repeats this run. Empty means "not
+      # overridden" (always the case on the automatic workflow_run path, which
+      # uses the defaults). Read-only here; the steps that USE these inputs
+      # still read them where they always did.
+      ROLL_IN_LOCATION: ${{ inputs.location }}
+      ROLL_IN_RESOURCE_GROUP: ${{ inputs.resource_group }}
+      ROLL_IN_ACR: ${{ inputs.acr }}
     steps:
+      # #4823 — the job's start, read by 'Notify on a timeout-cancel' to tell a
+      # timeout from an earlier cancel. FIRST, ahead of checkout and setup-node:
+      # recorded any later, slow setup would shrink the measured elapsed time
+      # below the 2-minute margin and turn a real timeout into a quiet
+      # "cancelled". A bare `date`, so it needs nothing checked out.
+      - name: Record the job start
+        run: echo "ROLL_JOB_STARTED=$(date -u +%s)" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - name: Use Node.js 20
@@ -307,6 +344,14 @@ jobs:
           PRODUCER_RUN: ${{ github.event.workflow_run.id }}
         run: |
           set -euo pipefail
+          # #4823 — the ONE deadline every lease acquire below waits against.
+          # Written first, so every later step can rely on it. It is a deadline
+          # measured from HERE, not accumulated waiting: the roll, health and
+          # verify steps spend it too, so a slow roll leaves the pin a 0-minute
+          # wait (one attempt) and the pin then fails fast on any contention.
+          ROLL_LEASE_DEADLINE=$(node scripts/ci/roll-lease-budget.mjs deadline --budget-minutes "$LOOM_ROLL_LEASE_BUDGET_MINUTES")
+          echo "ROLL_LEASE_DEADLINE=$ROLL_LEASE_DEADLINE" >> "$GITHUB_ENV"
+          echo "::notice::ACR lease-wait budget for this job: ${LOOM_ROLL_LEASE_BUDGET_MINUTES}m in total across every lease acquire (deadline epoch $ROLL_LEASE_DEADLINE)."
           TAG="$(printf '%s' "$IN_TAG" | tr -d '[:space:]')"
           BOUNDARY_IN="$(printf '%s' "$IN_BOUNDARY" | tr -d '[:space:]')"
           APPS_IN="${IN_APPS:-}"
@@ -356,6 +401,9 @@ jobs:
             echo "TAG=$TAG"
             echo "APPS=$APPS"
             echo "BOUNDARY=$BOUNDARY_IN"
+            # #4823 — the RESOLVED pin, for the re-dispatch command a lease
+            # refusal or a timeout prints. Nothing branches on it.
+            echo "ROLL_PIN_DEPLOY_TAG=$PIN"
           } >> "$GITHUB_ENV"
           {
             echo "tag=$TAG"
@@ -531,9 +579,32 @@ jobs:
             return 1
           }
           trap 'release_lease' EXIT
+          # #4823 — on a failed acquire, read the lease back and NAME the
+          # holder; only a live lease held by another run is classified (and
+          # only then is deploy-failure.json written for the notifier).
+          report_unacquired() {
+            if ! bash scripts/csa-loom/acr-firewall-lease.sh status --acr "$ACR" > .roll/lease-status.txt; then
+              echo "::error::Could not read the ACR firewall lease on '$ACR' back after the failed acquire, so the holder is NOT named here and no cause is asserted."
+              return 1
+            fi
+            node scripts/ci/roll-lease-budget.mjs unacquired --status-file .roll/lease-status.txt \
+              --severity error --step preflight --acr "$ACR" --wait-minutes "$LEASE_WAIT_MIN" \
+              --budget-minutes "$LOOM_ROLL_LEASE_BUDGET_MINUTES" \
+              --boundary "${BOUNDARY:-}" --tag "$TAG" --apps "${APPS:-}" --location "${ROLL_IN_LOCATION:-}" \
+              --resource-group "${ROLL_IN_RESOURCE_GROUP:-}" --acr-override "${ROLL_IN_ACR:-}" \
+              --pin-deploy-tag "${ROLL_PIN_DEPLOY_TAG:-}" --out deploy-failure.json
+          }
 
-          if ! LOOM_ACR_LEASE_TTL_MINUTES=20 bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"; then
+          # Wait only for what is LEFT of the job's one lease-wait deadline.
+          if ! LEASE_WAIT_MIN=$(node scripts/ci/roll-lease-budget.mjs wait-minutes --deadline "${ROLL_LEASE_DEADLINE:-}"); then
+            echo "::error::Could not compute this step's share of the job's ACR lease-wait budget (ROLL_LEASE_DEADLINE='${ROLL_LEASE_DEADLINE:-<unset>}', written by the resolve step). Refusing to fall back to the helper's default wait, which is how three waits outgrew the job timeout (#4823). Nothing was read and nothing was rolled."
+            exit 1
+          fi
+          if ! LOOM_ACR_LEASE_TTL_MINUTES=20 LOOM_ACR_LEASE_WAIT_MINUTES="$LEASE_WAIT_MIN" bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"; then
             echo "::error::Could not acquire the ACR firewall lease on '$ACR'. Either another build/roll holds it, or this identity cannot change the registry network rules. Existence of '$TAG' is therefore UNPROVEN — this run establishes nothing and refuses to roll on it."
+            if ! report_unacquired; then
+              echo "::error::Reporting the lease holder failed (the reason is above), so the acquire's own output is the only record of who held it."
+            fi
             exit 1
           fi
           LEASE_HELD=1
@@ -756,11 +827,35 @@ jobs:
             return 1
           }
           trap 'release_lease' EXIT
+          # #4823 — name the holder on a failed acquire. A WARNING, and no
+          # deploy-failure.json: verdict=unknown is not a failure (#4196).
+          report_unacquired() {
+            if ! bash scripts/csa-loom/acr-firewall-lease.sh status --acr "$ACR" > .roll/lease-status.txt; then
+              echo "::warning::Could not read the ACR firewall lease on '$ACR' back after the failed acquire, so the holder is NOT named here and no cause is asserted."
+              return 1
+            fi
+            node scripts/ci/roll-lease-budget.mjs unacquired --status-file .roll/lease-status.txt \
+              --severity warning --step digest-reassert --acr "$ACR" --wait-minutes "$LEASE_WAIT_MIN" \
+              --budget-minutes "$LOOM_ROLL_LEASE_BUDGET_MINUTES"
+          }
 
-          if ! LOOM_ACR_LEASE_TTL_MINUTES=20 bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"; then
+          # Wait only for what is LEFT of the job's one lease-wait deadline, so
+          # this wait and the pin's below cannot add up past the budget. The
+          # verdict semantics are unchanged: failing to get the lease is
+          # `unknown`, never a negative, and never a rollback.
+          if ! LEASE_WAIT_MIN=$(node scripts/ci/roll-lease-budget.mjs wait-minutes --deadline "${ROLL_LEASE_DEADLINE:-}"); then
             echo "verdict=unknown" >> "$GITHUB_OUTPUT"
             echo "release_confirmed=true" >> "$GITHUB_OUTPUT"
-            echo "::warning::Could not acquire the ACR firewall lease to re-read '$ACR' within the bounded wait, so the digest re-assertion DID NOT RUN. This run does not claim the tag is unchanged — and it does not claim it moved either, because it never read the registry. The roll's own health and live-image verification above are unaffected and still stand, so the rolled images are LEFT IN PLACE. Re-dispatch this workflow once the lease holder has finished if you need the assertion."
+            echo "::warning::Could not compute this step's share of the job's ACR lease-wait budget (ROLL_LEASE_DEADLINE='${ROLL_LEASE_DEADLINE:-<unset>}'), so the lease was not requested and the digest re-assertion DID NOT RUN. Nothing is claimed about the tag either way; the rolled images are LEFT IN PLACE."
+            exit 0
+          fi
+          if ! LOOM_ACR_LEASE_TTL_MINUTES=20 LOOM_ACR_LEASE_WAIT_MINUTES="$LEASE_WAIT_MIN" bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"; then
+            echo "verdict=unknown" >> "$GITHUB_OUTPUT"
+            echo "release_confirmed=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::Could not acquire the ACR firewall lease to re-read '$ACR' within this step's share of the job's lease-wait budget (${LEASE_WAIT_MIN}m), so the digest re-assertion DID NOT RUN. This run does not claim the tag is unchanged — and it does not claim it moved either, because it never read the registry. The roll's own health and live-image verification above are unaffected and still stand, so the rolled images are LEFT IN PLACE. Re-dispatch this workflow once the lease holder has finished if you need the assertion."
+            if ! report_unacquired; then
+              echo "::warning::Reporting the lease holder failed (the reason is above), so the acquire's own output is the only record of who held it."
+            fi
             exit 0
           fi
           LEASE_HELD=1
@@ -867,13 +962,41 @@ jobs:
             return 1
           }
           trap 'release_lease' EXIT
+          # #4823 — a failed acquire now ENDS THIS STEP with a true error that
+          # names the holder, instead of being killed mid-wait by the job
+          # timeout. A live lease held by another run is contention and is
+          # classified `transient` in deploy-failure.json for the notifier.
+          report_unacquired() {
+            if ! bash scripts/csa-loom/acr-firewall-lease.sh status --acr "$ACR" > .roll/lease-status.txt; then
+              echo "::error::Could not read the ACR firewall lease on '$ACR' back after the failed acquire, so the holder is NOT named here and no cause is asserted."
+              return 1
+            fi
+            node scripts/ci/roll-lease-budget.mjs unacquired --status-file .roll/lease-status.txt \
+              --severity error --step "pin :v0.1" --acr "$ACR" --wait-minutes "$LEASE_WAIT_MIN" \
+              --budget-minutes "$LOOM_ROLL_LEASE_BUDGET_MINUTES" \
+              --boundary "${BOUNDARY:-}" --tag "$TAG" --apps "${APPS:-}" --location "${ROLL_IN_LOCATION:-}" \
+              --resource-group "${ROLL_IN_RESOURCE_GROUP:-}" --acr-override "${ROLL_IN_ACR:-}" \
+              --pin-deploy-tag "${ROLL_PIN_DEPLOY_TAG:-}" --out deploy-failure.json
+          }
+
+          # Wait only for what is LEFT of the job's one lease-wait deadline —
+          # whatever the digest re-assertion above already spent is not
+          # available again here. Run 36665140502 is what the old per-step
+          # 25-minute default did: 25m in step 16, then a timeout mid-wait here.
+          if ! LEASE_WAIT_MIN=$(node scripts/ci/roll-lease-budget.mjs wait-minutes --deadline "${ROLL_LEASE_DEADLINE:-}"); then
+            echo "::error::Could not compute this step's share of the job's ACR lease-wait budget (ROLL_LEASE_DEADLINE='${ROLL_LEASE_DEADLINE:-<unset>}'), so the lease was not requested, NO retag was attempted and :v0.1 is unchanged. The roll itself is verified and live; its DURABILITY is not established."
+            exit 1
+          fi
 
           # ACQUIRE BEFORE THE FIRST WRITE. Failing here means NOTHING was
           # retagged, which is a different and better state than the previous
           # ordering could report: it used to issue the retags first and then
           # discover it could not verify them.
-          if ! LOOM_ACR_LEASE_TTL_MINUTES=20 bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"; then
-            echo "::error::Could not acquire the ACR firewall lease on '$ACR', so NO retag was attempted and :v0.1 is unchanged. The roll itself is verified and live; its DURABILITY is not established. Re-run this workflow once the holder of the lease has finished."
+          if ! LOOM_ACR_LEASE_TTL_MINUTES=20 LOOM_ACR_LEASE_WAIT_MINUTES="$LEASE_WAIT_MIN" bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"; then
+            echo "::error::Could not acquire the ACR firewall lease on '$ACR' within this step's share of the job's lease-wait budget (${LEASE_WAIT_MIN}m), so NO retag was attempted and :v0.1 is unchanged. The roll itself is verified and live; its DURABILITY is not established. Re-run this workflow once the holder of the lease has finished."
+            if ! report_unacquired; then
+              echo "::error::Reporting the lease holder failed (the reason is above), so the acquire's own output is the only record of who held it."
+            fi
             exit 1
           fi
           LEASE_HELD=1
@@ -935,14 +1058,32 @@ jobs:
           [ "$IMPORT_FAILED" = "0" ] && [ "$VERIFY_FAILED" = "0" ]
 
       - name: Durability NOT established (state it plainly)
+        # Two arms. The first is the pre-existing one: the run SUCCEEDED but the
+        # pin was never requested or could not be (no digest). The second is
+        # #4823: a CANCELLED run — the job timeout, measured in run 36665140502,
+        # or a person — after the roll landed and before the pin completed.
+        # That cancel used to skip this step (`success()` is false), so a live,
+        # non-durable roll was reported by nothing but a summary row.
         if: >-
-          success() && (steps.resolve.outputs.pin != 'true' || steps.preflight.outputs.digests_complete != 'true')
+          (success() && (steps.resolve.outputs.pin != 'true' || steps.preflight.outputs.digests_complete != 'true'))
+          || (cancelled() && steps.roll.outcome == 'success' && steps.pin.outcome != 'success')
+        env:
+          JOB_STATUS: ${{ job.status }}
+          PIN_OUTCOME: ${{ steps.pin.outcome }}
         run: |
           set -euo pipefail
-          if [ "$BOUNDARY" = "commercial" ]; then
-            echo "::warning::The :v0.1 pin did not run. On Commercial the roll can still survive the next deploy, because deploy-fiab-commercial.yml runs reconcile-resolve.mjs, which MEASURES the running tags and exports LOOM_UNITY_TAG / LOOM_TRINO_TAG. That mechanism is not exercised by this run and is not verified by it."
+          if [ "$JOB_STATUS" = "cancelled" ]; then
+            case "$PIN_OUTCOME" in
+              cancelled) WHAT="This run was CANCELLED after the roll landed, while the :v0.1 pin step was running, so whether any retag onto :v0.1 landed is NOT established." ;;
+              *)         WHAT="This run was CANCELLED after the roll landed and before the :v0.1 pin step ran (pin step outcome: '${PIN_OUTCOME:-<none>}'), so :v0.1 was not touched by this run." ;;
+            esac
           else
-            echo "::error::The :v0.1 pin did not run, and on '$BOUNDARY' that is the ONLY durability mechanism: the Provision step in the Gov deploy workflows has no env: block, so bicep resolves readEnvironmentVariable('LOOM_UNITY_TAG','v0.1') to literally 'v0.1'. The next full deploy of this boundary WILL revert these apps. This roll is live but NOT durable."
+            WHAT="The :v0.1 pin did not run."
+          fi
+          if [ "$BOUNDARY" = "commercial" ]; then
+            echo "::warning::$WHAT On Commercial the roll can still survive the next deploy, because deploy-fiab-commercial.yml runs reconcile-resolve.mjs, which MEASURES the running tags and exports LOOM_UNITY_TAG / LOOM_TRINO_TAG. That mechanism is not exercised by this run and is not verified by it."
+          else
+            echo "::error::$WHAT On '$BOUNDARY' the pin is the ONLY durability mechanism: the Provision step in the Gov deploy workflows has no env: block, so bicep resolves readEnvironmentVariable('LOOM_UNITY_TAG','v0.1') to literally 'v0.1'. The next full deploy of this boundary WILL revert these apps. This roll is live but NOT durable."
             exit 1
           fi
 
@@ -1009,6 +1150,71 @@ jobs:
           set -euo pipefail
           node .github/scripts/deploy-notify-failure.mjs \
             --workflow loom-dataplane-roll --result "${{ job.status }}" --failure-json deploy-failure.json
+
+      # ── 14b. #4823 — THE SAME NOTICE WHEN THE JOB TIMES OUT.
+      #
+      #  A job that hits timeout-minutes concludes `cancelled`, not `failure`,
+      #  so the step above never ran on a timed-out roll (4 of the last 10;
+      #  run 36665140502's step list shows it `skipped` while `Summary`, an
+      #  always() step, ran after the timeout). Handing it `cancelled` would not
+      #  help: deploy-notify-failure.mjs deliberately logs and never files a
+      #  cancellation (#3368). So this step asks roll-lease-budget.mjs whether
+      #  the cancel came AT the time limit — a timeout, filed as the literal
+      #  `timed_out`, a genuine failure in run-outcome.mjs — or earlier, which is
+      #  a person or GitHub cancelling the run and stays quiet: logged, not filed.
+      #
+      #  There is no "superseded" case to keep quiet: the concurrency group has
+      #  cancel-in-progress: false, so a newer run waits as PENDING rather than
+      #  cancelling this one, and a pending run GitHub replaces never starts.
+      #
+      #  ROLL_JOB_TIMEOUT_MINUTES must equal the job's timeout-minutes (the `env`
+      #  context is not available to timeout-minutes, so it cannot be shared by
+      #  reference); roll-lease-budget.test.mjs fails if they differ.
+      #
+      #  #4823 round 2 — on a timeout, `notify-result --out` WRITES the
+      #  deploy-failure.json the notifier renders, OVERWRITING any earlier one.
+      #  With no artifact the notifier's text says the failing step "did not run
+      #  through deploy-retry.mjs" and that wiring it is the fix — false here —
+      #  and never says the job timed out; a stale artifact from an earlier
+      #  step would be rendered as the cause. STEP_OUTCOMES lets it name the
+      #  step id whose outcome is `cancelled` (the one the limit interrupted).
+      - name: Notify on a timeout-cancel
+        if: cancelled()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          JOB_STATUS: ${{ job.status }}
+          ROLL_JOB_TIMEOUT_MINUTES: '45'
+          STEP_OUTCOMES: >-
+            resolve=${{ steps.resolve.outcome }} plan=${{ steps.plan.outcome }}
+            preflight=${{ steps.preflight.outcome }} roll=${{ steps.roll.outcome }}
+            health=${{ steps.health.outcome }} verify=${{ steps.verify.outcome }}
+            digest=${{ steps.digest.outcome }} pin=${{ steps.pin.outcome }}
+        run: |
+          set -euo pipefail
+          NOTIFY_OUT=$(node scripts/ci/roll-lease-budget.mjs notify-result --job-status "$JOB_STATUS" \
+            --started "${ROLL_JOB_STARTED:-}" --timeout-minutes "$ROLL_JOB_TIMEOUT_MINUTES" \
+            --step-outcomes "$STEP_OUTCOMES" --boundary "${BOUNDARY:-}" --tag "${TAG:-}" --apps "${APPS:-}" \
+            --location "${ROLL_IN_LOCATION:-}" --resource-group "${ROLL_IN_RESOURCE_GROUP:-}" \
+            --acr-override "${ROLL_IN_ACR:-}" --pin-deploy-tag "${ROLL_PIN_DEPLOY_TAG:-}" \
+            --out deploy-failure.json)
+          printf '%s\n' "$NOTIFY_OUT" | sed '/^result=/d'
+          VERDICT=$(printf '%s\n' "$NOTIFY_OUT" | sed -n 's/^result=//p')
+          case "$VERDICT" in
+            timed_out)
+              node .github/scripts/deploy-notify-failure.mjs \
+                --workflow loom-dataplane-roll --result timed_out --failure-json deploy-failure.json
+              ;;
+            cancelled)
+              echo "Not filed: the note above states why this cancel is not a timeout."
+              ;;
+            failure)
+              echo "Not filed here: the job status is failure, which the 'Notify on failure' step above files."
+              ;;
+            *)
+              echo "::error::roll-lease-budget.mjs notify-result returned '${VERDICT:-<nothing>}' for job status '$JOB_STATUS', which is neither timed_out nor cancelled. Refusing to guess whether to file."
+              exit 1
+              ;;
+          esac
 
       - name: Summary
         if: always()
