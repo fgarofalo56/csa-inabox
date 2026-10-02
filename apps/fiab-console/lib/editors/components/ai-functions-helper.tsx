@@ -347,7 +347,7 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
       });
       const j = await r.json();
       if (!j.ok && j.code === 'unsaved_item') {
-        setUnsavedNotice(j.error || 'Save this item first, then run the AI function.');
+        setUnsavedNotice(j.error || 'AI functions run in the name of a saved item.');
         return;
       }
       if (!j.ok) {

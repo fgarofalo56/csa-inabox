@@ -88,7 +88,7 @@ function unsavedItemGate(): NextResponse {
   return NextResponse.json({
     ok: false,
     code: 'unsaved_item',
-    error: 'Save this item first — AI functions run in the name of a saved item.',
+    error: 'AI functions run in the name of a saved item.',
   }, { status: 200 });
 }
 

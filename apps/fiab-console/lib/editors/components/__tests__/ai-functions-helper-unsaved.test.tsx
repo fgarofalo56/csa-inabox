@@ -23,6 +23,19 @@ import { fireEvent, screen, waitFor, cleanup } from '@testing-library/react';
 import { renderWithProviders, installFetchMock } from '../../__tests__/test-helpers';
 import { AiFunctionsHelper } from '../ai-functions-helper';
 
+// `MessageBar`'s `intent` prop is not itself text in the DOM — without this
+// pass-through, a test can find the title/body strings while the bar renders
+// red (`intent="error"`) instead of amber, and still go green. Mirrored from
+// the warning the round-4 review measured: `findByText` alone cannot
+// distinguish the two intents.
+vi.mock('@fluentui/react-components', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@fluentui/react-components')>();
+  const MessageBar = (props: React.ComponentProps<typeof actual.MessageBar>) => (
+    <actual.MessageBar {...props} data-intent={props.intent ?? 'info'} />
+  );
+  return { ...actual, MessageBar };
+});
+
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 const PROBE = { ok: true, engine: 'notebook', govPath: false, dbxAvailable: true, gated: false };
@@ -55,13 +68,19 @@ describe('AiFunctionsHelper: the unsaved-item reply', () => {
       '/ai-function': () => ({
         ok: false,
         code: 'unsaved_item',
-        error: 'Save this item first — AI functions run in the name of a saved item.',
+        error: 'AI functions run in the name of a saved item.',
       }),
     });
     renderHelper('new');
     await clickRun();
 
-    expect(await screen.findByText('Save this item first')).toBeInTheDocument();
+    const title = await screen.findByText('Save this item first');
+    expect(title).toBeInTheDocument();
+    // What breaks this: `intent="warning"` changed to `intent="error"` on the
+    // unsaved notice (`ai-functions-helper.tsx`) — the title text alone does
+    // not change, only the bar's color/role, so only the intent attribute
+    // catches it.
+    expect(title.closest('[data-intent]')?.getAttribute('data-intent')).toBe('warning');
     expect(screen.getByText(/AI functions run in the name of a saved item\./)).toBeInTheDocument();
     expect(screen.queryByText('AI function failed')).toBeNull();
     // The POST was made (the warning is the route's answer, not a client-side
@@ -77,7 +96,11 @@ describe('AiFunctionsHelper: the unsaved-item reply', () => {
     renderHelper('nb-1');
     await clickRun();
 
-    expect(await screen.findByText('AI function failed')).toBeInTheDocument();
+    const title = await screen.findByText('AI function failed');
+    expect(title).toBeInTheDocument();
+    // The mirror of the assertion above: an ordinary failure must stay red,
+    // not drift to warning.
+    expect(title.closest('[data-intent]')?.getAttribute('data-intent')).toBe('error');
     expect(screen.getByText(/Warehouse is STOPPED\./)).toBeInTheDocument();
     expect(screen.queryByText('Save this item first')).toBeNull();
   });

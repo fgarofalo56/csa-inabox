@@ -84,13 +84,24 @@ export function dialectForEngine(engine: TransformEngine): CheckDialect {
   return 'tsql'; // synapse + fabric are T-SQL family
 }
 
+const IDENT_RE = /^[A-Za-z0-9_ $-]+$/;
+
 /** Reject anything that isn't a plain identifier segment (defense in depth). */
 function assertIdent(seg: string, what: string): string {
   const s = String(seg || '').trim();
-  if (!/^[A-Za-z0-9_ $-]+$/.test(s)) {
+  if (!IDENT_RE.test(s)) {
     throw new Error(`Unsafe ${what} in DQ check: "${seg}"`);
   }
   return s;
+}
+
+/**
+ * True when `name` is shaped like a plain identifier segment — the same rule
+ * {@link assertIdent} enforces, exposed so the route can reject a bad table
+ * name at ingestion instead of only at compile time.
+ */
+export function isSafeDqIdent(name: string): boolean {
+  return IDENT_RE.test(String(name || '').trim());
 }
 
 function quoteIdentFor(dialect: CheckDialect, name: string): string {
@@ -237,8 +248,26 @@ export interface CompiledChecks {
  */
 export function compileChecks(checks: DqCheck[], target: DqCheckTarget): CompiledChecks {
   const schema = (target.schema || 'analytics').trim() || 'analytics';
+  const skipped: SkippedCheck[] = [];
   const rulesOk = (checks || []).filter((c) => QUALITY_RULE_VALUES.includes(c.rule));
-  const tables = Array.from(new Set(rulesOk.map((c) => (c.table || '').trim()).filter(Boolean)));
+  // The table name feeds a Jinja `source()` STRING below, not a SQL literal —
+  // `escapeSqlLiteral`'s doubled-quote rule is SQL's escape, not Jinja's, so a
+  // quote character there would stay a quote and close the string early. The
+  // table must therefore be a plain identifier BEFORE it reaches that string,
+  // same as every column name already is (`assertIdent` above, defense in
+  // depth). A check whose table fails this is skipped, never faked as a pass.
+  const safeRows = rulesOk.filter((c) => {
+    const t = (c.table || '').trim();
+    if (!t) { skipped.push({ id: c.id, reason: 'no table' }); return false; }
+    try {
+      assertIdent(t, 'table');
+      return true;
+    } catch (e) {
+      skipped.push({ id: c.id, reason: (e as Error)?.message || 'unsafe table' });
+      return false;
+    }
+  });
+  const tables = Array.from(new Set(safeRows.map((c) => c.table.trim())));
 
   const sources: TransformSource[] = tables.map((t) => ({ name: 'loom_dq', schema, table: t }));
   const models: TransformModel[] = tables.map((t): TransformModel => ({
@@ -275,11 +304,9 @@ export function compileChecks(checks: DqCheck[], target: DqCheckTarget): Compile
   const files: GeneratedFile[] = tables.length ? generateTransformProject(project) : [];
   const dialect = dialectForEngine(target.engine);
   const compiled: CompiledChecks['compiled'] = [];
-  const skipped: SkippedCheck[] = [];
 
-  for (const check of rulesOk) {
-    const table = (check.table || '').trim();
-    if (!table) { skipped.push({ id: check.id, reason: 'no table' }); continue; }
+  for (const check of safeRows) {
+    const table = check.table.trim();
     const ref = `{{ ref('${escapeSqlLiteral(modelNameForTable(table))}') }}`;
     let built: ReturnType<typeof buildCheckSql>;
     try {
