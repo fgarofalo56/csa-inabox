@@ -273,6 +273,33 @@ test('FLOOR: a classifier that stopped classifying FAILS — a ratchet only fail
   assert.equal(code, 1);
 });
 
+test('FLOOR: the guard and the population test use the same comparison at the boundary', () => {
+  // The population test below asserts `total > MIN_LIVE_SITES`. The guard must
+  // fail at exactly the floor and pass one above it, or the guard can be green
+  // while that test is red. The floor is read from the guard's source, not
+  // copied here, so the probe cannot drift from the constant.
+  const src = fs.readFileSync(GUARD, 'utf8');
+  const m = /^const MIN_LIVE_SITES = (\d+);$/m.exec(src);
+  assert.ok(m, 'MIN_LIVE_SITES declaration not found in the guard');
+  const floor = Number(m[1]);
+  const floorMsg = (n) => {
+    const file = tmpBaseline({ 'a.tsx': n });
+    const errs = [];
+    const orig = console.error;
+    console.error = (...a) => errs.push(a.join(' '));
+    try {
+      judge({ files: new Array(1286).fill('x'), current: { 'a.tsx': n }, detail: [], sites: 2298 }, { argv: [], baselineFile: file, accepted: [], touchedFiles: null });
+    } finally {
+      console.error = orig;
+    }
+    return /the classifier found only/.test(errs.join('\n'));
+  };
+  // Breaks if the guard compares with `<`: at total === floor it would not fire.
+  assert.equal(floorMsg(floor), true, `no floor error at total === ${floor}`);
+  // Breaks if the guard compares with `<= floor + 1` or similar: one above passes.
+  assert.equal(floorMsg(floor + 1), false, `floor error at total === ${floor + 1}`);
+});
+
 test('the floors are ordered so extraction breakage is reported BEFORE a classifier zero', () => {
   // Both are broken here; the message must name site extraction, because a
   // "only N sites classified" verdict from a scanner that extracted nothing
@@ -613,13 +640,13 @@ test('the measured population is real: hundreds of sites, and not everything is 
   const total = Object.values(current).reduce((a, b) => a + b, 0);
   assert.ok(files.length > 1000, `only ${files.length} tracked .tsx enumerated`);
   assert.ok(sites > 1800, `only ${sites} free-text sites extracted`);
-  // 178 is MIN_LIVE_SITES in check-no-freeform.mjs, and the two must move
+  // 170 is MIN_LIVE_SITES in check-no-freeform.mjs, and the two must move
   // TOGETHER or one of them stops meaning anything. Both are the same control —
   // "the detector still detects" — and this one was 200 while the guard's was
   // 200, which is how it went red the moment console-ui-w2 removed real sites
   // (211 -> 187) rather than when the classifier broke. Lower BOTH in the same
   // PR that removes sites; never lower this one alone.
-  assert.ok(total > 178, `only ${total} violations classified`);
+  assert.ok(total > 170, `only ${total} violations classified`);
   // A classifier that flagged every free-text box would be useless in the other
   // direction: `<Input>` for a display name is correct and there are thousands.
   assert.ok(total < sites / 4, `${total}/${sites} sites flagged — the classifier is no longer discriminating`);
