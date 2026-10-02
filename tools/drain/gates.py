@@ -379,11 +379,25 @@ OTHER_IMPLEMENTED_BY = {
     "never": "gates.action_is_permitted",
     "stop_and_ask": "gates.action_is_permitted",
     "review.independent_reviewers_default": "gates.review_requirement",
-    "review.escalate_to_two_when_path_contains": "gates.escalation_paths",
+    # `escalate_to_two_when_path_contains` is RETIRED (operator decision
+    # 2026-10-02 -- see `_escalate_to_two_when_path_contains` in policy.json)
+    # and no longer appears as a live key, so it carries no row here; a row
+    # naming a key the authority does not contain fails
+    # `assert_policy_matches_code`'s "implemented but not declared" check.
+    "review.sensitive_path_prefixes": "gates.sensitive_path_prefixes",
+    "review.sensitive_reviewers": "gates.sensitive_reviewers",
+    # STILL LIVE, and deliberately NOT retired alongside the path list: this
+    # key no longer drives a review-COUNT decision in `review_requirement`,
+    # but `merge_gate.ledger_stream` still reads it (via `escalation_streams`)
+    # to pick which STREAM wins when a PR references several issues -- a
+    # reporting question, not an escalation one. See
+    # `_escalate_to_two_when_stream_is` in policy.json for the full split.
     "review.escalate_to_two_when_stream_is": "gates.escalation_streams",
     "review.escalate_on_blocking_first_verdict": "gates.review_requirement",
     "review.escalate_when_footprint_unknown": "gates.review_requirement",
-    "review.escalate_when_stream_unknown": "gates.review_requirement",
+    # `escalate_when_stream_unknown` is RETIRED the same way as the path list
+    # -- see `_escalate_when_stream_unknown` in policy.json -- and so carries
+    # no row either.
 }
 # Keys that are DELIBERATELY prose: they address the operator, not the program.
 # Listing them is the point -- an undeclared unconsulted key is indistinguishable
@@ -1605,8 +1619,19 @@ def _refuse_supersessions(live: list[Verdict]) -> str:
             + "; ".join(problems[:3]))
 
 
-def reduce_verdicts(live: list[Verdict], near: list[NearMiss] | None = None) -> tuple[bool, str]:
+def reduce_verdicts(live: list[Verdict], near: list[NearMiss] | None = None,
+                    required: int = 1) -> tuple[bool, str]:
     """Decide GO/NO-GO from live verdicts by CONJUNCTION, not recency.
+
+    `required` -- operator decision 2026-10-02 ("one reviewer on sensitive
+    paths, zero elsewhere on green CI"). It conditions EXACTLY ONE of the
+    checks below: the floor that refuses when no live verdict carries the
+    APPROVE token. `required` is the SAME NUMBER `review_requirement` (gate
+    3b) computed for this PR -- the caller passes it, this function does not
+    recompute it. Every other check stays unconditional regardless of
+    `required`: the supersession refusal, a blocking near-miss, a live
+    REQUEST-CHANGES, a live CANNOT-ASSESS. A PR that needs zero reviewers
+    still cannot merge over a reviewer who showed up and blocked it.
 
     A later APPROVE does NOT discharge an earlier block. Reduce by conjunction:
     any live blocking verdict blocks, regardless of what came after it.
@@ -1671,9 +1696,18 @@ def reduce_verdicts(live: list[Verdict], near: list[NearMiss] | None = None) -> 
         return False, "live REQUEST-CHANGES" + note
     if any(v.token == "CANNOT-ASSESS" and v.comment_id not in discharged for v in live):
         return False, "live CANNOT-ASSESS" + note
-    if not any(v.token == "APPROVE" for v in live):
+    # THE ONE CONDITIONAL CHECK. `required <= 0` means gate 3b already decided
+    # this PR needs no reviewer at all (an ordinary diff, or a qualifying
+    # dependency bump, on green CI) -- operator decision 2026-10-02. Every
+    # check above this line still runs regardless: a live block still blocks
+    # a zero-reviewer PR exactly as it blocks any other.
+    has_approve = any(v.token == "APPROVE" for v in live)
+    if required > 0 and not has_approve:
         return False, "no live APPROVE at head" + note
-    return True, "live APPROVE, zero live blocking verdicts" + note
+    return True, (
+        "live APPROVE, zero live blocking verdicts" if has_approve
+        else "zero live blocking verdicts, no reviewer required (operator decision 2026-10-02)"
+    ) + note
 
 
 # ---------------------------------------------------------------------------
@@ -5834,17 +5868,126 @@ def action_is_permitted(action: str, policy: dict) -> tuple[bool, str]:
     return False, "not in permitted_unattended - fails closed, add it to policy.json deliberately"
 
 
-def escalation_paths(policy: dict) -> tuple[str, ...]:
-    """Path fragments that escalate, READ FROM THE AUTHORITY.
+def sensitive_path_prefixes(policy: dict) -> tuple[str, ...]:
+    """Literal path-prefix fragments that make a diff SENSITIVE, READ FROM
+    THE AUTHORITY -- operator decision 2026-10-02, superseding the old
+    `escalate_to_two_when_path_contains` (`_escalate_to_two_when_path_
+    contains` in policy.json records that retirement).
 
-    This was a hardcoded tuple while `policy.json` carried four English
-    sentences declared as its implementation. The list could be emptied,
-    inverted or deleted and every decision stayed identical -- the
-    `marker_any_of` defect (a policy value duplicating a constant, so editing
-    the authority changes nothing) reintroduced one release after it was fixed.
-    Two independent reviewers found it in the same round.
+    Same reasoning as its predecessor: a hardcoded tuple can be emptied,
+    inverted or deleted with every decision unchanged, which is the
+    `marker_any_of` defect this module has already found twice.
+
+    This is HALF the sensitive-path grammar. The other half -- a `.github/
+    workflows/deploy-*` file and an `apps/fiab-console/app/api/**/_lib`
+    helper -- is a SHAPE, not a literal fragment, and is matched by
+    `path_is_a_deploy_workflow` / `path_is_an_api_lib_helper` instead: no
+    policy list of literal strings can express "basename starts with" or "a
+    segment exactly named `_lib`" without reintroducing the unanchored
+    substring hazard `path_is_on_bump_allowlist`'s docstring records.
     """
-    return tuple(policy.get("review", {}).get("escalate_to_two_when_path_contains", ()))
+    return tuple(policy.get("review", {}).get("sensitive_path_prefixes", ()))
+
+
+def sensitive_reviewers(policy: dict) -> int:
+    """How many reviewers a sensitive-path or unknown-footprint diff needs.
+
+    Same CLAMP and same reasoning as `dependency_bump_reviewers`: a negative
+    value would make `len(approvals) >= n` unfalsifiable, which is the
+    nonsense this module exists to keep out of a config file typo.
+    """
+    review = policy.get("review", {}) or {}
+    return max(0, int(review.get("sensitive_reviewers", 1)))
+
+
+def path_is_on_sensitive_prefix_list(path: str, prefixes: tuple[str, ...]) -> bool:
+    """Does `path` sit at or under one of `prefixes`, at a PATH-SEGMENT
+    boundary?
+
+    SEGMENTS, NOT SUBSTRINGS -- the same grammar `path_is_on_bump_allowlist`
+    enforces and for the identical reason: the OLD matcher this one replaces
+    asked `normalized.startswith(p) or f"/{p}" in normalized`, which has no
+    boundary at either end. `deploy/main.bicep` escalated on the bare
+    `deploy/` fragment that way, and a prefix list under THIS grammar would
+    let `tools/drain` wrongly admit `tools/drainage/x.py` or
+    `evil-tools/drainpipe/x.py`. An entry matches only the exact path or a
+    path rooted one level beneath it: `tools/drain` admits
+    `tools/drain/gates.py`, never `tools/drainage/x.py`.
+    """
+    normalized = path.replace("\\", "/").lstrip("/")
+    for entry in prefixes:
+        entry_norm = entry.replace("\\", "/").rstrip("/")
+        if not entry_norm:
+            continue
+        if normalized == entry_norm or normalized.startswith(entry_norm + "/"):
+            return True
+    return False
+
+
+#: `.github/workflows/<name>` -- a WORKFLOW FILE directly in that directory,
+#: never a nested one (workflows do not nest, but a stray subdirectory must
+#: not silently qualify either).
+_WORKFLOWS_DIR = ".github/workflows/"
+
+
+def path_is_a_deploy_workflow(path: str) -> bool:
+    """A `.github/workflows/` file whose BASENAME starts with `deploy-`.
+
+    NOT a substring test: `.github/workflows/post-deploy-bootstrap.yml`'s
+    basename starts with `post-`, not `deploy-`, and must NOT match merely
+    because it contains the word "deploy". A file under some OTHER directory
+    that happens to be named `deploy-x.yml` must not match either -- only
+    `.github/workflows/` counts.
+    """
+    normalized = path.replace("\\", "/")
+    if not normalized.startswith(_WORKFLOWS_DIR):
+        return False
+    rest = normalized[len(_WORKFLOWS_DIR):]
+    if not rest or "/" in rest:
+        return False
+    return rest.startswith("deploy-")
+
+
+#: The route-local authorization-helper directory this repo's API routes use.
+_API_DIR_MARKER = "apps/fiab-console/app/api/"
+
+
+def path_is_an_api_lib_helper(path: str) -> bool:
+    """A path SEGMENT exactly named `_lib`, somewhere under
+    `apps/fiab-console/app/api/`.
+
+    A SEGMENT, not a substring: `_libxyz/x.ts` and `foo_lib/x.ts` must not
+    match -- only a path component that is EXACTLY `_lib` does. These are the
+    route-local authorization helpers; a sibling directory that merely
+    contains the four characters is not one.
+    """
+    normalized = path.replace("\\", "/")
+    idx = normalized.find(_API_DIR_MARKER)
+    if idx == -1:
+        return False
+    rest = normalized[idx + len(_API_DIR_MARKER):]
+    segments = [s for s in rest.split("/") if s]
+    return "_lib" in segments
+
+
+def sensitive_path_reason(path: str, policy: dict) -> str | None:
+    """Why `path` is a SENSITIVE path, or `None` when it is not one.
+
+    One function so `review_requirement` makes a single call per changed
+    path rather than re-deriving the three-way grammar (literal prefixes,
+    deploy workflows, API `_lib` helpers) at its own call site.
+    """
+    normalized = path.replace("\\", "/")
+    prefixes = sensitive_path_prefixes(policy)
+    hit = next((p for p in prefixes
+                if path_is_on_sensitive_prefix_list(normalized, (p,))), None)
+    if hit:
+        return hit
+    if path_is_a_deploy_workflow(normalized):
+        return ".github/workflows/deploy-*"
+    if path_is_an_api_lib_helper(normalized):
+        return "apps/fiab-console/app/api/**/_lib"
+    return None
 
 
 def escalation_streams(policy: dict) -> tuple[str, ...]:
@@ -6001,11 +6144,25 @@ def is_dependency_bump(policy: dict, author: str | None,
 
 def review_requirement(policy: dict, changed_paths: list[str] | None = None,
                        prior_verdict: str | None = None,
-                       stream: str | None = None,
+                       stream: str | None = None,  # noqa: ARG001 - accepted for callers that still resolve it; see docstring
                        footprint_known: bool = True,
-                       stream_known: bool = True,
+                       stream_known: bool = True,  # noqa: ARG001 - accepted for callers that still resolve it; see docstring
                        dependency_bump: bool = False) -> tuple[int, str]:
     """How many independent reviewers this change needs, and why.
+
+    OPERATOR DECISION 2026-10-02, SUPERSEDING THE RULE BELOW: "one reviewer
+    on sensitive paths, zero elsewhere on green CI. Never two." This retires
+    BOTH the stream-based escalation-to-two trigger and the
+    escalate-when-stream-unknown trigger outright -- a PR whose stream cannot
+    be resolved, OR whose stream used to escalate, now gets the SAME answer
+    an ordinary PR gets, driven only by the sensitive-path check
+    (`sensitive_path_reason`) and the footprint-unknown check, both of which
+    return `sensitive_reviewers(policy)` (shipped at 1) rather than 2.
+    `independent_reviewers_default` (gate 3b's ordinary-lane answer) ships at
+    0. `stream`/`stream_known` remain accepted parameters, for the callers
+    that still compute and pass them (`merge_gate.py` still needs the
+    resolved stream for `ledger_stream`'s own reporting), but neither is READ
+    by this function's decision any more.
 
     Operator decision 2026-09-12. W0 -- the merge gate itself -- took EIGHT
     POSTED rounds with two reviewers, and that was right for the program that
@@ -6063,28 +6220,40 @@ def review_requirement(policy: dict, changed_paths: list[str] | None = None,
                 )
             return 2, f"a reviewer returned {prior_verdict.strip()!r}"
 
-    if stream and stream in escalation_streams(policy):
-        return 2, f"{stream} escalates whatever the diff turns out to touch"
+    # THE OLD STREAM-BASED ESCALATION BRANCH IS DELETED, not narrowed.
+    # Operator decision 2026-10-02 supersedes `escalate_to_two_when_stream_is`
+    # as a review-COUNT driver outright: "never two, for any reason" means an
+    # unresolvable OR a resolved-but-formerly-escalating stream now falls
+    # through to the ordinary rule below, driven only by path/footprint.
+    # `escalation_streams(policy)` and its policy key are UNCHANGED and still
+    # read -- `merge_gate.ledger_stream` still consults them to pick which
+    # STREAM wins when a PR references several issues, which is a reporting
+    # question this rule never touches. See `_escalate_to_two_when_stream_is`
+    # in policy.json for the full disclosure of that split.
 
     for path in changed_paths or []:
-        normalized = path.replace("\\", "/")
-        hit = next((p for p in escalation_paths(policy)
-                    if normalized.startswith(p) or f"/{p}" in normalized), None)
+        hit = sensitive_path_reason(path, policy)
         if hit:
-            return 2, f"the diff touches {hit} - a guard, deploy or console surface"
+            return sensitive_reviewers(policy), (
+                f"the diff touches {hit} - a sensitive path (auth/authz, the "
+                "merge gate's own tooling and gates, CODEOWNERS, a deploy "
+                "path, or a route-local authorization helper) - operator "
+                "decision 2026-10-02"
+            )
 
     # THE DEPENDENCY-BUMP EXEMPTION, and its POSITION is the design.
     #
-    # WHAT THIS ACTUALLY DOES, stated first because the operator decision it
-    # serves is WIDER than the change: decision 2026-09-21 is "dependency bumps
-    # merge on CI-green alone", and THIS IS A PARTIAL IMPLEMENTATION OF IT. It
-    # lowers gate 3b's reviewer count for a qualifying bump. It does NOT remove
-    # review: `reduce_verdicts` -- gate 2+3, a few thousand lines above -- ends
-    # with an unconditional refusal when no live verdict carries the APPROVE
-    # token, which this code does not touch and cannot reach. So a lock-only
-    # bot bump goes from TWO independent reviewers to ONE, never to zero.
-    # Reaching zero would mean loosening gate 2+3 as well, which is a strictly
-    # larger change than this one and needs its own decision and its own arms.
+    # WHAT THIS ACTUALLY DID AS OF 2026-09-27 -- RETRACTED 2026-10-02, see the
+    # note after the branch below. Decision 2026-09-21 is "dependency bumps
+    # merge on CI-green alone", and THIS WAS A PARTIAL IMPLEMENTATION OF IT at
+    # the time: it lowered gate 3b's reviewer count for a qualifying bump but
+    # did not reach `reduce_verdicts` (gate 2+3), which until 2026-10-02 ended
+    # with an UNCONDITIONAL refusal when no live verdict carried the APPROVE
+    # token. Operator decision 2026-10-02 conditions that refusal on
+    # `required > 0`, and `required` IS gate 3b's count -- so a qualifying
+    # bump whose `dependency_bump_reviewers` is 0 (the shipped value) now
+    # reaches zero at gate 2+3 too, completing the 2026-09-21 decision rather
+    # than stopping short of it.
     #
     # It sits HERE and nowhere else:
     #
@@ -6122,17 +6291,34 @@ def review_requirement(policy: dict, changed_paths: list[str] | None = None,
             "gate 2+3 still requires one live APPROVE at head, and required and "
             "advisory contexts still gate this merge"
         )
+    # RETRACTION, dated 2026-10-02, left here rather than rewritten into the
+    # paragraph above (`deploy-integrity.md` R7 / `assertion-design.md`): the
+    # sentence above was TRUE until this date and is now true only when
+    # `dependency_bump_reviewers(policy)` is nonzero. Gate 2+3
+    # (`reduce_verdicts`) now takes `required=needed` from THIS function's
+    # return value, so a qualifying bump with `dependency_bump_reviewers == 0`
+    # (the shipped value) ALSO skips gate 2+3's live-APPROVE floor -- "waives
+    # the COUNT only" is no longer the whole story for that shipped value. A
+    # qualifying lock-only bump with zero reviewer comments at all now merges
+    # on green CI alone, completing operator decision 2026-09-21 rather than
+    # the partial form this paragraph originally shipped
+    # (`test_a_bot_bump_still_needs_one_approve_from_gate_2_3` in
+    # `test_merge_gate.py` is the behavioural pin for the new state).
 
     if not footprint_known and review.get("escalate_when_footprint_unknown", True):
-        return 2, "the change's file footprint is not known yet - failing closed"
-    # The merge-gate half of the same idea. At BRIEF time the stream is a fact
-    # and the paths are a guess; at MERGE time the paths are a fact and the
-    # stream must be resolved from the ledger through the issues the PR
-    # references. `stream_known=False` says that resolution failed -- no issue
-    # referenced, no ledger, or an issue the ledger has never seen -- and the
-    # harness cannot place work it cannot classify.
-    if not stream_known and review.get("escalate_when_stream_unknown", True):
-        return 2, "the item's stream could not be resolved - failing closed"
+        return sensitive_reviewers(policy), (
+            "the change's file footprint is not known yet - failing closed"
+        )
+    # THE OLD STREAM-UNKNOWN BRANCH IS DELETED, not narrowed. Operator decision
+    # 2026-10-02: "unknown stream no longer escalates" -- a PR whose stream
+    # cannot be resolved (no issue referenced, no ledger, or an issue the
+    # ledger has never seen) now falls through to the ordinary default below,
+    # exactly like a PR with a RESOLVED, non-escalating stream always did. The
+    # `escalate_when_stream_unknown` policy key is RETIRED (see
+    # `_escalate_when_stream_unknown` in policy.json) rather than merely set
+    # to `false`, because nothing in this function reads it any more -- a key
+    # nobody reads is prose, and `policy_keys_without_implementation` is what
+    # catches that if the retirement is done halfway.
     return default, "default for an ordinary lane"
 
 

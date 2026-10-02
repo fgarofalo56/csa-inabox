@@ -88,14 +88,14 @@ import { GET } from '../route';
 const bareReq = (qs: string) =>
   ({ nextUrl: new URL(`https://console.local/api/lakehouse/shortcuts/browse?${qs}`) }) as any;
 /**
- * A credentialed browse must name the lakehouse (400 `item_required` without
- * it), so `req` adds `lakehouseId=lh-1` unless the query already names one or
- * is ADLS. No mint record below carries `lh-1` unless a test says so, and the
- * resolver compares the lakehouse only when both sides carry one — so this
- * keeps every existing fixture on the path it was written for.
+ * Every browse must name the lakehouse (400 `item_required` without it), so
+ * `req` adds `lakehouseId=lh-1` unless the query already names one. No mint
+ * record below carries `lh-1` unless a test says so, and the resolver compares
+ * the lakehouse only when both sides carry one — so this keeps every existing
+ * fixture on the path it was written for. ADLS browse, which also authorizes
+ * the lakehouse and scopes the container, is tested in route.adls-scope.test.ts.
  */
-const req = (qs: string) =>
-  bareReq(/(^|&)lakehouseId=/.test(qs) || /(^|&)sourceType=adls(&|$)/.test(qs) ? qs : `${qs}&lakehouseId=lh-1`);
+const req = (qs: string) => bareReq(/(^|&)lakehouseId=/.test(qs) ? qs : `${qs}&lakehouseId=lh-1`);
 
 /**
  * Every platform credential the browse surface must never resolve.
@@ -333,14 +333,6 @@ describe('the legitimate browse flow still works', () => {
       .find((u) => u.startsWith('https://s3.eu-west-2.amazonaws.com/'));
     expect(s3Call).toBe('https://s3.eu-west-2.amazonaws.com/my-bucket?delimiter=%2F&list-type=2&max-keys=100');
   });
-
-  it('ADLS browse needs no credential at all', async () => {
-    const res = await GET(req('sourceType=adls&account=contoso&container=raw'));
-    expect(res.status).toBe(200);
-    // No vault read happened on the uncredentialed path.
-    const secretReads = fetchWithTimeoutMock.mock.calls.filter((c) => String(c[0]).includes('/secrets/'));
-    expect(secretReads).toHaveLength(0);
-  });
 });
 
 describe('a credentialed browse must name the lakehouse', () => {
@@ -369,12 +361,5 @@ describe('a credentialed browse must name the lakehouse', () => {
     const ok = await GET(bareReq('sourceType=dataverse&kvSecret=loom-sc-abc&lakehouseId=lh-7'));
     expect(ok.status).toBe(200);
     expect(valueReads()).toEqual(['https://loomkv.vault.azure.net/secrets/loom-sc-abc?api-version=7.4']);
-  });
-
-  it('ADLS browse does not need a lakehouseId', async () => {
-    // WHAT BREAKS IT: the lakehouse check moved above the ADLS branch (400).
-    const res = await GET(bareReq('sourceType=adls&account=contoso&container=raw'));
-    expect(res.status).toBe(200);
-    expect((await res.json()).ok).toBe(true);
   });
 });

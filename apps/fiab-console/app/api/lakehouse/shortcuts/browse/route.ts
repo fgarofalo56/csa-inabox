@@ -14,8 +14,9 @@
  *   region     = AWS region                     (s3)
  *   account    = storage account                (adls)
  *   container  = filesystem/container           (adls)
- *   lakehouseId = the lakehouse the wizard is creating the shortcut in
- *                 (required for s3/gcs/dataverse; 400 item_required without it)
+ *   itemId     = the lakehouse ITEM id               (adls; 400 item_required without it)
+ *   lakehouseId = the shortcut registry key the credential was saved for
+ *                 (s3/gcs/dataverse; 400 item_required without it)
  *
  * Credentials are read from Key Vault by NAME (never passed in the URL, never
  * echoed). ADLS browses on the Console UAMI (no credential). Returns
@@ -47,7 +48,19 @@
  * compares the lakehouse the credential was saved for, as the create and Test
  * routes do. The parameter can only narrow the check: it never grants a read
  * the principal check refuses, so it needs no item authorization of its own.
- * ADLS browse resolves no credential and does not take it.
+ *
+ * ADLS browse is scoped to the containers bound to the caller's workspace. It
+ * runs on the Console identity, so the account and container it may list are
+ * decided by `resolveAdlsScope` (app/api/lakehouse/_lib/adls-scope.ts), the
+ * same scope the create route applies to an ADLS shortcut target: the caller
+ * must be able to read the lakehouse ITEM named by `itemId` (404 otherwise),
+ * and the account + container must be this deployment's lake container or one
+ * a readable lakehouse in that workspace records. A tenant admin may browse any
+ * account. Anything else is 403 `adls_location_not_permitted` (with the allowed
+ * locations) before any storage call; a lookup that fails is 503
+ * `adls_scope_unverified`, never an allow. `itemId` is separate from
+ * `lakehouseId` because the wizard's `lakehouseId` is the shortcut registry key,
+ * which is not always the item id.
  *
  * Auth: session-required. Runtime: nodejs, force-dynamic.
  * Per .claude/rules/no-vaporware.md — real S3/GCS/ADLS REST, no mock arrays.
@@ -68,6 +81,7 @@ import {
   type GcsServiceAccount,
 } from '@/lib/azure/shortcut-client';
 import { withSession } from '@/lib/api/route-toolkit';
+import { adlsLocationPermitted, adlsLocationRefusal, resolveAdlsScope } from '../../_lib/adls-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -110,6 +124,17 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
       if (!account || !container) {
         return NextResponse.json({ ok: false, error: 'account and container are required for ADLS browse' }, { status: 400 });
       }
+      // The lakehouse ITEM names the workspace whose bound containers bound this browse.
+      const itemId = (sp.get('itemId') || '').trim();
+      if (!itemId) {
+        return NextResponse.json(
+          { ok: false, code: 'item_required', error: 'itemId (the lakehouse item) is required to browse a storage account.' },
+          { status: 400 },
+        );
+      }
+      const scope = await resolveAdlsScope(session, itemId);
+      if (scope instanceof NextResponse) return scope;
+      if (!adlsLocationPermitted(scope, account, container)) return adlsLocationRefusal(scope, 'browse');
       result = await browseAdls({ account, container, prefix });
     } else {
       // Not trimmed: the resolver refuses a padded name rather than reading a
