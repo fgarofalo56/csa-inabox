@@ -1,6 +1,6 @@
 /**
  * GENERATED — do not edit by hand. TYPE-ONLY (no runtime import is emitted).
- * Source: apps/fiab-console/app/api/**\/route.ts   (1696 routes)
+ * Source: apps/fiab-console/app/api/**\/route.ts   (1697 routes)
  * Regenerate: node scripts/ci/generate-client-route-map.mjs
  * Drift gate:  node scripts/ci/generate-client-route-map.mjs --check
  *
@@ -648,6 +648,7 @@ export type StaticApiRoute =
   | '/api/lakehouse/schemas'
   | '/api/lakehouse/settings'
   | '/api/lakehouse/shortcuts'
+  | '/api/lakehouse/shortcuts/adls-scope'
   | '/api/lakehouse/shortcuts/browse'
   | '/api/lakehouse/shortcuts/credentials'
   | '/api/lakehouse/shortcuts/sharepoint'

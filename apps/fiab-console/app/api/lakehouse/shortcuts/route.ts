@@ -17,6 +17,8 @@
  * refuses (for example 403 `shortcut_secret_not_owned`) carries a `code`, and
  * its next step is written in `error`. Registry, target and engine failures
  * answer with `error`, a `code` where the failure has one, and some a `hint`.
+ * An `adls` or `internal` POST target is additionally scoped to the
+ * containers `lakehouseId`'s workspace binds, per `_lib/adls-scope.ts`.
  *
  * Runtime: nodejs, force-dynamic.
  * Design: docs/fiab/design/lakehouse-shortcuts.md.
@@ -32,6 +34,7 @@ import {
   type ShortcutCredentialRef,
 } from '@/lib/azure/lakehouse-shortcuts';
 import {
+  parseAbfss as parseTargetAbfss,
   resolveAndTestAdls,
   createTablesShortcut,
   dropShortcutObject,
@@ -43,6 +46,8 @@ import {
   type ExternalBinding,
 } from '@/lib/azure/shortcut-engines';
 import { parseAbfss as parseExternalAbfss, listAdlsWithSas, ShortcutSourceError } from '@/lib/azure/shortcut-client';
+import { adlsLocationPermitted, adlsLocationRefusal, resolveAdlsScope } from '../_lib/adls-scope';
+import type { SessionPayload } from '@/lib/auth/session';
 import {
   resolveShortcutSecret,
   assertShortcutSecretUsable,
@@ -81,6 +86,67 @@ function isGate(x: unknown): x is EngineGate {
  */
 function sanitize(e: any): string {
   return redactErrorText((e?.message || String(e)).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()).slice(0, 500);
+}
+
+/**
+ * True when any segment of `path` -- raw or percent-decoded -- is `.` or `..`.
+ * The parsed target reaches the Synapse OPENROWSET URL and the Databricks
+ * external-table path unnormalized, so a segment that decodes to a
+ * back-reference (`..`, `%2e%2e`, `%2E%2e`) must be refused here rather than
+ * left for storage to interpret. A malformed percent escape is not treated as
+ * a dot segment; it is left to the existing reachability check.
+ */
+function hasDotSegment(path: string): boolean {
+  for (const raw of path.split('/')) {
+    if (!raw) continue;
+    let decoded = raw;
+    try {
+      decoded = decodeURIComponent(raw);
+    } catch {
+      // A malformed escape is not a dot segment; leave it to the existing
+      // reachability check to refuse as unparseable.
+    }
+    if (decoded === '.' || decoded === '..') return true;
+  }
+  return false;
+}
+
+/**
+ * ADLS shortcuts and browse share one container scope (`_lib/adls-scope.ts`).
+ * An ADLS or internal target, read on the Console identity, is scoped to the
+ * lakehouse ITEM named by the already-authorized `lakehouseId` (never a
+ * separate caller-supplied value) and a location inside that item's scope
+ * (403 with the allowed locations). The target is parsed exactly as
+ * `resolveAndTestAdls` parses it; a target that does not parse is left to its
+ * 400 `bad_target`, before any storage call. A `.`/`..` path segment, raw or
+ * percent-encoded, is refused before the scope check runs. Returns null when
+ * the target may be used.
+ */
+async function adlsTargetRefusal(session: SessionPayload, lakehouseId: string, targetUri: string): Promise<NextResponse | null> {
+  let parts: { account: string; container: string; path: string } | null;
+  try {
+    parts = parseTargetAbfss(targetUri, getAccountName);
+  } catch {
+    parts = null;
+  }
+  if (!parts) return null;
+  if (hasDotSegment(parts.path)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        code: 'bad_target',
+        error: 'targetUri may not contain a "." or ".." path segment, raw or percent-encoded.',
+      },
+      { status: 400 },
+    );
+  }
+  const scope = await resolveAdlsScope(session, lakehouseId, {
+    write: true,
+    readOnlyMessage: 'Your role on this lakehouse is read-only, so Loom did not create the shortcut. A workspace '
+      + 'Member/Admin, or an item grant that includes Edit, can make this change.',
+  });
+  if (scope instanceof NextResponse) return scope;
+  return adlsLocationPermitted(scope, parts.account, parts.container) ? null : adlsLocationRefusal(scope, 'shortcut');
 }
 
 /**
@@ -296,6 +362,13 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
     }
   } else {
     // --- ADLS Gen2 / internal Loom lakehouse: real UAMI resolve + reachability test. ---
+    // Both target types reach the same reachability test below on the same
+    // identity, so both are scoped: a non-admin may use only a location
+    // `lakehouseId`'s scope permits (`_lib/adls-scope.ts`).
+    if (targetType === 'adls' || targetType === 'internal') {
+      const refused = await adlsTargetRefusal(session, lakehouseId, targetUri);
+      if (refused) return refused;
+    }
     try {
       const resolved = await resolveAndTestAdls(targetType, targetUri, getAccountName);
       abfssUri = resolved.abfssUri!;
