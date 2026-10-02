@@ -60,10 +60,16 @@ vi.mock('@/lib/azure/graph-drive-client', () => ({
   headDriveItem: vi.fn(), parseSharepointUri: vi.fn(), graphDriveConfigGate: vi.fn(() => null),
 }));
 
+// This branch's routes authorize the lakehouse item before any registry read.
+vi.mock('@/lib/auth/item-access', () => ({ resolveItemAccessByOid: vi.fn() }));
+vi.mock('../_lib/legacy-container-key', () => ({ legacyContainerKeyFor: vi.fn() }));
+
 import { POST as CREATE } from '../shortcuts/route';
 import { POST as TEST } from '../shortcuts/test/route';
 import { buildShareShortcutRequest } from '@/lib/components/marketplace/share-shortcut-request';
 import { getSession } from '@/lib/auth/session';
+import { resolveItemAccessByOid } from '@/lib/auth/item-access';
+import { legacyContainerKeyFor } from '../_lib/legacy-container-key';
 import { createShortcut, getShortcut, updateShortcutStatus } from '@/lib/azure/lakehouse-shortcuts';
 import { getKeyVaultSecret } from '@/lib/azure/shortcut-credentials';
 import { getShortcutSecretOwnerRecord } from '@/lib/azure/kv-secrets-client';
@@ -82,6 +88,10 @@ let fetchSpy: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   vi.clearAllMocks();
   (getSession as any).mockReturnValue({ claims: { oid: 'oid-me', upn: 'me@contoso.com', tid: 't1' } });
+  (resolveItemAccessByOid as any).mockImplementation(async (_s: unknown, id: string) => ({
+    item: { id, workspaceId: 'ws-1', itemType: 'lakehouse' }, role: 'Member', via: 'workspace', canWrite: true,
+  }));
+  (legacyContainerKeyFor as any).mockResolvedValue(null);
   (resolveWorkspaceHostnames as any).mockResolvedValue(['adb-1.azuredatabricks.net']);
   (listProviders as any).mockResolvedValue([{ name: 'acme_corp' }]);
   vault.mockResolvedValue(JSON.stringify(PROFILE));

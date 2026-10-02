@@ -2952,7 +2952,11 @@ export function judge(
   // detector correctly found — netting them off here would let the table walk
   // the floor down without anything having been fixed.
   const total = Object.values(measured).reduce((a, b) => a + b, 0);
-  if (total < MIN_LIVE_SITES && !regen) {
+  // Passes only ABOVE the floor, the same comparison no-freeform.test.mjs makes
+  // (`total > MIN_LIVE_SITES`). With `<` here the guard passed at exactly the
+  // floor while the test failed there, so running the guard did not predict the
+  // test.
+  if (total <= MIN_LIVE_SITES && !regen) {
     console.error(
       `::error::no-freeform: the classifier found only ${total} site(s) (floor ${MIN_LIVE_SITES}). ` +
         'A ratchet only fails on a RISE, so a detector that stopped detecting reads as a clean sweep — ' +

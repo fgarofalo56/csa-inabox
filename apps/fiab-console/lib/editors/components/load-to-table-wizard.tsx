@@ -75,12 +75,18 @@ interface ComputeTarget { id: string; name: string; kind: string; state?: string
 export interface LoadToTableWizardProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** The lakehouse item the file belongs to (the table is written under its root). */
+  lakehouseId: string;
   /** Container the file lives in (bronze|silver|gold|landing). */
   container: string;
   /** Path within the container, e.g. "Files/sales.csv". */
   path: string;
   /** Called after the Spark job is accepted; receives the Livy job id + table. */
-  onJobSubmitted?: (info: { jobId: string; tableName: string; rowCount: number | null }) => void;
+  onJobSubmitted?: (info: {
+    jobId: string; tableName: string; rowCount: number | null;
+    /** `<spark database>.<table>` — the name to query it by in a notebook. */
+    sparkTable?: string;
+  }) => void;
 }
 
 const FORMAT_LABELS: Record<LoadFormat, string> = {
@@ -89,7 +95,7 @@ const FORMAT_LABELS: Record<LoadFormat, string> = {
 
 export function LoadToTableWizard(props: LoadToTableWizardProps) {
   const s = useStyles();
-  const { open, onOpenChange, container, path } = props;
+  const { open, onOpenChange, lakehouseId, container, path } = props;
 
   const hint = useMemo(() => detectSparkFormat(path), [path]);
   const detectedFormat = useMemo<LoadFormat | null>(() => {
@@ -150,21 +156,28 @@ export function LoadToTableWizard(props: LoadToTableWizardProps) {
       const r = await clientFetch('/api/lakehouse/load-to-table', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ container, path, tableName, writeMode, poolName, format }),
+        body: JSON.stringify({ lakehouseId, container, path, tableName, writeMode, poolName, format }),
       });
       const ct = r.headers.get('content-type') || '';
       const j = ct.includes('application/json')
         ? await r.json()
         : { ok: false, error: `HTTP ${r.status}: ${(await r.text()).slice(0, 200)}` };
-      if (!j.ok) { setSubmitError(j.error || `HTTP ${r.status}`); setSubmitting(false); return; }
-      props.onJobSubmitted?.({ jobId: j.job.id, tableName, rowCount: j.job.rowCount ?? null });
+      if (!j.ok) {
+        setSubmitError([j.error || `HTTP ${r.status}`, j.remediation].filter(Boolean).join(' '));
+        setSubmitting(false);
+        return;
+      }
+      props.onJobSubmitted?.({
+        jobId: j.job.id, tableName, rowCount: j.job.rowCount ?? null,
+        ...(typeof j.job.sparkTable === 'string' ? { sparkTable: j.job.sparkTable } : {}),
+      });
       onOpenChange(false);
     } catch (e: any) {
       setSubmitError(e?.message || String(e));
     } finally {
       setSubmitting(false);
     }
-  }, [container, path, tableName, writeMode, poolName, format, props, onOpenChange]);
+  }, [lakehouseId, container, path, tableName, writeMode, poolName, format, props, onOpenChange]);
 
   return (
     <Dialog open={open} onOpenChange={(_, d) => { if (!submitting) onOpenChange(d.open); }}>
@@ -219,9 +232,9 @@ export function LoadToTableWizard(props: LoadToTableWizardProps) {
                     </MessageBar>
                   )}
                   <Body1>
-                    This creates a managed Delta table under <code>{container}/Tables/</code> by
+                    This creates a managed Delta table under this lakehouse&rsquo;s <code>Tables/</code> folder by
                     running a Spark job. It will appear in the Tables tab and be queryable from a
-                    notebook.
+                    notebook under this lakehouse&rsquo;s own Spark database.
                   </Body1>
                 </>
               )}

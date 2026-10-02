@@ -25,7 +25,7 @@
  */
 import React from 'react';
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { waitFor, cleanup } from '@testing-library/react';
+import { waitFor, cleanup, screen } from '@testing-library/react';
 import { renderWithProviders, installFetchMock, makeItem } from '../../__tests__/test-helpers';
 import { LakehouseEditor } from '../lakehouse-editor-shell';
 
@@ -135,14 +135,20 @@ describe('#3904 — the Files browser binds to the item\'s own container and roo
     expect(resolve.get('workspaceId')).toBe('ws-1');
     expect(resolve.get('container'), 'the client does not name a container it did not resolve').toBeNull();
 
-    // The BFF's answer is ADOPTED: every container-scoped call the editor makes
-    // afterwards is scoped to `landing`. The settings fetch is the independent
-    // witness — it fires off the active container, not off this response.
+    // The BFF's answer is ADOPTED as the active container. The witness is the
+    // container tree, which marks the ACTIVE container with ' ·' from editor
+    // state, not from this response. (The settings probe fires once a container
+    // is active, but it names the item, since settings belong to the item, so
+    // it no longer distinguishes landing from bronze.)
+    const marked = (name: string) =>
+      screen.queryAllByText((_, el) => (el?.textContent ?? '') === `${name} ·`);
     await waitFor(() => {
+      expect(marked('landing').length, 'landing is the active container').toBeGreaterThan(0);
       const settings = calls.filter((c) => c.url.includes('/api/lakehouse/settings'));
       expect(settings.length).toBeGreaterThan(0);
-      expect(settings[0].url).toContain('container=landing');
+      expect(settings[0].url).toContain('lakehouseId=lh-3904');
     });
+    expect(marked('bronze').length, 'bronze is not the active container').toBe(0);
     for (const p of pathCalls(calls)) {
       expect(p.get('container')).not.toBe('bronze');
     }

@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "12769445711939911088"
+      "templateHash": "5740425005950128113"
     }
   },
   "definitions": {
@@ -2623,7 +2623,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "10626065388416925966"
+              "templateHash": "14520601837987886397"
             }
           },
           "definitions": {
@@ -29237,7 +29237,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "7501123618701431137"
+                      "templateHash": "16641723508121549843"
                     }
                   },
                   "parameters": {
@@ -29543,11 +29543,7 @@
                           },
                           "associations": [
                             {
-                              "domains": [
-                                {
-                                  "id": "[resourceId('Microsoft.Cdn/profiles/afdEndpoints', format('fd-loom-{0}', uniqueString(resourceGroup().id)), format('loom-console-{0}', uniqueString(resourceGroup().id)))]"
-                                }
-                              ],
+                              "domains": "[if(empty(parameters('vanityDomain')), createArray(createObject('id', resourceId('Microsoft.Cdn/profiles/afdEndpoints', format('fd-loom-{0}', uniqueString(resourceGroup().id)), format('loom-console-{0}', uniqueString(resourceGroup().id))))), createArray(createObject('id', resourceId('Microsoft.Cdn/profiles/afdEndpoints', format('fd-loom-{0}', uniqueString(resourceGroup().id)), format('loom-console-{0}', uniqueString(resourceGroup().id)))), createObject('id', resourceId('Microsoft.Cdn/profiles/customDomains', format('fd-loom-{0}', uniqueString(resourceGroup().id)), variables('vanityName')))))]",
                               "patternsToMatch": [
                                 "/*"
                               ]
@@ -29556,6 +29552,7 @@
                         }
                       },
                       "dependsOn": [
+                        "[resourceId('Microsoft.Cdn/profiles/customDomains', format('fd-loom-{0}', uniqueString(resourceGroup().id)), variables('vanityName'))]",
                         "[resourceId('Microsoft.Cdn/profiles/afdEndpoints', format('fd-loom-{0}', uniqueString(resourceGroup().id)), format('loom-console-{0}', uniqueString(resourceGroup().id)))]",
                         "[resourceId('Microsoft.Cdn/profiles', format('fd-loom-{0}', uniqueString(resourceGroup().id)))]",
                         "[resourceId('Microsoft.Network/FrontDoorWebApplicationFirewallPolicies', format('wafloomfd{0}', uniqueString(resourceGroup().id)))]"

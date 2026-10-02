@@ -1,17 +1,33 @@
 /**
- * GET /api/lakehouse/settings?container=<c>
- *     — return the persisted Loom-side lakehouse settings doc for the
- *       container (Spark defaults, time-travel retention, Delta defaults,
- *       display name override). Real ADLS state (e.g. soft-delete) is
- *       merged in from Microsoft.Storage when available.
+ * GET /api/lakehouse/settings?lakehouseId=<id>
+ *     — return the persisted Loom-side settings doc for the lakehouse item
+ *       (Spark defaults, time-travel retention, Delta defaults, display name
+ *       override). Read access to the item is required.
  * PUT /api/lakehouse/settings
- *     body: { container, displayName?, defaultSparkPool?, sparkConfig?,
+ *     body: { lakehouseId, displayName?, defaultSparkPool?, sparkConfig?,
  *             timeTravelDays?, deltaDefaults?, description?,
+ *             liquidClustering?: { tableName, columns[] },
  *             icebergExpose?: { enabled, tableName, schemaName? } }
- *     — upsert the Loom-side settings doc in the `tenant-settings`
- *       Cosmos container, partitioned by tenantId. When icebergExpose.enabled,
- *       runs a real Delta UniForm ALTER TABLE so the Delta table is readable by
- *       Iceberg V2 readers (OneLake "Iceberg endpoint" parity, Azure-native).
+ *     — upsert the Loom-side settings doc in the `tenant-settings` Cosmos
+ *       container, partitioned by the caller's oid. Edit access to the item is
+ *       required. When icebergExpose.enabled, runs a real Delta UniForm ALTER
+ *       TABLE so the Delta table is readable by Iceberg V2 readers (OneLake
+ *       "Iceberg endpoint" parity, Azure-native).
+ *
+ * Earlier settings: before settings were keyed by the item, they were saved
+ * as `lakehouse-<container>`. GET reads that doc only when the container is
+ * bound to this lakehouse item alone (`legacyContainerKeyFor`), first from the
+ * caller's own partition and then from the workspace owner's, so members and
+ * viewers of the item see the settings the owner saved. A doc another member
+ * saved under the container key stays in that member's partition.
+ *
+ * Refusals carry a `code` and a `remediation`.
+ *
+ * Item scope: the storage container and root come from the item's own binding
+ * (`authorizeAndBindItem`), and every table these statements name sits under
+ * `<root>/Tables/`. Table, schema and column names must match
+ * `LAKEHOUSE_IDENT_RE` (400 otherwise) and are quoted with
+ * `quoteIdent(..., 'databricks-sql')` where they enter SQL.
  *
  * Storage account-level features (lifecycle/version policy) require the
  * caller to hold Storage Account Contributor; settings persisted here are
@@ -21,21 +37,25 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { tenantSettingsContainer } from '@/lib/azure/cosmos-client';
-import { getAccountName } from '@/lib/azure/adls-client';
 import {
   databricksConfigGate,
   listWarehouses,
   executeStatement,
 } from '@/lib/azure/databricks-client';
 import { withSession } from '@/lib/api/route-toolkit';
-import { trimSlashes } from '@/lib/util/trim';
+import { quoteIdent } from '@/lib/sql/quoting';
 import { hostHasSuffix } from '@/lib/util/host-match';
+import { readWorkspaceById } from '@/lib/auth/workspace-access';
+import { abfssHost } from '../_lib/item-binding';
+import { authorizeAndBindItem } from '../_lib/refusal-envelope';
+import { legacyContainerKeyFor } from '../_lib/legacy-container-key';
+import { IDENT_RULE_TEXT, isLakehouseIdent, lakehouseTableName } from '../_lib/identifiers';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 interface LiquidClustering {
-  tableName: string;           // e.g. "bronze_player_profile" (under /Tables/)
+  tableName: string;           // e.g. "bronze_player_profile" (under <root>/Tables/)
   columns: string[];           // e.g. ["player_id", "filing_timestamp"]
 }
 
@@ -52,7 +72,7 @@ interface IcebergExpose {
   // like OneLake, there is NO separate "Iceberg endpoint" toggle to flip:
   // exposing the Delta table to Iceberg readers *is* the Iceberg endpoint.
   enabled: boolean;
-  tableName: string;           // Delta table under /Tables/ (or /Tables/<schema>/) to expose
+  tableName: string;           // Delta table under <root>/Tables/ (or <root>/Tables/<schema>/)
   schemaName?: string;         // when the lakehouse is schema-enabled (e.g. "dbo")
 }
 
@@ -67,8 +87,9 @@ interface FabricToggles {
 }
 
 interface LakehouseSettingsDoc {
-  id: string;                  // `lakehouse-<container>`
+  id: string;                  // `lakehouse-item-<lakehouseId>`
   tenantId: string;            // partition key
+  lakehouseId?: string;
   container: string;
   displayName?: string;
   description?: string;
@@ -84,7 +105,45 @@ interface LakehouseSettingsDoc {
   updatedBy?: string;
 }
 
-function docId(container: string) { return `lakehouse-${container}`; }
+/** One settings doc per lakehouse item (several items can share a container). */
+function docId(lakehouseId: string) { return `lakehouse-item-${lakehouseId}`; }
+/** The earlier per-container doc id, read as a fallback so saved settings carry over. */
+function legacyDocId(container: string) { return `lakehouse-${container}`; }
+
+const ITEM_REQUIRED = 'lakehouseId is required: settings belong to a lakehouse item.';
+const REOPEN_REMEDIATION = 'Reopen the lakehouse and open Settings from it, so the request names the item.';
+
+function badRequest(error: string, remediation: string): NextResponse {
+  return NextResponse.json({ ok: false, error, code: 'bad_request', remediation }, { status: 400 });
+}
+
+/** The oid of the workspace owner (the workspace doc's partition key), or null when unknown. */
+async function workspaceOwnerOid(workspaceId: string): Promise<string | null> {
+  try {
+    const ws = await readWorkspaceById(workspaceId);
+    const oid = typeof ws?.tenantId === 'string' ? ws.tenantId.trim() : '';
+    return oid || null;
+  } catch {
+    return null;
+  }
+}
+
+type IcebergEndpoint = {
+  abfss: string;
+  httpsTablePath: string;
+  httpsMetadataFolder: string;
+  azureMetadataFolder: string;
+  format: 'iceberg-v2';
+  via: 'delta-uniform';
+};
+
+/** Where a lakehouse item's storage lives, as the item's binding records it. */
+interface ItemLocation {
+  abfss: string;               // abfss://<container>@<host>/<root>
+  container: string;
+  root: string;
+  host: string | null;
+}
 
 /**
  * Coarse cloud-boundary detection from the Entra authority host so the UI can
@@ -107,44 +166,64 @@ function cloudEnv(): 'commercial' | 'gcc' | 'gcch' | 'il5' {
   return 'commercial';
 }
 
-function parseLiquidClustering(v: any): LiquidClustering | undefined {
+type Parsed<T> = { ok: true; value: T | undefined } | { ok: false; error: string };
+
+function parseLiquidClustering(v: any): Parsed<LiquidClustering> {
   if (!v || typeof v !== 'object' || typeof v.tableName !== 'string' || !v.tableName.trim()) {
-    return undefined;
+    return { ok: true, value: undefined };
   }
+  const tableName = lakehouseTableName(v.tableName);
+  if (!tableName) return { ok: false, error: `liquidClustering.tableName must be ${IDENT_RULE_TEXT}.` };
   const columns = Array.isArray(v.columns)
     ? v.columns.map((c: any) => String(c).trim()).filter((c: string) => c.length > 0)
     : [];
-  return { tableName: v.tableName.trim(), columns };
+  const bad = columns.find((c: string) => !isLakehouseIdent(c));
+  if (bad !== undefined) {
+    return { ok: false, error: `liquidClustering column ${JSON.stringify(bad)} is not valid: a column name is ${IDENT_RULE_TEXT}.` };
+  }
+  return { ok: true, value: { tableName, columns } };
 }
 
-function parseIcebergExpose(v: any): IcebergExpose | undefined {
+function parseIcebergExpose(v: any): Parsed<IcebergExpose> {
   if (!v || typeof v !== 'object' || typeof v.tableName !== 'string' || !v.tableName.trim()) {
-    return undefined;
+    return { ok: true, value: undefined };
   }
-  const schemaName =
-    typeof v.schemaName === 'string' && v.schemaName.trim() ? v.schemaName.trim() : undefined;
-  return { enabled: !!v.enabled, tableName: v.tableName.trim(), schemaName };
+  const tableName = lakehouseTableName(v.tableName);
+  if (!tableName) return { ok: false, error: `icebergExpose.tableName must be ${IDENT_RULE_TEXT}.` };
+  const rawSchema = typeof v.schemaName === 'string' ? v.schemaName.trim() : '';
+  if (rawSchema && !isLakehouseIdent(rawSchema)) {
+    return { ok: false, error: `icebergExpose.schemaName must be ${IDENT_RULE_TEXT}.` };
+  }
+  return { ok: true, value: { enabled: !!v.enabled, tableName, schemaName: rawSchema || undefined } };
 }
 
 /**
- * Build the ADLS abfss:// path and the Iceberg metadata-folder / latest
- * metadata HTTPS URLs for a Delta table exposed via UniForm. Pure string
- * construction — no network call — so the UI always has the paths to show.
+ * The item-root location of a Delta table, plus the Iceberg metadata-folder
+ * URLs readers point at. Pure string construction from the item binding and
+ * validated names — no network call — so the UI always has the paths to show.
  */
-function icebergPaths(account: string, container: string, ie: IcebergExpose) {
-  const cleanTable = ie.tableName.replace(/^\/+/, '').replace(/^Tables\//i, '');
-  const schemaSeg = ie.schemaName ? `${trimSlashes(ie.schemaName)}/` : '';
-  const tablesRel = `Tables/${schemaSeg}${cleanTable}`;
-  const host = `${account}.dfs.core.windows.net`;
+function tableLocation(loc: ItemLocation, tableName: string, schemaName?: string) {
+  const tablesRel = `Tables/${schemaName ? `${schemaName}/` : ''}${tableName}`;
+  const abfss = `${loc.abfss}/${tablesRel}`;
+  const httpsBase = loc.host ? `https://${loc.host}/${loc.container}/${loc.root}/${tablesRel}` : '';
   return {
-    cleanTable,
-    abfss: `abfss://${container}@${host}/${tablesRel}`,
-    httpsTablePath: `https://${host}/${container}/${tablesRel}`,
-    httpsMetadataFolder: `https://${host}/${container}/${tablesRel}/metadata`,
+    abfss,
+    httpsTablePath: httpsBase,
+    httpsMetadataFolder: httpsBase ? `${httpsBase}/metadata` : '',
     // Snowflake EXTERNAL VOLUME wants the azure:// scheme; the metadata folder
     // is the discovery root for Iceberg readers.
-    azureMetadataFolder: `azure://${host}/${container}/${tablesRel}/metadata`,
+    azureMetadataFolder: loc.host ? `azure://${loc.host}/${loc.container}/${loc.root}/${tablesRel}/metadata` : '',
   };
+}
+
+function icebergEndpointFor(loc: ItemLocation, ie: IcebergExpose): IcebergEndpoint {
+  const p = tableLocation(loc, ie.tableName, ie.schemaName);
+  return { ...p, format: 'iceberg-v2', via: 'delta-uniform' };
+}
+
+/** `delta.\`<abfss>\`` with the path quoted as a Databricks identifier. */
+function deltaTableRef(abfss: string): string {
+  return `delta.${quoteIdent(abfss, 'databricks-sql')}`;
 }
 
 function parseFabricToggles(v: any): FabricToggles | undefined {
@@ -156,65 +235,76 @@ function parseFabricToggles(v: any): FabricToggles | undefined {
   };
 }
 
+async function pickWarehouse(usePreferredId: boolean) {
+  const whs = await listWarehouses();
+  const preferred = process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID;
+  return (
+    (usePreferredId && preferred && whs.find((w) => w.id === preferred)) ||
+    whs.find((w) => w.state === 'RUNNING') ||
+    whs[0]
+  );
+}
+
 export const GET = withSession(async (req: NextRequest, { session }) => {
-  const container = req.nextUrl.searchParams.get('container');
-  if (!container) return NextResponse.json({ ok: false, error: 'container query param required' }, { status: 400 });
+  const lakehouseId = (req.nextUrl.searchParams.get('lakehouseId') || '').trim();
+  if (!lakehouseId) return badRequest(ITEM_REQUIRED, REOPEN_REMEDIATION);
   const tenantId = session.claims.oid;
 
   try {
+    const scope = await authorizeAndBindItem(session, lakehouseId);
+    if (scope instanceof NextResponse) return scope;
+    const loc: ItemLocation = { ...scope.bound, root: scope.rootSegments.join('/'), host: abfssHost(scope.bound.abfss) };
+    const container = loc.container;
+
     const c = await tenantSettingsContainer();
-    let resource: LakehouseSettingsDoc | undefined;
-    try {
-      const r = await c.item(docId(container), tenantId).read<LakehouseSettingsDoc>();
-      resource = r.resource;
-    } catch (e: any) {
-      if (e?.code !== 404) throw e;
-    }
-    // If the persisted doc has an Iceberg-expose selection, surface the ADLS
-    // path + Iceberg metadata-folder URLs so the editor can render them on load
-    // (the "endpoint" is just the metadata path readers point at).
-    let icebergEndpoint:
-      | {
-          abfss: string;
-          httpsTablePath: string;
-          httpsMetadataFolder: string;
-          azureMetadataFolder: string;
-          format: 'iceberg-v2';
-          via: 'delta-uniform';
-        }
-      | undefined;
-    const ie = resource?.icebergExpose;
-    if (ie?.tableName) {
+    const readDoc = async (id: string, partition: string): Promise<LakehouseSettingsDoc | undefined> => {
       try {
-        const account = getAccountName();
-        const paths = icebergPaths(account, container, ie);
-        icebergEndpoint = {
-          abfss: paths.abfss,
-          httpsTablePath: paths.httpsTablePath,
-          httpsMetadataFolder: paths.httpsMetadataFolder,
-          azureMetadataFolder: paths.azureMetadataFolder,
-          format: 'iceberg-v2',
-          via: 'delta-uniform',
-        };
-      } catch {
-        /* storage account not configured — UI shows the honest gate */
+        const r = await c.item(id, partition).read<LakehouseSettingsDoc>();
+        return r.resource;
+      } catch (e: any) {
+        if (e?.code !== 404) throw e;
+        return undefined;
+      }
+    };
+    let resource = await readDoc(docId(lakehouseId), tenantId);
+    if (!resource) {
+      // Earlier container-keyed settings, only when this item is the one
+      // lakehouse bound to the container.
+      const legacyKey = await legacyContainerKeyFor(lakehouseId, scope.item.workspaceId);
+      if (legacyKey) {
+        resource = await readDoc(legacyDocId(legacyKey), tenantId);
+        if (!resource) {
+          const owner = await workspaceOwnerOid(scope.item.workspaceId);
+          if (owner && owner !== tenantId) resource = await readDoc(legacyDocId(legacyKey), owner);
+        }
       }
     }
+
+    // If the persisted doc has an Iceberg-expose selection whose names are
+    // valid, surface the table path + Iceberg metadata-folder URLs so the
+    // editor can render them on load (the "endpoint" is just the metadata
+    // path readers point at).
+    let icebergEndpoint: IcebergEndpoint | undefined;
+    const ie = parseIcebergExpose(resource?.icebergExpose);
+    if (ie.ok && ie.value) icebergEndpoint = icebergEndpointFor(loc, ie.value);
 
     return NextResponse.json({
       ok: true,
       container,
       cloud: cloudEnv(),
       icebergEndpoint,
-      settings: resource || {
-        id: docId(container),
-        tenantId,
-        container,
-        timeTravelDays: 7,
-        sparkConfig: {},
-        deltaDefaults: { autoOptimize: true, tableProperties: {} },
-        schemasEnabled: false,
-      },
+      settings: resource
+        ? { ...resource, id: docId(lakehouseId), lakehouseId, container }
+        : {
+            id: docId(lakehouseId),
+            tenantId,
+            lakehouseId,
+            container,
+            timeTravelDays: 7,
+            sparkConfig: {},
+            deltaDefaults: { autoOptimize: true, tableProperties: {} },
+            schemasEnabled: false,
+          },
     });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
@@ -223,29 +313,47 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
 
 export const PUT = withSession(async (req: NextRequest, { session }) => {
   const body = await req.json().catch(() => ({}));
-  const container: string = body?.container;
-  if (!container) return NextResponse.json({ ok: false, error: 'container is required' }, { status: 400 });
+  const lakehouseId = typeof body?.lakehouseId === 'string' ? body.lakehouseId.trim() : '';
+  if (!lakehouseId) return badRequest(ITEM_REQUIRED, REOPEN_REMEDIATION);
   const tenantId = session.claims.oid;
 
-  const doc: LakehouseSettingsDoc = {
-    id: docId(container),
-    tenantId,
-    container,
-    displayName: typeof body.displayName === 'string' ? body.displayName : undefined,
-    description: typeof body.description === 'string' ? body.description : undefined,
-    defaultSparkPool: typeof body.defaultSparkPool === 'string' ? body.defaultSparkPool : undefined,
-    sparkConfig: body.sparkConfig && typeof body.sparkConfig === 'object' ? body.sparkConfig : {},
-    timeTravelDays: typeof body.timeTravelDays === 'number' && body.timeTravelDays >= 0 ? body.timeTravelDays : 7,
-    deltaDefaults: body.deltaDefaults && typeof body.deltaDefaults === 'object' ? body.deltaDefaults : { autoOptimize: true },
-    schemasEnabled: typeof body.schemasEnabled === 'boolean' ? body.schemasEnabled : undefined,
-    liquidClustering: parseLiquidClustering(body.liquidClustering),
-    icebergExpose: parseIcebergExpose(body.icebergExpose),
-    fabricToggles: parseFabricToggles(body.fabricToggles),
-    updatedAt: new Date().toISOString(),
-    updatedBy: session.claims.upn,
-  };
+  const NAME_REMEDIATION = 'Use a table, schema or column name that starts with a letter or underscore '
+    + 'and has only letters, digits and underscores, then save again.';
+  const lcParsed = parseLiquidClustering(body.liquidClustering);
+  if (!lcParsed.ok) return badRequest(lcParsed.error, NAME_REMEDIATION);
+  const ieParsed = parseIcebergExpose(body.icebergExpose);
+  if (!ieParsed.ok) return badRequest(ieParsed.error, NAME_REMEDIATION);
 
   try {
+    const scope = await authorizeAndBindItem(session, lakehouseId, {
+      write: true,
+      readOnlyMessage:
+        'Your role on this lakehouse is read-only, so Loom did not save its settings. A workspace '
+        + 'Member/Admin, or an item grant that includes Edit, can change them.',
+    });
+    if (scope instanceof NextResponse) return scope;
+    const loc: ItemLocation = { ...scope.bound, root: scope.rootSegments.join('/'), host: abfssHost(scope.bound.abfss) };
+    const container = loc.container;
+
+    const doc: LakehouseSettingsDoc = {
+      id: docId(lakehouseId),
+      tenantId,
+      lakehouseId,
+      container,
+      displayName: typeof body.displayName === 'string' ? body.displayName : undefined,
+      description: typeof body.description === 'string' ? body.description : undefined,
+      defaultSparkPool: typeof body.defaultSparkPool === 'string' ? body.defaultSparkPool : undefined,
+      sparkConfig: body.sparkConfig && typeof body.sparkConfig === 'object' ? body.sparkConfig : {},
+      timeTravelDays: typeof body.timeTravelDays === 'number' && body.timeTravelDays >= 0 ? body.timeTravelDays : 7,
+      deltaDefaults: body.deltaDefaults && typeof body.deltaDefaults === 'object' ? body.deltaDefaults : { autoOptimize: true },
+      schemasEnabled: typeof body.schemasEnabled === 'boolean' ? body.schemasEnabled : undefined,
+      liquidClustering: lcParsed.value,
+      icebergExpose: ieParsed.value,
+      fabricToggles: parseFabricToggles(body.fabricToggles),
+      updatedAt: new Date().toISOString(),
+      updatedBy: session.claims.upn,
+    };
+
     const c = await tenantSettingsContainer();
     const { resource } = await c.items.upsert<LakehouseSettingsDoc>(doc);
 
@@ -268,22 +376,12 @@ export const PUT = withSession(async (req: NextRequest, { session }) => {
           `Your clustering columns are saved and will apply on the next save once the warehouse is configured.`;
       } else {
         try {
-          const account = getAccountName();
-          const cleanTable = lc.tableName.replace(/^\/+/, '').replace(/^Tables\//i, '');
-          const abfss = `abfss://${container}@${account}.dfs.core.windows.net/Tables/${cleanTable}`;
-          const cols = lc.columns
-            .map((col) => '`' + String(col).replace(/`/g, '').trim() + '`')
-            .filter((col) => col !== '``')
-            .join(', ');
-          const sql = `ALTER TABLE delta.\`${abfss}\` CLUSTER BY (${cols})`;
+          const { abfss } = tableLocation(loc, lc.tableName);
+          const cols = lc.columns.map((col) => quoteIdent(col, 'databricks-sql')).join(', ');
+          const sql = `ALTER TABLE ${deltaTableRef(abfss)} CLUSTER BY (${cols})`;
           clusteringSql = sql;
 
-          const whs = await listWarehouses();
-          const preferred = process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID;
-          const wh =
-            (preferred && whs.find((w) => w.id === preferred)) ||
-            whs.find((w) => w.state === 'RUNNING') ||
-            whs[0];
+          const wh = await pickWarehouse(true);
           if (!wh) {
             clusteringGate =
               'No Databricks SQL Warehouse exists in the workspace. Create one (Databricks navigator → SQL Warehouses) to run ALTER TABLE … CLUSTER BY.';
@@ -301,111 +399,69 @@ export const PUT = withSession(async (req: NextRequest, { session }) => {
     // When enabled for a named Delta table, issue a REAL ALTER TABLE … SET
     // TBLPROPERTIES enabling IcebergCompatV2 + UniForm iceberg via a Databricks
     // SQL Warehouse (Azure-native, no Fabric). Delta then generates Iceberg V2
-    // metadata asynchronously; we always return the ADLS path + Iceberg
+    // metadata asynchronously; we always return the table path + Iceberg
     // metadata-folder URL so readers (Snowflake/Trino/Spark) can be pointed at
     // it. The selection is persisted regardless so it re-applies on next save.
     let icebergApplied = false;
     let icebergSql: string | undefined;
     let icebergGate: string | undefined;
     let icebergError: string | undefined;
-    let icebergEndpoint:
-      | {
-          abfss: string;
-          httpsTablePath: string;
-          httpsMetadataFolder: string;
-          azureMetadataFolder: string;
-          format: 'iceberg-v2';
-          via: 'delta-uniform';
-        }
-      | undefined;
+    let icebergEndpoint: IcebergEndpoint | undefined;
 
     const ie = doc.icebergExpose;
     if (ie?.enabled && ie.tableName) {
-      let account: string | undefined;
-      try {
-        account = getAccountName();
-      } catch (e: any) {
+      icebergEndpoint = icebergEndpointFor(loc, ie);
+
+      // ALTER TABLE … SET TBLPROPERTIES turns on UniForm Iceberg V2 reads.
+      // Use REORG … UPGRADE UNIFORM when deletion vectors / older compat may
+      // be present; SET TBLPROPERTIES is the standard enable path and the one
+      // OneLake's virtualization mirrors. We use SET TBLPROPERTIES as the
+      // primary; the UI documents REORG for tables with deletion vectors.
+      const sql =
+        `ALTER TABLE ${deltaTableRef(icebergEndpoint.abfss)} SET TBLPROPERTIES(` +
+        `'delta.enableIcebergCompatV2' = 'true', ` +
+        `'delta.universalFormat.enabledFormats' = 'iceberg')`;
+      icebergSql = sql;
+
+      const gate = databricksConfigGate();
+      if (gate) {
         icebergGate =
-          'Storage account is not configured (set LOOM_LAKEHOUSE_STORAGE_ACCOUNT / LOOM_ADLS_ACCOUNT). ' +
-          'The Iceberg expose selection is saved and will apply once the storage account is set.';
-      }
-
-      if (account) {
-        const paths = icebergPaths(account, container, ie);
-        icebergEndpoint = {
-          abfss: paths.abfss,
-          httpsTablePath: paths.httpsTablePath,
-          httpsMetadataFolder: paths.httpsMetadataFolder,
-          azureMetadataFolder: paths.azureMetadataFolder,
-          format: 'iceberg-v2',
-          via: 'delta-uniform',
-        };
-
-        // ALTER TABLE … SET TBLPROPERTIES turns on UniForm Iceberg V2 reads.
-        // Use REORG … UPGRADE UNIFORM when deletion vectors / older compat may
-        // be present; SET TBLPROPERTIES is the standard enable path and the one
-        // OneLake's virtualization mirrors. We use SET TBLPROPERTIES as the
-        // primary; the UI documents REORG for tables with deletion vectors.
-        const sql =
-          `ALTER TABLE delta.\`${paths.abfss}\` SET TBLPROPERTIES(` +
-          `'delta.enableIcebergCompatV2' = 'true', ` +
-          `'delta.universalFormat.enabledFormats' = 'iceberg')`;
-        icebergSql = sql;
-
-        const gate = databricksConfigGate();
-        if (gate) {
-          icebergGate =
-            `Exposing a Delta table to Iceberg readers uses Delta Lake UniForm, which runs a real ` +
-            `ALTER TABLE … SET TBLPROPERTIES via a Databricks SQL Warehouse. Set ${gate.missing} ` +
-            `(and optionally LOOM_DATABRICKS_SQL_WAREHOUSE_ID) in the admin-plane env vars to enable it. ` +
-            `Your selection is saved and the Iceberg metadata path below is already valid; metadata is ` +
-            `generated the first time the UniForm enable runs.`;
-        } else {
-          try {
-            const whs = await listWarehouses();
-            const preferred = process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID;
-            const wh =
-              (preferred && whs.find((w) => w.id === preferred)) ||
-              whs.find((w) => w.state === 'RUNNING') ||
-              whs[0];
-            if (!wh) {
-              icebergGate =
-                'No Databricks SQL Warehouse exists in the workspace. Create one (Databricks navigator → SQL Warehouses) to run the UniForm ALTER TABLE that generates Iceberg metadata.';
-            } else {
-              await executeStatement(wh.id, sql);
-              icebergApplied = true;
-            }
-          } catch (e: any) {
-            icebergError = e?.message || String(e);
+          `Exposing a Delta table to Iceberg readers uses Delta Lake UniForm, which runs a real ` +
+          `ALTER TABLE … SET TBLPROPERTIES via a Databricks SQL Warehouse. Set ${gate.missing} ` +
+          `(and optionally LOOM_DATABRICKS_SQL_WAREHOUSE_ID) in the admin-plane env vars to enable it. ` +
+          `Your selection is saved and the Iceberg metadata path below is already valid; metadata is ` +
+          `generated the first time the UniForm enable runs.`;
+      } else {
+        try {
+          const wh = await pickWarehouse(true);
+          if (!wh) {
+            icebergGate =
+              'No Databricks SQL Warehouse exists in the workspace. Create one (Databricks navigator → SQL Warehouses) to run the UniForm ALTER TABLE that generates Iceberg metadata.';
+          } else {
+            await executeStatement(wh.id, sql);
+            icebergApplied = true;
           }
+        } catch (e: any) {
+          icebergError = e?.message || String(e);
         }
       }
     } else if (ie && !ie.enabled && ie.tableName) {
       // Disable path — turn UniForm Iceberg generation off for the table. This
       // is a real ALTER as well (best-effort; gated identically).
-      let account: string | undefined;
-      try {
-        account = getAccountName();
-      } catch {
-        /* no-op: nothing to disable if no account */
-      }
-      if (account) {
-        const paths = icebergPaths(account, container, ie);
-        const sql =
-          `ALTER TABLE delta.\`${paths.abfss}\` UNSET TBLPROPERTIES IF EXISTS (` +
-          `'delta.universalFormat.enabledFormats')`;
-        icebergSql = sql;
-        const gate = databricksConfigGate();
-        if (!gate) {
-          try {
-            const whs = await listWarehouses();
-            const wh = whs.find((w) => w.state === 'RUNNING') || whs[0];
-            if (wh) {
-              await executeStatement(wh.id, sql);
-            }
-          } catch (e: any) {
-            icebergError = e?.message || String(e);
+      const { abfss } = tableLocation(loc, ie.tableName, ie.schemaName);
+      const sql =
+        `ALTER TABLE ${deltaTableRef(abfss)} UNSET TBLPROPERTIES IF EXISTS (` +
+        `'delta.universalFormat.enabledFormats')`;
+      icebergSql = sql;
+      const gate = databricksConfigGate();
+      if (!gate) {
+        try {
+          const wh = await pickWarehouse(false);
+          if (wh) {
+            await executeStatement(wh.id, sql);
           }
+        } catch (e: any) {
+          icebergError = e?.message || String(e);
         }
       }
     }
