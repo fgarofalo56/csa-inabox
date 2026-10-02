@@ -115,17 +115,20 @@ describe('GET /api/lakehouse/shortcuts/adls-scope', () => {
     expect((await res.json()).error).toBe('lakehouse not found');
   });
 
-  it('a non-admin gets the lake and the readable workspace lakehouses, and nothing else', async () => {
+  it('a non-admin gets the readable workspace lakehouses, and nothing else', async () => {
     // WHAT BREAKS IT: an unreadable sibling listed (privateacct/vault), a
-    // recycled one (binacct/old), a non-lakehouse item (nbacct/scratch), another
-    // workspace's lakehouse (foreignacct/raw), or a missing lake container.
+    // recycled one (binacct/old), a non-lakehouse item (nbacct/scratch),
+    // another workspace's lakehouse (foreignacct/raw), or this deployment's
+    // lake containers granted unconditionally (loomlake/bronze, loomlake/landing
+    // — narrowed per the operator decision in adls-scope.ts's module header:
+    // a non-admin's locations are exactly what the workspace's own lakehouses
+    // record).
     const res = await scopeOf('itemId=lh-1');
     expect(res.status).toBe(200);
     const { data } = await res.json();
     expect(data.unrestricted).toBe(false);
-    expect(pairs(data.locations)).toEqual(['loomlake/bronze', 'loomlake/landing', 'partneracct/exports', 'loomlake/curated']);
-    expect(data.locations[0]).toEqual({ account: 'loomlake', container: 'bronze', dfsHost: 'loomlake.dfs.core.windows.net', source: 'lake' });
-    expect(data.locations[2]).toEqual({
+    expect(pairs(data.locations)).toEqual(['partneracct/exports', 'loomlake/curated']);
+    expect(data.locations[0]).toEqual({
       account: 'partneracct', container: 'exports', dfsHost: 'partneracct.dfs.core.windows.net', source: 'lakehouse', lakehouseName: 'Sales',
     });
     // Positive control for the readability filter: the same sibling is listed once readable.

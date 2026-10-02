@@ -7,16 +7,18 @@
  *
  *   1. The lakehouse item is authorized with `authorizeLakehouse` (404 when the
  *      caller cannot reach it; 403 on a read-only role when `write` is asked).
- *   2. The locations the caller may use are
- *        (a) this deployment's lake containers: each configured
- *            `LOOM_<CONTAINER>_URL` paired with the account in that URL; and
- *        (b) every container a lakehouse in the same workspace records
- *            (`state.storageAccount` or the primary lake account, with
- *            `adlsContainer`, `ownedContainers` and the provisioned container;
- *            plus the account and container in the provisioning receipt's
- *            abfss root), when the caller can read that lakehouse.
- *      Recycled lakehouses and non-lakehouse items record nothing here.
- *   3. A tenant admin may use any account and container (`unrestricted`).
+ *   2. A non-admin's locations are every container a lakehouse in the SAME
+ *      workspace records (`state.storageAccount` or the primary lake account,
+ *      with `adlsContainer`, `ownedContainers` and the provisioned container;
+ *      plus the account and container in the provisioning receipt's abfss
+ *      root), when the caller can read that lakehouse. Recycled lakehouses and
+ *      non-lakehouse items record nothing here. Being scoped to a container is
+ *      NOT the same as being scoped to a workspace — this deployment's shared
+ *      lake containers are not added unconditionally; a workspace reaches one
+ *      only through a lakehouse of its own that records it.
+ *   3. A tenant admin may use any account and container (`unrestricted`); this
+ *      deployment's lake containers are offered to an admin as suggestions
+ *      only, never as a non-admin grant.
  *
  * A failed workspace lookup is 503 `adls_scope_unverified` for a non-admin,
  * never an allow. A location outside the scope is 403 with the allowed
@@ -183,7 +185,10 @@ export async function resolveAdlsScope(
       + 'storage account. Retry in a moment; if it persists, ask a tenant admin.';
     return NextResponse.json({ ok: false, code: 'adls_scope_unverified', error, hint: error }, { status: 503 });
   }
-  return { item: access.item, unrestricted: false, locations: distinct([...lakeLocations(), ...bound]) };
+  // A non-admin's locations are exactly the containers this workspace's own
+  // lakehouses record — never this deployment's shared lake containers
+  // unconditionally (see module header).
+  return { item: access.item, unrestricted: false, locations: distinct(bound) };
 }
 
 /** May the caller use `container` on `account` under `scope`? */

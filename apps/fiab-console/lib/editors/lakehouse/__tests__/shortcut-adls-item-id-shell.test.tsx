@@ -1,14 +1,16 @@
 /**
- * Shortcut wizard in the REAL lakehouse editor: the ADLS picker authorizes the
- * lakehouse ITEM, not the shortcut registry key.
+ * Shortcut wizard in the REAL lakehouse editor: the ADLS picker, browse and
+ * create all name the lakehouse ITEM, never the file-browser's bound
+ * CONTAINER name.
  *
- * The shell hands the shortcut hook `shortcutLakehouseId = activeContainer || id`,
- * and `useLakehouseBinding` sets `activeContainer` to the item's bound CONTAINER
- * NAME (`landing` here) as soon as the container list loads. That value is the
- * registry key the credential and the shortcut rows are saved under; it is not
- * an item id, and authorizing it as one answers 404 for every caller. So the
- * ADLS scope, the ADLS browse and the ADLS create must carry the item id
- * (`itemId`) separately.
+ * `useLakehouseBinding` sets `activeContainer` to the item's bound CONTAINER
+ * NAME (`landing` here) as soon as the container list loads — that state
+ * drives the Files pane, not the shortcut registry. The shell hands the
+ * shortcut hook `shortcutLakehouseId = isNewItem ? '' : id`: the registry key
+ * IS the item id, so a row the hook creates is always filed under the item,
+ * never under `activeContainer`. The dialog computes the SAME item id
+ * (`isNewItem ? '' : id`) independently for the ADLS scope and browse calls,
+ * so all three (scope, browse, create) carry the identical value.
  *
  * Nothing below injects a context: the shell, the binding hook, the shortcut
  * hook, the dialog and the tree all run for real; only `fetch` is mocked.
@@ -16,19 +18,21 @@
  * WHAT BREAKS EACH LOAD-BEARING ASSERTION (assertion-design.md):
  *   - `binding container === 'landing'`: a fixture whose binding never
  *     resolves to a container, i.e. one that never reproduces the
- *     `activeContainer || id` != item id case. It guards the other assertions'
- *     premise.
- *   - scope / browse / create `itemId === 'lh-3904'`: the dialog or the shell
- *     passing `shortcutLakehouseId` (`landing`) as the item id, which is the
- *     defect: the routes would 404.
+ *     `activeContainer !== id` case. It guards the other assertions' premise
+ *     (that `activeContainer` and the item id are genuinely different
+ *     strings, so a test that silently used one for the other would not be
+ *     caught by accident).
+ *   - scope / browse `itemId === 'lh-3904'`: the dialog passing
+ *     `activeContainer` ('landing') as the item id, which the routes would
+ *     404 on.
  *   - browse carries no `lakehouseId`: sending the registry key on the ADLS
  *     browse, which the route does not read.
- *   - create `lakehouseId` equals the listing's key and is `landing` or
- *     `lh-3904`: the shell handing the shortcut hook any other value (for
- *     example `'not-an-item-id'`), which saves the shortcut under a key the
- *     lakehouse never lists. Both values are accepted because the registry key
- *     is moving from the container name to the item id; either is this
- *     lakehouse's own key.
+ *   - create `post.lakehouseId === 'lh-3904'`: the shell regressing to
+ *     `shortcutLakehouseId: activeContainer || id` (the pre-#4790 shape),
+ *     which would file the row under `landing` instead of the item, and
+ *     which the merged route's outer item check would 404 on in production.
+ *   - create carries no `itemId`: a stale caller re-adding the retired
+ *     separate item-id field to the POST body.
  */
 import React from 'react';
 import { describe, it, expect, afterEach, vi } from 'vitest';
@@ -68,8 +72,8 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 const params = (url: string) => new URL(url, 'http://localhost').searchParams;
 
-describe('shortcut wizard in the real editor — ADLS uses the item id, not the registry key', () => {
-  it('scope, browse and create carry itemId=lh-3904 while the registry key is the bound container', async () => {
+describe('shortcut wizard in the real editor — ADLS uses the item id, never the bound container name', () => {
+  it('scope, browse and create all carry itemId/lakehouseId=lh-3904, while the file browser binds the container landing', async () => {
     const user = userEvent.setup();
     const { calls } = installFetchMock({
       '/api/lakehouse/containers': () => CONTAINERS,
@@ -81,7 +85,10 @@ describe('shortcut wizard in the real editor — ADLS uses the item id, not the 
     });
     renderWithProviders(<LakehouseEditor item={makeItem('lakehouse', 'Lakehouse')} id="lh-3904" />);
 
-    // The premise: the real binding hook settles on the CONTAINER `landing`.
+    // The premise: the real binding hook settles on the CONTAINER `landing`,
+    // a different string than the item id (`lh-3904`) — so any assertion
+    // below that passed by accident (one value standing in for the other)
+    // would be exposed by this divergence.
     await waitFor(() => expect(
       calls.some((c) => c.url.includes('/api/lakehouse/paths') && params(c.url).get('container') === 'landing'),
       'binding container === landing',
@@ -113,7 +120,7 @@ describe('shortcut wizard in the real editor — ADLS uses the item id, not the 
     expect(browse.get('itemId'), 'browse itemId').toBe('lh-3904');
     expect(browse.has('lakehouseId'), 'browse carries no registry key').toBe(false);
 
-    // 3. Create: the item id rides beside the registry key.
+    // 3. Create: the registry key IS the item id, and there is no separate itemId.
     await user.click(await within(dialog).findByRole('button', { name: 'Next', hidden: true }));
     const nameInputs = await within(dialog).findAllByPlaceholderText('partner_products');
     await user.type(nameInputs[nameInputs.length - 1], 'partner_exports');
@@ -122,10 +129,10 @@ describe('shortcut wizard in the real editor — ADLS uses the item id, not the 
     const post = JSON.parse(String(calls.find((c) => c.url.endsWith('/api/lakehouse/shortcuts') && c.init?.method === 'POST')!.init!.body));
     expect(post.targetType).toBe('adls');
     expect(post.targetUri).toBe('abfss://exports@partneracct.dfs.core.windows.net/');
-    expect(post.itemId, 'create itemId').toBe('lh-3904');
+    expect(post).not.toHaveProperty('itemId');
 
     const listKey = params(calls.find((c) => c.url.includes('/api/lakehouse/shortcuts?'))!.url).get('lakehouseId');
     expect(post.lakehouseId, 'create saves under the key the lakehouse lists').toBe(listKey);
-    expect(['landing', 'lh-3904'], `registry key ${post.lakehouseId}`).toContain(post.lakehouseId);
+    expect(post.lakehouseId, 'create saves under the item id, never the bound container name').toBe('lh-3904');
   });
 });

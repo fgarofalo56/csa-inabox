@@ -143,3 +143,24 @@ describe('useLakehouseShortcuts: Test shows a refused or failed result', () => {
     expect(result.current.shortcuts).toEqual([LEGACY_ROW]);
   });
 });
+
+describe('useLakehouseShortcuts: bundle registration posts the open item id, with no separate itemId field', () => {
+  it('registerBundleShortcut sends lakehouseId === the mounted item id, and nothing else names an item', async () => {
+    // WHAT BREAKS IT: mounting with a DIFFERENT registry key (for example the
+    // pre-#4790 `activeContainer || id` shape, which could diverge from the
+    // item id) would move `lakehouseId` in the posted body away from ITEM_ID.
+    // The retired separate `itemId` field is also asserted absent: a caller
+    // re-adding it would pass `toHaveProperty` on the OLD shape but fail the
+    // `not.toHaveProperty` here.
+    const calls = installFetch();
+    const { result } = mount(ITEM_ID);
+    await act(async () => {
+      await result.current.registerBundleShortcut({ name: 'orders', kind: 'files', parentPath: '', target: 'abfss://raw@acct.dfs.core.windows.net/orders' });
+    });
+    const post = calls.find((c) => c.url.endsWith('/api/lakehouse/shortcuts') && c.init?.method === 'POST');
+    expect(post, 'registerBundleShortcut sent no request').toBeTruthy();
+    const body = JSON.parse(String(post!.init?.body));
+    expect(body.lakehouseId).toBe(ITEM_ID);
+    expect(body).not.toHaveProperty('itemId');
+  });
+});

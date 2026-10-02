@@ -5,10 +5,11 @@
  *
  * The route lists on the Console identity, so the account + container it may
  * list are decided by the route: the caller must be able to read the lakehouse
- * ITEM named by `itemId`, and the account + container must be one of this
- * deployment's lake containers (each configured container with the account in
- * its URL) or a container a readable lakehouse in that item's workspace records.
- * A tenant admin may browse any account.
+ * ITEM named by `itemId`, and the account + container must be a container a
+ * readable lakehouse in that item's workspace records. This deployment's
+ * shared lake containers are NOT granted to a non-admin unconditionally (see
+ * `_lib/adls-scope.ts`'s module header). A tenant admin may browse any
+ * account.
  *
  * `lakehouseId` is the shortcut registry key (s3/gcs/dataverse credentials are
  * saved under it); the editor sends the bound CONTAINER NAME there, so the ADLS
@@ -236,49 +237,33 @@ describe('a non-admin may browse only containers bound to the workspace', () => 
   it('refuses an unbound account and container before any storage call, listing exactly the allowed pairs', async () => {
     // WHAT BREAKS IT: the scope check removed, or a refusal that falls through
     // to browseAdls. 'unboundacct' is named by no document. The `allowed` list
-    // is the whole scope for lh-1: the two lake containers (configured order),
-    // then lh-1's own binding, lh-2's receipt and lh-5's provisioned container.
-    // An unreadable (lh-3), recycled (lh-4), non-lakehouse (nb-1) or
-    // foreign-workspace (lh-9) entry in it fails the toEqual.
+    // is the whole scope for lh-1: lh-1's own binding, lh-2's receipt and
+    // lh-5's provisioned container. This deployment's shared lake containers
+    // (bronze/landing) are deliberately absent — narrowed per the operator
+    // decision in adls-scope.ts's module header: a non-admin's locations are
+    // exactly what the workspace's own lakehouses record. An unreadable
+    // (lh-3), recycled (lh-4), non-lakehouse (nb-1) or foreign-workspace
+    // (lh-9) entry in it fails the toEqual.
     const body = await expectNotPermitted('account=unboundacct&container=data&itemId=lh-1');
     expect(body.allowed).toEqual([
-      { account: 'loomlake', container: 'bronze', dfsHost: 'loomlake.dfs.core.windows.net' },
-      { account: 'loomlake', container: 'landing', dfsHost: 'loomlake.dfs.core.windows.net' },
       { account: 'partneracct', container: 'exports', dfsHost: 'partneracct.dfs.core.windows.net' },
       { account: 'otheracct', container: 'shared', dfsHost: 'otheracct.dfs.core.windows.net' },
       { account: 'loomlake', container: 'curated', dfsHost: 'loomlake.dfs.core.windows.net' },
     ]);
     expect(body.error).toMatch(/ADLS shortcuts and browse are scoped to the containers bound to this workspace/);
     expect(body.error).toMatch(/did not browse it/);
-    expect(body.error).toMatch(/Pick one of the 5 listed in the wizard, or ask a tenant admin, who can create this shortcut for you\./);
+    expect(body.error).toMatch(/Pick one of the 3 listed in the wizard, or ask a tenant admin, who can create this shortcut for you\./);
     expect(body.hint).toBe(body.error);
     expect(listPathsMock).not.toHaveBeenCalled();
   });
 
-  it('allows this deployment\'s lake containers', async () => {
-    // WHAT BREAKS IT: dropping the lake locations (a). No document binds
-    // loomlake/landing, so without (a) the request is refused (403).
-    const res = await browse('account=loomlake&container=landing&itemId=lh-1');
-    expect(res.status).toBe(200);
-    expect((await res.json()).ok).toBe(true);
-    expect(listed()).toEqual(['loomlake/landing']);
-  });
-
-  it('the lake check pairs each configured container with the account in ITS URL', async () => {
-    // A second lake account for silver. WHAT BREAKS IT: (a) built as a cross
-    // product of lake accounts and containers (secondlake/bronze and
-    // loomlake/silver would pass), testing the account alone (loomlake/gold
-    // passes; gold is not configured) or the container alone (landing on
-    // foreignacct passes). Each is refused; the exact pairs list.
-    process.env.LOOM_SILVER_URL = 'https://secondlake.dfs.core.windows.net/silver';
-    await expectNotPermitted('account=loomlake&container=gold&itemId=lh-1');
-    await expectNotPermitted('account=foreignacct&container=landing&itemId=lh-1');
-    await expectNotPermitted('account=secondlake&container=bronze&itemId=lh-1');
-    await expectNotPermitted('account=loomlake&container=silver&itemId=lh-1');
+  it('does not automatically allow this deployment\'s lake containers', async () => {
+    // WHAT BREAKS IT: the narrowed non-admin scope reverting to include the
+    // lake locations unconditionally (a) — this would then list (200) even
+    // though no document in ws-A binds loomlake/landing.
+    const res = await expectNotPermitted('account=loomlake&container=landing&itemId=lh-1');
+    expect(res.allowed.map((l: any) => `${l.account}/${l.container}`)).not.toContain('loomlake/landing');
     expect(listPathsMock).not.toHaveBeenCalled();
-    expect((await browse('account=secondlake&container=silver&itemId=lh-1')).status).toBe(200);
-    expect((await browse('account=loomlake&container=bronze&itemId=lh-1')).status).toBe(200);
-    expect(listed()).toEqual(['secondlake/silver', 'loomlake/bronze']);
   });
 
   it('allows the item\'s own bound account and container', async () => {
