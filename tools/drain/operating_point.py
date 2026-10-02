@@ -84,6 +84,19 @@ def merge_time(policy: dict, led: Ledger, pr: int | None = None
     one-reviewer items could actually reach GO, because gate 6 refuses an
     undeclared close and `--allow-close` is refused without a receipt. Those
     are different gates and the operator should see both numbers.
+
+    `stream_known` IS NOW INERT FOR THIS FUNCTION'S OUTPUT, as of operator
+    decision 2026-10-02: `review_requirement` no longer reads `stream` or
+    `stream_known` at all (stream never drives a review count, resolved or
+    not), so `needed` -- and therefore `counts`, `one_reviewer` and
+    `receipted` -- comes out identically whatever `stream_known` computes,
+    for the synthetic `"docs/x.md"` probe below. The corroboration logic
+    (`item.pr == pr`, `SCHEDULED_STATES`) is left in place rather than
+    deleted: it is still an ACCURATE model of 3b's corroboration test, it is
+    simply no longer a model of anything that function's RETURN VALUE
+    exposes. `tools/drain/mutate_gates.py`'s OP1-OP4 arms, which mutated this
+    exact computation, are retired for the same reason MG10/MG15/R6 are
+    (genuine equivalent mutants, disclosed at their own site).
     """
     counts: Counter = Counter()
     one_reviewer = receipted = 0

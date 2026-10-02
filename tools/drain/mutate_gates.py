@@ -998,8 +998,8 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "MG3 the verdict gate always records GO - review stops blocking",
         "merge_gate.py",
-        "    ok, why = gates.reduce_verdicts(live, near)",
-        "    _, why = gates.reduce_verdicts(live, near)\n    ok = True",
+        "    ok, why = gates.reduce_verdicts(live, near, required=needed)",
+        "    _, why = gates.reduce_verdicts(live, near, required=needed)\n    ok = True",
     ),
     (
         "MG4 gate 6 is informational again - an undeclared auto-close stops blocking",
@@ -1564,7 +1564,7 @@ ARMS: list[tuple[str, str, str, str]] = [
         "    if False:",
     ),
     (
-        "R1 a guard/deploy/console diff stops escalating to a second reviewer",
+        "R1 a sensitive-path diff stops needing a reviewer",
         "gates.py",
         "    for path in changed_paths or []:",
         "    for path in []:",
@@ -1599,12 +1599,12 @@ ARMS: list[tuple[str, str, str, str]] = [
         '    reviewers, why_reviewers = (1, "default for an ordinary lane")',
     ),
     (
-        "R4 the escalation list stops being READ from the authority",
+        "R4 the sensitive-path list stops being READ from the authority",
         "gates.py",
-        '    return tuple(policy.get("review", {}).get("escalate_to_two_when_path_contains", ()))',
+        '    return tuple(policy.get("review", {}).get("sensitive_path_prefixes", ()))',
         ('    _ = policy\n'
-         '    return ("tools/drain", "scripts/ci", ".github/workflows",\n'
-         '            "platform/fiab/bicep", "apps/fiab-console", "deploy/")'),
+         '    return ("tools/drain", "dev-loop/gates", ".github/CODEOWNERS",\n'
+         '            "apps/fiab-console/lib/auth", "apps/fiab-console/middleware.ts")'),
     ),
     (
         "R5 an unknown file footprint falls OPEN to the default again",
@@ -1612,12 +1612,19 @@ ARMS: list[tuple[str, str, str, str]] = [
         '    if not footprint_known and review.get("escalate_when_footprint_unknown", True):',
         "    if False:",
     ),
-    (
-        "R6 the STREAM stops escalating, so an unlaned W0/W1 item gets one reviewer",
-        "gates.py",
-        "    if stream and stream in escalation_streams(policy):",
-        "    if False:",
-    ),
+    # R6 ("the STREAM stops escalating, so an unlaned W0/W1 item gets one
+    # reviewer") is RETIRED, not re-anchored: operator decision 2026-10-02
+    # deletes the branch it mutated from `review_requirement` outright (stream
+    # never drives a review count again, resolved or not), so no line exists
+    # for it to target any more. MG10 and MG15 (merge_gate.py's `stream_known=`
+    # / `stream=` call-site arguments) are REMOVED for the same reason, not
+    # merely re-pointed: `stream`/`stream_known` are still accepted parameters
+    # (`merge_gate.py` still computes and passes them, for `ledger_stream`'s
+    # own unrelated reporting) but neither is READ by `review_requirement`'s
+    # decision any more, so mutating either call-site argument changes
+    # NOTHING observable -- a genuine equivalent mutant, disclosed here rather
+    # than left in the matrix to report a permanent, uninvestigable SURVIVED
+    # (`assertion-design.md` #5).
     (
         # #4873 / PRP-01 section 2, 2026-10-01: the operator's cost directive
         # narrowed both escalation lists. R10/R12/R14/R15/R16 used to anchor on
@@ -1664,10 +1671,13 @@ ARMS: list[tuple[str, str, str, str]] = [
          "orphaned trailing comma drops with it; the array shrinks by one "
          "entry and stays valid JSON, the same technique R10 uses to drop the "
          "last entry of a list (R12/R14/R15 remove a MIDDLE entry instead, so "
-         "their anchor is just that one line plus its own trailing comma)"),
+         "their anchor is just that one line plus its own trailing comma). "
+         "RE-POINTED 2026-10-02 at `sensitive_path_prefixes`'s own last pair -- "
+         "`apps/fiab-console/lib/access` is now the second-to-last entry, "
+         "`escalate_to_two_when_path_contains` having been retired entirely."),
         "policy.json",
-        '      "apps/fiab-console/lib/auth",\n      "apps/fiab-console/middleware.ts"',
-        '      "apps/fiab-console/lib/auth"',
+        '      "apps/fiab-console/lib/access",\n      "apps/fiab-console/middleware.ts"',
+        '      "apps/fiab-console/lib/access"',
     ),
     # -- ROUND 14: round 13's fix landed on ONE OF THREE ROUTES --------------
     # An independent reviewer found the SEVENTH and EIGHTH readers of
@@ -2100,36 +2110,30 @@ ARMS: list[tuple[str, str, str, str]] = [
     # -- the measurement script MODELS the gates. A wrong model is worse than
     # none, and it shipped with ZERO arms and ZERO tests -- which is how both
     # reviewers came to find the same defect in it in the same round.
-    (
-        ("OP1 the model ANDs the RECEIPT into the stream test again, so it "
-         "reports gate 6's answer under gate 3b's name"),
-        "operating_point.py",
-        "        stream_known = (\n            item.pr == pr if item.pr is not None",
-        ("        stream_known = led.receipt_ok(item)[0] and (\n"
-         "            item.pr == pr if item.pr is not None"),
-    ),
-    (
-        ("OP2 the model accepts an item bound to ANY PR rather than THIS one, "
-         "over-reporting the permissive population in the unsafe direction"),
-        "operating_point.py",
-        "            item.pr == pr if item.pr is not None",
-        "            item.pr is not None if item.pr is not None",
-    ),
-    (
-        ("OP3 the model hardcodes the scheduled states instead of importing "
-         "them, so a fourth state diverges it in silence"),
-        "operating_point.py",
-        "            else item.state in merge_gate.SCHEDULED_STATES",
-        '            else item.state in ("in-flight", "in-review")',
-    ),
-    (
-        ("OP4 the receipt count is folded back into the 3b number, so the two "
-         "gates are reported as one again"),
-        "operating_point.py",
-        "        if needed == 1:\n            one_reviewer += 1",
-        ("        if needed == 1 and led.receipt_ok(item)[0]:\n"
-         "            one_reviewer += 1"),
-    ),
+    #
+    # OP1-OP4 (the arms that lived here, mutating `merge_time`'s `stream_known`
+    # computation and its `needed == 1` fold) are RETIRED 2026-10-02, not
+    # re-anchored -- found by an independent reviewer on PR #4883 as a SHARD
+    # 3-6 regression (Drain Mutation Matrix, run 37024637726 on main's tip
+    # green; RED at bbe489bbd0f80d00efbfca6aa6910caee99ca824). Root cause is
+    # the SAME as MG10/MG15/R6 above: `review_requirement` no longer reads
+    # `stream` or `stream_known` at all (operator decision 2026-10-02 --
+    # stream never drives a review count, resolved or not), so `merge_time`'s
+    # `needed` for its synthetic `"docs/x.md"` probe is ALWAYS the ordinary
+    # default regardless of what OP1-OP4 mutate. Each one used to change
+    # `stream_known` (receipt-conflation, PR-binding laxity, a hardcoded
+    # states tuple), which fed `stream=`/`stream_known=` into
+    # `review_requirement` -- inputs that function now ignores outright. A
+    # genuine equivalent mutant, not a gap: no input through `merge_time`'s
+    # PUBLIC return value can tell the mutated computation from the correct
+    # one any more. `operating_point.py::merge_time`'s own docstring carries
+    # the matching disclosure at its source. Confirmed by direct measurement
+    # (not assumed): each of the four code changes was applied to a SANDBOX
+    # copy of `operating_point.py` and `test_operating_point.py`'s full suite
+    # was run against it -- all four stayed GREEN, where before 2026-10-02 at
+    # least one assertion in every one of `test_merge_time_counts_the_gate_
+    # not_the_receipt`, `test_negative_control_an_item_bound_to_another_pr_
+    # is_not_corroborated` would have gone RED.
     (
         ("MG32 every unannounced block gets the no-marker sentence, so the two "
          "kinds it is untrue for are reported as something they are not"),
@@ -2258,19 +2262,15 @@ ARMS: list[tuple[str, str, str, str]] = [
         "        prior_verdict=prior_verdict,",
         "        prior_verdict=None,",
     ),
-    (
-        ("MG15 the merge gate stops passing the STREAM, so a W1-deploy PR outside "
-        "the twelve paths merges on one approval"),
-        "merge_gate.py",
-        "        stream=stream,",
-        "        stream=None,",
-    ),
-    (
-        "MG10 an unresolvable stream falls OPEN to the default instead of closed",
-        "merge_gate.py",
-        "        stream_known=stream is not None,",
-        "        stream_known=True,",
-    ),
+    # MG15 ("the merge gate stops passing the STREAM...") and MG10 ("an
+    # unresolvable stream falls OPEN to the default instead of closed") are
+    # REMOVED, 2026-10-02: `review_requirement` no longer reads `stream` or
+    # `stream_known` at all (operator decision: stream never drives a review
+    # count, resolved or not), so mutating either call-site argument in
+    # `merge_gate.py` is now a genuine EQUIVALENT MUTANT -- it changes nothing
+    # observable, and leaving it in the matrix would report a permanent,
+    # uninvestigable SURVIVED rather than a real gap (`assertion-design.md`
+    # #5). See the matching removal note beside R6 above.
     (
         ("MG11 the stream lookup reuses the VERB-ANCHORED closing scan, so a bare "
         "`Refs #N` resolves nothing and every such PR escalates for the wrong reason"),

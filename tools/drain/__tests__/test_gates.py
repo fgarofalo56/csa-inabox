@@ -735,6 +735,67 @@ def test_negative_control_no_verdict_is_not_go():
 
 
 # ---------------------------------------------------------------------------
+# `required` -- operator decision 2026-10-02: "zero reviewers elsewhere on
+# green CI". `required` is the ONE conditional check; every other check above
+# stays unconditional regardless of it.
+# ---------------------------------------------------------------------------
+
+
+def test_required_zero_with_no_verdicts_at_all_is_go():
+    """THE DECISION, encoded. WHAT VALUE WOULD MAKE THIS FAIL: dropping the
+    `required > 0` guard, which restores the old unconditional floor -- this
+    call carries ZERO verdicts, which only passes if that specific check is
+    skipped."""
+    ok, why = gates.reduce_verdicts([], required=0)
+    assert ok, why
+    assert "no reviewer required" in why, why
+
+
+def test_required_zero_still_blocks_on_a_live_request_changes():
+    """The decision narrows ONE check, not the whole gate: a live
+    REQUEST-CHANGES still blocks even when gate 3b required nobody at all.
+    WHAT VALUE WOULD MAKE THIS FAIL: `required=0` short-circuiting the whole
+    function instead of only the APPROVE floor."""
+    ok, why = gates.reduce_verdicts(
+        [gates.Verdict("REQUEST-CHANGES", "t1", 1)], required=0
+    )
+    assert not ok
+    assert "REQUEST-CHANGES" in why
+
+
+def test_required_zero_still_blocks_on_a_live_cannot_assess():
+    """Same property, the other blocking token. WHAT VALUE WOULD MAKE THIS
+    FAIL: the same short-circuit as above, or CANNOT-ASSESS being folded into
+    the now-conditional APPROVE check instead of staying its own line."""
+    ok, why = gates.reduce_verdicts(
+        [gates.Verdict("CANNOT-ASSESS", "t1", 1)], required=0
+    )
+    assert not ok
+    assert "CANNOT-ASSESS" in why
+
+
+def test_required_zero_still_honours_a_supersession_refusal():
+    """The FIRST check in the function, ahead of everything else, must still
+    run regardless of `required`. WHAT VALUE WOULD MAKE THIS FAIL: the
+    supersession refusal being skipped (or reordered below the APPROVE check)
+    when `required=0`."""
+    malformed = [gates.Verdict("APPROVE", "t1", 1, supersedes=(999,))]
+    ok, why = gates.reduce_verdicts(malformed, required=0)
+    assert not ok
+    assert gates.SUPERSESSION_MARKER in why
+
+
+def test_the_default_required_is_still_one():
+    """Every pre-existing caller in this suite never passes `required=` at
+    all, so the DEFAULT must still be 1 -- an empty verdict list must still
+    block by default. WHAT VALUE WOULD MAKE THIS FAIL: changing the
+    parameter's default away from 1."""
+    ok, why = gates.reduce_verdicts([])
+    assert not ok
+    assert "no live APPROVE" in why
+
+
+# ---------------------------------------------------------------------------
 # MISSING: never-created vs parked -- same symptom, opposite remedy
 # ---------------------------------------------------------------------------
 
