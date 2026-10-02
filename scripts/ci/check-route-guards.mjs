@@ -933,9 +933,6 @@ const SHARED_BACKEND_ITEM_ROUTES = [
   // `[type]/[id]` entries were deleted in #3648 / #3655.
   'apps/fiab-console/app/api/items/dataflow/[id]/refresh/route.ts',
   'apps/fiab-console/app/api/items/dataflow/[id]/route.ts',
-  'apps/fiab-console/app/api/items/dataset/[id]/lineage/route.ts',
-  'apps/fiab-console/app/api/items/dataset/[id]/preview/route.ts',
-  'apps/fiab-console/app/api/items/dataset/[id]/route.ts',
   'apps/fiab-console/app/api/items/dataverse-table/[id]/business-rules/route.ts',
   'apps/fiab-console/app/api/items/dataverse-table/[id]/columns/route.ts',
   'apps/fiab-console/app/api/items/dataverse-table/[id]/keys/route.ts',
@@ -1758,6 +1755,14 @@ const NOW_GUARDED = new Set([
   // OUT OF SCOPE here — it would put ten routes in remit in a change about one
   // — and is tracked as the route-family rollup (#4619).
   'apps/fiab-console/app/api/lakehouse/path/route.ts',
+  // The dataset editor's three routes (#4822) authorize the caller against the
+  // Loom `dataset` item `[id]` through `resolveItemAccessByOid`, with a tenant
+  // admin allowed to open a Foundry data asset by name. Moved here from
+  // SHARED_BACKEND_ITEM_ROUTES together, so the sibling rule re-flags any one
+  // of them that drops the check. The item-to-asset mapping is #4826.
+  'apps/fiab-console/app/api/items/dataset/[id]/route.ts',
+  'apps/fiab-console/app/api/items/dataset/[id]/lineage/route.ts',
+  'apps/fiab-console/app/api/items/dataset/[id]/preview/route.ts',
 ]);
 
 // Paths that get their excuse from the CLASS reason below rather than from a
