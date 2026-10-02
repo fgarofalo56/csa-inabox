@@ -27,6 +27,7 @@
  */
 import { buildIcebergEmitPySpark, buildIcebergDisablePySpark } from './iceberg-metadata';
 import { trimSlashes } from '@/lib/util/trim';
+import { dfsSuffix } from './cloud-endpoints';
 
 /** Vacuum retention options surfaced in the UI (hours). Fixed allowlist —
  * never a free-form number, per the no-freeform-config rule. */
@@ -57,6 +58,13 @@ export interface MaintenanceRequest {
    * Runs on the SAME Synapse Spark Livy session — no Databricks required.
    */
   icebergMetadata?: boolean;
+  /**
+   * The lakehouse item root inside the container (e.g. "lakehouses/Sales--<id>").
+   * Set by the ROUTE from the item binding, never read from a request body: when
+   * set, the table lives at `<tablesRoot>/Tables/<tableName>`; when omitted, at
+   * `Tables/<tableName>` at the container top level.
+   */
+  tablesRoot?: string;
 }
 
 export type ValidationResult =
@@ -129,10 +137,14 @@ export function validateMaintenanceRequest(body: any): ValidationResult {
   };
 }
 
-/** Build the abfss URI for a Delta table stored under `<container>/Tables/<name>`. */
-export function buildAbfssUri(container: string, account: string, tableName: string): string {
+/**
+ * Build the abfss URI for a Delta table stored under `<container>/Tables/<name>`,
+ * on the active cloud's DFS host (`dfsSuffix`).
+ */
+export function buildAbfssUri(container: string, account: string, tableName: string, tablesRoot?: string): string {
   const clean = trimSlashes(tableName);
-  return `abfss://${container}@${account}.dfs.core.windows.net/Tables/${clean}`;
+  const root = trimSlashes(tablesRoot || '');
+  return `abfss://${container}@${account}.${dfsSuffix()}/${root ? `${root}/` : ''}Tables/${clean}`;
 }
 
 /** Human-readable list of operations the request will run (used in receipts + UI). */
@@ -156,7 +168,7 @@ export function buildMaintenancePlan(req: MaintenanceRequest): string[] {
  * tableName + columns identifier-validated) so the generated SQL is injection-safe.
  */
 export function buildMaintenancePySpark(req: MaintenanceRequest, account: string): { code: string; ops: string[] } {
-  const uri = buildAbfssUri(req.container, account, req.tableName);
+  const uri = buildAbfssUri(req.container, account, req.tableName, req.tablesRoot);
   const lines: string[] = [];
   lines.push('# Loom Delta maintenance — OPTIMIZE / VACUUM / ZORDER BY (Azure-native, Synapse Spark)');
   lines.push('spark.conf.set("spark.databricks.delta.retentionDurationCheck.enabled", "false")');

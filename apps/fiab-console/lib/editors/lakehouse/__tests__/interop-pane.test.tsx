@@ -97,8 +97,11 @@ describe('InteropPane — configured catalog', () => {
       const put = calls.find((c) => c.init?.method === 'PUT');
       expect(put, 'a PUT to /api/lakehouse/interop must be issued').toBeTruthy();
       expect(JSON.parse(String(put!.init!.body))).toEqual({
-        container: 'gold', tableName: 'customers', iceberg: true,
+        lakehouseId: 'lh-1', tableName: 'customers', iceberg: true,
       });
+      // The state read names the item too (breaks if it goes back to ?container=).
+      const get = calls.find((c) => c.url.includes('/api/lakehouse/interop?') && c.init?.method !== 'PUT');
+      expect(get?.url).toContain('lakehouseId=lh-1');
     });
   });
 
@@ -126,6 +129,54 @@ describe('InteropPane — configured catalog', () => {
     // SECURITY: the snippet must point external engines at the AUDITED Loom
     // proxy, never at the internal-ingress catalog container.
     expect(rendered).toContain('uri=https://loom.test/api/catalog/iceberg');
+  });
+});
+
+describe('InteropPane — namespace', () => {
+  const WITH_DEFAULT = { ...CONFIGURED, defaultNamespace: 'lh_0123456789ab' };
+
+  it('shows the lakehouse default namespace for a table with no state', async () => {
+    installFetchMock({ '/api/lakehouse/interop': () => WITH_DEFAULT });
+    mount();
+    // Breaks if the fallback goes back to the container name ('gold (default)').
+    await waitFor(() => expect(screen.getByText('lh_0123456789ab (default)')).toBeInTheDocument());
+    expect(screen.queryByText('gold (default)')).toBeNull();
+  });
+
+  it('offers the lakehouse namespace when the catalog name is taken, and re-sends with it', async () => {
+    let puts = 0;
+    const { calls } = installFetchMock({
+      '/api/lakehouse/interop': (_u, init) => {
+        if (init?.method !== 'PUT') return WITH_DEFAULT;
+        puts += 1;
+        return puts === 1
+          ? {
+            ...WITH_DEFAULT, ok: true, pool: 'loompool',
+            catalogNote: 'The catalog already has gold.customers pointing at a different table.',
+            catalogCode: 'catalog_name_taken',
+            catalogRemediation: 'Register the table under lh_0123456789ab.',
+            suggestedNamespace: 'lh_0123456789ab',
+          }
+          : { ...WITH_DEFAULT, ok: true, pool: 'loompool' };
+      },
+    });
+    mount();
+    await waitFor(() => expect(screen.getByLabelText('Expose customers as Iceberg')).toBeInTheDocument());
+    fireEvent.click(screen.getByLabelText('Expose customers as Iceberg'));
+
+    // Breaks if the pane ignores catalogCode (no offer is rendered).
+    await waitFor(() => expect(screen.getByText('Catalog name in use')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Register as lh_0123456789ab.customers' }));
+
+    await waitFor(() => {
+      const bodies = calls.filter((c) => c.init?.method === 'PUT').map((c) => JSON.parse(String(c.init!.body)));
+      // Breaks if the retry omits the offered namespace.
+      expect(bodies).toEqual([
+        { lakehouseId: 'lh-1', tableName: 'customers', iceberg: true },
+        { lakehouseId: 'lh-1', tableName: 'customers', iceberg: true, namespace: 'lh_0123456789ab' },
+      ]);
+    });
+    await waitFor(() => expect(screen.queryByText('Catalog name in use')).toBeNull());
   });
 });
 
@@ -173,6 +224,27 @@ describe('InteropPane — honest gate (catalog not deployed)', () => {
     mount();
     await waitFor(() => expect(screen.getByText('Lake storage not configured')).toBeInTheDocument());
     expect(screen.getAllByText(/LOOM_GOLD_URL/).length).toBeGreaterThan(0);
+  });
+});
+
+describe('InteropPane — refused toggle', () => {
+  const ERROR = 'Your role on this lakehouse is read-only.';
+  const REMEDIATION = 'Ask a workspace Member or Admin to make the change.';
+
+  it('reports the error and the remediation together', async () => {
+    installFetchMock({
+      '/api/lakehouse/interop': (_u, init) =>
+        init?.method === 'PUT' ? { ok: false, code: 'read_only', error: ERROR, remediation: REMEDIATION } : CONFIGURED,
+    });
+    const setActionError = vi.fn();
+    const setActionStatus = vi.fn();
+    mount({ setActionError, setActionStatus });
+    await waitFor(() => expect(screen.getByLabelText('Expose customers as Iceberg')).toBeInTheDocument());
+    fireEvent.click(screen.getByLabelText('Expose customers as Iceberg'));
+    // Breaks if `remediation` is dropped (the message would be ERROR alone).
+    await waitFor(() => expect(setActionError).toHaveBeenLastCalledWith(`${ERROR} ${REMEDIATION}`));
+    // Breaks if a refusal is reported as a submitted job.
+    expect(setActionStatus).not.toHaveBeenCalled();
   });
 });
 

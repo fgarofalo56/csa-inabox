@@ -56,7 +56,14 @@ JOB_NAME="${JOB_NAME:-gh-aca-runner}"
 ACR="${ACR:-acrloomk6mvh5sm6z7do.azurecr.io}"
 ACR_NAME="${ACR%%.*}"
 IMAGE_TAG="${IMAGE_TAG:-latest}"
-RUNNER_IMAGE="${ACR}/gh-aca-runner:${IMAGE_TAG}"
+# The image REPOSITORY is `gh-actions-runner`, NOT the job name `gh-aca-runner`.
+# Measured 2026-09-29 (`az containerapp job show`): the live job `gh-aca-runner`
+# ran `gh-actions-runner:ci-2026-09-13b` before #4796's rebuild, and
+# `gh-actions-runner:ci-2026-09-29a` after it. This script used to build
+# `gh-aca-runner:<tag>`, which is not the repository the job pulls from, so a
+# rebuild from main did not reproduce the running image.
+IMAGE_REPO="${IMAGE_REPO:-gh-actions-runner}"
+RUNNER_IMAGE="${ACR}/${IMAGE_REPO}:${IMAGE_TAG}"
 
 # Console UAMI (reused for ACR pull + az login). Resource id + clientId.
 CONSOLE_UAMI_ID="${CONSOLE_UAMI_ID:-/subscriptions/${SUB}/resourceGroups/${ADMIN_RG}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-loom-console-centralus}"
@@ -78,9 +85,28 @@ REPLICA_TIMEOUT="${REPLICA_TIMEOUT:-1800}"
 CPU="${CPU:-1.0}"
 MEMORY="${MEMORY:-2.0Gi}"
 
-# Runner image build pins (passed through to the Dockerfile ARGs).
-RUNNER_VERSION="${RUNNER_VERSION:-2.337.0}"
-RUNNER_SHA256="${RUNNER_SHA256:-}"   # optional override; Dockerfile has a pinned default
+# Runner image build pins. The Dockerfile OWNS the default (ARG RUNNER_VERSION +
+# ARG RUNNER_SHA256); these are OVERRIDES only and are passed as --build-args
+# only when set. This script used to default RUNNER_VERSION to 2.328.0 and
+# always pass it, which would override a bumped Dockerfile version while the
+# Dockerfile's SHA256 stayed the new one -- a checksum failure on the very
+# rebuild that fixes an out-of-date runner. scripts/ci/check-runner-version-pin.mjs
+# fails CI if a disagreeing default comes back.
+RUNNER_VERSION="${RUNNER_VERSION:-}"
+RUNNER_SHA256="${RUNNER_SHA256:-}"
+if [[ -n "$RUNNER_VERSION" && -z "$RUNNER_SHA256" ]]; then
+  echo "[provision-gh-runner][FATAL] RUNNER_VERSION=$RUNNER_VERSION is set without RUNNER_SHA256." >&2
+  echo "  The Dockerfile's default checksum is for its own pinned version, so the build would fail" >&2
+  echo "  its sha256 check. Pass the linux-x64 SHA256 from the release page for that version too." >&2
+  exit 1
+fi
+if [[ -n "$RUNNER_SHA256" && -z "$RUNNER_VERSION" ]]; then
+  echo "[provision-gh-runner][FATAL] RUNNER_SHA256 is set without RUNNER_VERSION." >&2
+  echo "  An override is only passed to the build when BOTH are set, so this checksum would be silently" >&2
+  echo "  ignored and the Dockerfile's pinned version built instead. Set RUNNER_VERSION too, or unset" >&2
+  echo "  RUNNER_SHA256 to build the Dockerfile's pin." >&2
+  exit 1
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -136,27 +162,42 @@ fi
 echo ""
 echo "[provision-gh-runner] 1/3 Acquiring the ACR firewall lease (opens the registry)..."
 bash "$SCRIPT_DIR/acr-firewall-lease.sh" acquire --acr "$ACR_NAME" --subscription "$SUB"
+
+# Release the lease and VERIFY the registry re-locked. RETURNS 0 or 1; it never
+# exits. #4827: this used to end in `exit "$rc"` and was also called inline at
+# step 2, where `rc` was the preceding echo's 0 -- so the script exited 0 right
+# there, a failed build reported success, and step 3 never ran on a good one.
 release_acr_lease() {
-  # Preserve the status the script was already exiting with, so a clean re-lock
-  # never masks a failed build (see deploy-loom-uat-job.sh for the measurement:
-  # a bare non-zero command in an EXIT trap does NOT set the script's status).
-  local rc=$?
   # C24 (#3088): NO `|| true`. `release` VERIFIES the registry reads back
   # publicNetworkAccess=Disabled + defaultAction=Deny; discarding that verdict
   # is a script exiting 0 over a publicly reachable registry.
   if ! bash "$SCRIPT_DIR/acr-firewall-lease.sh" release --acr "$ACR_NAME" --subscription "$SUB"; then
     echo "[provision-gh-runner] ERROR: could NOT verify $ACR_NAME re-locked — it may be PUBLICLY REACHABLE. See the remediation above; the scheduled acr-firewall-sweeper will retry." >&2
+    return 1
+  fi
+  return 0
+}
+
+# The FAILURE path only: anything that ends the script before step 2's explicit
+# release (a FATAL, a failed command under set -e, a signal) still re-locks.
+# It keeps the status the script was already exiting with, and turns a failed
+# release into a non-zero exit: a bare non-zero command in an EXIT trap does NOT
+# change the script's status (measured in deploy-loom-uat-job.sh).
+release_acr_lease_on_exit() {
+  local rc=$?
+  if ! release_acr_lease; then
+    if [[ $rc -ne 0 ]]; then exit "$rc"; fi
     exit 1
   fi
   exit "$rc"
 }
-trap release_acr_lease EXIT
+trap release_acr_lease_on_exit EXIT
 
-echo "[provision-gh-runner] Building gh-aca-runner:${IMAGE_TAG} via ACR Tasks..."
-BUILD_ARGS=( "RUNNER_VERSION=${RUNNER_VERSION}" )
-[[ -n "$RUNNER_SHA256" ]] && BUILD_ARGS+=( "RUNNER_SHA256=${RUNNER_SHA256}" )
+echo "[provision-gh-runner] Building ${IMAGE_REPO}:${IMAGE_TAG} via ACR Tasks..."
 BUILD_ARG_FLAGS=()
-for a in "${BUILD_ARGS[@]}"; do BUILD_ARG_FLAGS+=( --build-arg "$a" ); done
+if [[ -n "$RUNNER_VERSION" ]]; then
+  BUILD_ARG_FLAGS+=( --build-arg "RUNNER_VERSION=${RUNNER_VERSION}" --build-arg "RUNNER_SHA256=${RUNNER_SHA256}" )
+fi
 
 # Run from inside the runner dir with a relative context (".") + relative
 # --file so the Windows `az` CLI gets a path it understands. --no-logs avoids
@@ -164,24 +205,30 @@ for a in "${BUILD_ARGS[@]}"; do BUILD_ARG_FLAGS+=( --build-arg "$a" ); done
 build_rc=0
 ( cd "$RUNNER_DIR" && az acr build \
     --registry "$ACR_NAME" \
-    --image "gh-aca-runner:${IMAGE_TAG}" \
+    --image "${IMAGE_REPO}:${IMAGE_TAG}" \
     --file "Dockerfile" \
     --subscription "$SUB" \
     --no-logs \
-    "${BUILD_ARG_FLAGS[@]}" \
+    ${BUILD_ARG_FLAGS[@]+"${BUILD_ARG_FLAGS[@]}"} \
     . ) || build_rc=$?
 
 # ---------------------------------------------------------------------------
 # Step 2 — Release the ACR firewall lease (ALWAYS, even on build failure).
-#   Released eagerly so the registry isn't held open through Step 3; the EXIT
-#   trap makes this idempotent.
+#   Released eagerly so the registry isn't held open through Step 3. The helper
+#   RETURNS, so the build's status below is still reachable; the EXIT trap is
+#   cleared only after a VERIFIED release. If the release cannot be verified the
+#   trap stays set, so the exit re-attempts it once more before the script fails.
 # ---------------------------------------------------------------------------
 echo ""
 echo "[provision-gh-runner] 2/3 Releasing the ACR firewall lease..."
-release_acr_lease
+if ! release_acr_lease; then
+  echo "[provision-gh-runner][FATAL] step 2/3: the ACR firewall lease release could not verify $ACR_NAME re-locked (build rc=$build_rc). Job not deployed." >&2
+  exit 1
+fi
+trap - EXIT
 
 if [[ $build_rc -ne 0 ]]; then
-  echo "[provision-gh-runner][FATAL] az acr build failed (rc=$build_rc). Job not deployed." >&2
+  echo "[provision-gh-runner][FATAL] step 1/3: az acr build of ${IMAGE_REPO}:${IMAGE_TAG} exited $build_rc. The registry was re-locked; step 3 (create/update job '$JOB_NAME') was NOT run. The build's own log is in ACR Tasks: az acr task list-runs -r $ACR_NAME --subscription $SUB -o table" >&2
   exit "$build_rc"
 fi
 echo "[provision-gh-runner] Image built: $RUNNER_IMAGE"

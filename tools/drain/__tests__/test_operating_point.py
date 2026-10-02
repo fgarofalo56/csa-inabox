@@ -81,7 +81,7 @@ def test_the_model_agrees_with_the_gate_on_every_shape(tmp_path, monkeypatch):
     rows = []
     number = 1
     states = ("ready", "closed", *merge_gate.SCHEDULED_STATES)
-    for stream in ("W9-rest", "W1-deploy"):          # non-escalating, escalating
+    for stream in ("W9-rest", "W2-security"):        # non-escalating, escalating
         for state in states:
             for pr in (None, 1, 99):                  # unbound, ours, another's
                 rows.append((number, stream, state, pr, None))
@@ -130,7 +130,7 @@ def test_merge_time_counts_the_gate_not_the_receipt(tmp_path):
         (1, "W9-rest", "in-flight", None, None),     # 3b says ONE, no receipt
         (2, "W9-rest", "in-flight", None, "ci-green"),  # ONE, and receipted
         (3, "W9-rest", "ready", None, None),         # never scheduled -> TWO
-        (4, "W1-deploy", "in-flight", None, None),   # escalating stream -> TWO
+        (4, "W2-security", "in-flight", None, None),  # escalating stream -> TWO
     ])
     counts, one_reviewer, receipted = operating_point.merge_time(POLICY, led, pr=1)
     assert counts[1] == 2, counts

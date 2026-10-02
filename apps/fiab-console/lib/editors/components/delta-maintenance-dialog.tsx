@@ -61,10 +61,17 @@ const useStyles = makeStyles({
 interface DeltaMaintenanceDialogProps {
   open: boolean;
   onOpenChange: (v: boolean) => void;
+  /** The lakehouse item the table belongs to (the route authorizes it). */
+  lakehouseId: string;
   /** ADLS container (e.g. "bronze"). */
   container: string;
   /** Table name / relative path under Tables/ (e.g. "orders"). */
   tableName: string;
+  /**
+   * The item's Tables/ prefix inside the container (e.g. "lakehouses/Sales--<id>/Tables").
+   * Display only: the route derives the real root from the item binding.
+   */
+  tablesPrefix?: string;
   /** Column names from the table DDL — used to populate the ZORDER picker. */
   columns?: string[];
 }
@@ -82,7 +89,7 @@ interface RunResult {
   code?: string;
 }
 
-export function DeltaMaintenanceDialog({ open, onOpenChange, container, tableName, columns }: DeltaMaintenanceDialogProps) {
+export function DeltaMaintenanceDialog({ open, onOpenChange, lakehouseId, container, tableName, tablesPrefix, columns }: DeltaMaintenanceDialogProps) {
   const s = useStyles();
   const { computes, loading: poolsLoading, error: poolsError } = useComputes(['synapse-spark']);
 
@@ -110,6 +117,7 @@ export function DeltaMaintenanceDialog({ open, onOpenChange, container, tableNam
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
+          lakehouseId,
           container,
           tableName,
           pool,
@@ -141,7 +149,7 @@ export function DeltaMaintenanceDialog({ open, onOpenChange, container, tableNam
             <div className={s.body}>
               <Caption1 className={s.hint}>
                 Runs Delta Lake maintenance against{' '}
-                <code>{container}/Tables/{tableName}</code> on Synapse Spark. Compaction bin-packs small
+                <code>{container}/{tablesPrefix || 'Tables'}/{tableName}</code> on Synapse Spark. Compaction bin-packs small
                 Parquet files; ZORDER BY co-locates related values for faster data-skipping; VACUUM removes
                 tombstoned files past the retention window.
               </Caption1>

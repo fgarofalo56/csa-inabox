@@ -304,9 +304,56 @@ async function parseJsonOrError<T extends { ok?: boolean; error?: string }>(
   } as T;
 }
 
+/**
+ * The installed-bundle table definition behind the Maintain… dialog's key.
+ *
+ * The Tables pane sets that key two ways: a planned bundle table sets its own
+ * `name`, and a schema-enabled live table sets `<schema>/<table>`. A bundle
+ * table with no `schema` belongs to `dbo`. Schema names compare
+ * case-insensitively, table names exactly.
+ */
+function maintainTableDef<T extends { name: string; schema?: string }>(tables: T[], key: string): T | undefined {
+  if (!key) return undefined;
+  // A bare name can match tables in several schemas; it means the dbo one
+  // (a table with no schema is dbo), and only then any other.
+  const byName = tables.filter((t) => t.name === key || leafName(t.name) === key);
+  const exact = byName.find((t) => (t.schema || 'dbo').toLowerCase() === 'dbo') ?? byName[0];
+  if (exact) return exact;
+  const slash = key.indexOf('/');
+  if (slash <= 0) return undefined;
+  const schema = key.slice(0, slash).toLowerCase();
+  const table = key.slice(slash + 1);
+  return tables.find((t) => (t.schema || 'dbo').toLowerCase() === schema && leafName(t.name) === table);
+}
+
+/**
+ * A bundle table's identity within the lakehouse: `<schema>/<name>`, where a
+ * table with no schema is `dbo`. Two tables may share a name across schemas, so
+ * React keys, tree values and the Maintain key use this, never the name alone.
+ */
+function bundleTableKey(t: { name: string; schema?: string }): string {
+  return `${t.schema || 'dbo'}/${t.name}`;
+}
+
+/**
+ * The DFS host suffix for the editor's generated SQL and notebook templates
+ * (`https://__account__.<suffix>/...`), read from a container URL the server
+ * returned. Those URLs are produced by the deploy for the active cloud, so this
+ * is `dfs.core.usgovcloudapi.net` in GCC-High and IL5. The browser cannot read
+ * the server's cloud setting, so with no container URL it answers the
+ * placeholder `__dfs_suffix__` rather than guessing a cloud.
+ */
+function templateDfsSuffix(containers: Array<{ url?: string }> | null | undefined): string {
+  for (const c of containers || []) {
+    const m = /^https:\/\/[^./]+\.(dfs\.[^/]+)/i.exec(String(c?.url ?? ''));
+    if (m) return m[1].toLowerCase();
+  }
+  return '__dfs_suffix__';
+}
+
 export {
   useStyles, formatBytes, leafName, collectEntries, formatCell, parseJsonOrError,
-  fileVisual, FileGlyph,
+  fileVisual, FileGlyph, maintainTableDef, templateDfsSuffix, bundleTableKey,
 };
 export type {
   ContainerInfo, PathEntry, ListingError, ReferenceLakehouse, RefSelection, PreviewResponse,
