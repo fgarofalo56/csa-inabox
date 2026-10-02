@@ -161,8 +161,19 @@ def _approval(at: str, cid: int = 1) -> dict:
 
 
 def _verdict_gate(repin: dict, head_date: str, approved_at: str) -> dict:
-    """Gate 2+3 through the REAL `run_gates`, with the repin `resolve_repin` made."""
+    """Gate 2+3 through the REAL `run_gates`, with the repin `resolve_repin` made.
+
+    `changed_files` is forced to a SENSITIVE path (`sensitive_reviewers == 1`),
+    not left at the default fixture's ordinary one: operator decision
+    2026-10-02 made the ordinary count 0, at which gate 2+3 no longer requires
+    a live APPROVE at all -- so every negative control in this file (a stale
+    or un-pinned verdict reading as a block) would pass VACUOUSLY regardless
+    of whether the re-pin chain walk worked, the exact could-not-fail shape
+    this module's own docstring warns against. At `required == 1` the floor is
+    exactly the pre-2026-10-02 rule, which is what every fixture here needs.
+    """
     result = tmg._run(head_date=head_date, repin=repin,
+                      changed_files=["tools/drain/gates.py"],
                       comments=[_approval(approved_at)])
     return tmg._gate(result, "2+3")
 

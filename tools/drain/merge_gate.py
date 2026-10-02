@@ -1616,43 +1616,14 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None,
     # simply never applying.
     repin = data["repin"]
     pin_date = repin["date"] if repin["ok"] else data["head_date"]
-    live, near = gates.parse_verdicts(
-        data["comments"], pin_date, policy["verdict_parsing"]["token_window_chars"]
-    )
-    ok, why = gates.reduce_verdicts(live, near)
-    # THE CARRIER IS NAMED, not just the target (#4704 consequence review).
-    # `reduce_verdicts`' reason says WHICH block was discharged; without
-    # `supersedes` here nothing in the run output says BY WHICH COMMENT, and
-    # nothing durable records it either -- `before-*.json` holds only
-    # pr/head/open_issues and the squash body is untouched. The only permanent
-    # record would be a GitHub comment a reader has to know to go looking for,
-    # which is a poor audit trail for the one act in this gate that makes a
-    # block go away. Empty for every verdict that carries no discharge, so the
-    # ordinary line is unchanged in length.
-    detail = why + (
-        f" | live={[(v.token, v.comment_id, v.supersedes) for v in live]}"
-        f" near={[(n.comment_id, n.kind, n.blocks) for n in near]}"
-    )
-    if repin["ok"]:
-        # Said out loud on every run it applies to. A verdict counted as live
-        # against a date that is NOT the head's is a material fact about how
-        # this decision was reached, and burying it would make the gate's
-        # output disagree with its own rule. `why` names EVERY hop crossed --
-        # sha, tree, both parents -- so a human can re-run each `merge-tree`
-        # and audit the transfer (#4811).
-        detail += f" | RE-PINNED to {repin['date']}: {repin['why']}"
-    else:
-        # The REFUSAL is said out loud too. Printed only on success, a gate that
-        # re-pinned nothing looked identical to one whose walk never ran, and a
-        # reviewer asking "why is my APPROVE stale after update-branch?" had
-        # nothing in the output to read. The reason names the commit that ended
-        # the walk and which test it failed.
-        detail += f" | NOT re-pinned: {repin.get('why') or 'no reason recorded'}"
-    record("2+3 verdicts (conjunction, pinned to head)", ok, detail)
 
-    # The closing scan is computed HERE, above 3b, because 3b needs the issue
-    # numbers to resolve the item's STREAM -- and it is RECORDED as gate 6 below,
-    # in its own place, so the output still reads in gate order.
+    # THE CLOSING SCAN AND 3b's REQUIREMENT ARE COMPUTED HERE, ABOVE gate 2+3,
+    # and this is a REORDERING from before operator decision 2026-10-02: gate
+    # 2+3 now needs `needed` -- gate 3b's reviewer COUNT -- before it can call
+    # `reduce_verdicts`, because a zero-reviewer PR no longer needs a live
+    # APPROVE to reach GO. The closing scan itself is unchanged in substance
+    # and is RECORDED as gate 6 further down, in its own place, so the output
+    # still reads in gate order; only the moment this block COMPUTES moved.
     messages = [
         f"{c.get('messageHeadline', '')}\n{c.get('messageBody', '')}"
         for c in (pr.get("commits") or [])
@@ -1676,13 +1647,11 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None,
     mentioned = gates.referenced_issues(pr.get("body") or "", messages,
                                         repo=policy.get("repo"))
 
-    # 3b -- HOW MANY independent reviewers, enforced here rather than described
-    # in a brief. `review_requirement` is computed from the PR's REAL changed
-    # files, not from a lane guess, because here the diff exists. Stated in a
-    # brief and enforced nowhere, the count was the shape this module was
-    # written to end: "the briefs restated the gates as instructions to an
-    # agent, so at run time GO/NO-GO was still a judgement".
-    approvals = [v for v in live if v.token == "APPROVE"]
+    # 3b's INPUTS -- also moved up, for the same reason as the closing scan:
+    # `review_requirement`'s verdict (`needed`) has to exist before gate 2+3
+    # calls `reduce_verdicts`. `approvals` itself still waits for `live`,
+    # parsed just below, so gate 3b's own `record(...)` stays where it was.
+    #
     # `footprint_known` is derived, not asserted. A failing `gh pr diff` raises
     # in `collect`, but an EMPTY list would otherwise be indistinguishable from
     # "an ordinary diff touching nothing that escalates" -- same boundary, other
@@ -1700,6 +1669,12 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None,
     # everything -- both merged GO on ONE approval. And the block-push-reapprove
     # rhythm of this very PR: after a push the earlier block is correctly no
     # longer live, so nothing raised the count.
+    #
+    # STREAM VALUE NO LONGER RAISES THE COUNT AT ALL (operator decision
+    # 2026-10-02) -- `stream`/`stream_known` are still passed through, because
+    # `stream_known=False` still fails closed when `escalate_when_stream_
+    # unknown` is explicitly turned back on, and because `why_stream` still
+    # feeds gate 3b's printed reason. `ledger_stream` itself is unchanged here.
     #
     # R6/R9 kill their mutations through `test_policy.py` calling
     # `review_requirement` DIRECTLY, so the matrix proved the function honours
@@ -1737,6 +1712,58 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None,
         stream_known=stream is not None,
         dependency_bump=is_bump,
     )
+
+    live, near = gates.parse_verdicts(
+        data["comments"], pin_date, policy["verdict_parsing"]["token_window_chars"]
+    )
+    # `required=needed`: operator decision 2026-10-02. When gate 3b needs ZERO
+    # reviewers (an ordinary lane, green required CI, no sensitive path, a
+    # known footprint), gate 2+3 no longer demands a live APPROVE either -- but
+    # every other refusal in `reduce_verdicts` still fires at `required=0`: a
+    # live REQUEST-CHANGES, a live CANNOT-ASSESS, a blocking near-miss, or a
+    # malformed supersession all still block regardless of count. At
+    # `required=1` (a sensitive path, or an unreadable footprint) this is
+    # EXACTLY the pre-2026-10-02 rule.
+    ok, why = gates.reduce_verdicts(live, near, required=needed)
+    # THE CARRIER IS NAMED, not just the target (#4704 consequence review).
+    # `reduce_verdicts`' reason says WHICH block was discharged; without
+    # `supersedes` here nothing in the run output says BY WHICH COMMENT, and
+    # nothing durable records it either -- `before-*.json` holds only
+    # pr/head/open_issues and the squash body is untouched. The only permanent
+    # record would be a GitHub comment a reader has to know to go looking for,
+    # which is a poor audit trail for the one act in this gate that makes a
+    # block go away. Empty for every verdict that carries no discharge, so the
+    # ordinary line is unchanged in length.
+    detail = why + (
+        f" | live={[(v.token, v.comment_id, v.supersedes) for v in live]}"
+        f" near={[(n.comment_id, n.kind, n.blocks) for n in near]}"
+    )
+    if repin["ok"]:
+        # Said out loud on every run it applies to. A verdict counted as live
+        # against a date that is NOT the head's is a material fact about how
+        # this decision was reached, and burying it would make the gate's
+        # output disagree with its own rule. `why` names EVERY hop crossed --
+        # sha, tree, both parents -- so a human can re-run each `merge-tree`
+        # and audit the transfer (#4811).
+        detail += f" | RE-PINNED to {repin['date']}: {repin['why']}"
+    else:
+        # The REFUSAL is said out loud too. Printed only on success, a gate that
+        # re-pinned nothing looked identical to one whose walk never ran, and a
+        # reviewer asking "why is my APPROVE stale after update-branch?" had
+        # nothing in the output to read. The reason names the commit that ended
+        # the walk and which test it failed.
+        detail += f" | NOT re-pinned: {repin.get('why') or 'no reason recorded'}"
+    record("2+3 verdicts (conjunction, pinned to head)", ok, detail)
+
+    # 3b -- HOW MANY independent reviewers, enforced here rather than described
+    # in a brief. `review_requirement` is computed from the PR's REAL changed
+    # files, not from a lane guess, because here the diff exists. Stated in a
+    # brief and enforced nowhere, the count was the shape this module was
+    # written to end: "the briefs restated the gates as instructions to an
+    # agent, so at run time GO/NO-GO was still a judgement". `needed` and
+    # `why_needed` are computed ABOVE, beside the closing scan, because gate
+    # 2+3 needs them too now -- this gate just reuses them.
+    approvals = [v for v in live if v.token == "APPROVE"]
     # NAMED "approval count", not "independent reviewers". The gate counts
     # APPROVE comments; it cannot tell two reviewers from one reviewer posting
     # twice -- `collect` projects comments to {id, body, created_at} and drops

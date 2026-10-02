@@ -98,25 +98,30 @@ def test_the_exemption_does_not_reach_gate_2_3():
     assert ok is True, why
 
 
-def test_the_exemption_does_not_apply_to_an_escalating_path_bump():
-    """A bump that touches an escalating-path fragment still needs TWO.
+def test_the_exemption_does_not_apply_to_a_sensitive_path_bump():
+    """A bump that touches a sensitive-path fragment still needs a reviewer.
 
-    PRE-2026-10-01 this used `.github/workflows` and `portal/`, which the
-    2026-10-01 lean-review directive (`_lean_review_2026_10_01`) dropped from
-    `escalate_to_two_when_path_contains` -- so both rows are now re-pointed at
-    fragments the narrowed authority still protects.
+    PRE-2026-10-01 this used `.github/workflows` and `portal/`; the
+    2026-10-01 lean-review directive dropped both from the authority, so this
+    test was re-pointed at fragments that directive still protected. Operator
+    decision 2026-10-02 (`_sensitive_review_2026_10_02`) retires the
+    two-reviewer escalation entirely -- `tools/drain` and
+    `apps/fiab-console/middleware.ts` are still `sensitive_paths` entries, so
+    this now asserts `sensitive_reviewers(policy)` (shipped 1), never 2.
 
     WHAT VALUE WOULD MAKE THIS FAIL: moving the exemption ABOVE the
-    escalation-path loop in `review_requirement`. That single reordering is
+    sensitive-path check in `review_requirement`. That single reordering is
     the dangerous version of this change: CI-green proves least precisely
-    where the diff can alter what CI runs.
+    where the diff can alter what CI runs. It also fails if either branch
+    ever returns the literal `2` again instead of reading `sensitive_
+    reviewers(policy)`.
     """
     needed, why = _req(changed_paths=["tools/drain/package-lock.json"])
-    assert needed == 2, (needed, why)
+    assert needed == 1, (needed, why)
     assert "tools/drain" in why, why
 
     needed, why = _req(changed_paths=["apps/fiab-console/middleware.ts"])
-    assert needed == 2, (needed, why)
+    assert needed == 1, (needed, why)
     assert "apps/fiab-console/middleware.ts" in why, why
 
 
@@ -137,14 +142,16 @@ def test_a_blocking_verdict_no_longer_raises_the_bump_count_by_default():
     assert "reviewer COUNT only" in why, why
 
     # The control: restoring the key still escalates a bump on a block, so the
-    # mechanism did not disappear -- only its shipped default did.
+    # mechanism did not disappear -- only its shipped default did. Operator
+    # decision 2026-10-02: the escalated count is now `sensitive_reviewers`
+    # (shipped 1), never the literal 2.
     restored = {**POLICY, "review": {**POLICY["review"],
                                      "escalate_on_blocking_first_verdict": True}}
     needed, why = gates.review_requirement(
         restored, changed_paths=LOCKS, prior_verdict="REQUEST-CHANGES",
         stream=None, footprint_known=True, stream_known=False, dependency_bump=True,
     )
-    assert needed == 2, (needed, why)
+    assert needed == 1, (needed, why)
     assert "reviewer returned" in why, why
 
 
@@ -165,9 +172,11 @@ def test_the_footprint_conjunct_is_load_bearing():
 
     WHAT VALUE WOULD MAKE THIS FAIL: deleting `and footprint_known` from the
     exemption branch. This call is the only site in the suite that varies it.
+    Asserted against `sensitive_reviewers(policy)` (1), not the retired
+    literal 2, per operator decision 2026-10-02.
     """
     needed, why = _req(footprint_known=False)
-    assert needed == 2, (needed, why)
+    assert needed == 1, (needed, why)
     assert "footprint is not known" in why, why
 
 
@@ -460,9 +469,19 @@ def test_the_allowlist_matches_whole_segments_not_substrings(path):
     assert ok is False, f"{path} must not be on the bump allowlist: {why}"
     assert "outside the allowlist" in why, why
 
+    # THE INTEGRATION CHECK THIS USED TO CARRY (`needed >= 1` through
+    # `review_requirement`) LOST ITS KILL POWER on 2026-10-02:
+    # `independent_reviewers_default` dropped to 0, so an ordinary non-
+    # sensitive path now needs ZERO reviewers whether or not `is_dependency_
+    # bump` correctly refused the exemption above -- none of these rows is a
+    # `sensitive_paths` entry, so a matcher that WRONGLY granted the bump
+    # exemption (`dependency_bump_reviewers`, also 0) would read identically.
+    # Disclosed rather than kept as a check that cannot fail
+    # (`assertion-design.md`): the real guarantee for this row is the two
+    # assertions above, on `is_dependency_bump`'s own verdict and reason.
     needed, _ = gates.review_requirement(
         POLICY, changed_paths=[path], stream_known=False, dependency_bump=ok)
-    assert needed >= 1, f"{path} reached zero reviewers"
+    assert needed == 0, f"{path}: expected the ordinary zero-reviewer default"
 
 
 @pytest.mark.parametrize(("path", "arm"), [
@@ -514,9 +533,14 @@ def test_the_allowlist_has_a_boundary_in_every_direction(path, arm):
     assert ok is False, f"{path} must not be on the bump allowlist ({arm}): {why}"
     assert "outside the allowlist" in why, why
 
+    # See the sibling test above for why this integration check now asserts
+    # the ordinary zero rather than `>= 1`: `independent_reviewers_default`
+    # dropped to 0 on 2026-10-02, so it no longer distinguishes a correct
+    # refusal from a wrongly-granted exemption at this call site. The real
+    # guarantee for this row is the two assertions above.
     needed, _ = gates.review_requirement(
         POLICY, changed_paths=[path], stream_known=False, dependency_bump=ok)
-    assert needed >= 1, f"{path} reached zero reviewers"
+    assert needed == 0, f"{path}: expected the ordinary zero-reviewer default"
 
     # POSITIVE CONTROL, so these rows cannot be satisfied by a matcher that
     # refuses everything: the un-degraded neighbour of each row is still

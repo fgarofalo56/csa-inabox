@@ -701,49 +701,52 @@ def test_the_brief_states_the_review_requirement(tmp_path):
     PRE-2026-10-01 this used W5-console/lane:console; the 2026-10-01 lean-
     review narrowing (`_lean_review_2026_10_01`) dropped W5-console from the
     escalating streams and narrowed the console path to `lib/auth` +
-    `middleware.ts`, so a bare lane:console item no longer escalates. The
-    two-reviewer example is re-pointed at an escalating STREAM instead."""
+    `middleware.ts`. Operator decision 2026-10-02 (`_sensitive_review_
+    2026_10_02`) retired stream-driven escalation ENTIRELY and restored
+    `platform/fiab/bicep` to the sensitive-path authority at a lower count, so
+    the one-reviewer example is now `lane:bicep`, not a security stream, and
+    the ordinary count is 0, not 1."""
     led = _led(tmp_path)
-    security = led.upsert(9, "a security fix", "W2-security", lane="lane:docs", size=5)
-    assert "2 reviewer(s)" in tick.write_brief(security, POLICY)
+    sensitive = led.upsert(9, "a bicep change", "W9-rest", lane="lane:bicep", size=5)
+    assert "1 reviewer(s)" in tick.write_brief(sensitive, POLICY)
     ordinary = led.upsert(10, "a dbt model", "W8-dataplane", lane="lane:dataplane", size=3)
-    assert "1 reviewer(s)" in tick.write_brief(ordinary, POLICY)
+    assert "0 reviewer(s)" in tick.write_brief(ordinary, POLICY)
 
 
 def test_the_brief_escalates_on_the_lanes_mapped_path_not_its_own_name(tmp_path, monkeypatch):
     """`write_brief` must pass `gates.LANE_PATHS[item.lane]` -- the MAPPED
     path -- to `review_requirement`, not `item.lane` itself. The two strings
     are never equal ("lane:console" vs "apps/fiab-console"), so this always
-    discriminates IF some lane's mapped path sits inside the escalating
-    authority -- which no production lane's does any more after the
-    2026-10-01 narrowing (every `LANE_PATHS` value is a bare directory, and
-    the narrowed authority no longer lists any bare directory). Monkeypatched
-    onto a fragment the SHIPPED authority still escalates on, so this test
-    does not depend on which lane happens to be wired to what today, and
-    would have been silent before 2026-10-01 too if written this way then.
+    discriminates IF some lane's mapped path sits inside the sensitive-path
+    authority -- which no production lane's does any more except `lane:bicep`
+    (restored 2026-10-02). Monkeypatched onto a fragment the SHIPPED authority
+    still treats as sensitive, so this test does not depend on which lane
+    happens to be wired to what today.
 
     WHAT VALUE WOULD MAKE THIS FAIL: `tick.py` reading `item.lane or ""`
     instead of `gates.LANE_PATHS.get(item.lane or "")` -- i.e. R1b in
     `mutate_gates.py`. Under that mutation `changed_paths` becomes
-    `["lane:fixture"]`, which matches no escalating fragment, so this would
-    read "1 reviewer(s)" instead of "2 reviewer(s)"."""
+    `["lane:fixture"]`, which matches no sensitive fragment, so this would
+    read "0 reviewer(s)" instead of "1 reviewer(s)"."""
     monkeypatch.setitem(gates.LANE_PATHS, "lane:fixture", "tools/drain")
     led = _led(tmp_path)
     item = led.upsert(11, "x", "W9-rest", lane="lane:fixture", size=1)
-    assert "2 reviewer(s)" in tick.write_brief(item, POLICY)
+    assert "1 reviewer(s)" in tick.write_brief(item, POLICY)
 
 
 def test_negative_control_an_unlaned_item_escalates_rather_than_defaulting(tmp_path):
     """28 of 299 live items carry NO lane, so the brief passed `[""]`, matched
-    nothing and asked for ONE reviewer -- including all four W0-harness items
-    (every one a `tools/drain` diff by construction) and nine W1-deploy ones.
-    Precisely the diffs the policy says need two. An unknown footprint is now
-    the closed direction, like every sibling control in this module."""
+    nothing and asked for ONE reviewer under the pre-2026-10-02 default --
+    including all four W0-harness items (every one a `tools/drain` diff by
+    construction) and nine W1-deploy ones. An unknown footprint is now the
+    closed direction, like every sibling control in this module -- escalated
+    at `sensitive_reviewers` (1), never the retired literal 2, and never the
+    ordinary 0 either."""
     led = _led(tmp_path)
     for stream in ("W0-harness", "W1-deploy", "W2-security", "W9-rest"):
         item = led.upsert(900 + hash(stream) % 90, "x", stream, lane=None, size=3)
         brief = tick.write_brief(item, POLICY)
-        assert "2 reviewer(s)" in brief, f"{stream} unlaned: {brief[:400]}"
+        assert "1 reviewer(s)" in brief, f"{stream} unlaned: {brief[:400]}"
 
 
 def test_negative_control_every_lane_gets_the_count_its_stream_deserves(tmp_path):
@@ -751,14 +754,17 @@ def test_negative_control_every_lane_gets_the_count_its_stream_deserves(tmp_path
     silently-deleted `LANE_PATHS` row (two arms that did exactly that both
     SURVIVED a full suite: 31 and 33 laned items would silently drop to one,
     over a green matrix). The 2026-10-01 lean-review narrowing dropped the
-    bare console/bicep/ci fragments from the authority outright, so this now
-    pins the OPPOSITE for those three -- and keeps one escalating case
-    (W2-security) to prove the brief still reports 2 where the narrowed
-    authority actually calls for it."""
+    bare console/bicep/ci fragments from the authority outright. Operator
+    decision 2026-10-02 restored `platform/fiab/bicep` (bare) to
+    `sensitive_paths`, at a lower count -- so `lane:bicep` is the one lane
+    below that is NOT at the ordinary zero, and the STREAM column no longer
+    matters at all: `lane:dataplane` reads 0 whether its stream is `W9-rest`
+    or the formerly-escalating `W2-security`, which is the fact this fixture
+    exists to pin now that stream-driven escalation is retired."""
     led = _led(tmp_path)
-    cases = [("lane:console", "W9-rest", 1), ("lane:bicep", "W9-rest", 1),
-             ("lane:ci", "W9-rest", 1), ("lane:dataplane", "W9-rest", 1),
-             ("lane:docs", "W9-rest", 1), ("lane:dataplane", "W2-security", 2)]
+    cases = [("lane:console", "W9-rest", 0), ("lane:bicep", "W9-rest", 1),
+             ("lane:ci", "W9-rest", 0), ("lane:dataplane", "W9-rest", 0),
+             ("lane:docs", "W9-rest", 0), ("lane:dataplane", "W2-security", 0)]
     for i, (lane, stream, expected) in enumerate(cases):
         item = led.upsert(800 + i, "x", stream, lane=lane, size=1)
         assert f"{expected} reviewer(s)" in tick.write_brief(item, POLICY), (

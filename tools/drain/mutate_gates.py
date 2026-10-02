@@ -998,8 +998,8 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "MG3 the verdict gate always records GO - review stops blocking",
         "merge_gate.py",
-        "    ok, why = gates.reduce_verdicts(live, near)",
-        "    _, why = gates.reduce_verdicts(live, near)\n    ok = True",
+        "    ok, why = gates.reduce_verdicts(live, near, required=needed)",
+        "    _, why = gates.reduce_verdicts(live, near, required=needed)\n    ok = True",
     ),
     (
         "MG4 gate 6 is informational again - an undeclared auto-close stops blocking",
@@ -1599,12 +1599,12 @@ ARMS: list[tuple[str, str, str, str]] = [
         '    reviewers, why_reviewers = (1, "default for an ordinary lane")',
     ),
     (
-        "R4 the escalation list stops being READ from the authority",
+        ("R4 the sensitive-path list stops being READ from the authority"),
         "gates.py",
-        '    return tuple(policy.get("review", {}).get("escalate_to_two_when_path_contains", ()))',
+        '    return tuple(policy.get("review", {}).get("sensitive_paths", ()))',
         ('    _ = policy\n'
-         '    return ("tools/drain", "scripts/ci", ".github/workflows",\n'
-         '            "platform/fiab/bicep", "apps/fiab-console", "deploy/")'),
+         '    return ("tools/drain", "dev-loop/gates", ".github/CODEOWNERS",\n'
+         '            "platform/fiab/bicep", "apps/fiab-console/lib/auth")'),
     ),
     (
         "R5 an unknown file footprint falls OPEN to the default again",
@@ -1613,9 +1613,11 @@ ARMS: list[tuple[str, str, str, str]] = [
         "    if False:",
     ),
     (
-        "R6 the STREAM stops escalating, so an unlaned W0/W1 item gets one reviewer",
+        ("R6 the STREAM-UNKNOWN check stops escalating, so an item whose "
+         "stream cannot be resolved falls through to the ordinary default "
+         "even when the operator has turned the check back on"),
         "gates.py",
-        "    if stream and stream in escalation_streams(policy):",
+        '    if not stream_known and review.get("escalate_when_stream_unknown", True):',
         "    if False:",
     ),
     (
@@ -1628,10 +1630,18 @@ ARMS: list[tuple[str, str, str, str]] = [
         # narrowed authority actually ships, so the mutation-coverage property
         # this file exists for -- every live row has an arm that proves a test
         # depends on it -- holds for the new list too, not just the old one.
-        "R10 W2-security drops out of the escalating streams (the security stream)",
+        #
+        # RE-POINTED AGAIN, 2026-10-02: `escalate_to_two_when_stream_is`
+        # shipped `[]` (operator decision `_sensitive_review_2026_10_02`), so
+        # the "W2-security drops out" anchor this arm used to carry no longer
+        # exists in `policy.json` at all. `sensitive_paths` is the authority's
+        # new growth point and `platform/fiab/bicep` is the one entry in it
+        # that is NOT already covered by R12/R13/R14/R15/R16, so this arm is
+        # re-pointed there rather than retired.
+        "R10 `platform/fiab/bicep` drops out of the sensitive paths",
         "policy.json",
-        '      "W0-harness",\n      "W2-security"',
-        '      "W0-harness"',
+        '      "platform/fiab/bicep",\n',
+        "",
     ),
     (
         "R12 `tools/drain` drops out of the escalating paths -- the harness's own tooling",
@@ -2126,8 +2136,8 @@ ARMS: list[tuple[str, str, str, str]] = [
         ("OP4 the receipt count is folded back into the 3b number, so the two "
          "gates are reported as one again"),
         "operating_point.py",
-        "        if needed == 1:\n            one_reviewer += 1",
-        ("        if needed == 1 and led.receipt_ok(item)[0]:\n"
+        "        if needed > 0:\n            one_reviewer += 1",
+        ("        if needed > 0 and led.receipt_ok(item)[0]:\n"
          "            one_reviewer += 1"),
     ),
     (

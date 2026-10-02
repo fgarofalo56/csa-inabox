@@ -363,74 +363,60 @@ def test_negative_control_a_pause_the_harness_cannot_undo_is_not_shipped():
     )
 
 
-def test_the_escalation_list_is_read_from_the_authority_not_hardcoded():
-    """THE defect two independent reviewers found in the same round: the policy
-    held four English sentences while a hardcoded `ESCALATION_PATHS` tuple did
-    the work, so the list could be emptied, inverted or deleted and every
-    decision stayed identical. That is `marker_any_of` reintroduced one release
-    after it was fixed. Editing the authority must change the answer."""
-    gutted = {**POLICY, "review": {**POLICY["review"],
-                                   "escalate_to_two_when_path_contains": []}}
+def test_the_sensitive_path_list_is_read_from_the_authority_not_hardcoded():
+    """THE defect two independent reviewers found in the same round, in the
+    predecessor key this one replaced (`escalate_to_two_when_path_contains`):
+    the policy held four English sentences while a hardcoded `ESCALATION_
+    PATHS` tuple did the work, so the list could be emptied, inverted or
+    deleted and every decision stayed identical. That is `marker_any_of`
+    reintroduced one release after it was fixed. Editing the authority must
+    change the answer -- `sensitive_paths` is read the same way, via
+    `gates.sensitive_paths` / `gates.path_is_sensitive`, at the new count
+    (`sensitive_reviewers`, shipped 1 -- never the retired literal 2)."""
+    gutted = {**POLICY, "review": {**POLICY["review"], "sensitive_paths": []}}
     n, _ = gates.review_requirement(gutted, changed_paths=["tools/drain/gates.py"])
-    assert n == 1, "emptying the authority must stop escalating"
+    assert n == 0, "emptying the authority must stop escalating"
 
-    widened = {**POLICY, "review": {**POLICY["review"],
-                                    "escalate_to_two_when_path_contains": ["docs/"]}}
+    widened = {**POLICY, "review": {**POLICY["review"], "sensitive_paths": ["docs"]}}
     n, why = gates.review_requirement(widened, changed_paths=["docs/whatever.md"])
-    assert n == 2, f"adding to the authority must start escalating: {why}"
+    assert n == 1, f"adding to the authority must start escalating: {why}"
 
 
 def test_the_default_is_read_from_the_authority():
     """The one key that WAS consulted had no test that a policy edit propagates
-    -- hardcoding `default = 1` survived, because the shipped value is 1."""
+    -- hardcoding `default = 0` would survive, because the shipped value is 0."""
     raised = {**POLICY, "review": {**POLICY["review"], "independent_reviewers_default": 3}}
     n, _ = gates.review_requirement(raised, changed_paths=["docs/x.md"])
     assert n == 3
 
 
-def test_negative_control_the_guard_stream_no_longer_escalates_on_its_own():
+def test_negative_control_no_stream_value_escalates_any_more():
     """PRE-2026-10-01 this pinned a historical defect: W6-ci was the guard
     stream and got covered only INCIDENTALLY through a lane-to-path guess, so a
     relabel could decouple them (measured: W6-ci with `lane:dataplane` got
-    ONE). The 2026-10-01 lean-review directive removed W6-ci from
-    `escalate_to_two_when_stream_is` outright -- it is not an escalating stream
-    any more, by any route -- so this now pins the OPPOSITE fact: a bare W6-ci
-    diff with no escalating path gets the ordinary count. Breaks if W6-ci is
-    ever added back to the shipped stream list without updating this test."""
-    for lane_path in ("domains/", "docs/"):
-        n, why = gates.review_requirement(POLICY, changed_paths=[lane_path], stream="W6-ci")
-        assert n == 1, f"W6-ci via {lane_path} escalated under the narrowed policy: {why}"
-
-
-def test_the_stream_escalates_whatever_the_diff_touches():
-    """A lane is a guess about the footprint; a stream is a fact about the work.
-    Every W0-harness item is a `tools/drain` diff by construction. Narrowed
-    2026-10-01 to just the two streams the shipped policy still escalates on."""
-    for stream in ("W0-harness", "W2-security"):
-        n, why = gates.review_requirement(POLICY, changed_paths=[], stream=stream)
-        assert n == 2, f"{stream}: {why}"
-    n, _ = gates.review_requirement(POLICY, changed_paths=["domains/x.sql"],
-                                    stream="W8-dataplane")
-    assert n == 1
-
-
-def test_negative_control_the_dropped_streams_no_longer_escalate():
-    """THE OTHER HALF of the narrowing, pinned so re-widening the list is a
-    conscious edit rather than a silent regression of the OLD behaviour this
-    policy used to have. Breaks if any of these five streams is restored to
-    `escalate_to_two_when_stream_is` without a matching test update."""
-    for stream in ("W1-deploy", "W3-gov", "W5-console", "W6-ci", "W7-bicep"):
-        n, why = gates.review_requirement(POLICY, changed_paths=[], stream=stream)
-        assert n == 1, f"{stream} escalated under the narrowed policy: {why}"
+    ONE). The 2026-10-01 lean-review directive narrowed the escalating-stream
+    list to W0-harness and W2-security; operator decision 2026-10-02
+    (`_sensitive_review_2026_10_02`) retires the MECHANISM outright -- no
+    stream value, previously-escalating or not, raises `review_requirement`'s
+    count any more. Breaks if `review_requirement` ever reads `stream` for
+    anything but logging again."""
+    for stream in ("W0-harness", "W2-security", "W6-ci", "W1-deploy", "W3-gov",
+                   "W5-console", "W7-bicep", "W8-dataplane", "W9-rest"):
+        for lane_path in ("domains/", "docs/"):
+            n, why = gates.review_requirement(
+                POLICY, changed_paths=[lane_path], stream=stream)
+            assert n == 0, f"{stream} via {lane_path} escalated: {why}"
 
 
 def test_negative_control_an_unknown_footprint_fails_closed():
     """28 of 299 live items carry no lane, so `changed_paths=[""]` matched
-    nothing and they got ONE reviewer -- including all four W0-harness items and
-    nine W1-deploy ones, i.e. exactly the diffs the policy says need two. Every
-    sibling control in this module fails closed; this one fell open."""
+    nothing and they got ONE reviewer under the pre-2026-10-02 default --
+    including all four W0-harness items and nine W1-deploy ones. Every
+    sibling control in this module fails closed; this one fell open. The
+    escalated count is now `sensitive_reviewers` (1), never the retired
+    literal 2."""
     n, why = gates.review_requirement(POLICY, changed_paths=[], footprint_known=False)
-    assert n == 2
+    assert n == 1
     assert "not known" in why
 
 
@@ -446,80 +432,126 @@ def test_negative_control_each_lane_is_pinned_individually():
     rows both SURVIVED a full suite: 31 and 33 laned items would silently drop
     to one, over a green 93/93 matrix). The 2026-10-01 narrowing removed the
     bare `apps/fiab-console`, `platform/fiab/bicep` and `scripts/ci` fragments
-    from the authority outright -- `LANE_PATHS` still maps those lanes to those
-    bare directories, so NONE of the five lanes below now escalates by path
-    alone. Breaks if a bare lane path is ever re-added to the authority without
-    updating this test, since that would silently re-escalate every item in
-    that lane regardless of which file within it changed."""
-    for lane in ("lane:console", "lane:bicep", "lane:ci", "lane:dataplane", "lane:docs"):
+    from the authority outright, and operator decision 2026-10-02
+    (`_sensitive_review_2026_10_02`) RESTORED `platform/fiab/bicep` to
+    `sensitive_paths` -- at a lower count (1, not 2). So `lane:bicep`'s bare
+    directory is sensitive again and the other four are not, which is why this
+    is no longer one uniform assertion over all five lanes: a bare lane path
+    re-added to the authority at the OLD count, or any of the four ordinary
+    lanes silently escalating, must each fail loudly and name which lane."""
+    for lane in ("lane:console", "lane:ci", "lane:dataplane", "lane:docs"):
         n, why = gates.review_requirement(
             POLICY, changed_paths=[gates.LANE_PATHS[lane]], stream="W9-rest")
-        assert n == 1, f"{lane} -> {n}, expected 1 under the narrowed policy: {why}"
+        assert n == 0, f"{lane} -> {n}, expected the ordinary zero: {why}"
+
+    n, why = gates.review_requirement(
+        POLICY, changed_paths=[gates.LANE_PATHS["lane:bicep"]], stream="W9-rest")
+    assert n == 1, f"lane:bicep -> {n}, expected sensitive_reviewers (1): {why}"
 
 
-#: Every fragment in `escalate_to_two_when_path_contains`, with a real file
-#: that lands on it. The fragment itself is NOT the test input -- a test that
-#: fed the list back into itself would pass over an empty list and prove
-#: nothing. These paths are written out by hand so that deleting a row from the
-#: authority makes a NAMED case fail. Narrowed 2026-10-01 (`_lean_review_
-#: 2026_10_01`) from twelve fragments to these five; the dropped seven are
-#: pinned as NO LONGER escalating by `test_negative_control_the_dropped_paths_
-#: no_longer_escalate` below.
+#: Every fragment in `sensitive_paths`, with a real file that lands on it. The
+#: fragment itself is NOT the test input -- a test that fed the list back into
+#: itself would pass over an empty list and prove nothing. These paths are
+#: written out by hand so that deleting a row from the authority makes a
+#: NAMED case fail. PRE-2026-10-02 this list named five fragments at a
+#: two-reviewer count (`escalate_to_two_when_path_contains`, narrowed
+#: 2026-10-01 from twelve); operator decision 2026-10-02 replaced that key
+#: with `sensitive_paths`, lowered the count to one, and WIDENED the list back
+#: to nine -- restoring `platform/fiab/bicep` and adding two shapes no prior
+#: list carried (`.github/workflows/deploy-*`, `apps/fiab-console/app/api/
+#: **/_lib`). `NO_LONGER_SENSITIVE` below pins the fragments that stay at the
+#: ordinary zero.
 ESCALATING_PATHS = [
     ("tools/drain", "tools/drain/gates.py"),
     ("dev-loop/gates", "dev-loop/gates/validate-all.ps1"),
     (".github/CODEOWNERS", ".github/CODEOWNERS"),
+    (".github/workflows/deploy-*", ".github/workflows/deploy-fiab-commercial.yml"),
+    ("platform/fiab/bicep", "platform/fiab/bicep/main.bicep"),
     ("apps/fiab-console/lib/auth", "apps/fiab-console/lib/auth/authflow.ts"),
     ("apps/fiab-console/middleware.ts", "apps/fiab-console/middleware.ts"),
+    ("apps/fiab-console/lib/access", "apps/fiab-console/lib/access/policy.ts"),
+    ("apps/fiab-console/app/api/**/_lib",
+     "apps/fiab-console/app/api/admin/security/_lib/guard.ts"),
 ]
 
 
 @pytest.mark.parametrize(("fragment", "path"), ESCALATING_PATHS)
-def test_negative_control_each_escalating_path_fragment_is_pinned(fragment, path):
-    """Both reviewers flagged the same asymmetry: the fragments reachable
-    through a LANE were pinned individually and the rest were covered only in
-    aggregate, so five rows could be deleted from the authority over a green
-    matrix.
+def test_negative_control_each_sensitive_path_fragment_is_pinned(fragment, path):
+    """Both reviewers flagged the same asymmetry on the PRE-2026-10-02
+    predecessor list: the fragments reachable through a LANE were pinned
+    individually and the rest were covered only in aggregate, so rows could be
+    deleted from the authority over a green matrix.
 
-    Parametrized rather than looped so a deletion names the row it lost."""
+    Parametrized rather than looped so a deletion names the row it lost.
+    Asserted at `sensitive_reviewers` (1) -- operator decision 2026-10-02
+    retires the two-reviewer count this fixture pinned before."""
     n, why = gates.review_requirement(POLICY, changed_paths=[path], stream="W9-rest")
-    assert n == 2, f"{fragment!r} via {path}: {why}"
+    assert n == 1, f"{fragment!r} via {path}: {why}"
 
 
-#: PRE-2026-10-01 this authority covered twelve fragments; seven were dropped
-#: by the lean-review directive. Pinned here, with a real file per row, so the
-#: narrowing is a measured fact rather than an assumption -- and so re-adding
-#: any one of these without a matching test update is caught.
-DROPPED_PATHS = [
+#: THE BOUNDARY CASES for the two NEW shapes `path_is_sensitive` introduces --
+#: a near-miss that LOOKS like it should match each one, and must not, for the
+#: exact reason `path_is_on_bump_allowlist`'s docstring gives for its own
+#: matcher: no boundary at an edge admits a shape that only resembles the real
+#: one. `.github/workflows/my-deploy-helper.yml`'s filename does not itself
+#: START with `deploy-`; `_libxyz` is a SEGMENT, and `_libxyz != "_lib"`.
+SENSITIVE_SHAPE_NEAR_MISSES = [
+    (".github/workflows/deploy-*", ".github/workflows/my-deploy-helper.yml"),
+    ("apps/fiab-console/app/api/**/_lib",
+     "apps/fiab-console/app/api/admin/_libxyz/guard.ts"),
+    ("tools/drain", "tools/drainage/x.py"),
+]
+
+
+@pytest.mark.parametrize(("fragment", "path"), SENSITIVE_SHAPE_NEAR_MISSES)
+def test_negative_control_the_sensitive_matcher_has_a_boundary(fragment, path):
+    """The over-reach `_sensitive_review_2026_10_02` discloses is deliberate on
+    the `_lib` SEGMENT and the deploy-workflow FILENAME -- every real `_lib`
+    directory and every real `deploy-*.yml` counts, not only audited ones. It
+    is not licence for a matcher with no edge at all: a path that merely
+    CONTAINS the fragment as a substring must still be refused, the same
+    discipline `gates.path_is_on_bump_allowlist`'s docstring records fixing
+    for the bump matcher after a reviewer measured 8 false-exempt shapes
+    there."""
+    n, why = gates.review_requirement(POLICY, changed_paths=[path], stream="W9-rest")
+    assert n == 0, f"{fragment!r} falsely matched {path!r} with no boundary: {why}"
+
+
+#: PRE-2026-10-01 the escalating-path authority covered twelve fragments;
+#: seven were dropped by the lean-review directive to five, which operator
+#: decision 2026-10-02 then widened back to nine (see `ESCALATING_PATHS`
+#: above) at a lower count. These seven fragments are NOT in the 2026-10-02
+#: `sensitive_paths` list and stay at the ordinary zero. Pinned here, with a
+#: real file per row, so that is a measured fact rather than an assumption --
+#: and so re-adding any one of these without a matching test update is caught.
+NO_LONGER_SENSITIVE_PATHS = [
     ("scripts/ci", "scripts/ci/check-deploy-staleness.mjs"),
-    (".github/workflows", ".github/workflows/deploy-fiab-commercial.yml"),
     (".gitignore", ".gitignore"),
     ("Makefile", "Makefile"),
     ("pyproject.toml", "pyproject.toml"),
-    ("platform/fiab/bicep", "platform/fiab/bicep/main.bicep"),
     ("deploy/", "deploy/main.bicep"),
     ("apps/fiab-console", "apps/fiab-console/app/page.tsx"),
     ("portal/", "portal/src/index.tsx"),
 ]
 
 
-@pytest.mark.parametrize(("fragment", "path"), DROPPED_PATHS)
-def test_negative_control_each_dropped_path_no_longer_escalates(fragment, path):
-    """The flip side of the test above: these nine fragments (console narrowed
-    to just two sub-paths counts as one dropped fragment here, `apps/fiab-
-    console` bare) used to each need two reviewers and now need one, by
-    operator directive. Breaks if any is ever re-added to the authority
-    without updating this test."""
+@pytest.mark.parametrize(("fragment", "path"), NO_LONGER_SENSITIVE_PATHS)
+def test_negative_control_each_never_sensitive_path_stays_at_zero(fragment, path):
+    """These seven fragments were dropped from the two-reviewer authority on
+    2026-10-01 and are not in the 2026-10-02 `sensitive_paths` list either --
+    pinned at the ordinary ZERO (not the one-reviewer `sensitive_reviewers`
+    either). Breaks if any is ever added to `sensitive_paths` without a
+    matching test update."""
     n, why = gates.review_requirement(POLICY, changed_paths=[path], stream="W9-rest")
-    assert n == 1, f"{fragment!r} via {path} still escalates: {why}"
+    assert n == 0, f"{fragment!r} via {path} now escalates: {why}"
 
 
 def test_negative_control_the_pinned_paths_are_the_whole_authority():
     """The list above is a hand-written MIRROR, so it can fall behind the file
-    it mirrors: add a thirteenth fragment and every case still passes while the
+    it mirrors: add a tenth fragment and every case still passes while the
     new row goes unpinned -- which is exactly the state this test was written to
     end. Compares SETS, not counts: a swap reads clean against a length."""
-    assert {f for f, _ in ESCALATING_PATHS} == set(gates.escalation_paths(POLICY))
+    assert {f for f, _ in ESCALATING_PATHS} == set(gates.sensitive_paths(POLICY))
 
 
 def _verdict(cid, when, body):
@@ -669,7 +701,7 @@ def test_negative_control_the_history_scan_sees_every_shape_gate_two_three_block
         # the SHAPE-MATCHING logic still exists and is wired correctly.
         n, why = gates.review_requirement(POLICY_BLOCK_ESCALATES, changed_paths=["docs/x.md"],
                                           prior_verdict=got)
-        assert n == 2, label
+        assert n == 1, label
         # THE REASON MUST BE TRUE OF THE COMMENT, not merely consistent with
         # the tag. Kills MG32.
         assert gates.UNANNOUNCED_REASON_BY_KIND[kind] in why, f"{label}: {why}"
@@ -700,7 +732,7 @@ def test_negative_control_an_unrecognised_kind_gets_no_confident_sentence():
     tagged = f"{gates.UNANNOUNCED_BLOCK} (brand-new-kind, comment 7)"
     n, why = gates.review_requirement(POLICY_BLOCK_ESCALATES, changed_paths=["docs/x.md"],
                                       prior_verdict=tagged)
-    assert n == 2, "an unrecognised kind still fails closed"
+    assert n == 1, "an unrecognised kind still fails closed"
     assert gates.UNANNOUNCED_REASON_UNKNOWN in why, why
     # ...and it must not borrow any KNOWN kind's sentence, which is exactly what
     # the surviving mutation did.
@@ -836,24 +868,28 @@ def test_negative_control_an_unresolvable_stream_fails_closed():
     """The merge-gate half of `escalate_when_footprint_unknown`. At brief time
     the stream is the fact and the paths are the guess; at merge time it is the
     other way round, and the stream must be resolved from the ledger. All three
-    ways that fails mean the harness cannot place the work."""
+    ways that fails mean the harness cannot place the work -- SHIPPED OFF as of
+    operator decision 2026-10-02 (`escalate_when_stream_unknown: false`), so
+    this now pins the mechanism through an explicit override (the same pattern
+    `POLICY_BLOCK_ESCALATES` uses) rather than through the real policy."""
     n, why = gates.review_requirement(POLICY, changed_paths=["docs/x.md"],
                                       stream_known=False)
-    assert n == 2
+    assert n == 0, "an unresolvable stream must not escalate under the shipped policy"
+    assert "default for an ordinary lane" in why, why
+
+    # The mechanism still exists -- only its shipped default changed. Asserted
+    # at `sensitive_reviewers` (1), never the retired literal 2.
+    reopened = {**POLICY, "review": {**POLICY["review"],
+                                     "escalate_when_stream_unknown": True}}
+    n, why = gates.review_requirement(reopened, changed_paths=["docs/x.md"],
+                                      stream_known=False)
+    assert n == 1, why
     assert "stream could not be resolved" in why
 
-    # The control: a resolvable non-escalating stream stays at one.
+    # The control: a resolvable non-escalating stream stays at zero.
     n, _ = gates.review_requirement(POLICY, changed_paths=["docs/x.md"],
                                     stream="W9-rest", stream_known=True)
-    assert n == 1
-
-    # ...and the authority can switch it off, which is what makes it a control
-    # rather than a constant.
-    opened = {**POLICY, "review": {**POLICY["review"],
-                                   "escalate_when_stream_unknown": False}}
-    n, _ = gates.review_requirement(opened, changed_paths=["docs/x.md"],
-                                    stream_known=False)
-    assert n == 1
+    assert n == 0
 
 
 def test_a_blocking_first_verdict_no_longer_escalates_by_default():
@@ -861,11 +897,12 @@ def test_a_blocking_first_verdict_no_longer_escalates_by_default():
     `escalate_on_blocking_first_verdict` ships `false`, so a REQUEST-CHANGES-
     shaped prior verdict no longer raises the count on its own under the real
     POLICY. Breaks if the shipped key reverts to `true`, or the `and
-    prior_verdict` guard in `review_requirement` stops reading it."""
+    prior_verdict` guard in `review_requirement` stops reading it. The
+    ordinary count is now 0 (operator decision 2026-10-02), not 1."""
     for spelling in ("REQUEST-CHANGES", "CHANGES REQUIRED", "CANNOT-ASSESS"):
         n, why = gates.review_requirement(POLICY, changed_paths=["docs/x.md"],
                                           prior_verdict=spelling)
-        assert n == 1, f"{spelling!r} escalated under the lean default: {why}"
+        assert n == 0, f"{spelling!r} escalated under the lean default: {why}"
 
 
 def test_negative_control_a_blocking_first_verdict_is_matched_by_shape():
@@ -874,59 +911,66 @@ def test_negative_control_a_blocking_first_verdict_is_matched_by_shape():
     `parse_verdicts` spends a whole apparatus on the fact that
     "CHANGES REQUIRED" is a block written the wrong way. A reviewer count that
     recognised only the exact token would let formatting reduce a block to
-    "one reviewer was enough"."""
+    "no reviewer was needed". Asserted at `sensitive_reviewers` (1) -- operator
+    decision 2026-10-02 retires the literal 2 this used to pin."""
     for spelling in ("REQUEST-CHANGES", "request-changes", "REQUEST-CHANGES ",
                      "## Independent review - REQUEST-CHANGES", "CHANGES REQUIRED",
                      "CANNOT-ASSESS"):
         n, why = gates.review_requirement(POLICY_BLOCK_ESCALATES, changed_paths=["docs/x.md"],
                                           prior_verdict=spelling)
-        assert n == 2, f"{spelling!r}: {why}"
+        assert n == 1, f"{spelling!r}: {why}"
     n, _ = gates.review_requirement(POLICY_BLOCK_ESCALATES, changed_paths=["docs/x.md"],
                                     prior_verdict="APPROVE")
-    assert n == 1
+    assert n == 0
 
 
 def test_negative_control_the_deploy_fragment_is_anchored():
     """PRE-2026-10-01 a bare substring made `docs/how-we-deploy/notes.md`
     escalate while `deploy/` itself correctly required two. The 2026-10-01
-    narrowing dropped `deploy/` from the authority entirely, so both now get
-    the ordinary count -- pinned together so a reader does not mistake the
-    dropped escalation for a regression of the anchoring fix."""
+    narrowing dropped `deploy/` from the authority entirely, and operator
+    decision 2026-10-02 never restored it (`deploy/` is not a `sensitive_paths`
+    entry -- only `.github/workflows/deploy-*` and `platform/fiab/bicep` are),
+    so both of these get the ordinary ZERO -- pinned together so a reader does
+    not mistake the dropped escalation for a regression of the anchoring fix."""
     n, _ = gates.review_requirement(POLICY, changed_paths=["docs/how-we-deploy/notes.md"])
-    assert n == 1
+    assert n == 0
     n, _ = gates.review_requirement(POLICY, changed_paths=["deploy/main.bicep"])
-    assert n == 1
+    assert n == 0
 
 
-def test_an_ordinary_lane_gets_one_reviewer():
+def test_an_ordinary_lane_gets_zero_reviewers():
+    """Operator decision 2026-10-02: an ordinary lane on green required CI
+    needs no reviewer at all. PRE-2026-10-02 this was the one-reviewer
+    default."""
     n, why = gates.review_requirement(POLICY, changed_paths=["domains/sales/models/x.sql"])
-    assert n == 1, why
+    assert n == 0, why
 
 
-def test_negative_control_a_guard_diff_still_escalates():
-    """W0 took nine rounds with two reviewers because it WAS the merge gate. One
-    reviewer is the default -- but the paths whose failure modes one reviewer
-    has been observed to miss still get two. Narrowed 2026-10-01 to the five
-    fragments the authority still protects; `DROPPED_PATHS` above pins the
-    seven that no longer do."""
+def test_negative_control_a_guard_diff_still_needs_one_reviewer():
+    """W0 took nine rounds with two reviewers because it WAS the merge gate.
+    Operator decision 2026-10-02 retires the two-reviewer escalation outright,
+    but these paths -- the ones whose failure modes one reviewer has been
+    observed to miss -- still get ONE (`sensitive_reviewers`), never zero.
+    `NO_LONGER_SENSITIVE_PATHS` above pins the fragments that get the ordinary
+    zero instead."""
     for path in ("tools/drain/gates.py", "dev-loop/gates/validate-all.ps1",
                  ".github/CODEOWNERS", "apps/fiab-console/lib/auth/authflow.ts",
                  "apps/fiab-console/middleware.ts"):
         n, why = gates.review_requirement(POLICY, changed_paths=[path])
-        assert n == 2, f"{path} must escalate: {why}"
+        assert n == 1, f"{path} must still need a reviewer: {why}"
 
 
 def test_negative_control_a_finding_escalates_whatever_the_path():
     """Driven through `POLICY_BLOCK_ESCALATES` -- the shipped default no
     longer routes a prior verdict into the count at all, see that constant's
-    docstring."""
+    docstring. Asserted at `sensitive_reviewers` (1), never the retired 2."""
     for verdict in ("REQUEST-CHANGES", "CANNOT-ASSESS"):
         n, why = gates.review_requirement(POLICY_BLOCK_ESCALATES, changed_paths=["docs/x.md"],
                                           prior_verdict=verdict)
-        assert n == 2, why
+        assert n == 1, why
     n, _ = gates.review_requirement(POLICY_BLOCK_ESCALATES, changed_paths=["docs/x.md"],
                                     prior_verdict="APPROVE")
-    assert n == 1
+    assert n == 0
 
 
 def test_the_hard_ceiling_is_a_control_not_a_comment():

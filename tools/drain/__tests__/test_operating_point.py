@@ -123,39 +123,88 @@ def test_merge_time_counts_the_gate_not_the_receipt(tmp_path):
     """`receipt_ok` is gate 6's, not 3b's. The first version conflated them and
     reported 100% two-reviewer over a ledger where one item asks for one.
 
-    The receipt count is reported SEPARATELY, because it is the thing that
-    actually stops that item -- a different gate, and the operator should see
-    both numbers rather than one that silently merges them."""
+    OPERATOR DECISION 2026-10-02 retired the stream-driven escalation this
+    fixture used to exercise outright (`escalate_when_stream_unknown` ships
+    `false`, and no stream VALUE raises the count any more either). `merge_
+    time` hardcodes `changed_paths=["docs/x.md"]` and `footprint_known=True`,
+    so every item in this fixture now gets the ordinary ZERO regardless of
+    stream, state, or PR binding -- DISCLOSED rather than hidden behind a
+    test that no longer measures what its name claims: the four rows below
+    are kept, with their original comments corrected, specifically so a
+    future change that makes `merge_time` sensitive to something besides the
+    ordinary default is forced to touch this assertion rather than finding it
+    already (silently) green.
+
+    The receipt count is still reported SEPARATELY from the reviewer count --
+    a different gate -- which is the one property this test can still pin:
+    `receipted` is 0 here even though #2 holds a real `ci-green` receipt,
+    because nothing in this ledger reaches `needed > 0` any more for
+    `receipted` to be counted against."""
     led = _ledger(tmp_path, [
-        (1, "W9-rest", "in-flight", None, None),     # 3b says ONE, no receipt
-        (2, "W9-rest", "in-flight", None, "ci-green"),  # ONE, and receipted
-        (3, "W9-rest", "ready", None, None),         # never scheduled -> TWO
-        (4, "W2-security", "in-flight", None, None),  # escalating stream -> TWO
+        (1, "W9-rest", "in-flight", None, None),      # corroborated (scheduled) -> ZERO
+        (2, "W9-rest", "in-flight", None, "ci-green"),  # corroborated, receipted -> ZERO
+        (3, "W9-rest", "ready", None, None),           # NEVER scheduled -> stream unknown
+        (4, "W2-security", "in-flight", None, None),   # corroborated -> ZERO (stream
+                                                        # VALUE never escalates, any policy)
     ])
     counts, one_reviewer, receipted = operating_point.merge_time(POLICY, led, pr=1)
-    assert counts[1] == 2, counts
-    assert counts[2] == 2, counts
-    assert one_reviewer == 2
-    assert receipted == 1, "only #2 could actually reach GO"
+    assert counts[0] == 4, counts
+    assert one_reviewer == 0
+    assert receipted == 0, "nothing in this ledger reaches needed > 0 under the shipped policy"
+
+    # THE MECHANISM STILL EXISTS, only its shipped default changed -- proven
+    # through the same override pattern `test_policy.py`'s `POLICY_BLOCK_
+    # ESCALATES` uses. With `escalate_when_stream_unknown` turned back on,
+    # only #3 (never scheduled, so `stream_known=False`) distinguishes: #1,
+    # #2 and #4 are all corroborated (`in-flight` is a SCHEDULED state), and a
+    # stream VALUE -- `W2-security` on #4 included -- does not escalate any
+    # more under ANY policy value, because that mechanism was removed from
+    # `review_requirement` entirely, not merely disabled by this flag.
+    reopened = {**POLICY, "review": {**POLICY["review"],
+                                     "escalate_when_stream_unknown": True}}
+    counts, one_reviewer, receipted = operating_point.merge_time(reopened, led, pr=1)
+    assert counts[0] == 3, counts   # #1, #2, #4: corroborated, stream_known=True
+    assert counts[1] == 1, counts   # #3: never scheduled, stream_known=False
+    assert one_reviewer == 1
+    assert receipted == 0, "#3 is the one-reviewer row and it holds no receipt"
 
 
 def test_negative_control_an_item_bound_to_another_pr_is_not_corroborated(tmp_path):
     """The row that caught the second defect, on its own so a failure names it.
     `item.pr is not None` accepted; `item.pr == pr` refuses. `tick.py
-    --bind-pr` writes `Item.pr` (#4489), so this row measures real bindings."""
+    --bind-pr` writes `Item.pr` (#4489), so this row measures real bindings.
+
+    Operator decision 2026-10-02 retired `escalate_when_stream_unknown`'s
+    shipped value (now `false`), so BOTH a corroborated and an uncorroborated
+    binding get the ordinary ZERO under the real policy today -- asserted
+    first, so that fact is not silently lost. The corroboration logic itself
+    is still exercised, and still distinguishes, through the same override
+    used above."""
     led = _ledger(tmp_path, [(1, "W9-rest", "in-flight", 99, None)])
     counts, _one, _receipted = operating_point.merge_time(POLICY, led, pr=1)
-    assert counts[2] == 1, counts
-    assert counts[1] == 0, "an item another PR owns cannot corroborate this one"
+    assert counts[0] == 1, "unresolvable streams no longer escalate under the shipped policy"
+
+    reopened = {**POLICY, "review": {**POLICY["review"],
+                                     "escalate_when_stream_unknown": True}}
+    counts, _one, _receipted = operating_point.merge_time(reopened, led, pr=1)
+    assert counts[1] == 1, counts
+    assert counts[0] == 0, "an item another PR owns cannot corroborate this one"
 
 
 def test_brief_time_and_merge_time_are_different_questions(tmp_path):
     """They are quoted side by side in `policy.json` and are NOT comparable:
     brief time decides from a LANE before the diff exists, merge time from the
-    real diff and the ledger. The same item can legitimately differ."""
+    real diff and the ledger. The same item can legitimately differ.
+
+    Operator decision 2026-10-02: the ordinary count is now 0, not 1, at
+    both measurement points -- `brief_time` resolves a laned item's lane to
+    `lane:docs` -> `docs/`, which is not a sensitive path, so a laned,
+    non-escalating-stream item now reads ZERO at brief time too; an unlaned,
+    never-scheduled item still reads ZERO at merge time under the shipped
+    policy (see the override tests above for how it distinguishes with
+    `escalate_when_stream_unknown` turned back on)."""
     led = _ledger(tmp_path, [(1, "W9-rest", "ready", None, None)])
     brief, _reasons, _per_stream = operating_point.brief_time(POLICY, led)
     merge, _one, _receipted = operating_point.merge_time(POLICY, led, pr=1)
-    # brief: laned, non-escalating stream -> ONE. merge: never scheduled -> TWO.
-    assert brief[1] == 1, brief
-    assert merge[2] == 1, merge
+    assert brief[0] == 1, brief
+    assert merge[0] == 1, merge

@@ -84,6 +84,16 @@ def merge_time(policy: dict, led: Ledger, pr: int | None = None
     one-reviewer items could actually reach GO, because gate 6 refuses an
     undeclared close and `--allow-close` is refused without a receipt. Those
     are different gates and the operator should see both numbers.
+
+    `one_reviewer` COUNTS `needed > 0`, not `needed == 1` -- updated for
+    operator decision 2026-10-02, which retired the two-reviewer escalation
+    entirely. Pre-2026-10-02 `needed` was always 1 (ordinary) or 2
+    (escalated), so `== 1` and `> 0` agreed; today `needed` is 0 (ordinary,
+    the new ZERO-reviewer default) or `sensitive_reviewers(policy)` (shipped
+    1, but READ from the authority, not assumed), so `> 0` is the one that
+    stays true to what the name means -- "3b would ask this item's PR for at
+    least one live APPROVE" -- if the shipped count for a sensitive path is
+    ever raised past 1.
     """
     counts: Counter = Counter()
     one_reviewer = receipted = 0
@@ -110,7 +120,7 @@ def merge_time(policy: dict, led: Ledger, pr: int | None = None
             stream_known=stream_known,
         )
         counts[needed] += 1
-        if needed == 1:
+        if needed > 0:
             one_reviewer += 1
             receipted += 1 if led.receipt_ok(item)[0] else 0
     return counts, one_reviewer, receipted
@@ -133,13 +143,13 @@ def main() -> int:
         counts, one_reviewer, receipted = merge_time(policy, led)
         total = sum(counts.values()) or 1
         print(f"GATE 3b over {total} live items, assuming every PR DECLARES its "
-              "close and touches no escalating path")
+              "close and touches no sensitive path")
         for needed in sorted(counts):
             print(f"  {needed} reviewer(s): {counts[needed]:3d}  "
                   f"({counts[needed] / total:.0%})")
         print("\nGATE 6 is a different gate, and today it is the binding one.")
-        print(f"  of the {one_reviewer} item(s) 3b would let through on one "
-              f"reviewer, {receipted} hold a receipt")
+        print(f"  of the {one_reviewer} item(s) 3b would ask a PR to carry at "
+              f"least one live APPROVE for, {receipted} hold a receipt")
         print("  an undeclared close is refused by gate 6, and `--allow-close` "
               "is refused without a receipt of the item's kind - so the rest "
               "cannot reach GO however many reviewers approve.")
@@ -159,10 +169,10 @@ def main() -> int:
     print("\nwhy:")
     for why, count in by_reason.most_common():
         print(f"  {count:3d}  {why}")
-    print("\nper stream (1 / 2):")
+    print("\nper stream (0 / 1):")
     for stream in sorted(per_stream):
         slot = per_stream[stream]
-        print(f"  {stream:14} {slot[1]:3d} / {slot[2]:3d}")
+        print(f"  {stream:14} {slot[0]:3d} / {slot[1]:3d}")
     return 0
 
 
