@@ -37,7 +37,7 @@
  * wall-clock (the common case: "as of yesterday 5pm"); `version` addresses a
  * Delta commit version directly (exact reproducibility of a specific commit).
  */
-import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { escapeSparkSqlLiteral, escapeSqlLiteral } from '@/lib/sql/quoting';
 
 export type AsOfSpec =
   | { kind: 'live' }
@@ -202,11 +202,16 @@ function gate(backend: TimeTravelBackend, spec: AsOfSpec, code: string, reason: 
 }
 
 /**
- * SQL string literal for an ISO timestamp — single-quote-escaped. The value is
+ * SQL string literals for an ISO timestamp, one per engine grammar. The value is
  * ALWAYS a coordinator-normalized ISO string (from `new Date().toISOString()`),
- * never raw user text, so this only defends in depth.
+ * never raw user text, so the escaping only defends in depth — but it follows
+ * the engine that parses it: Delta time travel runs on Databricks / Spark SQL
+ * (backslash rule), a temporal-table query on Synapse T-SQL (quote doubling).
  */
-function sqlTsLiteral(iso: string): string {
+function sparkTsLiteral(iso: string): string {
+  return `'${escapeSparkSqlLiteral(iso)}'`;
+}
+function tsqlTsLiteral(iso: string): string {
   return `'${escapeSqlLiteral(iso)}'`;
 }
 
@@ -222,7 +227,7 @@ export function resolveTimeTravel(backend: TimeTravelBackend, spec: AsOfSpec): T
     case 'delta': {
       // Databricks SQL / Spark SQL over Delta — both forms are native.
       if (spec.kind === 'version') return clause(backend, spec, { sqlTableSuffix: ` VERSION AS OF ${spec.version}` });
-      return clause(backend, spec, { sqlTableSuffix: ` TIMESTAMP AS OF ${sqlTsLiteral(spec.iso)}` });
+      return clause(backend, spec, { sqlTableSuffix: ` TIMESTAMP AS OF ${sparkTsLiteral(spec.iso)}` });
     }
 
     case 'synapse-temporal': {
@@ -231,7 +236,7 @@ export function resolveTimeTravel(backend: TimeTravelBackend, spec: AsOfSpec): T
         return gate(backend, spec, 'temporal_needs_timestamp',
           'A Synapse Dedicated SQL temporal table addresses history by time, not by Delta version — provide a timestamp asOf (a date/instant) instead of a version.');
       }
-      return clause(backend, spec, { sqlTableSuffix: ` FOR SYSTEM_TIME AS OF ${sqlTsLiteral(spec.iso)}` });
+      return clause(backend, spec, { sqlTableSuffix: ` FOR SYSTEM_TIME AS OF ${tsqlTsLiteral(spec.iso)}` });
     }
 
     case 'adx': {

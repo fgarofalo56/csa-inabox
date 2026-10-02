@@ -52,11 +52,15 @@ describe('ai-enrichment: identifier + expression safety', () => {
     expect(quoteColumn('`c`')).toBe('`c`');
     expect(() => quoteColumn('')).toThrow();
   });
-  it('builds each builtin ai_* expression and escapes literals', () => {
+  it('builds each builtin ai_* expression and escapes literals by the Spark SQL rule', () => {
     expect(buildAiSqlExpr('sentiment', '`c`')).toBe('ai_analyze_sentiment(`c`)');
     expect(buildAiSqlExpr('summarize', '`c`')).toBe('ai_summarize(`c`)');
-    expect(buildAiSqlExpr('classify', '`c`', { labels: ["a'b", 'c'] })).toBe("ai_classify(`c`, ARRAY('a''b', 'c'))");
-    expect(buildAiSqlExpr('translate', '`c`', { targetLang: "O'Brien" })).toBe("ai_translate(`c`, 'O''Brien')");
+    // Databricks SQL reads `\'` as a quote. Breaks under T-SQL doubling:
+    // ARRAY('a''b', 'c') / 'O''Brien'.
+    expect(buildAiSqlExpr('classify', '`c`', { labels: ["a'b", 'c'] })).toBe("ai_classify(`c`, ARRAY('a\\'b', 'c'))");
+    expect(buildAiSqlExpr('translate', '`c`', { targetLang: "O'Brien" })).toBe("ai_translate(`c`, 'O\\'Brien')");
+    // Breaks if the backslash is not escaped first: 'C:\' leaves the literal open.
+    expect(buildAiSqlExpr('translate', '`c`', { targetLang: 'C:\\' })).toBe("ai_translate(`c`, 'C:\\\\')");
     expect(buildAiSqlExpr('extract', '`c`', { fields: ['co'] })).toBe("ai_extract(`c`, ARRAY('co'))");
     expect(() => buildAiSqlExpr('custom_prompt', '`c`')).toThrow(/no Databricks ai_\* builtin/);
   });
@@ -89,9 +93,22 @@ describe('ai-enrichment: CTAS builders', () => {
       pairs: [{ source: "it's fine", output: 'ok' }, { source: 'b', output: 'good' }],
     });
     expect(sql).toContain('CREATE TABLE `main`.`sales`.`out` USING DELTA AS');
-    expect(sql).toContain("('it''s fine', 'ok')");
+    // Spark SQL rule. Breaks under doubling: ('it''s fine', 'ok').
+    expect(sql).toContain("('it\\'s fine', 'ok')");
     expect(sql).toContain('AS t(source_value, `ai_result`)');
     expect(() => buildValuesCtas({ catalog: 'm', schema: 's', destTable: 'd', outputColumn: 'o', pairs: [] })).toThrow(/no enriched rows/);
+  });
+  it('carries control characters in the VALUES literals: U+000C and U+001B raw, NUL as \\0', () => {
+    // Breaks if buildValuesCtas throws on a control character (the round-1
+    // behaviour refused them), drops one, or emits NUL raw. Spark reads any
+    // Unicode character in a literal; \0 is its documented NUL escape.
+    const sql = buildValuesCtas({
+      catalog: 'main', schema: 'sales', destTable: 'out', outputColumn: 'ai_result',
+      pairs: [{ source: 'a\u000cb', output: 'c\u001bd' }, { source: 'n\u0000ul', output: 'x' }],
+    });
+    expect(sql).toContain("('a\u000cb', 'c\u001bd')");
+    expect(sql).toContain("('n\\0ul', 'x')");
+    expect(sql).not.toContain('\u0000');
   });
   it('builds a bounded sample SELECT', () => {
     expect(buildSampleSelect('`m`.`s`.`t`', 'body', 5)).toBe('SELECT `body` AS source_value FROM `m`.`s`.`t` LIMIT 5');

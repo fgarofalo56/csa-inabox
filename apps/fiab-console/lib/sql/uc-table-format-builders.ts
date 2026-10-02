@@ -17,8 +17,8 @@
  *     against a strict allowlist first.
  *   - Column SQL types are validated against a strict allowlist regex (the same
  *     shape used by uc-security-builders) so a type can never carry a payload.
- *   - TBLPROPERTIES keys/values are emitted as single-quote-escaped literals via
- *     {@link escapeSqlLiteral}.
+ *   - TBLPROPERTIES keys/values and COMMENTs are emitted as string literals
+ *     escaped by the Spark SQL literal grammar ({@link escapeSparkSqlLiteral}).
  *
  * Grounded in Microsoft Learn:
  *   UniForm (Delta↔Iceberg): https://learn.microsoft.com/azure/databricks/delta/uniform
@@ -28,7 +28,7 @@
  *   CREATE TABLE:            https://learn.microsoft.com/azure/databricks/sql/language-manual/sql-ref-syntax-ddl-create-table-using
  */
 
-import { escapeSqlLiteral, quoteIdent } from '@/lib/sql/quoting';
+import { escapeSparkSqlLiteral, quoteIdent } from '@/lib/sql/quoting';
 
 /** Throwable for all build-time validation failures (surfaced as HTTP 400). */
 export class TableFormatBuildError extends Error {
@@ -98,9 +98,18 @@ function threePart(catalog: string, schema: string, name: string): string {
   return `${quoteIdent(assertName(catalog, 'catalog'), 'databricks-sql')}.${quoteIdent(assertName(schema, 'schema'), 'databricks-sql')}.${quoteIdent(assertName(name, 'table name'), 'databricks-sql')}`;
 }
 
+/**
+ * Inner text of a Databricks string literal, escaped by the Spark SQL literal
+ * grammar (escapeSparkSqlLiteral). Every character is carried; NUL is written
+ * as an escape and other control characters pass through.
+ */
+function lit(value: string): string {
+  return escapeSparkSqlLiteral(value);
+}
+
 /** `'k' = 'v'` — TBLPROPERTIES key/value emitted as escaped string literals. */
 function tblProp(key: string, value: string): string {
-  return `'${escapeSqlLiteral(key)}' = '${escapeSqlLiteral(value)}'`;
+  return `'${lit(key)}' = '${lit(value)}'`;
 }
 
 /**
@@ -146,7 +155,7 @@ export function buildCreateTableFormatDdl(spec: UcTableFormatSpec): string {
     const col = quoteIdent(assertName(c.name, 'column name'), 'databricks-sql');
     const type = assertType(c.type);
     const notNull = c.nullable === false ? ' NOT NULL' : '';
-    const comment = c.comment && c.comment.trim() ? ` COMMENT '${escapeSqlLiteral(c.comment.trim())}'` : '';
+    const comment = c.comment && c.comment.trim() ? ` COMMENT '${lit(c.comment.trim())}'` : '';
     return `  ${col} ${type}${notNull}${comment}`;
   }).join(',\n');
 
@@ -159,7 +168,7 @@ export function buildCreateTableFormatDdl(spec: UcTableFormatSpec): string {
     `)`,
     `USING ${using}`,
   ];
-  if (spec.comment && spec.comment.trim()) lines.push(`COMMENT '${escapeSqlLiteral(spec.comment.trim())}'`);
+  if (spec.comment && spec.comment.trim()) lines.push(`COMMENT '${lit(spec.comment.trim())}'`);
   if (propList.length) lines.push(`TBLPROPERTIES (${propList.join(', ')})`);
   return lines.join('\n') + ';';
 }

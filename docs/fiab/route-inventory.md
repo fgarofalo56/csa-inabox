@@ -15,8 +15,8 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | --- | ---: |
 | Total routes | 1697 |
 | Public (no session) | 59 |
-| Session-only | 625 |
-| Owner-scoped | 695 |
+| Session-only | 624 |
+| Owner-scoped | 696 |
 | Admin | 318 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 499 |
@@ -1105,7 +1105,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
 | `items/[type]/[id]/access-mode/route.ts` | PATCH | owner-scoped |  | Cosmos, Microsoft Graph |
-| `items/[type]/[id]/ai-function/route.ts` | GET POST | session-only | ● | AML, ARM, Azure AI Services, Azure Monitor, Azure OpenAI, Cosmos |
+| `items/[type]/[id]/ai-function/route.ts` | GET POST | owner-scoped | ● | AML, ARM, Azure AI Services, Azure Monitor, Azure OpenAI, Cosmos, Microsoft Graph |
 | `items/[type]/[id]/alerts/route.ts` | GET POST PATCH DELETE | owner-scoped | ● | ARM, Azure Monitor, Cosmos, Microsoft Graph |
 | `items/[type]/[id]/assist/route.ts` | POST | session-only | ● | AML, ARM, Azure AI Services, Azure Cache for Redis, Azure Monitor, Azure OpenAI, Azure SQL, Cosmos, Managed Identity, Synapse SQL |
 | `items/[type]/[id]/audit/route.ts` | GET POST | owner-scoped |  | Cosmos |
