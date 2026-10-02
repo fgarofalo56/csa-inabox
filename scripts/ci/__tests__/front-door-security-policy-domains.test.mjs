@@ -4,11 +4,9 @@
  * `platform/fiab/bicep/modules/admin-plane/front-door.bicep` declares one route
  * (`fdRoute`) and one WAF security policy (`fdSecurityPolicy`). The route serves
  * the endpoint's generated *.azurefd.net host (`linkToDefaultDomain: 'Enabled'`)
- * and, when `vanityDomain` is set, the custom domain `fdCustomDomain`. The policy
- * applies the WAF only to the domains listed in its `associations[].domains`, so
- * any domain the route serves that is missing from that list is served without
- * the policy evaluating its traffic. Until this test landed the association
- * listed the endpoint alone.
+ * and, when `vanityDomain` is set, the custom domain `fdCustomDomain`. This test
+ * pins the policy's `associations[].domains` to match every domain the route
+ * serves. Before this change the association listed the endpoint alone.
  *
  * WHAT THIS COMPARES. The module is compiled with `az bicep build`, and the
  * compiled ARM expressions are EVALUATED, not string-matched, for three

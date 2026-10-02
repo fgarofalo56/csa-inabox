@@ -523,8 +523,8 @@ resource fdSecurityPolicy 'Microsoft.Cdn/profiles/securityPolicies@2024-02-01' =
           // generated *.azurefd.net host (`linkToDefaultDomain: 'Enabled'`) AND,
           // when `vanityDomain` is set, `fdCustomDomain` — so both are listed
           // here, under the same `empty(vanityDomain)` condition the route's
-          // `customDomains` uses. A domain the route serves that is absent from
-          // this list is served without the WAF policy evaluating its traffic.
+          // `customDomains` uses. Keep this list equal to the route's served
+          // domains whenever either changes.
           // Pinned by scripts/ci/__tests__/front-door-security-policy-domains.test.mjs,
           // which compiles this module and compares the two sets for both an
           // empty and a non-empty vanityDomain.

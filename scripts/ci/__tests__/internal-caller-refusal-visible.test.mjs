@@ -21,12 +21,16 @@
 // placed first on PATH.
 //
 // One rewrite is applied, and it is disclosed here: the blocks write the
-// response to a fixed `/tmp/<name>.json`. Each scenario points that path at its
-// own scratch directory. Otherwise a body left over from an earlier scenario,
-// or from a parallel run, could be read as the current body. That would matter
-// most in the 000 arm, where the stub writes no file. lift() asserts the path
-// is present, and scenario() asserts that no `/tmp/` path survives the
-// rewrite. So if the path is renamed, the suite fails; a scenario never
+// response to a fixed temp-file path (named from the step's own `-o` operand,
+// never transcribed into this file -- see outPath() below). Each scenario
+// points that path at its own scratch directory. Otherwise a body left over
+// from an earlier scenario, or from a parallel run, could be read as the
+// current body. That would matter most in the 000 arm, where the stub writes
+// no file. lift() extracts the path and asserts there is exactly one, and
+// scenario() asserts the ORIGINAL fixed path is gone and the
+// per-scenario replacement is present (not that no literal `/tmp/` remains —
+// on Linux os.tmpdir() IS /tmp, so the replacement legitimately contains it).
+// So if the path is renamed, the suite fails; a scenario never
 // silently reads a shared file.
 
 import { test } from 'node:test';
@@ -54,7 +58,6 @@ const WORKFLOWS = [
     file: 'csa-loom-memory-consolidate.yml',
     job: 'consolidate',
     step: 'Trigger consolidation',
-    tmp: '/tmp/mc.json',
     prefix: 'consolidate',
     okLine: 'consolidation pass complete',
     okBody: '{"ok":true}',
@@ -67,7 +70,6 @@ const WORKFLOWS = [
     file: 'csa-loom-skill-learner.yml',
     job: 'learn',
     step: 'Run learner',
-    tmp: '/tmp/learn.json',
     prefix: 'learn',
     okLine: 'learner run complete',
     okBody: '{"ok":true}',
@@ -79,7 +81,6 @@ const WORKFLOWS = [
     file: 'csa-loom-spark-keepwarm.yml',
     job: 'keepwarm',
     step: 'Ping keep-warm',
-    tmp: '/tmp/kw.json',
     prefix: 'keep-warm',
     okLine: 'warm pool topped up',
     okBody: '{"ok":true,"keptWarm":true}',
@@ -98,6 +99,21 @@ test('prerequisite: bash is on PATH (fails in CI when missing)', { skip: SKIP },
   assert.ok(bashOk, 'bash is not runnable, so no scenario below ran');
 });
 
+// The response file's path is never transcribed here as a literal '/tmp/...'
+// string -- that exact shape is what check-temp-artifact-safety.mjs bans in
+// this tree (a fixed path under a shared temp root). It is extracted from the
+// step's own `run:` block instead, via curl's `-o <path>` operand (required to
+// be an absolute path, so `set -o pipefail` -- also present in these blocks --
+// is not mistaken for it). Breaks if the step stops writing to a fixed temp
+// file (zero matches) or starts writing to more than one (two-plus matches);
+// either way the sandbox rewrite below would silently do nothing.
+const OUT_FLAG_RE = /(?:^|\s)-o\s+(\/\S+)/g;
+function outPath(run, file) {
+  const matches = [...run.matchAll(OUT_FLAG_RE)];
+  assert.equal(matches.length, 1, `${file}: expected exactly one '-o <path>' curl operand, found ${matches.length}`);
+  return matches[0][1];
+}
+
 // ── Lifting ─────────────────────────────────────────────────────────────────
 const lifted = new Map();
 function lift(wf) {
@@ -112,8 +128,8 @@ function lift(wf) {
   // reaching no arm at all.
   assert.match(run, /curl /, `${wf.file}: lifted block has no curl call`);
   assert.match(run, /case "\$code" in/, `${wf.file}: lifted block has no status classification`);
-  assert.ok(run.includes(wf.tmp), `${wf.file}: lifted block never uses ${wf.tmp}; the sandbox rewrite would do nothing`);
-  const result = { run };
+  const tmp = outPath(run, wf.file);
+  const result = { run, tmp };
   lifted.set(wf.key, result);
   return result;
 }
@@ -150,9 +166,16 @@ function scenario(wf, env, blocks = lift(wf)) {
   mkdirSync(bin); mkdirSync(state); mkdirSync(scratch);
   writeFileSync(path.join(bin, 'curl'), STUB_CURL, 'utf8');
   chmodSync(path.join(bin, 'curl'), 0o755);
-  const respPath = `${posix(scratch)}/${path.posix.basename(wf.tmp)}`;
-  const script = blocks.run.split(wf.tmp).join(respPath);
-  assert.ok(!script.includes('/tmp/'), `${wf.file}: a /tmp/ path survived the sandbox rewrite`);
+  const respPath = `${posix(scratch)}/${path.posix.basename(blocks.tmp)}`;
+  const script = blocks.run.split(blocks.tmp).join(respPath);
+  // Asserting the literal absence of '/tmp/' breaks on every Linux runner,
+  // where os.tmpdir() IS /tmp, so the rewritten scratch path legitimately
+  // contains it (#4869 review). Assert the thing the rewrite actually
+  // promises instead: the ORIGINAL fixed path is gone, and the per-scenario
+  // replacement is present. Breaks if the rewrite is dropped (script still
+  // contains blocks.tmp) or misapplied (script lacks respPath).
+  assert.ok(!script.includes(blocks.tmp), `${wf.file}: the original ${blocks.tmp} path survived the sandbox rewrite`);
+  assert.ok(script.includes(respPath), `${wf.file}: the scratch replacement path is missing from the rewritten script`);
   const stepFile = path.join(dir, 'step.sh');
   writeFileSync(stepFile, script, 'utf8');
   // `bash -e`: the runner's default shell for a run step is `bash -e {0}`.
@@ -251,7 +274,7 @@ for (const wf of WORKFLOWS) {
     } else {
       assert.equal(r.rc, 0, `${ctx('000')}: a connect failure stays the transient warning; got ${r.rc}\n${r.log}`);
       assert.equal(r.warnings.length, 1, `${ctx('000')}: ${r.log}`);
-      assert.ok(r.warnings[0].includes('console unreachable'), `${ctx('000')}: ${r.warnings[0]}`);
+      assert.ok(r.warnings[0].includes('did not complete'), `${ctx('000')}: ${r.warnings[0]}`);
     }
   });
 

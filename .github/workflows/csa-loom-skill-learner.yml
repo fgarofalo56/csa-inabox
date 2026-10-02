@@ -90,6 +90,9 @@ jobs:
                   exit 1;;
                 *) echo "::warning::learn returned $code — see body above";;
               esac;;
-            000) echo "::warning::console unreachable ($CONSOLE_URL) — transient; next run retries";;
+            000)
+              # R7: we know the request did not complete. We do NOT know that the
+              # console is down -- DNS, TLS, egress and a timeout all land here.
+              echo "::warning::the request to $CONSOLE_URL did not complete (curl failed or timed out). Cause not established from here; next run retries.";;
             *)   echo "::warning::learn returned $code — see body above";;
           esac
