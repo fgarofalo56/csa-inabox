@@ -31,7 +31,7 @@ name: deploy-fiab-gcch
 # NOTHING, and omitting the marker would let a schedule-only history read as a
 # deploy receipt — the exact misreport this lane's own watchdog exists to
 # catch, turned on itself. Schedule now carries the marker too.
-run-name: deploy-fiab-gcch${{ (github.event_name == 'schedule' && ' — DRY RUN (scheduled preflight only — secrets/pause check + What-If + image preflight; the approval-gated deploy is dispatch-only, #4233)') || ((github.event_name == 'workflow_dispatch' && inputs.run_mode != 'full') && ' — DRY RUN (whatif-only, applies nothing)') || '' }}
+run-name: deploy-fiab-gcch${{ (github.event_name == 'schedule' && ' — DRY RUN (scheduled preflight only — secrets/pause check + What-If + image preflight; the approval-gated deploy is dispatch-only, issue 4233)') || ((github.event_name == 'workflow_dispatch' && inputs.run_mode != 'full') && ' — DRY RUN (whatif-only, applies nothing)') || '' }}
 
 on:
   schedule:
