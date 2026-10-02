@@ -23,10 +23,10 @@ import type { PathEntry } from '../shared';
  * create/update only `trim()` it (app/api/items/_lib/item-crud.ts), so it can
  * carry a line break. Rendered raw into the Query template's comment line
  * below, a line break ends the `--` comment and the rest of the name becomes
- * its own SQL statement. Replacing control characters -- C0, DEL, and the
- * U+2028/U+2029 line separators, the same class item-scope.ts's
- * `hasPathControlChar` refuses for storage paths -- with a space keeps the
- * name on one line and leaves an ordinary name unchanged.
+ * its own SQL statement. This replaces each C0 control character
+ * (U+0000-U+001F), DEL (U+007F), and the U+2028/U+2029 line separators with a
+ * space, which keeps the name on one line and leaves an ordinary name
+ * unchanged.
  * Breaking value: a name containing U+000A.
  */
 function sqlCommentSafe(name: string): string {
