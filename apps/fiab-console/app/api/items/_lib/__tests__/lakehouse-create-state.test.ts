@@ -126,6 +126,8 @@ function sourceLakehouseState(): Record<string, unknown> {
     ownedContainers: ['gold'],
     provisioning: { status: 'created', secondaryIds: { container: 'gold', rootPath: 'lakehouses/Sales--src-1' } },
     storageAccount: 'dlzacct',
+    sqlDatabase: 'src_lakedb',
+    sqlEndpointDatabase: 'src_lakedb',
     autoBind: { provider: 'adls', backingName: 'Sales--src-1' },
     notes: 'kept',
     tables: ['orders'],
@@ -156,9 +158,9 @@ describe('the cleared-key list', () => {
   // auto-bind record key is renamed: every other arm lifts its expectation from
   // these constants, so this literal list is what stops them all shrinking
   // together.
-  it('names the location keys, the installer receipt, the account and the auto-bind record', () => {
+  it('names the location keys, the installer receipt, the account, the SQL tab database and the auto-bind record', () => {
     expect([...CLEARED].sort()).toEqual(
-      ['adlsContainer', 'autoBind', 'lakehouseRoot', 'ownedContainers', 'provisioning', 'storageAccount'],
+      ['adlsContainer', 'autoBind', 'lakehouseRoot', 'ownedContainers', 'provisioning', 'sqlDatabase', 'sqlEndpointDatabase', 'storageAccount'],
     );
     expect(keysPresent(sourceLakehouseState()).sort(), 'the fixture must carry every cleared key').toEqual([...CLEARED].sort());
   });
@@ -172,7 +174,7 @@ describe('createOwnedItem, lakehouse', () => {
   ];
 
   // FAILS IF `createOwnedItem` writes a lakehouse's copied state as given: the
-  // written document (`created[0]`) then carries all six keys. It is the WRITTEN
+  // written document (`created[0]`) then carries every cleared key. It is the WRITTEN
   // document that is read, so a strip applied only after the write (the create
   // hook) does not satisfy this arm. The ordinary keys are the positive half:
   // an implementation that wrote `{}` fails on them.
@@ -215,7 +217,7 @@ describe('bundle import, create arm', () => {
   }) as any;
 
   // FAILS IF the create arm writes `planned.doc` as exported: the written
-  // lakehouse then carries the bundle source's six keys. The warehouse beside it
+  // lakehouse then carries every cleared key from the bundle source. The warehouse beside it
   // is the positive twin and FAILS IF the strip is applied regardless of type.
   it('writes a bundled lakehouse without the location keys and other types unchanged', async () => {
     const now = '2026-09-29T12:00:00.000Z';
