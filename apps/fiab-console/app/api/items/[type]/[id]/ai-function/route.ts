@@ -30,13 +30,30 @@
  *          limit?, options?:{ labels?, fields?, targetLang?, maxTokens? } }
  *        Databricks path  → { ok, engine:'databricks', sql, columns, rows, rowCount, executionMs }
  *        AOAI path        → { ok, engine:'aoai', fn, column, input, result, model, usage }
+ *
+ * WAREHOUSE ACCESS (#3669). On the Databricks path the caller names
+ * `warehouseId`. The route runs on it only when its live `loom_item_id` tag links
+ * it to a SQL warehouse item in a workspace the caller can read (any workspace
+ * role); a warehouse with no link is open to tenant admins only. Every other case
+ * is a 404 with `code: 'warehouse_not_available'` and a remediation, and a
+ * Databricks/Cosmos read failure is a 502 with `code: 'warehouse_unverifiable'` —
+ * nothing runs on either. The Gov boundaries never reach this path: they use the
+ * AOAI substitute, which takes no warehouse.
+ *
+ * THE DEPLOYMENT-SHARED WAREHOUSE STAYS ADMIN-ONLY. `loom-default` (and
+ * `loom-gov-default`, and whatever `LOOM_DATABRICKS_SQL_WAREHOUSE_ID` names) is
+ * created by the bootstrap, carries no item link, and is never linked to one —
+ * neither the editor's self-heal nor the admin "Link to this item" action will
+ * tag it (`isDeploymentSharedWarehouse`). So it is runnable here by tenant admins
+ * only. A non-admin sent here with it gets the 404 + remediation above, and the
+ * SQL warehouse editor's AI functions panel offers "Use Azure OpenAI instead",
+ * which re-sends the call WITHOUT `warehouseId` and takes the AOAI path below.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { isGovCloud } from '@/lib/azure/cloud-endpoints';
 import {
   databricksConfigGate,
   executeStatement,
-  getWarehouse,
 } from '@/lib/azure/databricks-client';
 import {
   callAiFn,
@@ -52,6 +69,7 @@ import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
 import { buildAiSqlExpr, isEnrichmentOp, opHasDbxBuiltin } from '@/lib/azure/ai-enrichment-client';
 import { withSession } from '@/lib/api/route-toolkit';
 import { guardSynapseItemRequest, UNSAVED_ITEM_ID } from '@/app/api/items/_lib/synapse-item-scope';
+import { authorizeWarehouseTarget } from '../../../_lib/warehouse-item-binding';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -67,7 +85,10 @@ export const dynamic = 'force-dynamic';
  *
  * On the Databricks path, `warehouseId`, `table`, `catalog` and `schema` are
  * read from the request body, as on the sibling `query` route; the warehouse
- * is one in this deployment's own Databricks workspace.
+ * named there is a SEPARATE authorization from the route's own `[type]/[id]`
+ * item above — see WAREHOUSE ACCESS in the file header. Both checks must pass:
+ * the caller needs a role on the route's own item AND the named warehouse must
+ * be linked to a SQL warehouse item the caller can read (or be a tenant admin).
  *
  * GET stays session-only: it returns the static function list and env-derived
  * capability flags, reads no item data, and is allowlisted on that basis in
@@ -149,7 +170,7 @@ function parseOptions(o: unknown): AiFnOptions {
 const GATE_HINT =
   'Set LOOM_AOAI_ENDPOINT + LOOM_AOAI_DEPLOYMENT (admin-plane/main.bicep — enable aiFoundryEnabled or agentFoundryEnabled, or pass explicit overrides) and grant the Console UAMI "Cognitive Services OpenAI User".';
 
-export const GET = withSession<{ type: string; id: string }>(async (req: NextRequest, { session, params }) => {
+export const GET = withSession<{ type: string; id: string }>(async (_req: NextRequest, { params }) => {
   const { type } = params;
 
   const govPath = isGovCloud();
@@ -224,9 +245,14 @@ export const POST = withSession<{ type: string; id: string }>(async (req: NextRe
     if (!table) {
       return NextResponse.json({ ok: false, error: 'table required for the Databricks SQL path' }, { status: 400 });
     }
+    // #3669 — the warehouse must be linked (its live `loom_item_id` tag) to a SQL
+    // warehouse item in a workspace the caller can read; an unlinked warehouse is
+    // for tenant admins only. See `_lib/warehouse-item-binding.ts`.
+    const target = await authorizeWarehouseTarget(session, warehouseId);
+    if (!target.ok) return target.res;
     // Verify the warehouse is RUNNING (honest 409 if not — never a silent fail).
-    const wh = await getWarehouse(warehouseId).catch(() => null);
-    if (wh && wh.state && wh.state !== 'RUNNING') {
+    const wh = target.warehouse;
+    if (wh.state && wh.state !== 'RUNNING') {
       return NextResponse.json(
         { ok: false, error: `Warehouse is ${wh.state}. Start it before running an AI function.`, state: wh.state },
         { status: 409 },

@@ -37,11 +37,21 @@ vi.mock('@/lib/azure/cloud-endpoints', async (importOriginal) => ({
 const executeStatement = vi.fn(async (..._a: unknown[]) => ({ columns: [], rows: [], rowCount: 0, executionMs: 1, truncated: false }));
 vi.mock('@/lib/azure/databricks-client', () => ({
   databricksConfigGate: () => null,
-  getWarehouse: async () => ({ state: 'RUNNING' }),
   executeStatement: (...a: unknown[]) => executeStatement(...a),
 }));
 
 vi.mock('@/lib/azure/copilot-config-store', () => ({ loadTenantCopilotConfig: async () => null }));
+
+// Warehouse-target binding (#3669) is its OWN file's concern
+// (`ai-function/__tests__/warehouse-binding.test.ts` models the real ladder
+// against it); this file is about the route's item scope + SQL literal
+// escaping, so the warehouse is always a bound, running one here.
+vi.mock('@/app/api/items/_lib/warehouse-item-binding', () => ({
+  authorizeWarehouseTarget: vi.fn(async (_session: unknown, warehouseId: string) => ({
+    ok: true,
+    warehouse: { id: warehouseId, state: 'RUNNING' },
+  })),
+}));
 
 /**
  * Item scoping. The REAL guardSynapseItemRequest runs (and its Cosmos lookup
