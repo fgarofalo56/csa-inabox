@@ -1557,6 +1557,98 @@ def test_blocker_a_pr_that_never_names_the_item_is_refused(tmp_path, monkeypatch
         tick._pr_references_item("r", 4521, 802)
 
 
+# -- #4533: EACH BINDING SURFACE ARMED ON ITS OWN ----------------------------
+#
+# `_pr_references_item` reads the UNION of `closingIssuesReferences` and
+# `gates.referenced_issues(body, commit trail)`. Every fixture above puts the
+# reference in the BODY, so dropping either of the other two surfaces survived
+# the suite. Each fixture below names the item on exactly ONE surface, with the
+# other two empty or unrelated, so the surface under test is the only thing
+# that can accept it. Arms: RW19 (closing dropped), RW20 (commit trail dropped).
+
+
+def _pr_payload(*, body="unrelated work", commits=(), closing=()):
+    return {
+        "body": body,
+        "commits": list(commits),
+        "closingIssuesReferences": [{"number": n} for n in closing],
+    }
+
+
+@pytest.mark.parametrize(
+    ("payload", "surface"),
+    [
+        (_pr_payload(closing=(802,)), "closingIssuesReferences"),
+        (_pr_payload(commits=({"messageHeadline": "fix(drain): tighten a check",
+                               "messageBody": "Refs #802"},)), "commit trail"),
+    ],
+)
+def test_a_reference_on_only_one_surface_binds(monkeypatch, payload, surface):
+    """WHAT MAKES THIS FAIL: dropping the named surface from the union.
+
+    - `closingIssuesReferences` row: `set(closing) | set(mentioned)` narrowed
+      to `set(mentioned)` (RW19) -> the body says nothing and there are no
+      commits, so the check raises "does not reference".
+    - `commit trail` row: `referenced_issues(body, messages, ...)` called with
+      `[]` for the messages (RW20) -> the reference lives only in a commit
+      body, so the check raises.
+
+    `closingIssuesReferences` has read EMPTY while a squash commit closed an
+    issue, which is why the commit trail is not redundant with it.
+    """
+    monkeypatch.setattr(tick, "gh_json_local", lambda *_a, **_k: payload)
+    assert tick._pr_references_item("o/r", 4521, 802) is None, surface
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        _pr_payload(closing=(803,)),
+        _pr_payload(commits=({"messageHeadline": "fix(drain): x",
+                              "messageBody": "Refs #803"},)),
+    ],
+)
+def test_negative_control_the_single_surface_fixtures_bind_only_their_number(
+    monkeypatch, payload
+):
+    """The control for the test above: the same shapes naming #803 must refuse
+    #802. WHAT MAKES THIS FAIL: a check that accepts any non-empty surface
+    regardless of the number on it -- the 'detects everything' mode the
+    positive rows alone cannot exclude."""
+    monkeypatch.setattr(tick, "gh_json_local", lambda *_a, **_k: payload)
+    with pytest.raises(tick.ReceiptRefusedError, match="does not reference"):
+        tick._pr_references_item("o/r", 4521, 802)
+
+
+@pytest.mark.parametrize("terminal", [DECLINED, PARKED])
+def test_a_declined_or_parked_item_is_not_re_receipted(tmp_path, monkeypatch, terminal):
+    """`TERMINAL` is (closed, parked, declined), and the only other fixture for
+    this refusal is a CLOSED item -- so narrowing `if item.state in TERMINAL:`
+    to `if item.state == CLOSED:` (RW21) survived, and a DECLINED item could be
+    re-receipted and closed, silently reversing a recorded decision.
+
+    WHAT MAKES THIS FAIL: under RW21 the declined/parked item falls through to
+    the run-backed path, which reads a green `_g1_run`, reaches the GitHub
+    closer (`spy.views`/`spy.closed` become non-empty) and closes the item, so
+    `pytest.raises` reds. The refusal must also come BEFORE any `gh` call, so
+    both spy lists are pinned EMPTY, not merely short.
+    """
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    item = led.upsert(709, "a console surface", "W5-console", lane="lane:console", size=1)
+    if terminal == PARKED:
+        item.blocker, item.owner = "no runner", "operator"
+    led.transition(709, terminal, "operator: out of scope for this drain")
+    assert item.state == terminal  # the precondition the refusal is about
+    monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
+    spy = _gh(monkeypatch)
+    with pytest.raises(tick.ReceiptRefusedError, match=f"already {terminal}"):
+        tick.record_receipt_from_evidence(led, POLICY, "o/r", 709, from_pr=None, from_run="1")
+    assert item.state == terminal
+    assert item.receipt_kind is None
+    assert spy.views == [], f"a {terminal} item reached GitHub: views={spy.views}"
+    assert spy.closed == [], f"a {terminal} item was closed on GitHub: {spy.closed}"
+
+
 def test_an_item_not_in_the_ledger_is_refused(tmp_path):
     """Recording against a number the ledger has never seen would KeyError deep
     in `record_receipt`; it refuses up front instead."""

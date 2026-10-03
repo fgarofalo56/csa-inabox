@@ -3304,6 +3304,35 @@ ARMS: list[tuple[str, str, str, str]] = [
         "        led.save(if_unchanged=not args.bootstrap)",
         "        led.save(if_unchanged=True)",
     ),
+    # -- #4533: the partly-exercised members of two sets --------------------
+    #
+    # The binding check reads a UNION of two surfaces and every fixture used to
+    # name the item in the PR body, so dropping either other surface survived.
+    # RW5 deletes the terminal refusal outright; RW21 NARROWS it to `closed`,
+    # which RW5's closed-item fixture cannot see.
+    (
+        ("RW19 the binding check drops `closingIssuesReferences`, so a PR that "
+         "names the item only through the API's closing view stops binding"),
+        "tick.py",
+        "    if item not in set(closing) | set(mentioned):",
+        "    if item not in set(mentioned):",
+    ),
+    (
+        ("RW20 the binding check drops the COMMIT TRAIL, so a PR that names the "
+         "item only in a commit message stops binding - the squash shape where "
+         "`closingIssuesReferences` has read empty"),
+        "tick.py",
+        '    mentioned = gates.referenced_issues(pr.get("body") or "", messages, repo)',
+        '    mentioned = gates.referenced_issues(pr.get("body") or "", [], repo)',
+    ),
+    (
+        ("RW21 the terminal refusal narrows TERMINAL to CLOSED, so a DECLINED or "
+         "PARKED item is re-receipted and closed, silently reversing a recorded "
+         "decision"),
+        "tick.py",
+        "    if item.state in TERMINAL:",
+        "    if item.state == CLOSED:",
+    ),
     # -- #4585: gate 1's SECOND arm, the path-intersection relaxation ------
     #
     # AN EMPTY INTERSECTION IS THE ANSWER THAT LETS A MERGE THROUGH, so every
