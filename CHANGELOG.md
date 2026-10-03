@@ -25,6 +25,36 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.111.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.110.0...csa-inabox-v0.111.0) (2026-10-03)
+
+
+### Features
+
+* **console:** read the Databricks metastore assignment and guide the account-admin grant ([#4898](https://github.com/fgarofalo56/csa-inabox/issues/4898)) ([412c361](https://github.com/fgarofalo56/csa-inabox/commit/412c361e21e5d2289abd34d607d2d7a67ec93cfb))
+* **warehouse:** link Databricks SQL warehouses to their Loom item and scope AI functions by it ([#4866](https://github.com/fgarofalo56/csa-inabox/issues/4866)) ([fb12aa6](https://github.com/fgarofalo56/csa-inabox/commit/fb12aa68e0886cd92351edd26244c22d9aa92356))
+
+
+### Bug Fixes
+
+* **ci:** copilot eval gate says NOT MEASURED when the judge scored nothing ([#4865](https://github.com/fgarofalo56/csa-inabox/issues/4865)) ([2a784bb](https://github.com/fgarofalo56/csa-inabox/commit/2a784bb2185f22ad4f7d7781858ac3e74fa88d3c))
+* **ci:** make deploy-fiab-gcch scheduled runs preflight-only ([#4233](https://github.com/fgarofalo56/csa-inabox/issues/4233)) ([#4880](https://github.com/fgarofalo56/csa-inabox/issues/4880)) ([539fcdb](https://github.com/fgarofalo56/csa-inabox/commit/539fcdb6d77e7a071a605b0e538a6cc2de6737a3))
+* **console:** Access policies are managed by tenant admins; access requests and label protection derive their grant scope from recorded bindings ([#4838](https://github.com/fgarofalo56/csa-inabox/issues/4838)) ([b3c7bed](https://github.com/fgarofalo56/csa-inabox/commit/b3c7bedcfbb5ad11a57ee26a454da5296520a8fa))
+* **deploy:** resolve cosmos.containerNameCollision at plan time via ARM child resources ([#3342](https://github.com/fgarofalo56/csa-inabox/issues/3342)) ([#4896](https://github.com/fgarofalo56/csa-inabox/issues/4896)) ([1c513f2](https://github.com/fgarofalo56/csa-inabox/commit/1c513f2fd0f97ea2ee9dfa64eda54d998d166009))
+* **drain:** close five residual review findings from [#4483](https://github.com/fgarofalo56/csa-inabox/issues/4483) ([#4894](https://github.com/fgarofalo56/csa-inabox/issues/4894)) ([4f01cea](https://github.com/fgarofalo56/csa-inabox/commit/4f01cea15ff9e9d0f8429bf8e1a377dc19c719f0))
+* **drain:** one reviewer on sensitive paths, zero elsewhere on green CI ([#4883](https://github.com/fgarofalo56/csa-inabox/issues/4883)) ([b5d4fae](https://github.com/fgarofalo56/csa-inabox/commit/b5d4fae63e75771b406f90657def4f968b34b138))
+* **gov-uc-wire:** pull loom-unity as its dedicated identity only, and fail closed with the exact grant ([#4863](https://github.com/fgarofalo56/csa-inabox/issues/4863)) ([2444e41](https://github.com/fgarofalo56/csa-inabox/commit/2444e4102d040e03220498c0031a471d9b1e5e11))
+* **lakehouse:** ADLS shortcuts and browse share one container scope ([#4864](https://github.com/fgarofalo56/csa-inabox/issues/4864)) ([c7e2429](https://github.com/fgarofalo56/csa-inabox/commit/c7e242929b930b2b10a49636a9106ca3da92c999))
+* **lakehouse:** confine the SQL tab to the item's storage root ([#4822](https://github.com/fgarofalo56/csa-inabox/issues/4822)) ([708a2d6](https://github.com/fgarofalo56/csa-inabox/commit/708a2d6dc954ccf19c0b85defd4531e74782f473))
+* **sql-pool:** confine the serverless SQL pool editor and Direct Lake raw SQL to the item's scope (rebuild of [#4841](https://github.com/fgarofalo56/csa-inabox/issues/4841)) ([#4891](https://github.com/fgarofalo56/csa-inabox/issues/4891)) ([3dc5fa4](https://github.com/fgarofalo56/csa-inabox/commit/3dc5fa43cbcf3d71dc91afeb9f575d0aeba580ed))
+* **sql:** escape each string literal by the rules of the engine that parses it ([#4861](https://github.com/fgarofalo56/csa-inabox/issues/4861)) ([e60e0af](https://github.com/fgarofalo56/csa-inabox/commit/e60e0af44d3135d67ec737cc477ed5202d1ed5bc))
+
+
+### Documentation
+
+* **adr:** reject Azure Deployment Environments as brownfield adopt mechanism ([#4902](https://github.com/fgarofalo56/csa-inabox/issues/4902)) ([21d9a67](https://github.com/fgarofalo56/csa-inabox/commit/21d9a677f2414217ad441b75a519812eb674841b))
+* **prp:** per-workspace Spark compute identity (least-privilege storage scoping) ([#4847](https://github.com/fgarofalo56/csa-inabox/issues/4847)) ([a6bada1](https://github.com/fgarofalo56/csa-inabox/commit/a6bada11cb39bfadaf162fa79f4dbf0d97b39d43))
+* **setup:** correct stale brownfield-blocker claims (fitness probe has had a producer since [#3445](https://github.com/fgarofalo56/csa-inabox/issues/3445)) ([#4895](https://github.com/fgarofalo56/csa-inabox/issues/4895)) ([0edf0e7](https://github.com/fgarofalo56/csa-inabox/commit/0edf0e78c35680957e0dc2b7e99b11eee1040975))
+
 ## [0.110.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.109.0...csa-inabox-v0.110.0) (2026-10-02)
 
 
