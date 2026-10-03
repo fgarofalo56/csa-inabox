@@ -1,20 +1,13 @@
 /**
- * GHSA-v2g8-gp3r-rg4r — route-level proof that `POST /api/items/lakehouse/[id]/
- * query` authorizes the caller against the lakehouse ITEM.
+ * Route-level tests that `POST /api/items/lakehouse/[id]/query` authorizes the
+ * caller against the lakehouse ITEM and takes its database from that item.
  *
- * WHAT SHIPPED. The handler signature was
- * `POST(req, _ctx: { params: Promise<{ id: string }> })` — it accepted the route
- * context and IGNORED it, so `[id]` was never read and `getSession()` was the
- * only check. The shared Synapse Serverless endpoint is reached with the
- * Console's own identity, so any signed-in user in any tenant could execute
- * T-SQL through it by hitting any lakehouse id (or a nonexistent one). The
- * target `database` also came from the request body.
+ * The backend-contract suite for this route (`query.test.ts`) covers the
+ * contract behind the guard, and `query-item-scope.test.ts` covers the
+ * item-root confinement of the SQL text; this file covers the authorization
+ * property only.
  *
- * The existing backend-contract suite for this route (`query.test.ts`) stays
- * as-is and still passes; this file adds only the authorization property.
- *
- * MUTATION PROOF — each is tsc-valid and turns this file RED. Both executed and
- * restored:
+ * MUTATION PROOF — each is tsc-valid and turns this file RED:
  *   1. `[id]/query/route.ts` — drop `if (guard.res) return guard.res;`
  *      (destructure `guard.ctx ?? { … }`)
  *        → "a denied caller never reaches Synapse" and "an id naming no
@@ -144,15 +137,18 @@ describe('POST /api/items/lakehouse/[id]/query — caller authorization', () => 
     expect((await res.json()).database).toBe('master');
   });
 
-  it('honours a database the ITEM declares', async () => {
+  // The item's recorded database is honoured for a tenant admin only
+  // (`query-item-scope.test.ts`); this caller is not one.
+  it('a caller who is not a tenant admin runs in master even when the item records a database', async () => {
     cosmos.byId = [{ ...ITEM, state: { sqlDatabase: 'lakedb' } }];
     const res = await POST(req({ sql: 'SELECT 1' }), ctx);
     expect(res.status).toBe(200);
-    expect(synapse.serverlessTarget).toHaveBeenCalledWith('lakedb');
+    expect(synapse.serverlessTarget).toHaveBeenCalledWith('master');
+    expect(synapse.serverlessTarget).not.toHaveBeenCalledWith('lakedb');
   });
 
   it('an authorized owner still gets rows back', async () => {
-    const res = await POST(req({ sql: 'SELECT TOP 10 * FROM OPENROWSET(...) AS r' }), ctx);
+    const res = await POST(req({ sql: 'SELECT TOP 10 * FROM INFORMATION_SCHEMA.TABLES' }), ctx);
     expect(res.status).toBe(200);
     const j = await res.json();
     expect(j.ok).toBe(true);

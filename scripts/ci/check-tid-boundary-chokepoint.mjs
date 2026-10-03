@@ -5030,6 +5030,36 @@ const ADMIN_SHAPE_UNSCOPED = new Map([
     },
   ],
   [
+    'app/api/items/lakehouse/[id]/query/route.ts:POST',
+    {
+      verdict: 'ORG-WIDE',
+      requires: ['guardAdxItemRequest(', 'isTenantAdmin(', 'confineToItem('],
+      why:
+        'ORG-WIDE (function scope). Every caller is first authorized against the lakehouse item by ' +
+        'guardAdxItemRequest, which carries the workspace ladder. isTenantAdmin only decides whether ' +
+        'the SQL text also passes confineToItem (the item-root classifier); a tenant admin runs the ' +
+        'text unchanged. No workspace document is read on the admin branch.',
+    },
+  ],
+  // The three dataset routes share one shape (#4822, #4826): the item check runs first, and
+  // the admin flag only decides whether a caller with no readable dataset item may still open
+  // a Foundry data asset by name.
+  ...['app/api/items/dataset/[id]/route.ts:GET',
+    'app/api/items/dataset/[id]/preview/route.ts:GET',
+    'app/api/items/dataset/[id]/lineage/route.ts:GET'].map((key) => [
+    key,
+    {
+      verdict: 'ORG-WIDE',
+      requires: ['resolveItemAccessByOid(', 'isTenantAdmin(', 'datasetItemNotFound('],
+      why:
+        'ORG-WIDE (the admin branch only). `resolveItemAccessByOid(session, id, \'dataset\')` runs ' +
+        'first (checked by 8a-8e) and a caller with no readable dataset item who is not a tenant ' +
+        'admin is answered 404 by datasetItemNotFound before any Foundry call. The isTenantAdmin ' +
+        'test only lets a tenant admin name a Foundry data asset directly; no workspace document is ' +
+        'read on that branch. Dataset items are not yet linked to Foundry assets (#4826).',
+    },
+  ]),
+  [
     'app/api/lakehouse/permissions/route.ts:GET',
     {
       verdict: 'ORG-WIDE',

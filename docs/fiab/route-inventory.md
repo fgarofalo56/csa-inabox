@@ -15,9 +15,9 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | --- | ---: |
 | Total routes | 1698 |
 | Public (no session) | 59 |
-| Session-only | 624 |
-| Owner-scoped | 696 |
-| Admin | 319 |
+| Session-only | 621 |
+| Owner-scoped | 695 |
+| Admin | 323 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 500 |
 | Areas | 122 |
@@ -1406,9 +1406,9 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/dataflow/profile/route.ts` | POST | session-only | ● | ARM, Azure SQL, Managed Identity, Synapse SQL |
 | `items/dataflow/route.ts` | GET POST | owner-scoped |  | Cosmos |
 | `items/datamart/migrate/route.ts` | POST | owner-scoped | ● | AAS, AI Search, ARM, Azure SQL, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
-| `items/dataset/[id]/lineage/route.ts` | GET | session-only |  | AML, ARM |
-| `items/dataset/[id]/preview/route.ts` | GET | session-only | ● | ADLS, AML, ARM, Azure SQL, Azure Storage, Managed Identity, Synapse SQL |
-| `items/dataset/[id]/route.ts` | GET | session-only |  | AML, ARM |
+| `items/dataset/[id]/lineage/route.ts` | GET | admin |  | AML, ARM, Cosmos, Microsoft Graph |
+| `items/dataset/[id]/preview/route.ts` | GET | admin | ● | ADLS, AML, ARM, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
+| `items/dataset/[id]/route.ts` | GET | admin |  | AML, ARM, Cosmos, Microsoft Graph |
 | `items/dataset/browse/route.ts` | GET | session-only |  | ADLS, ARM, Azure Storage, Managed Identity |
 | `items/dataset/route.ts` | GET POST | session-only |  | AML, ARM |
 | `items/dataverse-table/[id]/business-rules/route.ts` | GET | session-only |  | Power Automate, Power Platform |
@@ -1522,7 +1522,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/lakehouse-shortcut/route.ts` | GET POST DELETE | owner-scoped | ● | ADLS, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Key Vault, Managed Identity, Microsoft Graph, Synapse SQL |
 | `items/lakehouse/[id]/abfss/route.ts` | GET | owner-scoped |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph |
 | `items/lakehouse/[id]/assist/route.ts` | — | public |  | — |
-| `items/lakehouse/[id]/query/route.ts` | POST | owner-scoped | ● | ARM, Azure SQL, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
+| `items/lakehouse/[id]/query/route.ts` | POST | admin | ● | ADLS, ARM, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
 | `items/lakehouse/route.ts` | GET | session-only |  | Cosmos |
 | `items/linked-service/route.ts` | — | public |  | — |
 | `items/logic-app/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | AI Search, ARM, Cosmos, Logic Apps, Microsoft Graph, Purview |

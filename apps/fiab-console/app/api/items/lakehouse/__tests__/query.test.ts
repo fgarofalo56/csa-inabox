@@ -9,11 +9,12 @@
  *   5. happy-path runs executeQuery against the serverless target
  *   6. backend failure → 502 with structured error
  *
- * GHSA-v2g8-gp3r-rg4r added caller authorization against the lakehouse ITEM
- * ahead of every one of these paths (the route previously took `_ctx` and
- * ignored `[id]`), so the workspace guard and the item lookup are mocked here.
- * The AUTHORIZATION property itself is covered by `ghsa-item-authz.test.ts`;
- * this file keeps its original scope — the backend contract behind the guard.
+ * The route authorizes the caller against the lakehouse ITEM ahead of every
+ * one of these paths, so the workspace guard and the item lookup are mocked
+ * here. The authorization property is covered by `ghsa-item-authz.test.ts` and
+ * the item-root confinement of the SQL text by `query-item-scope.test.ts`; this
+ * file keeps its scope — the backend contract behind the guard. Its queries
+ * name no storage location, so they pass the confinement unchanged.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
@@ -88,7 +89,7 @@ describe('POST /api/items/lakehouse/[id]/query', () => {
   it('runs executeQuery and returns rows on happy path', async () => {
     (getSession as any).mockReturnValue({ claims: { upn: 'u@x' } });
     (executeQuery as any).mockResolvedValue({ columns: ['a'], rows: [[1]], rowCount: 1, executionMs: 5, truncated: false });
-    const res = await POST(req({ sql: 'SELECT TOP 100 * FROM OPENROWSET(...) AS r' }), ctx);
+    const res = await POST(req({ sql: 'SELECT TOP 100 * FROM INFORMATION_SCHEMA.TABLES' }), ctx);
     const j = await res.json();
     expect(j.ok).toBe(true);
     expect(j.columns).toEqual(['a']);

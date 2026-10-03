@@ -72,7 +72,7 @@ Datasets are first-class citizens for: training inputs, evaluation/grounding inp
 
 The current Loom `DatasetEditor` (`apps/fiab-console/lib/editors/foundry-sub-editors.tsx` lines 660–778) is wired live to the workspace data-assets ARM via:
 - `GET /api/items/dataset?project=...` → `listDataAssets(workspaceName)` — paged list of asset containers
-- `GET /api/items/dataset/[name]?project=...` → `getDataAsset(name)` — returns container + versions array
+- `GET /api/items/dataset/[id]?project=...` → `getDataAsset(id)` — returns container + versions array. The route (and `[id]/preview`, `[id]/lineage`) first authorizes `[id]` as a Loom `dataset` item with `resolveItemAccessByOid`, as the lakehouse routes do. A caller with no readable dataset item of that id who is not a tenant admin gets a 404 with code `dataset_item_not_found`, and the editor shows a notice linking #4826 in place of an error. A tenant admin can still open a Foundry data asset by name. Loom dataset items are not yet mapped to Foundry data assets (#4826): until they are, the Foundry lookup uses `[id]` as the asset name, so a caller who can read the item but is not a tenant admin still gets Foundry's "not found" for any asset whose name differs from the item id.
 - `POST /api/items/dataset` → `createDataAsset(name, {dataType, dataUri, version, description, workspaceName})` — creates a new version under a name
 
 The current UI is a list-and-detail surface with one creation form:
