@@ -736,10 +736,12 @@ Two constraints that follow from the code and are easy to hit:
    `/admin` → *Add landing zone* (`topology=dlz-attach`) instead. That is the
    correct invariant — a second Console can never be stamped — but it means the
    wizard is not the tool for reconciling an existing estate.
-2. **A plan containing any `adopt` decision cannot be deployed from the
-   wizard today.** That is a brownfield concern; it is documented, with the
-   measurement, in
-   [Brownfield → the wizard cannot deploy an adopt plan](brownfield.md#blocking-defect-the-wizard-cannot-deploy-a-plan-containing-an-adopt-decision).
+2. **An `adopt` of five singleton services (Purview, AI Search, Databricks,
+   Cosmos, AML) still cannot be deployed from the wizard today** (updated
+   2026-10-03, #3342) — most other adoptable services now can, since PR #3445
+   wired a real fitness-verdict producer. That is a brownfield concern; it is
+   documented, with the measurement, in
+   [Brownfield → five singleton services still block](brownfield.md#partially-fixed-the-wizard-can-now-deploy-most-plans-containing-an-adopt-decision--five-singleton-services-still-block).
    A pure greenfield plan (every service `create`) is unaffected.
 
 ---
