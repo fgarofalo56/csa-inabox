@@ -48,6 +48,8 @@ const world = {
   /** oid → workspace role returned by the (mocked) ACL resolver. */
   aclRole: null as string | null,
   admins: new Set<string>([ADMIN]),
+  /** Item-level grants in the `item-permissions` container. */
+  itemGrants: [] as Array<{ id: string; itemId: string; principalType: string; principalId: string; permissionTypes: string[] }>,
 };
 
 vi.mock('@/lib/azure/cosmos-client', () => ({
@@ -83,7 +85,18 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
     },
   }),
   workspaceRolesContainer: async () => ({ items: { query: () => ({ fetchAll: async () => ({ resources: [] }) }) } }),
-  itemPermissionsContainer: async () => ({ items: { query: () => ({ fetchAll: async () => ({ resources: [] }) }) } }),
+  // Item-level grants ("Grant people access" shares), filtered by the item id
+  // the caller queries with, so a grant only answers for its own item.
+  itemPermissionsContainer: async () => ({
+    items: {
+      query: (spec: any) => ({
+        fetchAll: async () => {
+          const i = (spec?.parameters || []).find((p: any) => p.name === '@i')?.value;
+          return { resources: world.itemGrants.filter((g) => g.itemId === i) };
+        },
+      }),
+    },
+  }),
 }));
 
 vi.mock('@/lib/azure/workspace-roles-client', () => ({
@@ -122,7 +135,45 @@ beforeEach(() => {
   world.items = [itemDoc];
   world.aclRole = null;
   world.admins = new Set([ADMIN]);
+  world.itemGrants = [];
   currentSession.value = null;
+});
+
+describe('an item-level grant with no workspace role does not admit the caller', () => {
+  // The serverless SQL pool query scope (`app/api/items/synapse-serverless-sql-pool/
+  // _lib/query-scope.ts`) lists every lakehouse in the item's workspace. That is
+  // right only while this guard admits workspace-role holders alone. These run the
+  // REAL guard and the REAL item-grant resolver over one Cosmos fixture; only the
+  // containers are stood in.
+  const EDIT_GRANT = {
+    id: 'perm-1', itemId: ITEM_ID, principalType: 'user', principalId: STRANGER, permissionTypes: ['Edit'],
+  };
+
+  it('positive control: the same grant IS an item grant the resolver accepts', async () => {
+    // Without this, a malformed fixture (wrong item id, wrong principal field)
+    // would make the refusal below pass for the wrong reason.
+    world.itemGrants = [EDIT_GRANT];
+    const { resolveItemAccessByOid } = await import('@/lib/auth/item-access');
+    const session = sessionFor(STRANGER);
+    currentSession.value = session;
+    const access = await resolveItemAccessByOid(session, ITEM_ID, ITEM_TYPE);
+    expect(access).toMatchObject({ via: 'item-grant', canWrite: true });
+  });
+
+  it('the guard refuses that grantee with the route 404, on a read and on a write', async () => {
+    // Breaks if `authorizeItemWorkspace` starts admitting item-level grantees
+    // (e.g. delegates to `resolveItemAccessByOid`): both calls return null.
+    world.itemGrants = [EDIT_GRANT];
+    for (const allowReadRoles of [true, undefined]) {
+      const res = await authorize(STRANGER, { workspaceId: WS_ID, allowReadRoles });
+      expect(res, `allowReadRoles=${allowReadRoles}`).not.toBeNull();
+      expect(res!.status).toBe(404);
+      expect(await res!.json()).toEqual({ ok: false, error: NOT_FOUND });
+    }
+    // Positive half: a workspace role on the same item still admits.
+    world.aclRole = 'Member';
+    expect(await authorize(STRANGER, { workspaceId: WS_ID, allowReadRoles: true })).toBeNull();
+  });
 });
 
 describe('#2941 (a) the guard admits a tenant-admin NON-OWNER on a read', () => {
