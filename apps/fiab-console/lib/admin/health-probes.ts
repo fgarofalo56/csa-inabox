@@ -1247,6 +1247,104 @@ async function probeLoomUnityAuthz(h: ProbeHelpers): Promise<CheckResult> {
   }
 }
 
+/** The values the account-admin grant needs (mirrors the account client). */
+export interface DatabricksAccountAdminValues {
+  consoleClientId: string | null;
+  consolePrincipalId: string | null;
+  accountId: string | null;
+  accountConsoleUrl: string;
+  suggestedDisplayName: string;
+}
+
+/**
+ * PURE. The guided grant for the Console identity — every value is THIS
+ * deployment's, and a value it does not hold is named as unset rather than
+ * replaced by something that looks real.
+ *
+ * The script is the same account SCIM find-or-create + PATCH roles account_admin
+ * that scripts/csa-loom/enable-unity-catalog.sh runs; it must be run AS an
+ * existing account admin — that restriction is Databricks', and it is why the
+ * Console cannot run it for itself.
+ */
+export function databricksAccountAdminFix(v: DatabricksAccountAdminValues): { portalSteps: string[]; fixScript: string } {
+  const unset = (k: string) => `<${k} is unset in this deployment>`;
+  const app = v.consoleClientId || unset('LOOM_UAMI_CLIENT_ID');
+  const acct = v.accountId || unset('LOOM_DATABRICKS_ACCOUNT_ID');
+  return {
+    portalSteps: [
+      `Sign in to the Databricks account console as an existing account admin: ${v.accountConsoleUrl} (if the account has no admin yet, an Entra Global Administrator signs in once and Databricks makes them the first one).`,
+      'User management → Service principals → Add service principal → Microsoft Entra ID managed.',
+      `Application (client) ID: ${app} — name it ${v.suggestedDisplayName} (a label only) → Add. If it is already listed, open it instead.`,
+      'Open the service principal → Roles → turn on "Account admin".',
+      `For reference — Console UAMI object id: ${v.consolePrincipalId || unset('LOOM_UAMI_PRINCIPAL_ID')}; Databricks account id: ${acct}.`,
+      'Back here, press Re-check. The Console re-reads the account API as itself; this clears only when that read succeeds.',
+    ],
+    fixScript: [
+      '# Run as an EXISTING Databricks account admin (az login as that person first).',
+      `ACCOUNT_ID="${acct}"`,
+      `APP_ID="${app}"`,
+      `API="${v.accountConsoleUrl}/api/2.0/accounts/\${ACCOUNT_ID}"`,
+      'TOKEN="$(az account get-access-token --resource 2ff814a6-3304-4ab8-85cb-cd0e6f879c1d --query accessToken -o tsv)"',
+      'auth=(-H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json")',
+      'SP_ID="$(curl -sS "${auth[@]}" "${API}/scim/v2/ServicePrincipals?filter=applicationId%20eq%20%22${APP_ID}%22" | jq -r \'.Resources[0].id // empty\')"',
+      'if [ -z "$SP_ID" ]; then',
+      `  SP_ID="$(curl -sS "\${auth[@]}" -X POST "\${API}/scim/v2/ServicePrincipals" -d "$(jq -n --arg a "$APP_ID" '{schemas:["urn:ietf:params:scim:schemas:core:2.0:ServicePrincipal"], applicationId:$a, displayName:"${v.suggestedDisplayName}", active:true}')" | jq -r '.id // empty')"`,
+      'fi',
+      'if [ -n "$SP_ID" ]; then',
+      '  curl -sS "${auth[@]}" -X PATCH "${API}/scim/v2/ServicePrincipals/${SP_ID}" -d \'{"schemas":["urn:ietf:params:scim:api:messages:2.0:PatchOp"],"Operations":[{"op":"add","path":"roles","value":[{"value":"account_admin"}]}]}\'',
+      'else',
+      '  echo "Could not find or create the service principal - is this login an account admin?" >&2',
+      'fi',
+    ].join('\n'),
+  };
+}
+
+/** Exported for its unit test (lib/admin/__tests__/databricks-account-admin-probe.test.ts). */
+export async function probeDatabricksAccountAdmin(h: ProbeHelpers): Promise<CheckResult> {
+  const base = {
+    id: 'probe-databricks-account-admin', category: 'azure-services' as const,
+    title: 'Databricks account admin — Console identity can read the Unity Catalog account plane', severity: 'recommended' as const,
+  };
+  const m = await import('@/lib/azure/unity-catalog-account-client');
+  const values = m.consoleAccountAdminValues();
+  const who = `the Console identity (client id ${values.consoleClientId || 'unset'})`;
+  let r: Awaited<ReturnType<typeof m.probeConsoleAccountAdmin>>;
+  try {
+    r = await withTimeout(m.probeConsoleAccountAdmin(), 8000);
+  } catch (e: any) {
+    r = { state: 'inconclusive', status: 0, message: e?.message || String(e) };
+  }
+  if (r.state === 'not-configured') {
+    return {
+      ...base, status: 'warn',
+      detail: 'LOOM_DATABRICKS_ACCOUNT_ID is unset, so the Databricks account API was not called — metastore read / assign and the brownfield Databricks metastore check cannot run.',
+      remediation: 'Set LOOM_DATABRICKS_ACCOUNT_ID to the Databricks account id (account console → your user menu), then make the Console identity an account admin.',
+      redeploy: true,
+      ...h.envVarFix(['LOOM_DATABRICKS_ACCOUNT_ID']),
+    };
+  }
+  if (r.state === 'admin') {
+    return {
+      ...base, status: 'pass',
+      detail: `${who} is a Databricks account admin on account ${values.accountId} — GET /metastores at ${values.accountConsoleUrl} answered with ${r.metastoreCount} metastore(s).`,
+    };
+  }
+  if (r.state === 'not-admin') {
+    return {
+      ...base, status: 'fail',
+      detail: `The Databricks account API refused ${who} on account ${values.accountId} (HTTP ${r.status}: ${r.message}). It is not an account admin, so Unity Catalog metastores cannot be read or assigned from Loom.`,
+      remediation: 'An existing Databricks account admin must add the Console identity to the account and turn on its Account admin role. Databricks allows only an account admin to grant it, so the Console cannot do this for itself. The steps below carry this deployment\'s exact values.',
+      docs: 'https://learn.microsoft.com/azure/databricks/admin/users-groups/manage-service-principals',
+      ...databricksAccountAdminFix(values),
+    };
+  }
+  return {
+    ...base, status: 'warn',
+    detail: `The Databricks account API read as ${who} did not establish anything (${r.status ? `HTTP ${r.status}: ` : ''}${r.message}). Whether it is an account admin is unknown.`,
+    remediation: 'Confirm the Console can reach the Databricks account host and acquire a Databricks token for its identity, then re-check. This result does not say the role is missing.',
+  };
+}
+
 /** Run every extended probe in parallel (each individually time-bounded). */export async function runExtraProbes(h: ProbeHelpers): Promise<CheckResult[]> {
   return Promise.all([
     probeAdls(h),
@@ -1290,6 +1388,9 @@ async function probeLoomUnityAuthz(h: ProbeHelpers): Promise<CheckResult> {
     probeDrRestorePosture(h),
     // LU-2 — Loom Unity anonymous-access proof (an actual unauthenticated request).
     probeLoomUnityAuthz(h),
+    // #3342 — is the Console identity a Databricks account admin? The live
+    // half of the svc-databricks-account-admin gate.
+    probeDatabricksAccountAdmin(h),
     // #3384 — AI Search indexer health. A scheduled indexer that fails every run
     // while reporting `status: running` had NO signal anywhere before this.
     probeSearchIndexers(h),
