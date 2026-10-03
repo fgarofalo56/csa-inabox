@@ -53,6 +53,12 @@ export type Remediation =
       command?: string;
       portalUrl?: string;
       role?: { name: string; scope: string };
+      /**
+       * The gate-registry id whose Fix-it carries this action (ux-baseline G2).
+       * Set when the action is a registered gate, so the surface mounts the
+       * shared HonestGate rather than printing a paragraph.
+       */
+      gateId?: string;
     }
   /** Nothing can fix it on this resource. Names the alternative. */
   | { kind: 'not-remediable'; description: string; alternative: string };
@@ -400,6 +406,82 @@ function unknownProp(id: string, label: string, name: string, propName: string, 
   };
 }
 
+/** The gate-registry entry that owns the Databricks account-admin grant. */
+export const DATABRICKS_ACCOUNT_ADMIN_GATE = 'svc-databricks-account-admin';
+
+/**
+ * Why the metastore assignment could not be read, as the probe recorded it
+ * (`fitness-probe.ts`). Carried on `properties.metastoreReadBlocked`.
+ */
+export interface MetastoreReadBlock {
+  reason: 'account-id-unset' | 'not-account-admin' | 'no-workspace-id' | 'inconclusive';
+  /** What the probe observed — becomes `established`, verbatim. */
+  detail: string;
+  consoleClientId?: string | null;
+  consolePrincipalId?: string | null;
+  accountId?: string | null;
+  accountConsoleUrl?: string;
+}
+
+/**
+ * The metastore assignment lives on the Databricks ACCOUNT plane and only an
+ * account admin can read it. The generic `unknownProp` remediation — "grant the
+ * scanning identity Reader on this resource" — is FALSE for this check: no Azure
+ * role on the workspace exposes the assignment, so following it could never
+ * clear the blocker (deploy-integrity R7). This names the grant that does, with
+ * the values the probe read from this deployment (#3342).
+ */
+function metastoreUnreadable(def: AdoptableServiceDef, s: FitnessSubject): FitnessCheck {
+  const b = prop(s, 'metastoreReadBlocked') as MetastoreReadBlock | undefined;
+  const id = 'databricks.metastoreAssignment';
+  const what = `Loom could not read the Unity Catalog metastore assignment of ${def.label} "${s.name}"`;
+  const why =
+    'Metastore assignment is one per account per region and reassignment destroys the existing Unity Catalog objects, so Loom must know the current assignment before it touches the workspace.';
+  const shown = (x?: string | null) => x || '(not set in this deployment)';
+
+  if (b?.reason === 'account-id-unset') {
+    return {
+      id, verdict: 'unknown', what, why,
+      established: b.detail,
+      remediation: {
+        kind: 'operator-action',
+        gateId: DATABRICKS_ACCOUNT_ADMIN_GATE,
+        description:
+          'Set LOOM_DATABRICKS_ACCOUNT_ID to your Databricks account id (shown in the account console under your user menu) with Fix it, make the Console identity a Databricks account admin, then re-check — the assignment is re-read live.',
+        portalUrl: b.accountConsoleUrl,
+      },
+    };
+  }
+  if (b?.reason === 'not-account-admin') {
+    return {
+      id, verdict: 'unknown', what, why,
+      established: b.detail,
+      remediation: {
+        kind: 'operator-action',
+        gateId: DATABRICKS_ACCOUNT_ADMIN_GATE,
+        description:
+          `A Databricks account admin must give the Console identity the Account admin role. In the account console: User management → Service principals → Add service principal → Microsoft Entra ID managed → application (client) id ${shown(b.consoleClientId)} → Add; then open it → Roles → turn on Account admin. ` +
+          `Console identity object id ${shown(b.consolePrincipalId)}; Databricks account ${shown(b.accountId)}. Then re-check — the assignment is re-read live, no acknowledgement is trusted.`,
+        portalUrl: b.accountConsoleUrl,
+        role: { name: 'Databricks account admin', scope: `Databricks account ${shown(b.accountId)}` },
+      },
+    };
+  }
+  return {
+    id, verdict: 'unknown', what, why,
+    established:
+      b?.detail ??
+      'the metastore assignment was absent from the discovered resource — this is "not read", which is a different fact from "unassigned"',
+    remediation: {
+      kind: 'operator-action',
+      gateId: DATABRICKS_ACCOUNT_ADMIN_GATE,
+      description:
+        'The assignment is read from the Databricks account API as the Console identity, which must be a Databricks account admin. Resolve what the observation above names, then re-check.',
+      portalUrl: b?.accountConsoleUrl,
+    },
+  };
+}
+
 const FAMILY_CHECKS: Record<string, FamilyCheckFn> = {
   // --- Purview -------------------------------------------------------------
   'purview.sameTenant': (def, s, ctx) => {
@@ -581,10 +663,7 @@ const FAMILY_CHECKS: Record<string, FamilyCheckFn> = {
   'databricks.metastoreAssignment': (def, s) => {
     const v = prop(s, 'metastoreId');
     const loomMetastore = prop(s, 'loomMetastoreId');
-    if (v === undefined) {
-      return unknownProp('databricks.metastoreAssignment', def.label, s.name, 'the Unity Catalog metastore assignment',
-        'Metastore assignment is one per account per region and reassignment destroys the existing Unity Catalog objects, so Loom must know the current assignment before it touches the workspace.');
-    }
+    if (v === undefined) return metastoreUnreadable(def, s);
     const unassigned = v === null || v === '';
     const isLoom = !!loomMetastore && v === loomMetastore;
     const ok = unassigned || isLoom;

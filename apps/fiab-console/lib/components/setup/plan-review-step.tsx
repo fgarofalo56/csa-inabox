@@ -49,6 +49,7 @@ import {
 import {
   BuildingMultiple24Regular,
   CheckmarkCircle16Regular,
+  Open16Regular,
   Sparkle24Regular,
   Warning16Filled,
 } from '@fluentui/react-icons';
@@ -61,6 +62,8 @@ import {
   type DeploymentPlan,
 } from '@/lib/deploy/plan-model';
 import type { ServiceScanRow } from '@/lib/deploy/plan-builder';
+import type { FitnessCheck } from '@/lib/deploy/fitness';
+import { HonestGate } from '@/lib/components/shared/honest-gate';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', rowGap: tokens.spacingVerticalL, minWidth: 0 },
@@ -92,7 +95,56 @@ const useStyles = makeStyles({
   mutations: { margin: 0, paddingLeft: tokens.spacingHorizontalL },
   truncate: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 },
   hash: { fontFamily: tokens.fontFamilyMonospace },
+  action: { display: 'flex', flexDirection: 'column', rowGap: tokens.spacingVerticalXS, marginTop: tokens.spacingVerticalXS, minWidth: 0 },
+  actionLinks: { display: 'flex', columnGap: tokens.spacingHorizontalS, flexWrap: 'wrap', minWidth: 0 },
 });
+
+/**
+ * An `operator-action` remediation, rendered (#3342). Until this, the wizard
+ * printed only `platform-will-fix` remediations, so an operator facing an
+ * `unknown` blocker saw what was wrong but never what to DO — the description,
+ * the place to do it and the role were computed and then dropped.
+ *
+ * A registered gate (`gateId`) mounts the shared HonestGate: its Fix-it opens
+ * the registry dialog, and its Recheck re-runs validation, which re-reads the
+ * resource live — the blocker clears on the measurement, never on a click.
+ */
+function OperatorAction({ check, onRecheck }: { check: FitnessCheck; onRecheck?: () => Promise<void> | void }) {
+  const styles = useStyles();
+  const r = check.remediation;
+  if (r?.kind !== 'operator-action') return null;
+  let host = '';
+  try { host = r.portalUrl ? new URL(r.portalUrl).host : ''; } catch { host = ''; }
+  const links = host ? (
+    <div className={styles.actionLinks}>
+      <Button as="a" size="small" appearance="secondary" icon={<Open16Regular />} href={r.portalUrl} target="_blank" rel="noopener noreferrer">
+        Open {host}
+      </Button>
+    </div>
+  ) : null;
+  if (r.gateId) {
+    return (
+      <div className={styles.action}>
+        <HonestGate
+          gateId={r.gateId}
+          surface="Deploy wizard"
+          detail={r.description}
+          classified={r.role ? { kind: 'permission', error: check.established, remediation: r.description } : undefined}
+          onResolved={onRecheck ? () => void onRecheck() : undefined}
+        />
+        {links}
+      </div>
+    );
+  }
+  return (
+    <div className={styles.action}>
+      <Caption1>To fix: {r.description}</Caption1>
+      {r.role && <Caption1>Role: {r.role.name} on {r.role.scope}</Caption1>}
+      {r.command && <Caption1 className={styles.hash}>{r.command}</Caption1>}
+      {links}
+    </div>
+  );
+}
 
 export function PlanReviewStep({
   plan,
@@ -114,12 +166,18 @@ export function PlanReviewStep({
   const byKey = useMemo(() => new Map(rows.map((r) => [r.service.key, r])), [rows]);
 
   /**
-   * Only offer the Fix-it when at least one adopt decision has NO verdict yet.
-   * A plan blocked because a resource was measured and found `unusable` is not
-   * fixed by measuring it again, and offering the button there would imply it
-   * might be.
+   * Offer the Fix-it when at least one adopt decision has NO verdict yet, or an
+   * `unknown` one. A plan blocked because a resource was measured and found
+   * `unusable` is not fixed by measuring it again, and offering the button there
+   * would imply it might be. An `unknown` IS fixed by measuring again once the
+   * operator has done what it names (#3342: the Databricks account-admin grant)
+   * — without this the re-read that clears it had no button.
    */
   const needsValidation = useMemo(
+    () => Object.values(plan.services).some((d) => d.mode === 'adopt' && (!d.fitness || d.fitness.verdict === 'unknown')),
+    [plan.services],
+  );
+  const hasUnverified = useMemo(
     () => Object.values(plan.services).some((d) => d.mode === 'adopt' && !d.fitness),
     [plan.services],
   );
@@ -191,7 +249,7 @@ export function PlanReviewStep({
                 icon={validating ? <Spinner size="tiny" /> : <CheckmarkCircle16Regular />}
                 onClick={() => void onValidate()}
               >
-                {validating ? 'Validating…' : 'Validate these resources'}
+                {validating ? 'Validating…' : hasUnverified ? 'Validate these resources' : 'Re-check these resources'}
               </Button>
             </MessageBarActions>
           )}
@@ -264,6 +322,9 @@ export function PlanReviewStep({
                             <b>{c.what}</b> — {c.why} (observed: {c.established})
                             {c.remediation?.kind === 'platform-will-fix' && ` Loom will fix this: ${c.remediation.description}`}
                           </Caption1>
+                          {c.remediation?.kind === 'operator-action' && (
+                            <OperatorAction check={c} onRecheck={onValidate} />
+                          )}
                         </li>
                       ))}
                   </ul>
