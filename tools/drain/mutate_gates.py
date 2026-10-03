@@ -407,8 +407,8 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "T7 --allow-shrink switches off the whole guard, not just the retention clause",
         "tick.py",
-        "    guard_refresh(led, live, allow_shrink=args.allow_shrink)",
-        "    if not args.allow_shrink:\n        guard_refresh(led, live)",
+        "    guard_refresh(led, live, allow_shrink=args.allow_shrink, allow_arrivals=args.allow_arrivals)",
+        "    if not args.allow_shrink:\n        guard_refresh(led, live, allow_arrivals=args.allow_arrivals)",
     ),
     (
         "T8 the reaper returns TERMINAL items to ready, undoing every receipt",
@@ -419,8 +419,8 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "T9 main() stops calling the refresh guard at all",
         "tick.py",
-        "    guard_refresh(led, live, allow_shrink=args.allow_shrink)",
-        "    pass  # guard_refresh(led, live, allow_shrink=args.allow_shrink)",
+        "    guard_refresh(led, live, allow_shrink=args.allow_shrink, allow_arrivals=args.allow_arrivals)",
+        "    pass  # guard_refresh(led, live, allow_shrink=args.allow_shrink, allow_arrivals=args.allow_arrivals)",
     ),
     # -- #4545: the ledger close must REACH GITHUB -------------------------
     #
@@ -1560,7 +1560,7 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "T15 a FLOOD of arrivals is ingested (a drained ledger meets a foreign repo)",
         "tick.py",
-        "    if len(arrivals) > max(GUARD_FLOOR, len(known)):",
+        "    if len(arrivals) > max(GUARD_FLOOR, len(known)) and not allow_arrivals:",
         "    if False:",
     ),
     (

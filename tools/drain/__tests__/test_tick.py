@@ -132,8 +132,11 @@ def test_negative_control_a_flood_of_arrivals_is_refused_on_magnitude(tmp_path):
     with pytest.raises(SystemExit, match="floods that size"):
         tick.guard_refresh(led, _live(range(90000, 90900)))
     # ...and the legitimate end-game still passes. Without this control the
-    # bound above could simply be "refuse everything".
-    tick.guard_refresh(led, _live(range(90000, 90006)))
+    # bound above could simply be "refuse everything". Numbered just above the
+    # ceiling (1039), not at the unrelated 90000+ range the flood above uses --
+    # the GAP bound (#4485 finding 1) would otherwise refuse six arrivals that
+    # far from the ceiling too, and this assertion is about MAGNITUDE alone.
+    tick.guard_refresh(led, _live(range(1040, 1046)))
 
 
 def test_negative_control_new_arrivals_do_not_halt_a_nearly_drained_run(tmp_path):
@@ -147,7 +150,11 @@ def test_negative_control_new_arrivals_do_not_halt_a_nearly_drained_run(tmp_path
     for n in range(1000, 1040):
         led.record_receipt(n, "ci-green", "green at sha")
         led.transition(n, CLOSED)
-    tick.guard_refresh(led, _live(range(5000, 5006)))  # fully drained, 6 brand-new
+    # Numbered just above the ceiling (1039) -- genuinely new arrivals, not the
+    # unrelated 90000+ range this file uses for FOREIGN reads. The GAP bound
+    # (#4485 finding 1) would otherwise refuse six arrivals that far from the
+    # ceiling, which is the exact false positive it exists to avoid.
+    tick.guard_refresh(led, _live(range(1040, 1046)))  # fully drained, 6 brand-new
 
     led2 = _led(tmp_path, n=40)
     for n in range(1000, 1036):
@@ -183,6 +190,78 @@ def test_negative_control_allow_shrink_does_not_disable_the_other_two_refusals(t
     with pytest.raises(SystemExit, match="ZERO open issues"):
         tick.guard_refresh(led, [], allow_shrink=True)
     tick.guard_refresh(led, _live(range(1000, 1010)), allow_shrink=True)  # retention: suppressed
+
+
+def test_negative_control_a_foreign_read_smaller_than_the_ledger_still_refuses_on_the_gap(tmp_path):
+    """#4485 finding 1. MAGNITUDE alone (`len(arrivals) > max(GUARD_FLOOR,
+    len(known))`) only refuses an arrival set LARGER than the whole ledger --
+    a terminal ledger big enough that 250 foreign issues stay BELOW that count
+    (300 known >= 250 foreign) passed with no refusal at all before this bound
+    existed. WHAT MAKES THIS FAIL: delete the GAP check (the `if arrivals and
+    not allow_arrivals:` block) -- this call then returns normally instead of
+    raising, because MAGNITUDE alone (250 !> 300) never fires either."""
+    led = _led(tmp_path, n=300)
+    for n in range(1000, 1300):
+        led.record_receipt(n, "ci-green", "green at sha")
+        led.transition(n, CLOSED)
+    assert led.drained()
+    assert not (max(10, 300) < 250), "fixture must stay BELOW the magnitude bound"
+    with pytest.raises(SystemExit, match="implausibly far"):
+        tick.guard_refresh(led, _live(range(90000, 90250)))
+
+
+def test_a_single_arrival_right_at_the_gap_ceiling_passes(tmp_path):
+    """Boundary for the GAP bound alone, isolated from MAGNITUDE (a single
+    arrival never trips the count check) and from OVERLAP (no candidates exist
+    to measure, since every live number is above the ceiling). Exactly
+    `MAX_ARRIVAL_GAP` above the ceiling (1039, forty items starting at 1000)
+    must still pass -- one more must refuse (next test). WHAT MAKES THIS FAIL:
+    change `>` to `>=` in the GAP check -- this exact boundary value then
+    refuses instead of passing."""
+    led = _led(tmp_path, n=40)
+    for n in range(1000, 1040):
+        led.record_receipt(n, "ci-green", "green at sha")
+        led.transition(n, CLOSED)
+    assert led.drained()
+    tick.guard_refresh(led, _live([1039 + tick.MAX_ARRIVAL_GAP]))
+
+
+def test_negative_control_a_single_arrival_one_past_the_gap_ceiling_refuses(tmp_path):
+    """The other side of the same boundary: one number further and the
+    identical single-item arrival set refuses instead of passing. WHAT MAKES
+    THIS FAIL: change `>` to `>=` in the GAP check -- this value then PASSES
+    (since `>=` and `>` disagree only at one point, the previous test's) --
+    together the two tests pin the exact comparison operator."""
+    led = _led(tmp_path, n=40)
+    for n in range(1000, 1040):
+        led.record_receipt(n, "ci-green", "green at sha")
+        led.transition(n, CLOSED)
+    with pytest.raises(SystemExit, match="implausibly far"):
+        tick.guard_refresh(led, _live([1040 + tick.MAX_ARRIVAL_GAP]))
+
+
+def test_allow_arrivals_suppresses_the_magnitude_and_gap_refusals_only(tmp_path):
+    """#4485 finding 2's non-destructive escape. `--allow-arrivals` lifts
+    MAGNITUDE and GAP for a genuine flood, but OVERLAP, the zero-issue
+    refusal, and the HARD retention floor are untouched -- it is not
+    `--allow-shrink`'s whole-guard bypass repeated under a new name. WHAT
+    MAKES THIS FAIL: thread `allow_arrivals` into the whole function instead
+    of its two clauses -- the two `pytest.raises` blocks below then stop
+    raising too."""
+    led = _led(tmp_path, n=40)
+    for n in range(1000, 1040):
+        led.record_receipt(n, "ci-green", "green at sha")
+        led.transition(n, CLOSED)
+    tick.guard_refresh(led, _live(range(90000, 90900)), allow_arrivals=True)  # MAGNITUDE lifted
+    tick.guard_refresh(  # GAP lifted
+        led, _live([1040 + tick.MAX_ARRIVAL_GAP]), allow_arrivals=True
+    )
+
+    not_terminal = _led(tmp_path)
+    with pytest.raises(SystemExit, match="different population"):
+        tick.guard_refresh(not_terminal, _live(range(500, 530)), allow_arrivals=True)
+    with pytest.raises(SystemExit, match="ZERO open issues"):
+        tick.guard_refresh(not_terminal, [], allow_arrivals=True)
 
 
 def test_the_guard_stays_quiet_on_a_small_ledger(tmp_path):
