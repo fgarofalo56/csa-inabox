@@ -26,6 +26,9 @@ vi.mock('@/lib/auth/feature-gate', async () => ({
 }));
 
 const POOL = { id: 'pool-1', itemType: 'synapse-serverless-sql-pool', workspaceId: 'ws-1', displayName: 'P', state: {} };
+const DEDICATED_POOL = { id: 'dp-1', itemType: 'synapse-dedicated-sql-pool', workspaceId: 'ws-1', displayName: 'D', state: {} };
+const WAREHOUSE = { id: 'wh-1', itemType: 'warehouse', workspaceId: 'ws-1', displayName: 'W', state: {} };
+const ITEMS = [POOL, DEDICATED_POOL, WAREHOUSE];
 vi.mock('@/lib/azure/cosmos-client', () => ({
   itemsContainer: async () => ({
     items: {
@@ -38,8 +41,8 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
             const inWorkspace = opts?.partitionKey === 'ws-1' && params['@w'] === 'ws-1';
             return { resources: inWorkspace ? [{ id: 'lh-1' }] : [] };
           }
-          const hit = params['@id'] === POOL.id && params['@t'] === POOL.itemType;
-          return { resources: hit ? [POOL] : [] };
+          const hit = ITEMS.find((it) => params['@id'] === it.id && params['@t'] === it.itemType);
+          return { resources: hit ? [hit] : [] };
         },
       }),
     },
@@ -70,7 +73,12 @@ vi.mock('@/lib/azure/synapse-pool-arm', () => ({ getPoolState: vi.fn(async () =>
 const access = vi.hoisted(() => ({ resolveAccessMode: vi.fn(async (..._a: any[]) => 'service') }));
 vi.mock('@/lib/azure/sql-access-mode', () => access);
 vi.mock('@/lib/azure/sql-user-token-store', () => ({ getUserSqlToken: vi.fn(async () => 'user-token') }));
-vi.mock('@/lib/azure/databricks-client', () => ({ executeStatement: vi.fn(), getWarehouse: vi.fn() }));
+vi.mock('@/lib/azure/databricks-client', () => ({
+  executeStatement: vi.fn(async (..._a: any[]) => ({
+    columns: ['a'], rows: [[1]], rowCount: 1, executionMs: 3, truncated: false,
+  })),
+  getWarehouse: vi.fn(async (..._a: any[]) => ({ state: 'RUNNING' })),
+}));
 
 import { POST } from '@/app/api/items/[type]/[id]/visual-query/route';
 import { compileGraph, type VqGraph } from '@/lib/editors/visual-query-compiler';
@@ -196,10 +204,52 @@ describe('visual query on the serverless SQL pool item', () => {
     expect(storage.resolveLakehouseStorage).not.toHaveBeenCalled();
   });
 
-  it('the dedicated engine types are unchanged: no item guard and no classifier', async () => {
-    const res = await POST(req({ describe: { schema: 'sys', table: 'tables' } }), ctx('synapse-dedicated-sql-pool', 'dp-1'));
+  it('the databricks-sql-warehouse engine is unchanged: no item guard', async () => {
+    // Not DEDICATED_ENGINES, and not read via Cosmos by this route — confirms
+    // only the two dedicated-pool engines gained a guard, not every non-serverless type.
+    const res = await POST(
+      req({ describe: { table: 'orders' }, warehouseId: 'wh-dbx-1' }),
+      ctx('databricks-sql-warehouse', 'dbx-1'),
+    );
     expect(res.status).toBe(200);
     expect(guard.authorizeItemWorkspace).not.toHaveBeenCalled();
+  });
+});
+
+describe('visual query on the dedicated-pool engines (warehouse, synapse-dedicated-sql-pool)', () => {
+  it.each([
+    ['warehouse', WAREHOUSE],
+    ['synapse-dedicated-sql-pool', DEDICATED_POOL],
+  ])('%s: a caller the item guard refuses gets its 404 and nothing runs (breaks if the route skips the guard)', async (type, item) => {
+    guard.authorizeItemWorkspace.mockResolvedValue(
+      Response.json({ ok: false, error: 'item not found' }, { status: 404 }) as any,
+    );
+    const res = await POST(req({ describe: { schema: 'sys', table: 'tables' } }), ctx(type, item.id));
+    expect(res.status).toBe(404);
+    expect(ranAnything()).toBe(0);
+    expect(guard.authorizeItemWorkspace.mock.calls[0][1]).toMatchObject({ itemId: item.id, itemType: type });
+    // Write-scoped: a Sink-capable statement runs here with no classifier, so
+    // this guard must never admit read-only roles the way the serverless one
+    // does. Breaks if a future edit passes `allowReadRoles: true`.
+    expect(guard.authorizeItemWorkspace.mock.calls[0][1].allowReadRoles).toBeUndefined();
+  });
+
+  it.each([
+    ['warehouse', WAREHOUSE],
+    ['synapse-dedicated-sql-pool', DEDICATED_POOL],
+  ])('%s: an id naming no item is a 404 and nothing runs (breaks if the route trusts the id with no Cosmos record)', async (type) => {
+    const res = await POST(req({ describe: { schema: 'sys', table: 'tables' } }), ctx(type, 'no-such-id'));
+    expect(res.status).toBe(404);
+    expect(ranAnything()).toBe(0);
+  });
+
+  it.each([
+    ['warehouse', WAREHOUSE],
+    ['synapse-dedicated-sql-pool', DEDICATED_POOL],
+  ])('%s: an authorized caller on the real item runs the compiled SQL unchanged (positive half; this PR\'s GHSA-v2g8-gp3r-rg4r fix)', async (type, item) => {
+    const res = await POST(req({ describe: { schema: 'sys', table: 'tables' } }), ctx(type, item.id));
+    expect(res.status).toBe(200);
+    expect(guard.authorizeItemWorkspace).toHaveBeenCalledTimes(1);
     expect(synapse.executeQuery.mock.calls[0][1]).toBe('SELECT TOP 0 * FROM [sys].[tables]');
   });
 });

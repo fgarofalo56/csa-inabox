@@ -42,7 +42,25 @@
  *     Its refusals are worded for a visual query (`VISUAL_QUERY_SURFACE`): a
  *     Sink's `INTO` / `CREATE` is the compiler's, so they name the Sink and the
  *     targets that run one, with no hint to bracket `INTO`.
- * The other engine types are unchanged by this.
+ *
+ * ITEM SCOPE FOR `warehouse` / `synapse-dedicated-sql-pool` — the same guard
+ * their own query and cancel routes run (`guardSynapseItemRequest` in
+ * `../../_lib/synapse-item-scope.ts`): the caller is authorized on the route
+ * ITEM (owner, tenant admin, or shared-ACL member of its workspace) before the
+ * body is read, 404 for an id naming no item of that type. Write-scoped — no
+ * `allowReadRoles` — because the compiled graph can end in a Sink
+ * (`SELECT … INTO` / `CREATE OR ALTER VIEW`), so this is not a read-only path
+ * even though most graphs compile to a SELECT, and there is no classifier here
+ * to confine a non-admin to read-only text the way the serverless path does.
+ * Before this, the route ran these two engines on `withSession` alone: any
+ * signed-in caller could run a Sink-capable generated statement against ANY
+ * warehouse / dedicated-pool id on the one shared dedicated pool — the same
+ * GHSA-v2g8-gp3r-rg4r shape the sibling query/cancel routes close, left open
+ * here. This closes the same floor they do (not a per-table bound — see
+ * `../../_lib/synapse-item-scope.ts` for what remains open on the shared pool).
+ * The `database` this route reads is never used on the dedicated path (unlike
+ * the query route's Layer 2), so no re-point exists here to bind.
+ * The databricks-sql-warehouse engine is unchanged by this.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -70,6 +88,7 @@ import {
   SQL_POOL_READER_POOL_PREFIX,
 } from '@/app/api/items/synapse-serverless-sql-pool/_lib/query-scope';
 import { VISUAL_QUERY_SURFACE } from '@/app/api/items/synapse-serverless-sql-pool/_lib/visual-query-surface';
+import { guardSynapseItemRequest } from '@/app/api/items/_lib/synapse-item-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -121,6 +140,19 @@ export const POST = withSession<{ type: string; id: string }>(async (req: NextRe
     serverlessItem = guard.ctx.item;
   }
   const admin = serverless && isTenantAdmin(session);
+
+  // The dedicated-pool engines (warehouse, synapse-dedicated-sql-pool): the
+  // same item authorization their own query/cancel routes run (see the
+  // header). Write-scoped (no `allowReadRoles`) — the compiled graph can end
+  // in a Sink.
+  if (DEDICATED_ENGINES.has(type)) {
+    const guard = await guardSynapseItemRequest({
+      itemId: id,
+      itemType: type,
+      notFound: type === 'warehouse' ? 'warehouse not found' : 'dedicated SQL pool not found',
+    });
+    if (guard.res) return guard.res;
+  }
 
   const body = await req.json().catch(() => ({} as any));
   const dialect: SqlDialect = type === 'databricks-sql-warehouse' ? 'sparksql' : 'tsql';
