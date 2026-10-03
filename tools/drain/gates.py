@@ -1145,12 +1145,12 @@ def parse_verdicts(
         blocking_mention = any(
             any(t in ln for t in BLOCKING_TOKENS)
             and not all(t in full for t in VERDICT_TOKENS)  # not the template line
-            for ln, full in zip(lines, full_lines)
+            for ln, full in zip(lines, full_lines, strict=True)
         )
         mentions_token = any(
             any(t in ln for t in VERDICT_TOKENS)
             and not all(t in full for t in VERDICT_TOKENS)
-            for ln, full in zip(lines, full_lines)
+            for ln, full in zip(lines, full_lines, strict=True)
         )
         # A marker line that is CITED, or one that sits past the window. Neither
         # is a decision, and both used to vanish without a trace -- `live=[]`,
@@ -1297,30 +1297,30 @@ def parse_verdicts(
                 (has_marker, NEAR_NO_TOKEN,
                  f"marker line, but no token on it in body[:{window}]"),
                 (blocking_mention, NEAR_NO_MARKER,
-                 f"a BLOCKING token appears in body[:{window}] with no line "
-                 "announcing a verdict - formatting never reduces a block, so "
-                 "this blocks. Announce it on the comment's FIRST line, or "
-                 "reference the token instead of writing it"),
+                 (f"a BLOCKING token appears in body[:{window}] with no line "
+                  "announcing a verdict - formatting never reduces a block, so "
+                  "this blocks. Announce it on the comment's FIRST line, or "
+                  "reference the token instead of writing it")),
                 (bool(cited), NEAR_CITED,
-                 f"{len(cited)} verdict header(s) CITED here (quoted, fenced, "
-                 "indented or collapsed) - a citation is not a decision, but it "
-                 "is recorded so a relayed verdict is not invisible"),
+                 (f"{len(cited)} verdict header(s) CITED here (quoted, fenced, "
+                  "indented or collapsed) - a citation is not a decision, but it "
+                  "is recorded so a relayed verdict is not invisible")),
                 (out_of_window, NEAR_NOT_FIRST,
-                 "a verdict header appears in prose but is NOT the comment's "
-                 f"first line (it may also be below body[:{window}]) - a verdict "
-                 "is announced first or it does not register"),
+                 ("a verdict header appears in prose but is NOT the comment's "
+                  f"first line (it may also be below body[:{window}]) - a verdict "
+                  "is announced first or it does not register")),
                 (blocking_below, NEAR_NOT_FIRST,
-                 f"a BLOCKING token appears BELOW body[:{window}] in a comment "
-                 "that announces no verdict - it does not block (the window "
-                 "bounds both directions) but it is recorded rather than dropped"),
+                 (f"a BLOCKING token appears BELOW body[:{window}] in a comment "
+                  "that announces no verdict - it does not block (the window "
+                  "bounds both directions) but it is recorded rather than dropped")),
                 (mentions_token, NEAR_NO_MARKER,
-                 f"a verdict token appears in body[:{window}] but no line announces "
-                 f"it - the announcing line must be the comment's FIRST line and "
-                 f"begin with one of {MARKERS}"),
+                 (f"a verdict token appears in body[:{window}] but no line announces "
+                  f"it - the announcing line must be the comment's FIRST line and "
+                  f"begin with one of {MARKERS}")),
                 (bool(sup_ids or sup_bad), NEAR_NO_MARKER,
-                 f"carries a {SUPERSESSION_MARKER} line but announces no verdict "
-                 "on its FIRST line - a supersession is carried BY a verdict, so "
-                 "this discharges nothing"),
+                 (f"carries a {SUPERSESSION_MARKER} line but announces no verdict "
+                  "on its FIRST line - a supersession is carried BY a verdict, so "
+                  "this discharges nothing")),
             ):
                 if not true:
                     continue

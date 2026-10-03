@@ -1560,7 +1560,7 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "T15 a FLOOD of arrivals is ingested (a drained ledger meets a foreign repo)",
         "tick.py",
-        "    if len(arrivals) > max(GUARD_FLOOR, len(known)):",
+        "    if len(arrivals) > max(GUARD_FLOOR, len(known)) and not allow_arrivals:",
         "    if False:",
     ),
     (

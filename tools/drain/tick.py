@@ -70,10 +70,9 @@ GUARD_FLOOR = 10  # below this many KNOWN items the ratios are noise
 # cycle (one shared counter; dependency-bump PRs move it fastest). This
 # repo's entire history, issues and PRs combined, is under 5,000 numbers as
 # of 2026-10 (`gh api repos/:owner/:repo --jq .open_issues_count` plus the
-# highest PR/issue number) -- so a single-cycle jump of this size would mean
-# the repo repeating its whole lifetime in one refresh, which a foreign read
-# clears by multiple orders of magnitude (measured: 250 foreign issues landed
-# tens of thousands above the ceiling).
+# highest PR/issue number), so a single-cycle jump of 2,000 is already a
+# large fraction of that -- a genuine arrival this far from the ceiling would
+# be unusual on its own, well before any foreign-repo read is considered.
 MAX_ARRIVAL_GAP = 2000
 
 
@@ -223,16 +222,15 @@ def guard_refresh(
     # SIZE of the arrival set is a different instrument rather than a tuned
     # threshold -- six arrivals against a 297-item ledger never trips it, nine
     # hundred always does.
-    if len(arrivals) > max(GUARD_FLOOR, len(known)):
-        if not allow_arrivals:
-            raise SystemExit(
-                f"refusing to refresh: {len(arrivals)} of the {len(live_numbers)} live issues "
-                f"are numbered above this ledger's ceiling (#{ceiling}), which is more than "
-                f"the {len(known)} issues it knows about. New arrivals do not come in floods "
-                "that size - check `repo` in policy.json. If this repo really did gain that "
-                "many at once, pass --allow-arrivals; --bootstrap is not the remedy here, it "
-                "DISCARDS the ledger."
-            )
+    if len(arrivals) > max(GUARD_FLOOR, len(known)) and not allow_arrivals:
+        raise SystemExit(
+            f"refusing to refresh: {len(arrivals)} of the {len(live_numbers)} live issues "
+            f"are numbered above this ledger's ceiling (#{ceiling}), which is more than "
+            f"the {len(known)} issues it knows about. New arrivals do not come in floods "
+            "that size - check `repo` in policy.json. If this repo really did gain that "
+            "many at once, pass --allow-arrivals; --bootstrap is not the remedy here, it "
+            "DISCARDS the ledger."
+        )
 
     if not believed_open:
         # TERMINAL ledger: RETENTION cannot fire below (nothing is left to

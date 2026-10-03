@@ -205,7 +205,7 @@ def test_negative_control_a_foreign_read_smaller_than_the_ledger_still_refuses_o
         led.record_receipt(n, "ci-green", "green at sha")
         led.transition(n, CLOSED)
     assert led.drained()
-    assert not (250 > max(10, 300)), "fixture must stay BELOW the magnitude bound"
+    assert not (max(10, 300) < 250), "fixture must stay BELOW the magnitude bound"
     with pytest.raises(SystemExit, match="implausibly far"):
         tick.guard_refresh(led, _live(range(90000, 90250)))
 
