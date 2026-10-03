@@ -61,6 +61,24 @@ managed vector index and reranks on query).
 `SEARCH_AAD_SCOPE` (`https://search.azure.com/.default`) is cloud-invariant; only
 the data-plane hostname differs and is resolved by `searchEndpointBase()`.
 
+### Cosmos DB for MongoDB (vCore) backend — per-boundary status
+`vector_store_retrieve` (#3351) selects this backend via
+`cosmos-vcore-vector-client.ts`; the gate the table below reports is
+`cosmosVcoreGate()` / `CosmosVcoreDriverError`, not the AI Search gate above.
+
+| Cloud | Code status | Live status | Notes |
+|---|---|---|---|
+| Commercial | supported-in-code | not yet exercised — no `LOOM_COSMOS_VCORE_CONNECTION_STRING`-bound deploy receipt measured | `mongodb` driver now an installed dependency (this PR); `loadMongo()` resolves. Needs a provisioned vCore cluster + the connection-string env var to clear the honest gate. |
+| GCC | supported-in-code | not yet exercised | same code path as Commercial (public-cloud Azure); Cosmos DB for MongoDB vCore is a public-cloud-Azure service, so GCC parity follows Commercial once provisioned. |
+| GCC-High | supported-in-code | not yet exercised | same code path; availability of Cosmos DB for MongoDB vCore in this boundary has not been independently confirmed here — verify against the Azure Government service catalog before relying on it. |
+| IL5 | supported-in-code | not yet exercised | same as GCC-High; not independently confirmed in this boundary. |
+
+Per `cloud-parity.md`: "supported-in-code" means the client, gate, and
+dependency resolve identically in every boundary (no boundary-specific branch
+in `cosmos-vcore-vector-client.ts`); it does not mean a deploy receipt exists.
+No boundary has produced one yet — all four rows are measured as
+not-yet-exercised as of this change.
+
 ## Backend access (RBAC)
 The Console UAMI is granted **Search Index Data Contributor**
 (`8ebe5a00-799e-43f5-93ac-243d3dce84a7`) on the search service in
