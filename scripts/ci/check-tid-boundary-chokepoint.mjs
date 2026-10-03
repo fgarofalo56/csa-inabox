@@ -5077,6 +5077,28 @@ const ADMIN_SHAPE_UNSCOPED = new Map([
         'this entry no longer describes the function.',
     },
   ],
+  [
+    'app/api/items/_lib/warehouse-item-binding.ts:authorizeWarehouseTarget',
+    {
+      verdict: 'ORG-WIDE',
+      requires: ['isTenantAdmin(', 'authorizeItemWorkspace(', 'allowReadRoles: true'],
+      why:
+        'ORG-WIDE (the admin branch only), #3669. The `isTenantAdmin` test is reached ONLY when the ' +
+        'Databricks SQL warehouse carries no `loom_item_id` tag, or a tag naming no ' +
+        '`databricks-sql-warehouse` item: no workspace and no item is in play, the warehouse is a ' +
+        'resource of the DEPLOYMENT\'s Databricks workspace, and a non-admin gets the coded 404. A ' +
+        'warehouse whose tag names an item takes the other branch, `authorizeItemWorkspace(session, ' +
+        '{ workspaceId, itemId, allowReadRoles: true })` with the item\'s workspace, which never ' +
+        'consults the admin flag here and returns its own 409 on a tenant mismatch. The three tokens ' +
+        'pin PRESENCE only: this guard checks that each substring is in the masked body, not where ' +
+        'it sits or in which order, so moving the admin test above the item branch would still pass ' +
+        'here. That ORDER is enforced by vitest, in ' +
+        'app/api/items/[type]/[id]/ai-function/__tests__/warehouse-binding.test.ts: "goes through ' +
+        'the ladder for a tagged warehouse, and its 409 passes through" (an admin short-circuit ' +
+        'turns that 409 into a 200) and its positive pair "runs on a tagged warehouse in a ' +
+        'workspace the resolver grants".',
+    },
+  ],
   // The two serverless SQL routes that share the SQL tab's classifier (#4841). Same shape as
   // `lakehouse/[id]/query/route.ts:POST` above: the item check runs first, and the admin flag
   // only picks the target, the database and whether the text is confined.
