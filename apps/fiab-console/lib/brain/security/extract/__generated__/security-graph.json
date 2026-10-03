@@ -12335,13 +12335,46 @@
           }
         },
         {
-          "id": "sec:verdict-call:apps/fiab-console/app/api/items/[type]/[id]/visual-query/route.ts#POST:pdpCheck:7",
+          "id": "sec:authorizer:apps/fiab-console/app/api/items/[type]/[id]/visual-query/route.ts#POST",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "POST /api/items/[type]/[id]/visual-query",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "POST /api/items/[type]/[id]/visual-query",
+            "params": [
+              "type",
+              "id"
+            ],
+            "resourceScoped": true,
+            "callerNamedResourceInputs": [
+              "type",
+              "id"
+            ],
+            "allowPaths": [
+              {
+                "id": "post:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": false,
+            "privilegedSinkKinds": []
+          }
+        },
+        {
+          "id": "sec:verdict-call:apps/fiab-console/app/api/items/[type]/[id]/visual-query/route.ts#POST:pdpCheck:4",
           "kind": "verdict-call",
           "provenance": "declared",
           "label": "POST /api/items/[type]/[id]/visual-query -> pdpCheck",
           "facet": {
             "kind": "verdict-call",
-            "callSite": "POST /api/items/[type]/[id]/visual-query:7",
+            "callSite": "POST /api/items/[type]/[id]/visual-query:4",
             "symbol": "pdpCheck",
             "returnsVerdictUnion": true,
             "pathsToPrivilegedSink": 0,
@@ -14732,6 +14765,38 @@
             "allowlistPremiseTested": false,
             "sinkPrivileged": false,
             "sinkKind": "none"
+          }
+        },
+        {
+          "id": "sec:authorizer:apps/fiab-console/app/api/items/semantic-model/[id]/direct-lake/route.ts#POST",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "POST /api/items/semantic-model/[id]/direct-lake",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "POST /api/items/semantic-model/[id]/direct-lake",
+            "params": [
+              "id"
+            ],
+            "resourceScoped": true,
+            "callerNamedResourceInputs": [
+              "id",
+              "workspaceId"
+            ],
+            "allowPaths": [
+              {
+                "id": "post:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": true,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": false,
+            "privilegedSinkKinds": []
           }
         },
         {
@@ -35413,7 +35478,7 @@
             "declaredSinkCount": 24,
             "sinks": [
               {
-                "id": "console:member:6578",
+                "id": "console:member:6626",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -35423,67 +35488,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6697",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:6701",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:6708",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:6715",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:6721",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:6729",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:6739",
+                "id": "console:member:6745",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -35503,7 +35508,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6776",
+                "id": "console:member:6756",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -35513,7 +35518,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6780",
+                "id": "console:member:6763",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -35523,7 +35528,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6782",
+                "id": "console:member:6769",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -35533,7 +35538,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6790",
+                "id": "console:member:6777",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -35543,7 +35548,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6799",
+                "id": "console:member:6787",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -35553,57 +35558,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6809",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:6816",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:6817",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:6821",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:6822",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:6823",
+                "id": "console:member:6797",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -35623,17 +35578,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:6825",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:6826",
+                "id": "console:member:6828",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -35644,6 +35589,126 @@
               },
               {
                 "id": "console:member:6830",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:6838",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:6847",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:6857",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:6864",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:6865",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:6869",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:6870",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:6871",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:6872",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:6873",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:6874",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:6878",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -46689,6 +46754,13 @@
           "provenance": "declared"
         },
         {
+          "id": "sec-edge:calls:sec:authorizer:apps/fiab-console/app/api/items/[type]/[id]/visual-query/route.ts#POST->sec:verdict-call:apps/fiab-console/app/api/items/[type]/[id]/visual-query/route.ts#POST:pdpCheck:4",
+          "from": "sec:authorizer:apps/fiab-console/app/api/items/[type]/[id]/visual-query/route.ts#POST",
+          "to": "sec:verdict-call:apps/fiab-console/app/api/items/[type]/[id]/visual-query/route.ts#POST:pdpCheck:4",
+          "kind": "calls",
+          "provenance": "declared"
+        },
+        {
           "id": "sec-edge:calls:sec:authorizer:apps/fiab-console/app/api/items/databricks-cluster/hygiene/route.ts#GET->sec:verdict-call:apps/fiab-console/app/api/items/databricks-cluster/hygiene/route.ts#GET:requireTenantAdmin:5",
           "from": "sec:authorizer:apps/fiab-console/app/api/items/databricks-cluster/hygiene/route.ts#GET",
           "to": "sec:verdict-call:apps/fiab-console/app/api/items/databricks-cluster/hygiene/route.ts#GET:requireTenantAdmin:5",
@@ -49340,7 +49412,12 @@
           "deployedAs": "loom-console"
         },
         {
-          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/items/[type]/[id]/visual-query/route.ts#POST:pdpCheck:7",
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/items/[type]/[id]/visual-query/route.ts#POST",
+          "codeModuleId": "code:apps/fiab-console/app/api/items/[type]/[id]/visual-query/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/items/[type]/[id]/visual-query/route.ts#POST:pdpCheck:4",
           "codeModuleId": "code:apps/fiab-console/app/api/items/[type]/[id]/visual-query/route.ts",
           "deployedAs": "loom-console"
         },
@@ -49947,6 +50024,11 @@
         {
           "nodeId": "sec:verdict-call:apps/fiab-console/app/api/items/semantic-model/[id]/datasource/route.ts#POST:authorizeItemWorkspace:7",
           "codeModuleId": "code:apps/fiab-console/app/api/items/semantic-model/[id]/datasource/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/items/semantic-model/[id]/direct-lake/route.ts#POST",
+          "codeModuleId": "code:apps/fiab-console/app/api/items/semantic-model/[id]/direct-lake/route.ts",
           "deployedAs": "loom-console"
         },
         {
