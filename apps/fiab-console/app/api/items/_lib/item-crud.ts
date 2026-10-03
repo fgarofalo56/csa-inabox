@@ -25,7 +25,7 @@ import { reconcileThreadEdgesOnDelete, restoreThreadEdgesForItem } from '@/lib/t
 import { labelRank } from '@/lib/governance/label-propagation';
 import { recordItemVersion } from '@/lib/versions/item-version-store';
 import { cosmosIdFromLoomId } from './loom-content-id';
-import { autoBindOnCreate, stripLakehouseCreateState } from '@/lib/azure/auto-bind';
+import { autoBindOnCreate, stripCreateState } from '@/lib/azure/auto-bind';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
 import { emitLoomEvent } from '@/lib/events/webhook-emitter';
@@ -905,10 +905,12 @@ export async function createOwnedItem(
   // built from (override allowed via an explicit state.sensitivityLabel).
   const baseState = state && typeof state === 'object' ? { ...state } : {};
   const labelledState = await applyLabelInheritance(baseState, session.claims.oid);
-  // A new lakehouse never keeps the keys that say where an item's files are:
-  // a caller that copies `state` from another item would otherwise hand the new
-  // item the source's container and root. Its own root comes from auto-bind.
-  const inheritedState = itemType === 'lakehouse' ? stripLakehouseCreateState(labelledState) : labelledState;
+  // A new item never keeps the keys that say which Azure object backs it: a
+  // caller that copies `state` from another item (promotion, branch-out, the
+  // Copilot `item_create` tool) or passes a request body would otherwise hand
+  // the new item another item's installer receipt, account, or lakehouse
+  // container and root. Its own binding comes from auto-bind or the installer.
+  const inheritedState = stripCreateState(itemType, labelledState);
   const item: WorkspaceItem = {
     id: crypto.randomUUID(),
     workspaceId,

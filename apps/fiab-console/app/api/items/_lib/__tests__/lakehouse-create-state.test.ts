@@ -140,6 +140,12 @@ function keysPresent(state: Record<string, unknown> | undefined): string[] {
 
 const session = { claims: { oid: OID, upn: 'owner@contoso.com' } } as any;
 
+/** `state` minus the two keys no new item of any type keeps. */
+function withoutReceipt(state: Record<string, unknown>): Record<string, unknown> {
+  const { provisioning: _p, storageAccount: _s, ...rest } = state;
+  return rest;
+}
+
 beforeEach(() => {
   created.length = 0;
   replaced.length = 0;
@@ -185,15 +191,16 @@ describe('createOwnedItem, lakehouse', () => {
     expect(keysPresent(state).sort()).toEqual([...CLEARED].sort());
   });
 
-  // POSITIVE CONTROL for the type check. FAILS IF the strip runs for every item
-  // type: a warehouse's state is not a lakehouse location and must be written
-  // as given, key for key.
-  it('writes another item type\'s state unchanged', async () => {
+  // POSITIVE CONTROL for the type check. FAILS IF the LAKEHOUSE strip runs for
+  // every item type: a warehouse keeps the lakehouse location keys (they mean
+  // nothing to it) and loses only the installer receipt and the account, which
+  // no new item of any type takes (`stripCreateState`).
+  it('writes another item type\'s state without only the receipt and the account', async () => {
     const res = await createOwnedItem(session, 'warehouse', {
       workspaceId: WS, displayName: 'Sales WH', state: sourceLakehouseState(),
     });
     expect(res.ok).toBe(true);
-    expect(created[0].state).toEqual(sourceLakehouseState());
+    expect(created[0].state).toEqual(withoutReceipt(sourceLakehouseState()));
     expect(replaced).toEqual([]);
   });
 });
@@ -221,7 +228,7 @@ describe('bundle import, create arm', () => {
     expect(created.map((d) => d.id)).toEqual(['lh-new', 'wh-new']);
     expect(keysPresent(created[0].state)).toEqual([]);
     expect(created[0].state).toMatchObject({ notes: 'kept', tables: ['orders'] });
-    expect(created[1].state).toEqual(sourceLakehouseState());
+    expect(created[1].state).toEqual(withoutReceipt(sourceLakehouseState()));
   });
 
   // FAILS IF the create arm does not bind the imported lakehouse (0 calls: its
@@ -310,5 +317,67 @@ describe('POST /api/cosmos-items/lakehouse', () => {
     const after = DOCS.get(`${WS}::${body.item.id}`);
     expect(keysPresent(after.state)).toEqual([]);
     expect(after.state).toMatchObject({ notes: 'kept', tables: ['orders'] });
+  });
+});
+
+// ── Installer receipts on every other item type ─────────────────────────────────
+
+describe('createOwnedItem, store types other than lakehouse: no client-supplied receipt', () => {
+  // A receipt that names ANOTHER item's store. If it were written, the label
+  // grant resolver (`resolveItemBackingScope`) and the catalog store scope would
+  // treat it as this item's binding.
+  const foreignReceipt = () => ({
+    provisioning: { status: 'created', resourceId: 'someone-elses-db', secondaryIds: { database: 'someone-elses-db', container: 'someone-elses-container' } },
+    storageAccount: 'otheracct',
+    notes: 'kept',
+  });
+
+  it.each(['kql-database', 'eventhouse', 'warehouse'])(
+    '%s: the written item carries no receipt or account, and ordinary keys survive',
+    async (itemType) => {
+      // FAILS IF `createOwnedItem` strips only lakehouses (the pre-#4838 rule):
+      // `created[0].state.provisioning` is then the foreign receipt.
+      const res = await createOwnedItem(session, itemType, { workspaceId: WS, displayName: 'Telemetry', state: foreignReceipt() });
+      expect(res.ok).toBe(true);
+      expect(created[0].state.provisioning).toBeUndefined();
+      expect(created[0].state.storageAccount).toBeUndefined();
+      expect(created[0].state.notes).toBe('kept');
+    },
+  );
+
+  it.each(['kql-database', 'eventhouse'])(
+    '%s created with a foreign receipt: the label-grant resolver returns pending, not that database',
+    async (itemType) => {
+      // FAILS IF the receipt is written: the resolver would answer
+      // `{ scopeType: 'kql-database', scopeRef: 'someone-elses-db' }`.
+      const res = await createOwnedItem(session, itemType, { workspaceId: WS, displayName: 'Telemetry', state: foreignReceipt() });
+      const { resolveItemBackingScope } = await import('@/lib/azure/item-backing-scope');
+      const scope = resolveItemBackingScope((res as any).item);
+      expect('pending' in scope).toBe(true);
+    },
+  );
+
+  it('the bundle import drops a bundled kql-database receipt too', async () => {
+    // FAILS IF the bundle create arm strips only lakehouses.
+    const now = '2026-09-30T12:00:00.000Z';
+    await executeWorkspaceImport({
+      strategy: 'skip-existing', foldersToCreate: [], foldersReused: 0, idMap: {}, refsRemapped: 0,
+      items: [{ action: 'create', doc: { id: 'kql-new', workspaceId: WS, itemType: 'kql-database', displayName: 'T', state: foreignReceipt(), createdAt: now, updatedAt: now } }],
+    } as any, { id: WS, tenantId: OID } as any);
+    expect(created[0].state.provisioning).toBeUndefined();
+    expect(created[0].state.notes).toBe('kept');
+  });
+
+  it('the create hook removes a receipt from a stored non-lakehouse item', async () => {
+    // Covers routes that write the document themselves and then call
+    // `autoBindOnCreate`. FAILS IF the hook is lakehouse-only (no replace, and the
+    // stored doc keeps the receipt).
+    const { clearServerOwnedKeysOnCreate } = await import('@/lib/azure/auto-bind');
+    const doc = { id: 'kql-9', workspaceId: WS, itemType: 'kql-database', displayName: 'T', state: foreignReceipt() };
+    DOCS.set(`${WS}::kql-9`, structuredClone(doc));
+    expect(await clearServerOwnedKeysOnCreate(doc as any)).toBe(true);
+    expect((doc as any).state.provisioning).toBeUndefined();
+    expect(DOCS.get(`${WS}::kql-9`).state.provisioning).toBeUndefined();
+    expect(DOCS.get(`${WS}::kql-9`).state.notes).toBe('kept');
   });
 });

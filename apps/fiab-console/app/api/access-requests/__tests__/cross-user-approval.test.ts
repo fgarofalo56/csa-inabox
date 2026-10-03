@@ -34,9 +34,16 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
   accessAssignmentsContainer: vi.fn(),
   approvalPoliciesContainer: vi.fn(),
   featurePermissionsContainer: vi.fn(),
+  itemsContainer: vi.fn(),
 }));
 vi.mock('@/lib/azure/rbac-client', () => ({ enforceAccessGrant: vi.fn() }));
 vi.mock('@/lib/azure/access-policy-client', () => ({ enforceAccessGrant: vi.fn() }));
+// Discovery (workspace membership / same-tenant) has its own coverage; here the
+// requested product is simply discoverable to user A, so the request is filed.
+vi.mock('@/lib/dataproducts/discoverability', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/dataproducts/discoverability')>();
+  return { ...actual, resolveDiscoveryAccess: vi.fn() };
+});
 
 import { POST as requestAccessPOST } from '@/app/api/catalog/request-access/route';
 import { GET as inboxGET } from '../route';
@@ -45,8 +52,10 @@ import { getSession } from '@/lib/auth/session';
 import {
   accessRequestWorkflowContainer, auditLogContainer, notificationsContainer,
   accessAssignmentsContainer, approvalPoliciesContainer, featurePermissionsContainer,
+  itemsContainer,
 } from '@/lib/azure/cosmos-client';
 import { enforceAccessGrant } from '@/lib/azure/rbac-client';
+import { resolveDiscoveryAccess } from '@/lib/dataproducts/discoverability';
 import { makePartitionedContainer, makeSinkContainer, type FakeContainer } from './partitioned-cosmos-fake';
 
 const TENANT = 'tenant-1-tid';
@@ -78,12 +87,8 @@ async function fileRequestAsA(): Promise<string> {
   const res = await requestAccessPOST(
     jsonReq({
       assetId: 'asset-1',
-      assetName: 'Gold sales',
-      itemType: 'lakehouse',
       permission: 'read',
       justification: 'quarterly report',
-      scopeType: 'adls-container',
-      scopeRef: 'gold',
     }) as any,
   );
   const j = await res.json();
@@ -97,7 +102,7 @@ const ORIGINAL_ADMIN_OID = process.env.LOOM_TENANT_ADMIN_OID;
 
 beforeEach(() => {
   vi.resetAllMocks();
-  wf = makePartitionedContainer({ partitionKeyPath: '/tenantId' });
+  wf = makePartitionedContainer({ partitionKeyPath: '/tenantId', etags: true });
   // Empty but REACHABLE: no approval policy names anyone, and no capability
   // grant exists. So authority comes only from tenant-admin, which is what the
   // bystander tests rely on. A container that THREW would take the
@@ -110,6 +115,19 @@ beforeEach(() => {
   (auditLogContainer as any).mockResolvedValue(makeSinkContainer());
   (notificationsContainer as any).mockResolvedValue(makeSinkContainer());
   (accessAssignmentsContainer as any).mockResolvedValue(makeSinkContainer());
+  // The requested asset: a published, governed data product bound to `gold`.
+  (itemsContainer as any).mockResolvedValue(makePartitionedContainer({
+    partitionKeyPath: '/workspaceId',
+    seed: [{
+      // The lakehouse the product's `gold-out` port names: ports are checked
+      // against the stores bound in the product's workspace.
+      id: 'lh-gold', workspaceId: 'ws-1', itemType: 'lakehouse', displayName: 'Gold lake', state: { adlsContainer: 'gold' },
+    }, {
+      id: 'asset-1', workspaceId: 'ws-1', itemType: 'data-product', displayName: 'Gold sales',
+      state: { lifecycleState: 'published', ports: { output: [{ name: 'gold-out', kind: 'adls', ref: 'gold' }] } },
+    }],
+  }));
+  (resolveDiscoveryAccess as any).mockResolvedValue('discoverable');
   // B is the tenant admin — the out-of-the-box approval authority. (Delegation
   // to a non-admin is covered by the capability path; see the bystander test.)
   process.env.LOOM_TENANT_ADMIN_OID = USER_B.oid;
@@ -174,9 +192,10 @@ describe('F16 cross-user approval', () => {
     const fj = await final.json();
     expect(final.status).toBe(200);
     expect(fj.request.status).toBe('completed');
-    // The grant is provisioned for the REQUESTER, not the approver.
+    // The grant is provisioned for the REQUESTER, not the approver, on the
+    // product's bound container.
     expect(enforceAccessGrant).toHaveBeenCalledWith(
-      expect.objectContaining({ principalId: USER_A.oid }),
+      expect.objectContaining({ principalId: USER_A.oid, scopeType: 'adls-container', scopeRef: 'gold' }),
     );
   });
 });

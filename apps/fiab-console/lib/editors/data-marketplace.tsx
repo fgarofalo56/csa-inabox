@@ -260,12 +260,11 @@ export function DataProductsMarketplace() {
     const r = await clientFetch('/api/catalog/request-access', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
+      // The server loads the product and derives its access model and grant
+      // scope; the body names the product and the permission requested.
       body: JSON.stringify({
         assetId: hit.id.replace(/^dp[:_]/, ''),
-        assetName: hit.displayName,
-        itemType: 'data-product',
         permission,
-        accessModel: hit.accessModel || 'governed',
       }),
     });
     const j = await r.json();
@@ -399,7 +398,7 @@ export function DataProductsMarketplace() {
                       {h.productType && <Badge appearance="outline">{h.productType}</Badge>}
                       {h.accessModel && h.accessModel !== 'governed' && (
                         <Badge appearance="tint" color={h.accessModel === 'self-serve' ? 'success' : 'informative'}>
-                          {h.accessModel === 'self-serve' ? 'Self-serve' : 'Request only'}
+                          {h.accessModel === 'self-serve' ? `Self-serve · ${SELF_SERVE_ROLE_LABEL}` : 'Request only'}
                         </Badge>
                       )}
                       {h.owner && <Caption1 className={s.hint}>Owner: {h.owner}</Caption1>}
@@ -563,7 +562,7 @@ function ProductPreviewButton({
     ...(hit.productType ? [{ label: 'Type', value: hit.productType }] : []),
     ...(hit.owner ? [{ label: 'Owner', value: hit.owner }] : []),
     ...(hit.sla ? [{ label: 'SLA', value: hit.sla }] : []),
-    { label: 'Access model', value: hit.accessModel === 'self-serve' ? 'Self-serve — immediate grant where policy allows' : hit.accessModel === 'request' ? 'Request only — owner provisions manually' : 'Governed — approval → real Azure RBAC' },
+    { label: 'Access model', value: hit.accessModel === 'self-serve' ? `Self-serve — ${SELF_SERVE_ROLE_LABEL} granted immediately; Write or Admin goes through approval` : hit.accessModel === 'request' ? 'Request only — owner provisions manually' : 'Governed — approval → real Azure RBAC' },
     ...(hit.url ? [{ label: 'Open URL', value: hit.url, mono: true }] : []),
   ];
   return (
@@ -616,12 +615,21 @@ function ProductPreviewButton({
   );
 }
 
+/**
+ * The role a self-serve product grants without approval. Mirrors
+ * SELF_SERVE_PERMISSION in lib/access/request-asset.ts, which the server enforces.
+ */
+const SELF_SERVE_ROLE = 'read';
+const SELF_SERVE_ROLE_LABEL = 'Read';
+
 /** A small request-access control with a permission picker + confirmation. */
 function RequestAccessButton({ hit, onRequest }: { hit: Hit; onRequest: (h: Hit, p: string) => Promise<any> }) {
   const [open, setOpen] = useState(false);
-  const [perm, setPerm] = useState('read');
+  const [perm, setPerm] = useState(SELF_SERVE_ROLE);
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
+  const [msg, setMsg] = useState<{ intent: 'success' | 'info' | 'error'; text: string } | null>(null);
+  const selfServe = hit.accessModel === 'self-serve';
+  const routed = selfServe && perm !== SELF_SERVE_ROLE;
   return (
     <Dialog open={open} onOpenChange={(_, d) => setOpen(d.open)}>
       <DialogTrigger disableButtonEnhancement>
@@ -632,13 +640,16 @@ function RequestAccessButton({ hit, onRequest }: { hit: Hit; onRequest: (h: Hit,
           <DialogTitle>Request access — {hit.displayName}</DialogTitle>
           <DialogContent>
             {msg ? (
-              <MessageBar intent="success"><MessageBarBody>{msg}</MessageBarBody></MessageBar>
+              <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar>
             ) : (
-              <Field label="Permission">
+              <Field label="Permission"
+                hint={selfServe
+                  ? `This product is self-serve for ${SELF_SERVE_ROLE_LABEL}: it is granted immediately. Write or Admin is routed through approval.`
+                  : undefined}>
                 <Select value={perm} onChange={(_, d) => setPerm(d.value)}>
-                  <option value="read">Read</option>
-                  <option value="write">Write</option>
-                  <option value="admin">Admin</option>
+                  <option value="read">{selfServe ? `${SELF_SERVE_ROLE_LABEL} (granted immediately)` : 'Read'}</option>
+                  <option value="write">{selfServe ? 'Write (needs approval)' : 'Write'}</option>
+                  <option value="admin">{selfServe ? 'Admin (needs approval)' : 'Admin'}</option>
                 </Select>
               </Field>
             )}
@@ -649,8 +660,10 @@ function RequestAccessButton({ hit, onRequest }: { hit: Hit; onRequest: (h: Hit,
                 setBusy(true);
                 const j = await onRequest(hit, perm);
                 setBusy(false);
-                setMsg(j?.ok ? (j.message || 'Access request recorded.') : (j?.error || 'Request failed.'));
-              }}>{busy ? 'Requesting…' : 'Submit request'}</Button>
+                if (!j?.ok) setMsg({ intent: 'error', text: j?.error || 'Request failed.' });
+                else if (j.granted) setMsg({ intent: 'success', text: j.message || `${SELF_SERVE_ROLE_LABEL} access granted.` });
+                else setMsg({ intent: 'info', text: j.message || 'Access request recorded.' });
+              }}>{busy ? 'Requesting…' : selfServe && !routed ? `Get ${SELF_SERVE_ROLE_LABEL} access` : 'Submit request'}</Button>
             )}
             <DialogTrigger disableButtonEnhancement>
               <Button appearance="secondary" onClick={() => { setMsg(null); }}>Close</Button>
@@ -833,7 +846,7 @@ function PublishTab({
                   hint="How a consumer's subscribe is provisioned.">
                   <Select value={accessModel} onChange={(_, d) => setAccessModel(d.value)}>
                     <option value="governed">Governed — multi-tier approval → real RBAC</option>
-                    <option value="self-serve">Self-serve — immediate grant where policy allows</option>
+                    <option value="self-serve">Self-serve — Read granted immediately; more needs approval</option>
                     <option value="request">Request only — owner provisions manually</option>
                   </Select>
                 </Field>

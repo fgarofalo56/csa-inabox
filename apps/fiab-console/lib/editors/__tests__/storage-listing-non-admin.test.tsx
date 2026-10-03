@@ -289,9 +289,11 @@ describe('Governance policies, new Access policy, ADLS container', () => {
   // or if the options are not the listed containers (no `landing` option, and
   // the preview never reads "on landing").
   it('offers the listed containers and uses the chosen one', async () => {
+    // A tenant admin (`canManageAccess: true`): Access policies are managed by
+    // tenant admins, so this is the caller for whom the Access form opens.
     installStatusFetch({
       '/api/lakehouse/containers': () => ({ body: { ok: true, containers: [{ name: 'bronze' }, { name: 'landing' }] } }),
-      '/api/governance/policies': () => ({ body: { ok: true, policies: [] } }),
+      '/api/governance/policies': () => ({ body: { ok: true, policies: [], canManageAccess: true } }),
     });
     const { default: PoliciesPage } = await import('@/app/governance/policies/page');
     wrap(<PoliciesPage />);
@@ -308,5 +310,99 @@ describe('Governance policies, new Access policy, ADLS container', () => {
     fireEvent.click(container);
     fireEvent.click(await screen.findByRole('option', { name: 'landing' }, { timeout: 5000 }));
     expect(await within(dlg).findByText(/ Read on landing$/, {}, { timeout: 5000 })).toBeInTheDocument();
+  }, 20000);
+
+  // A caller who is not a tenant admin sees the Access kind, disabled, with the
+  // reason on screen. FAILS IF the lock is dropped (the option reads plain
+  // "Access" and is selectable), or if the reason is hidden (no
+  // `access-policy-admin-only` bar). The DLP option staying enabled is the
+  // positive pair: a lock applied to every kind would disable it too.
+  it('shows Access disabled with the reason for a caller who is not a tenant admin', async () => {
+    installStatusFetch({
+      '/api/lakehouse/containers': () => ({ body: { ok: true, containers: [{ name: 'bronze' }] } }),
+      '/api/governance/policies': () => ({ body: { ok: true, policies: [], canManageAccess: false } }),
+    });
+    const { default: PoliciesPage } = await import('@/app/governance/policies/page');
+    wrap(<PoliciesPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /^New policy$/ }, { timeout: 10000 }));
+    const bar = await screen.findByTestId('access-policy-admin-only', {}, { timeout: 5000 });
+    expect(bar.textContent).toContain('Access policies are managed by tenant admins');
+    const kind = await screen.findByRole('combobox', { name: /^Kind$/ }, { timeout: 5000 });
+    fireEvent.click(kind);
+    const access = await screen.findByRole('option', { name: 'Access (tenant admins only)' }, { timeout: 5000 });
+    expect(access).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('option', { name: 'DLP' })).not.toHaveAttribute('aria-disabled', 'true');
+  }, 20000);
+});
+
+describe('Governance policies, existing Access rows', () => {
+  const POLICIES = [
+    { id: 'ap-1', name: 'Grant gold', kind: 'Access', scope: 'tenant', rule: '', enabled: true, createdAt: '2026-01-01', createdBy: 'x' },
+    { id: 'dlp-1', name: 'PII guard', kind: 'DLP', scope: 'tenant', rule: '', enabled: true, createdAt: '2026-01-01', createdBy: 'x' },
+  ];
+  function rowOf(el: HTMLElement): HTMLElement {
+    const row = (el.closest('[role="row"]') || el.closest('tr')) as HTMLElement | null;
+    expect(row, 'expected the cell to sit inside a table row').not.toBeNull();
+    return row as HTMLElement;
+  }
+
+  // A caller who is not a tenant admin: the Access row is read-only with the
+  // reason on screen and reachable by keyboard. FAILS IF the row lock is dropped
+  // (Delete not aria-disabled, the Switch enabled), if the visible notice is
+  // missing, or if the reason is not on a focusable element. The DLP row staying
+  // editable is the positive pair: a lock on every row would disable it too.
+  it('locks the Access row for a non-admin, says why, and leaves the DLP row editable', async () => {
+    installStatusFetch({
+      '/api/governance/policies': () => ({ body: { ok: true, policies: POLICIES, canManageAccess: false } }),
+    });
+    const { default: PoliciesPage } = await import('@/app/governance/policies/page');
+    wrap(<PoliciesPage />);
+
+    const notice = await screen.findByTestId('admin-only-notice', {}, { timeout: 10000 });
+    expect(notice.textContent).toContain('Access policies are read-only for you');
+    expect(notice.textContent).toContain('Access policies are managed by tenant admins');
+
+    const accessRow = rowOf(await screen.findByText('Grant gold'));
+    expect(within(accessRow).getByRole('button', { name: /Delete/ })).toHaveAttribute('aria-disabled', 'true');
+    expect(within(accessRow).getByRole('switch')).toBeDisabled();
+    expect(within(accessRow).getByTestId('access-row-locked-ap-1')).toHaveAttribute('tabindex', '0');
+
+    const dlpRow = rowOf(screen.getByText('PII guard'));
+    expect(within(dlpRow).getByRole('button', { name: /Delete/ })).not.toHaveAttribute('aria-disabled', 'true');
+    expect(within(dlpRow).getByRole('switch')).not.toBeDisabled();
+  }, 20000);
+
+  // The admin pair: FAILS IF the lock applies regardless of `canManageAccess`.
+  it('leaves the Access row editable, with no notice, for a tenant admin', async () => {
+    installStatusFetch({
+      '/api/governance/policies': () => ({ body: { ok: true, policies: POLICIES, canManageAccess: true } }),
+    });
+    const { default: PoliciesPage } = await import('@/app/governance/policies/page');
+    wrap(<PoliciesPage />);
+
+    const accessRow = rowOf(await screen.findByText('Grant gold', {}, { timeout: 10000 }));
+    expect(within(accessRow).getByRole('button', { name: /Delete/ })).not.toHaveAttribute('aria-disabled', 'true');
+    expect(within(accessRow).getByRole('switch')).not.toBeDisabled();
+    expect(screen.queryByTestId('admin-only-notice')).toBeNull();
+  }, 20000);
+
+  // A 403 that still reaches the page (a stale `canManageAccess`) shows the
+  // envelope's reason and remediation. FAILS IF the page renders `j.error`
+  // (the bare token "forbidden") instead.
+  it("shows a 403's reason and remediation, not the bare error token", async () => {
+    installStatusFetch({
+      '/api/governance/policies': (_u, init) => (init?.method === 'PUT'
+        ? { status: 403, body: { ok: false, error: 'forbidden', reason: 'Needs the Admin role on Permissions.', remediation: 'Ask a tenant admin.' } }
+        : { body: { ok: true, policies: POLICIES, canManageAccess: true } }),
+    });
+    const { default: PoliciesPage } = await import('@/app/governance/policies/page');
+    wrap(<PoliciesPage />);
+
+    const accessRow = rowOf(await screen.findByText('Grant gold', {}, { timeout: 10000 }));
+    fireEvent.click(within(accessRow).getByRole('switch'));
+    const reason = await screen.findByText(/Needs the Admin role on Permissions\. Ask a tenant admin\./, {}, { timeout: 5000 });
+    expect(reason).toBeInTheDocument();
+    expect(screen.queryByText(/^forbidden$/)).toBeNull();
   }, 20000);
 });

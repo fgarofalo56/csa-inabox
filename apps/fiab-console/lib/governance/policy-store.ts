@@ -17,6 +17,7 @@ import {
   defaultLabelPolicyBody,
   type LabelPolicyBody, type LabelPresetCategory,
 } from '@/lib/governance/label-policy-library';
+import { accessPoliciesDocId } from '@/lib/governance/access-policy-doc';
 export type { DlpPolicyRule, DlpPresetCategory } from '@/lib/governance/dlp-policy-library';
 
 export interface PolicyEnforcement {
@@ -64,6 +65,10 @@ export interface PoliciesDoc {
   /** Built-in default source-keys already seeded once — so a later disable/delete
    *  by an operator is never re-seeded (day-one default-on, without fighting opt-out). */
   seededDefaults?: string[];
+  /** The owner's Entra tenant, stamped when the owner lists their policies
+   *  (`stampPoliciesTenant`). Lets an admin find this doc's pre-existing Access
+   *  policies without relying on the owner having created a workspace. */
+  tid?: string;
   updatedAt: string;
 }
 
@@ -162,5 +167,77 @@ export async function savePolicies(doc: PoliciesDoc): Promise<PoliciesDoc> {
   await c.item(doc.id, doc.tenantId).replace(doc);
   return doc;
 }
+
+/** Read a user's `policies:<oid>` doc WITHOUT seeding it (null when absent). */
+export async function readPoliciesDoc(ownerId: string): Promise<PoliciesDoc | null> {
+  const c = await tenantSettingsContainer();
+  try {
+    const { resource } = await c.item(`policies:${ownerId}`, ownerId).read<PoliciesDoc>();
+    return resource ?? null;
+  } catch (e: any) {
+    if (e?.code === 404) return null;
+    throw e;
+  }
+}
+
+// ── Tenant-scoped Access policies ─────────────────────────────────────────────
+//
+// Access policies are managed by tenant admins and apply to the whole tenant,
+// so they are recorded ONCE per tenant rather than in the author's own
+// `policies:<oid>` doc: `access-policies:<tenantScope>` in partition
+// `<tenantScope>`, where tenantScope = tenantScopeId(session) = the Entra `tid`
+// (or the oid for a tid-less single-operator session). Every admin in the
+// tenant reads and manages the same doc.
+//
+// Access policies written before this change live in their author's
+// `policies:<oid>` doc. They are NOT moved or deleted; the policies route lists
+// them beside the tenant doc (see `listLegacyAccessPolicyDocs` in lib/governance/legacy-access-policies.ts).
+
+export interface AccessPoliciesDoc {
+  id: string;
+  tenantId: string;
+  kind: 'access-policies';
+  items: Policy[];
+  updatedAt: string;
+}
+
+/** The doc id of a tenant's Access-policy doc. */
+export { accessPoliciesDocId };
+
+/**
+ * Read the tenant's Access-policy doc. Returns an EMPTY, not-yet-persisted doc
+ * when none exists (nothing is written on read); `saveAccessPolicies` upserts.
+ */
+export async function readAccessPolicies(tenantScope: string): Promise<AccessPoliciesDoc> {
+  const c = await tenantSettingsContainer();
+  const id = accessPoliciesDocId(tenantScope);
+  try {
+    const { resource } = await c.item(id, tenantScope).read<AccessPoliciesDoc>();
+    if (resource) return { ...resource, items: Array.isArray(resource.items) ? resource.items : [] };
+  } catch (e: any) {
+    if (e?.code !== 404) throw e;
+  }
+  return { id, tenantId: tenantScope, kind: 'access-policies', items: [], updatedAt: new Date(0).toISOString() };
+}
+
+/** Persist the tenant Access-policy doc (upsert — the first save creates it). */
+export async function saveAccessPolicies(doc: AccessPoliciesDoc): Promise<AccessPoliciesDoc> {
+  const c = await tenantSettingsContainer();
+  doc.updatedAt = new Date().toISOString();
+  await c.items.upsert(doc);
+  return doc;
+}
+
+/**
+ * Record the owner's Entra tenant on their own `policies:<oid>` doc, once.
+ * Called with the owner's own session only (their `tid` claim), so the stamp is
+ * never written from a request body. Returns the (possibly updated) doc.
+ */
+export async function stampPoliciesTenant(doc: PoliciesDoc, tid: string | undefined): Promise<PoliciesDoc> {
+  if (!tid || doc.tid) return doc;
+  doc.tid = tid;
+  return savePolicies(doc);
+}
+
 
 export { CosmosNotConfiguredError };

@@ -9,7 +9,12 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-vi.mock('@/lib/auth/session', () => ({ getSession: vi.fn() }));
+// Partial: the route also calls the real `tenantScopeId` to mark Access policies
+// in the tenant Access-policy doc.
+vi.mock('@/lib/auth/session', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/auth/session')>()),
+  getSession: vi.fn(),
+}));
 vi.mock('@/lib/azure/cosmos-client', () => ({
   tenantSettingsContainer: vi.fn(async () => ({
     item: () => ({ read: async () => ({ resource: undefined }), replace: async () => ({}) }),

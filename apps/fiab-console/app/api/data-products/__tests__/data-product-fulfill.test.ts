@@ -9,6 +9,8 @@ const h = vi.hoisted(() => {
   const reqDoc = { id: 'req-1', dataProductId: 'dp-1', requesterId: 'consumer', requesterUpn: 'c@x', status: 'pending' };
   return {
     productState: { value: {} as Record<string, unknown> },
+    // The items in the product's workspace: the stores its output ports may name.
+    workspaceItems: { value: [] as any[] },
     replaced: { doc: null as any },
     accessReqItem: {
       read: vi.fn(async () => ({ resource: { ...reqDoc } })),
@@ -26,7 +28,11 @@ vi.mock('@/lib/azure/cosmos-client', () => {
   const q = (rows: any[]) => ({ query: () => ({ fetchAll: async () => ({ resources: rows }) }) });
   return {
     accessRequestsContainer: vi.fn(async () => ({ item: () => h.accessReqItem })),
-    itemsContainer: vi.fn(async () => ({ items: q([{ workspaceId: 'ws-1', displayName: 'Sales', state: h.productState.value }]) })),
+    // The workspace-store lookup (lib/access/verified-targets.ts) queries by
+    // `@w`; every other query is the product lookup.
+    itemsContainer: vi.fn(async () => ({ items: { query: (spec: any) => ({ fetchAll: async () => ({
+      resources: /@w\b/.test(spec?.query || '') ? h.workspaceItems.value : [{ workspaceId: 'ws-1', displayName: 'Sales', state: h.productState.value }],
+    }) }) } })),
     workspacesContainer: vi.fn(async () => ({ items: q([{ tenantId: 'owner' }]) })),
   };
 });
@@ -43,6 +49,8 @@ beforeEach(() => {
   h.replaced.doc = null;
   h.accessReqItem.read.mockResolvedValue({ resource: { ...h.reqDoc } });
   h.productState.value = { ports: { output: [{ name: 'lake', direction: 'output', kind: 'adls', ref: 'curated' }] } };
+  // A lakehouse in the product's workspace, bound to the container the port names.
+  h.workspaceItems.value = [{ id: 'lh-1', workspaceId: 'ws-1', itemType: 'lakehouse', displayName: 'Curated', state: { adlsContainer: 'curated' } }];
 });
 
 describe('PATCH /access-requests (approve + fulfill)', () => {
@@ -84,6 +92,19 @@ describe('PATCH /access-requests (approve + fulfill)', () => {
     expect((await res.json()).provisioned).toBe(false);
     expect(h.replaced.doc.status).toBe('approved');
     expect(h.replaced.doc.fulfillmentNote).toMatch(/User Access Administrator/);
+  });
+
+  it('a port naming a container no item in the product\'s workspace is bound to grants nothing', async () => {
+    // Breaks if ports are granted as typed: the owner's `ref: 'someone-elses'`
+    // would reach the grant client.
+    (getSession as any).mockReturnValue({ claims: { oid: 'owner', upn: 'o@x' } });
+    h.productState.value = { ports: { output: [{ name: 'lake', direction: 'output', kind: 'adls', ref: 'someone-elses' }] } };
+    (enforceAccessGrant as any).mockResolvedValue({ status: 'active', roleAssignmentId: 'ra-x' });
+    const res = await PATCH(req({ requestId: 'req-1', decision: 'approved' }), ctx('dp-1'));
+    expect(res.status).toBe(200);
+    expect(enforceAccessGrant).not.toHaveBeenCalled();
+    expect((await res.json()).provisioned).toBe(false);
+    expect(h.replaced.doc.provisionedTargets[0]).toMatchObject({ status: 'pending', scopeRef: '' });
   });
 
   it('rejects without granting', async () => {

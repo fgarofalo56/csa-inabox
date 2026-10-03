@@ -19,18 +19,21 @@ import { clientFetch } from '@/lib/client-fetch';
  * Completed / Denied history tab surfaces closed requests with their receipt
  * (role assignment id, or denial reason). No Microsoft Fabric dependency.
  *
+ * `?request=<id>` (REQUEST_PARAM, the Access report's Request link) opens the
+ * inbox on that request: its tier tab (or History), expanded and highlighted.
+ *
  * Design: Fluent v9 + Loom tokens — spaced Section cards, accent status badges,
  * keyboard-navigable controls. Honest infra/config gates surface as a Fluent
  * MessageBar naming the exact env var / role to provision (no-vaporware.md).
  */
 
-import { useCallback, useEffect, useMemo, useState, Fragment } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, Fragment } from 'react';
 import {
   makeStyles, tokens, Spinner, Badge, Button, Text, Caption1, Body1Strong,
   TabList, Tab, type SelectTabData, type SelectTabEvent,
   Table, TableHeader, TableHeaderCell, TableRow, TableBody, TableCell,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
-  Textarea, Input, Dropdown, Option, Field, Checkbox,
+  Textarea, Field, Checkbox,
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions, Tooltip,
 } from '@fluentui/react-components';
 import {
@@ -41,6 +44,7 @@ import {
   TIER_SEQUENCE, TIER_LABEL,
   type ApprovalTier, type ApprovalStatus, type AccessRequestEnforcement,
 } from '@/lib/types/access-request-workflow';
+import { useIsTenantAdmin } from '@/lib/components/session-context';
 
 // ── Local mirror of the server doc (only the fields the UI reads). ────────────
 interface ApprovalStep {
@@ -56,6 +60,13 @@ interface AccessRequest {
   itemType: string;
   scopeType: string;
   scopeRef: string;
+  /**
+   * Scopes derived from the asset on the server (catalog requests). `declaredRef`
+   * is the store the port named when the request was made; an empty `scopeRef`
+   * beside it is a port whose store is not bound yet.
+   */
+  grantTargets?: GrantScope[];
+  packageId?: string;
   permission: 'read' | 'write' | 'admin';
   justification: string;
   requesterUpn: string;
@@ -89,7 +100,54 @@ interface BulkDecisionResult {
   results: { id: string; ok: boolean; status: number; error?: string }[];
 }
 
-const SCOPE_TYPES = ['adls-container', 'warehouse', 'kql-database', 'workspace', 'item', 'collection'];
+interface GrantScope { scopeType: string; scopeRef: string; source?: string; declaredRef?: string }
+
+/** Every scope a request's grant binds to (the asset-derived list when present). */
+function grantScopes(r: AccessRequest): GrantScope[] {
+  if (r.grantTargets && r.grantTargets.length > 0) return r.grantTargets;
+  return r.scopeType ? [{ scopeType: r.scopeType, scopeRef: r.scopeRef }] : [];
+}
+
+/**
+ * One scope as a line of text. A scope with no store yet shows the store its
+ * port declared, so an approver can tell which store the grant will land on
+ * once it is bound.
+ */
+export function scopeLabel(g: GrantScope): string {
+  if (g.scopeRef) return `${g.scopeType} · ${g.scopeRef}`;
+  if (g.declaredRef) return `${g.scopeType} · declared '${g.declaredRef}', not bound yet`;
+  return g.scopeType;
+}
+
+/**
+ * React key for a scope row. Two ports can share a type and store, so the
+ * index keeps the keys unique.
+ */
+const scopeKey = (g: GrantScope, i: number) => `${i}:${g.scopeType}:${g.scopeRef}:${g.source ?? ''}`;
+
+/** Where kept grants and every live assignment are listed. */
+export const ACCESS_REPORT_HREF = '/admin/access-governance?tab=report';
+
+/**
+ * The query parameter that opens the inbox on one request (the Access report's
+ * Request column links here): the inbox finds it among open, completed and
+ * denied requests, switches to its tier (or History) and expands it.
+ */
+export const REQUEST_PARAM = 'request';
+
+/** What a non-admin is told about kept grants, since only a tenant admin can open the report. */
+export const KEPT_GRANTS_ADMIN_NOTE = 'A tenant admin can review and remove the kept grants.';
+
+/**
+ * A final approval refused because the asset's storage no longer matches what
+ * was reviewed (409 `targets_changed`): both lists, and a denial reason the
+ * server suggests for the approver to send instead.
+ */
+interface TargetsChange {
+  reviewed: GrantScope[];
+  current: GrantScope[];
+  suggestedDenyReason?: string;
+}
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL },
@@ -150,6 +208,7 @@ const useStyles = makeStyles({
   steps: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   dialogFields: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: '420px', maxWidth: '100%', boxSizing: 'border-box' },
   err: { marginBottom: tokens.spacingVerticalM },
+  focusedRow: { backgroundColor: tokens.colorBrandBackground2 },
 });
 
 const STATUS_BADGE: Record<ApprovalStatus, { color: 'informative' | 'success' | 'danger'; label: string }> = {
@@ -198,10 +257,31 @@ export function AccessRequestInboxEditor() {
   const [bulk, setBulk] = useState<{ decision: 'approved' | 'denied'; ids: string[] } | null>(null);
   const [bulkResult, setBulkResult] = useState<BulkDecisionResult | null>(null);
   const [reason, setReason] = useState('');
-  const [scopeType, setScopeType] = useState('adls-container');
-  const [scopeRef, setScopeRef] = useState('');
   const [busy, setBusy] = useState(false);
   const [dlgError, setDlgError] = useState<string | null>(null);
+  /**
+   * A decision that took effect but left something to act on — a denial that
+   * kept grants it could not revoke. Shown on the page, not in the dialog: the
+   * request is already closed, so a dialog still offering Deny would only
+   * produce a conflict.
+   */
+  const [notice, setNotice] = useState<{ title: string; detail: string } | null>(null);
+  /** Set when a final approval is refused because the storage changed since review. */
+  const [targetsChange, setTargetsChange] = useState<TargetsChange | null>(null);
+  const isAdmin = useIsTenantAdmin();
+  /** The request the URL opened the inbox on (`?request=<id>`), once found. */
+  const [focusId, setFocusId] = useState<string | null>(null);
+  /** The URL named a request that was not found, or could not be looked up. */
+  const [focusMiss, setFocusMiss] = useState<{ id: string; reason?: string } | null>(null);
+  /**
+   * Where keyboard focus goes once the dialog has re-rendered: the submit
+   * button disables itself while busy, and **Deny with this reason** unmounts
+   * itself, so without this focus drops to the document body.
+   */
+  const [focusAfter, setFocusAfter] = useState<'deny-instead' | 'reason' | 'error' | null>(null);
+  const denyInsteadRef = useRef<HTMLButtonElement>(null);
+  const reasonRef = useRef<HTMLTextAreaElement>(null);
+  const dlgErrorRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async (v: ViewKey) => {
     setLoading(true); setError(null); setGate(null);
@@ -255,6 +335,43 @@ export function AccessRequestInboxEditor() {
   useEffect(() => { load(view); }, [view, load]);
   useEffect(() => { loadCounts(); }, [loadCounts]);
 
+  // `?request=<id>` (the Access report's Request link): find the request among
+  // open, completed and denied ones, open its tier (or History) and expand it.
+  useEffect(() => {
+    const id = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get(REQUEST_PARAM);
+    if (!id) return;
+    let cancelled = false;
+    const find = async (status: ApprovalStatus): Promise<AccessRequest | undefined> => {
+      const r = await clientFetch(`/api/access-requests?status=${status}`);
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.reason || j.error || `HTTP ${r.status}`);
+      return (j.requests || []).find((x: AccessRequest) => x.id === id);
+    };
+    (async () => {
+      try {
+        const hit = (await find('open')) || (await find('completed')) || (await find('denied'));
+        if (cancelled) return;
+        if (!hit) { setFocusMiss({ id }); return; }
+        setView(hit.status === 'open' ? hit.tier : 'history');
+        setExpanded((prev) => new Set(prev).add(id));
+        setFocusId(id);
+      } catch (e: any) {
+        if (!cancelled) setFocusMiss({ id, reason: e?.message || String(e) });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!focusAfter || busy) return;
+    const el = focusAfter === 'deny-instead' ? denyInsteadRef.current
+      : focusAfter === 'reason' ? reasonRef.current
+        : dlgErrorRef.current;
+    if (!el) return;
+    el.focus();
+    setFocusAfter(null);
+  }, [focusAfter, busy, dlg, dlgError, targetsChange]);
+
   const onTab = (_e: SelectTabEvent, d: SelectTabData) => setView(d.value as ViewKey);
 
   const toggle = (id: string) => setExpanded((prev) => {
@@ -266,9 +383,19 @@ export function AccessRequestInboxEditor() {
   const openDialog = (req: AccessRequest, decision: 'approved' | 'denied') => {
     setDlg({ req, decision });
     setReason('');
-    setScopeType(req.scopeType || 'adls-container');
-    setScopeRef(req.scopeRef || '');
     setDlgError(null);
+    setTargetsChange(null);
+    setFocusAfter(null);
+  };
+
+  /** Switch a refused approval to a denial, prefilled with the reason the server suggested. */
+  const denyInstead = () => {
+    if (!dlg) return;
+    setDlg({ req: dlg.req, decision: 'denied' });
+    setReason(targetsChange?.suggestedDenyReason || '');
+    setDlgError(null);
+    // The button that was clicked unmounts: put focus on the reason to send.
+    setFocusAfter('reason');
   };
 
   const isFinalTier = dlg?.req.tier === 'access-provider';
@@ -279,10 +406,6 @@ export function AccessRequestInboxEditor() {
     try {
       const payload: Record<string, unknown> = { decision: dlg.decision };
       if (reason.trim()) payload.reason = reason.trim();
-      if (dlg.decision === 'approved' && isFinalTier) {
-        payload.scopeType = scopeType;
-        if (scopeRef.trim()) payload.scopeRef = scopeRef.trim();
-      }
       const r = await clientFetch(`/api/access-requests/${dlg.req.id}/decision`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(payload),
@@ -291,11 +414,27 @@ export function AccessRequestInboxEditor() {
       if (!j.ok) {
         // Honest gate / grant error — keep the dialog open with the precise reason.
         setDlgError(j.warning || j.error || `HTTP ${r.status}`);
+        const refused = j.code === 'targets_changed';
+        setTargetsChange(refused
+          ? { reviewed: j.reviewed || [], current: j.current || [], suggestedDenyReason: j.suggestedDenyReason }
+          : null);
+        // The submit button disabled itself while busy: move focus to the
+        // action the refusal offers, or to the message itself.
+        setFocusAfter(refused && dlg.decision === 'approved' ? 'deny-instead' : 'error');
+        return;
+      }
+      if (j.warning && dlg.decision === 'denied') {
+        // The denial is recorded; the warning names grants it kept. Close the
+        // dialog and keep the warning on the page with a link to the report.
+        setDlg(null);
+        setNotice({ title: `Request for ${dlg.req.assetName} denied — some access was kept`, detail: j.warning });
+        await Promise.all([load(view), loadCounts()]);
         return;
       }
       if (j.warning) {
         // pending infra/config gate — surfaced but request stays at this tier.
         setDlgError(j.warning);
+        setFocusAfter('error');
         await Promise.all([load(view), loadCounts()]);
         return;
       }
@@ -303,8 +442,9 @@ export function AccessRequestInboxEditor() {
       await Promise.all([load(view), loadCounts()]);
     } catch (e: any) {
       setDlgError(e?.message || String(e));
+      setFocusAfter('error');
     } finally { setBusy(false); }
-  }, [dlg, reason, isFinalTier, scopeType, scopeRef, load, view, loadCounts]);
+  }, [dlg, reason, load, view, loadCounts]);
 
   // ── AG-14 bulk approve/deny ────────────────────────────────────────────────
   // Selection is per-view and clears whenever the tier tab or the row set
@@ -400,6 +540,40 @@ export function AccessRequestInboxEditor() {
           </MessageBar>
         )}
 
+        {notice && (
+          <MessageBar intent="warning" className={s.err} layout="multiline">
+            <MessageBarBody>
+              <MessageBarTitle>{notice.title}</MessageBarTitle>
+              {notice.detail}
+            </MessageBarBody>
+            <MessageBarActions
+              containerAction={<Button appearance="transparent" size="small" aria-label="Dismiss" icon={<DismissCircle20Regular />} onClick={() => setNotice(null)} />}
+            >
+              {isAdmin ? (
+                <Button as="a" href={ACCESS_REPORT_HREF} appearance="primary" size="small">
+                  Open the Access report
+                </Button>
+              ) : notice.detail.includes(KEPT_GRANTS_ADMIN_NOTE) ? null : (
+                <Caption1>{KEPT_GRANTS_ADMIN_NOTE}</Caption1>
+              )}
+            </MessageBarActions>
+          </MessageBar>
+        )}
+
+        {focusMiss && (
+          <MessageBar intent="warning" className={s.err} layout="multiline">
+            <MessageBarBody>
+              <MessageBarTitle>{focusMiss.reason ? 'Couldn’t look up the linked request' : 'Linked request not found'}</MessageBarTitle>
+              {focusMiss.reason
+                ? `Request ${focusMiss.id} could not be looked up: ${focusMiss.reason}`
+                : `Request ${focusMiss.id} is not among this tenant's open, completed or denied requests.`}
+            </MessageBarBody>
+            <MessageBarActions
+              containerAction={<Button appearance="transparent" size="small" aria-label="Dismiss" icon={<DismissCircle20Regular />} onClick={() => setFocusMiss(null)} />}
+            />
+          </MessageBar>
+        )}
+
         {error && (
           <MessageBar intent="error" className={s.err}>
             <MessageBarBody><MessageBarTitle>Couldn’t load requests</MessageBarTitle>{error}</MessageBarBody>
@@ -471,7 +645,11 @@ export function AccessRequestInboxEditor() {
                 const sb = STATUS_BADGE[r.status];
                 return (
                   <Fragment key={r.id}>
-                    <TableRow>
+                    <TableRow
+                      className={r.id === focusId ? s.focusedRow : undefined}
+                      aria-current={r.id === focusId ? 'true' : undefined}
+                      ref={r.id === focusId ? (el: HTMLTableRowElement | null) => el?.scrollIntoView?.({ block: 'center' }) : undefined}
+                    >
                       {selectable && (
                         <TableCell>
                           <Checkbox
@@ -539,7 +717,9 @@ export function AccessRequestInboxEditor() {
                               </span>
                               <span className={s.kv}>
                                 <Caption1 className={s.kvLabel}>Grant scope</Caption1>
-                                <Text>{r.scopeType}{r.scopeRef ? ` · ${r.scopeRef}` : ''}</Text>
+                                {grantScopes(r).map((g, i) => (
+                                  <Text key={scopeKey(g, i)}>{scopeLabel(g)}</Text>
+                                ))}
                               </span>
                               <span className={s.kv}>
                                 <Caption1 className={s.kvLabel}>Current tier</Caption1>
@@ -617,12 +797,39 @@ export function AccessRequestInboxEditor() {
                 )}
 
                 {dlgError && (
-                  <MessageBar intent="warning">
+                  <MessageBar intent="warning" ref={dlgErrorRef} tabIndex={-1}>
                     <MessageBarBody>
                       <MessageBarTitle>Action needs attention</MessageBarTitle>
                       {dlgError}
                     </MessageBarBody>
+                    {targetsChange && dlg?.decision === 'approved' && (
+                      <MessageBarActions>
+                        <Button ref={denyInsteadRef} appearance="primary" size="small" icon={<DismissCircle20Regular />} onClick={denyInstead}>
+                          Deny with this reason
+                        </Button>
+                      </MessageBarActions>
+                    )}
                   </MessageBar>
+                )}
+
+                {targetsChange && (
+                  <div className={s.detailRow} aria-label="Storage recorded when requested and bound now">
+                    <span className={s.kv}>
+                      {/* "Recorded", not "Reviewed": for a request made before
+                          targets were recorded, this is the scope its request
+                          body named, which nothing checked. */}
+                      <Caption1 className={s.kvLabel}>Recorded when requested</Caption1>
+                      {targetsChange.reviewed.length ? targetsChange.reviewed.map((g, i) => (
+                        <Text key={scopeKey(g, i)}>{scopeLabel(g)}{g.source ? ` (${g.source})` : ''}</Text>
+                      )) : <Text>—</Text>}
+                    </span>
+                    <span className={s.kv}>
+                      <Caption1 className={s.kvLabel}>Bound now</Caption1>
+                      {targetsChange.current.length ? targetsChange.current.map((g, i) => (
+                        <Text key={scopeKey(g, i)}>{scopeLabel(g)}{g.source ? ` (${g.source})` : ''}</Text>
+                      )) : <Text>—</Text>}
+                    </span>
+                  </div>
                 )}
 
                 {dlg?.decision === 'approved' && isFinalTier && (
@@ -630,24 +837,22 @@ export function AccessRequestInboxEditor() {
                     <MessageBar intent="info">
                       <MessageBarBody>
                         Final approval provisions a <strong>real Azure RBAC role assignment</strong> on the
-                        backing store and subscribes the requester. Confirm the scope below.
+                        backing store and subscribes the requester.
                       </MessageBarBody>
                     </MessageBar>
-                    <Field label="Scope type">
-                      <Dropdown
-                        value={scopeType}
-                        selectedOptions={[scopeType]}
-                        onOptionSelect={(_, d) => d.optionValue && setScopeType(d.optionValue)}
-                      >
-                        {SCOPE_TYPES.map((t) => <Option key={t} value={t}>{t}</Option>)}
-                      </Dropdown>
-                    </Field>
-                    <Field
-                      label="Backing container / database"
-                      hint="ADLS container name, Synapse pool/db, or ADX database the grant binds to."
-                    >
-                      <Input value={scopeRef} onChange={(_, d) => setScopeRef(d.value)} placeholder="e.g. gold" />
-                    </Field>
+                    <span className={s.kv}>
+                      <Caption1 className={s.kvLabel}>Grant scope</Caption1>
+                      {dlg && grantScopes(dlg.req).map((g, i) => (
+                        <Text key={scopeKey(g, i)}>
+                          {scopeLabel(g)}{g.source ? ` (${g.source})` : ''}
+                        </Text>
+                      ))}
+                      <Caption1>
+                        {dlg?.req.packageId
+                          ? 'Defined by the access package.'
+                          : 'Approval grants these scopes. If the asset’s bindings changed since the request, approval is refused; a scope with no store yet is granted once its store is bound.'}
+                      </Caption1>
+                    </span>
                   </>
                 )}
 
@@ -656,6 +861,7 @@ export function AccessRequestInboxEditor() {
                   required={dlg?.decision === 'denied'}
                 >
                   <Textarea
+                    ref={reasonRef}
                     value={reason}
                     onChange={(_, d) => setReason(d.value)}
                     placeholder={dlg?.decision === 'denied' ? 'Why is this request denied?' : 'Optional context for the audit trail'}

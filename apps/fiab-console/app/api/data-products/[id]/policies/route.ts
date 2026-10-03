@@ -7,9 +7,10 @@
  * whole implementation until #3580's second pass.
  *
  * The owner defined these as `Access`-kind governance policies scoped to
- * `data-product:<id>`, stored in the `tenant-settings` container under
- * `policies:<ownerOid>`. A consumer (different oid) cannot see them via
- * GET /api/governance/policies (which scopes to the caller's own oid), so this
+ * `data-product:<id>`. They live in the `tenant-settings` container, in the
+ * tenant Access-policy doc `access-policies:<tid>` (and, for policies recorded
+ * before that doc existed, the author's `policies:<ownerOid>`). A consumer
+ * cannot see them via GET /api/governance/policies, so this
  * BFF route resolves the owning workspace's tenantId and returns the owner's
  * Access policies scoped to THIS product. The dialog populates its "Permitted
  * purpose" dropdown from this (no freeform input).
@@ -55,6 +56,7 @@ import type { WorkspaceItem } from '@/lib/types/workspace';
 import { resolveDiscoveryAccess, NOT_FOUND } from '@/lib/dataproducts/discoverability';
 import { apiServerError } from '@/lib/api/respond';
 import { withSession } from '@/lib/api/route-toolkit';
+import { accessPoliciesDocId } from '@/lib/governance/access-policy-doc';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -92,29 +94,45 @@ export const GET = withSession<{ id: string }>(async (_req: NextRequest, { sessi
       return NextResponse.json({ ok: false, error: NOT_FOUND }, { status: 404 });
     }
 
-    // 3. Resolve the owning workspace's tenantId (cross-partition by id; PK = /tenantId).
+    // 3. Resolve the owning workspace's creator oid (`tenantId`) and Entra
+    //    tenant (`tid`) (cross-partition by id; PK = /tenantId).
     const ws = await workspacesContainer();
     const { resources: wsRes } = await ws.items
-      .query<{ tenantId: string }>({
-        query: 'SELECT c.tenantId FROM c WHERE c.id = @id',
+      .query<{ tenantId: string; tid?: string }>({
+        query: 'SELECT c.tenantId, c.tid FROM c WHERE c.id = @id',
         parameters: [{ name: '@id', value: resources[0].workspaceId }],
       })
       .fetchAll();
     const ownerTenantId = wsRes[0]?.tenantId;
     if (!ownerTenantId) return NextResponse.json({ ok: true, policies: [] });
 
-    // 4. Load the owner's policies doc from tenant-settings.
+    // 4. Load the Access policies that can apply to this product: the tenant
+    //    Access-policy doc (`access-policies:<tid>`, managed by tenant admins)
+    //    and the owner's own `policies:<oid>` doc, which holds any Access
+    //    policies recorded before the tenant doc existed. A missing doc is an
+    //    empty list; the two are merged by id.
     const ts = await tenantSettingsContainer();
-    let policiesDoc: any;
-    try {
-      const { resource } = await ts.item(`policies:${ownerTenantId}`, ownerTenantId).read();
-      policiesDoc = resource;
-    } catch (e: any) {
-      if (e?.code === 404) return NextResponse.json({ ok: true, policies: [] });
-      throw e;
-    }
-
-    const all: any[] = Array.isArray(policiesDoc?.items) ? policiesDoc.items : [];
+    const readItems = async (docId: string, pk: string): Promise<any[]> => {
+      try {
+        const { resource } = await ts.item(docId, pk).read();
+        return Array.isArray((resource as any)?.items) ? (resource as any).items : [];
+      } catch (e: any) {
+        if (e?.code === 404) return [];
+        throw e;
+      }
+    };
+    const tenantScope = wsRes[0]?.tid || ownerTenantId;
+    const [tenantItems, ownerItems] = await Promise.all([
+      readItems(accessPoliciesDocId(tenantScope), tenantScope),
+      readItems(`policies:${ownerTenantId}`, ownerTenantId),
+    ]);
+    const seen = new Set<string>();
+    const all: any[] = [...tenantItems, ...ownerItems].filter((p: any) => {
+      const key = String(p?.id);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
     const scopeKey = `data-product:${id}`;
     const policies: PermittedPurpose[] = all
       .filter((p: any) => p?.kind === 'Access' && p?.scope === scopeKey && p?.enabled !== false)

@@ -41,9 +41,10 @@ import {
   type AccessScopeType,
   type PrincipalType,
 } from './access-policy-client';
-import type { WorkspaceItem } from '../types/workspace';
 
 // ── Exported types ───────────────────────────────────────────────────────────
+
+export { resolveItemBackingScope, type BackingScope } from './item-backing-scope';
 
 export type UsageRights = SensitivityLabelUsageRights;
 
@@ -75,10 +76,6 @@ export interface LabelRbacGrant {
   roleName?: string;
   appliedAt: string;
 }
-
-export type BackingScope =
-  | { scopeType: AccessScopeType; scopeRef: string }
-  | { pending: string };
 
 // ── Pure helpers (synchronous, unit-tested) ──────────────────────────────────
 
@@ -150,41 +147,6 @@ export function checkExportProtection(
   }
 
   return { blocked: false };
-}
-
-/**
- * Resolve the Azure backing-store scope for a Loom workspace item, so F21 can
- * enforce a real RBAC grant on it.
- *
- * Returns `{ pending }` (never a silent no-op, per no-vaporware.md) when the
- * item type has no Azure-native backing scope wired for label enforcement.
- *
- * State-field conventions (Azure-native defaults — no Fabric):
- *   lakehouse                → ADLS container (state.container, default 'bronze')
- *   warehouse                → Synapse dedicated pool (state.dedicatedPool /
- *                              LOOM_SYNAPSE_DEDICATED_POOL, default 'loompool')
- *   kql-database / eventhouse → ADX database (state.adxDatabase / displayName)
- */
-export function resolveItemBackingScope(item: WorkspaceItem): BackingScope {
-  const state = (item.state || {}) as Record<string, unknown>;
-  switch (item.itemType) {
-    case 'lakehouse':
-      return { scopeType: 'adls-container', scopeRef: String(state.container || 'bronze') };
-    case 'warehouse':
-      return {
-        scopeType: 'warehouse',
-        scopeRef: String(state.dedicatedPool || process.env.LOOM_SYNAPSE_DEDICATED_POOL || 'loompool'),
-      };
-    case 'kql-database':
-    case 'eventhouse':
-      return { scopeType: 'kql-database', scopeRef: String(state.adxDatabase || item.displayName) };
-    default:
-      return {
-        pending:
-          `Item type "${item.itemType}" has no Azure backing scope for label RBAC enforcement. ` +
-          `Scope label protection to a lakehouse, warehouse, or kql-database item.`,
-      };
-  }
 }
 
 // ── Async helpers (Graph / ARM backed) ───────────────────────────────────────
