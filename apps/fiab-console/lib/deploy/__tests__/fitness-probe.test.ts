@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   ARM_API_VERSIONS,
   apiVersionFor,
+  cosmosContainerNames,
   familyPropertiesFromArm,
   foundryDeploymentProps,
   networkPostureFromArm,
@@ -180,6 +181,52 @@ describe('foundryDeploymentProps', () => {
   });
 });
 
+describe('cosmosContainerNames — the #3342 fix: resolved via ARM child resources, not a data-plane token', () => {
+  const dbs = [{ name: 'loom' }, { name: 'appdb' }];
+
+  it('flattens container names across every scanned database when the walk is complete', () => {
+    const containerListsByDb = new Map([
+      ['loom', { ok: true as const, value: [{ name: 'loom-items' }, { name: 'loom-workspaces' }] }],
+      ['appdb', { ok: true as const, value: [{ name: 'orders' }] }],
+    ]);
+    const r = cosmosContainerNames(dbs, containerListsByDb);
+    expect(r.complete).toBe(true);
+    expect(r.containerNames.sort()).toEqual(['loom-items', 'loom-workspaces', 'orders']);
+    expect(r.databasesScanned).toBe(2);
+  });
+
+  it('an EMPTY container list is a real answer (complete, zero names) — not an absent one', () => {
+    const containerListsByDb = new Map([
+      ['loom', { ok: true as const, value: [] }],
+      ['appdb', { ok: true as const, value: [] }],
+    ]);
+    const r = cosmosContainerNames(dbs, containerListsByDb);
+    expect(r.complete).toBe(true);
+    expect(r.containerNames).toEqual([]);
+  });
+
+  it('REFUSES to report complete when one database could not be listed — a partial scan must not read as "no collision" (R7)', () => {
+    // What value would make this fail: if `complete` were computed from only
+    // the SUCCESSFUL entries (ignoring the failed one), this would wrongly
+    // report `true` with containerNames from 'loom' alone — exactly the false
+    // "no collision" this test exists to catch.
+    const containerListsByDb = new Map([
+      ['loom', { ok: true as const, value: [{ name: 'loom-items' }] }],
+      ['appdb', { ok: false as const }],
+    ]);
+    const r = cosmosContainerNames(dbs, containerListsByDb);
+    expect(r.complete).toBe(false);
+  });
+
+  it('REFUSES to report complete when the database list itself was truncated by the scan cap', () => {
+    const many = Array.from({ length: 30 }, (_, i) => ({ name: `db${i}` }));
+    const containerListsByDb = new Map(many.slice(0, 25).map((d) => [d.name, { ok: true as const, value: [] }]));
+    const r = cosmosContainerNames(many, containerListsByDb);
+    expect(r.complete).toBe(false);
+    expect(r.databasesScanned).toBe(25);
+  });
+});
+
 describe('probeRbac — an unreadable authorization surface is unknown, never a deny', () => {
   it('reports holdsRole true when an assignment carries the role guid', async () => {
     const t = stubTransport([
@@ -333,5 +380,50 @@ describe('probeAdoption — the verdict MOVES with what ARM returned', () => {
     expect(t.calls.some((u) => u.includes('/deployments?'))).toBe(true);
     expect(r.fitness.checks.find((c) => c.id === 'foundry.kind')?.verdict).toBe('pass');
     expect(r.established).toContain('deployments: 1 returned');
+  });
+
+  it('cosmos walks sqlDatabases -> containers and FLAGS a collision — the check that used to be permanently unknown (#3342)', async () => {
+    const t = stubTransport([
+      { match: '/roleAssignments', result: noAssignments },
+      { match: '/permissions', result: okPermissions },
+      { match: '/sqlDatabases/loom/containers?', result: { status: 200, body: { value: [{ name: 'loom-items' }, { name: 'orders' }] } } },
+      { match: '/sqlDatabases?', result: { status: 200, body: { value: [{ name: 'loom' }] } } },
+      {
+        match: 'accounts/stloomexisting?',
+        result: {
+          status: 200,
+          body: { location: 'eastus2', properties: { publicNetworkAccess: 'Enabled', capabilities: [] } },
+        },
+      },
+    ]);
+    const r = await probeAdoption('cosmos', TARGET, CTX, 'tok', t);
+    expect(t.calls.some((u) => u.includes('/sqlDatabases?'))).toBe(true);
+    expect(t.calls.some((u) => u.includes('/sqlDatabases/loom/containers?'))).toBe(true);
+    expect(r.fitness.checks.find((c) => c.id === 'cosmos.containerNameCollision')?.verdict).toBe('warn');
+    expect(r.established).toContain('sqlDatabases: 1 returned, 1 scanned for containers');
+    expect(r.established).not.toContain('INCOMPLETE');
+  });
+
+  it('cosmos reports the collision check as UNKNOWN (not a false pass) when one database could not be listed', async () => {
+    const t = stubTransport([
+      { match: '/roleAssignments', result: noAssignments },
+      { match: '/permissions', result: okPermissions },
+      { match: '/sqlDatabases/loom/containers?', result: { status: 200, body: { value: [] } } },
+      { match: '/sqlDatabases/appdb/containers?', result: { status: 403, body: { error: { message: 'Forbidden' } } } },
+      { match: '/sqlDatabases?', result: { status: 200, body: { value: [{ name: 'loom' }, { name: 'appdb' }] } } },
+      {
+        match: 'accounts/stloomexisting?',
+        result: {
+          status: 200,
+          body: { location: 'eastus2', properties: { publicNetworkAccess: 'Enabled', capabilities: [] } },
+        },
+      },
+    ]);
+    const r = await probeAdoption('cosmos', TARGET, CTX, 'tok', t);
+    // What value would make this fail: if the partial walk were reported
+    // `complete`, this check would read `pass` (no "loom" name seen in the ONE
+    // database that happened to answer) instead of `unknown`.
+    expect(r.fitness.checks.find((c) => c.id === 'cosmos.containerNameCollision')?.verdict).toBe('unknown');
+    expect(r.established).toContain('INCOMPLETE');
   });
 });
