@@ -186,11 +186,23 @@ describe('POST /api/setup/deploy — the #3014 fitness gate at the choke point',
     expect(j.issues?.some((i: any) => i.code === 'missing-target')).toBe(true);
   });
 
-  it('an UN-EVALUATED adoption still deploys (honestly documented: no producer for evaluateFitness yet)', async () => {
-    // This pins the deliberate scope of the gate: enforcing
-    // 'fitness-not-evaluated' before an evaluator exists would dead-end
-    // brownfield entirely. When the evaluator lands, this test is the one to
-    // flip. Refs #3014 follow-up.
+  it('an UN-EVALUATED adoption still deploys (NOT because no producer exists — one does — but because enforcing this here needs the #3016 adopt-bag-transport fixtures updated in lockstep; see route.ts)', async () => {
+    // Renamed 2026-10-03 (#3342): the old title and comment said "no producer
+    // for evaluateFitness yet" and promised "when the evaluator lands, this
+    // test is the one to flip". Both are false at this head —
+    // `lib/deploy/fitness-probe.ts` IS a real production producer, reached via
+    // POST /api/setup/validate-adoption, and the wizard already refuses to
+    // enable Deploy on exactly this condition (`plan-model.ts`
+    // `planBlockers()` blocks on `!d.fitness`). What this test still measures
+    // is UNCHANGED: `app/api/setup/__tests__/deploy-adopt-transport.test.ts`
+    // (the #3016 suite) deliberately submits `adopt` decisions with no
+    // `fitness` attached to isolate the adopt-bag-transport question from the
+    // fitness-gate question, and several of its assertions require those
+    // submits to reach a deploy tier (202/503), not a 400. Flipping THIS
+    // test's expectation to 400 without updating that suite in lockstep would
+    // make this test pass while breaking that one — so the behavior stays as
+    // measured, and only the false claim about WHY is corrected. Refs #3014
+    // follow-up, #3342.
     const { POST } = await import('@/app/api/setup/deploy/route');
     const r = await POST(
       bodyReq(

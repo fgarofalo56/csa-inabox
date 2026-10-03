@@ -1,6 +1,6 @@
 /**
  * GENERATED — do not edit by hand. TYPE-ONLY (no runtime import is emitted).
- * Source: apps/fiab-console/app/api/**\/route.ts   (1697 routes)
+ * Source: apps/fiab-console/app/api/**\/route.ts   (1698 routes)
  * Regenerate: node scripts/ci/generate-client-route-map.mjs
  * Drift gate:  node scripts/ci/generate-client-route-map.mjs --check
  *
@@ -81,6 +81,7 @@ export type StaticApiRoute =
   | '/api/admin/copilot/memory/audit'
   | '/api/admin/data-products-backend'
   | '/api/admin/data-quality-rules'
+  | '/api/admin/databricks-warehouses/adopt'
   | '/api/admin/deploy-plan'
   | '/api/admin/deploy-plan/cost-estimate'
   | '/api/admin/deploy-status'

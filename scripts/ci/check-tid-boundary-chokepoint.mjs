@@ -5077,6 +5077,76 @@ const ADMIN_SHAPE_UNSCOPED = new Map([
         'this entry no longer describes the function.',
     },
   ],
+  [
+    'app/api/items/_lib/warehouse-item-binding.ts:authorizeWarehouseTarget',
+    {
+      verdict: 'ORG-WIDE',
+      requires: ['isTenantAdmin(', 'authorizeItemWorkspace(', 'allowReadRoles: true'],
+      why:
+        'ORG-WIDE (the admin branch only), #3669. The `isTenantAdmin` test is reached ONLY when the ' +
+        'Databricks SQL warehouse carries no `loom_item_id` tag, or a tag naming no ' +
+        '`databricks-sql-warehouse` item: no workspace and no item is in play, the warehouse is a ' +
+        'resource of the DEPLOYMENT\'s Databricks workspace, and a non-admin gets the coded 404. A ' +
+        'warehouse whose tag names an item takes the other branch, `authorizeItemWorkspace(session, ' +
+        '{ workspaceId, itemId, allowReadRoles: true })` with the item\'s workspace, which never ' +
+        'consults the admin flag here and returns its own 409 on a tenant mismatch. The three tokens ' +
+        'pin PRESENCE only: this guard checks that each substring is in the masked body, not where ' +
+        'it sits or in which order, so moving the admin test above the item branch would still pass ' +
+        'here. That ORDER is enforced by vitest, in ' +
+        'app/api/items/[type]/[id]/ai-function/__tests__/warehouse-binding.test.ts: "goes through ' +
+        'the ladder for a tagged warehouse, and its 409 passes through" (an admin short-circuit ' +
+        'turns that 409 into a 200) and its positive pair "runs on a tagged warehouse in a ' +
+        'workspace the resolver grants".',
+    },
+  ],
+  // The two serverless SQL routes that share the SQL tab's classifier (#4841). Same shape as
+  // `lakehouse/[id]/query/route.ts:POST` above: the item check runs first, and the admin flag
+  // only picks the target, the database and whether the text is confined.
+  [
+    'app/api/items/synapse-serverless-sql-pool/[id]/query/route.ts:POST',
+    {
+      verdict: 'NARROWS',
+      requires: ['guardSqlPoolQueryItem(', 'isTenantAdmin(', 'confineToWorkspaceLakehouses('],
+      why:
+        'NARROWS (as to item and workspace). `guardSqlPoolQueryItem(id)` runs first and returns its ' +
+        'refusal before the body is read; it resolves the item\'s workspace from the item through ' +
+        'guardSynapseItemRequest -> authorizeItemWorkspace (checked by 8a-8e). The isTenantAdmin ' +
+        'read that follows admits no item and no workspace: it picks the target and database ' +
+        '(the requested one for a tenant admin, master on the reader pool otherwise) and, for a ' +
+        'caller who is not a tenant admin, sends the text through confineToWorkspaceLakehouses, ' +
+        'whose roots come from the guarded item\'s own workspaceId.',
+    },
+  ],
+  [
+    'app/api/items/semantic-model/[id]/direct-lake/route.ts:POST',
+    {
+      verdict: 'NARROWS',
+      requires: ['loadOwnedItem(', 'isTenantAdmin(', 'confineToWorkspaceLakehouses('],
+      why:
+        'NARROWS (as to item and workspace). The isTenantAdmin read sits inside `if (rawSql && ' +
+        'owned)`, so it is reached only after `loadOwnedItem(id, \'semantic-model\', ...)` has ' +
+        'returned the item at write level (null -> 404). It admits no item and no workspace: it ' +
+        'picks the target (serverless master for a tenant admin, the Direct Lake reader pool ' +
+        'otherwise) and, for a caller who is not a tenant admin, sends the text through ' +
+        'confineToWorkspaceLakehouses with roots from the owned item\'s workspaceId, never the ' +
+        'body\'s Power BI workspaceId.',
+    },
+  ],
+  [
+    'app/api/items/[type]/[id]/visual-query/route.ts:POST',
+    {
+      verdict: 'NARROWS',
+      requires: ['guardSqlPoolQueryItem(', 'isTenantAdmin(', 'confineToWorkspaceLakehouses('],
+      why:
+        'NARROWS (as to item and workspace). The isTenantAdmin read is `serverless && ' +
+        'isTenantAdmin(session)`, so it counts only for type synapse-serverless-sql-pool, and for ' +
+        'that type `guardSqlPoolQueryItem(id)` has already returned (its refusal before the body is ' +
+        'read). It admits no item and no workspace: it picks the target and database for the ' +
+        'generated SQL and, for a caller who is not a tenant admin, sends it through ' +
+        'confineToWorkspaceLakehouses with roots from the guarded item\'s workspaceId. The other ' +
+        'engine types never read the flag.',
+    },
+  ],
 ]);
 
 /**

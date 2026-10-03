@@ -31,9 +31,19 @@ const NOT_RUN_CODES = new Set([
   'lakehouse_storage_unbound',
 ]);
 
+/**
+ * Whether a failed response is a query the route chose not to run (or could
+ * not confirm), rather than one that ran and failed. The one predicate every
+ * editor that shows these responses uses, so a caption and a bar cannot
+ * disagree about the same response.
+ */
+export function isSqlRefusal(result: { ok?: boolean; code?: string }): boolean {
+  return result.ok !== true && !!result.code && NOT_RUN_CODES.has(result.code);
+}
+
 /** The failure bar under the SQL editor: the reason, then what to do about it. */
 export function SqlRefusalOrError({ result }: { result: SqlFailure }) {
-  const notRun = !!result.code && NOT_RUN_CODES.has(result.code);
+  const notRun = isSqlRefusal(result);
   return (
     <MessageBar intent={notRun ? 'warning' : 'error'} layout="multiline">
       {/* A refused name can be one long unbroken token; let it wrap rather than widen the bar. */}
