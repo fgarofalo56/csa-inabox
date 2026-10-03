@@ -14,7 +14,11 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-vi.mock('@/lib/auth/session', () => ({ getSession: vi.fn() }));
+vi.mock('@/lib/auth/session', () => ({
+  getSession: vi.fn(),
+  // The route reads the tenant Access-policy doc keyed by tenantScopeId.
+  tenantScopeId: (s: any) => s?.claims?.tid || s?.claims?.oid,
+}));
 vi.mock('@/app/api/items/_lib/item-crud', async () => {
   const { NextResponse } = await import('next/server');
   return {

@@ -95,6 +95,60 @@ export interface AccessRequestDoc {
    *  requester activates it for a bounded window instead. */
   activationRequired?: boolean;
   activationWindowHours?: number | null;
+  // ── asset-derived scope (catalog requests) ───────────────────────────────────
+  /**
+   * Every scope the grant binds to, derived from the requested asset on the
+   * server (lib/access/request-asset.ts). `scopeType`/`scopeRef` above carry the
+   * first one for display. Absent on access-package legs, whose scope comes
+   * from the package definition.
+   */
+  grantTargets?: AccessRequestGrantTarget[];
+  /**
+   * Per-scope grant outcome. Written at the final tier, and also when a
+   * self-serve request's grant landed on some scopes but not all before it
+   * was routed for approval (lib/access/landed-grants.ts). Every `active` entry
+   * that this request `created` is recorded in the entitlement ledger and is
+   * revoked if the request is denied.
+   */
+  grantResults?: AccessRequestGrantResult[];
+  /** Grants this request created and a denial revoked (lib/access/landed-grants.ts). */
+  revokedGrants?: AccessRequestGrantResult[];
+  /** Owner recorded on the requested item, when it names one (never from the request body). */
+  ownerUpn?: string;
+  /**
+   * Set while a decision holds this request (ISO-8601 expiry): a final
+   * approval while it grants, or a denial while it revokes. It is renewed
+   * between scopes; any other decision is refused until it passes or the
+   * result is written (app/api/access-requests/[id]/decision/route.ts).
+   */
+  grantLeaseUntil?: string;
+}
+
+/** One scope an access request's grant binds to. */
+export interface AccessRequestGrantTarget {
+  scopeType: AccessScopeType;
+  scopeRef: string;
+  /** Where the scope came from (an output port, a data asset, the item itself). */
+  source?: string;
+  /**
+   * For an output-port target: the store the port named when the request was
+   * made (the owner's text, before it is checked against the workspace). A
+   * port target that was not bound yet is approved later only onto a store
+   * the port still names — so the approver's view and the grant agree.
+   */
+  declaredRef?: string;
+}
+
+/** The grant outcome for one scope. */
+export interface AccessRequestGrantResult extends AccessRequestEnforcement {
+  scopeType: AccessScopeType;
+  scopeRef: string;
+  /**
+   * True when this request's grant CREATED the role assignment / membership;
+   * false when the grant found it already in place. Only created grants are
+   * revoked on denial, so access the principal held beforehand is left alone.
+   */
+  created?: boolean;
 }
 
 /** Map a tier to the doc field that records its decision. */
@@ -114,7 +168,8 @@ export const TIER_APPROVAL_KEY: Record<ApprovalTier, keyof AccessRequestDoc> = {
  * enforced by resolveWorkspaceRole. (#51 live finding 2026-07-16: the old
  * default of 'adls-container' sent data-product grants into
  * grantContainerRole('') → 502 at the final approval tier.)
- * The access provider can still override the scope at the final tier.
+ * Catalog requests no longer use this: their scope is derived from the asset's
+ * own record (lib/access/request-asset.ts).
  */
 export function inferScopeType(itemType: string): AccessScopeType {
   const t = (itemType || '').toLowerCase();

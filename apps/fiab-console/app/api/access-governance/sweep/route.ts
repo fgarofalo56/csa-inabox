@@ -16,14 +16,29 @@
  * C17: the machine path used to require LOOM_SWEEPER_TOKEN, which the deploy set
  * NOWHERE — so the schedule never ran and expiry auto-revoke was
  * admin-button-only. See lib/access/sweep-auth.ts for the measurement and fix.
+ *
+ * The same pass resolves the access-request grant ledger
+ * (lib/access/grant-intents.ts, reconcileStaleGrantIntents): every `pending`
+ * row older than a decision's hold is checked against the store and marked
+ * `absent` or found in place, `absent` rows are re-checked for a day for a
+ * grant that landed late, and an `absent` row past that day is checked once
+ * more and marked `lapsed` when still not in place — so a decision that stopped
+ * without recording its grant is resolved on the schedule, not only when
+ * someone decides on that request again. The scheduled job covers every
+ * tenant; an admin's button covers the admin's own. Skipped on a dry run. A
+ * failure there is reported in `grantRecordsError`; the expiry pass still
+ * completes, and the scheduled job's runner fails the execution
+ * (e2e/run-access-sweep.mjs).
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { withTenantAdmin } from '@/lib/api/route-toolkit';
+import { tenantScopeId } from '@/lib/auth/session';
 import { accessAssignmentsContainer, auditLogContainer } from '@/lib/azure/cosmos-client';
 import type { AccessAssignment } from '@/lib/types/access-assignment';
 import { revokeAccessGrant, revokeStructuredGrant, type AccessScopeType, type AccessPermission } from '@/lib/azure/access-policy-client';
 import { expireAssignment } from '@/lib/access/assignment-ledger';
 import { selectExpired } from '@/lib/access/expiry';
+import { reconcileStaleGrantIntents } from '@/lib/access/grant-intents';
 import { isSweepSystemCaller } from '@/lib/access/sweep-auth';
 import crypto from 'node:crypto';
 import { apiServerError } from '@/lib/api/respond';
@@ -31,8 +46,8 @@ import { apiServerError } from '@/lib/api/respond';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-/** The sweep itself — identical work for the system caller and a human admin. */
-async function runSweep(req: NextRequest, by: string): Promise<Response> {
+/** The sweep itself — identical work for the system caller and a human admin (`tenantId` scopes the grant ledger). */
+async function runSweep(req: NextRequest, by: string, tenantId?: string): Promise<Response> {
   const dryRun = req.nextUrl.searchParams.get('dryRun') === '1';
   const now = new Date();
 
@@ -85,16 +100,27 @@ async function runSweep(req: NextRequest, by: string): Promise<Response> {
     }
   }
 
+  let grantRecords: Awaited<ReturnType<typeof reconcileStaleGrantIntents>> | undefined;
+  let grantRecordsError: string | undefined;
+  try {
+    grantRecords = await reconcileStaleGrantIntents({ ...(tenantId ? { tenantId } : {}), now: now.getTime() });
+  } catch (e: any) {
+    const code = [e?.code, e?.statusCode, e?.status].find((v) => typeof v === 'number');
+    grantRecordsError = `The access-request grant records could not be resolved${code === undefined ? '' : ` (the store answered ${code})`}.`;
+  }
+
   return NextResponse.json({
     ok: true, dryRun: false, candidates: due.length, expired,
     ...(errors.length ? { revokeWarnings: errors.slice(0, 20) } : {}),
+    ...(grantRecords ? { grantRecords } : {}),
+    ...(grantRecordsError ? { grantRecordsError } : {}),
     by,
   });
 }
 
 /** Human-admin path — session (401) + tenant-admin (403) through the toolkit. */
 const adminSweep = withTenantAdmin(async (req: NextRequest, { session }) =>
-  runSweep(req, session.claims.upn || session.claims.oid),
+  runSweep(req, session.claims.upn || session.claims.oid, tenantScopeId(session)),
 );
 
 export async function POST(req: NextRequest) {

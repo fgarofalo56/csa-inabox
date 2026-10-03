@@ -15,10 +15,19 @@
  * merge de-dups the same effective grant that appears in both the ledger and the
  * live ACL container. Real backends only (no mock rows) — an empty report is an
  * honest "nothing granted yet / run backfill", not a stub.
+ *
+ * `grantRecords` lists the access-request grants that are not settled — the
+ * grant-ledger rows (lib/access/grant-intents.ts) still `pending` (a grant in
+ * progress, or interrupted before its outcome was written), `failed`, or
+ * `absent` (not in place when checked) — with their state and when they were
+ * written, for the admin's own tenant and the same principal / resource filter.
+ * A pending row may be a live grant; the scheduled access sweep resolves it.
+ * When those rows cannot be read the report still answers, with
+ * `grantRecordsError` saying so.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { requireTenantAdmin } from '@/lib/auth/feature-gate';
+import { tenantScopeId } from '@/lib/auth/session';
+import { withTenantAdmin } from '@/lib/api/route-toolkit';
 import { accessAssignmentsContainer, workspaceRolesContainer } from '@/lib/azure/cosmos-client';
 import { getGroupTransitiveMembers } from '@/lib/azure/graph-identity-client';
 import type { AccessAssignment } from '@/lib/types/access-assignment';
@@ -27,6 +36,7 @@ import {
   assignmentToEntry, workspaceRoleToEntry, mergeEntries,
   buildPrincipalReport, buildResourceReport, entriesToCsv, type AccessEntry,
 } from '@/lib/access/access-report';
+import { listUnsettledGrantIntents } from '@/lib/access/grant-intents';
 import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
@@ -68,11 +78,8 @@ async function expandGroups(entries: AccessEntry[]): Promise<{ entries: AccessEn
   return { entries: out, status: anyExpanded ? 'applied' : 'unavailable' };
 }
 
-export async function GET(req: NextRequest) {
-  const s = getSession();
-  const gate = requireTenantAdmin(s);
-  if (gate) return gate;
-
+/** Route-toolkit: withTenantAdmin (session 401, tenant-admin 403). */
+export const GET = withTenantAdmin(async (req: NextRequest, { session: s }) => {
   const principalId = (req.nextUrl.searchParams.get('principalId') || '').trim();
   const resourceRef = (req.nextUrl.searchParams.get('resourceRef') || '').trim();
   const resourceType = (req.nextUrl.searchParams.get('resourceType') || '').trim();
@@ -136,14 +143,41 @@ export async function GET(req: NextRequest) {
       });
     }
 
+    let grantRecords: Array<Record<string, unknown>> = [];
+    let grantRecordsError: string | undefined;
+    try {
+      const rows = await listUnsettledGrantIntents(tenantScopeId(s), {
+        ...(principalId ? { principalId } : {}),
+        ...(resourceRef ? { scopeRef: resourceRef } : {}),
+      });
+      grantRecords = rows.map((r) => ({
+        id: r.id,
+        requestId: r.requestId,
+        principalId: r.principalId,
+        principalName: r.principalName,
+        scopeType: r.scopeType,
+        scopeRef: r.scopeRef,
+        assetName: r.assetName,
+        permission: r.permission,
+        state: r.state,
+        createdAt: r.createdAt,
+        updatedAt: r.updatedAt,
+        ...(r.detail ? { detail: r.detail } : {}),
+      }));
+    } catch {
+      grantRecordsError = 'The access-request grant records could not be read, so grants not yet settled are not listed.';
+    }
+
     return NextResponse.json({
       ok: true,
       mode: principalId ? 'principal' : resourceRef ? 'resource' : 'tenant',
       count: entries.length,
       groupExpansion,
       entries,
+      grantRecords,
+      ...(grantRecordsError ? { grantRecordsError } : {}),
     });
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});

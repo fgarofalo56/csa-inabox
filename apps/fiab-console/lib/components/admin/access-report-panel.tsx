@@ -7,8 +7,18 @@
  * and can seed the ledger via POST /api/access-governance/backfill. All real
  * backends; an empty result is an honest "nothing granted / run backfill" state,
  * never a stub. Fluent v9 + Loom tokens throughout (web3-ui + ux-baseline §9.5).
+ *
+ * Below the grants, "Grants not yet settled" lists the access-request grants
+ * whose outcome is not recorded as in place, held before, removed or lapsed
+ * (the report's `grantRecords`): a grant in progress or interrupted, one that
+ * failed, one waiting on configuration, or one not in place when it was
+ * checked — with its age, because a pending row may be a live grant until the
+ * scheduled access sweep resolves it. Rows a closed request or a later attempt
+ * superseded are not listed. Each row links to its request in the inbox. The
+ * CSV export covers the recorded grants only, and says so.
  */
 import { useState, useEffect, useCallback } from 'react';
+import Link from 'next/link';
 import { clientFetch } from '@/lib/client-fetch';
 import {
   makeStyles, tokens, Badge, Button, Input, Caption1, Subtitle2, Spinner,
@@ -18,7 +28,7 @@ import {
 import {
   ArrowSync20Regular, ArrowDownload20Regular, DatabaseArrowUp20Regular,
   Person20Regular, Group20Regular, Search20Regular, ShieldTask24Regular,
-  Play20Regular, Timer20Regular,
+  Play20Regular, Timer20Regular, HourglassHalf20Regular,
 } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
 import { IdentityPicker } from '@/lib/components/ui/identity-picker';
@@ -31,6 +41,45 @@ interface Entry {
   role: string; permission?: string; source: string;
   grantedBy?: string; grantedAt?: string; expiresAt?: string | null; state: string;
   viaGroupId?: string; viaGroupName?: string;
+}
+
+/** An access-request grant whose outcome is not settled (the report's `grantRecords`). */
+interface GrantRecord {
+  id: string; requestId: string;
+  principalId: string; principalName?: string;
+  scopeType: string; scopeRef: string; assetName?: string; permission?: string;
+  state: 'pending' | 'gated' | 'failed' | 'absent' | string;
+  createdAt: string; updatedAt?: string; detail?: string;
+}
+
+/** What each unsettled state means to an admin. */
+export const GRANT_RECORD_STATE_LABEL: Record<string, string> = {
+  pending: 'Grant in progress or interrupted',
+  gated: 'Waiting on configuration',
+  failed: 'Grant failed',
+  absent: 'Not in place when checked',
+};
+
+/** The access-request inbox, opened on one request (lib/editors/access-request-inbox.tsx reads `request`). */
+export function requestInboxHref(requestId: string): string {
+  return `/governance/access-requests?request=${encodeURIComponent(requestId)}`;
+}
+
+/** What the CSV export covers, shown beside it whenever there are grants not yet settled. */
+export const CSV_SCOPE_NOTE =
+  'The CSV export covers recorded grants only. Grants not yet settled, listed below, are not exported.';
+/** Why Export is unavailable when nothing is recorded. */
+export const CSV_EMPTY_NOTE = 'Nothing recorded to export. Grants not yet settled are not exported.';
+
+/** "12 min", "3 h", "2 d" since an ISO instant. */
+export function ageLabel(iso: string, now = Date.now()): string {
+  const ms = now - Date.parse(iso);
+  if (Number.isNaN(ms)) return '—';
+  const min = Math.max(0, Math.floor(ms / 60_000));
+  if (min < 60) return `${min} min`;
+  const h = Math.floor(min / 60);
+  if (h < 48) return `${h} h`;
+  return `${Math.floor(h / 24)} d`;
 }
 
 /** Human "expires in" / "expired" / permanent, from an ISO expiresAt. */
@@ -55,6 +104,8 @@ const useStyles = makeStyles({
   via: { color: tokens.colorNeutralForeground3 },
   count: { color: tokens.colorNeutralForeground2 },
   scroll: { overflowX: 'auto', minWidth: 0 },
+  section: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 },
+  sectionHeader: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', minWidth: 0 },
 });
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -79,6 +130,8 @@ export function AccessReportPanel() {
   const [mode, setMode] = useState<Mode>('tenant');
   const [value, setValue] = useState('');
   const [rows, setRows] = useState<Entry[] | null>(null);
+  const [records, setRecords] = useState<GrantRecord[]>([]);
+  const [recordsError, setRecordsError] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [groupExpansion, setGroupExpansion] = useState<string>('n/a');
@@ -94,16 +147,18 @@ export function AccessReportPanel() {
   const load = useCallback(async () => {
     setErr(null); setNote(null);
     // Principal/resource modes need a value; tenant mode lists everything.
-    if (mode !== 'tenant' && !value.trim()) { setRows(null); return; }
+    if (mode !== 'tenant' && !value.trim()) { setRows(null); setRecords([]); setRecordsError(null); return; }
     setRows(null);
     try {
       const qs = queryString();
       const r = await clientFetch(`/api/access-governance/report${qs ? `?${qs}` : ''}`);
       const j = await r.json();
-      if (!j.ok) { setErr(isUnauthorized(r) ? 'Tenant-admin access required.' : (j.error || `HTTP ${r.status}`)); setRows([]); return; }
+      if (!j.ok) { setErr(isUnauthorized(r) ? 'Tenant-admin access required.' : (j.error || `HTTP ${r.status}`)); setRows([]); setRecords([]); return; }
       setRows(j.entries || []);
+      setRecords(Array.isArray(j.grantRecords) ? j.grantRecords : []);
+      setRecordsError(j.grantRecordsError || null);
       setGroupExpansion(j.groupExpansion || 'n/a');
-    } catch (e: any) { setErr(e?.message || String(e)); setRows([]); }
+    } catch (e: any) { setErr(e?.message || String(e)); setRows([]); setRecords([]); }
   }, [mode, value, queryString]);
 
   // Auto-load the tenant-wide view on mount + whenever mode switches to tenant.
@@ -144,7 +199,11 @@ export function AccessReportPanel() {
       const r = await clientFetch('/api/access-governance/sweep', { method: 'POST' });
       const j = await r.json();
       if (!j.ok) { setErr(j.error || 'sweep failed'); return; }
-      setNote(`Sweep complete — ${j.expired ?? 0} expired of ${j.candidates ?? 0} due.`); await load();
+      const g = j.grantRecords;
+      setNote(`Sweep complete — ${j.expired ?? 0} expired of ${j.candidates ?? 0} due.`
+        + (g ? ` Grants not yet settled: ${g.checked ?? 0} checked, ${(g.found ?? 0) + (g.landedLate ?? 0)} found in place, ${(g.absent ?? 0) + (g.stillAbsent ?? 0)} not in place, ${g.lapsed ?? 0} no longer re-checked, ${g.unknown ?? 0} could not be checked.` : '')
+        + (j.grantRecordsError ? ` ${j.grantRecordsError}` : ''));
+      await load();
     } catch (er: any) { setErr(er?.message || String(er)); }
     finally { setBusy(false); }
   }, [load]);
@@ -215,13 +274,21 @@ export function AccessReportPanel() {
           <Tooltip content="Reload" relationship="label">
             <Button appearance="subtle" icon={<ArrowSync20Regular />} onClick={() => void load()} aria-label="Reload" />
           </Tooltip>
-          <Button appearance="secondary" icon={<ArrowDownload20Regular />} disabled={!rows || rows.length === 0} onClick={downloadCsv}>Export CSV</Button>
+          {rows && rows.length === 0 && records.length > 0 ? (
+            // Disabled, but still focusable so its reason is announced.
+            <Tooltip content={CSV_EMPTY_NOTE} relationship="description">
+              <Button appearance="secondary" icon={<ArrowDownload20Regular />} disabledFocusable>Export CSV</Button>
+            </Tooltip>
+          ) : (
+            <Button appearance="secondary" icon={<ArrowDownload20Regular />} disabled={!rows || rows.length === 0} onClick={downloadCsv}>Export CSV</Button>
+          )}
           <Button appearance="secondary" icon={<Timer20Regular />} disabled={busy} onClick={() => void runSweep()}>Run sweep</Button>
           <Button appearance="primary" icon={busy ? <Spinner size="tiny" /> : <DatabaseArrowUp20Regular />} disabled={busy} onClick={() => void runBackfill()}>Backfill ledger</Button>
         </div>
       </div>
 
       {note && <MessageBar intent="success"><MessageBarBody>{note}</MessageBarBody></MessageBar>}
+      {records.length > 0 && <Caption1 className={s.count}>{CSV_SCOPE_NOTE}</Caption1>}
       {err && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Could not load report</MessageBarTitle>{err}</MessageBarBody></MessageBar>}
       {mode === 'resource' && groupExpansion === 'unavailable' && rows && rows.length > 0 && (
         <MessageBar intent="info"><MessageBarBody>
@@ -301,6 +368,77 @@ export function AccessReportPanel() {
             </Table>
           </div>
         </>
+      )}
+
+      {recordsError && (
+        <MessageBar intent="warning"><MessageBarBody>{recordsError}</MessageBarBody></MessageBar>
+      )}
+      {records.length > 0 && (
+        <section className={s.section} aria-label="Grants not yet settled">
+          <div className={s.sectionHeader}>
+            <HourglassHalf20Regular />
+            <Subtitle2>Grants not yet settled</Subtitle2>
+            <Badge appearance="tint" color="warning" size="small">{records.length}</Badge>
+          </div>
+          <Caption1 className={s.count}>
+            Access-request grants whose outcome is not recorded as in place, held before, removed or lapsed. A grant
+            in progress or interrupted may be live: the scheduled access sweep checks it against the store, and one
+            found in place moves into the grants above. One not in place when checked is re-checked for 24 hours,
+            then once more, and leaves this list if still not in place. A failed grant, or one waiting on
+            configuration, is not retried by the sweep; approving the request again retries it. Rows of a closed
+            request, or of a scope a later attempt settled, are not listed.
+          </Caption1>
+          <div className={s.scroll}>
+            <Table size="small" aria-label="Grants not yet settled">
+              <TableHeader>
+                <TableRow>
+                  <TableHeaderCell>Principal</TableHeaderCell>
+                  <TableHeaderCell>Resource</TableHeaderCell>
+                  <TableHeaderCell>State</TableHeaderCell>
+                  <TableHeaderCell>Age</TableHeaderCell>
+                  <TableHeaderCell>Request</TableHeaderCell>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {records.map((g) => (
+                  <TableRow key={g.id}>
+                    <TableCell>
+                      <TableCellLayout media={<Person20Regular />}>
+                        <span>{g.principalName || g.principalId}</span>
+                      </TableCellLayout>
+                    </TableCell>
+                    <TableCell>
+                      <div className={s.principalCell}>
+                        <span>{g.assetName ? `${g.assetName} · ${g.scopeRef}` : g.scopeRef}</span>
+                        <Caption1 className={s.via}>{g.scopeType}</Caption1>
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <div className={s.principalCell}>
+                        <div className={s.badges}>
+                          <Badge
+                            appearance="tint"
+                            color={g.state === 'failed' ? 'danger' : g.state === 'gated' ? 'informative' : 'warning'}
+                            size="small"
+                          >
+                            {GRANT_RECORD_STATE_LABEL[g.state] || g.state}
+                          </Badge>
+                        </div>
+                        {g.detail && <Caption1 className={s.via}>{g.detail}</Caption1>}
+                      </div>
+                    </TableCell>
+                    <TableCell><Caption1 className={s.count}>{ageLabel(g.createdAt)}</Caption1></TableCell>
+                    <TableCell>
+                      <Link href={requestInboxHref(g.requestId)} aria-label={`Open request ${g.requestId} in the access-request inbox`}>
+                        <Caption1>{g.requestId}</Caption1>
+                      </Link>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </section>
       )}
     </div>
   );

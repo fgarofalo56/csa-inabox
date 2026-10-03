@@ -110,25 +110,6 @@
           }
         },
         {
-          "id": "sec:verdict-call:apps/fiab-console/app/api/access-governance/report/route.ts#GET:requireTenantAdmin:3",
-          "kind": "verdict-call",
-          "provenance": "declared",
-          "label": "GET /api/access-governance/report -> requireTenantAdmin",
-          "facet": {
-            "kind": "verdict-call",
-            "callSite": "GET /api/access-governance/report:3",
-            "symbol": "requireTenantAdmin",
-            "returnsVerdictUnion": true,
-            "pathsToPrivilegedSink": 6,
-            "pathsConsumingAsRefusal": 6,
-            "consumption": "returned",
-            "allowlisted": false,
-            "allowlistPremiseTested": false,
-            "sinkPrivileged": true,
-            "sinkKind": "cosmos-cross-partition-read"
-          }
-        },
-        {
           "id": "sec:authorizer:apps/fiab-console/app/api/access-governance/reviews/[id]/decision/route.ts#POST",
           "kind": "authorizer",
           "provenance": "declared",
@@ -11665,6 +11646,63 @@
           }
         },
         {
+          "id": "sec:verdict-call:apps/fiab-console/app/api/governance/policies/route.ts#POST:enforceCapability:10",
+          "kind": "verdict-call",
+          "provenance": "declared",
+          "label": "POST /api/governance/policies -> enforceCapability",
+          "facet": {
+            "kind": "verdict-call",
+            "callSite": "POST /api/governance/policies:10",
+            "symbol": "enforceCapability",
+            "returnsVerdictUnion": true,
+            "pathsToPrivilegedSink": 0,
+            "pathsConsumingAsRefusal": 0,
+            "consumption": "returned",
+            "allowlisted": false,
+            "allowlistPremiseTested": false,
+            "sinkPrivileged": false,
+            "sinkKind": "none"
+          }
+        },
+        {
+          "id": "sec:verdict-call:apps/fiab-console/app/api/governance/policies/route.ts#PUT:enforceCapability:14",
+          "kind": "verdict-call",
+          "provenance": "declared",
+          "label": "PUT /api/governance/policies -> enforceCapability",
+          "facet": {
+            "kind": "verdict-call",
+            "callSite": "PUT /api/governance/policies:14",
+            "symbol": "enforceCapability",
+            "returnsVerdictUnion": true,
+            "pathsToPrivilegedSink": 0,
+            "pathsConsumingAsRefusal": 0,
+            "consumption": "returned",
+            "allowlisted": false,
+            "allowlistPremiseTested": false,
+            "sinkPrivileged": false,
+            "sinkKind": "none"
+          }
+        },
+        {
+          "id": "sec:verdict-call:apps/fiab-console/app/api/governance/policies/route.ts#DELETE:enforceCapability:9",
+          "kind": "verdict-call",
+          "provenance": "declared",
+          "label": "DELETE /api/governance/policies -> enforceCapability",
+          "facet": {
+            "kind": "verdict-call",
+            "callSite": "DELETE /api/governance/policies:9",
+            "symbol": "enforceCapability",
+            "returnsVerdictUnion": true,
+            "pathsToPrivilegedSink": 0,
+            "pathsConsumingAsRefusal": 0,
+            "consumption": "returned",
+            "allowlisted": false,
+            "allowlistPremiseTested": false,
+            "sinkPrivileged": false,
+            "sinkKind": "none"
+          }
+        },
+        {
           "id": "sec:authorizer:apps/fiab-console/app/api/governance/scans/register-existing/route.ts#POST",
           "kind": "authorizer",
           "provenance": "declared",
@@ -12348,6 +12386,25 @@
             "allowlistPremiseTested": false,
             "sinkPrivileged": false,
             "sinkKind": "none"
+          }
+        },
+        {
+          "id": "sec:verdict-call:apps/fiab-console/app/api/items/[type]/[id]/sensitivity-label/route.ts#PATCH:enforceCapability:81",
+          "kind": "verdict-call",
+          "provenance": "declared",
+          "label": "PATCH /api/items/[type]/[id]/sensitivity-label -> enforceCapability",
+          "facet": {
+            "kind": "verdict-call",
+            "callSite": "PATCH /api/items/[type]/[id]/sensitivity-label:81",
+            "symbol": "enforceCapability",
+            "returnsVerdictUnion": true,
+            "pathsToPrivilegedSink": 1,
+            "pathsConsumingAsRefusal": 1,
+            "consumption": "returned",
+            "allowlisted": false,
+            "allowlistPremiseTested": false,
+            "sinkPrivileged": true,
+            "sinkKind": "cosmos-write"
           }
         },
         {
@@ -45512,13 +45569,6 @@
           "provenance": "declared"
         },
         {
-          "id": "sec-edge:calls:sec:authorizer:apps/fiab-console/app/api/access-governance/report/route.ts#GET->sec:verdict-call:apps/fiab-console/app/api/access-governance/report/route.ts#GET:requireTenantAdmin:3",
-          "from": "sec:authorizer:apps/fiab-console/app/api/access-governance/report/route.ts#GET",
-          "to": "sec:verdict-call:apps/fiab-console/app/api/access-governance/report/route.ts#GET:requireTenantAdmin:3",
-          "kind": "calls",
-          "provenance": "declared"
-        },
-        {
           "id": "sec-edge:calls:sec:authorizer:apps/fiab-console/app/api/access-governance/reviews/route.ts#POST->sec:verdict-call:apps/fiab-console/app/api/access-governance/reviews/route.ts#POST:requireTenantAdmin:3",
           "from": "sec:authorizer:apps/fiab-console/app/api/access-governance/reviews/route.ts#POST",
           "to": "sec:verdict-call:apps/fiab-console/app/api/access-governance/reviews/route.ts#POST:requireTenantAdmin:3",
@@ -46775,11 +46825,6 @@
         },
         {
           "nodeId": "sec:authorizer:apps/fiab-console/app/api/access-governance/report/route.ts#GET",
-          "codeModuleId": "code:apps/fiab-console/app/api/access-governance/report/route.ts",
-          "deployedAs": "loom-console"
-        },
-        {
-          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/access-governance/report/route.ts#GET:requireTenantAdmin:3",
           "codeModuleId": "code:apps/fiab-console/app/api/access-governance/report/route.ts",
           "deployedAs": "loom-console"
         },
@@ -49189,6 +49234,21 @@
           "deployedAs": "loom-console"
         },
         {
+          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/governance/policies/route.ts#POST:enforceCapability:10",
+          "codeModuleId": "code:apps/fiab-console/app/api/governance/policies/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/governance/policies/route.ts#PUT:enforceCapability:14",
+          "codeModuleId": "code:apps/fiab-console/app/api/governance/policies/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/governance/policies/route.ts#DELETE:enforceCapability:9",
+          "codeModuleId": "code:apps/fiab-console/app/api/governance/policies/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
           "nodeId": "sec:authorizer:apps/fiab-console/app/api/governance/scans/register-existing/route.ts#POST",
           "codeModuleId": "code:apps/fiab-console/app/api/governance/scans/register-existing/route.ts",
           "deployedAs": "loom-console"
@@ -49336,6 +49396,11 @@
         {
           "nodeId": "sec:verdict-call:apps/fiab-console/app/api/items/[type]/[id]/security-roles/route.ts#DELETE:pdpCheck:9",
           "codeModuleId": "code:apps/fiab-console/app/api/items/[type]/[id]/security-roles/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/items/[type]/[id]/sensitivity-label/route.ts#PATCH:enforceCapability:81",
+          "codeModuleId": "code:apps/fiab-console/app/api/items/[type]/[id]/sensitivity-label/route.ts",
           "deployedAs": "loom-console"
         },
         {
