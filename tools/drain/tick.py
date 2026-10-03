@@ -67,12 +67,11 @@ GUARD_FLOOR = 10  # below this many KNOWN items the ratios are noise
 # than the foreign read passes it with nothing believed open left to catch it
 # on retention either. Genuine arrivals are THIS repo's own issue+PR counter,
 # so they land within a few hundred of the ceiling even across a dormant
-# cycle (one shared counter; dependency-bump PRs move it fastest). This
-# repo's entire history, issues and PRs combined, is under 5,000 numbers as
-# of 2026-10 (`gh api repos/:owner/:repo --jq .open_issues_count` plus the
-# highest PR/issue number), so a single-cycle jump of 2,000 is already a
-# large fraction of that -- a genuine arrival this far from the ceiling would
-# be unusual on its own, well before any foreign-repo read is considered.
+# cycle (one shared counter; dependency-bump PRs move it fastest). Highest
+# issue/PR number observed: 4896 (2026-10-03) -- a single-cycle jump of
+# 2,000 is already a large fraction of that, so a genuine arrival this far
+# from the ceiling would be unusual on its own, well before any
+# foreign-repo read is considered.
 MAX_ARRIVAL_GAP = 2000
 
 
