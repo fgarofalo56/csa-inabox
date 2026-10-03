@@ -61,6 +61,19 @@ MIN_RETAINED = 0.8
 MIN_RETAINED_HARD = 0.25  # --allow-shrink cannot suppress this one
 GUARD_FLOOR = 10  # below this many KNOWN items the ratios are noise
 
+# How far a genuine new arrival can land above this ledger's ceiling (#4485
+# finding 1). MAGNITUDE alone (below) only refuses an arrival set LARGER than
+# the whole ledger -- a fully terminal ledger whose `known` count is bigger
+# than the foreign read passes it with nothing believed open left to catch it
+# on retention either. Genuine arrivals are THIS repo's own issue+PR counter,
+# so they land within a few hundred of the ceiling even across a dormant
+# cycle (one shared counter; dependency-bump PRs move it fastest). Highest
+# issue/PR number observed: 4896 (2026-10-03) -- a single-cycle jump of
+# 2,000 is already a large fraction of that, so a genuine arrival this far
+# from the ceiling would be unusual on its own, well before any
+# foreign-repo read is considered.
+MAX_ARRIVAL_GAP = 2000
+
 
 def sh(args: list[str]) -> tuple[int, str, str]:
     """Run a command in the REPO ROOT and return (rc, stdout, stderr).
@@ -101,7 +114,9 @@ def read_live_issues(repo: str) -> list[dict]:
         raise SystemExit(f"unparseable issue list for {repo}: {exc}") from exc
 
 
-def guard_refresh(led: Ledger, live: list[dict], allow_shrink: bool = False) -> None:
+def guard_refresh(
+    led: Ledger, live: list[dict], allow_shrink: bool = False, allow_arrivals: bool = False
+) -> None:
     """Refuse a refresh whose live set is not plausibly this ledger's population.
 
     Departure from the live set is how an item leaves the queue, so a refresh
@@ -132,6 +147,15 @@ def guard_refresh(led: Ledger, live: list[dict], allow_shrink: bool = False) -> 
     `allow_shrink` suppresses the RETENTION clause ONLY. It used to skip the
     whole function, so the documented escape from a shrink warning also turned
     off the wrong-repo and zero-issue refusals.
+
+    `allow_arrivals` suppresses the MAGNITUDE and GAP clauses ONLY (#4485
+    finding 2) -- the two that refuse a FLOOD of arrivals, whether foreign or
+    (rarely) genuinely this repo's own. OVERLAP, the zero-issue refusal, and
+    the HARD retention floor are untouched: it is not `--allow-shrink`'s
+    whole-guard bypass repeated under a new name. The non-destructive escape
+    for a standing multi-session program -- `--bootstrap` DISCARDS the ledger,
+    the one record GitHub does not carry, so it is not the remedy for "this
+    repo really did gain that many issues at once".
     """
     believed_open = {n for n, i in led.items.items() if i.state not in TERMINAL}
     known = set(led.items)
@@ -197,16 +221,43 @@ def guard_refresh(led: Ledger, live: list[dict], allow_shrink: bool = False) -> 
     # SIZE of the arrival set is a different instrument rather than a tuned
     # threshold -- six arrivals against a 297-item ledger never trips it, nine
     # hundred always does.
-    if len(arrivals) > max(GUARD_FLOOR, len(known)):
+    if len(arrivals) > max(GUARD_FLOOR, len(known)) and not allow_arrivals:
         raise SystemExit(
-            f"refusing to refresh: {len(arrivals)} of the {len(live_numbers)} live issues are "
-            f"numbered above this ledger's ceiling (#{ceiling}), which is more than the "
-            f"{len(known)} issues it knows about. New arrivals do not come in floods that "
-            "size - check `repo` in policy.json. If this repo really did gain that many, "
-            "re-seed with --bootstrap rather than refreshing."
+            f"refusing to refresh: {len(arrivals)} of the {len(live_numbers)} live issues "
+            f"are numbered above this ledger's ceiling (#{ceiling}), which is more than "
+            f"the {len(known)} issues it knows about. New arrivals do not come in floods "
+            "that size - check `repo` in policy.json. If this repo really did gain that "
+            "many at once, pass --allow-arrivals; --bootstrap is not the remedy here, it "
+            "DISCARDS the ledger."
         )
 
     if not believed_open:
+        # TERMINAL ledger: RETENTION cannot fire below (nothing is left to
+        # retain) and MAGNITUDE alone is not enough -- a foreign read SMALLER
+        # than the whole ledger still slips past it (#4485 finding 1).
+        # Measured: a terminal ledger whose `known` count exceeds a 250-issue
+        # foreign read (300 known >= 250 foreign) passed with no refusal at
+        # all, because every live number looked like an arrival and the count
+        # never exceeded `len(known)`.
+        #
+        # GAP closes it. Genuine arrivals are this repo's OWN issue+PR
+        # counter, so the NEAREST one lands within `MAX_ARRIVAL_GAP` of the
+        # ceiling even across a dormant cycle; a foreign repo's numbers have
+        # no relation to this ledger's ceiling at all. Only engaged here, with
+        # NOTHING believed open -- a healthy, non-terminal ledger never reaches
+        # this branch, so this bound cannot fire on ordinary operation.
+        if arrivals and not allow_arrivals:
+            gap = min(arrivals) - ceiling
+            if gap > MAX_ARRIVAL_GAP:
+                raise SystemExit(
+                    f"refusing to refresh: the nearest of {len(arrivals)} live issues above "
+                    f"this ledger's ceiling (#{ceiling}) is #{min(arrivals)}, {gap} numbers "
+                    "above it - implausibly far for this repo's own issue counter to have "
+                    f"moved in one cycle (floor {MAX_ARRIVAL_GAP}). That is a foreign "
+                    f"population smaller than this ledger's {len(known)} known issues, so "
+                    "MAGNITUDE alone did not catch it. If this repo really did gain that "
+                    "many issues at once, pass --allow-arrivals."
+                )
         return
     retained = len(believed_open & live_numbers) / len(believed_open)
     # A HARD floor --allow-shrink cannot suppress. A wrong-repo read whose
@@ -4304,6 +4355,13 @@ def build_parser() -> argparse.ArgumentParser:
              "refusals still apply",
     )
     parser.add_argument(
+        "--allow-arrivals", action="store_true",
+        help="suppress the MAGNITUDE and GAP clauses only (a genuine flood of new "
+             "issues in one cycle); OVERLAP, the zero-issue refusal, and the HARD "
+             "retention floor still apply. The non-destructive alternative to "
+             "--bootstrap, which discards the ledger",
+    )
+    parser.add_argument(
         "--bind-pr", type=int, metavar="ITEM",
         help="record that a lane opened a PR for this item (needs --pr) and move "
              "it in-flight -> in-review, so the reaper stops taking it back",
@@ -4820,7 +4878,7 @@ def main() -> int:
         return 0
 
     live = read_live_issues(repo)
-    guard_refresh(led, live, allow_shrink=args.allow_shrink)
+    guard_refresh(led, live, allow_shrink=args.allow_shrink, allow_arrivals=args.allow_arrivals)
     if args.bootstrap and os.path.exists(STATE_PATH):
         # Back it up first. The ledger is the ONLY record of what has already
         # been verified -- GitHub carries which issues are open, never which
