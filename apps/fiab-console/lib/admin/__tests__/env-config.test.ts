@@ -355,7 +355,12 @@ describe('admin/env-config registry', () => {
     // by `synapseConfigGate()` and absent from the spec, so an estate using it
     // got a false RED with no field to clear it. Both were derived from prose;
     // both are now derived from the predicate.
-    expect(EDITABLE_ENV.length).toBe(204);
+    //
+    // Then to 205 by #3342, +1/-0: LOOM_DATABRICKS_ACCOUNT_ID, the env half of
+    // the new svc-databricks-account-admin gate. bicep already forwarded it
+    // (loomDatabricksAccountId) but no spec required it, so a Fix-it could not
+    // write the one value the account-admin probe needs before it can ask.
+    expect(EDITABLE_ENV.length).toBe(205);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {

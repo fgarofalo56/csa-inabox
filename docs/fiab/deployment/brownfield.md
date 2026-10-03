@@ -648,12 +648,39 @@ exact remediation — never a silent pass, and never `unusable`:
 |---|---|
 | `aisearch.indexHeadroom` | index count/quota is a data-plane `servicestats` read |
 | `purview.rootCollectionAdmin`, `purview.capacityUnits` | Purview data-plane collection + capacity APIs |
-| `databricks.metastoreAssignment` | the Databricks **account** API, not ARM |
 | `cosmos.containerNameCollision`, `aml.computeQuota` | two-level sub-resource enumeration |
 
 If you adopt one of those services today the plan still blocks, and the verdict
 tells you which read failed. That gap is tracked — it is a shortfall in Loom,
 not an instruction to you.
+
+**`databricks.metastoreAssignment` is read — once the Console identity is a
+Databricks account admin.** The assignment lives on the Databricks **account**
+API, not ARM, and the probe reads it there as the Console identity
+(`GET /api/2.0/accounts/{id}/workspaces/{workspaceId}/metastore`, plus the
+account's metastore list to find the regional one). Databricks only lets an
+existing account admin grant that role, so the Console cannot grant it to
+itself. Until it is held the check is `unknown` and the wizard shows, under the
+Databricks row:
+
+1. what was observed (for example `HTTP 403` from the account API);
+2. the exact grant, with **this deployment's** Console application (client) id,
+   object id and Databricks account id, and an **Open** link to the account
+   console;
+3. the `svc-databricks-account-admin` gate's **Fix it** — set
+   `LOOM_DATABRICKS_ACCOUNT_ID` there if it is unset;
+4. **Re-check these resources**, which re-reads the account API live. The
+   blocker clears when that read succeeds, not when someone says it was done.
+
+The grant itself, done by an account admin in the account console: User
+management → Service principals → Add service principal → Microsoft Entra ID
+managed → the Console application id → Add; then open it → Roles → turn on
+**Account admin**. If the account has no admin yet, an Entra Global
+Administrator signs in to the account console once and Databricks makes them
+the first. `/admin/readiness` carries the same live check
+(`probe-databricks-account-admin`) with a scripted equivalent of the grant. In
+GCC-High / IL5 there is no Databricks account console; the gate reports
+cloud-unavailable.
 
 ---
 
