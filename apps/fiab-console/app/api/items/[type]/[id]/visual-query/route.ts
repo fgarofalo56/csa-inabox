@@ -60,7 +60,21 @@
  * `../../_lib/synapse-item-scope.ts` for what remains open on the shared pool).
  * The `database` this route reads is never used on the dedicated path (unlike
  * the query route's Layer 2), so no re-point exists here to bind.
- * The databricks-sql-warehouse engine is unchanged by this.
+ *
+ * ITEM SCOPE FOR `databricks-sql-warehouse` — the same guard its own query
+ * route runs (`databricks-sql-warehouse/[id]/query/route.ts`):
+ * `guardSynapseItemRequest`, write-scoped, 404 for an id naming no item of
+ * that type. Before this, this engine ran on `withSession` alone with a
+ * caller-chosen `warehouseId` in the body — the same GHSA-v2g8-gp3r-rg4r shape
+ * as the dedicated-pool gap above, in the SAME route, found in a second round
+ * of review. `resolveItemSynapseDatabase` returns null for this item type (it
+ * is not Synapse-backed), which is fine: this route never reads `guard.ctx`
+ * for any engine, only `guard.res`.
+ *
+ * ALL FOUR ENGINE TYPES THIS ROUTE ACCEPTS ARE NOW ITEM-SCOPED. There is no
+ * fifth; `SYNAPSE_TSQL_ENGINES` plus the explicit `databricks-sql-warehouse`
+ * check above is the complete population this handler admits (anything else
+ * is the 400 just above).
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -99,6 +113,14 @@ const SYNAPSE_TSQL_ENGINES = new Set([
   'synapse-serverless-sql-pool',
 ]);
 const DEDICATED_ENGINES = new Set(['warehouse', 'synapse-dedicated-sql-pool']);
+// The engines whose visual-query runs the SAME item-authorization guard their
+// own query/cancel routes run — everything this route accepts EXCEPT the
+// serverless SQL pool, which has its own guard above (read roles accepted,
+// because its text is classifier-confined; these are write-scoped).
+const SYNAPSE_GUARD_ENGINES = new Set(['warehouse', 'synapse-dedicated-sql-pool', 'databricks-sql-warehouse']);
+const DATABRICKS_WAREHOUSE_ITEM_UNREACHABLE =
+  'This SQL warehouse item is not available to you. Either it does not exist, or you have no ' +
+  'role in its workspace. Ask a workspace owner to share it with you.';
 
 function quoteIdent(name: string, dialect: SqlDialect): string {
   const clean = (name || '').trim();
@@ -141,16 +163,19 @@ export const POST = withSession<{ type: string; id: string }>(async (req: NextRe
   }
   const admin = serverless && isTenantAdmin(session);
 
-  // The dedicated-pool engines (warehouse, synapse-dedicated-sql-pool): the
-  // same item authorization their own query/cancel routes run (see the
-  // header). Write-scoped (no `allowReadRoles`) — the compiled graph can end
-  // in a Sink.
-  if (DEDICATED_ENGINES.has(type)) {
-    const guard = await guardSynapseItemRequest({
-      itemId: id,
-      itemType: type,
-      notFound: type === 'warehouse' ? 'warehouse not found' : 'dedicated SQL pool not found',
-    });
+  // The dedicated-pool engines (warehouse, synapse-dedicated-sql-pool) and the
+  // Databricks SQL Warehouse engine: the same item authorization their own
+  // query/cancel routes run (see the header). Write-scoped (no
+  // `allowReadRoles`) — the compiled graph can end in a Sink, and the
+  // Databricks branch's `sql` is unrestricted DDL/DML the same way its own
+  // query route treats it.
+  if (SYNAPSE_GUARD_ENGINES.has(type)) {
+    const notFound = type === 'warehouse'
+      ? 'warehouse not found'
+      : type === 'synapse-dedicated-sql-pool'
+        ? 'dedicated SQL pool not found'
+        : DATABRICKS_WAREHOUSE_ITEM_UNREACHABLE;
+    const guard = await guardSynapseItemRequest({ itemId: id, itemType: type, notFound });
     if (guard.res) return guard.res;
   }
 

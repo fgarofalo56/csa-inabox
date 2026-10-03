@@ -28,7 +28,8 @@ vi.mock('@/lib/auth/feature-gate', async () => ({
 const POOL = { id: 'pool-1', itemType: 'synapse-serverless-sql-pool', workspaceId: 'ws-1', displayName: 'P', state: {} };
 const DEDICATED_POOL = { id: 'dp-1', itemType: 'synapse-dedicated-sql-pool', workspaceId: 'ws-1', displayName: 'D', state: {} };
 const WAREHOUSE = { id: 'wh-1', itemType: 'warehouse', workspaceId: 'ws-1', displayName: 'W', state: {} };
-const ITEMS = [POOL, DEDICATED_POOL, WAREHOUSE];
+const DBX_WAREHOUSE = { id: 'dbx-1', itemType: 'databricks-sql-warehouse', workspaceId: 'ws-1', displayName: 'DBX', state: {} };
+const ITEMS = [POOL, DEDICATED_POOL, WAREHOUSE, DBX_WAREHOUSE];
 vi.mock('@/lib/azure/cosmos-client', () => ({
   itemsContainer: async () => ({
     items: {
@@ -73,12 +74,13 @@ vi.mock('@/lib/azure/synapse-pool-arm', () => ({ getPoolState: vi.fn(async () =>
 const access = vi.hoisted(() => ({ resolveAccessMode: vi.fn(async (..._a: any[]) => 'service') }));
 vi.mock('@/lib/azure/sql-access-mode', () => access);
 vi.mock('@/lib/azure/sql-user-token-store', () => ({ getUserSqlToken: vi.fn(async () => 'user-token') }));
-vi.mock('@/lib/azure/databricks-client', () => ({
+const dbx = vi.hoisted(() => ({
   executeStatement: vi.fn(async (..._a: any[]) => ({
     columns: ['a'], rows: [[1]], rowCount: 1, executionMs: 3, truncated: false,
   })),
   getWarehouse: vi.fn(async (..._a: any[]) => ({ state: 'RUNNING' })),
 }));
+vi.mock('@/lib/azure/databricks-client', () => dbx);
 
 import { POST } from '@/app/api/items/[type]/[id]/visual-query/route';
 import { compileGraph, type VqGraph } from '@/lib/editors/visual-query-compiler';
@@ -204,43 +206,49 @@ describe('visual query on the serverless SQL pool item', () => {
     expect(storage.resolveLakehouseStorage).not.toHaveBeenCalled();
   });
 
-  it('the databricks-sql-warehouse engine is unchanged: no item guard', async () => {
-    // Not DEDICATED_ENGINES, and not read via Cosmos by this route — confirms
-    // only the two dedicated-pool engines gained a guard, not every non-serverless type.
-    const res = await POST(
-      req({ describe: { table: 'orders' }, warehouseId: 'wh-dbx-1' }),
-      ctx('databricks-sql-warehouse', 'dbx-1'),
-    );
-    expect(res.status).toBe(200);
+  it('a non-item engine stays refused at the 400 before any guard runs (there is no fifth engine)', async () => {
+    const res = await POST(req({ describe: { table: 'orders' } }), ctx('kql-database', 'kql-1'));
+    expect(res.status).toBe(400);
     expect(guard.authorizeItemWorkspace).not.toHaveBeenCalled();
+    expect(ranAnything()).toBe(0);
   });
 });
 
-describe('visual query on the dedicated-pool engines (warehouse, synapse-dedicated-sql-pool)', () => {
+describe('visual query on the item-scoped engines (warehouse, synapse-dedicated-sql-pool, databricks-sql-warehouse)', () => {
   it.each([
     ['warehouse', WAREHOUSE],
     ['synapse-dedicated-sql-pool', DEDICATED_POOL],
+    ['databricks-sql-warehouse', DBX_WAREHOUSE],
   ])('%s: a caller the item guard refuses gets its 404 and nothing runs (breaks if the route skips the guard)', async (type, item) => {
     guard.authorizeItemWorkspace.mockResolvedValue(
       Response.json({ ok: false, error: 'item not found' }, { status: 404 }) as any,
     );
-    const res = await POST(req({ describe: { schema: 'sys', table: 'tables' } }), ctx(type, item.id));
+    const res = await POST(
+      req({ describe: { schema: 'sys', table: 'tables' }, warehouseId: 'wh-dbx-1' }),
+      ctx(type, item.id),
+    );
     expect(res.status).toBe(404);
     expect(ranAnything()).toBe(0);
+    expect(dbx.executeStatement).not.toHaveBeenCalled();
     expect(guard.authorizeItemWorkspace.mock.calls[0][1]).toMatchObject({ itemId: item.id, itemType: type });
-    // Write-scoped: a Sink-capable statement runs here with no classifier, so
-    // this guard must never admit read-only roles the way the serverless one
-    // does. Breaks if a future edit passes `allowReadRoles: true`.
+    // Write-scoped: a Sink-capable / unrestricted statement runs here with no
+    // classifier, so this guard must never admit read-only roles the way the
+    // serverless one does. Breaks if a future edit passes `allowReadRoles: true`.
     expect(guard.authorizeItemWorkspace.mock.calls[0][1].allowReadRoles).toBeUndefined();
   });
 
   it.each([
     ['warehouse', WAREHOUSE],
     ['synapse-dedicated-sql-pool', DEDICATED_POOL],
+    ['databricks-sql-warehouse', DBX_WAREHOUSE],
   ])('%s: an id naming no item is a 404 and nothing runs (breaks if the route trusts the id with no Cosmos record)', async (type) => {
-    const res = await POST(req({ describe: { schema: 'sys', table: 'tables' } }), ctx(type, 'no-such-id'));
+    const res = await POST(
+      req({ describe: { schema: 'sys', table: 'tables' }, warehouseId: 'wh-dbx-1' }),
+      ctx(type, 'no-such-id'),
+    );
     expect(res.status).toBe(404);
     expect(ranAnything()).toBe(0);
+    expect(dbx.executeStatement).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -251,6 +259,21 @@ describe('visual query on the dedicated-pool engines (warehouse, synapse-dedicat
     expect(res.status).toBe(200);
     expect(guard.authorizeItemWorkspace).toHaveBeenCalledTimes(1);
     expect(synapse.executeQuery.mock.calls[0][1]).toBe('SELECT TOP 0 * FROM [sys].[tables]');
+  });
+
+  it('databricks-sql-warehouse: an authorized caller on the real item runs the compiled SQL unchanged (positive half; the gap review found on a second pass)', async () => {
+    const res = await POST(
+      req({ describe: { schema: 'sys', table: 'tables' }, warehouseId: 'wh-dbx-1' }),
+      ctx('databricks-sql-warehouse', DBX_WAREHOUSE.id),
+    );
+    expect(res.status).toBe(200);
+    expect(guard.authorizeItemWorkspace).toHaveBeenCalledTimes(1);
+    expect(guard.authorizeItemWorkspace.mock.calls[0][1]).toMatchObject({
+      itemId: DBX_WAREHOUSE.id, itemType: 'databricks-sql-warehouse',
+    });
+    // sparksql dialect: backtick-quoted, LIMIT not TOP (breaks if the route
+    // ran this engine through the T-SQL describe branch).
+    expect(dbx.executeStatement.mock.calls[0][1]).toBe('SELECT * FROM `sys`.`tables` LIMIT 0');
   });
 });
 
