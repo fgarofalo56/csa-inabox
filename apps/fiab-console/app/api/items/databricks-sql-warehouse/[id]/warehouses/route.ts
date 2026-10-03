@@ -57,12 +57,36 @@
  *   MEASURED on #3655: the carve-out sits INSIDE the wrapper, so an
  *   unauthenticated request to `.../new/warehouses` still gets 401, not 200.
  *   Asserted in `__tests__/ghsa-v2g8-warehouse-reads.test.ts`.
+ *
+ * ── THE LINK (#3669): `linkedWarehouseId` AND THE SELF-HEAL ────────────────
+ *
+ * On a real id the response also carries `linkedWarehouseId`: the id of the ONE
+ * listed warehouse whose live `loom_item_id` tag names this item, or '' when
+ * none does (or more than one does, or the tag is ambiguous). The editor
+ * preselects exactly that warehouse and nothing else, so it never opens on a
+ * warehouse this item does not own. The `new` path and Gov (dedicated pools
+ * carry no tags) return ''.
+ *
+ * Before listing, this route calls `healWarehouseLink` — the self-heal of
+ * `auto-bind-by-default.md` §3 ("the next open re-binds"). It is called HERE
+ * because every editor open passes through this route, right after the item
+ * guard, and NOT in `authorizeWarehouseTarget`, which is read-scoped and runs
+ * on every AI-function call. The heal itself requires WRITE scope on the item,
+ * reads the warehouse id ONLY from the item document's server-written receipt
+ * (`state.provisioning.secondaryIds.warehouseId`), adds the tag only when it is
+ * ABSENT, and never overwrites another owner. Its outcome is returned as `link`
+ * (`'error'` if it threw); a heal failure never fails the list.
+ *
+ * DISCLOSED: this makes a GET perform a write. It is idempotent (a second call
+ * finds `already_linked`), it only ever ADDS a missing tag naming the item the
+ * caller can already write, and a Viewer's GET never writes (`not_writer`).
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { withSession } from '@/lib/api/route-toolkit';
 import { guardSynapseItemRequest, UNSAVED_ITEM_ID } from '../../../_lib/synapse-item-scope';
 import { listWarehouses } from '@/lib/azure/databricks-client';
+import { healWarehouseLink, linkedWarehouseIdFor, type HealOutcome } from '../../../_lib/warehouse-item-binding';
 import { listDedicatedSqlPools } from '@/lib/azure/synapse-dev-client';
 import { isGovCloud } from '@/lib/azure/cloud-endpoints';
 
@@ -77,8 +101,8 @@ const ITEM_UNREACHABLE =
   'role in its workspace. Ask a workspace owner to share it with you.';
 
 /** The list itself — identical on both paths, so the carve-out changes WHO may
- *  call it and nothing about what it returns. */
-async function listForCloud(): Promise<NextResponse> {
+ *  call it and nothing about what it returns. `itemId` is '' on the `new` path. */
+async function listForCloud(itemId = '', link?: HealOutcome | 'error'): Promise<NextResponse> {
   if (isGovCloud()) {
     try {
       const pools = await listDedicatedSqlPools();
@@ -90,7 +114,7 @@ async function listForCloud(): Promise<NextResponse> {
         state: p.status === 'Online' ? 'RUNNING' : p.status === 'Paused' ? 'STOPPED' : (p.status || 'UNKNOWN'),
         cluster_size: p.sku?.name,
       }));
-      return NextResponse.json({ ok: true, warehouses, gov: true });
+      return NextResponse.json({ ok: true, warehouses, gov: true, linkedWarehouseId: '' });
     } catch (e: any) {
       return NextResponse.json({ ok: false, error: e?.message || String(e), gov: true }, { status: 502 });
     }
@@ -98,7 +122,8 @@ async function listForCloud(): Promise<NextResponse> {
 
   try {
     const warehouses = await listWarehouses();
-    return NextResponse.json({ ok: true, warehouses, gov: false });
+    const linkedWarehouseId = itemId ? linkedWarehouseIdFor(warehouses, itemId) : '';
+    return NextResponse.json({ ok: true, warehouses, gov: false, linkedWarehouseId, ...(link ? { link } : {}) });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e), gov: false }, { status: 502 });
   }
@@ -121,5 +146,12 @@ export const GET = withSession<{ id: string }>(async (_req: NextRequest, { param
   });
   if (guard.res) return guard.res;
 
-  return listForCloud();
+  // THE SELF-HEAL — write-scoped inside, receipt id only (see header).
+  let link: HealOutcome | 'error';
+  try {
+    link = await healWarehouseLink(guard.ctx.session, guard.ctx.item);
+  } catch {
+    link = 'error';
+  }
+  return listForCloud(guard.ctx.item.id, link);
 });

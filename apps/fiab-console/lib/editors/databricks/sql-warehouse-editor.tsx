@@ -76,6 +76,7 @@ import {
   dbuPerHr, estimateDbxCostPerHr, estimateDwuCostPerHr,
 } from './shared';
 import type { QueryResponse, Warehouse, WarehouseState, SchemaResponse, Cluster } from './shared';
+import { preselectWarehouseId } from './linked-warehouse';
 import {
   UnityCatalogWriteDialogs, ModelVersionsDialog, UcTagsDialog, GovernedTagsDialog,
   ExternalLocationsDialog, ConnectionsDialog, WorkspaceBindingsDialog, AuditSystemDialog,
@@ -253,7 +254,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
         }
         const list = (j.warehouses || []) as Warehouse[];
         setWarehouses(list);
-        if (list.length > 0 && !warehouseId) setWarehouseId(list[0].id);
+        if (!warehouseId) setWarehouseId(preselectWarehouseId(j)); // only THIS item's warehouse (#3669)
       } catch (e: any) {
         if (!cancelled) setWarehousesError(e?.message || String(e));
       }
