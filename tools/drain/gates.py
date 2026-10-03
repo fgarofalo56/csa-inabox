@@ -688,7 +688,21 @@ def _documentation_keys_that_are_actually_read() -> list[str]:
             # three modules as `policy["repo"]`; the ledger's `raw.get("schema")`
             # is keyed to `raw` and so does not match, which is what lets bare
             # names be covered at all.
-            pattern = (r"(?:policy|POLICY|cfg)\s*(?:\[|\.get\()\s*[\"']"
+            #
+            # THE RECEIVER LIST IS A CLOSED SET BY CONSTRUCTION (#4485 finding
+            # 4) -- every module in this package spells it `policy` or
+            # `POLICY` today (checked directly: no top-level `.py` file here
+            # reads one as `pol`, `conf`, `config`, or any other shortening),
+            # so this widening catches no CURRENT read. It is here for the
+            # read a future edit writes in one of this package's OTHER common
+            # abbreviations instead of the house spelling -- `cfg` was already
+            # on the list for exactly that reason and never fired either.
+            # Still inherent: a read assembled from a variable (`getattr`,
+            # a dict built elsewhere and handed in under a different name)
+            # passes no matter how this list is widened -- that limitation is
+            # a property of scanning SOURCE TEXT, not of this pattern, and is
+            # stated above rather than claimed fixed here.
+            pattern = (r"(?:policy|POLICY|cfg|pol|conf|config)\s*(?:\[|\.get\()\s*[\"']"
                        + re.escape(parts[0]) + r"[\"']")
         if re.search(pattern, flat):
             found.append(dotted)
@@ -1110,15 +1124,33 @@ def parse_verdicts(
         # blocking. The two directions are NOT symmetric and are no longer
         # decided by the same test.
         lines = head.splitlines()
+        # TEMPLATE EXCLUSION (#4485 finding 5) reads the FULL line from `body`,
+        # not the possibly WINDOW-TRUNCATED line in `head`. A 200-char prefix
+        # cut can split the template line itself -- the portion inside the
+        # window then carries only one or two of the three tokens and no
+        # longer looks like a template, so its lone in-window BLOCKING token
+        # read as a genuine block. Measured: a template pasted at ~offset 190.
+        # `body.splitlines()` is a strict superset of `head.splitlines()` --
+        # `head` is a character-prefix of `body`, so every line here but
+        # possibly the LAST is already identical between the two, and slicing
+        # to `len(lines)` lines up each (possibly truncated) `ln` with its full
+        # counterpart.
+        #
+        # The EXISTENCE check (`any(t in ln ...)`) stays on the TRUNCATED `ln`
+        # on purpose -- a token must be genuinely inside the window to
+        # register AT ALL, straddling or not
+        # (`test_negative_control_a_token_straddling_the_window_cut_is_not_
+        # lost`); only the template-or-not judgement needs the full line.
+        full_lines = body.splitlines()[:len(lines)]
         blocking_mention = any(
             any(t in ln for t in BLOCKING_TOKENS)
-            and not all(t in ln for t in VERDICT_TOKENS)  # not the template line
-            for ln in lines
+            and not all(t in full for t in VERDICT_TOKENS)  # not the template line
+            for ln, full in zip(lines, full_lines)
         )
         mentions_token = any(
             any(t in ln for t in VERDICT_TOKENS)
-            and not all(t in ln for t in VERDICT_TOKENS)
-            for ln in lines
+            and not all(t in full for t in VERDICT_TOKENS)
+            for ln, full in zip(lines, full_lines)
         )
         # A marker line that is CITED, or one that sits past the window. Neither
         # is a decision, and both used to vanish without a trace -- `live=[]`,
@@ -1240,6 +1272,62 @@ def parse_verdicts(
                              "this discharges nothing",
                              NEAR_NO_MARKER, blocks=False)
                 )
+            # COMPLETENESS, not decision (#4485 finding 3): the chain above
+            # reports exactly ONE near-miss per comment -- whichever condition
+            # is true FIRST, in this same order -- and that single fact is all
+            # `reduce_verdicts`/`worst_verdict_in_history` ever decide on,
+            # unchanged by anything below. Any OTHER condition independently
+            # true for the SAME comment was, until now, masked without a
+            # trace: `cited` or `out_of_window` matching first hid a genuine
+            # `blocking_below` fact entirely, invisible even in the evidence
+            # line a reviewer reads. Recorded here for the evidence line ONLY
+            # -- `blocks` is forced False on every one of these, because
+            # letting any of them block would be a SECOND vote this comment
+            # never had; the chain above remains the only thing that escalates.
+            #
+            # Deliberately NOT sharing text with the chain above: touching
+            # those `near.append(...)` bodies risks nothing here (no
+            # `mutate_gates.py` anchor is keyed to their message text), but
+            # touching the `elif` lines themselves would break several that
+            # ARE. If a message above changes, update the matching line here.
+            decided = False
+            for true, kind, reason in (
+                (saw_template, NEAR_TEMPLATE,
+                 "carries the verdict TEMPLATE line, not a decision"),
+                (has_marker, NEAR_NO_TOKEN,
+                 f"marker line, but no token on it in body[:{window}]"),
+                (blocking_mention, NEAR_NO_MARKER,
+                 f"a BLOCKING token appears in body[:{window}] with no line "
+                 "announcing a verdict - formatting never reduces a block, so "
+                 "this blocks. Announce it on the comment's FIRST line, or "
+                 "reference the token instead of writing it"),
+                (bool(cited), NEAR_CITED,
+                 f"{len(cited)} verdict header(s) CITED here (quoted, fenced, "
+                 "indented or collapsed) - a citation is not a decision, but it "
+                 "is recorded so a relayed verdict is not invisible"),
+                (out_of_window, NEAR_NOT_FIRST,
+                 "a verdict header appears in prose but is NOT the comment's "
+                 f"first line (it may also be below body[:{window}]) - a verdict "
+                 "is announced first or it does not register"),
+                (blocking_below, NEAR_NOT_FIRST,
+                 f"a BLOCKING token appears BELOW body[:{window}] in a comment "
+                 "that announces no verdict - it does not block (the window "
+                 "bounds both directions) but it is recorded rather than dropped"),
+                (mentions_token, NEAR_NO_MARKER,
+                 f"a verdict token appears in body[:{window}] but no line announces "
+                 f"it - the announcing line must be the comment's FIRST line and "
+                 f"begin with one of {MARKERS}"),
+                (bool(sup_ids or sup_bad), NEAR_NO_MARKER,
+                 f"carries a {SUPERSESSION_MARKER} line but announces no verdict "
+                 "on its FIRST line - a supersession is carried BY a verdict, so "
+                 "this discharges nothing"),
+            ):
+                if not true:
+                    continue
+                if not decided:
+                    decided = True  # the chain above already reported THIS one
+                    continue
+                near.append(NearMiss(cid, when, reason, kind, blocks=False))
             continue
         if not postdates:
             near.append(
