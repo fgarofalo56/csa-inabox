@@ -79,6 +79,9 @@ import {
   type VqSinkConfig, type VqSinkMode, type SqlDialect,
 } from '@/lib/editors/visual-query-compiler';
 import { STARTER_PATTERNS, buildStarterGraph, type StarterPatternId } from './warp-transform-starters';
+import { useIsTenantAdmin } from '@/lib/components/session-context';
+import { SqlRefusalOrError, isSqlRefusal, type SqlFailure } from '@/lib/editors/lakehouse/panes/sql-pane';
+import { SqlScopeFollowUp } from '@/lib/editors/components/sql-pool-query-scope-note';
 
 // ============================================================
 // Types
@@ -116,6 +119,8 @@ interface RunResult {
   truncated?: boolean;
   error?: string;
   code?: string;
+  /** What to do instead, on a query the route chose not to run (see `isSqlRefusal`). */
+  remediation?: string;
   gate?: { reason?: string; remediation?: string; sql?: string };
 }
 
@@ -306,6 +311,20 @@ function buildGraph(nodes: Node[], edges: Edge[], outputId?: string): VqGraph {
   return { nodes: vqNodes, outputId };
 }
 
+/**
+ * True when the graph ends in a Sink that names a table: the case `compileGraph`
+ * wraps in `SELECT … INTO` / `CREATE … VIEW` (an output Sink with an input and a
+ * table). A Sink with no table yet compiles to a plain SELECT and runs.
+ */
+export function graphWritesSink(graph: VqGraph): boolean {
+  const out = graph.nodes.find((n) => n.id === graph.outputId);
+  return !!out && out.kind === 'sink' && out.inputs.length > 0 && !!(out.sink?.table || '').trim();
+}
+
+/** Why Run and Validate are off for a Sink graph on a serverless target, for a caller who is not a tenant admin. */
+export const SERVERLESS_SINK_REASON =
+  'Sinks are not run on a serverless target for your role: remove the Sink, or pick a warehouse or dedicated pool target.';
+
 /** React Flow node from a VqNode (used when laying down a starter graph). */
 function rfNodeFromVq(n: VqNode, x: number, y: number): Node {
   const { id, kind, inputs, ...rest } = n;
@@ -363,6 +382,10 @@ function CanvasInner(props: WarpTransformCanvasProps) {
 
   const [columnsByNode, setColumnsByNode] = useState<Record<string, string[]>>({});
   const [colError, setColError] = useState<string | null>(null);
+  // A describe the route chose not to run (a refusal with a remediation), shown
+  // through the same bar as the SQL editors rather than as a bare string.
+  const [colRefusal, setColRefusal] = useState<SqlFailure | null>(null);
+  const isAdmin = useIsTenantAdmin();
 
   const [addOpen, setAddOpen] = useState(false);
   const [addSchema, setAddSchema] = useState('');
@@ -392,10 +415,19 @@ function CanvasInner(props: WarpTransformCanvasProps) {
     return compileGraph(buildGraph(nodes, edges, outputId), dialect);
   }, [nodes, edges, outputId, dialect]);
 
+  // The visual-query route does not run a Sink on a serverless SQL pool for a
+  // caller who is not a tenant admin, so Run and Validate are off, with the
+  // reason, rather than posting a graph that is refused.
+  const sinkNotRun = useMemo(
+    () => target?.engine === 'synapse-serverless-sql-pool' && !isAdmin && graphWritesSink(buildGraph(nodes, edges, outputId)),
+    [target, isAdmin, nodes, edges, outputId],
+  );
+
   // ---- describe (column discovery) against the chosen target ----
   const fetchColumns = useCallback(async (nodeId: string, schema: string | undefined, table: string) => {
     if (!target) { setColError('Pick a run target to resolve table columns.'); return; }
     setColError(null);
+    setColRefusal(null);
     try {
       const r = await clientFetch(`/api/items/${target.engine}/${encodeURIComponent(target.id)}/visual-query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
@@ -404,6 +436,8 @@ function CanvasInner(props: WarpTransformCanvasProps) {
       const j = await r.json();
       if (j.ok && Array.isArray(j.columns)) {
         setColumnsByNode((prev) => ({ ...prev, [nodeId]: j.columns }));
+      } else if (isSqlRefusal(j)) {
+        setColRefusal(j as SqlFailure);
       } else {
         setColError(j.error || j.gate?.reason || 'Could not resolve columns for this table.');
       }
@@ -536,7 +570,10 @@ function CanvasInner(props: WarpTransformCanvasProps) {
       });
       const j = (await r.json()) as RunResult;
       if (mode === 'validate') {
-        setValidateMsg(j.ok ? `Compiled + executed against ${target.label}: ${j.rowCount ?? 0} rows, ${j.executionMs ?? '?'} ms.` : (j.error || j.gate?.reason || 'Validation failed.'));
+        // A refusal is shown once, by the result bar below with its remediation.
+        setValidateMsg(j.ok
+          ? `Compiled + executed against ${target.label}: ${j.rowCount ?? 0} rows, ${j.executionMs ?? '?'} ms.`
+          : isSqlRefusal(j) ? null : (j.error || j.gate?.reason || 'Validation failed.'));
         if (!j.ok) setResult(j);
       } else {
         setResult(j);
@@ -615,7 +652,7 @@ function CanvasInner(props: WarpTransformCanvasProps) {
           onOptionSelect={(_, d) => {
             const [, eid] = (d.optionValue || '').split('|');
             const next = targets.find((t) => `${t.engine}|${t.id}` === d.optionValue) || null;
-            void eid; setTarget(next); setColumnsByNode({});
+            void eid; setTarget(next); setColumnsByNode({}); setColRefusal(null);
           }}
           aria-label="Run target engine"
         >
@@ -629,8 +666,18 @@ function CanvasInner(props: WarpTransformCanvasProps) {
           : <Badge appearance="outline" color="informative">No engine</Badge>}
         <div className={s.toolbarSpacer} />
         <Button icon={<Sparkle20Regular />} appearance="secondary" onClick={() => setWizardOpen(true)}>New from pattern</Button>
-        <Button icon={<CheckmarkCircle20Regular />} appearance="secondary" disabled={!nodes.length || !target || running} onClick={() => void callRun('validate')}>Validate</Button>
-        <Button icon={running ? <Spinner size="tiny" /> : <Play20Regular />} appearance="primary" disabled={!nodes.length || !target || running} onClick={() => void callRun('run')}>{running ? 'Running…' : 'Run / Preview'}</Button>
+        <Button
+          icon={<CheckmarkCircle20Regular />} appearance="secondary"
+          disabled={!nodes.length || !target || running} disabledFocusable={sinkNotRun}
+          title={sinkNotRun ? SERVERLESS_SINK_REASON : undefined}
+          onClick={sinkNotRun ? undefined : () => void callRun('validate')}
+        >Validate</Button>
+        <Button
+          icon={running ? <Spinner size="tiny" /> : <Play20Regular />} appearance="primary"
+          disabled={!nodes.length || !target || running} disabledFocusable={sinkNotRun}
+          title={sinkNotRun ? SERVERLESS_SINK_REASON : undefined}
+          onClick={sinkNotRun ? undefined : () => void callRun('run')}
+        >{running ? 'Running…' : 'Run / Preview'}</Button>
         <Button icon={<Save20Regular />} appearance="secondary" disabled={!nodes.length} onClick={() => { setSaveMsg(null); setSaveOpen(true); }}>Save</Button>
       </div>
 
@@ -649,6 +696,31 @@ function CanvasInner(props: WarpTransformCanvasProps) {
           <MessageBarBody>
             <MessageBarTitle>No SQL engine configured</MessageBarTitle>
             Create a warehouse or lakehouse, or set <code>LOOM_SYNAPSE_WORKSPACE</code> (Synapse) / a Databricks SQL warehouse, to run transforms against a live Azure-native backend. You can still build and save the graph.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {/* The visual-query route item-scopes a serverless SQL pool for a caller
+          who is not a tenant admin; say what runs before they build a graph
+          that would be refused. */}
+      {target?.engine === 'synapse-serverless-sql-pool' && !isAdmin && (
+        <MessageBar intent="info" layout="multiline" data-testid="warp-serverless-scope">
+          <MessageBarBody style={{ overflowWrap: 'anywhere' }}>
+            <MessageBarTitle>What runs on a serverless SQL pool</MessageBarTitle>
+            A transform here runs as one read-only SELECT in master, so its sources are tables and views in
+            master, such as the INFORMATION_SCHEMA views; the canvas does not name a lakehouse file as a source.
+            To transform a lakehouse&apos;s files, query them with OPENROWSET(BULK …) in that lakehouse&apos;s SQL
+            tab, or pick a warehouse or dedicated SQL pool target. A Sink that creates or writes a table or view is
+            not run here, so Run and Validate are off while the graph ends in one; a source in the sys schema is
+            refused with the reason and what to do. Tenant admins can run these.
+            <SqlScopeFollowUp />
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {sinkNotRun && (
+        <MessageBar intent="warning" data-testid="warp-sink-not-run">
+          <MessageBarBody style={{ overflowWrap: 'anywhere' }}>
+            <MessageBarTitle>Run and Validate are off</MessageBarTitle>
+            {SERVERLESS_SINK_REASON}
           </MessageBarBody>
         </MessageBar>
       )}
@@ -752,6 +824,7 @@ function CanvasInner(props: WarpTransformCanvasProps) {
 
           <aside className={s.inspector} aria-label="Node configuration">
             {colError && <MessageBar intent="warning"><MessageBarBody>{colError}</MessageBarBody></MessageBar>}
+            {colRefusal && <SqlRefusalOrError result={colRefusal} />}
             {!selectedNode && (
               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                 Select a node to configure it. Add sources from the palette; chain transforms; finish with a Sink to materialize a table or view.
@@ -787,7 +860,10 @@ function CanvasInner(props: WarpTransformCanvasProps) {
           </MessageBarBody>
         </MessageBar>
       )}
-      {!running && result && !result.ok && result.code !== 'sql_login_required' && (
+      {!running && result && !result.ok && isSqlRefusal(result) && (
+        <SqlRefusalOrError result={result as SqlFailure} />
+      )}
+      {!running && result && !result.ok && result.code !== 'sql_login_required' && !isSqlRefusal(result) && (
         <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Run failed</MessageBarTitle>{result.error || 'Unknown error'}</MessageBarBody></MessageBar>
       )}
       {!running && result?.ok && (

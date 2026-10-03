@@ -22,7 +22,7 @@
  * walk (the real gate per no-vaporware.md).
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 
 // Stub the heavy map child so the smoke mount is fast + deterministic under v8
 // coverage. GeoDatasetEditor renders a GeoJsonMap (SVG/canvas map); the smoke
@@ -30,11 +30,11 @@ import { render, screen, waitFor } from '@testing-library/react';
 // behaviour-preserving.
 vi.mock('@/lib/components/graph/geojson-map', () => ({ GeoJsonMap: () => null }));
 
-import { GeoDatasetEditor, GeoSchemaPanel } from '../geo-editors';
+import { GeoDatasetEditor, GeoSchemaPanel, GeoInspectFailure } from '../geo-editors';
 import { makeItem, installFetchMock } from './test-helpers';
 
 describe('GeoDatasetEditor', () => {
-  afterEach(() => { vi.restoreAllMocks(); });
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
   it('mounts and surfaces at least one ribbon button', async () => {
     installFetchMock({});
@@ -68,5 +68,35 @@ describe('GeoDatasetEditor', () => {
     expect(screen.getAllByText('WKB').length).toBeGreaterThan(0);
     // The column count header reflects the probe.
     expect(screen.getByText(/Schema \(4 columns\)/i)).toBeInTheDocument();
+  });
+  // Inspect posts to the serverless SQL pool query route. For a caller who is not
+  // a tenant admin a path outside every lakehouse root in the workspace comes back
+  // as a refusal; it must read as "Query not run" with the route's remediation,
+  // not as a red "Inspect failed". Breaks if GeoInspectFailure loses its refusal
+  // branch (the remediation line disappears and the title reads "Inspect failed").
+  it('shows an Inspect refusal as "Query not run" with the route\'s remediation', () => {
+    render(
+      <GeoInspectFailure
+        result={{
+          ok: false, status: 403, code: 'query_location_outside_root',
+          error: "The location 'https://acct1.dfs.core.windows.net/gold/geo/roads.parquet' is not accepted.",
+          remediation: 'Read files under a lakehouse root in this workspace. Remediation-4417.',
+        }}
+      />,
+    );
+    const text = document.body.textContent || '';
+    expect(text).toContain('Query not run');
+    expect(text).toContain('What to do:');
+    expect(text).toContain('Remediation-4417');
+    expect(text).not.toContain('Inspect failed');
+  });
+
+  it('keeps any other Inspect failure on the editor\'s own bar (positive half)', () => {
+    render(<GeoInspectFailure result={{ ok: false, status: 502, error: 'Sentinel-3391 could not be read.' }} />);
+    const text = document.body.textContent || '';
+    expect(text).toContain('Inspect failed');
+    expect(text).toContain('Sentinel-3391');
+    expect(text).not.toContain('Query not run');
+    expect(text).not.toContain('What to do:');
   });
 });
