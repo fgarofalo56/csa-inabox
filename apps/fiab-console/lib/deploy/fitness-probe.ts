@@ -46,13 +46,30 @@
  * Those cover four of the five `az` commands `brownfield.md` asked the customer
  * to run by hand, plus the AOAI deployment list — all five.
  *
- * NOT resolved here, because they need a data plane this module does not hold a
- * token for at plan time: `purview.rootCollectionAdmin`, `purview.capacityUnits`,
- * `aisearch.indexHeadroom`, `databricks.metastoreAssignment`,
- * `cosmos.containerNameCollision`, `aml.computeQuota`. Those return `unknown`
- * with the exact remediation `fitness.ts` already writes for them. They are
- * NOT silently passed — a check that cannot fail is the defect class this whole
- * subsystem exists to avoid.
+ * `databricks.metastoreAssignment` IS resolved (#3342): one Databricks ACCOUNT
+ * API read as the Console identity (`readDatabricksMetastore`). It resolves only
+ * once that identity is a Databricks account admin — a grant Databricks reserves
+ * to an existing account admin — so until then it is `unknown` with the grant
+ * named and the svc-databricks-account-admin gate attached, and the next
+ * validation re-reads it live.
+ *
+ * `cosmos.containerNameCollision` (#3342) is ALSO resolved here now, via a
+ * bounded walk of the account's `sqlDatabases` -> `containers` ARM child
+ * resources (`cosmosContainerNames`). It never needed a data-plane token — the
+ * same RBAC that let the account read above succeed already covers these
+ * child-resource reads. Capped at `COSMOS_DATABASE_SCAN_CAP` databases; a
+ * capped or partially-failed walk is reported as INCOMPLETE and does NOT
+ * attach `containerNames` (R7 — see `cosmosContainerNames`'s doc comment).
+ *
+ * NOT resolved here, because they need a data plane (or a grant) this module
+ * does not hold at plan time: `purview.rootCollectionAdmin`,
+ * `purview.capacityUnits`, `aisearch.indexHeadroom`, `aml.computeQuota`. Those
+ * return `unknown` with the exact remediation `fitness.ts` already writes for
+ * them. They are NOT silently passed — a check that cannot fail is the defect
+ * class this whole subsystem exists to avoid. Per-check findings on why each
+ * of these four is harder than `databricks.metastoreAssignment` and
+ * `cosmos.containerNameCollision` were — and which are genuine chicken-and-egg
+ * cases vs. which just need more work — are recorded on #3342.
  *
  * ## Purity
  *
@@ -83,6 +100,20 @@ export const AUTHZ_API_VERSION = '2022-04-01';
 
 /** Per-resource read budget. A hung cross-sub ARM call becomes an honest unknown. */
 export const PROBE_TIMEOUT_MS = 12_000;
+
+/**
+ * Cosmos container-name-collision scan bounds (#3342 — this check used to be
+ * permanently `unknown`; it is resolved via plain ARM control-plane child-
+ * resource reads, the same RBAC the probe already needed to read the account).
+ *
+ * BOUNDED, not because the real answer is approximate, but because an account
+ * with hundreds of databases must not turn one plan-time probe into a
+ * multi-minute fan-out. Hitting the cap means the scan is INCOMPLETE and
+ * `cosmosContainerNames` reports that explicitly — the caller must never treat
+ * a capped scan as a clean "no collision" answer (deploy-integrity R7).
+ */
+export const COSMOS_DATABASE_SCAN_CAP = 25;
+export const COSMOS_CONTAINER_SCAN_CAP_PER_DB = 50;
 
 /**
  * ARM api-version per adoption-catalog `armType`.
@@ -311,6 +342,178 @@ export function foundryDeploymentProps(deployments: any[]): Record<string, unkno
   };
 }
 
+/**
+ * PURE. The name of a Cosmos SQL child resource (a database or a container), as
+ * ARM actually reported it.
+ *
+ * ARM's list APIs for these child types echo the short name on `.name`. Some
+ * API versions instead (or additionally) carry it on `.properties.resource.id`
+ * — the Cosmos resource's own "id" field, which IS its name for the SQL API.
+ * Prefer `.name`; fall back to the resource id; never fabricate one.
+ */
+function cosmosChildName(entry: any): string {
+  return String(entry?.name ?? entry?.properties?.resource?.id ?? '').trim();
+}
+
+/**
+ * PURE. Fold a Cosmos account's sqlDatabases list + a per-database containers
+ * list into the flat `containerNames` property `cosmos.containerNameCollision`
+ * reads (#3342).
+ *
+ * `complete` is the honesty flag: true only when EVERY database was listed
+ * (within `COSMOS_DATABASE_SCAN_CAP`) and EVERY one of those database's
+ * container lists was read successfully. A `false` here means the caller must
+ * NOT attach `containerNames` — a partial list that happens to show no
+ * "loom"-prefixed name is not evidence of no collision, it is evidence of an
+ * incomplete read, and `fitness.ts`'s `nameCollisionCheck` has no "partial"
+ * verdict to render that distinction. Reporting a capped/partial scan as a
+ * complete one would be exactly the R7 violation this module exists to avoid.
+ */
+export function cosmosContainerNames(
+  databases: any[],
+  containerListsByDb: Map<string, { ok: true; value: any[] } | { ok: false }>,
+): { containerNames: string[]; complete: boolean; databasesScanned: number } {
+  const dbNames = databases.map(cosmosChildName).filter(Boolean);
+  const scanned = dbNames.slice(0, COSMOS_DATABASE_SCAN_CAP);
+  const truncatedDbList = dbNames.length > scanned.length;
+
+  const containerNames: string[] = [];
+  let anyDbFailed = false;
+  for (const db of scanned) {
+    const entry = containerListsByDb.get(db);
+    if (!entry || !entry.ok) {
+      anyDbFailed = true;
+      continue;
+    }
+    for (const c of entry.value.slice(0, COSMOS_CONTAINER_SCAN_CAP_PER_DB)) {
+      const name = cosmosChildName(c);
+      if (name) containerNames.push(name);
+    }
+  }
+
+  return {
+    containerNames,
+    complete: !truncatedDbList && !anyDbFailed,
+    databasesScanned: scanned.length,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Databricks metastore assignment (#3342)
+// ---------------------------------------------------------------------------
+
+/** The values the Databricks grant needs; mirrors the account client's shape. */
+export interface AccountAdminValues {
+  consoleClientId: string | null;
+  consolePrincipalId: string | null;
+  accountId: string | null;
+  accountConsoleUrl: string;
+}
+
+/** One account-plane read of a workspace's metastore, already classified. */
+export type MetastoreRead =
+  | { ok: true; metastoreId: string | null; loomMetastoreId: string | null }
+  | { ok: false; reason: 'not-account-admin' | 'inconclusive'; detail: string };
+
+/**
+ * The account-plane reads `databricks.metastoreAssignment` needs. Injected so the
+ * suite runs with no network; the live one is the account client, called as the
+ * Console identity — the identity that must hold the role for Loom to operate
+ * the workspace after adoption, so its answer is the one that matters.
+ */
+export interface MetastoreReader {
+  values(): Promise<AccountAdminValues>;
+  read(workspaceId: string, hubRegion: string): Promise<MetastoreRead>;
+}
+
+/**
+ * PURE. The metastore Loom would bind in a region — the first account metastore
+ * whose region matches, exactly as `scripts/csa-loom/enable-unity-catalog.sh`
+ * picks it (`select(.region==$r) | head -1`). Null when the account has none
+ * there, which `fitness.ts` then compares against honestly.
+ */
+export function regionalMetastoreId(
+  metastores: { metastore_id: string; region?: string }[],
+  region: string,
+): string | null {
+  const norm = (r: unknown) => String(r ?? '').toLowerCase().replace(/[\s_-]/g, '');
+  const want = norm(region);
+  if (!want) return null;
+  return metastores.find((m) => norm(m.region) === want)?.metastore_id ?? null;
+}
+
+export const liveMetastoreReader: MetastoreReader = {
+  async values() {
+    const m = await import('../azure/unity-catalog-account-client');
+    return m.consoleAccountAdminValues();
+  },
+  async read(workspaceId, hubRegion) {
+    const m = await import('../azure/unity-catalog-account-client');
+    try {
+      const [assignment, metastores] = await Promise.all([
+        m.getWorkspaceMetastoreAssignment(workspaceId),
+        m.listAccountMetastores(),
+      ]);
+      return {
+        ok: true,
+        metastoreId: assignment?.metastore_id ?? null,
+        loomMetastoreId: regionalMetastoreId(metastores, hubRegion),
+      };
+    } catch (e) {
+      const c = m.classifyAccountAdminFailure(e);
+      if (c.state === 'not-admin') {
+        return {
+          ok: false,
+          reason: 'not-account-admin',
+          detail: `the Databricks account API refused the Console identity (HTTP ${c.status}: ${c.message})`,
+        };
+      }
+      const why = c.state === 'inconclusive' ? `HTTP ${c.status || 'n/a'}: ${c.message}` : c.state;
+      return { ok: false, reason: 'inconclusive', detail: `the Databricks account API read did not complete (${why})` };
+    }
+  },
+};
+
+/**
+ * Read the metastore assignment of an adopted Databricks workspace and fold it
+ * into the properties `databricks.metastoreAssignment` reads.
+ *
+ * `metastoreId` is set ONLY when the account API answered — `null` then means
+ * "the account reports no assignment", a real answer. Every other outcome sets
+ * `metastoreReadBlocked` instead, carrying what was observed and the values the
+ * grant needs, so the check names the actual fix rather than a generic one.
+ */
+export async function readDatabricksMetastore(
+  armBody: Record<string, any>,
+  hubRegion: string,
+  reader: MetastoreReader,
+): Promise<{ properties: Record<string, unknown>; note: string }> {
+  const values = await reader.values();
+  const blocked = (reason: string, detail: string) => ({
+    properties: { metastoreReadBlocked: { reason, detail, ...values } },
+    note: detail,
+  });
+  if (!values.accountId) {
+    return blocked(
+      'account-id-unset',
+      'LOOM_DATABRICKS_ACCOUNT_ID is unset in this deployment, so the Databricks account API — the only place the assignment can be read — was not called',
+    );
+  }
+  const wsId = armBody?.properties?.workspaceId;
+  if (wsId === undefined || wsId === null || String(wsId).trim() === '') {
+    return blocked(
+      'no-workspace-id',
+      'the ARM read carried no properties.workspaceId, so there was no workspace id to ask the Databricks account API about',
+    );
+  }
+  const r = await reader.read(String(wsId), hubRegion);
+  if (!r.ok) return blocked(r.reason, r.detail);
+  return {
+    properties: { metastoreId: r.metastoreId, loomMetastoreId: r.loomMetastoreId },
+    note: `account API: workspace ${wsId} metastore=${JSON.stringify(r.metastoreId)}, regional metastore=${JSON.stringify(r.loomMetastoreId)}`,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // IO
 // ---------------------------------------------------------------------------
@@ -427,6 +630,7 @@ export async function probeAdoption(
   ctx: ProbeContext,
   token: string,
   transport: DiscoveryTransport = liveTransport,
+  metastoreReader: MetastoreReader = liveMetastoreReader,
 ): Promise<AdoptionProbeResult> {
   const fitnessCtx: FitnessContext = {
     hubRegion: ctx.hubRegion,
@@ -507,6 +711,60 @@ export async function probeAdoption(
     }
   }
 
+  // Databricks: the metastore assignment is an ACCOUNT-plane fact. Until #3342
+  // nothing read it, so this check was `unknown` on every adopt and blocked the
+  // plan with a remediation (grant Reader) that could never clear it.
+  if (serviceKey === 'databricks') {
+    const ms = await readDatabricksMetastore(body, ctx.hubRegion, metastoreReader);
+    subject.properties = { ...(subject.properties ?? {}), ...ms.properties };
+    notes.push(`metastore: ${ms.note}`);
+  }
+
+  // Cosmos: `cosmos.containerNameCollision` was permanently `unknown` (#3342)
+  // — not because it needs a data-plane token, but because nothing had ever
+  // walked the sqlDatabases -> containers child-resource tree. Both reads are
+  // plain ARM control-plane GETs under the SAME RBAC that already let the
+  // account read above succeed (Reader-class `.../sqlDatabases/read` and
+  // `.../containers/read` actions are included in every role this catalog
+  // grants for Cosmos), so there is no new grant to wait on.
+  if (serviceKey === 'cosmos') {
+    const dbs = await armGetJson(
+      transport,
+      token,
+      `${armBase()}${scope}/sqlDatabases?api-version=${apiVersion}`,
+    );
+    if (dbs.body && Array.isArray(dbs.body.value)) {
+      const dbNames = dbs.body.value.map(cosmosChildName).filter(Boolean).slice(0, COSMOS_DATABASE_SCAN_CAP);
+      const containerListsByDb = new Map<string, { ok: true; value: any[] } | { ok: false }>();
+      for (const db of dbNames) {
+        const c = await armGetJson(
+          transport,
+          token,
+          `${armBase()}${scope}/sqlDatabases/${encodeURIComponent(db)}/containers?api-version=${apiVersion}`,
+        );
+        if (c.body && Array.isArray(c.body.value)) {
+          containerListsByDb.set(db, { ok: true, value: c.body.value });
+        } else {
+          containerListsByDb.set(db, { ok: false });
+          notes.push(`containers (database=${db}): ${c.detail}`);
+        }
+      }
+      const result = cosmosContainerNames(dbs.body.value, containerListsByDb);
+      notes.push(
+        `sqlDatabases: ${dbs.body.value.length} returned, ${result.databasesScanned} scanned for containers` +
+          (result.complete ? '' : ' (INCOMPLETE — see above)'),
+      );
+      // Only attach when the walk was COMPLETE. A partial list that happens to
+      // show no "loom"-prefixed name is evidence of an incomplete read, not of
+      // "no collision" — see cosmosContainerNames's own doc comment (R7).
+      if (result.complete) {
+        subject.properties = { ...(subject.properties ?? {}), containerNames: result.containerNames };
+      }
+    } else {
+      notes.push(`sqlDatabases: ${dbs.detail}`);
+    }
+  }
+
   const { rbac, detail: rbacDetail } = await probeRbac(
     transport,
     token,
@@ -536,8 +794,9 @@ export async function probeAdoptions(
   ctx: ProbeContext,
   token: string,
   transport: DiscoveryTransport = liveTransport,
+  metastoreReader: MetastoreReader = liveMetastoreReader,
 ): Promise<AdoptionProbeResult[]> {
   return Promise.all(
-    adoptions.map((a) => probeAdoption(a.serviceKey, a.target, ctx, token, transport)),
+    adoptions.map((a) => probeAdoption(a.serviceKey, a.target, ctx, token, transport, metastoreReader)),
   );
 }

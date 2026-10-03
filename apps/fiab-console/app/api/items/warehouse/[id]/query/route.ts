@@ -47,7 +47,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { tenantScopeId } from '@/lib/auth/session';
 import { apiServerError } from '@/lib/api/respond';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
-import { dedicatedTarget, executeQuery, type SynapseQueryParam } from '@/lib/azure/synapse-sql-client';
+import { dedicatedTarget, executeQuery, type SqlCancelKey, type SynapseQueryParam } from '@/lib/azure/synapse-sql-client';
 import { getPoolState } from '@/lib/azure/synapse-pool-arm';
 import { recordQueryRun } from '@/lib/finops/query-run';
 import {
@@ -80,6 +80,11 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const body = await req.json().catch(() => ({}));
     const sqlText = (body?.sql || '').toString().trim();
     const queryId = (body?.queryId || '').toString().trim() || undefined;
+    // The cancel key: this family, the caller, the item and the queryId
+    // (`../cancel/route.ts` builds the same key).
+    const cancelKey: SqlCancelKey | undefined = queryId
+      ? { family: 'warehouse', oid: session.claims.oid, itemId: item.id, queryId }
+      : undefined;
     if (!sqlText) return NextResponse.json({ error: 'sql is required' }, { status: 400 });
     if (sqlText.length > 65_536) return NextResponse.json({ error: 'sql too large (>64KB)' }, { status: 413 });
 
@@ -115,7 +120,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
     try {
       const started = Date.now();
-      const result = await executeQuery(target, sqlText, 60_000, parameters, queryId);
+      const result = await executeQuery(target, sqlText, 60_000, parameters, cancelKey);
       // B-N19e — FOCUS cost attribution: tag this run with WHO ran it and WHICH
       // warehouse item + workspace it belongs to (best-effort, never blocks).
       void recordQueryRun({

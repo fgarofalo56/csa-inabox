@@ -25,7 +25,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { apiServerError } from '@/lib/api/respond';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
-import { dedicatedTarget, executeQuery, executeQueryAsUser, type SynapseQueryParam } from '@/lib/azure/synapse-sql-client';
+import { dedicatedTarget, executeQuery, executeQueryAsUser, type SqlCancelKey, type SynapseQueryParam } from '@/lib/azure/synapse-sql-client';
 import { getPoolState } from '@/lib/azure/synapse-pool-arm';
 import { resolveAccessMode } from '@/lib/azure/sql-access-mode';
 import { getUserSqlToken } from '@/lib/azure/sql-user-token-store';
@@ -68,6 +68,11 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const body = await req.json().catch(() => ({}));
     const sqlText = (body?.sql || '').toString().trim();
     const queryId = (body?.queryId || '').toString().trim() || undefined;
+    // The cancel key: this family, the caller, the item and the queryId
+    // (`../cancel/route.ts` builds the same key).
+    const cancelKey: SqlCancelKey | undefined = queryId
+      ? { family: 'dedicated-sql-pool', oid: session.claims.oid, itemId: item.id, queryId }
+      : undefined;
     if (!sqlText) return NextResponse.json({ error: 'sql is required' }, { status: 400 });
     if (sqlText.length > 65_536) return NextResponse.json({ error: 'sql too large (>64KB)' }, { status: 413 });
 
@@ -119,9 +124,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
             { status: 403 },
           );
         }
-        result = await executeQueryAsUser(target, sqlText, userToken, session.claims.oid, 60_000, parameters, queryId);
+        result = await executeQueryAsUser(target, sqlText, userToken, session.claims.oid, 60_000, parameters, cancelKey);
       } else {
-        result = await executeQuery(target, sqlText, 60_000, parameters, queryId);
+        result = await executeQuery(target, sqlText, 60_000, parameters, cancelKey);
       }
       return NextResponse.json({
         ok: true,

@@ -118,11 +118,20 @@ vi.mock('@/lib/azure/cloud-endpoints', async (importOriginal) => ({
 const executeStatement = vi.fn(async (..._a: unknown[]) => ({ columns: [], rows: [], rowCount: 0, executionMs: 1, truncated: false }));
 vi.mock('@/lib/azure/databricks-client', () => ({
   databricksConfigGate: () => null,
-  getWarehouse: async () => ({ state: 'RUNNING' }),
   executeStatement: (...a: unknown[]) => executeStatement(...a),
 }));
 
 vi.mock('@/lib/azure/copilot-config-store', () => ({ loadTenantCopilotConfig: async () => null }));
+
+// Warehouse-target binding (#3669) is its own file's concern
+// (`warehouse-binding.test.ts`); this file is about the route's OWN item-scope
+// ladder, run for real, so the named warehouse is always a bound, running one.
+vi.mock('@/app/api/items/_lib/warehouse-item-binding', () => ({
+  authorizeWarehouseTarget: vi.fn(async (_session: unknown, warehouseId: string) => ({
+    ok: true,
+    warehouse: { id: warehouseId, state: 'RUNNING' },
+  })),
+}));
 
 import { POST } from '../route';
 

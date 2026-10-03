@@ -141,6 +141,12 @@ function accountHost(): string {
     .replace(/\/$/, '');
 }
 
+/** The Databricks account console for this deployment's account host. Same
+ *  host as the account API — Databricks serves both from it. */
+export function accountConsoleUrl(): string {
+  return `https://${accountHost()}`;
+}
+
 async function dbxToken(): Promise<string> {
   const t = await credential.getToken(DBX_SCOPE);
   if (!t?.token) throw new UnityCatalogAccountError('Failed to acquire Databricks AAD token', 401);
@@ -300,4 +306,98 @@ export async function assignMetastore(
     body: { metastore_id: metastoreId, default_catalog_name: defaultCatalog },
   });
   return { workspace_id: String(workspaceId), metastore_id: metastoreId, default_catalog_name: defaultCatalog };
+}
+
+// ============================================================
+// The Console identity as a Databricks ACCOUNT ADMIN (#3342)
+// ============================================================
+//
+// Every call above needs the Console identity to hold the Databricks
+// `account_admin` role. Databricks exposes the grant as an API — PATCH
+// /scim/v2/ServicePrincipals/{id} adding `roles: [{value:'account_admin'}]`,
+// the call scripts/csa-loom/enable-unity-catalog.sh makes — but only an
+// EXISTING account admin may call it, and the first account admin of an account
+// is established interactively by an Entra Global Administrator signing in to
+// the account console. The Console identity cannot grant the role to itself, so
+// this module does the two things it can: hand the operator every value the
+// grant needs, and MEASURE whether the grant has happened.
+
+/**
+ * The values a Databricks account admin needs to grant the Console identity the
+ * account admin role, read from THIS deployment's environment. A value the
+ * deployment does not hold is `null` — callers say so; they never print a
+ * stand-in that looks like a real id.
+ */
+export interface ConsoleAccountAdminValues {
+  /** Entra application (client) id of the Console UAMI — what the account
+   *  console asks for under "Microsoft Entra ID managed". */
+  consoleClientId: string | null;
+  /** Entra object (principal) id of the Console UAMI. */
+  consolePrincipalId: string | null;
+  /** The Databricks account id (LOOM_DATABRICKS_ACCOUNT_ID). */
+  accountId: string | null;
+  accountConsoleUrl: string;
+  /** The display name enable-unity-catalog.sh registers. A label only —
+   *  Databricks keys the principal on the client id. */
+  suggestedDisplayName: string;
+}
+
+export function consoleAccountAdminValues(): ConsoleAccountAdminValues {
+  const v = (k: string) => (process.env[k] || '').trim() || null;
+  return {
+    consoleClientId: v('LOOM_UAMI_CLIENT_ID') ?? v('AZURE_CLIENT_ID'),
+    consolePrincipalId: v('LOOM_UAMI_PRINCIPAL_ID') ?? v('LOOM_CONSOLE_PRINCIPAL_ID'),
+    accountId: v('LOOM_DATABRICKS_ACCOUNT_ID'),
+    accountConsoleUrl: accountConsoleUrl(),
+    suggestedDisplayName: 'loom-console-uami',
+  };
+}
+
+export type AccountAdminProbe =
+  /** LOOM_DATABRICKS_ACCOUNT_ID is unset — nothing was asked. */
+  | { state: 'not-configured' }
+  /** The account API answered an account-admin-only read. */
+  | { state: 'admin'; metastoreCount: number }
+  /** The account API REFUSED the identity (401/403 from the account host). */
+  | { state: 'not-admin'; status: number; message: string }
+  /** Nothing was established — no token, a timeout, a 5xx, an IP block. */
+  | { state: 'inconclusive'; status: number; message: string };
+
+/** An account IP access list refuses with 403 too; that is not a role fact. */
+const IP_BLOCK = /ip address|ip access|access list|source ip/i;
+
+/**
+ * PURE. Classify a failure of an account-admin-only read.
+ *
+ * Only a refusal that CAME FROM THE ACCOUNT API — it carries the endpoint it was
+ * refused at — establishes "this identity is not an account admin". A 401
+ * thrown before any request (token acquisition) carries no endpoint and says
+ * nothing about the account; neither does a 403 an IP access list produced.
+ * Reporting either as "not an admin" would send the operator to grant a role
+ * that may already be held (deploy-integrity R7).
+ */
+export function classifyAccountAdminFailure(e: unknown): AccountAdminProbe {
+  if (e instanceof UnityCatalogAccountError) {
+    const refusedByAccount = !!e.endpoint && (e.status === 401 || e.status === 403);
+    if (refusedByAccount && !IP_BLOCK.test(e.message || '')) {
+      return { state: 'not-admin', status: e.status, message: e.message };
+    }
+    return { state: 'inconclusive', status: e.status, message: e.message };
+  }
+  return { state: 'inconclusive', status: 0, message: (e as any)?.message ?? String(e) };
+}
+
+/**
+ * Is the Console identity a Databricks ACCOUNT ADMIN right now? A LIVE read:
+ * GET /metastores is account-admin-only and is the read every metastore surface
+ * in the Console makes first, so its answer is the answer that matters.
+ */
+export async function probeConsoleAccountAdmin(): Promise<AccountAdminProbe> {
+  if (!isAccountApiConfigured()) return { state: 'not-configured' };
+  try {
+    const ms = await listAccountMetastores();
+    return { state: 'admin', metastoreCount: ms.length };
+  } catch (e) {
+    return classifyAccountAdminFailure(e);
+  }
 }

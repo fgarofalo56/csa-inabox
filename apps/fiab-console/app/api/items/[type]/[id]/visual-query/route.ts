@@ -28,10 +28,57 @@
  * Synapse path needs LOOM_SYNAPSE_WORKSPACE; if unset, the underlying client
  * throws a precise "Missing env var: LOOM_SYNAPSE_WORKSPACE" surfaced to the UI
  * MessageBar — never a "bind a Fabric workspace" gate.
+ *
+ * ITEM SCOPE FOR `synapse-serverless-sql-pool` — the same as the serverless SQL
+ * pool query route (`../../../synapse-serverless-sql-pool/[id]/query/route.ts`),
+ * because this route runs generated SQL on the same shared serverless endpoint:
+ *   - the caller is authorized on the route ITEM (`guardSqlPoolQueryItem`: read
+ *     roles accepted, 404 for an id naming no item) before the body is read;
+ *   - a TENANT ADMIN's generated SQL runs unchanged in the requested `database`;
+ *   - anyone else's passes the same classifier and lakehouse-root confinement
+ *     (`confineToWorkspaceLakehouses`), and runs in `master` on the SQL pool
+ *     editor's own pool with the `USE [master];` prefix, whatever `database`
+ *     the request names. The response's `generatedSql` is the text as compiled.
+ *     Its refusals are worded for a visual query (`VISUAL_QUERY_SURFACE`): a
+ *     Sink's `INTO` / `CREATE` is the compiler's, so they name the Sink and the
+ *     targets that run one, with no hint to bracket `INTO`.
+ *
+ * ITEM SCOPE FOR `warehouse` / `synapse-dedicated-sql-pool` — the same guard
+ * their own query and cancel routes run (`guardSynapseItemRequest` in
+ * `../../_lib/synapse-item-scope.ts`): the caller is authorized on the route
+ * ITEM (owner, tenant admin, or shared-ACL member of its workspace) before the
+ * body is read, 404 for an id naming no item of that type. Write-scoped — no
+ * `allowReadRoles` — because the compiled graph can end in a Sink
+ * (`SELECT … INTO` / `CREATE OR ALTER VIEW`), so this is not a read-only path
+ * even though most graphs compile to a SELECT, and there is no classifier here
+ * to confine a non-admin to read-only text the way the serverless path does.
+ * Before this, the route ran these two engines on `withSession` alone: any
+ * signed-in caller could run a Sink-capable generated statement against ANY
+ * warehouse / dedicated-pool id on the one shared dedicated pool — the same
+ * GHSA-v2g8-gp3r-rg4r shape the sibling query/cancel routes close, left open
+ * here. This closes the same floor they do (not a per-table bound — see
+ * `../../_lib/synapse-item-scope.ts` for what remains open on the shared pool).
+ * The `database` this route reads is never used on the dedicated path (unlike
+ * the query route's Layer 2), so no re-point exists here to bind.
+ *
+ * ITEM SCOPE FOR `databricks-sql-warehouse` — the same guard its own query
+ * route runs (`databricks-sql-warehouse/[id]/query/route.ts`):
+ * `guardSynapseItemRequest`, write-scoped, 404 for an id naming no item of
+ * that type. Before this, this engine ran on `withSession` alone with a
+ * caller-chosen `warehouseId` in the body — the same GHSA-v2g8-gp3r-rg4r shape
+ * as the dedicated-pool gap above, in the SAME route, found in a second round
+ * of review. `resolveItemSynapseDatabase` returns null for this item type (it
+ * is not Synapse-backed), which is fine: this route never reads `guard.ctx`
+ * for any engine, only `guard.res`.
+ *
+ * ALL FOUR ENGINE TYPES THIS ROUTE ACCEPTS ARE NOW ITEM-SCOPED. There is no
+ * fifth; `SYNAPSE_TSQL_ENGINES` plus the explicit `databricks-sql-warehouse`
+ * check above is the complete population this handler admits (anything else
+ * is the 400 just above).
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import { pdpCheck } from '@/lib/auth/pdp/enforce';
 import {
   dedicatedTarget,
@@ -46,6 +93,16 @@ import { getUserSqlToken } from '@/lib/azure/sql-user-token-store';
 import { executeStatement, getWarehouse } from '@/lib/azure/databricks-client';
 import { compileGraph, type VqGraph, type SqlDialect } from '@/lib/editors/visual-query-compiler';
 import { isSqlLoginFailure, sqlLoginGateBody } from '@/lib/azure/sql-login-gate';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
+import type { WorkspaceItem } from '@/lib/types/workspace';
+import { readerTarget, readerBatch } from '@/app/api/items/lakehouse/_lib/query-reader';
+import {
+  guardSqlPoolQueryItem,
+  confineToWorkspaceLakehouses,
+  SQL_POOL_READER_POOL_PREFIX,
+} from '@/app/api/items/synapse-serverless-sql-pool/_lib/query-scope';
+import { VISUAL_QUERY_SURFACE } from '@/app/api/items/synapse-serverless-sql-pool/_lib/visual-query-surface';
+import { guardSynapseItemRequest } from '@/app/api/items/_lib/synapse-item-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -56,11 +113,23 @@ const SYNAPSE_TSQL_ENGINES = new Set([
   'synapse-serverless-sql-pool',
 ]);
 const DEDICATED_ENGINES = new Set(['warehouse', 'synapse-dedicated-sql-pool']);
+// The engines whose visual-query runs the SAME item-authorization guard their
+// own query/cancel routes run — everything this route accepts EXCEPT the
+// serverless SQL pool, which has its own guard above (read roles accepted,
+// because its text is classifier-confined; these are write-scoped).
+const SYNAPSE_GUARD_ENGINES = new Set(['warehouse', 'synapse-dedicated-sql-pool', 'databricks-sql-warehouse']);
+const DATABRICKS_WAREHOUSE_ITEM_UNREACHABLE =
+  'This SQL warehouse item is not available to you. Either it does not exist, or you have no ' +
+  'role in its workspace. Ask a workspace owner to share it with you.';
 
 function quoteIdent(name: string, dialect: SqlDialect): string {
   const clean = (name || '').trim();
   if (dialect === 'tsql') return `[${clean.replace(/[[\]]/g, '')}]`;
-  return `\`${clean.replace(/`/g, '')}\``;
+  // \x60 is the backtick. Written as an escape so no backtick sits inside a regex
+  // inside a template expression: check-tid-boundary-chokepoint's lexer loses
+  // its brace depth there and then no longer recognises this file's POST
+  // handler (#4856).
+  return `\`${clean.replace(/\x60/g, '')}\``;
 }
 
 /** Build a zero-row "describe" query so the canvas can enumerate a table's columns. */
@@ -71,11 +140,8 @@ function describeSql(schema: string | undefined, table: string, dialect: SqlDial
   return dialect === 'tsql' ? `SELECT TOP 0 * FROM ${ref}` : `SELECT * FROM ${ref} LIMIT 0`;
 }
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ type: string; id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
-  const { type, id } = await ctx.params;
+export const POST = withSession<{ type: string; id: string }>(async (req: NextRequest, { session, params }) => {
+  const { type, id } = params;
   // PDP gate (default-off / shadow-ready). Visual query reads item data.
   const blocked = await pdpCheck(session, { level: 'item', id, itemType: type }, 'read');
   if (blocked) return blocked;
@@ -86,8 +152,37 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ type: stri
     );
   }
 
+  // The serverless SQL pool item: authorize the caller on the item first, the
+  // same guard as its query route (see the header).
+  const serverless = type === 'synapse-serverless-sql-pool';
+  let serverlessItem: WorkspaceItem | null = null;
+  if (serverless) {
+    const guard = await guardSqlPoolQueryItem(id);
+    if (guard.res) return guard.res;
+    serverlessItem = guard.ctx.item;
+  }
+  const admin = serverless && isTenantAdmin(session);
+
+  // The dedicated-pool engines (warehouse, synapse-dedicated-sql-pool) and the
+  // Databricks SQL Warehouse engine: the same item authorization their own
+  // query/cancel routes run (see the header). Write-scoped (no
+  // `allowReadRoles`) — the compiled graph can end in a Sink, and the
+  // Databricks branch's `sql` is unrestricted DDL/DML the same way its own
+  // query route treats it.
+  if (SYNAPSE_GUARD_ENGINES.has(type)) {
+    const notFound = type === 'warehouse'
+      ? 'warehouse not found'
+      : type === 'synapse-dedicated-sql-pool'
+        ? 'dedicated SQL pool not found'
+        : DATABRICKS_WAREHOUSE_ITEM_UNREACHABLE;
+    const guard = await guardSynapseItemRequest({ itemId: id, itemType: type, notFound });
+    if (guard.res) return guard.res;
+  }
+
   const body = await req.json().catch(() => ({} as any));
   const dialect: SqlDialect = type === 'databricks-sql-warehouse' ? 'sparksql' : 'tsql';
+  // Read by the tenant-admin serverless target and the other engines only; a
+  // serverless caller who is not a tenant admin runs on `readerTarget` (master).
   const database = (body?.database || 'master').toString();
   const warehouseId = (body?.warehouseId || '').toString().trim();
   const catalog = body?.catalog ? String(body.catalog) : undefined;
@@ -114,6 +209,20 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ type: stri
   }
 
   const generatedSql = sql;
+
+  // Non-admin serverless: the generated text passes the query route's
+  // classifier and root confinement before anything runs. Without the item
+  // record there is no root set to confine to, so nothing runs (fails closed).
+  if (serverless && !admin) {
+    if (!serverlessItem) {
+      return NextResponse.json(
+        { ok: false, error: 'The serverless SQL pool item could not be read, so the query was not run.' },
+        { status: 500 },
+      );
+    }
+    const refused = await confineToWorkspaceLakehouses(sql, serverlessItem, VISUAL_QUERY_SURFACE);
+    if (refused) return refused;
+  }
 
   try {
     let result: QueryResult;
@@ -142,7 +251,11 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ type: stri
       }
       result = await executeQuery(dedicatedTarget(), sql);
     } else {
-      // synapse-serverless-sql-pool — honor the F10 data-access mode.
+      // synapse-serverless-sql-pool — honor the F10 data-access mode. A tenant
+      // admin runs in the requested database; anyone else in master on the SQL
+      // pool editor's own pool, with the `USE [master];` prefix.
+      const target = admin ? serverlessTarget(database) : readerTarget(SQL_POOL_READER_POOL_PREFIX);
+      const batch = admin ? sql : readerBatch(sql);
       const accessMode = await resolveAccessMode(id, type);
       if (accessMode === 'user') {
         const userToken = await getUserSqlToken(session.claims.oid);
@@ -157,9 +270,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ type: stri
             { status: 403 },
           );
         }
-        result = await executeQueryAsUser(serverlessTarget(database), sql, userToken, session.claims.oid);
+        result = await executeQueryAsUser(target, batch, userToken, session.claims.oid);
       } else {
-        result = await executeQuery(serverlessTarget(database), sql);
+        result = await executeQuery(target, batch);
       }
     }
 
@@ -188,4 +301,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ type: stri
       { status: 502 },
     );
   }
-}
+});

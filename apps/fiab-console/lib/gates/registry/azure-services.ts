@@ -387,6 +387,23 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
     },
     legacyCodes: ['uc_system_tables_boundary', 'uc_system_schema_grant'],
   },
+  // #3342 — `role-grant` because the account admin role can only be granted by
+  // an existing Databricks account admin (Databricks reserves the first one to
+  // an Entra Global Administrator, interactively). The Console cannot hold a
+  // credential that may grant it, so the Fix-it hands over the exact values and
+  // the live probe (probe-databricks-account-admin) re-measures on Re-check —
+  // the gate clears when the account API answers, not on an acknowledgement.
+  'svc-databricks-account-admin': {
+    surfaces: [
+      { path: '/setup', label: 'Deploy wizard — brownfield Databricks adopt (metastore assignment check)' },
+      { path: '/catalog/metastores', label: 'Unity Catalog metastores — attach to workspace' },
+      { path: '/api/catalog/metastores', label: 'Metastores BFF route' },
+    ],
+    fixit: {
+      kind: 'role-grant',
+      grantNote: 'An existing Databricks account admin, in the account console: User management → Service principals → Add service principal → Microsoft Entra ID managed → paste the Console UAMI application (client) id → Add; then open it → Roles → turn on Account admin. The exact client id, object id, account id and account console link for THIS deployment are in the live check result (Re-check refreshes it). A scripted equivalent — account SCIM find-or-create plus PATCH roles account_admin, run as that admin — is in the check\'s fix script. In GCC-High / IL5 there is no Databricks account console, so this gate reports cloud-unavailable.',
+    },
+  },
   'svc-synapse-spark-pool': {
     surfaces: [
       { path: '/items/ml-model', label: 'ML model predict' },
