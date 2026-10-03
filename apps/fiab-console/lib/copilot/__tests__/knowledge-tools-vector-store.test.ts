@@ -229,12 +229,16 @@ describe('vector_store_retrieve — the ready path returns real rows', () => {
 /**
  * R7 — the blocker this file's source change fixes.
  *
- * CosmosVcoreDriverError is the ONLY outcome reachable in the image that ships
- * today (`mongodb` is not a dependency of this app), so this branch IS the live
- * behaviour of the tool in every boundary. It previously fell into the generic
- * catch-all, which told the model "This is a backend failure, not an empty
- * result" — a cause the code had not established — and discarded the error's
- * `.hint`, the one-time remediation that makes this an honest gate.
+ * `mongodb` is now a declared dependency (#3351 driver fix) so
+ * CosmosVcoreDriverError is no longer the only reachable outcome once an
+ * image ships with it installed — but these specs still exercise the
+ * classification itself (a real cluster failure vs. this dependency gap),
+ * which matters regardless of driver availability: a transient cluster error
+ * must never be mis-reported as "missing driver", and vice versa. It
+ * previously fell into the generic catch-all, which told the model "This is a
+ * backend failure, not an empty result" — a cause the code had not
+ * established — and discarded the error's `.hint`, the one-time remediation
+ * that makes this an honest gate.
  */
 describe('vector_store_retrieve — failure classification (R7)', () => {
   it('reports the missing driver as a DEPENDENCY gap, not a backend failure', async () => {

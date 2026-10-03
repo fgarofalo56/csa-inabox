@@ -37,7 +37,10 @@ const nextConfig = {
   // Externalize so they load from node_modules at runtime in the
   // standalone server output. `ws` powers the Pylance/pylsp WebSocket bridge
   // (lib/lsp/pylsp-bridge.mjs) and must load natively, not be webpack-bundled.
-  serverExternalPackages: ['mssql', 'tedious', '@azure/storage-file-datalake', 'ws'],
+  // `mongodb` backs the Cosmos DB for MongoDB (vCore) vector-store client
+  // (lib/azure/cosmos-vcore-vector-client.ts) — same dynamic-require shape,
+  // must load natively rather than be webpack-bundled.
+  serverExternalPackages: ['mssql', 'tedious', '@azure/storage-file-datalake', 'ws', 'mongodb'],
   // Repo-hosted app-bundle sample datasets live at apps/fiab-console/samples/
   // app-data/** and are read at runtime by lib/apps/repo-datasets.ts (relative
   // to process.cwd()) then uploaded into the tenant's own ADLS at install time.
