@@ -296,18 +296,24 @@ worse than explaining why.
   an existing resource is *usable* — SKU, region, reachability from the Console
   subnet, and the RBAC the deploy identity holds or can grant — belongs to the
   deployment plan's validation step.
-  **The blocking gate is now wired; the evaluator is not (#3014, merged, not
-  deployed):** `POST /api/setup/deploy` calls `assertPlanIsDeployable()` before
-  ANY deploy tier fires — a plan whose adopt decision carries an `unusable` or
-  `unknown` fitness verdict is refused with 422 and the observed blocking
-  checks, and structurally incoherent plans (adopt of a create-only service, a
-  second tenant-singleton, a missing coordinate) are refused with 400. What
-  still has no production producer is `evaluateFitness()` itself: no route yet
-  reads the live resource and attaches a verdict to the plan, so an adoption
-  nobody evaluated passes the gate un-checked (deliberately — refusing every
-  un-evaluated adoption would dead-end brownfield). Until the evaluator lands,
-  run the checks in §Step 4 of the brownfield walkthrough by hand for anything
-  you adopt.
+  **The blocking gate AND the evaluator are both wired** (#3014; the evaluator
+  landed in PR #3445, 2026-08-14): `POST /api/setup/deploy` calls
+  `assertPlanIsDeployable()` before ANY deploy tier fires — a plan whose adopt
+  decision carries an `unusable` or `unknown` fitness verdict is refused with
+  422 and the observed blocking checks, and structurally incoherent plans
+  (adopt of a create-only service, a second tenant-singleton, a missing
+  coordinate) are refused with 400. `evaluateFitness()` now has a real
+  production producer: `lib/deploy/fitness-probe.ts` reads the live resource
+  with the operator's own ARM token and attaches a verdict, reached via
+  `POST /api/setup/validate-adoption` and called by the wizard's review step
+  (`lib/panes/setup-adoption-planner.ts`). **Six checks still return `unknown`**
+  for lack of a data-plane token the plan-time probe does not hold —
+  `purview.rootCollectionAdmin`, `purview.capacityUnits`,
+  `aisearch.indexHeadroom`, `databricks.metastoreAssignment`,
+  `cosmos.containerNameCollision`, `aml.computeQuota` — so adopting Purview, AI
+  Search, Databricks, Cosmos, or AML still blocks (tracked on #3342); every
+  other adoptable service can now clear this gate from the UI. For those five,
+  run the checks in §Step 4 of the brownfield walkthrough by hand.
 
 ---
 
