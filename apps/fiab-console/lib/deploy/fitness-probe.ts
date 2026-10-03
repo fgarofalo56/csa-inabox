@@ -48,11 +48,17 @@
  *
  * NOT resolved here, because they need a data plane this module does not hold a
  * token for at plan time: `purview.rootCollectionAdmin`, `purview.capacityUnits`,
- * `aisearch.indexHeadroom`, `databricks.metastoreAssignment`,
- * `cosmos.containerNameCollision`, `aml.computeQuota`. Those return `unknown`
- * with the exact remediation `fitness.ts` already writes for them. They are
- * NOT silently passed — a check that cannot fail is the defect class this whole
- * subsystem exists to avoid.
+ * `aisearch.indexHeadroom`, `cosmos.containerNameCollision`, `aml.computeQuota`.
+ * Those return `unknown` with the exact remediation `fitness.ts` already writes
+ * for them. They are NOT silently passed — a check that cannot fail is the
+ * defect class this whole subsystem exists to avoid.
+ *
+ * `databricks.metastoreAssignment` IS resolved (#3342): one Databricks ACCOUNT
+ * API read as the Console identity (`readDatabricksMetastore`). It resolves only
+ * once that identity is a Databricks account admin — a grant Databricks reserves
+ * to an existing account admin — so until then it is `unknown` with the grant
+ * named and the svc-databricks-account-admin gate attached, and the next
+ * validation re-reads it live.
  *
  * ## Purity
  *
@@ -312,6 +318,122 @@ export function foundryDeploymentProps(deployments: any[]): Record<string, unkno
 }
 
 // ---------------------------------------------------------------------------
+// Databricks metastore assignment (#3342)
+// ---------------------------------------------------------------------------
+
+/** The values the Databricks grant needs; mirrors the account client's shape. */
+export interface AccountAdminValues {
+  consoleClientId: string | null;
+  consolePrincipalId: string | null;
+  accountId: string | null;
+  accountConsoleUrl: string;
+}
+
+/** One account-plane read of a workspace's metastore, already classified. */
+export type MetastoreRead =
+  | { ok: true; metastoreId: string | null; loomMetastoreId: string | null }
+  | { ok: false; reason: 'not-account-admin' | 'inconclusive'; detail: string };
+
+/**
+ * The account-plane reads `databricks.metastoreAssignment` needs. Injected so the
+ * suite runs with no network; the live one is the account client, called as the
+ * Console identity — the identity that must hold the role for Loom to operate
+ * the workspace after adoption, so its answer is the one that matters.
+ */
+export interface MetastoreReader {
+  values(): Promise<AccountAdminValues>;
+  read(workspaceId: string, hubRegion: string): Promise<MetastoreRead>;
+}
+
+/**
+ * PURE. The metastore Loom would bind in a region — the first account metastore
+ * whose region matches, exactly as `scripts/csa-loom/enable-unity-catalog.sh`
+ * picks it (`select(.region==$r) | head -1`). Null when the account has none
+ * there, which `fitness.ts` then compares against honestly.
+ */
+export function regionalMetastoreId(
+  metastores: { metastore_id: string; region?: string }[],
+  region: string,
+): string | null {
+  const norm = (r: unknown) => String(r ?? '').toLowerCase().replace(/[\s_-]/g, '');
+  const want = norm(region);
+  if (!want) return null;
+  return metastores.find((m) => norm(m.region) === want)?.metastore_id ?? null;
+}
+
+export const liveMetastoreReader: MetastoreReader = {
+  async values() {
+    const m = await import('../azure/unity-catalog-account-client');
+    return m.consoleAccountAdminValues();
+  },
+  async read(workspaceId, hubRegion) {
+    const m = await import('../azure/unity-catalog-account-client');
+    try {
+      const [assignment, metastores] = await Promise.all([
+        m.getWorkspaceMetastoreAssignment(workspaceId),
+        m.listAccountMetastores(),
+      ]);
+      return {
+        ok: true,
+        metastoreId: assignment?.metastore_id ?? null,
+        loomMetastoreId: regionalMetastoreId(metastores, hubRegion),
+      };
+    } catch (e) {
+      const c = m.classifyAccountAdminFailure(e);
+      if (c.state === 'not-admin') {
+        return {
+          ok: false,
+          reason: 'not-account-admin',
+          detail: `the Databricks account API refused the Console identity (HTTP ${c.status}: ${c.message})`,
+        };
+      }
+      const why = c.state === 'inconclusive' ? `HTTP ${c.status || 'n/a'}: ${c.message}` : c.state;
+      return { ok: false, reason: 'inconclusive', detail: `the Databricks account API read did not complete (${why})` };
+    }
+  },
+};
+
+/**
+ * Read the metastore assignment of an adopted Databricks workspace and fold it
+ * into the properties `databricks.metastoreAssignment` reads.
+ *
+ * `metastoreId` is set ONLY when the account API answered — `null` then means
+ * "the account reports no assignment", a real answer. Every other outcome sets
+ * `metastoreReadBlocked` instead, carrying what was observed and the values the
+ * grant needs, so the check names the actual fix rather than a generic one.
+ */
+export async function readDatabricksMetastore(
+  armBody: Record<string, any>,
+  hubRegion: string,
+  reader: MetastoreReader,
+): Promise<{ properties: Record<string, unknown>; note: string }> {
+  const values = await reader.values();
+  const blocked = (reason: string, detail: string) => ({
+    properties: { metastoreReadBlocked: { reason, detail, ...values } },
+    note: detail,
+  });
+  if (!values.accountId) {
+    return blocked(
+      'account-id-unset',
+      'LOOM_DATABRICKS_ACCOUNT_ID is unset in this deployment, so the Databricks account API — the only place the assignment can be read — was not called',
+    );
+  }
+  const wsId = armBody?.properties?.workspaceId;
+  if (wsId === undefined || wsId === null || String(wsId).trim() === '') {
+    return blocked(
+      'no-workspace-id',
+      'the ARM read carried no properties.workspaceId, so there was no workspace id to ask the Databricks account API about',
+    );
+  }
+  const r = await reader.read(String(wsId), hubRegion);
+  if (!r.ok) return blocked(r.reason, r.detail);
+  return {
+    properties: { metastoreId: r.metastoreId, loomMetastoreId: r.loomMetastoreId },
+    note: `account API: workspace ${wsId} metastore=${JSON.stringify(r.metastoreId)}, regional metastore=${JSON.stringify(r.loomMetastoreId)}`,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // IO
 // ---------------------------------------------------------------------------
 
@@ -427,6 +549,7 @@ export async function probeAdoption(
   ctx: ProbeContext,
   token: string,
   transport: DiscoveryTransport = liveTransport,
+  metastoreReader: MetastoreReader = liveMetastoreReader,
 ): Promise<AdoptionProbeResult> {
   const fitnessCtx: FitnessContext = {
     hubRegion: ctx.hubRegion,
@@ -507,6 +630,15 @@ export async function probeAdoption(
     }
   }
 
+  // Databricks: the metastore assignment is an ACCOUNT-plane fact. Until #3342
+  // nothing read it, so this check was `unknown` on every adopt and blocked the
+  // plan with a remediation (grant Reader) that could never clear it.
+  if (serviceKey === 'databricks') {
+    const ms = await readDatabricksMetastore(body, ctx.hubRegion, metastoreReader);
+    subject.properties = { ...(subject.properties ?? {}), ...ms.properties };
+    notes.push(`metastore: ${ms.note}`);
+  }
+
   const { rbac, detail: rbacDetail } = await probeRbac(
     transport,
     token,
@@ -536,8 +668,9 @@ export async function probeAdoptions(
   ctx: ProbeContext,
   token: string,
   transport: DiscoveryTransport = liveTransport,
+  metastoreReader: MetastoreReader = liveMetastoreReader,
 ): Promise<AdoptionProbeResult[]> {
   return Promise.all(
-    adoptions.map((a) => probeAdoption(a.serviceKey, a.target, ctx, token, transport)),
+    adoptions.map((a) => probeAdoption(a.serviceKey, a.target, ctx, token, transport, metastoreReader)),
   );
 }
