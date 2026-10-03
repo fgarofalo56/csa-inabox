@@ -294,6 +294,12 @@ test('session derivation finds the wrappers SESSION_RE does not name', () => {
  * `owner-scoped`; the derived column correctly said `session-only` until a real
  * guard landed.
  *
+ * A FIFTH ROUTE JOINED THEM: `items/synapse-serverless-sql-pool/[id]/query`,
+ * which was this file's negative example until #4841 authorized the caller on
+ * the route item (`guardSqlPoolQueryItem`, which resolves through
+ * `guardSynapseItemRequest` to `authorizeItemWorkspace`). It is a near-twin of
+ * `synapse-dedicated-sql-pool/[id]/query`, so the list now holds both twins.
+ *
  * THE NEGATIVE HALF IS REPOINTED, NOT RETIRED — see {@link STILL_UNGUARDED}.
  */
 const GUARDED = [
@@ -301,6 +307,7 @@ const GUARDED = [
   'items/synapse-dedicated-sql-pool/[id]/query/route.ts',
   'items/azure-sql-database/[id]/mirroring/route.ts',
   'items/databricks-sql-warehouse/[id]/query/route.ts',
+  'items/synapse-serverless-sql-pool/[id]/query/route.ts',
 ];
 
 /**
@@ -313,51 +320,37 @@ const GUARDED = [
  * The replacement is chosen to preserve the DISCRIMINATION being tested, not
  * merely to name something unguarded. An unguarded route with no owner-shaped
  * tokens at all would be a weak negative — it would classify correctly even
- * under the broken `OWNER_RE`. `items/synapse-serverless-sql-pool/[id]/query`
- * is the strong form, and is a near-twin of `synapse-dedicated-sql-pool/[id]/
- * query` in the GUARDED list above, so both directions are exercised on almost
- * identical shapes. VERIFIED AT SOURCE, not inferred from the column:
+ * under the broken `OWNER_RE`.
  *
- *   :24  `withSession(async (req, { session, params }) => {`  — no item guard
- *   :28  `const { id } = params;`  — the id IS read...
- *   :41  ...but only by `resolveAccessMode(id, 'synapse-serverless-sql-pool')`,
- *        which picks OBO-vs-managed-identity mode. It is not an authorization.
- *   :31  `const database = (body?.database || 'master').toString();` — the
- *        coordinate comes from the request
- *   :47  `getUserSqlToken(session.claims.oid)`   — a TOKEN MINT
- *   :69  `userOid: session.claims.oid`           — a FinOps ATTRIBUTION field
+ * HISTORY. The fourth #3625 route was the first negative; when it was hardened
+ * this constant moved to `items/synapse-serverless-sql-pool/[id]/query`. That
+ * route now authorizes the caller on its item (#4841) and sits in GUARDED, so
+ * the constant moved again, to `items/report/[id]/subscriptions`. It is the
+ * strong form for the same reason: its owner-shaped tokens are not decorative.
+ * VERIFIED AT SOURCE (2026-09-30), not inferred from the column:
  *
- * So: two `claims.oid` reads and a consumed route id, and still no per-item
- * ownership check. That is exactly the shape the derivation must not be fooled
- * by.
+ *   :81, :107  `const s = getSession();`  — a session check, both handlers
+ *   :83, :109  `const { id: reportId } = await ctx.params;`  — the route id IS read
+ *   :90, :93   GET: `c.reportId = @r AND c.createdBy = @o`, with `@o` bound to
+ *              `s.claims.oid` — the oid reaches a WHERE clause as a filter on
+ *              the caller's own subscription rows
+ *   :157       POST: `createdBy: s.claims.oid` — the oid is WRITTEN as the row's
+ *              creator
  *
- * ITS SEVERITY, BOTH BRANCHES — and the DEFAULT is the service identity.
- * An earlier revision of this comment said the route "runs the statement through
- * OBO … therefore NOT an open cross-tenant hole". That was materially
- * incomplete, and incompleteness in a section headed "severity" is the
- * `deploy-integrity.md` R7 shape: asserting something the code does not
- * establish. Corrected, with both branches named:
- *
- *   `accessMode === 'user'`    :59 → `executeQueryAsUser(…, userToken, …)`.
- *        The caller's OWN Azure identity runs the statement, so their SQL RBAC
- *        is consulted. This branch is genuinely mitigated.
- *   `accessMode === 'service'` :61 → `executeQuery(serverlessTarget(database),
- *        sqlText, …)` as the CONSOLE identity, with `database` from the body
- *        (:31) and no ownership check. **This is the DEFAULT** —
- *        `lib/azure/sql-access-mode.ts` documents `'service'` as "the
- *        always-works default", `normalizeAccessMode` returns it for anything
- *        that is not the literal `'user'` (:48-50), and `resolveAccessMode`
- *        returns it on ANY miss or thrown lookup (:70-72). An item only leaves
- *        it after an explicit PATCH /access-mode.
- *
- * So on the default branch this is the SAME class as the route it replaced, not
- * a milder one. It is pinned here because the CLASSIFIER must keep getting it
- * right, and it is a live finding in its own right — not a claim that the route
- * is safe. If it is ever hardened, move it into GUARDED and repoint this again.
+ * So: a consumed route id and two `claims.oid` uses, one of them inside a
+ * Cosmos predicate, and no call that authorizes the caller on the report ITEM
+ * (`reportId` is never looked up in the items container). The classifier must
+ * read that as `session-only`: filtering the caller's own rows by their oid is
+ * not an authorization on the item the route names. The inventory row agrees
+ * (`docs/fiab/route-inventory.md`, `items/report/[id]/subscriptions/route.ts`,
+ * `session-only`). If the route ever authorizes on the report item, move it
+ * into GUARDED and repoint this again (the probe used to find this one:
+ * session-only item routes whose source reads `claims.oid` and the route id —
+ * four matched on 2026-09-30).
  */
-const STILL_UNGUARDED = 'items/synapse-serverless-sql-pool/[id]/query/route.ts';
+const STILL_UNGUARDED = 'items/report/[id]/subscriptions/route.ts';
 
-test('the four GUARDED routes #3625 names are owner-scoped TODAY — and for a stated reason', () => {
+test('the GUARDED routes (the four #3625 names, and the serverless SQL pool query) are owner-scoped TODAY — and for a stated reason', () => {
   for (const rel of GUARDED) {
     const c = classify(rel);
     assert.equal(c.owner, true, `${rel} is not owner-scoped`);

@@ -1,22 +1,47 @@
 /**
  * POST /api/items/synapse-serverless-sql-pool/[id]/query
  * Executes T-SQL on Synapse Serverless SQL endpoint via TDS + AAD.
- * Body: { sql: string, database?: string }
- * Auth: session-required.
+ * Body: { sql: string, database?: string, queryId?: string, parameters?: [...] }
+ *
+ * Auth and item scope (`../../_lib/query-scope.ts`):
+ *   - The caller is authorized on the route ITEM: owner, tenant admin, or
+ *     shared-ACL member of its workspace, with the workspace resolved from the
+ *     item and a 404 for an id naming no item. Read roles are accepted because
+ *     every non-admin query is classifier-accepted SELECT text (the same
+ *     justification as the lakehouse SQL tab). Three other editors reach this
+ *     handler with their own item id, so those types are accepted too: the SQL
+ *     analytics endpoint (its query route re-exports this POST) and the
+ *     geo-dataset and geo-query editors (they post here directly).
+ *   - A TENANT ADMIN runs the SQL unchanged, in the requested `database`
+ *     (default `master`), with its named parameters.
+ *   - Any other caller: the SQL passes the lakehouse SQL tab's classifier
+ *     (SELECT only; no USE, no other database, no `sys` catalog outside the
+ *     INFORMATION_SCHEMA views), and every OPENROWSET(BULK …) location must be a
+ *     literal URL under the storage root of a lakehouse in this item's
+ *     workspace, resolved server-side. It runs in `master` whatever the request
+ *     names, on a connection pool of its own, with the batch starting
+ *     `USE [master];` (`../../../lakehouse/_lib/query-reader.ts`). Variables
+ *     and `@parameters` are refused for these callers.
+ *   - A per-item serverless database (#4821) is the durable form of this
+ *     boundary and lifts these restrictions.
  *
  * Data-access mode (F10): when the item's state.accessMode is 'user', the query
  * runs under the signed-in user's own Azure identity via their cached delegated
- * SQL token; otherwise it runs as the Loom service identity (default).
+ * SQL token; otherwise it runs as the Loom service identity (default). The item
+ * scope above applies in both modes.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { tenantScopeId } from '@/lib/auth/session';
 import { withSession } from '@/lib/api/route-toolkit';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { serverlessTarget, serverlessEndpoint, executeQuery, executeQueryAsUser, type SynapseQueryParam } from '@/lib/azure/synapse-sql-client';
 import { resolveAccessMode } from '@/lib/azure/sql-access-mode';
 import { getUserSqlToken } from '@/lib/azure/sql-user-token-store';
 import { recordQueryRun } from '@/lib/finops/query-run';
+import { READER_DATABASE, readerTarget, readerBatch, withoutReaderUseMessage } from '../../../lakehouse/_lib/query-reader';
+import { guardSqlPoolQueryItem, confineToWorkspaceLakehouses, sqlPoolQueryKey, SQL_POOL_READER_POOL_PREFIX } from '../../_lib/query-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -26,19 +51,38 @@ export const POST = withSession(async (req: NextRequest, { session, params }) =>
   if (limited) return limited;
 
   const { id } = params;
+  const guard = await guardSqlPoolQueryItem(id);
+  if (guard.res) return guard.res;
+  const { item } = guard.ctx;
+
   const body = await req.json().catch(() => ({}));
   const sqlText = (body?.sql || '').toString().trim();
-  const database = (body?.database || 'master').toString();
   const queryId = (body?.queryId || '').toString().trim() || undefined;
   if (!sqlText) return NextResponse.json({ error: 'sql is required' }, { status: 400 });
   if (sqlText.length > 65_536) return NextResponse.json({ error: 'sql too large (>64KB)' }, { status: 413 });
 
-  // Named parameters (`@name`) — bound via req.input(), NOT concatenated.
-  const parameters: SynapseQueryParam[] = (Array.isArray(body?.parameters) ? body.parameters : [])
+  // A tenant admin runs the SQL unchanged in the requested database; anyone
+  // else runs classifier-accepted text in master (see the header).
+  const admin = isTenantAdmin(session);
+  const database = admin ? (body?.database || 'master').toString() : READER_DATABASE;
+  if (!admin) {
+    const refused = await confineToWorkspaceLakehouses(sqlText, item);
+    if (refused) return refused;
+  }
+  const target = admin ? serverlessTarget(database) : readerTarget(SQL_POOL_READER_POOL_PREFIX);
+  const batch = admin ? sqlText : readerBatch(sqlText);
+
+  // Named parameters (`@name`) — bound via req.input(), NOT concatenated. The
+  // classifier refuses `@` variables for non-admins, so none are bound there.
+  const parameters: SynapseQueryParam[] = !admin ? [] : (Array.isArray(body?.parameters) ? body.parameters : [])
     .filter((p: any) => p && typeof p.name === 'string')
     .map((p: any) => ({ name: String(p.name), value: p.value == null ? null : String(p.value) }));
 
   const accessMode = await resolveAccessMode(id, 'synapse-serverless-sql-pool');
+  // A running query is registered for cancel under the caller, the item and
+  // the queryId together (`../cancel/route.ts` builds the same key), so a
+  // cancel reaches only the caller's own query on this item.
+  const cancelKey = queryId ? sqlPoolQueryKey(session.claims.oid, item.id, queryId) : undefined;
 
   try {
     let result;
@@ -56,10 +100,11 @@ export const POST = withSession(async (req: NextRequest, { session, params }) =>
           { status: 403 },
         );
       }
-      result = await executeQueryAsUser(serverlessTarget(database), sqlText, userToken, session.claims.oid, 60_000, parameters, queryId);
+      result = await executeQueryAsUser(target, batch, userToken, session.claims.oid, 60_000, parameters, cancelKey);
     } else {
-      result = await executeQuery(serverlessTarget(database), sqlText, 60_000, parameters, queryId);
+      result = await executeQuery(target, batch, 60_000, parameters, cancelKey);
     }
+    if (!admin) result = { ...result, messages: withoutReaderUseMessage(result.messages) };
     // DDL (CREATE/ALTER/DROP VIEW|PROC|FUNCTION) and other non-SELECT statements
     // return no columns. Flag isDdl so the editor switches to the Messages pane
     // and shows "Command(s) completed successfully." instead of an empty grid.

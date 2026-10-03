@@ -15,9 +15,9 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | --- | ---: |
 | Total routes | 1698 |
 | Public (no session) | 59 |
-| Session-only | 619 |
-| Owner-scoped | 695 |
-| Admin | 325 |
+| Session-only | 614 |
+| Owner-scoped | 697 |
+| Admin | 328 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 500 |
 | Areas | 122 |
@@ -1147,7 +1147,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/[type]/[id]/versions/[versionId]/restore/route.ts` | POST | owner-scoped | ● | Cosmos, Microsoft Graph |
 | `items/[type]/[id]/versions/[versionId]/route.ts` | GET | owner-scoped | ● | Cosmos, Microsoft Graph |
 | `items/[type]/[id]/versions/route.ts` | GET | owner-scoped | ● | Cosmos, Microsoft Graph |
-| `items/[type]/[id]/visual-query/route.ts` | POST | session-only |  | ADLS, ARM, Azure Monitor, Azure SQL, Cosmos, Managed Identity, Microsoft Graph, Resource Graph, Synapse, Synapse SQL |
+| `items/[type]/[id]/visual-query/route.ts` | POST | admin |  | ADLS, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Resource Graph, Synapse, Synapse SQL |
 | `items/activation-sync/[id]/bind-trigger/route.ts` | POST | owner-scoped |  | ADLS, Azure Monitor, Azure Storage, Cosmos, Microsoft Graph |
 | `items/activation-sync/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | AI Search, Cosmos, Microsoft Graph, Purview |
 | `items/activation-sync/[id]/run/route.ts` | POST | owner-scoped | ● | ADLS, AI Search, ARM, Azure Cache for Redis, Azure Monitor, Azure Storage, Cosmos, Event Grid, Event Hubs / Service Bus, Managed Identity, Microsoft Graph, Power Automate, Power Platform, Service Bus |
@@ -1720,7 +1720,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/semantic-model/[id]/datasource/route.ts` | GET POST PUT | owner-scoped | ● | AAS, ADX, ARM, Azure SQL, Cosmos, Fabric, Key Vault, Managed Identity, Microsoft Graph, Power BI, Synapse SQL |
 | `items/semantic-model/[id]/dax-query/route.ts` | POST | owner-scoped |  | AAS, AI Search, ARM, Azure Cache for Redis, Azure SQL, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
 | `items/semantic-model/[id]/describe-bulk/route.ts` | GET POST | owner-scoped |  | AI Search, AML, ARM, Azure AI Services, Azure Cache for Redis, Azure OpenAI, Cosmos, Fabric, Microsoft Graph, Power BI |
-| `items/semantic-model/[id]/direct-lake/route.ts` | GET POST PUT | owner-scoped | ● | ADLS, ARM, Azure Cache for Redis, Azure SQL, Azure Storage, Cosmos, Event Grid, Fabric, Managed Identity, Microsoft Graph, Power BI, Synapse SQL |
+| `items/semantic-model/[id]/direct-lake/route.ts` | GET POST PUT | admin | ● | ADLS, ARM, Azure Cache for Redis, Azure SQL, Azure Storage, Cosmos, Event Grid, Fabric, Managed Identity, Microsoft Graph, Power BI, Synapse SQL |
 | `items/semantic-model/[id]/embed-token/route.ts` | POST | owner-scoped |  | Cosmos, Fabric, Microsoft Graph, Power BI |
 | `items/semantic-model/[id]/ingest/route.ts` | POST | owner-scoped | ● | AAS, ADF, ADLS, ARM, Azure Storage, Cosmos, Microsoft Graph, Resource Graph, Synapse |
 | `items/semantic-model/[id]/measures/route.ts` | POST | owner-scoped |  | Cosmos, Fabric, Microsoft Graph, Power BI |
@@ -1775,7 +1775,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/stream-analytics-job/[name]/state/route.ts` | POST | session-only |  | ADX, ARM, Azure SQL, Azure Storage, Event Hubs, IoT Hub, PostgreSQL, Service Bus, Stream Analytics |
 | `items/stream-analytics-job/[name]/test/route.ts` | POST | session-only |  | ADX, ARM, Azure SQL, Azure Storage, Event Hubs, IoT Hub, PostgreSQL, Service Bus, Stream Analytics |
 | `items/stream-analytics-job/route.ts` | GET | session-only |  | ADX, ARM, Azure SQL, Azure Storage, Event Hubs, IoT Hub, PostgreSQL, Service Bus, Stream Analytics |
-| `items/synapse-dedicated-sql-pool/[id]/cancel/route.ts` | POST | session-only |  | Azure SQL |
+| `items/synapse-dedicated-sql-pool/[id]/cancel/route.ts` | POST | owner-scoped |  | Azure SQL, Cosmos, Microsoft Graph |
 | `items/synapse-dedicated-sql-pool/[id]/clone/route.ts` | POST | owner-scoped |  | ARM, Azure SQL, Cosmos, Managed Identity, Microsoft Graph, Resource Graph, Synapse, Synapse SQL |
 | `items/synapse-dedicated-sql-pool/[id]/connection/route.ts` | GET | session-only |  | ADLS, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Databricks, Event Hubs / Service Bus, Key Vault, PostgreSQL, Synapse, Synapse SQL |
 | `items/synapse-dedicated-sql-pool/[id]/model/route.ts` | — | public |  | — |
@@ -1795,11 +1795,11 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/synapse-pipeline/[id]/runs/route.ts` | GET | owner-scoped |  | Cosmos, Microsoft Graph, Synapse |
 | `items/synapse-pipeline/[id]/triggers/route.ts` | GET POST | owner-scoped |  | Cosmos, Microsoft Graph, Synapse |
 | `items/synapse-pipeline/list/route.ts` | GET | session-only |  | Synapse |
-| `items/synapse-serverless-sql-pool/[id]/cancel/route.ts` | POST | session-only |  | Azure SQL |
+| `items/synapse-serverless-sql-pool/[id]/cancel/route.ts` | POST | owner-scoped |  | Azure SQL, Cosmos, Microsoft Graph |
 | `items/synapse-serverless-sql-pool/[id]/connection/route.ts` | GET | session-only |  | ADLS, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Databricks, Event Hubs / Service Bus, Key Vault, PostgreSQL, Synapse, Synapse SQL |
 | `items/synapse-serverless-sql-pool/[id]/iqy/route.ts` | POST | session-only |  | — |
 | `items/synapse-serverless-sql-pool/[id]/objects/route.ts` | GET | session-only | ● | ARM, Azure SQL, Managed Identity, Synapse SQL |
-| `items/synapse-serverless-sql-pool/[id]/query/route.ts` | POST | session-only |  | ARM, Azure SQL, Cosmos, Managed Identity, Synapse SQL |
+| `items/synapse-serverless-sql-pool/[id]/query/route.ts` | POST | admin |  | ADLS, ARM, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
 | `items/synapse-serverless-sql-pool/[id]/schema/route.ts` | GET | session-only |  | ARM, Azure SQL, Managed Identity, Synapse SQL |
 | `items/synapse-spark-pool/[id]/auto-pause/route.ts` | POST | session-only |  | ARM, Resource Graph, Synapse |
 | `items/synapse-spark-pool/[id]/config/route.ts` | POST | session-only |  | ARM, Resource Graph, Synapse |
@@ -1831,7 +1831,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/vector-store/[id]/search/route.ts` | POST | session-only | ● | AI Search, AML, ARM, Azure AI Services, Azure OpenAI, PostgreSQL |
 | `items/vector-store/[id]/sync/route.ts` | GET POST | session-only |  | AI Search, AML, ARM, Azure AI Services, Azure OpenAI, Azure SQL, Azure Storage, Cosmos, Managed Identity, Synapse SQL |
 | `items/vector-store/route.ts` | GET POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, ARM, Azure SQL, Azure Storage, Compute, Cosmos, Managed Identity, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Synapse |
-| `items/warehouse/[id]/cancel/route.ts` | POST | session-only |  | Azure SQL |
+| `items/warehouse/[id]/cancel/route.ts` | POST | owner-scoped |  | Azure SQL, Cosmos, Microsoft Graph |
 | `items/warehouse/[id]/clone/route.ts` | POST | owner-scoped | ● | ADLS, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Resource Graph, Synapse, Synapse SQL |
 | `items/warehouse/[id]/copy-into/route.ts` | GET POST | owner-scoped |  | ADLS, ARM, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Resource Graph, Synapse, Synapse SQL |
 | `items/warehouse/[id]/iqy/route.ts` | POST | session-only |  | — |
@@ -2427,7 +2427,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 ## Authorization resolvers (derived)
 
-204 function(s) across 93 module(s) reach an owner / workspace-ACL
+205 function(s) across 94 module(s) reach an owner / workspace-ACL
 decision. Derived by `scripts/ci/_route-auth-scope.mjs` from the seeds above —
 nothing here is hand-maintained. A change to this list in a diff means the
 authorization surface moved.
@@ -2463,6 +2463,7 @@ authorization surface moved.
 | `apps/fiab-console/app/api/items/materialized-lake-view/_lib/load.ts` | `loadMlvItem` |
 | `apps/fiab-console/app/api/items/scorecard/config-store.ts` | `loadScorecardConfig` |
 | `apps/fiab-console/app/api/items/semantic-model/_lib/prep-for-ai-store.ts` | `enrichSemanticModelSources`, `readPrepForAi`, `writePrepForAi` |
+| `apps/fiab-console/app/api/items/synapse-serverless-sql-pool/_lib/query-scope.ts` | `guardSqlPoolQueryItem` |
 | `apps/fiab-console/app/api/lakehouse/_lib/adls-scope.ts` | `resolveAdlsScope`, `workspaceLocations` |
 | `apps/fiab-console/app/api/lakehouse/_lib/item-binding.ts` | `authorizeAndBind` |
 | `apps/fiab-console/app/api/lakehouse/_lib/item-scope.ts` | `authorizeLakehouse`, `scopeItemPath` |
