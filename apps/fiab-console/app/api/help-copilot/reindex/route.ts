@@ -31,8 +31,11 @@
  *      would 502 while the rebuild was fine.
  *      That pin also does not reach every edge: it is the Front Door module,
  *      and Application Gateway is enabled on FOUR boundaries (commercial-full,
- *      gcc-high, il5, tenant-dmlz), where `requestTimeout: 30` is hardcoded
- *      with no parameter (#4431). Wherever both flags and `deployAppsEnabled`
+ *      gcc-high, il5, tenant-dmlz), where `requestTimeout` reads
+ *      `param consoleRequestTimeoutSeconds` (threaded from main.bicep's
+ *      `appGatewayRequestTimeoutSeconds`, default 120), overridable per
+ *      boundary in a `.bicepparam`, bounded 1-86400s (#4431, fixed by #4739).
+ *      Wherever both flags and `deployAppsEnabled`
  *      are true the console has two public edges and this pin moves only one;
  *      on IL5, where Front Door is disabled as not IL5-certified, App Gateway
  *      is the ONLY edge, so nothing here moves it at all.
