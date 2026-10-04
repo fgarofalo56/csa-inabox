@@ -1,23 +1,30 @@
 /**
- * #3706 — the recycle-bin tenancy constraint, pinned so a later WIDENING is a
- * deliberate act rather than a quiet one.
+ * #4692 — `loadRecycledItem` DELEGATES to the canonical authorization ladder
+ * (operator decision 2026-09-24, Refs #3706).
  *
- * `loadRecycledItem` gates restore/purge on a POINT READ in the CALLER's own
- * workspace partition — "did you CREATE this workspace", not "may you write in
- * it". That is narrower than the canonical `authorizeWorkspace` ladder, and it
- * looks exactly like the #2947 defect (an `assertOwner` inlined under another
- * name, which 404'd legitimate members). It is not the same, because
- * `purgeRecycledItem` HARD-DELETES the Cosmos document. Over-restrictive is the
- * safe direction here.
+ * ── RETRACTED, not silently replaced ────────────────────────────────────────
  *
- * The issue is latent — nothing is broken today. These tests exist so that the
- * eventual "fix" for the apparent asymmetry fails the suite instead of silently
- * handing every shared-workspace collaborator an irreversible purge.
+ * This file used to be titled "loadRecycledItem is owner-scoped, and must stay
+ * that way" and pinned an INLINE partition point read + `resource.tenantId !==
+ * tenantId` comparison that lived directly in `loadRecycledItem`. That
+ * mechanism is GONE: the function now calls `resolveWorkspaceAccessByOid` (the
+ * same delegation `loadOwnedItem` uses, item-crud.ts:595) and gates on
+ * `access.canWrite`. The decision that mechanism enforced — restore/purge stay
+ * owner-only because purge is irreversible — was REVERSED by #4692: see
+ * item-crud.ts's retraction note at `loadRecycledItem`'s docblock.
  *
- * They therefore assert the MECHANISM (a caller-partitioned point read, a
- * POSITIVE tenant match) rather than only the verdict — a verdict-only test
- * would still pass if the read were widened to a cross-partition query that
- * happened to return the same row in a single-tenant fixture.
+ * WHAT THIS FILE NOW PINS, and does NOT re-prove: the tid boundary / owner /
+ * ACL / admin-open resolution LOGIC lives in `resolveWorkspaceAccessByOid`
+ * itself and is independently covered by
+ * `lib/auth/__tests__/workspace-access-tid-boundary.test.ts` and
+ * `workspace-access-admin-tid.test.ts`. Re-deriving that here (as the old file
+ * did, with its own partition-fixture mock) would duplicate coverage AND would
+ * now be dead weight — the ladder is mocked below, so a fixture encoding the
+ * resolver's internal tenant comparison can no longer witness anything (that
+ * logic simply isn't reached from this file). What IS this file's own surface:
+ * does `loadRecycledItem` call the ladder with the RIGHT ARGUMENTS, and does
+ * it gate on `canWrite` (not merely truthiness)? That is new code this PR
+ * wrote, and it has no other test.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -29,52 +36,28 @@ const RECYCLED = {
   state: { _recycled: { deletedAt: 'x', deletedBy: 'a@x', purgeAfter: 'y' } },
 };
 
-/** Every `ws.item(id, partitionKey)` the code under test performs. */
-const wsPointReads: Array<{ id: string; pk: string }> = [];
-/** Every cross-partition query against the WORKSPACES container. */
-const wsQueries: any[] = [];
-/** What the workspace point read should resolve to, per test. */
-let wsDoc: any = null;
-
-/**
- * The ACL ladder's answer, if the code under test ever asks it.
- *
- * Today `loadRecycledItem` never calls `resolveWorkspaceAccessByOid`, so this
- * mock is INERT on the current tree — it is not coverage, it is the harness the
- * "shared-workspace member" test below needs in order to be a REAL kill rather
- * than an incidental one. Without it, migrating `loadRecycledItem` to the
- * canonical ladder makes tests fail on an unmocked `workspaceRolesContainer` —
- * a broken-harness red that a future author would "fix" by completing the mock,
- * at which point the widening ships green. Completing it up front means the
- * widening is refused on its merits.
- */
+/** The ladder's answer, set per-test. */
 let aclAccess: any = null;
+const resolveWorkspaceAccessByOid = vi.fn(async () => aclAccess);
+/** The row `itemsContainer().items.query(...).fetchAll()` returns, set per-test. */
+let recycledFixture: any = RECYCLED;
 
 vi.mock('@/lib/auth/workspace-access', () => ({
-  resolveWorkspaceAccessByOid: vi.fn(async () => aclAccess),
+  resolveWorkspaceAccessByOid: (...args: any[]) => resolveWorkspaceAccessByOid(...args),
   ambientAccessOptsFor: vi.fn(async () => ({})),
 }));
 
 vi.mock('@/lib/azure/cosmos-client', () => ({
   itemsContainer: vi.fn(async () => ({
-    items: { query: () => ({ fetchAll: async () => ({ resources: [RECYCLED] }) }) },
-    item: () => ({ read: async () => ({ resource: RECYCLED }), delete: async () => ({}) }),
+    items: { query: () => ({ fetchAll: async () => ({ resources: [recycledFixture] }) }) },
   })),
+  // loadRecycledItem no longer reads `workspaces` directly — the delegation IS
+  // the thing under test — but `accessOptsFor`'s ambient fallback dynamically
+  // imports `@/lib/auth/session`, so nothing here touches this container.
   workspacesContainer: vi.fn(async () => ({
-    item: (id: string, pk: string) => {
-      wsPointReads.push({ id, pk });
-      return { read: async () => ({ resource: wsDoc }) };
-    },
-    items: {
-      query: (spec: any) => { wsQueries.push(spec); return { fetchAll: async () => ({ resources: [] }) }; },
-    },
-  })),
-  // Present so the canonical ladder's direct-role lookup does not throw if a
-  // future widening reaches it — see `aclAccess` above.
-  workspaceRolesContainer: vi.fn(async () => ({
+    item: () => ({ read: async () => ({ resource: undefined }) }),
     items: { query: () => ({ fetchAll: async () => ({ resources: [] }) }) },
   })),
-  auditLogContainer: vi.fn(async () => ({ items: { create: vi.fn(async () => ({})) } })),
 }));
 
 import { loadRecycledItem } from '../item-crud';
@@ -82,80 +65,61 @@ import { loadRecycledItem } from '../item-crud';
 const CALLER = 'tenant-A';
 
 beforeEach(() => {
-  wsPointReads.length = 0;
-  wsQueries.length = 0;
-  wsDoc = null;
   aclAccess = null;
-  vi.clearAllMocks();
+  recycledFixture = RECYCLED;
+  resolveWorkspaceAccessByOid.mockClear();
 });
 
-describe('#3706 — loadRecycledItem is owner-scoped, and must stay that way', () => {
-  it('reads the workspace in the CALLER\'s partition, not cross-partition', async () => {
-    wsDoc = { id: RECYCLED.workspaceId, tenantId: CALLER };
+describe('#4692 — loadRecycledItem delegates to the canonical ladder', () => {
+  it('passes the CALLER oid and the ITEM\'s own workspaceId to the ladder', async () => {
+    aclAccess = { role: 'Owner', via: 'owner', canWrite: true };
 
-    const got = await loadRecycledItem(RECYCLED.id, CALLER);
+    await loadRecycledItem(RECYCLED.id, CALLER);
 
-    expect(got).not.toBeNull();
-    // THE MECHANISM: exactly one point read, partitioned by the CALLER.
-    // Swapping this for a cross-partition query — the natural way to "fix" the
-    // fact that a tenant admin is refused — makes this fail.
-    expect(wsPointReads).toEqual([{ id: RECYCLED.workspaceId, pk: CALLER }]);
-    expect(wsQueries).toHaveLength(0);
+    // FAILS IF either argument is transposed or hard-codes the wrong id — the
+    // ladder would then decide the WRONG workspace's or WRONG caller's access.
+    expect(resolveWorkspaceAccessByOid).toHaveBeenCalledWith(
+      CALLER,
+      RECYCLED.workspaceId,
+      expect.anything(),
+    );
   });
 
-  it('refuses when the workspace tenant does not POSITIVELY match the caller', async () => {
-    // FAILS IF the `resource.tenantId !== tenantId` comparison is dropped: the
-    // point read resolves a workspace owned by tenant-B and the item comes back.
-    wsDoc = { id: RECYCLED.workspaceId, tenantId: 'tenant-B' };
+  it('admits when the ladder returns a write-capable role', async () => {
+    aclAccess = { role: 'Member', via: 'acl', canWrite: true };
+
+    expect(await loadRecycledItem(RECYCLED.id, CALLER)).toEqual(RECYCLED);
+  });
+
+  it('refuses when the ladder returns a role with canWrite:false', async () => {
+    // FAILS IF the gate is loosened from `!access.canWrite` to a bare
+    // `!access` (i.e. truthiness) — a read-only Viewer grant is TRUTHY, so a
+    // bare-truthiness gate would wrongly admit it here.
+    aclAccess = { role: 'Viewer', via: 'acl', canWrite: false };
 
     expect(await loadRecycledItem(RECYCLED.id, CALLER)).toBeNull();
   });
 
-  it('refuses when the workspace carries NO tenantId at all', async () => {
-    // THIS is the arm the short-circuit shape breaks: the wrong form
-    // `caller && doc.tenantId && caller !== doc.tenantId` lets a claim-less
-    // workspace doc through because the middle operand is falsy (cf. bfd67ed1).
-    // It asserts the match is REQUIRED, not merely un-contradicted — the
-    // previous test cannot distinguish the two shapes, this one can.
-    wsDoc = { id: RECYCLED.workspaceId };
+  it('refuses when the ladder refuses outright (null)', async () => {
+    aclAccess = null;
 
     expect(await loadRecycledItem(RECYCLED.id, CALLER)).toBeNull();
   });
 
-  it('refuses when the workspace is not in the caller\'s partition', async () => {
-    wsDoc = null; // Cosmos point read outside your partition resolves to nothing.
-
-    expect(await loadRecycledItem(RECYCLED.id, CALLER)).toBeNull();
-  });
-
-  it('refuses an empty caller tenant WITHOUT querying Cosmos for the workspace', async () => {
+  it('refuses an empty caller tenant WITHOUT consulting the ladder', async () => {
     // A caller-supplied scope must never become an existence oracle: refuse
-    // before the read, so nothing about the id is learnable.
-    wsDoc = { id: RECYCLED.workspaceId, tenantId: CALLER };
+    // before any resolution, so nothing about the id is learnable.
+    aclAccess = { role: 'Owner', via: 'owner', canWrite: true }; // would admit if reached
 
     expect(await loadRecycledItem(RECYCLED.id, '')).toBeNull();
-    expect(wsPointReads).toHaveLength(0);
+    expect(resolveWorkspaceAccessByOid).not.toHaveBeenCalled();
   });
 
-  /**
-   * THE WIDENING THIS FILE EXISTS TO STOP, asserted on its merits.
-   *
-   * The caller is NOT the workspace creator (their partition read misses), but
-   * the canonical ladder WOULD grant them write access — i.e. a member the
-   * workspace was deliberately shared with. `loadRecycledItem` must still
-   * refuse, because the verbs behind it include an unrecoverable purge.
-   *
-   * FAILS IF someone copies the sibling at `item-crud.ts:595`
-   * (`resolveWorkspaceAccessByOid(...)` + `if (!access) return null`) into
-   * `loadRecycledItem`: that mutation needs no signature change, and the four
-   * tests above cannot see it — the owner fast path keeps the point-read
-   * mechanism intact, so test 1 still passes. This one goes red because the
-   * ladder is mocked to SAY YES and the correct answer is still null.
-   */
-  it('refuses a shared-workspace member the canonical ladder would admit', async () => {
-    wsDoc = null; // not the creator — the caller-partitioned point read misses
-    aclAccess = { role: 'Member', canWrite: true }; // ...but the ladder says yes
+  it('refuses an item with no workspaceId WITHOUT consulting the ladder', async () => {
+    aclAccess = { role: 'Owner', via: 'owner', canWrite: true }; // would admit if reached
+    recycledFixture = { ...RECYCLED, workspaceId: undefined };
 
     expect(await loadRecycledItem(RECYCLED.id, CALLER)).toBeNull();
+    expect(resolveWorkspaceAccessByOid).not.toHaveBeenCalled();
   });
 });

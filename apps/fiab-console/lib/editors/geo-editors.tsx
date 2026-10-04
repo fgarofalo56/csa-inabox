@@ -44,6 +44,7 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { splitAdlsPath, joinAdlsPath, computeGeoBbox, bboxToZoom, bboxLabel, geoFeaturesFromInspectRows } from './_family-utils';
 import { GeoJsonMap } from '@/lib/components/graph/geojson-map';
 import { useSharedEditorStyles } from './shared-styles';
+import { SqlRefusalOrError, isSqlRefusal, type SqlFailure } from './lakehouse/panes/sql-pane';
 // C19 — shared load-lifecycle + data-loss guard (see use-item-doc-state.tsx).
 import { canPersistItemState, ItemLoadErrorBar, SAVE_REFUSED_UNLOADED, type ItemLoadStatus } from './use-item-doc-state';
 
@@ -585,6 +586,25 @@ function useLakehouseContainers() {
 // can exercise them. See `lib/editors/__tests__/family-utils.test.ts` for
 // round-trip coverage.
 
+/**
+ * A failed Inspect probe. The query route refuses a probe it will not run (for a
+ * caller who is not a tenant admin, a path outside every lakehouse root in this
+ * workspace is refused with `query_location_outside_root`); that is shown by the
+ * SQL tab's shared bar, "Query not run" with the route's remediation. Anything
+ * else keeps this editor's own bar.
+ */
+export function GeoInspectFailure({ result }: { result: any }) {
+  if (isSqlRefusal(result)) return <SqlRefusalOrError result={result as SqlFailure} />;
+  return (
+    <MessageBar intent={result.status === 503 || result.notDeployed ? 'warning' : 'error'}>
+      <MessageBarBody>
+        <MessageBarTitle>{result.status === 503 ? 'Synapse Serverless not provisioned' : 'Inspect failed'}</MessageBarTitle>
+        {result.error}{result.hint && <><br />{result.hint}</>}
+      </MessageBarBody>
+    </MessageBar>
+  );
+}
+
 export function GeoDatasetEditor({ item, id }: { item: FabricItemType; id: string }) {
   if (id === 'new') {
     return (
@@ -789,12 +809,7 @@ function GeoDatasetEditorBody({ item, id }: { item: FabricItemType; id: string }
           {inspecting && <Spinner size="tiny" label="Probing dataset…" labelPosition="after" />}
           {inspectResult && (
             inspectResult.error || inspectResult.status >= 400 ? (
-              <MessageBar intent={inspectResult.status === 503 || inspectResult.notDeployed ? 'warning' : 'error'}>
-                <MessageBarBody>
-                  <MessageBarTitle>{inspectResult.status === 503 ? 'Synapse Serverless not provisioned' : 'Inspect failed'}</MessageBarTitle>
-                  {inspectResult.error}{inspectResult.hint && <><br />{inspectResult.hint}</>}
-                </MessageBarBody>
-              </MessageBar>
+              <GeoInspectFailure result={inspectResult} />
             ) : (
               <>
                 {inspectResult.geojsonNote && (

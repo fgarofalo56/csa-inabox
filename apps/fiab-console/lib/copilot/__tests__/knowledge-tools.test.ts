@@ -94,8 +94,15 @@ describe('registerKnowledgeTools', () => {
  * Search agentic retrieval may be unavailable. So the model was told a falsehood
  * and sent to a dead end, in the boundary the feature exists for.
  *
- * These specs run in an environment where `mongodb` genuinely does not resolve —
- * the same condition as the shipped image — so they measure the real branch.
+ * `mongodb` is now a real `apps/fiab-console/package.json` dependency (#3351
+ * driver fix), so in CI (which runs `pnpm install` before vitest) the plain
+ * dynamic `import('mongodb')` these specs used to rely on resolving SUCCEEDS —
+ * the "driver cannot load" branch is no longer the environment's natural
+ * state and a spec that merely imported knowledge-tools statically would
+ * silently stop exercising it. Each spec below now DRIVES the outcome with an
+ * explicit `vi.doMock('mongodb', …)` + `vi.resetModules()` + a fresh dynamic
+ * `import('../knowledge-tools')`, so both branches stay genuinely reachable
+ * regardless of whether the real driver is installed in node_modules.
  */
 describe('AI-Search-unavailable routing hint (R7)', () => {
   let savedConn: string | undefined;
@@ -103,28 +110,46 @@ describe('AI-Search-unavailable routing hint (R7)', () => {
   beforeEach(() => {
     savedConn = process.env.LOOM_COSMOS_VCORE_CONNECTION_STRING;
     isConfiguredMock.mockReturnValue(false); // AI Search is not deployed here
+    vi.resetModules();
   });
 
   afterEach(() => {
     if (savedConn === undefined) delete process.env.LOOM_COSMOS_VCORE_CONNECTION_STRING;
     else process.env.LOOM_COSMOS_VCORE_CONNECTION_STRING = savedConn;
+    vi.doUnmock('mongodb');
   });
 
-  async function hint(): Promise<string> {
-    const retrieve = collect().find((t) => t.name === 'knowledge_base_retrieve');
+  /**
+   * Re-imports `../knowledge-tools` fresh (after `vi.resetModules()` +
+   * `vi.doMock('mongodb', …)`) so its module-level `_mongoDriverResolves`
+   * memo starts unset every time — a driver outcome forced in one test can
+   * never leak into the next.
+   */
+  async function hint(driverResolves: boolean): Promise<string> {
+    if (driverResolves) {
+      vi.doMock('mongodb', () => ({ MongoClient: class {} }));
+    } else {
+      vi.doMock('mongodb', () => { throw new Error("Cannot find module 'mongodb'"); });
+    }
+    const { registerKnowledgeTools: freshRegister } = await import('../knowledge-tools');
+    const registered: any[] = [];
+    freshRegister({ register: (t: any) => registered.push(t) } as any);
+    const retrieve = registered.find((t: any) => t.name === 'knowledge_base_retrieve');
     const out: any = await retrieve.handler({ knowledgeBase: 'kb1', query: 'q' });
     expect(out.grounded).toBe(false);
     return String(out.message);
   }
 
   /**
-   * THE BLOCKER. Connection string set, driver absent — the pre-fix wording.
+   * THE BLOCKER (pre-fix wording, still a live regression risk post-driver-fix).
    *   MUTATION: `vectorFallbackState()` returning 'ready' on the gate alone
-   *   (i.e. dropping the `vcoreDriverResolves()` conjunction) → red here.
+   *   (i.e. dropping the `vcoreDriverResolves()` conjunction) → red here, since
+   *   the driver is forced to fail resolution for this spec regardless of what
+   *   is actually installed.
    */
   it('does NOT tell the model to call vector_store_retrieve when the driver cannot load', async () => {
     process.env.LOOM_COSMOS_VCORE_CONNECTION_STRING = 'mongodb+srv://loom.invalid/?tls=true';
-    const msg = await hint();
+    const msg = await hint(false);
 
     expect(msg).toContain('LOOM_AI_SEARCH_SERVICE');
     // The routing instruction is the thing that must not appear.
@@ -136,10 +161,29 @@ describe('AI-Search-unavailable routing hint (R7)', () => {
     expect(msg).toMatch(/say so honestly/i);
   });
 
+  /**
+   * THE FIX THIS PR ADDS (#3351 driver dependency). Connection string set AND
+   * the driver resolves — the routing hint must now point at
+   * vector_store_retrieve, not report a dependency gap that no longer exists.
+   *   MUTATION: `vectorFallbackState()` never reaching 'ready' (e.g. an `&&
+   * false` tacked onto the `vcoreDriverResolves()` branch) → red here, since
+   * this is the only spec in the file that forces the driver to resolve.
+   */
+  it('DOES tell the model to call vector_store_retrieve once the driver resolves', async () => {
+    process.env.LOOM_COSMOS_VCORE_CONNECTION_STRING = 'mongodb+srv://loom.invalid/?tls=true';
+    const msg = await hint(true);
+
+    expect(msg).toMatch(/call vector_store_retrieve/i);
+    expect(msg).not.toMatch(/not installed in this Console image/i);
+  });
+
   /** Neither backend wired: unchanged, and still the honest "no backend" answer. */
   it('names the unset connection string when the vector backend is not configured at all', async () => {
     delete process.env.LOOM_COSMOS_VCORE_CONNECTION_STRING;
-    const msg = await hint();
+    // Driver resolution is irrelevant here — cosmosVcoreGate() short-circuits
+    // vectorFallbackState() before vcoreDriverResolves() is ever called — but
+    // forcing failure keeps this spec deterministic either way.
+    const msg = await hint(false);
 
     expect(msg).toContain('LOOM_COSMOS_VCORE_CONNECTION_STRING');
     expect(msg).not.toMatch(/call vector_store_retrieve/i);
@@ -155,7 +199,7 @@ describe('AI-Search-unavailable routing hint (R7)', () => {
     govGateMock.mockReturnValue({ cloud: 'GCC-High', reason: 'not GA in GCC-High.' });
     process.env.LOOM_COSMOS_VCORE_CONNECTION_STRING = 'mongodb+srv://loom.invalid/?tls=true';
 
-    const msg = await hint();
+    const msg = await hint(false);
     expect(msg).toContain('GCC-High');
     expect(msg).not.toMatch(/call vector_store_retrieve/i);
     expect(msg).toMatch(/not installed in this Console image/i);

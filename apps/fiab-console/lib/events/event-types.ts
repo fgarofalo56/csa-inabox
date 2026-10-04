@@ -10,6 +10,11 @@
  *       → app/api/items/_lib/item-crud.ts (createOwnedItem / updateOwnedItem /
  *         softDeleteOwnedItem+deleteOwnedItem) — the SHARED per-type item
  *         lifecycle chokepoint every editor persists through.
+ *   item.purged
+ *       → app/api/items/_lib/item-crud.ts purgeRecycledItem — the recycle-bin
+ *         HARD-delete, added by #4692 alongside widening restore/purge to the
+ *         canonical authorization ladder (a wide-and-anonymous purge would be
+ *         worse than the narrow-but-accountable one it replaced).
  *   workspace.created / workspace.updated / workspace.deleted
  *   permission.granted / permission.revoked
  *   mcp-server.deployed / mcp-server.removed
@@ -33,6 +38,7 @@ export const LOOM_EVENT_TYPES = [
   'item.created',
   'item.updated',
   'item.deleted',
+  'item.purged',
   'workspace.created',
   'workspace.updated',
   'workspace.deleted',
@@ -79,6 +85,7 @@ export const LOOM_EVENT_GROUPS: ReadonlyArray<{
       { type: 'item.created', label: 'Item created' },
       { type: 'item.updated', label: 'Item updated' },
       { type: 'item.deleted', label: 'Item deleted' },
+      { type: 'item.purged', label: 'Item permanently purged' },
     ],
   },
   {

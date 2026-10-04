@@ -903,6 +903,7 @@ export async function removePrincipalFromPathAcl(
 
 import { armBase, armScope, dfsUrl } from './cloud-endpoints';
 import { discoverResourceCoordsByName } from './resource-graph-coords';
+import { armScopeSegment, assertContainerRoleAssignmentId, containerSegment } from './arm-scope-segment';
 
 const ARM_SCOPE = armScope();
 // I5: the ARM-plane credential also rides the factory's shared chain
@@ -1034,7 +1035,13 @@ function newCorrelationId(): string {
   return randomUuid();
 }
 
-/** The storage account named in an ARM id (`.../storageAccounts/<name>/...`), or ''. */
+/**
+ * The storage account named in an ARM id (`.../storageAccounts/<name>/...`),
+ * or '' if none is found. This is a loose, non-anchored extraction used only
+ * to pick a CANDIDATE account to validate and report; {@link
+ * assertContainerRoleAssignmentId}'s own anchored regex is what actually
+ * decides whether the id is accepted.
+ */
 function storageAccountOfArmId(id: string): string {
   return /\/storageAccounts\/([^/]+)/i.exec(id)?.[1] ?? '';
 }
@@ -1113,14 +1120,28 @@ async function resolveStorageScope(container: string, account: string = getAccou
   // Storage RBAC supports scoping to a single container via the
   // `blobServices/default/containers/<name>` sub-resource path on the
   // storage account ARM id. Coordinates are resolved by name (self-heal) so a
-  // wrong env RG never breaks the Permissions surface. `account` defaults to the
-  // configured account; a lakehouse bound elsewhere passes its own.
-  return containerScope(await resolveStorageCoords(account), account, container);
+  // wrong env RG never breaks the Permissions surface. `account` defaults to
+  // the configured account; a lakehouse bound elsewhere passes its own.
+  //
+  // Each name is validated as exactly one ARM path segment and percent-encoded
+  // (see arm-scope-segment.ts). The container is checked FIRST, before any
+  // coordinate lookup, so a malformed name is refused without an ARM call.
+  const containerSeg = containerSegment(container);
+  const coords = await resolveStorageCoords(account);
+  return containerScope(coords, account, containerSeg);
 }
 
-/** The ARM scope of one container on `account`, from coordinates already resolved for that account. */
+/**
+ * The ARM scope of one container on `account`, from coordinates already
+ * resolved for that account. `container` must already be a validated,
+ * percent-encoded segment (see {@link containerSegment}); `coords` and
+ * `account` are validated here.
+ */
 function containerScope(coords: { sub: string; rg: string }, account: string, container: string): string {
-  return `/subscriptions/${coords.sub}/resourceGroups/${coords.rg}/providers/Microsoft.Storage/storageAccounts/${account}/blobServices/default/containers/${container}`;
+  return `/subscriptions/${armScopeSegment(coords.sub, 'subscription id')}`
+    + `/resourceGroups/${armScopeSegment(coords.rg, 'resource group')}`
+    + `/providers/Microsoft.Storage/storageAccounts/${armScopeSegment(account, 'storage account')}`
+    + `/blobServices/default/containers/${container}`;
 }
 
 async function armCall<T = any>(url: string, init: RequestInit = {}): Promise<T> {
@@ -1204,13 +1225,15 @@ export async function grantContainerRole(
 
   // Self-heal coords (see resolveStorageCoords): the role-definition id must be
   // scoped to the SAME subscription the account lives in, not the env default.
-  // The coordinates are resolved once, for `account`, and used for both the
-  // scope and the role definition, so a lakehouse bound to another account is
-  // granted on that account's container.
+  // The container name is validated before any ARM lookup; coordinates are
+  // then resolved once, for `target`, and reused for both the scope and the
+  // role definition, so a lakehouse bound to another account is granted on
+  // that account's container.
+  const containerSeg = containerSegment(container);
   const target = account || getAccountName();
   const coords = await resolveStorageCoords(target);
-  const scope = containerScope(coords, target, container);
-  const roleDefinitionId = `/subscriptions/${coords.sub}/providers/Microsoft.Authorization/roleDefinitions/${roleGuid}`;
+  const scope = containerScope(coords, target, containerSeg);
+  const roleDefinitionId = `/subscriptions/${armScopeSegment(coords.sub, 'subscription id')}/providers/Microsoft.Authorization/roleDefinitions/${roleGuid}`;
   // ARM role-assignment names are random GUIDs. Use crypto.randomUUID() so
   // re-grants get distinct ids; the principalId+role pair would 409 anyway
   // if it already exists at the scope.
@@ -1218,7 +1241,7 @@ export async function grantContainerRole(
     typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
       ? crypto.randomUUID()
       : `${Date.now()}-${Math.random().toString(16).slice(2)}-${Math.random().toString(16).slice(2)}`;
-  const url = `${armBase()}${scope}/providers/Microsoft.Authorization/roleAssignments/${guid}?api-version=2022-04-01`;
+  const url = `${armBase()}${scope}/providers/Microsoft.Authorization/roleAssignments/${armScopeSegment(guid, 'role-assignment name')}?api-version=2022-04-01`;
   const res = await roleAssignmentCall<any>(url, {
     method: 'PUT',
     body: JSON.stringify({
@@ -1238,9 +1261,20 @@ export async function grantContainerRole(
   };
 }
 
+/**
+ * Delete a container-scoped Storage role assignment. The id must be a
+ * role assignment at a container scope on SOME storage account (the only
+ * kind `grantContainerRole` creates and `listContainerRoleAssignments`
+ * returns); any other id is refused without an ARM call. The account is read
+ * from the id itself, not fixed to the configured account, so a lakehouse
+ * bound elsewhere (as `grantContainerRole`/`listContainerRoleAssignments`
+ * already support) can also be revoked there.
+ */
 export async function revokeContainerRoleAssignment(roleAssignmentArmId: string): Promise<void> {
-  const url = `${armBase()}${roleAssignmentArmId}?api-version=2022-04-01`;
-  await roleAssignmentCall<void>(url, { method: 'DELETE' }, storageAccountOfArmId(roleAssignmentArmId), 'revoke');
+  const target = storageAccountOfArmId(roleAssignmentArmId);
+  const id = assertContainerRoleAssignmentId(roleAssignmentArmId, target);
+  const url = `${armBase()}${id}?api-version=2022-04-01`;
+  await roleAssignmentCall<void>(url, { method: 'DELETE' }, target, 'revoke');
 }
 
 // ============================================================

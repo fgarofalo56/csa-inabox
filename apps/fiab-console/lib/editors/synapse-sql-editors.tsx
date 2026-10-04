@@ -224,7 +224,7 @@ interface ServerlessSchema {
 export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const [sqlText0] = useState<string>(
-    `-- Synapse Serverless SQL — runs against the Loom workspace endpoint.\n-- Tip: highlight part of the script and Run to execute only the selection.\nSELECT 1 AS smoke, SYSDATETIMEOFFSET() AS server_time, SUSER_NAME() AS upn;`,
+    `-- Synapse Serverless SQL — runs against the Loom workspace endpoint.\n-- Tip: highlight part of the script and Run to execute only the selection.\nSELECT 1 AS smoke, SYSDATETIMEOFFSET() AS server_time;`,
   );
   const { tabs, activeTabId, activeTab, setActiveTabId, addTab, closeTab, patchTab, setActiveSql, setActiveResult } =
     useSqlTabs<QueryResponse>(sqlText0, { slug: 'lakehouse', itemId: id !== 'new' ? id : undefined });

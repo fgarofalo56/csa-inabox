@@ -488,6 +488,25 @@ def test_negative_control_a_token_straddling_the_window_cut_is_not_lost():
         assert not near[0].blocks, f"pad={pad}: the window still bounds blocking"
 
 
+def test_negative_control_a_template_straddling_the_window_cut_does_not_block():
+    """#4485 finding 5. The template line is excluded from `blocking_mention`
+    by checking `all(t in ln for t in VERDICT_TOKENS)` on the line -- but when
+    the 200-char window cuts the template line itself, the TRUNCATED `ln`
+    carries REQUEST-CHANGES without CANNOT-ASSESS, no longer looks like the
+    template, and reads as a genuine block. WHAT MAKES THIS FAIL: read the
+    exclusion check against `ln` (the truncated line) instead of `full` (the
+    untruncated line from `body`) -- every pad below then blocks."""
+    template = "VERDICT: APPROVE | REQUEST-CHANGES | CANNOT-ASSESS"
+    for pad in range(135, 151):
+        body = "Reviewer notes.\n" + ("x" * pad) + template
+        rc_end = body.index("REQUEST-CHANGES") + len("REQUEST-CHANGES")
+        ca_end = body.index("CANNOT-ASSESS") + len("CANNOT-ASSESS")
+        assert rc_end <= 200 < ca_end, f"pad={pad}: fixture does not straddle the window"
+        live, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+        assert live == []
+        assert not any(n.blocks for n in near), f"pad={pad}: a straddled template blocked"
+
+
 def test_negative_control_a_prose_header_that_is_not_first_is_reported_as_such():
     """`not-the-first-line`, not `below-the-window`. The message must name the
     cause it established: a header three lines down, inside the window, is
@@ -499,9 +518,17 @@ def test_negative_control_a_prose_header_that_is_not_first_is_reported_as_such()
     )
     live, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
     assert live == []
-    assert len(near) == 1
+    # #4485 finding 3: this same line is ALSO a bare VERDICT_TOKEN mention with
+    # no announcing marker (`mentions_token`) -- `out_of_window` used to mask
+    # it entirely by being checked first in the elif chain. It is recorded now,
+    # second and forced non-blocking, rather than lost. WHAT MAKES near[0]
+    # WRONG: swap the two append orders above it in `parse_verdicts` -- then
+    # `mentions_token`'s reason would land here instead of NEAR_NOT_FIRST's.
+    assert len(near) == 2
     assert near[0].kind == gates.NEAR_NOT_FIRST
     assert not near[0].blocks
+    assert near[1].kind == gates.NEAR_NO_MARKER
+    assert not near[1].blocks, "a masked near-miss must not gain a NEW vote to block"
 
 
 def test_an_unannounced_approve_does_not_block():
@@ -610,10 +637,48 @@ def test_a_misspelled_marker_is_reported_loudly_not_dropped():
     spelling."""
     body = "## Re-review - REQUEST-CHANGES\n\nBlocker: the thing is broken.\n"
     _, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
-    assert len(near) == 1
+    # #4485 finding 3: this line is REQUEST-CHANGES counted both as a BLOCKING
+    # mention and (separately) as a bare VERDICT_TOKEN mention -- `elif`
+    # used to let `blocking_mention` mask `mentions_token` outright. Still
+    # recorded second now, forced non-blocking. WHAT MAKES near[0] WRONG:
+    # delete the `blocking_mention` branch from the chain -- then
+    # `mentions_token`'s (non-blocking) reason would be near[0] instead, and
+    # a genuine block would silently stop blocking.
+    assert len(near) == 2
     assert near[0].kind == gates.NEAR_NO_MARKER
     assert near[0].blocks
     assert "formatting never reduces a block" in near[0].reason
+    assert near[1].kind == gates.NEAR_NO_MARKER
+    assert not near[1].blocks, "the masked mention must not ALSO block"
+
+
+def test_a_cited_verdict_does_not_mask_a_real_block_below_it():
+    """#4485 finding 3, the issue's own example: `cited` used to mask
+    `blocking_below` outright in the elif chain, so a comment that quoted an
+    old verdict ABOVE a genuine block BELOW the window reported only the
+    citation -- the block was invisible even in the evidence line. (The quoted
+    line's own APPROVE also independently satisfies `mentions_token` -- raw
+    line scans do not exempt quoted text -- so a THIRD entry is expected too.)
+    WHAT MAKES near[0] WRONG: move the `cited` tuple past `blocking_below` in
+    `parse_verdicts` -- then near[0] would be the BLOCKING_BELOW entry
+    instead, which is also fine for the DECISION (neither blocks) but proves
+    this fixture no longer witnesses precedence."""
+    body = (
+        "> ## Independent review - APPROVE\n\n"
+        + ("filler. " * 30)
+        + "\nREQUEST-CHANGES after all, see below\n"
+    )
+    assert body.index("REQUEST-CHANGES") > 200, "fixture must push the block past the window"
+    live, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+    assert live == []
+    assert len(near) == 3
+    assert near[0].kind == gates.NEAR_CITED
+    assert not near[0].blocks
+    assert near[1].kind == gates.NEAR_NOT_FIRST
+    assert "BELOW" in near[1].reason
+    assert not near[1].blocks, "a masked near-miss must not gain a NEW vote to block"
+    assert near[2].kind == gates.NEAR_NO_MARKER
+    assert not near[2].blocks
 
 
 def test_a_misspelled_marker_over_an_approve_does_not_block_but_is_reported():
@@ -729,6 +794,67 @@ def test_negative_control_cannot_assess_blocks_even_after_an_approve():
 
 
 def test_negative_control_no_verdict_is_not_go():
+    ok, why = gates.reduce_verdicts([])
+    assert not ok
+    assert "no live APPROVE" in why
+
+
+# ---------------------------------------------------------------------------
+# `required` -- operator decision 2026-10-02: "zero reviewers elsewhere on
+# green CI". `required` is the ONE conditional check; every other check above
+# stays unconditional regardless of it.
+# ---------------------------------------------------------------------------
+
+
+def test_required_zero_with_no_verdicts_at_all_is_go():
+    """THE DECISION, encoded. WHAT VALUE WOULD MAKE THIS FAIL: dropping the
+    `required > 0` guard, which restores the old unconditional floor -- this
+    call carries ZERO verdicts, which only passes if that specific check is
+    skipped."""
+    ok, why = gates.reduce_verdicts([], required=0)
+    assert ok, why
+    assert "no reviewer required" in why, why
+
+
+def test_required_zero_still_blocks_on_a_live_request_changes():
+    """The decision narrows ONE check, not the whole gate: a live
+    REQUEST-CHANGES still blocks even when gate 3b required nobody at all.
+    WHAT VALUE WOULD MAKE THIS FAIL: `required=0` short-circuiting the whole
+    function instead of only the APPROVE floor."""
+    ok, why = gates.reduce_verdicts(
+        [gates.Verdict("REQUEST-CHANGES", "t1", 1)], required=0
+    )
+    assert not ok
+    assert "REQUEST-CHANGES" in why
+
+
+def test_required_zero_still_blocks_on_a_live_cannot_assess():
+    """Same property, the other blocking token. WHAT VALUE WOULD MAKE THIS
+    FAIL: the same short-circuit as above, or CANNOT-ASSESS being folded into
+    the now-conditional APPROVE check instead of staying its own line."""
+    ok, why = gates.reduce_verdicts(
+        [gates.Verdict("CANNOT-ASSESS", "t1", 1)], required=0
+    )
+    assert not ok
+    assert "CANNOT-ASSESS" in why
+
+
+def test_required_zero_still_honours_a_supersession_refusal():
+    """The FIRST check in the function, ahead of everything else, must still
+    run regardless of `required`. WHAT VALUE WOULD MAKE THIS FAIL: the
+    supersession refusal being skipped (or reordered below the APPROVE check)
+    when `required=0`."""
+    malformed = [gates.Verdict("APPROVE", "t1", 1, supersedes=(999,))]
+    ok, why = gates.reduce_verdicts(malformed, required=0)
+    assert not ok
+    assert gates.SUPERSESSION_MARKER in why
+
+
+def test_the_default_required_is_still_one():
+    """Every pre-existing caller in this suite never passes `required=` at
+    all, so the DEFAULT must still be 1 -- an empty verdict list must still
+    block by default. WHAT VALUE WOULD MAKE THIS FAIL: changing the
+    parameter's default away from 1."""
     ok, why = gates.reduce_verdicts([])
     assert not ok
     assert "no live APPROVE" in why
@@ -904,6 +1030,101 @@ def test_a_rollup_with_no_advisory_red_is_go():
     ok, why = gates.advisory_verdict(checks, REQUIRED, True)
     assert ok, why
     assert "3 clean of 3 advisory" in why, why
+
+
+# #4346 -- the eval's neutral "not measured" check-run.
+
+
+def _lift_not_measured_check_name(path) -> str:
+    """LIFTED from the module that publishes it, never retyped here, so a
+    rename on the publishing side fails this file instead of silently turning
+    the check back into clean coverage. Takes an explicit path so the only
+    caller that needs a real checkout (the drift test below) is the only one
+    that resolves it."""
+    import re
+
+    with open(path, encoding="utf-8") as fh:
+        src = fh.read()
+    hits = re.findall(r"^export const NOT_MEASURED_CHECK_NAME = '([^']+)';$", src, re.M)
+    assert len(hits) == 1, f"expected exactly one NOT_MEASURED_CHECK_NAME in {path}, found {hits!r}"
+    return hits[0]
+
+
+def _not_evidence_context_name() -> str:
+    """The literal name for the two behaviour tests below, taken from
+    `gates.NOT_EVIDENCE_CONTEXTS` -- not from the published module -- so they
+    need no checkout and still run (and kill) in the mutation sandbox, which
+    copies only `tools/drain`. The drift test ties this literal back to the
+    module that actually publishes it; breaks if the set stops holding
+    exactly one name."""
+    assert len(gates.NOT_EVIDENCE_CONTEXTS) == 1, sorted(gates.NOT_EVIDENCE_CONTEXTS)
+    (name,) = gates.NOT_EVIDENCE_CONTEXTS
+    return name
+
+
+def test_the_published_not_measured_name_is_the_one_the_gate_reads():
+    """Breaks if `NOT_MEASURED_CHECK_NAME` in eval-measurement.mjs and
+    `NOT_EVIDENCE_CONTEXTS` here drift apart -- the publisher would then emit a
+    name this gate scores as ordinary clean coverage.
+
+    SKIPS only when `_repo_root()` is None -- i.e. genuinely out of tree, which
+    in practice means the mutation sandbox (it copies only `tools/drain`, so
+    `scripts/ci` is absent). Declared in `mutate_gates.EXPECTED_SANDBOX_SKIPS`:
+    a skip here kills no arm, and the two behaviour tests below carry the
+    literal name instead, so they still run -- and still kill -- there."""
+    root = _repo_root()
+    if root is None:
+        pytest.skip("out of tree: no .github/workflows + scripts/ci above this file "
+                    "(the mutation sandbox copies only tools/drain)")
+    eval_measurement = root / "scripts" / "ci" / "eval-measurement.mjs"
+    name = _lift_not_measured_check_name(eval_measurement)
+    assert name == "Copilot quality: not measured", name
+    assert name in gates.NOT_EVIDENCE_CONTEXTS, sorted(gates.NOT_EVIDENCE_CONTEXTS)
+
+
+def test_a_neutral_not_measured_check_is_not_evidence_and_not_green_coverage():
+    """THE #4346 CASE: every required context green, CodeQL green, and the
+    eval's neutral "Copilot quality: not measured" check.
+
+    Breaks if: that NEUTRAL is counted in `clean` (the defect -- the line would
+    read "2 clean of 2 advisory" and say nothing about it), if it is dropped
+    from the population ("1 of 1"), or if it is made to BLOCK (`ok` False --
+    it is informational and must not hold a merge). The positive pair is
+    `PR Summary` NEUTRAL, which must stay clean: breaks if every NEUTRAL is
+    turned into not-evidence."""
+    name = _not_evidence_context_name()
+    checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+        _adv("CodeQL", "SUCCESS"),
+        _adv("PR Summary", "NEUTRAL"),
+        _adv(name, "NEUTRAL"),
+    ]
+    split = gates.classify_advisory_checks(checks, REQUIRED)
+    assert split.clean == ["CodeQL", "PR Summary"], split
+    assert split.not_evidence == [f"{name} (NEUTRAL)"], split
+    assert split.population == 3, split
+
+    ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+    assert ok, why
+    assert "2 clean of 3 advisory" in why, why
+    assert f"NOT EVIDENCE 1: {name} (NEUTRAL)" in why, why
+    assert "not counted as clean" in why, why
+
+
+def test_the_not_measured_name_with_a_non_neutral_conclusion_is_read_normally():
+    """Only a NEUTRAL on that name is not-evidence. Breaks if the name alone is
+    matched: a SUCCESS would vanish from `clean` and a FAILURE from `red`
+    (an advisory red that no longer blocks)."""
+    name = _not_evidence_context_name()
+    base = [_run(n, "SUCCESS") for n in REQUIRED]
+
+    split = gates.classify_advisory_checks([*base, _adv(name, "SUCCESS")], REQUIRED)
+    assert split.clean == [name], split
+    assert split.not_evidence == [], split
+
+    ok, why = gates.advisory_verdict([*base, _adv(name, "FAILURE")], REQUIRED, True)
+    assert not ok, why
+    assert f"ADV-RED 1: {name} (FAILURE)" in why, why
+    assert "NOT EVIDENCE" not in why, why
 
 
 def test_negative_control_an_advisory_red_blocks_while_every_required_is_green():

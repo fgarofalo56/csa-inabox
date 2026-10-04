@@ -22,6 +22,8 @@ export interface GrantTarget {
   permission: AccessPermission;
   /** Where this target came from (an output port name or a data asset) — for the receipt. */
   source: string;
+  /** For an output port: the store the port names, as written (kept when the scope is later blanked as unbound). */
+  declaredRef?: string;
 }
 
 /** A raw output port as stored on `state.ports.output` (DP-8) or the legacy flat array. */
@@ -33,15 +35,16 @@ function portToTarget(p: RawPort, permission: AccessPermission): GrantTarget | n
   const kind = typeof p.kind === 'string' ? p.kind : '';
   const ref = typeof p.ref === 'string' ? p.ref.trim() : '';
   if (!ref) return null; // nothing concrete to grant against
+  const source = `output port '${name || kind}'`;
   switch (kind) {
     case 'adls':
     case 'delta':
       // ref = container or abfss path.
-      return { scopeType: ref.startsWith('abfss://') || ref.includes('/') ? 'adls-path' : 'adls-container', scopeRef: ref, permission, source: `output port '${name || kind}'` };
+      return { scopeType: ref.startsWith('abfss://') || ref.includes('/') ? 'adls-path' : 'adls-container', scopeRef: ref, permission, source, declaredRef: ref };
     case 'sql-endpoint':
-      return { scopeType: 'warehouse', scopeRef: ref, permission, source: `output port '${name || kind}'` };
+      return { scopeType: 'warehouse', scopeRef: ref, permission, source, declaredRef: ref };
     case 'adx':
-      return { scopeType: 'kql-database', scopeRef: ref, permission, source: `output port '${name || kind}'` };
+      return { scopeType: 'kql-database', scopeRef: ref, permission, source, declaredRef: ref };
     // 'rest' and unknown kinds have no direct RBAC target.
     default:
       return null;

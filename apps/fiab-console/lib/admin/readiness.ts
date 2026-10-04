@@ -299,6 +299,9 @@ export const GATE_PROBE_MAP: Record<string, string> = {
   'svc-aoai': 'probe-aoai',
   purview: 'probe-purview-datamap',
   'svc-databricks': 'probe-databricks',
+  // #3342 — the account-admin role is not an env value; only a live read of the
+  // account API as the Console identity can say whether it is held.
+  'svc-databricks-account-admin': 'probe-databricks-account-admin',
   'svc-dab-runtime': 'probe-dab-runtime',
   'svc-udf-function': 'probe-udf-runtime',
   'svc-mcp-catalog': 'probe-builtin-mcp',

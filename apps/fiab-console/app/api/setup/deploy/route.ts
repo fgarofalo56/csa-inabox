@@ -443,11 +443,37 @@ async function handleDeploy(req: NextRequest): Promise<NextResponse> {
     // Structural coherence first. An adopt of a create-only service, a create
     // of an existing tenant singleton, or an adopt without a full coordinate
     // can never deploy — refuse now, not three minutes into an ARM run.
-    // 'fitness-not-evaluated' and 'scan-coverage-missing' are deliberately NOT
-    // enforced yet: no production path evaluates fitness (`evaluateFitness`
-    // still has no producer — the follow-up recorded on #3014), so refusing
-    // every un-evaluated adoption here would dead-end brownfield entirely.
-    // An adoption that HAS a verdict is enforced below, unknown included.
+    //
+    // 'fitness-not-evaluated' and 'scan-coverage-missing' are STILL not
+    // enforced here — but the reason changed on 2026-10-03 (#3342). The
+    // original reason (no production path evaluates fitness) is now FALSE:
+    // `lib/deploy/fitness-probe.ts` is a real production producer, reached via
+    // POST /api/setup/validate-adoption, and the wizard already refuses to
+    // enable Deploy on exactly this condition
+    // (`plan-model.ts` `planBlockers()` blocks on `!d.fitness`). What still
+    // holds this back from enforcement at THIS layer: several tests
+    // (`app/api/setup/__tests__/deploy-adopt-transport.test.ts`, the #3016
+    // adopt-bag-threading suite) deliberately submit `adopt` decisions with no
+    // `fitness` attached — on purpose, to isolate the adopt-bag transport
+    // question from the fitness-gate question — and expect those submits to
+    // reach a deploy tier (202/503), not a 400. Enforcing
+    // 'fitness-not-evaluated' here would need those fixtures updated in
+    // lockstep (or a considered decision that direct-API callers must now
+    // pre-attach fitness), which is a wider, more consequential change than
+    // this comment fix and is left for that follow-up, still tracked on
+    // #3342. `app/api/setup/__tests__/deploy-fitness-gate.test.ts`'s own
+    // "an UN-EVALUATED adoption still deploys" test is renamed to stop
+    // asserting the stale reason, without changing what it measures.
+    //
+    // 'fitness-blocking' (an adopt WITH a verdict of 'unusable' or 'unknown')
+    // is unchanged, enforced below via `assertPlanIsDeployable`. Five
+    // singleton services — Purview, AI Search, Databricks, Cosmos, AML —
+    // carry checks the plan-time probe cannot resolve without a data-plane
+    // token it does not hold (`fitness-probe.ts` "NOT resolved here"), so
+    // their adoption verdict is always 'unknown' and always blocks here.
+    // Whether to relax that (e.g. an explicit operator acknowledgement +
+    // post-grant re-verification) is a separate open product decision, also
+    // tracked on #3342, not changed by this commit.
     const ENFORCED = new Set(['unknown-service', 'adopt-not-permitted', 'create-not-permitted', 'missing-target']);
     const issues = validatePlan(plan).filter((i) => ENFORCED.has(i.code));
     if (issues.length > 0) {

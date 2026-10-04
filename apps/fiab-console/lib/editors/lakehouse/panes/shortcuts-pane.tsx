@@ -12,11 +12,35 @@ import {
 } from '@fluentui/react-icons';
 import { useStyles } from '../shared';
 import { useLakehouseCtx } from '../lakehouse-editor-context';
-import { useLakehouseReadOnly, LAKEHOUSE_READ_ONLY_TITLE } from '../hooks/use-lakehouse-access';
+import { useIsTenantAdmin } from '@/lib/components/session-context';
+import {
+  useLakehouseReadOnly, LAKEHOUSE_READ_ONLY_TITLE, LAKEHOUSE_READ_ONLY_SUBTEXT,
+} from '../hooks/use-lakehouse-access';
+
+/**
+ * Why a shortcut's "Query (SQL)" is unavailable to a caller who is not a tenant
+ * admin. A shortcut normally points outside this lakehouse's storage root, and a
+ * Tables shortcut is an object in the shortcut database; the SQL tab reads only
+ * this lakehouse's own root for such a caller, so the generated query would be
+ * refused. Tracked with the per-item SQL database in #4821.
+ *
+ * As with the other read-only menu items in the lakehouse editor, the item shows
+ * a short reason (`SHORTCUT_QUERY_ADMIN_ONLY_SUBTEXT`) and carries the full
+ * sentence as its title. The pointer to Test is added only where Test is open,
+ * i.e. for a role that can edit the lakehouse: `SHORTCUT_QUERY_ADMIN_ONLY` for
+ * that role, `SHORTCUT_QUERY_ADMIN_ONLY_READER` for a read-only role.
+ */
+export const SHORTCUT_QUERY_ADMIN_ONLY_SUBTEXT = 'Tenant admins only: a shortcut points outside this lakehouse';
+export const SHORTCUT_QUERY_ADMIN_ONLY_READER =
+  "Runs for tenant admins: the SQL tab reads only this lakehouse's own storage root, and a shortcut "
+  + 'points outside it (#4821).';
+export const SHORTCUT_TEST_HINT = 'Use Test to check the shortcut resolves.';
+export const SHORTCUT_QUERY_ADMIN_ONLY = `${SHORTCUT_QUERY_ADMIN_ONLY_READER} ${SHORTCUT_TEST_HINT}`;
 
 export function ShortcutsPane() {
   const s = useStyles();
   const ctx = useLakehouseCtx();
+  const canQueryShortcuts = useIsTenantAdmin();
   // Creating, registering, re-testing (it writes the status back) and deleting a
   // shortcut all need Edit; a read-only role can still list and query them.
   const readOnly = useLakehouseReadOnly(ctx.id, ctx.isNewItem);
@@ -186,17 +210,34 @@ export function ShortcutsPane() {
                         </MenuTrigger>
                         <MenuPopover>
                           <MenuList>
-                            {sc.kind === 'tables' && sc.engineObject && (
+                            {!canQueryShortcuts && (
+                              // `disabled`, not `disabledFocusable`: this MenuItem version ignores the
+                              // latter (no aria-disabled), and a disabled menu item stays reachable by
+                              // arrow keys, so the short reason below is still read out.
+                              <MenuItem icon={<Play20Regular />} disabled
+                                subText={SHORTCUT_QUERY_ADMIN_ONLY_SUBTEXT}
+                                title={readOnly ? SHORTCUT_QUERY_ADMIN_ONLY_READER : SHORTCUT_QUERY_ADMIN_ONLY}>
+                                Query (SQL)
+                              </MenuItem>
+                            )}
+                            {canQueryShortcuts && sc.kind === 'tables' && sc.engineObject && (
                               <MenuItem icon={<Play20Regular />} onClick={() => {
                                 setSqlText(`SELECT TOP 100 * FROM ${sc.engineObject};`);
                                 setTab('sql');
                               }}>Query (SQL)</MenuItem>
                             )}
-                            {!(sc.kind === 'tables' && sc.engineObject) && (
+                            {canQueryShortcuts && !(sc.kind === 'tables' && sc.engineObject) && (
                               <MenuItem icon={<Play20Regular />} onClick={() => queryShortcut(sc)}>Query (SQL)</MenuItem>
                             )}
-                            <MenuItem icon={<ArrowSync20Regular />} disabled={readOnly} title={roTitle} onClick={() => testShortcut(sc)}>Test</MenuItem>
-                            <MenuItem icon={<Delete20Regular />} disabled={readOnly} title={roTitle} onClick={() => deleteShortcutRow(sc)}>Delete</MenuItem>
+                            {/* The editor's read-only convention (the Files and Tables menus): a short
+                                visible reason, part of the item's accessible name, and the full sentence
+                                as the title. */}
+                            <MenuItem icon={<ArrowSync20Regular />} disabled={readOnly} title={roTitle}
+                              subText={readOnly ? LAKEHOUSE_READ_ONLY_SUBTEXT : undefined}
+                              onClick={() => testShortcut(sc)}>Test</MenuItem>
+                            <MenuItem icon={<Delete20Regular />} disabled={readOnly} title={roTitle}
+                              subText={readOnly ? LAKEHOUSE_READ_ONLY_SUBTEXT : undefined}
+                              onClick={() => deleteShortcutRow(sc)}>Delete</MenuItem>
                           </MenuList>
                         </MenuPopover>
                       </Menu>

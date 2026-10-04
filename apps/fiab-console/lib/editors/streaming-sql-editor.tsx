@@ -111,6 +111,20 @@ interface StreamingMvStatus {
   progress?: string;
   rowCount?: number;
 }
+
+/**
+ * #3546 (deploy-integrity.md R7) — `clientFetch`'s default timeout copy says
+ * "heavier across multiple subscriptions", which is true of ARM/Resource Graph
+ * fan-out reads and false of everything on this page. Every call below talks to
+ * the SAME single-instance RisingWave Container App over one pg-wire connection
+ * (or, for /mv and /query, a single statement against it) — there is no
+ * subscription enumeration anywhere in this path. State only what is actually
+ * established: the deadline elapsed on a connect/round-trip to that one engine.
+ */
+export const RISINGWAVE_TIMEOUT_HINT =
+  'This is a connect or round-trip to a single RisingWave streaming-engine instance — it did not finish in '
+  + 'time. Retry; if it keeps happening, check the tier\'s own status panel.';
+
 interface StatusResponse {
   ok: boolean;
   configured?: boolean;
@@ -134,7 +148,7 @@ interface QueryResponse {
 }
 
 async function fetchStatus(): Promise<StatusResponse> {
-  const res = await clientFetch('/api/streaming-sql/status', { cache: 'no-store' });
+  const res = await clientFetch('/api/streaming-sql/status', { cache: 'no-store' }, { timeoutHint: RISINGWAVE_TIMEOUT_HINT });
   const json = (await res.json().catch(() => ({}))) as StatusResponse & { error?: string };
   if (!res.ok || json?.ok !== true) throw new Error(json?.error || `Could not read streaming status (HTTP ${res.status})`);
   return json;
@@ -172,7 +186,7 @@ export function StreamingSqlEditor({ item, id }: { item: FabricItemType; id: str
       const res = await clientFetch('/api/streaming-sql/mv', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sql, itemId: id }),
-      });
+      }, { timeoutHint: RISINGWAVE_TIMEOUT_HINT });
       const json = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; command?: string };
       setDdlMsg(res.ok && json.ok
         ? { ok: true, text: `Materialized (${json.command || 'CREATE MATERIALIZED VIEW'}). RisingWave is now maintaining it incrementally.` }
@@ -189,7 +203,7 @@ export function StreamingSqlEditor({ item, id }: { item: FabricItemType; id: str
       const res = await clientFetch('/api/streaming-sql/query', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sql: previewSql, maxRows: 5000, itemId: id }),
-      });
+      }, { timeoutHint: RISINGWAVE_TIMEOUT_HINT });
       const json = (await res.json().catch(() => ({}))) as QueryResponse;
       setResult(res.ok && json.ok ? json : { ok: false, error: json.error || `HTTP ${res.status}` });
     } catch (e) {
@@ -203,7 +217,7 @@ export function StreamingSqlEditor({ item, id }: { item: FabricItemType; id: str
       const res = await clientFetch('/api/streaming-sql/mv', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ ...payload, itemId: id }),
-      });
+      }, { timeoutHint: RISINGWAVE_TIMEOUT_HINT });
       const json = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
       setDdlMsg(res.ok && json.ok ? { ok: true, text: `${label} created.` } : { ok: false, text: json.error || `HTTP ${res.status}` });
       if (res.ok && json.ok) void statusQ.refetch();

@@ -6,6 +6,7 @@ import {
   parseViolationCount,
   checkTestName,
   dialectForEngine,
+  isSafeDqIdent,
   type DqCheck,
 } from '../dq-check-compile';
 
@@ -86,6 +87,25 @@ describe('compileChecks', () => {
   it('ignores unknown rule values', () => {
     const out = compileChecks([{ id: 'z', table: 'orders', rule: 'sql_injection', severity: 'error' } as DqCheck], target);
     expect(out.compiled).toHaveLength(0);
+  });
+
+  it('skips a table name that could break out of the Jinja source() string, never compiling it', () => {
+    // A single quote is doubled by escapeSqlLiteral (SQL's own-quote rule),
+    // which is NOT how Jinja strings escape a quote -- so a doubled quote
+    // here would still close the Jinja string one character early. Before
+    // this check existed, this table name reached that string unvalidated.
+    const hostile = "orders') }}{{ config(enabled=true) }}{{ source('x";
+    const out = compileChecks([check({ id: 'x', table: hostile, column: 'id', rule: 'not_null' })], target);
+    expect(out.compiled).toHaveLength(0);
+    expect(out.skipped).toHaveLength(1);
+    expect(out.skipped[0].reason).toMatch(/unsafe table/i);
+    // The hostile table must never reach a generated file's content.
+    expect(out.files.some((f) => f.content.includes('config(enabled=true)'))).toBe(false);
+  });
+
+  it('isSafeDqIdent rejects quotes and Jinja braces, accepts a plain table name', () => {
+    expect(isSafeDqIdent('orders')).toBe(true);
+    expect(isSafeDqIdent("orders'); }}")).toBe(false);
   });
 });
 

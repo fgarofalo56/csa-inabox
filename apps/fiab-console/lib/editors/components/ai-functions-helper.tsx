@@ -21,6 +21,15 @@ import { clientFetch } from '@/lib/client-fetch';
  *     renders the warning; it never crashes).
  *
  * A boundary probe (GET ?probe=1) drives which mode + gate the dialog shows.
+ *
+ * WAREHOUSE LINK (#3669). The in-database path runs only on a warehouse linked to
+ * an item the caller can read. A refusal is shown with its `code` and the
+ * server's `remediation`, plus "Use Azure OpenAI instead", which re-runs the
+ * function on the AOAI path (no warehouse). A tenant admin whose selected
+ * warehouse carries no link — and is not the deployment-shared `loom-default`,
+ * which stays admin-only — is offered "Link to this item", which calls
+ * `POST /api/admin/databricks-warehouses/adopt` for THIS item and reports what
+ * the server read back. See `ai-function-warehouse-link.ts`.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -38,6 +47,7 @@ import {
   Field,
   Input,
   MessageBar,
+  MessageBarActions,
   MessageBarBody,
   MessageBarTitle,
   Option,
@@ -52,11 +62,14 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { Sparkle20Regular } from '@fluentui/react-icons';
+import { Link20Regular, Sparkle20Regular } from '@fluentui/react-icons';
+import { useIsTenantAdmin } from '@/lib/components/session-context';
+import { LINKABLE_ITEM_TYPE, linkOfferFor, runErrorFrom, type LinkOffer, type RunError } from './ai-function-warehouse-link';
 
 // AiFn is a server type; import as type-only so this client bundle never pulls
 // in the server module (which imports @azure/identity).
 import type { AiFn } from '@/lib/azure/ai-functions-client';
+import { escapeSparkSqlLiteral } from '@/lib/sql/quoting';
 
 /** The nine AI functions (kept in sync with AI_FN_NAMES on the server). The
  *  first seven run in-database on Databricks (Comm/GCC) or via AOAI chat; embed
@@ -78,6 +91,62 @@ const FN_OPTIONS: { key: AiFn; label: string; desc: string }[] = [
 const DBX_SUPPORTED = new Set<AiFn>([
   'sentiment', 'classify', 'translate', 'summarize', 'extract', 'fix_grammar', 'generate_response',
 ]);
+
+export interface DatabricksAiSnippetInput {
+  fn: AiFn;
+  column: string;
+  table?: string;
+  labels?: string[];
+  fields?: string[];
+  targetLang?: string;
+}
+
+/**
+ * The Databricks AI SQL snippet the dialog displays and inserts. Labels, fields
+ * and the target language are Databricks string literals, so they are escaped
+ * by the Spark SQL literal grammar (escapeSparkSqlLiteral), the same rule the
+ * server route applies. Every character is carried, so this never throws; it
+ * returns '' only when no column is chosen (see {@link aiSnippetBlockedReason}).
+ */
+export function buildDatabricksAiSnippet(input: DatabricksAiSnippetInput): string {
+  const { fn, column, table, targetLang } = input;
+  if (!column.trim()) return '';
+  const col = column.includes('`') ? column : `\`${column.trim()}\``;
+  const tbl = table && (table.includes('`') || table.includes('.')) ? table : (table ? `\`${table}\`` : '<table>');
+  const lit = (v: string) => `'${escapeSparkSqlLiteral(v)}'`;
+  let expr: string;
+  switch (fn) {
+    case 'sentiment': expr = `ai_analyze_sentiment(${col})`; break;
+    case 'summarize': expr = `ai_summarize(${col})`; break;
+    case 'classify': {
+      const ls = input.labels && input.labels.length ? input.labels : ['positive', 'negative', 'neutral'];
+      expr = `ai_classify(${col}, ARRAY(${ls.map(lit).join(', ')}))`;
+      break;
+    }
+    case 'translate':
+      expr = `ai_translate(${col}, ${lit(targetLang || 'English')})`;
+      break;
+    case 'extract': {
+      const fs = input.fields && input.fields.length ? input.fields : ['entity'];
+      expr = `ai_extract(${col}, ARRAY(${fs.map(lit).join(', ')}))`;
+      break;
+    }
+    case 'fix_grammar': expr = `ai_fix_grammar(${col})`; break;
+    case 'generate_response': expr = `ai_gen(${col})`; break;
+    default: expr = `ai_query(${col})`;
+  }
+  return `SELECT ${col}, ${expr} AS ai_result\nFROM ${tbl}\nLIMIT 50;`;
+}
+
+/**
+ * Why the dialog has no AI SQL to insert, or null when it has one. Shown as the
+ * snippet field's hint and the Insert button's tooltip, so a disabled Insert is
+ * never unexplained.
+ */
+export function aiSnippetBlockedReason(input: { column: string }): string | null {
+  if (!input.column.trim()) return 'Choose a column to generate the AI SQL.';
+  return null;
+}
 
 const useStyles = makeStyles({
   body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minWidth: '520px' },
@@ -162,7 +231,23 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
 
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<RunResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setErrorState] = useState<RunError | null>(null);
+  const setError = useCallback((message: string | null) => {
+    setErrorState(message === null ? null : { message, aoaiFallback: false });
+  }, []);
+  // The route answers an unsaved item (`/items/<type>/new`) with 200
+  // `{ ok:false, code:'unsaved_item' }`. That is guidance, not a failure, so it
+  // renders as a warning (the sibling convention in warehouse-alerts.tsx).
+  const [unsavedNotice, setUnsavedNotice] = useState<string | null>(null);
+
+  // #3669 — "Use Azure OpenAI instead" after a warehouse refusal; cleared when the
+  // dialog reopens or the warehouse changes.
+  const [forceAoai, setForceAoai] = useState(false);
+  const isAdmin = useIsTenantAdmin();
+  const [linkOffer, setLinkOffer] = useState<LinkOffer>('unknown');
+  const [linking, setLinking] = useState(false);
+  const [linkError, setLinkError] = useState<RunError | null>(null);
+  useEffect(() => { setForceAoai(false); setLinkError(null); }, [open, warehouseId]);
 
   // FGC-19 — model-tier selector (Fast/default vs Advanced) + reasoning-effort.
   // Applies to the Azure OpenAI path only (the in-database Databricks path uses
@@ -202,7 +287,50 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
   }, [open, itemType, itemId]);
 
   // Whether the in-database Databricks path is the one this run will take.
-  const useDbx = !!(probe && !probe.govPath && probe.dbxAvailable && warehouseId && DBX_SUPPORTED.has(fn));
+  const useDbx = !!(probe && !probe.govPath && probe.dbxAvailable && warehouseId && DBX_SUPPORTED.has(fn) && !forceAoai);
+
+  // #3669 — tenant admins: is the selected warehouse unlinked, so "Link to this
+  // item" applies? Read from the admin listing; any failure leaves 'unknown',
+  // which offers nothing (never a guess).
+  const dbxPossible = !!(probe && !probe.govPath && probe.dbxAvailable && warehouseId && itemType === LINKABLE_ITEM_TYPE);
+  useEffect(() => {
+    setLinkOffer('unknown');
+    if (!open || !isAdmin || !dbxPossible) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await clientFetch('/api/admin/databricks-warehouses/adopt');
+        const j = await r.json();
+        if (!cancelled && j?.ok) setLinkOffer(linkOfferFor(j.warehouses, warehouseId, itemId));
+      } catch { /* stays 'unknown' — nothing offered */ }
+    })();
+    return () => { cancelled = true; };
+  }, [open, isAdmin, dbxPossible, warehouseId, itemId]);
+
+  const linkToItem = useCallback(async () => {
+    if (!warehouseId) return;
+    setLinking(true);
+    setLinkError(null);
+    try {
+      const r = await clientFetch('/api/admin/databricks-warehouses/adopt', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ warehouseId, itemId, dryRun: false }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (j?.ok) {
+        setLinkOffer('linked');
+        setForceAoai(false);
+        setErrorState(null);
+      } else {
+        setLinkError(runErrorFrom(j, r.status));
+      }
+    } catch (e: any) {
+      setLinkError({ message: e?.message || String(e), aoaiFallback: false });
+    } finally {
+      setLinking(false);
+    }
+  }, [warehouseId, itemId]);
 
   // Load the live model deployments when the Advanced tier is selected on the
   // AOAI path (honest: if the list can't load the dropdown stays empty and Fast
@@ -234,33 +362,18 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
   // Build the Databricks AI SQL snippet (for Insert + as the displayed contract).
   const generatedSql = useMemo(() => {
     if (!useDbx || !column.trim()) return '';
-    const col = column.includes('`') ? column : `\`${column.trim()}\``;
-    const tbl = table && (table.includes('`') || table.includes('.')) ? table : (table ? `\`${table}\`` : '<table>');
-    let expr: string;
-    switch (fn) {
-      case 'sentiment': expr = `ai_analyze_sentiment(${col})`; break;
-      case 'summarize': expr = `ai_summarize(${col})`; break;
-      case 'classify': {
-        const ls = (optionsPayload.labels as string[] | undefined) || ['positive', 'negative', 'neutral'];
-        expr = `ai_classify(${col}, ARRAY(${ls.map((l) => `'${l.replace(/'/g, "''")}'`).join(', ')}))`;
-        break;
-      }
-      case 'translate':
-        expr = `ai_translate(${col}, '${(targetLang || 'English').replace(/'/g, "''")}')`;
-        break;
-      case 'extract': {
-        const fs = (optionsPayload.fields as string[] | undefined) || ['entity'];
-        expr = `ai_extract(${col}, ARRAY(${fs.map((f) => `'${f.replace(/'/g, "''")}'`).join(', ')}))`;
-        break;
-      }
-      case 'fix_grammar': expr = `ai_fix_grammar(${col})`; break;
-      case 'generate_response': expr = `ai_gen(${col})`; break;
-      default: expr = `ai_query(${col})`;
-    }
-    return `SELECT ${col}, ${expr} AS ai_result\nFROM ${tbl}\nLIMIT 50;`;
+    return buildDatabricksAiSnippet({
+      fn,
+      column,
+      table,
+      labels: optionsPayload.labels as string[] | undefined,
+      fields: optionsPayload.fields as string[] | undefined,
+      targetLang,
+    });
   }, [useDbx, column, table, fn, optionsPayload, targetLang]);
+  const snippetBlockedReason = useDbx ? aiSnippetBlockedReason({ column }) : null;
 
-  const reset = useCallback(() => { setResult(null); setError(null); }, []);
+  const reset = useCallback(() => { setResult(null); setError(null); setUnsavedNotice(null); }, [setError]);
 
   const insert = useCallback(() => {
     if (generatedSql && onInsert) {
@@ -300,8 +413,13 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
         }),
       });
       const j = await r.json();
+      if (!j.ok && j.code === 'unsaved_item') {
+        setUnsavedNotice(j.error || 'AI functions run in the name of a saved item.');
+        return;
+      }
       if (!j.ok) {
-        setError(j.error || `HTTP ${r.status}`);
+        // #3669 — keep the code and the server's remediation, not just the error.
+        setErrorState(runErrorFrom(j, r.status));
         if (j.gated) setProbe((p) => (p ? { ...p, gated: true, hint: j.hint } : p));
         return;
       }
@@ -311,7 +429,7 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
     } finally {
       setRunning(false);
     }
-  }, [reset, column, useDbx, sampleInput, compareTo, itemType, itemId, fn, warehouseId, table, catalog, schema, optionsPayload, tier, deployment, reasoningEffort]);
+  }, [reset, setError, column, useDbx, sampleInput, compareTo, itemType, itemId, fn, warehouseId, table, catalog, schema, optionsPayload, tier, deployment, reasoningEffort]);
 
   const activeFn = FN_OPTIONS.find((f) => f.key === fn);
 
@@ -359,6 +477,30 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
                     </Badge>
                   )}
                 </Caption1>
+              )}
+
+              {/* #3669 — tenant admins: link an unlinked warehouse to this item. */}
+              {linkOffer === 'offer' && (
+                <MessageBar intent="info" layout="multiline">
+                  <MessageBarBody>
+                    <MessageBarTitle>This warehouse is not linked to this item</MessageBarTitle>
+                    Only tenant admins can run AI functions on it until it is linked. Linking tags the
+                    warehouse with this item, so readers of this workspace can use it too.
+                    {linkError && (
+                      <div>
+                        <Caption1>
+                          {linkError.message}
+                          {linkError.code ? <> · <span className={s.mono}>{linkError.code}</span></> : null}
+                        </Caption1>
+                      </div>
+                    )}
+                  </MessageBarBody>
+                  <MessageBarActions>
+                    <Button size="small" icon={<Link20Regular />} disabled={linking} onClick={linkToItem}>
+                      {linking ? 'Linking…' : 'Link to this item'}
+                    </Button>
+                  </MessageBarActions>
+                </MessageBar>
               )}
 
               {!probe?.gated && (
@@ -464,7 +606,10 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
                   )}
 
                   {useDbx ? (
-                    <Field label="Generated AI SQL" hint="Inserted into the query editor or run against the warehouse">
+                    <Field
+                      label="Generated AI SQL"
+                      hint={snippetBlockedReason ?? 'Inserted into the query editor or run against the warehouse'}
+                    >
                       <Textarea value={generatedSql} readOnly textarea={{ className: s.mono }} resize="vertical" rows={4} />
                     </Field>
                   ) : (
@@ -479,12 +624,36 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
                     </Field>
                   )}
 
+                  {unsavedNotice && (
+                    <MessageBar intent="warning">
+                      <MessageBarBody>
+                        <MessageBarTitle>Save this item first</MessageBarTitle>
+                        {unsavedNotice}
+                      </MessageBarBody>
+                    </MessageBar>
+                  )}
+
                   {error && (
-                    <MessageBar intent="error">
+                    <MessageBar intent="error" layout="multiline">
                       <MessageBarBody>
                         <MessageBarTitle>AI function failed</MessageBarTitle>
-                        {error}
+                        {error.message}
+                        {error.code && (
+                          <div><Caption1>Code: <span className={s.mono}>{error.code}</span></Caption1></div>
+                        )}
+                        {error.remediation && <div><Caption1>{error.remediation}</Caption1></div>}
                       </MessageBarBody>
+                      {error.aoaiFallback && (
+                        <MessageBarActions>
+                          <Button
+                            size="small"
+                            icon={<Sparkle20Regular />}
+                            onClick={() => { setForceAoai(true); setErrorState(null); setResult(null); }}
+                          >
+                            Use Azure OpenAI instead
+                          </Button>
+                        </MessageBarActions>
+                      )}
                     </MessageBar>
                   )}
 
@@ -554,7 +723,14 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
           <DialogActions>
             <Button appearance="secondary" onClick={() => onOpenChange(false)}>Close</Button>
             {useDbx && onInsert && (
-              <Button appearance="outline" disabled={!generatedSql} onClick={insert}>Insert SQL</Button>
+              <Button
+                appearance="outline"
+                disabled={!generatedSql}
+                title={snippetBlockedReason ?? undefined}
+                onClick={insert}
+              >
+                Insert SQL
+              </Button>
             )}
             {!probe?.gated && (
               <Button appearance="primary" icon={running ? <Spinner size="tiny" /> : <Sparkle20Regular />} disabled={running || probing} onClick={run}>

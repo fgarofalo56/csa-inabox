@@ -27,9 +27,9 @@
  * `condition` are free-text SQL surfaces (a query / expression surface, which
  * loom_no_freeform_config explicitly allows — 1:1 with the Databricks editor).
  *
- * SQL-injection posture: object names are back-tick quoted through
+ * Quoting: object names are back-tick quoted through
  * `quoteIdent(name, 'databricks-sql')` and string literals (ADLS paths) are
- * escaped through `escapeSqlLiteral` from lib/sql/quoting.ts. `query` /
+ * escaped through `escapeSparkSqlLiteral` from lib/sql/quoting.ts. `query` /
  * `condition` are analyst-authored SQL fragments (the same trust model as the
  * SQL editor itself) and are emitted verbatim inside the generated source.
  *
@@ -39,7 +39,7 @@
  * the Azure-native default pipeline surface.
  */
 
-import { escapeSqlLiteral, quoteIdent } from '@/lib/sql/quoting';
+import { escapeSparkSqlLiteral, quoteIdent } from '@/lib/sql/quoting';
 
 // ---------------------------------------------------------------------------
 // Model types
@@ -280,7 +280,7 @@ function quoteQualified(name: string): string {
 
 /** A single-quoted, escaped SQL string literal (ADLS paths etc.). */
 function sqlString(value: string): string {
-  return `'${escapeSqlLiteral(value)}'`;
+  return `'${escapeSparkSqlLiteral(value)}'`;
 }
 
 /** The `read_files(...)` / table reference a source contributes to a SELECT. */

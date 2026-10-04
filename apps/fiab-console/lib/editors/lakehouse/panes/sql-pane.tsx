@@ -12,6 +12,54 @@ import { EditorResultsSplit, SplitFillBox } from '../../components/editor-result
 import { useStyles, formatCell } from '../shared';
 import { useLakehouseCtx } from '../lakehouse-editor-context';
 
+/** A failed SQL tab response: the route's `error` and `code`, plus its `remediation` when it sends one. */
+export interface SqlFailure {
+  ok: false;
+  error?: string;
+  code?: string;
+  remediation?: string;
+}
+
+/**
+ * Codes for a query the SQL tab chose not to run, or could not confirm, as
+ * opposed to one that ran and failed. They are shown as a warning with the
+ * route's remediation, because the next step is the user's, not a retry.
+ */
+const NOT_RUN_CODES = new Set([
+  'query_construct_not_accepted',
+  'query_location_outside_root',
+  'lakehouse_storage_unbound',
+]);
+
+/**
+ * Whether a failed response is a query the route chose not to run (or could
+ * not confirm), rather than one that ran and failed. The one predicate every
+ * editor that shows these responses uses, so a caption and a bar cannot
+ * disagree about the same response.
+ */
+export function isSqlRefusal(result: { ok?: boolean; code?: string }): boolean {
+  return result.ok !== true && !!result.code && NOT_RUN_CODES.has(result.code);
+}
+
+/** The failure bar under the SQL editor: the reason, then what to do about it. */
+export function SqlRefusalOrError({ result }: { result: SqlFailure }) {
+  const notRun = isSqlRefusal(result);
+  return (
+    <MessageBar intent={notRun ? 'warning' : 'error'} layout="multiline">
+      {/* A refused name can be one long unbroken token; let it wrap rather than widen the bar. */}
+      <MessageBarBody style={{ overflowWrap: 'anywhere' }}>
+        <MessageBarTitle>{notRun ? 'Query not run' : 'Query failed'}</MessageBarTitle>
+        {result.error} {result.code && <Caption1>· {result.code}</Caption1>}
+        {result.remediation && (
+          <Body1 block style={{ marginTop: tokens.spacingVerticalXS }}>
+            <strong>What to do:</strong> {result.remediation}
+          </Body1>
+        )}
+      </MessageBarBody>
+    </MessageBar>
+  );
+}
+
 export function SqlPane() {
   const s = useStyles();
   const ctx = useLakehouseCtx();
@@ -55,12 +103,7 @@ export function SqlPane() {
           <>
             {sqlLoading && <Spinner size="small" label="Executing…" labelPosition="after" />}
             {!sqlLoading && sqlResult && !sqlResult.ok && (
-              <MessageBar intent="error">
-                <MessageBarBody>
-                  <MessageBarTitle>Query failed</MessageBarTitle>
-                  {sqlResult.error} {sqlResult.code && <Caption1>· {sqlResult.code}</Caption1>}
-                </MessageBarBody>
-              </MessageBar>
+              <SqlRefusalOrError result={sqlResult as SqlFailure} />
             )}
             {!sqlLoading && sqlResult?.ok && (
               <SplitFillBox className={s.tableWrap}>

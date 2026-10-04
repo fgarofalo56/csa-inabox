@@ -49,6 +49,8 @@ import { evaluateContractGate, resolveContractTable } from '@/lib/dataproducts/c
 import type { DataContract } from '@/lib/dataproducts/contract';
 import { apiServerError } from '@/lib/api/respond';
 import { withSession } from '@/lib/api/route-toolkit';
+import { tenantScopeId } from '@/lib/auth/session';
+import { accessPoliciesDocId } from '@/lib/governance/access-policy-doc';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -92,16 +94,28 @@ async function resolveEffectiveContract(
   return inline && typeof inline === 'object' ? (inline as DataContract) : undefined;
 }
 
-/** Read the tenant governance-policies doc (read-only — no seed write). */
-async function readPolicies(tenantId: string): Promise<any[]> {
-  try {
-    const c = await tenantSettingsContainer();
-    const { resource } = await c.item(`policies:${tenantId}`, tenantId).read<any>();
-    return Array.isArray(resource?.items) ? resource.items : [];
-  } catch (e: any) {
-    if (e?.code === 404) return [];
-    throw e;
-  }
+/**
+ * Read the governance policies that can satisfy the publish gate (read-only —
+ * no seed write): the tenant Access-policy doc (`access-policies:<tenantScope>`,
+ * managed by tenant admins) plus the owner's own `policies:<oid>` doc, which
+ * holds any Access policies recorded before the tenant doc existed.
+ */
+async function readPolicies(tenantId: string, tenantScope: string): Promise<any[]> {
+  const c = await tenantSettingsContainer();
+  const readItems = async (docId: string, pk: string): Promise<any[]> => {
+    try {
+      const { resource } = await c.item(docId, pk).read<any>();
+      return Array.isArray(resource?.items) ? resource.items : [];
+    } catch (e: any) {
+      if (e?.code === 404) return [];
+      throw e;
+    }
+  };
+  const [tenantItems, ownItems] = await Promise.all([
+    readItems(accessPoliciesDocId(tenantScope), tenantScope),
+    readItems(`policies:${tenantId}`, tenantId),
+  ]);
+  return [...tenantItems, ...ownItems];
 }
 
 /**
@@ -112,6 +126,7 @@ async function checkPublishPreconditions(
   id: string,
   state: Record<string, unknown>,
   tenantId: string,
+  tenantScope: string,
 ): Promise<PreconditionFailure | null> {
   // 1. >= 1 data asset attached — count EITHER the Datasets-tab `datasets` OR the
   //    Data-Map `dataAssets` (DP-3: the guided wizard attaches via dataAssets),
@@ -131,7 +146,7 @@ async function checkPublishPreconditions(
   //    to this product, OR the product's own `state.accessPolicy` (DP-3: the
   //    guided wizard / the access-policy route configure the latter). A product
   //    explicitly marked self-serve also satisfies this (no approval needed).
-  const policies = await readPolicies(tenantId);
+  const policies = await readPolicies(tenantId, tenantScope);
   const hasTenantPolicy = policies.some(
     (p: any) => p?.kind === 'Access' && p?.scope === `data-product:${id}` && p?.enabled !== false,
   );
@@ -197,7 +212,7 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest, { sessi
 
     // Publish is guarded by the three real preconditions.
     if (status === 'PUBLISHED') {
-      const failure = await checkPublishPreconditions(id, state, session.claims.oid);
+      const failure = await checkPublishPreconditions(id, state, session.claims.oid, tenantScopeId(session));
       if (failure) {
         return NextResponse.json(
           { ok: false, error: failure.message, preconditionFailed: failure },

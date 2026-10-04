@@ -25,7 +25,7 @@ import { reconcileThreadEdgesOnDelete, restoreThreadEdgesForItem } from '@/lib/t
 import { labelRank } from '@/lib/governance/label-propagation';
 import { recordItemVersion } from '@/lib/versions/item-version-store';
 import { cosmosIdFromLoomId } from './loom-content-id';
-import { autoBindOnCreate, stripLakehouseCreateState } from '@/lib/azure/auto-bind';
+import { autoBindOnCreate, stripCreateState } from '@/lib/azure/auto-bind';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
 import { emitLoomEvent } from '@/lib/events/webhook-emitter';
@@ -108,6 +108,14 @@ const NOT_RECYCLED = '(NOT IS_DEFINED(c.state._recycled) OR c.state._recycled = 
  *                          deleteKeyVaultSecret(). A SECOND item type, which is
  *                          why this list is keyed by KEY NAME and applied to
  *                          every item type rather than to one route.
+ *   state.sqlDatabase / state.sqlEndpointDatabase
+ *                        → items/lakehouse/[id]/query, which runs a tenant
+ *                          admin's SQL in the database the item records. The
+ *                          SQL tab runs in a server-chosen database, so these
+ *                          are written by the server only (the mirrored-
+ *                          databricks pairing writes `sqlDatabase` with
+ *                          `items.item().replace()`, which this rule does not
+ *                          cover, and no editor writes either key).
  *
  * None of these needed elevated privilege: a shortcut in the caller's OWN
  * workspace was enough, because the escalation is state the caller may write
@@ -148,6 +156,8 @@ export const SERVER_OWNED_STATE_KEYS: readonly string[] = [
   'keyVaultSecret',
   'engineObject',
   '_recycled',
+  'sqlDatabase',
+  'sqlEndpointDatabase',
 ];
 const SERVER_OWNED_SET = new Set<string>(SERVER_OWNED_STATE_KEYS);
 
@@ -895,10 +905,12 @@ export async function createOwnedItem(
   // built from (override allowed via an explicit state.sensitivityLabel).
   const baseState = state && typeof state === 'object' ? { ...state } : {};
   const labelledState = await applyLabelInheritance(baseState, session.claims.oid);
-  // A new lakehouse never keeps the keys that say where an item's files are:
-  // a caller that copies `state` from another item would otherwise hand the new
-  // item the source's container and root. Its own root comes from auto-bind.
-  const inheritedState = itemType === 'lakehouse' ? stripLakehouseCreateState(labelledState) : labelledState;
+  // A new item never keeps the keys that say which Azure object backs it: a
+  // caller that copies `state` from another item (promotion, branch-out, the
+  // Copilot `item_create` tool) or passes a request body would otherwise hand
+  // the new item another item's installer receipt, account, or lakehouse
+  // container and root. Its own binding comes from auto-bind or the installer.
+  const inheritedState = stripCreateState(itemType, labelledState);
   const item: WorkspaceItem = {
     id: crypto.randomUUID(),
     workspaceId,
@@ -1036,59 +1048,48 @@ export async function deleteOwnedItem(
  * which can't use loadOwnedItem (that filter would never see recycled items
  * and also requires the itemType up-front).
  *
- * ── #3706 — THIS NARROWNESS IS THE CONTROL. DO NOT "FIX" IT WIDER. ──────────
+ * ── #3706 — THIS NARROWNESS WAS THE CONTROL. RETRACTED BY OPERATOR DECISION
+ *    #4692 (2026-09-24). ───────────────────────────────────────────────────
  *
- * The workspace check below is a POINT READ in the CALLER's own partition
+ * The block below (preserved as HISTORY, because the reasoning is still true
+ * of the owner-only read that no longer exists here — only the CONCLUSION
+ * reversed) argued that restore/purge must stay owner-scoped because purge is
+ * an irreversible hard-delete. #3706 asked whether to widen; the operator has
+ * now decided: widen BOTH verbs to the canonical `authorizeWorkspace` ladder
+ * (Owner/Admin/Member + tenant admin), same as every other migrated item
+ * route (#3941). The asymmetry this comment worried about — the way IN being
+ * wider than the way OUT — is what the decision closes, not what it accepts.
+ *
+ * WHAT MADE THIS SAFE TO REVERSE, versus what the paragraphs below still
+ * document correctly: purge now EMITS an audit event naming the actor and the
+ * item (`item.purged`, below) — the asymmetry the original decision used to
+ * justify over-restriction (an anonymous irreversible delete) is closed
+ * separately from the authorization widening, in the SAME change, per #4692.
+ * Widening without that record would have converted a narrow-but-accountable
+ * operation into a wide-and-anonymous one.
+ *
+ * `recycle-bin-verbs-authz.test.ts` now pins the WIDENED matrix: a write-
+ * capable role (Owner/Admin/Member) admits both verbs, and a read-only Viewer
+ * still refuses both (canWrite:false fails the write-scoped gate below).
+ *
+ * ── PRESERVED HISTORY (the original #3706 reasoning) ────────────────────────
+ * The workspace check used to be a POINT READ in the CALLER's own partition
  * (`ws.item(workspaceId, tenantId)`, where `tenantId` is `session.claims.oid`).
- * That answers "did YOU create this workspace", not "may you write in it" — so
- * it is strictly narrower than the canonical `authorizeWorkspace` ladder used
- * elsewhere, and a tenant admin or a shared-workspace member is refused here
- * even though they can write in the workspace.
- *
- * That asymmetry looks like the #2947 defect (an `assertOwner` inlined under
- * another name, which 404'd legitimate members) and it will keep attracting the
- * same fix. It is NOT the same, because of what is on the other end:
- *
- *   restoreOwnedItem()  → un-deletes an item and re-indexes it
- *   purgeRecycledItem() → HARD-DELETES the Cosmos document, unrecoverably
- *
- * Widening this to workspace-write access would hand every member the workspace
- * was shared with AT WRITE SCOPE an irreversible purge over items they did not
- * delete, and — via restore — the ability to resurrect an item its owner
- * deliberately removed. Over-restrictive here is the SAFE direction: the failure
- * mode is "an admin must ask the owner to restore", not "a collaborator
- * destroyed the only copy".
- *
- * KNOWN ASYMMETRY, recorded rather than silently tolerated: the way INTO the bin
- * is WIDER than the way out. `softDeleteOwnedItem` resolves through
- * `loadOwnedItem` (:595) and therefore the canonical write-scoped ladder, so a
- * write-role member CAN bin an item they did not create — but only the workspace
- * creator can then list, restore or purge it. That is deliberate in the safe
- * direction (nothing is destroyed by the narrow side) but it is NOT a decided
- * end state; #3706 decided only that the fix is not "widen the way out".
- *
- * Note also what is NOT decided here: restore and purge are treated IDENTICALLY
- * today because they share this helper. The paragraph below states the condition
- * a FUTURE widening must meet (separate them); it does not argue that identical
- * treatment is correct now. If that question is ever opened, open it explicitly.
- *
- * If restore/purge genuinely must reach beyond the creator, that is a DESIGN
- * change, not a guard relaxation: it needs an explicit recycle-bin permission
- * with its own authorization ladder, restore and purge separated (restore is
- * recoverable, purge is not), and an audit record of who purged what. It is not
- * achieved by swapping this point read for a cross-partition query.
- *
- * `recycle-bin-tenancy.test.ts` pins both halves of this — the read is
- * partition-scoped to the caller, and a workspace whose `tenantId` does not
- * POSITIVELY equal the caller's is refused — so a later widening fails the
- * suite instead of shipping quietly.
- *
- * Note the tenant check is a POSITIVE match (`resource.tenantId !== tenantId`
- * with `tenantId` always populated), not the `caller && doc && caller !== doc`
- * shape that lets a claim-less session through by short-circuit. Keep it that
- * way (cf. commit bfd67ed1).
+ * That answered "did YOU create this workspace", not "may you write in it" —
+ * strictly narrower than the canonical `authorizeWorkspace` ladder used
+ * elsewhere, and it refused a tenant admin or a shared-workspace member even
+ * though they could write in the workspace. That asymmetry looked like the
+ * #2947 defect (an `assertOwner` inlined under another name, which 404'd
+ * legitimate members), but was judged not the same at the time because
+ * `purgeRecycledItem()` hard-deletes the Cosmos document unrecoverably while
+ * `restoreOwnedItem()` merely un-deletes. #4692 is the record of why that
+ * judgment changed rather than the judgment itself being wrong when made.
  */
-export async function loadRecycledItem(itemId: string, tenantId: string): Promise<WorkspaceItem | null> {
+export async function loadRecycledItem(
+  itemId: string,
+  tenantId: string,
+  opts: { session?: SessionPayload } = {},
+): Promise<WorkspaceItem | null> {
   const items = await itemsContainer();
   const { resources } = await items.items
     .query<WorkspaceItem>({
@@ -1103,14 +1104,20 @@ export async function loadRecycledItem(itemId: string, tenantId: string): Promis
   // 404 ("item not found in recycle bin") — never a 403 that would confirm the
   // id exists in someone else's tenant.
   if (!tenantId) return null;
-  const ws = await workspacesContainer();
-  try {
-    const { resource } = await ws.item(current.workspaceId, tenantId).read<Workspace>();
-    if (!resource || resource.tenantId !== tenantId) return null;
-  } catch (e: any) {
-    if (e?.code === 404) return null;
-    throw e;
-  }
+  if (!current.workspaceId) return null;
+  // #4692 — THE CANONICAL LADDER, replacing the owner-only partition point
+  // read this helper used to do (see the preserved history above). Both
+  // restore and purge are mutations, so this stays WRITE-scoped
+  // (Owner/Admin/Member) — never `{ allowReadRoles: true }` — a read-only
+  // Viewer must still be refused on the irreversible purge path exactly as on
+  // restore. Mirrors `loadOwnedItem` (:595), which is the same delegation for
+  // every other item verb in this file.
+  const access = await resolveWorkspaceAccessByOid(
+    tenantId,
+    current.workspaceId,
+    await accessOptsFor(tenantId, opts.session),
+  );
+  if (!access || !access.canWrite) return null;
   return current;
 }
 
@@ -1198,8 +1205,9 @@ export async function softDeleteOwnedItem(
 export async function restoreOwnedItem(
   itemId: string,
   tenantId: string,
+  opts: { session?: SessionPayload } = {},
 ): Promise<WorkspaceItem | null> {
-  const current = await loadRecycledItem(itemId, tenantId);
+  const current = await loadRecycledItem(itemId, tenantId, opts);
   if (!current) return null;
 
   // Best-effort ADLS restore via undeletePath().
@@ -1233,12 +1241,41 @@ export async function restoreOwnedItem(
  * Purge (hard-delete) a soft-deleted item from the Recycle bin. Only operates
  * on items that are currently recycled and owned by the caller's tenant.
  * Returns false when the id is not a recycled item the tenant owns.
+ *
+ * #4692 — AUDITED, where it never was. Measured on the pre-#4692 tree: every
+ * other mutation in this file emits `emitLoomEvent({...})`
+ * (`createOwnedItem` :945, `updateOwnedItem` :1004, `deleteOwnedItem` :1034,
+ * `softDeleteOwnedItem` :1194) but this function emitted NOTHING. That was
+ * survivable only because purge was owner-only, so the actor was implied by
+ * who could reach the call at all. Widening authorization to the canonical
+ * ladder (above, via `loadRecycledItem`) removes that implication: a Member
+ * who did not create the item can now permanently destroy it through a path
+ * that wrote no trace. Emitting `item.purged` BEFORE the destructive calls
+ * below would log an event for a request that still might be refused by one
+ * of them failing atomically; emitting it AFTER (as every sibling in this
+ * file does with its own side effects) would be silent if the Cosmos delete
+ * itself failed. It is emitted immediately after the one call that, on this
+ * line reaching it, cannot be undone (`items.item(...).delete()`) — the same
+ * placement `deleteOwnedItem` and `softDeleteOwnedItem` use for theirs.
  */
-export async function purgeRecycledItem(itemId: string, tenantId: string): Promise<boolean> {
-  const current = await loadRecycledItem(itemId, tenantId);
+export async function purgeRecycledItem(
+  itemId: string,
+  tenantId: string,
+  opts: { session?: SessionPayload } = {},
+): Promise<boolean> {
+  const current = await loadRecycledItem(itemId, tenantId, opts);
   if (!current) return false;
   const items = await itemsContainer();
   await items.item(current.id, current.workspaceId).delete();
+  const actorOid = opts.session?.claims.oid ?? tenantId;
+  emitLoomEvent({
+    type: 'item.purged',
+    tenantId,
+    subject: current.id,
+    subjectName: current.displayName,
+    actor: { oid: actorOid, upn: opts.session?.claims.upn || opts.session?.claims.email },
+    data: { itemType: current.itemType, workspaceId: current.workspaceId },
+  });
   void deleteLoomDoc(`it:${current.id}`);
   if (current.itemType === 'data-product') void deleteDataProductDoc(`dp:${current.id}`);
   void deleteGovernanceItem(current.id);

@@ -141,6 +141,22 @@ const TOUCH_EXEMPT = new Map([
   // is pinned by lib/auth/__tests__/refresh.test.ts ("returns 401 { reauth:true } …").
   ['apps/fiab-console/app/api/auth/refresh/route.ts',
    '#4805: authVia carry + device-code expiry clamp in the re-mint only, auth prologue untouched; codemod SKIPS (401 is the reauth contract). 401 pinned by refresh.test.ts'],
+  // #4861 touched the two landing-zone attach routes for ONE line each: the
+  // Resource Graph id literal is built with escapeKqlLiteral (KQL backslash
+  // rule) instead of T-SQL quote doubling. The auth prologue is UNTOUCHED.
+  //
+  // THE CODEMOD REFUSES BOTH, falsifiable in one command each:
+  //   node scripts/codemods/migrate-route-toolkit.mjs --file="app/api/landing-zones/[id]/attach/route.ts"
+  //   → SKIPPED (POST: getSession() without the exact 401 guard)
+  // The prologue is getSession → enforceCapability('admin.attach-service',
+  // 'Admin') → pdpCheck; the capability gate issues the 401 itself, so there is
+  // no bare session guard for withSession to replace. COMPENSATING CONTROL:
+  // attach-routes.test.ts pins, for both routes, that the gate verdict is
+  // returned before any ARG call. FOLLOW-UP: #4862.
+  ['apps/fiab-console/app/api/landing-zones/[id]/attach/route.ts',
+   '#4861: ARG id literal escaping only, auth prologue untouched; codemod SKIPS (401 issued by enforceCapability). Gate-first pinned by attach-routes.test.ts; migration tracked in #4862'],
+  ['apps/fiab-console/app/api/landing-zones/[id]/attach/preflight/route.ts',
+   '#4861: ARG id literal escaping only, auth prologue untouched; codemod SKIPS (401 issued by enforceCapability). Gate-first pinned by attach-routes.test.ts; migration tracked in #4862'],
   // #3549/#3551 touched this route ONLY inside Phase-1 item creation, to backfill
   // the bundle definition onto a name-matched EXISTING item that has none. The
   // dedup path pushed `status:'existed'` and wrote nothing while still handing
@@ -793,6 +809,16 @@ const TOUCH_EXEMPT = new Map([
    '#3941: owner-only → authorizeItemWorkspace WIDENING only, 401 prologue untouched; codemod SKIPS (GET: 401 not the exact guard shape). 401 pinned by lineage/__tests__/route.test.ts:108'],
   ['apps/fiab-console/app/api/items/[type]/[id]/sensitivity-label/route.ts',
    '#3941: owner-only → authorizeItemWorkspace WIDENING only, all four 401 prologues untouched; codemod SKIPS every handler (401 not the exact guard shape). 401 pinned by sensitivity-label/__tests__/route.test.ts:110'],
+  // #4692 touched this route's POST/DELETE ONLY to thread `{ session: s }`
+  // through to `restoreOwnedItem`/`purgeRecycledItem` (item-crud.ts), which now
+  // authorize via the canonical ladder instead of an owner-only point read. The
+  // three handlers' own `getSession()` → 401 prologues are byte-identical;
+  // migrating the whole route onto the toolkit (GET's cached per-workspace
+  // ownership loop included) is a separate, wider change than this PR's scope
+  // and would put unrelated regression risk on a 404-vs-401 shape this PR does
+  // not touch.
+  ['apps/fiab-console/app/api/onelake/recycle/route.ts',
+   '#4692: POST/DELETE thread `{ session }` to the canonical-ladder-backed restore/purge only; 401 prologues untouched on all three handlers — migrating the whole route to the toolkit is separate scope'],
 ]);
 
 /** All route files (repo-relative POSIX paths) under app/api. */

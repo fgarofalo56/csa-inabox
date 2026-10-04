@@ -161,7 +161,7 @@ def test_seam_an_unlabelled_g1_item_takes_the_per_kind_default_and_names_it(tmp_
     monkeypatch.setattr(tick, "sh", _labels_stub(["lane:console", "sp:1"]))
     seen = {}
 
-    def _closer(_policy, _repo, _number, _state, detail, _kind, _issue_class, _binding):
+    def _closer(_policy, _repo, _number, _state, detail, _kind, _issue_class, _binding, **_kwargs):
         seen["detail"] = detail
         return "closed (test stub)"
 
@@ -196,7 +196,7 @@ def test_main_refuses_a_policy_missing_the_drift_gov_row(tmp_path, monkeypatch, 
     monkeypatch.setattr(tick, "sh", _labels_stub(["drift-gov"]))
     closed = []
     monkeypatch.setattr(tick, "close_issue_on_github",
-                        lambda *a: closed.append(a) or "closed (test stub)")
+                        lambda *a, **_k: closed.append(a) or "closed (test stub)")
     monkeypatch.setattr(sys, "argv", ["tick.py", "--record-receipt", "4408",
                                       "--from-run", "36053481220"])
 

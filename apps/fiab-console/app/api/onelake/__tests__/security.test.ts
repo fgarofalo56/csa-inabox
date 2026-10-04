@@ -319,6 +319,18 @@ describe('DELETE /api/onelake/security', () => {
     expect(revokeContainerRoleAssignment).not.toHaveBeenCalled();
   });
 
+  it('400, not 502, when the storage client refuses the id as malformed', async () => {
+    // Breaks if the route maps an ArmScopeSegmentError to the upstream-failure
+    // status (502): the refusal is about the caller's input.
+    (getSession as any).mockReturnValue(adminSess);
+    const { ArmScopeSegmentError } = await import('@/lib/azure/arm-scope-segment');
+    (listContainerRoleAssignments as any).mockRejectedValue(new ArmScopeSegmentError('container', 'bronze', 'test refusal'));
+    const res = await del(VALID);
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/test refusal/);
+    expect(revokeContainerRoleAssignment).not.toHaveBeenCalled();
+  });
+
   it('404 on a well-formed id that is not a current assignment on that container', async () => {
     // Breaks if the membership check is removed: the id parses, so the handler
     // would revoke it (200) although the container lists no such assignment.

@@ -5030,6 +5030,36 @@ const ADMIN_SHAPE_UNSCOPED = new Map([
     },
   ],
   [
+    'app/api/items/lakehouse/[id]/query/route.ts:POST',
+    {
+      verdict: 'ORG-WIDE',
+      requires: ['guardAdxItemRequest(', 'isTenantAdmin(', 'confineToItem('],
+      why:
+        'ORG-WIDE (function scope). Every caller is first authorized against the lakehouse item by ' +
+        'guardAdxItemRequest, which carries the workspace ladder. isTenantAdmin only decides whether ' +
+        'the SQL text also passes confineToItem (the item-root classifier); a tenant admin runs the ' +
+        'text unchanged. No workspace document is read on the admin branch.',
+    },
+  ],
+  // The three dataset routes share one shape (#4822, #4826): the item check runs first, and
+  // the admin flag only decides whether a caller with no readable dataset item may still open
+  // a Foundry data asset by name.
+  ...['app/api/items/dataset/[id]/route.ts:GET',
+    'app/api/items/dataset/[id]/preview/route.ts:GET',
+    'app/api/items/dataset/[id]/lineage/route.ts:GET'].map((key) => [
+    key,
+    {
+      verdict: 'ORG-WIDE',
+      requires: ['resolveItemAccessByOid(', 'isTenantAdmin(', 'datasetItemNotFound('],
+      why:
+        'ORG-WIDE (the admin branch only). `resolveItemAccessByOid(session, id, \'dataset\')` runs ' +
+        'first (checked by 8a-8e) and a caller with no readable dataset item who is not a tenant ' +
+        'admin is answered 404 by datasetItemNotFound before any Foundry call. The isTenantAdmin ' +
+        'test only lets a tenant admin name a Foundry data asset directly; no workspace document is ' +
+        'read on that branch. Dataset items are not yet linked to Foundry assets (#4826).',
+    },
+  ]),
+  [
     'app/api/lakehouse/permissions/route.ts:GET',
     {
       verdict: 'ORG-WIDE',
@@ -5045,6 +5075,76 @@ const ADMIN_SHAPE_UNSCOPED = new Map([
         'SQL-plane tabs list the shared dedicated pool\'s catalogue for any caller the item check ' +
         'admits (not narrowed to the item\'s tables; #4850). Both tokens are pinned: drop the item branch and ' +
         'this entry no longer describes the function.',
+    },
+  ],
+  [
+    'app/api/items/_lib/warehouse-item-binding.ts:authorizeWarehouseTarget',
+    {
+      verdict: 'ORG-WIDE',
+      requires: ['isTenantAdmin(', 'authorizeItemWorkspace(', 'allowReadRoles: true'],
+      why:
+        'ORG-WIDE (the admin branch only), #3669. The `isTenantAdmin` test is reached ONLY when the ' +
+        'Databricks SQL warehouse carries no `loom_item_id` tag, or a tag naming no ' +
+        '`databricks-sql-warehouse` item: no workspace and no item is in play, the warehouse is a ' +
+        'resource of the DEPLOYMENT\'s Databricks workspace, and a non-admin gets the coded 404. A ' +
+        'warehouse whose tag names an item takes the other branch, `authorizeItemWorkspace(session, ' +
+        '{ workspaceId, itemId, allowReadRoles: true })` with the item\'s workspace, which never ' +
+        'consults the admin flag here and returns its own 409 on a tenant mismatch. The three tokens ' +
+        'pin PRESENCE only: this guard checks that each substring is in the masked body, not where ' +
+        'it sits or in which order, so moving the admin test above the item branch would still pass ' +
+        'here. That ORDER is enforced by vitest, in ' +
+        'app/api/items/[type]/[id]/ai-function/__tests__/warehouse-binding.test.ts: "goes through ' +
+        'the ladder for a tagged warehouse, and its 409 passes through" (an admin short-circuit ' +
+        'turns that 409 into a 200) and its positive pair "runs on a tagged warehouse in a ' +
+        'workspace the resolver grants".',
+    },
+  ],
+  // The two serverless SQL routes that share the SQL tab's classifier (#4841). Same shape as
+  // `lakehouse/[id]/query/route.ts:POST` above: the item check runs first, and the admin flag
+  // only picks the target, the database and whether the text is confined.
+  [
+    'app/api/items/synapse-serverless-sql-pool/[id]/query/route.ts:POST',
+    {
+      verdict: 'NARROWS',
+      requires: ['guardSqlPoolQueryItem(', 'isTenantAdmin(', 'confineToWorkspaceLakehouses('],
+      why:
+        'NARROWS (as to item and workspace). `guardSqlPoolQueryItem(id)` runs first and returns its ' +
+        'refusal before the body is read; it resolves the item\'s workspace from the item through ' +
+        'guardSynapseItemRequest -> authorizeItemWorkspace (checked by 8a-8e). The isTenantAdmin ' +
+        'read that follows admits no item and no workspace: it picks the target and database ' +
+        '(the requested one for a tenant admin, master on the reader pool otherwise) and, for a ' +
+        'caller who is not a tenant admin, sends the text through confineToWorkspaceLakehouses, ' +
+        'whose roots come from the guarded item\'s own workspaceId.',
+    },
+  ],
+  [
+    'app/api/items/semantic-model/[id]/direct-lake/route.ts:POST',
+    {
+      verdict: 'NARROWS',
+      requires: ['loadOwnedItem(', 'isTenantAdmin(', 'confineToWorkspaceLakehouses('],
+      why:
+        'NARROWS (as to item and workspace). The isTenantAdmin read sits inside `if (rawSql && ' +
+        'owned)`, so it is reached only after `loadOwnedItem(id, \'semantic-model\', ...)` has ' +
+        'returned the item at write level (null -> 404). It admits no item and no workspace: it ' +
+        'picks the target (serverless master for a tenant admin, the Direct Lake reader pool ' +
+        'otherwise) and, for a caller who is not a tenant admin, sends the text through ' +
+        'confineToWorkspaceLakehouses with roots from the owned item\'s workspaceId, never the ' +
+        'body\'s Power BI workspaceId.',
+    },
+  ],
+  [
+    'app/api/items/[type]/[id]/visual-query/route.ts:POST',
+    {
+      verdict: 'NARROWS',
+      requires: ['guardSqlPoolQueryItem(', 'isTenantAdmin(', 'confineToWorkspaceLakehouses('],
+      why:
+        'NARROWS (as to item and workspace). The isTenantAdmin read is `serverless && ' +
+        'isTenantAdmin(session)`, so it counts only for type synapse-serverless-sql-pool, and for ' +
+        'that type `guardSqlPoolQueryItem(id)` has already returned (its refusal before the body is ' +
+        'read). It admits no item and no workspace: it picks the target and database for the ' +
+        'generated SQL and, for a caller who is not a tenant admin, sends it through ' +
+        'confineToWorkspaceLakehouses with roots from the guarded item\'s workspaceId. The other ' +
+        'engine types never read the flag.',
     },
   ],
 ]);
@@ -5545,6 +5645,240 @@ for (const p of ADMIN_SHAPE_PROBES) {
       'Section 8h judges ZERO functions on the current tree, so `violations: 0` there says ' +
       'nothing on its own — these probes are the only thing standing between "8h is watching" ' +
       'and "8h looks at an empty set", which is what #3877 was. Fix the section, never the probe.',
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 8i-W: WRAPPER-MEDIATED ADMIN GRANTS — withTenantAdmin (#4004)
+// ════════════════════════════════════════════════════════════════════════════
+//
+// WHAT WAS MEASURED. 8h's own-body model requires the GRANTING function's TEXT
+// to carry an isTenantAdmin-bearing condition — that is how `ADMIN_VERDICT_
+// PREFILTER` decides which files are even worth masking, and how `adminShape
+// FunctionsIn` decides which of a file's functions grant. `withTenantAdmin`
+// (`apps/fiab-console/lib/api/route-toolkit.ts:170`) grants on the SAME
+// verdict, the SAME way in substance — every caller of the handler it wraps is
+// already a tenant admin — but the condition lives in the WRAPPER, never in
+// the handler's own text, and the wrapper's token is `withTenantAdmin(`, not
+// `isTenantAdmin(`. MEASURED on the tree this change ships: 93 route/lib files
+// call `withTenantAdmin`, support 110 wrapped handlers between them, and 0 of
+// those 93 files contain the literal `isTenantAdmin(` 8h's prefilter requires
+// — every one of them was invisible to 8h AND to 8i, which is the #4004
+// finding: the admin-bypass family's own test (8i, three spellings already
+// caught) simply never RAN on a fourth where the grant is structural rather
+// than textual.
+//
+// THE FIX DOES NOT WIDEN 8h'S OWN-BODY MODEL OR ADMIN_SHAPE_UNSCOPED. A
+// wrapped handler's own text never conditions on the verdict, so there is
+// nothing for that census's NARROWS/ORG-WIDE/UNRESOLVED taxonomy to describe
+// — widening it would mean inventing a verdict 8h never computed. Instead,
+// every handler `withTenantAdmin` wraps is admitted DIRECTLY to 8i's existing
+// family-shape test (`familyShapeVerdict`: a workspace-document read with no
+// tenant comparison and no delegation) — the SAME function the tree-scan
+// population above calls, not a reimplementation of it. Membership in that
+// family does not depend on how the grant was spelled, only on whether the
+// read it reaches is ever subjected to the caller's tenant.
+//
+// SCOPED TO `withTenantAdmin` ONLY, not to every wrapper `route-toolkit.ts`
+// exports. `withDlzAccess` grants on domain-admin-or-tenant-admin (a WIDER
+// verdict than `isTenantAdmin` alone), `withCapability` grants on a named
+// capability role, and `withApprovalAuthority` resolves access-approval
+// authority (`lib/access/approval-authority.ts`, already its own
+// ADMIN_SHAPE_UNSCOPED entry) — three different verdicts, not three spellings
+// of this one. Folding them in here would apply this family's reasoning
+// ("the ONLY thing standing between a caller and a cross-tenant workspace
+// read is `isTenantAdmin`") to populations it was never built to judge.
+const ADMIN_WRAPPER_NAMES = ['withTenantAdmin'];
+const ADMIN_WRAPPER_TOKEN = new RegExp(`\\b(?:${ADMIN_WRAPPER_NAMES.join('|')})\\s*\\(`);
+
+/**
+ * Every handler ONE module wraps in `withTenantAdmin(…)`, with the family-shape
+ * verdict (or null) for each. Extracted so the tree scan and the embedded
+ * controls below run the SAME code — a probe that reimplements the judgement
+ * proves only that the probe works.
+ *
+ * `declaredFunctions` already resolves `export const GET = withTenantAdmin(
+ * async (…) => {…})` to a callable named `GET` whose body IS the wrapped
+ * handler (round 5's `wrappedCallable`, written for exactly this "wrapper
+ * composes a route export" shape and reused here rather than re-parsed). What
+ * this function adds is deciding WHICH wrapper sits between the `=` and that
+ * callable — `head` is the declaration text up to the body brace, and it must
+ * contain the wrapper token so a route using `withDlzAccess` or a plain
+ * `withSession` is never admitted under this section.
+ */
+function wrapperMediatedHandlers(rawSrc) {
+  const masked = mask(desugarStaticKeys(rawSrc));
+  const out = [];
+  for (const fn of declaredFunctions(masked)) {
+    const head = masked.slice(fn.declAt, fn.bodyStart);
+    if (!ADMIN_WRAPPER_NAMES.some((w) => head.includes(`${w}(`))) continue;
+    const line = masked.slice(0, fn.declAt).split('\n').length;
+    out.push({ fn, line, reader: familyShapeVerdict(fn) });
+  }
+  return out;
+}
+
+/**
+ * Reviewed exemptions from the finding above — a function `withTenantAdmin`
+ * wraps DOES reach a workspace-document read with no call this file's
+ * `TENANT_SUBJECTION` regex recognises, but the read is bounded some OTHER
+ * way a human read and is recording here rather than silently dropping
+ * (`assertion-design.md` #5 — an un-killable finding is disclosed, not
+ * counted). Keyed `rel:fnName`, same convention as `ADMIN_SHAPE_UNSCOPED`.
+ * `requires` pins the argument so the entry goes stale, loudly, the moment the
+ * code it describes changes (#4007's lesson applied here on day one rather
+ * than after a round of drift).
+ */
+const WRAPPER_FAMILY_EXEMPT = new Map([
+  [
+    'app/api/admin/batch-labeling/route.ts:GET',
+    {
+      requires: ['workspacesContainer(', 'partitionKey: tenantId'],
+      why:
+        'REVIEWED (#4004). `workspacesContainer()` is read, but the query is bounded by ' +
+        '`WHERE c.tenantId = @t` AND the point query runs `{ partitionKey: tenantId }` — both `@t` ' +
+        "and the partition key are the LOCAL `tenantId`, bound two lines above to `s.claims.oid`, " +
+        "the CALLER's OWN oid from their OWN session. The read can only ever return the admin's own " +
+        'tenant\'s workspaces; there is no second tenant it could cross into. It trips this family\'s ' +
+        'heuristic only because the subjection is an inline Cosmos predicate on the caller\'s own ' +
+        'identity rather than one of TENANT_SUBJECTION\'s named calls, which is a gap in what this ' +
+        'heuristic can recognise, not a gap in the route.',
+    },
+  ],
+]);
+
+let wrapperHandlersExamined = 0;
+let wrapperFamilyFindings = 0;
+let wrapperExemptPinsChecked = 0;
+let wrapperExemptPinFailures = 0;
+const wrapperExemptSeen = new Set();
+for (const file of files) {
+  const rel = file.slice(CONSOLE_ROOT.length + 1);
+  if (!ADMIN_WRAPPER_TOKEN.test(readSource(file))) continue;
+  for (const { fn, line, reader } of wrapperMediatedHandlers(readSource(file))) {
+    wrapperHandlersExamined += 1;
+    if (!reader) continue;
+    wrapperFamilyFindings += 1;
+    const key = `${rel}:${fn.name}`;
+    const exempt = WRAPPER_FAMILY_EXEMPT.get(key);
+    if (exempt) {
+      wrapperExemptSeen.add(key);
+      for (const token of exempt.requires ?? []) {
+        if (fn.body.includes(token)) { wrapperExemptPinsChecked += 1; continue; }
+        wrapperExemptPinFailures += 1;
+        fail(
+          `${rel}:${line}: ${fn.name}() no longer contains \`${token}\`, which its ` +
+            'WRAPPER_FAMILY_EXEMPT entry pins as the reason this read is self-scoped. The entry is ' +
+            'not automatically stale — re-review and either rewrite it to describe what is there now ' +
+            'or, if the token went missing by accident, treat the CODE as the defect (#4007).',
+        );
+      }
+      continue;
+    }
+    fail(
+      `${rel}:${line}: ${fn.name}() is gated by withTenantAdmin(), and its own body reaches a ` +
+        `workspace-document read (\`${reader.id}\`: ${reader.what}) with NO tenant comparison and no ` +
+        "delegation anywhere in it — the #3833/#3825/#3891 admin-bypass family, admitted here " +
+        'because the grant is STRUCTURAL (the wrapper already required tenant-admin standing to ' +
+        'reach this code) rather than textual (#4004). Fix it the same way 8i does: call ' +
+        '`sameTenantConfirmed(callerTid, doc.tid)` from `lib/auth/tenant-boundary.ts`, or delegate to ' +
+        '`resolveWorkspaceAccessByOid`. If the read is already bounded some other way (an inline ' +
+        "WHERE/partitionKey clause on the caller's OWN tid/oid, for instance), record it in " +
+        'WRAPPER_FAMILY_EXEMPT with that argument and the tokens that make it true — do not let this ' +
+        'finding disappear silently.',
+    );
+  }
+}
+for (const k of [...WRAPPER_FAMILY_EXEMPT.keys()].filter((x) => !wrapperExemptSeen.has(x))) {
+  fail(
+    `WRAPPER_FAMILY_EXEMPT entry \`${k}\` matches no current finding. Either the route was fixed ` +
+      '(delete the entry and say so) or this section stopped SEEING it — re-review before deleting, ' +
+      'same convention as ADMIN_SHAPE_UNSCOPED (#3877).',
+  );
+}
+
+// ── 8i-W EMBEDDED CONTROLS — positive, negative, and the wrapper-scope bound ─
+//
+// THE TREE CANNOT BE THE EVIDENCE: batch-labeling is the ONE tree hit and it
+// is exempted above, so a from-scratch break in this section would print
+// `0 finding(s)` — exactly what a correctly-exempted population also prints.
+// Each control below runs `wrapperMediatedHandlers`, the REAL function the
+// tree scan calls, against a synthetic module.
+const WRAPPER_FAMILY_PROBES = [
+  {
+    name: 'W1 POSITIVE — withTenantAdmin wraps an unsubjected workspace read, ' +
+      'and NOTHING in the module ever writes the literal `isTenantAdmin(` token',
+    fnName: 'GET',
+    expectPresent: true,
+    expectFire: true,
+    src: `
+      import { withTenantAdmin } from '@/lib/api/route-toolkit';
+      import { workspacesContainer } from '@/lib/azure/cosmos-client';
+      export const GET = withTenantAdmin(async (_req, { session }) => {
+        const c = await workspacesContainer();
+        const { resources } = await c.items.query({ query: 'SELECT * FROM c WHERE c.id = @id' }).fetchAll();
+        return NextResponse.json({ ok: true, data: resources });
+      });`,
+  },
+  {
+    name: 'W2 NEGATIVE CONTROL — same wrapper, but the read IS subjected. Must NOT fire.',
+    fnName: 'GET',
+    expectPresent: true,
+    expectFire: false,
+    src: `
+      import { withTenantAdmin } from '@/lib/api/route-toolkit';
+      import { readWorkspaceById } from '@/lib/auth/workspace-access';
+      import { sameTenantConfirmed } from '@/lib/auth/tenant-boundary';
+      export const GET = withTenantAdmin(async (_req, { session, params }) => {
+        const doc = await readWorkspaceById(params.id);
+        if (!doc || !sameTenantConfirmed(session.claims.tid, doc.tid)) return apiNotFound();
+        return NextResponse.json({ ok: true, data: doc });
+      });`,
+  },
+  {
+    name: 'W3 NEGATIVE CONTROL — a DIFFERENT wrapper, same unsubjected read. Must not even be PRESENT ' +
+      '(this section is scoped to withTenantAdmin only — withDlzAccess grants on a wider verdict)',
+    fnName: 'GET',
+    expectPresent: false,
+    expectFire: false,
+    src: `
+      import { withDlzAccess } from '@/lib/api/route-toolkit';
+      import { workspacesContainer } from '@/lib/azure/cosmos-client';
+      export const GET = withDlzAccess('cost', async (_req, { session }) => {
+        const c = await workspacesContainer();
+        const { resources } = await c.items.query({ query: 'SELECT * FROM c' }).fetchAll();
+        return NextResponse.json({ ok: true, data: resources });
+      });`,
+  },
+];
+let wrapperFamilyProbesPassed = 0;
+for (const p of WRAPPER_FAMILY_PROBES) {
+  const hit = wrapperMediatedHandlers(p.src).find((h) => h.fn.name === p.fnName);
+  const present = Boolean(hit);
+  if (present !== p.expectPresent) {
+    fail(
+      `8i-W control ${p.name}: expected the wrapped-handler population to ${p.expectPresent ? '' : 'NOT '}` +
+        `contain \`${p.fnName}\` and it did ${present ? '' : 'not'}. If W3 is the one failing, the ` +
+        'wrapper-token match has widened past `withTenantAdmin` alone.',
+    );
+    continue;
+  }
+  if (present && (hit.reader !== null) !== p.expectFire) {
+    fail(
+      `8i-W control ${p.name}: expected the family-shape judgement to ${p.expectFire ? 'FIRE' : 'stay SILENT'} ` +
+        `and it did ${hit.reader ? 'FIRE' : 'not'}. ${p.expectFire
+          ? 'A wrapper-mediated member of the admin-bypass family is invisible to this section.'
+          : 'The section is accusing a SAFE pattern.'}`,
+    );
+    continue;
+  }
+  wrapperFamilyProbesPassed += 1;
+}
+if (wrapperFamilyProbesPassed !== WRAPPER_FAMILY_PROBES.length) {
+  fail(
+    `8i-W: ${wrapperFamilyProbesPassed} of ${WRAPPER_FAMILY_PROBES.length} wrapper-mediated controls ` +
+      'passed. Asserted exactly, so a control that silently stopped matching reads as a failure ' +
+      'rather than as a smaller suite.',
   );
 }
 
@@ -6702,6 +7036,17 @@ console.log(`[tid-boundary-chokepoint]   8i admin-bypass FAMILY shape (#3833/#38
             `controls passed: ${familyProbesPassed}/${FAMILY_SHAPE_PROBES.length} — three known ` +
             'spellings, a FOURTH nobody has written, and two safe patterns asserted NOT to fire, ' +
             'each through the real judgement so the section is not blind when the tree is clean');
+// #4004: THE WRAPPER-MEDIATED POPULATION, reported with the same shape as 8i's
+// line above — examined / findings / exemptions / controls — because a grant
+// that is admitted only to be silently cleared is the same unqualified-zero
+// failure #3877 and #4007 both name.
+console.log(`[tid-boundary-chokepoint]   8i-W wrapper-mediated admin grants — withTenantAdmin ` +
+            `(#4004): ${wrapperHandlersExamined} handler(s) examined, ${wrapperFamilyFindings} ` +
+            `reaching the same unsubjected workspace-document read, ${wrapperExemptSeen.size} ` +
+            `reviewed-exempt (pins checked: ${wrapperExemptPinsChecked}, failed: ` +
+            `${wrapperExemptPinFailures}); controls passed: ${wrapperFamilyProbesPassed}/` +
+            `${WRAPPER_FAMILY_PROBES.length} — positive, subjected-negative, and a wrapper-scope ` +
+            'bound (a different wrapper must not enter this population at all)');
 // PRINTED BECAUSE A CONTENT PIN NOBODY CAN SEE IS A MEMBERSHIP TEST AGAIN
 // (#4007). The count is the number of TOKENS checked against real function
 // bodies this run, not the number of entries — an entry with no `requires`

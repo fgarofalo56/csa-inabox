@@ -30,14 +30,30 @@
  *          limit?, options?:{ labels?, fields?, targetLang?, maxTokens? } }
  *        Databricks path  → { ok, engine:'databricks', sql, columns, rows, rowCount, executionMs }
  *        AOAI path        → { ok, engine:'aoai', fn, column, input, result, model, usage }
+ *
+ * WAREHOUSE ACCESS (#3669). On the Databricks path the caller names
+ * `warehouseId`. The route runs on it only when its live `loom_item_id` tag links
+ * it to a SQL warehouse item in a workspace the caller can read (any workspace
+ * role); a warehouse with no link is open to tenant admins only. Every other case
+ * is a 404 with `code: 'warehouse_not_available'` and a remediation, and a
+ * Databricks/Cosmos read failure is a 502 with `code: 'warehouse_unverifiable'` —
+ * nothing runs on either. The Gov boundaries never reach this path: they use the
+ * AOAI substitute, which takes no warehouse.
+ *
+ * THE DEPLOYMENT-SHARED WAREHOUSE STAYS ADMIN-ONLY. `loom-default` (and
+ * `loom-gov-default`, and whatever `LOOM_DATABRICKS_SQL_WAREHOUSE_ID` names) is
+ * created by the bootstrap, carries no item link, and is never linked to one —
+ * neither the editor's self-heal nor the admin "Link to this item" action will
+ * tag it (`isDeploymentSharedWarehouse`). So it is runnable here by tenant admins
+ * only. A non-admin sent here with it gets the 404 + remediation above, and the
+ * SQL warehouse editor's AI functions panel offers "Use Azure OpenAI instead",
+ * which re-sends the call WITHOUT `warehouseId` and takes the AOAI path below.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { isGovCloud } from '@/lib/azure/cloud-endpoints';
 import {
   databricksConfigGate,
   executeStatement,
-  getWarehouse,
 } from '@/lib/azure/databricks-client';
 import {
   callAiFn,
@@ -50,10 +66,52 @@ import {
   type AiFnOptions,
 } from '@/lib/azure/ai-functions-client';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
-import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { buildAiSqlExpr, isEnrichmentOp, opHasDbxBuiltin } from '@/lib/azure/ai-enrichment-client';
+import { withSession } from '@/lib/api/route-toolkit';
+import { guardSynapseItemRequest, UNSAVED_ITEM_ID } from '@/app/api/items/_lib/synapse-item-scope';
+import { authorizeWarehouseTarget } from '../../../_lib/warehouse-item-binding';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+/**
+ * POST is ITEM-SCOPED: the caller must hold a role on the `[type]/[id]` item's
+ * workspace (read roles admitted: the statement is a fixed `SELECT ai_*(col)`
+ * over identifier-validated input, and the AOAI paths send text to the model;
+ * neither writes). `guardSynapseItemRequest` is the guard the sibling
+ * `databricks-sql-warehouse/[id]/query` runs; it fails CLOSED on an id that
+ * names no item of `[type]` and on a Cosmos error, and refuses with 404 (not
+ * 403) so a foreign item's existence is not disclosed.
+ *
+ * On the Databricks path, `warehouseId`, `table`, `catalog` and `schema` are
+ * read from the request body, as on the sibling `query` route; the warehouse
+ * named there is a SEPARATE authorization from the route's own `[type]/[id]`
+ * item above — see WAREHOUSE ACCESS in the file header. Both checks must pass:
+ * the caller needs a role on the route's own item AND the named warehouse must
+ * be linked to a SQL warehouse item the caller can read (or be a tenant admin).
+ *
+ * GET stays session-only: it returns the static function list and env-derived
+ * capability flags, reads no item data, and is allowlisted on that basis in
+ * `scripts/ci/check-route-guards.mjs`.
+ */
+const ITEM_UNREACHABLE =
+  'This item is not available to you. Either it does not exist, or you have no role in its ' +
+  'workspace. Ask a workspace owner to share it with you.';
+
+/**
+ * The unsaved-item gate: the helper can mount on `/items/<type>/new`, and the
+ * guard rightly refuses an id naming no item. 200 with `code:'unsaved_item'`,
+ * which the helper (`ai-functions-helper.tsx`) renders as a warning titled
+ * "Save this item first" rather than as a failed run. Matched EXACTLY: real
+ * ids are UUIDs, so a prefix test would let a real id skip the guard.
+ */
+function unsavedItemGate(): NextResponse {
+  return NextResponse.json({
+    ok: false,
+    code: 'unsaved_item',
+    error: 'AI functions run in the name of a saved item.',
+  }, { status: 200 });
+}
 
 /**
  * SQL identifier safety. Columns / tables flow into a Databricks SQL statement,
@@ -74,25 +132,17 @@ function quoteIdent(raw: string): string {
  * Map a Loom AiFn → the Databricks built-in AI SQL expression over a column.
  * PARTIAL: only the functions with a direct `ai_*` SQL builtin are in-database.
  * `embed` / `similarity` have no simple column builtin, so they always take the
- * AOAI-direct path (below) — `DBX_FN[fn]` is undefined for them and the caller
- * falls through.
+ * AOAI-direct path (below) — this returns null for them and the caller falls
+ * through.
+ *
+ * The expression comes from `buildAiSqlExpr` (lib/azure/ai-enrichment-client),
+ * the one implementation shared with the AI enrichment item, so labels, fields
+ * and the target language are escaped by the same pinned Spark SQL rule.
  */
-const DBX_FN: Partial<Record<AiFn, (col: string, o: AiFnOptions) => string>> = {
-  sentiment: (col) => `ai_analyze_sentiment(${col})`,
-  summarize: (col) => `ai_summarize(${col})`,
-  classify: (col, o) =>
-    `ai_classify(${col}, ARRAY(${(o.labels && o.labels.length ? o.labels : ['positive', 'negative', 'neutral'])
-      .map((l) => `'${escapeSqlLiteral(String(l))}'`)
-      .join(', ')}))`,
-  translate: (col, o) =>
-    `ai_translate(${col}, '${escapeSqlLiteral(String(o.targetLang || 'English'))}')`,
-  extract: (col, o) =>
-    `ai_extract(${col}, ARRAY(${(o.fields && o.fields.length ? o.fields : ['entity'])
-      .map((f) => `'${escapeSqlLiteral(String(f))}'`)
-      .join(', ')}))`,
-  fix_grammar: (col) => `ai_fix_grammar(${col})`,
-  generate_response: (col) => `ai_gen(${col})`,
-};
+function dbxExpr(fn: AiFn, col: string, o: AiFnOptions): string | null {
+  if (!isEnrichmentOp(fn) || !opHasDbxBuiltin(fn)) return null;
+  return buildAiSqlExpr(fn, col, { labels: o.labels, fields: o.fields, targetLang: o.targetLang });
+}
 
 function parseOptions(o: unknown): AiFnOptions {
   const opts: AiFnOptions = {};
@@ -120,13 +170,8 @@ function parseOptions(o: unknown): AiFnOptions {
 const GATE_HINT =
   'Set LOOM_AOAI_ENDPOINT + LOOM_AOAI_DEPLOYMENT (admin-plane/main.bicep — enable aiFoundryEnabled or agentFoundryEnabled, or pass explicit overrides) and grant the Console UAMI "Cognitive Services OpenAI User".';
 
-export async function GET(
-  req: NextRequest,
-  ctx: { params: Promise<{ type: string; id: string }> },
-) {
-  const { type } = await ctx.params;
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession<{ type: string; id: string }>(async (_req: NextRequest, { params }) => {
+  const { type } = params;
 
   const govPath = isGovCloud();
   const dbxAvailable = !govPath && databricksConfigGate() === null;
@@ -146,16 +191,22 @@ export async function GET(
     missing: gated ? 'LOOM_AOAI_ENDPOINT' : undefined,
     hint: gated ? GATE_HINT : undefined,
   });
-}
+});
 
-export async function POST(
-  req: NextRequest,
-  ctx: { params: Promise<{ type: string; id: string }> },
-) {
-  await ctx.params; // [type]/[id] carried for item scoping; backend keys off body
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
+export const POST = withSession<{ type: string; id: string }>(async (req: NextRequest, { params }) => {
+  // Authentication is the wrapper's (above this line), so the unsaved-item gate
+  // below cannot answer a request that carries no session.
+  if (params.id === UNSAVED_ITEM_ID) return unsavedItemGate();
+  const guard = await guardSynapseItemRequest({
+    itemId: params.id,
+    itemType: params.type,
+    allowReadRoles: true,
+    notFound: ITEM_UNREACHABLE,
+  });
+  if (guard.res) return guard.res;
+  // Consumed, so deleting the `if (guard.res)` line is a type error rather than
+  // a silent pass (the same reasoning as the sibling `query` route).
+  const { session } = guard.ctx;
   let body: any;
   try { body = await req.json(); } catch { body = {}; }
 
@@ -183,8 +234,8 @@ export async function POST(
   // ---------- Commercial / GCC + Databricks SQL warehouse: in-database ----------
   // Only functions with a direct `ai_*` SQL builtin run in-database; embed /
   // similarity have no column builtin and fall through to the AOAI path below.
-  const dbxExpr = DBX_FN[fn];
-  if (!govPath && warehouseId && dbxExpr && databricksConfigGate() === null) {
+  const hasDbxBuiltin = isEnrichmentOp(fn) && opHasDbxBuiltin(fn);
+  if (!govPath && warehouseId && hasDbxBuiltin && databricksConfigGate() === null) {
     if (!IDENT_RE.test(column) || (table && !IDENT_RE.test(table))) {
       return NextResponse.json(
         { ok: false, error: 'column / table must be plain SQL identifiers (no spaces or punctuation other than "." and backticks).' },
@@ -194,9 +245,14 @@ export async function POST(
     if (!table) {
       return NextResponse.json({ ok: false, error: 'table required for the Databricks SQL path' }, { status: 400 });
     }
+    // #3669 — the warehouse must be linked (its live `loom_item_id` tag) to a SQL
+    // warehouse item in a workspace the caller can read; an unlinked warehouse is
+    // for tenant admins only. See `_lib/warehouse-item-binding.ts`.
+    const target = await authorizeWarehouseTarget(session, warehouseId);
+    if (!target.ok) return target.res;
     // Verify the warehouse is RUNNING (honest 409 if not — never a silent fail).
-    const wh = await getWarehouse(warehouseId).catch(() => null);
-    if (wh && wh.state && wh.state !== 'RUNNING') {
+    const wh = target.warehouse;
+    if (wh.state && wh.state !== 'RUNNING') {
       return NextResponse.json(
         { ok: false, error: `Warehouse is ${wh.state}. Start it before running an AI function.`, state: wh.state },
         { status: 409 },
@@ -204,7 +260,9 @@ export async function POST(
     }
     const colExpr = quoteIdent(column);
     const tableExpr = table.includes('`') || table.includes('.') ? table : quoteIdent(table);
-    const sql = `SELECT ${colExpr}, ${dbxExpr(colExpr, opts)} AS ai_result FROM ${tableExpr} LIMIT ${limit}`;
+    // Labels / fields / target language become Databricks string literals
+    // (Spark SQL grammar), escaped inside buildAiSqlExpr.
+    const sql = `SELECT ${colExpr}, ${dbxExpr(fn, colExpr, opts)} AS ai_result FROM ${tableExpr} LIMIT ${limit}`;
     try {
       const result = await executeStatement(warehouseId, sql, catalog, schema);
       return NextResponse.json({ ok: true, engine: 'databricks', fn, column, sql, ...result });
@@ -311,4 +369,4 @@ export async function POST(
     }
     return NextResponse.json({ ok: false, engine: 'aoai', error: e?.message || String(e) }, { status: 502 });
   }
-}
+});

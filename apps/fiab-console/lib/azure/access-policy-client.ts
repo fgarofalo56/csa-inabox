@@ -24,14 +24,14 @@
  * can't bind (collection) returns status 'pending' with a precise reason —
  * never a silent no-op (no-vaporware.md).
  */
-import { grantContainerRole, revokeContainerRoleAssignment } from './adls-client';
+import { grantContainerRole, listContainerRoleAssignments, revokeContainerRoleAssignment } from './adls-client';
 import { dedicatedTarget, executeQuery as synapseExecute } from './synapse-sql-client';
 import { getPoolState, resumePool } from './synapse-pool-arm';
 import {
-  defaultDatabase,
   kustoConfigGate,
   addDatabasePrincipal,
   dropDatabasePrincipal,
+  showDatabasePrincipals,
 } from './kusto-client';
 import { escapeSqlLiteral, bracket } from '@/lib/sql/quoting';
 import { itemsContainer } from './cosmos-client';
@@ -78,6 +78,19 @@ export interface AccessGrantResult {
   roleName?: string;
   roleAssignmentId?: string;
   detail?: string;
+  /**
+   * Whether the principal ALREADY held this role before the grant: `true` when
+   * the grant found it in place, `false` when the grant created it, absent when
+   * that could not be determined. A caller that later undoes the grant revokes
+   * only what it created (lib/access/landed-grants.ts).
+   */
+  preexisting?: boolean;
+}
+
+/** The outcome of undoing a structured (warehouse / KQL) grant. */
+export interface StructuredRevokeResult {
+  status: 'revoked' | 'skipped' | 'error';
+  detail?: string;
 }
 
 // ── SQL identifier/literal escaping (no string injection) ─────────────────────
@@ -104,6 +117,17 @@ function adxPrincipalToken(input: AccessGrantInput): { token: string } | { gate:
   return { gate: 'Set AZURE_TENANT_ID to grant ADX access to a service principal.' };
 }
 
+/**
+ * An ARM role-assignment PUT refused because the principal already holds that
+ * role at the scope. Classified on what `armCall` records — the HTTP status and
+ * ARM's error code — never on the message, which quotes the scope: a failed
+ * grant on a container named `x-409` must not read as "already held". A 409
+ * with another code (`ScopeLocked`, a resource lock) is a failure, not a hold.
+ */
+function roleAssignmentExists(e: any): boolean {
+  return e?.status === 409 && e?.body?.error?.code === 'RoleAssignmentExists';
+}
+
 /** Enforce an access grant. Real data-plane grant per scope; honest gate otherwise. */
 export async function enforceAccessGrant(input: AccessGrantInput): Promise<AccessGrantResult> {
   switch (input.scopeType) {
@@ -111,11 +135,11 @@ export async function enforceAccessGrant(input: AccessGrantInput): Promise<Acces
       const roleName = PERMISSION_ROLE[input.permission];
       try {
         const grant = await grantContainerRole(input.scopeRef, input.principalId, roleName, input.principalType);
-        return { status: 'active', roleName: grant.roleName || roleName, roleAssignmentId: grant.id };
+        return { status: 'active', roleName: grant.roleName || roleName, roleAssignmentId: grant.id, preexisting: false };
       } catch (e: any) {
         const msg = (e?.message || String(e)).slice(0, 400);
-        if (/\b409\b|already exists|RoleAssignmentExists/i.test(msg)) {
-          return { status: 'active', roleName, detail: 'Role already assigned at this scope (idempotent).' };
+        if (roleAssignmentExists(e)) {
+          return { status: 'active', roleName, detail: 'Role already assigned at this scope (idempotent).', preexisting: true };
         }
         return { status: 'error', detail: msg };
       }
@@ -127,10 +151,27 @@ export async function enforceAccessGrant(input: AccessGrantInput): Promise<Acces
       if (!name) {
         return { status: 'error', detail: 'A principal UPN / name is required to grant warehouse (Synapse SQL) access.' };
       }
+      // The grant scope must name the warehouse. An empty scopeRef is refused
+      // here rather than read as "the deployment's dedicated pool", so an
+      // unresolved target can never widen to a store nobody named.
+      if (!(input.scopeRef || '').trim()) {
+        return { status: 'error', detail: 'A warehouse (dedicated SQL pool) is required for the grant scope; nothing was granted.' };
+      }
       let target;
       try { target = dedicatedTarget(); }
       catch {
         return { status: 'pending', detail: 'The Azure-native warehouse is not configured: set LOOM_SYNAPSE_WORKSPACE and LOOM_SYNAPSE_DEDICATED_POOL to enforce warehouse grants.' };
+      }
+      // The grant runs on this deployment's dedicated pool, so the scope must
+      // name that pool (as a warehouse item's recorded scope does). Any other
+      // name is refused rather than granted on the pool regardless.
+      // Azure SQL pool names are case-insensitive.
+      const named = input.scopeRef.trim();
+      if (named.toLowerCase() !== String(target.database || '').trim().toLowerCase()) {
+        return {
+          status: 'error',
+          detail: `The grant scope names warehouse '${named}', which is not this deployment's dedicated SQL pool (${target.database}); nothing was granted.`,
+        };
       }
       // The Dedicated SQL pool may be provisioned start-paused (cost control).
       // A grant needs an Online pool to connect over TDS; if it's paused, kick
@@ -150,6 +191,14 @@ export async function enforceAccessGrant(input: AccessGrantInput): Promise<Acces
       } catch {
         /* ARM probe unavailable — proceed and let the TDS attempt report errors */
       }
+      // Did the principal already hold the role? `sp_addrolemember` succeeds
+      // either way, so the answer has to be read before the grant. The read and
+      // the grant are two calls; the decision route holds a per-request lease
+      // across them (decision/route.ts, grantLeaseUntil).
+      const held = await warehouseRoleHeld(target, roleName, name);
+      if (held === true) {
+        return { status: 'active', roleName, detail: `Already a member of ${roleName} on ${target.database} (idempotent).`, preexisting: true };
+      }
       try {
         // Create the Entra DB user if absent, then add it to the fixed role.
         // Synapse **Dedicated** SQL pools do NOT support `ALTER ROLE ... ADD
@@ -161,11 +210,11 @@ export async function enforceAccessGrant(input: AccessGrantInput): Promise<Acces
           `  CREATE USER ${sqlBracket(name)} FROM EXTERNAL PROVIDER;\n` +
           `EXEC sp_addrolemember ${sqlString(roleName)}, ${sqlString(name)};`;
         await synapseExecute(target, sql);
-        return { status: 'active', roleName, detail: `Granted ${roleName} on ${target.database} to ${name}.` };
+        return { status: 'active', roleName, detail: `Granted ${roleName} on ${target.database} to ${name}.`, ...(held === false ? { preexisting: false } : {}) };
       } catch (e: any) {
         const msg = (e?.message || String(e)).slice(0, 400);
         if (/already a member|already exists/i.test(msg)) {
-          return { status: 'active', roleName, detail: 'Already a member of the role (idempotent).' };
+          return { status: 'active', roleName, detail: 'Already a member of the role (idempotent).', preexisting: true };
         }
         return { status: 'error', detail: msg };
       }
@@ -175,15 +224,24 @@ export async function enforceAccessGrant(input: AccessGrantInput): Promise<Acces
       const gate = kustoConfigGate();
       if (gate) return { status: 'pending', detail: `ADX not configured: set ${gate.missing} to enforce KQL-database grants.` };
       const roleName = ADX_ROLE[input.permission];
-      const db = (input.scopeRef || defaultDatabase() || '').trim();
-      if (!db) return { status: 'error', detail: 'A KQL database name is required for the grant scope.' };
+      // The grant scope must name the database. An empty scopeRef is refused
+      // rather than read as the deployment's default database.
+      const db = (input.scopeRef || '').trim();
+      if (!db) return { status: 'error', detail: 'A KQL database name is required for the grant scope; nothing was granted.' };
       const principal = adxPrincipalToken(input);
       if ('gate' in principal) return { status: 'pending', detail: principal.gate };
+      // `.add database ... <role>` succeeds whether or not the principal already
+      // holds the role, so the answer is read from the database's principals first.
+      // Read and grant are two calls; see the warehouse arm for the lease note.
+      const held = await adxRoleHeld(db, roleName, input);
+      if (held === true) {
+        return { status: 'active', roleName, detail: `Already ${roleName} on ADX database ${db} (idempotent).`, preexisting: true };
+      }
       try {
         // `.add database ["db"] <role> ('<fqn>')` via the typed helper, which
         // allow-lists the role (KUSTO_DATABASE_ROLES) and centralizes escaping.
         await addDatabasePrincipal(db, roleName, principal.token);
-        return { status: 'active', roleName, detail: `Granted ${roleName} on ADX database ${db}.` };
+        return { status: 'active', roleName, detail: `Granted ${roleName} on ADX database ${db}.`, ...(held === false ? { preexisting: false } : {}) };
       } catch (e: any) {
         return { status: 'error', detail: (e?.message || String(e)).slice(0, 400) };
       }
@@ -257,29 +315,157 @@ export async function revokeAccessGrant(roleAssignmentId: string): Promise<void>
 
 /**
  * Revoke a non-ADLS structured grant (warehouse / kql-database) by replaying the
- * inverse data-plane command. Best-effort — never throws (the policy delete must
- * still succeed). ADLS grants are revoked via {@link revokeAccessGrant} by id.
+ * inverse data-plane command. Never throws (a policy delete must still
+ * succeed); it REPORTS what happened, so a caller that records the revoke can
+ * tell a revoke from a skip or a failure. ADLS grants are revoked via
+ * {@link revokeAccessGrant} by id.
  */
-export async function revokeStructuredGrant(input: AccessGrantInput): Promise<void> {
+export async function revokeStructuredGrant(input: AccessGrantInput): Promise<StructuredRevokeResult> {
   try {
     if (input.scopeType === 'warehouse') {
       const name = (input.principalName || '').trim();
-      if (!name) return;
+      if (!name) return { status: 'skipped', detail: 'No principal name to revoke the warehouse role from.' };
       const roleName = SQL_ROLE[input.permission];
       const target = dedicatedTarget();
       // Dedicated SQL pools use sp_droprolemember (not ALTER ROLE ... DROP MEMBER).
       await synapseExecute(target, `EXEC sp_droprolemember ${sqlString(roleName)}, ${sqlString(name)};`);
-    } else if (input.scopeType === 'kql-database') {
-      if (kustoConfigGate()) return;
-      const roleName = ADX_ROLE[input.permission];
-      const db = (input.scopeRef || defaultDatabase() || '').trim();
-      if (!db) return;
-      const principal = adxPrincipalToken(input);
-      if ('gate' in principal) return;
-      await dropDatabasePrincipal(db, roleName, principal.token);
+      return { status: 'revoked' };
     }
+    if (input.scopeType === 'kql-database') {
+      const gate = kustoConfigGate();
+      if (gate) return { status: 'skipped', detail: `ADX not configured (${gate.missing}).` };
+      const roleName = ADX_ROLE[input.permission];
+      // Like the grant: the scope must name the database. An empty scopeRef is
+      // refused rather than read as the deployment's default database.
+      const db = (input.scopeRef || '').trim();
+      if (!db) return { status: 'error', detail: 'A KQL database name is required for the revoke scope; nothing was revoked.' };
+      const principal = adxPrincipalToken(input);
+      if ('gate' in principal) return { status: 'skipped', detail: principal.gate };
+      await dropDatabasePrincipal(db, roleName, principal.token);
+      return { status: 'revoked' };
+    }
+    return { status: 'skipped', detail: `No structured revoke for ${input.scopeType} scopes.` };
+  } catch (e: any) {
+    return { status: 'error', detail: (e?.message || String(e)).slice(0, 400) };
+  }
+}
+
+/** What {@link probeAccessGrant} found. */
+export type AccessGrantProbe =
+  | { held: true; roleName: string; roleAssignmentId?: string }
+  | { held: false }
+  | { unknown: string };
+
+/**
+ * Whether the principal holds the grant `input` describes right now, read from
+ * the store itself: the container's role assignments (ADLS), the dedicated
+ * pool's role membership (warehouse), or the ADX database's principals. A read
+ * that fails, or a scope with no read, is `unknown` with the reason: never
+ * reported as not held.
+ */
+export async function probeAccessGrant(input: AccessGrantInput): Promise<AccessGrantProbe> {
+  const scopeRef = (input.scopeRef || '').trim();
+  if (!scopeRef) return { unknown: 'the grant scope names no store' };
+  switch (input.scopeType) {
+    case 'adls-container': {
+      const roleName = PERMISSION_ROLE[input.permission];
+      try {
+        const hit = (await listContainerRoleAssignments(scopeRef))
+          .find((a) => a.principalId === input.principalId && a.roleName === roleName);
+        return hit ? { held: true, roleName, roleAssignmentId: hit.id } : { held: false };
+      } catch (e: any) {
+        return { unknown: `the container's role assignments could not be listed${e?.status ? ` (ARM ${e.status})` : ''}` };
+      }
+    }
+    case 'warehouse': {
+      const roleName = SQL_ROLE[input.permission];
+      const name = (input.principalName || '').trim();
+      if (!name) return { unknown: 'no principal name to look up in the warehouse' };
+      let target;
+      try { target = dedicatedTarget(); } catch { return { unknown: 'the warehouse is not configured' }; }
+      if (scopeRef.toLowerCase() !== String(target.database || '').trim().toLowerCase()) {
+        return { unknown: `warehouse '${scopeRef}' is not this deployment's dedicated SQL pool` };
+      }
+      const held = await warehouseRoleHeld(target, roleName, name);
+      return held === undefined ? { unknown: 'the warehouse role membership could not be read' } : held ? { held: true, roleName } : { held: false };
+    }
+    case 'kql-database': {
+      const gate = kustoConfigGate();
+      if (gate) return { unknown: `ADX is not configured (${gate.missing})` };
+      const roleName = ADX_ROLE[input.permission];
+      const held = await adxRoleHeld(scopeRef, roleName, input);
+      return held === undefined ? { unknown: 'the database principals could not be read' } : held ? { held: true, roleName } : { held: false };
+    }
+    default:
+      return { unknown: `no check exists for ${input.scopeType} grants` };
+  }
+}
+
+/**
+ * Whether `name` is already a member of the database role `roleName` on the
+ * dedicated pool: true / false, or undefined when that could not be read.
+ */
+async function warehouseRoleHeld(target: ReturnType<typeof dedicatedTarget>, roleName: string, name: string): Promise<boolean | undefined> {
+  try {
+    const res = await synapseExecute(
+      target,
+      'SELECT COUNT(*) FROM sys.database_role_members rm '
+        + 'JOIN sys.database_principals r ON rm.role_principal_id = r.principal_id '
+        + 'JOIN sys.database_principals m ON rm.member_principal_id = m.principal_id '
+        + 'WHERE r.name = @role AND m.name = @member;',
+      60_000,
+      [{ name: 'role', value: roleName }, { name: 'member', value: name }],
+    );
+    const n = Number((res.rows?.[0] as unknown[] | undefined)?.[0] ?? NaN);
+    return Number.isFinite(n) ? n > 0 : undefined;
   } catch {
-    /* best-effort revoke — never block the policy delete */
+    return undefined;
+  }
+}
+
+/** ADX role names are plural (`viewers`); `.show database principals` reports them singular. */
+const ADX_ROLE_LABEL: Record<string, string> = { viewers: 'viewer', users: 'user', admins: 'admin' };
+
+/** The ADX FQN prefix for each principal type (`aaduser=…`, `aadgroup=…`, `aadapp=…`). */
+const ADX_FQN_KIND: Record<PrincipalType, string> = { User: 'aaduser', Group: 'aadgroup', ServicePrincipal: 'aadapp' };
+
+/**
+ * Split an ADX principal FQN (`aaduser=alice@contoso.com`,
+ * `aadgroup=<oid>;<tenant>`) into its kind and identifier, both lower-cased.
+ * The tenant segment after `;` is not compared. Returns null for any other
+ * shape, so an unparseable row never counts as a match.
+ */
+export function parseAdxFqn(fqn: string): { kind: string; id: string } | null {
+  const m = /^\s*(aaduser|aadgroup|aadapp)=([^;]+?)\s*(?:;.*)?$/i.exec(fqn || '');
+  if (!m) return null;
+  return { kind: m[1].toLowerCase(), id: m[2].trim().toLowerCase() };
+}
+
+/**
+ * Whether the principal already holds `roleName` on ADX database `db`: true /
+ * false, or undefined when the principals could not be read. A row matches on
+ * exact objectId equality, or on an FQN of the same kind whose identifier is
+ * exactly the principal's object id or UPN (case-insensitive) — never a
+ * substring, so `aaduser=jalice@contoso.com` does not match `alice@contoso.com`.
+ */
+async function adxRoleHeld(db: string, roleName: string, input: AccessGrantInput): Promise<boolean | undefined> {
+  try {
+    const rows = await showDatabasePrincipals(db);
+    const want = ADX_ROLE_LABEL[roleName] || roleName;
+    const id = (input.principalId || '').trim().toLowerCase();
+    const upn = (input.principalName || '').trim().toLowerCase();
+    const kind = ADX_FQN_KIND[input.principalType] || 'aaduser';
+    return rows.some((r) => {
+      const role = (r.role || '').toLowerCase();
+      // Exactly `Database <Role>` (or the bare role): never `Database Unrestricted Viewer`.
+      if (!new RegExp(`^(database\\s+)?${want}$`).test(role.trim())) return false;
+      if (!!id && (r.objectId || '').trim().toLowerCase() === id) return true;
+      const p = parseAdxFqn(r.fqn);
+      if (!p || p.kind !== kind) return false;
+      return (!!id && p.id === id) || (!!upn && upn.includes('@') && p.id === upn);
+    });
+  } catch {
+    return undefined;
   }
 }
 

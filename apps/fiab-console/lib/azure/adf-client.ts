@@ -25,7 +25,7 @@ import { pathToHttpsUrl, KNOWN_CONTAINERS } from './adls-client';
 import { executeQuery, serverlessTarget } from './synapse-sql-client';
 import { discoverResourceCoordsByName } from './resource-graph-coords';
 import { currentFactoryOverride } from './adf-factory-context';
-import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { escapeKqlLiteral, escapeSqlLiteral } from '@/lib/sql/quoting';
 import { trimSlashes } from '@/lib/util/trim';
 
 const API = '2018-06-01';
@@ -495,9 +495,9 @@ interface LaTable {
 }
 interface LaQueryResponse { tables?: LaTable[]; error?: { message?: string } }
 
-/** Escape a single-quoted KQL string literal (double the quote). */
+/** Escape a single-quoted KQL string literal (KQL backslash rule). */
 function kqlStr(v: string): string {
-  return escapeSqlLiteral(v);
+  return escapeKqlLiteral(v);
 }
 
 async function laQuery(workspaceGuid: string, kql: string): Promise<LaQueryResponse> {

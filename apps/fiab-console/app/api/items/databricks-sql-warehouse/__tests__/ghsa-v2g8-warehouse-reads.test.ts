@@ -398,7 +398,13 @@ describe('the admitted path still works', () => {
     const j = await res.json();
     expect(res.status).toBe(200);
     expect(j).toMatchObject({ ok: true, id: 'wh-new' });
-    expect(createWarehouse).toHaveBeenCalledWith({ name: 'wh-new', cluster_size: 'Small' });
+    // #3669 — the spec also carries the server-side owner tag for the authorized
+    // item `sw-1`; the stamp itself is pinned in `warehouse-owner-tag.test.ts`.
+    expect(createWarehouse).toHaveBeenCalledWith({
+      name: 'wh-new',
+      cluster_size: 'Small',
+      tags: { custom_tags: [{ key: 'loom_item_id', value: 'sw-1' }] },
+    });
   });
 
   /**

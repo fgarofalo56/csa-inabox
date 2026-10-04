@@ -20,6 +20,9 @@
 // wells→SQL compiler the report `/query` route already runs.
 import type { SqlDialect } from '../../../azure/wells-to-sql';
 import { stripTrailingSemicolons } from '@/lib/util/trim';
+// Pure string helper (no runtime dependencies of its own): the per-dialect
+// string-literal escape, shared with the server SQL builders.
+import { escapeLiteralFor } from '@/lib/sql/quoting';
 
 export interface AppliedStep {
   /** Step (let-binding) name, e.g. `Source`, `Filtered Rows`. */
@@ -401,9 +404,14 @@ function foldQuoteIdent(name: string, dialect?: SqlDialect): string {
   }
 }
 
-/** SQL single-quoted string literal (doubling embedded quotes). */
-function sqlString(v: string): string {
-  return `'${v.replace(/'/g, "''")}'`;
+/**
+ * SQL single-quoted string literal in the fold's dialect. Databricks SQL reads
+ * backslash escape sequences inside `'…'`, so it takes the Spark SQL rule
+ * (escapeSparkSqlLiteral); every other dialect doubles the quote. Every
+ * character is carried; control characters are encoded, never refused.
+ */
+function sqlString(v: string, d?: SqlDialect): string {
+  return `'${escapeLiteralFor(v, d)}'`;
 }
 
 /** Parse a non-negative-ish integer token, or null. */
@@ -560,7 +568,7 @@ function foldOperand(tok: string, d?: SqlDialect): string | null {
   const col = t.match(/^\[\s*(?:#"([^"]*)"|([A-Za-z_][A-Za-z0-9_ .]*))\s*\]$/);
   if (col) return foldQuoteIdent((col[1] ?? col[2]).trim(), d);
   const s = parseMString(t);
-  if (s != null) return sqlString(s);
+  if (s != null) return sqlString(s, d);
   if (/^-?\d+(\.\d+)?$/.test(t)) return t;
   if (t === 'true') return '1';
   if (t === 'false') return '0';
@@ -643,7 +651,7 @@ function foldScalar(raw: string, d?: SqlDialect): string | null {
         s += t[j]; j += 1;
       }
       if (!closed) return null;
-      out += sqlString(s);
+      out += sqlString(s, d);
       i = j;
       continue;
     }
@@ -760,11 +768,11 @@ function foldTextTransform(fnTok: string, col: string, d?: SqlDialect): string |
     }
     case 'BeforeDelimiter': {
       const dl = parseMString(rest[0]);
-      return dl == null ? null : `SUBSTRING(${ident}, 1, CHARINDEX(${sqlString(dl)}, ${ident}) - 1)`;
+      return dl == null ? null : `SUBSTRING(${ident}, 1, CHARINDEX(${sqlString(dl, d)}, ${ident}) - 1)`;
     }
     case 'AfterDelimiter': {
       const dl = parseMString(rest[0]);
-      return dl == null ? null : `SUBSTRING(${ident}, CHARINDEX(${sqlString(dl)}, ${ident}) + 1, LEN(${ident}))`;
+      return dl == null ? null : `SUBSTRING(${ident}, CHARINDEX(${sqlString(dl, d)}, ${ident}) + 1, LEN(${ident}))`;
     }
     default: return null;
   }
@@ -911,8 +919,8 @@ function foldStep(
         if (!target.has(c.toLowerCase())) return Q(c);
         const ident = Q(c);
         return isText
-          ? `REPLACE(${ident}, ${sqlString(oldV)}, ${sqlString(newV)}) AS ${ident}`
-          : `CASE WHEN ${ident} = ${sqlString(oldV)} THEN ${sqlString(newV)} ELSE ${ident} END AS ${ident}`;
+          ? `REPLACE(${ident}, ${sqlString(oldV, d)}, ${sqlString(newV, d)}) AS ${ident}`
+          : `CASE WHEN ${ident} = ${sqlString(oldV, d)} THEN ${sqlString(newV, d)} ELSE ${ident} END AS ${ident}`;
       });
       return { sql: `SELECT ${proj.join(', ')} FROM ${from}`, cols };
     }

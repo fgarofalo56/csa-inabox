@@ -86,26 +86,44 @@ describe('checkExportProtection — F19', () => {
   });
 });
 
-describe('resolveItemBackingScope', () => {
+describe('resolveItemBackingScope — only bindings Loom recorded', () => {
   const base = { id: 'i1', workspaceId: 'w1', displayName: 'My DB', createdBy: 'x', createdAt: '', updatedAt: '' };
-  it('lakehouse → adls-container (state.container, default bronze)', () => {
-    expect(resolveItemBackingScope({ ...base, itemType: 'lakehouse', state: { container: 'silver' } }))
+  it('lakehouse → receipt container, then adlsContainer, then a single ownedContainers entry', () => {
+    // Each fixture also carries `state.container: 'planted'`; a resolver reading it would return 'planted'.
+    expect(resolveItemBackingScope({ ...base, itemType: 'lakehouse', state: { container: 'planted', provisioning: { secondaryIds: { container: 'gold' } }, adlsContainer: 'landing' } }))
+      .toEqual({ scopeType: 'adls-container', scopeRef: 'gold' });
+    expect(resolveItemBackingScope({ ...base, itemType: 'lakehouse', state: { container: 'planted', adlsContainer: 'landing' } }))
+      .toEqual({ scopeType: 'adls-container', scopeRef: 'landing' });
+    expect(resolveItemBackingScope({ ...base, itemType: 'lakehouse', state: { container: 'planted', ownedContainers: ['silver'] } }))
       .toEqual({ scopeType: 'adls-container', scopeRef: 'silver' });
-    expect(resolveItemBackingScope({ ...base, itemType: 'lakehouse' }))
-      .toEqual({ scopeType: 'adls-container', scopeRef: 'bronze' });
   });
-  it('warehouse → warehouse (state.dedicatedPool, default loompool)', () => {
+  it('lakehouse with nothing recorded (or two owned containers) → pending, never bronze', () => {
+    // Breaks if the `'bronze'` default or a first-of-many pick comes back.
+    expect('pending' in resolveItemBackingScope({ ...base, itemType: 'lakehouse', state: { container: 'planted' } })).toBe(true);
+    expect('pending' in resolveItemBackingScope({ ...base, itemType: 'lakehouse' })).toBe(true);
+    expect('pending' in resolveItemBackingScope({ ...base, itemType: 'lakehouse', state: { ownedContainers: ['a1a', 'b2b'] } })).toBe(true);
+  });
+  it('warehouse → the deployment pool; state.dedicatedPool is not read', () => {
     const prev = process.env.LOOM_SYNAPSE_DEDICATED_POOL;
-    delete process.env.LOOM_SYNAPSE_DEDICATED_POOL;
-    expect(resolveItemBackingScope({ ...base, itemType: 'warehouse' }))
-      .toEqual({ scopeType: 'warehouse', scopeRef: 'loompool' });
-    if (prev !== undefined) process.env.LOOM_SYNAPSE_DEDICATED_POOL = prev;
+    try {
+      process.env.LOOM_SYNAPSE_DEDICATED_POOL = 'deploymentpool';
+      expect(resolveItemBackingScope({ ...base, itemType: 'warehouse', state: { dedicatedPool: 'otherpool' } }))
+        .toEqual({ scopeType: 'warehouse', scopeRef: 'deploymentpool' });
+      // Breaks if the old `'loompool'` literal default returns when the pool is not configured.
+      delete process.env.LOOM_SYNAPSE_DEDICATED_POOL;
+      expect('pending' in resolveItemBackingScope({ ...base, itemType: 'warehouse', state: { dedicatedPool: 'otherpool' } })).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.LOOM_SYNAPSE_DEDICATED_POOL;
+      else process.env.LOOM_SYNAPSE_DEDICATED_POOL = prev;
+    }
   });
-  it('kql-database / eventhouse → kql-database (state.adxDatabase, default displayName)', () => {
-    expect(resolveItemBackingScope({ ...base, itemType: 'kql-database', state: { adxDatabase: 'telemetry' } }))
+  it('kql-database / eventhouse → the install receipt database; adxDatabase and displayName are not read', () => {
+    expect(resolveItemBackingScope({ ...base, itemType: 'kql-database', state: { adxDatabase: 'planted', provisioning: { status: 'created', secondaryIds: { database: 'telemetry' } } } }))
       .toEqual({ scopeType: 'kql-database', scopeRef: 'telemetry' });
-    expect(resolveItemBackingScope({ ...base, itemType: 'eventhouse' }))
-      .toEqual({ scopeType: 'kql-database', scopeRef: 'My DB' });
+    expect(resolveItemBackingScope({ ...base, itemType: 'eventhouse', state: { provisioning: { status: 'exists', resourceId: 'events' } } }))
+      .toEqual({ scopeType: 'kql-database', scopeRef: 'events' });
+    // Breaks if `state.adxDatabase || displayName` returns as a fallback.
+    expect('pending' in resolveItemBackingScope({ ...base, itemType: 'eventhouse', state: { adxDatabase: 'planted' } })).toBe(true);
   });
   it('unknown type → pending (honest gate)', () => {
     const r = resolveItemBackingScope({ ...base, itemType: 'report' });

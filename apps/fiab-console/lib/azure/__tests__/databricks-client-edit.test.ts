@@ -158,3 +158,46 @@ describe('databricks-client — SQL Warehouse EDIT / scale', () => {
       .rejects.toThrow(/editWarehouse failed 400/);
   });
 });
+
+/**
+ * #3669 — an edit must not drop the `loom_item_id` owner tag. The SDK documents
+ * `tags` on `WarehousesAPI.edit` but not whether omitting it clears them, so the
+ * client always re-sends the tags it read.
+ */
+describe('databricks-client — SQL Warehouse EDIT keeps tags', () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+  const EXISTING = {
+    id: 'wh123', name: 'analytics-wh', state: 'RUNNING', cluster_size: 'Small', warehouse_type: 'PRO',
+    tags: { custom_tags: [{ key: 'env', value: 'dev' }, { key: 'loom_item_id', value: 'item-1' }] },
+  };
+  beforeEach(() => {
+    fetchMock = vi.fn(async () => okResponse({}));
+    vi.stubGlobal('fetch', fetchMock);
+  });
+  afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
+  const sentBody = () => JSON.parse(fetchMock.mock.calls[1][1].body as string);
+
+  // RED if the tag carry is removed: `tags` is then absent from the edit body.
+  it('re-sends the tags it read on a scale-only edit', async () => {
+    fetchMock.mockResolvedValueOnce(okResponse(EXISTING));
+    await editWarehouse('wh123', { max_num_clusters: 3 });
+    expect(sentBody().tags).toEqual(EXISTING.tags);
+    expect(sentBody().max_num_clusters).toBe(3);
+  });
+
+  // RED if the override is ignored in favour of the read tags.
+  it('sends the caller-provided tag list instead when one is given', async () => {
+    fetchMock.mockResolvedValueOnce(okResponse(EXISTING));
+    const next = [{ key: 'env', value: 'dev' }, { key: 'loom_item_id', value: 'item-2' }];
+    await editWarehouse('wh123', {}, next);
+    expect(sentBody().tags).toEqual({ custom_tags: next });
+  });
+
+  // RED if an empty `tags` object is sent for an untagged warehouse.
+  it('sends no tags field for a warehouse that has none', async () => {
+    fetchMock.mockResolvedValueOnce(okResponse({ ...EXISTING, tags: undefined }));
+    await editWarehouse('wh123', { max_num_clusters: 2 });
+    expect('tags' in sentBody()).toBe(false);
+    expect(sentBody().name).toBe('analytics-wh');
+  });
+});

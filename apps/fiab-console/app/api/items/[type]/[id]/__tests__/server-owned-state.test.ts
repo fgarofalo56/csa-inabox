@@ -218,7 +218,7 @@ describe('#3611 — the generic PATCH may not write server-owned state', () => {
  * persisting would still leave the sink armed.
  */
 describe('#3611 — every server-owned key is enforced, not only the reported one', () => {
-  const CASES: Array<{ key: string; itemType: string; current: any; attacker: any; read: (s: any) => unknown }> = [
+  const CASES: Array<{ key: string; itemType: string; current: any; submitted: any; read: (s: any) => unknown }> = [
     {
       // Reaches `DROP VIEW ${obj}` / `SELECT TOP n * FROM ${obj}` as the Console
       // UAMI. Deleting this key from the list restored the original #3611 write
@@ -226,7 +226,7 @@ describe('#3611 — every server-owned key is enforced, not only the reported on
       key: 'engineObject',
       itemType: 'lakehouse-shortcut',
       current: { kind: 'tables', engine: 'synapse', engineObject: 'loom_lakehouse.shortcuts.sc_a' },
-      attacker: { kind: 'tables', engine: 'synapse', engineObject: 'finance_db.dbo.payroll' },
+      submitted: { kind: 'tables', engine: 'synapse', engineObject: 'finance_db.dbo.payroll' },
       read: (s) => s.engineObject,
     },
     {
@@ -238,7 +238,7 @@ describe('#3611 — every server-owned key is enforced, not only the reported on
       key: 'patSecretRef',
       itemType: 'loom-app-runtime',
       current: { appRuntime: { git: { patSecretRef: 'loom-git-ws1-pat' } } },
-      attacker: { appRuntime: { git: { patSecretRef: PLATFORM_SECRET } } },
+      submitted: { appRuntime: { git: { patSecretRef: PLATFORM_SECRET } } },
       read: (s) => s.appRuntime.git.patSecretRef,
     },
     {
@@ -247,8 +247,25 @@ describe('#3611 — every server-owned key is enforced, not only the reported on
       key: 'keyVaultSecret',
       itemType: 'lakehouse-shortcut',
       current: { credentialRef: { kind: 'awsKeys', keyVaultSecret: 'loom-sc-abc' } },
-      attacker: { credentialRef: { kind: 'awsKeys', keyVaultSecret: PLATFORM_SECRET } },
+      submitted: { credentialRef: { kind: 'awsKeys', keyVaultSecret: PLATFORM_SECRET } },
       read: (s) => s.credentialRef.keyVaultSecret,
+    },
+    {
+      // The database the lakehouse SQL tab runs a tenant admin's query in
+      // (`items/lakehouse/[id]/query`). The server chooses it; removing this
+      // key from the list lets a client write it, and this row goes red.
+      key: 'sqlDatabase',
+      itemType: 'lakehouse',
+      current: { sqlDatabase: 'lakedb' },
+      submitted: { sqlDatabase: 'loom_lakehouse' },
+      read: (s) => s.sqlDatabase,
+    },
+    {
+      key: 'sqlEndpointDatabase',
+      itemType: 'lakehouse',
+      current: { sqlEndpointDatabase: 'lakedb' },
+      submitted: { sqlEndpointDatabase: 'loom_lakehouse' },
+      read: (s) => s.sqlEndpointDatabase,
     },
   ];
 
@@ -256,7 +273,7 @@ describe('#3611 — every server-owned key is enforced, not only the reported on
     it(`refuses to CHANGE state.${c.key}`, async () => {
       seed(`k-${c.key}`, c.itemType, c.current);
 
-      const res = await patch(c.itemType, `k-${c.key}`, { state: c.attacker });
+      const res = await patch(c.itemType, `k-${c.key}`, { state: c.submitted });
 
       expect(res.status).toBe(400);
       expect(lastReplaced).toBeNull();
@@ -268,7 +285,7 @@ describe('#3611 — every server-owned key is enforced, not only the reported on
       // comparing only "did the existing value change" would pass this.
       seed(`n-${c.key}`, c.itemType, { unrelated: true });
 
-      const res = await patch(c.itemType, `n-${c.key}`, { state: c.attacker });
+      const res = await patch(c.itemType, `n-${c.key}`, { state: c.submitted });
 
       expect(res.status).toBe(400);
       expect(lastReplaced).toBeNull();

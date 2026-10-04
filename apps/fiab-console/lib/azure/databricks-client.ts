@@ -13,7 +13,7 @@
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { DefaultAzureCredential, ManagedIdentityCredential, ChainedTokenCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
-import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { escapeSparkSqlLiteral } from '@/lib/sql/quoting';
 import { recordDatabricksUnityAccess } from '@/lib/azure/unity-audit';
 
 const DBX_SCOPE = '2ff814a6-3304-4ab8-85cb-cd0e6f879c1d/.default';
@@ -118,6 +118,8 @@ export interface Warehouse {
    * once; the connection route gates honestly when they are absent.
    */
   odbc_params?: WarehouseOdbcParams;
+  /** `GetWarehouseResponse.tags` — carries Loom's `loom_item_id` owner tag (#3669). */
+  tags?: { custom_tags?: Array<{ key: string; value: string }> };
 }
 
 // asJsonOrThrow keeps the `<op> failed <status>: <body>` message AND sets
@@ -272,7 +274,11 @@ export interface WarehouseScaleSpec {
  * warehouse to already exist (no upsert semantics) and will return 400
  * if cluster_size is outside the allowed enum.
  */
-export async function editWarehouse(id: string, spec: WarehouseScaleSpec): Promise<void> {
+export async function editWarehouse(
+  id: string,
+  spec: WarehouseScaleSpec,
+  customTags?: Array<{ key: string; value: string }>,
+): Promise<void> {
   // Read existing to preserve required fields (name + warehouse_type) the
   // edit endpoint requires even when not changing them.
   const existing = await getWarehouse(id);
@@ -285,6 +291,11 @@ export async function editWarehouse(id: string, spec: WarehouseScaleSpec): Promi
   if (typeof spec.max_num_clusters === 'number') payload.max_num_clusters = spec.max_num_clusters;
   if (typeof spec.auto_stop_mins === 'number') payload.auto_stop_mins = spec.auto_stop_mins;
   if (typeof spec.enable_serverless_compute === 'boolean') payload.enable_serverless_compute = spec.enable_serverless_compute;
+  // #3669 — ALWAYS send tags. The SDK's WarehousesAPI.edit documents `tags` but not
+  // whether omitting it clears them; sending the current set is right either way
+  // and keeps the `loom_item_id` owner tag on every scale. `customTags` replaces.
+  const tags = customTags ?? existing.tags?.custom_tags;
+  if (tags && tags.length > 0) payload.tags = { custom_tags: tags };
 
   const res = await dbxFetch(`/api/2.0/sql/warehouses/${encodeURIComponent(id)}/edit`, {
     method: 'POST',
@@ -1765,7 +1776,7 @@ export async function createUcTableFromFile(
   }
   // Identifier hygiene — only allow safe identifier chars in names we splice
   // into the SQL statement. The file PATH is bound via a `read_files()` string
-  // literal (single-quoted, with quotes escaped), so it cannot break out.
+  // literal, escaped with escapeSparkSqlLiteral (Spark SQL literal grammar).
   const ident = (v: string) => {
     if (!/^[A-Za-z0-9_]+$/.test(v)) throw new Error(`Invalid identifier: ${v}`);
     return v;
@@ -1785,7 +1796,7 @@ export async function createUcTableFromFile(
     opts.push(`header => ${spec.header === false ? 'false' : 'true'}`);
     opts.push(`inferSchema => true`);
   }
-  const literalPath = escapeSqlLiteral(stagedPath);
+  const literalPath = escapeSparkSqlLiteral(stagedPath);
   const fqtn = `\`${cat}\`.\`${sch}\`.\`${tbl}\``;
   const createSql =
     `CREATE TABLE ${fqtn} AS SELECT * FROM read_files('${literalPath}', ${opts.join(', ')})`;

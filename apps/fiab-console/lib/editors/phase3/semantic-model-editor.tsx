@@ -100,6 +100,7 @@ import { VerifiedQueriesPane } from './semantic-model-editor/verified-queries-pa
 // presentational body) moved to sibling modules. Purely structural.
 import { useSemanticModelAggregations, SemanticModelAggregationsTab } from './semantic-model-editor/aggregations-tab';
 import { useSemanticModelDirectLake, SemanticModelDirectLakeTab } from './semantic-model-editor/direct-lake-tab';
+import { DirectLakeSqlScopeNote, DirectLakeQueryFailure } from './semantic-model-editor/direct-lake-sql-scope';
 import { useSemanticModelIncrementalRefreshState, useSemanticModelIncrementalRefreshActions, SemanticModelIncrementalRefreshTab } from './semantic-model-editor/incremental-refresh-tab';
 import type { IncrementalRefreshApi } from './semantic-model-editor/incremental-refresh-tab';
 
@@ -557,6 +558,8 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
     lastRefreshedAt?: string | null;
     cacheTtlSeconds?: number;
     error?: string;
+    code?: string;
+    remediation?: string;
     /** WS-3.3 Direct Lake substitute (loom-columnar-cache backend): */
     cached?: boolean;
     deltaVersion?: number | null;
@@ -2271,6 +2274,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
                         rotates so the next query re-reads live — no manual refresh.
                       </MessageBarBody>
                     </MessageBar>
+                    <DirectLakeSqlScopeNote />
 
                     <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'flex-end', flexWrap: 'wrap' }}>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS}}>
@@ -2368,14 +2372,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
                           </Caption1>
                         )}
 
-                        {!dlResult.ok && (
-                          <MessageBar intent="error">
-                            <MessageBarBody>
-                              <MessageBarTitle>Query failed</MessageBarTitle>
-                              {dlResult.error}
-                            </MessageBarBody>
-                          </MessageBar>
-                        )}
+                        {!dlResult.ok && <DirectLakeQueryFailure result={dlResult} />}
 
                         {dlResult.ok && dlResult.columns && dlResult.rows && (
                           <div style={{ overflowX: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>

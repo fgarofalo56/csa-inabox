@@ -56,6 +56,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { ArmScopeSegmentError } from '@/lib/azure/arm-scope-segment';
 import { withTenantAdmin } from '@/lib/api/route-toolkit';
 import type { TenantAdminRefusal } from '@/lib/auth/feature-gate';
 import { isValidContainerName } from '@/app/api/storage/_lib/validate';
@@ -310,6 +311,8 @@ export const GET = withTenantAdmin(async (req: NextRequest) => {
   } catch (e: any) {
     const msg = String(e?.message || e);
     if (/LOOM_SUBSCRIPTION_ID|LOOM_DLZ_RG/.test(msg)) return rbacGate();
+    // A malformed container or role-assignment id is the caller's input, not an upstream failure.
+    if (e instanceof ArmScopeSegmentError) return NextResponse.json({ ok: false, error: msg }, { status: 400 });
     return NextResponse.json({ ok: false, error: msg }, { status: e?.status || 502 });
   }
 
@@ -419,6 +422,8 @@ export const POST = withTenantAdmin(async (req: NextRequest) => {
   } catch (e: any) {
     const msg = String(e?.message || e);
     if (/LOOM_SUBSCRIPTION_ID|LOOM_DLZ_RG/.test(msg)) return rbacGate();
+    // A malformed container or role-assignment id is the caller's input, not an upstream failure.
+    if (e instanceof ArmScopeSegmentError) return NextResponse.json({ ok: false, error: msg }, { status: 400 });
     // Re-granting an identical (principal, role, scope) triple 409s — surface it.
     return NextResponse.json({ ok: false, error: msg }, { status: e?.status || 502 });
   }
@@ -452,6 +457,8 @@ export const DELETE = withTenantAdmin(async (req: NextRequest) => {
   } catch (e: any) {
     const msg = String(e?.message || e);
     if (/LOOM_SUBSCRIPTION_ID|LOOM_DLZ_RG/.test(msg)) return rbacGate();
+    // A malformed container or role-assignment id is the caller's input, not an upstream failure.
+    if (e instanceof ArmScopeSegmentError) return NextResponse.json({ ok: false, error: msg }, { status: 400 });
     return NextResponse.json({ ok: false, error: msg }, { status: e?.status || 502 });
   }
 }, SECURE_TAB_REFUSAL);

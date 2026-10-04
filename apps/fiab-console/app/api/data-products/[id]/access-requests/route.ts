@@ -15,7 +15,6 @@
  * Cosmos-only — no Fabric/Purview dependency.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import {
   accessRequestsContainer,
   itemsContainer,
@@ -30,12 +29,14 @@ import { emitLoomEvent } from '@/lib/events/webhook-emitter';
 import { resolveGrantTargets, rollUpFulfillment } from '@/lib/dataproducts/fulfillment';
 import { enforceAccessGrant } from '@/lib/azure/access-policy-client';
 import { recordAssignment } from '@/lib/access/assignment-ledger';
+import { verifyProductTargets } from '@/lib/access/verified-targets';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /** Resolve the owning workspace tenantId for a data product (or null). */
-async function resolveOwnerTenantId(id: string): Promise<{ found: boolean; ownerTenantId: string | null; name?: string; state?: Record<string, unknown> }> {
+async function resolveOwnerTenantId(id: string): Promise<{ found: boolean; ownerTenantId: string | null; name?: string; state?: Record<string, unknown>; workspaceId?: string }> {
   const items = await itemsContainer();
   const { resources } = await items.items
     .query<Pick<WorkspaceItem, 'workspaceId' | 'displayName' | 'state'>>({
@@ -56,16 +57,11 @@ async function resolveOwnerTenantId(id: string): Promise<{ found: boolean; owner
       parameters: [{ name: '@id', value: item.workspaceId }],
     })
     .fetchAll();
-  return { found: true, ownerTenantId: wsRes[0]?.tenantId ?? null, name, state: (item.state || {}) as Record<string, unknown> };
+  return { found: true, ownerTenantId: wsRes[0]?.tenantId ?? null, name, state: (item.state || {}) as Record<string, unknown>, workspaceId: item.workspaceId };
 }
 
-export async function POST(
-  req: NextRequest,
-  props: { params: Promise<{ id: string }> },
-) {
-  const { id } = await props.params;
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session: s, params }) => {
+  const { id } = params;
 
   const body = await req.json().catch(() => ({} as any));
   const policyId = String(body?.policyId || '').trim();
@@ -126,7 +122,7 @@ export async function POST(
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});
 
 /**
  * PATCH /api/data-products/[id]/access-requests  (DP-10)
@@ -143,10 +139,8 @@ export async function POST(
  * approved-but-not-provisioned with a precise note rather than a fake success.
  * Owner-only. Azure-native; role-assignment REST identical per cloud.
  */
-export async function PATCH(req: NextRequest, props: { params: Promise<{ id: string }> }) {
-  const { id } = await props.params;
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const PATCH = withSession<{ id: string }>(async (req: NextRequest, { session: s, params }) => {
+  const { id } = params;
 
   const body = await req.json().catch(() => ({} as any));
   const requestId = String(body?.requestId || '').trim();
@@ -184,7 +178,10 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
     }
 
     // ── APPROVED — zero-touch fulfillment ─────────────────────────────────────
-    const targets = resolveGrantTargets(owner.state);
+    // Output ports are the owner's free text: each is checked against the
+    // stores this product's own workspace has bound before a grant is placed on
+    // it (lib/access/verified-targets.ts). An unverified port grants nothing.
+    const targets = await verifyProductTargets({ workspaceId: owner.workspaceId || '' }, resolveGrantTargets(owner.state));
     let httpStatus = 200;
     if (targets.length === 0) {
       // Honest-gate: approved, but no resolvable backing resource to grant.
@@ -197,6 +194,10 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
 
     const provisioned: ProvisionedTarget[] = [];
     for (const t of targets) {
+      if (!t.scopeRef) {
+        provisioned.push({ scopeType: t.scopeType, scopeRef: '', status: 'pending', detail: `${t.source} does not name a store bound in this product's workspace, so nothing was granted on it.`, source: t.source });
+        continue;
+      }
       const grant = await enforceAccessGrant({
         principalId: doc.requesterId,
         principalName: doc.requesterUpn,
@@ -257,15 +258,10 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});
 
-export async function GET(
-  req: NextRequest,
-  props: { params: Promise<{ id: string }> },
-) {
-  const { id } = await props.params;
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession<{ id: string }>(async (req: NextRequest, { session: s, params }) => {
+  const { id } = params;
 
   const role = req.nextUrl.searchParams.get('role');
   const approverView = role === 'approver';
@@ -303,4 +299,4 @@ export async function GET(
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});
