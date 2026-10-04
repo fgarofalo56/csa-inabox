@@ -151,12 +151,14 @@ export async function POST(req: NextRequest, props: { params: Promise<{ type: st
   if (!format) return apiError('format is required', 400);
 
   try {
-    // #4456 — read-scoped. This handler is side-effect-free (it only answers
-    // "would exporting this item be blocked?"), so a read-only Viewer has a
-    // legitimate reason to call it; refusing them with a write-scoped 404 is
-    // what caused the client-side fail-open below (a non-OK response read as
-    // `{ blocked: false }`).
-    const { item, denied } = await loadItem(params.id, params.type, session, { allowReadRoles: true });
+    // #4456 — NOT read-scoped, despite this handler being side-effect-free.
+    // #2947/#3941's guard classifies by HTTP verb, not by actual behavior: no
+    // POST/PUT/PATCH/DELETE handler may ever admit read-only roles, full stop
+    // (CI caught the read-scoped attempt as a scope-drift violation). The
+    // actual #4456 fix is the client-side fail-closed change below — a
+    // write-scoped 404 is still refused correctly; what was broken is that a
+    // non-OK response was silently read as `{ blocked: false }`.
+    const { item, denied } = await loadItem(params.id, params.type, session, { allowReadRoles: false });
     if (denied) return denied;
     if (!item) return apiError('Item not found', 404);
 
