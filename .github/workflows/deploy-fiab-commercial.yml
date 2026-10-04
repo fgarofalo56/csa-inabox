@@ -508,6 +508,49 @@ jobs:
             echo "::notice::brownfield-adopt: no existing VPN gateway or azure-api.net link on the hub VNet — create-new defaults apply."
           fi
 
+      # ── POSTURE-REFRESH FUNCTION URL DISCOVERY (#4161 — auto-bind-by-default.md
+      # §5). svc-posture-refresh's Function (azure-functions/posture-refresh) is
+      # deployed OUT-OF-BAND by the post-deploy bootstrap, which also sets
+      # LOOM_POSTURE_FUNCTION_URL on the Console with a one-off
+      # `az containerapp update`. That assignment does not survive the NEXT full
+      # re-render of main.bicep on this scheduled/dispatched path: the bicep
+      # param defaults to '', nothing here passed a value, and the env var gets
+      # blanked — the capability reads BLOCKED again though the Function is
+      # still live (measured 2026-08-28). Discover the existing Function the
+      # same way the bootstrap does and pass its URL through every deploy, so
+      # the binding survives without a manual `-p loomPostureFunctionUrl=`.
+      #
+      # Not derived in bicep: `uniqueString(resourceGroup().id)` would predict
+      # the right name but not the right CLOUD-SPECIFIC host suffix (Gov is not
+      # azurewebsites.net — cloud-parity.md), and a guessed URL would assert the
+      # Function exists without having checked (deploy-integrity R7). A failed
+      # LIST is NOT evidence of absence — it is reported as UNKNOWN and the
+      # parameter is omitted (same fail-safe direction as "not found": the
+      # capability keeps its existing honest gate rather than receiving a value
+      # nothing confirmed).
+      - name: Discover posture-refresh Function URL (auto-bind — #4161)
+        id: posture_discover
+        run: |
+          set -euo pipefail
+          RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+          DEPLOY_SUB="${{ steps.topology_guard.outputs.deploy_sub }}"
+          ERRFILE="${RUNNER_TEMP}/posture-discover.err"
+          HOST=$(az functionapp list -g "$RG" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
+            --query "[?starts_with(name, 'func-loom-posture')].defaultHostName | [0]" \
+            -o tsv 2> "$ERRFILE") || true
+          HOST=$(printf '%s' "${HOST:-}" | tr -d '\r')
+          if [ -n "$HOST" ] && [ "$HOST" != "None" ]; then
+            echo "url=https://$HOST" >> "$GITHUB_OUTPUT"
+            echo "::notice::posture-refresh Function discovered at $HOST — wiring LOOM_POSTURE_FUNCTION_URL."
+          else
+            echo "url=" >> "$GITHUB_OUTPUT"
+            if [ -s "$ERRFILE" ]; then
+              echo "::warning::posture-refresh Function list failed ($(tr '\n' ' ' < "$ERRFILE")) — leaving LOOM_POSTURE_FUNCTION_URL unset this run. This does not assert the Function is absent, only that this read could not confirm it."
+            else
+              echo "::notice::No posture-refresh Function found in $RG — svc-posture-refresh stays on its honest gate."
+            fi
+          fi
+
       # ── POLICY-RESTRICTION DISCOVERY (D5, run 31100384405 — deploy-integrity R5) ──
       # Names the Azure Policy restrictions the deploy is subject to BEFORE
       # anything is submitted (the D5 leaf: the Purview RP preflight denied by
@@ -1067,6 +1110,7 @@ jobs:
           FRONT_DOOR_ENABLED: ${{ steps.topology_guard.outputs.front_door_enabled }}
           EXISTING_VPN_GATEWAY_NAME: ${{ steps.reconcile_adopt.outputs.vpn_gateway_name }}
           APIM_DNS_LINK_NAME: ${{ steps.reconcile_adopt.outputs.apim_dns_link_name }}
+          POSTURE_FUNCTION_URL: ${{ steps.posture_discover.outputs.url }}
           HUB_ADMIN_SUB: ${{ steps.hubcoords.outputs.hub_admin_sub }}
           HUB_VNET_ID: ${{ steps.hubcoords.outputs.hub_vnet_id }}
           HUB_UAMI_PRINCIPAL: ${{ steps.hubcoords.outputs.hub_uami_principal }}
@@ -1116,6 +1160,12 @@ jobs:
           add --parameters "frontDoorEnabled=$FRONT_DOOR_ENABLED"
           add --parameters "existingVpnGatewayName=$EXISTING_VPN_GATEWAY_NAME"
           add --parameters "apimGatewayDnsLinkName=$APIM_DNS_LINK_NAME"
+          # #4161 — empty is a legitimate answer (Function not deployed yet, or
+          # this run's LIST could not confirm it); omit rather than pass blank,
+          # same as the HUB_ACR_LOGIN / HUB_CAE_ID pattern above.
+          if [ -n "${POSTURE_FUNCTION_URL:-}" ]; then
+            add --parameters "loomPostureFunctionUrl=$POSTURE_FUNCTION_URL"
+          fi
           add --parameters "adminEntraGroupId=$ADMIN_ENTRA_GROUP_ID"
           # ── BOOTSTRAP ADMIN BINDING (auto-bind-by-default.md §5) ───────────
           # loomTenantAdminGroupId MUST be passed EXPLICITLY. It cannot be left
