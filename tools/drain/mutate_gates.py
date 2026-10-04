@@ -262,6 +262,16 @@ ARMS: list[tuple[str, str, str, str]] = [
         "            if was_state in REOPEN_DISPUTES and existing.receipt_kind:",
     ),
     (
+        ("L31 (#4544) a SECOND filter inside the same predicate: `and not "
+         "existing.blocker`, the obvious-sounding next rewrite ('a park is the "
+         "thing with a blocker') -- wrong because `blocker` is never cleared on "
+         "a state change, so a CLOSED item that once carried one still reads "
+         "as parked by this field alone and its reopen is silently dropped"),
+        "ledger.py",
+        "            if was_state in REOPEN_DISPUTES:",
+        "            if was_state in REOPEN_DISPUTES and not existing.blocker:",
+    ),
+    (
         ("L30 a TERMINAL item keeps its stale audit reason, so the ledger reads "
          "`state=closed reason='departed'` and a cold reader cannot tell that "
          "label from a live one. Pre-existing, and it becomes the COMMON shape "
@@ -1400,6 +1410,18 @@ ARMS: list[tuple[str, str, str, str]] = [
          "and item.state != NEEDS_AUDIT:"),
         ("        if number not in live_numbers and item.state != CLOSED "
          "and item.state != NEEDS_AUDIT:"),
+    ),
+    (
+        ("T17 (#4544) the departure skip adds `and item.lane`, so an item with "
+         "no `lane:` label (`item.lane is None`) is silently never audited when "
+         "it leaves GitHub -- every existing departure fixture comes from "
+         "`_led()`, which hardcodes `lane='lane:ci'`, and 32 of 335 live items "
+         "carry no lane label"),
+        "tick.py",
+        ("        if number not in live_numbers and item.state not in TERMINAL "
+         "and item.state != NEEDS_AUDIT:"),
+        ("        if number not in live_numbers and item.state not in TERMINAL "
+         "and item.state != NEEDS_AUDIT and item.lane:"),
     ),
     (
         "L9 the receipt refusal exempts one stream (the narrow bypass)",
@@ -3332,6 +3354,18 @@ ARMS: list[tuple[str, str, str, str]] = [
         "tick.py",
         "    if item.state in TERMINAL:",
         "    if item.state == CLOSED:",
+    ),
+    (
+        ("RW22 the terminal refusal narrows TERMINAL to the two-state tuple "
+         "(CLOSED, DECLINED) -- #4544's literal rewrite, one state narrower "
+         "than TERMINAL rather than RW21's all-the-way-to-one-state cut -- so "
+         "a PARKED item is still re-receipted and closed. Killed by the same "
+         "fixture as RW21 (`test_a_declined_or_parked_item_is_not_re_receipted` "
+         "with terminal=PARKED): PARKED is absent from this tuple too, so no "
+         "new test was needed for this site"),
+        "tick.py",
+        "    if item.state in TERMINAL:",
+        "    if item.state in (CLOSED, DECLINED):",
     ),
     # -- #4585: gate 1's SECOND arm, the path-intersection relaxation ------
     #
