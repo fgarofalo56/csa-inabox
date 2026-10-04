@@ -45,6 +45,55 @@ const RESULT_BOX_FILL_STYLE = {
   display: 'flex', flexDirection: 'column', overflow: 'auto',
 } as const;
 
+/**
+ * F19 export pre-flight — calls `/api/items/[type]/[id]/export-check` and
+ * decides whether a CSV/TXT export should proceed.
+ *
+ * #4456 — FAILS CLOSED. A non-OK response (401/403/404/5xx), an unreadable
+ * 2xx body, or a network error all establish NOTHING about whether the
+ * item's sensitivity label permits the export (deploy-integrity.md R7).
+ * Only a genuine 2xx body naming `blocked: false` may permit it. Exported
+ * standalone (rather than inlined in the `useMemo` below) so it is directly
+ * unit-testable without rendering the panel component.
+ */
+export async function evaluateExportCheck(
+  itemType: string,
+  itemId: string,
+): Promise<{ blocked: boolean; reason?: string }> {
+  try {
+    const r = await clientFetch(`/api/items/${itemType}/${itemId}/export-check`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ format: 'csv' }),
+    });
+    if (!r.ok) {
+      return {
+        blocked: true,
+        reason: `Could not verify export protection for this item (export-check responded ${r.status}). Blocking the export until it can be verified.`,
+      };
+    }
+    const j = await r.json().catch(() => null);
+    if (!j || typeof j.blocked !== 'boolean') {
+      // A 2xx with an unreadable/malformed body establishes just as little
+      // as a non-OK status — same fail-closed reasoning applies.
+      return {
+        blocked: true,
+        reason: 'export-check returned an unreadable response. Blocking the export until it can be verified.',
+      };
+    }
+    return { blocked: j.blocked, reason: j.reason };
+  } catch {
+    // Network/route failure establishes nothing either (deploy-integrity.md
+    // R7) — fail CLOSED, not open. Previously this returned
+    // `{ blocked: false }`, silently permitting the export whenever the
+    // check could not be reached at all.
+    return {
+      blocked: true,
+      reason: 'Could not reach export protection check (network error). Blocking the export until it can be verified.',
+    };
+  }
+}
+
 export interface KqlVisualization {
   Visualization?: string;
   Title?: string;
@@ -560,20 +609,7 @@ export function KqlResultsPanel({ result, loading, itemId, itemType, onLoadMore,
   // protected label blocks the download (encryption can't survive CSV/TXT).
   const onExportCheck = useMemo(() => {
     if (!itemId || !itemType) return undefined;
-    return async (): Promise<{ blocked: boolean; reason?: string }> => {
-      try {
-        const r = await clientFetch(`/api/items/${itemType}/${itemId}/export-check`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ format: 'csv' }),
-        });
-        const j = await r.json().catch(() => ({}));
-        return { blocked: !!j?.blocked, reason: j?.reason };
-      } catch {
-        // Network/route failure must not silently block a legitimate export.
-        return { blocked: false };
-      }
-    };
+    return () => evaluateExportCheck(itemType, itemId);
   }, [itemId, itemType]);
   // Default visual follows the cluster's `| render` annotation; the user can
   // override with the chart picker. Re-derive whenever a new result arrives.
