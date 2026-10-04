@@ -16,7 +16,10 @@
  * 502 with no way to tell "still building" from "crashed". Nor does the pin
  * cover every edge — it is the Front Door module, and Application Gateway is
  * enabled on FOUR boundaries (commercial-full, gcc-high, il5, tenant-dmlz),
- * where `requestTimeout: 30` is hardcoded with no parameter (#4431). Wherever
+ * where `requestTimeout` reads `param consoleRequestTimeoutSeconds` (threaded
+ * from `platform/fiab/bicep/main.bicep`'s `appGatewayRequestTimeoutSeconds`,
+ * default 120), overridable per boundary in a `.bicepparam`, bounded
+ * `@minValue(1)`/`@maxValue(86400)` (#4431, fixed by #4739). Wherever
  * both flags and `deployAppsEnabled` are true the console has two public edges
  * and this pin moves only one; on IL5, where Front Door is disabled as not
  * IL5-certified, App Gateway is the ONLY edge, so nothing here moves it at all.

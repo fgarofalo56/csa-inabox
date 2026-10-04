@@ -269,9 +269,14 @@ async function cancelIntentStore(): Promise<CancelIntentStore | null> {
     // earlier revision cited `deploy-integrity.md` R7 here; R7 governs what the
     // code HANDS BACK, so it was the wrong citation for a comment.)
     //
-    // `sql-cancel-intents` still has no ARM row — deferred to #4406 — and that
-    // is worth recording. It is simply not unprecedented, and nothing about the
-    // credential path is new.
+    // `sql-cancel-intents` now has two ARM rows (#4752): a standalone
+    // `sqlCancelIntents` resource in `loom-console-cosmos.bicep`, and a
+    // `loomContainers` row in `landing-zone/cosmos.bicep` — both with
+    // `defaultTtl: 120`, matching `CANCEL_INTENT_TTL_SECONDS` at :159. The
+    // lazy `createIfNotExists` below is deliberately KEPT, not retired: it is
+    // what makes a fresh estate work before the template has run
+    // (`auto-bind-by-default.md` §5 — deploy is the primary path, this is the
+    // idempotent fallback).
     //
     // WHAT IS MEASURED: the deploy grants the Console UAMI BOTH tiers on this
     // account — `Cosmos DB Built-in Data Contributor` (data-plane
