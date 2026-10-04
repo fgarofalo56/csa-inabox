@@ -343,6 +343,24 @@ def test_negative_control_an_item_in_any_non_terminal_state_is_audited_on_depart
         assert led.items[1019].state == NEEDS_AUDIT
 
 
+def test_an_unlaned_item_is_still_audited_on_departure(tmp_path):
+    """#4544: every departure fixture above comes from `_led()`, which
+    hardcodes `lane="lane:ci"` on every item, so a departure skip narrowed to
+    `and item.lane` (an unlaned item is never audited) survives all of them.
+    32 of 335 live items carry no `lane:` label and would be entirely
+    unwitnessed by this path without this fixture.
+
+    WHAT MAKES THIS FAIL: appending `and item.lane` to the departure skip
+    (kills T17). This item's `lane` is None, so the mutated condition is
+    falsy and it is silently left `ready` instead of flagged `departed`."""
+    led = _led(tmp_path)
+    led.items[1019].lane = None  # no `lane:` label on GitHub
+    _, departed = tick.refresh_from_github(led, {}, _live(range(1000, 1019)))
+    assert departed == 1
+    assert led.items[1019].state == NEEDS_AUDIT
+    assert led.items[1019].audit_reason == AUDIT_DEPARTED
+
+
 def test_a_new_issue_is_added_with_its_labels(tmp_path):
     led = _led(tmp_path)
     live = [

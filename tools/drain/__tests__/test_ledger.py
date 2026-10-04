@@ -675,6 +675,30 @@ def test_a_declined_item_seen_open_is_still_disputed(tmp_path):
     assert led.items[2].audit_reason == led_mod.AUDIT_REOPENED
 
 
+def test_a_stale_blocker_does_not_suppress_a_reopen_dispute(tmp_path):
+    """#4544: `blocker` is never cleared on a state change, so a CLOSED item
+    that happens to carry one from an earlier attempt looks, by that field
+    alone, like the thing a park holds. `and not existing.blocker` is a
+    plausible next narrowing of the `REOPEN_DISPUTES` branch -- it reads as
+    "a park is the thing with a blocker" -- and it is wrong, because nothing
+    clears the field on close.
+
+    WHAT MAKES THIS FAIL: appending `and not existing.blocker` to the
+    `REOPEN_DISPUTES` check (kills L31). This item is CLOSED, not PARKED, and
+    carries a stale blocker string; under that mutation the condition is
+    falsy and the reopen is silently dropped -- `state` stays CLOSED and
+    `audit_reason` stays None instead of flagging the dispute."""
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)
+    led.record_receipt(1, "ci-green", "run/1")
+    led.transition(1, CLOSED)
+    led.items[1].blocker = "stale: left over from an earlier, unrelated attempt"
+
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)   # seen OPEN on GitHub
+    assert led.items[1].state == NEEDS_AUDIT
+    assert led.items[1].audit_reason == led_mod.AUDIT_REOPENED
+
+
 def test_a_terminal_transition_clears_a_stale_audit_reason(tmp_path):
     """A CLOSED ITEM IS NOT ALSO A DEPARTED ONE (round 9 nit, pre-existing).
 
