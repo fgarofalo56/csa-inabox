@@ -960,10 +960,10 @@ test('#3886 matcher set is EXACTLY the two observed strings', () => {
   );
   assert.deepEqual(
     sig.not,
-    ['runstatus.timeout', 'runstatus.error', 'runstatus.canceled', 'runstatus.cancelled'],
+    ['runstatus.timeout', 'runstatus.error', 'runstatus.canceled', 'runstatus.cancelled', 'is not allowed access', 'client with ip'],
     `${TAXONOMY_REL_3886}: the exclusions on "${SIGNAL_3886}" changed. They exist so a mixed input ` +
-      'carrying a non-FAILED terminal status falls closed to unknown rather than being labelled a ' +
-      'build failure.',
+      'carrying a non-FAILED terminal status, OR a firewall-denial shape (#4461, run 34570892009), ' +
+      'falls to a different (or unknown) class rather than being labelled a build failure.',
   );
   assert.equal(sig.class, 'defect', `${TAXONOMY_REL_3886}: "${SIGNAL_3886}" changed class`);
   assert.equal(
@@ -1053,6 +1053,54 @@ test('#3886 the fail-closed default survives — an unrelated ACR build failure 
   assert.match(render(d, 'az acr build'), /Could not classify this failure/);
 });
 
+// #4461 — the precedence bug this entry's own `observed` field called
+// "hypothetical" on 2026-08-28 (co-occurrence with a more-specific cause "has
+// not been observed") was observed for real on 2026-09-11, run 34570892009:
+// an ACR firewall denial, once its task log reached a human or this
+// classifier, carries `failed during run, err: exit status` (this signal)
+// SIDE BY SIDE WITH `client with IP ... is not allowed access`
+// (config.acr-unreachable). Before the `not:` fix above, `defect` — being
+// first in classPrecedence — won regardless, asserting a Loom-code bug over
+// an operator-fixable network/lease condition. These two tests are the ones
+// that would have caught it: a positive control proving the firewall-denial
+// shape no longer reaches this signal, and a negative control proving a
+// genuine Dockerfile break still does.
+
+test('#4461 POSITIVE CONTROL — an ACR firewall denial classifies config, not defect, even carrying RunStatus.FAILED', () => {
+  // Verbatim shape from run 34570892009 (job 103186485753, loom-console):
+  // az's own client-side wrapper line PLUS the firewall-denial text the task
+  // log carried. Before the fix, the mere presence of "RunStatus.FAILED" let
+  // SIGNAL_3886 win on precedence even though this evidence is more specific.
+  const d = classify(
+    "ERROR: The run with ID 'cj778' finished with unsuccessful status 'RunStatus.FAILED'. " +
+      "Show run logs by 'az acr task logs -r acrloomk6mvh5sm6z7do --run-id cj778'.\n" +
+      'failed to login, ran out of retries: failed to set docker credentials: Error response from ' +
+      "daemon: Get \"https://acrloomk6mvh5sm6z7do.azurecr.io/v2/\": denied: client with IP " +
+      "'104.43.250.100' is not allowed access. Refer https://aka.ms/acr/firewall",
+  );
+  assert.equal(d.class, 'config');
+  assert.equal(d.signalId, 'config.acr-unreachable');
+  assert.notEqual(d.signalId, SIGNAL_3886);
+  assert.match(d.remediation, /network-locked|firewall lease/i);
+});
+
+test('#4461 NEGATIVE CONTROL — a genuine Dockerfile break with no firewall text still classifies defect', () => {
+  // Same RunStatus.FAILED wrapper as the positive control, but none of the
+  // excluded firewall markers — this must NOT be swept into config by an
+  // over-broad exclusion. Re-uses the original #3886 stderr verbatim.
+  const d = classify(STDERR_3886);
+  assert.equal(d.class, 'defect');
+  assert.equal(d.signalId, SIGNAL_3886);
+  assert.equal(d.retryable, false);
+});
+
+test('#4461 the `not` exclusions on the signal now include the firewall-denial markers', () => {
+  const onDisk = JSON.parse(fs.readFileSync(TAXONOMY_PATH, 'utf8'));
+  const sig = onDisk.signals.find((s) => s.id === SIGNAL_3886);
+  assert.ok(sig.not.includes('is not allowed access'));
+  assert.ok(sig.not.includes('client with ip'));
+});
+
 // #4472 — an ACR TASK's own 1-hour ceiling, hit mid-download (not a build step
 // failing), was previously unclassifiable and therefore `unknown` (correct,
 // R7-compliant, but not actionable since a genuinely transient condition then
@@ -1098,3 +1146,4 @@ test('#4472 the taxonomy on disk carries the new signal with the exact two-term 
   assert.equal(sig.class, 'transient');
   assert.equal(TAXONOMY.classes.transient.retryable, true);
 });
+
