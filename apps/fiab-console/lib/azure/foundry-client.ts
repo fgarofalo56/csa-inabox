@@ -1389,7 +1389,7 @@ function safetyFailOpen(op: string, e: unknown): ContentSafetyVerdict {
 export async function shieldPrompt(userPrompt: string): Promise<ContentSafetyVerdict> {
   let ep: string | null;
   try { ep = await resolveContentSafetyEndpoint(); } catch (e) { return safetyFailOpen('shieldPrompt', e); }
-  if (!ep) return { blocked: false, reason: '' };
+  if (!ep) return safetyFailOpen('shieldPrompt', new Error('#4458 endpoint did not resolve (empty)')); // loud, not silent
   let tok: string;
   // An unobtainable token (IMDS blip, or Cognitive Services User revoked
   // out-of-band) is an UNSCREENED prompt too, so it gets the same loud

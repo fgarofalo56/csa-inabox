@@ -23,11 +23,19 @@ vi.mock('@/lib/components/editor/monaco-textarea', () => ({
     <textarea aria-label={ariaLabel} value={value} onChange={(e) => onChange(e.target.value)} />
   ),
 }));
+// #3546 — spy on the REAL clientFetch (not a fetch-level mock) so the test can
+// read the third (options) argument each call site passes, which is where the
+// call-site-specific timeout copy lives.
+vi.mock('@/lib/client-fetch', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/client-fetch')>();
+  return { ...actual, clientFetch: vi.fn(actual.clientFetch) };
+});
 
 let flagValue = true;
 vi.mock('@/lib/components/ui/use-runtime-flag', () => ({ useRuntimeFlag: () => flagValue }));
 
-import { StreamingSqlEditor } from '../streaming-sql-editor';
+import { StreamingSqlEditor, RISINGWAVE_TIMEOUT_HINT } from '../streaming-sql-editor';
+import { clientFetch } from '@/lib/client-fetch';
 
 const ITEM = makeItem('streaming-sql', 'Streaming SQL');
 
@@ -50,7 +58,7 @@ const GATED = {
   },
 };
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); flagValue = true; });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); flagValue = true; (clientFetch as unknown as ReturnType<typeof vi.fn>).mockClear?.(); });
 
 describe('StreamingSqlEditor — tier wired', () => {
   it('badges the real engine version and shows the live view counts', async () => {
@@ -73,6 +81,32 @@ describe('StreamingSqlEditor — tier wired', () => {
     const post = calls.find((c) => c.url.includes('/api/streaming-sql/mv'));
     expect(post).toBeTruthy();
     expect(JSON.parse(String(post!.init!.body))).toMatchObject({ itemId: 'ss-1' });
+  });
+
+  // #3546 (deploy-integrity.md R7) — every clientFetch call this surface makes
+  // must carry RISINGWAVE_TIMEOUT_HINT, never clientFetch's default "heavier
+  // across multiple subscriptions" copy, which asserts a cause (sub fan-out)
+  // this single-instance streaming engine never has. BREAKS if the third
+  // argument is dropped from any call site, or if the hint text regresses to
+  // mention "subscriptions".
+  it('every clientFetch call carries the RisingWave-accurate timeout hint, never the generic cross-subscription one', async () => {
+    installFetchMock({
+      '/api/streaming-sql/status': () => CONFIGURED,
+      '/api/streaming-sql/mv': () => ({ ok: true, command: 'CREATE_MATERIALIZED_VIEW' }),
+    });
+    renderWithProviders(<StreamingSqlEditor item={ITEM} id="ss-1" />);
+    await waitFor(() => expect(screen.getByText('RisingWave 2.1.3')).toBeInTheDocument());
+    fireEvent.click(screen.getAllByRole('button', { name: /Materialize/ })[0]);
+    await waitFor(() => expect(screen.getByText(/maintaining it incrementally/)).toBeInTheDocument());
+
+    const mock = clientFetch as unknown as ReturnType<typeof vi.fn>;
+    expect(mock.mock.calls.length).toBeGreaterThanOrEqual(2); // status + mv
+    for (const args of mock.mock.calls) {
+      const opts = args[2] as { timeoutHint?: string } | number | undefined;
+      expect(typeof opts).toBe('object');
+      expect((opts as { timeoutHint?: string }).timeoutHint).toBe(RISINGWAVE_TIMEOUT_HINT);
+    }
+    expect(RISINGWAVE_TIMEOUT_HINT).not.toMatch(/multiple subscriptions/i);
   });
 });
 
