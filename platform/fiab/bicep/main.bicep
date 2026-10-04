@@ -1321,6 +1321,11 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     // Adopted workspace's 'loom-default' (else 'loom-governance') SQL warehouse (see the var's comment).
     // '' until the warehouse exists — the admin-plane param default.
     loomDatabricksSqlWarehouseId: existingDatabricksSqlWarehouseId
+    // Same warehouse id, same source var: csa-loom-post-deploy-bootstrap.yml:1380-1381 sets both
+    // LOOM_DATABRICKS_SQL_WAREHOUSE_ID and LOOM_DATABRICKS_LINEAGE_WAREHOUSE_ID to the one
+    // 'loom-default' warehouse (it serves SQL execution, Delta Sharing grants, lineage and
+    // system tables) -- there is no separate "lineage" warehouse to look up (#4773).
+    loomDatabricksLineageWarehouseId: existingDatabricksSqlWarehouseId
     keyVaultHsmIsolated: keyVaultHsmIsolated
     consolePrincipalNeedsCmkBind: consolePrincipalNeedsCmkBind
     adminEntraGroupId: adminEntraGroupId

@@ -462,6 +462,32 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     },
   },
   {
+    // #3342 — the Console identity as a Databricks ACCOUNT ADMIN. Every
+    // account-plane Unity Catalog call (metastore list / read / assign, and the
+    // brownfield `databricks.metastoreAssignment` fitness read) needs it.
+    // Databricks reserves the grant to an EXISTING account admin, and the first
+    // one is established interactively by an Entra Global Administrator — so
+    // the Console cannot perform it for itself. The env half is the account id;
+    // the role half is measured live by probe-databricks-account-admin
+    // (readiness GATE_PROBE_MAP), whose result carries this deployment's own
+    // client id / object id / account id and the account console link.
+    id: 'svc-databricks-account-admin', category: 'azure-services',
+    title: 'Databricks account admin — Unity Catalog metastore read / assign', severity: 'recommended',
+    required: ['LOOM_DATABRICKS_ACCOUNT_ID'], warnOnMiss: true,
+    remediation: 'Set LOOM_DATABRICKS_ACCOUNT_ID to the Databricks account id, then have an existing Databricks account admin add the Console UAMI (Microsoft Entra ID managed service principal, by its application id) to the account and turn on its Account admin role. The Re-check re-reads the account API as the Console identity; the brownfield adopt validation re-reads the metastore assignment the same way.',
+    provisionedBy: 'admin-plane/main.bicep forwards loomDatabricksAccountId → LOOM_DATABRICKS_ACCOUNT_ID. modules/landing-zone/databricks-uc-bootstrap.bicep grants account_admin to the Console UAMI when its script identity is already an account admin; on an account whose only admin is a person, the grant is that person\'s one-time action.',
+    role: 'Databricks account admin (account_admin role on the Console UAMI\'s account service principal)',
+    docs: 'https://learn.microsoft.com/azure/databricks/admin/users-groups/manage-service-principals',
+    // X-MATRIX: per Microsoft Learn the Databricks account console is not
+    // available in Azure Government regions, and Unity Catalog is not offered
+    // there (see svc-databricks-system-tables) — there is no account plane to
+    // grant on. Loom Unity is the catalog at those boundaries.
+    availability: {
+      commercial: 'ga', gccHigh: 'unavailable', il5: 'unavailable',
+      fallbackNote: 'The Databricks account console and Unity Catalog are not available in Azure Government, so there is no account admin role to grant at this boundary. Loom Unity (the self-hosted, Unity-Catalog-compatible catalog, LOOM_UC_BACKEND=oss) is the catalog for Databricks workspaces here.',
+    },
+  },
+  {
     id: 'svc-synapse-spark-pool', category: 'azure-services', title: 'Synapse Spark pool (ML predict / scheduled runs)', severity: 'recommended',
     required: ['LOOM_SYNAPSE_SPARK_POOL'], warnOnMiss: true,
     remediation: 'Set LOOM_SYNAPSE_SPARK_POOL (e.g. loompool) so ml-model predict and scheduled job run-adapters have a Spark compute target (synapse_spark_pool_not_configured).',

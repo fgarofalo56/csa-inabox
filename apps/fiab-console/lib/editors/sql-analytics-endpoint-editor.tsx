@@ -46,6 +46,12 @@ import {
 } from '@/lib/components/synapse-sql-object-explorer';
 import { downloadBlob, resultsToCsv, resultsToJson } from './components/result-export';
 import { useSharedEditorStyles } from './shared-styles';
+import { useIsTenantAdmin } from '@/lib/components/session-context';
+import { SqlRefusalOrError, isSqlRefusal, type SqlFailure } from './lakehouse/panes/sql-pane';
+import { SqlPoolQueryScopeNote, SQL_POOL_ADMIN_ONLY_TEMPLATE } from './components/sql-pool-query-scope-note';
+
+/** The ribbon entries disabled for a caller who is not a tenant admin, named in the scope note. */
+const ADMIN_ONLY_ENTRIES = ['New view', 'New procedure', 'New function', 'Grant access', 'Row-level security'] as const;
 // UX-baseline shared components (SC-6/8/9/10): teaching banner, item-view tab
 // strip, ribbon command-search registration, and the schema entity-diagram —
 // each fed by this editor's OWN real serverless-SQL objects (no mocks).
@@ -92,11 +98,17 @@ interface QueryResponse {
   error?: string;
   code?: string;
   sqlNumber?: number;
+  /** Set when the route chose not to run the query; says what to do instead. */
+  remediation?: string;
+  construct?: string;
 }
+
+/** The database every caller who is not a tenant admin runs in (the query route pins it). */
+const READER_DATABASE = 'master';
 
 const DEFAULT_SQL =
   `-- SQL analytics endpoint — read-only T-SQL over the lake (Azure-native serverless; no Fabric).\n`
-  + `SELECT 1 AS smoke, SYSDATETIMEOFFSET() AS server_time, SUSER_NAME() AS upn;`;
+  + `SELECT 1 AS smoke, SYSDATETIMEOFFSET() AS server_time;`;
 
 // Custom objects on a lake database live OUTSIDE [dbo] ([dbo] is reserved for
 // Spark-managed lake tables). Consumption objects default to [reports].
@@ -174,7 +186,12 @@ export function SqlAnalyticsEndpointEditor({ item, id }: { item: FabricItemType;
   // may pass ?database=<db> to land directly on that attached database.
   const searchParams = useSearchParams();
   const initialDb = searchParams?.get('database') || 'master';
-  const [database, setDatabase] = useState(initialDb);
+  const [chosenDatabase, setDatabase] = useState(initialDb);
+  // This editor posts to the serverless SQL pool query route, which runs a
+  // non-admin's query in master whatever it is sent; the picker, the explorer
+  // and the query all read this value.
+  const isAdmin = useIsTenantAdmin();
+  const database = isAdmin ? chosenDatabase : READER_DATABASE;
   const [databases, setDatabases] = useState<string[]>([]);
   const [endpoint, setEndpoint] = useState<string>('');
   const [configured, setConfigured] = useState(true);
@@ -351,17 +368,19 @@ export function SqlAnalyticsEndpointEditor({ item, id }: { item: FabricItemType;
       { label: 'Connect', actions: [
         { label: 'Connection details', onClick: () => setConnOpen(true), title: 'Serverless endpoint FQDN, database, JDBC URL + sqlcmd snippet' },
       ]},
+      // Templates the query route refuses for a caller who is not a tenant
+      // admin are disabled for that caller, with the reason.
       { label: 'New', actions: [
-        { label: 'New view', onClick: () => newScript(TEMPLATE_VIEW) },
-        { label: 'New procedure', onClick: () => newScript(TEMPLATE_PROC) },
-        { label: 'New function', onClick: () => newScript(TEMPLATE_FUNC) },
+        { label: 'New view', onClick: isAdmin ? () => newScript(TEMPLATE_VIEW) : undefined, disabled: !isAdmin, disabledFocusable: true, title: isAdmin ? undefined : SQL_POOL_ADMIN_ONLY_TEMPLATE },
+        { label: 'New procedure', onClick: isAdmin ? () => newScript(TEMPLATE_PROC) : undefined, disabled: !isAdmin, disabledFocusable: true, title: isAdmin ? undefined : SQL_POOL_ADMIN_ONLY_TEMPLATE },
+        { label: 'New function', onClick: isAdmin ? () => newScript(TEMPLATE_FUNC) : undefined, disabled: !isAdmin, disabledFocusable: true, title: isAdmin ? undefined : SQL_POOL_ADMIN_ONLY_TEMPLATE },
       ]},
       { label: 'Security', actions: [
-        { label: 'Grant access', onClick: () => newScript(TEMPLATE_GRANT), title: 'Object-level GRANT / DENY on a consumption view' },
-        { label: 'Row-level security', onClick: () => newScript(TEMPLATE_RLS), title: 'Predicate function + security policy (row-level security)' },
+        { label: 'Grant access', onClick: isAdmin ? () => newScript(TEMPLATE_GRANT) : undefined, disabled: !isAdmin, disabledFocusable: true, title: isAdmin ? 'Object-level GRANT / DENY on a consumption view' : SQL_POOL_ADMIN_ONLY_TEMPLATE },
+        { label: 'Row-level security', onClick: isAdmin ? () => newScript(TEMPLATE_RLS) : undefined, disabled: !isAdmin, disabledFocusable: true, title: isAdmin ? 'Predicate function + security policy (row-level security)' : SQL_POOL_ADMIN_ONLY_TEMPLATE },
       ]},
     ]},
-  ], [loading, run, runSelection, objectsLoading, loadObjects, newScript]);
+  ], [isAdmin, loading, run, runSelection, objectsLoading, loadObjects, newScript]);
 
   // SC-9 — publish the ribbon actions (Run, New view/procedure/function, Grant
   // access, Row-level security, Connection details…) to the shared command
@@ -442,6 +461,7 @@ export function SqlAnalyticsEndpointEditor({ item, id }: { item: FabricItemType;
               </MessageBarBody>
             </MessageBar>
           )}
+          <SqlPoolQueryScopeNote adminOnlyEntries={ADMIN_ONLY_ENTRIES} />
           {/* SC-8 — item-view tab strip: T-SQL query editor ⇄ schema diagram,
               one-for-one with the Fabric SQL-endpoint Data/Model views. */}
           <ItemTabStrip
@@ -457,16 +477,24 @@ export function SqlAnalyticsEndpointEditor({ item, id }: { item: FabricItemType;
             <Badge appearance="filled" color="brand" icon={<Server16Regular />}>SQL analytics endpoint</Badge>
             <div className={s.connect}>
               <Label size="small" htmlFor="connect-db">Connect to</Label>
-              <Dropdown
-                id="connect-db"
-                size="small"
-                value={database}
-                selectedOptions={[database]}
-                onOptionSelect={(_, d) => { if (d.optionValue) setDatabase(d.optionValue); }}
-                style={{ minWidth: 180 }}
+              <Tooltip
+                content={isAdmin
+                  ? 'The database this editor runs your query in.'
+                  : 'Pinned to master: queries from callers who are not tenant admins run in master. A tenant admin can pick another database.'}
+                relationship="description"
               >
-                {databases.map((db) => <Option key={db} value={db}>{db}</Option>)}
-              </Dropdown>
+                <Dropdown
+                  id="connect-db"
+                  size="small"
+                  value={database}
+                  selectedOptions={[database]}
+                  disabled={!isAdmin}
+                  onOptionSelect={(_, d) => { if (d.optionValue) setDatabase(d.optionValue); }}
+                  style={{ minWidth: 180 }}
+                >
+                  {(isAdmin ? databases : [READER_DATABASE]).map((db) => <Option key={db} value={db}>{db}</Option>)}
+                </Dropdown>
+              </Tooltip>
             </div>
             <Badge appearance="outline" color={endpoint ? 'success' : 'severe'}
               className={s.endpointBadge} title={endpoint || 'endpoint not configured'}>
@@ -505,7 +533,7 @@ export function SqlAnalyticsEndpointEditor({ item, id }: { item: FabricItemType;
               !result ? (
                 <Caption1>Click <strong>Run</strong> (or Ctrl+Enter) to execute. Results appear here.</Caption1>
               ) : !result.ok ? (
-                <Caption1>Query failed — see the <strong>Messages</strong> tab.</Caption1>
+                <Caption1>{isSqlRefusal(result) ? 'Query not run' : 'Query failed'} — see the <strong>Messages</strong> tab.</Caption1>
               ) : result.isDdl || columns.length === 0 ? (
                 <Caption1>Command(s) completed — see the <strong>Messages</strong> tab.</Caption1>
               ) : (
@@ -552,6 +580,8 @@ export function SqlAnalyticsEndpointEditor({ item, id }: { item: FabricItemType;
             {!loading && resultTab === 'messages' && (
               !result ? (
                 <Caption1>Messages (PRINT, RAISERROR, DDL receipts and errors) appear here after you Run.</Caption1>
+              ) : isSqlRefusal(result) ? (
+                <SqlRefusalOrError result={result as SqlFailure} />
               ) : !result.ok ? (
                 <MessageBar intent="error">
                   <MessageBarBody className={s.errorText}>

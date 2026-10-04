@@ -100,14 +100,18 @@ no decisions.
 >    wizard is not the tool for reconciling an existing estate. Use
 >    `deploy-fiab-commercial.yml` with `allow_existing_hub=true` for that —
 >    [Brownfield → adopting into an existing hub](brownfield.md#adopting-into-an-existing-loom-hub).
-> 2. **A plan containing any `adopt` decision cannot be deployed from the
->    wizard.** The Deploy button is gated on `planBlockers()`, which blocks every
->    adopt decision that has no fitness verdict — and no production code path
->    ever attaches one. So **drive a brownfield install from the CLI**, and note
->    that `recommendFor()` picks `adopt` *by default* whenever one candidate is
->    found, so this is the default outcome on a brownfield tenant, not an opt-in.
+> 2. **An `adopt` of Purview, AI Search, Databricks, Cosmos, or AML still cannot
+>    deploy from the wizard** (updated 2026-10-03, #3342). The producer that was
+>    missing (`evaluateFitness`/`applyFitness`) now exists — PR #3445 wired
+>    `lib/deploy/fitness-probe.ts` into `POST /api/setup/validate-adoption` and
+>    the wizard calls it — so most services can now adopt from the UI. These
+>    five still block because a check each of them needs returns `unknown` for
+>    lack of a data-plane token at plan time, and `unknown` is never treated as
+>    a pass. Note that `recommendFor()` picks `adopt` *by default* whenever one
+>    candidate is found, so hitting this is the default outcome on a brownfield
+>    tenant, not an opt-in. **Use the CLI for these five services.**
 >    Measurement and re-measure commands:
->    [Brownfield → blocking defect](brownfield.md#blocking-defect-the-wizard-cannot-deploy-a-plan-containing-an-adopt-decision).
+>    [Brownfield → five singleton services still block](brownfield.md#partially-fixed-the-wizard-can-now-deploy-most-plans-containing-an-adopt-decision--five-singleton-services-still-block).
 >
 > **Corrections to an earlier version of this box**, recorded rather than
 > silently rewritten:

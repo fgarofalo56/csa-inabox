@@ -49,13 +49,16 @@ import {
 import { downloadBlob, resultsToCsv, resultsToJson } from './components/result-export';
 import { PreviewTable } from '@/lib/components/shared/preview-table';
 import { useSharedEditorStyles } from './shared-styles';
+import { useIsTenantAdmin } from '@/lib/components/session-context';
+import { SqlRefusalOrError, isSqlRefusal, type SqlFailure } from './lakehouse/panes/sql-pane';
+import { SqlPoolQueryScopeNote, SQL_POOL_ADMIN_ONLY_TEMPLATE } from './components/sql-pool-query-scope-note';
 
 const useLocalStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap', minWidth: 0 },
   connect: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', minWidth: 0 },
   endpointBadge: { maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-  errorText: { overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  wrapText: { overflowWrap: 'anywhere', wordBreak: 'break-word' },
   editorWrap: { minHeight: '220px' },
   resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM, minHeight: '200px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   resultMeta: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
@@ -87,11 +90,31 @@ interface QueryResponse {
   error?: string;
   code?: string;
   sqlNumber?: number;
+  /** Set when the route chose not to run the query; says what to do instead. */
+  remediation?: string;
+  construct?: string;
 }
+
+/**
+ * The route refuses a query before running it (see
+ * `app/api/items/synapse-serverless-sql-pool/_lib/query-scope.ts`); the shared
+ * predicate decides which failures those are, so this editor's caption and its
+ * Messages bar read the same response the same way.
+ */
+const isRefusal = (r: QueryResponse): boolean => isSqlRefusal(r);
+
+/** The database every caller who is not a tenant admin runs in (the route pins it). */
+const READER_DATABASE = 'master';
+
+/** Why a control is unavailable to a caller who is not a tenant admin. */
+const ADMIN_ONLY_TEMPLATE = SQL_POOL_ADMIN_ONLY_TEMPLATE;
+
+/** The ribbon entries disabled for a caller who is not a tenant admin, named in the scope note. */
+const ADMIN_ONLY_ENTRIES = ['New view', 'New procedure', 'New function', 'Bytes processed', 'Cost cap'] as const;
 
 const DEFAULT_SQL =
   `-- Synapse Serverless SQL — Azure-native analytics endpoint (no Fabric needed).\n`
-  + `SELECT 1 AS smoke, SYSDATETIMEOFFSET() AS server_time, SUSER_NAME() AS upn;`;
+  + `SELECT 1 AS smoke, SYSDATETIMEOFFSET() AS server_time;`;
 
 // Custom objects on a lake database must live OUTSIDE [dbo] ([dbo] is reserved
 // for Spark-managed lake tables). Templates default to [reports].
@@ -140,12 +163,19 @@ const TSQL_KEYWORDS = [
 
 export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  // Only a tenant admin runs ad-hoc SQL in the chosen database; anyone else's
+  // query is checked and run in master by the route (see the scope bar below).
+  const isAdmin = useIsTenantAdmin();
   // A paired editor (e.g. opened from a mirror's "SQL analytics endpoint" link)
   // may pass ?database=<db> to land directly on that database so its views are
   // visible without manually picking it from the connect-to dropdown.
   const searchParams = useSearchParams();
   const initialDb = searchParams?.get('database') || 'master';
-  const [database, setDatabase] = useState(initialDb);
+  const [chosenDatabase, setDatabase] = useState(initialDb);
+  // The route runs a non-admin's query in master whatever it is sent, so the
+  // editor does the same: the picker, the explorer, Excel and the connection
+  // details all read this value, never the one a link or the picker chose.
+  const database = isAdmin ? chosenDatabase : READER_DATABASE;
   const [databases, setDatabases] = useState<string[]>([]);
   const [endpoint, setEndpoint] = useState<string>('');
   const [configured, setConfigured] = useState(true);
@@ -362,24 +392,26 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
       { label: 'Connect', actions: [
         { label: 'Connection details', onClick: () => setConnOpen(true), title: 'Serverless endpoint FQDN, database, JDBC URL + sqlcmd snippet (copy)' },
       ]},
+      // DDL templates and the sys-catalog cost scripts are refused for a caller
+      // who is not a tenant admin, so they are disabled with the reason.
       { label: 'New', actions: [
-        { label: 'New view', onClick: () => newScript(TEMPLATE_VIEW) },
-        { label: 'New procedure', onClick: () => newScript(TEMPLATE_PROC) },
-        { label: 'New function', onClick: () => newScript(TEMPLATE_FUNC) },
+        { label: 'New view', onClick: isAdmin ? () => newScript(TEMPLATE_VIEW) : undefined, disabled: !isAdmin, disabledFocusable: true, title: isAdmin ? undefined : ADMIN_ONLY_TEMPLATE },
+        { label: 'New procedure', onClick: isAdmin ? () => newScript(TEMPLATE_PROC) : undefined, disabled: !isAdmin, disabledFocusable: true, title: isAdmin ? undefined : ADMIN_ONLY_TEMPLATE },
+        { label: 'New function', onClick: isAdmin ? () => newScript(TEMPLATE_FUNC) : undefined, disabled: !isAdmin, disabledFocusable: true, title: isAdmin ? undefined : ADMIN_ONLY_TEMPLATE },
       ]},
       { label: 'Cost', actions: [
-        { label: 'Bytes processed', onClick: () => newScript(
+        { label: 'Bytes processed', disabled: !isAdmin, disabledFocusable: true, title: isAdmin ? undefined : ADMIN_ONLY_TEMPLATE, onClick: isAdmin ? () => newScript(
           `-- Serverless bytes-processed cost telemetry.\n`
           + `SELECT type, data_processed_mb FROM sys.dm_external_data_processed;`,
-        ) },
-        { label: 'Cost cap', onClick: () => newScript(
+        ) : undefined },
+        { label: 'Cost cap', disabled: !isAdmin, disabledFocusable: true, title: isAdmin ? undefined : ADMIN_ONLY_TEMPLATE, onClick: isAdmin ? () => newScript(
           `-- View / set the serverless cost-control (bytes) policy.\n`
           + `SELECT * FROM sys.configurations WHERE name LIKE '%cost%' OR name LIKE '%limit%';\n`
           + `-- Set a daily cap (workspace admin): EXEC sp_set_data_processed_limit @type=N'daily', @limit_TB=1;`,
-        ) },
+        ) : undefined },
       ]},
     ]},
-  ], [loading, run, runSelection, objectsLoading, loadObjects, newScript, openInExcel, sqlText]);
+  ], [isAdmin, loading, run, runSelection, objectsLoading, loadObjects, newScript, openInExcel, sqlText]);
 
   const rows = result?.rows || [];
   const columns = result?.columns || [];
@@ -411,20 +443,29 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
               detail="Set LOOM_SYNAPSE_WORKSPACE on the Console container app (admin-plane bicep deploys the Synapse workspace + Serverless endpoint). No Microsoft Fabric or Power BI workspace is required — this is the Azure-native default."
             />
           )}
+          <SqlPoolQueryScopeNote adminOnlyEntries={ADMIN_ONLY_ENTRIES} />
           <div className={s.toolbar}>
             <Badge appearance="filled" color="brand" icon={<Server16Regular />}>Serverless</Badge>
             <div className={s.connect}>
               <Label size="small" htmlFor="connect-db">Connect to</Label>
-              <Dropdown
-                id="connect-db"
-                size="small"
-                value={database}
-                selectedOptions={[database]}
-                onOptionSelect={(_, d) => { if (d.optionValue) setDatabase(d.optionValue); }}
-                style={{ minWidth: 180 }}
+              <Tooltip
+                content={isAdmin
+                  ? 'The database this editor runs your query in.'
+                  : 'Pinned to master: queries from callers who are not tenant admins run in master. A tenant admin can pick another database.'}
+                relationship="description"
               >
-                {databases.map((db) => <Option key={db} value={db}>{db}</Option>)}
-              </Dropdown>
+                <Dropdown
+                  id="connect-db"
+                  size="small"
+                  value={database}
+                  selectedOptions={[database]}
+                  disabled={!isAdmin}
+                  onOptionSelect={(_, d) => { if (d.optionValue) setDatabase(d.optionValue); }}
+                  style={{ minWidth: 180 }}
+                >
+                  {(isAdmin ? databases : [READER_DATABASE]).map((db) => <Option key={db} value={db}>{db}</Option>)}
+                </Dropdown>
+              </Tooltip>
             </div>
             <Badge appearance="outline" color={endpoint ? 'success' : 'severe'}
               className={s.endpointBadge} title={endpoint || 'endpoint not configured'}>
@@ -461,7 +502,7 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
               !result ? (
                 <Caption1>Click <strong>Run</strong> (or Ctrl+Enter) to execute. Results appear here.</Caption1>
               ) : !result.ok ? (
-                <Caption1>Query failed — see the <strong>Messages</strong> tab.</Caption1>
+                <Caption1>{isRefusal(result) ? 'Query not run' : 'Query failed'} — see the <strong>Messages</strong> tab.</Caption1>
               ) : result.isDdl || columns.length === 0 ? (
                 <Caption1>Command(s) completed — see the <strong>Messages</strong> tab.</Caption1>
               ) : (
@@ -513,9 +554,11 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
             {!loading && resultTab === 'messages' && (
               !result ? (
                 <Caption1>Messages (PRINT, RAISERROR, DDL receipts and errors) appear here after you Run.</Caption1>
+              ) : isRefusal(result) ? (
+                <SqlRefusalOrError result={result as SqlFailure} />
               ) : !result.ok ? (
                 <MessageBar intent="error">
-                  <MessageBarBody className={s.errorText}>
+                  <MessageBarBody className={s.wrapText}>
                     <MessageBarTitle>Query failed{result.sqlNumber ? ` (Msg ${result.sqlNumber})` : ''}</MessageBarTitle>
                     {result.error || 'Unknown error'}{result.code ? ` · ${result.code}` : ''}
                   </MessageBarBody>

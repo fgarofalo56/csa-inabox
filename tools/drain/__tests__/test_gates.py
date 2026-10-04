@@ -488,6 +488,25 @@ def test_negative_control_a_token_straddling_the_window_cut_is_not_lost():
         assert not near[0].blocks, f"pad={pad}: the window still bounds blocking"
 
 
+def test_negative_control_a_template_straddling_the_window_cut_does_not_block():
+    """#4485 finding 5. The template line is excluded from `blocking_mention`
+    by checking `all(t in ln for t in VERDICT_TOKENS)` on the line -- but when
+    the 200-char window cuts the template line itself, the TRUNCATED `ln`
+    carries REQUEST-CHANGES without CANNOT-ASSESS, no longer looks like the
+    template, and reads as a genuine block. WHAT MAKES THIS FAIL: read the
+    exclusion check against `ln` (the truncated line) instead of `full` (the
+    untruncated line from `body`) -- every pad below then blocks."""
+    template = "VERDICT: APPROVE | REQUEST-CHANGES | CANNOT-ASSESS"
+    for pad in range(135, 151):
+        body = "Reviewer notes.\n" + ("x" * pad) + template
+        rc_end = body.index("REQUEST-CHANGES") + len("REQUEST-CHANGES")
+        ca_end = body.index("CANNOT-ASSESS") + len("CANNOT-ASSESS")
+        assert rc_end <= 200 < ca_end, f"pad={pad}: fixture does not straddle the window"
+        live, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+        assert live == []
+        assert not any(n.blocks for n in near), f"pad={pad}: a straddled template blocked"
+
+
 def test_negative_control_a_prose_header_that_is_not_first_is_reported_as_such():
     """`not-the-first-line`, not `below-the-window`. The message must name the
     cause it established: a header three lines down, inside the window, is
@@ -499,9 +518,17 @@ def test_negative_control_a_prose_header_that_is_not_first_is_reported_as_such()
     )
     live, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
     assert live == []
-    assert len(near) == 1
+    # #4485 finding 3: this same line is ALSO a bare VERDICT_TOKEN mention with
+    # no announcing marker (`mentions_token`) -- `out_of_window` used to mask
+    # it entirely by being checked first in the elif chain. It is recorded now,
+    # second and forced non-blocking, rather than lost. WHAT MAKES near[0]
+    # WRONG: swap the two append orders above it in `parse_verdicts` -- then
+    # `mentions_token`'s reason would land here instead of NEAR_NOT_FIRST's.
+    assert len(near) == 2
     assert near[0].kind == gates.NEAR_NOT_FIRST
     assert not near[0].blocks
+    assert near[1].kind == gates.NEAR_NO_MARKER
+    assert not near[1].blocks, "a masked near-miss must not gain a NEW vote to block"
 
 
 def test_an_unannounced_approve_does_not_block():
@@ -610,10 +637,48 @@ def test_a_misspelled_marker_is_reported_loudly_not_dropped():
     spelling."""
     body = "## Re-review - REQUEST-CHANGES\n\nBlocker: the thing is broken.\n"
     _, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
-    assert len(near) == 1
+    # #4485 finding 3: this line is REQUEST-CHANGES counted both as a BLOCKING
+    # mention and (separately) as a bare VERDICT_TOKEN mention -- `elif`
+    # used to let `blocking_mention` mask `mentions_token` outright. Still
+    # recorded second now, forced non-blocking. WHAT MAKES near[0] WRONG:
+    # delete the `blocking_mention` branch from the chain -- then
+    # `mentions_token`'s (non-blocking) reason would be near[0] instead, and
+    # a genuine block would silently stop blocking.
+    assert len(near) == 2
     assert near[0].kind == gates.NEAR_NO_MARKER
     assert near[0].blocks
     assert "formatting never reduces a block" in near[0].reason
+    assert near[1].kind == gates.NEAR_NO_MARKER
+    assert not near[1].blocks, "the masked mention must not ALSO block"
+
+
+def test_a_cited_verdict_does_not_mask_a_real_block_below_it():
+    """#4485 finding 3, the issue's own example: `cited` used to mask
+    `blocking_below` outright in the elif chain, so a comment that quoted an
+    old verdict ABOVE a genuine block BELOW the window reported only the
+    citation -- the block was invisible even in the evidence line. (The quoted
+    line's own APPROVE also independently satisfies `mentions_token` -- raw
+    line scans do not exempt quoted text -- so a THIRD entry is expected too.)
+    WHAT MAKES near[0] WRONG: move the `cited` tuple past `blocking_below` in
+    `parse_verdicts` -- then near[0] would be the BLOCKING_BELOW entry
+    instead, which is also fine for the DECISION (neither blocks) but proves
+    this fixture no longer witnesses precedence."""
+    body = (
+        "> ## Independent review - APPROVE\n\n"
+        + ("filler. " * 30)
+        + "\nREQUEST-CHANGES after all, see below\n"
+    )
+    assert body.index("REQUEST-CHANGES") > 200, "fixture must push the block past the window"
+    live, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+    assert live == []
+    assert len(near) == 3
+    assert near[0].kind == gates.NEAR_CITED
+    assert not near[0].blocks
+    assert near[1].kind == gates.NEAR_NOT_FIRST
+    assert "BELOW" in near[1].reason
+    assert not near[1].blocks, "a masked near-miss must not gain a NEW vote to block"
+    assert near[2].kind == gates.NEAR_NO_MARKER
+    assert not near[2].blocks
 
 
 def test_a_misspelled_marker_over_an_approve_does_not_block_but_is_reported():

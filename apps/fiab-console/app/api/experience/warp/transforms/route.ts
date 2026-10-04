@@ -122,8 +122,8 @@ export async function GET() {
       };
     });
 
-    // Run targets — real warehouse / lakehouse-SQL-endpoint items, plus the
-    // ambient Synapse engines (Dedicated / Serverless) the route can reach.
+    // Run targets — real warehouse / lakehouse-SQL-endpoint / serverless SQL pool
+    // items, plus the ambient Synapse Dedicated engine the route can reach.
     const typeParams = TARGET_ITEM_TYPES.map((t, i) => ({ name: `@k${i}`, value: t }));
     const typeExpr = typeParams.map((p) => p.name).join(',');
     const { resources: targetItems } = await items.items
@@ -157,19 +157,21 @@ export async function GET() {
   }
 }
 
-/** Ambient engine targets that don't need a specific item id. */
+/**
+ * Ambient engine targets that don't need a specific item id.
+ *
+ * Serverless SQL is offered only as `synapse-serverless-sql-pool` ITEM targets
+ * (listed above), never as an ambient id: the visual-query route authorizes the
+ * caller on that item and item-scopes the generated SQL, so an id that is not an
+ * item is answered 404 for every caller. `__tests__/warp-targets.test.ts` pins
+ * that no serverless target is offered here.
+ */
 function synapseDefaultTargets(): WarpRunTarget[] {
   return [
     {
       id: 'synapse-dedicated',
       label: 'Synapse Dedicated SQL pool (T-SQL)',
       engine: 'synapse-dedicated-sql-pool',
-      dialect: 'tsql',
-    },
-    {
-      id: 'synapse-serverless',
-      label: 'Synapse Serverless SQL endpoint (T-SQL)',
-      engine: 'synapse-serverless-sql-pool',
       dialect: 'tsql',
     },
   ];

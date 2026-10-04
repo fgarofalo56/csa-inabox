@@ -100,12 +100,27 @@
  * the call site. The header used to claim this change closed the route's
  * authorization gap, which was an overclaim for that branch (deploy-integrity
  * R7) — recorded here rather than quietly corrected.
+ *
+ * ── RAW SQL SCOPE (#4619) ────────────────────────────────────────────────────
+ * Past that gate, a TENANT ADMIN's `body.sql` runs unchanged on the shared
+ * serverless `master` target. Any other caller's SQL follows the serverless SQL
+ * pool editor's rules (`../../_lib/direct-lake-scope.ts`): the lakehouse SQL
+ * tab's classifier, every `OPENROWSET(BULK …)` location under the storage root
+ * of a lakehouse in the model's own workspace, and a run in `master` on a pool
+ * of its own with the batch starting `USE [master];`. A model whose SQL reads
+ * other storage is refused for those callers, with the reason and what to do,
+ * until a per-item serverless database (#4821) gives it a scoped data source.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession, type SessionPayload } from '@/lib/auth/session';
 import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import { loadOwnedItem } from '@/app/api/items/_lib/item-crud';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
+import type { WorkspaceItem } from '@/lib/types/workspace';
+import { readerTarget, readerBatch, withoutReaderUseMessage } from '@/app/api/items/lakehouse/_lib/query-reader';
+import { confineToWorkspaceLakehouses } from '@/app/api/items/synapse-serverless-sql-pool/_lib/query-scope';
+import { DIRECT_LAKE_SQL_SURFACE, DIRECT_LAKE_READER_POOL_PREFIX } from '../../_lib/direct-lake-scope';
 import {
   executeQuery,
   serverlessTarget,
@@ -212,11 +227,11 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   }
 
   // ── RAW T-SQL IS NOT A PREVIEW READ, AND IS GATED SEPARATELY ────────────────
-  // `body.sql` reaches `executeQuery(serverlessTarget('master'), rawSql)` VERBATIM
-  // — the only limit is a 64KB cap, and Synapse serverless accepts `CREATE VIEW`,
+  // A tenant admin's `body.sql` reaches `executeQuery(serverlessTarget('master'),
+  // rawSql)` unchanged (64KB cap), and Synapse serverless accepts `CREATE VIEW`,
   // `CREATE EXTERNAL TABLE` and `CREATE DATABASE SCOPED CREDENTIAL` on that
-  // connection. So the two concessions the TABLE branch legitimately makes are
-  // both wrong for this one:
+  // connection; anyone else's is classified first (below). Either way the two
+  // concessions the TABLE branch legitimately makes are both wrong for this one:
   //
   //   1. `allowReadRoles` would be a Viewer→Contributor escalation. Dropped here:
   //      the raw-SQL branch is write-scoped (Owner/Admin/Member).
@@ -231,8 +246,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   // The raw-GUID justification that carries the rest of this family does not
   // reach this branch: it never uses `id` for the query, and a Power BI dataset
   // GUID has no business submitting T-SQL to Synapse.
+  let owned: WorkspaceItem | null = null;
   if (rawSql) {
-    const owned = await loadOwnedItem(id, 'semantic-model', session.claims.oid, { session });
+    owned = await loadOwnedItem(id, 'semantic-model', session.claims.oid, { session });
     if (!owned) {
       return NextResponse.json({ ok: false, error: 'semantic model not found' }, { status: 404 });
     }
@@ -258,13 +274,31 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const endpoint = `${process.env.LOOM_SYNAPSE_WORKSPACE}-ondemand.${getSynapseSqlSuffix()}`;
 
   // ── Raw SQL path: always Serverless, skip the cache check. ──────────────────
-  if (rawSql) {
+  // A tenant admin's SQL runs unchanged. Anyone else's passes the classifier,
+  // confined to the lakehouse roots of the model's own workspace, and runs in
+  // master on this path's own pool with the `USE [master];` prefix
+  // (`../../_lib/direct-lake-scope.ts`).
+  if (rawSql && owned) {
     if (rawSql.length > 65_536) {
       return NextResponse.json({ ok: false, error: 'sql too large (>64KB)' }, { status: 413 });
     }
+    const admin = isTenantAdmin(session);
+    if (!admin) {
+      const refused = await confineToWorkspaceLakehouses(rawSql, owned, DIRECT_LAKE_SQL_SURFACE);
+      if (refused) return refused;
+    }
+    const target = admin ? serverlessTarget('master') : readerTarget(DIRECT_LAKE_READER_POOL_PREFIX);
+    const batch = admin ? rawSql : readerBatch(rawSql);
     try {
-      const result = await executeQuery(serverlessTarget('master'), rawSql, 60_000);
-      return NextResponse.json({ ok: true, servingFrom: 'serverless-fallback', endpoint, ...result });
+      const result = await executeQuery(target, batch, 60_000);
+      return NextResponse.json({
+        ok: true,
+        servingFrom: 'serverless-fallback',
+        endpoint,
+        ...result,
+        // The route's own `USE [master];` context message is not the caller's.
+        messages: admin ? result.messages : withoutReaderUseMessage(result.messages),
+      });
     } catch (e: any) {
       return NextResponse.json({ ok: false, error: sanitize(e), code: e?.code }, { status: 502 });
     }

@@ -135,49 +135,79 @@ reason Loom wants that service.
 > hub is already present, with a 409 that names `/admin` → *Add landing zone* as
 > the alternative.
 
-#### BLOCKING DEFECT: the wizard cannot deploy a plan containing an `adopt` decision
+#### PARTIALLY FIXED: the wizard can now deploy MOST plans containing an `adopt` decision — five singleton services still block
 
-**Use the CLI for brownfield today.** Not as a preference — the wizard's Deploy
-button is disabled for any plan with an adopt decision, and it will not become
-enabled by anything you can do in the UI.
-
-Measured on this branch, 2026-08-08:
-
-- `lib/deploy/plan-model.ts` → `planBlockers()` pushes a blocker for **every**
-  `adopt` decision that carries no `fitness` verdict:
-  `"<service>: adoption has not been validated yet — run the validation step."`
-- `lib/panes/setup-wizard.tsx` gates the review step's Deploy button on exactly
-  that: `nextDisabled={!!planner.plan && planBlockers(planner.plan).length > 0}`.
-- `evaluateFitness()` (`lib/deploy/fitness.ts`) and `applyFitness()`
-  (`lib/deploy/plan-builder.ts`) have **zero production callers** — grep returns
-  only their own definitions and tests. Nothing ever attaches a verdict.
-
-So the blocker can never clear, and the remediation text points at a
-"validation step" the product does not have.
-
-**It is the default, not an opt-in.** `recommendFor()` in
-`lib/deploy/plan-builder.ts` returns `adopt` whenever exactly one candidate is
-found, and `adopt-required` for a tenant singleton that already exists. A tenant
-with one existing Purview therefore gets an adopt decision **automatically**,
-and its plan is undeployable from the UI without the operator choosing anything.
-
-Re-measure before trusting this:
+**Updated 2026-10-03 (#3342).** The section below described a gate that could
+**never** clear, because nothing produced a fitness verdict. That premise is
+now false — re-measure before trusting either version:
 
 ```bash
 grep -n 'planBlockers' apps/fiab-console/lib/panes/setup-wizard.tsx
 grep -rn 'evaluateFitness\|applyFitness' apps/fiab-console --include=*.ts --include=*.tsx | grep -v __tests__
 ```
 
-If the second command shows a caller outside `fitness.ts` / `plan-builder.ts`,
-an evaluator has landed and this section is stale.
+The second command now returns callers **outside** `fitness.ts` /
+`plan-builder.ts`: `lib/deploy/fitness-probe.ts` (the production producer,
+`POST /api/setup/validate-adoption`) and `lib/panes/setup-adoption-planner.ts`
+(the wizard step that calls it and attaches the result via `applyFitness`).
+PR #3445 (2026-08-14) landed this.
+
+**What this fixes:** for most adoptable services, running the wizard's
+validation step (the review step's Fix-it, or `validateAdoptions()`) now
+attaches a real verdict — `usable`, `usable-with-changes`, `unusable`, or
+`unknown` — derived from a live ARM read with the operator's own token
+(SKU, region, network posture, RBAC, plus the per-family checks in
+`fitness.ts`). `usable` and `usable-with-changes` clear `planBlockers()` and
+the Deploy button enables.
+
+**What still blocks, and why:** six checks need a data-plane token the
+plan-time probe does not hold — `purview.rootCollectionAdmin`,
+`purview.capacityUnits`, `aisearch.indexHeadroom`,
+`databricks.metastoreAssignment`, `cosmos.containerNameCollision`, and
+`aml.computeQuota` (`fitness-probe.ts`, "NOT resolved here"). Each of those
+rolls up to an `unknown` verdict (`fitness.ts` `rollUpVerdict`), and `unknown`
+blocks exactly like `unusable` — "I could not verify this" is deliberately
+never treated as "this is fine" (`assertPlanIsDeployable`,
+`planBlockers()`). Because those six checks each belong to a different
+service, **adopting Purview, AI Search, Databricks, Cosmos, or AML from the
+wizard still cannot clear the Deploy gate** — the same five singletons
+`deploy-integrity.md` **R5** names as the brownfield case. **Use the CLI for
+those five today**; the rest of the catalog (ADLS, ADX, Synapse, ADF, Event
+Hubs, Stream Analytics, APIM, Maps, …) can now adopt from the UI.
+
+**Not (yet) enforced:** `POST /api/setup/deploy`'s structural pre-check
+(`app/api/setup/deploy/route.ts`) still does not refuse an `adopt` decision
+submitted with no fitness verdict at all — a caller that reaches the route
+directly, bypassing the wizard's own validation step, is not stopped at the
+API layer today. That gap is deliberate for now: the #3016 adopt-bag-transport
+suite (`deploy-adopt-transport.test.ts`) submits exactly that shape on purpose
+to test tier dispatch independent of the fitness gate, so closing this needs
+those fixtures updated in lockstep, not a one-line flip.
+
+Whether to relax the five-singleton block (give the probe data-plane tokens,
+or require an explicit operator acknowledgement followed by a post-grant
+re-verification, or keep it as-is) is an **open product decision**, tracked on
+#3342 — not resolved by this doc update. No brownfield E2E run against a real
+estate that already owns Purview / AI Search / Databricks / Cosmos / AML has
+been recorded; the issue's "Proof required" clause remains unmet.
+
+**This is still not a minor edge case.** `recommendFor()` in
+`lib/deploy/plan-builder.ts` returns `adopt` whenever exactly one candidate is
+found, and `adopt-required` for a tenant singleton that already exists — adopt
+is the DEFAULT recommendation, not an opt-in the operator reaches for. A
+tenant with one existing Purview account gets an adopt decision automatically,
+and today that specific plan still cannot clear Deploy from the UI.
 
 > **An earlier version of this documentation gave the right advice for the wrong
-> reason.** [`index.md`](index.md) told readers to drive brownfield from the CLI
-> because of **#3016** — the adopt bag not reaching the deploy. #3016 is fixed
-> (see [below](#fixed--the-deploy-no-longer-discards-your-brownfield-picks-3016)).
-> The reason the advice still holds is this fitness blocker, which is the
-> **#3014 follow-up** and is *not* fixed. Same conclusion, different cause —
-> recorded because acting on the wrong cause would have removed the warning.
+> reason, twice over.** [`index.md`](index.md) told readers to drive brownfield
+> from the CLI because of **#3016** — the adopt bag not reaching the deploy.
+> #3016 is fixed (see
+> [below](#fixed--the-deploy-no-longer-discards-your-brownfield-picks-3016)).
+> A later revision of this section gave the same CLI advice because of the
+> fitness blocker, which was the **#3014 follow-up** — that was fixed in
+> PR #3445 (2026-08-14) for every service except the five singletons named
+> above. The CLI advice for those five still holds; for everything else it no
+> longer does.
 
 ### From the CLI (works on any estate)
 
@@ -618,12 +648,39 @@ exact remediation — never a silent pass, and never `unusable`:
 |---|---|
 | `aisearch.indexHeadroom` | index count/quota is a data-plane `servicestats` read |
 | `purview.rootCollectionAdmin`, `purview.capacityUnits` | Purview data-plane collection + capacity APIs |
-| `databricks.metastoreAssignment` | the Databricks **account** API, not ARM |
 | `cosmos.containerNameCollision`, `aml.computeQuota` | two-level sub-resource enumeration |
 
 If you adopt one of those services today the plan still blocks, and the verdict
 tells you which read failed. That gap is tracked — it is a shortfall in Loom,
 not an instruction to you.
+
+**`databricks.metastoreAssignment` is read — once the Console identity is a
+Databricks account admin.** The assignment lives on the Databricks **account**
+API, not ARM, and the probe reads it there as the Console identity
+(`GET /api/2.0/accounts/{id}/workspaces/{workspaceId}/metastore`, plus the
+account's metastore list to find the regional one). Databricks only lets an
+existing account admin grant that role, so the Console cannot grant it to
+itself. Until it is held the check is `unknown` and the wizard shows, under the
+Databricks row:
+
+1. what was observed (for example `HTTP 403` from the account API);
+2. the exact grant, with **this deployment's** Console application (client) id,
+   object id and Databricks account id, and an **Open** link to the account
+   console;
+3. the `svc-databricks-account-admin` gate's **Fix it** — set
+   `LOOM_DATABRICKS_ACCOUNT_ID` there if it is unset;
+4. **Re-check these resources**, which re-reads the account API live. The
+   blocker clears when that read succeeds, not when someone says it was done.
+
+The grant itself, done by an account admin in the account console: User
+management → Service principals → Add service principal → Microsoft Entra ID
+managed → the Console application id → Add; then open it → Roles → turn on
+**Account admin**. If the account has no admin yet, an Entra Global
+Administrator signs in to the account console once and Databricks makes them
+the first. `/admin/readiness` carries the same live check
+(`probe-databricks-account-admin`) with a scripted equivalent of the grant. In
+GCC-High / IL5 there is no Databricks account console; the gate reports
+cloud-unavailable.
 
 ---
 
@@ -930,7 +987,7 @@ pins each tier and goes red if one stops consuming the bag.
 
 | Gap | Effect | Tracked |
 |---|---|---|
-| **`evaluateFitness` has no production producer — and this DISABLES the wizard's Deploy button on every adopt plan** | Not merely "un-checked adoptions pass the gate". Because `planBlockers()` treats a missing verdict as blocking and the review step gates Deploy on it, a brownfield plan cannot be submitted from the UI at all. Full measurement: [above](#blocking-defect-the-wizard-cannot-deploy-a-plan-containing-an-adopt-decision). **Use the CLI.** | **#3014** (follow-up) |
+| **Five singleton services (Purview, AI Search, Databricks, Cosmos, AML) still cannot clear the wizard's Deploy gate on `adopt`** — the producer itself now exists | Updated 2026-10-03: `evaluateFitness` DOES have a production producer as of PR #3445 (`lib/deploy/fitness-probe.ts`, `POST /api/setup/validate-adoption`), and most adoptable services can now deploy from the UI. The five named here still cannot, because a check each of them needs returns `unknown` at plan time for lack of a data-plane token. Full measurement: [above](#partially-fixed-the-wizard-can-now-deploy-most-plans-containing-an-adopt-decision--five-singleton-services-still-block). **Use the CLI for these five.** | **#3342** (open) |
 | GitHub-dispatch tier cannot carry the adopt bag | Brownfield submits fall through to the copy-paste gate when only the dispatch tier is available; needs a `plan_json` input on the deploy workflows | **#3016** (follow-up) |
 | Purview managed storage rejected by tenant policy (`RequestDisallowedByPolicy`); APIM private-DNS re-link `Conflict`; VPN gateway created under a different name than the existing one | A brownfield re-apply fails on ARM leaves that adoption should have suppressed. **Fixed in the tree, NOT yet deployed** — PR #3058 merged 2026-08-07; it remains what you hit on the estate until the next apply | **#3038** (merged, not deployed) |
 | No networking / Log Analytics / ACR / Key Vault adoption | You cannot bring your own VNet, subnets, DNS zones, firewall, workspace or registry (class C above) | — |
@@ -954,8 +1011,10 @@ grep -c '^param ' platform/fiab/bicep/main.bicep
 # Expect fitness.ts + the deploy route (the GATE is wired).
 grep -rn 'assertPlanIsDeployable' apps/fiab-console --include=*.ts | grep -v __tests__
 
-# Expect ZERO hits outside fitness.ts / plan-builder.ts — the EVALUATOR is not
-# wired, which is what disables the wizard's Deploy button on any adopt plan.
+# Updated 2026-10-03 (#3342): expect callers OUTSIDE fitness.ts / plan-builder.ts
+# now — lib/deploy/fitness-probe.ts (the production producer) and
+# lib/panes/setup-adoption-planner.ts (the wizard caller). Zero hits here would
+# mean the producer regressed, not that it was never wired.
 grep -rn 'evaluateFitness\|applyFitness' apps/fiab-console --include=*.ts --include=*.tsx | grep -v __tests__
 
 # Expect the one choke-point call.
