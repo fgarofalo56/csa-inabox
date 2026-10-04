@@ -15,6 +15,7 @@ const h = vi.hoisted(() => ({
   reconcileThreadEdgesOnDelete: vi.fn(),
   restoreThreadEdgesForItem: vi.fn(),
   offboardFromPurview: vi.fn(),
+  emitLoomEvent: vi.fn(),
 }));
 
 // ── Cosmos mock: items.query().fetchAll(), item(id,pk).replace()/.delete(),
@@ -55,6 +56,13 @@ vi.mock('@/lib/azure/adls-client', () => ({
 vi.mock('@/lib/thread/thread-edges', () => ({
   reconcileThreadEdgesOnDelete: h.reconcileThreadEdgesOnDelete,
   restoreThreadEdgesForItem: h.restoreThreadEdgesForItem,
+}));
+
+// #4692 — purgeRecycledItem's new audit event, mocked directly so the test
+// below asserts the EXACT envelope rather than depending on the webhook
+// fan-out's internal hook lookup actually finding a subscriber.
+vi.mock('@/lib/events/webhook-emitter', () => ({
+  emitLoomEvent: h.emitLoomEvent,
 }));
 
 import { softDeleteOwnedItem, restoreOwnedItem, purgeRecycledItem } from '../item-crud';
@@ -195,6 +203,46 @@ describe('purgeRecycledItem', () => {
       expect.objectContaining({ id: 'item-1' }),
       TENANT,
     );
+  });
+
+  /**
+   * #4692 — purge was AUDITED for the first time by this issue. Measured on
+   * the pre-#4692 tree: `purgeRecycledItem` called `emitLoomEvent` nowhere, so
+   * this assertion is a real addition, not a tightened duplicate — the
+   * previous revision of this test file had no equivalent for purge, only for
+   * restore's/soft-delete's PRE-EXISTING events. FAILS IF the `emitLoomEvent`
+   * call is removed from `purgeRecycledItem`, or if its `type` is left as (or
+   * reverted to) `'item.deleted'` — the type every OTHER delete path in this
+   * file already uses, which is exactly the value a careless copy-paste would
+   * produce instead of the new `'item.purged'`.
+   */
+  it('emits item.purged naming the actor and the item', async () => {
+    h.itemsQuery.mockResolvedValue({ resources: [{ ...activeItem, state: { _recycled: { deletedAt: 'x', deletedBy: 'a', purgeAfter: 'y' } } }] });
+    const session = { claims: { oid: TENANT, upn: 'admin@contoso.com' } } as any;
+
+    await purgeRecycledItem('item-1', TENANT, { session });
+
+    expect(h.emitLoomEvent).toHaveBeenCalledTimes(1);
+    expect(h.emitLoomEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'item.purged',
+        tenantId: TENANT,
+        subject: 'item-1',
+        actor: expect.objectContaining({ oid: TENANT, upn: 'admin@contoso.com' }),
+      }),
+    );
+  });
+
+  /**
+   * The audit record must correlate with a REAL purge, not a refused attempt —
+   * otherwise the log would claim a destruction that never happened. FAILS IF
+   * `emitLoomEvent` is hoisted above the `loadRecycledItem` refusal check.
+   */
+  it('does not emit when the purge is refused (not a recycled item)', async () => {
+    h.itemsQuery.mockResolvedValue({ resources: [] });
+
+    expect(await purgeRecycledItem('item-1', TENANT)).toBe(false);
+    expect(h.emitLoomEvent).not.toHaveBeenCalled();
   });
 
   it('returns false when the item is not in the recycle bin', async () => {

@@ -469,7 +469,8 @@ ARMS: list[tuple[str, str, str, str]] = [
         "GH1 the ledger closes and GitHub never hears (#4545 verbatim)",
         "tick.py",
         ("    close_note = close_issue_on_github(\n"
-         "        policy, repo, number, CLOSED, detail, kind, issue_class, binding)"),
+         "        policy, repo, number, CLOSED, detail, kind, issue_class, binding,\n"
+         "        run_created_at=run_created_at)"),
         '    close_note = "the ledger is the only record"',
     ),
     (
@@ -477,9 +478,11 @@ ARMS: list[tuple[str, str, str, str]] = [
          "upstream and every run-backed item is left open"),
         "tick.py",
         ("    close_note = close_issue_on_github(\n"
-         "        policy, repo, number, CLOSED, detail, kind, issue_class, binding)"),
+         "        policy, repo, number, CLOSED, detail, kind, issue_class, binding,\n"
+         "        run_created_at=run_created_at)"),
         ("    close_note = (close_issue_on_github(\n"
-         "        policy, repo, number, CLOSED, detail, kind, issue_class, binding)\n"
+         "        policy, repo, number, CLOSED, detail, kind, issue_class, binding,\n"
+         "        run_created_at=run_created_at)\n"
          '                  if from_pr else "run-backed items close quietly")'),
     ),
     (
@@ -527,14 +530,35 @@ ARMS: list[tuple[str, str, str, str]] = [
          "#4545 reproduced by the fix for it"),
         "tick.py",
         ("    close_note = close_issue_on_github(\n"
-         "        policy, repo, number, CLOSED, detail, kind, issue_class, binding)\n"
+         "        policy, repo, number, CLOSED, detail, kind, issue_class, binding,\n"
+         "        run_created_at=run_created_at)\n"
          "    # EVERY FAILURE FROM HERE ON IS A POST-CLOSE FAILURE"),
         ("    _record_close_in_ledger(\n"
          '        led, item, number, kind, ref, f"receipt verified by tick: {detail}"\n'
          "    )\n"
          "    close_note = close_issue_on_github(\n"
-         "        policy, repo, number, CLOSED, detail, kind, issue_class, binding)\n"
+         "        policy, repo, number, CLOSED, detail, kind, issue_class, binding,\n"
+         "        run_created_at=run_created_at)\n"
          "    # EVERY FAILURE FROM HERE ON IS A POST-CLOSE FAILURE"),
+    ),
+    (
+        ("GH39 THE DATE COMPARISON ITSELF IS DELETED (#4578) -- the disclosure "
+         "narrowed by GH20 says the run's createdAt IS checked against the "
+         "item's filing date; this removes the one `if` that makes that true, "
+         "so a run created WEEKS before the issue was filed is accepted again "
+         "exactly as measured on run 33238747458 against 147 of the 351 issues "
+         "open on 2026-09-18. Scoped to the comparison alone, not the whole "
+         "guarded block, so a reviewer cannot satisfy it by deleting the "
+         "surrounding `if run_created_at is not None:` instead and calling that "
+         "the same finding"),
+        "tick.py",
+        ("            if run_created < item_created:\n"
+         "                raise ReceiptRefusedError(\n"
+         '                    f"the run was created {run_created.isoformat()}, before "\n'
+         '                    f"#{number} was filed ({item_created.isoformat()}) - a run "\n'
+         '                    "that predates the item cannot be evidence for it"\n'
+         "                )"),
+        ("            pass"),
     ),
     (
         ("GH10 a lost CAS after a SUCCESSFUL upstream close is reported as "
@@ -576,8 +600,8 @@ ARMS: list[tuple[str, str, str, str]] = [
          "the two branches back into the single template, which is the exact "
          "shape of the defect rather than a proxy for it"),
         "tick.py",
-        "    head = f\"Drain harness: receipt verified (kind={kind}, class={issue_class}) - {detail}.\"",
-        ("    head = f\"Drain harness: receipt verified - {detail}.\"\n"
+        "    head = f\"{RECEIPT_COMMENT_HEAD} (kind={kind}, class={issue_class}) - {detail}.\"",
+        ("    head = f\"{RECEIPT_COMMENT_HEAD} - {detail}.\"\n"
          "    return head + \" Closing this issue on that evidence (deploy-integrity R2).\""),
     ),
     (
@@ -673,11 +697,12 @@ ARMS: list[tuple[str, str, str, str]] = [
          '        "deploy-integrity R2 (merged is not done) asks of this class. "'),
     ),
     (
-        ("GH20 THE TIME/SHA DISCLOSURE IS DELETED while the softened R2 line "
+        ("GH20 THE SHA/TIME DISCLOSURE IS DELETED while the softened R2 line "
          "stays. The one-sided shape this package keeps producing, and the half "
          "a reader cannot detect: the comment still reads correctly, still "
          "cites #4489 for the reference binding, and silently stops saying that "
-         "the run is bound to no TIME and no SHA. Told apart from GH19 by "
+         "the SHA is unbound and the run's TIME is now actually checked (#4578). "
+         "Told apart from GH19 by "
          "MEASUREMENT, not by construction: each arm was applied to a sandbox "
          "copy and all five predicates of the run-backed test evaluated by "
          "rendering the comment directly, since pytest stops at the first "
@@ -688,29 +713,30 @@ ARMS: list[tuple[str, str, str, str]] = [
          "red, which is a second independent killer"),
         "tick.py",
         ('        "that "\n'
-         '        "binding is #4489. It is bound to no TIME and no SHA either: no "\n'
-         '        "run date is fetched and no head sha is compared, so a run that "\n'
-         '        "PREDATES this issue is accepted exactly as one that postdates it "\n'
-         '        "(#4578). Read this as \'the declared producer ran green in this item\'s "\n'
-         '        "boundary\', not as \'the "\n'
+         '        "binding is #4489, and so is the SHA - headSha is read only to "\n'
+         '        "interpolate it above, never compared. It IS bound by TIME, since "\n'
+         '        "#4578: the run\'s createdAt is checked against this issue\'s own filing "\n'
+         '        "date before this comment is posted, so a run that predates the item "\n'
+         '        "is refused rather than accepted as its evidence. Read this as \'the "\n'
+         '        "declared producer ran green in this item\'s boundary, no earlier than "\n'
+         '        "the item was filed\', not as \'the "\n'
          '        "estate was observed carrying this change\'. "\n'),
         ('        "binding is #4489. "\n'),
     ),
     (
-        ("GH21 the already-closed note reverts to a bare 'left alone', so the "
-         "operator is told a receipt was recorded with no hint that NOTHING WAS "
-         "PUBLISHED. That route issues `gh issue view` and nothing else, and "
-         "`tools/drain/state.json` is untracked, so the receipt's whole "
-         "existence is a local gitignored file -- the state all 7 currently "
-         "ledger-closed items are in. Posting there is #4579; saying so is the "
-         "part that is not deferrable"),
+        ("GH21 the already-closed route's POSTED-NOW note reverts to a bare "
+         "'left alone', dropping the one disclosure that distinguishes #4579's "
+         "repair actually firing from the issue merely being found closed. "
+         "Before #4579 this mutation collapsed the route's ONLY return, when "
+         "NOTHING was ever published; now it collapses the one return among "
+         "four that fires when a NEW receipt comment goes up because nothing "
+         "on the issue carried the sentinel yet"),
         "tick.py",
-        ('            return (\n'
-         '                f"#{number} was already closed on GitHub - left alone, so NO "\n'
-         '                "receipt comment was posted: on this route the receipt exists "\n'
-         '                "only in the local ledger, which is untracked (#4579)"\n'
-         '            )'),
-        ('            return f"#{number} was already closed on GitHub - left alone"'),
+        ('    return (\n'
+         '        f"#{number} was already closed on GitHub - left alone, and the missing "\n'
+         '        "receipt comment was posted now, so it has a public trace (#4579)"\n'
+         '    )'),
+        ('    return f"#{number} was already closed on GitHub - left alone"'),
     ),
     # -- round 10: "verified by effect" verified a property of the WORLD ----
     #
@@ -733,9 +759,9 @@ ARMS: list[tuple[str, str, str, str]] = [
          "instead of through the write"),
         "tick.py",
         ('        ["gh", "issue", "view", str(number), "--repo", repo,\n'
-         '         "--json", "state,title,url"]'),
+         '         "--json", "state,title,url,createdAt"]'),
         ('        ["gh", "issue", "view", str(number),\n'
-         '         "--json", "state,title,url"]'),
+         '         "--json", "state,title,url,createdAt"]'),
     ),
     (
         ("GH23 THE NOTE GOES BACK TO KEYING ON THE READ-BACK ALONE, so a close "
@@ -844,10 +870,13 @@ ARMS: list[tuple[str, str, str, str]] = [
         "tick.py",
         ('            "so the receipt comment MAY NOT have been posted. DO THIS: read the "\n'
          '            f"issue\'s comments (`gh issue view {number} --repo {repo} --comments`) "\n'
-         '            "and, if none begins `Drain harness: receipt verified`, post the "\n'
-         '            "receipt by hand - this tool will not re-enter the path, because the "\n'
-         '            "ledger write below makes the item terminal and the record route "\n'
-         '            "refuses a terminal item (#4579 tracks closing that gap in code)"'),
+         '            f"and, if none begins `{RECEIPT_COMMENT_HEAD}`, post the receipt by "\n'
+         '            "hand - this tool will not re-enter the path, because the ledger "\n'
+         '            "write below makes the item terminal and the record route refuses a "\n'
+         '            "terminal item. #4579 automated this same check for the "\n'
+         '            "ALREADY-CLOSED route (`_already_closed_receipt_note`); it did not "\n'
+         '            "reach this UNKNOWN-outcome branch, which still asks the operator "\n'
+         '            "to do it by hand"'),
         '            "so the receipt comment MAY NOT have been posted"',
     ),
     (
@@ -978,8 +1007,8 @@ ARMS: list[tuple[str, str, str, str]] = [
          "spy that returns every field regardless would let this survive on a "
          "behaviour the real command does not have"),
         "tick.py",
-        '         "--json", "state,title,url"]',
-        '         "--json", "state,url"]',
+        '         "--json", "state,title,url,createdAt"]',
+        '         "--json", "state,url,createdAt"]',
     ),
     (
         ("GH37 THE READ-BACK'S TITLE IS DROPPED from the neutralisation set, "
