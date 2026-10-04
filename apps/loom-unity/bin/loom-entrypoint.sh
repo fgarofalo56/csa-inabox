@@ -1071,7 +1071,20 @@ fi
 # Resolve a writable DB dir BEFORE rendering hibernate.properties (which bakes
 # the path into the JDBC URL) — this is what makes the H2/SMB fallback take.
 resolve_db_dir
-echo "[loom-unity] rendering config (db=${LOOM_UNITY_DB_URL:+postgres/${LOOM_UNITY_DB_AUTH:-entra}}${LOOM_UNITY_DB_URL:-h2-file} dir=${DB_DIR} auth=${LOOM_UNITY_AUTH:-enable} adls-vending=${LOOM_UNITY_ADLS_ACCOUNT:+on}${LOOM_UNITY_ADLS_ACCOUNT:-off})"
+# #4859: the startup line used to print the WHOLE LOOM_UNITY_DB_URL (database
+# name, query parameters, and — with the scheme/auth concatenated with no
+# separator — a malformed "postgres/entrajdbc:..." run-together). That JDBC
+# string reaches every consumer of the container log (az containerapp logs
+# show, Log Analytics, CI). Identify the store by scheme + host only.
+db_display="h2-file"
+if [ -n "${LOOM_UNITY_DB_URL:-}" ]; then
+  _db_url_no_scheme="${LOOM_UNITY_DB_URL#*://}"
+  _db_hostport="${_db_url_no_scheme%%/*}"
+  _db_hostport="${_db_hostport##*@}"
+  _db_host="${_db_hostport%%:*}"
+  db_display="postgres/${LOOM_UNITY_DB_AUTH:-entra} jdbc:postgresql://${_db_host}"
+fi
+echo "[loom-unity] rendering config (db=${db_display} dir=${DB_DIR} auth=${LOOM_UNITY_AUTH:-enable} adls-vending=${LOOM_UNITY_ADLS_ACCOUNT:+on}${LOOM_UNITY_ADLS_ACCOUNT:-off})"
 if [ -z "${LOOM_UNITY_DB_URL:-}" ]; then
   # LU-1: the H2 fallback is not the recommended posture anywhere it can be
   # avoided. Say so on every boot rather than letting a deployment quietly sit on
