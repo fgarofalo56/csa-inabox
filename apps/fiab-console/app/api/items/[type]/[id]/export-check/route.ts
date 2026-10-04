@@ -151,7 +151,12 @@ export async function POST(req: NextRequest, props: { params: Promise<{ type: st
   if (!format) return apiError('format is required', 400);
 
   try {
-    const { item, denied } = await loadItem(params.id, params.type, session, { allowReadRoles: false });
+    // #4456 — read-scoped. This handler is side-effect-free (it only answers
+    // "would exporting this item be blocked?"), so a read-only Viewer has a
+    // legitimate reason to call it; refusing them with a write-scoped 404 is
+    // what caused the client-side fail-open below (a non-OK response read as
+    // `{ blocked: false }`).
+    const { item, denied } = await loadItem(params.id, params.type, session, { allowReadRoles: true });
     if (denied) return denied;
     if (!item) return apiError('Item not found', 404);
 
