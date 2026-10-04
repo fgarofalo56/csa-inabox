@@ -1596,7 +1596,11 @@ export const TRIAGED_INERT_BINDINGS = new Map([
   [
     'LOOM_IQ_MCP_ENABLED',
     {
-      issue: '#3320 (pinned by #3344)',
+      // #3319 flipped the TOP-LEVEL default; #3323 then found the entry was
+      // STILL absent because it lived in the wrong ternary branch. Both PRs
+      // touched this var; #3320 (MIP) never did -- verified via `git show` on
+      // all three merge commits before this citation was corrected.
+      issue: '#3319 + #3323 (pinned by #3344)',
       param: 'loomIqMcpEnabled',
       // Bicep cannot put a `bool` in an env `value:`, so the emission is the
       // param through `string()`. Pinning `string(loomIqMcpEnabled)` exactly is
@@ -1617,7 +1621,11 @@ export const TRIAGED_INERT_BINDINGS = new Map([
   [
     'LOOM_MIP_ENABLED',
     {
-      issue: '#3319 (pinned by #3344)',
+      // #3320 is the PR that touched loomMipEnabled (MIP default-ON); #3319
+      // only ever touched loomIqMcpEnabled/loomWorkspaceM365LinkEnabled/
+      // loomSharepointShortcutsEnabled -- verified via `git show` on both
+      // merge commits before this citation was corrected.
+      issue: '#3320 (pinned by #3344)',
       param: 'loomMipEnabled',
       // A LITERAL, and deliberately so: the param decides whether the entry is
       // emitted at all rather than what it says. That makes T2 a constant
@@ -1643,8 +1651,8 @@ export const TRIAGED_INERT_BINDINGS = new Map([
  * must be a deliberate, reviewed line in the same diff — never a silent side
  * effect of deleting the entry.
  *
- * 1 -> 3 on 2026-09-07 (#3344): LOOM_IQ_MCP_ENABLED (#3320) and
- * LOOM_MIP_ENABLED (#3319) were triaged out of the always-empty ratchet with
+ * 1 -> 3 on 2026-09-07 (#3344): LOOM_IQ_MCP_ENABLED (#3319 + #3323) and
+ * LOOM_MIP_ENABLED (#3320) were triaged out of the always-empty ratchet with
  * nothing pinning the bindings that triaged them.
  */
 export const TRIAGED_BINDINGS_FLOOR = 3;
