@@ -2077,7 +2077,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `onelake/governance/route.ts` | GET | session-only |  | Cosmos, Purview |
 | `onelake/lifecycle/route.ts` | GET PUT | admin |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph |
 | `onelake/paths/route.ts` | GET | session-only |  | ADLS, Azure Storage |
-| `onelake/recycle/route.ts` | GET POST DELETE | owner-scoped |  | ADLS, AI Search, ARM, Azure Storage, Cosmos, Managed Identity, Purview |
+| `onelake/recycle/route.ts` | GET POST DELETE | owner-scoped |  | ADLS, AI Search, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Purview |
 | `onelake/resolve/route.ts` | GET POST | session-only |  | Loom service |
 | `onelake/security/route.ts` | GET POST DELETE | admin |  | ADLS, ARM, Azure Monitor, Azure RBAC, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Resource Graph |
 | `onelake/storage/route.ts` | GET | session-only | ● | ADLS, ARM, Azure Storage, Cosmos, Managed Identity |
