@@ -474,6 +474,15 @@ jobs:
       - name: Diagnose a failed ACR build — fetch the task run log (#3416, #4461)
         if: failure()
         env:
+          # The build step above resolves ACR into a LOCAL shell variable
+          # (`ACR="${{ needs.resolve.outputs.acr_name }}"`, line ~379) and never
+          # exports it to $GITHUB_ENV — it only exports ACR_LOGIN_SERVER, and
+          # only on the SUCCESS path. A separate step's shell does not inherit
+          # another step's local variables, so this step read the job output
+          # directly instead (independent review on #4920 caught this: without
+          # it, $ACR was always empty here and every failure silently took the
+          # "no registry name" branch, never fetching the log).
+          ACR: ${{ needs.resolve.outputs.acr_name }}
           ART: ${{ github.workspace }}/deploy-failure.json
         run: |
           set -uo pipefail
