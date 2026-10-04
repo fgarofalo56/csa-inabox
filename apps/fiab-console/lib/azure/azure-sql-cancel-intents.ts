@@ -269,9 +269,12 @@ async function cancelIntentStore(): Promise<CancelIntentStore | null> {
     // earlier revision cited `deploy-integrity.md` R7 here; R7 governs what the
     // code HANDS BACK, so it was the wrong citation for a comment.)
     //
-    // `sql-cancel-intents` still has no ARM row — deferred to #4406 — and that
-    // is worth recording. It is simply not unprecedented, and nothing about the
-    // credential path is new.
+    // `sql-cancel-intents` now carries an ARM row in both
+    // `admin-plane/loom-console-cosmos.bicep` and `landing-zone/cosmos.bicep`
+    // (#4406, PR #4752) — partitionKey `/requestId`, `defaultTtl: 120`,
+    // matching `CANCEL_INTENT_TTL_SECONDS` below. The `createIfNotExists`
+    // call below stays regardless (see next paragraph): it is simply not the
+    // only place this container is declared any more.
     //
     // WHAT IS MEASURED: the deploy grants the Console UAMI BOTH tiers on this
     // account — `Cosmos DB Built-in Data Contributor` (data-plane
@@ -286,8 +289,12 @@ async function cancelIntentStore(): Promise<CancelIntentStore | null> {
     // it to the caller in `reason` — so the operator sees the actual Cosmos
     // error in the HTTP response the moment a cross-replica cancel is attempted,
     // not only in a console.warn nobody can reach. The `console.warn` is the
-    // second copy, not the only one. Landing the ARM row on #4406 removes the
-    // create attempt altogether and is the real fix.
+    // second copy, not the only one. The ARM row does not remove this call —
+    // #4406's own acceptance criteria keeps `createIfNotExists` so a fresh
+    // estate still works with no extra ARM step; the ARM row's purpose is
+    // only to make `defaultTtl` apply even when something OTHER than this
+    // lazy path wins the creation race (`azure-sql-cancel-intents-ttl-drift.test.ts`
+    // pins the two TTLs against each other so they cannot quietly diverge).
     const { container } = await database.containers.createIfNotExists({
       id: CANCEL_INTENT_CONTAINER,
       partitionKey: { paths: ['/requestId'] },
