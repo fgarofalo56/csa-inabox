@@ -206,10 +206,6 @@ function useStyles() {
 interface WorkspaceLite { id: string; name: string; isOnDedicatedCapacity?: boolean; }
 interface PipelineLite { id: string; displayName: string; description?: string; }
 
-function toB64(s: string): string {
-  return typeof window === 'undefined' ? Buffer.from(s, 'utf-8').toString('base64')
-    : btoa(unescape(encodeURIComponent(s)));
-}
 function fromB64(b: string): string {
   try {
     return typeof window === 'undefined' ? Buffer.from(b, 'base64').toString('utf-8')
@@ -813,13 +809,16 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
     if (!workspaceId || !createName.trim()) return;
     setCreateBusy(true); setCreateErr(null);
     try {
-      const definition = {
-        parts: [{
-          path: 'pipeline-content.json',
-          payload: toB64(specToText(STARTER)),
-          payloadType: 'InlineBase64' as const,
-        }],
-      };
+      // #3549-adjacent: POST /api/items/data-pipeline reads `definition.properties`
+      // directly (the same flat ADF shape the PUT/save route and `upsertPipeline`
+      // consume — see [id]/route.ts's `body.definition.properties || body.definition`).
+      // This used to wrap STARTER in a Fabric git-integration `parts[].payload`
+      // (base64 JSON) envelope, which the route never reads, so
+      // `body?.definition?.properties` was always `undefined` and the route's own
+      // `|| { activities: [] }` fallback fired unconditionally. Harmless today only
+      // because STARTER itself is empty — the mismatch would silently drop any
+      // future non-empty starter/template content sent through this exact call.
+      const definition = { properties: STARTER.properties };
       const r = await clientFetch(`/api/items/data-pipeline?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ displayName: createName.trim(), definition }),
