@@ -596,19 +596,57 @@ jobs:
   # -- but the SIGNAL moved from a blocking check to an advisory one, and that
   # is the exact objection the pre-split comment raised against splitting.
   #
-  # It is answered three ways, none of which is "we will remember":
-  #   1. The job is UNCONDITIONAL. No job-level `if:`, no change detector, no
-  #      `if:` on the matrix step -- so it runs on every PR, every push, every
-  #      merge group and every dispatch. It deliberately does NOT reuse
-  #      `python-tests`'s `Detect Python-relevant changes` gate: a second copy
-  #      of that delegation would be guarded by nothing (the tests that enforce
-  #      it are scoped to `jobs["python-tests"]`), and two lists that must agree
-  #      is defect #3862 verbatim. Running it on a docs-only PR costs minutes;
-  #      a silently-narrowed mutation matrix costs the guarantee.
-  #   2. `tests/repo/test_drain_mutation_matrix_job.py` ASSERTS all of that
-  #      against this file, so re-adding a gate is RED rather than quiet.
-  #   3. It is in `pr-summary`'s `needs` and its table, so its result is
-  #      visible on every PR instead of only to someone who opens the run.
+  # It is answered three ways, and bullet 1 is the one REVERSED here
+  # (2026-10-02, operator-approved after an explicit cost/risk tradeoff
+  # discussion -- the unconditional run was the single biggest CI wall-time
+  # cost in the repo, confirmed running at full cost on 9 recent PRs that
+  # touched zero files under `tools/drain`):
+  #   1. THE JOB NOW RUNS ONLY WHEN A DETECTOR SAYS ITS FOOTPRINT CHANGED.
+  #      `drain-mutation-detect` (below) is scoped to EXACTLY `tools/drain/**`
+  #      -- the whole surface `mutate_gates.py` can mutate: `gates.py`,
+  #      `merge_gate.py`, `operating_point.py`, every module under this
+  #      package -- PLUS this workflow file itself, because it controls the
+  #      shard topology the coupling-guard tests below depend on. Nothing
+  #      narrower, nothing wider. It does NOT reuse `python-tests`'s `Detect
+  #      Python-relevant changes` gate: a second copy of that delegation would
+  #      still be defect #3862's "two lists that must agree" shape, so this is
+  #      its OWN job, over its own (different) pair of paths.
+  #      THE RISK THE ORIGINAL BULLET 1 NAMED IS ANSWERED THE SAME WAY #4555
+  #      and #4712 answer every other version of this question: FAIL OPEN --
+  #      and that applies to TWO different kinds of "cannot answer", not one.
+  #      Inside the detector's own step: any event other than `pull_request` /
+  #      `merge_group` (push, workflow_dispatch, schedule) sets `relevant=true`
+  #      with NO diffing attempted at all; an unresolved PR merge-base, a
+  #      `merge_group` with no `base_sha`, or a failed `git diff` all set
+  #      `relevant=true` rather than guess. There is exactly ONE
+  #      `relevant=false` in the step -- the clean-diff, scope-missed case --
+  #      and `tests/repo/test_drain_mutation_matrix_job.py` pins that count so
+  #      a second, possibly narrower, skip path cannot be added quietly.
+  #      ONE LEVEL UP, THE SHARD JOB'S OWN `if:` fails open a SECOND way: if
+  #      `drain-mutation-detect` ERRORS (a checkout timeout, a network flake --
+  #      an infra failure, not a `relevant=false` DECISION), GitHub's default
+  #      behaviour would otherwise skip the shard job silently, because GitHub
+  #      implicitly ANDs `success()` into any `if:` that does not itself name a
+  #      status-check function. The shard job's `if:` is written
+  #      `!cancelled() && (needs.drain-mutation-detect.result != 'success' ||
+  #      needs.drain-mutation-detect.outputs.relevant == 'true')` specifically
+  #      to close that: a detector that did not conclude cleanly fails OPEN
+  #      (runs anyway) rather than vanishing into a bare `skipped`.
+  #      THE MERGE JOB then reads `needs.drain-mutation-shard.result !=
+  #      'skipped'` (NOT a custom output on the matrix job -- see that job's
+  #      own comment for why), so it adjudicates whenever the shard genuinely
+  #      attempted to run and skips only when the shard itself was skipped,
+  #      which now only happens on a clean `relevant=false` verdict.
+  #   2. `tests/repo/test_drain_mutation_matrix_job.py` ASSERTS the detector's
+  #      scope, every one of its fail-open branches, and that BOTH jobs' `if:`
+  #      genuinely derive from its output rather than a silent `if: true` --
+  #      so a narrowing, or a detector that stops being consulted, is RED.
+  #   3. It is STILL in `pr-summary`'s `needs` and its table, unchanged by this
+  #      PR. A `skipped` row for an off-topic PR is now the CORRECT state, not
+  #      the "control that stops reporting" failure #4712 is about: `skipped`
+  #      is not in `gates.RED_CONCLUSIONS`, and `classify_advisory_checks`
+  #      treats a routine skip as clean, so gate 4c sees no red over a
+  #      genuinely off-topic PR.
   #
   # ---- THE BUDGET: MEASURED, NOT PROJECTED -------------------------------
   # Measured at 7d1708db097, run 35469150763, on a GitHub Linux runner:
@@ -691,6 +729,76 @@ jobs:
   #    The adjudicator additionally re-derives the UNION of the shards' arm
   #    NAMES and compares it to `ARMS` in this checkout, so a truncated or
   #    partially-dispatched run FAILS rather than reporting a clean subset.
+  # ---- THE CHANGE DETECTOR (2026-10-02) ------------------------------------
+  # Gates the two jobs below on whether this PR touched anything
+  # `mutate_gates.py` can mutate. See the "THIS IS NOT A REQUIRED CONTEXT"
+  # block above for the cost/risk tradeoff and why this fails open.
+  drain-mutation-detect:
+    name: Detect drain-relevant changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      relevant: ${{ steps.detect.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          # Need the PR base (or the merge_group batch base) in history to
+          # diff changed paths below -- same reason `python-tests`'s own
+          # detector sets this.
+          fetch-depth: 0
+
+      - name: Detect drain-relevant changes
+        id: detect
+        # SCOPE: exactly `tools/drain/` + this workflow file -- see the block
+        # above this job for why. FAIL OPEN on every branch that cannot
+        # answer: the non-PR/non-merge_group branch, a merge_group with no
+        # `base_sha`, and an unresolvable `git diff` all set `relevant=true`.
+        # The ONLY `relevant=false` is the clean-diff, scope-missed case at
+        # the very end -- `test_drain_mutation_matrix_job.py` pins that there
+        # is exactly one.
+        run: |
+          # Anything other than pull_request/merge_group (push, dispatch,
+          # schedule): run unconditionally, no diffing attempted.
+          if [ "${{ github.event_name }}" != "pull_request" ] && [ "${{ github.event_name }}" != "merge_group" ]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::event ${{ github.event_name }} is neither pull_request nor merge_group -- running the drain mutation matrix unconditionally."
+            exit 0
+          fi
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="origin/${{ github.base_ref }}"
+            # depth=1 gives the base TIP but not the MERGE BASE -- same shape
+            # as fiab-console-ci.yml's own "Detect console changes" step.
+            git fetch --no-tags --depth=50 origin "${{ github.base_ref }}" >/dev/null 2>&1 || true
+            if ! git merge-base "$base" HEAD >/dev/null 2>&1; then
+              git fetch --no-tags --deepen=200 origin "${{ github.base_ref }}" >/dev/null 2>&1 || true
+            fi
+            range="$base...HEAD"
+          else
+            # merge_group: base_sha is the commit the WHOLE batch was built on.
+            mg_base="${{ github.event.merge_group.base_sha }}"
+            if [ -z "$mg_base" ]; then
+              echo "::warning::merge_group payload carried no base_sha, so the batch cannot be bounded -- running the drain mutation matrix rather than reporting it skipped over an unexamined tree."
+              echo "relevant=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            range="$mg_base...HEAD"
+          fi
+
+          if ! changed=$(git -c core.quotePath=false diff --name-only "$range" 2>&1); then
+            echo "::warning::could not resolve '$range' ($changed) -- running the drain mutation matrix rather than reporting it skipped on an unexamined tree."
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if echo "$changed" | grep -qE '^tools/drain/|^\.github/workflows/test\.yml'; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "Drain-relevant path changed -- running the drain mutation matrix."
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::no drain-relevant path changed -- skipping the drain mutation matrix (both drain jobs report skipped, which is not red: see tools/drain/gates.py RED_CONCLUSIONS / classify_advisory_checks)."
+          fi
+
   drain-mutation-shard:
     # THE `/6` IN THIS NAME IS LOAD-BEARING, and so is its agreement with both
     # `strategy.matrix.shard` and the `--shard i/6` below.
@@ -701,6 +809,27 @@ jobs:
     # green; the adjudicator's union check catches it at run time, and that test
     # catches it on the PR that causes it.
     name: Drain Mutation Matrix shard ${{ matrix.shard }}/6 (3.10)
+    needs: drain-mutation-detect
+    # GATED, as of 2026-10-02 -- a REVERSAL of "unconditional", not a return to
+    # the pre-#4555 shape it replaced. BOTH halves are load-bearing:
+    #   * `!cancelled()` -- same meaning as the merge job's below: refers to
+    #     the RUN, not to a needed job.
+    #   * `(needs.drain-mutation-detect.result != 'success' ||
+    #     needs.drain-mutation-detect.outputs.relevant == 'true')` -- and this
+    #     is NOT decoration. GitHub Actions implicitly ANDs `success()` into
+    #     ANY `if:` that does not itself name a status-check function, so
+    #     `if: needs.drain-mutation-detect.outputs.relevant == 'true'` ALONE
+    #     would SKIP this job whenever the detector job merely ERRORED (a
+    #     checkout timeout, a network flake -- nothing about relevance) --
+    #     exactly the defect class this PR exists to prevent, moved one hop
+    #     upstream. The `result != 'success'` half makes a non-clean detector
+    #     verdict fail OPEN (run anyway) rather than silently skip; the
+    #     `outputs.relevant == 'true'` half is what actually narrows, and only
+    #     once the detector concluded cleanly. Parenthesised because `&&`
+    #     binds tighter than `||` in this expression language: without the
+    #     parens, `!cancelled() && A || B` parses as `(!cancelled() && A) ||
+    #     B`, which would run on EVERY non-cancelled run regardless of B.
+    if: ${{ !cancelled() && (needs.drain-mutation-detect.result != 'success' || needs.drain-mutation-detect.outputs.relevant == 'true') }}
     runs-on: ubuntu-latest
     # ~3.5x the ~7 min projected above. NOT fitted, for the reason the old
     # block gave and that still holds now that the advisory is known to block:
@@ -740,7 +869,9 @@ jobs:
           pip install pytest pyyaml
 
       - name: Drain mutation matrix shard (every assigned arm must be KILLED)
-        # NO `if:`. See the block above -- this is the whole point of the job.
+        # NO step-level `if:` here. The only gate on this job is the
+        # job-level `if:` above, and it is driven by `drain-mutation-detect`,
+        # not by anything local to this step.
         #
         # The body is the bare command, deliberately: anything wrapped around it
         # can decide not to run it, or can decide which arms run, without
@@ -773,17 +904,36 @@ jobs:
   # moving it would silently retire the advisory rather than shard it -- the
   # "control that stops reporting" failure this whole change is about.
   #
-  # `if: ${{ !cancelled() }}` is NOT a narrowing and is required. By default a
-  # job whose `needs` FAILED is skipped, so a surviving arm would turn this job
-  # from "red, and here is the arm" into "skipped" -- which on a non-required
-  # check is indistinguishable from "nothing to do". `cancelled()` refers to the
-  # RUN, not to a needed job: a shard that overruns `timeout-minutes` concludes
+  # `if: ${{ !cancelled() && needs.drain-mutation-shard.result != 'skipped' }}`
+  # -- BOTH halves load-bearing, for opposite reasons.
+  # `!cancelled()` is NOT a narrowing and is still required. By default a job
+  # whose `needs` FAILED (or was SKIPPED) is itself skipped, so either a
+  # surviving arm OR a detector that said `relevant=false` would otherwise turn
+  # this job into an indistinguishable bare `skipped` instead of "red, and
+  # here is the arm" / "skipped, on purpose". `cancelled()` refers to the RUN,
+  # not to a needed job: a shard that overruns `timeout-minutes` concludes
   # CANCELLED without cancelling the run, this job still executes, and
   # `--needs-result cancelled` is refused by name.
+  # The second half IS the narrowing, and it is the new one (2026-10-02):
+  # `needs.drain-mutation-shard.result != 'skipped'` -- NOT an `outputs` read.
+  # The shard job's own `if:` (above) already absorbs every fail-open decision
+  # about the detector, so this job only needs to ask "did the shard genuinely
+  # attempt to run" -- and `result` is the right field to ask that with: it is
+  # ALREADY read two steps below for `--needs-result`, with the SAME
+  # documented meaning (`success` only when every matrix leg succeeded,
+  # `cancelled` on a timeout, `skipped` when the job never ran at all). A
+  # custom `outputs` value on a MATRIX job does not have that guarantee --
+  # GitHub's own docs say only that the value comes from "one of" the matrix
+  # legs when more than one defines the same output name, not which -- so it
+  # is the wrong signal to gate on here. `result != 'skipped'` is `true` for
+  # `success`, `failure` AND `cancelled`: the shard job attempted the matrix
+  # in all three cases, and only a `skipped` shard means the detector
+  # determined this PR's footprint did not touch `tools/drain/**` or this
+  # workflow file.
   drain-mutation-matrix:
     name: Drain Mutation Matrix (3.10)
     needs: drain-mutation-shard
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.drain-mutation-shard.result != 'skipped' }}
     runs-on: ubuntu-latest
     # This job downloads six small JSON files and evaluates a pure function, so
     # its own wall time says NOTHING about whether the suite ran -- which is
