@@ -727,6 +727,12 @@ test('compiled template: admin-plane receives the warehouse id and the schema gr
   const m = adminPlaneModule(tpl);
   const passed = m.properties.parameters;
   assert.equal(passed.loomDatabricksSqlWarehouseId?.value, "[variables('existingDatabricksSqlWarehouseId')]");
+  // Same adopted id, same var — #4773. csa-loom-post-deploy-bootstrap.yml sets
+  // both LOOM_DATABRICKS_SQL_WAREHOUSE_ID and LOOM_DATABRICKS_LINEAGE_WAREHOUSE_ID
+  // to the one 'loom-default' warehouse; there is no separate lineage warehouse
+  // to adopt a different id for. Breaks if main.bicep stops passing this param,
+  // or passes a literal '' / a different variable than the SQL warehouse one.
+  assert.equal(passed.loomDatabricksLineageWarehouseId?.value, "[variables('existingDatabricksSqlWarehouseId')]");
   assert.equal(
     passed.eventsConfig?.value?.loomEhSchemaGroup,
     "[if(not(empty(variables('existingEventHubSchemaGroup'))), variables('existingEventHubSchemaGroup'), if(and(variables('useSingleDlz'), variables('provisionEventHubs')), 'loom-schemas', ''))]",
@@ -737,6 +743,7 @@ test('compiled template: admin-plane receives the warehouse id and the schema gr
   // would otherwise make these params dead on arrival.
   const declared = m.properties.template.parameters;
   assert.ok(declared.loomDatabricksSqlWarehouseId, 'admin-plane must declare loomDatabricksSqlWarehouseId');
+  assert.ok(declared.loomDatabricksLineageWarehouseId, 'admin-plane must declare loomDatabricksLineageWarehouseId');
   assert.ok(declared.eventsConfig, 'admin-plane must declare eventsConfig');
 });
 

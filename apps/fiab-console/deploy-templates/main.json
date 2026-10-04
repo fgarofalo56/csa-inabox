@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "5740425005950128113"
+      "templateHash": "15497872764271951159"
     }
   },
   "definitions": {
@@ -2223,6 +2223,9 @@
           },
           "loomDatabricksAccountHost": "[if(empty(parameters('databricksAccountId')), createObject('value', ''), createObject('value', variables('databricksAccountHost')))]",
           "loomDatabricksSqlWarehouseId": {
+            "value": "[variables('existingDatabricksSqlWarehouseId')]"
+          },
+          "loomDatabricksLineageWarehouseId": {
             "value": "[variables('existingDatabricksSqlWarehouseId')]"
           },
           "keyVaultHsmIsolated": {
