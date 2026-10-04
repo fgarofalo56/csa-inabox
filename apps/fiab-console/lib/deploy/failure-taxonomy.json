@@ -701,6 +701,17 @@
       "observed": "Verbatim GitHub Actions annotation on loom-dataplane-roll run 36665140502 (2026-09-30, job \"Roll all on commercial\"): `The job has exceeded the maximum execution time of 45m0s`. The job concludes `cancelled`, not `failure`, so if: failure() steps do not run. On that lane the artifact is written DIRECTLY by scripts/ci/roll-lease-budget.mjs notify-result when a cancel lands at the timeout-minutes limit (#4823); this entry registers the id and class the notifier renders. The needle is GitHub's own wording and appears in no Azure output. WHAT IT DOES NOT ESTABLISH: which step was slow, or why — the class is transient on the expectation that the same run, unchanged, completes once whatever was slow has cleared, and the remediation says so.",
       "remediationKind": "operator-action",
       "remediation": "The job hit its timeout-minutes limit and GitHub cancelled it, so no step after the interrupted one did its work and no failure()-gated step (rollback, failure notice) ran. Read the interrupted step's own log for what was slow and, for a roll, the live revisions before acting. If the SAME step times out again on a re-run it is not transient. Re-dispatch with the exact command the issue body prints, e.g. `gh workflow run loom-dataplane-roll.yml -f boundary=<boundary> -f tag=<tag> -f apps=<apps>`."
+    },
+    {
+      "id": "transient.acr-task-run-timeout",
+      "class": "transient",
+      "allOf": [
+        "run id",
+        "timed out after"
+      ],
+      "observed": "Verbatim from the ACR task log for loom-risingwave, run cj79a (2026-09-11, fetched via `az acr task logs -r acrloomk6mvh5sm6z7do --run-id cj79a`, confirmed by #4472): \"Run ID: cj79a timed out after 1h0m0s\". The log tail shows an in-progress `apt-get` fetch from archive.ubuntu.com (Get:48...Get:65, still pulling systemd/libssl-dev/libssl3t64) -- the build did not fail, the ACR TASK's own 1-hour ceiling was reached mid-download. This is DISTINCT from defect.acr-task-run-failed's `failed during run, err: exit status` shape (a step returning non-zero) and from transient.acr-lease-held-past-roll-budget's `allOf` (which additionally requires 'waiting for the acr firewall lease' and 'lease-wait budget', neither present here) -- a bare 'run id' + 'timed out after' pair cannot satisfy that stricter three-term allOf, so the two signals cannot collide. Classified transient, not unknown, because the remediation (retry, possibly after reducing the apt-get footprint) is known and bounded, unlike a build genuinely producing no actionable signal.",
+      "remediationKind": "operator-action",
+      "remediation": "The ACR task ran out of its 1-hour ceiling mid-build, not a build step failing -- a retry of the SAME context is likely to succeed if the slow download was transient network/mirror congestion. If the SAME image times out repeatedly, the exposure should be reduced rather than retried indefinitely: pin any `dist-upgrade`/`apt-get` step to only the packages actually required instead of a full upgrade, consider an Azure-hosted apt mirror instead of archive.ubuntu.com, or raise the ACR task timeout for this specific image if the download is genuinely irreducible. See #4472 for the measurement this entry was raised against."
     }
   ],
   "remediationKinds": {
