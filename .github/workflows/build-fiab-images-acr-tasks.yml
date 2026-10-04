@@ -590,6 +590,7 @@ jobs:
           echo "::notice::${{ matrix.name }}:${{ github.sha }} → $DIGEST"
 
       - name: Trivy gate — fail on CRITICAL CVEs (pushed image)
+        id: trivy
         if: steps.sc.outputs.skip != 'true'
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
         with:
@@ -605,6 +606,31 @@ jobs:
           # Reviewed baseline of base-image/vendored CVEs with burn-down notes.
           trivyignores: .trivyignore
           format: table
+
+      # #4464 — `az acr build` pushes server-side BEFORE this gate runs (there is
+      # no `--no-push`), so a red Trivy gate used to leave a CRITICAL-flagged
+      # image live and pullable under 3 mutable tags, :latest included. This
+      # does not make the push atomic with the scan (the smaller, safer fix the
+      # issue asked for) — it UNTAGS what was just pushed the moment the gate
+      # refuses it, so the registry stops serving the flagged image under any
+      # name a caller would reasonably pull. Untag, not delete-manifest: a tag
+      # can share a digest with an earlier, clean build, and untagging only
+      # removes THIS build's pointer to it.
+      - name: Delete the pushed tags the Trivy gate just refused (#4464)
+        if: steps.trivy.outcome == 'failure'
+        run: |
+          set -uo pipefail
+          FAILED_UNTAG=0
+          for T in "$IMAGE_TAG" "${{ github.sha }}" "latest"; do
+            echo "::warning::Trivy CRITICAL gate failed for ${{ matrix.name }}:$T -- untagging it so the registry stops serving a flagged image under a mutable tag."
+            if az acr repository untag --name "$ACR_NAME" --image "${{ matrix.name }}:$T"; then
+              echo "::notice::${{ matrix.name }}:$T untagged."
+            else
+              echo "::error::Could not untag ${{ matrix.name }}:$T -- it may still be pullable. Remove it manually: az acr repository untag --name $ACR_NAME --image ${{ matrix.name }}:$T"
+              FAILED_UNTAG=1
+            fi
+          done
+          exit $FAILED_UNTAG
 
       - name: Install cosign
         if: steps.sc.outputs.skip != 'true'
