@@ -1196,7 +1196,7 @@ class _GhSpy:
     def __init__(self, *, state="OPEN", close_rc=0, close_err="", takes_effect=True,
                  on_close=None, raises=None, view_fails_after_close=False,
                  url_kind="issues", url_repo="", close_title="",
-                 view_title_before=""):
+                 view_title_before="", created_at="2020-01-01T00:00:00Z"):
         self.state = state
         self.states: dict[str, str] = {}
         self.close_rc = close_rc
@@ -1204,6 +1204,13 @@ class _GhSpy:
         self.takes_effect = takes_effect
         self.on_close = on_close
         self.raises = raises
+        #: The item's OWN filing time (#4578), answered only when asked for --
+        #: same `asked`-filtering as every other field here. Defaulted far in
+        #: the past so a test that never configures it (the overwhelming
+        #: majority) cannot accidentally trip the #4578 date refusal just by
+        #: existing: that refusal is opt-in, via `run_created_at=` on the
+        #: close call, and this default keeps it that way.
+        self.created_at = created_at
         #: Which OBJECT `gh issue view` resolves the number to. `gh issue view`
         #: answers for pull requests too -- measured live on #4552, which came
         #: back `{"state":"OPEN","url":".../pull/4552"}` -- so the payload
@@ -1257,6 +1264,7 @@ class _GhSpy:
                 ),
                 "url": (f"https://github.com/{self.url_repo or _argv_repo(args)}"
                         f"/{self.url_kind}/{args[3]}"),
+                "createdAt": self.created_at,
             }
             # ANSWER ONLY WHAT WAS ASKED FOR, because that is what `gh` does --
             # `--json state,url` returns those two keys and nothing else. A spy
@@ -1993,9 +2001,7 @@ def test_a_run_backed_comment_does_not_claim_an_r2_satisfaction_it_cannot_establ
     The run-backed text used to end "an observation of something that ran, not a
     merge, which is what deploy-integrity R2 (merged is not done) ASKS OF THIS
     CLASS" -- an assertion that R2 is SATISFIED. Nothing in the receipt path
-    establishes it. `_run_evidence` never requests `createdAt`, and
-    `verify_run_backed_receipt` reads `headSha` only to interpolate it into the
-    returned ref and compares it to nothing. So the run is bound to this issue
+    established it at the time. So the run was bound to this issue
     on ONE axis -- its BOUNDARY, since #4709 -- and on nothing else: not by
     reference (a workflow run names no issue at all -- the
     gap the old text did disclose, #4489), not by time, not by sha.
@@ -2003,19 +2009,19 @@ def test_a_run_backed_comment_does_not_claim_an_r2_satisfaction_it_cannot_establ
     MEASURED RATHER THAN ARGUED, which is what makes it a blocker and not a
     style note: run `33238747458` (`loom-roll-and-validate`,
     `completed`/`success`, headSha `70ca3d136651efc01cf9b8449b0d73e609fdb071`,
-    created 2026-08-29T06:33:22Z) satisfies every check this code makes, and
-    147 of the 351 issues open on 2026-09-18 were filed AFTER it -- for each of
-    those the run cannot have observed the behaviour the issue is about. A
-    reader of the closed issue six months on takes "what R2 asks of this class"
-    to mean the estate was seen carrying this change. R7 governs implication and
-    the comment is unrevisable.
+    created 2026-08-29T06:33:22Z) satisfied every check this code made BEFORE
+    #4578, and 147 of the 351 issues open on 2026-09-18 were filed AFTER it --
+    for each of those the run could not have observed the behaviour the issue
+    is about. A reader of the closed issue six months on takes "what R2 asks of
+    this class" to mean the estate was seen carrying this change. R7 governs
+    implication and the comment is unrevisable.
 
-    WHY DISCLOSURE AND NOT THE BINDING, decided rather than defaulted: the
-    binding needs the run's date, the item's date, a comparison and a refusal,
-    and the item's date is not in hand -- fetching it is a new `gh` call on a
-    path whose seven-shape failure behaviour was independently measured clean at
-    this head. That re-derivation is #4578's work. What is NOT deferrable is the
-    sentence, because it is published on every issue closed in the meantime.
+    #4578 LANDED THE TIME HALF, reusing the read `close_issue_on_github`
+    already makes for state rather than a new `gh` call: the item's own
+    `createdAt` rides the same `--json` list, and the run's `createdAt` --
+    now also fetched by `_run_evidence` -- is compared to it before the close
+    is ever attempted. The SHA half remains open (#4489 still needs
+    `Item.pr` to bind it), and the comment below discloses exactly that split.
 
     THE VALUES THAT BREAK THIS, MEASURED RATHER THAN PREDICTED. An earlier draft
     of this docstring said GH19 breaks "the second assertion" and stopped there;
@@ -2037,8 +2043,8 @@ def test_a_run_backed_comment_does_not_claim_an_r2_satisfaction_it_cannot_establ
 
     Assertion 5 (`#4489`) is DISCLOSED AS UN-KILLABLE by these two arms, per
     assertion-design.md "done" #5: it survives both, and it is here to pin that
-    the gap the OLD text did disclose is still disclosed -- a regression guard,
-    not coverage of this round's change.
+    the SHA gap the OLD text did disclose is still disclosed -- a regression
+    guard, not coverage of this round's change.
 
     The negatives are paired with a positive per assertion-design.md "done" #4:
     assertion 1 pins that the run branch still SAYS what it establishes, without
@@ -2067,32 +2073,38 @@ def test_a_run_backed_comment_does_not_claim_an_r2_satisfaction_it_cannot_establ
     )
     assert "asks of this class" not in body, (
         "the run-backed comment claims deploy-integrity R2 is SATISFIED; the "
-        "code fetches no run date and compares no sha, so it cannot know"
+        "code still compares no sha, so it cannot know the estate carried "
+        "THIS change"
     )
-    assert "no run date is fetched and no head sha is compared" in body, (
-        "a run-backed close must disclose that the run is bound to no TIME and "
-        "no SHA - the value that breaks this is the DISCLOSED clause deleted "
-        "while the softened R2 line stays, which reads clean and says less"
+    assert "never compared" in body, (
+        "a run-backed close must disclose that the SHA is still unbound - the "
+        "value that breaks this is the DISCLOSED clause deleted while the "
+        "softened R2 line stays, which reads clean and says less"
+    )
+    assert "is refused rather than accepted as its evidence" in body, (
+        "a run-backed close must say that a run predating the item IS now "
+        "refused (#4578) - the value that breaks this is the narrowed TIME "
+        "clause deleted along with the SHA one"
     )
     assert "#4578" in body, (
-        "the time/sha gap must be TRACKED on the artifact, not merely "
+        "the time binding must be TRACKED on the artifact, not merely "
         "mentioned - the value that breaks this is the issue reference dropped"
     )
-    # The gap the OLD text already disclosed is still disclosed. Restoring the
-    # old sentence would keep this green, which is why it is not the assertion
-    # that catches arm GH19.
+    # The SHA gap the OLD text already disclosed is still disclosed. Restoring
+    # the old sentence would keep this green, which is why it is not the
+    # assertion that catches arm GH19.
     assert "#4489" in body
 
 
 def test_the_run_backed_disclosure_is_still_true_of_the_code_it_describes():
-    """THE DISCLOSURE AND THE CODE, PINNED TOGETHER (round 9).
+    """THE DISCLOSURE AND THE CODE, PINNED TOGETHER (round 9, narrowed for #4578).
 
-    The comment publishes "no run date is fetched and no head sha is compared".
-    That is a claim ABOUT THIS PROGRAM, on a permanent public artifact, and the
-    way it goes FALSE is not an edit to the string -- it is somebody landing
-    #4578, adding the comparison, and leaving the string alone. From that moment
-    the harness understates itself forever, on every issue it closes after it,
-    and no existing test notices.
+    The comment used to publish "no run date is fetched and no head sha is
+    compared". That claim went FALSE the moment #4578 landed `createdAt` on
+    `_run_evidence` and the comparison in `close_issue_on_github` -- this test
+    is the tripwire that FIRED for that landing, and its assertions are now
+    pinned to the state #4578 leaves: the run's date IS fetched and compared,
+    the SHA is still not.
 
     The claim is therefore asserted against the argv `_run_evidence` ACTUALLY
     ISSUES, read through a spy on the `sh` seam rather than from the module's
@@ -2101,10 +2113,10 @@ def test_the_run_backed_disclosure_is_still_true_of_the_code_it_describes():
     "we do not fetch the date" is exactly the kind of claim a docstring can
     keep asserting after the code stopped agreeing.
 
-    THE VALUE THAT BREAKS THIS: `createdAt` added to the `--json` field list,
-    i.e. the first step of #4578. That is INTENDED. This test is the tripwire
-    that makes narrowing the published disclosure part of that change instead
-    of an afterthought; it is not a vote against the binding.
+    THE VALUE THAT BREAKS THIS NOW: `createdAt` removed from the `--json` field
+    list while the comment keeps claiming it is bound by time -- the SAME
+    one-sided shape in the opposite direction, which is why this is a
+    regression guard going forward rather than a one-time tripwire.
     """
     seen: list[list[str]] = []
 
@@ -2123,20 +2135,23 @@ def test_the_run_backed_disclosure_is_still_true_of_the_code_it_describes():
     argv = seen[0]
     assert argv[:3] == ["gh", "run", "view"], argv
     fields = argv[argv.index("--json") + 1].split(",")
-    assert "createdAt" not in fields, (
-        "`_run_evidence` now fetches the run's date, so the published sentence "
-        "'no run date is fetched and no head sha is compared' is no longer "
-        "true - narrow the disclosure in `_receipt_comment` in the same change "
-        "(#4578)"
+    assert "createdAt" in fields, (
+        "`_run_evidence` must fetch the run's date (#4578) for the comment's "
+        "'bound by TIME' claim to be true - the value that breaks this is "
+        "`createdAt` dropped from the field list"
     )
     # The POSITIVE HALF: the field list is real and non-trivial, so this test
     # cannot be satisfied by `_run_evidence` requesting nothing at all. Split in
     # two (PT018) so a failure names WHICH field went missing.
     assert "headSha" in fields, fields
     assert "conclusion" in fields, fields
-    assert "no run date is fetched and no head sha is compared" in tick._receipt_comment(
-        "deploy-run", "deploy-path", "d", tick.BINDING_POLICY
-    ), "the disclosure this test keeps honest is not in the comment at all"
+    body = tick._receipt_comment("deploy-run", "deploy-path", "d", tick.BINDING_POLICY)
+    assert "bound by TIME, since" in body, (
+        "the disclosure this test keeps honest is not in the comment at all"
+    )
+    assert "never compared" in body, (
+        "the SHA half of the disclosure must still say it is unbound (#4489)"
+    )
 
 
 def test_a_receipt_kind_in_neither_category_refuses_rather_than_defaulting():
@@ -3213,6 +3228,51 @@ def test_the_closer_refuses_an_issue_that_resolves_to_another_repository(
     assert led.load().items[4547].state != CLOSED, (
         "the ledger moved over an object in another repository"
     )
+
+
+def test_a_run_that_predates_the_item_is_refused_before_the_close_is_attempted(
+    monkeypatch,
+):
+    """#4578: the item's OWN filing time is read off the SAME `gh issue view`
+    `close_issue_on_github` already issues for state (one more field on the
+    `--json` list, exactly as `title` was before it) -- no new network call --
+    and a run created before it is refused rather than accepted as its
+    evidence. Measured live: run 33238747458 (created 2026-08-29) passed every
+    other check this code makes for 147 of the 351 issues open on 2026-09-18,
+    every one of them filed AFTER it.
+
+    WOULD PASS if `run_created_at` here were moved to AFTER the item's filing
+    date; that is the positive control immediately below -- the only field
+    that differs between the two tests is which timestamp is earlier.
+    """
+    spy = _gh(monkeypatch, created_at="2026-09-01T00:00:00Z")
+    with pytest.raises(tick.ReceiptRefusedError, match=r"before #9001 was filed"):
+        tick.close_issue_on_github(
+            POLICY, "o/r", 9001, CLOSED, "a receipt", "g1-browser", "ui-surface",
+            tick.BINDING_POLICY, run_created_at="2026-01-01T00:00:00Z")
+    assert spy.closed == [], "a run that predates the item must never reach the close call"
+
+
+def test_positive_control_a_run_created_after_the_item_still_closes(monkeypatch):
+    """The control for the refusal above: identical setup, only the two
+    timestamps' ORDER changes."""
+    spy = _gh(monkeypatch, created_at="2026-01-01T00:00:00Z")
+    tick.close_issue_on_github(
+        POLICY, "o/r", 9002, CLOSED, "a receipt", "g1-browser", "ui-surface",
+        tick.BINDING_POLICY, run_created_at="2026-09-01T00:00:00Z")
+    assert spy.closed == ["9002"]
+
+
+def test_a_run_backed_close_with_no_run_created_at_skips_the_date_check(monkeypatch):
+    """`run_created_at=None` is the signal that this close is NOT the plain
+    run-backed route (ci-green, or the watcher route, which binds time its own
+    way) -- not "the item's date is unknown". Would refuse (wrongly) if `None`
+    were treated as "predates everything" instead of "not applicable"."""
+    spy = _gh(monkeypatch, created_at="2026-09-01T00:00:00Z")
+    tick.close_issue_on_github(
+        POLICY, "o/r", 9003, CLOSED, "a receipt", "g1-browser", "ui-surface",
+        tick.BINDING_POLICY)
+    assert spy.closed == ["9003"]
 
 
 def test_blocker_the_closer_refuses_a_number_that_resolves_to_a_pull_request(
