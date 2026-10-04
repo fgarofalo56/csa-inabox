@@ -196,19 +196,26 @@ export async function GET(
   // Atlas GUID) has no Cosmos row.
   let item: WorkspaceItem | null = null;
   try {
-    // Best-effort, and DELIBERATELY dropping the authorization refusal. What
-    // makes that safe is LOCAL and traced: on a refusal `loadItem` returns
-    // `item: null`, which is byte-for-byte the "no Cosmos row" outcome this
-    // lookup already handles, so no item state the caller may not see reaches
-    // the response through THIS call.
+    // Best-effort ONLY for "no Cosmos row" (`loadItem` already collapses an
+    // ordinary 404 to `denied: null`, which is byte-for-byte that outcome).
+    // A `denied` that survives past that collapse is a genuine non-404
+    // refusal (e.g. 409 tenant_unconfirmed) and MUST reach the caller, matching
+    // the other sixteen `loadItem`-based handlers — see
+    // `../__tests__/workspace-authz.test.ts` and the static scan in
+    // `app/api/__tests__/workspace-guard-scope.test.ts`.
     //
-    // #4357 review 7 — the earlier wording justified it instead by asserting
+    // #4457 — this call used to keep only `.item`, silently discarding
+    // `denied` and flattening a real 409 into this route's own 404 wording.
+    //
+    // #4357 review 7 — the earlier wording justified the old drop by asserting
     // "the lineage answer below is tenant-scoped inside `getUnifiedLineage`
-    // regardless". That states more than was established:
+    // regardless". That stated more than was established:
     // `listThreadEdges(input.session)` IS session-scoped, but the Purview /
-    // Unity Catalog portion of the same answer is not. The claim is withdrawn;
-    // it was never the reason this is safe, and the outcome is unchanged.
-    item = (await loadItem(id, type, session, { allowReadRoles: true })).item;
+    // Unity Catalog portion of the same answer is not. That claim is moot now
+    // that the refusal is returned rather than swallowed.
+    const loaded = await loadItem(id, type, session, { allowReadRoles: true });
+    if (loaded.denied) return loaded.denied;
+    item = loaded.item;
   } catch {
     item = null;
   }
