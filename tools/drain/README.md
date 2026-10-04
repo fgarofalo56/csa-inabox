@@ -208,20 +208,28 @@ The third row says "settled", not "the GitHub write LANDED", because the closer
 may have found the issue **already closed** and left it alone. The note it
 quotes says which.
 
-**On that already-closed route nothing is published at all**, and the note says
-so rather than leaving the operator to infer it. That route issues `gh issue
-view` and no other command, so no receipt comment is posted — and
-`tools/drain/state.json` is untracked, which leaves the receipt existing solely
-in a local gitignored file. It is not a corner: all 7 items the live ledger
-currently holds as `closed` are in exactly that state, and it is the route
+**On that already-closed route, the receipt's public trace is now checked and
+filled in if missing (#4579).** Before #4579 this route issued `gh issue view`
+and no other command, so no receipt comment was ever posted — and
+`tools/drain/state.json` is untracked, which left the receipt existing solely
+in a local gitignored file. All 7 items the live ledger held as `closed` when
+this was measured were in exactly that state, and it is the route
 `close_issue_on_github` was written for (#4535 was hand-closed). The
-short-circuit conflates *the harness already commented here*, where skipping is
-right, with *a human closed it silently*, where no comment exists and none ever
-will. Posting the receipt there too — read the comments, `gh issue comment` when
-none begins `Drain harness: receipt verified` — is tracked as #4579 and is
-deliberately not done here: it adds two `gh` calls, hence two new failure
-routes, to the one route the whole current population takes, and that route's
-seven-shape failure behaviour was independently measured clean.
+short-circuit conflates *the harness already commented here*, where nothing
+more is needed, with *a human closed it silently*, where no comment ever
+existed — and now reads the issue's comments to tell the two apart, posting
+with `gh issue comment` only when none begins `Drain harness: receipt
+verified`. Two new `gh` calls on this route where there was one: the read,
+and — only when nothing matches — the post. Each fails **sensibly** rather
+than crashing or going silent: a failed read or post is named in the returned
+note with its `rc` and the first 200 chars of stderr, and the ledger write
+still proceeds, because GitHub's own state **is** closed regardless of whether
+this particular comment lands. Re-deriving the seven-shape failure matrix
+independently measured for the single-call route over these two new calls is
+#4579's own named follow-on, not redone here. **DISCLOSED:** the fix runs only
+the next time this route is reached for a given issue — the 7 items above are
+already `closed` in the ledger, which `record_receipt_from_evidence` refuses
+to re-enter, so none of the 7 is backfilled by this change alone.
 
 **An empty ledger is NOT drained.** `all([])` is `True`, so without an emptiness
 clause a fresh clone or a deleted scratch file reports the whole backlog drained
