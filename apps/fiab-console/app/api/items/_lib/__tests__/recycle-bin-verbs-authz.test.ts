@@ -1,44 +1,47 @@
 /**
- * #3706 — the recycle-bin authorization matrix, asserted THROUGH THE VERBS.
+ * #4692 — the recycle-bin authorization matrix, asserted THROUGH THE VERBS.
+ * Operator decision 2026-09-24 (Refs #3706): restore AND purge are now WIDENED
+ * to the canonical ladder (Owner/Admin/Member + tenant admin).
  *
- * ── What this file adds that the two existing ones do not ──────────────────
+ * ── RETRACTED, not silently replaced ────────────────────────────────────────
  *
- * `recycle-bin-tenancy.test.ts` pins the MECHANISM, but it imports
- * `loadRecycledItem` DIRECTLY — so it cannot see a change that leaves the
- * shared helper alone and widens one verb's own path.
+ * This file used to pin the OPPOSITE verdict for the exact same arms below —
+ * "admitted by the ladder, refused by the bin" — because #3706 had decided
+ * restore/purge stay owner-only. #4692 reversed that decision (see item-crud
+ * .ts's retraction note at `loadRecycledItem`). The arms are NOT renamed
+ * (same roles, same verbs) so a reviewer can diff this file against its
+ * previous revision and see exactly which verdicts flipped and which did not.
  *
- * `recycle-crud.test.ts` pins BOTH VERBS, but only against a cross-tenant
- * workspace, and it is STRUCTURALLY incapable of witnessing a ladder-based
- * widening: it sets `process.env.LOOM_MULTIUSER_ACL = 'off'` (`:72`), and
- * `workspace-access.ts:101` reads exactly that env var to degrade the real
- * resolver to owner-only. So the interesting principal — one the canonical
- * ladder WOULD admit — cannot be represented there at all, mocked or not.
+ * ── What this file still adds that the other two do not ────────────────────
  *
- * (An earlier revision of this header predicted that file would instead red as
- * an unmocked-`workspaceRolesContainer` CRASH. That was MEASURED WRONG: run
- * against a restore-widened mutant it passes 9/9, because the resolver
- * short-circuits on the kill switch before ever reaching that container.)
+ * `recycle-bin-tenancy.test.ts` pins `loadRecycledItem`'s OWN delegation
+ * (right args, gates on `canWrite`) with the ladder mocked directly, but it
+ * imports the helper DIRECTLY — so it cannot see a change that leaves the
+ * shared helper alone and widens (or narrows) one verb's own path.
  *
- * So the gap closed here is the CROSS PRODUCT the issue's acceptance asked for:
- * each role against BOTH verbs, with the ladder mocked to SAY YES.
+ * `recycle-crud.test.ts` pins BOTH VERBS against an owned vs. cross-tenant
+ * workspace with `LOOM_MULTIUSER_ACL=off`, so it never represents the
+ * interesting principal (one the ladder, not bare ownership, admits).
  *
- * THE MUTATION THIS FILE EXISTS TO CATCH, and which neither file above catches:
- * split the loader — give `restoreOwnedItem` a ladder-backed loader and leave
- * `purgeRecycledItem` on the narrow one (or the reverse). That is the shape any
- * future "restore should be wider than purge" change would take. Measured
- * against a restore-widened mutant, counting the WHOLE FILE (10 runtime tests
- * = 5 restore arms + 5 purge arms): all 4 restore NEGATIVES go red — the 3
- * `describe.each` roles plus the third-tenant row — and all 5 purge arms stay
- * green, as does the creator's restore arm. The purge-widened mirror is
- * symmetric: 4 purge negatives red, 5 restore arms green. So it names WHICH
- * VERB moved instead of merely failing.
+ * So the matrix this file owns is the CROSS PRODUCT: each role against BOTH
+ * verbs, with the ladder mocked to answer per-arm, so a change that widens
+ * (or narrows) ONE verb without the other reds only that verb's column.
  *
- * ── What this file does NOT do ────────────────────────────────────────────
+ * THE MUTATION THIS FILE EXISTS TO CATCH: split the loader — give
+ * `restoreOwnedItem` a ladder-backed loader while leaving `purgeRecycledItem`
+ * on a DIFFERENT (narrower or wider) one, or the reverse. That is the shape
+ * any future "restore and purge should differ" change would take; today both
+ * route through the one shared `loadRecycledItem`, so every arm below moves
+ * together.
  *
- * It does not argue the current narrowness is right. That decision is recorded
- * at `item-crud.ts` (the `#3706 — THIS NARROWNESS IS THE CONTROL` block) and is
- * unchanged by this file. These tests make a future widening an explicit,
- * reviewed act rather than a quiet one — in EITHER direction.
+ * The third-tenant-mismatch arm the pre-#4692 revision carried here is
+ * RETIRED, not quietly dropped: `loadRecycledItem` no longer performs its own
+ * partition read + tenant comparison (that mechanism is gone — see
+ * item-crud.ts), so a fixture encoding it can no longer witness anything from
+ * THIS mocked harness. The tid boundary itself is the ladder's own concern,
+ * covered by `lib/auth/__tests__/workspace-access-tid-boundary.test.ts`; this
+ * file's remaining job is "does loadRecycledItem obey whatever the ladder
+ * says", which `recycle-bin-tenancy.test.ts` now covers directly.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -86,29 +89,20 @@ const h = vi.hoisted(() => ({
   offboardFromPurview: vi.fn(),
 }));
 
-/**
- * Which workspace doc each PARTITION resolves. Modelled faithfully: a Cosmos
- * point read outside your own partition finds NOTHING — it does not find
- * someone else's row. Default: only the creator's partition has the workspace.
- */
-let wsByPartition: Record<string, any> = {};
-/** Every `ws.item(id, pk)` performed, so a cross-partition rewrite is visible. */
+/** Every `ws.item(id, pk)` performed — kept only so a future regression that
+ *  re-adds an inline point read to `loadRecycledItem` is visible; nothing in
+ *  this file's current assertions reads from it. */
 const wsPointReads: Array<{ id: string; pk: string }> = [];
-/** Every cross-partition query against the WORKSPACES container. */
-const wsQueries: any[] = [];
 
 /**
  * The canonical ladder's answer. Set per-arm to the role under test.
  *
- * On the current tree `loadRecycledItem` never calls this, so the mock is INERT
- * — it is not coverage, it is the harness that makes each negative arm a REAL
- * kill. It is paired with the `workspaceRolesContainer` stub below so that a
- * widening which DOES reach the ladder cannot die on a harness error: a
- * broken-harness red invites a later author to "repair" the mock, and the
- * widening then ships green. MEASURED, both directions: under the
- * restore-widened and purge-widened mutants the negative arms fail on the
- * VERDICT (`expected {…} to be null` / `expected true to be false`), never on a
- * module error — i.e. the widening is refused ON ITS MERITS.
+ * #4692 — THIS IS NOW THE DECIDING MOCK, not an inert harness. `loadRecycledItem`
+ * delegates fully to `resolveWorkspaceAccessByOid` (mocked here) and gates on
+ * `access.canWrite` — see `recycle-bin-tenancy.test.ts` for the delegation
+ * mechanism itself. `workspaceRolesContainer` stays stubbed below so a future
+ * widening that reaches the REAL resolver's direct-role lookup (e.g. if this
+ * mock is ever removed) does not throw.
  */
 let aclAccess: any = null;
 
@@ -129,11 +123,9 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
   workspacesContainer: vi.fn(async () => ({
     item: (id: string, pk: string) => {
       wsPointReads.push({ id, pk });
-      return { read: async () => ({ resource: wsByPartition[pk] }) };
+      return { read: async () => ({ resource: undefined }) };
     },
-    items: {
-      query: (spec: any) => { wsQueries.push(spec); return { fetchAll: async () => ({ resources: [] }) }; },
-    },
+    items: { query: () => ({ fetchAll: async () => ({ resources: [] }) }) },
   })),
   // Present so a future widening that reaches the ladder's direct-role lookup
   // does not throw — see `aclAccess` above.
@@ -142,8 +134,9 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
   })),
   tenantSettingsContainer: vi.fn(async () => ({ item: () => ({ read: vi.fn(async () => ({ resource: undefined })) }) })),
   auditLogContainer: vi.fn(async () => ({ items: { create: vi.fn(async () => ({})) } })),
-  // Silences the webhook fan-out's "no export defined" stderr; the emitter is
-  // best-effort and fires only on paths these arms must never reach anyway.
+  // #4692 — purge now emits `item.purged` on every ADMITTED arm, so this is no
+  // longer an unreached path: it silences the webhook fan-out's internal fetch
+  // of subscribed hooks (returns none, so delivery never fires either).
   webhookSubscriptionsContainer: vi.fn(async () => ({
     items: { query: () => ({ fetchAll: async () => ({ resources: [] }) }) },
   })),
@@ -175,159 +168,107 @@ import { restoreOwnedItem, purgeRecycledItem } from '../item-crud';
 beforeEach(() => {
   Object.values(h).forEach((fn) => fn.mockReset());
   wsPointReads.length = 0;
-  wsQueries.length = 0;
-  wsByPartition = { [CREATOR]: WORKSPACE };
   aclAccess = null;
   h.itemReplace.mockImplementation((_id: string, _pk: string, doc: any) => ({ resource: doc }));
 });
 
 /**
- * The ladder answers this file mocks, one per role the canonical
- * `authorizeWorkspace` ladder can return for a NON-creator.
+ * The ladder answers this file mocks, one per role relevant to the matrix,
+ * paired with the oid the verb is called with (the mock ignores it, but it
+ * keeps each row's label honest about who is acting).
  *
- * `Viewer` is DISCLOSED as dominated, not counted as extra coverage: under a
- * write-scoped widening it stays GREEN (a write-scoped ladder refuses a viewer
- * too), and under a read-scoped widening it reds — but so does `Member`. Its
- * kill set is therefore a SUBSET of `Member`'s under every widening shape
- * considered. It is here because the issue asked in those words ("a read-only
- * role must not purge") and because it states the intent for a reader, NOT
- * because it kills a mutant `Member` misses.
+ * #4692 flips three of these four verdicts from the pre-decision revision:
+ * Member and the tenant admin now ADMIT (previously refused); Viewer is
+ * UNCHANGED (refused before and after — a write-scoped gate never admitted a
+ * read-only role, so this is the one row whose kill direction did not move).
  */
-const LADDER_SAYS_YES: Array<[string, any]> = [
-  ['a shared-workspace Member with write', { workspace: WORKSPACE, role: 'Member', via: 'acl', canWrite: true }],
-  ['a read-only Viewer', { workspace: WORKSPACE, role: 'Viewer', via: 'acl', canWrite: false }],
-  ['a tenant admin opening a workspace they do not own', { workspace: WORKSPACE, role: 'Admin', via: 'admin', canWrite: true }],
+const WRITE_CAPABLE: Array<[string, any, string]> = [
+  ['the workspace CREATOR (ladder: Owner)', { workspace: WORKSPACE, role: 'Owner', via: 'owner', canWrite: true }, CREATOR],
+  ['a shared-workspace Member with write', { workspace: WORKSPACE, role: 'Member', via: 'acl', canWrite: true }, OTHER],
+  ['a tenant admin opening a workspace they do not own', { workspace: WORKSPACE, role: 'Admin', via: 'admin', canWrite: true }, OTHER],
+];
+const READ_ONLY: Array<[string, any, string]> = [
+  ['a read-only Viewer', { workspace: WORKSPACE, role: 'Viewer', via: 'acl', canWrite: false }, OTHER],
 ];
 
-describe('#3706 — recycle-bin role x verb matrix (restore and purge)', () => {
-  describe('the workspace CREATOR — the positive pair every absence assertion below is paired with', () => {
+describe('#4692 — recycle-bin role x verb matrix (restore and purge)', () => {
+  describe.each(WRITE_CAPABLE)('%s — write-capable, CAN restore AND purge', (_label, access, oid) => {
+    beforeEach(() => { aclAccess = access; });
+
     /**
-     * FAILS IF the owner path stops working at all — e.g. the positive tenant
-     * comparison is inverted, or the point read is given the wrong partition.
-     * Without this arm, every `not.toHaveBeenCalled()` below would also be
-     * satisfied by deleting the feature outright.
+     * FAILS IF the write-scoped gate stops admitting a write-capable ladder
+     * verdict at all (e.g. `access.canWrite` inverted, or the ladder's result
+     * ignored outright) — every row in this table would then also refuse.
      */
     it('CAN restore', async () => {
-      const out = await restoreOwnedItem(RECYCLED.id, CREATOR);
+      const out = await restoreOwnedItem(RECYCLED.id, oid);
 
       expect(out).not.toBeNull();
       expect((out!.state as any)._recycled).toBeUndefined();
       expect(h.itemReplace).toHaveBeenCalledTimes(1);
-      // THE POSITIVE PAIR for the negative arms' `unDeleteDirectory` absence
-      // assertions. FAILS IF the ADLS un-delete is dropped from restore, or if
-      // the fixture loses `adlsRefs` (which would silently make those absence
-      // assertions unreachable again).
+      // THE POSITIVE PAIR for the READ_ONLY arm's absence assertions below.
+      // FAILS IF the ADLS un-delete is dropped from restore, or if the fixture
+      // loses `adlsRefs` (which would silently make those absence assertions
+      // unreachable again).
       expect(h.unDeleteDirectory).toHaveBeenCalledWith('bronze', 'notebooks/deleted-notebook', 'del-77');
-      // THE MECHANISM: resolved by a point read in the CALLER's own partition,
-      // never a cross-partition query. Swapping the read for a query — the
-      // natural way to "fix" the fact that an admin is refused — fails here.
-      expect(wsPointReads).toEqual([{ id: WS_ID, pk: CREATOR }]);
-      // DISCLOSED as near-dominated (assertion-design §5): the query-swap mutant
-      // is already caught by the `wsPointReads` equality one line up, which
-      // throws first, and a FALLBACK query never fires on the owner-hit path.
-      // Kept as a regression guard; the arm with real kill power for a
-      // cross-partition fallback is the negative one below.
-      expect(wsQueries).toHaveLength(0);
+      expect(h.restoreThreadEdgesForItem).toHaveBeenCalledWith(oid, RECYCLED.id);
     });
 
     it('CAN purge', async () => {
-      const ok = await purgeRecycledItem(RECYCLED.id, CREATOR);
+      const ok = await purgeRecycledItem(RECYCLED.id, oid);
 
       expect(ok).toBe(true);
       expect(h.itemDelete).toHaveBeenCalledWith(RECYCLED.id, WS_ID);
-      expect(wsPointReads).toEqual([{ id: WS_ID, pk: CREATOR }]);
-      expect(wsQueries).toHaveLength(0);
+      expect(h.deleteLoomDoc).toHaveBeenCalledWith(`it:${RECYCLED.id}`);
+      expect(h.reconcileThreadEdgesOnDelete).toHaveBeenCalledWith(oid, RECYCLED.id, { mode: 'remove' });
     });
   });
 
   /**
-   * THE MATRIX. For each principal the canonical ladder would ADMIT but who did
-   * NOT create the workspace, BOTH verbs must still refuse.
-   *
-   * Every arm FAILS IF `loadRecycledItem` — or a verb-specific loader
-   * introduced beside it — is migrated to `resolveWorkspaceAccessByOid` /
-   * `authorizeWorkspace`: the ladder is mocked to say YES, the caller's own
-   * partition read misses, and the correct answer is still a refusal.
-   *
-   * Running it through the VERBS rather than the helper is the point: a change
-   * that widens ONE verb reds only that verb's column, which no other spec in
-   * this directory can see.
+   * THE ONE ROLE WHOSE VERDICT DID NOT FLIP. A read-only Viewer is admitted by
+   * the ladder (`access` is non-null) but carries `canWrite:false`, and both
+   * verbs are mutations. FAILS IF the gate is loosened from `!access.canWrite`
+   * to bare `!access` (truthiness) — a Viewer grant is truthy, so that mutant
+   * admits it here while every WRITE_CAPABLE arm above stays green, naming
+   * exactly which check broke.
    */
-  describe.each(LADDER_SAYS_YES)('%s — admitted by the ladder, refused by the bin', (_label, access) => {
-    beforeEach(() => {
-      // Not the creator: their partition holds no workspace row...
-      wsByPartition = { [CREATOR]: WORKSPACE };
-      // ...but the canonical ladder would admit them.
-      aclAccess = access;
-    });
+  describe.each(READ_ONLY)('%s — read-only, refused by the write-scoped gate', (_label, access, oid) => {
+    beforeEach(() => { aclAccess = access; });
 
     it('must NOT restore', async () => {
-      const out = await restoreOwnedItem(RECYCLED.id, OTHER);
+      const out = await restoreOwnedItem(RECYCLED.id, oid);
 
       expect(out).toBeNull();
       // The irreversible-adjacent effects must not fire either — a verdict-only
       // assertion would still pass if the write happened and the return value
-      // were dropped. Each is REACHABLE: the creator arm above proves all three
-      // DO fire on a successful restore, so a widening reds every one of them.
+      // were dropped. Each is REACHABLE: the WRITE_CAPABLE arms above prove all
+      // three DO fire on a successful restore.
       expect(h.itemReplace).not.toHaveBeenCalled();
       expect(h.unDeleteDirectory).not.toHaveBeenCalled();
       expect(h.restoreThreadEdgesForItem).not.toHaveBeenCalled();
-      // THE REALISTIC WIDENING SHAPE, and why this line is not decoration:
-      // KEEP the point read and add a cross-partition QUERY as a FALLBACK —
-      // which "fixes" the tenant-admin 404 without appearing to remove
-      // anything. MEASURED against exactly that mutant: it reds the six
-      // `describe.each` negative arms and nothing else, every one of them ON
-      // THIS LINE (`expected [ { …(2) } ] to have a length of +0 but got 1`),
-      // while `recycle-bin-tenancy.test.ts` stays 6/6 green. The verdict
-      // assertions above CANNOT see it — the query mock yields no rows, so the
-      // item is still refused and `toBeNull` still passes. This assertion is
-      // dominated by nothing.
-      expect(wsQueries).toHaveLength(0);
     });
 
     it('must NOT purge', async () => {
-      const ok = await purgeRecycledItem(RECYCLED.id, OTHER);
+      const ok = await purgeRecycledItem(RECYCLED.id, oid);
 
       expect(ok).toBe(false);
       // THE ONE THAT MATTERS: purge hard-deletes the Cosmos document. If this
-      // fires for a principal who did not create the workspace, the only copy
-      // of someone else's item is gone.
+      // fires for a principal the ladder only grants READ to, the only copy of
+      // someone else's item is gone with no write role behind it.
       expect(h.itemDelete).not.toHaveBeenCalled();
       expect(h.deleteLoomDoc).not.toHaveBeenCalled();
       expect(h.reconcileThreadEdgesOnDelete).not.toHaveBeenCalled();
       expect(h.offboardFromPurview).not.toHaveBeenCalled();
-      // Same cross-partition-query kill as the restore arm above.
-      expect(wsQueries).toHaveLength(0);
     });
   });
 
-  /**
-   * A workspace row that DOES resolve in the caller's partition but carries
-   * another tenant's id. FAILS IF the `resource.tenantId !== tenantId`
-   * comparison is dropped, or rewritten into the short-circuiting
-   * `caller && doc.tenantId && caller !== doc.tenantId` shape that lets a
-   * claim-less doc through (cf. bfd67ed1).
-   *
-   * `recycle-crud.test.ts` covers this pair too; it is repeated here so the
-   * matrix is complete in one place AND so it is measured with the ladder
-   * mocked — there, the `LOOM_MULTIUSER_ACL='off'` kill switch (`:72`) means a
-   * ladder-based widening cannot be witnessed at all: that file stays 9/9 green
-   * under BOTH the restore-widened and purge-widened mutants (measured).
-   */
-  describe('a workspace row whose tenant does not POSITIVELY match the caller', () => {
-    beforeEach(() => {
-      wsByPartition = { [OTHER]: { id: WS_ID, tenantId: 'some-third-tenant' } };
-      aclAccess = { workspace: WORKSPACE, role: 'Member', via: 'acl', canWrite: true };
-    });
+  it('refuses outright when the ladder itself refuses (null)', async () => {
+    // FAILS IF a falsy/null ladder verdict is read as "no opinion, proceed"
+    // instead of a refusal — the opposite of a least-privilege default.
+    aclAccess = null;
 
-    it('must NOT restore', async () => {
-      expect(await restoreOwnedItem(RECYCLED.id, OTHER)).toBeNull();
-      expect(h.itemReplace).not.toHaveBeenCalled();
-    });
-
-    it('must NOT purge', async () => {
-      expect(await purgeRecycledItem(RECYCLED.id, OTHER)).toBe(false);
-      expect(h.itemDelete).not.toHaveBeenCalled();
-    });
+    expect(await restoreOwnedItem(RECYCLED.id, OTHER)).toBeNull();
+    expect(await purgeRecycledItem(RECYCLED.id, OTHER)).toBe(false);
   });
 });
+

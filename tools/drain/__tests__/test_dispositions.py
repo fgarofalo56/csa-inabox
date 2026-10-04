@@ -655,9 +655,10 @@ def test_a_disposition_refuses_an_already_terminal_item(monkeypatch, tmp_path, t
     reason no field still carries.
 
     This is ALSO what bounds the duplicate-comment window: `post_disposition_comment`
-    has no read-before-write short circuit (de-duplicating against the comment
-    list is #4579's open problem), so this guard is the only thing standing
-    between a re-run and a second announcement.
+    has no read-before-write short circuit -- de-duplicating against the
+    comment list remains open for THIS route; #4579 solved it only for
+    `close_issue_on_github`'s already-closed route -- so this guard is the only
+    thing standing between a re-run and a second announcement.
     """
     led = _led(tmp_path)
     item = led.items[BLOCKED_ON_A_RUNNER]

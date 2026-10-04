@@ -871,11 +871,17 @@ test('POPULATION — the deploy_sub binding sites are enumerated EXACTLY', () =>
   // pin on that binding is the "ADMIN_SUB is bound to the RESOLVED target_sub"
   // test below. Breaks on: 19 if the binding is reverted to deploy_sub, 17 if
   // any other consumer leaves.
+  //
+  // 18 -> 19 (#4161): the new "Discover posture-refresh Function URL" step
+  // binds `DEPLOY_SUB:` to scope its `az functionapp list` lookup — the same
+  // consumer shape as every existing site here (read-only discovery, not a
+  // literal-subscription case like dlz_adopt above). Breaks on: 18 if that
+  // step's binding is removed or changed, 20 if another consumer joins.
   const bindings = [...src.matchAll(new RegExp(DEPLOY_SUB_BINDING, 'g'))];
-  assert.equal(bindings.length, 18, 'the deploy_sub consumer population changed');
+  assert.equal(bindings.length, 19, 'the deploy_sub consumer population changed');
 
   const consumerSteps = steps.filter((s) => new RegExp(DEPLOY_SUB_BINDING).test(s));
-  assert.equal(consumerSteps.length, 18,
+  assert.equal(consumerSteps.length, 19,
     'binding sites and consumer steps diverged — a step binds deploy_sub twice, or the split lost one');
 
   assert.deepEqual(

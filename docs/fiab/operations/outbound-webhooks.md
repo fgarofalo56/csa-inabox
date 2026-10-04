@@ -12,7 +12,7 @@ are no placeholder types.
 
 | Group | Event types | Emitted from |
 | --- | --- | --- |
-| Item lifecycle | `item.created`, `item.updated`, `item.deleted` | the shared per-type item CRUD chokepoint (`app/api/items/_lib/item-crud.ts`) — fires for every editor |
+| Item lifecycle | `item.created`, `item.updated`, `item.deleted`, `item.purged` | the shared per-type item CRUD chokepoint (`app/api/items/_lib/item-crud.ts`) — fires for every editor; `item.purged` is the recycle-bin hard-delete |
 | Workspace | `workspace.created`, `workspace.updated`, `workspace.deleted` | admin workspace routes (via the BR-SIEM audit fan-out) |
 | Pipeline runs | `pipeline.run.completed`, `pipeline.run.failed` | the deployment-pipeline deploy receipt |
 | Marketplace | `marketplace.listing.subscribed`, `marketplace.sla.breached` | data-product subscribe path + the SLA-check route (W18) |

@@ -164,16 +164,14 @@ const TOUCH_EXEMPT = new Map([
   //                          it re-resolves the workspace cross-partition and
   //                          authorizes with `authorizeWorkspace(session,
   //                          workspaceId)` (write-scoped).
-  //   loadRecycledItem       the one genuine #2941-shaped read: recycle-bin
-  //                          restore/purge is limited to the workspace CREATOR,
-  //                          so a tenant admin or write-capable ACL member
-  //                          cannot restore. It fails CLOSED, and migrating it
-  //                          WIDENS who can restore and purge items — an
-  //                          authorization change that needs its own review and
-  //                          its own tests, not a drive-by inside a 404 fix.
+  //   loadRecycledItem       MIGRATED by #4692 (operator decision 2026-09-24):
+  //                          recycle-bin restore/purge now go through the same
+  //                          canonical ladder as every other item verb, so this
+  //                          is no longer one of the exempted shapes — see the
+  //                          item-crud.ts baselined-count note below.
   //
-  // The PR's edits are confined to `accessOptsFor` and the five call sites that
-  // await it; none of them is one of the four above.
+  // The PR's edits (#3697/#3698 + #3753) were confined to `accessOptsFor` and the
+  // five call sites that await it; none of them was one of the four above.
   //
   // #3753 ALSO touches this file, for a second reason that leaves the same four
   // sites alone: `resolveDomainName` (the data-product marketplace mirror's
@@ -181,12 +179,16 @@ const TOUCH_EXEMPT = new Map([
   // against `tenant-settings` — a different container, not `workspaces` — and so
   // read a per-user copy of the tenant domain list ever since #3282 re-keyed that
   // document. It now reads through `loadTenantDomains`. Re-measured with this
-  // guard's OWN predicate against the current tree, the four detected sites are
-  // at `mirrorGovernanceDoc`, `applyLabelInheritance`, `createOwnedItem` and
-  // `loadRecycledItem`; #3753's hunks are the import line plus `resolveDomainName`
-  // /`domainScopeFor`, and contain none of them.
+  // guard's OWN predicate against the current tree AS OF #3697/#3698 + #3753,
+  // the four detected sites were at `mirrorGovernanceDoc`, `applyLabelInheritance`,
+  // `createOwnedItem` and `loadRecycledItem`; #3753's hunks were the import line
+  // plus `resolveDomainName`/`domainScopeFor`, and contained none of them.
+  // `loadRecycledItem` is NO LONGER one of them — #4692 migrated it onto the
+  // canonical ladder (see that function's docblock in item-crud.ts), so the
+  // guard's own predicate now finds only THREE sites in this file; update the
+  // count via `--update-baseline` rather than trust either number quoted above.
   ['apps/fiab-console/app/api/items/_lib/item-crud.ts',
-   "#3697/#3698 + #3753: both diffs are confined to helpers that are NOT the four baselined sites (accessOptsFor + its call sites; resolveDomainName's tenant-settings domain-name lookup). mirrorGovernanceDoc is a name lookup, applyLabelInheritance fails closed, createOwnedItem already falls through to authorizeWorkspace, and loadRecycledItem stays owner-only BY DECISION (#3706) — enforced by recycle-bin-tenancy.test.ts, not by this guard"],
+   "#3697/#3698 + #3753 confined their diffs to helpers that are NOT the (then four, now three) baselined sites. mirrorGovernanceDoc is a name lookup, applyLabelInheritance fails closed, createOwnedItem already falls through to authorizeWorkspace. loadRecycledItem is RETRACTED from this exemption by #4692 (operator decision 2026-09-24): it now calls the canonical ladder like every other item verb, enforced by recycle-bin-verbs-authz.test.ts, not by this guard"],
   // REMOVED 2026-09-07 (#3941): `items/[type]/[id]/access-mode/route.ts`. The
   // deferral this entry recorded — "migrating it would WIDEN who can change an
   // item's data-access mode — separate PR" — is DONE. That route's `loadItem`
@@ -258,6 +260,16 @@ const TOUCH_EXEMPT = new Map([
   // check fails CLOSED, so deferring it leaks nothing.
   ['apps/fiab-console/app/api/items/mirrored-databricks/route.ts',
    '2026-09-07 · #3878/#4183: pairing-failure envelope + an auth-neutral withSession migration; loadWs’s baselined owner-only point read is untouched (0 of 127 changed lines match either detector predicate, and both predicates still match exactly 1 line each in the file — a live negative, not a dead check), and migrating it would WIDEN who may CREATE a mirror to admins + shared-ACL members — separate PR'],
+  // #4692 touched this route's POST/DELETE handlers ONLY to thread `{ session: s }`
+  // through to `restoreOwnedItem`/`purgeRecycledItem`, which now authorize via
+  // `loadRecycledItem`'s canonical-ladder delegation (item-crud.ts). The
+  // baselined owner-only occurrence is the GET handler's per-workspace list
+  // filter (`ws.item(it.workspaceId, s.claims.oid).read()` + `resource.tenantId
+  // === s.claims.oid`, cached per workspaceId) — a DIFFERENT, untouched surface.
+  // #4692 decided only the restore/purge VERBS; widening what the recycle-bin
+  // LIST shows is a separate question, not opened here.
+  ['apps/fiab-console/app/api/onelake/recycle/route.ts',
+   "#4692: POST/DELETE now thread `{ session }` to the canonical-ladder-backed restore/purge; the baselined occurrence is the GET list filter's owner-only cache, untouched — widening the LIST surface is a separate, undecided question"],
 ]);
 
 /** Owner-partition point read: `.item(<x>, <oid-ish>)` on a workspaces handle. */

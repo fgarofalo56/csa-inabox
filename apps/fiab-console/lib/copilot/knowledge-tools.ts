@@ -16,18 +16,21 @@
  * as a second backend (`vector_store_retrieve`), and the AI Search preflight
  * ROUTES to it automatically when AI Search cannot answer.
  *
- * WHAT THIS DOES NOT YET CLOSE (R7 + cloud-parity, measured 2026-09-08). The
- * vCore backend reaches the official `mongodb` npm driver through
- * cosmos-vcore-vector-client.ts's `loadMongo()`, and that driver is NOT a
- * dependency of this app: `apps/fiab-console/package.json` does not list it,
- * `next.config.mjs` does not carry it in `serverExternalPackages`, and it is
- * absent from node_modules. So in the image that ships today
- * `vector_store_retrieve` can only return CosmosVcoreDriverError's honest
- * dependency gate — it cannot ground an answer in ANY boundary. The parity gap
- * AI Search leaves in the sovereign clouds is therefore NOT closed here, and
- * nothing in this file may say otherwise. Adding the driver (package.json +
- * serverExternalPackages + redeploy) is tracked separately; until then the
- * routing hint below states only what it can establish.
+ * DRIVER DEPENDENCY (R7 + cloud-parity, updated — #3351). The vCore backend
+ * reaches the official `mongodb` npm driver through
+ * cosmos-vcore-vector-client.ts's `loadMongo()`. `mongodb` is now a declared
+ * dependency of this app (`apps/fiab-console/package.json`) and listed in
+ * `next.config.mjs`'s `serverExternalPackages`, so `loadMongo()` resolves and
+ * `vcoreVectorSearch` reaches the real `cosmosSearch` aggregation once an
+ * image is built with it installed. This was verified by resolving the exact
+ * dynamic-import code path against an isolated install of the driver (import
+ * resolves, `MongoClient` constructs cleanly) — NOT against a live Cosmos DB
+ * for MongoDB vCore cluster; no boundary has a deploy receipt against a real
+ * cluster yet (`docs/fiab/parity/vector-store.md` records all four as
+ * not-yet-exercised). Until a cluster is provisioned and
+ * `LOOM_COSMOS_VCORE_CONNECTION_STRING` is set, `vector_store_retrieve`
+ * returns `cosmosVcoreGate()`'s honest config gate rather than the dependency
+ * gate.
  *
  * Both tools are registered by default and neither is a user-visible
  * configuration choice (`loom_default_on_opt_out`): the model picks the tool,
@@ -37,10 +40,9 @@
  * REAL backend — the AI Search agentic-retrieval REST API via
  * `aisearch-knowledge.ts`, or a genuine `cosmosSearch` kNN aggregation via
  * `cosmos-vcore-vector-client.ts` — or returns an honest message string naming
- * what is missing. Per the note above, the vCore path reaches its real
- * aggregation only in an image that carries the `mongodb` driver; in this one it
- * returns the dependency gate. No Fabric / Power BI dependency — both backends
- * are Azure-native.
+ * what is missing (the driver gate until redeployed with the dependency, the
+ * config gate until a cluster + connection string are wired). No Fabric /
+ * Power BI dependency — both backends are Azure-native.
  */
 
 import type { LoomToolRegistry } from '../azure/copilot-orchestrator';
@@ -201,11 +203,12 @@ export function registerKnowledgeTools(r: LoomToolRegistry): void {
   // incomplete, and a Cosmos vCore cluster is available in every boundary Loom
   // supports.
   //
-  // The intent is not the achievement. Until the `mongodb` driver is a
-  // dependency of this app (see the header note), this tool's only reachable
-  // answer is CosmosVcoreDriverError's dependency gate, in every boundary. It
-  // is registered so the gate is discoverable and so the backend goes live the
-  // moment the driver ships — not because the parity gap is closed.
+  // The intent is not the achievement. `mongodb` is now a declared dependency
+  // (see the header note) so `loadMongo()` resolves once an image is built
+  // with it installed — but no boundary has an exercised deploy receipt
+  // against a real cluster yet. It is registered so the gate is discoverable
+  // and so the backend goes live the moment a cluster is wired — not because
+  // the parity gap is closed by this change alone.
   //
   // WHAT THE HANDLER-SCOPED IMPORTS DO AND DO NOT BUY. `aoaiEmbed` is imported
   // inside the handler and nowhere else, so the AOAI client genuinely stays out
@@ -218,8 +221,8 @@ export function registerKnowledgeTools(r: LoomToolRegistry): void {
   // true of the AOAI client only, and is corrected here rather than defended.
   // What the dynamic import in the handler still does buy is real but narrower:
   // the `mongodb` driver itself is resolved through a webpack-ignored dynamic
-  // import INSIDE that client, so the driver — the heavy part, and the one this
-  // image does not carry — is never resolved on a path that only reads the gate.
+  // import INSIDE that client, so the driver is only ever resolved on a path
+  // that actually runs a query, never on a path that only reads the gate.
   r.register({
     name: 'vector_store_retrieve',
     service: 'Cosmos DB for MongoDB (vCore) vector search',

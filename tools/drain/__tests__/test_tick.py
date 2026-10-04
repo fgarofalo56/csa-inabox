@@ -343,6 +343,24 @@ def test_negative_control_an_item_in_any_non_terminal_state_is_audited_on_depart
         assert led.items[1019].state == NEEDS_AUDIT
 
 
+def test_an_unlaned_item_is_still_audited_on_departure(tmp_path):
+    """#4544: every departure fixture above comes from `_led()`, which
+    hardcodes `lane="lane:ci"` on every item, so a departure skip narrowed to
+    `and item.lane` (an unlaned item is never audited) survives all of them.
+    32 of 335 live items carry no `lane:` label and would be entirely
+    unwitnessed by this path without this fixture.
+
+    WHAT MAKES THIS FAIL: appending `and item.lane` to the departure skip
+    (kills T17). This item's `lane` is None, so the mutated condition is
+    falsy and it is silently left `ready` instead of flagged `departed`."""
+    led = _led(tmp_path)
+    led.items[1019].lane = None  # no `lane:` label on GitHub
+    _, departed = tick.refresh_from_github(led, {}, _live(range(1000, 1019)))
+    assert departed == 1
+    assert led.items[1019].state == NEEDS_AUDIT
+    assert led.items[1019].audit_reason == AUDIT_DEPARTED
+
+
 def test_a_new_issue_is_added_with_its_labels(tmp_path):
     led = _led(tmp_path)
     live = [
@@ -1164,10 +1182,11 @@ def _argv_repo(args) -> str:
 class _GhSpy:
     """Stub the `gh` SEAM (`tick.sh`), never the closer itself.
 
-    The rc check, the JSON parse, the already-closed short-circuit and the
-    read-back all stay in the path, so deleting any one of them is still
-    visible -- the lesson from `_stub_ci_green`, where stubbing the binding
-    CHECK left its call site deletable by a green suite.
+    The rc check, the JSON parse, the already-closed short-circuit, the
+    read-back, and (#4579) the comment-sentinel read-before-post all stay in
+    the path, so deleting any one of them is still visible -- the lesson from
+    `_stub_ci_green`, where stubbing the binding CHECK left its call site
+    deletable by a green suite.
 
     A command this spy does not recognise raises. A stub that answers
     everything cannot fail, and the harness must never reach a live `gh` from
@@ -1178,7 +1197,9 @@ class _GhSpy:
     def __init__(self, *, state="OPEN", close_rc=0, close_err="", takes_effect=True,
                  on_close=None, raises=None, view_fails_after_close=False,
                  url_kind="issues", url_repo="", close_title="",
-                 view_title_before=""):
+                 view_title_before="", existing_comments=None,
+                 comment_rc=0, comment_err="",
+                 created_at="2020-01-01T00:00:00Z"):
         self.state = state
         self.states: dict[str, str] = {}
         self.close_rc = close_rc
@@ -1186,6 +1207,13 @@ class _GhSpy:
         self.takes_effect = takes_effect
         self.on_close = on_close
         self.raises = raises
+        #: The item's OWN filing time (#4578), answered only when asked for --
+        #: same `asked`-filtering as every other field here. Defaulted far in
+        #: the past so a test that never configures it (the overwhelming
+        #: majority) cannot accidentally trip the #4578 date refusal just by
+        #: existing: that refusal is opt-in, via `run_created_at=` on the
+        #: close call, and this default keeps it that way.
+        self.created_at = created_at
         #: Which OBJECT `gh issue view` resolves the number to. `gh issue view`
         #: answers for pull requests too -- measured live on #4552, which came
         #: back `{"state":"OPEN","url":".../pull/4552"}` -- so the payload
@@ -1213,6 +1241,17 @@ class _GhSpy:
         #: The 502 shape: the close LANDS and the verification read cannot be
         #: made. rc=0 from `gh issue close` plus an unreadable state.
         self.view_fails_after_close = view_fails_after_close
+        #: Comments `gh issue view --json comments` answers with, keyed by the
+        #: issue number the argv names (as a string) -- seeded by a test to
+        #: model an issue that already carries a receipt (or any other
+        #: comment), and APPENDED TO by a `gh issue comment` this spy executes,
+        #: so the SAME read sees its own prior write exactly as a re-run
+        #: against real GitHub would (#4579).
+        self.existing_comments: dict[str, list[dict]] = {
+            str(k): [{"body": b} for b in v] for k, v in (existing_comments or {}).items()
+        }
+        self.comment_rc = comment_rc
+        self.comment_err = comment_err
         self.calls: list[list[str]] = []
         self.view_titles: list[str | None] = []
 
@@ -1239,6 +1278,13 @@ class _GhSpy:
                 ),
                 "url": (f"https://github.com/{self.url_repo or _argv_repo(args)}"
                         f"/{self.url_kind}/{args[3]}"),
+                #: #4579's de-duplicating read asks `--json comments` alone, so
+                #: this key answers that request the same way the other three
+                #: answer `state,title,url` -- filtered by `asked` below.
+                "comments": self.existing_comments.get(args[3], []),
+                #: The item's OWN filing time (#4578), answered only when
+                #: asked for -- same `asked`-filtering as the other fields.
+                "createdAt": self.created_at,
             }
             # ANSWER ONLY WHAT WAS ASKED FOR, because that is what `gh` does --
             # `--json state,url` returns those two keys and nothing else. A spy
@@ -1291,12 +1337,32 @@ class _GhSpy:
                 self.states[args[3]] = "CLOSED"
             return 0, "", self.close_err or _gh_closed_stderr(
                 repo=_argv_repo(args), number=args[3], title=title)
+        if args[:3] == ["gh", "issue", "comment"]:
+            # #4579's already-closed route, posting the missing receipt. Kept
+            # as a SEPARATE command from `gh issue close` -- real `gh` has no
+            # `--comment` flag on `issue comment`, it takes `--body` -- so a
+            # caller that confused the two would raise the "unexpected
+            # command" AssertionError below rather than silently matching here.
+            if self.comment_rc != 0:
+                return self.comment_rc, "", self.comment_err
+            body = args[args.index("--body") + 1] if "--body" in args else ""
+            self.existing_comments.setdefault(args[3], []).append({"body": body})
+            return 0, "", ""
         raise AssertionError(f"the closer ran an unexpected command: {args}")
 
     @property
     def closed(self) -> list[str]:
         """The issue NUMBERS a `gh issue close` was actually issued for."""
         return [c[3] for c in self.calls if c[:3] == ["gh", "issue", "close"]]
+
+    @property
+    def posted_comments(self) -> list[str]:
+        """The issue NUMBERS a `gh issue comment` (NOT `issue close`) was
+        issued for -- #4579's new call, kept distinct from `closed` because the
+        whole point of the already-closed route is posting a comment WITHOUT a
+        close riding along.
+        """
+        return [c[3] for c in self.calls if c[:3] == ["gh", "issue", "comment"]]
 
     @property
     def views(self) -> list[str]:
@@ -1555,6 +1621,98 @@ def test_blocker_a_pr_that_never_names_the_item_is_refused(tmp_path, monkeypatch
     )
     with pytest.raises(tick.ReceiptRefusedError, match="does not reference"):
         tick._pr_references_item("r", 4521, 802)
+
+
+# -- #4533: EACH BINDING SURFACE ARMED ON ITS OWN ----------------------------
+#
+# `_pr_references_item` reads the UNION of `closingIssuesReferences` and
+# `gates.referenced_issues(body, commit trail)`. Every fixture above puts the
+# reference in the BODY, so dropping either of the other two surfaces survived
+# the suite. Each fixture below names the item on exactly ONE surface, with the
+# other two empty or unrelated, so the surface under test is the only thing
+# that can accept it. Arms: RW19 (closing dropped), RW20 (commit trail dropped).
+
+
+def _pr_payload(*, body="unrelated work", commits=(), closing=()):
+    return {
+        "body": body,
+        "commits": list(commits),
+        "closingIssuesReferences": [{"number": n} for n in closing],
+    }
+
+
+@pytest.mark.parametrize(
+    ("payload", "surface"),
+    [
+        (_pr_payload(closing=(802,)), "closingIssuesReferences"),
+        (_pr_payload(commits=({"messageHeadline": "fix(drain): tighten a check",
+                               "messageBody": "Refs #802"},)), "commit trail"),
+    ],
+)
+def test_a_reference_on_only_one_surface_binds(monkeypatch, payload, surface):
+    """WHAT MAKES THIS FAIL: dropping the named surface from the union.
+
+    - `closingIssuesReferences` row: `set(closing) | set(mentioned)` narrowed
+      to `set(mentioned)` (RW19) -> the body says nothing and there are no
+      commits, so the check raises "does not reference".
+    - `commit trail` row: `referenced_issues(body, messages, ...)` called with
+      `[]` for the messages (RW20) -> the reference lives only in a commit
+      body, so the check raises.
+
+    `closingIssuesReferences` has read EMPTY while a squash commit closed an
+    issue, which is why the commit trail is not redundant with it.
+    """
+    monkeypatch.setattr(tick, "gh_json_local", lambda *_a, **_k: payload)
+    assert tick._pr_references_item("o/r", 4521, 802) is None, surface
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        _pr_payload(closing=(803,)),
+        _pr_payload(commits=({"messageHeadline": "fix(drain): x",
+                              "messageBody": "Refs #803"},)),
+    ],
+)
+def test_negative_control_the_single_surface_fixtures_bind_only_their_number(
+    monkeypatch, payload
+):
+    """The control for the test above: the same shapes naming #803 must refuse
+    #802. WHAT MAKES THIS FAIL: a check that accepts any non-empty surface
+    regardless of the number on it -- the 'detects everything' mode the
+    positive rows alone cannot exclude."""
+    monkeypatch.setattr(tick, "gh_json_local", lambda *_a, **_k: payload)
+    with pytest.raises(tick.ReceiptRefusedError, match="does not reference"):
+        tick._pr_references_item("o/r", 4521, 802)
+
+
+@pytest.mark.parametrize("terminal", [DECLINED, PARKED])
+def test_a_declined_or_parked_item_is_not_re_receipted(tmp_path, monkeypatch, terminal):
+    """`TERMINAL` is (closed, parked, declined), and the only other fixture for
+    this refusal is a CLOSED item -- so narrowing `if item.state in TERMINAL:`
+    to `if item.state == CLOSED:` (RW21) survived, and a DECLINED item could be
+    re-receipted and closed, silently reversing a recorded decision.
+
+    WHAT MAKES THIS FAIL: under RW21 the declined/parked item falls through to
+    the run-backed path, which reads a green `_g1_run`, reaches the GitHub
+    closer (`spy.views`/`spy.closed` become non-empty) and closes the item, so
+    `pytest.raises` reds. The refusal must also come BEFORE any `gh` call, so
+    both spy lists are pinned EMPTY, not merely short.
+    """
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    item = led.upsert(709, "a console surface", "W5-console", lane="lane:console", size=1)
+    if terminal == PARKED:
+        item.blocker, item.owner = "no runner", "operator"
+    led.transition(709, terminal, "operator: out of scope for this drain")
+    assert item.state == terminal  # the precondition the refusal is about
+    monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
+    spy = _gh(monkeypatch)
+    with pytest.raises(tick.ReceiptRefusedError, match=f"already {terminal}"):
+        tick.record_receipt_from_evidence(led, POLICY, "o/r", 709, from_pr=None, from_run="1")
+    assert item.state == terminal
+    assert item.receipt_kind is None
+    assert spy.views == [], f"a {terminal} item reached GitHub: views={spy.views}"
+    assert spy.closed == [], f"a {terminal} item was closed on GitHub: {spy.closed}"
 
 
 def test_an_item_not_in_the_ledger_is_refused(tmp_path):
@@ -1883,9 +2041,7 @@ def test_a_run_backed_comment_does_not_claim_an_r2_satisfaction_it_cannot_establ
     The run-backed text used to end "an observation of something that ran, not a
     merge, which is what deploy-integrity R2 (merged is not done) ASKS OF THIS
     CLASS" -- an assertion that R2 is SATISFIED. Nothing in the receipt path
-    establishes it. `_run_evidence` never requests `createdAt`, and
-    `verify_run_backed_receipt` reads `headSha` only to interpolate it into the
-    returned ref and compares it to nothing. So the run is bound to this issue
+    established it at the time. So the run was bound to this issue
     on ONE axis -- its BOUNDARY, since #4709 -- and on nothing else: not by
     reference (a workflow run names no issue at all -- the
     gap the old text did disclose, #4489), not by time, not by sha.
@@ -1893,19 +2049,19 @@ def test_a_run_backed_comment_does_not_claim_an_r2_satisfaction_it_cannot_establ
     MEASURED RATHER THAN ARGUED, which is what makes it a blocker and not a
     style note: run `33238747458` (`loom-roll-and-validate`,
     `completed`/`success`, headSha `70ca3d136651efc01cf9b8449b0d73e609fdb071`,
-    created 2026-08-29T06:33:22Z) satisfies every check this code makes, and
-    147 of the 351 issues open on 2026-09-18 were filed AFTER it -- for each of
-    those the run cannot have observed the behaviour the issue is about. A
-    reader of the closed issue six months on takes "what R2 asks of this class"
-    to mean the estate was seen carrying this change. R7 governs implication and
-    the comment is unrevisable.
+    created 2026-08-29T06:33:22Z) satisfied every check this code made BEFORE
+    #4578, and 147 of the 351 issues open on 2026-09-18 were filed AFTER it --
+    for each of those the run could not have observed the behaviour the issue
+    is about. A reader of the closed issue six months on takes "what R2 asks of
+    this class" to mean the estate was seen carrying this change. R7 governs
+    implication and the comment is unrevisable.
 
-    WHY DISCLOSURE AND NOT THE BINDING, decided rather than defaulted: the
-    binding needs the run's date, the item's date, a comparison and a refusal,
-    and the item's date is not in hand -- fetching it is a new `gh` call on a
-    path whose seven-shape failure behaviour was independently measured clean at
-    this head. That re-derivation is #4578's work. What is NOT deferrable is the
-    sentence, because it is published on every issue closed in the meantime.
+    #4578 LANDED THE TIME HALF, reusing the read `close_issue_on_github`
+    already makes for state rather than a new `gh` call: the item's own
+    `createdAt` rides the same `--json` list, and the run's `createdAt` --
+    now also fetched by `_run_evidence` -- is compared to it before the close
+    is ever attempted. The SHA half remains open (#4489 still needs
+    `Item.pr` to bind it), and the comment below discloses exactly that split.
 
     THE VALUES THAT BREAK THIS, MEASURED RATHER THAN PREDICTED. An earlier draft
     of this docstring said GH19 breaks "the second assertion" and stopped there;
@@ -1927,8 +2083,8 @@ def test_a_run_backed_comment_does_not_claim_an_r2_satisfaction_it_cannot_establ
 
     Assertion 5 (`#4489`) is DISCLOSED AS UN-KILLABLE by these two arms, per
     assertion-design.md "done" #5: it survives both, and it is here to pin that
-    the gap the OLD text did disclose is still disclosed -- a regression guard,
-    not coverage of this round's change.
+    the SHA gap the OLD text did disclose is still disclosed -- a regression
+    guard, not coverage of this round's change.
 
     The negatives are paired with a positive per assertion-design.md "done" #4:
     assertion 1 pins that the run branch still SAYS what it establishes, without
@@ -1957,32 +2113,38 @@ def test_a_run_backed_comment_does_not_claim_an_r2_satisfaction_it_cannot_establ
     )
     assert "asks of this class" not in body, (
         "the run-backed comment claims deploy-integrity R2 is SATISFIED; the "
-        "code fetches no run date and compares no sha, so it cannot know"
+        "code still compares no sha, so it cannot know the estate carried "
+        "THIS change"
     )
-    assert "no run date is fetched and no head sha is compared" in body, (
-        "a run-backed close must disclose that the run is bound to no TIME and "
-        "no SHA - the value that breaks this is the DISCLOSED clause deleted "
-        "while the softened R2 line stays, which reads clean and says less"
+    assert "never compared" in body, (
+        "a run-backed close must disclose that the SHA is still unbound - the "
+        "value that breaks this is the DISCLOSED clause deleted while the "
+        "softened R2 line stays, which reads clean and says less"
+    )
+    assert "is refused rather than accepted as its evidence" in body, (
+        "a run-backed close must say that a run predating the item IS now "
+        "refused (#4578) - the value that breaks this is the narrowed TIME "
+        "clause deleted along with the SHA one"
     )
     assert "#4578" in body, (
-        "the time/sha gap must be TRACKED on the artifact, not merely "
+        "the time binding must be TRACKED on the artifact, not merely "
         "mentioned - the value that breaks this is the issue reference dropped"
     )
-    # The gap the OLD text already disclosed is still disclosed. Restoring the
-    # old sentence would keep this green, which is why it is not the assertion
-    # that catches arm GH19.
+    # The SHA gap the OLD text already disclosed is still disclosed. Restoring
+    # the old sentence would keep this green, which is why it is not the
+    # assertion that catches arm GH19.
     assert "#4489" in body
 
 
 def test_the_run_backed_disclosure_is_still_true_of_the_code_it_describes():
-    """THE DISCLOSURE AND THE CODE, PINNED TOGETHER (round 9).
+    """THE DISCLOSURE AND THE CODE, PINNED TOGETHER (round 9, narrowed for #4578).
 
-    The comment publishes "no run date is fetched and no head sha is compared".
-    That is a claim ABOUT THIS PROGRAM, on a permanent public artifact, and the
-    way it goes FALSE is not an edit to the string -- it is somebody landing
-    #4578, adding the comparison, and leaving the string alone. From that moment
-    the harness understates itself forever, on every issue it closes after it,
-    and no existing test notices.
+    The comment used to publish "no run date is fetched and no head sha is
+    compared". That claim went FALSE the moment #4578 landed `createdAt` on
+    `_run_evidence` and the comparison in `close_issue_on_github` -- this test
+    is the tripwire that FIRED for that landing, and its assertions are now
+    pinned to the state #4578 leaves: the run's date IS fetched and compared,
+    the SHA is still not.
 
     The claim is therefore asserted against the argv `_run_evidence` ACTUALLY
     ISSUES, read through a spy on the `sh` seam rather than from the module's
@@ -1991,10 +2153,10 @@ def test_the_run_backed_disclosure_is_still_true_of_the_code_it_describes():
     "we do not fetch the date" is exactly the kind of claim a docstring can
     keep asserting after the code stopped agreeing.
 
-    THE VALUE THAT BREAKS THIS: `createdAt` added to the `--json` field list,
-    i.e. the first step of #4578. That is INTENDED. This test is the tripwire
-    that makes narrowing the published disclosure part of that change instead
-    of an afterthought; it is not a vote against the binding.
+    THE VALUE THAT BREAKS THIS NOW: `createdAt` removed from the `--json` field
+    list while the comment keeps claiming it is bound by time -- the SAME
+    one-sided shape in the opposite direction, which is why this is a
+    regression guard going forward rather than a one-time tripwire.
     """
     seen: list[list[str]] = []
 
@@ -2013,20 +2175,23 @@ def test_the_run_backed_disclosure_is_still_true_of_the_code_it_describes():
     argv = seen[0]
     assert argv[:3] == ["gh", "run", "view"], argv
     fields = argv[argv.index("--json") + 1].split(",")
-    assert "createdAt" not in fields, (
-        "`_run_evidence` now fetches the run's date, so the published sentence "
-        "'no run date is fetched and no head sha is compared' is no longer "
-        "true - narrow the disclosure in `_receipt_comment` in the same change "
-        "(#4578)"
+    assert "createdAt" in fields, (
+        "`_run_evidence` must fetch the run's date (#4578) for the comment's "
+        "'bound by TIME' claim to be true - the value that breaks this is "
+        "`createdAt` dropped from the field list"
     )
     # The POSITIVE HALF: the field list is real and non-trivial, so this test
     # cannot be satisfied by `_run_evidence` requesting nothing at all. Split in
     # two (PT018) so a failure names WHICH field went missing.
     assert "headSha" in fields, fields
     assert "conclusion" in fields, fields
-    assert "no run date is fetched and no head sha is compared" in tick._receipt_comment(
-        "deploy-run", "deploy-path", "d", tick.BINDING_POLICY
-    ), "the disclosure this test keeps honest is not in the comment at all"
+    body = tick._receipt_comment("deploy-run", "deploy-path", "d", tick.BINDING_POLICY)
+    assert "bound by TIME, since" in body, (
+        "the disclosure this test keeps honest is not in the comment at all"
+    )
+    assert "never compared" in body, (
+        "the SHA half of the disclosure must still say it is unbound (#4489)"
+    )
 
 
 def test_a_receipt_kind_in_neither_category_refuses_rather_than_defaulting():
@@ -2161,29 +2326,25 @@ def test_blocker_a_close_that_rc0s_but_leaves_the_issue_open_is_refused(tmp_path
     assert item.receipt_kind is None
 
 
-def test_an_already_closed_issue_is_not_closed_again_and_no_comment_is_appended(
+def test_an_already_closed_issue_is_not_closed_again_but_gets_its_missing_receipt(
     tmp_path, monkeypatch
 ):
-    """IDEMPOTENCE, and it is not hypothetical: #4535 was closed BY HAND as the
-    interim workaround, so the first real run of this path met an issue that was
-    already closed.
+    """IDEMPOTENCE ON THE CLOSE, REPAIR ON THE COMMENT (#4579). #4535 was closed
+    BY HAND as the interim workaround, so the first real run of this path met an
+    issue that was already closed -- and, until #4579, that route posted no
+    receipt comment at all, so its whole existence was `tools/drain/state.json`,
+    which is untracked. All 7 items the live ledger held as `closed` when this
+    was measured were in that state.
 
-    No second close, therefore no second comment on a human's issue -- and the
-    ledger still reaches `closed`, because the upstream state is already what
-    this transaction wanted. The value that breaks it: closing unconditionally
-    (a `gh issue close` call appears), or refusing (the item stays READY).
+    No second close -- the ledger still reaches `closed`, because the upstream
+    state is already what this transaction wanted. The value that breaks THAT
+    half: closing unconditionally (a `gh issue close` call appears), or
+    refusing (the item stays READY).
 
-    AND THE PRICE, ASSERTED RATHER THAN LEFT IMPLICIT (round 9). "No second
-    comment" is true of a route where the harness already commented. On the
-    route that actually motivated the short-circuit -- a human closed the issue
-    silently -- there is no FIRST comment either, so the receipt's whole
-    existence is `tools/drain/state.json`, which is untracked. All 7 items the
-    live ledger holds as `closed` are in that state, so this is the route the
-    current population takes. `_receipt_comment`'s docstring used to claim its
-    string is the receipt's only public trace "forever", which is false here;
-    posting on this route is #4579. THE VALUE THAT BREAKS THE NEW PAIR: the note
-    reverted to a bare "left alone", which reports a recorded receipt with no
-    hint that nothing was published (arm GH21).
+    THE REPAIR ITSELF: a receipt comment IS now posted on this route, because
+    nothing on the fake issue carries the sentinel yet. The value that breaks
+    THIS half: reverting to the pre-#4579 code, where no `gh issue comment`
+    call is ever issued and `spy.posted_comments` stays empty.
     """
     led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
     item = led.upsert(715, "a console surface", "W5-console", lane="lane:console", size=1)
@@ -2196,20 +2357,60 @@ def test_an_already_closed_issue_is_not_closed_again_and_no_comment_is_appended(
     assert spy.closed == [], "an already-closed issue was closed again"
     assert item.state == CLOSED
     assert "already closed" in out.summary
-    # No comment was posted -- not by this run and, on the silent-human route,
-    # not ever. The note must SAY so, because the operator's only other reading
-    # is that a receipt was published.
-    assert not any(c[:3] == ["gh", "issue", "comment"] for c in spy.calls), (
-        "this test's premise is that nothing is published on this route"
+
+    # THE NEW CALL, NAMED: exactly one `gh issue comment`, for #715, carrying
+    # the harness's own sentinel -- lifted from `tick.RECEIPT_COMMENT_HEAD`
+    # rather than retyped, per assertion-design.md #3.
+    assert spy.posted_comments == ["715"], (
+        "the already-closed route must post the missing receipt comment "
+        "exactly once - the value that breaks this is the pre-#4579 code, "
+        "which never calls `gh issue comment` at all"
     )
-    assert "NO receipt comment was posted" in out.close_note, (
-        "the already-closed note reports a recorded receipt without saying its "
-        "public trace does not exist - the value that breaks this is the note "
-        "reverted to a bare 'left alone' (#4579)"
+    posted_body = next(
+        c[c.index("--body") + 1] for c in spy.calls
+        if c[:3] == ["gh", "issue", "comment"]
+    )
+    assert posted_body.startswith(tick.RECEIPT_COMMENT_HEAD), (
+        "the posted comment must carry the harness's own sentinel, not an "
+        "arbitrary string - breaks if the post uses anything but "
+        "`_receipt_comment`'s text"
+    )
+    assert "posted now" in out.close_note, (
+        "the already-closed note must say a NEW comment went up, distinct from "
+        "finding one that already existed"
     )
     assert "#4579" in out.close_note, (
-        "the missing-trace gap must be TRACKED where it is disclosed"
+        "the repair is TRACKED where it is disclosed"
     )
+
+
+def test_an_already_closed_issue_with_an_existing_receipt_comment_posts_no_duplicate(
+    tmp_path, monkeypatch
+):
+    """IDEMPOTENCE ACROSS RE-RUNS (#4579's own requirement): a second tick over
+    the same already-closed item must not stack a second receipt comment.
+
+    The value that breaks this: a post-unconditionally implementation, which
+    would make `spy.posted_comments` non-empty here even though a comment
+    beginning with the sentinel is already on the issue.
+    """
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    item = led.upsert(716, "a console surface", "W5-console", lane="lane:console", size=1)
+    monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
+    prior = f"{tick.RECEIPT_COMMENT_HEAD} (kind=g1-browser, class=ui-surface) - a prior run."
+    spy = _gh(monkeypatch, state="CLOSED", existing_comments={"716": [prior]})
+
+    out = tick.record_receipt_from_evidence(
+        led, POLICY, "o/r", 716, from_pr=None, from_run="1")
+
+    assert spy.closed == [], "an already-closed issue was closed again"
+    assert item.state == CLOSED
+    assert spy.posted_comments == [], (
+        "a receipt comment already carries the sentinel - posting again is the "
+        "duplicate #4579 must not produce on a re-run"
+    )
+    assert "already carries the receipt sentinel" in out.close_note
+    assert "#4579" in out.close_note
 
 
 def test_the_already_closed_marker_is_pinned_to_real_gh_output_not_to_the_spy():
@@ -3103,6 +3304,51 @@ def test_the_closer_refuses_an_issue_that_resolves_to_another_repository(
     assert led.load().items[4547].state != CLOSED, (
         "the ledger moved over an object in another repository"
     )
+
+
+def test_a_run_that_predates_the_item_is_refused_before_the_close_is_attempted(
+    monkeypatch,
+):
+    """#4578: the item's OWN filing time is read off the SAME `gh issue view`
+    `close_issue_on_github` already issues for state (one more field on the
+    `--json` list, exactly as `title` was before it) -- no new network call --
+    and a run created before it is refused rather than accepted as its
+    evidence. Measured live: run 33238747458 (created 2026-08-29) passed every
+    other check this code makes for 147 of the 351 issues open on 2026-09-18,
+    every one of them filed AFTER it.
+
+    WOULD PASS if `run_created_at` here were moved to AFTER the item's filing
+    date; that is the positive control immediately below -- the only field
+    that differs between the two tests is which timestamp is earlier.
+    """
+    spy = _gh(monkeypatch, created_at="2026-09-01T00:00:00Z")
+    with pytest.raises(tick.ReceiptRefusedError, match=r"before #9001 was filed"):
+        tick.close_issue_on_github(
+            POLICY, "o/r", 9001, CLOSED, "a receipt", "g1-browser", "ui-surface",
+            tick.BINDING_POLICY, run_created_at="2026-01-01T00:00:00Z")
+    assert spy.closed == [], "a run that predates the item must never reach the close call"
+
+
+def test_positive_control_a_run_created_after_the_item_still_closes(monkeypatch):
+    """The control for the refusal above: identical setup, only the two
+    timestamps' ORDER changes."""
+    spy = _gh(monkeypatch, created_at="2026-01-01T00:00:00Z")
+    tick.close_issue_on_github(
+        POLICY, "o/r", 9002, CLOSED, "a receipt", "g1-browser", "ui-surface",
+        tick.BINDING_POLICY, run_created_at="2026-09-01T00:00:00Z")
+    assert spy.closed == ["9002"]
+
+
+def test_a_run_backed_close_with_no_run_created_at_skips_the_date_check(monkeypatch):
+    """`run_created_at=None` is the signal that this close is NOT the plain
+    run-backed route (ci-green, or the watcher route, which binds time its own
+    way) -- not "the item's date is unknown". Would refuse (wrongly) if `None`
+    were treated as "predates everything" instead of "not applicable"."""
+    spy = _gh(monkeypatch, created_at="2026-09-01T00:00:00Z")
+    tick.close_issue_on_github(
+        POLICY, "o/r", 9003, CLOSED, "a receipt", "g1-browser", "ui-surface",
+        tick.BINDING_POLICY)
+    assert spy.closed == ["9003"]
 
 
 def test_blocker_the_closer_refuses_a_number_that_resolves_to_a_pull_request(
