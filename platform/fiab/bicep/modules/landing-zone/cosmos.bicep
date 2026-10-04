@@ -538,8 +538,9 @@ var loomContainers = [
   // KEEP 120 IN STEP with `CANCEL_INTENT_TTL_SECONDS` in
   // apps/fiab-console/lib/azure/azure-sql-cancel-intents.ts and with the sibling
   // declaration in admin-plane/loom-console-cosmos.bicep. Three places now hold
-  // this number; a guard that fails on drift is the open half of #4406 and lives
-  // under apps/fiab-console (outside this lane's ownership).
+  // this number;
+  // `apps/fiab-console/lib/azure/__tests__/azure-sql-cancel-intents-ttl-drift.test.ts`
+  // fails if any of the three diverge — #4406 is closed.
   //
   // The lazy createIfNotExists STAYS — it is what makes a fresh estate work
   // before this template has run (auto-bind-by-default.md §5: the deploy is the
