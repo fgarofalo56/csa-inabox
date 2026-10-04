@@ -142,6 +142,82 @@ describe('SqlLabEditor — tier not deployed (honest fallback)', () => {
   });
 });
 
+describe('SqlLabEditor — cold-start retry (#3571, deploy-integrity.md R6)', () => {
+  it('retries the capabilities probe ONCE on a first-request timeout and badges the real engine once warm', async () => {
+    // Kill power: removing `retryOnTimeoutOnce`/`onTimeoutRetry` from
+    // `fetchCapabilities` leaves the first attempt's abort unretried — this
+    // test would time out waiting for 'DuckDB 1.1.3' and `calls` would stay 1.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let calls = 0;
+    vi.spyOn(global, 'fetch').mockImplementation(async (input: any, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : String(input?.toString?.() ?? input);
+      if (!url.includes('/api/duckdb/capabilities')) {
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }) as any;
+      }
+      calls += 1;
+      if (calls === 1) {
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            const e = new Error('signal is aborted without reason');
+            e.name = 'AbortError';
+            reject(e);
+          });
+        });
+      }
+      return new Response(JSON.stringify(CONFIGURED_CAPS), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }) as any;
+    });
+
+    renderWithProviders(<SqlLabEditor item={ITEM} id="lab-1" />);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    await waitFor(() => expect(screen.getByText('DuckDB 1.1.3')).toBeInTheDocument());
+    expect(calls).toBe(2);
+
+    vi.useRealTimers();
+  });
+
+  it('states the real cause (scale-to-zero cold start) and not the generic cross-subscription copy', async () => {
+    // Kill power: a call site that dropped its own `timeoutHint` would fail
+    // the "scale-to-zero" assertion; a literal copy-paste of the RisingWave
+    // hint would fail the "not match" assertion instead.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.spyOn(global, 'fetch').mockImplementation(async (input: any, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : String(input?.toString?.() ?? input);
+      if (!url.includes('/api/duckdb/capabilities')) {
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }) as any;
+      }
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          const e = new Error('signal is aborted without reason');
+          e.name = 'AbortError';
+          reject(e);
+        });
+      });
+    });
+
+    renderWithProviders(<SqlLabEditor item={ITEM} id="lab-1" />);
+    await vi.advanceTimersByTimeAsync(60_000); // first attempt times out, retry fires
+    await vi.advanceTimersByTimeAsync(60_000); // retry ALSO times out, surfaces to the editor
+
+    await waitFor(() =>
+      expect(screen.getByText('Could not read the engine capabilities')).toBeInTheDocument());
+    expect(screen.getByText(/scale-to-zero/)).toBeInTheDocument();
+    expect(screen.queryByText(/heavier across multiple subscriptions/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/RisingWave|streaming-engine/)).not.toBeInTheDocument();
+
+    vi.useRealTimers();
+  });
+});
+
 describe('SqlLabEditor — FLAG0 kill switch', () => {
   it('reverts to a guided notice that says the backend is untouched', async () => {
     flagValue = false;

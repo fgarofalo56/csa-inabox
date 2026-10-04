@@ -128,10 +128,34 @@ export interface ClientFetchOptions {
    * a cause (R7); that is the defect this parameter exists to end.
    */
   timeoutHint?: string;
+  /**
+   * #3571 (deploy-integrity.md R6) — retry the request ONCE, transparently,
+   * when the FIRST attempt times out. Opt-in and per-call-site, NOT a global
+   * default: most callers want a genuinely-hung backend to fail fast and
+   * visibly, and a blanket retry-on-timeout would double the wait before any
+   * of them see an error. Set this ONLY where the call site knows a timeout is
+   * commonly a cold start rather than a stuck request (e.g. a scale-to-zero
+   * Container App) — the retry is skipped if the request body is not safely
+   * re-sendable (see {@link isReSendableBody}), and the SECOND timeout (or any
+   * non-timeout failure) still propagates to the caller unchanged. Never more
+   * than one retry — a retry that cannot fail to eventually surface an error
+   * is forbidden (deploy-integrity.md).
+   */
+  retryOnTimeoutOnce?: boolean;
+  /**
+   * Fired synchronously right before the retry attempt is issued — i.e. ONLY
+   * when the first attempt itself timed out and a retry is about to run — so a
+   * caller can render a "warming up" state during the retry window. Never
+   * fired when the first attempt succeeds, fails for a non-timeout reason, or
+   * when `retryOnTimeoutOnce` is not set.
+   */
+  onTimeoutRetry?: () => void;
 }
 
 /** Normalize the third argument, which historically was a bare `number`. */
-function resolveOptions(opts?: number | ClientFetchOptions): { ms: number; hint?: string } {
+function resolveOptions(opts?: number | ClientFetchOptions): {
+  ms: number; hint?: string; retryOnTimeoutOnce?: boolean; onTimeoutRetry?: () => void;
+} {
   if (typeof opts === 'number') {
     return {
       ms: opts,
@@ -142,6 +166,8 @@ function resolveOptions(opts?: number | ClientFetchOptions): { ms: number; hint?
   return {
     ms,
     hint: opts?.timeoutHint ?? (ms === CROSS_SUB_FETCH_TIMEOUT_MS ? CROSS_SUB_TIMEOUT_HINT : undefined),
+    retryOnTimeoutOnce: opts?.retryOnTimeoutOnce,
+    onTimeoutRetry: opts?.onTimeoutRetry,
   };
 }
 
@@ -204,13 +230,30 @@ export async function clientFetch<S extends string>(
   // of inheriting one sentence written for cross-subscription reads.
   opts: number | ClientFetchOptions = CLIENT_FETCH_TIMEOUT_MS,
 ): Promise<Response> {
-  const { ms: timeoutMs, hint: timeoutHint } = resolveOptions(opts);
+  const { ms: timeoutMs, hint: timeoutHint, retryOnTimeoutOnce, onTimeoutRetry } = resolveOptions(opts);
   // `ValidateApiPath<S>` is a compile-time-only refinement of `string` (it is
   // either `S` itself or the `UnknownApiRoute` error object, which is
   // unreachable here because such a call does not compile). Widen once, at the
   // boundary, so the rest of the body keeps its plain `string | URL` typing.
   const target = input as string | URL;
-  const res = await rawFetch(target, init, timeoutMs, timeoutHint);
+  let res: Response;
+  try {
+    res = await rawFetch(target, init, timeoutMs, timeoutHint);
+  } catch (err) {
+    // #3571 — retry ONCE, and only when ALL THREE hold: the call site opted
+    // in, the failure was genuinely OUR timeout (not a caller abort or a
+    // network error), and the body can be safely re-sent (a one-shot stream
+    // body is skipped rather than retried, same rule the post-refresh retry
+    // below already follows). Anything else re-throws unchanged — a retry that
+    // always fires regardless of cause is exactly the unbounded retry R6
+    // forbids.
+    if (retryOnTimeoutOnce && err instanceof ClientFetchTimeoutError && isReSendableBody(init)) {
+      onTimeoutRetry?.();
+      res = await rawFetch(target, init, timeoutMs, timeoutHint);
+    } else {
+      throw err;
+    }
+  }
   // SLIDING-SESSION RECOVERY: a 401 from a first-party /api route MAY mean the
   // encrypted loom_session cookie lapsed while the MSAL refresh token is still
   // alive. In that one case we transparently POST /api/auth/refresh ONCE to
