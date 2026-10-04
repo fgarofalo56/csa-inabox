@@ -617,7 +617,7 @@ jobs:
       # can share a digest with an earlier, clean build, and untagging only
       # removes THIS build's pointer to it.
       - name: Delete the pushed tags the Trivy gate just refused (#4464)
-        if: steps.trivy.outcome == 'failure'
+        if: failure() && steps.trivy.outcome == 'failure'
         run: |
           set -uo pipefail
           FAILED_UNTAG=0
