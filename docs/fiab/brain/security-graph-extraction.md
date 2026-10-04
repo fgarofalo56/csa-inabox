@@ -372,6 +372,9 @@ reachable and is entered by `__tests__/artifact.test.ts`:
 | malformed | shape does not carry graph/join/meta |
 | incoherent join | some node is on no surface |
 
+**Intentional refusal, not a bug**: running the standalone bundle locally from its own directory (`cd .next/standalone && node server.js`) puts `server.js` beside the server process — one of the image-context markers — even on a build with no date file. That trips **built image, no build date** and refuses, same as it would for a genuinely incomplete deployed image. Refusing is the safe direction here: the check cannot distinguish "a real image missing its date" from "a local run that happens to share one marker," so it refuses rather than guessing fresh (#4819).
+
+
 **Where the age comes from.** The artifact carries no clock (#4798: a committed
 timestamp conflicted between every pair of PRs). Instead, the console
 `Dockerfile`'s runner stage writes `/app/loom-image-built-at.txt`, an ISO-8601

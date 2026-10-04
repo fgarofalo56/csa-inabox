@@ -220,17 +220,24 @@ echo "[deploy-loom-uat-job] 4/5 Resolving CAE + deploying loom-uat job..."
 CAEID="$(az containerapp env show -n "$CAE" -g "$ADMIN_RG" \
           --subscription "$SUB" --query id -o tsv | tr -d '\r')"
 
-# Build optional env entries for UAT config.
+# Build optional env entries for UAT config. YAML single-quoted, not double --
+# UAT_GREP is a regex and routinely carries literal backslashes (the default
+# is `(admin-security|phase2-install-rbac|apps\.uat\.ts)`). In a YAML
+# double-quoted scalar backslash is an escape character, so `\.` is an
+# "unknown escape character" parse error in az's own YAML loader (measured,
+# deploy-loom-uat run 36911689868). Single-quoted YAML scalars treat
+# backslash as a literal character -- the only escape needed is doubling a
+# literal single quote (''), which no UAT_GREP value has used to date.
 UAT_GREP_ENV=""
 if [[ -n "$UAT_GREP" ]]; then
-  UAT_GREP_ENV="- { name: UAT_GREP, value: \"${UAT_GREP}\" }"
+  UAT_GREP_ENV="- { name: UAT_GREP, value: '${UAT_GREP//\'/\'\'}' }"
 fi
 
 # UAT_GREP_INVERT excludes matching test titles (e.g. "tutorial:" to skip the
 # slow screenshot suite during a fast functional run). See #1564.
 UAT_GREP_INVERT_ENV=""
 if [[ -n "${UAT_GREP_INVERT:-}" ]]; then
-  UAT_GREP_INVERT_ENV="- { name: UAT_GREP_INVERT, value: \"${UAT_GREP_INVERT}\" }"
+  UAT_GREP_INVERT_ENV="- { name: UAT_GREP_INVERT, value: '${UAT_GREP_INVERT//\'/\'\'}' }"
 fi
 
 RESULTS_CONTAINER_ENV=""

@@ -25,6 +25,56 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.111.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.110.0...csa-inabox-v0.111.0) (2026-10-04)
+
+
+### Features
+
+* **console:** read the Databricks metastore assignment and guide the account-admin grant ([#4898](https://github.com/fgarofalo56/csa-inabox/issues/4898)) ([412c361](https://github.com/fgarofalo56/csa-inabox/commit/412c361e21e5d2289abd34d607d2d7a67ec93cfb))
+* **warehouse:** link Databricks SQL warehouses to their Loom item and scope AI functions by it ([#4866](https://github.com/fgarofalo56/csa-inabox/issues/4866)) ([fb12aa6](https://github.com/fgarofalo56/csa-inabox/commit/fb12aa68e0886cd92351edd26244c22d9aa92356))
+
+
+### Bug Fixes
+
+* [#3344](https://github.com/fgarofalo56/csa-inabox/issues/3344) citation fix + [#3546](https://github.com/fgarofalo56/csa-inabox/issues/3546) timeout copy + [#4458](https://github.com/fgarofalo56/csa-inabox/issues/4458) loud fail-open ([#4912](https://github.com/fgarofalo56/csa-inabox/issues/4912)) ([07f3877](https://github.com/fgarofalo56/csa-inabox/commit/07f38770dd2bb13f5a495f17503a9d25e052b7d9))
+* **bicep:** pass loomDatabricksLineageWarehouseId to admin-plane ([#4905](https://github.com/fgarofalo56/csa-inabox/issues/4905)) ([9045540](https://github.com/fgarofalo56/csa-inabox/commit/9045540e752771211f883e9c20ee2e88d9935f02))
+* **ci:** copilot eval gate says NOT MEASURED when the judge scored nothing ([#4865](https://github.com/fgarofalo56/csa-inabox/issues/4865)) ([2a784bb](https://github.com/fgarofalo56/csa-inabox/commit/2a784bb2185f22ad4f7d7781858ac3e74fa88d3c))
+* **ci:** make deploy-fiab-gcch scheduled runs preflight-only ([#4233](https://github.com/fgarofalo56/csa-inabox/issues/4233)) ([#4880](https://github.com/fgarofalo56/csa-inabox/issues/4880)) ([539fcdb](https://github.com/fgarofalo56/csa-inabox/commit/539fcdb6d77e7a071a605b0e538a6cc2de6737a3))
+* **console:** Access policies are managed by tenant admins; access requests and label protection derive their grant scope from recorded bindings ([#4838](https://github.com/fgarofalo56/csa-inabox/issues/4838)) ([b3c7bed](https://github.com/fgarofalo56/csa-inabox/commit/b3c7bedcfbb5ad11a57ee26a454da5296520a8fa))
+* **console:** add mongodb driver dependency for Cosmos vCore vector RAG backend ([#3351](https://github.com/fgarofalo56/csa-inabox/issues/3351)) ([#4903](https://github.com/fgarofalo56/csa-inabox/issues/4903)) ([26ba616](https://github.com/fgarofalo56/csa-inabox/commit/26ba616f6db9234a73783bfebde4bf175c4a1f90))
+* **console:** data-pipeline create dialog sends the shape its own route reads ([#4914](https://github.com/fgarofalo56/csa-inabox/issues/4914)) ([71405a1](https://github.com/fgarofalo56/csa-inabox/commit/71405a1c81ba69edda11ceea054cec022b244a9c))
+* **console:** return 409 refusal from impact/lineage instead of flattening to 404 ([#4911](https://github.com/fgarofalo56/csa-inabox/issues/4911)) ([4fef82a](https://github.com/fgarofalo56/csa-inabox/commit/4fef82a81c2304a1186df58f393b6ca307c82fc9))
+* **deploy:** resolve cosmos.containerNameCollision at plan time via ARM child resources ([#3342](https://github.com/fgarofalo56/csa-inabox/issues/3342)) ([#4896](https://github.com/fgarofalo56/csa-inabox/issues/4896)) ([1c513f2](https://github.com/fgarofalo56/csa-inabox/commit/1c513f2fd0f97ea2ee9dfa64eda54d998d166009))
+* **drain:** bind a run-backed receipt's close to the item's filing date ([#4578](https://github.com/fgarofalo56/csa-inabox/issues/4578)) ([#4907](https://github.com/fgarofalo56/csa-inabox/issues/4907)) ([7f2f715](https://github.com/fgarofalo56/csa-inabox/commit/7f2f7156f5537858fc18e3dad7ec8c31767ec278))
+* **drain:** close five residual review findings from [#4483](https://github.com/fgarofalo56/csa-inabox/issues/4483) ([#4894](https://github.com/fgarofalo56/csa-inabox/issues/4894)) ([4f01cea](https://github.com/fgarofalo56/csa-inabox/commit/4f01cea15ff9e9d0f8429bf8e1a377dc19c719f0))
+* **drain:** one reviewer on sensitive paths, zero elsewhere on green CI ([#4883](https://github.com/fgarofalo56/csa-inabox/issues/4883)) ([b5d4fae](https://github.com/fgarofalo56/csa-inabox/commit/b5d4fae63e75771b406f90657def4f968b34b138))
+* **drain:** post the receipt comment on the already-closed close route ([#4909](https://github.com/fgarofalo56/csa-inabox/issues/4909)) ([bdd3b7a](https://github.com/fgarofalo56/csa-inabox/commit/bdd3b7ac9c51d13347cd4d3634b9e98d3152ba2e))
+* **gov-uc-wire:** pull loom-unity as its dedicated identity only, and fail closed with the exact grant ([#4863](https://github.com/fgarofalo56/csa-inabox/issues/4863)) ([2444e41](https://github.com/fgarofalo56/csa-inabox/commit/2444e4102d040e03220498c0031a471d9b1e5e11))
+* **items:** widen recycle-bin restore/purge to the canonical ladder, audit purge ([#4692](https://github.com/fgarofalo56/csa-inabox/issues/4692)) ([#4913](https://github.com/fgarofalo56/csa-inabox/issues/4913)) ([42353dc](https://github.com/fgarofalo56/csa-inabox/commit/42353dc9034666e2204de401f8979c7306f6dbf6))
+* **lakehouse:** ADLS shortcuts and browse share one container scope ([#4864](https://github.com/fgarofalo56/csa-inabox/issues/4864)) ([c7e2429](https://github.com/fgarofalo56/csa-inabox/commit/c7e242929b930b2b10a49636a9106ca3da92c999))
+* **lakehouse:** confine the SQL tab to the item's storage root ([#4822](https://github.com/fgarofalo56/csa-inabox/issues/4822)) ([708a2d6](https://github.com/fgarofalo56/csa-inabox/commit/708a2d6dc954ccf19c0b85defd4531e74782f473))
+* **sql-pool:** confine the serverless SQL pool editor and Direct Lake raw SQL to the item's scope (rebuild of [#4841](https://github.com/fgarofalo56/csa-inabox/issues/4841)) ([#4891](https://github.com/fgarofalo56/csa-inabox/issues/4891)) ([3dc5fa4](https://github.com/fgarofalo56/csa-inabox/commit/3dc5fa43cbcf3d71dc91afeb9f575d0aeba580ed))
+* **sql:** escape each string literal by the rules of the engine that parses it ([#4861](https://github.com/fgarofalo56/csa-inabox/issues/4861)) ([e60e0af](https://github.com/fgarofalo56/csa-inabox/commit/e60e0af44d3135d67ec737cc477ed5202d1ed5bc))
+* wire posture-refresh URL durably + fail export-check closed ([#4910](https://github.com/fgarofalo56/csa-inabox/issues/4910)) ([90d2223](https://github.com/fgarofalo56/csa-inabox/commit/90d222379b1aa780d80e6b48331fbeffd7791ee4))
+
+
+### Documentation
+
+* **adr:** reject Azure Deployment Environments as brownfield adopt mechanism ([#4902](https://github.com/fgarofalo56/csa-inabox/issues/4902)) ([21d9a67](https://github.com/fgarofalo56/csa-inabox/commit/21d9a677f2414217ad441b75a519812eb674841b))
+* **prp:** per-workspace Spark compute identity (least-privilege storage scoping) ([#4847](https://github.com/fgarofalo56/csa-inabox/issues/4847)) ([a6bada1](https://github.com/fgarofalo56/csa-inabox/commit/a6bada11cb39bfadaf162fa79f4dbf0d97b39d43))
+* **setup:** correct stale brownfield-blocker claims (fitness probe has had a producer since [#3445](https://github.com/fgarofalo56/csa-inabox/issues/3445)) ([#4895](https://github.com/fgarofalo56/csa-inabox/issues/4895)) ([0edf0e7](https://github.com/fgarofalo56/csa-inabox/commit/0edf0e78c35680957e0dc2b7e99b11eee1040975))
+
+
+### Tests
+
+* **drain:** arm both binding surfaces and the full TERMINAL refusal ([#4897](https://github.com/fgarofalo56/csa-inabox/issues/4897)) ([a2bf5ae](https://github.com/fgarofalo56/csa-inabox/commit/a2bf5aeaac8f9b9126a72f2311fabba12875d32f))
+* **drain:** arm the three unwitnessed TERMINAL-adjacent narrowings ([#4544](https://github.com/fgarofalo56/csa-inabox/issues/4544)) ([#4906](https://github.com/fgarofalo56/csa-inabox/issues/4906)) ([35d9864](https://github.com/fgarofalo56/csa-inabox/commit/35d98649a15e44e53dea629d452ef5449d013ace))
+
+
+### Continuous Integration
+
+* **tid-boundary:** teach census to see withTenantAdmin wrapper grants ([#4901](https://github.com/fgarofalo56/csa-inabox/issues/4901)) ([c0d6392](https://github.com/fgarofalo56/csa-inabox/commit/c0d6392a9209f8cffeacdc01af7476317a248968))
+
 ## [0.110.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.109.0...csa-inabox-v0.110.0) (2026-10-02)
 
 
