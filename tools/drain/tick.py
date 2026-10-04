@@ -2187,10 +2187,19 @@ class _IssueRead(NamedTuple):
     `_close_outcome` classifies, and knowing its value is what lets the caller
     take it back out again before reading `gh`'s prose. It costs no extra call
     -- one more field on a `--json` list that was already being fetched.
+
+    `created_at` (#4578) is the SAME shape of addition: the item's own filing
+    time, read off this same call rather than a second `gh issue view`, so
+    `close_issue_on_github` can refuse a run-backed receipt whose run predates
+    the item without opening a new network route. Defaulted to `""` so the
+    one hand-built `_IssueRead("CLOSED", "")` in `mutate_gates.py` (arm GH6)
+    keeps constructing without a third argument -- that arm is about the
+    read-back being skipped entirely, not about the date.
     """
 
     state: str
     title: str
+    created_at: str = ""
 
 
 def _read_issue_on_github(repo: str, number: int) -> _IssueRead:
@@ -2224,7 +2233,7 @@ def _read_issue_on_github(repo: str, number: int) -> _IssueRead:
     """
     rc, out, err = sh(
         ["gh", "issue", "view", str(number), "--repo", repo,
-         "--json", "state,title,url"]
+         "--json", "state,title,url,createdAt"]
     )
     if rc != 0:
         raise IssueCloseFailedError(
@@ -2270,7 +2279,8 @@ def _read_issue_on_github(repo: str, number: int) -> _IssueRead:
     # legitimate title, and there is nothing here to refuse. It is neutralised
     # at the point of USE instead (`_without_title_line_breaks`), because the
     # hazard is not the value -- it is the value being read as structure.
-    return _IssueRead(state, str((parsed or {}).get("title") or ""))
+    return _IssueRead(state, str((parsed or {}).get("title") or ""),
+                       str((parsed or {}).get("createdAt") or ""))
 
 
 #: The receipt kinds whose evidence is a MERGE rather than an observation of
@@ -2303,8 +2313,8 @@ RUN_BACKED_KINDS = frozenset({"deploy-run", "estate", "g1-browser"})
 #:   matched by workflow id against the failed run the watcher recorded. The
 #:   policy producer is not consulted and no boundary is resolved, so the
 #:   policy-producer comment -- "the only workflow policy accepts", "bound on
-#:   one axis, its BOUNDARY", "no run date is fetched" -- would be false on
-#:   every clause.
+#:   one axis, its BOUNDARY", "checked against this issue's own filing date" --
+#:   would be false on every clause.
 BINDING_POLICY = "policy"
 BINDING_WATCHER_WORKFLOW = "watcher-workflow"
 
@@ -2481,11 +2491,13 @@ def _receipt_comment(kind: str, issue_class: str, detail: str, binding: str) -> 
         "the producer declared for this item's cloud - and on nothing else. It "
         "is not bound by reference: a workflow run names no issue at all, and "
         "that "
-        "binding is #4489. It is bound to no TIME and no SHA either: no "
-        "run date is fetched and no head sha is compared, so a run that "
-        "PREDATES this issue is accepted exactly as one that postdates it "
-        "(#4578). Read this as 'the declared producer ran green in this item's "
-        "boundary', not as 'the "
+        "binding is #4489, and so is the SHA - headSha is read only to "
+        "interpolate it above, never compared. It IS bound by TIME, since "
+        "#4578: the run's createdAt is checked against this issue's own filing "
+        "date before this comment is posted, so a run that predates the item "
+        "is refused rather than accepted as its evidence. Read this as 'the "
+        "declared producer ran green in this item's boundary, no earlier than "
+        "the item was filed', not as 'the "
         "estate was observed carrying this change'. "
         "Closing this issue on that evidence, and on nothing wider than it."
     )
@@ -2857,7 +2869,7 @@ def _close_outcome(err: str, repo: str, number: int) -> str:
 
 def close_issue_on_github(
     policy: dict, repo: str, number: int, target_state: str, detail: str,
-    kind: str, issue_class: str, binding: str,
+    kind: str, issue_class: str, binding: str, *, run_created_at: str | None = None,
 ) -> str:
     """Close the GitHub issue for an item the ledger is about to make terminal.
 
@@ -2865,6 +2877,17 @@ def close_issue_on_github(
     sentence `_receipt_comment` publishes, and a default would let the
     watcher route publish the policy-producer text -- a claim about a producer
     and a boundary that route never consulted.
+
+    `run_created_at` (#4578) is the run's `createdAt`, passed ONLY by the plain
+    policy-producer route (`record_receipt_from_evidence`'s `else` branch) --
+    `None` for `ci-green` (a merge, no run) and for the watcher route (already
+    time-bound against the recorded FAILURE, a stronger and different check).
+    When given, it is compared to THIS READ's `before.created_at` rather than
+    fetched separately: `_read_issue_on_github` below is the call the closer
+    already makes for state, and `created_at` is one more field on the same
+    `--json` list, exactly as `title` was before it -- not a second `gh issue
+    view`, which would reopen a failure matrix measured at the prior call
+    count.
 
     THE WRITE THAT WAS MISSING (#4545). `tick.py` read GitHub and never wrote to
     it, so a ledger close was invisible upstream and the next refresh read it as
@@ -2939,6 +2962,21 @@ def close_issue_on_github(
                 "receipt comment was posted: on this route the receipt exists "
                 "only in the local ledger, which is untracked (#4579)"
             )
+        # #4578 -- REFUSE A RUN THAT PREDATES THE ITEM, before anything is
+        # posted. `run_created_at` is None for every route except the plain
+        # policy run-backed one, so this never fires for `ci-green` (a merge,
+        # not a run) or the watcher route (bound to the recorded FAILURE
+        # instead, a stricter and different comparison). `before.created_at`
+        # is this SAME read's own field, not a second call.
+        if run_created_at is not None:
+            item_created = _parse_time(before.created_at, "the item's creation time")
+            run_created = _parse_time(run_created_at, "the run's creation time")
+            if run_created < item_created:
+                raise ReceiptRefusedError(
+                    f"the run was created {run_created.isoformat()}, before "
+                    f"#{number} was filed ({item_created.isoformat()}) - a run "
+                    "that predates the item cannot be evidence for it"
+                )
         # THE COMMENT CLAIMS ONLY WHAT IS TRUE WHEN IT IS POSTED, because `gh`
         # posts it BEFORE it closes anything (#4545 finding 11; cli/cli
         # `pkg/cmd/issue/close/close.go` at v2.100.0 -- `CommentableRun` :158,
@@ -3081,7 +3119,7 @@ def _run_evidence(repo: str, run_id: str) -> dict:
     """
     rc, out, err = sh(
         ["gh", "run", "view", run_id, "--repo", repo,
-         "--json", "databaseId,workflowName,conclusion,status,headSha,url,jobs"]
+         "--json", "databaseId,workflowName,conclusion,status,headSha,url,jobs,createdAt"]
     )
     if rc != 0:
         raise ReceiptRefusedError(
@@ -3623,10 +3661,12 @@ def watcher_filing(repo: str, number: int) -> WatcherFiling | None:
     return WatcherFiling(workflow, ids[0], recorded_at, len(records))
 
 
-#: The fields the watcher route reads off a run. WIDER than `_run_evidence`'s,
-#: and a separate read on purpose: `test_the_run_backed_disclosure_is_still_true_of_the_code_it_describes`
-#: pins that `_run_evidence` does not fetch `createdAt`, because the policy
-#: route publishes "no run date is fetched" -- which stays true on that route.
+#: The fields the watcher route reads off a run. WIDER than `_run_evidence`'s
+#: (workflow identity, branch, event, display title), and a separate read on
+#: purpose: the watcher route binds TIME against its own recorded FAILURE
+#: (`WatcherFiling.recorded_at`), a stricter and different comparison from the
+#: plain policy route's item-filing-date check (#4578), so sharing one fetch
+#: would couple two checks that must stay independently correct.
 _WATCHER_RUN_FIELDS = (
     "databaseId,workflowName,workflowDatabaseId,headBranch,createdAt,event,"
     "displayTitle,conclusion,status,headSha,url,jobs"
@@ -4184,6 +4224,10 @@ def record_receipt_from_evidence(
         )
 
     binding = BINDING_POLICY
+    # #4578 -- None for every route except the plain run-backed one below,
+    # which is the only one `close_issue_on_github` compares against the
+    # item's filing date (see its docstring for why the other two are None).
+    run_created_at: str | None = None
     if kind == "ci-green":
         if from_pr is None:
             raise ReceiptRefusedError(
@@ -4225,6 +4269,7 @@ def record_receipt_from_evidence(
                 "established by a workflow run - pass --from-run"
             )
         run = _run_evidence(repo, from_run)
+        run_created_at = run.get("createdAt")
         boundary, boundary_source = boundary_of_issue(repo, number, policy, kind)
         ref = verify_run_backed_receipt(kind, run, policy, boundary)
         # THE BOUNDARY IS NAMED IN THE PUBLIC COMMENT, AND SO IS WHERE IT CAME
@@ -4262,7 +4307,8 @@ def record_receipt_from_evidence(
     # The close raises rather than returning a flag, so the ledger write below
     # is unreachable unless the issue is observably closed on GitHub.
     close_note = close_issue_on_github(
-        policy, repo, number, CLOSED, detail, kind, issue_class, binding)
+        policy, repo, number, CLOSED, detail, kind, issue_class, binding,
+        run_created_at=run_created_at)
     # EVERY FAILURE FROM HERE ON IS A POST-CLOSE FAILURE, and it is wrapped so
     # it cannot be reported as a refusal. `_record_close_in_ledger` restores the
     # item, so the in-memory ledger is untouched and `main()` saves nothing --

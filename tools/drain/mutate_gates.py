@@ -459,7 +459,8 @@ ARMS: list[tuple[str, str, str, str]] = [
         "GH1 the ledger closes and GitHub never hears (#4545 verbatim)",
         "tick.py",
         ("    close_note = close_issue_on_github(\n"
-         "        policy, repo, number, CLOSED, detail, kind, issue_class, binding)"),
+         "        policy, repo, number, CLOSED, detail, kind, issue_class, binding,\n"
+         "        run_created_at=run_created_at)"),
         '    close_note = "the ledger is the only record"',
     ),
     (
@@ -467,9 +468,11 @@ ARMS: list[tuple[str, str, str, str]] = [
          "upstream and every run-backed item is left open"),
         "tick.py",
         ("    close_note = close_issue_on_github(\n"
-         "        policy, repo, number, CLOSED, detail, kind, issue_class, binding)"),
+         "        policy, repo, number, CLOSED, detail, kind, issue_class, binding,\n"
+         "        run_created_at=run_created_at)"),
         ("    close_note = (close_issue_on_github(\n"
-         "        policy, repo, number, CLOSED, detail, kind, issue_class, binding)\n"
+         "        policy, repo, number, CLOSED, detail, kind, issue_class, binding,\n"
+         "        run_created_at=run_created_at)\n"
          '                  if from_pr else "run-backed items close quietly")'),
     ),
     (
@@ -517,14 +520,35 @@ ARMS: list[tuple[str, str, str, str]] = [
          "#4545 reproduced by the fix for it"),
         "tick.py",
         ("    close_note = close_issue_on_github(\n"
-         "        policy, repo, number, CLOSED, detail, kind, issue_class, binding)\n"
+         "        policy, repo, number, CLOSED, detail, kind, issue_class, binding,\n"
+         "        run_created_at=run_created_at)\n"
          "    # EVERY FAILURE FROM HERE ON IS A POST-CLOSE FAILURE"),
         ("    _record_close_in_ledger(\n"
          '        led, item, number, kind, ref, f"receipt verified by tick: {detail}"\n'
          "    )\n"
          "    close_note = close_issue_on_github(\n"
-         "        policy, repo, number, CLOSED, detail, kind, issue_class, binding)\n"
+         "        policy, repo, number, CLOSED, detail, kind, issue_class, binding,\n"
+         "        run_created_at=run_created_at)\n"
          "    # EVERY FAILURE FROM HERE ON IS A POST-CLOSE FAILURE"),
+    ),
+    (
+        ("GH39 THE DATE COMPARISON ITSELF IS DELETED (#4578) -- the disclosure "
+         "narrowed by GH20 says the run's createdAt IS checked against the "
+         "item's filing date; this removes the one `if` that makes that true, "
+         "so a run created WEEKS before the issue was filed is accepted again "
+         "exactly as measured on run 33238747458 against 147 of the 351 issues "
+         "open on 2026-09-18. Scoped to the comparison alone, not the whole "
+         "guarded block, so a reviewer cannot satisfy it by deleting the "
+         "surrounding `if run_created_at is not None:` instead and calling that "
+         "the same finding"),
+        "tick.py",
+        ("            if run_created < item_created:\n"
+         "                raise ReceiptRefusedError(\n"
+         '                    f"the run was created {run_created.isoformat()}, before "\n'
+         '                    f"#{number} was filed ({item_created.isoformat()}) - a run "\n'
+         '                    "that predates the item cannot be evidence for it"\n'
+         "                )"),
+        ("            pass"),
     ),
     (
         ("GH10 a lost CAS after a SUCCESSFUL upstream close is reported as "
@@ -663,11 +687,12 @@ ARMS: list[tuple[str, str, str, str]] = [
          '        "deploy-integrity R2 (merged is not done) asks of this class. "'),
     ),
     (
-        ("GH20 THE TIME/SHA DISCLOSURE IS DELETED while the softened R2 line "
+        ("GH20 THE SHA/TIME DISCLOSURE IS DELETED while the softened R2 line "
          "stays. The one-sided shape this package keeps producing, and the half "
          "a reader cannot detect: the comment still reads correctly, still "
          "cites #4489 for the reference binding, and silently stops saying that "
-         "the run is bound to no TIME and no SHA. Told apart from GH19 by "
+         "the SHA is unbound and the run's TIME is now actually checked (#4578). "
+         "Told apart from GH19 by "
          "MEASUREMENT, not by construction: each arm was applied to a sandbox "
          "copy and all five predicates of the run-backed test evaluated by "
          "rendering the comment directly, since pytest stops at the first "
@@ -678,11 +703,13 @@ ARMS: list[tuple[str, str, str, str]] = [
          "red, which is a second independent killer"),
         "tick.py",
         ('        "that "\n'
-         '        "binding is #4489. It is bound to no TIME and no SHA either: no "\n'
-         '        "run date is fetched and no head sha is compared, so a run that "\n'
-         '        "PREDATES this issue is accepted exactly as one that postdates it "\n'
-         '        "(#4578). Read this as \'the declared producer ran green in this item\'s "\n'
-         '        "boundary\', not as \'the "\n'
+         '        "binding is #4489, and so is the SHA - headSha is read only to "\n'
+         '        "interpolate it above, never compared. It IS bound by TIME, since "\n'
+         '        "#4578: the run\'s createdAt is checked against this issue\'s own filing "\n'
+         '        "date before this comment is posted, so a run that predates the item "\n'
+         '        "is refused rather than accepted as its evidence. Read this as \'the "\n'
+         '        "declared producer ran green in this item\'s boundary, no earlier than "\n'
+         '        "the item was filed\', not as \'the "\n'
          '        "estate was observed carrying this change\'. "\n'),
         ('        "binding is #4489. "\n'),
     ),
@@ -723,9 +750,9 @@ ARMS: list[tuple[str, str, str, str]] = [
          "instead of through the write"),
         "tick.py",
         ('        ["gh", "issue", "view", str(number), "--repo", repo,\n'
-         '         "--json", "state,title,url"]'),
+         '         "--json", "state,title,url,createdAt"]'),
         ('        ["gh", "issue", "view", str(number),\n'
-         '         "--json", "state,title,url"]'),
+         '         "--json", "state,title,url,createdAt"]'),
     ),
     (
         ("GH23 THE NOTE GOES BACK TO KEYING ON THE READ-BACK ALONE, so a close "
@@ -968,8 +995,8 @@ ARMS: list[tuple[str, str, str, str]] = [
          "spy that returns every field regardless would let this survive on a "
          "behaviour the real command does not have"),
         "tick.py",
-        '         "--json", "state,title,url"]',
-        '         "--json", "state,url"]',
+        '         "--json", "state,title,url,createdAt"]',
+        '         "--json", "state,url,createdAt"]',
     ),
     (
         ("GH37 THE READ-BACK'S TITLE IS DROPPED from the neutralisation set, "

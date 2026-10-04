@@ -231,7 +231,7 @@ def _ledger(tmp_path, **over) -> tuple[Ledger, object]:
 
 
 def _closer(seen: dict):
-    def close(_policy, _repo, _number, _state, detail, kind, issue_class, binding):
+    def close(_policy, _repo, _number, _state, detail, kind, issue_class, binding, **_kwargs):
         seen.update(detail=detail, kind=kind, issue_class=issue_class, binding=binding)
         return "closed (test stub)"
     return close
@@ -941,7 +941,8 @@ def test_watcher_seam_refuses_when_the_path_went_red_again(tmp_path, monkeypatch
 def test_the_watcher_comment_claims_only_what_the_route_checked():
     """WHAT VALUE WOULD MAKE THIS FAIL: the watcher branch in `_receipt_comment`
     removed (arm WR20) -- the policy text then says "the only workflow policy
-    accepts" and "no run date is fetched", both false on this route. Also a
+    accepts" and "checked against this issue's own filing date", both false on
+    this route. Also a
     reintroduction of the round-1 sentence "the cloud this receipt speaks for
     is the one that workflow deploys to", which is FALSE for
     `loom-dataplane-roll` -- its `boundary` input picks commercial, gcc-high
@@ -970,7 +971,7 @@ def test_the_watcher_comment_claims_only_what_the_route_checked():
     assert "executed work steps" not in text, text
     assert "A failure the watcher did not record is not seen" not in text, text
     assert "the only workflow policy accepts" not in text, text
-    assert "no run date is fetched" not in text, text
+    assert "checked against this issue's own filing date" not in text, text
     policy_text = tick._receipt_comment("deploy-run", "deploy-path", "d", tick.BINDING_POLICY)
     assert "the only workflow policy accepts" in policy_text
 
