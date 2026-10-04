@@ -52,8 +52,13 @@ describe('readImageBuildDate — four states, because "no file" means two things
   });
 
   it('MISSING: no date beside EITHER image marker is missing, naming the marker found', () => {
-    // Breaks if a marker is dropped from IMAGE_CONTEXT_MARKERS, or the marker
-    // check is removed (both would read a built image as a dev run).
+    // Loops over IMAGE_CONTEXT_MARKERS, so dropping one marker from THAT array
+    // only removes one iteration here -- it does not fail this test. Measured
+    // by the #4798 review (arm I2): dropping `public/build-marker.txt` from
+    // the Dockerfile itself stays green here; the Dockerfile-parsing suite
+    // above ("the console Dockerfile writes the date the runtime reads") is
+    // what catches a Dockerfile-side removal, because it pins the write
+    // command and WORKDIR/CMD directly against the Dockerfile's own text.
     for (const marker of IMAGE_CONTEXT_MARKERS) {
       const d = scratch();
       mkdirSync(join(d, marker, '..'), { recursive: true });

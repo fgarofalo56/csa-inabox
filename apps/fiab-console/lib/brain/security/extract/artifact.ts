@@ -253,10 +253,10 @@ function resolveAge(options: ResolveOptions): AgeVerdict {
     return {
       ok: false,
       reason:
-        `This server's directory holds a built console image (found ${built.markers.join(', ')}) ` +
+        `This server's directory carries an image-context marker (found ${built.markers.join(', ')}) ` +
         `but not the image build date ${where}, so ${unknownAge} The console Dockerfile ` +
-        'writes the date in every image it builds, so this image either was not built by it or ' +
-        'had the file removed.',
+        'writes the marker and the date together in every image it builds, so either this ' +
+        'directory was not populated by it, or the date file was removed afterward.',
     };
   }
   if (built.state === 'unreadable') {
