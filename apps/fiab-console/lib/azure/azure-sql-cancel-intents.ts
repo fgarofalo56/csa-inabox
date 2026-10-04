@@ -291,8 +291,12 @@ async function cancelIntentStore(): Promise<CancelIntentStore | null> {
     // it to the caller in `reason` — so the operator sees the actual Cosmos
     // error in the HTTP response the moment a cross-replica cancel is attempted,
     // not only in a console.warn nobody can reach. The `console.warn` is the
-    // second copy, not the only one. Landing the ARM row on #4406 removes the
-    // create attempt altogether and is the real fix.
+    // second copy, not the only one. The ARM row does not remove this call —
+    // #4406's own acceptance criteria keeps `createIfNotExists` so a fresh
+    // estate still works with no extra ARM step; the ARM row's purpose is
+    // only to make `defaultTtl` apply even when something OTHER than this
+    // lazy path wins the creation race (`azure-sql-cancel-intents-ttl-drift.test.ts`
+    // pins the two TTLs against each other so they cannot quietly diverge).
     const { container } = await database.containers.createIfNotExists({
       id: CANCEL_INTENT_CONTAINER,
       partitionKey: { paths: ['/requestId'] },
