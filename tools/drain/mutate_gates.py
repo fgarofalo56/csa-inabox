@@ -566,8 +566,8 @@ ARMS: list[tuple[str, str, str, str]] = [
          "the two branches back into the single template, which is the exact "
          "shape of the defect rather than a proxy for it"),
         "tick.py",
-        "    head = f\"Drain harness: receipt verified (kind={kind}, class={issue_class}) - {detail}.\"",
-        ("    head = f\"Drain harness: receipt verified - {detail}.\"\n"
+        "    head = f\"{RECEIPT_COMMENT_HEAD} (kind={kind}, class={issue_class}) - {detail}.\"",
+        ("    head = f\"{RECEIPT_COMMENT_HEAD} - {detail}.\"\n"
          "    return head + \" Closing this issue on that evidence (deploy-integrity R2).\""),
     ),
     (
@@ -687,20 +687,19 @@ ARMS: list[tuple[str, str, str, str]] = [
         ('        "binding is #4489. "\n'),
     ),
     (
-        ("GH21 the already-closed note reverts to a bare 'left alone', so the "
-         "operator is told a receipt was recorded with no hint that NOTHING WAS "
-         "PUBLISHED. That route issues `gh issue view` and nothing else, and "
-         "`tools/drain/state.json` is untracked, so the receipt's whole "
-         "existence is a local gitignored file -- the state all 7 currently "
-         "ledger-closed items are in. Posting there is #4579; saying so is the "
-         "part that is not deferrable"),
+        ("GH21 the already-closed route's POSTED-NOW note reverts to a bare "
+         "'left alone', dropping the one disclosure that distinguishes #4579's "
+         "repair actually firing from the issue merely being found closed. "
+         "Before #4579 this mutation collapsed the route's ONLY return, when "
+         "NOTHING was ever published; now it collapses the one return among "
+         "four that fires when a NEW receipt comment goes up because nothing "
+         "on the issue carried the sentinel yet"),
         "tick.py",
-        ('            return (\n'
-         '                f"#{number} was already closed on GitHub - left alone, so NO "\n'
-         '                "receipt comment was posted: on this route the receipt exists "\n'
-         '                "only in the local ledger, which is untracked (#4579)"\n'
-         '            )'),
-        ('            return f"#{number} was already closed on GitHub - left alone"'),
+        ('    return (\n'
+         '        f"#{number} was already closed on GitHub - left alone, and the missing "\n'
+         '        "receipt comment was posted now, so it has a public trace (#4579)"\n'
+         '    )'),
+        ('    return f"#{number} was already closed on GitHub - left alone"'),
     ),
     # -- round 10: "verified by effect" verified a property of the WORLD ----
     #
@@ -834,10 +833,13 @@ ARMS: list[tuple[str, str, str, str]] = [
         "tick.py",
         ('            "so the receipt comment MAY NOT have been posted. DO THIS: read the "\n'
          '            f"issue\'s comments (`gh issue view {number} --repo {repo} --comments`) "\n'
-         '            "and, if none begins `Drain harness: receipt verified`, post the "\n'
-         '            "receipt by hand - this tool will not re-enter the path, because the "\n'
-         '            "ledger write below makes the item terminal and the record route "\n'
-         '            "refuses a terminal item (#4579 tracks closing that gap in code)"'),
+         '            f"and, if none begins `{RECEIPT_COMMENT_HEAD}`, post the receipt by "\n'
+         '            "hand - this tool will not re-enter the path, because the ledger "\n'
+         '            "write below makes the item terminal and the record route refuses a "\n'
+         '            "terminal item. #4579 automated this same check for the "\n'
+         '            "ALREADY-CLOSED route (`_already_closed_receipt_note`); it did not "\n'
+         '            "reach this UNKNOWN-outcome branch, which still asks the operator "\n'
+         '            "to do it by hand"'),
         '            "so the receipt comment MAY NOT have been posted"',
     ),
     (

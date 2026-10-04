@@ -1164,10 +1164,11 @@ def _argv_repo(args) -> str:
 class _GhSpy:
     """Stub the `gh` SEAM (`tick.sh`), never the closer itself.
 
-    The rc check, the JSON parse, the already-closed short-circuit and the
-    read-back all stay in the path, so deleting any one of them is still
-    visible -- the lesson from `_stub_ci_green`, where stubbing the binding
-    CHECK left its call site deletable by a green suite.
+    The rc check, the JSON parse, the already-closed short-circuit, the
+    read-back, and (#4579) the comment-sentinel read-before-post all stay in
+    the path, so deleting any one of them is still visible -- the lesson from
+    `_stub_ci_green`, where stubbing the binding CHECK left its call site
+    deletable by a green suite.
 
     A command this spy does not recognise raises. A stub that answers
     everything cannot fail, and the harness must never reach a live `gh` from
@@ -1178,7 +1179,8 @@ class _GhSpy:
     def __init__(self, *, state="OPEN", close_rc=0, close_err="", takes_effect=True,
                  on_close=None, raises=None, view_fails_after_close=False,
                  url_kind="issues", url_repo="", close_title="",
-                 view_title_before=""):
+                 view_title_before="", existing_comments=None,
+                 comment_rc=0, comment_err=""):
         self.state = state
         self.states: dict[str, str] = {}
         self.close_rc = close_rc
@@ -1213,6 +1215,17 @@ class _GhSpy:
         #: The 502 shape: the close LANDS and the verification read cannot be
         #: made. rc=0 from `gh issue close` plus an unreadable state.
         self.view_fails_after_close = view_fails_after_close
+        #: Comments `gh issue view --json comments` answers with, keyed by the
+        #: issue number the argv names (as a string) -- seeded by a test to
+        #: model an issue that already carries a receipt (or any other
+        #: comment), and APPENDED TO by a `gh issue comment` this spy executes,
+        #: so the SAME read sees its own prior write exactly as a re-run
+        #: against real GitHub would (#4579).
+        self.existing_comments: dict[str, list[dict]] = {
+            str(k): [{"body": b} for b in v] for k, v in (existing_comments or {}).items()
+        }
+        self.comment_rc = comment_rc
+        self.comment_err = comment_err
         self.calls: list[list[str]] = []
         self.view_titles: list[str | None] = []
 
@@ -1239,6 +1252,10 @@ class _GhSpy:
                 ),
                 "url": (f"https://github.com/{self.url_repo or _argv_repo(args)}"
                         f"/{self.url_kind}/{args[3]}"),
+                #: #4579's de-duplicating read asks `--json comments` alone, so
+                #: this key answers that request the same way the other three
+                #: answer `state,title,url` -- filtered by `asked` below.
+                "comments": self.existing_comments.get(args[3], []),
             }
             # ANSWER ONLY WHAT WAS ASKED FOR, because that is what `gh` does --
             # `--json state,url` returns those two keys and nothing else. A spy
@@ -1291,12 +1308,32 @@ class _GhSpy:
                 self.states[args[3]] = "CLOSED"
             return 0, "", self.close_err or _gh_closed_stderr(
                 repo=_argv_repo(args), number=args[3], title=title)
+        if args[:3] == ["gh", "issue", "comment"]:
+            # #4579's already-closed route, posting the missing receipt. Kept
+            # as a SEPARATE command from `gh issue close` -- real `gh` has no
+            # `--comment` flag on `issue comment`, it takes `--body` -- so a
+            # caller that confused the two would raise the "unexpected
+            # command" AssertionError below rather than silently matching here.
+            if self.comment_rc != 0:
+                return self.comment_rc, "", self.comment_err
+            body = args[args.index("--body") + 1] if "--body" in args else ""
+            self.existing_comments.setdefault(args[3], []).append({"body": body})
+            return 0, "", ""
         raise AssertionError(f"the closer ran an unexpected command: {args}")
 
     @property
     def closed(self) -> list[str]:
         """The issue NUMBERS a `gh issue close` was actually issued for."""
         return [c[3] for c in self.calls if c[:3] == ["gh", "issue", "close"]]
+
+    @property
+    def posted_comments(self) -> list[str]:
+        """The issue NUMBERS a `gh issue comment` (NOT `issue close`) was
+        issued for -- #4579's new call, kept distinct from `closed` because the
+        whole point of the already-closed route is posting a comment WITHOUT a
+        close riding along.
+        """
+        return [c[3] for c in self.calls if c[:3] == ["gh", "issue", "comment"]]
 
     @property
     def views(self) -> list[str]:
@@ -2253,29 +2290,25 @@ def test_blocker_a_close_that_rc0s_but_leaves_the_issue_open_is_refused(tmp_path
     assert item.receipt_kind is None
 
 
-def test_an_already_closed_issue_is_not_closed_again_and_no_comment_is_appended(
+def test_an_already_closed_issue_is_not_closed_again_but_gets_its_missing_receipt(
     tmp_path, monkeypatch
 ):
-    """IDEMPOTENCE, and it is not hypothetical: #4535 was closed BY HAND as the
-    interim workaround, so the first real run of this path met an issue that was
-    already closed.
+    """IDEMPOTENCE ON THE CLOSE, REPAIR ON THE COMMENT (#4579). #4535 was closed
+    BY HAND as the interim workaround, so the first real run of this path met an
+    issue that was already closed -- and, until #4579, that route posted no
+    receipt comment at all, so its whole existence was `tools/drain/state.json`,
+    which is untracked. All 7 items the live ledger held as `closed` when this
+    was measured were in that state.
 
-    No second close, therefore no second comment on a human's issue -- and the
-    ledger still reaches `closed`, because the upstream state is already what
-    this transaction wanted. The value that breaks it: closing unconditionally
-    (a `gh issue close` call appears), or refusing (the item stays READY).
+    No second close -- the ledger still reaches `closed`, because the upstream
+    state is already what this transaction wanted. The value that breaks THAT
+    half: closing unconditionally (a `gh issue close` call appears), or
+    refusing (the item stays READY).
 
-    AND THE PRICE, ASSERTED RATHER THAN LEFT IMPLICIT (round 9). "No second
-    comment" is true of a route where the harness already commented. On the
-    route that actually motivated the short-circuit -- a human closed the issue
-    silently -- there is no FIRST comment either, so the receipt's whole
-    existence is `tools/drain/state.json`, which is untracked. All 7 items the
-    live ledger holds as `closed` are in that state, so this is the route the
-    current population takes. `_receipt_comment`'s docstring used to claim its
-    string is the receipt's only public trace "forever", which is false here;
-    posting on this route is #4579. THE VALUE THAT BREAKS THE NEW PAIR: the note
-    reverted to a bare "left alone", which reports a recorded receipt with no
-    hint that nothing was published (arm GH21).
+    THE REPAIR ITSELF: a receipt comment IS now posted on this route, because
+    nothing on the fake issue carries the sentinel yet. The value that breaks
+    THIS half: reverting to the pre-#4579 code, where no `gh issue comment`
+    call is ever issued and `spy.posted_comments` stays empty.
     """
     led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
     item = led.upsert(715, "a console surface", "W5-console", lane="lane:console", size=1)
@@ -2288,20 +2321,60 @@ def test_an_already_closed_issue_is_not_closed_again_and_no_comment_is_appended(
     assert spy.closed == [], "an already-closed issue was closed again"
     assert item.state == CLOSED
     assert "already closed" in out.summary
-    # No comment was posted -- not by this run and, on the silent-human route,
-    # not ever. The note must SAY so, because the operator's only other reading
-    # is that a receipt was published.
-    assert not any(c[:3] == ["gh", "issue", "comment"] for c in spy.calls), (
-        "this test's premise is that nothing is published on this route"
+
+    # THE NEW CALL, NAMED: exactly one `gh issue comment`, for #715, carrying
+    # the harness's own sentinel -- lifted from `tick.RECEIPT_COMMENT_HEAD`
+    # rather than retyped, per assertion-design.md #3.
+    assert spy.posted_comments == ["715"], (
+        "the already-closed route must post the missing receipt comment "
+        "exactly once - the value that breaks this is the pre-#4579 code, "
+        "which never calls `gh issue comment` at all"
     )
-    assert "NO receipt comment was posted" in out.close_note, (
-        "the already-closed note reports a recorded receipt without saying its "
-        "public trace does not exist - the value that breaks this is the note "
-        "reverted to a bare 'left alone' (#4579)"
+    posted_body = next(
+        c[c.index("--body") + 1] for c in spy.calls
+        if c[:3] == ["gh", "issue", "comment"]
+    )
+    assert posted_body.startswith(tick.RECEIPT_COMMENT_HEAD), (
+        "the posted comment must carry the harness's own sentinel, not an "
+        "arbitrary string - breaks if the post uses anything but "
+        "`_receipt_comment`'s text"
+    )
+    assert "posted now" in out.close_note, (
+        "the already-closed note must say a NEW comment went up, distinct from "
+        "finding one that already existed"
     )
     assert "#4579" in out.close_note, (
-        "the missing-trace gap must be TRACKED where it is disclosed"
+        "the repair is TRACKED where it is disclosed"
     )
+
+
+def test_an_already_closed_issue_with_an_existing_receipt_comment_posts_no_duplicate(
+    tmp_path, monkeypatch
+):
+    """IDEMPOTENCE ACROSS RE-RUNS (#4579's own requirement): a second tick over
+    the same already-closed item must not stack a second receipt comment.
+
+    The value that breaks this: a post-unconditionally implementation, which
+    would make `spy.posted_comments` non-empty here even though a comment
+    beginning with the sentinel is already on the issue.
+    """
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    item = led.upsert(716, "a console surface", "W5-console", lane="lane:console", size=1)
+    monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
+    prior = f"{tick.RECEIPT_COMMENT_HEAD} (kind=g1-browser, class=ui-surface) - a prior run."
+    spy = _gh(monkeypatch, state="CLOSED", existing_comments={"716": [prior]})
+
+    out = tick.record_receipt_from_evidence(
+        led, POLICY, "o/r", 716, from_pr=None, from_run="1")
+
+    assert spy.closed == [], "an already-closed issue was closed again"
+    assert item.state == CLOSED
+    assert spy.posted_comments == [], (
+        "a receipt comment already carries the sentinel - posting again is the "
+        "duplicate #4579 must not produce on a re-run"
+    )
+    assert "already carries the receipt sentinel" in out.close_note
+    assert "#4579" in out.close_note
 
 
 def test_the_already_closed_marker_is_pinned_to_real_gh_output_not_to_the_spy():

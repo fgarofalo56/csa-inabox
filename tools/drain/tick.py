@@ -779,10 +779,12 @@ class LedgerWriteAfterCommentError(Exception):
 
 
 #: THE FIRST LINE OF EVERY DISPOSITION COMMENT, held as a constant because it is
-#: what a future reader (or a future de-duplicating read, the #4579 shape) would
-#: have to match on. `_receipt_comment`'s equivalent prefix is embedded in its
-#: f-string and is transcribed into `close_issue_on_github`'s remediation text by
-#: hand; one of those two copies is the kind of thing that drifts.
+#: what a future reader (or a de-duplicating read) would have to match on.
+#: `_receipt_comment`'s equivalent prefix is `RECEIPT_COMMENT_HEAD`, below --
+#: until #4579 it was embedded only in `_receipt_comment`'s f-string and
+#: transcribed BY HAND into `close_issue_on_github`'s remediation text, which is
+#: exactly the kind of pair that drifts; #4579's own de-duplicating read shares
+#: that constant too, rather than adding a third hand copy.
 DISPOSITION_HEADS = {
     PARKED: "Drain harness: PARKED - blocked, not done.",
     DECLINED: "Drain harness: DECLINED - will not do.",
@@ -985,13 +987,14 @@ def post_disposition_comment(
     so at its site; it is not counted as coverage of any composed route
     (assertion-design #5).
 
-    NOT IDEMPOTENT, and not pretending to be. `close_issue_on_github` reads the
-    issue first and short-circuits; there is no equivalent read here, because
-    the thing that would have to be read is the COMMENT LIST, and de-duplicating
-    against it is #4579's open problem rather than a solved one. What bounds the
-    duplication instead is the caller: `_dispose` refuses a TERMINAL item, so the
-    only way to post twice is a ledger write that failed after the comment
-    landed -- which is a visible, reported state, not a silent one.
+    NOT IDEMPOTENT, and not pretending to be. `close_issue_on_github`'s
+    already-closed route now reads the comment list before posting a second
+    time (#4579); there is no equivalent read here. De-duplicating THIS route
+    against its comment list remains open -- #4579 solved it for the one route
+    it was filed about, not for this one. What bounds the duplication instead is
+    the caller: `_dispose` refuses a TERMINAL item, so the only way to post
+    twice is a ledger write that failed after the comment landed -- which is a
+    visible, reported state, not a silent one.
     """
     if target_state in CLOSES_ON_GITHUB:
         raise DispositionCommentFailedError(
@@ -2308,6 +2311,15 @@ RUN_BACKED_KINDS = frozenset({"deploy-run", "estate", "g1-browser"})
 BINDING_POLICY = "policy"
 BINDING_WATCHER_WORKFLOW = "watcher-workflow"
 
+#: THE FIRST LINE OF EVERY RECEIPT COMMENT -- `_receipt_comment`'s analogue of
+#: `DISPOSITION_HEADS`, above, held as a constant for the same reason: it is
+#: what the already-closed route's de-duplicating read (#4579,
+#: `_already_closed_receipt_note`) matches a comment's body against, and what
+#: `close_issue_on_github`'s unclassified-close remediation text names. A
+#: second hand-transcribed copy of this literal is exactly the drift
+#: `DISPOSITION_HEADS` warns about.
+RECEIPT_COMMENT_HEAD = "Drain harness: receipt verified"
+
 
 def _receipt_comment(kind: str, issue_class: str, detail: str, binding: str) -> str:
     """The comment `gh issue close --comment` posts. THE PERMANENT PUBLIC RECORD.
@@ -2316,18 +2328,22 @@ def _receipt_comment(kind: str, issue_class: str, detail: str, binding: str) -> 
     whenever a comment is posted at all, on up to 334 issues, and it is not
     revisable, so it is built deliberately rather than formatted in place.
 
-    **WHERE NO COMMENT IS POSTED, AND THE SENTENCE ABOVE USED TO DENY IT.** That
+    **WHERE NO COMMENT WAS POSTED, AND THE SENTENCE ABOVE USED TO DENY IT.** That
     sentence read "is the receipt's only trace on the artifact a human reads, on
-    up to 334 issues, forever", with no qualifier. It is FALSE on the
-    already-closed short-circuit in `close_issue_on_github`: that route issues
-    `gh issue view` and nothing else, so no comment exists, and
-    `tools/drain/state.json` is untracked -- the receipt's whole existence is a
-    local gitignored file. Not a corner, and that is why the claim mattered: all
-    7 items the live ledger holds as `closed` are in exactly that state, and the
+    up to 334 issues, forever", with no qualifier. It was FALSE on the
+    already-closed short-circuit in `close_issue_on_github`: until #4579 that
+    route issued `gh issue view` and nothing else, so no comment ever existed,
+    and `tools/drain/state.json` is untracked -- the receipt's whole existence
+    was a local gitignored file. Not a corner: all 7 items the live ledger held
+    as `closed` when this was measured were in exactly that state, and the
     route is the one `close_issue_on_github`'s own docstring names as
-    motivating. Posting the receipt there too is #4579, deliberately not done
-    here; the claim is corrected rather than left standing over the route the
-    whole current population takes.
+    motivating. #4579 makes that route read the issue's comments
+    (`_already_closed_receipt_note`) and post this same string -- via
+    `RECEIPT_COMMENT_HEAD` -- when none of them already carries it. DISCLOSED:
+    that only runs the NEXT time the route is reached for a given issue; the 7
+    items above are already `closed` in the ledger, and
+    `record_receipt_from_evidence` refuses a terminal item at its top, so none
+    of the 7 is backfilled by this change alone.
 
     **WHY IT NAMES `kind` AND `issue_class`.** The previous text was identical on
     both routes and cited `deploy-integrity` R2 on both: "Closing this issue on
@@ -2386,7 +2402,7 @@ def _receipt_comment(kind: str, issue_class: str, detail: str, binding: str) -> 
     the output is PERMANENT and PUBLIC: a loud refusal before anything is
     written is recoverable, and a wrong sentence on a closed issue is not.
     """
-    head = f"Drain harness: receipt verified (kind={kind}, class={issue_class}) - {detail}."
+    head = f"{RECEIPT_COMMENT_HEAD} (kind={kind}, class={issue_class}) - {detail}."
     # AN UNKNOWN BINDING RAISES, for the reason an unclassified kind does
     # below: the text is permanent, and a binding nothing classified would
     # otherwise fall through to whichever sentence happened to be the default.
@@ -2811,8 +2827,10 @@ def _close_outcome(err: str, repo: str, number: int) -> str:
       the race window is precisely BETWEEN it and the close.
     - **Reading the comments back** would answer directly, but it is a new `gh`
       call on the write path -- a new failure route added to the route the
-      whole current population takes, which is the same cost this change
-      declined to pay for #4579.
+      whole current population takes. #4579 made exactly that trade on the
+      SEPARATE already-closed route (`_already_closed_receipt_note`); this
+      classifier still declines to pay it here, on the race-condition route,
+      which is a different problem #4579 did not touch.
     - **`closedAt`** is second-granular and has no pre-value to compare against
       on an open issue, so it would trade one race for a narrower one.
 
@@ -2855,6 +2873,82 @@ def _close_outcome(err: str, repo: str, number: int) -> str:
     return CLOSE_OUTCOME_UNKNOWN
 
 
+def _already_closed_receipt_note(
+    repo: str, number: int, kind: str, issue_class: str, detail: str, binding: str,
+) -> str:
+    """#4579: on the already-closed route, post the receipt comment IF MISSING.
+
+    Called only from `close_issue_on_github`'s `before.state == "CLOSED"`
+    branch, after that function's own read has already established the number
+    is CLOSED, is an issue (not a pull request), and is in THIS repository --
+    none of that is re-established here.
+
+    READ FIRST, so a re-run (or a human who already pasted the receipt by hand)
+    never gets a second copy: a comment whose body starts with
+    `RECEIPT_COMMENT_HEAD` means the receipt already has its public trace, and
+    nothing more is posted. This is the automated form of the by-hand
+    instruction `close_issue_on_github`'s CLOSE_OUTCOME_UNKNOWN branch still
+    gives the operator for a DIFFERENT, ambiguous-outcome route this change
+    does not touch.
+
+    TWO NEW `gh` CALLS -- the read, and, only when nothing matches, the post --
+    on the one route the entire current population (#4466, #4484, #4490,
+    #4494, #4514, #4524, #4535) takes. Re-deriving the seven-shape failure
+    matrix independently measured for the single-call route over these two is
+    its own piece of work (named explicitly in #4579's issue body), so neither
+    call is retried or classified here: each FAILS SENSIBLY instead -- the rc
+    and the first 200 chars of stderr are named in the returned note, nothing
+    raises, and nothing is swallowed silently. The caller's ledger write
+    proceeds regardless of what this function returns, because GitHub's own
+    state IS closed whether or not this particular comment lands.
+    """
+    read_rc, read_out, read_err = sh(
+        ["gh", "issue", "view", str(number), "--repo", repo, "--json", "comments"]
+    )
+    if read_rc != 0:
+        return (
+            f"#{number} was already closed on GitHub - left alone, and this run "
+            f"could NOT read its comments to check for a receipt (rc={read_rc}): "
+            f"{read_err[:200]}. NO receipt comment was posted: the receipt exists "
+            "only in the local ledger, which is untracked (#4579)"
+        )
+    try:
+        parsed = json.loads(read_out)
+    except json.JSONDecodeError as exc:
+        return (
+            f"#{number} was already closed on GitHub - left alone, and this run "
+            f"could NOT parse its comments to check for a receipt ({exc}). NO "
+            "receipt comment was posted: the receipt exists only in the local "
+            "ledger, which is untracked (#4579)"
+        )
+    comments = parsed.get("comments") if isinstance(parsed, dict) else None
+    already_posted = any(
+        isinstance(c, dict) and str(c.get("body") or "").startswith(RECEIPT_COMMENT_HEAD)
+        for c in (comments or [])
+    )
+    if already_posted:
+        return (
+            f"#{number} was already closed on GitHub, and a comment already "
+            "carries the receipt sentinel - left alone, nothing posted again "
+            "(#4579)"
+        )
+    post_rc, _post_out, post_err = sh(
+        ["gh", "issue", "comment", str(number), "--repo", repo,
+         "--body", _receipt_comment(kind, issue_class, detail, binding)]
+    )
+    if post_rc != 0:
+        return (
+            f"#{number} was already closed on GitHub, and this run could NOT "
+            f"post the missing receipt comment (rc={post_rc}): {post_err[:200]}. "
+            "The receipt still exists only in the local ledger, which is "
+            "untracked (#4579)"
+        )
+    return (
+        f"#{number} was already closed on GitHub - left alone, and the missing "
+        "receipt comment was posted now, so it has a public trace (#4579)"
+    )
+
+
 def close_issue_on_github(
     policy: dict, repo: str, number: int, target_state: str, detail: str,
     kind: str, issue_class: str, binding: str,
@@ -2880,26 +2974,32 @@ def close_issue_on_github(
     precondition for the callers that do not exist yet, and the test that pins
     it calls this function directly and says so at its site.
 
-    Idempotent by READING FIRST: an issue already closed is left alone entirely
-    -- no second close, no second comment, no noise on an issue a human may have
-    closed by hand (which is exactly how #4535 was worked around).
+    Idempotent by READING FIRST, on BOTH axes (#4579): an issue already closed
+    is left alone entirely -- no second close, no noise on an issue a human may
+    have closed by hand (which is exactly how #4535 was worked around) -- and,
+    inside that branch, its comments are read before a second receipt comment
+    is posted, so a re-run of this same item never stacks a duplicate.
 
-    THE PRICE OF THAT, DISCLOSED because the route is the COMMON one and the
-    cost is invisible from here: on the already-closed path this function issues
-    `gh issue view` and NOTHING ELSE, so no receipt comment is posted -- and
-    `tools/drain/state.json` is untracked, which leaves the receipt existing
-    solely in a local gitignored file. All 7 items the live ledger currently
-    holds as `closed` are in that state. The short-circuit conflates two worlds:
-    *the harness already commented here*, correct to skip, and *a human closed
-    it silently*, where no comment exists and none ever will. Posting the
-    receipt on this route -- read the comments, post with `gh issue comment`
-    when none begins `Drain harness: receipt verified` -- is #4579 and is
-    deliberately NOT done in this change: it adds two `gh` calls, hence two new
-    failure routes, to the one route the entire current population takes, and
-    that route's seven-shape failure behaviour was independently measured clean
-    at this head. Re-deriving that matrix over a new write is its own work. What
-    IS done here is that the returned note says so, rather than reporting a
-    receipt whose public trace does not exist.
+    THE GAP THIS USED TO LEAVE, CLOSED HERE (#4579). Before this change, the
+    already-closed path issued `gh issue view` and NOTHING ELSE, so no receipt
+    comment was ever posted on it -- and `tools/drain/state.json` is untracked,
+    which left the receipt existing solely in a local gitignored file. All 7
+    items the live ledger held as `closed` when this was measured were in that
+    state. The short-circuit conflates two worlds: *the harness already
+    commented here*, correct to skip, and *a human closed it silently*, where no
+    comment ever existed. `_already_closed_receipt_note` now tells the two apart
+    by reading the issue's comments and posting the receipt with `gh issue
+    comment` only when none begins `RECEIPT_COMMENT_HEAD`.
+
+    TWO NEW `gh` CALLS ON THIS ROUTE where there was one before -- the read,
+    and, only when nothing matches, the post -- so two new failure routes join
+    the one route the entire current population takes. Re-deriving the
+    seven-shape failure matrix independently measured for the single-call route
+    over these two new calls is #4579's own named follow-on, not redone here:
+    each of the two new calls fails SENSIBLY instead -- named in the returned
+    note with its `rc` and the first 200 chars of stderr, never raised, never
+    swallowed -- and the ledger write below still proceeds regardless, because
+    GitHub's own state IS closed whether or not this particular comment lands.
 
     Verified BY EFFECT AS FAR AS THAT IS POSSIBLE, and the qualification is
     load-bearing. The state is read back after the close, because rc=0 from a
@@ -2929,16 +3029,12 @@ def close_issue_on_github(
     try:
         before = _read_issue_on_github(repo, number)
         if before.state == "CLOSED":
-            # THE NOTE SAYS WHAT DID NOT HAPPEN. "left alone" alone reads as
-            # "nothing needed doing", which is true of the close and false of
-            # the receipt: no comment is posted on this route, so the operator
-            # would otherwise be told a receipt was recorded with no hint that
-            # its only trace is a gitignored local file (#4579).
-            return (
-                f"#{number} was already closed on GitHub - left alone, so NO "
-                "receipt comment was posted: on this route the receipt exists "
-                "only in the local ledger, which is untracked (#4579)"
-            )
+            # #4579: the close itself is never repeated, but the receipt
+            # comment used to be assumed absent rather than checked. See
+            # `_already_closed_receipt_note` for the read-first idempotence and
+            # the two new `gh` calls this route now issues.
+            return _already_closed_receipt_note(
+                repo, number, kind, issue_class, detail, binding)
         # THE COMMENT CLAIMS ONLY WHAT IS TRUE WHEN IT IS POSTED, because `gh`
         # posts it BEFORE it closes anything (#4545 finding 11; cli/cli
         # `pkg/cmd/issue/close/close.go` at v2.100.0 -- `CommentableRun` :158,
@@ -3064,10 +3160,13 @@ def close_issue_on_github(
             "either sentence it uses to say which (close.go v2.100.0 :118 / :169), "
             "so the receipt comment MAY NOT have been posted. DO THIS: read the "
             f"issue's comments (`gh issue view {number} --repo {repo} --comments`) "
-            "and, if none begins `Drain harness: receipt verified`, post the "
-            "receipt by hand - this tool will not re-enter the path, because the "
-            "ledger write below makes the item terminal and the record route "
-            "refuses a terminal item (#4579 tracks closing that gap in code)"
+            f"and, if none begins `{RECEIPT_COMMENT_HEAD}`, post the receipt by "
+            "hand - this tool will not re-enter the path, because the ledger "
+            "write below makes the item terminal and the record route refuses a "
+            "terminal item. #4579 automated this same check for the "
+            "ALREADY-CLOSED route (`_already_closed_receipt_note`); it did not "
+            "reach this UNKNOWN-outcome branch, which still asks the operator "
+            "to do it by hand"
         )
     return f"#{number} closed on GitHub"
 
@@ -4092,8 +4191,9 @@ class Recorded(NamedTuple):
 
     `summary` is the whole-operation line -- "#N closed on a <kind> receipt ...
     (<close_note>)" -- and `close_note` is the UPSTREAM half alone, either
-    "#N closed on GitHub" or the already-closed note, which says both that the
-    issue was left alone AND that no receipt comment was posted on it (#4579).
+    "#N closed on GitHub" or the already-closed note, which says the issue was
+    left alone AND reports what happened to its receipt comment: already
+    present, posted now, or unverifiable because a new `gh` call failed (#4579).
 
     They are separate because `main()`'s save-failure arm needs the upstream
     half and only the upstream half. It used to interpolate `summary` under the
