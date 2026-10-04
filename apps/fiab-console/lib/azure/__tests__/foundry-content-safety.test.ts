@@ -84,6 +84,33 @@ describe('foundry-client / shieldPrompt', () => {
     // No discovery connection available → never calls the shieldPrompt REST.
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  // #4458 (deploy-integrity.md R7 / ux-baseline.md G2) — an empty-endpoint
+  // verdict must be LOUD, exactly like its three sibling failure branches
+  // (unresolvable endpoint, unobtainable token, unparseable response). BREAKS
+  // if the `!ep` branch in shieldPrompt reverts to a bare
+  // `return { blocked: false, reason: '' }` with no console.warn — the exact
+  // silent shape measured on the adopt/BYO Foundry path with
+  // contentSafetyEnabled=false.
+  it('an empty endpoint is NOT a silent {blocked:false} — it routes through the loud fail-open path', async () => {
+    delete process.env.LOOM_CONTENT_SAFETY_ENDPOINT;
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const m = await import('../foundry-client');
+    const v = await m.shieldPrompt('anything');
+    expect(v.blocked).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+    // The loud path: safetyFailOpen('shieldPrompt', …) logs a console.warn
+    // naming the op and "Failing OPEN" / "NOT screened" — the signal the UI /
+    // /admin/readiness need to surface "prompts are unscreened" instead of a
+    // false clean verdict.
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [msg] = warn.mock.calls[0] as [string];
+    expect(msg).toContain('shieldPrompt');
+    expect(msg).toMatch(/NOT screened/);
+    warn.mockRestore();
+  });
 });
 
 describe('foundry-client / moderateContent', () => {
