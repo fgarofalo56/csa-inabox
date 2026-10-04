@@ -809,6 +809,16 @@ const TOUCH_EXEMPT = new Map([
    '#3941: owner-only → authorizeItemWorkspace WIDENING only, 401 prologue untouched; codemod SKIPS (GET: 401 not the exact guard shape). 401 pinned by lineage/__tests__/route.test.ts:108'],
   ['apps/fiab-console/app/api/items/[type]/[id]/sensitivity-label/route.ts',
    '#3941: owner-only → authorizeItemWorkspace WIDENING only, all four 401 prologues untouched; codemod SKIPS every handler (401 not the exact guard shape). 401 pinned by sensitivity-label/__tests__/route.test.ts:110'],
+  // #4692 touched this route's POST/DELETE ONLY to thread `{ session: s }`
+  // through to `restoreOwnedItem`/`purgeRecycledItem` (item-crud.ts), which now
+  // authorize via the canonical ladder instead of an owner-only point read. The
+  // three handlers' own `getSession()` → 401 prologues are byte-identical;
+  // migrating the whole route onto the toolkit (GET's cached per-workspace
+  // ownership loop included) is a separate, wider change than this PR's scope
+  // and would put unrelated regression risk on a 404-vs-401 shape this PR does
+  // not touch.
+  ['apps/fiab-console/app/api/onelake/recycle/route.ts',
+   '#4692: POST/DELETE thread `{ session }` to the canonical-ladder-backed restore/purge only; 401 prologues untouched on all three handlers — migrating the whole route to the toolkit is separate scope'],
 ]);
 
 /** All route files (repo-relative POSIX paths) under app/api. */
