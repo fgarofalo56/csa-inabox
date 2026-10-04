@@ -30,16 +30,32 @@ SCRIPT_RUNNER_PY = REPO / "platform" / "runners" / "script-runner" / "app.py"
 SCRIPT_RUNNER_BICEP = (
     REPO / "platform" / "fiab" / "bicep" / "modules" / "admin-plane" / "script-runner-app.bicep"
 )
+DRAIN_MUTATION_MATRIX_TEST_PY = REPO / "tests" / "repo" / "test_drain_mutation_matrix_job.py"
 
-# The ONLY files permitted to exec user-supplied code. Both execute user code as
-# their product function, both hold no credential by design, and both are bounded
-# by internal ingress + an IP allow-list. Adding to this set is a security
-# decision: the host must be documented and its bicep must pin ingress.
+# Files permitted an exec/eval call, for TWO DIFFERENT reasons -- do not conflate
+# them when adding a third entry; each needs its OWN matching justification.
 #
-# script-runner was found by the sweep below, NOT by CodeQL — alert #545 reported
+#   PRODUCTION (APP_PY, SCRIPT_RUNNER_PY): execute user-supplied code as their
+#   product function. Both hold no credential by design and are bounded by
+#   internal ingress + an IP allow-list. Adding here is a security decision: the
+#   host must be documented and its bicep must pin ingress.
+#
+#   TEST-ONLY TOOLING (DRAIN_MUTATION_MATRIX_TEST_PY, #4885): `_eval_gha_if()`
+#   evaluates a GitHub Actions `if:` expression LIFTED from this repo's own
+#   workflow YAML at test time -- never external/caller request data, which is
+#   the threat class this sweep exists to catch. `eval(py, {"__builtins__": {}}, {})`
+#   runs with an EMPTY builtins mapping: no function calls, no imports, no file
+#   or network access are reachable from the expression at all. There is no
+#   production surface, no ingress, and no credential to bound -- the sandboxing
+#   IS the boundary. Adding a test file here is still a decision to make
+#   deliberately: it must keep using an empty-builtins eval (or stronger), and
+#   must not grow a path that accepts anything other than the workflow's own
+#   checked-in `if:` string.
+#
+# script-runner was found by the sweep below, NOT by CodeQL -- alert #545 reported
 # only udf-runtime. That is precisely why the unit of work for this class is a
 # sweep rather than the one reported line.
-SANCTIONED_EXEC_HOSTS = {APP_PY.resolve(), SCRIPT_RUNNER_PY.resolve()}
+SANCTIONED_EXEC_HOSTS = {APP_PY.resolve(), SCRIPT_RUNNER_PY.resolve(), DRAIN_MUTATION_MATRIX_TEST_PY.resolve()}
 
 
 def _load_app_module() -> ModuleType:
