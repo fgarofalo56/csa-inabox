@@ -479,6 +479,87 @@ const MIGRATED: Array<{ file: string; handlers: Array<{ verb: string; allowReadR
   },
 ];
 
+/**
+ * Extract one handler's source region from a file, by verb — the same
+ * bounds-finding HANDLER_RE scan `callsIn` does internally, exposed standalone
+ * so #4457's check can read the region text without needing the authorize-call
+ * shape `callsIn` returns.
+ */
+function handlerRegion(abs: string, verb: string): string | null {
+  const src = fs.readFileSync(abs, 'utf8');
+  const lines = src.split(/\r?\n/);
+  const bounds: Array<{ i: number; verb: string }> = [];
+  lines.forEach((l, i) => {
+    const m = l.match(HANDLER_RE);
+    if (m) bounds.push({ i, verb: (m[1] || m[2])! });
+  });
+  const idx = bounds.findIndex((b) => b.verb === verb);
+  if (idx === -1) return null;
+  const end = idx + 1 < bounds.length ? bounds[idx + 1].i : lines.length;
+  return lines.slice(bounds[idx].i, end).join('\n');
+}
+
+/**
+ * Does this handler region check a `denied` result and RETURN it, rather than
+ * reading only `.item` off the same call? Matches both idioms in the tree:
+ * `const { item, denied } = await loadItem(...); if (denied) return denied;`
+ * and (post-#4457) `const loaded = await loadItem(...); if (loaded.denied)
+ * return loaded.denied;`.
+ */
+function deniedIsReturned(region: string): boolean {
+  return /\bif\s*\(\s*([\w.]*\bdenied)\s*\)\s*\{?\s*return\s+\1\b/.test(region);
+}
+
+/**
+ * #4457 — impact and lineage used to write
+ * `item = (await loadItem(...)).item;`, discarding `denied` entirely. A tenant
+ * admin on an unconfirmed tenant then got THIS route's own 404 instead of the
+ * 409 `tenant_unconfirmed` + remediation the other sixteen handlers return.
+ * Behavioural coverage of the mechanism (the 409 itself) already lives in
+ * `app/api/items/[type]/[id]/__tests__/workspace-authz.test.ts`, for the base
+ * route only; this is the static counterpart that covers all eighteen, in the
+ * same shape as the #3941 `MIGRATED` block above.
+ */
+describe('#4457 every migrated handler propagates a non-404 `denied`, not just `.item`', () => {
+  it('each handler checks `denied` and returns it — deleting that check reproduces the #4457 defect', () => {
+    const missing: string[] = [];
+    for (const { file, handlers } of MIGRATED) {
+      const abs = path.resolve(API_ROOT, '..', '..', file);
+      for (const { verb } of handlers) {
+        const region = handlerRegion(abs, verb);
+        if (region == null) {
+          missing.push(`${file}:${verb} (handler region not found)`);
+          continue;
+        }
+        if (!deniedIsReturned(region)) missing.push(`${file}:${verb}`);
+      }
+    }
+    expect(
+      missing.sort(),
+      'These handlers call loadItem but do not check+return `denied` — a non-404\n' +
+        'refusal (e.g. 409 tenant_unconfirmed) would be silently discarded as if the\n' +
+        'item did not exist:\n' + missing.join('\n'),
+    ).toEqual([]);
+  });
+
+  it('the detector rejects the exact pre-fix shape (construction proof, not just absence)', () => {
+    // Reconstructs impact/route.ts's actual pre-#4457 text. A detector that was
+    // hollowed to `() => true` would still pass the suite above; this pins that
+    // THIS specific, previously-real shape is the value that makes it fail.
+    const preFix4457 = [
+      'export async function GET(req, props) {',
+      '  let item = null;',
+      '  try {',
+      '    item = (await loadItem(id, type, session, { allowReadRoles: true })).item;',
+      '  } catch {',
+      '    item = null;',
+      '  }',
+      '}',
+    ].join('\n');
+    expect(deniedIsReturned(preFix4457)).toBe(false);
+  });
+});
+
 describe('#3941 the ten migrated routes are STILL guarded (declared membership)', () => {
   it('every declared handler still reaches the ladder — a deleted call is named, not absorbed', () => {
     const missing: string[] = [];
