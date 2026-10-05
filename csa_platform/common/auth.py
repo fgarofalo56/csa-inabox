@@ -256,6 +256,19 @@ async def _validate_token(token: str) -> dict[str, Any]:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token.",
         ) from exc
+    except jwt.exceptions.PyJWKClientError as exc:
+        # #4872: PyJWKClientError (and its subclass PyJWKClientConnectionError,
+        # raised when the JWKS endpoint can't be reached, or the token's `kid`
+        # isn't in the key set) does NOT subclass InvalidTokenError, so it fell
+        # through to FastAPI's unhandled-exception path and surfaced as 500.
+        # The request is still refused either way; this just names the failure
+        # correctly — a signing-key lookup failure is still an unauthenticated
+        # request, not a server error.
+        logger.warning("JWKS signing-key lookup failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not verify token signature.",
+        ) from exc
 
 
 # ─────────────────────────────────────────────────────────────────────────
