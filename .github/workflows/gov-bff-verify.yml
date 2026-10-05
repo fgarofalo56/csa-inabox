@@ -239,13 +239,24 @@ jobs:
             {
               path: '/api/catalog/metastores',
               label: 'unity-catalog (OSS loom-unity)',
-              // `ok` and `purview` are on EVERY 2xx path of that route
-              // (`const result: any = { ok: true }` at :115, and :213-220 sets
-              // `result.purview` to an object or to null in both branches), so
-              // an envelope missing either is unreadable, not clean.
-              required: ['ok', 'purview'],
+              // `ok`, `unityOk` and `purview` are on EVERY 2xx path of that route
+              // (`const result: any = { ok: true, unityOk: true }` at :125, and
+              // :235-237 sets `result.purview` to an object or to null in both
+              // branches), so an envelope missing any of them is unreadable, not
+              // clean.
+              //
+              // `unityOk` (#4656): BEFORE this route carried only `unityWorkspaceErrors`
+              // (an array nobody checks by default) while `ok` stayed `true` over a
+              // failed Unity listing — the exact shape this probe caught via the
+              // 10/10 red run quoted in #4656. `unityOk` is the honest top-level
+              // sibling a caller checking only `ok`-adjacent fields would see; it is
+              // graded here too, redundantly with `unityWorkspaceErrors`, as
+              // defense-in-depth for any OTHER consumer of this route that is less
+              // thorough than this probe.
+              required: ['ok', 'unityOk', 'purview'],
               gates: {
                 ok: okTrue,
+                unityOk: (v) => (v === false ? 'unity listing did not fully succeed (unityOk=false) — see unityError/unityWorkspaceErrors' : false),
                 unityError: gate('unity catalog error'),
                 unityHint: gate('unity catalog NOT CONFIGURED (missing hostnames env)'),
                 unityWorkspaceErrors: gateNonEmpty('one or more Unity workspaces failed to list'),
