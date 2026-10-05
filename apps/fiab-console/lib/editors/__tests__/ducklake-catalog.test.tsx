@@ -163,3 +163,87 @@ describe('DucklakeCatalogEditor transport-failure honesty (C14)', () => {
     expect(screen.queryByText('No tables in the DuckLake catalog yet')).not.toBeInTheDocument();
   });
 });
+
+describe('DucklakeCatalogEditor cold-start retry (#3571, deploy-integrity.md R6)', () => {
+  it('retries ONCE, transparently, on a first-request timeout and renders the real tables once warm', async () => {
+    // Kill power: removing `retryOnTimeoutOnce`/`onTimeoutRetry` from
+    // `fetchCatalog`'s clientFetch call leaves the FIRST attempt's timeout
+    // UNRETRIED — this test would then time out waiting for 'orders' (the
+    // promise never resolves past the first, permanently-pending attempt) and
+    // `calls` would stay at 1.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let calls = 0;
+    vi.spyOn(global, 'fetch').mockImplementation(async (input: any, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : String(input?.toString?.() ?? input);
+      if (!url.includes('/api/ducklake/catalog')) {
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }) as any;
+      }
+      calls += 1;
+      if (calls === 1) {
+        // Never resolves on its own — only the client's own abort ends it,
+        // exactly like a cold Container App that has not answered yet.
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            const e = new Error('signal is aborted without reason');
+            e.name = 'AbortError';
+            reject(e);
+          });
+        });
+      }
+      return new Response(
+        JSON.stringify({ ok: true, configured: true, catalog: 'loomlake', tables: [{ schema: 'bronze', name: 'orders' }] }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ) as any;
+    });
+
+    renderEditor();
+    // Drives the first attempt's setTimeout(timeoutMs) past its ceiling so it
+    // aborts and the retry fires.
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    await waitFor(() => expect(screen.getByText('orders')).toBeInTheDocument());
+    expect(calls).toBe(2);
+
+    vi.useRealTimers();
+  });
+
+  it('states the real cause (scale-to-zero cold start) and NOT the generic cross-subscription copy', async () => {
+    // Kill power: if the call site dropped its `timeoutHint` (falling back to
+    // clientFetch's app-wide default) this assertion on "scale-to-zero" fails,
+    // and if it were a copy-paste of the RisingWave wording the "not match"
+    // assertion on "RisingWave"/"streaming-engine" would fail instead.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.spyOn(global, 'fetch').mockImplementation(async (input: any, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : String(input?.toString?.() ?? input);
+      if (!url.includes('/api/ducklake/catalog')) {
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }) as any;
+      }
+      // BOTH attempts time out, so the editor surfaces the real error message.
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          const e = new Error('signal is aborted without reason');
+          e.name = 'AbortError';
+          reject(e);
+        });
+      });
+    });
+
+    renderEditor();
+    await vi.advanceTimersByTimeAsync(60_000); // first attempt times out, retry fires
+    await vi.advanceTimersByTimeAsync(60_000); // retry ALSO times out, surfaces to the editor
+
+    await waitFor(() =>
+      expect(screen.getByText('Could not read the DuckLake catalog')).toBeInTheDocument());
+    expect(screen.getByText(/scale-to-zero/)).toBeInTheDocument();
+    expect(screen.queryByText(/heavier across multiple subscriptions/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/RisingWave|streaming-engine/)).not.toBeInTheDocument();
+
+    vi.useRealTimers();
+  });
+});

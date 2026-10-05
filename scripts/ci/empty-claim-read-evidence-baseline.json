@@ -77,6 +77,7 @@
     "apps/fiab-console/lib/editors/data-marketplace.tsx#unguarded": 4,
     "apps/fiab-console/lib/editors/data-product-editors.tsx#unguarded": 2,
     "apps/fiab-console/lib/editors/dataflow-gen2-editor.tsx#unguarded": 2,
+    "apps/fiab-console/lib/editors/ducklake-catalog-editor.tsx#unguarded": 3,
     "apps/fiab-console/lib/editors/event-schema-set-editor.tsx#unguarded": 2,
     "apps/fiab-console/lib/editors/foundry-playground.tsx#unguarded": 3,
     "apps/fiab-console/lib/editors/foundry-sub-editors.tsx#unguarded": 7,
