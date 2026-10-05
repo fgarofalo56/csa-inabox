@@ -29,7 +29,7 @@
 //         environmentId: containerPlatform.outputs.environmentId  // the CAE id
 //         consoleUamiId: identity.outputs.consoleUamiId           // uami-loom-console
 //         acrLoginServer: registry.outputs.loginServer            // acr...azurecr.io
-//         runnerImage: '${registry.outputs.loginServer}/gh-aca-runner:latest'
+//         runnerImage: '${registry.outputs.loginServer}/gh-actions-runner:latest'
 //         ghOwner: 'fgarofalo56'
 //         ghRepo: 'csa-inabox'
 //         // Pass the PAT from a pipeline @secure() var OR a KV secret URI:
@@ -58,7 +58,13 @@ param consoleUamiId string
 param acrLoginServer string
 
 @description('Runner container image reference (toolchain image built by provision-gh-runner.sh).')
-param runnerImage string = '${acrLoginServer}/gh-aca-runner:latest'
+// #4828 — the image REPOSITORY is gh-actions-runner, NOT gh-aca-runner (that is
+// the JOB name). provision-gh-runner.sh fixed its own default the same way in
+// #4801 (IMAGE_REPO defaults to gh-actions-runner); this module is not wired
+// into any orchestrator today (see the top-of-file TODO), so the wrong name
+// here could not yet have affected a live deploy, but would reintroduce the
+// #4796 mismatch the moment it is wired in.
+param runnerImage string = '${acrLoginServer}/gh-actions-runner:latest'
 
 @description('GitHub repo owner (runner scope = repo).')
 param ghOwner string = 'fgarofalo56'
