@@ -4946,7 +4946,7 @@ const UNLEASED_ARM_IMAGE_WRITERS = Object.freeze({
     writes: 1,
     recorded: '2026-09-11',
     reason:
-      'Gov boundary, provisioning-time deploy of data-plane/loom-trino-aca.bicep on a dispatch lane. Its SECOND az deployment site is counted in OPAQUE_ARM_DEPLOY_SITES, not here, because its template does not exist in the tree. Unported sovereign gap. cloud-parity.md, #3676.',
+      'Gov boundary, provisioning-time deploy of data-plane/loom-trino-aca.bicep on a dispatch lane. Its SECOND az deployment site (data-plane/loom-trino-lake-rbac.bicep, #4473) now resolves as a non-writer — a Storage Blob Data Reader role assignment, no Microsoft.App/containerApps — so it is counted in neither bucket. Unported sovereign gap. cloud-parity.md, #3676.',
   },
   'gov-provision-wrangler.yml': {
     writes: 1,
@@ -5014,12 +5014,6 @@ const OPAQUE_ARM_DEPLOY_SITES = Object.freeze({
     recorded: '2026-09-11',
     reason:
       'An `::error::` string telling the operator to run phase 1 (`az deployment sub create … deployAppsEnabled=false`) first. Prose, not a command. #3676.',
-  },
-  'gov-provision-trino.yml': {
-    sites: 1,
-    recorded: '2026-09-11',
-    reason:
-      'A SEPARATE DEFECT SURFACED BY THIS SCAN, recorded here rather than silently resolved: `-f platform/fiab/bicep/modules/data-plane/loom-trino-lake-rbac.bicep` names a file that does not exist anywhere in the tree (`git ls-files | grep loom-trino-lake-rbac` returns nothing, measured 2026-09-11), so that Gov lake-RBAC deploy step cannot succeed as written. Whether the missing template would have rendered a Container App is unknowable; it is OPAQUE, not a non-writer. Out of scope for this PR, which touches neither that lane nor that module. #3676.',
   },
 });
 
@@ -5247,7 +5241,11 @@ test('POPULATION CONTROL (ARM): the scanner sees the deploy shape, resolves modu
   // whole guard exists to refuse.
   const unresolvable = {
     'runtime variable path': 'az deployment group create -g rg -n n -f "$BICEP_PATH" -o none',
-    'a template that does not exist': 'az deployment group create -g rg -n n -f platform/fiab/bicep/modules/data-plane/loom-trino-lake-rbac.bicep -o none',
+    // Not loom-trino-lake-rbac.bicep: #4473 wrote that file, so it now EXISTS
+    // and resolves as a non-writer — reusing it here would make this control
+    // assert against a path the same PR made true out from under it. Any path
+    // confirmed absent from the tree proves the same UNRESOLVED behavior.
+    'a template that does not exist': 'az deployment group create -g rg -n n -f platform/fiab/bicep/modules/data-plane/does-not-exist-template.bicep -o none',
     'template-uri': 'az deployment group create -g rg -n n --template-uri https://example.invalid/t.json',
     'flags hidden in a shell array': 'az deployment sub create "${DEPLOY_ARGS[@]}"',
   };
