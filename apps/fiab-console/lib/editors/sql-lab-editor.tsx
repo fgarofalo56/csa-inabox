@@ -38,6 +38,7 @@ import {
 } from '@fluentui/react-icons';
 import { transpilePrqlToSql, PrqlTranspileError, type QueryLanguage } from '@/lib/query/prql-transpile';
 import { clientFetch } from '@/lib/client-fetch';
+import { DUCKDB_TIER_TIMEOUT_MS, DUCKDB_TIER_TIMEOUT_HINT } from '@/lib/azure/duckdb-timeout';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { EditorResultsSplit } from './components/editor-results-split';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
@@ -172,24 +173,30 @@ interface CapabilitiesResponse {
  * anyone arriving cold.
  *
  * The 20s default is right for the admin surfaces it was raised for and wrong
- * here, so SQL Lab opts into a ceiling that covers a real cold start, and says
- * WHY in its own words rather than inheriting the app-wide cross-subscription
- * sentence that has nothing to do with this call (#3546, R7).
+ * here, so SQL Lab opts into a ceiling that covers a real cold start (shared
+ * with the DuckLake catalog editor via lib/azure/duckdb-timeout, since both
+ * callers hit the SAME tier), and says WHY in its own words rather than
+ * inheriting the app-wide cross-subscription sentence that has nothing to do
+ * with this call (#3546, R7).
  *
- * This is the CLIENT half only. Pre-warming the tier (a min replica, or a
- * scheduled ping) is a bicep change and is NOT done here.
+ * Beyond the raised ceiling, every call below also opts into
+ * `retryOnTimeoutOnce` (deploy-integrity.md R6): a first-request timeout is
+ * retried ONCE, transparently, before surfacing an error — which is exactly
+ * the "fails twice, then instant success" shape that was measured live. The
+ * `onTimeoutRetry` callback drives a "warming up" indicator so the retry
+ * window is never silent.
+ *
+ * Pre-warming the tier (a min replica, or a scheduled ping) is a bicep change
+ * and is NOT done here — this is the client half only.
  */
-const SQL_LAB_TIMEOUT_MS = 60_000;
-const SQL_LAB_TIMEOUT_HINT =
-  'SQL Lab\'s serving tier is deployed scale-to-zero (loom-duckdb, minReplicas 0), and the Synapse '
-  + 'Serverless fallback has a cold start of its own, so the FIRST request after an idle period pays for '
-  + 'starting the engine before any SQL runs. Once warm it answers in milliseconds. Run it again — a '
-  + 'second attempt normally returns immediately. If it keeps timing out, the tier may genuinely be '
-  + 'unreachable from the console rather than cold.';
+const SQL_LAB_TIMEOUT_MS = DUCKDB_TIER_TIMEOUT_MS;
+const SQL_LAB_TIMEOUT_HINT = DUCKDB_TIER_TIMEOUT_HINT;
 
-async function fetchCapabilities(): Promise<CapabilitiesResponse> {
-  const res = await clientFetch('/api/duckdb/capabilities', { cache: 'no-store' },
-    { timeoutMs: SQL_LAB_TIMEOUT_MS, timeoutHint: SQL_LAB_TIMEOUT_HINT });
+async function fetchCapabilities(onTimeoutRetry?: () => void): Promise<CapabilitiesResponse> {
+  const res = await clientFetch('/api/duckdb/capabilities', { cache: 'no-store' }, {
+    timeoutMs: SQL_LAB_TIMEOUT_MS, timeoutHint: SQL_LAB_TIMEOUT_HINT,
+    retryOnTimeoutOnce: true, onTimeoutRetry,
+  });
   const json = (await res.json().catch(() => ({}))) as CapabilitiesResponse & { error?: string };
   if (!res.ok || json?.ok !== true) {
     throw new Error(json?.error || `Could not read engine capabilities (HTTP ${res.status})`);
@@ -219,6 +226,11 @@ export function SqlLabEditor({ item, id }: { item: FabricItemType; id: string })
   const [result, setResult] = useState<SqlLabResponse | null>(null);
   // Engine picker: DuckDB/Serverless (default) or the opt-in Trino federation.
   const [engine, setEngine] = useState<SqlEngine>('default');
+  // #3571 — set by `onTimeoutRetry` right before the single transparent retry
+  // fires, cleared once the read settles either way. Drives the "warming up"
+  // copy below instead of leaving the first-request cold-start retry silent.
+  const [capsWarming, setCapsWarming] = useState(false);
+  const [queryWarming, setQueryWarming] = useState(false);
 
   // When the modern-query flag is OFF, force SQL — the toggle disappears and the
   // surface reverts to SQL-only (FLAG0 revert story).
@@ -226,7 +238,14 @@ export function SqlLabEditor({ item, id }: { item: FabricItemType; id: string })
 
   const capsQ = useQuery({
     queryKey: ['sql-lab-capabilities'],
-    queryFn: fetchCapabilities,
+    queryFn: async () => {
+      setCapsWarming(false);
+      try {
+        return await fetchCapabilities(() => setCapsWarming(true));
+      } finally {
+        setCapsWarming(false);
+      }
+    },
     staleTime: 60_000,
   });
 
@@ -235,6 +254,7 @@ export function SqlLabEditor({ item, id }: { item: FabricItemType; id: string })
     setResult(null);
     setTranspileError(null);
     setTranspiledSql(null);
+    setQueryWarming(false);
 
     // N8: in PRQL mode transpile FIRST. On any unsupported construct we surface
     // the honest error and refuse to run — never a fabricated query.
@@ -263,7 +283,14 @@ export function SqlLabEditor({ item, id }: { item: FabricItemType; id: string })
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sql: runnableSql, maxRows: 5000, itemId: id }),
-      }, { timeoutMs: SQL_LAB_TIMEOUT_MS, timeoutHint: SQL_LAB_TIMEOUT_HINT });
+      }, {
+        timeoutMs: SQL_LAB_TIMEOUT_MS, timeoutHint: SQL_LAB_TIMEOUT_HINT,
+        // #3571 — scoped to the duckdb/Serverless path. Trino is a separate
+        // opt-in engine on its own Container App; this fix is about the
+        // loom-duckdb cold start specifically, so Trino is left untouched
+        // rather than guessing its retry semantics are identical.
+        ...(useTrino ? {} : { retryOnTimeoutOnce: true, onTimeoutRetry: () => setQueryWarming(true) }),
+      });
       const json = (await res.json().catch(() => ({}))) as SqlLabResponse;
       if (res.ok && json.ok) {
         setResult(json);
@@ -278,6 +305,7 @@ export function SqlLabEditor({ item, id }: { item: FabricItemType; id: string })
       setResult({ ok: false, error: e instanceof Error ? e.message : String(e) });
     } finally {
       setRunning(false);
+      setQueryWarming(false);
     }
   }, [engine, trinoEnabled, activeLang, id, prql, sql]);
 
@@ -310,7 +338,7 @@ export function SqlLabEditor({ item, id }: { item: FabricItemType; id: string })
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sql, maxRows: 200000, itemId: id }),
-      }, { timeoutMs: SQL_LAB_TIMEOUT_MS, timeoutHint: SQL_LAB_TIMEOUT_HINT });
+      }, { timeoutMs: SQL_LAB_TIMEOUT_MS, timeoutHint: SQL_LAB_TIMEOUT_HINT, retryOnTimeoutOnce: true });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(body.error || `Arrow fetch failed (HTTP ${res.status})`);
@@ -399,6 +427,21 @@ export function SqlLabEditor({ item, id }: { item: FabricItemType; id: string })
               }
             />
           </div>
+
+          {/* #3571 — the capabilities probe's first attempt timed out on a cold
+              loom-duckdb container and is retrying once, transparently, before
+              surfacing any error. Shown ONLY during that retry window — never
+              on a normal (warm) load, and cleared the moment the retry settles
+              either way. */}
+          {capsWarming && (
+            <MessageBar intent="info" layout="multiline" data-testid="sql-lab-caps-warming">
+              <MessageBarBody>
+                <MessageBarTitle>Warming up the engine…</MessageBarTitle>
+                The DuckDB serving tier is scale-to-zero and this looks like the first request after an idle
+                period. Retrying automatically — this should resolve in a few seconds.
+              </MessageBarBody>
+            </MessageBar>
+          )}
 
           {/* C20 — the capability read failed, so which engine will serve a
               query is UNKNOWN. Say so rather than letting the default badge
@@ -538,7 +581,15 @@ export function SqlLabEditor({ item, id }: { item: FabricItemType; id: string })
                         <div className={s.genSql}>{transpiledSql}</div>
                       </div>
                     )}
-                    {running && <Spinner size="small" label="Executing…" labelPosition="after" />}
+                    {running && (
+                      <Spinner
+                        size="small"
+                        label={queryWarming
+                          ? 'First query after an idle period — warming up the engine, retrying…'
+                          : 'Executing…'}
+                        labelPosition="after"
+                      />
+                    )}
                     {/* N7e opt-in gate — the Trino engine is not wired. Render the
                         shared Fix-it (discloses the AKS cost) instead of an error;
                         DuckDB stays selectable and fully functional. */}

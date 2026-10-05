@@ -14,7 +14,7 @@
  * Azure-native + OSS; no Microsoft Fabric (.claude/rules/no-fabric-dependency.md).
  */
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Badge, Body1, Button, Caption1, Spinner, Subtitle2,
@@ -23,6 +23,7 @@ import {
 } from '@fluentui/react-components';
 import { Database20Regular, TableSimple20Regular } from '@fluentui/react-icons';
 import { clientFetch } from '@/lib/client-fetch';
+import { DUCKDB_TIER_TIMEOUT_MS, DUCKDB_TIER_TIMEOUT_HINT } from '@/lib/azure/duckdb-timeout';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { PreviewTable, type PreviewData } from '@/lib/components/shared/preview-table';
 import { HonestGate } from '@/lib/components/shared/honest-gate';
@@ -58,8 +59,16 @@ interface DucklakeResponse {
   gate?: { id: string; title?: string; remediation?: string; fixItHref?: string; missing?: string[] };
 }
 
-async function fetchCatalog(): Promise<DucklakeResponse> {
-  const res = await clientFetch('/api/ducklake/catalog', { cache: 'no-store' });
+async function fetchCatalog(onTimeoutRetry?: () => void): Promise<DucklakeResponse> {
+  // #3571 — the DuckLake catalog is served by the SAME loom-duckdb Container
+  // App as SQL Lab (scale-to-zero, minReplicas 0), so it pays the identical
+  // cold-start tax on the first read after an idle period. Shares SQL Lab's
+  // ceiling/copy/retry policy (lib/azure/duckdb-timeout) rather than a second,
+  // independently-drifting copy of the same cause statement.
+  const res = await clientFetch('/api/ducklake/catalog', { cache: 'no-store' }, {
+    timeoutMs: DUCKDB_TIER_TIMEOUT_MS, timeoutHint: DUCKDB_TIER_TIMEOUT_HINT,
+    retryOnTimeoutOnce: true, onTimeoutRetry,
+  });
   const json = (await res.json().catch(() => ({}))) as DucklakeResponse;
   if (!res.ok || json?.ok !== true) {
     throw new Error(json?.error || `Could not read the DuckLake catalog (HTTP ${res.status})`);
@@ -70,10 +79,20 @@ async function fetchCatalog(): Promise<DucklakeResponse> {
 export function DucklakeCatalogEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const enabled = useRuntimeFlag(DUCKLAKE_FLAG_ID);
+  // #3571 — set by `onTimeoutRetry` right before the single transparent retry
+  // fires, cleared once the read settles either way.
+  const [warming, setWarming] = useState(false);
 
   const q = useQuery({
     queryKey: ['ducklake-catalog', id],
-    queryFn: fetchCatalog,
+    queryFn: async () => {
+      setWarming(false);
+      try {
+        return await fetchCatalog(() => setWarming(true));
+      } finally {
+        setWarming(false);
+      }
+    },
     staleTime: 30_000,
     enabled,
   });
@@ -121,7 +140,15 @@ export function DucklakeCatalogEditor({ item, id }: { item: FabricItemType; id: 
           />
         </div>
 
-        {q.isLoading && <Spinner size="small" label="Reading the DuckLake catalog…" labelPosition="after" />}
+        {q.isLoading && (
+          <Spinner
+            size="small"
+            label={warming
+              ? 'First read after an idle period — warming up the DuckDB tier, retrying…'
+              : 'Reading the DuckLake catalog…'}
+            labelPosition="after"
+          />
+        )}
 
         {/* Silent-failure fix (FINISHLINE C14) — the same defect apex A3 fixed in
             s3-gateway-editor.tsx, which was never propagated to this sibling.
