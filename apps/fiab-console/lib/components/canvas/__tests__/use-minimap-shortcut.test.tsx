@@ -3,10 +3,16 @@
  * own header comment for why: only 2 of 24 real canvas hosts have ANY
  * hand-rolled keydown handler at all, so per-host binding would mean adding
  * this from scratch in 22 files). These tests pin the guard that keeps it
- * from firing while the user is typing, and the real collision this hook
- * introduced in pipeline/canvas.tsx (fixed there with e.stopPropagation() on
- * the align-chord's own 'm' binding) — that fix is pinned in canvas.test.tsx,
- * not here; this file pins the hook's OWN contract in isolation.
+ * from firing while the user is typing.
+ *
+ * NOT covered here, or anywhere: the real collision this hook introduced in
+ * pipeline/canvas.tsx (fixed there with e.stopPropagation() on the
+ * align-chord's own 'm' binding). That file cannot be imported in this
+ * vitest/jsdom environment at all — a pre-existing OOM on the @xyflow/react +
+ * ELK import chain, already documented inline by
+ * pipeline-canvas-viewport.test.tsx:39-42, which stubs the whole file out for
+ * exactly this reason. The fix is verified by tracing the event path instead
+ * (see the PR description), not by an automated test — disclosed, not hidden.
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
