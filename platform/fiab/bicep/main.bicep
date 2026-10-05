@@ -1403,14 +1403,25 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     // ten keep exactly the defaults they had when this bag was never passed.
     //   adopt  → the group the discover script measured on the adopted namespace
     //   create → 'loom-schemas' ONLY when the landing-zone Event Hubs module
-    //            actually deploys (singleDlz + provisionEventHubs), because that
-    //            module is what creates the group (landing-zone/eventhubs.bicep
-    //            schemaGroupName default). Otherwise '' — naming a group nobody
-    //            created would point the console at a 404.
+    //            actually deploys (singleDlz or dlz-attach + provisionEventHubs,
+    //            #4774), because that module is what creates the group
+    //            (landing-zone/eventhubs.bicep schemaGroupName default).
+    //            Otherwise '' — naming a group nobody created would point the
+    //            console at a 404.
     eventsConfig: {
+      // #4774 — dlz-attach's landing-zone module creates the group exactly
+      // like single-sub's does (both deploy modules/landing-zone/main.bicep
+      // with loomEventHubEnabled: provisionEventHubs), and dlz-attach is the
+      // only non-single-sub topology whose namespace the console actually
+      // binds (dlzEventHubNamespace below reads dlzAttach!.outputs only).
+      // useMultiDlz is deliberately NOT included: the dlz[for] array path has
+      // no console namespace binding at all today (no DLZ's
+      // eventHubsNamespaceName is wired to dlzEventHubNamespace on that path),
+      // so naming a schema group there would bind to a namespace the console
+      // was never told about — tracked separately, not fixed here (#4774).
       loomEhSchemaGroup: !empty(existingEventHubSchemaGroup)
         ? existingEventHubSchemaGroup
-        : ((useSingleDlz && provisionEventHubs) ? 'loom-schemas' : '')
+        : (((useSingleDlz || effectiveTopology == 'dlz-attach') && provisionEventHubs) ? 'loom-schemas' : '')
     }
     copilotMafEnabled: copilotMafEnabled
     setupOrchestratorEnabled: setupOrchestratorEnabled

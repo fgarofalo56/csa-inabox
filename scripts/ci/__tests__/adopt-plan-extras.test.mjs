@@ -735,7 +735,9 @@ test('compiled template: admin-plane receives the warehouse id and the schema gr
   assert.equal(passed.loomDatabricksLineageWarehouseId?.value, "[variables('existingDatabricksSqlWarehouseId')]");
   assert.equal(
     passed.eventsConfig?.value?.loomEhSchemaGroup,
-    "[if(not(empty(variables('existingEventHubSchemaGroup'))), variables('existingEventHubSchemaGroup'), if(and(variables('useSingleDlz'), variables('provisionEventHubs')), 'loom-schemas', ''))]",
+    // #4774 — extended from useSingleDlz-only to also cover dlz-attach (the
+    // only other topology whose namespace the console actually binds).
+    "[if(not(empty(variables('existingEventHubSchemaGroup'))), variables('existingEventHubSchemaGroup'), if(and(or(variables('useSingleDlz'), equals(variables('effectiveTopology'), 'dlz-attach')), variables('provisionEventHubs')), 'loom-schemas', ''))]",
   );
   assert.deepEqual(Object.keys(passed.eventsConfig.value), ['loomEhSchemaGroup'],
     'only the schema group is set; every other eventsConfigT field must keep its admin-plane default');
