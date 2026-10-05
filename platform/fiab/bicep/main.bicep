@@ -1403,10 +1403,11 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     // ten keep exactly the defaults they had when this bag was never passed.
     //   adopt  → the group the discover script measured on the adopted namespace
     //   create → 'loom-schemas' ONLY when the landing-zone Event Hubs module
-    //            actually deploys (singleDlz + provisionEventHubs), because that
-    //            module is what creates the group (landing-zone/eventhubs.bicep
-    //            schemaGroupName default). Otherwise '' — naming a group nobody
-    //            created would point the console at a 404.
+    //            actually deploys (singleDlz or dlz-attach + provisionEventHubs,
+    //            #4774), because that module is what creates the group
+    //            (landing-zone/eventhubs.bicep schemaGroupName default).
+    //            Otherwise '' — naming a group nobody created would point the
+    //            console at a 404.
     eventsConfig: {
       // #4774 — dlz-attach's landing-zone module creates the group exactly
       // like single-sub's does (both deploy modules/landing-zone/main.bicep
