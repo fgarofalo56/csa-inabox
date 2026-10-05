@@ -459,6 +459,107 @@ jobs:
             [ "${q:-1}" = "0" ] && az acr agentpool update -r "$ACR" -n "$POOL" --count 0 --no-wait -o none || true
           fi
 
+      # Ported from gov-provision-runner-images.yml (#3416) to this lane (#4461):
+      # this is THE producer of every production app image, Commercial and Gov
+      # both, and it had no equivalent — a failed `az acr build` here gave the
+      # operator only the generic client-side pointer (RunStatus.FAILED), never
+      # the task's own log, so a firewall denial and a genuine Dockerfile break
+      # were indistinguishable without a manual `az acr task logs` pull. This
+      # step is purely diagnostic: it prints the redacted task log for a human
+      # to read. It does NOT re-run deploy-retry.mjs's classification or change
+      # the retry/exit-code decision already made above — see the failure-
+      # taxonomy.json entry for `defect.acr-task-run-failed` (#4461) for the
+      # precedence fix that keeps a firewall-denial log from being outranked by
+      # the generic RunStatus text once both are visible to a human reading it.
+      - name: Diagnose a failed ACR build — fetch the task run log (#3416, #4461)
+        if: failure()
+        env:
+          # The build step above resolves ACR into a LOCAL shell variable
+          # (`ACR="${{ needs.resolve.outputs.acr_name }}"`, line ~379) and never
+          # exports it to $GITHUB_ENV — it only exports ACR_LOGIN_SERVER, and
+          # only on the SUCCESS path. A separate step's shell does not inherit
+          # another step's local variables, so this step read the job output
+          # directly instead (independent review on #4920 caught this: without
+          # it, $ACR was always empty here and every failure silently took the
+          # "no registry name" branch, never fetching the log).
+          ACR: ${{ needs.resolve.outputs.acr_name }}
+          ART: ${{ github.workspace }}/deploy-failure.json
+        run: |
+          set -uo pipefail
+
+          # Same unbound-variable guard as the ported step: this is `if:
+          # failure()`, so it also runs when an earlier step in this job (ACR
+          # login, boundary resolve) failed before $ACR was ever set.
+          ACR="${ACR:-}"
+          if [ -z "$ACR" ]; then
+            echo "::warning::No registry name is set on this runner, so this run failed at or before the registry was resolved — i.e. before any ACR build was attempted. There is no task log to fetch and none is claimed to exist. This says WHERE the run stopped, not anything about an image build: the cause is in the failing step above."
+            exit 0
+          fi
+
+          RUN_IDS=""
+
+          # 1. The authoritative source. deploy-retry.mjs writes the child
+          #    command's full stderr to a file and names that file in the
+          #    artifact as .stderrPath, on exactly the path taken here (the
+          #    write happens in the `if (!decision.retry)` branch, before the
+          #    unclassified-exit). az prints the run id inside its own error.
+          if [ -f "$ART" ]; then
+            STDERR_PATH=$(jq -r ".stderrPath // empty" "$ART")
+            RC=$?
+            if [ "$RC" != "0" ]; then
+              echo "::warning::Could not read $ART with jq (exit $RC). That is a statement about THIS file, not about the build. Falling back to the registry run list below."
+              STDERR_PATH=""
+            fi
+            if [ -n "$STDERR_PATH" ] && [ -f "$STDERR_PATH" ]; then
+              RUN_IDS=$(grep -oE "run with ID .[A-Za-z0-9_-]+" "$STDERR_PATH" | grep -oE "[A-Za-z0-9_-]+$" | sort -u | tr "\n" " ")
+              if [ -z "$RUN_IDS" ]; then
+                echo "::warning::The captured stderr exists but names no ACR run id, so this build did not fail inside an ACR task run — it failed before one was queued (auth, firewall, context upload). The stderr is already printed in full by the build step above; nothing further to fetch."
+              fi
+            elif [ -n "$STDERR_PATH" ]; then
+              echo "::warning::The artifact names a captured-stderr file that is not present on this runner. No run id could be extracted; falling back to the registry run list below."
+            fi
+          else
+            echo "::warning::No $ART on this runner, so the failure did not come through deploy-retry.mjs. Falling back to the registry run list below."
+          fi
+
+          # 2. Fallback. The registry knows its own recent failures. This does
+          #    NOT assert which of them is ours — saying so is the whole point
+          #    (R7): a run listed here may belong to another lane sharing this
+          #    registry.
+          if [ -z "$RUN_IDS" ]; then
+            echo "::notice::Listing the registry's own recent FAILED task runs. This lane does NOT claim any of these is the build that just failed — it is a starting point, not an identification."
+            az acr task list-runs -r "$ACR" --run-status Failed --top 5 -o table
+            RC=$?
+            if [ "$RC" != "0" ]; then
+              echo "::error::Could not list failed task runs on $ACR (az exit $RC, output above). The build failure therefore remains undiagnosed from inside this run — read it manually with: az acr task logs -r $ACR --run-id <id>"
+            fi
+            exit 0
+          fi
+
+          echo "::notice::Fetching the ACR task log for run id(s): $RUN_IDS (matrix: ${{ matrix.name }})"
+          for ID in $RUN_IDS; do
+            LOG="${RUNNER_TEMP:-/tmp}/acr-task-$ID.log"
+            az acr task logs -r "$ACR" --run-id "$ID" > "$LOG"
+            RC=$?
+            if [ "$RC" != "0" ]; then
+              echo "::error::az acr task logs -r $ACR --run-id $ID exited $RC, so the build output could NOT be retrieved. This is not evidence about the build; it is evidence the log fetch failed. Retry it manually."
+              continue
+            fi
+            if [ ! -s "$LOG" ]; then
+              echo "::warning::The ACR task log for run $ID came back EMPTY. The registry answered, so this is not a fetch failure — the task produced no log, which usually means it never started (agent pool, quota, or a rejected context)."
+              continue
+            fi
+            echo "───── ACR task log: run $ID, image ${{ matrix.name }} (redacted) ─────"
+            node -e "const fs=require('fs');import('./scripts/ci/_azure-redact.mjs').then(m=>process.stdout.write(m.redact(fs.readFileSync(process.argv[1],'utf8')))).catch(e=>{console.error(String(e&&e.message||e));process.exit(9);});" "$LOG"
+            RC=$?
+            if [ "$RC" != "0" ]; then
+              echo "::error::The ACR task log for run $ID was fetched but the redactor could not be loaded (exit $RC), so it is deliberately NOT printed — this repository is public and an unredacted Azure log is a publication surface. It is on this runner at $LOG; re-read it with: az acr task logs -r $ACR --run-id $ID"
+              continue
+            fi
+            echo "──────────────────────────────────────────"
+            echo "::notice::The lines above are the ACTUAL build failure for $ID. If the taxonomy still could not classify it, add the signal to apps/fiab-console/lib/deploy/failure-taxonomy.json using them."
+          done
+
       # ── SC1: supply-chain gate — Trivy CRITICAL scan + keyless cosign sign ──
       # The ACR data plane is OPEN at this point (acr_enable ran before the
       # build matrix and acr_restore only runs after it), so the runner can
@@ -489,6 +590,7 @@ jobs:
           echo "::notice::${{ matrix.name }}:${{ github.sha }} → $DIGEST"
 
       - name: Trivy gate — fail on CRITICAL CVEs (pushed image)
+        id: trivy
         if: steps.sc.outputs.skip != 'true'
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
         with:
@@ -504,6 +606,31 @@ jobs:
           # Reviewed baseline of base-image/vendored CVEs with burn-down notes.
           trivyignores: .trivyignore
           format: table
+
+      # #4464 — `az acr build` pushes server-side BEFORE this gate runs (there is
+      # no `--no-push`), so a red Trivy gate used to leave a CRITICAL-flagged
+      # image live and pullable under 3 mutable tags, :latest included. This
+      # does not make the push atomic with the scan (the smaller, safer fix the
+      # issue asked for) — it UNTAGS what was just pushed the moment the gate
+      # refuses it, so the registry stops serving the flagged image under any
+      # name a caller would reasonably pull. Untag, not delete-manifest: a tag
+      # can share a digest with an earlier, clean build, and untagging only
+      # removes THIS build's pointer to it.
+      - name: Delete the pushed tags the Trivy gate just refused (#4464)
+        if: failure() && steps.trivy.outcome == 'failure'
+        run: |
+          set -uo pipefail
+          FAILED_UNTAG=0
+          for T in "$IMAGE_TAG" "${{ github.sha }}" "latest"; do
+            echo "::warning::Trivy CRITICAL gate failed for ${{ matrix.name }}:$T -- untagging it so the registry stops serving a flagged image under a mutable tag."
+            if az acr repository untag --name "$ACR_NAME" --image "${{ matrix.name }}:$T"; then
+              echo "::notice::${{ matrix.name }}:$T untagged."
+            else
+              echo "::error::Could not untag ${{ matrix.name }}:$T -- it may still be pullable. Remove it manually: az acr repository untag --name $ACR_NAME --image ${{ matrix.name }}:$T"
+              FAILED_UNTAG=1
+            fi
+          done
+          exit $FAILED_UNTAG
 
       - name: Install cosign
         if: steps.sc.outputs.skip != 'true'

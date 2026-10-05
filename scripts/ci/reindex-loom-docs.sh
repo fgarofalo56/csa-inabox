@@ -41,9 +41,11 @@
 # latent (every known caller overrides deployAppsEnabled=false), and tenant-dmlz
 # is supported-in-code but NEVER exercised — no workflow references
 # tenant-dmlz.bicepparam at all. The pin does not touch the App Gateway edge,
-# whose `requestTimeout: 30` is hardcoded and enabled on FOUR param files
-# (commercial-full, gcc-high, il5, tenant-dmlz); IL5 is where AGW is the ONLY
-# edge, not the only place it is capped (#4431).
+# whose `requestTimeout` reads `param consoleRequestTimeoutSeconds` (threaded
+# from main.bicep's `appGatewayRequestTimeoutSeconds`, default 120),
+# overridable per boundary in a .bicepparam, bounded 1-86400s, enabled on FOUR
+# param files (commercial-full, gcc-high, il5, tenant-dmlz); IL5 is where AGW
+# is the ONLY edge, not the only place it is capped (#4431, fixed by #4739).
 # What is NOT measured, and is therefore not asserted anywhere in this script:
 # why the edge gave up at ~30s when the AFD default is 60s, and whether the POST
 # ever reached a replica. The fix does not need that answer — it converts the

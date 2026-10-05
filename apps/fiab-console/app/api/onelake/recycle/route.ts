@@ -95,7 +95,7 @@ export async function POST(req: NextRequest) {
   const itemId = (body?.itemId || '').trim();
   if (!itemId) return NextResponse.json({ ok: false, error: 'itemId is required' }, { status: 400 });
 
-  const restored = await restoreOwnedItem(itemId, s.claims.oid);
+  const restored = await restoreOwnedItem(itemId, s.claims.oid, { session: s });
   if (!restored) {
     return NextResponse.json({ ok: false, error: 'item not found in recycle bin' }, { status: 404 });
   }
@@ -108,7 +108,7 @@ export async function DELETE(req: NextRequest) {
   const itemId = (new URL(req.url).searchParams.get('itemId') || '').trim();
   if (!itemId) return NextResponse.json({ ok: false, error: 'itemId query param is required' }, { status: 400 });
 
-  const purged = await purgeRecycledItem(itemId, s.claims.oid);
+  const purged = await purgeRecycledItem(itemId, s.claims.oid, { session: s });
   if (!purged) {
     return NextResponse.json({ ok: false, error: 'item not found in recycle bin' }, { status: 404 });
   }
