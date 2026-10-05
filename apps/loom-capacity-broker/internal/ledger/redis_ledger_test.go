@@ -57,6 +57,33 @@ func TestParseConnPlain6379NoTLS(t *testing.T) {
 	}
 }
 
+// #4270: Azure Managed Redis's endpoint is host:10000, TLS-only. The old
+// heuristic recognized only :6380, so this bare form connected plaintext and
+// failed for a reason that read as a network problem rather than a protocol
+// mismatch.
+func TestParseConnBareHostPortInfersTLSOnAMRPort10000(t *testing.T) {
+	r, err := parseConn("myamr.redis.cache.windows.net:10000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.useTLS {
+		t.Fatal("AMR port 10000 should infer TLS by default")
+	}
+}
+
+// An explicit redis:// scheme is the stated opt-out mechanism (per #4270's
+// fix shape: "defaulting to TLS-on and requiring an explicit opt-out") and
+// must not be overridden by the port-based default, even on a non-6379 port.
+func TestParseConnExplicitRedisSchemeOverridesPortDefault(t *testing.T) {
+	r, err := parseConn("redis://host:10000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.useTLS {
+		t.Fatal("explicit redis:// must win over the port-based TLS default")
+	}
+}
+
 func TestParseConnMissingPortErrors(t *testing.T) {
 	if _, err := parseConn("hostwithoutport"); err == nil {
 		t.Fatal("expected error for missing :port")
