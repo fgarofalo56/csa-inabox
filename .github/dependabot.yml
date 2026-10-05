@@ -230,3 +230,95 @@ updates:
       cargo-security:
         applies-to: security-updates
         patterns: ["*"]
+
+  # #4592: six npm manifest paths carried open Dependabot security alerts with
+  # NO version-update lane — the same "watched for vulnerable, never for fixed"
+  # gap the cargo entry above closed for apps/loom-directlake, measured
+  # 2026-09-18 and named (not fixed) in the comment above this section. None
+  # has a committed lockfile (`loom-sdk`/`loom-embed`/`loom-cli`/
+  # `fiab-label-propagation` are plain package.json, no shared workspace root
+  # tying them together), so each gets its own independent entry rather than
+  # one grouped-by-directory block.
+  - package-ecosystem: "npm"
+    directory: "/apps/fiab-console"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies", "javascript"]
+    open-pull-requests-limit: 10
+    groups:
+      fiab-console-version:
+        applies-to: version-updates
+        patterns: ["*"]
+      fiab-console-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: "npm"
+    directory: "/apps/loom-sdk"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies", "javascript"]
+    open-pull-requests-limit: 5
+    groups:
+      loom-sdk-version:
+        applies-to: version-updates
+        patterns: ["*"]
+      loom-sdk-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: "npm"
+    directory: "/apps/loom-embed"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies", "javascript"]
+    open-pull-requests-limit: 5
+    groups:
+      loom-embed-version:
+        applies-to: version-updates
+        patterns: ["*"]
+      loom-embed-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: "npm"
+    directory: "/apps/loom-cli"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies", "javascript"]
+    open-pull-requests-limit: 5
+    groups:
+      loom-cli-version:
+        applies-to: version-updates
+        patterns: ["*"]
+      loom-cli-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: "npm"
+    directory: "/apps/fiab-label-propagation"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies", "javascript"]
+    open-pull-requests-limit: 5
+    groups:
+      fiab-label-propagation-version:
+        applies-to: version-updates
+        patterns: ["*"]
+      fiab-label-propagation-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: "npm"
+    directory: "/azure-functions/secret-expiry-monitor"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies", "javascript"]
+    open-pull-requests-limit: 5
+    groups:
+      secret-expiry-monitor-version:
+        applies-to: version-updates
+        patterns: ["*"]
+      secret-expiry-monitor-security:
+        applies-to: security-updates
+        patterns: ["*"]
