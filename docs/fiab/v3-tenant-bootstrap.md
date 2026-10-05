@@ -2056,7 +2056,7 @@ To enable it:
    `LOOM_PYLSP_ENABLED`):
 
    ```bicep
-   // params/<cloud>-full.bicepparam
+   // params/commercial.bicepparam (Commercial) or params/gcc-high.bicepparam (Gov)
    param pylspEnabled = true
    ```
 
@@ -2127,11 +2127,18 @@ single-partition point-operation — cross-owner leakage is structurally impossi
    no key.
 
    ```bicep
-   // params/<cloud>-full.bicepparam
+   // params/commercial.bicepparam (Commercial) or params/gcc-high.bicepparam (Gov)
    param loomPostureFunctionUrl = '<functionUrl output>'
    // Add to the file's EXISTING observabilityConfig object; do not replace it.
    //   postureFunctionKeyEnabled: true
    // The secret name is the admin-plane default loom-posture-function-key.
+   //
+   // params/tenant-dmlz.bicepparam has no observabilityConfig object at all (it
+   // renders the Console too — deployAppsEnabled = true — but this param was
+   // never added there). Declare it fresh in that file instead of "adding inside":
+   //   param observabilityConfig = {
+   //     postureFunctionKeyEnabled: true
+   //   }
    ```
 
    - `loomPostureFunctionUrl` must be a **deploy parameter**. A value set on
@@ -2140,10 +2147,12 @@ single-partition point-operation — cross-owner leakage is structurally impossi
      blanks it.
    - Set `postureFunctionKeyEnabled: true` **only after confirming the secret exists,
      by name**. For example,
-     `az keyvault secret show --vault-name <loom-kv> --name loom-posture-function-key --query id -o tsv`
-     prints the id, never the value. A Container App revision that references a
-     missing Key Vault secret fails to provision, so setting the flag early takes the
-     Console down.
+     `az keyvault secret list --vault-name <loom-kv> --query "[?name=='loom-posture-function-key'].attributes.enabled | [0]" -o tsv`
+     and require `true`. (`az keyvault secret show ... --query id` is not a
+     metadata-only check: `--query` filters what's printed, but `show` itself
+     fetches the secret — value included — and needs `get` permission, not just
+     `list`.) A Container App revision that references a missing Key Vault secret
+     fails to provision, so setting the flag early fails the Console deploy.
 
    When all three hold, these surface as `LOOM_POSTURE_FUNCTION_URL` (plain) and
    `LOOM_POSTURE_FUNCTION_KEY` (secretRef → Key Vault) on the Console. An empty URL
@@ -2173,7 +2182,7 @@ storage account — the only built-in role with the ACL-modify "superuser" bit
 ### Step 1 — Deploy with the feature enabled
 
 ```bicep
-// params/<cloud>-full.bicepparam
+// params/commercial.bicepparam (Commercial) or params/gcc-high.bicepparam (Gov)
 param loomOnelakeSecurityEnabled = true   // → Storage Blob Data Owner grant + LOOM_ONELAKE_SECURITY_ACL=true
 // param loomFabricSecurityEnabled = true  // OPTIONAL opt-in Fabric dataAccessRoles mirror (non-Gov only)
 ```
@@ -2443,7 +2452,7 @@ by the Identity Picker bootstrap; see `identity-graph-rbac.bicep`).
 `skipRoleGrants=true`), scoped to `LOOM_SQL_RG` (defaults to `LOOM_DLZ_RG`):
 
 ```bicep
-// params/<cloud>-full.bicepparam — only if your SQL servers live outside the DLZ RG
+// params/commercial.bicepparam (Commercial) or params/gcc-high.bicepparam (Gov) — only if your SQL servers live outside the DLZ RG
 param loomSqlServerRg = 'rg-my-sql-servers'   // → constrained RBAC-Admin grant here + LOOM_SQL_RG
 ```
 
@@ -2489,7 +2498,7 @@ Set on the Console container app (then redeploy) — wire in
 | `LOOM_SQL_GIT_GITHUB_PAT_SECRET` | github | Key Vault secret name holding the GitHub PAT |
 
 ```bicep
-// params/<cloud>-full.bicepparam
+// params/commercial.bicepparam (Commercial) or params/gcc-high.bicepparam (Gov)
 param loomSqlGitProvider = 'azdo'
 param loomSqlGitAdoOrg = 'contoso'
 param loomSqlGitAdoProject = 'DataPlatform'
@@ -2518,7 +2527,7 @@ set; the rest of the editor works regardless.
 | `LOOM_AAS_MODEL`  | with server | tabular model (database) name on the server |
 
 ```bicep
-// params/<cloud>-full.bicepparam
+// params/commercial.bicepparam (Commercial) or params/gcc-high.bicepparam (Gov)
 param loomAasServer = 'loom-aas'
 param loomAasRegion = 'eastus2'
 param loomAasModel  = 'LoomModel'
@@ -2595,7 +2604,7 @@ principal is the admin and the XMLA data-plane auth uses that SPN.
 
 1. Deploy the server (wired in `admin-plane/main.bicep`):
    ```bicep
-   // params/<cloud>-full.bicepparam
+   // params/commercial.bicepparam (Commercial) or params/gcc-high.bicepparam (Gov)
    param aasEnabled = true
    param aasSpnClientId = '<appId of the AAS-admin SPN>'   // NOT the Console UAMI
    param aasSku = 'D1'                                     // Developer; $0 idle
