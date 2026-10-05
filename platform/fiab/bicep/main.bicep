@@ -1408,9 +1408,19 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     //            schemaGroupName default). Otherwise '' — naming a group nobody
     //            created would point the console at a 404.
     eventsConfig: {
+      // #4774 — dlz-attach's landing-zone module creates the group exactly
+      // like single-sub's does (both deploy modules/landing-zone/main.bicep
+      // with loomEventHubEnabled: provisionEventHubs), and dlz-attach is the
+      // only non-single-sub topology whose namespace the console actually
+      // binds (dlzEventHubNamespace below reads dlzAttach!.outputs only).
+      // useMultiDlz is deliberately NOT included: the dlz[for] array path has
+      // no console namespace binding at all today (no DLZ's
+      // eventHubsNamespaceName is wired to dlzEventHubNamespace on that path),
+      // so naming a schema group there would bind to a namespace the console
+      // was never told about — tracked separately, not fixed here (#4774).
       loomEhSchemaGroup: !empty(existingEventHubSchemaGroup)
         ? existingEventHubSchemaGroup
-        : ((useSingleDlz && provisionEventHubs) ? 'loom-schemas' : '')
+        : (((useSingleDlz || effectiveTopology == 'dlz-attach') && provisionEventHubs) ? 'loom-schemas' : '')
     }
     copilotMafEnabled: copilotMafEnabled
     setupOrchestratorEnabled: setupOrchestratorEnabled
