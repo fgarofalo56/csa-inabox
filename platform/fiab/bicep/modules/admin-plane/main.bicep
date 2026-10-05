@@ -398,6 +398,9 @@ type observabilityConfigT = {
   @description('Posture pre-warm — bind the posture-refresh Function host key (Key Vault secret loomPostureFunctionKeySecretName, default loom-posture-function-key) into the Console as LOOM_POSTURE_FUNCTION_KEY via a Key Vault secretRef. Set true ONLY once that secret is KNOWN to exist in the Loom Key Vault. The post-deploy bootstrap attempts to write it (best-effort: it can skip silently, and it runs whether or not the Function code was published), so confirm the secret exists (by name, never by reading its value) before setting this: a Container App revision that references a missing Key Vault secret fails to provision, so binding it on loomPostureFunctionUrl alone would take the Console down. Deliberately independent of the URL — the URL is known as soon as the Function App exists, the key only once code is published and the key stored. Takes effect only when loomPostureFunctionUrl is also passed as a deploy param (a URL set on loom-console with az containerapp update does not satisfy it). Nothing sets this flag or that param at deploy time yet (#4781). Default false (empty-safe): the Govern owner view still computes posture live from Cosmos; only the on-open pre-warm is unavailable, and the refresh route says so.')
   postureFunctionKeyEnabled: bool?
 
+  @description('#4779 — same shape as postureFunctionKeyEnabled, for the paginated-report-renderer Function host key (Key Vault secret loomPaginatedRenderKeySecretName, default loom-paginated-render-key), bound into the Console as LOOM_PAGINATED_RENDER_KEY / LOOM_REPORT_RENDER_KEY. Set true ONLY once that secret is KNOWN to exist (see azure-functions/paginated-report-renderer/DEPLOYMENT.md — it is written by a manual step today, not post-deploy bootstrap). Deliberately independent of loomPaginatedRenderUrl: a Container App revision whose secretRef points at a missing Key Vault secret fails to provision, so gating on the URL alone would take the Console down the moment the URL is wired. Default false (empty-safe): until set, LOOM_PAGINATED_RENDER_URL still emits so the renderer Function can be reached in modes that do not need the host key.')
+  paginatedRenderKeyEnabled: bool?
+
   @description('C2 — FinOps forecast horizon in days (LOOM_COST_FORECAST_HORIZON_DAYS). How far forward the Cost Management Forecast API / computed projection projects. Default 30 (console clamps 1–90).')
   costForecastHorizonDays: int?
 
@@ -561,6 +564,10 @@ var alertWebhookSecretName = observabilityConfig.?alertWebhookSecretName ?? 'loo
 // secretRef on the URL would turn "wire the URL" into "take the Console down".
 // The URL is still required (a key with no Function to call is dead weight).
 var postureFunctionKeyBound = !empty(loomPostureFunctionUrl) && (observabilityConfig.?postureFunctionKeyEnabled ?? false)
+// #4779 — same shape as postureFunctionKeyBound, for the paginated-report-
+// renderer Function host key. See that var's comment for why this is NOT
+// derived from loomPaginatedRenderUrl alone.
+var paginatedRenderKeyBound = !empty(loomPaginatedRenderUrl) && (observabilityConfig.?paginatedRenderKeyEnabled ?? false)
 // C2 (observabilityConfig bag) — FinOps forecast knobs (fully-functional defaults).
 var costForecastHorizonDays = observabilityConfig.?costForecastHorizonDays ?? 30
 var costForecastMethod = observabilityConfig.?costForecastMethod ?? 'auto'
@@ -1930,7 +1937,7 @@ param loomPostureFunctionKeySecretName string = 'loom-posture-function-key'
 @description('Base URL of the paginated-report-renderer Azure Function (deployed from azure-functions/paginated-report-renderer/deploy/main.bicep). Backs PDF/Excel/Word export for the paginated-report editor. Empty surfaces an honest export gate in the designer; authoring still works fully (no Microsoft Fabric / Power BI dependency).')
 param loomPaginatedRenderUrl string = ''
 
-@description('Key Vault secret name holding the paginated-report-renderer Function host key. The Console reads this via secretRef as LOOM_PAGINATED_RENDER_KEY. Only emitted when loomPaginatedRenderUrl is set.')
+@description('Key Vault secret name holding the paginated-report-renderer Function host key. The Console reads this via secretRef as LOOM_PAGINATED_RENDER_KEY / LOOM_REPORT_RENDER_KEY. Only emitted when paginatedRenderKeyBound (see that var, #4779) — not merely when loomPaginatedRenderUrl is set.')
 param loomPaginatedRenderKeySecretName string = 'loom-paginated-render-key'
 
 @description('Loom Databricks workspace hostname (e.g. adb-1234567890123456.7.azuredatabricks.net) backing the Databricks navigator (jobs/clusters/notebooks/SQL warehouses + Unity Catalog). The real hostname embeds a non-deterministic workspace id, so it is NOT hard-coded — it is patched onto the Console post-deploy from the DLZ databricks workspaceUrl output (scripts/csa-loom/patch-navigator-env.sh). Empty surfaces the navigator config gate.')
@@ -5678,12 +5685,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           alertWebhookEnabled ? [
             { name: 'LOOM_ALERT_WEBHOOK_URL', secretRef: 'loom-alert-webhook-url' }
           ] : [],
-          // Paginated-report-renderer Function host key — only when wired.
-          // Surfaced to the export BFF (?code=…), never to the browser. The
-          // report-designer export route reads the SAME host key as
-          // LOOM_REPORT_RENDER_KEY (one Functions host, two consumers — see
-          // LOOM_REPORT_RENDERER above).
-          !empty(loomPaginatedRenderUrl) ? [
+          // Paginated-report-renderer Function host key — only when the key is
+          // KNOWN to exist in Key Vault (paginatedRenderKeyBound; NOT the URL
+          // alone — see the var, #4779). Surfaced to the export BFF (?code=…),
+          // never to the browser. The report-designer export route reads the
+          // SAME host key as LOOM_REPORT_RENDER_KEY (one Functions host, two
+          // consumers — see LOOM_REPORT_RENDERER above).
+          paginatedRenderKeyBound ? [
             { name: 'LOOM_PAGINATED_RENDER_KEY', secretRef: 'loom-paginated-render-key' }
             { name: 'LOOM_REPORT_RENDER_KEY', secretRef: 'loom-paginated-render-key' }
           ] : [],
@@ -6699,10 +6707,14 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           alertWebhookEnabled ? [
             { name: 'loom-alert-webhook-url', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/${alertWebhookSecretName}', identity: identity.outputs.uamiConsoleId }
           ] : [],
-          // Paginated-report-renderer Function host key — stored in KV post-deploy
-          // as 'loom-paginated-render-key' (see
-          // azure-functions/paginated-report-renderer/DEPLOYMENT.md).
-          !empty(loomPaginatedRenderUrl) ? [
+          // Paginated-report-renderer Function host key — declared ONLY when
+          // paginatedRenderKeyBound: ARM resolves a secretRef at provision
+          // time, so declaring it before the secret is known to exist would
+          // fail the Console revision (#4779). Stored in Key Vault as
+          // 'loom-paginated-render-key' by a manual step today — see
+          // azure-functions/paginated-report-renderer/DEPLOYMENT.md — not by
+          // post-deploy bootstrap.
+          paginatedRenderKeyBound ? [
             { name: 'loom-paginated-render-key', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/${loomPaginatedRenderKeySecretName}', identity: identity.outputs.uamiConsoleId }
           ] : [],
           // Shared internal trust token for the VNet-internal callbacks: the
