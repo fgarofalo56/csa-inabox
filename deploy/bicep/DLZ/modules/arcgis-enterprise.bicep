@@ -47,6 +47,17 @@ param adminPassword string
 @description('VM size — D8s_v5 recommended minimum for ArcGIS Enterprise base deployment')
 param vmSize string = 'Standard_D8s_v5'
 
+// #4672 follow-up: this module is greenfield-only (deployed standalone per
+// docs/tutorials/04-geoanalytics-arcgis/README.md:110, referenced by no other
+// bicep, and no live ArcGIS VM exists in either subscription), so there is no
+// PropertyChangeNotAllowed hazard here -- unlike the VM module #4673 reverted,
+// which DOES have a live instance. Defaulting to the deprecated offer here
+// only guaranteed every NEW deploy inherits a .NET-6 image Microsoft is
+// retiring 2027-01-11. Secure default; override for a brownfield VM that
+// predates this change.
+@description('Windows Server Marketplace offer for the ArcGIS VM.')
+param windowsImageOffer string = 'windowsserver2022'
+
 @description('Deploy a public IP for the VM (disable in production)')
 param enablePublicIp bool = true
 
@@ -217,16 +228,14 @@ resource vm 'Microsoft.Compute/virtualMachines@2024-03-01' = {
       }
     }
     storageProfile: {
-      // Offer reverted from `windowsserver2022` (#4658 → this fix): Azure
-      // refuses an imageReference change on an EXISTING VM
-      // (PropertyChangeNotAllowed), so on a VM that edit could never migrate
-      // anything — it only breaks redeploys. Migrating an existing ArcGIS VM
-      // off the .NET-6-bearing offer requires re-creating it before
-      // 2027-01-11; see #4672. VMSS modules keep `windowsserver2022`, where a
-      // model image update IS accepted.
+      // #4672 follow-up: reverted to a param, not the hard-coded deprecated
+      // offer #4658 left behind -- this module has no live instance and no
+      // PropertyChangeNotAllowed hazard (see the param declaration above), so
+      // the revert here was a pure security regression on every future deploy,
+      // not a fix.
       imageReference: {
         publisher: 'MicrosoftWindowsServer'
-        offer: 'WindowsServer'
+        offer: windowsImageOffer
         sku: '2022-datacenter-g2'
         version: 'latest'
       }

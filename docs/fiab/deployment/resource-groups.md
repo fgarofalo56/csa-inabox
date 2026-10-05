@@ -199,7 +199,7 @@ network and the AI resources, because they share a resource group. If your
 governance model requires finer resource-group boundaries, that constraint is
 real and current.
 
-t169 is tracked as forward work (FINISHLINE `C11`), and is sequenced **after**
+t169 is tracked as forward work ([#4550](https://github.com/fgarofalo56/csa-inabox/issues/4550)), and is sequenced **after**
 t166 in the plan because both touch `main.bicep` heavily.
 
 ---
