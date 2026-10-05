@@ -270,6 +270,9 @@ jobs:
       - name: bicep-sync (orphan modules + env-sync core)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-bicep-sync.mjs
+      - name: app-gateway-timeout-bounds (three declared bounds must agree — #4747)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-app-gateway-timeout-bounds.mjs
       # bicep-sync says the module is WIRED IN. This says the wiring consults the
       # cloud-parity quota gate: three of the four flexibleServers consumers in
       # admin-plane/main.bicep routed through postgresQuotaAvailable and the

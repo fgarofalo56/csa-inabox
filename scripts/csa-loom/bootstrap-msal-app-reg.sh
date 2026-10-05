@@ -1051,9 +1051,29 @@ if [ -n "${CONSOLE_RG:-}" ]; then
   echo "==> Ensuring the Application ID URI (prerequisite for Loom Unity authorization)"
   CURRENT_URIS="$(az ad app show --id "${APP_ID}" --query "identifierUris" -o tsv 2>/dev/null || true)"
   if ! printf '%s' "${CURRENT_URIS}" | grep -qx "api://${APP_ID}"; then
-    az ad app update --id "${APP_ID}" --identifier-uris "api://${APP_ID}" -o none \
-      && echo "    set Application ID URI api://${APP_ID}" \
-      || echo "    WARN: could not set the Application ID URI (app owned elsewhere?) — a client will not be able to mint api://${APP_ID}/.default"
+    # #4611: the previous `cmd && echo ok || echo WARN` form discarded the
+    # real exit status (the compound statement's own status is the `echo`'s,
+    # which always succeeds) — `set -e` never saw the failure, so a bad update
+    # here reported success while leaving exactly the AADSTS500011 condition
+    # #2678 is about. Capture stderr and the real exit code instead of
+    # guessing a cause (R7): "app owned elsewhere?" was a guess, not something
+    # this script had established.
+    #
+    # The assignment is the `if` CONDITION, not a bare statement: under
+    # `set -e` a bare `VAR="$(failing_cmd)"` aborts the script right there
+    # (command substitution in assignment position still trips `set -e`
+    # outside a tested position), so the error branch below would never run
+    # and this message would never print. Testing the assignment directly is
+    # what keeps `set -e` from firing on it.
+    if URI_UPDATE_ERR="$(az ad app update --id "${APP_ID}" --identifier-uris "api://${APP_ID}" -o none 2>&1)"; then
+      echo "    set Application ID URI api://${APP_ID}"
+    else
+      URI_UPDATE_RC=$?
+      echo "    ERROR: could not set the Application ID URI api://${APP_ID} (az exit ${URI_UPDATE_RC}):" >&2
+      echo "    ${URI_UPDATE_ERR}" >&2
+      echo "    A client will not be able to mint api://${APP_ID}/.default until this is set. Fix the reported cause and re-run this script — it is idempotent (this check is skipped once the URI is present)." >&2
+      exit 1
+    fi
   else
     echo "    Application ID URI api://${APP_ID} already present"
   fi
