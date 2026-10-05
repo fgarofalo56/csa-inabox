@@ -123,6 +123,11 @@ function scriptEnvReads(script) {
 
 const METASTORES_CLEAN = {
   ok: true,
+  // #4656 — gov-bff-verify.yml's probe table now requires `unityOk` alongside
+  // `ok`/`purview` (added when the metastores route stopped hard-coding
+  // `ok:true` over a failed Unity listing). Every "clean" fixture needs it or
+  // the probe reports a missing required key, not a clean pass.
+  unityOk: true,
   unity: [{ metastore_id: 'meta-gov-1', name: 'loom-unity-gov', workspace_hostname: 'loom-unity.internal.usgovvirginia.azurecontainerapps.us' }],
   unityHosts: ['loom-unity.internal.usgovvirginia.azurecontainerapps.us'],
   registrations: [],
@@ -363,6 +368,7 @@ test('LATE: a real Unity finding past character 260 is REPORTED WITH ITS TOKEN, 
   const SENTINEL = 'LOOM_UNITY_CLIENT_ID / LOOM_UNITY_AUDIENCE';
   const body = {
     ok: true,
+    unityOk: true,
     unity: [],
     unityHosts: [
       'adb-1111111111111111.11.azuredatabricks.us',
@@ -411,6 +417,7 @@ test('LATE MUTATION: reverting the window to the fixed 260-char head drops the t
   const SENTINEL = 'LOOM_UNITY_CLIENT_ID / LOOM_UNITY_AUDIENCE';
   const body = {
     ok: true,
+    unityOk: true,
     unity: [],
     unityHosts: [
       'adb-1111111111111111.11.azuredatabricks.us',
@@ -730,6 +737,14 @@ const GATE_TRIPS = [
     value: false, expect: /ok is not true on a 2xx/,
   },
   {
+    // #4656 — the honest sibling of `ok`, added so a caller checking only
+    // `ok`-adjacent fields sees a failed Unity listing instead of `ok:true`
+    // over `unityWorkspaceErrors` nobody reads by default.
+    path: '/api/catalog/metastores', label: 'unity-catalog (OSS loom-unity)', key: 'unityOk',
+    value: false,
+    expect: /GATED — unity listing did not fully succeed \(unityOk=false\)/,
+  },
+  {
     path: '/api/catalog/metastores', label: 'unity-catalog (OSS loom-unity)', key: 'unityError',
     value: 'Databricks Unity Catalog is not configured: missing LOOM_UNITY_CLIENT_ID',
     expect: /GATED — unity catalog error/,
@@ -803,7 +818,7 @@ test('#3999 GATE INVENTORY: every gate predicate the step ships has a tripping f
   // The counts, stated explicitly: a table silently reduced to one probe would
   // still deepEqual above.
   assert.equal(probes.length, 3, `expected 3 probes, got ${probes.length}`);
-  assert.equal(GATE_TRIPS.length, 10, 'GATE_TRIPS lost or gained an entry without the inventory moving');
+  assert.equal(GATE_TRIPS.length, 11, 'GATE_TRIPS lost or gained an entry without the inventory moving — #4656 added unityOk deliberately, update this count with it');
 });
 
 for (const trip of GATE_TRIPS) {
