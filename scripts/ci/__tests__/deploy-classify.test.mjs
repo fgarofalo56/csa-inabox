@@ -1101,3 +1101,49 @@ test('#4461 the `not` exclusions on the signal now include the firewall-denial m
   assert.ok(sig.not.includes('client with ip'));
 });
 
+// #4472 — an ACR TASK's own 1-hour ceiling, hit mid-download (not a build step
+// failing), was previously unclassifiable and therefore `unknown` (correct,
+// R7-compliant, but not actionable since a genuinely transient condition then
+// never gets retried). These pin the new signal and that it cannot be
+// confused with the two existing, differently-scoped ACR signals.
+
+test('#4472 POSITIVE CONTROL — an ACR task-run timeout classifies transient, not unknown', () => {
+  // Verbatim tail from the ACR task log, run cj79a (loom-risingwave, 2026-09-11).
+  const d = classify(
+    'Get:65 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libssl3t64 amd64 3.0.13-0ubuntu3.5 [1859 kB]\n' +
+      'Run ID: cj79a timed out after 1h0m0s',
+  );
+  assert.equal(d.class, 'transient');
+  assert.equal(d.signalId, 'transient.acr-task-run-timeout');
+  assert.match(d.remediation, /ACR task ran out of its 1-hour ceiling/i);
+});
+
+test('#4472 DISCRIMINATION — a genuine Dockerfile break (no "timed out after") stays on its own signal', () => {
+  const d = classify(STDERR_3886);
+  assert.notEqual(d.signalId, 'transient.acr-task-run-timeout');
+  assert.equal(d.signalId, SIGNAL_3886);
+});
+
+test('#4472 DISCRIMINATION — the stricter lease-budget signal still wins when its own three terms are all present', () => {
+  // transient.acr-lease-held-past-roll-budget requires 'waiting for the acr
+  // firewall lease' and 'lease-wait budget' IN ADDITION to 'timed out after' —
+  // a shape that also satisfies the new, looser 'run id' + 'timed out after'
+  // pair. Both are `transient`, so a collision would be silent (same class),
+  // which is exactly why this must be pinned to the SIGNAL ID, not the class.
+  const d = classify(
+    "[acr-lease] TIMED OUT after 25m waiting for the ACR firewall lease on 'acr'. " +
+      'lease-wait budget exhausted. Run ID abc123 did not start.',
+  );
+  assert.equal(d.class, 'transient');
+  assert.equal(d.signalId, 'transient.acr-lease-held-past-roll-budget');
+});
+
+test('#4472 the taxonomy on disk carries the new signal with the exact two-term allOf', () => {
+  const onDisk = JSON.parse(fs.readFileSync(TAXONOMY_PATH, 'utf8'));
+  const sig = onDisk.signals.find((s) => s.id === 'transient.acr-task-run-timeout');
+  assert.ok(sig, 'apps/fiab-console/lib/deploy/failure-taxonomy.json is missing transient.acr-task-run-timeout');
+  assert.deepEqual(sig.allOf, ['run id', 'timed out after']);
+  assert.equal(sig.class, 'transient');
+  assert.equal(TAXONOMY.classes.transient.retryable, true);
+});
+
