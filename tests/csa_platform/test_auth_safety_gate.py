@@ -206,6 +206,45 @@ async def test_validate_token_rejects_wrong_tenant(
 
 
 @pytest.mark.asyncio
+async def test_validate_token_maps_jwks_client_error_to_401(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#4872: a JWKS lookup failure must surface as 401, not propagate as 500.
+
+    PyJWKClientConnectionError subclasses PyJWKClientError, not
+    InvalidTokenError — before the fix it hit no except clause in
+    _validate_token and propagated as a raw PyJWT exception (which FastAPI's
+    unhandled-exception path turns into a 500). Raising the subclass here
+    also proves the handler catches by the PARENT class, not just the exact
+    PyJWKClientError type.
+    """
+    from fastapi import HTTPException
+
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv(
+        "AZURE_TENANT_ID", "00000000-0000-0000-0000-000000000001"
+    )
+    monkeypatch.setenv(
+        "AZURE_CLIENT_ID", "00000000-0000-0000-0000-000000000002"
+    )
+
+    class _FakeJWKSClient:
+        def get_signing_key_from_jwt(self, _token: str) -> object:
+            raise auth_module.jwt.exceptions.PyJWKClientConnectionError(
+                "could not reach the JWKS endpoint"
+            )
+
+    monkeypatch.setattr(
+        auth_module, "_get_jwks_client", lambda: _FakeJWKSClient()
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await auth_module._validate_token("dummy-token")
+    assert exc_info.value.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_validate_token_accepts_matching_tenant(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
