@@ -43,6 +43,8 @@ import {
   Play16Regular, Delete16Regular,
 } from '@fluentui/react-icons';
 import { accentGradient, accentTint, portStyle, CanvasRightRail } from '@/lib/components/canvas/canvas-node-kit';
+import { useCanvasBooleanPreference } from '@/lib/components/canvas/use-canvas-preference';
+import { useMinimapShortcut } from '@/lib/components/canvas/use-minimap-shortcut';
 
 // ---------------------------------------------------------------------------
 // Public model — kept in sync with the schema-graph BFF route
@@ -390,6 +392,9 @@ function SchemaDiagramCanvasInner({ nodes: srcNodes, edges: srcEdges, onQueryNod
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
   const [railCollapsed, setRailCollapsed] = useState(false);
+  const [minimapVisible, setMinimapVisible] = useCanvasBooleanPreference('schema-diagram', 'minimapVisible', true);
+  const toggleMinimap = useCallback(() => setMinimapVisible((v) => !v), [setMinimapVisible]);
+  useMinimapShortcut(toggleMinimap);
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState<Node>([]);
 
   const positions = useMemo(() => columnarLayout(srcNodes), [srcNodes]);
@@ -501,16 +506,20 @@ function SchemaDiagramCanvasInner({ nodes: srcNodes, edges: srcEdges, onQueryNod
             onFit={() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 })}
             collapsed={railCollapsed}
             onToggleCollapse={() => setRailCollapsed((v) => !v)}
+            minimapVisible={minimapVisible}
+            onToggleMinimap={toggleMinimap}
           />
         </Panel>
-        <MiniMap
-          pannable
-          zoomable
-          nodeColor={(n) => styleForKind((n.data as SchemaEntityNodeData)?.node?.kind || 'table').color}
-          nodeStrokeColor={tokens.colorNeutralStroke2}
-          maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
-          style={{ backgroundColor: tokens.colorNeutralBackground1 }}
-        />
+        {minimapVisible && (
+          <MiniMap
+            pannable
+            zoomable
+            nodeColor={(n) => styleForKind((n.data as SchemaEntityNodeData)?.node?.kind || 'table').color}
+            nodeStrokeColor={tokens.colorNeutralStroke2}
+            maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
+            style={{ backgroundColor: tokens.colorNeutralBackground1 }}
+          />
+        )}
       </ReactFlow>
 
       {srcNodes.length === 0 && (

@@ -33,7 +33,11 @@ export interface CanvasShortcut {
  * The canvas shortcut map. Ordered by group for the overlay. The first five
  * groups are the new W1/W2/W3 power layer; View/Navigate document the shortcuts
  * `canvas.tsx` already bound (I/O/F/A/N/Shift-arrows/Backspace) that were
- * previously discoverable only in code comments.
+ * previously discoverable only in code comments. `toggle-minimap` (#3699) is
+ * the first entry bound by a shared document-level hook
+ * (`use-minimap-shortcut.ts`) rather than a per-host keydown switch, so it
+ * works on every canvas that renders `<MiniMap>`, not only the two hosts that
+ * mount `CanvasShortcutDialog`.
  */
 export const CANVAS_SHORTCUTS: CanvasShortcut[] = [
   // --- History (W1) ---
@@ -58,6 +62,7 @@ export const CANVAS_SHORTCUTS: CanvasShortcut[] = [
   { id: 'zoom-out', keys: ['O'], label: 'Zoom out', group: 'View' },
   { id: 'fit-view', keys: ['F'], label: 'Zoom to fit', group: 'View' },
   { id: 'toggle-nested', keys: ['N'], label: 'Toggle nested-activity preview', group: 'View', palette: true },
+  { id: 'toggle-minimap', keys: ['M'], label: 'Show or hide the minimap', group: 'View', palette: true },
   { id: 'show-shortcuts', keys: ['?'], label: 'Show this keyboard shortcut list', group: 'View' },
   // --- Navigate (key-only; need pointer/canvas focus) ---
   { id: 'pan', keys: ['Shift+Arrows'], label: 'Pan the canvas', group: 'Navigate', palette: false },

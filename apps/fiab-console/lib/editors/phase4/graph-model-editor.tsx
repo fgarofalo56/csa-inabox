@@ -58,6 +58,8 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { CanvasNode, CanvasRightRail, CATEGORY_ACCENT, accentTint, portStyle, type CanvasVisual } from '@/lib/components/canvas/canvas-node-kit';
+import { useCanvasBooleanPreference } from '@/lib/components/canvas/use-canvas-preference';
+import { useMinimapShortcut } from '@/lib/components/canvas/use-minimap-shortcut';
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import { type MapLayer, type MapLayerType } from '@/lib/components/graph/geojson-map';
 import {
@@ -224,6 +226,9 @@ function GraphModelCanvasInner({ nodes, edges, positions, onMoveNode, onOpenNode
   const rf = useReactFlow();
   const [zoom, setZoom] = useState(1);
   const [railCollapsed, setRailCollapsed] = useState(false);
+  const [minimapVisible, setMinimapVisible] = useCanvasBooleanPreference('graph-model-editor', 'minimapVisible', true);
+  const toggleMinimap = useCallback(() => setMinimapVisible((v) => !v), [setMinimapVisible]);
+  useMinimapShortcut(toggleMinimap);
   const grid = useMemo(() => gGridLayout(nodes.map((n) => n.name)), [nodes]);
 
   useEffect(() => {
@@ -307,15 +312,19 @@ function GraphModelCanvasInner({ nodes, edges, positions, onMoveNode, onOpenNode
               onFit={() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 })}
               collapsed={railCollapsed}
               onToggleCollapse={() => setRailCollapsed((v) => !v)}
+              minimapVisible={minimapVisible}
+              onToggleMinimap={toggleMinimap}
             />
           </Panel>
-          <MiniMap
-            pannable
-            zoomable
-            nodeStrokeColor={tokens.colorNeutralStroke2}
-            maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
-            style={{ backgroundColor: tokens.colorNeutralBackground1 }}
-          />
+          {minimapVisible && (
+            <MiniMap
+              pannable
+              zoomable
+              nodeStrokeColor={tokens.colorNeutralStroke2}
+              maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
+              style={{ backgroundColor: tokens.colorNeutralBackground1 }}
+            />
+          )}
         </ReactFlow>
         {nodes.length === 0 && (
           <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>

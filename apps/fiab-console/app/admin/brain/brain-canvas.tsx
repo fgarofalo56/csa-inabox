@@ -52,6 +52,8 @@ import {
 import '@xyflow/react/dist/style.css';
 import { Badge, Caption1, makeStyles, tokens } from '@fluentui/react-components';
 import { CanvasRightRail, accentTint } from '@/lib/components/canvas/canvas-node-kit';
+import { useCanvasBooleanPreference } from '@/lib/components/canvas/use-canvas-preference';
+import { useMinimapShortcut } from '@/lib/components/canvas/use-minimap-shortcut';
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import { readableAccent } from '@/lib/components/ui/item-type-visual';
 import { useTheme } from '@/lib/theme/theme-context';
@@ -366,6 +368,9 @@ function CanvasInner(props: BrainCanvasProps) {
   const rf = useReactFlow();
   const { mode } = useTheme();
   const [zoom, setZoom] = React.useState(1);
+  const [minimapVisible, setMinimapVisible] = useCanvasBooleanPreference('brain-canvas', 'minimapVisible', true);
+  const toggleMinimap = React.useCallback(() => setMinimapVisible((v) => !v), [setMinimapVisible]);
+  useMinimapShortcut(toggleMinimap);
   const { nodes, edges } = React.useMemo(() => buildFlow(props), [props]);
 
   const statesPresent = React.useMemo(() => {
@@ -428,22 +433,24 @@ function CanvasInner(props: BrainCanvasProps) {
       {/* Themed like every sibling minimap (one-canvas, lineage-canvas) — the
           React Flow default is light-theme chrome, a bright panel in dark mode
           (#4241 defect 9). Node fills carry the same accent the canvas shows. */}
-      <MiniMap
-        pannable
-        zoomable
-        ariaLabel="Graph minimap"
-        nodeStrokeColor={tokens.colorNeutralStroke2}
-        nodeColor={(n) => {
-          if (n.type === 'dangling') return 'var(--loom-accent-red)';
-          const d = n.data as unknown as BrainNodeData;
-          const accent = d.synapse
-            ? d.synapse.accent
-            : nodeVisual(d.node, d.coverageConfigured).accent;
-          return readableAccent(accent, mode === 'dark');
-        }}
-        maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
-        style={{ backgroundColor: tokens.colorNeutralBackground1 }}
-      />
+      {minimapVisible && (
+        <MiniMap
+          pannable
+          zoomable
+          ariaLabel="Graph minimap"
+          nodeStrokeColor={tokens.colorNeutralStroke2}
+          nodeColor={(n) => {
+            if (n.type === 'dangling') return 'var(--loom-accent-red)';
+            const d = n.data as unknown as BrainNodeData;
+            const accent = d.synapse
+              ? d.synapse.accent
+              : nodeVisual(d.node, d.coverageConfigured).accent;
+            return readableAccent(accent, mode === 'dark');
+          }}
+          maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
+          style={{ backgroundColor: tokens.colorNeutralBackground1 }}
+        />
+      )}
       <Panel position="top-left" className={s.topStripPanel}>
         {/* #4280: legend and provenance chips are SIBLINGS here, in one
             wrapping flow. They were two absolutely-positioned Panels and the
@@ -521,6 +528,8 @@ function CanvasInner(props: BrainCanvasProps) {
           onZoomIn={() => rf.zoomIn()}
           onZoomOut={() => rf.zoomOut()}
           onFit={() => rf.fitView()}
+          minimapVisible={minimapVisible}
+          onToggleMinimap={toggleMinimap}
         />
       </Panel>
     </ReactFlow>

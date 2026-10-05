@@ -50,6 +50,8 @@ import {
   GhostNextStepNode, ghostAnchorPosition, ghostEdgeId, GHOST_NODE_ID,
   type GhostNodeData, type AnchorNode,
 } from '@/lib/components/canvas/canvas-node-kit';
+import { useCanvasBooleanPreference } from '@/lib/components/canvas/use-canvas-preference';
+import { useMinimapShortcut } from '@/lib/components/canvas/use-minimap-shortcut';
 import { DocumentArrowRight16Regular, Flowchart16Regular, Search16Regular } from '@fluentui/react-icons';
 import { useGhostSuggestion } from '@/lib/components/canvas/use-ghost-suggestion';
 import { CanvasCollabLayer } from '@/lib/components/canvas/canvas-collab-layer';
@@ -331,6 +333,9 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
   // rail every Loom canvas shares (replaces React Flow's default grey Controls).
   const [zoom, setZoom] = useState(1);
   const [railCollapsed, setRailCollapsed] = useState(false);
+  const [minimapVisible, setMinimapVisible] = useCanvasBooleanPreference('pipeline-canvas', 'minimapVisible', true);
+  const toggleMinimap = useCallback(() => setMinimapVisible((v) => !v), [setMinimapVisible]);
+  useMinimapShortcut(toggleMinimap);
   // Fabric "updated canvas experience" — when on, container nodes render an
   // inline mini-preview of their inner activities. Toggled by N / the toolbar.
   const [showNestedPreviews, setShowNestedPreviews] = useState(false);
@@ -724,8 +729,13 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
     if (alignChordRef.current) {
       const map: Record<string, AlignMode> = { l: 'left', c: 'center-h', r: 'right', t: 'top', m: 'middle', b: 'bottom' };
       const low = key.toLowerCase();
-      if (map[low]) { e.preventDefault(); clearTimeout(alignChordRef.current); alignChordRef.current = null; alignSelection(map[low]); return; }
-      if (low === 'h' || low === 'v') { e.preventDefault(); clearTimeout(alignChordRef.current); alignChordRef.current = null; distributeSelection(low as DistributeAxis); return; }
+      // #3699 — stopPropagation on the chord's own letters: the align-chord's
+      // 'm' (middle) would otherwise ALSO reach the new document-level minimap
+      // shortcut (which does not know about this 1.5s chord window) and double
+      // -fire. Only this branch needs it; outside the chord window 'm' is not
+      // bound here at all, so the document-level hook is the only listener.
+      if (map[low]) { e.preventDefault(); e.stopPropagation(); clearTimeout(alignChordRef.current); alignChordRef.current = null; alignSelection(map[low]); return; }
+      if (low === 'h' || low === 'v') { e.preventDefault(); e.stopPropagation(); clearTimeout(alignChordRef.current); alignChordRef.current = null; distributeSelection(low as DistributeAxis); return; }
       // Any other key cancels the chord and falls through.
       clearTimeout(alignChordRef.current); alignChordRef.current = null;
     }
@@ -764,7 +774,7 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
       onDrop={onDrop}
       data-testid="pipeline-canvas"
       data-canvas="pipeline"
-      aria-label="Pipeline design canvas. Keyboard: Ctrl+Z/Ctrl+Shift+Z undo/redo, Ctrl+C/V/D copy/paste/duplicate, ? for all shortcuts, I/O zoom, F fit, A align, N nested preview, Shift+arrows pan, Backspace back."
+      aria-label="Pipeline design canvas. Keyboard: Ctrl+Z/Ctrl+Shift+Z undo/redo, Ctrl+C/V/D copy/paste/duplicate, ? for all shortcuts, I/O zoom, F fit, A align, N nested preview, M toggle minimap, Shift+arrows pan, Backspace back."
     >
       <CanvasShortcutDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
       <ReactFlow
@@ -870,6 +880,8 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
             onAutoLayout={autoAlign}
             collapsed={railCollapsed}
             onToggleCollapse={() => setRailCollapsed((v) => !v)}
+            minimapVisible={minimapVisible}
+            onToggleMinimap={toggleMinimap}
           />
         </Panel>
         {/* U13 — in-canvas Debug/Output run strip (ADF debug-canvas parity):
@@ -882,21 +894,23 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
             />
           </Panel>
         )}
-        <MiniMap
-          pannable
-          zoomable
-          // Reuse the kit's per-category accent so the minimap reads the same
-          // colour language as the canvas nodes; selected nodes get the brand
-          // stroke. (SVG fill resolves the --loom-accent-* var theme-aware.)
-          nodeColor={(n) => {
-            if (n.selected) return tokens.colorBrandBackground;
-            const a = (n.data as ActivityNodeData)?.activity;
-            return getActivityVisual(a?.type).accent;
-          }}
-          nodeStrokeColor={tokens.colorNeutralStroke2}
-          maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
-          style={{ backgroundColor: tokens.colorNeutralBackground1 }}
-        />
+        {minimapVisible && (
+          <MiniMap
+            pannable
+            zoomable
+            // Reuse the kit's per-category accent so the minimap reads the same
+            // colour language as the canvas nodes; selected nodes get the brand
+            // stroke. (SVG fill resolves the --loom-accent-* var theme-aware.)
+            nodeColor={(n) => {
+              if (n.selected) return tokens.colorBrandBackground;
+              const a = (n.data as ActivityNodeData)?.activity;
+              return getActivityVisual(a?.type).accent;
+            }}
+            nodeStrokeColor={tokens.colorNeutralStroke2}
+            maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
+            style={{ backgroundColor: tokens.colorNeutralBackground1 }}
+          />
+        )}
         {/* W4 + W5 — shared collaboration overlay (comments + presence). No-ops
             without an itemId; no host node-state changes. #3698 — also requires
             an explicit `itemType`: addressing `/api/items/[type]/[id]/…` under a

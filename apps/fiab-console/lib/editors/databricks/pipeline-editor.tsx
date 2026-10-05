@@ -24,7 +24,7 @@
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, MiniMap, Panel,
+  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Panel,
   Handle, Position, useNodesState, useEdgesState, addEdge,
   type Node, type Edge, type NodeProps, type Connection,
 } from '@xyflow/react';
@@ -581,14 +581,14 @@ export function DatabricksPipelineEditor({ item, id }: { item: FabricItemType; i
                     size={1.5}
                     color={accentTint('var(--loom-accent-blue)', 45)}
                   />
-                  <CanvasRailPanel />
-                  <MiniMap
-                    pannable
-                    zoomable
-                    nodeColor={(n) => (n.data as DltNodeData)?.visual?.accent}
-                    nodeStrokeColor={tokens.colorNeutralStroke2}
-                    maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
-                    style={{ backgroundColor: tokens.colorNeutralBackground1 }}
+                  <CanvasRailPanel
+                    surfaceKey="databricks-pipeline"
+                    minimapProps={{
+                      nodeColor: (n) => (n.data as DltNodeData)?.visual?.accent,
+                      nodeStrokeColor: tokens.colorNeutralStroke2,
+                      maskColor: accentTint(tokens.colorNeutralBackground3, 70),
+                      style: { backgroundColor: tokens.colorNeutralBackground1 },
+                    }}
                   />
                   {model.nodes.length === 0 && (
                     <Panel position="top-center">

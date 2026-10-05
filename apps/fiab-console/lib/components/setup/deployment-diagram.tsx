@@ -22,7 +22,7 @@
  * stands up — it is a faithful preview, not an aspirational topology.
  */
 
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import {
   ReactFlow, ReactFlowProvider, Background, BackgroundVariant, MiniMap, Panel,
@@ -33,6 +33,8 @@ import '@xyflow/react/dist/style.css';
 import { Badge, Caption1, tokens, makeStyles } from '@fluentui/react-components';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { accentTint, accentGradient, CanvasRightRail } from '@/lib/components/canvas/canvas-node-kit';
+import { useCanvasBooleanPreference } from '@/lib/components/canvas/use-canvas-preference';
+import { useMinimapShortcut } from '@/lib/components/canvas/use-minimap-shortcut';
 
 export interface DiagramSpoke {
   /** subscription id the DLZ lands in */
@@ -257,6 +259,9 @@ function DiagramInner(props: SetupDiagramProps) {
   const nodes = useMemo(() => buildNodes(props), [props]);
   const [zoom, setZoom] = useState(1);
   const [railCollapsed, setRailCollapsed] = useState(false);
+  const [minimapVisible, setMinimapVisible] = useCanvasBooleanPreference('deployment-diagram', 'minimapVisible', true);
+  const toggleMinimap = useCallback(() => setMinimapVisible((v) => !v), [setMinimapVisible]);
+  useMinimapShortcut(toggleMinimap);
   return (
     <ResizableCanvasRegion
       storageKey="setup-deployment-diagram"
@@ -289,13 +294,15 @@ function DiagramInner(props: SetupDiagramProps) {
           size={1.5}
           color={accentTint('var(--loom-accent-blue)', 45)}
         />
-        <MiniMap
-          pannable
-          zoomable
-          nodeStrokeColor={tokens.colorNeutralStroke2}
-          maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
-          style={{ backgroundColor: tokens.colorNeutralBackground1 }}
-        />
+        {minimapVisible && (
+          <MiniMap
+            pannable
+            zoomable
+            nodeStrokeColor={tokens.colorNeutralStroke2}
+            maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
+            style={{ backgroundColor: tokens.colorNeutralBackground1 }}
+          />
+        )}
         <Panel position="bottom-left">
           <CanvasRightRail
             zoom={zoom}
@@ -307,6 +314,8 @@ function DiagramInner(props: SetupDiagramProps) {
             onFit={() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 })}
             collapsed={railCollapsed}
             onToggleCollapse={() => setRailCollapsed((v) => !v)}
+            minimapVisible={minimapVisible}
+            onToggleMinimap={toggleMinimap}
           />
         </Panel>
       </ReactFlow>

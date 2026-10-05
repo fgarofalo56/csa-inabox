@@ -58,6 +58,8 @@ import {
   ColumnTriple20Regular, TargetArrow20Regular,
 } from '@fluentui/react-icons';
 import { portStyle, accentTint, CanvasRightRail } from '@/lib/components/canvas/canvas-node-kit';
+import { useCanvasBooleanPreference } from '@/lib/components/canvas/use-canvas-preference';
+import { useMinimapShortcut } from '@/lib/components/canvas/use-minimap-shortcut';
 import { itemVisual, isKnownItemType, readableAccent } from '@/lib/components/ui/item-type-visual';
 import { useTheme } from '@/lib/theme/theme-context';
 import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
@@ -586,6 +588,9 @@ const LineageCanvasInner = forwardRef<LineageCanvasHandle, LineageCanvasProps>(f
   const [search, setSearch] = useState('');
   const [zoom, setZoom] = useState(1);
   const [railCollapsed, setRailCollapsed] = useState(false);
+  const [minimapVisible, setMinimapVisible] = useCanvasBooleanPreference('lineage-canvas', 'minimapVisible', true);
+  const toggleMinimap = useCallback(() => setMinimapVisible((v) => !v), [setMinimapVisible]);
+  useMinimapShortcut(toggleMinimap);
   // Tables whose column fan-out is currently expanded (L5). Collapsed by
   // default: the table-grain graph stays primary, exactly like the Databricks
   // Catalog Explorer lineage graph before "See column lineage".
@@ -945,16 +950,20 @@ const LineageCanvasInner = forwardRef<LineageCanvasHandle, LineageCanvasProps>(f
             onFit={() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 })}
             collapsed={railCollapsed}
             onToggleCollapse={() => setRailCollapsed((v) => !v)}
+            minimapVisible={minimapVisible}
+            onToggleMinimap={toggleMinimap}
           />
         </Panel>
-        <MiniMap
-          pannable
-          zoomable
-          nodeColor={(n) => readableAccent(styleForType((n.data as LineageNodeData)?.node?.type).color, mode === 'dark')}
-          nodeStrokeColor={tokens.colorNeutralStroke2}
-          maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
-          style={{ backgroundColor: tokens.colorNeutralBackground1 }}
-        />
+        {minimapVisible && (
+          <MiniMap
+            pannable
+            zoomable
+            nodeColor={(n) => readableAccent(styleForType((n.data as LineageNodeData)?.node?.type).color, mode === 'dark')}
+            nodeStrokeColor={tokens.colorNeutralStroke2}
+            maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
+            style={{ backgroundColor: tokens.colorNeutralBackground1 }}
+          />
+        )}
       </ReactFlow>
 
       {selected && (

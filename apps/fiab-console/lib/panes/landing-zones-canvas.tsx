@@ -22,6 +22,8 @@ import '@xyflow/react/dist/style.css';
 import { makeStyles, tokens, Subtitle2, Body1 } from '@fluentui/react-components';
 import { Building20Regular, Box20Regular } from '@fluentui/react-icons';
 import { accentTint, CanvasRightRail } from '@/lib/components/canvas/canvas-node-kit';
+import { useCanvasBooleanPreference } from '@/lib/components/canvas/use-canvas-preference';
+import { useMinimapShortcut } from '@/lib/components/canvas/use-minimap-shortcut';
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import type { LandingZone, HubCoords, DlzAttachState } from '@/lib/setup/landing-zones-model';
 
@@ -207,6 +209,9 @@ function LandingZonesFlow({
   const rf = useReactFlow();
   const [zoom, setZoom] = useState(1);
   const [railCollapsed, setRailCollapsed] = useState(false);
+  const [minimapVisible, setMinimapVisible] = useCanvasBooleanPreference('landing-zones', 'minimapVisible', true);
+  const toggleMinimap = useCallback(() => setMinimapVisible((v) => !v), [setMinimapVisible]);
+  useMinimapShortcut(toggleMinimap);
   return (
     <ReactFlow
       nodes={nodes}
@@ -236,6 +241,8 @@ function LandingZonesFlow({
           onFit={() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 })}
           collapsed={railCollapsed}
           onToggleCollapse={() => setRailCollapsed((v) => !v)}
+          minimapVisible={minimapVisible}
+          onToggleMinimap={toggleMinimap}
         />
       </Panel>
       <Panel position="top-left">
@@ -248,14 +255,16 @@ function LandingZonesFlow({
           ))}
         </div>
       </Panel>
-      <MiniMap
-        position="bottom-right"
-        pannable
-        zoomable
-        nodeStrokeColor={tokens.colorNeutralStroke2}
-        maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
-        style={{ backgroundColor: tokens.colorNeutralBackground1 }}
-      />
+      {minimapVisible && (
+        <MiniMap
+          position="bottom-right"
+          pannable
+          zoomable
+          nodeStrokeColor={tokens.colorNeutralStroke2}
+          maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
+          style={{ backgroundColor: tokens.colorNeutralBackground1 }}
+        />
+      )}
     </ReactFlow>
   );
 }
