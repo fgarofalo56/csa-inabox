@@ -112,7 +112,17 @@ async function listRegistrations(tenantId: string): Promise<MetastoreRegistratio
 export const GET = withSession(async (_req, { session: s }) => {
   const tenantId = s.claims.oid;
 
-  const result: any = { ok: true };
+  // `unityOk` (#4656): an honest, top-level SIBLING of `ok` scoped to the Unity
+  // listing specifically. `ok` means "the envelope executed" and must stay true
+  // on a partial Unity outage — the Console catalog-shell page renders the
+  // WHOLE surface (registrations, OneLake, Purview, discoverable workspaces)
+  // only when `ok` is true, so flipping the shared `ok` on a Unity-only failure
+  // would blank every OTHER working backend too (a bigger no-vaporware.md
+  // violation than the one being fixed here). `unityOk` is the field a caller
+  // checking only `ok`-adjacent top-level keys would actually see, instead of
+  // the real state being buried only in the `unityWorkspaceErrors` sibling
+  // array — which is exactly the shape the gov-bff-verify failure measured.
+  const result: any = { ok: true, unityOk: true };
 
   // Unity — federated metastore list. listAllMetastores() folds per-workspace
   // failures into synthetic `ERROR_<host>` rows so one bad workspace doesn't
@@ -139,7 +149,15 @@ export const GET = withSession(async (_req, { session: s }) => {
     }
     result.unity = real;
     result.unityHosts = safeEnvHosts();
-    if (workspaceErrors.length) result.unityWorkspaceErrors = workspaceErrors;
+    if (workspaceErrors.length) {
+      result.unityWorkspaceErrors = workspaceErrors;
+      // A workspace gated purely on "needs a Databricks account admin" already
+      // carries its own honest, well-understood signal (`accountAdminGate`
+      // below) — an expected, documented state. Any OTHER per-workspace error
+      // means a workspace that was EXPECTED to list came back failed instead,
+      // which is the #4656 defect: flip the Unity verdict for that.
+      if (workspaceErrors.some((w) => !w.accountAdmin)) result.unityOk = false;
+    }
     if (accountAdminGate) result.accountAdminGate = ACCOUNT_ADMIN_GATE;
   } catch (e: any) {
     result.unity = [];
@@ -147,6 +165,7 @@ export const GET = withSession(async (_req, { session: s }) => {
       result.accountAdminGate = ACCOUNT_ADMIN_GATE;
     } else {
       result.unityError = e?.message || String(e);
+      result.unityOk = false; // #4656: the whole Unity listing failed outright.
       if (e instanceof UnityCatalogNotConfiguredError) result.unityHint = e.hint;
     }
   }

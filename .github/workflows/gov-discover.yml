@@ -59,6 +59,37 @@ jobs:
           # shellcheck disable=SC1091
           set -a; . ./vals.env; set +a
 
+      # #4644 — read-only measurement, via Actions (never local az, which reads
+      # Commercial from this workstation). Confirms or refutes whether the
+      # #4643 Single-revision-mode template fix has reached the LIVE Gov
+      # console yet, independent of whether it has landed in bicep (that only
+      # takes effect on Gov's NEXT infra deploy).
+      #
+      # Two false-confirmation traps this step deliberately avoids (#4644):
+      #   1. `revision list` WITHOUT --all returns only ACTIVE revisions — a
+      #      bare count here would read as "nothing accumulated" even with 200
+      #      retained-but-inactive revisions sitting behind it.
+      #   2. A NEGATED JMESPath filter (`[?!properties.active]`) returns 0
+      #      regardless of the real inactive count, even WITH --all. Measured
+      #      cause: the `!` operator, not the missing flag. This step uses
+      #      `[?properties.active==\`false\`]` instead, which resolves
+      #      correctly server-side.
+      - name: Measure loom-console's activeRevisionsMode + revision/replica counts
+        run: |
+          set -euo pipefail
+          MODE=$(az containerapp show -n "$APP" -g "$RG" --query "properties.configuration.activeRevisionsMode" -o tsv | tr -d '\r')
+          ALL=$(az containerapp revision list -n "$APP" -g "$RG" --all -o json)
+          TOTAL=$(echo "$ALL" | python3 -c "import json,sys;print(len(json.load(sys.stdin)))")
+          ACTIVE=$(echo "$ALL" | python3 -c "import json,sys;d=json.load(sys.stdin);print(sum(1 for r in d if r.get('properties',{}).get('active') is True))")
+          INACTIVE=$(echo "$ALL" | python3 -c "import json,sys;d=json.load(sys.stdin);print(sum(1 for r in d if r.get('properties',{}).get('active') is False))")
+          REPLICAS=$(echo "$ALL" | python3 -c "import json,sys;d=json.load(sys.stdin);print(sum(r.get('properties',{}).get('replicas',0) or 0 for r in d if r.get('properties',{}).get('active') is True))")
+          echo "::notice::[gov-console-revision-mode] mode=$MODE total=$TOTAL active=$ACTIVE inactive=$INACTIVE active_replicas=$REPLICAS measured_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          if [ "$MODE" = "Multiple" ] && [ "$INACTIVE" -gt 5 ]; then
+            echo "::warning::[gov-console-revision-mode] Multiple-revision mode with $INACTIVE retained inactive revisions -- this is the #4644 accumulation shape. The #4643 template fix (Single mode) has NOT reached this live app yet; it only takes effect on this app's NEXT infra deploy."
+          elif [ "$MODE" = "Single" ]; then
+            echo "::notice::[gov-console-revision-mode] Already Single -- the #4643 fix has reached this live app."
+          fi
+
       - name: Probe ARM existence (sub-wide) + compose PLAN
         run: |
           set -euo pipefail
