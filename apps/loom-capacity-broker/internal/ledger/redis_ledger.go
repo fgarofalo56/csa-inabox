@@ -72,6 +72,7 @@ func NewRedis(ctx context.Context, connStr string) (*Redis, error) {
 func parseConn(s string) (*Redis, error) {
 	s = strings.TrimSpace(s)
 	r := &Redis{}
+	explicitTLS := false
 	switch {
 	case strings.HasPrefix(s, "redis://") || strings.HasPrefix(s, "rediss://"):
 		u, err := url.Parse(s)
@@ -87,6 +88,7 @@ func parseConn(s string) (*Redis, error) {
 			}
 		}
 		r.useTLS = u.Scheme == "rediss"
+		explicitTLS = true // the scheme IS the explicit choice, either way
 		r.tlsName = u.Hostname()
 		if u.User != nil {
 			r.username = u.User.Username()
@@ -110,6 +112,7 @@ func parseConn(s string) (*Redis, error) {
 				r.username = val
 			case "ssl":
 				r.useTLS = strings.EqualFold(val, "true")
+				explicitTLS = true
 			}
 		}
 		r.tlsName = hostOnly(r.addr)
@@ -120,9 +123,20 @@ func parseConn(s string) (*Redis, error) {
 	if !strings.Contains(r.addr, ":") {
 		return nil, fmt.Errorf("ledger: redis address %q missing :port", r.addr)
 	}
-	// Azure Cache for Redis SSL port heuristic.
-	if !r.useTLS && strings.HasSuffix(r.addr, ":6380") {
-		r.useTLS = true
+	// Azure backend TLS inference, applied ONLY when the caller did not say
+	// either way (no rediss://, no redis://, no explicit ssl=): Loom's three
+	// Redis backends listen on three different ports -- OSS-on-ACA 6379
+	// (plaintext, used in sovereign boundaries per #4265), classic Azure Cache
+	// for Redis 6380 (TLS), and Azure Managed Redis 10000 (TLS, Entra-only).
+	// #4270: the old heuristic only recognized 6380, so a bare `host:10000`
+	// (AMR's actual endpoint shape) silently connected PLAINTEXT to a
+	// TLS-only listener and failed for a reason that reads as a network
+	// problem, not a protocol mismatch. Defaulting to TLS-on for every port
+	// except the one known-plaintext port (6379) fails safe instead: an
+	// unrecognized future backend gets TLS by default, and the one backend
+	// that genuinely needs plaintext keeps working exactly as today.
+	if !explicitTLS {
+		r.useTLS = !strings.HasSuffix(r.addr, ":6379")
 	}
 	return r, nil
 }
