@@ -107,7 +107,7 @@ and maps every gap to an Azure-native build (no Microsoft Fabric on the default 
 | 2 | ❌ MISSING | Only `mode:'design'\|'preview'`; single canvas, no page model/nav. The `navigate` effect goes to a URL, not a page. | #4363 |
 | 3 | ⚠️ partial | `WidgetPalette` `:597-609` renders `KIND_META`'s 5 kinds as buttons — a flat list, not Slate's 8 categories. Widens with #4360/#4361/#4362. | #4360 |
 | 4 | ⚠️ partial | Real client sort + Prev/Next paging + columns, **single-row selection** (`selectable`/`selectedRow`/`onSelectRow`, `:420-489`) feeding `onSelect` interactions, and widget-level click events. No column order/width/align, no per-cell tooltips, no transpose, no multi/checkbox selection. Server-side paging is #4364. | #4360 |
-| 5 | ✅ BUILT | `LoomChart` real SVG renderer (column/bar/line/area/pie/donut/scatter) bound to live results (`:526`). | — |
+| 5 | ⚠️ 3 of 8 | `LoomChart` real SVG renderer bound to live results (`:526`). The `N of M` counts **inventory row 5's eight chart widgets**: **Chart XY** (`CHART_TYPES :161` — column/bar/line/area/scatter), **Pie** (pie/donut, same list) and **Metric Card** (the separate `metric` kind, `SlateWidgetKind :66`, rendered at `:515`) are built (3); **Vega Chart, Gantt, Pivot Table, Timeline and Time-Series Analysis are absent (#4929)** — zero case-insensitive matches for any of the five names in the builder. Scored ✅ BUILT by the 2026-07-01 pass; that was an overstatement of a bundled row, corrected by #4384. | #4929 |
 | 6 | ❌ MISSING | No Map widget (`SlateWidgetKind` `:66` has no map). Must land on **both** map backends (`resolveMapsBackend`: Azure Maps **and** OSS MapLibre) — see **Boundaries** below. | #4361 |
 | 7 | ❌ MISSING | No graph/tree/image widgets. | #4362 |
 | 8 | ❌ MISSING | No input/control widgets. Variables can only be driven from the Variables panel or a table row-select. | #4360 |
@@ -126,7 +126,7 @@ and maps every gap to an Azure-native build (no Microsoft Fabric on the default 
 | 21 | ⚠️ 2 of 3 | Per-widget event triggers wired live: `onClick`, `onSelect` (table row-select) and `onChange` — `SlateEventTrigger :81`, dispatched by `runInteractions :1091`, authored in `InteractionsDialog :688`. The `N of M` counts **inventory row 21's three**: **click and selection-change are built (2)**; **`didOpen`/`didClose` are absent (#4363)** — they have no analog until containers/dialogs land. `onChange` is a Loom addition the Slate inventory row does not list, so (like `date` in row 18) it does not raise the numerator; it also **fires on Preview entry only** (`:1143`) — editing a variable re-runs the bound queries (`setRuntimeScalar :1148` → `runPreview`) but does **not** dispatch `onChange` interactions, tracked in #4360 alongside the control widgets that would drive it. | #4360, #4363 |
 | 22 | ⚠️ 4 of 6 | `setVariable` (literal or selected-row column), `runQuery` (refresh preview), `navigate` (interpolated URL) and `writeBack` (POST) all execute for real in Preview — `:1097-1128`. No toast effect and no run-Function effect. | #4360 |
 | 23 | ⚠️ partial | The `writeBack` effect POSTs the chosen variables as JSON to the app's DAB/APIM REST base and surfaces the real HTTP status (`:1110-1126`). No ontology object create/update/delete, no column-derived action form. | #4367 |
-| 24 | ✅ BUILT | `runPreview :1076` executes each bound widget's query against the real backend; `WidgetView :493-531` renders live rows with Spinner / honest-gate / error / empty states. | — |
+| 24 | ❌ MISSING | Inventory row 24's four capabilities — **object sets, retrieve individual objects, OSDK in Slate, Foundry Functions in Slate** — are all ontology/function reads, and the builder has **zero** case-insensitive matches for `ontology`, `osdk`, `object-set`/`objectset` or `foundry function`; row 13 records the same absence for the query types. What Loom does have — `runPreview :1076` executing each bound widget's `rest-dab` / `kql` / `sql` query against the real backend, rendered by `WidgetView :493-531` with Spinner / honest-gate / error / empty states — is the generic query engine row 13 already credits, not any of row 24's four, so (by the rule rows 13, 18 and 21 apply to Loom additions) it does not raise the numerator. Scored ✅ BUILT by the 2026-07-01 pass, which described that engine instead of the inventory row; corrected by #4384. | #4364 |
 | 25 | ❌ MISSING | Inspector exposes **seven** fields — title / bound query / chart type / aggregation / **value column** (`metricField`, `:659-664`) / text / interactions (`:613-684`); **none of them style**. No per-widget CSS, no app stylesheet. | #4366 |
 | 26 | ❌ MISSING | No custom HTML/CSS/JS authoring surface, no custom widget sets. | #4366 |
 | 27 | ❌ MISSING | Only an `apiBaseUrl` data-base field; no app parameters / module interface. | #4367 |
@@ -138,41 +138,27 @@ and maps every gap to an Azure-native build (no Microsoft Fabric on the default 
 
 ## Grade
 
-**Grade today: ~C.** Counting the 31 in-scope rows (30 is n/a): **2 ✅ BUILT**
-(5, 24), **13 ⚠️ partial** (1, 3, 4, 10, 12, 13, 14, 16, 18, 21, 22, 23, 29),
-**16 ❌ MISSING** (2, 6, 7, 8, 9, 11, 15, 17, 19, 20, 25, 26, 27, 28, 31, 32).
+**Grade today: ~C−.** Counting the 31 in-scope rows (30 is n/a): **0 ✅ BUILT**,
+**14 ⚠️ partial** (1, 3, 4, 5, 10, 12, 13, 14, 16, 18, 21, 22, 23, 29),
+**17 ❌ MISSING** (2, 6, 7, 8, 9, 11, 15, 17, 19, 20, 24, 25, 26, 27, 28, 31, 32).
 `ui-parity.md` grades a surface **A only at zero ❌**, so slate-app cannot be A
-until the sixteen rows below land. An earlier revision of this pass read ~C+ off
-**5 ✅ BUILT / 10 ⚠️ partial**; applying the `N of M` rule below to rows 1, 12
-and 21 moved three rows out of ✅ into ⚠️ **without changing what the code does**,
-and the grade is stated at the lower reading rather than the flattering one. Row
-21 still improves on the previous revision of this file — it was ❌ MISSING and
-is now ⚠️ 2 of 3 — it is simply not the ✅ BUILT an earlier draft claimed.
+until the seventeen rows below land. The reading has moved down twice without the
+code changing: an earlier revision read ~C+ off **5 ✅ BUILT / 10 ⚠️ partial**;
+applying the `N of M` rule to rows 1, 12 and 21 gave ~C at **2 ✅ / 13 ⚠️ / 16 ❌**;
+and #4384 applied the same rule to the last two ✅ rows — row 5 to ⚠️ 3 of 8, row
+24 to ❌ MISSING because none of its four inventory capabilities is present. Each
+time the grade is stated at the lower reading rather than the flattering one.
 
 Where an inventory row bundles several capabilities, this table scores it
-`⚠️ N of M` rather than ✅ — rows 1 (2 of 3 canvas verbs), 12 (3 of 5
-Queries-panel capabilities), 13 (3 of 5 query types), 18 (3 of 5 variable types),
-21 (2 of 3 event triggers) and 22 (4 of 6 action effects) follow that rule, so a
-bundled row's gaps stay visible to the "every non-BUILT row names its issue"
-check below. **Two rows do not follow it yet and are called out rather than
-quietly left:** row 5 (inventory names 8 chart widgets; Loom has Chart-XY, Pie
-and Metric Card — Vega, Gantt, Pivot Table, Timeline and Time-Series Analysis are
-absent) and row 24 (inventory names object sets / individual objects / OSDK /
-Foundry Functions; Loom reads through the generic query engine, and row 13 says
-in this same table that ontology and function query types are not first-class).
-This pass did not re-score them — re-scoring both would move the counts above
-again, and that re-derivation is tracked in **#4384** rather than done here on an
-unmeasured guess.
-
-That "two" is now a **checkable** claim rather than an assertion: rows 5 and 24
-are the **only** ✅ BUILT rows left in the table, so the exception set and
-#4384's row list are the same two rows, and a reader can falsify the sentence by
-grepping the Status column for ✅. An earlier draft of this section said "two"
-while the table still carried ✅ on rows 1, 12 and 21 — three bundled rows whose
-gaps sat outside #4384 *and* outside the row-to-issue derivation, because ✅
-removed them from its population. That was the same defect this file exists to
-fix, one screen below the paragraph declaring the invariant; it is corrected
-here, and the correction is what moved the grade from ~C+ to ~C.
+`⚠️ N of M` rather than ✅ — rows 1 (2 of 3 canvas verbs), 5 (3 of 8 chart
+widgets), 12 (3 of 5 Queries-panel capabilities), 13 (3 of 5 query types), 18
+(3 of 5 variable types), 21 (2 of 3 event triggers) and 22 (4 of 6 action
+effects) follow that rule, and a bundled row with **zero** of its capabilities
+present scores ❌ (row 24). A Loom capability the inventory row does not list
+never raises the numerator. **There are no exceptions left:** the table carries
+no ✅ BUILT row, so no bundled row's gaps can hide from the "every non-BUILT row
+names its issue" check below behind a ✅ — a reader can falsify that by grepping
+the Status column for ✅.
 
 What is genuinely real today, verified against code on 2026-09-07: a canvas whose
 widgets really drag and resize (placement is still click-from-palette); a
@@ -192,18 +178,16 @@ defect recurring.
 
 ## Tracked gaps
 
-Every ❌ / ⚠️ row above is tracked. No row is left as an untracked aspiration.
-The last row is the exception that proves the rule: #4384 covers rows 5 and 24,
-which are ✅ BUILT and therefore carry `—` in the Tracked column — so a
-row-to-issue bijection derived from that column will not contain it. It is listed
-here deliberately, per the Grade section above. Rows 5 and 24 are also the only
-✅ rows left in the table, so nothing else can hide from this list behind a ✅.
+Every ❌ / ⚠️ row above is tracked. No row is left as an untracked aspiration,
+and since the table carries no ✅ BUILT row, every in-scope row appears in the
+Tracked column — a row-to-issue bijection derived from that column is complete.
 
 Rows in parentheses are **secondary** — the row's primary owner is elsewhere in
-this table, and each of the sixteen ❌ MISSING rows appears exactly once as a
-primary. Rows 1, 12 and 21 are secondaries added by this pass's re-score; the
+this table, and each of the seventeen ❌ MISSING rows appears exactly once as a
+primary. Rows 1, 12 and 21 are secondaries added by the `N of M` re-score; the
 scope they add to their owning issue is recorded as a comment on that issue, not
-only here.
+only here. Row 5's five missing chart widgets were untracked while it was scored
+✅, and now have their own issue (#4929).
 
 | Issue | Rows | Size | Gap |
 |---|---|---|---|
@@ -211,13 +195,13 @@ only here.
 | #4361 | 6 | M | Map widget — Azure Maps **and** OSS MapLibre backends (location / heatmap / shape / choropleth). Azure-Maps-only would be Commercial-only |
 | #4362 | 7 | M | Graph / tree / image-gallery widgets |
 | #4363 | 2, 11 (+18, 21) | M | Multi-page apps, real container nesting, page-scoped variables (row 18's missing scope axis), and the `didOpen`/`didClose` triggers containers/dialogs would carry (row 21) |
-| #4364 | 14, 15, 16, 17 (+12, 13) | M | Handlebars query helpers, partials, conditional triggers, server-side paging/sort. Also the Queries-panel editor toolbar and raw-JSON view (row 12's two missing capabilities) |
+| #4364 | 14, 15, 16, 17, 24 (+12, 13) | M | Handlebars query helpers, partials, conditional triggers, server-side paging/sort. Also the Queries-panel editor toolbar and raw-JSON view (row 12's two missing capabilities), and the ontology/OSDK/Foundry-Function read path (row 13's two missing query types and all four of row 24's capabilities) |
 | #4365 | 19, 20 (+18) | M | Variable transformations, object-set filter variables, per-user persisted storage, struct/object-set variable types (row 18's missing type axis) |
 | #4366 | 25, 26 | M | Per-widget styles, global stylesheet, custom HTML/Handlebars widget |
 | #4367 | 27, 28, 29 (+23) | M | App parameters / module interface, public apps, import-export-duplicate, kiosk mode |
 | #4368 | 31, 32 | M | Dependency/debug inspector and usage metrics / edit history |
 | #4374 | 10 | S | **Defect, not a gap:** the inspector hint at `:670` promises `{{variable}}` interpolation in text widgets that `renderMarkdownLite` never performs — implement it, or delete the sentence |
-| #4384 | 5, 24 | S | **Doc-scoring debt:** rows 5 and 24 are ✅ BUILT against bundled inventory rows whose sub-capabilities are not all present — re-derive both against code and re-state the grade counts |
+| #4929 | 5 | M | Chart widgets absent from the Slate set — Vega Chart, Gantt, Pivot Table, Timeline, Time-Series Analysis (Chart XY, Pie and Metric Card are built) |
 
 ## Build plan
 
