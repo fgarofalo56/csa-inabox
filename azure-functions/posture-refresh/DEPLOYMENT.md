@@ -86,14 +86,16 @@ module. The key is bound only when **all three** hold (admin-plane
 |-------|-------|
 | Key Vault secret `loom-posture-function-key` | Stored in step 3. The name is the admin-plane default of `loomPostureFunctionKeySecretName`, which the root deploy does not override. |
 | `loomPostureFunctionUrl` (root deploy param) | The `functionUrl` output from step 1, passed as a **deploy parameter**. A value set on `loom-console` with `az containerapp update` does not count, and a full deploy that renders the Console blanks it. |
-| `observabilityConfig.postureFunctionKeyEnabled` | `true`. Add it inside the params file's existing `observabilityConfig` object; don't replace the object, which carries other fields. |
+| `observabilityConfig.postureFunctionKeyEnabled` | `true`. Add it inside the params file's existing `observabilityConfig` object; don't replace the object, which carries other fields. (`params/tenant-dmlz.bicepparam` has no `observabilityConfig` object at all — declare it fresh there instead of "adding inside".) |
 
 Set `postureFunctionKeyEnabled` **only after confirming the secret exists, by name**.
-For example, `az keyvault secret show --vault-name <loom-kv> --name loom-posture-function-key --query id -o tsv`
-prints the secret's id, never its value. The Loom vault is private, so run the check
-from a network path that can reach it. The order matters: a Container App revision
-that references a missing Key Vault secret **fails to provision**, so setting the flag
-before the secret exists takes the Console down.
+For example, `az keyvault secret list --vault-name <loom-kv> --query "[?name=='loom-posture-function-key'].attributes.enabled | [0]" -o tsv`
+and require `true`. (`az keyvault secret show ... --query id` is not a metadata-only
+check: `--query` filters what's *printed*, but `show` itself fetches the secret —
+value included — and needs `get` permission, not just `list`.) The Loom vault is
+private, so run the check from a network path that can reach it. The order matters:
+a Container App revision that references a missing Key Vault secret **fails to
+provision**, so setting the flag before the secret exists fails the Console deploy.
 
 When all three hold, the Console gets `LOOM_POSTURE_FUNCTION_URL` (plain) and
 `LOOM_POSTURE_FUNCTION_KEY` (secretRef → Key Vault). Until then, the refresh route
