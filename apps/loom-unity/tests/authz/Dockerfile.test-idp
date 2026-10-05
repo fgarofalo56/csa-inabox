@@ -1,4 +1,14 @@
 FROM python:3.12-slim
+
+# SC1 hardening (#4561): python:3.12-slim's debian-13 base carries `perl-base`
+# 5.40.1-6 with three CRITICAL CVEs, fixed in 5.40.1-6+deb13u1. This is a test
+# IdP fixture -- never pushed to a registry, never SC1-gated -- but the fix is
+# applied for consistency per #4561's explicit judgement call. New minimal
+# layer (no existing apt-get block to merge into; this file installs nothing
+# via apt).
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y \
+    && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir cryptography
 COPY test-idp.py /idp.py
 EXPOSE 8000

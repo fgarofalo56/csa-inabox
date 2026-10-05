@@ -10,6 +10,17 @@
 # assigned identity only ever needs AcrPull.
 FROM python:3.11-slim
 
+# SC1 hardening (#4561): python:3.11-slim's debian-13 base carries `perl-base`
+# 5.40.1-6 with three CRITICAL CVEs (CVE-2026-13221, CVE-2026-42496,
+# CVE-2026-8376), fixed in 5.40.1-6+deb13u1. perl-base is inherited from the
+# base layer -- this file installs nothing via apt, so unlike its siblings
+# (apps/loom-migrate/Dockerfile) there was no existing apt-get block to merge
+# the fix into. This is therefore a new minimal layer rather than a merge: the
+# same repo-standard dist-upgrade line, with no package installed.
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y \
+    && rm -rf /var/lib/apt/lists/*
+
 # Non-root runtime user (defense-in-depth; the container is the boundary).
 RUN useradd --create-home --uid 10001 wrangler
 
