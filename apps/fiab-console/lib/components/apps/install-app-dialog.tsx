@@ -146,11 +146,80 @@ export interface InstallAppDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
+interface InstallDialogBoundaryProps {
+  appName: string;
+  onOpenChange: (open: boolean) => void;
+  children: React.ReactElement;
+}
+
+interface InstallDialogBoundaryState {
+  err: Error | null;
+  remountKey: number;
+}
+
+const HYDRATION_ERROR_RE = /Minified React error #(418|423|425)\b|hydrat/i;
+
+function isHydrationLikeError(err: unknown): boolean {
+  return !!(err && typeof err === 'object' && typeof (err as { message?: unknown }).message === 'string'
+    && HYDRATION_ERROR_RE.test((err as { message: string }).message));
+}
+
+export class InstallDialogBoundary extends React.Component<InstallDialogBoundaryProps, InstallDialogBoundaryState> {
+  state: InstallDialogBoundaryState = { err: null, remountKey: 0 };
+
+  static getDerivedStateFromError(err: Error): Partial<InstallDialogBoundaryState> {
+    return { err };
+  }
+
+  private reloadDialog = () => {
+    this.setState((state) => ({ err: null, remountKey: state.remountKey + 1 }));
+  };
+
+  render() {
+    const { appName, onOpenChange, children } = this.props;
+    const { err, remountKey } = this.state;
+    if (!err) return <React.Fragment key={remountKey}>{children}</React.Fragment>;
+    const hydration = isHydrationLikeError(err);
+    return (
+      <Dialog open inertTrapFocus onOpenChange={(_, d) => onOpenChange(d.open)}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Install {appName}</DialogTitle>
+            <DialogContent>
+              <MessageBar intent={hydration ? 'warning' : 'error'}>
+                <MessageBarTitle>
+                  {hydration ? 'Reload the install dialog' : 'The install dialog hit an unexpected error'}
+                </MessageBarTitle>
+                <MessageBarBody>
+                  {hydration
+                    ? 'CSA Loom detected a client render mismatch while opening this install flow. Reload the dialog to remount the workspace picker cleanly. If it happens again, reload the page before retrying.'
+                    : 'CSA Loom could not finish rendering this install flow. Try reloading the dialog; if it keeps failing, reload the page before retrying.'}
+                </MessageBarBody>
+              </MessageBar>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => onOpenChange(false)}>Close</Button>
+              {hydration && (
+                <Button appearance="secondary" onClick={() => window.location.reload()}>
+                  Reload page
+                </Button>
+              )}
+              <Button appearance="primary" onClick={this.reloadDialog}>
+                {hydration ? 'Reload dialog' : 'Try again'}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+    );
+  }
+}
+
 /**
  * The shared install wizard. Renders nothing until `open` is true. The caller
  * owns the trigger (a Button) and the open state.
  */
-export function InstallAppDialog({
+function InstallAppDialogInner({
   appId, appName, itemCount, open, onOpenChange,
 }: InstallAppDialogProps): React.ReactElement {
   const s = useStyles();
@@ -498,6 +567,23 @@ export function InstallAppDialog({
         </DialogBody>
       </DialogSurface>
     </Dialog>
+  );
+}
+
+/**
+ * Recovery wrapper for the shared install wizard.
+ *
+ * The dialog only mounts when opened, so the workspace picker is client-mounted
+ * on demand instead of participating in the initial /apps/[id] hydration pass.
+ * If that on-demand mount still hits a client render error, the boundary shows
+ * an honest recovery dialog instead of leaving a click-dead control behind.
+ */
+export function InstallAppDialog(props: InstallAppDialogProps): React.ReactElement | null {
+  if (!props.open) return null;
+  return (
+    <InstallDialogBoundary appName={props.appName} onOpenChange={props.onOpenChange}>
+      <InstallAppDialogInner {...props} />
+    </InstallDialogBoundary>
   );
 }
 
