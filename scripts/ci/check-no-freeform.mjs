@@ -2345,6 +2345,34 @@ export const TOUCH_EXEMPT = new Map([
     'apps/fiab-console/lib/editors/lakehouse/dialogs/shortcut-wizard-dialog.tsx',
     'touched only for the example text of the two typed secret-name fields (:156, :214); replacing them with Save to Key Vault (and adding it for Delta Sharing) is tracked in #4854',
   ],
+  // ── #3699 Phase 1 (minimap show/hide toggle) ──────────────────────────────
+  // Three baselined files carry MINIMAP WIRING in #4951 (one preference-hook
+  // call, a CanvasRightRail props passthrough, and `{minimapVisible && …}` or
+  // minimapProps ownership around the EXISTING MiniMap JSX). Measured with a
+  // --report diff between base and head: the free-text sites themselves are
+  // UNTOUCHED — dbt-model-graph.tsx keeps its 2 sites (Synapse FQDN + Fabric
+  // endpoint), visual-designer.tsx keeps its 5, databricks/pipeline-editor.tsx
+  // keeps its 1, and the site counts are identical at base and head, which is
+  // why the ratchet itself is green (123/51) and only the touched-file rule
+  // fires. The rule reads the whole FILE, not the site — so wiring work in a
+  // file that happens to carry baselined sites would otherwise force this PR
+  // to clear 8 sites of product work unrelated to its diff, which is the
+  // "punish an innocent edit" exact shape the rule's own header warns about.
+  // Dated exception in the shape #3626 / #3530 established, NOT
+  // --update-baseline (which does not clear the boy-scout rule at all): each
+  // entry below DELETES itself when that file's sites get their pickers.
+  [
+    'apps/fiab-console/lib/components/dbt/dbt-model-graph.tsx',
+    '#3699 Phase 1 touched this file for minimap wiring only; the 2 sites (Synapse server FQDN, Fabric SQL endpoint) are untouched — needs a Synapse workspace-derived endpoint + tracking the Fabric picker — tracked in the no-freeform ratchet',
+  ],
+  [
+    'apps/fiab-console/lib/components/eventstream/visual-designer.tsx',
+    '#3699 Phase 1 touched this file for minimap wiring only (5 sites untouched) — tracked in the no-freeform ratchet',
+  ],
+  [
+    'apps/fiab-console/lib/editors/databricks/pipeline-editor.tsx',
+    '#3699 Phase 1 touched this file for minimap wiring only (1 site untouched) — tracked in the no-freeform ratchet',
+  ],
 ]);
 
 // ═══════════════════════════════════════════════════════════════════════════
