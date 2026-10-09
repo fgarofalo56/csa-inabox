@@ -1,5 +1,12 @@
 # ACTIVE WORK REGISTER
 
+**Superseded as the entry point by `PRPs/active/MASTER-INDEX.md` (2026-10-05).**
+That file carries the current run order, per-PRP status (re-verified against
+live GitHub state, not this file's 2026-08-31 snapshot), and model
+recommendations. This file's own disposition table in §2 below is still
+accurate — MASTER-INDEX.md re-verified rather than repeated it — so it's kept
+for the history, not duplicated.
+
 **The register of record is `PRPs/active/drain-2026-08-31/`.** This file is a
 pointer, not a snapshot. The previous revision of this file was a live-state
 snapshot measured 2026-08-23; by 2026-08-31 it was actively misleading (stale PR

@@ -37,6 +37,8 @@ import {
   CanvasNode, CanvasRightRail, CANVAS_NODE_WIDTH, CATEGORY_ACCENT, accentTint, portStyle,
   type CanvasVisual, type CanvasNodeCategory,
 } from '@/lib/components/canvas/canvas-node-kit';
+import { useCanvasBooleanPreference } from '@/lib/components/canvas/use-canvas-preference';
+import { useMinimapShortcut } from '@/lib/components/canvas/use-minimap-shortcut';
 import { CanvasCollabLayer } from '@/lib/components/canvas/canvas-collab-layer';
 import { useCanvasHistory } from '@/lib/components/canvas/use-canvas-history';
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
@@ -182,6 +184,9 @@ function InnerCanvas(props: AgentFlowCanvasProps) {
   const rf = useReactFlow();
   const [zoom, setZoom] = useState(1);
   const [railCollapsed, setRailCollapsed] = useState(false);
+  const [minimapVisible, setMinimapVisible] = useCanvasBooleanPreference('agent-flow-canvas', 'minimapVisible', true);
+  const toggleMinimap = useCallback(() => setMinimapVisible((v) => !v), [setMinimapVisible]);
+  useMinimapShortcut(toggleMinimap);
 
   // ---- derive React-Flow nodes/edges from props + layout ----
   const logical = useMemo(() => buildFlowNodes({
@@ -360,15 +365,19 @@ function InnerCanvas(props: AgentFlowCanvasProps) {
                 onFit={() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 })}
                 collapsed={railCollapsed}
                 onToggleCollapse={() => setRailCollapsed((v) => !v)}
+                minimapVisible={minimapVisible}
+                onToggleMinimap={toggleMinimap}
               />
             </Panel>
-            <MiniMap
-              pannable
-              zoomable
-              nodeStrokeColor={tokens.colorNeutralStroke2}
-              maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
-              style={{ backgroundColor: tokens.colorNeutralBackground1 }}
-            />
+            {minimapVisible && (
+              <MiniMap
+                pannable
+                zoomable
+                nodeStrokeColor={tokens.colorNeutralStroke2}
+                maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
+                style={{ backgroundColor: tokens.colorNeutralBackground1 }}
+              />
+            )}
             <Panel position="top-left">
               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Click a node to configure it in the inspector →</Caption1>
             </Panel>

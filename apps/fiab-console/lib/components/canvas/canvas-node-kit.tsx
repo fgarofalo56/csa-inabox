@@ -83,10 +83,13 @@ import {
   FullScreenMaximize20Regular, Organization20Regular,
   ChevronDoubleRight20Regular, ChevronDoubleLeft20Regular, Lightbulb16Regular,
   Sparkle16Filled, Checkmark16Regular, Dismiss16Regular,
+  Map20Regular, Map20Filled,
 } from '@fluentui/react-icons';
 import type { JSX } from 'react';
-import { BaseEdge, getBezierPath, Handle, Position, Panel, useReactFlow, useViewport, type EdgeProps, type NodeProps } from '@xyflow/react';
-import { memo, useState } from 'react';
+import { BaseEdge, getBezierPath, Handle, Position, Panel, MiniMap, useReactFlow, useViewport, type EdgeProps, type NodeProps, type MiniMapProps } from '@xyflow/react';
+import { memo, useCallback, useState } from 'react';
+import { useCanvasBooleanPreference } from './use-canvas-preference';
+import { useMinimapShortcut } from './use-minimap-shortcut';
 import { transformByType, type TransformDef, type TransformCategory } from '@/lib/pipeline/dataflow-transform-catalog';
 import {
   PORT_COLOR_KEY, isConditionalPort, resolvePortShape, portGeometry, ghostAnchorPosition,
@@ -1503,18 +1506,24 @@ export interface CanvasRightRailProps {
   /** Collapsed rail shows only the expand toggle. */
   collapsed?: boolean;
   onToggleCollapse?: () => void;
+  /**
+   * #3699 Scope B — minimap show/hide. Button hidden when `onToggleMinimap` is
+   * omitted, same optional-button idiom as `onAutoLayout`.
+   */
+  minimapVisible?: boolean;
+  onToggleMinimap?: () => void;
 }
 
 /**
  * The standardized canvas right rail: collapse toggle + zoom-in / vertical zoom
- * slider / zoom % / zoom-out + fit + auto-layout. Presentational — the host
- * wires callbacks to `useReactFlow()` and drops this into a
+ * slider / zoom % / zoom-out + fit + auto-layout + minimap toggle. Presentational
+ * — the host wires callbacks to `useReactFlow()` and drops this into a
  * `<Panel position="bottom-right">` (or "top-right"). One rail for every canvas
- * so zoom/fit/auto-layout read + behave identically surface to surface.
+ * so zoom/fit/auto-layout/minimap read + behave identically surface to surface.
  */
 export function CanvasRightRail({
   zoom, minZoom = 0.25, maxZoom = 2, onZoomChange, onZoomIn, onZoomOut,
-  onFit, onAutoLayout, collapsed, onToggleCollapse,
+  onFit, onAutoLayout, collapsed, onToggleCollapse, minimapVisible, onToggleMinimap,
 }: CanvasRightRailProps) {
   const styles = useStyles();
   const pct = `${Math.round(zoom * 100)}%`;
@@ -1565,6 +1574,18 @@ export function CanvasRightRail({
           <Button size="small" appearance="subtle" icon={<Organization20Regular />} aria-label="Auto-layout" onClick={onAutoLayout} />
         </Tooltip>
       )}
+      {onToggleMinimap && (
+        <Tooltip content={minimapVisible ? 'Hide minimap (M)' : 'Show minimap (M)'} relationship="label">
+          <Button
+            size="small"
+            appearance="subtle"
+            icon={minimapVisible ? <Map20Filled /> : <Map20Regular />}
+            aria-label={minimapVisible ? 'Hide minimap' : 'Show minimap'}
+            aria-pressed={minimapVisible}
+            onClick={onToggleMinimap}
+          />
+        </Tooltip>
+      )}
     </div>
   );
 }
@@ -1574,6 +1595,21 @@ export interface CanvasRailPanelProps {
   onAutoLayout?: () => void;
   /** Panel corner. Defaults to bottom-left (clear of the bottom-right MiniMap). */
   position?: 'bottom-left' | 'top-left' | 'bottom-right' | 'top-right';
+  /**
+   * #3699 — per-surface key for the minimap show/hide preference. When
+   * provided, `CanvasRailPanel` owns the `<MiniMap>` element itself (so its
+   * host no longer renders its own) and the rail's minimap toggle appears.
+   * Omit to keep the pre-#3699 behavior (host renders its own unconditional
+   * `<MiniMap>` elsewhere).
+   */
+  surfaceKey?: string;
+  /**
+   * Passed through verbatim to the `<MiniMap>` this panel renders (nodeColor,
+   * nodeStrokeColor, maskColor, style, etc.) — every existing `CanvasRailPanel`
+   * host styles its minimap to match its own node palette, so `CanvasRailPanel`
+   * must not hard-code a bare, unstyled one. Ignored unless `surfaceKey` is set.
+   */
+  minimapProps?: Omit<MiniMapProps, 'pannable' | 'zoomable' | 'position'>;
 }
 
 /**
@@ -1585,25 +1621,33 @@ export interface CanvasRailPanelProps {
  * For hosts that already track zoom + collapse state (e.g. the pipeline canvas),
  * use `<CanvasRightRail>` directly in a host `<Panel>` instead.
  */
-export function CanvasRailPanel({ onAutoLayout, position = 'bottom-left' }: CanvasRailPanelProps) {
+export function CanvasRailPanel({ onAutoLayout, position = 'bottom-left', surfaceKey, minimapProps }: CanvasRailPanelProps) {
   const rf = useReactFlow();
   const { zoom } = useViewport();
   const [collapsed, setCollapsed] = useState(false);
+  const [minimapVisible, setMinimapVisible] = useCanvasBooleanPreference(surfaceKey ?? 'unkeyed-rail-panel', 'minimapVisible', true);
+  const toggleMinimap = useCallback(() => setMinimapVisible((v) => !v), [setMinimapVisible]);
+  useMinimapShortcut(toggleMinimap, Boolean(surfaceKey));
   return (
-    <Panel position={position}>
-      <CanvasRightRail
-        zoom={zoom}
-        minZoom={0.25}
-        maxZoom={2}
-        onZoomChange={(z) => rf.setViewport({ ...rf.getViewport(), zoom: z }, { duration: 120 })}
-        onZoomIn={() => rf.zoomIn({ duration: 120 })}
-        onZoomOut={() => rf.zoomOut({ duration: 120 })}
-        onFit={() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 })}
-        onAutoLayout={onAutoLayout}
-        collapsed={collapsed}
-        onToggleCollapse={() => setCollapsed((v) => !v)}
-      />
-    </Panel>
+    <>
+      {surfaceKey && minimapVisible && <MiniMap pannable zoomable position="bottom-right" {...minimapProps} />}
+      <Panel position={position}>
+        <CanvasRightRail
+          zoom={zoom}
+          minZoom={0.25}
+          maxZoom={2}
+          onZoomChange={(z) => rf.setViewport({ ...rf.getViewport(), zoom: z }, { duration: 120 })}
+          onZoomIn={() => rf.zoomIn({ duration: 120 })}
+          onZoomOut={() => rf.zoomOut({ duration: 120 })}
+          onFit={() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 })}
+          onAutoLayout={onAutoLayout}
+          collapsed={collapsed}
+          onToggleCollapse={() => setCollapsed((v) => !v)}
+          minimapVisible={surfaceKey ? minimapVisible : undefined}
+          onToggleMinimap={surfaceKey ? toggleMinimap : undefined}
+        />
+      </Panel>
+    </>
   );
 }
 

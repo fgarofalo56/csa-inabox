@@ -36,6 +36,8 @@ import {
 } from '@fluentui/react-icons';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { CanvasNode, CANVAS_NODE_WIDTH, accentTint, portStyle, CanvasRightRail, type CanvasVisual } from '@/lib/components/canvas/canvas-node-kit';
+import { useCanvasBooleanPreference } from '@/lib/components/canvas/use-canvas-preference';
+import { useMinimapShortcut } from '@/lib/components/canvas/use-minimap-shortcut';
 import type {
   DbtProjectGraph, DbtSource, DbtModel, DbtTest, DbtTarget, MedallionLayer, Materialization, DbtAdapter,
 } from '@/lib/dbt/dbt-project-model';
@@ -336,6 +338,9 @@ function CanvasInner({ sources, models, selected, onSelect, onAddSource, onAddMo
   const rf = useReactFlow();
   const [zoom, setZoom] = useState(1);
   const [railCollapsed, setRailCollapsed] = useState(false);
+  const [minimapVisible, setMinimapVisible] = useCanvasBooleanPreference('dbt-model-graph', 'minimapVisible', true);
+  const toggleMinimap = useCallback(() => setMinimapVisible((v) => !v), [setMinimapVisible]);
+  useMinimapShortcut(toggleMinimap);
   const positionsRef = useRef<Map<string, XY>>(new Map());
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const total = sources.length + models.length;
@@ -432,21 +437,25 @@ function CanvasInner({ sources, models, selected, onSelect, onAddSource, onAddMo
             onFit={() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 })}
             collapsed={railCollapsed}
             onToggleCollapse={() => setRailCollapsed((v) => !v)}
+            minimapVisible={minimapVisible}
+            onToggleMinimap={toggleMinimap}
           />
         </Panel>
-        <MiniMap
-          pannable
-          zoomable
-          nodeColor={(n) => {
-            const d = n.data as unknown as DbtNodeData;
-            if (d?.kind === 'source') return SOURCE_ACCENT;
-            return layerAccent(d?.layer);
-          }}
-          nodeStrokeColor={tokens.colorNeutralStroke2}
-          nodeStrokeWidth={2}
-          maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
-          style={{ backgroundColor: tokens.colorNeutralBackground1 }}
-        />
+        {minimapVisible && (
+          <MiniMap
+            pannable
+            zoomable
+            nodeColor={(n) => {
+              const d = n.data as unknown as DbtNodeData;
+              if (d?.kind === 'source') return SOURCE_ACCENT;
+              return layerAccent(d?.layer);
+            }}
+            nodeStrokeColor={tokens.colorNeutralStroke2}
+            nodeStrokeWidth={2}
+            maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
+            style={{ backgroundColor: tokens.colorNeutralBackground1 }}
+          />
+        )}
         <Panel position="top-left">
           <div className={s.palette} role="toolbar" aria-label="dbt node palette">
             <Button size="small" icon={<Add20Regular />} onClick={onAddSource} data-palette-item="source">Source</Button>

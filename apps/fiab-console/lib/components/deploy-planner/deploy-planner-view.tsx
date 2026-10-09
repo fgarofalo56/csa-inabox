@@ -38,6 +38,8 @@ import {
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { LOOM_ACCENT } from '@/lib/components/shared/accent-tokens';
 import { accentTint, CanvasRightRail } from '@/lib/components/canvas/canvas-node-kit';
+import { useCanvasBooleanPreference } from '@/lib/components/canvas/use-canvas-preference';
+import { useMinimapShortcut } from '@/lib/components/canvas/use-minimap-shortcut';
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 // Shared draggable width divider (G3): the service palette is sized by
 // SplitPane with a persisted sizingKey instead of a fixed 300px grid track.
@@ -332,6 +334,9 @@ function PlannerInner() {
   const { mode } = useTheme();
   const [zoom, setZoom] = useState(1);
   const [railCollapsed, setRailCollapsed] = useState(false);
+  const [minimapVisible, setMinimapVisible] = useCanvasBooleanPreference('deploy-planner', 'minimapVisible', true);
+  const toggleMinimap = useCallback(() => setMinimapVisible((v) => !v), [setMinimapVisible]);
+  useMinimapShortcut(toggleMinimap);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [subs, setSubs] = useState<PlanSubscription[]>([]);
@@ -824,15 +829,19 @@ function PlannerInner() {
                 onFit={() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 })}
                 collapsed={railCollapsed}
                 onToggleCollapse={() => setRailCollapsed((v) => !v)}
+                minimapVisible={minimapVisible}
+                onToggleMinimap={toggleMinimap}
               />
             </Panel>
-            <MiniMap
-              pannable
-              zoomable
-              nodeStrokeColor={tokens.colorNeutralStroke2}
-              maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
-              style={{ backgroundColor: tokens.colorNeutralBackground1 }}
-            />
+            {minimapVisible && (
+              <MiniMap
+                pannable
+                zoomable
+                nodeStrokeColor={tokens.colorNeutralStroke2}
+                maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
+                style={{ backgroundColor: tokens.colorNeutralBackground1 }}
+              />
+            )}
           </ReactFlow>
           {subs.length === 0 && (
             <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', color: tokens.colorNeutralForeground3 }}>

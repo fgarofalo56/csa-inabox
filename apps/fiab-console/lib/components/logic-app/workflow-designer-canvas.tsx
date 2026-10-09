@@ -42,6 +42,8 @@ import {
   CanvasNode, CanvasRightRail, getActivityVisual,
   type CanvasNodeStatus,
 } from '@/lib/components/canvas/canvas-node-kit';
+import { useCanvasBooleanPreference } from '@/lib/components/canvas/use-canvas-preference';
+import { useMinimapShortcut } from '@/lib/components/canvas/use-minimap-shortcut';
 import { CanvasPowerToolbar } from '@/lib/components/canvas/canvas-power-toolbar';
 import { CanvasShortcutDialog } from '@/lib/components/canvas/canvas-shortcut-dialog';
 import { alignPositions, distributePositions, type AlignMode, type DistributeAxis } from '@/lib/components/canvas/canvas-align';
@@ -287,6 +289,9 @@ function DesignerInner({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
   const [railCollapsed, setRailCollapsed] = useState(false);
+  const [minimapVisible, setMinimapVisible] = useCanvasBooleanPreference('logic-app-designer', 'minimapVisible', true);
+  const toggleMinimap = useCallback(() => setMinimapVisible((v) => !v), [setMinimapVisible]);
+  useMinimapShortcut(toggleMinimap);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [history, setHistory] = useState<LogicGraph[]>([]);
   const [future, setFuture] = useState<LogicGraph[]>([]);
@@ -709,7 +714,7 @@ function DesignerInner({
         aria-label="Workflow designer canvas"
       >
         <Background variant={BackgroundVariant.Dots} gap={16} size={1} />
-        <MiniMap pannable zoomable nodeStrokeWidth={2} />
+        {minimapVisible && <MiniMap pannable zoomable nodeStrokeWidth={2} />}
         <Panel position="top-left">
           <CanvasPowerToolbar
             onUndo={undo}
@@ -731,6 +736,8 @@ function DesignerInner({
             onAutoLayout={doAutoLayout}
             collapsed={railCollapsed}
             onToggleCollapse={() => setRailCollapsed((v) => !v)}
+            minimapVisible={minimapVisible}
+            onToggleMinimap={toggleMinimap}
           />
         </Panel>
         <Panel position="top-right">

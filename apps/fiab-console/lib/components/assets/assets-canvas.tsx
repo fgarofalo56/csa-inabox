@@ -45,6 +45,8 @@ import {
   CANVAS_NODE_WIDTH, CanvasNode, CanvasRightRail, portStyle,
   type CanvasNodeStatus, type CanvasVisual,
 } from '@/lib/components/canvas/canvas-node-kit';
+import { useCanvasBooleanPreference } from '@/lib/components/canvas/use-canvas-preference';
+import { useMinimapShortcut } from '@/lib/components/canvas/use-minimap-shortcut';
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import { SplitPane } from '@/lib/components/shared/split-pane';
 import { EmptyState } from '@/lib/components/empty-state';
@@ -252,6 +254,9 @@ function CanvasInner({ assets, deps, onSavePolicy, onMaterialize }: AssetsCanvas
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [runMessage, setRunMessage] = useState<{ key: string; ok: boolean; text: string } | null>(null);
+  const [minimapVisible, setMinimapVisible] = useCanvasBooleanPreference('assets-canvas', 'minimapVisible', true);
+  const toggleMinimap = useCallback(() => setMinimapVisible((v) => !v), [setMinimapVisible]);
+  useMinimapShortcut(toggleMinimap);
   const { zoomIn, zoomOut, fitView, setViewport, getViewport } = useReactFlow();
   const { zoom } = useViewport();
 
@@ -331,7 +336,7 @@ function CanvasInner({ assets, deps, onSavePolicy, onMaterialize }: AssetsCanvas
           maxZoom={2}
         >
           <Background variant={BackgroundVariant.Dots} gap={16} size={1} />
-          <MiniMap pannable zoomable />
+          {minimapVisible && <MiniMap pannable zoomable />}
           <Panel position="bottom-right">
             <CanvasRightRail
               zoom={zoom}
@@ -340,6 +345,8 @@ function CanvasInner({ assets, deps, onSavePolicy, onMaterialize }: AssetsCanvas
               onZoomOut={() => zoomOut({ duration: 120 })}
               onFit={() => fitView({ padding: 0.2, duration: 200 })}
               onAutoLayout={() => fitView({ padding: 0.2, duration: 200 })}
+              minimapVisible={minimapVisible}
+              onToggleMinimap={toggleMinimap}
             />
           </Panel>
         </ReactFlow>

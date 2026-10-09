@@ -26,7 +26,7 @@ import { clientFetch } from '@/lib/client-fetch';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, MiniMap, Panel,
+  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Panel,
   MarkerType, useReactFlow, useNodesInitialized, type Node, type Edge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -538,7 +538,18 @@ function GraphInner({ graph }: { graph: { nodes: TopoNode[]; edges: TopoEdge[] }
             size={1.5}
             color={accentTint('var(--loom-accent-blue)', 45)}
           />
-          <CanvasRailPanel />
+          <CanvasRailPanel
+            surfaceKey="full-topology"
+            minimapProps={{
+              nodeColor: (n) => {
+                const k = (n.data as { topo?: TopoNode } | undefined)?.topo?.kind;
+                return k ? KIND_STYLE[k].accent : tokens.colorNeutralStroke2;
+              },
+              nodeStrokeColor: tokens.colorNeutralStroke2,
+              maskColor: accentTint(tokens.colorNeutralBackground3, 70),
+              style: { backgroundColor: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke2}` },
+            }}
+          />
           <Panel position="top-left">
             <div className={styles.legend} aria-label="Topology legend">
               {NODE_LEGEND.map((k) => {
@@ -558,16 +569,6 @@ function GraphInner({ graph }: { graph: { nodes: TopoNode[]; edges: TopoEdge[] }
               })}
             </div>
           </Panel>
-          <MiniMap
-            position="bottom-right" pannable zoomable
-            nodeColor={(n) => {
-              const k = (n.data as { topo?: TopoNode } | undefined)?.topo?.kind;
-              return k ? KIND_STYLE[k].accent : tokens.colorNeutralStroke2;
-            }}
-            nodeStrokeColor={tokens.colorNeutralStroke2}
-            maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
-            style={{ backgroundColor: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke2}` }}
-          />
         </ReactFlow>
       </ReactFlowProvider>
 

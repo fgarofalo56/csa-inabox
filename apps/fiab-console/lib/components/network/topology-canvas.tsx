@@ -24,7 +24,7 @@
 
 import React, { useCallback, useMemo, useState } from 'react';
 import {
-  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, MiniMap, Panel,
+  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Panel,
   type Node, type Edge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -836,7 +836,14 @@ export function NetworkTopologyCanvas(props: TopologyCanvasProps): React.ReactEl
             size={1.5}
             color={accentTint('var(--loom-accent-blue)', 45)}
           />
-          <CanvasRailPanel />
+          <CanvasRailPanel
+            surfaceKey="topology"
+            minimapProps={{
+              nodeStrokeColor: tokens.colorNeutralStroke2,
+              maskColor: accentTint(tokens.colorNeutralBackground3, 70),
+              style: { backgroundColor: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke2}` },
+            }}
+          />
           <Panel position="top-left">
             <div className={styles.legend} aria-label="Topology legend">
               {NODE_LEGEND.map((n) => (
@@ -866,17 +873,6 @@ export function NetworkTopologyCanvas(props: TopologyCanvasProps): React.ReactEl
               })}
             </div>
           </Panel>
-          <MiniMap
-            position="bottom-right"
-            pannable
-            zoomable
-            nodeStrokeColor={tokens.colorNeutralStroke2}
-            maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
-            style={{
-              backgroundColor: tokens.colorNeutralBackground1,
-              border: `1px solid ${tokens.colorNeutralStroke2}`,
-            }}
-          />
         </ReactFlow>
       </ReactFlowProvider>
 

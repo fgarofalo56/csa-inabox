@@ -38,6 +38,8 @@ import {
   CANVAS_NODE_WIDTH, CanvasNode, CanvasRightRail, accentTint, portStyle,
   type CanvasVisual,
 } from '@/lib/components/canvas/canvas-node-kit';
+import { useCanvasBooleanPreference } from '@/lib/components/canvas/use-canvas-preference';
+import { useMinimapShortcut } from '@/lib/components/canvas/use-minimap-shortcut';
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import { SplitPane } from '@/lib/components/shared/split-pane';
 import { EmptyState } from '@/lib/components/empty-state';
@@ -167,6 +169,9 @@ export interface ModelDagCanvasProps {
 function DagInner({ dag, onSelectAsset }: ModelDagCanvasProps) {
   const s = useStyles();
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [minimapVisible, setMinimapVisible] = useCanvasBooleanPreference('model-dag-canvas', 'minimapVisible', true);
+  const toggleMinimap = useCallback(() => setMinimapVisible((v) => !v), [setMinimapVisible]);
+  useMinimapShortcut(toggleMinimap);
   const { zoomIn, zoomOut, fitView, setViewport, getViewport } = useReactFlow();
   const { zoom } = useViewport();
 
@@ -238,7 +243,7 @@ function DagInner({ dag, onSelectAsset }: ModelDagCanvasProps) {
           maxZoom={2}
         >
           <Background variant={BackgroundVariant.Dots} gap={16} size={1} />
-          <MiniMap pannable zoomable />
+          {minimapVisible && <MiniMap pannable zoomable />}
           <Panel position="bottom-right">
             <CanvasRightRail
               zoom={zoom}
@@ -247,6 +252,8 @@ function DagInner({ dag, onSelectAsset }: ModelDagCanvasProps) {
               onZoomOut={() => zoomOut({ duration: 120 })}
               onFit={() => fitView({ padding: 0.2, duration: 200 })}
               onAutoLayout={onAutoLayout}
+              minimapVisible={minimapVisible}
+              onToggleMinimap={toggleMinimap}
             />
           </Panel>
         </ReactFlow>
