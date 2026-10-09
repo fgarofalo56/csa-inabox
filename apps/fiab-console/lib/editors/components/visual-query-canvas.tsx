@@ -62,6 +62,8 @@ import {
   CanvasNode, CATEGORY_ACCENT, portStyle, accentTint, CanvasRightRail,
   type CanvasVisual, type CanvasNodeCategory,
 } from '@/lib/components/canvas/canvas-node-kit';
+import { useCanvasBooleanPreference } from '@/lib/components/canvas/use-canvas-preference';
+import { useMinimapShortcut } from '@/lib/components/canvas/use-minimap-shortcut';
 import {
   compileGraph,
   VQ_JOIN_KINDS,
@@ -335,6 +337,9 @@ function CanvasInner(props: VisualQueryCanvasProps) {
   const rf = useReactFlow();
   const [zoom, setZoom] = useState(1);
   const [railCollapsed, setRailCollapsed] = useState(false);
+  const [minimapVisible, setMinimapVisible] = useCanvasBooleanPreference('visual-query-canvas', 'minimapVisible', true);
+  const toggleMinimap = useCallback(() => setMinimapVisible((v) => !v), [setMinimapVisible]);
+  useMinimapShortcut(toggleMinimap);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -673,15 +678,19 @@ function CanvasInner(props: VisualQueryCanvasProps) {
                 onFit={() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 })}
                 collapsed={railCollapsed}
                 onToggleCollapse={() => setRailCollapsed((v) => !v)}
+                minimapVisible={minimapVisible}
+                onToggleMinimap={toggleMinimap}
               />
             </Panel>
-            <MiniMap
-              pannable
-              zoomable
-              nodeStrokeColor={tokens.colorNeutralStroke2}
-              maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
-              style={{ backgroundColor: tokens.colorNeutralBackground1 }}
-            />
+            {minimapVisible && (
+              <MiniMap
+                pannable
+                zoomable
+                nodeStrokeColor={tokens.colorNeutralStroke2}
+                maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
+                style={{ backgroundColor: tokens.colorNeutralBackground1 }}
+              />
+            )}
             <Panel position="top-left">
               <div className={s.palette} role="toolbar" aria-label="Visual query steps">
                 <Button size="small" icon={<Add20Regular />} appearance="primary" onClick={() => { setAddTable(''); setAddSchema(schema || ''); setAddOpen(true); }} data-vq-action="add-table">Add table</Button>

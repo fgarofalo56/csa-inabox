@@ -98,6 +98,8 @@ import {
   accentTint, CanvasRightRail,
   type CanvasNodeStatus,
 } from '@/lib/components/canvas/canvas-node-kit';
+import { useCanvasBooleanPreference } from '@/lib/components/canvas/use-canvas-preference';
+import { useMinimapShortcut } from '@/lib/components/canvas/use-minimap-shortcut';
 import { CanvasCollabLayer } from '@/lib/components/canvas/canvas-collab-layer';
 import { DatasetPicker } from '../dataset-picker';
 import { ExpressionField } from '../expression-field';
@@ -988,6 +990,9 @@ function DesignerInner({
   const [addMenu, setAddMenu] = useState<AddMenuState>({ open: false });
   const [zoom, setZoom] = useState(1);
   const [railCollapsed, setRailCollapsed] = useState(false);
+  const [minimapVisible, setMinimapVisible] = useCanvasBooleanPreference('mapping-dataflow', 'minimapVisible', true);
+  const toggleMinimap = useCallback(() => setMinimapVisible((v) => !v), [setMinimapVisible]);
+  useMinimapShortcut(toggleMinimap);
 
   const positionsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
   for (const t of graph.transforms) {
@@ -1388,16 +1393,20 @@ function DesignerInner({
                 onFit={() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 })}
                 collapsed={railCollapsed}
                 onToggleCollapse={() => setRailCollapsed((v) => !v)}
+                minimapVisible={minimapVisible}
+                onToggleMinimap={toggleMinimap}
               />
             </Panel>
-            <MiniMap
-              pannable
-              zoomable
-              nodeColor={(n) => (n.selected ? tokens.colorBrandBackground : tokens.colorNeutralForeground3)}
-              nodeStrokeColor={tokens.colorNeutralStroke2}
-              maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
-              style={{ backgroundColor: tokens.colorNeutralBackground1 }}
-            />
+            {minimapVisible && (
+              <MiniMap
+                pannable
+                zoomable
+                nodeColor={(n) => (n.selected ? tokens.colorBrandBackground : tokens.colorNeutralForeground3)}
+                nodeStrokeColor={tokens.colorNeutralStroke2}
+                maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
+                style={{ backgroundColor: tokens.colorNeutralBackground1 }}
+              />
+            )}
             {/* W4 + W5 — shared collaboration overlay (comments + presence).
                 No-ops without an itemId; no host node-state changes. */}
             <CanvasCollabLayer itemType={itemType} itemId={itemId} canvasKey="mapping-dataflow" />

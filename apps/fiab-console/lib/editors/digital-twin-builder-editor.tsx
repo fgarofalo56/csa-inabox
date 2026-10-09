@@ -37,6 +37,8 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { CanvasNode, CanvasRightRail, CANVAS_NODE_WIDTH, CATEGORY_ACCENT, accentTint, portStyle, type CanvasVisual } from '@/lib/components/canvas/canvas-node-kit';
+import { useCanvasBooleanPreference } from '@/lib/components/canvas/use-canvas-preference';
+import { useMinimapShortcut } from '@/lib/components/canvas/use-minimap-shortcut';
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import { useCanvasHistory } from '@/lib/components/canvas/use-canvas-history';
 import { ForceDirectedGraph, type GraphNode, type GraphEdge } from '@/lib/components/graph/force-directed-graph';
@@ -158,6 +160,9 @@ function TwinCanvasInner({ entities, relationships, onMoveNode, onOpenNode, onDr
   const rf = useReactFlow();
   const [zoom, setZoom] = useState(1);
   const [railCollapsed, setRailCollapsed] = useState(false);
+  const [minimapVisible, setMinimapVisible] = useCanvasBooleanPreference('digital-twin-builder', 'minimapVisible', true);
+  const toggleMinimap = useCallback(() => setMinimapVisible((v) => !v), [setMinimapVisible]);
+  useMinimapShortcut(toggleMinimap);
   const grid = useMemo(() => gridLayout(entities.map((e) => e.apiName)), [entities]);
 
   useEffect(() => {
@@ -240,15 +245,19 @@ function TwinCanvasInner({ entities, relationships, onMoveNode, onOpenNode, onDr
               onFit={() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 })}
               collapsed={railCollapsed}
               onToggleCollapse={() => setRailCollapsed((v) => !v)}
+              minimapVisible={minimapVisible}
+              onToggleMinimap={toggleMinimap}
             />
           </Panel>
-          <MiniMap
-            pannable
-            zoomable
-            nodeStrokeColor={tokens.colorNeutralStroke2}
-            maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
-            style={{ backgroundColor: tokens.colorNeutralBackground1 }}
-          />
+          {minimapVisible && (
+            <MiniMap
+              pannable
+              zoomable
+              nodeStrokeColor={tokens.colorNeutralStroke2}
+              maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
+              style={{ backgroundColor: tokens.colorNeutralBackground1 }}
+            />
+          )}
         </ReactFlow>
         {entities.length === 0 && (
           <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>

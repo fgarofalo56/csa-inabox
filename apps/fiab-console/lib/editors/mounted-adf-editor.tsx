@@ -47,6 +47,8 @@ import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas'
 // SplitPane with persisted sizingKeys instead of fixed 200px / 300px widths.
 import { SplitPane } from '@/lib/components/shared/split-pane';
 import { accentTint, CanvasRightRail } from '@/lib/components/canvas/canvas-node-kit';
+import { useCanvasBooleanPreference } from '@/lib/components/canvas/use-canvas-preference';
+import { useMinimapShortcut } from '@/lib/components/canvas/use-minimap-shortcut';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { AzureResourcePicker } from '@/lib/components/azure/azure-resource-picker';
 import { DetailsPanel, type DetailsSection } from '@/lib/components/shared/details-panel';
@@ -892,6 +894,9 @@ function InnerDesigner({ name, datasets, reloadKey }: DesignerProps) {
   const rf = useReactFlow();
   const [zoom, setZoom] = useState(1);
   const [railCollapsed, setRailCollapsed] = useState(false);
+  const [minimapVisible, setMinimapVisible] = useCanvasBooleanPreference('mounted-adf', 'minimapVisible', true);
+  const toggleMinimap = useCallback(() => setMinimapVisible((v) => !v), [setMinimapVisible]);
+  useMinimapShortcut(toggleMinimap);
   const [model, setModel] = useState<DfModel>({ streams: [] });
   const [selected, setSelected] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -1165,16 +1170,20 @@ function InnerDesigner({ name, datasets, reloadKey }: DesignerProps) {
                 onFit={() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 })}
                 collapsed={railCollapsed}
                 onToggleCollapse={() => setRailCollapsed((v) => !v)}
+                minimapVisible={minimapVisible}
+                onToggleMinimap={toggleMinimap}
               />
             </Panel>
-            <MiniMap
-              pannable
-              zoomable
-              nodeColor={(n) => KIND_COLOR[((n.data as DfNodeData)?.stream?.kind) || 'select']}
-              nodeStrokeColor={tokens.colorNeutralStroke2}
-              maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
-              style={{ backgroundColor: tokens.colorNeutralBackground1 }}
-            />
+            {minimapVisible && (
+              <MiniMap
+                pannable
+                zoomable
+                nodeColor={(n) => KIND_COLOR[((n.data as DfNodeData)?.stream?.kind) || 'select']}
+                nodeStrokeColor={tokens.colorNeutralStroke2}
+                maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
+                style={{ backgroundColor: tokens.colorNeutralBackground1 }}
+              />
+            )}
           </ReactFlow>
         </div>
 

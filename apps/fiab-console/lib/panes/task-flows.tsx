@@ -58,6 +58,8 @@ import {
   CanvasNode, CanvasEdge, CanvasRightRail, CANVAS_NODE_WIDTH, portStyle, CATEGORY_ACCENT, accentTint,
   type CanvasVisual,
 } from '@/lib/components/canvas/canvas-node-kit';
+import { useCanvasBooleanPreference } from '@/lib/components/canvas/use-canvas-preference';
+import { useMinimapShortcut } from '@/lib/components/canvas/use-minimap-shortcut';
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 
 /**
@@ -236,6 +238,9 @@ function TaskFlowCanvasInner({ workspaceId, flow, items, onBack }: CanvasProps) 
   const rf = useReactFlow();
   const [zoom, setZoom] = useState(1);
   const [railCollapsed, setRailCollapsed] = useState(false);
+  const [minimapVisible, setMinimapVisible] = useCanvasBooleanPreference('task-flows', 'minimapVisible', true);
+  const toggleMinimap = useCallback(() => setMinimapVisible((v) => !v), [setMinimapVisible]);
+  useMinimapShortcut(toggleMinimap);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
@@ -512,15 +517,19 @@ function TaskFlowCanvasInner({ workspaceId, flow, items, onBack }: CanvasProps) 
               onFit={() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 })}
               collapsed={railCollapsed}
               onToggleCollapse={() => setRailCollapsed((v) => !v)}
+              minimapVisible={minimapVisible}
+              onToggleMinimap={toggleMinimap}
             />
           </Panel>
-          <MiniMap
-            pannable
-            zoomable
-            nodeStrokeColor={tokens.colorNeutralStroke2}
-            maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
-            style={{ backgroundColor: tokens.colorNeutralBackground1 }}
-          />
+          {minimapVisible && (
+            <MiniMap
+              pannable
+              zoomable
+              nodeStrokeColor={tokens.colorNeutralStroke2}
+              maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
+              style={{ backgroundColor: tokens.colorNeutralBackground1 }}
+            />
+          )}
           <Panel position="top-left">
             <Button size="small" appearance="primary" icon={<Add20Regular />} onClick={openAddStep}>Add step</Button>
           </Panel>

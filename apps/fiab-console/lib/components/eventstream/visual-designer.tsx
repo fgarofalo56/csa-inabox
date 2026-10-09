@@ -74,6 +74,8 @@ import {
   GhostNextStepNode, CanvasRightRail, ghostAnchorPosition, ghostEdgeId,
   accentTint, GHOST_NODE_ID, type GhostNodeData, type AnchorNode,
 } from '@/lib/components/canvas/canvas-node-kit';
+import { useCanvasBooleanPreference } from '@/lib/components/canvas/use-canvas-preference';
+import { useMinimapShortcut } from '@/lib/components/canvas/use-minimap-shortcut';
 import { CanvasCollabLayer } from '@/lib/components/canvas/canvas-collab-layer';
 import { useCanvasSuggestion } from '@/lib/collab/use-canvas-suggestion';
 import type { CanvasTopology } from '@/lib/collab/canvas-suggest';
@@ -501,6 +503,9 @@ function EventstreamCanvasInner({
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [zoom, setZoom] = useState(1);
   const [railCollapsed, setRailCollapsed] = useState(false);
+  const [minimapVisible, setMinimapVisible] = useCanvasBooleanPreference('eventstream-designer', 'minimapVisible', true);
+  const toggleMinimap = useCallback(() => setMinimapVisible((v) => !v), [setMinimapVisible]);
+  useMinimapShortcut(toggleMinimap);
   // Right-click node context menu ({x,y} relative to the canvas wrapper).
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; id: string } | null>(null);
 
@@ -722,13 +727,15 @@ function EventstreamCanvasInner({
             size={1.5}
             color={accentTint('var(--loom-accent-blue)', 45)}
           />
-          <MiniMap
-            pannable
-            zoomable
-            nodeStrokeColor={tokens.colorNeutralStroke2}
-            maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
-            style={{ backgroundColor: tokens.colorNeutralBackground1 }}
-          />
+          {minimapVisible && (
+            <MiniMap
+              pannable
+              zoomable
+              nodeStrokeColor={tokens.colorNeutralStroke2}
+              maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
+              style={{ backgroundColor: tokens.colorNeutralBackground1 }}
+            />
+          )}
           <Panel position="bottom-right">
             <CanvasRightRail
               zoom={zoom}
@@ -739,6 +746,8 @@ function EventstreamCanvasInner({
               onZoomOut={() => rf.zoomOut({ duration: 120 })}
               onFit={() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 })}
               collapsed={railCollapsed}
+              minimapVisible={minimapVisible}
+              onToggleMinimap={toggleMinimap}
               onToggleCollapse={() => setRailCollapsed((v) => !v)}
             />
           </Panel>
