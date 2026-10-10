@@ -64,7 +64,47 @@ import { redactSecrets } from './redact-secrets.mjs';
  * @returns {string}
  */
 function clean(v) {
-  return redactSecrets(String(v)).replace(/[\r\n|]+/g, ' ');
+  return redactSecrets(safeString(v)).replace(/[\r\n|]+/g, ' ');
+}
+
+/**
+ * TOTAL COERCION of a REMOTE value to a string (#4517).
+ *
+ * Every value this file touches comes from a response body the estate did not
+ * author, and `String(v)` is NOT total over that domain. The spec requires a
+ * `TypeError` when `ToPrimitive` yields no primitive: an object whose
+ * `toString` is present but not callable falls through to
+ * `Object.prototype.valueOf` (callable -- it returns the receiver) and then
+ * throws. Measured: `{"jobId":{"toString":42}}` is well-formed JSON with a
+ * READABLE `jobId` key, so `JSON.parse`, `readFileSync` and the truthiness test
+ * all succeed and the throw lands AFTER every guard -- which is how it reached
+ * `postJobId`'s `return` in the first place.
+ *
+ * `Object.prototype.toString.call` would NOT fix this: it reads the
+ * `Symbol.toStringTag` slot and never calls the user's `toString`, so it cannot
+ * throw, but it also silently discards the value (`[object Object]`) and would
+ * report a garbage body as if it carried data. This returns the EMPTY STRING
+ * instead, which is the vocabulary the rest of the module already uses for "the
+ * remote body carried nothing readable here" -- the callers' existing
+ * `v ? ... : ''` then need no change.
+ *
+ * Deliberately NOT exported. It is an internal safety net, not a boundary; the
+ * boundaries are `postJobId`, `pollFields` and `redactBodyFile`, and enrolling a
+ * third name would widen the surface `publication-surface-bypasses.test.mjs`
+ * treats as a redacting entry point.
+ *
+ * @param {unknown} v any value, including one whose coercion throws
+ * @returns {string} the string value, or '' when it cannot be coerced at all
+ */
+function safeString(v) {
+  // null/undefined have their own path: `String(null)` is the LITERAL "null",
+  // which every caller here treats as a value and would echo into a field.
+  if (v === null || v === undefined) return '';
+  try {
+    return String(v);
+  } catch {
+    return '';
+  }
 }
 
 /**
@@ -83,9 +123,9 @@ export function pollFields(parsed) {
   // store as the manifest, so a failure that happened on a replica this poll
   // will never reach is still readable here.
   const lr = (j.freshness && j.freshness.lastRun) || null;
-  const lo = lr && lr.outcome ? String(lr.outcome) : '';
-  const lf = lr && lr.finishedAt ? String(lr.finishedAt) : '';
-  const lj = lr && lr.jobId ? String(lr.jobId) : '';
+  const lo = lr && lr.outcome ? safeString(lr.outcome) : '';
+  const lf = lr && lr.finishedAt ? safeString(lr.finishedAt) : '';
+  const lj = lr && lr.jobId ? safeString(lr.jobId) : '';
   // `lr.error` is REMOTE-SUPPLIED — whatever string the freshness endpoint chose
   // to store — and the rebuild_failed branch in the shell echoes it to stdout.
   // On a `loom-roll-and-validate` run that stdout is a PUBLIC Actions log in a
@@ -99,7 +139,7 @@ export function pollFields(parsed) {
   // length bound and leave a fragment that no longer matches, publishing the
   // head of a key instead of `[redacted]`. Re-redacting in `clean` is a no-op
   // (the rules are idempotent); slicing an unredacted value is not.
-  const le = lr && lr.error ? redactSecrets(String(lr.error)).slice(0, 300) : '';
+  const le = lr && lr.error ? redactSecrets(safeString(lr.error)).slice(0, 300) : '';
   return [f, s, c, lo, lf, le, lj].map(clean);
 }
 
@@ -138,7 +178,13 @@ export function postJobId(p) {
     parsed = {};
   }
   const j = parsed && typeof parsed === 'object' ? parsed : {};
-  return j.jobId ? clean(String(j.jobId)) : '';
+  // #4517: NO `String()` HERE. `clean` coerces through `safeString` itself, and
+  // this outer `String()` was the crash site — it sat AFTER the read/parse guard
+  // and after the truthiness test, so a well-formed body with a non-coercible
+  // `jobId` threw here instead of returning ''. Removing it is not a cosmetic
+  // tidy: it is the difference between "no readable id" and a non-zero exit that
+  // disables the #4497 correlation with no disclosure.
+  return j.jobId ? clean(j.jobId) : '';
 }
 
 /**
