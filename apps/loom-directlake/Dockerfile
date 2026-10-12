@@ -62,6 +62,7 @@ FROM debian:bookworm-slim AS runtime
 
 # ca-certificates so the MI-authenticated HTTPS calls to ADLS / IMDS validate.
 RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 runner
