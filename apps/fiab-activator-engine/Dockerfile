@@ -18,6 +18,10 @@ WORKDIR /src/src/LoomActivator
 RUN dotnet publish -c Release -o /app --no-restore
 
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
+# Pull Debian security fixes ahead of the base image's next rebuild.
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 RUN groupadd --system loom && useradd --system --gid loom --uid 10001 loom
 COPY --from=build --chown=loom:loom /app .
