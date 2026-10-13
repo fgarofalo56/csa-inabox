@@ -3,6 +3,20 @@
 #
 # Status: SCAFFOLDED — production image per PRP-03
 
+# Read-only XMLA discovery client. Do not trim: ADOMD uses reflection.
+# Put the independent probe first for probe-only legacy Docker builds.
+FROM mcr.microsoft.com/dotnet/sdk:8.0-alpine AS aas-probe-builder
+WORKDIR /probe
+COPY tools/aas-probe/AasProbe.csproj tools/aas-probe/Program.cs ./
+RUN dotnet publish AasProbe.csproj -c Release -r linux-musl-x64 \
+    --self-contained true -p:PublishTrimmed=false -o /out
+
+# Probe-only smoke target; production inherits these same files and libraries.
+FROM node:22-alpine AS aas-probe-runtime
+RUN apk add --no-cache ca-certificates libgcc libssl3 libstdc++ zlib tzdata krb5
+COPY --from=aas-probe-builder /out /app/tools/aas-probe
+ENV DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
+
 # ============================================================
 # Stage 1 — dependencies
 # ============================================================
@@ -83,7 +97,7 @@ RUN npx --yes license-checker@0.6.3 --production --json \
 # ============================================================
 # Stage 3 — runner (production)
 # ============================================================
-FROM node:22-alpine AS runner
+FROM aas-probe-runtime AS runner
 
 WORKDIR /app
 

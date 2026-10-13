@@ -538,6 +538,14 @@ describe('R-CAP-4 — an unconfirmed resume is RESUME_FAILED, NEVER RUNNING', ()
     const poll = await pollResume(started.snapshot, rec.actuator, { now: '2026-08-23T01:00:00.000Z' });
     expect(poll.state).toBe('RESUME_FAILED');
     expect(poll.progress.every((p) => p.probed === false)).toBe(true);
+    // WHAT BREAKS THIS: claiming a real request failed when no probe ran.
+    expect(poll.unconfirmed.length).toBeGreaterThan(0);
+    for (const outcome of poll.unconfirmed) {
+      expect(outcome.observedState).toBe('Online');
+      expect(outcome.confirmation).toBe('unknown');
+      expect(outcome.reason).toContain('service readiness verification did not complete');
+      expect(outcome.reason).not.toContain('a real request to it did not succeed');
+    }
   });
 
   it('inside the published resume window an unconfirmed resource reads RESUMING, not a false failure', async () => {

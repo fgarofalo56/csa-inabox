@@ -74,6 +74,10 @@ const kustoExecuteQuery = vi.fn();
 vi.mock('@/lib/azure/kusto-client', () => ({
   executeQuery: (...a: unknown[]) => kustoExecuteQuery(...a),
 }));
+const probeAasServer = vi.fn();
+vi.mock('@/lib/azure/aas-readiness', () => ({
+  probeAasServer: (...a: unknown[]) => probeAasServer(...a),
+}));
 const listDatabases = vi.fn(() => {
   throw new Error('listDatabases() was called — it re-derives its target from process.env');
 });
@@ -168,7 +172,8 @@ beforeEach(() => {
     }
     return {
       tags: {},
-      properties: { state: 'Running', uri: 'https://adx-verified.eastus2.kusto.windows.net' },
+      properties: { state: 'Running', uri: 'https://adx-verified.eastus2.kusto.windows.net',
+        serverFullName: 'asazure://eastus.asazure.windows.net/aas-verified' },
       sku: { name: 'DW100c', capacity: 100 },
     };
   });
@@ -176,6 +181,8 @@ beforeEach(() => {
   armPatch.mockResolvedValue({});
   synapseExecuteQuery.mockResolvedValue({ rows: [{ loom_pause_probe: 1 }] });
   kustoExecuteQuery.mockResolvedValue({ rows: [[1]] });
+  probeAasServer.mockResolvedValue({ servable: true, probed: true,
+    detail: 'aas-verified answered server-level XMLA catalog discovery; model-query readiness was not tested.' });
   // The env deliberately names DIFFERENT resources than the fixtures, so any
   // env-derived target is immediately visible as a mismatch.
   process.env.LOOM_SUBSCRIPTION_ID = 'sub-FROM-ENV';
@@ -392,11 +399,37 @@ describe('probeServable — the CONFIRM path addresses the VERIFIED id too', () 
     expect(r.probed).toBe(true);
     expect(r.servable).toBe(true);
     expect(listDatabases).not.toHaveBeenCalled();
-    expect(armGet).toHaveBeenCalledWith(expect.stringContaining(`${ids.aas}/databases?`));
+    expect(armGet).toHaveBeenCalledWith(expect.stringContaining(`${ids.aas}?`));
+    expect(armGet.mock.calls.some((c) => String(c[0]).includes('/databases?'))).toBe(false);
+    expect(probeAasServer).toHaveBeenCalledWith(
+      'asazure://eastus.asazure.windows.net/aas-verified', 'aas-verified',
+    );
     for (const c of armGet.mock.calls) expect(String(c[0])).not.toContain('FROM-ENV');
-    // R7 — the old string claimed "over XMLA" for what is an ARM control-plane
-    // read. It must not claim a transport it did not use.
-    expect(r.detail).not.toMatch(/XMLA/i);
+    expect(r.detail).toMatch(/XMLA catalog discovery/);
+    expect(r.detail).toContain('model-query readiness was not tested');
+  });
+
+  it('leaves AAS unprobed when ARM omits connection metadata', async () => {
+    armGet.mockResolvedValue({ properties: {} });
+    const r = await (await createArmActuator()).probeServable(entryFor('aas'));
+    expect(r).toMatchObject({ servable: false, probed: false });
+    expect(r.detail).toContain('unverified');
+    expect(probeAasServer).not.toHaveBeenCalled();
+  });
+
+  it('does not interpret an AAS ARM read failure as XMLA failure', async () => {
+    armGet.mockRejectedValue(new Error('metadata denied'));
+    const r = await (await createArmActuator()).probeServable(entryFor('aas'));
+    expect(r).toMatchObject({ servable: false, probed: false });
+    expect(r.detail).toContain('unverified');
+    expect(probeAasServer).not.toHaveBeenCalled();
+  });
+
+  it('preserves unverified discovery failures without claiming server health', async () => {
+    probeAasServer.mockResolvedValue({ servable: false, probed: true, detail: 'AAS readiness is unverified: discovery did not succeed.' });
+    const r = await (await createArmActuator()).probeServable(entryFor('aas'));
+    expect(r).toMatchObject({ servable: false, probed: true });
+    expect(r.detail).toContain('unverified');
   });
 
   it('reads NO env var to decide WHAT to probe — the id is the only input', async () => {

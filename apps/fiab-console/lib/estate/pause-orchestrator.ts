@@ -935,7 +935,10 @@ export async function pollResume(
           confirmation: 'unknown',
           observedState: observed,
           reason:
-            `ARM reports ${entry.name} is ${observed}, but a real request to it did not succeed: `
+            `ARM reports ${entry.name} is ${observed}, but `
+            + (probe.probed
+              ? 'a real request to it did not succeed: '
+              : 'service readiness verification did not complete: ')
             + `${probe.detail} A resumed Synapse pool reports ONLINE 2-3 minutes before it can serve, `
             + 'so the status field alone does not establish that this resource is usable.',
         };
