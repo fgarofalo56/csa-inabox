@@ -178,3 +178,11 @@ overrides:
   # nothing is the worst shape available here, because it reads as "bumped".
   # The floor below is the mechanism that actually moves a transitive.
   browserslist: '>=4.28.7'
+  # CVE-2026-104848 / CVE-2026-104849: highest first-patched version 2.1.2.
+  # Vitest 3.2.7 is the sole consumer and declares ^1.1.1; this deliberate
+  # cross-major exception is scoped to Vitest and pinned to the minimum fix,
+  # not floated to 2.2+. Published 2.1.2 retains its pool/channel/lifecycle API
+  # and supports Node 20/22+. tinypool-compatibility.test.ts exercises both
+  # fork IPC and thread transferList calls, isolation, and recycling. Remove
+  # once Vitest's own range selects a patched version without this override.
+  'vitest>tinypool': '2.1.2'
