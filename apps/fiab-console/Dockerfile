@@ -97,12 +97,19 @@ RUN npx --yes license-checker@0.6.3 --production --json \
 # ============================================================
 # Stage 3 — runner (production)
 # ============================================================
-FROM aas-probe-runtime AS runner
+FROM node:22-alpine AS runner
 
 WORKDIR /app
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
+
+# AAS XMLA probe: same libraries and files as the aas-probe-runtime smoke
+# stage above. The runner keeps its own node:22-alpine FROM (the
+# preflight/Trivy regression tests pin `FROM node:... AS runner`).
+RUN apk add --no-cache ca-certificates libgcc libssl3 libstdc++ zlib tzdata krb5
+COPY --from=aas-probe-builder /out /app/tools/aas-probe
+ENV DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
 
 # B-SC1' (loom-apex): drop the bundled npm/npx from the RUNTIME image.
 # The console runs `node server.js` (Next standalone) and never shells out to
