@@ -13,11 +13,11 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1698 |
-| Public (no session) | 59 |
+| Total routes | 1700 |
+| Public (no session) | 60 |
 | Session-only | 614 |
 | Owner-scoped | 697 |
-| Admin | 328 |
+| Admin | 329 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 500 |
 | Areas | 122 |
@@ -255,6 +255,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `admin/dspm-ai/route.ts` | GET | admin | ● | Cosmos, Log Analytics, Microsoft Graph |
 | `admin/embed-codes/route.ts` | GET POST DELETE | admin | ● | ADLS, ARM, Azure Storage, Cosmos, Managed Identity |
 | `admin/env-config/route.ts` | GET PUT | admin |  | ADLS, AKS, ARM, Azure Monitor, Container Apps, Cosmos, Microsoft Graph |
+| `admin/estate/autopause/route.ts` | GET PUT | admin |  | Azure Monitor, Cosmos |
 | `admin/estate/pause/route.ts` | POST | admin |  | AAS, ADX, ARM, Azure Monitor, Azure SQL, Compute, Cosmos, Databricks, Managed Identity, Synapse, Synapse SQL |
 | `admin/estate/resume/route.ts` | POST | admin |  | AAS, ARM, Azure Monitor, Azure SQL, Cosmos, Databricks, Managed Identity, Synapse SQL |
 | `admin/estate/state/route.ts` | GET | admin |  | AAS, ADX, ARM, Azure SQL, Compute, Cosmos, Databricks, Managed Identity, Synapse, Synapse SQL |
@@ -903,6 +904,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | --- | --- | --- | :---: | --- |
 | `estate/execute/route.ts` | POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, ARM, Azure SQL, Azure Storage, Compute, Cosmos, Managed Identity, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Stream Analytics, Synapse |
 | `estate/plan/route.ts` | POST | session-only |  | AML, ARM, Azure AI Services, Azure Cache for Redis, Azure OpenAI, Cosmos, Stream Analytics |
+| `estate/power/route.ts` | GET POST | public |  | AAS, ADX, ARM, Azure Monitor, Azure SQL, Compute, Cosmos, Databricks, Managed Identity, Synapse, Synapse SQL |
 
 ## eventhubs
 
