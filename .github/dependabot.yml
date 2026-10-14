@@ -43,6 +43,18 @@ updates:
       interval: "weekly"
     labels: ["dependencies", "python"]
     open-pull-requests-limit: 10
+    # pydantic-ai 1.107.x (#4974/#4977, combined attempt #4984, 2026-10-14) cannot be
+    # taken by editing pins: the family pins itself (slim, graph, evals ==1.107.7) and
+    # the extras it ships floor other packages (genai-prices>=0.0.62, anthropic>=0.108.0,
+    # ...), each failing `resolve lock-copilot` one cascade at a time. A full
+    # pip-compile of requirements/locks/copilot also rewrote ~1000 lines, so the lock is
+    # stale against pyproject. Hold the family until the copilot lock is regenerated
+    # deliberately (one reviewed PR), then lift this.
+    ignore:
+      - dependency-name: "pydantic-ai"
+      - dependency-name: "pydantic-ai-slim"
+      - dependency-name: "pydantic-graph"
+      - dependency-name: "pydantic-evals"
     groups:
       azure-sdk:
         patterns:
