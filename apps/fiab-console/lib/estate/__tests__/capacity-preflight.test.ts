@@ -352,6 +352,24 @@ describe('summarizeResume', () => {
     expect(s.headline).toMatch(/Nothing has failed yet/);
   });
 
+  it('an online server with a probe 404 is a readiness failure, not a missing resource', () => {
+    // WHAT BREAKS THIS: classifying the probe's HTTP 404 as server deletion.
+    // observedState pins the successful ARM read, including legacy outcomes.
+    const outcomes: ResumeOutcome[] = [{
+      resourceId: entry.resourceId,
+      confirmation: 'unknown',
+      observedState: 'Online',
+      reason: 'ARM reports the server is Online, but its probe failed 404: unsupported endpoint',
+    }];
+    const s = summarizeResume('RESUME_FAILED', outcomes, [entry]);
+    expect(s.details[0].kind).toBe('readiness');
+    expect(s.details[0].remediation).toContain('unsupported endpoint');
+    expect(s.details[0].remediation).toMatch(/readiness/i);
+    expect(s.details[0].remediation).not.toMatch(/redeploy it from bicep|Grant.*Contributor/);
+    expect(s.headline).toContain('NOT confirmed');
+    expect(s.headline).not.toContain('those resources are unusable');
+  });
+
   it('an outcome for a resource NOT in the snapshot is reported, not dropped', () => {
     const outcomes: ResumeOutcome[] = [{ resourceId: '/ghost', confirmation: 'unknown', reason: 'no idea' }];
     const s = summarizeResume('RESUME_FAILED', outcomes, [entry]);

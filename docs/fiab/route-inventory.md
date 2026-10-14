@@ -256,7 +256,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `admin/embed-codes/route.ts` | GET POST DELETE | admin | ● | ADLS, ARM, Azure Storage, Cosmos, Managed Identity |
 | `admin/env-config/route.ts` | GET PUT | admin |  | ADLS, AKS, ARM, Azure Monitor, Container Apps, Cosmos, Microsoft Graph |
 | `admin/estate/pause/route.ts` | POST | admin |  | AAS, ADX, ARM, Azure Monitor, Azure SQL, Compute, Cosmos, Managed Identity, Synapse, Synapse SQL |
-| `admin/estate/resume/route.ts` | POST | admin |  | ARM, Azure Monitor, Azure SQL, Cosmos, Managed Identity, Synapse SQL |
+| `admin/estate/resume/route.ts` | POST | admin |  | AAS, ARM, Azure Monitor, Azure SQL, Cosmos, Managed Identity, Synapse SQL |
 | `admin/estate/state/route.ts` | GET | admin |  | AAS, ADX, ARM, Azure SQL, Compute, Cosmos, Managed Identity, Synapse, Synapse SQL |
 | `admin/feedback-forwarding/route.ts` | GET PUT | admin |  | Cosmos |
 | `admin/finops/anomalies/route.ts` | GET PUT DELETE | admin |  | ARM, Azure Cache for Redis, Azure Monitor, Cosmos, Cost Management |
@@ -2546,7 +2546,7 @@ silently downgrading the route.
 
 ## Backend signals (derived)
 
-456 module(s) ORIGINATE a backend label — the derivation read an
+457 module(s) ORIGINATE a backend label — the derivation read an
 Azure identifier out of them. Every other route/module below inherits through the
 call graph. Nothing in this section is a Loom module name someone typed: the
 modules are derived, and only the Microsoft-owned identifier vocabulary is seeded.
@@ -2911,6 +2911,7 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/auth/obo.ts` | Power Automate, Power Platform |
 | `apps/fiab-console/lib/auth/pdp/context-loader.ts` | Cosmos |
 | `apps/fiab-console/lib/azure/aas-client.ts` | AAS, Fabric, Power BI |
+| `apps/fiab-console/lib/azure/aas-readiness.ts` | AAS |
 | `apps/fiab-console/lib/azure/aas-server-client.ts` | AAS |
 | `apps/fiab-console/lib/azure/activator-client.ts` | Fabric, Power BI |
 | `apps/fiab-console/lib/azure/adf-client.ts` | ADF |

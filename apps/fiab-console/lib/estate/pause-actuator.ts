@@ -387,26 +387,23 @@ export async function createArmActuator(): Promise<EstateActuator> {
           };
         }
         case 'microsoft.analysisservices/servers': {
-          // HONEST SCOPE: this is an ARM CONTROL-PLANE read, addressed at the
-          // verified id. It establishes that this server is addressable and
-          // enumerable — NOT that a model will answer a query. The previous
-          // implementation called the env-pinned `listDatabases()` and described
-          // the result as "answered a model list over XMLA", which was untrue on
-          // both counts (R7): it is neither XMLA nor necessarily this server.
-          //
-          // A genuine AAS data-plane probe needs a different credential scope and
-          // host shape that nothing in this feature has ever exercised against
-          // live Azure. An unverified probe that errors would report
-          // RESUME_FAILED for a HEALTHY server, which is strictly worse than the
-          // weaker guarantee. Wiring the real XMLA probe is a tracked follow-up.
-          await armGet(`${entry.resourceId}/databases?api-version=${apiVersion(type)}`);
-          return {
-            servable: true,
-            probed: true,
-            detail:
-              `${entry.name} answered an ARM model-list request against its own resource id `
-              + '(control plane — this is not a data-plane query).',
-          };
+          // ARM has no documented databases-list child for AAS. Resolve the
+          // connection URI from this exact server, then ask the supported XMLA
+          // client for catalog discovery (not a model query or refresh).
+          const serverName = armIdSegment(entry.resourceId, 'servers');
+          if (!serverName) return unprobed(entry, 'its resource id does not name an AAS server');
+          let server;
+          try {
+            server = await armGet<{ properties?: { serverFullName?: string } }>(
+              `${entry.resourceId}?api-version=${apiVersion(type)}`,
+            );
+          } catch {
+            return unprobed(entry, 'AAS readiness is unverified: its ARM connection metadata could not be read');
+          }
+          const serverUri = server.properties?.serverFullName;
+          if (!serverUri) return unprobed(entry, 'AAS readiness is unverified: ARM returned no serverFullName');
+          const { probeAasServer } = await import('@/lib/azure/aas-readiness');
+          return probeAasServer(serverUri, serverName);
         }
         default:
           return {

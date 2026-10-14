@@ -36,7 +36,7 @@
  */
 
 import type { PausedResourceSnapshot, ResumeOutcome } from './pause-state';
-import { isResumeSuccess } from './pause-state';
+import { isResumeSuccess, isRunningState } from './pause-state';
 import type { EstateFallbackSku } from './pause-state';
 import type { PauseCandidate } from './pause-inventory';
 
@@ -65,6 +65,8 @@ export type ResumeFailureKind =
   | 'transient'
   /** A malformed or conflicting request (wrong state, bad body). */
   | 'configuration'
+  /** ARM found a running resource, but service readiness was not confirmed. */
+  | 'readiness'
   /** Not established. */
   | 'unknown';
 
@@ -167,6 +169,14 @@ export function remediationFor(
         `ARM rejected the resume of ${entry.name} as invalid for its current state — most often the `
         + 'resource is already mid-transition (Resuming/Scaling). Wait for the in-flight operation to '
         + 'finish and resume again; if it is genuinely stuck, check its state on /admin/scaling.'
+      );
+    case 'readiness':
+      return (
+        `ARM returned a running resource for ${entry.name}, but its service readiness check did not pass. `
+        + 'This does not establish that the resource is missing or unusable. Verify the readiness '
+        + 'endpoint and service-level access, then retry verification. Do not redeploy or change ARM '
+        + 'roles solely because this probe failed.'
+        + (rawError ? ` Probe evidence: ${rawError.slice(0, 800)}` : '')
       );
     case 'unknown':
     default:
@@ -357,7 +367,12 @@ export function summarizeResume(
     .filter((o) => !isResumeSuccess(o.confirmation))
     .map((o) => {
       const entry = byId.get(o.resourceId);
-      const { kind } = classifyActuationFailure(o.reason);
+      // A probe failure after a successful ARM read is not a missing resource.
+      // observedState also handles outcomes recorded before this repair.
+      const kind: ResumeFailureKind = o.confirmation === 'unknown'
+        && o.observedState !== undefined && isRunningState(o.observedState)
+        ? 'readiness'
+        : classifyActuationFailure(o.reason).kind;
       return {
         resourceId: o.resourceId,
         kind,
@@ -373,8 +388,8 @@ export function summarizeResume(
         ? `${details.length} of ${snapshotResources.length} resource(s) are still coming back. Nothing `
           + 'has failed yet — the published resume window has not elapsed.'
         : `${details.length} of ${snapshotResources.length} resource(s) are NOT confirmed running. The `
-          + 'estate is RESUME_FAILED. This is not a display state: those resources are unusable until '
-          + 'the remediation below is applied.',
+          + 'estate is RESUME_FAILED. This is not a display state: service readiness has NOT been '
+          + 'confirmed. Review the per-resource evidence and remediation below.',
     details,
   };
 }
