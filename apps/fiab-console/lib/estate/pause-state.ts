@@ -317,6 +317,12 @@ export interface EstateSkuSnapshot {
   capacity?: number;
 }
 
+/** A Container App replica range, as ARM expresses template.scale. */
+export interface EstateScaleSnapshot {
+  minReplicas?: number;
+  maxReplicas?: number;
+}
+
 /**
  * R-CAP-1 — a DECLARED fallback SKU for the capacity-constrained types.
  *
@@ -359,6 +365,14 @@ export interface PausedResourceSnapshot {
   sku?: EstateSkuSnapshot;
   /** Replica/instance/node count at pause time (ACA replicas, VMSS capacity). */
   replicaCount?: number;
+  /**
+   * Container Apps: the replica RANGE at pause time (template.scale). Resume
+   * restores both bounds exactly and never invents one that was not recorded.
+   * Optional and additive: snapshots persisted before this field existed simply
+   * lack it (no schema bump needed), and a Container App resume without it is
+   * refused rather than guessed.
+   */
+  scale?: EstateScaleSnapshot;
   /** R-CAP-1 — used only when the original SKU is unavailable on resume. */
   fallbackSku?: EstateFallbackSku;
 
@@ -672,6 +686,7 @@ export function capturePrePauseState(args: {
   reading: ArmPowerReading;
   sku?: EstateSkuSnapshot;
   replicaCount?: number;
+  scale?: EstateScaleSnapshot;
   fallbackSku?: EstateFallbackSku;
   ownership: LoomOwnershipEvidence;
 }): PausedResourceSnapshot {
@@ -713,6 +728,7 @@ export function capturePrePauseState(args: {
     powerStateApiVersion: args.reading.armApiVersion,
     ...(args.sku ? { sku: args.sku } : {}),
     ...(typeof args.replicaCount === 'number' ? { replicaCount: args.replicaCount } : {}),
+    ...(args.scale ? { scale: args.scale } : {}),
     ...(args.fallbackSku ? { fallbackSku: args.fallbackSku } : {}),
     ownership: args.ownership,
   };

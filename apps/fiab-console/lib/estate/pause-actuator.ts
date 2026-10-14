@@ -27,6 +27,7 @@ import {
   armPowerReading,
   type ArmPowerReading,
   type EstatePowerState,
+  type EstateScaleSnapshot,
   type EstateSkuSnapshot,
   type PausedResourceSnapshot,
 } from './pause-state';
@@ -52,6 +53,8 @@ export interface PowerRead {
   error?: string;
   sku?: EstateSkuSnapshot;
   replicaCount?: number;
+  /** Container Apps: the template.scale range, so resume restores it exactly. */
+  scale?: EstateScaleSnapshot;
 }
 
 /** Whether the resource can actually SERVE, as opposed to reporting a state. */
@@ -115,12 +118,71 @@ export function normalizePowerState(resourceType: string, raw: unknown): EstateP
       if (s === 'resuming' || s === 'preparing' || s === 'provisioning') return 'Resuming';
       if (s === 'scaling') return 'Scaling';
       return 'Unknown';
+    case 'microsoft.compute/virtualmachines': {
+      // instanceView status code, e.g. 'PowerState/running'. Learn: starting |
+      // running | stopping | stopped | deallocating | deallocated | unknown.
+      // 'stopped' is OS-stopped but STILL ALLOCATED (still billed); it is
+      // reported as Stopped, not Deallocated, so it is never mistaken for savings.
+      const v = s.startsWith('powerstate/') ? s.slice('powerstate/'.length) : s;
+      if (v === 'running') return 'Online';
+      if (v === 'deallocated') return 'Deallocated';
+      if (v === 'stopped') return 'Stopped';
+      if (v === 'starting') return 'Starting';
+      if (v === 'stopping' || v === 'deallocating') return 'Pausing';
+      return 'Unknown';
+    }
+    case 'microsoft.containerservice/managedclusters':
+      // properties.powerState.code: Running | Stopped. The caller substitutes
+      // provisioningState Starting/Stopping while an operation is in flight.
+      if (s === 'running') return 'Online';
+      if (s === 'stopped') return 'Stopped';
+      if (s === 'starting') return 'Starting';
+      if (s === 'stopping') return 'Pausing';
+      return 'Unknown';
+    case 'microsoft.app/containerapps':
+      // Not an ARM field: the caller derives it from template.scale + the live
+      // replica count (online = min > 0; paused = min 0 and 0 replicas;
+      // scaling = min 0 but replicas still running).
+      if (s === 'online') return 'Online';
+      if (s === 'paused') return 'Paused';
+      if (s === 'scaling') return 'Scaling';
+      return 'Unknown';
+    case 'microsoft.streamanalytics/streamingjobs':
+      // Learn jobState: Created | Starting | Running | Stopping | Stopped |
+      // Deleting | Failed | Degraded | Restarting | Scaling. Failed/Degraded are
+      // deliberately Unknown: a job in trouble is left alone, not "paused".
+      if (s === 'running') return 'Online';
+      if (s === 'stopped' || s === 'created') return 'Stopped';
+      if (s === 'starting' || s === 'restarting') return 'Starting';
+      if (s === 'stopping') return 'Pausing';
+      if (s === 'scaling') return 'Scaling';
+      return 'Unknown';
+    case 'microsoft.web/sites':
+      // properties.state: Running | Stopped (others, e.g. QuotaExceeded, Unknown).
+      if (s === 'running') return 'Online';
+      if (s === 'stopped') return 'Stopped';
+      return 'Unknown';
     default:
       if (s === 'online' || s === 'running' || s === 'succeeded') return 'Online';
       if (s === 'paused' || s === 'stopped' || s === 'suspended') return 'Paused';
       if (s === 'deallocated') return 'Deallocated';
       return 'Unknown';
   }
+}
+
+/** Shape of the Container App fields the actuator reads and writes. */
+interface AcaBody {
+  properties?: {
+    provisioningState?: string;
+    template?: { scale?: { minReplicas?: number; maxReplicas?: number } };
+  };
+}
+
+/** Compute the Container App power vocabulary from min replicas + live replicas. */
+function acaPowerWord(minReplicas: number | undefined, liveReplicas: number): string {
+  if (typeof minReplicas !== 'number') return '';
+  if (minReplicas > 0) return 'online';
+  return liveReplicas === 0 ? 'paused' : 'scaling';
 }
 
 /**
@@ -184,25 +246,153 @@ export async function createArmActuator(): Promise<EstateActuator> {
     name: string;
   }): Promise<PowerRead> => {
     const version = apiVersion(resource.resourceType);
+    const type = resource.resourceType.toLowerCase();
     try {
+      if (type === 'microsoft.app/containerapps') {
+        return await readContainerAppPower(resource.resourceId, version);
+      }
+      // A VM's power state lives in instanceView, which GET only returns on request.
+      const expand = type === 'microsoft.compute/virtualmachines' ? '&$expand=instanceView' : '';
       const body = await armGet<{
         sku?: { name?: string; tier?: string; family?: string; capacity?: number };
-        properties?: { status?: string; state?: string };
-      }>(`${resource.resourceId}?api-version=${version}`);
-      const raw = body?.properties?.status ?? body?.properties?.state;
+        properties?: {
+          status?: string;
+          state?: string;
+          jobState?: string;
+          provisioningState?: string;
+          powerState?: { code?: string };
+          hardwareProfile?: { vmSize?: string };
+          instanceView?: { statuses?: Array<{ code?: string }> };
+        };
+      }>(`${resource.resourceId}?api-version=${version}${expand}`);
+      let raw: unknown = body?.properties?.status ?? body?.properties?.state;
+      let sku = body?.sku;
+      if (type === 'microsoft.compute/virtualmachines') {
+        raw = (body?.properties?.instanceView?.statuses ?? [])
+          .map((st) => String(st?.code ?? ''))
+          .find((c) => c.toLowerCase().startsWith('powerstate/'));
+        // Record the size so resume can prove it restored the SAME VM size.
+        if (body?.properties?.hardwareProfile?.vmSize) sku = { name: body.properties.hardwareProfile.vmSize };
+      } else if (type === 'microsoft.containerservice/managedclusters') {
+        const prov = String(body?.properties?.provisioningState ?? '').toLowerCase();
+        raw = prov === 'starting' || prov === 'stopping' ? prov : body?.properties?.powerState?.code;
+      } else if (type === 'microsoft.streamanalytics/streamingjobs') {
+        raw = body?.properties?.jobState;
+      }
       return {
         reading: armPowerReading({
           resourceId: resource.resourceId,
           powerState: normalizePowerState(resource.resourceType, raw),
           armApiVersion: version,
         }),
-        ...(body?.sku ? { sku: body.sku } : {}),
-        ...(typeof body?.sku?.capacity === 'number' ? { replicaCount: body.sku.capacity } : {}),
+        ...(sku ? { sku } : {}),
+        ...(typeof sku?.capacity === 'number' ? { replicaCount: sku.capacity } : {}),
       };
     } catch (err) {
       // R7 — say what happened, do not convert a failed read into a state.
       return { reading: null, error: err instanceof Error ? err.message : String(err) };
     }
+  };
+
+  /**
+   * Read a Container App's replica range AND its live replica count. The count
+   * comes from the revisions list; if that cannot be read, the whole read fails
+   * (reading: null, via the caller's catch) rather than guessing 0 replicas and
+   * calling a busy app Paused.
+   */
+  const readContainerAppPower = async (resourceId: string, version: string): Promise<PowerRead> => {
+    const app = await armGet<AcaBody>(`${resourceId}?api-version=${version}`);
+    const revs = await armGet<{ value?: Array<{ properties?: { active?: boolean; replicas?: number } }> }>(
+      `${resourceId}/revisions?api-version=${version}`,
+    );
+    const live = (revs?.value ?? []).reduce(
+      (n, r) => n + (typeof r?.properties?.replicas === 'number' ? r.properties.replicas : 0),
+      0,
+    );
+    const min = app?.properties?.template?.scale?.minReplicas;
+    const max = app?.properties?.template?.scale?.maxReplicas;
+    return {
+      reading: armPowerReading({
+        resourceId,
+        powerState: normalizePowerState('microsoft.app/containerapps', acaPowerWord(min, live)),
+        armApiVersion: version,
+      }),
+      scale: {
+        ...(typeof min === 'number' ? { minReplicas: min } : {}),
+        ...(typeof max === 'number' ? { maxReplicas: max } : {}),
+      },
+      replicaCount: live,
+    };
+  };
+
+  /** PATCH template.scale on the VERIFIED id only; both bounds are always sent. */
+  const patchAcaScale = (resourceId: string, version: string, minReplicas: number, maxReplicas: number) =>
+    armPatch(`${resourceId}?api-version=${version}`, {
+      properties: { template: { scale: { minReplicas, maxReplicas } } },
+    });
+
+  const readAcaScale = async (resourceId: string, version: string) => {
+    const app = await armGet<AcaBody>(`${resourceId}?api-version=${version}`);
+    return app?.properties?.template?.scale ?? {};
+  };
+
+  /** Container App pause: record-free here (the snapshot already holds the range). */
+  const pauseContainerApp = async (resource: { resourceId: string; name: string }): Promise<ActuatorResult> => {
+    const version = apiVersion('microsoft.app/containerapps');
+    const current = await readAcaScale(resource.resourceId, version);
+    const max = current.maxReplicas;
+    if (current.minReplicas === 0) {
+      // Already 0: nothing to change and nothing to invent. Resume will not touch it
+      // because its recorded pre-pause state is not Online.
+      return { ok: true, detail: `Container App ${resource.name} already has minReplicas 0; nothing was changed.` };
+    }
+    if (typeof current.minReplicas !== 'number' || typeof max !== 'number') {
+      return {
+        ok: false,
+        detail: `Container App ${resource.name} did not report both minReplicas and maxReplicas, so its range could not be preserved. Left RUNNING.`,
+        error: 'aca-scale-unreadable',
+      };
+    }
+    await patchAcaScale(resource.resourceId, version, 0, max);
+    const after = await readAcaScale(resource.resourceId, version);
+    if (after.minReplicas !== 0) {
+      return {
+        ok: false,
+        detail: `ARM accepted the scale-to-zero of ${resource.name} but a read-back reports minReplicas ${String(after.minReplicas)}, not 0.`,
+        error: `aca-readback-mismatch:min=${String(after.minReplicas)}`,
+      };
+    }
+    return { ok: true, detail: `Container App ${resource.name} scaled to minReplicas 0 (was ${current.minReplicas}/${max}); read-back confirmed.` };
+  };
+
+  const resumeContainerApp = async (entry: PausedResourceSnapshot): Promise<ActuatorResult> => {
+    const version = apiVersion('microsoft.app/containerapps');
+    const min = entry.scale?.minReplicas;
+    const max = entry.scale?.maxReplicas;
+    if (typeof min !== 'number' || typeof max !== 'number') {
+      return {
+        ok: false,
+        detail:
+          `The snapshot has no recorded replica range for Container App ${entry.name}, so Loom will not invent one. `
+          + 'Set minReplicas/maxReplicas on the app by hand (Container Apps > Scale and replicas).',
+        error: 'aca-no-recorded-scale',
+      };
+    }
+    const current = await readAcaScale(entry.resourceId, version);
+    if (current.minReplicas !== min || current.maxReplicas !== max) {
+      await patchAcaScale(entry.resourceId, version, min, max);
+    }
+    const after = await readAcaScale(entry.resourceId, version);
+    if (after.minReplicas !== min || after.maxReplicas !== max) {
+      return {
+        ok: false,
+        detail:
+          `A read-back of ${entry.name} reports ${String(after.minReplicas)}/${String(after.maxReplicas)} but the recorded `
+          + `range is ${min}/${max}. It was NOT restored.`,
+        error: `aca-readback-mismatch:${String(after.minReplicas)}/${String(after.maxReplicas)}`,
+      };
+    }
+    return { ok: true, detail: `Container App ${entry.name} restored to minReplicas ${min} / maxReplicas ${max}; read-back confirmed.` };
   };
 
   const pause = async (candidate: PauseCandidate): Promise<ActuatorResult> => {
@@ -233,6 +423,25 @@ export async function createArmActuator(): Promise<EstateActuator> {
         case 'microsoft.compute/virtualmachinescalesets': {
           await armPatch(`${resource.resourceId}?api-version=${apiVersion(type)}`, { sku: { capacity: 0 } });
           return { ok: true, detail: `ARM accepted scaling ${resource.name} to 0 instances.` };
+        }
+        case 'microsoft.compute/virtualmachines': {
+          // Deallocate (not power-off): releases compute billing. Idempotent in ARM.
+          await armPost(`${resource.resourceId}/deallocate?api-version=${apiVersion(type)}`);
+          return { ok: true, detail: `ARM accepted the deallocation of VM ${resource.name}.` };
+        }
+        case 'microsoft.containerservice/managedclusters': {
+          await armPost(`${resource.resourceId}/stop?api-version=${apiVersion(type)}`);
+          return { ok: true, detail: `ARM accepted the stop of AKS cluster ${resource.name}.` };
+        }
+        case 'microsoft.app/containerapps':
+          return await pauseContainerApp(resource);
+        case 'microsoft.streamanalytics/streamingjobs': {
+          await armPost(`${resource.resourceId}/stop?api-version=${apiVersion(type)}`);
+          return { ok: true, detail: `ARM accepted the stop of Stream Analytics job ${resource.name}.` };
+        }
+        case 'microsoft.web/sites': {
+          await armPost(`${resource.resourceId}/stop?api-version=${apiVersion(type)}`);
+          return { ok: true, detail: `ARM accepted the stop of web app ${resource.name}.` };
         }
         default:
           return {
@@ -268,6 +477,27 @@ export async function createArmActuator(): Promise<EstateActuator> {
           const capacity = entry.replicaCount ?? entry.sku?.capacity ?? 1;
           await armPatch(`${entry.resourceId}?api-version=${apiVersion(type)}`, { sku: { capacity } });
           return { ok: true, detail: `ARM accepted restoring ${entry.name} to ${capacity} instance(s).` };
+        }
+        case 'microsoft.compute/virtualmachines': {
+          await armPost(`${entry.resourceId}/start?api-version=${apiVersion(type)}`);
+          return { ok: true, detail: `ARM accepted the start of VM ${entry.name}.` };
+        }
+        case 'microsoft.containerservice/managedclusters': {
+          await armPost(`${entry.resourceId}/start?api-version=${apiVersion(type)}`);
+          return { ok: true, detail: `ARM accepted the start of AKS cluster ${entry.name}.` };
+        }
+        case 'microsoft.app/containerapps':
+          return await resumeContainerApp(entry);
+        case 'microsoft.streamanalytics/streamingjobs': {
+          // Resume where the job left off rather than re-reading from JobStartTime.
+          await armPost(`${entry.resourceId}/start?api-version=${apiVersion(type)}`, {
+            outputStartMode: 'LastOutputEventTime',
+          });
+          return { ok: true, detail: `ARM accepted the start of Stream Analytics job ${entry.name} (LastOutputEventTime).` };
+        }
+        case 'microsoft.web/sites': {
+          await armPost(`${entry.resourceId}/start?api-version=${apiVersion(type)}`);
+          return { ok: true, detail: `ARM accepted the start of web app ${entry.name}.` };
         }
         default:
           return {
@@ -404,6 +634,78 @@ export async function createArmActuator(): Promise<EstateActuator> {
           if (!serverUri) return unprobed(entry, 'AAS readiness is unverified: ARM returned no serverFullName');
           const { probeAasServer } = await import('@/lib/azure/aas-readiness');
           return probeAasServer(serverUri, serverName);
+        }
+        case 'microsoft.compute/virtualmachines': {
+          // Running per instanceView AND, when the guest agent reports, Ready.
+          const vm = await armGet<{
+            properties?: { instanceView?: { statuses?: Array<{ code?: string }>; vmAgent?: { statuses?: Array<{ displayStatus?: string }> } } };
+          }>(`${entry.resourceId}?api-version=${apiVersion(type)}&$expand=instanceView`);
+          const view = vm?.properties?.instanceView;
+          const code = (view?.statuses ?? []).map((st) => String(st?.code ?? '')).find((c) => c.toLowerCase().startsWith('powerstate/'));
+          if (normalizePowerState(type, code) !== 'Online') {
+            return { servable: false, probed: true, detail: `${entry.name} reports power state ${code ?? 'unreported'}, not running.` };
+          }
+          const agent = view?.vmAgent?.statuses?.[0]?.displayStatus;
+          if (agent && agent.toLowerCase() !== 'ready') {
+            return { servable: false, probed: true, detail: `${entry.name} is running but its guest agent reports '${agent}', not Ready.` };
+          }
+          return {
+            servable: true,
+            probed: true,
+            detail: agent
+              ? `${entry.name} is running and its guest agent reports Ready.`
+              : `${entry.name} is running; no guest agent status was reported, so this is control-plane evidence only.`,
+          };
+        }
+        case 'microsoft.containerservice/managedclusters': {
+          const aks = await armGet<{ properties?: { provisioningState?: string; powerState?: { code?: string } } }>(
+            `${entry.resourceId}?api-version=${apiVersion(type)}`,
+          );
+          const prov = String(aks?.properties?.provisioningState ?? '');
+          const ok = prov.toLowerCase() === 'succeeded' && normalizePowerState(type, aks?.properties?.powerState?.code) === 'Online';
+          return {
+            servable: ok,
+            probed: true,
+            detail: ok
+              ? `${entry.name} reports provisioningState Succeeded and powerState Running (control-plane evidence; no kubeconfig round-trip was made).`
+              : `${entry.name} reports provisioningState '${prov}' and powerState '${String(aks?.properties?.powerState?.code ?? '')}'.`,
+          };
+        }
+        case 'microsoft.app/containerapps': {
+          const read = await readContainerAppPower(entry.resourceId, apiVersion(type));
+          const app = await armGet<AcaBody>(`${entry.resourceId}?api-version=${apiVersion(type)}`);
+          const prov = String(app?.properties?.provisioningState ?? '');
+          const restored =
+            read.scale?.minReplicas === entry.scale?.minReplicas && read.scale?.maxReplicas === entry.scale?.maxReplicas;
+          const ok = prov.toLowerCase() === 'succeeded' && restored && read.reading?.powerState === 'Online';
+          return {
+            servable: ok,
+            probed: true,
+            detail: ok
+              ? `${entry.name} is Succeeded with its recorded replica range restored (control-plane evidence).`
+              : `${entry.name} reports provisioningState '${prov}', range ${String(read.scale?.minReplicas)}/${String(read.scale?.maxReplicas)} vs recorded ${String(entry.scale?.minReplicas)}/${String(entry.scale?.maxReplicas)}.`,
+          };
+        }
+        case 'microsoft.streamanalytics/streamingjobs': {
+          const job = await armGet<{ properties?: { jobState?: string } }>(`${entry.resourceId}?api-version=${apiVersion(type)}`);
+          const ok = normalizePowerState(type, job?.properties?.jobState) === 'Online';
+          return {
+            servable: ok,
+            probed: true,
+            detail: `${entry.name} jobState is '${String(job?.properties?.jobState ?? '')}' (control-plane evidence; output flow was not measured).`,
+          };
+        }
+        case 'microsoft.web/sites': {
+          const site = await armGet<{ properties?: { state?: string; availabilityState?: string } }>(
+            `${entry.resourceId}?api-version=${apiVersion(type)}`,
+          );
+          const availability = String(site?.properties?.availabilityState ?? '');
+          const ok = normalizePowerState(type, site?.properties?.state) === 'Online' && availability.toLowerCase() !== 'limited';
+          return {
+            servable: ok,
+            probed: true,
+            detail: `${entry.name} state '${String(site?.properties?.state ?? '')}', availabilityState '${availability || 'unreported'}' (control-plane evidence; no HTTP request was made).`,
+          };
         }
         default:
           return {

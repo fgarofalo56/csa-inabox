@@ -152,6 +152,14 @@ export const TYPICAL_RESUME_SECONDS: Readonly<Record<string, number>> = {
   'microsoft.analysisservices/servers': 240,
   // VM allocation in a healthy region.
   'microsoft.compute/virtualmachinescalesets': 300,
+  // VM allocation + guest-agent heartbeat.
+  'microsoft.compute/virtualmachines': 300,
+  // AKS start re-provisions the control plane and nodes.
+  'microsoft.containerservice/managedclusters': 600,
+  // Scale from zero is seconds; revision activation is the long pole.
+  'microsoft.app/containerapps': 90,
+  'microsoft.streamanalytics/streamingjobs': 120,
+  'microsoft.web/sites': 60,
 };
 
 // ---------------------------------------------------------------------------
@@ -583,6 +591,7 @@ export async function startPause(
       reading: power.reading,
       sku: power.sku,
       replicaCount: power.replicaCount,
+      scale: power.scale,
       fallbackSku: candidate.fallbackSku,
       ownership: recheck.ownership,
     });
@@ -767,6 +776,44 @@ export async function pollPause(
 // Resume
 // ---------------------------------------------------------------------------
 
+/**
+ * Resume dispatch order: platform first, then data services, then the things
+ * that consume them. Lower rank dispatches earlier.
+ *
+ *   0  platform   AKS clusters (workloads cannot schedule without one)
+ *   1  data       ADX, Synapse pools, AAS, Stream Analytics
+ *   2  consumers  Container Apps, VMs, VM scale sets, Web sites
+ *
+ * An unrecognised type ranks with the consumers (last) rather than first, so
+ * a type this table has not been taught never jumps ahead of a data service.
+ * The sort is stable: within a rank the snapshot's own order is preserved.
+ * NOTE this orders DISPATCH only. Each verb returns once ARM accepts it, so a
+ * rank is not guaranteed to be fully up before the next starts; `pollResume`
+ * is what establishes that each resource is actually serving.
+ */
+const RESUME_RANK: Readonly<Record<string, number>> = {
+  'microsoft.containerservice/managedclusters': 0,
+  'microsoft.kusto/clusters': 1,
+  'microsoft.synapse/workspaces/sqlpools': 1,
+  'microsoft.analysisservices/servers': 1,
+  'microsoft.streamanalytics/streamingjobs': 1,
+  'microsoft.app/containerapps': 2,
+  'microsoft.compute/virtualmachines': 2,
+  'microsoft.compute/virtualmachinescalesets': 2,
+  'microsoft.web/sites': 2,
+};
+
+export function resumeRank(resourceType: string): number {
+  return RESUME_RANK[String(resourceType || '').toLowerCase()] ?? 2;
+}
+
+export function orderForResume<T extends { resourceType: string }>(entries: readonly T[]): T[] {
+  return entries
+    .map((entry, index) => ({ entry, index }))
+    .sort((a, b) => resumeRank(a.entry.resourceType) - resumeRank(b.entry.resourceType) || a.index - b.index)
+    .map((x) => x.entry);
+}
+
 export interface ResumeDispatch {
   resourceId: string;
   name: string;
@@ -805,7 +852,7 @@ export async function startResume(
   };
 
   const dispatches: ResumeDispatch[] = [];
-  for (const entry of snapshot.resources) {
+  for (const entry of orderForResume(snapshot.resources)) {
     // Restore TO the pre-pause state. Something that was already stopped when
     // Loom found it stays stopped — resuming it would be Loom starting a
     // resource nobody asked it to start.
