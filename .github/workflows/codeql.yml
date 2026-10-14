@@ -262,4 +262,3 @@ jobs:
           fi
           echo "[codeql] ${LANGUAGE}: stored analysis ${SHA} — rules=${RULES} results=${RESULTS} (category ${CATEGORY}, ref ${ANALYSIS_REF})."
           echo "[codeql] ${LANGUAGE}: analysis completed AND the upload was confirmed non-empty."
-
