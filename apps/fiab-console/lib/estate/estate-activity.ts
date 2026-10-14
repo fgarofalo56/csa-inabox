@@ -15,10 +15,9 @@
  * `idleForSeconds` is null when nothing is recorded or the read failed. Null is
  * "unknown", and the contract forbids auto-pausing on it.
  *
- * WIRING: call {@link recordHumanActivity} from the session-validation seam
- * (`getSession()` in lib/auth/session.ts, or middleware.ts). That seam is
- * outside this change's file ownership; until it calls this, nothing writes the
- * doc and `lastActivityAt` stays null, which the contract treats as unknown.
+ * WIRING: called from `withSession` in lib/api/route-toolkit.ts (the base every
+ * session-scoped wrapper composes on), fire-and-forget, with the request pathname.
+ * Routes that do not use the toolkit do not count as activity.
  */
 import type { EstateActivityStatus } from './estate-power-contract';
 

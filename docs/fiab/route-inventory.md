@@ -170,22 +170,22 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
-| `adf/cdc/route.ts` | GET POST DELETE | session-only | ● | ADF, ADLS, ADX, ARM, Azure Monitor, Azure Networking, Azure SQL, Azure Storage, Container Apps, Cost Management, Log Analytics, Managed Identity, Resource Graph, Synapse SQL |
-| `adf/dataflows/[name]/debug/route.ts` | GET POST | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cost Management, Log Analytics, Resource Graph |
-| `adf/dataflows/[name]/route.ts` | GET PUT DELETE | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cost Management, Log Analytics, Resource Graph |
-| `adf/dataflows/route.ts` | GET POST DELETE | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cost Management, Log Analytics, Resource Graph |
-| `adf/datasets/[name]/route.ts` | GET | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cost Management, Log Analytics, Resource Graph |
-| `adf/datasets/route.ts` | GET POST DELETE | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cost Management, Log Analytics, Resource Graph |
-| `adf/factories/create/route.ts` | POST | session-only |  | ADF, ARM |
-| `adf/global-parameters/route.ts` | GET PUT | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cost Management, Log Analytics, Resource Graph |
-| `adf/integration-runtimes/route.ts` | GET POST DELETE | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cost Management, Log Analytics, Resource Graph |
-| `adf/linked-services/[name]/route.ts` | GET | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cost Management, Log Analytics, Resource Graph |
-| `adf/linked-services/route.ts` | GET POST DELETE | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cost Management, Log Analytics, Resource Graph |
-| `adf/linked-services/test/route.ts` | POST | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cost Management, Log Analytics, Resource Graph |
-| `adf/managed-private-endpoints/route.ts` | GET POST DELETE | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cost Management, Log Analytics, Resource Graph |
-| `adf/pipelines/route.ts` | GET POST DELETE | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cost Management, Log Analytics, Resource Graph |
-| `adf/resource-json/route.ts` | GET | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cost Management, Log Analytics, Resource Graph |
-| `adf/triggers/route.ts` | GET POST DELETE | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cost Management, Log Analytics, Resource Graph |
+| `adf/cdc/route.ts` | GET POST DELETE | session-only | ● | ADF, ADLS, ADX, ARM, Azure Monitor, Azure Networking, Azure SQL, Azure Storage, Container Apps, Cosmos, Cost Management, Log Analytics, Managed Identity, Resource Graph, Synapse SQL |
+| `adf/dataflows/[name]/debug/route.ts` | GET POST | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Resource Graph |
+| `adf/dataflows/[name]/route.ts` | GET PUT DELETE | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Resource Graph |
+| `adf/dataflows/route.ts` | GET POST DELETE | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Resource Graph |
+| `adf/datasets/[name]/route.ts` | GET | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Resource Graph |
+| `adf/datasets/route.ts` | GET POST DELETE | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Resource Graph |
+| `adf/factories/create/route.ts` | POST | session-only |  | ADF, ARM, Cosmos |
+| `adf/global-parameters/route.ts` | GET PUT | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Resource Graph |
+| `adf/integration-runtimes/route.ts` | GET POST DELETE | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Resource Graph |
+| `adf/linked-services/[name]/route.ts` | GET | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Resource Graph |
+| `adf/linked-services/route.ts` | GET POST DELETE | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Resource Graph |
+| `adf/linked-services/test/route.ts` | POST | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Resource Graph |
+| `adf/managed-private-endpoints/route.ts` | GET POST DELETE | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Resource Graph |
+| `adf/pipelines/route.ts` | GET POST DELETE | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Resource Graph |
+| `adf/resource-json/route.ts` | GET | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Resource Graph |
+| `adf/triggers/route.ts` | GET POST DELETE | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Resource Graph |
 
 ## admin
 
@@ -204,12 +204,12 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `admin/azure-resources/route.ts` | GET | admin | ● | ARM |
 | `admin/batch-labeling/route.ts` | GET POST | admin |  | Cosmos, Fabric, Microsoft Graph, Power BI, Purview |
 | `admin/bootstrap-catalogs/route.ts` | POST | admin |  | AI Search, Cosmos |
-| `admin/brain/graph/route.ts` | GET | admin |  | ARM, Container Apps, Resource Graph, Retail Prices API |
-| `admin/brain/history/route.ts` | GET POST | admin |  | ARM, Container Apps, Resource Graph |
+| `admin/brain/graph/route.ts` | GET | admin |  | ARM, Container Apps, Cosmos, Resource Graph, Retail Prices API |
+| `admin/brain/history/route.ts` | GET POST | admin |  | ARM, Container Apps, Cosmos, Resource Graph |
 | `admin/brain/ownership-backfill/route.ts` | GET POST | admin |  | AAS, ADX, ARM, Azure Monitor, Compute, Cosmos, Synapse |
 | `admin/brain/perform/route.ts` | GET POST | admin | ● | ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Resource Graph, Retail Prices API |
 | `admin/brain/proposals/route.ts` | POST | admin |  | Azure Monitor, Cosmos |
-| `admin/brain/synapses/route.ts` | GET | admin |  | — |
+| `admin/brain/synapses/route.ts` | GET | admin |  | Cosmos |
 | `admin/capacity/chargeback/route.ts` | GET | admin |  | ARM, Azure Cache for Redis, Cosmos, Cost Management |
 | `admin/capacity/cost/route.ts` | GET | admin |  | ARM, Azure Cache for Redis, Cosmos, Cost Management, Microsoft Graph |
 | `admin/capacity/guardrails/route.ts` | GET PUT | admin |  | Azure Monitor, Cosmos |
@@ -272,7 +272,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `admin/health/exercise/route.ts` | GET POST | admin |  | ADLS, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Databricks, Event Hubs / Service Bus, Key Vault, PostgreSQL, Power Platform, Synapse, Synapse SQL |
 | `admin/lakehouse-roots/keep/route.ts` | POST | admin |  | ADLS, ARM, Azure Monitor, Azure Storage, Cosmos, Managed Identity |
 | `admin/lineage/reconcile/route.ts` | GET POST | admin |  | Cosmos, Purview |
-| `admin/load-sample-data/route.ts` | POST | admin |  | ADX, ARM, Managed Identity |
+| `admin/load-sample-data/route.ts` | POST | admin |  | ADX, ARM, Cosmos, Managed Identity |
 | `admin/mcp-servers/bridge/route.ts` | GET | admin |  | — |
 | `admin/mcp-servers/builtin/route.ts` | GET | admin |  | — |
 | `admin/mcp-servers/deploy/route.ts` | GET POST | admin | ● | ADLS, ARM, Azure Monitor, Azure Storage, Container Apps, Cosmos, Fabric, Key Vault, Microsoft Graph, Power BI |
@@ -334,7 +334,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `admin/scaling/foundry-compute/route.ts` | GET POST | admin |  | AML, ARM, Cosmos, Microsoft Graph |
 | `admin/scaling/synapse-dwu/route.ts` | GET POST | admin | ● | ARM, Cosmos, Microsoft Graph, Resource Graph, Synapse |
 | `admin/scaling/utilization/route.ts` | GET | admin | ● | ADX, AI Search, APIM, ARM, Container Apps, Cosmos, Microsoft Graph, Synapse |
-| `admin/secret-health/route.ts` | GET | admin |  | Key Vault, Microsoft Graph |
+| `admin/secret-health/route.ts` | GET | admin |  | Cosmos, Key Vault, Microsoft Graph |
 | `admin/security/dlp/alerts/route.ts` | GET | admin |  | Microsoft Graph, Purview |
 | `admin/security/dlp/manage/route.ts` | GET POST PATCH DELETE | admin |  | ADLS, Cosmos, Microsoft Graph, Purview |
 | `admin/security/dlp/policies/route.ts` | GET | admin |  | Microsoft Graph, Purview |
@@ -357,10 +357,10 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `admin/sensitivity-labels/route.ts` | GET POST DELETE | admin |  | Cosmos |
 | `admin/slo/route.ts` | GET | admin |  | ARM, Azure Cache for Redis, Azure Monitor, Azure Storage, Cosmos |
 | `admin/spark-telemetry/audit/route.ts` | GET POST | admin |  | ARM, Cosmos |
-| `admin/spark/chaos/route.ts` | POST | admin | ● | Synapse |
+| `admin/spark/chaos/route.ts` | POST | admin | ● | Cosmos, Synapse |
 | `admin/spark/health/route.ts` | GET | admin | ● | ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Resource Graph, Synapse |
 | `admin/spark/recover/route.ts` | GET POST | admin | ● | ADX, ARM, Azure Cache for Redis, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Resource Graph, Synapse |
-| `admin/synthetic-runs/route.ts` | GET | admin | ● | Azure Storage |
+| `admin/synthetic-runs/route.ts` | GET | admin | ● | Azure Storage, Cosmos |
 | `admin/tenant-settings/groups/route.ts` | GET | admin | ● | Microsoft Graph |
 | `admin/tenant-settings/route.ts` | GET PUT | admin |  | ADLS, Azure Monitor, Cosmos, Microsoft Graph |
 | `admin/updates/apply/route.ts` | GET POST | admin |  | ACR, ARM, Azure Monitor, Container Apps, Cosmos, Microsoft Graph |
@@ -439,11 +439,11 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `ai-search/index-my-data/prepare/route.ts` | GET | owner-scoped |  | ADLS, AI Search, AML, ARM, Azure AI Services, Azure OpenAI, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Resource Graph, Synapse |
 | `ai-search/index-my-data/run/route.ts` | POST | owner-scoped | ● | ADLS, AI Search, AML, ARM, Azure AI Services, Azure OpenAI, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Resource Graph, Synapse |
 | `ai-search/index-my-data/sources/route.ts` | GET | owner-scoped |  | Azure SQL, Cosmos, Microsoft Graph, Synapse |
-| `ai-search/indexers/route.ts` | GET POST DELETE | session-only | ● | AI Search |
+| `ai-search/indexers/route.ts` | GET POST DELETE | session-only | ● | AI Search, Cosmos |
 | `ai-search/indexes/[name]/analyze/route.ts` | POST | session-only | ● | AI Search |
 | `ai-search/indexes/[name]/route.ts` | GET PUT | session-only | ● | AI Search |
 | `ai-search/indexes/[name]/search/route.ts` | POST | session-only | ● | AI Search |
-| `ai-search/indexes/route.ts` | GET POST DELETE | session-only | ● | AI Search |
+| `ai-search/indexes/route.ts` | GET POST DELETE | session-only | ● | AI Search, Cosmos |
 | `ai-search/knowledge-bases/[name]/retrieve/route.ts` | POST | session-only | ● | AI Search |
 | `ai-search/knowledge-bases/[name]/route.ts` | GET | session-only | ● | AI Search |
 | `ai-search/knowledge-bases/route.ts` | GET POST DELETE | session-only | ● | AI Search |
@@ -457,20 +457,20 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
-| `aml/compute-instances/[name]/idle-shutdown/route.ts` | POST | session-only | ● | AML, ARM |
-| `aml/compute-instances/[name]/start/route.ts` | POST | session-only | ● | AML, ARM |
-| `aml/compute-instances/[name]/stop/route.ts` | POST | session-only | ● | AML, ARM |
-| `aml/compute-instances/mine/route.ts` | GET POST | session-only | ● | AML, ARM |
-| `aml/compute-instances/route.ts` | GET POST | session-only | ● | AML, ARM |
-| `aml/datastores/route.ts` | GET | session-only | ● | ADLS, AML, ARM, Azure Storage |
+| `aml/compute-instances/[name]/idle-shutdown/route.ts` | POST | session-only | ● | AML, ARM, Cosmos |
+| `aml/compute-instances/[name]/start/route.ts` | POST | session-only | ● | AML, ARM, Cosmos |
+| `aml/compute-instances/[name]/stop/route.ts` | POST | session-only | ● | AML, ARM, Cosmos |
+| `aml/compute-instances/mine/route.ts` | GET POST | session-only | ● | AML, ARM, Cosmos |
+| `aml/compute-instances/route.ts` | GET POST | session-only | ● | AML, ARM, Cosmos |
+| `aml/datastores/route.ts` | GET | session-only | ● | ADLS, AML, ARM, Azure Storage, Cosmos |
 | `aml/environments/route.ts` | GET POST PATCH | owner-scoped | ● | ADX, AML, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Microsoft Graph |
-| `aml/experiments/route.ts` | GET | session-only |  | AML, ARM |
-| `aml/runs/[runId]/artifact/route.ts` | GET | session-only | ● | ADX, AML, ARM, Azure Monitor, Azure Networking, Container Apps, Cost Management, Log Analytics |
-| `aml/runs/[runId]/artifacts/route.ts` | GET | session-only |  | AML, ARM |
-| `aml/runs/[runId]/metrics/route.ts` | GET | session-only |  | AML, ARM |
-| `aml/runs/[runId]/route.ts` | POST | session-only |  | AML, ARM |
-| `aml/runs/[runId]/traces/route.ts` | GET | session-only |  | AML, ARM |
-| `aml/runs/route.ts` | GET POST | session-only |  | AML, ARM |
+| `aml/experiments/route.ts` | GET | session-only |  | AML, ARM, Cosmos |
+| `aml/runs/[runId]/artifact/route.ts` | GET | session-only | ● | ADX, AML, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
+| `aml/runs/[runId]/artifacts/route.ts` | GET | session-only |  | AML, ARM, Cosmos |
+| `aml/runs/[runId]/metrics/route.ts` | GET | session-only |  | AML, ARM, Cosmos |
+| `aml/runs/[runId]/route.ts` | POST | session-only |  | AML, ARM, Cosmos |
+| `aml/runs/[runId]/traces/route.ts` | GET | session-only |  | AML, ARM, Cosmos |
+| `aml/runs/route.ts` | GET POST | session-only |  | AML, ARM, Cosmos |
 
 ## analytics
 
@@ -482,19 +482,19 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
-| `apim/apis/route.ts` | GET POST DELETE | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cost Management, Log Analytics |
-| `apim/backends/route.ts` | GET POST DELETE | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cost Management, Log Analytics |
-| `apim/developer-portal/route.ts` | GET POST | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cost Management, Log Analytics |
-| `apim/gateways/route.ts` | GET | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cost Management, Log Analytics |
-| `apim/import/route.ts` | POST | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cost Management, Log Analytics |
-| `apim/instances/route.ts` | GET | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cost Management, Log Analytics |
+| `apim/apis/route.ts` | GET POST DELETE | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
+| `apim/backends/route.ts` | GET POST DELETE | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
+| `apim/developer-portal/route.ts` | GET POST | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
+| `apim/gateways/route.ts` | GET | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
+| `apim/import/route.ts` | POST | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
+| `apim/instances/route.ts` | GET | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
 | `apim/named-values/route.ts` | GET POST DELETE | admin | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cost Management, Key Vault, Log Analytics |
-| `apim/operations/route.ts` | GET | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cost Management, Log Analytics |
-| `apim/products/route.ts` | GET POST DELETE | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cost Management, Log Analytics |
-| `apim/service/route.ts` | GET PATCH | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cost Management, Log Analytics |
-| `apim/subscriptions/[sid]/keys/route.ts` | GET | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cost Management, Log Analytics |
-| `apim/subscriptions/[sid]/route.ts` | PATCH DELETE | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cost Management, Log Analytics |
-| `apim/subscriptions/route.ts` | GET POST DELETE | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cost Management, Log Analytics |
+| `apim/operations/route.ts` | GET | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
+| `apim/products/route.ts` | GET POST DELETE | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
+| `apim/service/route.ts` | GET PATCH | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
+| `apim/subscriptions/[sid]/keys/route.ts` | GET | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
+| `apim/subscriptions/[sid]/route.ts` | PATCH DELETE | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
+| `apim/subscriptions/route.ts` | GET POST DELETE | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
 
 ## app-templates
 
@@ -558,11 +558,11 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
 | `azure/connectables/route.ts` | GET | session-only |  | ARM, Azure SQL, Cosmos, Event Hubs / Service Bus, Key Vault, Resource Graph, Synapse SQL |
-| `azure/function-apps/functions/route.ts` | GET | session-only |  | AAS, ARM, App Service, Azure SQL, Azure Storage, Power BI |
+| `azure/function-apps/functions/route.ts` | GET | session-only |  | AAS, ARM, App Service, Azure SQL, Azure Storage, Cosmos, Power BI |
 | `azure/function-apps/route.ts` | GET | session-only | ● | ARM, App Service |
 | `azure/iothub/policies/route.ts` | GET | session-only |  | ARM, Cosmos, IoT Hub |
 | `azure/resources/route.ts` | GET | session-only |  | ADF, ARM, App Service, Azure Networking, Cosmos, Cost Management, Management Groups, Resource Graph |
-| `azure/servicebus-entities/route.ts` | GET | session-only |  | ARM, Service Bus |
+| `azure/servicebus-entities/route.ts` | GET | session-only |  | ARM, Cosmos, Service Bus |
 
 ## business-events
 
@@ -595,7 +595,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `catalog/find/route.ts` | GET | session-only |  | AI Search, Cosmos |
 | `catalog/glossary/route.ts` | GET POST | session-only |  | Purview |
 | `catalog/iceberg/config/route.ts` | GET | session-only |  | ADX, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
-| `catalog/iceberg/connect/route.ts` | GET | session-only | ● | ADX, Azure Monitor, Azure Networking, Container Apps, Cost Management, Log Analytics |
+| `catalog/iceberg/connect/route.ts` | GET | session-only | ● | ADX, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
 | `catalog/iceberg/namespaces/route.ts` | GET POST | session-only |  | ADX, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
 | `catalog/iceberg/overview/route.ts` | GET | admin | ● | ADX, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
 | `catalog/iceberg/table/route.ts` | GET | session-only |  | ADX, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
@@ -610,7 +610,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `catalog/request-access/route.ts` | POST | owner-scoped |  | ADLS, ADX, ARM, Azure RBAC, Azure SQL, Azure Storage, Cosmos, Fabric, Managed Identity, Microsoft Graph, Resource Graph, Synapse, Synapse SQL |
 | `catalog/search/route.ts` | GET | owner-scoped |  | Azure Monitor, Cosmos, Fabric, Microsoft Graph, Purview |
 | `catalog/shortcut/route.ts` | GET POST DELETE | session-only | ● | Fabric, Purview |
-| `catalog/unity/capabilities/route.ts` | GET | session-only | ● | — |
+| `catalog/unity/capabilities/route.ts` | GET | session-only | ● | Cosmos |
 | `catalog/unity/foreign-catalogs/route.ts` | GET | admin | ● | Cosmos |
 | `catalog/unity/governance/route.ts` | GET POST | admin |  | Azure Monitor, Cosmos, Purview |
 | `catalog/unity/governed-tags/route.ts` | GET POST | admin |  | Cosmos |
@@ -623,7 +623,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `cdc/connectors/[id]/route.ts` | GET DELETE | owner-scoped |  | AI Search, Cosmos, Microsoft Graph, Purview |
 | `cdc/connectors/[id]/state/route.ts` | POST | owner-scoped |  | ADF, ADLS, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Key Vault, Managed Identity, Microsoft Graph, PostgreSQL, Resource Graph |
 | `cdc/connectors/route.ts` | GET POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, ARM, Azure Cache for Redis, Azure SQL, Azure Storage, Compute, Cosmos, Managed Identity, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Synapse |
-| `cdc/connectors/source-tables/route.ts` | POST | session-only |  | Azure SQL, PostgreSQL |
+| `cdc/connectors/source-tables/route.ts` | POST | session-only |  | Azure SQL, Cosmos, PostgreSQL |
 
 ## cloud
 
@@ -860,8 +860,8 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
-| `directlake/frame/route.ts` | POST | admin |  | — |
-| `directlake/scan/route.ts` | POST | admin |  | — |
+| `directlake/frame/route.ts` | POST | admin |  | Cosmos |
+| `directlake/scan/route.ts` | POST | admin |  | Cosmos |
 
 ## downloads
 
@@ -955,7 +955,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
-| `flightsql/connect/route.ts` | GET | session-only |  | — |
+| `flightsql/connect/route.ts` | GET | session-only |  | Cosmos |
 | `flightsql/session/route.ts` | POST | session-only |  | Azure Monitor, Cosmos |
 
 ## foundry
@@ -980,7 +980,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `foundry/computes/[id]/start/route.ts` | POST | session-only |  | AML, ARM |
 | `foundry/computes/[id]/status/route.ts` | GET | session-only |  | AML, ARM |
 | `foundry/computes/route.ts` | GET | session-only |  | AML, ARM |
-| `foundry/connections/route.ts` | GET POST PATCH DELETE | session-only |  | AML, ARM |
+| `foundry/connections/route.ts` | GET POST PATCH DELETE | session-only |  | AML, ARM, Cosmos |
 | `foundry/data-sources/route.ts` | GET | session-only | ● | AI Search |
 | `foundry/datastores/route.ts` | GET | session-only |  | AML, ARM |
 | `foundry/deployments/route.ts` | GET | session-only |  | AML, ARM |
@@ -1032,7 +1032,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `governance/govern/embed/route.ts` | GET | admin | ● | Fabric, Power BI |
 | `governance/govern/owner/route.ts` | GET | session-only |  | Cosmos |
 | `governance/govern/posture/route.ts` | GET | admin | ● | Cosmos, Log Analytics, Microsoft Graph, Purview |
-| `governance/govern/refresh/route.ts` | POST | session-only | ● | — |
+| `governance/govern/refresh/route.ts` | POST | session-only | ● | Cosmos |
 | `governance/govern/trigger-scan/route.ts` | GET POST | admin |  | ARM, Compute, Purview |
 | `governance/identities/search/route.ts` | GET | admin | ● | Cosmos, Microsoft Graph |
 | `governance/insights/route.ts` | GET | session-only |  | Azure Cache for Redis, Cosmos |
@@ -1195,7 +1195,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/ai-enrichment/[id]/run/route.ts` | POST | owner-scoped | ● | AI Search, AML, ARM, Azure AI Services, Azure Monitor, Azure OpenAI, Cosmos, Microsoft Graph |
 | `items/ai-enrichment/[id]/runs/route.ts` | GET | owner-scoped |  | Cosmos, Microsoft Graph |
 | `items/ai-enrichment/[id]/schema/route.ts` | GET | owner-scoped | ● | Azure Monitor, Cosmos, Microsoft Graph |
-| `items/ai-foundry-project/[id]/route.ts` | GET DELETE | session-only |  | AML, ARM |
+| `items/ai-foundry-project/[id]/route.ts` | GET DELETE | session-only |  | AML, ARM, Cosmos |
 | `items/ai-foundry-project/route.ts` | GET POST | session-only |  | AML, ARM |
 | `items/ai-red-team/[id]/route.ts` | GET PATCH DELETE | owner-scoped |  | AI Search, Cosmos, Microsoft Graph, Purview |
 | `items/ai-red-team/[id]/run/route.ts` | POST | owner-scoped | ● | AI Search, AML, ARM, Azure AI Services, Azure Cache for Redis, Azure OpenAI, Cosmos, Microsoft Graph |
@@ -1222,18 +1222,18 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/airflow-job/[id]/task-logs/route.ts` | GET | owner-scoped |  | Cosmos, Microsoft Graph |
 | `items/airflow-job/route.ts` | GET POST | owner-scoped |  | Cosmos |
 | `items/analysis-board/[id]/run/route.ts` | POST | owner-scoped | ● | ADX, ARM, Cosmos, Managed Identity, Microsoft Graph |
-| `items/apim-api/[id]/operations/route.ts` | GET POST PUT DELETE | session-only | ● | APIM, ARM |
+| `items/apim-api/[id]/operations/route.ts` | GET POST PUT DELETE | session-only | ● | APIM, ARM, Cosmos |
 | `items/apim-api/[id]/revisions/route.ts` | GET POST | session-only |  | APIM, ARM |
 | `items/apim-api/[id]/route.ts` | GET PUT DELETE | session-only |  | APIM, ARM |
 | `items/apim-api/[id]/spec/route.ts` | GET | session-only |  | APIM, ARM |
 | `items/apim-api/[id]/test-call/route.ts` | POST | session-only |  | APIM, ARM |
-| `items/apim-api/route.ts` | GET POST | session-only | ● | APIM, ARM |
+| `items/apim-api/route.ts` | GET POST | session-only | ● | APIM, ARM, Cosmos |
 | `items/apim-policy/[id]/route.ts` | GET PUT | session-only |  | APIM, ARM |
 | `items/apim-policy/route.ts` | GET PUT | session-only | ● | APIM, ARM |
 | `items/apim-product/[id]/apis/route.ts` | GET POST DELETE | session-only |  | APIM, ARM |
 | `items/apim-product/[id]/route.ts` | GET PUT DELETE | session-only |  | APIM, ARM |
 | `items/apim-product/[id]/subscriptions/route.ts` | GET | session-only |  | APIM, ARM |
-| `items/apim-product/route.ts` | GET POST | session-only | ● | APIM, ARM |
+| `items/apim-product/route.ts` | GET POST | session-only | ● | APIM, ARM, Cosmos |
 | `items/automl/[id]/assist/route.ts` | — | public |  | — |
 | `items/automl/jobs/[name]/route.ts` | GET DELETE | session-only | ● | AML, ARM |
 | `items/automl/jobs/route.ts` | GET | session-only | ● | AML, ARM |
@@ -1273,23 +1273,23 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/compute/[id]/start/route.ts` | POST | session-only |  | AML, ARM |
 | `items/compute/[id]/stop/route.ts` | POST | session-only |  | AML, ARM |
 | `items/compute/route.ts` | GET POST | session-only |  | AML, ARM |
-| `items/content-safety/blocklists/items/route.ts` | GET POST DELETE | session-only |  | Azure AI Services |
-| `items/content-safety/blocklists/route.ts` | GET POST DELETE | session-only |  | Azure AI Services |
-| `items/content-safety/rai-policies/route.ts` | GET POST DELETE | session-only |  | ARM, Azure AI Services |
-| `items/content-safety/route.ts` | GET POST | session-only |  | Azure AI Services |
-| `items/copilot-studio-action/[id]/route.ts` | PATCH DELETE | session-only |  | Power Automate, Power Platform |
-| `items/copilot-studio-action/route.ts` | GET POST | session-only |  | Power Automate, Power Platform |
-| `items/copilot-studio-agent/[id]/directline-token/route.ts` | POST | session-only |  | Direct Line |
-| `items/copilot-studio-agent/[id]/publish/route.ts` | POST | session-only |  | Dataverse, Power Automate, Power Platform |
-| `items/copilot-studio-agent/[id]/route.ts` | GET PATCH DELETE | session-only |  | Power Automate, Power Platform |
-| `items/copilot-studio-agent/route.ts` | GET POST | session-only |  | Power Automate, Power Platform |
-| `items/copilot-studio-analytics/[id]/route.ts` | GET | session-only |  | Power Automate, Power Platform |
-| `items/copilot-studio-channel/[id]/publish/route.ts` | POST | session-only |  | Bot Service, Power Automate, Power Platform |
-| `items/copilot-studio-channel/route.ts` | GET | session-only |  | Power Automate, Power Platform |
-| `items/copilot-studio-knowledge/[id]/route.ts` | DELETE | session-only |  | Power Automate, Power Platform |
-| `items/copilot-studio-knowledge/route.ts` | GET POST | session-only |  | Power Automate, Power Platform |
-| `items/copilot-studio-topic/[id]/route.ts` | GET PATCH DELETE | session-only |  | Power Automate, Power Platform |
-| `items/copilot-studio-topic/route.ts` | GET POST | session-only |  | Power Automate, Power Platform |
+| `items/content-safety/blocklists/items/route.ts` | GET POST DELETE | session-only |  | Azure AI Services, Cosmos |
+| `items/content-safety/blocklists/route.ts` | GET POST DELETE | session-only |  | Azure AI Services, Cosmos |
+| `items/content-safety/rai-policies/route.ts` | GET POST DELETE | session-only |  | ARM, Azure AI Services, Cosmos |
+| `items/content-safety/route.ts` | GET POST | session-only |  | Azure AI Services, Cosmos |
+| `items/copilot-studio-action/[id]/route.ts` | PATCH DELETE | session-only |  | Cosmos, Power Automate, Power Platform |
+| `items/copilot-studio-action/route.ts` | GET POST | session-only |  | Cosmos, Power Automate, Power Platform |
+| `items/copilot-studio-agent/[id]/directline-token/route.ts` | POST | session-only |  | Cosmos, Direct Line |
+| `items/copilot-studio-agent/[id]/publish/route.ts` | POST | session-only |  | Cosmos, Dataverse, Power Automate, Power Platform |
+| `items/copilot-studio-agent/[id]/route.ts` | GET PATCH DELETE | session-only |  | Cosmos, Power Automate, Power Platform |
+| `items/copilot-studio-agent/route.ts` | GET POST | session-only |  | Cosmos, Power Automate, Power Platform |
+| `items/copilot-studio-analytics/[id]/route.ts` | GET | session-only |  | Cosmos, Power Automate, Power Platform |
+| `items/copilot-studio-channel/[id]/publish/route.ts` | POST | session-only |  | Bot Service, Cosmos, Power Automate, Power Platform |
+| `items/copilot-studio-channel/route.ts` | GET | session-only |  | Cosmos, Power Automate, Power Platform |
+| `items/copilot-studio-knowledge/[id]/route.ts` | DELETE | session-only |  | Cosmos, Power Automate, Power Platform |
+| `items/copilot-studio-knowledge/route.ts` | GET POST | session-only |  | Cosmos, Power Automate, Power Platform |
+| `items/copilot-studio-topic/[id]/route.ts` | GET PATCH DELETE | session-only |  | Cosmos, Power Automate, Power Platform |
+| `items/copilot-studio-topic/route.ts` | GET POST | session-only |  | Cosmos, Power Automate, Power Platform |
 | `items/copilot-template-library/[id]/route.ts` | GET POST DELETE | session-only |  | Cosmos, Power Automate, Power Platform |
 | `items/copilot-template-library/route.ts` | GET POST | session-only |  | Cosmos |
 | `items/copy-job/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | AI Search, Cosmos, Microsoft Graph, Purview, Synapse |
@@ -1309,7 +1309,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/dashboard/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | Cosmos, Fabric, Microsoft Graph, Power BI |
 | `items/dashboard/[id]/tile-embed-token/route.ts` | POST | owner-scoped |  | Cosmos, Fabric, Microsoft Graph, Power BI |
 | `items/dashboard/[id]/tile-query/route.ts` | POST | owner-scoped | ● | AAS, ADX, AML, ARM, Azure AI Services, Azure Cache for Redis, Azure OpenAI, Cosmos, Fabric, Managed Identity, Microsoft Graph, Power BI |
-| `items/dashboard/route.ts` | GET | session-only |  | Fabric, Power BI |
+| `items/dashboard/route.ts` | GET | session-only |  | Cosmos, Fabric, Power BI |
 | `items/data-agent/[id]/a2a/route.ts` | GET POST | owner-scoped |  | AAS, ADX, AI Search, AML, ARM, Azure AI Services, Azure Cache for Redis, Azure Monitor, Azure OpenAI, Azure SQL, Container Apps, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
 | `items/data-agent/[id]/chat/route.ts` | POST | owner-scoped |  | AAS, ADX, AI Search, AML, ARM, Azure AI Services, Azure Cache for Redis, Azure Monitor, Azure OpenAI, Azure SQL, Container Apps, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
 | `items/data-agent/[id]/conversations/route.ts` | GET POST DELETE | session-only |  | Cosmos |
@@ -1411,7 +1411,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/dataset/[id]/lineage/route.ts` | GET | admin |  | AML, ARM, Cosmos, Microsoft Graph |
 | `items/dataset/[id]/preview/route.ts` | GET | admin | ● | ADLS, AML, ARM, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
 | `items/dataset/[id]/route.ts` | GET | admin |  | AML, ARM, Cosmos, Microsoft Graph |
-| `items/dataset/browse/route.ts` | GET | session-only |  | ADLS, ARM, Azure Storage, Managed Identity |
+| `items/dataset/browse/route.ts` | GET | session-only |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity |
 | `items/dataset/route.ts` | GET POST | session-only |  | AML, ARM |
 | `items/dataverse-table/[id]/business-rules/route.ts` | GET | session-only |  | Power Automate, Power Platform |
 | `items/dataverse-table/[id]/columns/route.ts` | POST | session-only | ● | Dataverse, Power Automate, Power Platform |
@@ -1554,10 +1554,10 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/map/[id]/geocode/route.ts` | POST | owner-scoped | ● | Azure Maps, Cosmos, Microsoft Graph |
 | `items/map/[id]/map-token/route.ts` | GET | owner-scoped |  | Azure Maps, Cosmos, Microsoft Graph |
 | `items/map/[id]/route.ts` | GET PATCH DELETE | owner-scoped |  | AI Search, Cosmos, Microsoft Graph, Purview |
-| `items/mapping-dataflow/[id]/debug/preview/route.ts` | POST | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cost Management, Log Analytics, Resource Graph |
-| `items/mapping-dataflow/[id]/debug/schema/route.ts` | POST | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cost Management, Log Analytics, Resource Graph |
-| `items/mapping-dataflow/[id]/debug/session/route.ts` | POST | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cost Management, Log Analytics, Resource Graph |
-| `items/mapping-dataflow/[id]/debug/stats/route.ts` | POST | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cost Management, Log Analytics, Resource Graph |
+| `items/mapping-dataflow/[id]/debug/preview/route.ts` | POST | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Resource Graph |
+| `items/mapping-dataflow/[id]/debug/schema/route.ts` | POST | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Resource Graph |
+| `items/mapping-dataflow/[id]/debug/session/route.ts` | POST | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Resource Graph |
+| `items/mapping-dataflow/[id]/debug/stats/route.ts` | POST | session-only | ● | ADF, ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Resource Graph |
 | `items/materialized-lake-view/[id]/adf-pipeline/route.ts` | GET POST | owner-scoped | ● | ADF, ADLS, ARM, Azure Storage, Cosmos, Resource Graph |
 | `items/materialized-lake-view/[id]/assist/route.ts` | — | public |  | — |
 | `items/materialized-lake-view/[id]/lineage/route.ts` | GET POST | owner-scoped |  | Cosmos |
@@ -1656,7 +1656,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/postgres-flexible-server/[id]/databases/route.ts` | GET | owner-scoped |  | ARM, Azure SQL, Cosmos, Microsoft Graph, PostgreSQL |
 | `items/postgres-flexible-server/[id]/firewall/route.ts` | GET POST DELETE | owner-scoped |  | ARM, Azure SQL, Cosmos, Microsoft Graph, PostgreSQL |
 | `items/postgres-flexible-server/[id]/query/route.ts` | POST | owner-scoped |  | ARM, Azure SQL, Cosmos, Microsoft Graph, PostgreSQL |
-| `items/postgres-flexible-server/route.ts` | GET POST | session-only | ● | ARM, Key Vault, PostgreSQL |
+| `items/postgres-flexible-server/route.ts` | GET POST | session-only | ● | ARM, Cosmos, Key Vault, PostgreSQL |
 | `items/power-app/[id]/publish/route.ts` | POST | owner-scoped |  | Cosmos, Power Automate, Power Platform |
 | `items/power-app/[id]/route.ts` | GET | owner-scoped |  | Cosmos, Power Automate, Power Platform |
 | `items/power-app/[id]/state/route.ts` | GET POST | owner-scoped |  | Cosmos |
@@ -1769,14 +1769,14 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/sql-databases/route.ts` | GET | session-only |  | ARM, Azure SQL, PostgreSQL |
 | `items/sql-server-2025-vector-index/route.ts` | GET POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, ARM, Azure SQL, Azure Storage, Compute, Cosmos, Managed Identity, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Synapse |
 | `items/stream-analytics-job/[name]/assist/route.ts` | — | public |  | — |
-| `items/stream-analytics-job/[name]/inputs/route.ts` | PUT DELETE | session-only |  | ADX, ARM, Azure SQL, Azure Storage, Event Hubs, IoT Hub, PostgreSQL, Service Bus, Stream Analytics |
-| `items/stream-analytics-job/[name]/metrics/route.ts` | GET | session-only |  | ADX, ARM, Azure SQL, Azure Storage, Event Hubs, IoT Hub, PostgreSQL, Service Bus, Stream Analytics |
-| `items/stream-analytics-job/[name]/outputs/route.ts` | PUT DELETE | session-only |  | ADX, ARM, Azure SQL, Azure Storage, Event Hubs, IoT Hub, PostgreSQL, Service Bus, Stream Analytics |
-| `items/stream-analytics-job/[name]/query/route.ts` | PUT | session-only |  | ADX, ARM, Azure SQL, Azure Storage, Event Hubs, IoT Hub, PostgreSQL, Service Bus, Stream Analytics |
+| `items/stream-analytics-job/[name]/inputs/route.ts` | PUT DELETE | session-only |  | ADX, ARM, Azure SQL, Azure Storage, Cosmos, Event Hubs, IoT Hub, PostgreSQL, Service Bus, Stream Analytics |
+| `items/stream-analytics-job/[name]/metrics/route.ts` | GET | session-only |  | ADX, ARM, Azure SQL, Azure Storage, Cosmos, Event Hubs, IoT Hub, PostgreSQL, Service Bus, Stream Analytics |
+| `items/stream-analytics-job/[name]/outputs/route.ts` | PUT DELETE | session-only |  | ADX, ARM, Azure SQL, Azure Storage, Cosmos, Event Hubs, IoT Hub, PostgreSQL, Service Bus, Stream Analytics |
+| `items/stream-analytics-job/[name]/query/route.ts` | PUT | session-only |  | ADX, ARM, Azure SQL, Azure Storage, Cosmos, Event Hubs, IoT Hub, PostgreSQL, Service Bus, Stream Analytics |
 | `items/stream-analytics-job/[name]/route.ts` | GET POST | owner-scoped |  | ADX, ARM, Azure SQL, Azure Storage, Cosmos, Event Hubs, IoT Hub, Microsoft Graph, PostgreSQL, Service Bus, Stream Analytics |
-| `items/stream-analytics-job/[name]/state/route.ts` | POST | session-only |  | ADX, ARM, Azure SQL, Azure Storage, Event Hubs, IoT Hub, PostgreSQL, Service Bus, Stream Analytics |
-| `items/stream-analytics-job/[name]/test/route.ts` | POST | session-only |  | ADX, ARM, Azure SQL, Azure Storage, Event Hubs, IoT Hub, PostgreSQL, Service Bus, Stream Analytics |
-| `items/stream-analytics-job/route.ts` | GET | session-only |  | ADX, ARM, Azure SQL, Azure Storage, Event Hubs, IoT Hub, PostgreSQL, Service Bus, Stream Analytics |
+| `items/stream-analytics-job/[name]/state/route.ts` | POST | session-only |  | ADX, ARM, Azure SQL, Azure Storage, Cosmos, Event Hubs, IoT Hub, PostgreSQL, Service Bus, Stream Analytics |
+| `items/stream-analytics-job/[name]/test/route.ts` | POST | session-only |  | ADX, ARM, Azure SQL, Azure Storage, Cosmos, Event Hubs, IoT Hub, PostgreSQL, Service Bus, Stream Analytics |
+| `items/stream-analytics-job/route.ts` | GET | session-only |  | ADX, ARM, Azure SQL, Azure Storage, Cosmos, Event Hubs, IoT Hub, PostgreSQL, Service Bus, Stream Analytics |
 | `items/synapse-dedicated-sql-pool/[id]/cancel/route.ts` | POST | owner-scoped |  | Azure SQL, Cosmos, Microsoft Graph |
 | `items/synapse-dedicated-sql-pool/[id]/clone/route.ts` | POST | owner-scoped |  | ARM, Azure SQL, Cosmos, Managed Identity, Microsoft Graph, Resource Graph, Synapse, Synapse SQL |
 | `items/synapse-dedicated-sql-pool/[id]/connection/route.ts` | GET | session-only |  | ADLS, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Databricks, Event Hubs / Service Bus, Key Vault, PostgreSQL, Synapse, Synapse SQL |
@@ -1806,7 +1806,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/synapse-spark-pool/[id]/auto-pause/route.ts` | POST | session-only |  | ARM, Resource Graph, Synapse |
 | `items/synapse-spark-pool/[id]/config/route.ts` | POST | session-only |  | ARM, Resource Graph, Synapse |
 | `items/synapse-spark-pool/[id]/route.ts` | GET PUT | session-only |  | ARM, Resource Graph, Synapse |
-| `items/synapse-spark-pool/[id]/runs/route.ts` | GET | session-only |  | Synapse |
+| `items/synapse-spark-pool/[id]/runs/route.ts` | GET | session-only |  | Cosmos, Synapse |
 | `items/synapse-spark-pool/[id]/scale/route.ts` | POST | session-only |  | ARM, Resource Graph, Synapse |
 | `items/synapse-spark-pool/[id]/state/route.ts` | GET POST | session-only |  | ARM, Resource Graph, Synapse |
 | `items/synapse-spark-pool/[id]/submit/route.ts` | POST | session-only |  | Synapse |
@@ -1826,7 +1826,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/transformation-project/route.ts` | GET POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, ARM, Azure SQL, Azure Storage, Compute, Cosmos, Managed Identity, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Synapse |
 | `items/user-data-function/[id]/invoke/route.ts` | POST | owner-scoped |  | Cosmos, Fabric, Key Vault, Microsoft Graph |
 | `items/user-data-function/[id]/route.ts` | GET PATCH DELETE | owner-scoped |  | AI Search, Cosmos, Microsoft Graph, Purview |
-| `items/user-data-function/endpoints/route.ts` | GET | session-only |  | — |
+| `items/user-data-function/endpoints/route.ts` | GET | session-only |  | Cosmos |
 | `items/variable-library/[id]/resolve/route.ts` | POST | owner-scoped |  | Cosmos, Key Vault, Microsoft Graph |
 | `items/variable-library/[id]/route.ts` | GET PATCH DELETE | owner-scoped |  | AI Search, Cosmos, Microsoft Graph, Purview |
 | `items/vector-store/[id]/index/route.ts` | GET POST PUT | session-only |  | AI Search, PostgreSQL |
@@ -1858,7 +1858,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
-| `keyvault/secret-names/route.ts` | GET | admin |  | ARM, Key Vault, Managed Identity |
+| `keyvault/secret-names/route.ts` | GET | admin |  | ARM, Cosmos, Key Vault, Managed Identity |
 
 ## lakehouse
 
@@ -1874,7 +1874,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `lakehouse/maintenance/route.ts` | GET POST | owner-scoped |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Synapse |
 | `lakehouse/path/route.ts` | POST DELETE | owner-scoped |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph |
 | `lakehouse/paths/route.ts` | GET | admin |  | AAS, ADLS, ARM, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Power BI |
-| `lakehouse/permissions/rls-test/route.ts` | POST | admin |  | ARM, Azure SQL, Managed Identity, Synapse SQL |
+| `lakehouse/permissions/rls-test/route.ts` | POST | admin |  | ARM, Azure SQL, Cosmos, Managed Identity, Synapse SQL |
 | `lakehouse/permissions/route.ts` | GET POST DELETE | admin |  | ADLS, ARM, Azure RBAC, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Resource Graph, Synapse SQL |
 | `lakehouse/preview/route.ts` | GET | owner-scoped |  | ADLS, ARM, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
 | `lakehouse/references/paths/route.ts` | GET | owner-scoped |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph |
@@ -1883,7 +1883,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `lakehouse/settings/route.ts` | GET PUT | owner-scoped | ● | ADLS, ARM, Azure Monitor, Azure Storage, Cosmos, Managed Identity, Microsoft Graph |
 | `lakehouse/shortcuts/adls-scope/route.ts` | GET | owner-scoped |  | ADLS, Azure Storage, Cosmos, Microsoft Graph |
 | `lakehouse/shortcuts/browse/route.ts` | GET | owner-scoped | ● | ADLS, ARM, Azure Monitor, Azure Storage, Cosmos, Key Vault, Managed Identity, Microsoft Graph |
-| `lakehouse/shortcuts/credentials/route.ts` | POST | session-only | ● | Key Vault |
+| `lakehouse/shortcuts/credentials/route.ts` | POST | session-only | ● | Cosmos, Key Vault |
 | `lakehouse/shortcuts/route.ts` | GET POST DELETE | owner-scoped |  | ADLS, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Key Vault, Managed Identity, Microsoft Graph, Synapse SQL |
 | `lakehouse/shortcuts/sharepoint/route.ts` | GET | session-only | ● | Microsoft Graph |
 | `lakehouse/shortcuts/test/route.ts` | POST | owner-scoped | ● | ADLS, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Key Vault, Managed Identity, Microsoft Graph, Synapse SQL |
@@ -2024,8 +2024,8 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `monitor/diagnostics/route.ts` | GET POST | session-only |  | ARM, Azure Cache for Redis, Cosmos |
 | `monitor/health/route.ts` | GET | session-only |  | ARM, Azure Cache for Redis, Cosmos, Resource Graph, Resource Health |
 | `monitor/inventory/route.ts` | GET | session-only |  | ARM, Azure Cache for Redis, Cosmos |
-| `monitor/logic-app-callback/route.ts` | POST | session-only |  | AAS, ARM, Azure SQL, Azure Storage, Logic Apps, Power BI |
-| `monitor/logic-app-triggers/route.ts` | GET | session-only |  | AAS, ARM, Azure SQL, Azure Storage, Logic Apps, Power BI |
+| `monitor/logic-app-callback/route.ts` | POST | session-only |  | AAS, ARM, Azure SQL, Azure Storage, Cosmos, Logic Apps, Power BI |
+| `monitor/logic-app-triggers/route.ts` | GET | session-only |  | AAS, ARM, Azure SQL, Azure Storage, Cosmos, Logic Apps, Power BI |
 | `monitor/logs/route.ts` | GET POST | session-only |  | Log Analytics |
 | `monitor/metrics/route.ts` | POST | session-only |  | ARM, Azure Cache for Redis, Cosmos |
 | `monitor/spark/route.ts` | GET | session-only |  | Log Analytics, Synapse |
@@ -2125,7 +2125,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `powerplatform/environments/operation/route.ts` | GET | session-only | ● | Power Automate, Power Platform |
 | `powerplatform/environments/route.ts` | GET POST PATCH DELETE | session-only | ● | Power Automate, Power Platform |
 | `powerplatform/flows/route.ts` | GET POST DELETE | session-only | ● | Power Automate, Power Platform |
-| `powerplatform/solutions/route.ts` | GET POST DELETE | session-only | ● | Power Automate, Power Platform |
+| `powerplatform/solutions/route.ts` | GET POST DELETE | session-only | ● | Cosmos, Power Automate, Power Platform |
 | `powerplatform/tables/route.ts` | GET POST | session-only | ● | Dataverse, Power Automate, Power Platform |
 
 ## pub
@@ -2150,7 +2150,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `realtime-hub/http-source/route.ts` | POST | session-only |  | Event Hubs, Event Hubs / Service Bus |
 | `realtime-hub/keyvault-certificates/route.ts` | GET | session-only | ● | Key Vault |
 | `realtime-hub/options/route.ts` | GET | session-only | ● | ARM, Cosmos, Event Hubs, IoT Hub, Resource Graph |
-| `realtime-hub/preview/route.ts` | POST | session-only |  | ADX, ARM, Managed Identity |
+| `realtime-hub/preview/route.ts` | POST | session-only |  | ADX, ARM, Cosmos, Managed Identity |
 | `realtime-hub/provision/route.ts` | POST | session-only |  | ARM, Cosmos, Event Hubs, IoT Hub |
 | `realtime-hub/streams/route.ts` | GET | owner-scoped |  | Cosmos, Fabric, Microsoft Graph |
 
@@ -2176,7 +2176,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
-| `s3-gateway/info/route.ts` | GET | session-only |  | — |
+| `s3-gateway/info/route.ts` | GET | session-only |  | Cosmos |
 
 ## scheduler
 
@@ -2223,7 +2223,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `setup/existing-aoai/route.ts` | GET | session-only |  | ARM, Azure AI Services, Resource Graph |
 | `setup/existing-dlzs/route.ts` | GET | session-only |  | ARM, Cosmos, Resource Graph |
 | `setup/existing-storage/route.ts` | GET | session-only |  | ARM, Resource Graph |
-| `setup/identity/route.ts` | GET POST | session-only |  | Microsoft Graph |
+| `setup/identity/route.ts` | GET POST | session-only |  | Cosmos, Microsoft Graph |
 | `setup/landing-zones/grant/route.ts` | POST | admin |  | ARM, Azure RBAC, Cosmos |
 | `setup/landing-zones/route.ts` | GET | session-only |  | ARM, Azure RBAC, Cosmos, Resource Graph |
 | `setup/quota-preflight/route.ts` | POST | session-only |  | ARM, Compute |
@@ -2235,7 +2235,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `setup/tenant-topology/route.ts` | GET | session-only |  | Cosmos |
 | `setup/validate-adoption/route.ts` | POST | admin | ● | ARM, Azure RBAC, Azure Storage, Container Apps, Cosmos, Resource Graph |
 | `setup/wire-existing/route.ts` | POST | admin |  | ARM, Cosmos, Resource Graph |
-| `setup/workflow-run-status/route.ts` | GET | session-only | ● | — |
+| `setup/workflow-run-status/route.ts` | GET | session-only | ● | Cosmos |
 
 ## spark
 
@@ -2281,7 +2281,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | --- | --- | --- | :---: | --- |
 | `storage/[account]/containers/[container]/paths/route.ts` | GET | owner-scoped |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph |
 | `storage/[account]/containers/route.ts` | GET | owner-scoped |  | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph |
-| `storage/accounts/route.ts` | GET | session-only |  | ARM, Azure Storage |
+| `storage/accounts/route.ts` | GET | session-only |  | ARM, Azure Storage, Cosmos |
 
 ## streaming-sql
 
@@ -2307,12 +2307,12 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `synapse/linkedservices/route.ts` | GET POST DELETE | session-only | ● | Synapse |
 | `synapse/linkedservices/test/route.ts` | POST | session-only | ● | Synapse |
 | `synapse/notebooks/[name]/route.ts` | GET PUT DELETE | owner-scoped | ● | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Synapse |
-| `synapse/notebooks/[name]/run-cell/route.ts` | GET POST | session-only | ● | ARM, Resource Graph, Synapse |
+| `synapse/notebooks/[name]/run-cell/route.ts` | GET POST | session-only | ● | ARM, Cosmos, Resource Graph, Synapse |
 | `synapse/notebooks/route.ts` | GET POST DELETE | owner-scoped | ● | Cosmos, Microsoft Graph, Synapse |
 | `synapse/pipelines/route.ts` | GET POST DELETE | session-only | ● | Synapse |
 | `synapse/pools/route.ts` | GET | session-only | ● | ARM, Resource Graph, Synapse |
 | `synapse/sparkjobdefinitions/[name]/route.ts` | GET PUT DELETE | session-only | ● | ARM, Resource Graph, Synapse |
-| `synapse/sparkjobdefinitions/[name]/run/route.ts` | GET POST | session-only | ● | Synapse |
+| `synapse/sparkjobdefinitions/[name]/run/route.ts` | GET POST | session-only | ● | Cosmos, Synapse |
 | `synapse/sparkjobdefinitions/route.ts` | GET POST DELETE | session-only | ● | ARM, Resource Graph, Synapse |
 | `synapse/sqlscripts/route.ts` | GET POST DELETE | session-only | ● | Synapse |
 | `synapse/triggers/route.ts` | GET POST DELETE | session-only | ● | Synapse |
@@ -2351,7 +2351,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `thread/lakehouse-delta-tables/route.ts` | GET | owner-scoped |  | ADLS, ARM, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
 | `thread/materialize-to-kql/route.ts` | POST | owner-scoped | ● | ADLS, ADX, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Purview |
 | `thread/mirror-to-lakehouse/route.ts` | POST | owner-scoped |  | ADLS, Cosmos, Microsoft Graph, Purview |
-| `thread/mirror-to-notebook/route.ts` | POST | session-only |  | — |
+| `thread/mirror-to-notebook/route.ts` | POST | session-only |  | Cosmos |
 | `thread/model-tables/route.ts` | GET | owner-scoped |  | Cosmos, Microsoft Graph |
 | `thread/open-in-report-builder/route.ts` | POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, ARM, Azure SQL, Azure Storage, Compute, Cosmos, Key Vault, Managed Identity, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Synapse, Synapse SQL |
 | `thread/promote-medallion/route.ts` | POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, ARM, Azure SQL, Azure Storage, Compute, Cosmos, Managed Identity, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Synapse |

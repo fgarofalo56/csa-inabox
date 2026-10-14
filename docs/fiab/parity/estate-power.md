@@ -31,15 +31,15 @@ service-principal entry point for the Actions/CLI lane.
 | 3 | State badge RUNNING / PAUSING / PAUSED / RESUMING / RESUME_FAILED | built (pre-existing) |
 | 4 | Dry-run preview table with owning tag, resume risk | built (pre-existing) |
 | 5 | Auto-pause switch + idle-hours input (1 to 168, default on / 2 h), Save, Retry, Reset to defaults | built this PR (setting + UI). The pause action itself is the Actions lane (separate work item) |
-| 6 | Last activity, idle-for, last paused, last resumed badges | built this PR. **Activity recording is not wired**, see below |
+| 6 | Last activity, idle-for, last paused, last resumed badges | built this PR; recorded via `withSession` |
 | 7 | `POST /api/estate/power` with the deploy service principal | built this PR |
 
-**Honest gate (not built): activity recording.** `recordHumanActivity`
-(`lib/estate/estate-activity.ts`) is implemented and tested but is not yet
-called from the session-validation seam (`getSession()` in
-`lib/auth/session.ts`, or `middleware.ts`), which is outside this change's file
-ownership. Until it is wired, `lastActivityAt` stays null; the panel says "no
-activity recorded yet" and the contract forbids auto-pausing on null.
+**Activity recording** is wired: `withSession` (lib/api/route-toolkit.ts) calls
+`recordHumanActivity` fire-and-forget, throttled to one Cosmos write per 5 minutes
+per replica. PAT sessions, health, session refresh, `/api/internal/*`, the state
+poll and `/api/estate/power` do not count. Routes that bypass the toolkit do not
+count either; until none do, a null or stale `lastActivityAt` can under-report use,
+so the contract still forbids auto-pausing on null.
 
 ## Backend per control
 
