@@ -383,6 +383,12 @@
         "probe-databricks"
       ]
     },
+    "databricks-estate-client": {
+      "checks": [
+        "svc-databricks",
+        "probe-databricks"
+      ]
+    },
     "databricks-scale-client": {
       "checks": [
         "svc-databricks",

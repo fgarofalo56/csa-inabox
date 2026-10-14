@@ -92,9 +92,11 @@ import { assertNoFalseGreen } from './capacity-preflight';
 import { containerAppPauseGuard } from './pause-guards';
 import { ESTATE_PAUSE_TIER, OUT_OF_TIER_REASONS, TYPICAL_RESUME_SECONDS, orderForResume, resumeRank } from './pause-tier';
 
-export { ESTATE_PAUSE_TIER, OUT_OF_TIER_REASONS, TYPICAL_RESUME_SECONDS, orderForResume, resumeRank };
+// Re-exported with `export ... from` (not `import {X}; export {X}`): istanbul coverage
+// instrumentation leaves the latter form undefined at first read (CI shards run with it).
+export { ESTATE_PAUSE_TIER, OUT_OF_TIER_REASONS, TYPICAL_RESUME_SECONDS, orderForResume, resumeRank } from './pause-tier';
 
-export { containerAppPauseGuard };
+export { containerAppPauseGuard } from './pause-guards';
 import type {
   ActuatorResult,
   EstateActuator,
