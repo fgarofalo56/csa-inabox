@@ -48,6 +48,8 @@ interface ActivityDoc {
 }
 
 const lastWriteAt = new Map<string, number>();
+/** Writes run one at a time: bounded concurrency, and no two concurrent dynamic imports of the Cosmos client. */
+let writeChain: Promise<void> = Promise.resolve();
 
 /** Test hook: forget the in-memory throttle. */
 export function __resetEstateActivityThrottleForTest(): void {
@@ -74,7 +76,7 @@ export function recordHumanActivity(
   // tick cannot each start one. A failed write keeps the claim: Cosmos being
   // down must not turn every request into a retry.
   lastWriteAt.set(tenantId, now);
-  void (async () => {
+  writeChain = writeChain.then(async () => {
     try {
       const { maintenanceJobsContainer } = await import('@/lib/azure/cosmos-client');
       const c = await maintenanceJobsContainer();
@@ -86,7 +88,7 @@ export function recordHumanActivity(
       };
       await c.items.upsert(doc);
     } catch { /* best-effort; the request path must never see this */ }
-  })();
+  });
   return true;
 }
 
