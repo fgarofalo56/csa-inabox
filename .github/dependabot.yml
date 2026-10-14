@@ -43,6 +43,18 @@ updates:
       interval: "weekly"
     labels: ["dependencies", "python"]
     open-pull-requests-limit: 10
+    # pydantic-ai 1.107.x (#4974/#4977, combined attempt #4984, 2026-10-14) cannot be
+    # taken by editing pins: the family pins itself (slim, graph, evals ==1.107.7) and
+    # the extras it ships floor other packages (genai-prices>=0.0.62, anthropic>=0.108.0,
+    # ...), each failing `resolve lock-copilot` one cascade at a time. A full
+    # pip-compile of requirements/locks/copilot also rewrote ~1000 lines, so the lock is
+    # stale against pyproject. Hold the family until the copilot lock is regenerated
+    # deliberately (one reviewed PR), then lift this.
+    ignore:
+      - dependency-name: "pydantic-ai"
+      - dependency-name: "pydantic-ai-slim"
+      - dependency-name: "pydantic-graph"
+      - dependency-name: "pydantic-evals"
     groups:
       azure-sdk:
         patterns:
@@ -65,6 +77,11 @@ updates:
       interval: "weekly"
     labels: ["dependencies", "python"]
     open-pull-requests-limit: 5
+    # pyarrow 26.0.0 requires Python >=3.11 but the Test Suite matrix runs 3.10 (#4988:
+    # 'Could not find a version that satisfies pyarrow==26.0.0'). Hold the major.
+    ignore:
+      - dependency-name: "pyarrow"
+        update-types: ["version-update:semver-major"]
     groups:
       duckdb-version:
         applies-to: version-updates
@@ -273,6 +290,28 @@ updates:
       # 0.x: 0.11 -> 0.12 is a semver-MINOR to dependabot, so pin by version.
       - dependency-name: "elkjs"
         versions: [">=0.12.0"]
+      # Added after the rebuilt group PR #4992 (2026-10-14) still failed:
+      #   @types/node 26: next build fails, crypto.JsonWebKey was removed
+      #     (lib/azure/entra-bearer-verify.ts:200). Runtime is Node 20.
+      #   jsdom 30 / @vitejs/plugin-react 6: 25 suites fail on the tabster CJS
+      #     import, and form-data 4.x leaves the lockfile (advisory-floor guard).
+      #   eslint 10 / @testing-library/jest-dom 7: held as toolchain majors.
+      #   @azure/msal-node 7 / @azure/msal-browser 5: sign-in critical; take them
+      #     in a reviewed migration PR with an auth walk, not a grouped bump.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "jsdom"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@vitejs/plugin-react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "eslint"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@testing-library/jest-dom"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@azure/msal-node"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@azure/msal-browser"
+        update-types: ["version-update:semver-major"]
     groups:
       fiab-console-version:
         applies-to: version-updates
