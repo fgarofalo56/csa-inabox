@@ -163,6 +163,10 @@ export const WATCHED = [
       'scripts/csa-loom/enable-all-diagnostics.sh',
       'scripts/csa-loom/enable-unity-catalog.sh',
       'scripts/csa-loom/ensure-ai-private-endpoints.sh',
+      // #4876 — the bootstrap defines the Estate.Power app role + grants it to the
+      // deploy SP, and persists the console URL/audience repo variables.
+      'scripts/csa-loom/ensure-estate-power-role.mjs',
+      'scripts/csa-loom/set-console-repo-vars.mjs',
       'scripts/csa-loom/ensure-search-index.sh',
       // #2929 — the bootstrap refreshes the `loom-docs` Copilot index through
       // this shared driver, so a change to it changes what the bootstrap does.

@@ -469,6 +469,50 @@ jobs:
             echo "LOOM_MSAL_CLIENT_ID=$APP_ID" >> "$GITHUB_ENV"
           fi
 
+      - name: Grant Estate.Power app role to the deploy SP (PRP-02 step 3 / #4876)
+        id: estate-role
+        # The console /api/estate/power route accepts only a client-credentials
+        # token for the console audience carrying the `Estate.Power` app role.
+        # This step creates that role on the console app registration (fixed id,
+        # idempotent) and assigns it to THIS deploy service principal, then
+        # re-reads both. FAILS the job on any error: the pause/resume lane cannot
+        # authenticate without it. Needs Graph Application.ReadWrite.All +
+        # AppRoleAssignment.ReadWrite.All (admin-consented) or Application
+        # Administrator on the deploy SP; the failure output names them.
+        if: env.LOOM_MSAL_CLIENT_ID != ''
+        env:
+          AZURE_CLOUD: ${{ ((inputs.boundary == 'GCC-High' || inputs.boundary == 'IL5') && 'AzureUSGovernment') || 'AzureCloud' }}
+        run: |
+          set -euo pipefail
+          mkdir -p temp
+          CONSOLE_FQDN=$(az containerapp show -n loom-console -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "properties.configuration.ingress.fqdn" -o tsv 2> temp/estate-power-fqdn.err) || {
+            echo "::warning::Could not resolve the console FQDN (the console URL output will be empty): $(cat temp/estate-power-fqdn.err)"
+            CONSOLE_FQDN=""
+          }
+          CONSOLE_URL=""
+          if [ -n "$CONSOLE_FQDN" ]; then CONSOLE_URL="https://$CONSOLE_FQDN"; fi
+          node scripts/csa-loom/ensure-estate-power-role.mjs --client-id "$LOOM_MSAL_CLIENT_ID" --console-url "$CONSOLE_URL"
+
+      - name: Persist console URL + audience as repo variables (PRP-02 step 3 / #4876)
+        # Feeds estate-power.yml / estate-idle-autopause.yml. Commercial writes
+        # CSA_LOOM_CONSOLE_*; GCC-High/IL5 write CSA_LOOM_GCCH_CONSOLE_*. The PAT
+        # (secret LOOM_REPO_VARS_TOKEN, Variables read/write) reaches the script
+        # ONLY as GH_TOKEN. Empty secret => a visible "NOT set" notice + summary
+        # line (not a silent pass); every write is read back and must match.
+        # GCC and IL5 are skipped on purpose: they have no variable pair the
+        # estate-power workflows read, and writing the GCC-High pair from IL5
+        # would overwrite the GCC-High console's values.
+        if: env.LOOM_MSAL_CLIENT_ID != '' && (inputs.boundary == 'Commercial' || inputs.boundary == 'GCC-High')
+        env:
+          GH_TOKEN: ${{ secrets.LOOM_REPO_VARS_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          CONSOLE_URL: ${{ steps.estate-role.outputs.console_url }}
+          CONSOLE_AUDIENCE: ${{ steps.estate-role.outputs.console_audience }}
+          BOUNDARY: ${{ inputs.boundary }}
+        run: |
+          set -euo pipefail
+          node scripts/csa-loom/set-console-repo-vars.mjs --boundary "$BOUNDARY" --url "$CONSOLE_URL" --audience "$CONSOLE_AUDIENCE"
+
       - name: Unseal Loom Unity + wire the Console (LU / #2681)
         # THE FIRST-DEPLOY HALF of #2681. admin-plane/main.bicep now deploys
         # loom-unity DEFAULT-ON with authMode=entra, and passes the Console's MSAL
