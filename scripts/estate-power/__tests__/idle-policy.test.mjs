@@ -64,6 +64,11 @@ test('pipeline run: started 1s INSIDE the window skips; started 1s BEFORE the wi
   assert.equal(outside.decision, 'pause');
 });
 
+test('pipeline run started EXACTLY at the window edge (14400s ago) counts as in-window and skips -- breaks >= turned into >', () => {
+  const d = go({ activity: { ok: true, runs: [{ startedAt: iso(14400), status: 'Succeeded' }] } });
+  assert.equal(d.code, 'recent-pipeline-run');
+});
+
 test('pipeline run: still InProgress/Queued skips even if it started long ago', () => {
   for (const status of ['InProgress', 'Queued']) {
     const d = go({ activity: { ok: true, runs: [{ startedAt: iso(999999), status }] } });
