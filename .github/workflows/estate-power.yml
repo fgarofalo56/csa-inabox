@@ -1,0 +1,199 @@
+name: estate-power
+
+# CSA Loom - manual estate PAUSE / RESUME / state, driven through the console
+# API as the deploy service principal (#4876 step 3).
+#
+# WHY THE CONSOLE API AND NOT az DIRECTLY: the pause snapshot lives in Cosmos,
+# which is private-endpoint-only, so a runner cannot read or write it. The console
+# owns the snapshot; this workflow authenticates as the deploy SP (Estate.Power
+# app role) and calls POST /api/estate/power. All logic is in scripts/estate-power.
+#
+# GCC-High follows deploy-fiab-gcch.yml: the same secrets, the same four
+# sovereign endpoint URLs, `az cloud set --name AzureUSGovernment`, and the same
+# manual-approval environment. Gov actions run ONLY here, never from a workstation.
+#
+# The CLI refuses (exit 3) before requesting a token if the active az cloud is not
+# the requested boundary, and exits non-zero unless every resource is READ BACK in
+# the target state. Required repo variables (honest config gate, not defaulted):
+#   Commercial: CSA_LOOM_CONSOLE_URL, CSA_LOOM_CONSOLE_AUDIENCE
+#   GCC-High:   CSA_LOOM_GCCH_CONSOLE_URL, CSA_LOOM_GCCH_CONSOLE_AUDIENCE
+
+run-name: estate-power ${{ inputs.boundary }} ${{ inputs.action }}${{ inputs.dry_run && ' - DRY RUN (nothing mutated)' || '' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      boundary:
+        description: 'Which estate to act on.'
+        type: choice
+        required: true
+        options:
+          - Commercial
+          - GCC-High
+      action:
+        description: 'state/preview only read. pause/resume mutate (unless dry_run).'
+        type: choice
+        required: true
+        default: state
+        options:
+          - state
+          - preview
+          - pause
+          - resume
+      confirm:
+        description: 'Type the estate id (shown by action=preview). Required for a real pause.'
+        type: string
+        required: false
+        default: ''
+      dry_run:
+        description: 'Show the set that WOULD change and send no mutation.'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# One manual power operation per boundary at a time. Deliberately a DIFFERENT
+# group from estate-idle-autopause.yml: a GCC-High run parked on its approval
+# gate counts as in-progress and would otherwise block the scheduled lane. The
+# console itself refuses overlapping pause/resume (inFlight), which is the real
+# arbiter.
+concurrency:
+  group: estate-power-${{ inputs.boundary }}
+  cancel-in-progress: false
+
+jobs:
+  precheck:
+    name: Verify secrets and variables for ${{ inputs.boundary }}
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - id: check
+        env:
+          BOUNDARY: ${{ inputs.boundary }}
+          COM_C: ${{ secrets.AZURE_CLIENT_ID }}
+          COM_S: ${{ secrets.AZURE_CLIENT_SECRET }}
+          COM_T: ${{ secrets.AZURE_TENANT_ID }}
+          COM_U: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          COM_URL: ${{ vars.CSA_LOOM_CONSOLE_URL }}
+          COM_AUD: ${{ vars.CSA_LOOM_CONSOLE_AUDIENCE }}
+          GOV_C: ${{ secrets.AZURE_GOV_CLIENT_ID }}
+          GOV_S: ${{ secrets.AZURE_GOV_CLIENT_SECRET }}
+          GOV_T: ${{ secrets.AZURE_GOV_TENANT_ID }}
+          GOV_U: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+          GOV_URL: ${{ vars.CSA_LOOM_GCCH_CONSOLE_URL }}
+          GOV_AUD: ${{ vars.CSA_LOOM_GCCH_CONSOLE_AUDIENCE }}
+        run: |
+          if [[ "$BOUNDARY" == "GCC-High" ]]; then
+            missing=""
+            [[ -z "$GOV_C" ]] && missing="$missing AZURE_GOV_CLIENT_ID"
+            [[ -z "$GOV_S" ]] && missing="$missing AZURE_GOV_CLIENT_SECRET"
+            [[ -z "$GOV_T" ]] && missing="$missing AZURE_GOV_TENANT_ID"
+            [[ -z "$GOV_U" ]] && missing="$missing AZURE_GOV_SUBSCRIPTION_ID"
+            [[ -z "$GOV_URL" ]] && missing="$missing vars.CSA_LOOM_GCCH_CONSOLE_URL"
+            [[ -z "$GOV_AUD" ]] && missing="$missing vars.CSA_LOOM_GCCH_CONSOLE_AUDIENCE"
+          else
+            missing=""
+            [[ -z "$COM_C" ]] && missing="$missing AZURE_CLIENT_ID"
+            [[ -z "$COM_S" ]] && missing="$missing AZURE_CLIENT_SECRET"
+            [[ -z "$COM_T" ]] && missing="$missing AZURE_TENANT_ID"
+            [[ -z "$COM_U" ]] && missing="$missing AZURE_SUBSCRIPTION_ID"
+            [[ -z "$COM_URL" ]] && missing="$missing vars.CSA_LOOM_CONSOLE_URL"
+            [[ -z "$COM_AUD" ]] && missing="$missing vars.CSA_LOOM_CONSOLE_AUDIENCE"
+          fi
+          if [[ -n "$missing" ]]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::NEUTRAL SKIP - $BOUNDARY estate-power did NOT run. Missing:$missing"
+            {
+              echo "### estate-power $BOUNDARY: SKIPPED, nothing was done"
+              echo "Missing configuration (names only):$missing"
+              echo "Bootstrap per docs/fiab/runbooks/secrets-bootstrap.md"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  commercial:
+    name: Estate power - Commercial
+    needs: [precheck]
+    if: inputs.boundary == 'Commercial' && needs.precheck.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - name: Azure login (Commercial)
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      - name: Run estate-power (Commercial)
+        env:
+          CSA_LOOM_CONSOLE_URL: ${{ vars.CSA_LOOM_CONSOLE_URL }}
+          CSA_LOOM_CONSOLE_AUDIENCE: ${{ vars.CSA_LOOM_CONSOLE_AUDIENCE }}
+          IN_ACTION: ${{ inputs.action }}
+          IN_CONFIRM: ${{ inputs.confirm }}
+          IN_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          args=(--boundary Commercial --action "$IN_ACTION")
+          [[ "$IN_DRY_RUN" == "true" ]] && args+=(--dry-run)
+          [[ -n "$IN_CONFIRM" ]] && args+=(--confirm "$IN_CONFIRM")
+          node scripts/estate-power/estate-power.mjs "${args[@]}"
+
+  gcch:
+    name: Estate power - GCC-High
+    needs: [precheck]
+    if: inputs.boundary == 'GCC-High' && needs.precheck.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: gcc-high-deploy   # requires manual approval (same gate as deploy-fiab-gcch.yml)
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - name: Azure login (Gov sub) - limitlessdata_deploy SP
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Run estate-power (GCC-High)
+        env:
+          CSA_LOOM_CONSOLE_URL: ${{ vars.CSA_LOOM_GCCH_CONSOLE_URL }}
+          CSA_LOOM_CONSOLE_AUDIENCE: ${{ vars.CSA_LOOM_GCCH_CONSOLE_AUDIENCE }}
+          IN_ACTION: ${{ inputs.action }}
+          IN_CONFIRM: ${{ inputs.confirm }}
+          IN_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          args=(--boundary GCC-High --action "$IN_ACTION")
+          [[ "$IN_DRY_RUN" == "true" ]] && args+=(--dry-run)
+          [[ -n "$IN_CONFIRM" ]] && args+=(--confirm "$IN_CONFIRM")
+          node scripts/estate-power/estate-power.mjs "${args[@]}"

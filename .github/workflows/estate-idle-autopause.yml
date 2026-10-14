@@ -1,0 +1,178 @@
+name: estate-idle-autopause
+
+# CSA Loom - scheduled idle auto-pause (#4876 step 3).
+#
+# Every 30 minutes, per boundary: read console state -> read recent ADF/Synapse
+# pipeline runs -> idle policy (scripts/estate-power/idle-policy.mjs) -> pause
+# through the console API. One cheap job, no model calls.
+#
+# NO reviewer-gated environment on this path, on purpose. A gated environment
+# makes a scheduled run park at `waiting`, hold its concurrency group, and pile
+# up behind it (see the github.event_name != schedule note in
+# deploy-fiab-gcch.yml: 12 scheduled runs were silently dropped behind one
+# waiting occupant for 13 days). The deploy SP carries the Estate.Power role;
+# the console re-validates, refuses overlapping pause/resume, and the policy
+# only pauses on positive evidence of idleness (unknown is never idle).
+#
+# SKIPS ARE VISIBLE. Every run writes its decision and reason to the job
+# summary. Missing secrets/variables take the NEUTRAL SKIP path: a ::warning::
+# plus a summary that says nothing was done, rather than a silent green.
+#
+# Declared pause: if the boundary is already paused per the console state, or
+# declared in scripts/ci/estate-pause-declaration.json, the policy skips.
+
+run-name: estate-idle-autopause${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && ' - DRY RUN (no pause sent)' || '' }}
+
+on:
+  schedule:
+    - cron: '7,37 * * * *'   # every 30 minutes, off the :00/:30 herd
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Decide and report, but send no pause.'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  commercial:
+    name: Idle auto-pause - Commercial
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    concurrency:
+      group: estate-idle-autopause-commercial
+      cancel-in-progress: false
+    env:
+      C: ${{ secrets.AZURE_CLIENT_ID }}
+      S: ${{ secrets.AZURE_CLIENT_SECRET }}
+      T: ${{ secrets.AZURE_TENANT_ID }}
+      U: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      CSA_LOOM_CONSOLE_URL: ${{ vars.CSA_LOOM_CONSOLE_URL }}
+      CSA_LOOM_CONSOLE_AUDIENCE: ${{ vars.CSA_LOOM_CONSOLE_AUDIENCE }}
+    steps:
+      - id: check
+        name: Check configuration (NEUTRAL SKIP when missing)
+        run: |
+          missing=""
+          [[ -z "$C" ]] && missing="$missing AZURE_CLIENT_ID"
+          [[ -z "$S" ]] && missing="$missing AZURE_CLIENT_SECRET"
+          [[ -z "$T" ]] && missing="$missing AZURE_TENANT_ID"
+          [[ -z "$U" ]] && missing="$missing AZURE_SUBSCRIPTION_ID"
+          [[ -z "$CSA_LOOM_CONSOLE_URL" ]] && missing="$missing vars.CSA_LOOM_CONSOLE_URL"
+          [[ -z "$CSA_LOOM_CONSOLE_AUDIENCE" ]] && missing="$missing vars.CSA_LOOM_CONSOLE_AUDIENCE"
+          if [[ -n "$missing" ]]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::NEUTRAL SKIP - Commercial idle auto-pause did NOT run. Missing:$missing"
+            {
+              echo "### Estate idle auto-pause (Commercial): SKIPPED, nothing was evaluated"
+              echo "Missing configuration (names only):$missing"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.check.outputs.configured == 'true'
+        uses: actions/checkout@v7.0.1
+
+      - if: steps.check.outputs.configured == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - if: steps.check.outputs.configured == 'true'
+        name: Azure login (Commercial)
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      - if: steps.check.outputs.configured == 'true'
+        name: Decide and (if idle) pause - Commercial
+        env:
+          IN_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          args=(--boundary Commercial)
+          [[ "$IN_DRY_RUN" == "true" ]] && args+=(--dry-run)
+          node scripts/estate-power/autopause.mjs "${args[@]}"
+
+  gcch:
+    name: Idle auto-pause - GCC-High
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    concurrency:
+      group: estate-idle-autopause-gcch
+      cancel-in-progress: false
+    env:
+      C: ${{ secrets.AZURE_GOV_CLIENT_ID }}
+      S: ${{ secrets.AZURE_GOV_CLIENT_SECRET }}
+      T: ${{ secrets.AZURE_GOV_TENANT_ID }}
+      U: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+      CSA_LOOM_CONSOLE_URL: ${{ vars.CSA_LOOM_GCCH_CONSOLE_URL }}
+      CSA_LOOM_CONSOLE_AUDIENCE: ${{ vars.CSA_LOOM_GCCH_CONSOLE_AUDIENCE }}
+    steps:
+      - id: check
+        name: Check configuration (NEUTRAL SKIP when missing)
+        run: |
+          missing=""
+          [[ -z "$C" ]] && missing="$missing AZURE_GOV_CLIENT_ID"
+          [[ -z "$S" ]] && missing="$missing AZURE_GOV_CLIENT_SECRET"
+          [[ -z "$T" ]] && missing="$missing AZURE_GOV_TENANT_ID"
+          [[ -z "$U" ]] && missing="$missing AZURE_GOV_SUBSCRIPTION_ID"
+          [[ -z "$CSA_LOOM_CONSOLE_URL" ]] && missing="$missing vars.CSA_LOOM_GCCH_CONSOLE_URL"
+          [[ -z "$CSA_LOOM_CONSOLE_AUDIENCE" ]] && missing="$missing vars.CSA_LOOM_GCCH_CONSOLE_AUDIENCE"
+          if [[ -n "$missing" ]]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::NEUTRAL SKIP - GCC-High idle auto-pause did NOT run. Missing:$missing"
+            {
+              echo "### Estate idle auto-pause (GCC-High): SKIPPED, nothing was evaluated"
+              echo "Missing configuration (names only):$missing"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.check.outputs.configured == 'true'
+        uses: actions/checkout@v7.0.1
+
+      - if: steps.check.outputs.configured == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - if: steps.check.outputs.configured == 'true'
+        name: Azure login (Gov sub) - limitlessdata_deploy SP
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - if: steps.check.outputs.configured == 'true'
+        name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - if: steps.check.outputs.configured == 'true'
+        name: Decide and (if idle) pause - GCC-High
+        env:
+          IN_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          args=(--boundary GCC-High)
+          [[ "$IN_DRY_RUN" == "true" ]] && args+=(--dry-run)
+          node scripts/estate-power/autopause.mjs "${args[@]}"
