@@ -245,6 +245,34 @@ updates:
       interval: "weekly"
     labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 10
+    # MAJOR bumps held back, each measured to break CI in dependabot PR #4941
+    # (2026-10-14) -- one grouped PR of 48 updates failed because of these
+    # four majors alone, and they hid the ~40 safe updates behind them:
+    #   next / eslint-config-next 15 -> 16  `next build` rejects the "pkg-<semver>"
+    #     deploymentId fallback in next.config.mjs (the dot is now invalid) and
+    #     warns on the removed `eslint` key. A migration, not a bump.
+    #   typescript 5 -> 7  lib/brain/security/extract/build.ts shells out to tsc,
+    #     which now refuses a tsconfig plus files (TS5112).
+    #   vitest / @vitest/* 3 -> 5  test.poolOptions was removed and the coverage
+    #     pass now tries to parse lib/notebook/ai-display.py.
+    #   elkjs 0.11 -> 0.12  now EPL-2.0 OR GPL-3.0-or-later; the license gate
+    #     blocks GPL (scripts/ci/check-licenses.mjs).
+    # Minor/patch updates for these packages still arrive. Lift an ignore with a
+    # migration PR that carries the fix, not by closing the dependabot PR.
+    ignore:
+      - dependency-name: "next"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "eslint-config-next"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "vitest"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@vitest/*"
+        update-types: ["version-update:semver-major"]
+      # 0.x: 0.11 -> 0.12 is a semver-MINOR to dependabot, so pin by version.
+      - dependency-name: "elkjs"
+        versions: [">=0.12.0"]
     groups:
       fiab-console-version:
         applies-to: version-updates
@@ -259,6 +287,16 @@ updates:
       interval: "weekly"
     labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 5
+    # #4965/#4966 (2026-10-14): typescript 7 + vitest 5 + @types/node 26 made npm
+    # fail on install with 'Cannot read properties of null (reading edgesOut)'. Hold
+    # the majors; minor/patch still arrive. Lift with a migration PR.
+    ignore:
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "vitest"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
       loom-sdk-version:
         applies-to: version-updates
@@ -287,6 +325,16 @@ updates:
       interval: "weekly"
     labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 5
+    # #4965/#4966 (2026-10-14): typescript 7 + vitest 5 + @types/node 26 made npm
+    # fail on install with 'Cannot read properties of null (reading edgesOut)'. Hold
+    # the majors; minor/patch still arrive. Lift with a migration PR.
+    ignore:
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "vitest"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
       loom-cli-version:
         applies-to: version-updates
@@ -301,6 +349,16 @@ updates:
       interval: "weekly"
     labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 5
+    # #4963/#4964 (2026-10-14): vitest 5 declares peer @types/node ^22 || >=24 and these
+    # packages sit on @types/node 20, so `npm ci` fails ERESOLVE in the standalone
+    # vitest suites. Hold the majors; minor/patch still arrive. Lift with a migration PR.
+    ignore:
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "vitest"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
       fiab-label-propagation-version:
         applies-to: version-updates
@@ -315,6 +373,16 @@ updates:
       interval: "weekly"
     labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 5
+    # #4963/#4964 (2026-10-14): vitest 5 declares peer @types/node ^22 || >=24 and these
+    # packages sit on @types/node 20, so `npm ci` fails ERESOLVE in the standalone
+    # vitest suites. Hold the majors; minor/patch still arrive. Lift with a migration PR.
+    ignore:
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "vitest"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
       secret-expiry-monitor-version:
         applies-to: version-updates
