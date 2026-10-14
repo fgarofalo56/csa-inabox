@@ -440,4 +440,20 @@ describe('pause gates apply to the service principal exactly as to a cookie admi
     expect(json.power.lastPausedAt).toBe('2026-08-23T00:05:00.000Z');
     expect(json.power.lastResumedAt).toBeNull();
   });
+
+  it('state carries the power block in EVERY branch, including a RESUMING poll (breaks if that branch omits `power`)', async () => {
+    loadPauseSnapshot.mockResolvedValue({
+      ...pausedSnapshot(), state: 'RESUMING', resumeStartedAt: '2026-08-23T01:00:00.000Z',
+    });
+    const { res, json } = await call('GET', jwt());
+    expect(res.status).toBe(200);
+    expect(['RESUMING', 'RUNNING', 'RESUME_FAILED']).toContain(json.state);
+    expect(json.power).toMatchObject({ lastPausedAt: '2026-08-23T00:05:00.000Z' });
+  });
+
+  it('state carries the power block while PAUSING too', async () => {
+    loadPauseSnapshot.mockResolvedValue({ ...pausedSnapshot(), state: 'PAUSING' });
+    const { json } = await call('GET', jwt());
+    expect(json.power).toBeDefined();
+  });
 });
