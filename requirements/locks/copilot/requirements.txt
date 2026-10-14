@@ -787,9 +787,9 @@ fsspec==2026.3.0 \
     --hash=sha256:1ee6a0e28677557f8c2f994e3eea77db6392b4de9cd1f5d7a9e87a0ae9d01b41 \
     --hash=sha256:d2ceafaad1b3457968ed14efa28798162f1638dbb5d2a6868a2db002a5ee39a4
     # via huggingface-hub
-genai-prices==0.0.57 \
-    --hash=sha256:14e50fb69cdc5a06ddb2a6df5a7fe06741b9e44304ce3f1728f56abdf1856cca \
-    --hash=sha256:6e101e9c53975557ceffa237b0995787d81fe75aac12410f2898504188bcad89
+genai-prices==0.0.73 \
+    --hash=sha256:64dfbbf55df91db6b74ff2b24ac752b8154952e0aed4e62868d6cd42710bf742 \
+    --hash=sha256:ddad5b23dadd7aac8a58ab5af7506addb062114037e96427324703e50bc35077
     # via pydantic-ai-slim
 google-auth==2.49.2 \
     --hash=sha256:c1ae38500e73065dcae57355adb6278cf8b5c8e391994ae9cbadbcb9631ab409 \
