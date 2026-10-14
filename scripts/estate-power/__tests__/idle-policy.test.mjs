@@ -1,0 +1,80 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { decideIdlePause } from '../idle-policy.mjs';
+
+const NOW = Date.parse('2026-10-13T12:00:00Z');
+// idleHours=4 -> window 14400s. Last activity exactly 4h before NOW = exactly met.
+const iso = (offsetSec) => new Date(NOW - offsetSec * 1000).toISOString();
+const state = (over = {}) => ({
+  overall: 'RUNNING', inFlight: false, lastActivityAt: iso(14400),
+  autoPause: { enabled: true, idleHours: 4 }, ...over,
+});
+const quiet = { ok: true, runs: [] };
+const go = (o) => decideIdlePause({ now: NOW, declared: { declared: false }, activity: quiet, state: state(), ...o });
+
+test('POSITIVE CONTROL / boundary: idle for exactly idleHours (14400s) pauses', () => {
+  const d = go({});
+  assert.equal(d.decision, 'pause');
+  assert.equal(d.code, 'idle');
+});
+
+test('boundary: idle 1 second SHORT of idleHours (14399s) skips -- breaks a >= turned into a >, or a window off by one', () => {
+  const d = go({ state: state({ lastActivityAt: iso(14399) }) });
+  assert.equal(d.decision, 'skip');
+  assert.equal(d.code, 'not-idle-long-enough');
+});
+
+const SKIPS = [
+  ['autoPause disabled', { state: state({ autoPause: { enabled: false, idleHours: 4 } }) }, 'autopause-disabled'],
+  ['autoPause enabled is the string "true", not boolean true', { state: state({ autoPause: { enabled: 'true', idleHours: 4 } }) }, 'autopause-disabled'],
+  ['autoPause object missing', { state: state({ autoPause: undefined }) }, 'autopause-disabled'],
+  ['estate PAUSED', { state: state({ overall: 'PAUSED' }) }, 'not-running'],
+  ['estate state missing', { state: state({ overall: undefined }) }, 'not-running'],
+  ['pause/resume in flight', { state: state({ inFlight: true }) }, 'in-flight'],
+  ['in-flight not reported at all', { state: state({ inFlight: undefined }) }, 'in-flight'],
+  ['lastActivityAt missing (unknown is never idle)', { state: state({ lastActivityAt: undefined }) }, 'activity-unknown'],
+  ['lastActivityAt unparseable', { state: state({ lastActivityAt: 'yesterday-ish' }) }, 'activity-unknown'],
+  ['lastActivityAt empty string', { state: state({ lastActivityAt: '' }) }, 'activity-unknown'],
+  ['lastActivityAt in the future (clock skew)', { state: state({ lastActivityAt: iso(-3600) }) }, 'not-idle-long-enough'],
+  ['idleHours 0', { state: state({ autoPause: { enabled: true, idleHours: 0 } }) }, 'idle-hours-invalid'],
+  ['idleHours missing', { state: state({ autoPause: { enabled: true } }) }, 'idle-hours-invalid'],
+  ['declared paused', { declared: { declared: true } }, 'declared-paused'],
+  ['activity read FAILED', { activity: { ok: false, reason: 'az rest failed (exit 1)' } }, 'activity-read-failed'],
+  ['activity result missing', { activity: undefined }, 'activity-read-failed'],
+  ['no state at all', { state: null }, 'state-missing'],
+  ['now is NaN', { now: NaN }, 'now-invalid'],
+];
+for (const [name, over, code] of SKIPS) {
+  test(`skip: ${name} -> ${code}`, () => {
+    const d = go(over);
+    assert.equal(d.decision, 'skip', `${name} must not pause`);
+    assert.equal(d.code, code);
+  });
+}
+
+test('a failed activity read names WHY in the reason (not just "skip")', () => {
+  const d = go({ activity: { ok: false, reason: 'az rest failed (exit 1): AuthorizationFailed' } });
+  assert.match(d.reason, /AuthorizationFailed/);
+});
+
+test('pipeline run: started 1s INSIDE the window skips; started 1s BEFORE the window does not', () => {
+  const inside = go({ activity: { ok: true, runs: [{ startedAt: iso(14399), status: 'Succeeded' }] } });
+  assert.equal(inside.code, 'recent-pipeline-run');
+  const outside = go({ activity: { ok: true, runs: [{ startedAt: iso(14401), status: 'Succeeded' }] } });
+  assert.equal(outside.decision, 'pause');
+});
+
+test('pipeline run: still InProgress/Queued skips even if it started long ago', () => {
+  for (const status of ['InProgress', 'Queued']) {
+    const d = go({ activity: { ok: true, runs: [{ startedAt: iso(999999), status }] } });
+    assert.equal(d.code, 'recent-pipeline-run', status);
+  }
+});
+
+test('pipeline run with an unparseable startedAt is treated as activity, not ignored', () => {
+  assert.equal(go({ activity: { ok: true, runs: [{ startedAt: null, status: 'Succeeded' }] } }).code, 'recent-pipeline-run');
+});
+
+test('Date objects as now are accepted (same answer as epoch ms)', () => {
+  assert.equal(go({ now: new Date(NOW) }).decision, 'pause');
+});
