@@ -52,11 +52,9 @@
  *     recency-vs-serving error as #3676 — the fix is to probe the thing, not to
  *     trust the field that describes it.
  *
- *  5. The console cannot pause itself out of existence. `ESTATE_PAUSE_TIER`
- *     omits Container Apps: the Loom console IS a Container App, and the
- *     surface that resumes the estate must survive the pause. ACA scale-to-zero
- *     is a real saving (~$388/mo) and is tracked as a follow-up, but it needs
- *     per-app ownership re-verification that this slice does not build.
+ *  5. The console cannot pause itself out of existence: every Container App
+ *     passes `containerAppPauseGuard` (see ./pause-guards) at plan time and in
+ *     `startPause`, failing safe. No-op stops come back as `noop` -> `no-op`.
  */
 
 import {
@@ -91,6 +89,14 @@ import {
   type PauseScope,
 } from './pause-inventory';
 import { assertNoFalseGreen } from './capacity-preflight';
+import { containerAppPauseGuard } from './pause-guards';
+import { ESTATE_PAUSE_TIER, OUT_OF_TIER_REASONS, TYPICAL_RESUME_SECONDS, orderForResume, resumeRank } from './pause-tier';
+
+// Re-exported with `export ... from` (not `import {X}; export {X}`): istanbul coverage
+// instrumentation leaves the latter form undefined at first read (CI shards run with it).
+export { ESTATE_PAUSE_TIER, OUT_OF_TIER_REASONS, TYPICAL_RESUME_SECONDS, orderForResume, resumeRank } from './pause-tier';
+
+export { containerAppPauseGuard } from './pause-guards';
 import type {
   ActuatorResult,
   EstateActuator,
@@ -98,61 +104,6 @@ import type {
   ServabilityProbe,
 } from './pause-actuator';
 
-// ---------------------------------------------------------------------------
-// The tier this slice actuates
-// ---------------------------------------------------------------------------
-
-/**
- * The ARM types this PAUSE slice will actuate, lower-cased.
- *
- * A type in `PAUSABLE_RESOURCE_TYPES` but NOT here is reported in the dry-run
- * as `out-of-tier` — visible, explained, and left running. That is deliberately
- * noisier than silently dropping it: a resource that disappears from both the
- * "would pause" and "left running" lists is a resource nobody reviewed.
- *
- * Container Apps are excluded for the reason in the module header (invariant 5).
- * Stream Analytics jobs are excluded because all 251 measured Running=0 and ASA
- * bills only while started — stopping a stopped job saves nothing and adds 251
- * ARM mutations to the blast radius.
- */
-export const ESTATE_PAUSE_TIER: readonly string[] = [
-  'microsoft.synapse/workspaces/sqlpools',
-  'microsoft.kusto/clusters',
-  'microsoft.analysisservices/servers',
-  'microsoft.compute/virtualmachinescalesets',
-];
-
-/** Why a Loom-owned, pausable-typed resource is nevertheless out of this tier. */
-export const OUT_OF_TIER_REASONS: Readonly<Record<string, string>> = {
-  'microsoft.app/containerapps':
-    'Container Apps are excluded from this slice. The Loom console itself runs as a Container App, '
-    + 'so the surface that resumes the estate must stay reachable; scale-to-zero across the app '
-    + 'fleet needs per-app ownership re-verification that this work item does not build.',
-  'microsoft.streamanalytics/streamingjobs':
-    'Stream Analytics jobs bill only while STARTED, and every job measured on this estate is already '
-    + 'stopped. Stopping a stopped job saves nothing and widens the blast radius.',
-  'microsoft.web/sites':
-    'Function Apps / App Service here run on Y1 Consumption plans, which are already $0 at idle.',
-};
-
-/**
- * TYPICAL resume time per type, in seconds. Used ONLY to draw a progress bar.
- *
- * Every figure is Microsoft's own published language, converted to a number so
- * a bar can move; none of them is a guarantee, and the UI says so. Microsoft's
- * Fabric pause/resume page publishes NO duration at all, so an honest estimate
- * with a stated basis is already better than the model we are copying.
- */
-export const TYPICAL_RESUME_SECONDS: Readonly<Record<string, number>> = {
-  // Learn: "several minutes", and the API reports ONLINE 2-3 min before it serves.
-  'microsoft.synapse/workspaces/sqlpools': 420,
-  // Learn: ~10 minutes to start, plus UNBOUNDED hot-cache rehydration.
-  'microsoft.kusto/clusters': 600,
-  // Resume returns quickly; the model must then be re-attached/queried.
-  'microsoft.analysisservices/servers': 240,
-  // VM allocation in a healthy region.
-  'microsoft.compute/virtualmachinescalesets': 300,
-};
 
 // ---------------------------------------------------------------------------
 // The injected actuator
@@ -314,6 +265,8 @@ export function planPause(
     gateReason?: string;
     /** How many resources the deploy env NAMES, armed or not. */
     namedByDeploy?: number;
+    /** This process's own Container App name; defaults to CONTAINER_APP_NAME. */
+    selfAppName?: string;
   },
 ): EstatePlan {
   const full = buildPauseInventory(discovered, ctx);
@@ -323,6 +276,21 @@ export function planPause(
   for (const c of full.pausable) {
     const type = c.resource.resourceType.toLowerCase();
     if (ESTATE_PAUSE_TIER.includes(type)) {
+      if (type === 'microsoft.app/containerapps') {
+        const guard = containerAppPauseGuard(
+          { name: c.resource.name, tags: c.resource.tags },
+          ctx.selfAppName ?? process.env.CONTAINER_APP_NAME,
+        );
+        if (!guard.eligible) {
+          outOfTier.push({
+            resourceId: c.resource.resourceId,
+            name: c.resource.name,
+            resourceType: c.resource.resourceType,
+            reason: guard.reason,
+          });
+          continue;
+        }
+      }
       inTier.push(c);
       continue;
     }
@@ -453,6 +421,12 @@ export type PauseActionStatus =
   | 'dispatched'
   /** ARM already reported it stopped; nothing was sent. */
   | 'already-paused'
+  /**
+   * The actuator established that stopping would change nothing (e.g. a Y1
+   * Consumption site that bills $0 at idle). Nothing was sent, no saving is
+   * claimed, and the resource is NOT recorded in the snapshot.
+   */
+  | 'no-op'
   /** Left RUNNING on purpose — ownership or the ARM read did not establish enough. */
   | 'skipped'
   /** The ARM verb was rejected. */
@@ -517,6 +491,8 @@ export async function startPause(
     readManifest?: () => Promise<DeployManifest | null>;
     createdBy?: string;
     now?: string;
+    /** This process's own Container App name; defaults to CONTAINER_APP_NAME. */
+    selfAppName?: string;
   },
 ): Promise<PauseRunResult> {
   const snapshot = newPauseSnapshot({
@@ -554,6 +530,26 @@ export async function startPause(
       continue;
     }
 
+    // (1b) Container Apps only: the console must survive the pause. Re-check
+    //      identity against FRESH tags, so a tag added since the preview (an
+    //      exemption) is honoured and an unreadable tag set fails safe.
+    if (resource.resourceType.toLowerCase() === 'microsoft.app/containerapps') {
+      let freshTags: Readonly<Record<string, string>> | null = null;
+      try {
+        freshTags = await actuator.readTags(resource.resourceId);
+      } catch {
+        freshTags = null;
+      }
+      const guard = containerAppPauseGuard(
+        { name: resource.name, tags: freshTags },
+        ctx.selfAppName ?? process.env.CONTAINER_APP_NAME,
+      );
+      if (!guard.eligible) {
+        actions.push({ ...base, status: 'skipped', detail: guard.reason });
+        continue;
+      }
+    }
+
     // (2) Authoritative ARM power read. No reading -> no snapshot -> no pause.
     const power = await actuator.readPower(resource);
     if (!power.reading) {
@@ -583,6 +579,8 @@ export async function startPause(
       reading: power.reading,
       sku: power.sku,
       replicaCount: power.replicaCount,
+      scale: power.scale,
+      children: power.children,
       fallbackSku: candidate.fallbackSku,
       ownership: recheck.ownership,
     });
@@ -602,7 +600,16 @@ export async function startPause(
     }
 
     // (5) The mutation.
-    const result = await actuator.pause(candidate);
+    const result = await actuator.pause(candidate, entry);
+    if (result.ok && result.noop) {
+      // The actuator established that stopping changes nothing. Un-record it:
+      // there is nothing to restore, and keeping it would leave the estate in
+      // PAUSING forever waiting for a state change that was never requested.
+      const at = snapshot.resources.indexOf(entry);
+      if (at >= 0) snapshot.resources.splice(at, 1);
+      actions.push({ ...base, status: 'no-op', detail: result.detail });
+      continue;
+    }
     dispatchedAny = dispatchedAny || result.ok;
     actions.push({
       ...base,
@@ -805,7 +812,7 @@ export async function startResume(
   };
 
   const dispatches: ResumeDispatch[] = [];
-  for (const entry of snapshot.resources) {
+  for (const entry of orderForResume(snapshot.resources)) {
     // Restore TO the pre-pause state. Something that was already stopped when
     // Loom found it stays stopped — resuming it would be Loom starting a
     // resource nobody asked it to start.

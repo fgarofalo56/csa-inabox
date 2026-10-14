@@ -214,7 +214,13 @@ export interface PausableTypeSpec {
   resourceType: string;
   label: string;
   /** How the pause is effected against ARM. */
-  mechanism: 'arm-pause-action' | 'arm-stop-action' | 'scale-to-zero' | 'deallocate';
+  mechanism:
+    | 'arm-pause-action'
+    | 'arm-stop-action'
+    | 'scale-to-zero'
+    | 'deallocate'
+    /** No ARM verb: stop the workspace's running warehouses/clusters via its data plane. */
+    | 'workspace-compute-stop';
   /**
    * R-CAP-1 — true when RE-ACQUIRING this capacity on resume can fail (regional
    * capacity, quota, SKU retirement). These MUST carry a declared fallback.
@@ -339,6 +345,15 @@ export const PAUSABLE_RESOURCE_TYPES: Readonly<Record<string, PausableTypeSpec>>
     mechanism: 'arm-stop-action',
     capacityConstrained: false,
     armApiVersion: '2021-10-01-preview',
+  },
+  'microsoft.databricks/workspaces': {
+    resourceType: 'microsoft.databricks/workspaces',
+    label: 'Databricks workspace compute (SQL warehouses + clusters)',
+    mechanism: 'workspace-compute-stop',
+    // Warehouses/clusters are restarted from their kept configuration; a failed
+    // start surfaces as an unservable probe, not a regional reservation loss.
+    capacityConstrained: false,
+    armApiVersion: '2024-05-01',
   },
   'microsoft.web/sites': {
     resourceType: 'microsoft.web/sites',

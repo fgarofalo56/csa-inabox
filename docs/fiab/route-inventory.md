@@ -255,9 +255,9 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `admin/dspm-ai/route.ts` | GET | admin | ● | Cosmos, Log Analytics, Microsoft Graph |
 | `admin/embed-codes/route.ts` | GET POST DELETE | admin | ● | ADLS, ARM, Azure Storage, Cosmos, Managed Identity |
 | `admin/env-config/route.ts` | GET PUT | admin |  | ADLS, AKS, ARM, Azure Monitor, Container Apps, Cosmos, Microsoft Graph |
-| `admin/estate/pause/route.ts` | POST | admin |  | AAS, ADX, ARM, Azure Monitor, Azure SQL, Compute, Cosmos, Managed Identity, Synapse, Synapse SQL |
-| `admin/estate/resume/route.ts` | POST | admin |  | AAS, ARM, Azure Monitor, Azure SQL, Cosmos, Managed Identity, Synapse SQL |
-| `admin/estate/state/route.ts` | GET | admin |  | AAS, ADX, ARM, Azure SQL, Compute, Cosmos, Managed Identity, Synapse, Synapse SQL |
+| `admin/estate/pause/route.ts` | POST | admin |  | AAS, ADX, ARM, Azure Monitor, Azure SQL, Compute, Cosmos, Databricks, Managed Identity, Synapse, Synapse SQL |
+| `admin/estate/resume/route.ts` | POST | admin |  | AAS, ARM, Azure Monitor, Azure SQL, Cosmos, Databricks, Managed Identity, Synapse SQL |
+| `admin/estate/state/route.ts` | GET | admin |  | AAS, ADX, ARM, Azure SQL, Compute, Cosmos, Databricks, Managed Identity, Synapse, Synapse SQL |
 | `admin/feedback-forwarding/route.ts` | GET PUT | admin |  | Cosmos |
 | `admin/finops/anomalies/route.ts` | GET PUT DELETE | admin |  | ARM, Azure Cache for Redis, Azure Monitor, Cosmos, Cost Management |
 | `admin/finops/breakdown/route.ts` | GET | admin |  | ARM, Azure Cache for Redis, Cosmos, Cost Management |
@@ -2546,7 +2546,7 @@ silently downgrading the route.
 
 ## Backend signals (derived)
 
-457 module(s) ORIGINATE a backend label — the derivation read an
+458 module(s) ORIGINATE a backend label — the derivation read an
 Azure identifier out of them. Every other route/module below inherits through the
 call graph. Nothing in this section is a Loom module name someone typed: the
 modules are derived, and only the Microsoft-owned identifier vocabulary is seeded.
@@ -2956,6 +2956,7 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/azure/cost-forecast.ts` | Cost Management |
 | `apps/fiab-console/lib/azure/data-agent-client.ts` | Container Apps |
 | `apps/fiab-console/lib/azure/databricks-discovery.ts` | Databricks |
+| `apps/fiab-console/lib/azure/databricks-estate-client.ts` | Databricks |
 | `apps/fiab-console/lib/azure/databricks-scale-client.ts` | Databricks |
 | `apps/fiab-console/lib/azure/defender-client.ts` | Azure Policy, Azure RBAC, Defender for Cloud |
 | `apps/fiab-console/lib/azure/devcenter-client.ts` | Dev Center |
