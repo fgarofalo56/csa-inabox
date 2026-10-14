@@ -287,6 +287,16 @@ updates:
       interval: "weekly"
     labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 5
+    # #4965/#4966 (2026-10-14): typescript 7 + vitest 5 + @types/node 26 made npm
+    # fail on install with 'Cannot read properties of null (reading edgesOut)'. Hold
+    # the majors; minor/patch still arrive. Lift with a migration PR.
+    ignore:
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "vitest"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
       loom-sdk-version:
         applies-to: version-updates
@@ -315,6 +325,16 @@ updates:
       interval: "weekly"
     labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 5
+    # #4965/#4966 (2026-10-14): typescript 7 + vitest 5 + @types/node 26 made npm
+    # fail on install with 'Cannot read properties of null (reading edgesOut)'. Hold
+    # the majors; minor/patch still arrive. Lift with a migration PR.
+    ignore:
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "vitest"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
       loom-cli-version:
         applies-to: version-updates
