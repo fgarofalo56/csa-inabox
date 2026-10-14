@@ -1769,9 +1769,9 @@ pydantic==2.13.3 \
     #   pydantic-handlebars
     #   pydantic-settings
     #   xai-sdk
-pydantic-ai==1.106.0 \
-    --hash=sha256:c8c93979acab85b087dc3499e40249d5de4333f2212eb792c52a6c05c2448d69 \
-    --hash=sha256:fb2b4bba143f924f2272926428ed173e456b00e0e5b3b125d7fd757f11b21fee
+pydantic-ai==1.107.7 \
+    --hash=sha256:aa5d170bfd772d0bb31609ac8b1d9b7588bffaf6643c4a7598475312ccd75c95 \
+    --hash=sha256:ddd9b72e4e3486fc1e0cb9fe84efef46f3a5453a4861f9d07b95f401fd7a7c1a
     # via csa-inabox (pyproject.toml)
 pydantic-ai-slim==1.106.0 \
     --hash=sha256:0dd7a99ea3fa89b490098406c2240ba7d75c327eea094c3fd057dd7aa9f3d163 \
