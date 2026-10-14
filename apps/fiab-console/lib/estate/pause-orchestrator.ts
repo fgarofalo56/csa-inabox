@@ -135,6 +135,7 @@ export const ESTATE_PAUSE_TIER: readonly string[] = [
   'microsoft.app/containerapps',
   'microsoft.streamanalytics/streamingjobs',
   'microsoft.web/sites',
+  'microsoft.databricks/workspaces',
 ];
 
 /**
@@ -169,6 +170,8 @@ export const TYPICAL_RESUME_SECONDS: Readonly<Record<string, number>> = {
   'microsoft.app/containerapps': 90,
   'microsoft.streamanalytics/streamingjobs': 120,
   'microsoft.web/sites': 60,
+  // Warehouses start in minutes; classic clusters 5-10.
+  'microsoft.databricks/workspaces': 420,
 };
 
 // ---------------------------------------------------------------------------
@@ -646,6 +649,7 @@ export async function startPause(
       sku: power.sku,
       replicaCount: power.replicaCount,
       scale: power.scale,
+      children: power.children,
       fallbackSku: candidate.fallbackSku,
       ownership: recheck.ownership,
     });
@@ -665,7 +669,7 @@ export async function startPause(
     }
 
     // (5) The mutation.
-    const result = await actuator.pause(candidate);
+    const result = await actuator.pause(candidate, entry);
     if (result.ok && result.noop) {
       // The actuator established that stopping changes nothing. Un-record it:
       // there is nothing to restore, and keeping it would leave the estate in
@@ -860,6 +864,7 @@ const RESUME_RANK: Readonly<Record<string, number>> = {
   'microsoft.synapse/workspaces/sqlpools': 1,
   'microsoft.analysisservices/servers': 1,
   'microsoft.streamanalytics/streamingjobs': 1,
+  'microsoft.databricks/workspaces': 1,
   'microsoft.app/containerapps': 2,
   'microsoft.compute/virtualmachines': 2,
   'microsoft.compute/virtualmachinescalesets': 2,

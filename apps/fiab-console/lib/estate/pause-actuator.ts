@@ -27,6 +27,7 @@ import {
   armPowerReading,
   type ArmPowerReading,
   type EstatePowerState,
+  type EstateComputeChild,
   type EstateScaleSnapshot,
   type EstateSkuSnapshot,
   type PausedResourceSnapshot,
@@ -62,6 +63,8 @@ export interface PowerRead {
   replicaCount?: number;
   /** Container Apps: the template.scale range, so resume restores it exactly. */
   scale?: EstateScaleSnapshot;
+  /** Databricks workspaces: the compute RUNNING right now (see PausedResourceSnapshot.children). */
+  children?: EstateComputeChild[];
 }
 
 /** Whether the resource can actually SERVE, as opposed to reporting a state. */
@@ -90,7 +93,7 @@ export interface EstateActuator {
     name: string;
   }): Promise<PowerRead>;
   /** The native pause/stop/suspend verb. Composes an existing lib/azure client. */
-  pause(candidate: PauseCandidate): Promise<ActuatorResult>;
+  pause(candidate: PauseCandidate, entry?: PausedResourceSnapshot): Promise<ActuatorResult>;
   /** The native resume/start verb. */
   resume(entry: PausedResourceSnapshot): Promise<ActuatorResult>;
   /** A REAL data-plane round-trip. `probed:false` when none is wired. */
@@ -164,6 +167,14 @@ export function normalizePowerState(resourceType: string, raw: unknown): EstateP
       if (s === 'stopping') return 'Pausing';
       if (s === 'scaling') return 'Scaling';
       return 'Unknown';
+    case 'microsoft.databricks/workspaces':
+      // Not a Databricks field: the caller folds the states of the workspace's
+      // warehouses and clusters into one word via `dbxWorkspacePowerWord`.
+      if (s === 'online') return 'Online';
+      if (s === 'paused') return 'Paused';
+      if (s === 'starting') return 'Starting';
+      if (s === 'stopping') return 'Pausing';
+      return 'Unknown';
     case 'microsoft.web/sites':
       // properties.state: Running | Stopped (others, e.g. QuotaExceeded, Unknown).
       if (s === 'running') return 'Online';
@@ -175,6 +186,30 @@ export function normalizePowerState(resourceType: string, raw: unknown): EstateP
       if (s === 'deallocated') return 'Deallocated';
       return 'Unknown';
   }
+}
+
+/** Classify one Databricks warehouse/cluster state. Unrecognised => 'unknown' (fail safe). */
+export function dbxStateClass(raw: string): 'running' | 'starting' | 'stopping' | 'stopped' | 'unknown' {
+  const st = String(raw ?? '').trim().toUpperCase();
+  if (st === 'RUNNING') return 'running';
+  if (st === 'STARTING' || st === 'PENDING' || st === 'RESTARTING' || st === 'RESIZING') return 'starting';
+  if (st === 'STOPPING' || st === 'TERMINATING') return 'stopping';
+  // ERROR = failed to start: not running and not billed. DELETED = gone.
+  if (st === 'STOPPED' || st === 'TERMINATED' || st === 'ERROR' || st === 'DELETED' || st === 'DELETING') return 'stopped';
+  return 'unknown';
+}
+
+/**
+ * Fold a workspace's compute states into one power word. Any unrecognised state
+ * makes the whole workspace 'unknown' so it is never paused on a guess.
+ */
+export function dbxWorkspacePowerWord(states: readonly string[]): string {
+  const classes = states.map(dbxStateClass);
+  if (classes.includes('unknown')) return 'unknown';
+  if (classes.includes('running')) return 'online';
+  if (classes.includes('starting')) return 'starting';
+  if (classes.includes('stopping')) return 'stopping';
+  return 'paused';
 }
 
 /** Shape of the Container App fields the actuator reads and writes. */
@@ -258,6 +293,9 @@ export async function createArmActuator(): Promise<EstateActuator> {
       if (type === 'microsoft.app/containerapps') {
         return await readContainerAppPower(resource.resourceId, version);
       }
+      if (type === 'microsoft.databricks/workspaces') {
+        return await readDatabricksPower(resource.resourceId, version);
+      }
       // A VM's power state lives in instanceView, which GET only returns on request.
       const expand = type === 'microsoft.compute/virtualmachines' ? '&$expand=instanceView' : '';
       const body = await armGet<{
@@ -299,6 +337,138 @@ export async function createArmActuator(): Promise<EstateActuator> {
       // R7 — say what happened, do not convert a failed read into a state.
       return { reading: null, error: err instanceof Error ? err.message : String(err) };
     }
+  };
+
+  /**
+   * The data-plane host of the VERIFIED workspace, from ARM
+   * (`properties.workspaceUrl`) - never from LOOM_DATABRICKS_HOSTNAME. The host
+   * is validated against the known Azure Databricks domains before any token is
+   * sent to it.
+   */
+  const dbxHostFor = async (resourceId: string, version: string): Promise<string> => {
+    const { assertDatabricksHost } = await import('@/lib/azure/databricks-estate-client');
+    const ws = await armGet<{ properties?: { workspaceUrl?: string; provisioningState?: string } }>(
+      `${resourceId}?api-version=${version}`,
+    );
+    const prov = String(ws?.properties?.provisioningState ?? '');
+    if (prov && prov.toLowerCase() !== 'succeeded') {
+      throw new Error(`The Databricks workspace is in provisioningState '${prov}', so its compute cannot be addressed yet.`);
+    }
+    return assertDatabricksHost(ws?.properties?.workspaceUrl);
+  };
+
+  const readDatabricksPower = async (resourceId: string, version: string): Promise<PowerRead> => {
+    const dbx = await import('@/lib/azure/databricks-estate-client');
+    const host = await dbxHostFor(resourceId, version);
+    const [warehouses, clusters] = await Promise.all([dbx.listWarehouses(host), dbx.listUserClusters(host)]);
+    const all = [...warehouses, ...clusters];
+    const children: EstateComputeChild[] = all
+      .filter((c) => dbxStateClass(c.state) === 'running')
+      .map((c) => ({
+        kind: c.kind,
+        id: c.id,
+        name: c.name,
+        priorState: c.state,
+        ...(typeof c.autoStopMins === 'number' ? { autoStopMins: c.autoStopMins } : {}),
+      }));
+    return {
+      reading: armPowerReading({
+        resourceId,
+        powerState: normalizePowerState(
+          'microsoft.databricks/workspaces',
+          dbxWorkspacePowerWord(all.map((c) => c.state)),
+        ),
+        armApiVersion: version,
+      }),
+      children,
+    };
+  };
+
+  const getChild = async (host: string, c: EstateComputeChild) => {
+    const dbx = await import('@/lib/azure/databricks-estate-client');
+    return c.kind === 'sql-warehouse' ? dbx.getWarehouse(host, c.id) : dbx.getCluster(host, c.id);
+  };
+
+  /** Stop the recorded children; read each back. Never touches compute that is not in `entry.children`. */
+  const pauseDatabricks = async (resource: { resourceId: string; name: string }, entry?: PausedResourceSnapshot): Promise<ActuatorResult> => {
+    const version = apiVersion('microsoft.databricks/workspaces');
+    const children = entry?.children;
+    if (!children) {
+      return {
+        ok: false,
+        detail: `No pre-pause compute list was recorded for workspace ${resource.name}, so Loom will not guess what to stop. Left RUNNING.`,
+        error: 'dbx-no-recorded-children',
+      };
+    }
+    if (children.length === 0) {
+      return { ok: true, noop: true, detail: `Workspace ${resource.name} had no running warehouses or clusters; nothing to stop.` };
+    }
+    const dbx = await import('@/lib/azure/databricks-estate-client');
+    const host = await dbxHostFor(resource.resourceId, version);
+    const failed: string[] = [];
+    const stopped: string[] = [];
+    for (const c of children) {
+      try {
+        const cls = dbxStateClass((await getChild(host, c)).state);
+        if (cls === 'running' || cls === 'starting') {
+          if (c.kind === 'sql-warehouse') await dbx.stopWarehouse(host, c.id);
+          else await dbx.terminateCluster(host, c.id);
+        }
+        const after = dbxStateClass((await getChild(host, c)).state);
+        if (after === 'stopped' || after === 'stopping') stopped.push(c.name);
+        else failed.push(`${c.kind} ${c.name}: read-back reports '${after}' after the stop`);
+      } catch (err) {
+        failed.push(`${c.kind} ${c.name}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    if (failed.length > 0) {
+      return {
+        ok: false,
+        detail:
+          `The pause of workspace ${resource.name} was only partly applied (${stopped.length} stopped, ${failed.length} not): `
+          + `${failed.join('; ')}. Stopped compute is recorded and Resume will restart it; the rest is still running.`,
+        error: failed.join('; '),
+      };
+    }
+    return { ok: true, detail: `Stopped ${stopped.length} compute resource(s) in workspace ${resource.name} (${stopped.join(', ')}); read-back confirmed.` };
+  };
+
+  const resumeDatabricks = async (entry: PausedResourceSnapshot): Promise<ActuatorResult> => {
+    const version = apiVersion('microsoft.databricks/workspaces');
+    const children = entry.children;
+    if (!children || children.length === 0) {
+      return {
+        ok: false,
+        detail: `The snapshot records no running compute for workspace ${entry.name}, so there is nothing Loom can restore. Start the warehouses/clusters you need by hand.`,
+        error: 'dbx-no-recorded-children',
+      };
+    }
+    const dbx = await import('@/lib/azure/databricks-estate-client');
+    const host = await dbxHostFor(entry.resourceId, version);
+    const failed: string[] = [];
+    const started: string[] = [];
+    for (const c of children) {
+      try {
+        const cls = dbxStateClass((await getChild(host, c)).state);
+        if (cls !== 'running' && cls !== 'starting') {
+          if (c.kind === 'sql-warehouse') await dbx.startWarehouse(host, c.id);
+          else await dbx.startCluster(host, c.id);
+        }
+        const after = dbxStateClass((await getChild(host, c)).state);
+        if (after === 'running' || after === 'starting') started.push(c.name);
+        else failed.push(`${c.kind} ${c.name}: read-back reports '${after}' after the start`);
+      } catch (err) {
+        failed.push(`${c.kind} ${c.name}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    if (failed.length > 0) {
+      return {
+        ok: false,
+        detail: `Resume of workspace ${entry.name} was only partly applied (${started.length} started, ${failed.length} not): ${failed.join('; ')}.`,
+        error: failed.join('; '),
+      };
+    }
+    return { ok: true, detail: `Started ${started.length} compute resource(s) in workspace ${entry.name} (${started.join(', ')}); read-back confirmed.` };
   };
 
   /**
@@ -416,7 +586,7 @@ export async function createArmActuator(): Promise<EstateActuator> {
     return { ok: true, detail: `Container App ${entry.name} restored to minReplicas ${min} / maxReplicas ${max}; read-back confirmed.` };
   };
 
-  const pause = async (candidate: PauseCandidate): Promise<ActuatorResult> => {
+  const pause = async (candidate: PauseCandidate, entry?: PausedResourceSnapshot): Promise<ActuatorResult> => {
     const { resource } = candidate;
     const type = resource.resourceType.toLowerCase();
     try {
@@ -456,6 +626,8 @@ export async function createArmActuator(): Promise<EstateActuator> {
         }
         case 'microsoft.app/containerapps':
           return await pauseContainerApp(resource);
+        case 'microsoft.databricks/workspaces':
+          return await pauseDatabricks(resource, entry);
         case 'microsoft.streamanalytics/streamingjobs': {
           await armPost(`${resource.resourceId}/stop?api-version=${apiVersion(type)}`);
           return { ok: true, detail: `ARM accepted the stop of Stream Analytics job ${resource.name}.` };
@@ -536,6 +708,8 @@ export async function createArmActuator(): Promise<EstateActuator> {
         }
         case 'microsoft.app/containerapps':
           return await resumeContainerApp(entry);
+        case 'microsoft.databricks/workspaces':
+          return await resumeDatabricks(entry);
         case 'microsoft.streamanalytics/streamingjobs': {
           // Resume where the job left off rather than re-reading from JobStartTime.
           await armPost(`${entry.resourceId}/start?api-version=${apiVersion(type)}`, {
@@ -732,6 +906,29 @@ export async function createArmActuator(): Promise<EstateActuator> {
             detail: ok
               ? `${entry.name} is Succeeded with its recorded replica range restored (control-plane evidence).`
               : `${entry.name} reports provisioningState '${prov}', range ${String(read.scale?.minReplicas)}/${String(read.scale?.maxReplicas)} vs recorded ${String(entry.scale?.minReplicas)}/${String(entry.scale?.maxReplicas)}.`,
+          };
+        }
+        case 'microsoft.databricks/workspaces': {
+          const children = entry.children ?? [];
+          if (children.length === 0) return unprobed(entry, 'the snapshot records no compute to check');
+          const host = await dbxHostFor(entry.resourceId, apiVersion(type));
+          const notRunning: string[] = [];
+          const drift: string[] = [];
+          for (const c of children) {
+            const now = await getChild(host, c);
+            if (dbxStateClass(now.state) !== 'running') notRunning.push(`${c.name} (${now.state || 'unreported'})`);
+            else if (typeof c.autoStopMins === 'number' && now.autoStopMins !== c.autoStopMins) {
+              drift.push(`${c.name} auto-stop ${String(now.autoStopMins)} vs recorded ${c.autoStopMins}`);
+            }
+          }
+          const ok = notRunning.length === 0;
+          return {
+            servable: ok,
+            probed: true,
+            detail: ok
+              ? `All ${children.length} recorded compute resource(s) in ${entry.name} are RUNNING`
+                + (drift.length ? `; configuration drift noticed (not caused by Loom): ${drift.join('; ')}.` : '.')
+              : `Not yet RUNNING in ${entry.name}: ${notRunning.join(', ')}.`,
           };
         }
         case 'microsoft.streamanalytics/streamingjobs': {

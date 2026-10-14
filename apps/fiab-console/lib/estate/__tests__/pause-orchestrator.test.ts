@@ -681,6 +681,7 @@ describe('the PAUSE tier', () => {
       'microsoft.compute/virtualmachines',
       'microsoft.compute/virtualmachinescalesets',
       'microsoft.containerservice/managedclusters',
+      'microsoft.databricks/workspaces',
       'microsoft.kusto/clusters',
       'microsoft.streamanalytics/streamingjobs',
       'microsoft.synapse/workspaces/sqlpools',

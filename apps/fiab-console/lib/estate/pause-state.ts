@@ -317,6 +317,17 @@ export interface EstateSkuSnapshot {
   capacity?: number;
 }
 
+/** One workspace-scoped compute resource and the condition it was found in. */
+export interface EstateComputeChild {
+  kind: 'sql-warehouse' | 'cluster';
+  id: string;
+  name: string;
+  /** Databricks state at capture (RUNNING). Recorded verbatim for the audit trail. */
+  priorState: string;
+  /** Idle minutes before auto-stop / auto-termination, as configured at capture. */
+  autoStopMins?: number;
+}
+
 /** A Container App replica range, as ARM expresses template.scale. */
 export interface EstateScaleSnapshot {
   minReplicas?: number;
@@ -373,6 +384,13 @@ export interface PausedResourceSnapshot {
    * refused rather than guessed.
    */
   scale?: EstateScaleSnapshot;
+  /**
+   * Databricks workspaces: the compute that was RUNNING at pause time (SQL
+   * warehouses and all-purpose clusters). A workspace has no stop verb of its
+   * own, so pausing it means stopping exactly these, and resume starts exactly
+   * these back. Optional and additive, like `scale`.
+   */
+  children?: EstateComputeChild[];
   /** R-CAP-1 — used only when the original SKU is unavailable on resume. */
   fallbackSku?: EstateFallbackSku;
 
@@ -687,6 +705,7 @@ export function capturePrePauseState(args: {
   sku?: EstateSkuSnapshot;
   replicaCount?: number;
   scale?: EstateScaleSnapshot;
+  children?: EstateComputeChild[];
   fallbackSku?: EstateFallbackSku;
   ownership: LoomOwnershipEvidence;
 }): PausedResourceSnapshot {
@@ -729,6 +748,7 @@ export function capturePrePauseState(args: {
     ...(args.sku ? { sku: args.sku } : {}),
     ...(typeof args.replicaCount === 'number' ? { replicaCount: args.replicaCount } : {}),
     ...(args.scale ? { scale: args.scale } : {}),
+    ...(args.children ? { children: args.children } : {}),
     ...(args.fallbackSku ? { fallbackSku: args.fallbackSku } : {}),
     ownership: args.ownership,
   };
