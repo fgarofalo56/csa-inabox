@@ -38,6 +38,7 @@ import { requireTenantAdmin, enforceCapability, type FeatureRole, type TenantAdm
 import { denyIfNoDlzAccess, type DlzPane } from '@/lib/auth/dlz-gate';
 import { resolveApprovalAuthority, approvalAuthorityDenied } from '@/lib/access/approval-authority';
 import { apiUnauthorized, apiNotFound, apiServerError } from './respond';
+import { recordHumanActivity } from '@/lib/estate/estate-activity';
 import { backendGateResponse, type GateEnvelopeOpts } from './gate-envelope';
 
 /** Next.js route context — `params` is a Promise in the app router. */
@@ -90,6 +91,10 @@ export function withSession<P = Record<string, string>>(handler: SessionHandler<
   return async (req, ctx) => {
     const session = getSession();
     if (!session) return apiUnauthorized();
+    // Idle auto-pause signal (PRP-02 #4876): fire-and-forget, filtered inside the helper
+    // (PAT / probes / state poll / SP route excluded). Changes no authorization decision
+    // and no response; a failure here must never reach the request.
+    try { recordHumanActivity(session, req.nextUrl?.pathname ?? ''); } catch { /* never throws into the request */ }
     try {
       const params = await resolveParams(ctx);
       return await handler(req, { session, params });

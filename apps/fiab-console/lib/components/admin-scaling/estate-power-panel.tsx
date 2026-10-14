@@ -15,7 +15,8 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Body1, Caption1, Button, MessageBar, MessageBarBody, MessageBarTitle,
+  Body1, Caption1, Button, MessageBar, MessageBarActions, MessageBarBody, MessageBarTitle,
+  Field, Switch, makeStyles,
   Input, tokens, Badge, ProgressBar, Spinner, Subtitle2,
   Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
 } from '@fluentui/react-components';
@@ -109,6 +110,197 @@ const ESTATE_PRESENTATION: Record<EstateState, {
     hint: 'At least one resource is NOT confirmed back up. This is not a display state — those resources are unusable until the remediation below is applied.',
   },
 };
+
+// ===========================================================================
+// IDLE ACTIVITY + AUTO-PAUSE (PRP-02 step 3, #4876)
+//
+// Shows how long the console has been idle, when the estate was last paused and
+// resumed, and the auto-pause setting the auto-pause lane reads. Honest states:
+//   - no activity recorded  -> informative note (it is NOT "idle forever", and
+//     the auto-pause lane will not fire on it), never an error;
+//   - setting never saved   -> says the armed default is in effect;
+//   - setting unreadable    -> a warning with a one-click "Reset to defaults";
+//   - save refused          -> a warning with Retry.
+// ===========================================================================
+
+const useSectionStyles = makeStyles({
+  row: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalM,
+    minWidth: 0,
+  },
+});
+
+/** "2h 5m" / "37m" / "under a minute". Pure, exported for the test. */
+export function formatIdle(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return 'unknown';
+  if (seconds < 60) return 'under a minute';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+/** Same bounds as the server (`validateAutoPause`); the server is still the authority. */
+export function parseIdleHours(raw: string): number | null {
+  if (raw.trim() === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 1 && n <= 168 ? n : null;
+}
+
+export function EstateAutoPauseSection({ power, styles, onChanged }: {
+  power: any;
+  styles: Record<string, string>;
+  onChanged: () => Promise<unknown> | void;
+}) {
+  const s = useSectionStyles();
+  const ap = power?.autoPause;
+  const activity = power?.activity;
+  const [enabled, setEnabled] = useState<boolean>(ap?.enabled ?? true);
+  const [hours, setHours] = useState<string>(String(ap?.idleHours ?? 2));
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  // Follow the server value until the operator starts editing.
+  useEffect(() => {
+    if (dirty || !ap) return;
+    setEnabled(ap.enabled);
+    setHours(String(ap.idleHours));
+  }, [ap?.enabled, ap?.idleHours, ap?.updatedAt, dirty]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!power) return null;
+
+  const parsed = parseIdleHours(hours);
+  const hoursInvalid = dirty && parsed === null;
+
+  async function save(next: { enabled: boolean; idleHours: number }) {
+    setSaving(true);
+    setSaveError(null);
+    setSaved(false);
+    try {
+      const r = await clientFetch('/api/admin/estate/autopause', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(next),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j?.ok === false) throw new Error(j?.error || `Save failed (${r.status})`);
+      setDirty(false);
+      setSaved(true);
+      await onChanged();
+    } catch (e: any) {
+      setSaveError(e?.message || String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const noActivity = activity && activity.lastActivityAt === null;
+
+  return (
+    <div className={`${styles.powerSection} ${styles.powerDivider}`} data-testid="estate-autopause">
+      <Caption1 className={styles.fieldLabel}>Idle auto-pause</Caption1>
+
+      <div className={s.row}>
+        {activity?.unreadable ? (
+          <Badge appearance="tint" color="warning">activity unreadable</Badge>
+        ) : noActivity ? (
+          <Badge appearance="tint" color="informative">no activity recorded yet</Badge>
+        ) : (
+          <>
+            <Badge appearance="tint" color="brand">
+              last activity {new Date(activity.lastActivityAt).toLocaleString()}
+            </Badge>
+            <Badge appearance="tint" color="subtle">idle for {formatIdle(activity.idleForSeconds)}</Badge>
+          </>
+        )}
+        <Badge appearance="tint" color="subtle">
+          last paused {power.lastPausedAt ? new Date(power.lastPausedAt).toLocaleString() : 'never'}
+        </Badge>
+        <Badge appearance="tint" color="subtle">
+          last resumed {power.lastResumedAt ? new Date(power.lastResumedAt).toLocaleString() : 'never'}
+        </Badge>
+      </div>
+
+      {(noActivity || activity?.unreadable) && (
+        <Caption1 className={styles.powerSub}>
+          {activity?.unreadable
+            ? 'Loom could not read the last-activity record, so it treats idleness as unknown and will not auto-pause.'
+            : 'Nothing has recorded a person using the console yet. Loom treats that as unknown, not idle, and will not auto-pause until activity has been seen.'}
+        </Caption1>
+      )}
+
+      {ap?.source === 'unreadable' && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>The saved auto-pause setting could not be read</MessageBarTitle>
+            Showing the defaults below; Loom will not auto-pause on an unreadable setting.
+            Saving writes a fresh, explicit setting.
+          </MessageBarBody>
+          <MessageBarActions>
+            <Button size="small" disabled={saving}
+              onClick={() => { void save({ enabled: true, idleHours: 2 }); }}>
+              Reset to defaults (on, 2 hours)
+            </Button>
+          </MessageBarActions>
+        </MessageBar>
+      )}
+
+      <div className={s.row}>
+        <Switch
+          checked={enabled}
+          label={enabled ? 'Auto-pause when idle' : 'Auto-pause is off'}
+          onChange={(_, d) => { setEnabled(d.checked); setDirty(true); setSaved(false); }}
+        />
+        <Field
+          label="Idle hours"
+          validationState={hoursInvalid ? 'error' : 'none'}
+          validationMessage={hoursInvalid ? 'Enter a number from 1 to 168.' : undefined}
+          hint={hoursInvalid ? undefined : '1 to 168 (one week). Default 2.'}
+        >
+          <Input
+            type="number"
+            value={hours}
+            disabled={!enabled}
+            aria-label="Idle hours before auto-pause"
+            onChange={(_, d) => { setHours(d.value); setDirty(true); setSaved(false); }}
+          />
+        </Field>
+        <Button appearance="primary" disabled={!dirty || parsed === null || saving}
+          onClick={() => { if (parsed !== null) void save({ enabled, idleHours: parsed }); }}>
+          {saving ? 'Saving…' : 'Save'}
+        </Button>
+      </div>
+
+      {ap?.source === 'default' && !dirty && !saved && (
+        <Caption1 className={styles.powerSub}>
+          Using the default: on, after 2 idle hours. Save to make it an explicit setting.
+          Auto-pause still needs the pause feature armed and a current preview to act.
+        </Caption1>
+      )}
+      {saved && (
+        <MessageBar intent="success"><MessageBarBody>Auto-pause setting saved.</MessageBarBody></MessageBar>
+      )}
+      {saveError && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>The auto-pause setting was not saved</MessageBarTitle>
+            {saveError}
+          </MessageBarBody>
+          <MessageBarActions>
+            <Button size="small" disabled={saving || parsed === null}
+              onClick={() => { if (parsed !== null) void save({ enabled, idleHours: parsed }); }}>
+              Retry
+            </Button>
+          </MessageBarActions>
+        </MessageBar>
+      )}
+    </div>
+  );
+}
 
 export function EstatePowerPanel({ styles }: { styles: Record<string, string> }) {
   const [data, setData] = useState<any>(null);
@@ -385,6 +577,10 @@ export function EstatePowerPanel({ styles }: { styles: Record<string, string> })
         </MessageBar>
       )}
 
+      {!loading && data?.power && (
+        <EstateAutoPauseSection power={data.power} styles={styles} onChanged={refresh} />
+      )}
+
       {/* RESUME_FAILED — loud, terminal, and per-resource. Never a spinner. */}
       {state === 'RESUME_FAILED' && data?.summary && (
         <MessageBar intent="error">
@@ -599,4 +795,3 @@ export function EstatePowerPanel({ styles }: { styles: Record<string, string> })
     </div>
   );
 }
-
