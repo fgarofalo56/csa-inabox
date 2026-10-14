@@ -19,7 +19,8 @@ export async function probeAasServer(serverUri: string, serverName: string): Pro
   const suffix = aasSuffix();
   if (!['asazure.windows.net', 'asazure.usgovcloudapi.net'].includes(suffix)
     || uri.protocol !== 'asazure:' || uri.username || uri.password || uri.port || uri.search || uri.hash
-    || !new RegExp(`^[a-z0-9-]+\\.${suffix.replaceAll('.', '\\.')}$`).test(uri.hostname)
+    || !uri.hostname.endsWith(`.${suffix}`)
+    || !/^[a-z0-9-]+$/.test(uri.hostname.slice(0, -(suffix.length + 1)))
     || !/^[a-zA-Z0-9-]+$/.test(serverName)
     || uri.pathname.toLowerCase() !== `/${serverName.toLowerCase()}`) {
     return unknown('ARM connection URI does not match the verified server and cloud.');
