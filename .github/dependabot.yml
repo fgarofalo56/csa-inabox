@@ -77,6 +77,11 @@ updates:
       interval: "weekly"
     labels: ["dependencies", "python"]
     open-pull-requests-limit: 5
+    # pyarrow 26.0.0 requires Python >=3.11 but the Test Suite matrix runs 3.10 (#4988:
+    # 'Could not find a version that satisfies pyarrow==26.0.0'). Hold the major.
+    ignore:
+      - dependency-name: "pyarrow"
+        update-types: ["version-update:semver-major"]
     groups:
       duckdb-version:
         applies-to: version-updates
@@ -285,6 +290,28 @@ updates:
       # 0.x: 0.11 -> 0.12 is a semver-MINOR to dependabot, so pin by version.
       - dependency-name: "elkjs"
         versions: [">=0.12.0"]
+      # Added after the rebuilt group PR #4992 (2026-10-14) still failed:
+      #   @types/node 26: next build fails, crypto.JsonWebKey was removed
+      #     (lib/azure/entra-bearer-verify.ts:200). Runtime is Node 20.
+      #   jsdom 30 / @vitejs/plugin-react 6: 25 suites fail on the tabster CJS
+      #     import, and form-data 4.x leaves the lockfile (advisory-floor guard).
+      #   eslint 10 / @testing-library/jest-dom 7: held as toolchain majors.
+      #   @azure/msal-node 7 / @azure/msal-browser 5: sign-in critical; take them
+      #     in a reviewed migration PR with an auth walk, not a grouped bump.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "jsdom"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@vitejs/plugin-react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "eslint"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@testing-library/jest-dom"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@azure/msal-node"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@azure/msal-browser"
+        update-types: ["version-update:semver-major"]
     groups:
       fiab-console-version:
         applies-to: version-updates
