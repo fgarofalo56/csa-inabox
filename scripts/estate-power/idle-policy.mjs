@@ -1,11 +1,13 @@
 /**
  * idle-policy.mjs — PURE. Should the scheduled lane pause this estate?
  *
- * UNKNOWN IS NEVER IDLE. Every branch that cannot establish idleness returns
- * `skip` with the reason; the only path to `pause` is every rule satisfied by
- * positive evidence.
+ * Encodes the console contract's caller rules (estate-power-contract.ts, "RULES
+ * FOR THE CALLER"): pause only when autoPause.enabled === true, autoPause.source
+ * !== 'unreadable', activity.lastActivityAt !== null and
+ * activity.idleForSeconds >= idleHours * 3600. UNKNOWN IS NEVER IDLE: every branch
+ * that cannot establish idleness returns `skip` with the reason.
  */
-import { FIELD, OVERALL_RUNNING } from './contract.mjs';
+import { FIELD, ESTATE_STATE, IN_FLIGHT_STATES, AUTOPAUSE_SOURCE_UNREADABLE } from './contract.mjs';
 
 const ACTIVE_RUN_STATUSES = new Set(['inprogress', 'queued', 'running', 'canceling']);
 
@@ -17,7 +19,7 @@ function ms(v) {
 
 /**
  * @param {object} p
- * @param {object} p.state    the console state `data` object
+ * @param {object} p.state    the console state body (top-level fields)
  * @param {{ok:boolean, reason?:string, runs?:Array<{startedAt:string|null,status?:string}>}} p.activity
  * @param {Date|number} p.now
  * @param {{declared:boolean, reason?:string}} [p.declared]  classifyPauseDeclaration result
@@ -31,22 +33,26 @@ export function decideIdlePause({ state, activity, now, declared }) {
 
   if (declared?.declared === true) return skip('declared-paused', 'the boundary is declared paused in the pause register; nothing to do');
 
-  const ap = state[FIELD.autoPause];
-  if (!ap || ap[FIELD.autoPauseEnabled] !== true) return skip('autopause-disabled', 'autoPause.enabled is not true');
+  const power = state[FIELD.power];
+  const ap = power?.[FIELD.autoPause];
+  if (!ap || ap[FIELD.autoPauseEnabled] !== true) return skip('autopause-disabled', 'power.autoPause.enabled is not true');
+  if (ap[FIELD.autoPauseSource] === AUTOPAUSE_SOURCE_UNREADABLE) {
+    return skip('autopause-unreadable', 'power.autoPause.source is unreadable: the setting read failed, its values must not be acted on');
+  }
 
-  if (state[FIELD.overall] !== OVERALL_RUNNING) {
-    return skip('not-running', `estate state is ${JSON.stringify(state[FIELD.overall] ?? null)}, not ${OVERALL_RUNNING}`);
-  }
-  if (state[FIELD.inFlight] !== false) {
-    // strict: true means in flight, and a missing field is unknown, which is not "idle"
-    return skip('in-flight', state[FIELD.inFlight] === true ? 'a pause/resume is in flight' : 'whether a pause/resume is in flight was not reported');
-  }
+  const st = state[FIELD.state];
+  if (IN_FLIGHT_STATES.includes(st)) return skip('in-flight', `estate state is ${st}: a pause/resume is in flight`);
+  if (st !== ESTATE_STATE.running) return skip('not-running', `estate state is ${JSON.stringify(st ?? null)}, not ${ESTATE_STATE.running}`);
 
   const idleHours = Number(ap[FIELD.autoPauseIdleHours]);
   if (!Number.isFinite(idleHours) || idleHours <= 0) return skip('idle-hours-invalid', `autoPause.idleHours is ${JSON.stringify(ap[FIELD.autoPauseIdleHours] ?? null)}, not a positive number`);
 
-  const lastMs = ms(state[FIELD.lastActivityAt]);
-  if (lastMs === null) return skip('activity-unknown', 'lastActivityAt is missing or unparseable; unknown is never idle');
+  const act = power?.[FIELD.activity];
+  if (!act || act[FIELD.activityUnreadable] === true) return skip('activity-unknown', 'power.activity is missing or flagged unreadable; unknown is never idle');
+  const lastMs = ms(act[FIELD.lastActivityAt]);
+  if (lastMs === null) return skip('activity-unknown', 'lastActivityAt is null or unparseable (null means no activity recorded, NOT idle forever); unknown is never idle');
+  const serverIdle = act[FIELD.idleForSeconds];
+  if (typeof serverIdle !== 'number' || !Number.isFinite(serverIdle)) return skip('activity-unknown', 'idleForSeconds is not a number although lastActivityAt is set');
 
   if (!activity || activity.ok !== true || !Array.isArray(activity.runs)) {
     return skip('activity-read-failed', `pipeline activity could not be read (${activity?.reason ?? 'no reason reported'}); not pausing on an unestablished answer`);
@@ -62,10 +68,10 @@ export function decideIdlePause({ state, activity, now, declared }) {
     }
   }
 
-  const idleMs = nowMs - lastMs;
+  // Both clocks must agree: the console's own idleForSeconds AND ours from lastActivityAt.
+  const idleMs = Math.min(nowMs - lastMs, serverIdle * 1000);
   if (idleMs < windowMs) {
-    const mins = Math.ceil((windowMs - idleMs) / 60000);
-    return skip('not-idle-long-enough', `last activity ${new Date(lastMs).toISOString()}; idle ${Math.floor(idleMs / 1000)}s of the required ${windowMs / 1000}s (about ${mins} min to go)`);
+    return skip('not-idle-long-enough', `last activity ${new Date(lastMs).toISOString()}; idle ${Math.floor(idleMs / 1000)}s of the required ${windowMs / 1000}s`);
   }
   return { decision: 'pause', code: 'idle', reason: `idle ${Math.floor(idleMs / 1000)}s >= ${windowMs / 1000}s (idleHours=${idleHours}), no pipeline run in the window` };
 }

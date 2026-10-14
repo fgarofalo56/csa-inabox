@@ -20,8 +20,8 @@
  */
 import { pathToFileURL } from 'node:url';
 import {
-  ACTIONS, FIELD, ENDPOINT_PATH, PAUSED_STATES, RUNNING_STATES, DEFAULT_PAUSE_CONFIRM,
-  boundaryInfo, parseEnvelope, resourcesOf,
+  ACTIONS, FIELD, ENDPOINT_PATH, ESTATE_STATE, RESUME_SUCCESS,
+  boundaryInfo, parseEnvelope, pauseSetOf, rowsOf,
 } from './contract.mjs';
 import { acquireToken, assertBoundary, defaultSpawn, scrub } from './token.mjs';
 
@@ -80,15 +80,47 @@ export function remediationFor(kind, boundary) {
  * name list captured BEFORE the mutation, so a resource that vanished from the
  * read-back is a failure, not a pass.
  */
-export function verifyTarget(resources, expected, targetStates) {
+export function verifyPaused(data, expectedIds) {
+  const st = data?.[FIELD.state];
   const failures = [];
-  const byName = new Map((resources ?? []).map((r) => [r.name, r]));
-  for (const e of expected) {
-    const got = byName.get(e.name);
-    if (!got) failures.push({ name: e.name, type: e.type, state: 'absent', why: 'not present in the read-back' });
-    else if (!targetStates.includes(got.state)) failures.push({ name: got.name, type: got.type, state: got.state, why: `state ${got.state} is not one of ${targetStates.join('/')}` });
+  const progress = Array.isArray(data?.[FIELD.progress]) ? data[FIELD.progress] : null;
+  if (progress) {
+    for (const p of progress) {
+      if (p?.[FIELD.progressAtExpected] !== true) {
+        failures.push({ name: String(p?.[FIELD.rowName] ?? '<unnamed>'), type: String(p?.[FIELD.rowType] ?? '<untyped>'), state: String(p?.[FIELD.progressPowerState] ?? 'Unknown'), why: String(p?.[FIELD.progressDetail] ?? 'not at the expected state') });
+      }
+    }
+    const seen = new Set(progress.map((p) => String(p?.[FIELD.rowResourceId] ?? '').toLowerCase()));
+    for (const id of expectedIds) {
+      if (!seen.has(id.toLowerCase())) failures.push({ name: id, type: '', state: 'absent', why: 'not present in the read-back' });
+    }
   }
-  return { ok: failures.length === 0, failures };
+  if (st !== ESTATE_STATE.paused) return { ok: false, terminal: false, failures, note: `estate state is ${JSON.stringify(st ?? null)}, not ${ESTATE_STATE.paused}` };
+  if (!progress || progress.length === 0) return { ok: false, terminal: false, failures, note: 'state is PAUSED but the response carried no per-resource progress, so nothing was verified' };
+  if (data?.[FIELD.drifted] === true) failures.push({ name: 'estate', type: '', state: 'drifted', why: `drifted resources: ${JSON.stringify(data?.[FIELD.driftedResources] ?? null)}` });
+  return { ok: failures.length === 0, terminal: false, failures, note: failures.length ? 'PAUSED but not every resource is at its expected state' : '' };
+}
+
+/**
+ * Resume verification. The console reports RUNNING only once every resource
+ * passes BOTH an ARM read and a real request to the service; RESUME_FAILED is
+ * terminal and carries per-resource `outcomes`.
+ */
+export function verifyResumed(data) {
+  const st = data?.[FIELD.state];
+  if (st === ESTATE_STATE.running) return { ok: true, terminal: false, failures: [], note: '' };
+  if (st === ESTATE_STATE.resumeFailed) {
+    const names = new Map((Array.isArray(data?.[FIELD.resources]) ? data[FIELD.resources] : []).map((r) => [String(r?.[FIELD.rowResourceId] ?? ''), r]));
+    const outcomes = Array.isArray(data?.[FIELD.outcomes]) ? data[FIELD.outcomes] : [];
+    const failures = outcomes
+      .filter((o) => !RESUME_SUCCESS.includes(o?.[FIELD.outcomeConfirmation]))
+      .map((o) => {
+        const r = names.get(String(o?.[FIELD.outcomeResourceId] ?? ''));
+        return { name: String(r?.[FIELD.rowName] ?? o?.[FIELD.outcomeResourceId] ?? '<unnamed>'), type: String(r?.[FIELD.rowType] ?? ''), state: String(o?.[FIELD.outcomeConfirmation] ?? 'unknown'), why: String(o?.[FIELD.outcomeReason] ?? '') };
+      });
+    return { ok: false, terminal: true, failures, note: String(data?.[FIELD.reason] ?? 'the console reported RESUME_FAILED') };
+  }
+  return { ok: false, terminal: false, failures: [], note: `estate state is ${JSON.stringify(st ?? null)}, not ${ESTATE_STATE.running}` };
 }
 
 export function parseArgs(argv) {
@@ -204,31 +236,66 @@ export async function runPower(args, deps = {}) {
     if (r.outcomeUnknown) err('The request may or may not have been applied; this run did not verify it. Run action=state before re-running.');
     return null;
   };
-  const printSet = (label, resources) => {
-    out(`${label} (${resources.length} resource(s)):`);
-    for (const r of resources) out(`  - ${r.name} | ${r.type} | ${r.state}`);
+  const printSet = (label, rows) => {
+    out(`${label} (${rows.length} resource(s)):`);
+    for (const r of rows) out(`  - ${r.name} | ${r.type} | ${r.detail}`);
+  };
+  const summarize = (d) => {
+    const p = d[FIELD.power];
+    out(`${FIELD.state}=${d[FIELD.state] ?? 'n/a'} ${FIELD.estateId}=${d[FIELD.estateId] ?? 'n/a'} `
+      + `${FIELD.lastActivityAt}=${p?.[FIELD.activity]?.[FIELD.lastActivityAt] ?? 'n/a'} `
+      + `${FIELD.lastPausedAt}=${p?.[FIELD.lastPausedAt] ?? 'n/a'} ${FIELD.lastResumedAt}=${p?.[FIELD.lastResumedAt] ?? 'n/a'}`);
   };
 
   if (args.action === 'state' || args.action === 'preview') {
     const r = await callOrFail({ action: args.action }, false, `action=${args.action}`);
     if (!r) return EXIT.FAILED;
-    const res = resourcesOf(r.data);
-    out(`${FIELD.overall}=${r.data[FIELD.overall] ?? 'n/a'} ${FIELD.inFlight}=${r.data[FIELD.inFlight] ?? 'n/a'} ${FIELD.lastActivityAt}=${r.data[FIELD.lastActivityAt] ?? 'n/a'}`);
-    if (res) printSet(args.action, res);
+    summarize(r.data);
+    const rows = args.action === 'preview' ? pauseSetOf(r.data) : rowsOf(r.data[FIELD.resources]);
+    if (rows) printSet(args.action, rows);
     return EXIT.OK;
   }
 
   const isPause = args.action === 'pause';
-  const target = isPause ? PAUSED_STATES : RUNNING_STATES;
 
-  // Establish the real set first (preview for pause, state for resume).
-  const pre = await callOrFail({ action: isPause ? 'preview' : 'state' }, false, isPause ? 'preview' : 'pre-resume state read');
-  if (!pre) return EXIT.FAILED;
-  const expected = resourcesOf(pre.data);
-  if (!expected || expected.length === 0) {
+  // Where is the estate NOW? Decides whether there is anything to do at all.
+  const cur = await callOrFail({ action: 'state' }, false, 'pre-action state read');
+  if (!cur) return EXIT.FAILED;
+  const curState = cur.data[FIELD.state];
+  summarize(cur.data);
+  if (curState === ESTATE_STATE.pausing || curState === ESTATE_STATE.resuming) {
+    return fail(EXIT.FAILED, `estate state is ${curState}: a pause/resume is already in flight. Nothing was sent; wait for it to settle (action=state) and re-run.`);
+  }
+  if (isPause && curState === ESTATE_STATE.paused) {
+    const v = verifyPaused(cur.data, []);
+    if (v.ok) { out('already PAUSED and every resource reads back at its expected state; no pause sent.'); return EXIT.OK; }
+    return fail(EXIT.FAILED, `estate state is PAUSED but not verified: ${v.note}. Nothing was sent.`);
+  }
+  if (isPause && curState !== ESTATE_STATE.running) {
+    return fail(EXIT.FAILED, `estate state is ${JSON.stringify(curState ?? null)}; pause needs RUNNING. Nothing was sent.`);
+  }
+  if (!isPause && curState === ESTATE_STATE.running) {
+    out('estate is already RUNNING per the console; no resume sent.');
+    return EXIT.OK;
+  }
+  if (!isPause && curState !== ESTATE_STATE.paused && curState !== ESTATE_STATE.resumeFailed) {
+    return fail(EXIT.FAILED, `estate state is ${JSON.stringify(curState ?? null)}; resume needs PAUSED or RESUME_FAILED. Nothing was sent.`);
+  }
+
+  // Establish the real set: preview.wouldPause for pause, the snapshot resources for resume.
+  let pre = cur;
+  let rows;
+  if (isPause) {
+    pre = await callOrFail({ action: 'preview' }, false, 'preview');
+    if (!pre) return EXIT.FAILED;
+    rows = pauseSetOf(pre.data);
+  } else {
+    rows = rowsOf(pre.data[FIELD.resources]);
+  }
+  if (!rows || rows.length === 0) {
     return fail(EXIT.FAILED, `the console reported no resources to ${args.action}; the set to verify against is not established, so nothing was changed`);
   }
-  printSet(isPause ? 'pause set' : 'resume set', expected);
+  printSet(isPause ? 'pause set' : 'resume set', rows);
 
   if (args.dryRun) {
     out('dry-run: no mutation was sent.');
@@ -238,31 +305,41 @@ export async function runPower(args, deps = {}) {
   const body = { action: args.action };
   if (isPause) {
     const token = pre.data[FIELD.confirmToken];
+    const estateId = pre.data[FIELD.estateId];
     if (typeof token !== 'string' || token === '') return fail(EXIT.FAILED, `preview returned no ${FIELD.confirmToken}; pause cannot be authorised`);
-    if (!args.confirm) return fail(EXIT.USAGE, `pause needs --confirm <typed phrase> (the console expects ${JSON.stringify(pre.data[FIELD.confirmPhrase] ?? DEFAULT_PAUSE_CONFIRM)})`);
+    if (typeof estateId !== 'string' || estateId === '') return fail(EXIT.FAILED, `preview returned no ${FIELD.estateId}, which is the typed confirmation; pause cannot be authorised`);
+    if (!args.confirm) return fail(EXIT.USAGE, `pause needs --confirm <typed estate id> (the console expects the estate id ${JSON.stringify(estateId)})`);
+    if (args.confirm.trim() !== estateId) return fail(EXIT.USAGE, `--confirm does not equal the estate id ${JSON.stringify(estateId)}. Nothing was sent.`);
     body.confirm = args.confirm;
     body.confirmToken = token;
   }
   const sent = await callOrFail(body, true, `action=${args.action}`);
   if (!sent) return EXIT.FAILED;
-  out(`${args.action} accepted by the console; polling until every resource reads back ${target.join('/')}.`);
+  const goal = isPause ? 'PAUSED (every resource at its expected state)' : 'RUNNING';
+  out(`${args.action} accepted by the console (202 is a dispatch, not a result); polling until the console reports ${goal}.`);
 
+  const expectedIds = rows.map((r) => r.id).filter(Boolean);
   const deadline = now() + args.timeoutMin * 60000;
   let last = null;
+  let lastProgress = null;
   for (;;) {
     const s = await callOrFail({ action: 'state' }, false, 'poll state read');
     if (!s) return EXIT.FAILED;
-    last = verifyTarget(resourcesOf(s.data), expected, target);
+    if (Array.isArray(s.data[FIELD.progress])) lastProgress = s.data[FIELD.progress];
+    last = isPause ? verifyPaused(s.data, expectedIds) : verifyResumed(s.data);
     if (last.ok) {
-      out(`VERIFIED: all ${expected.length} resource(s) read back ${target.join('/')}.`);
+      out(`VERIFIED: the console reports ${isPause ? ESTATE_STATE.paused : ESTATE_STATE.running}.`);
+      if (lastProgress) for (const p of lastProgress) out(`  - ${p?.[FIELD.rowName]} | ${p?.[FIELD.rowType]} | ${p?.[FIELD.progressPowerState]}`);
       return EXIT.OK;
     }
-    if (now() >= deadline) break;
+    if (last.terminal || now() >= deadline) break;
     await sleep(POLL_INTERVAL_MS);
   }
-  err(`ERROR: ${last.failures.length} of ${expected.length} resource(s) were NOT read back ${target.join('/')} within ${args.timeoutMin} minute(s):`);
+  err(`ERROR: ${args.action} is NOT verified${last.terminal ? '' : ` within ${args.timeoutMin} minute(s)`}: ${last.note}`);
   for (const f of last.failures) err(`  - ${f.name} | ${f.type} | ${f.state} (${f.why})`);
-  err(`REMEDIATION: the ${args.action} was accepted but is unverified. Run action=state, and if a resource stays stuck read its ARM activity log; re-run action=${args.action} once the console reports no pause/resume in flight.`);
+  err(last.terminal
+    ? 'REMEDIATION: the console reported RESUME_FAILED. Read the per-resource reasons above (they come from the console), fix the named cause, then re-run action=resume.'
+    : `REMEDIATION: the ${args.action} was accepted but is unverified. Run action=state, and if a resource stays stuck read its ARM activity log; re-run action=${args.action} once the console reports no pause/resume in flight.`);
   return EXIT.FAILED;
 }
 

@@ -5,9 +5,15 @@ import { decideIdlePause } from '../idle-policy.mjs';
 const NOW = Date.parse('2026-10-13T12:00:00Z');
 // idleHours=4 -> window 14400s. Last activity exactly 4h before NOW = exactly met.
 const iso = (offsetSec) => new Date(NOW - offsetSec * 1000).toISOString();
-const state = (over = {}) => ({
-  overall: 'RUNNING', inFlight: false, lastActivityAt: iso(14400),
-  autoPause: { enabled: true, idleHours: 4 }, ...over,
+// Real shape: estate-power-contract.ts EstatePowerStatus under `power`, estate state at top level.
+const state = ({ st = 'RUNNING', last = iso(14400), idle = 14400, enabled = true, hours = 4, source = 'stored', unreadable = false, activity, autoPause } = {}) => ({
+  state: st,
+  power: {
+    activity: activity === undefined ? { lastActivityAt: last, idleForSeconds: idle, unreadable } : activity,
+    autoPause: autoPause === undefined ? { enabled, idleHours: hours, source, updatedAt: null, updatedBy: null } : autoPause,
+    lastPausedAt: null,
+    lastResumedAt: null,
+  },
 });
 const quiet = { ok: true, runs: [] };
 const go = (o) => decideIdlePause({ now: NOW, declared: { declared: false }, activity: quiet, state: state(), ...o });
@@ -19,25 +25,34 @@ test('POSITIVE CONTROL / boundary: idle for exactly idleHours (14400s) pauses', 
 });
 
 test('boundary: idle 1 second SHORT of idleHours (14399s) skips -- breaks a >= turned into a >, or a window off by one', () => {
-  const d = go({ state: state({ lastActivityAt: iso(14399) }) });
+  const d = go({ state: state({ last: iso(14399), idle: 14399 }) });
   assert.equal(d.decision, 'skip');
   assert.equal(d.code, 'not-idle-long-enough');
 });
 
+test('both clocks must agree: our clock says 14400s but the console idleForSeconds says 14399 -> skip', () => {
+  assert.equal(go({ state: state({ last: iso(14400), idle: 14399 }) }).code, 'not-idle-long-enough');
+  assert.equal(go({ state: state({ last: iso(14399), idle: 14400 }) }).code, 'not-idle-long-enough');
+});
+
 const SKIPS = [
-  ['autoPause disabled', { state: state({ autoPause: { enabled: false, idleHours: 4 } }) }, 'autopause-disabled'],
-  ['autoPause enabled is the string "true", not boolean true', { state: state({ autoPause: { enabled: 'true', idleHours: 4 } }) }, 'autopause-disabled'],
-  ['autoPause object missing', { state: state({ autoPause: undefined }) }, 'autopause-disabled'],
-  ['estate PAUSED', { state: state({ overall: 'PAUSED' }) }, 'not-running'],
-  ['estate state missing', { state: state({ overall: undefined }) }, 'not-running'],
-  ['pause/resume in flight', { state: state({ inFlight: true }) }, 'in-flight'],
-  ['in-flight not reported at all', { state: state({ inFlight: undefined }) }, 'in-flight'],
-  ['lastActivityAt missing (unknown is never idle)', { state: state({ lastActivityAt: undefined }) }, 'activity-unknown'],
-  ['lastActivityAt unparseable', { state: state({ lastActivityAt: 'yesterday-ish' }) }, 'activity-unknown'],
-  ['lastActivityAt empty string', { state: state({ lastActivityAt: '' }) }, 'activity-unknown'],
-  ['lastActivityAt in the future (clock skew)', { state: state({ lastActivityAt: iso(-3600) }) }, 'not-idle-long-enough'],
-  ['idleHours 0', { state: state({ autoPause: { enabled: true, idleHours: 0 } }) }, 'idle-hours-invalid'],
-  ['idleHours missing', { state: state({ autoPause: { enabled: true } }) }, 'idle-hours-invalid'],
+  ['autoPause disabled', { state: state({ enabled: false }) }, 'autopause-disabled'],
+  ['autoPause enabled is the string "true", not boolean true', { state: state({ autoPause: { enabled: 'true', idleHours: 4, source: 'stored' } }) }, 'autopause-disabled'],
+  ['autoPause object missing', { state: state({ autoPause: null }) }, 'autopause-disabled'],
+  ['autoPause.source unreadable (values are defaults, must not be acted on)', { state: state({ source: 'unreadable' }) }, 'autopause-unreadable'],
+  ['estate PAUSED', { state: state({ st: 'PAUSED' }) }, 'not-running'],
+  ['estate RESUME_FAILED', { state: state({ st: 'RESUME_FAILED' }) }, 'not-running'],
+  ['estate state missing', { state: state({ st: null }) }, 'not-running'],
+  ['PAUSING (in flight)', { state: state({ st: 'PAUSING' }) }, 'in-flight'],
+  ['RESUMING (in flight)', { state: state({ st: 'RESUMING' }) }, 'in-flight'],
+  ['lastActivityAt null (no activity recorded is NOT idle forever)', { state: state({ last: null, idle: null }) }, 'activity-unknown'],
+  ['lastActivityAt unparseable', { state: state({ last: 'yesterday-ish' }) }, 'activity-unknown'],
+  ['activity.unreadable true even with a stale timestamp', { state: state({ unreadable: true }) }, 'activity-unknown'],
+  ['power.activity missing', { state: state({ activity: null }) }, 'activity-unknown'],
+  ['idleForSeconds null while lastActivityAt is set', { state: state({ idle: null }) }, 'activity-unknown'],
+  ['lastActivityAt in the future (clock skew)', { state: state({ last: iso(-3600), idle: 20000 }) }, 'not-idle-long-enough'],
+  ['idleHours 0', { state: state({ hours: 0 }) }, 'idle-hours-invalid'],
+  ['idleHours missing', { state: state({ autoPause: { enabled: true, source: 'stored' } }) }, 'idle-hours-invalid'],
   ['declared paused', { declared: { declared: true } }, 'declared-paused'],
   ['activity read FAILED', { activity: { ok: false, reason: 'az rest failed (exit 1)' } }, 'activity-read-failed'],
   ['activity result missing', { activity: undefined }, 'activity-read-failed'],

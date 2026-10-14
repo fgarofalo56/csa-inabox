@@ -7,7 +7,7 @@
 import { defaultSpawn } from './token.mjs';
 import { boundaryInfo, FIELD } from './contract.mjs';
 
-const ADF_ID = /^\/subscriptions\/[0-9a-fA-F-]{36}\/resourceGroups\/[\w.()-]+\/providers\/Microsoft\.DataFactory\/factories\/[\w-]+$/;
+const ADF_ID = /^\/subscriptions\/[0-9a-fA-F-]{36}\/resourceGroups\/[\w.()-]+\/providers\/Microsoft\.DataFactory\/factories\/[\w-]+$/i;
 const SYNAPSE_NAME = /^[a-z0-9][a-z0-9-]{0,48}[a-z0-9]$/;
 export const MAX_PAGES = 5;
 
@@ -19,6 +19,42 @@ function azRest(spawn, args) {
   } catch {
     return { ok: false, reason: 'az rest did not return JSON' };
   }
+}
+
+const RG_FROM_ID = /^\/subscriptions\/([0-9a-fA-F-]{36})\/resourceGroups\/([\w.()-]+)\//i;
+const RG_NAME = /^[\w.()-]{1,90}$/;
+const FACTORY_TYPE = 'Microsoft.DataFactory/factories';
+const SYNAPSE_TYPE = 'Microsoft.Synapse/workspaces';
+
+/**
+ * The console contract carries no factory/workspace list, so targets are
+ * DISCOVERED from what it does carry: the subscriptions and resource groups of
+ * the resources in preview.wouldPause / preview.wouldLeaveRunning (the estate as
+ * the console resolved it). Nothing is hard-coded. Any failure => ok:false, and
+ * an estate that names no resource group at all is unknown, not idle.
+ */
+export function discoverActivityTargets({ state, spawn = defaultSpawn }) {
+  const prev = state?.[FIELD.preview];
+  const rows = [...(Array.isArray(prev?.[FIELD.wouldPause]) ? prev[FIELD.wouldPause] : []), ...(Array.isArray(prev?.[FIELD.wouldLeaveRunning]) ? prev[FIELD.wouldLeaveRunning] : [])];
+  const pairs = new Map();
+  for (const r of rows) {
+    const m = RG_FROM_ID.exec(String(r?.[FIELD.rowResourceId] ?? ''));
+    if (m) pairs.set(`${m[1].toLowerCase()}/${m[2].toLowerCase()}`, { sub: m[1], rg: m[2] });
+  }
+  if (pairs.size === 0) return { ok: false, reason: 'the console state named no resource group to search for a Data Factory or Synapse workspace, so pipeline activity is unknown' };
+  const targets = [];
+  for (const { sub, rg } of pairs.values()) {
+    if (!RG_NAME.test(rg)) return { ok: false, reason: `resource group name ${JSON.stringify(rg)} is not valid` };
+    for (const [kind, type] of [['adf', FACTORY_TYPE], ['synapse', SYNAPSE_TYPE]]) {
+      const r = spawn('az', ['resource', 'list', '--only-show-errors', '--subscription', sub, '--resource-group', rg, '--resource-type', type, '--query', '[].{id:id,name:name}', '--output', 'json']);
+      if (r.error || r.status !== 0) return { ok: false, reason: `az resource list ${type} in ${rg} failed (exit ${r.status ?? 'none'}): ${String(r.stderr ?? '').trim().slice(0, 300) || 'no stderr'}` };
+      let list;
+      try { list = JSON.parse(r.stdout); } catch { return { ok: false, reason: `az resource list ${type} did not return JSON` }; }
+      if (!Array.isArray(list)) return { ok: false, reason: `az resource list ${type} did not return an array` };
+      for (const x of list) targets.push({ kind, id: x?.id, name: x?.name });
+    }
+  }
+  return { ok: true, targets };
 }
 
 function mapRuns(json) {
@@ -37,7 +73,7 @@ function mapRuns(json) {
 export function readRecentPipelineRuns({ targets, boundary, now, windowHours, spawn = defaultSpawn }) {
   const info = boundaryInfo(boundary);
   if (!info) return { ok: false, reason: `unknown boundary '${boundary}'` };
-  if (!Array.isArray(targets)) return { ok: false, reason: `the console state carried no ${FIELD.activityTargets} list, so which factory/workspace to read is unknown` };
+  if (!Array.isArray(targets)) return { ok: false, reason: 'no activity targets were established, so which factory/workspace to read is unknown' };
   if (!Number.isFinite(windowHours) || windowHours <= 0) return { ok: false, reason: 'windowHours is not a positive number' };
   const after = new Date(now.getTime() - windowHours * 3600 * 1000).toISOString();
   const before = new Date(now.getTime() + 5 * 60 * 1000).toISOString();

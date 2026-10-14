@@ -16,11 +16,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { FIELD, DEFAULT_PAUSE_CONFIRM, boundaryInfo, resourcesOf } from './contract.mjs';
+import { FIELD, boundaryInfo, pauseSetOf } from './contract.mjs';
 import { acquireToken, assertBoundary, defaultSpawn, scrub } from './token.mjs';
 import { callConsole, endpointUrl, EXIT, runPower } from './estate-power.mjs';
 import { decideIdlePause } from './idle-policy.mjs';
-import { readRecentPipelineRuns } from './read-activity.mjs';
+import { discoverActivityTargets, readRecentPipelineRuns } from './read-activity.mjs';
 import { classifyPauseDeclaration, PAUSE_DECLARATION_PATH } from '../ci/_estate-pause-declaration.mjs';
 
 const stdoutSink = (s) => process.stdout.write(`${s}\n`);
@@ -78,21 +78,33 @@ export async function runAutopause({ boundary, dryRun = false }, deps = {}) {
     today: nowDate.toISOString().slice(0, 10),
   });
 
-  const ap = state[FIELD.autoPause];
-  const windowHours = Number(ap?.[FIELD.autoPauseIdleHours]);
-  const activity = readRecentPipelineRuns({
-    targets: state[FIELD.activityTargets], boundary, now: nowDate, windowHours, spawn,
-  });
+  // Cheap pass first: pipeline activity can only ADD a skip, so when the console
+  // fields alone say skip there is no reason to spend ARM calls on the reads.
+  const cheap = decideIdlePause({ state, activity: { ok: true, runs: [] }, now: nowDate, declared });
+  if (cheap.decision !== 'pause') {
+    skip(cheap);
+    return EXIT.OK;
+  }
+
+  const windowHours = Number(state[FIELD.power]?.[FIELD.autoPause]?.[FIELD.autoPauseIdleHours]);
+  const found = discoverActivityTargets({ state, spawn });
+  const activity = found.ok
+    ? readRecentPipelineRuns({ targets: found.targets, boundary, now: nowDate, windowHours, spawn })
+    : found;
   if (!activity.ok) out(`::warning::pipeline activity not established: ${scrub(activity.reason, secrets)}`);
 
   const decision = decideIdlePause({ state, activity, now: nowDate, declared });
   skip(decision);
   if (decision.decision !== 'pause') return EXIT.OK;
 
-  const phrase = typeof state[FIELD.confirmPhrase] === 'string' && state[FIELD.confirmPhrase] ? state[FIELD.confirmPhrase] : DEFAULT_PAUSE_CONFIRM;
-  const count = resourcesOf(state)?.length ?? 'unknown number of';
-  out(`pausing ${count} resource(s) via the console.`);
-  return runPower({ boundary, action: 'pause', dryRun, confirm: phrase, timeoutMin: 20 }, { ...deps, env, spawn, fetchFn, sleep });
+  // The typed confirmation the console demands is the estate id (handlePausePost).
+  const estateId = state[FIELD.estateId];
+  if (typeof estateId !== 'string' || estateId === '') {
+    err('ERROR: the state response carried no estateId, which is the typed pause confirmation; nothing was sent.');
+    return EXIT.FAILED;
+  }
+  out(`pausing ${pauseSetOf(state)?.length ?? 'an unreported number of'} resource(s) via the console.`);
+  return runPower({ boundary, action: 'pause', dryRun, confirm: estateId, timeoutMin: 20 }, { ...deps, env, spawn, fetchFn, sleep });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

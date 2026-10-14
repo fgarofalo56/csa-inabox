@@ -41,7 +41,7 @@ on:
           - pause
           - resume
       confirm:
-        description: 'Typed confirmation phrase. Required for a real pause.'
+        description: 'Type the estate id (shown by action=preview). Required for a real pause.'
         type: string
         required: false
         default: ''

@@ -1,18 +1,39 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  main, runPower, parseArgs, endpointUrl, classifyFailure, shouldRetry, verifyTarget,
+  main, runPower, parseArgs, endpointUrl, classifyFailure, shouldRetry, verifyPaused, verifyResumed,
   EXIT, MAX_ATTEMPTS,
 } from '../estate-power.mjs';
-import { classifyCloud } from '../contract.mjs';
-import { SENTINEL, ENV, RES, fakeSpawn, fakeFetch, ok, capture, fakeClock } from './_fakes.mjs';
+import { classifyCloud, parseEnvelope, pauseSetOf } from '../contract.mjs';
+import {
+  SENTINEL, ENV, ESTATE_ID, AAS_ID, ADX_ID, fakeSpawn, fakeFetch, ok, accepted, bad, capture, fakeClock,
+  runningBody, previewBody, pausedBody, resumeBody, progressRows,
+} from './_fakes.mjs';
 
 const base = (over = {}) => ({ boundary: 'Commercial', action: 'state', dryRun: false, confirm: null, timeoutMin: 5, ...over });
+const run = (args, fetchFn, extra = {}) => {
+  const c = capture();
+  return runPower(args, { env: ENV, spawn: fakeSpawn(), fetchFn, ...c.deps, ...fakeClock(), ...extra }).then((code) => ({ code, c }));
+};
+const actions = (f) => f.calls.map((x) => x.body.action);
+
+/** A console that walks the real state machine for pause. */
+function pausingConsole({ finalAtExpected = true, pollsBeforeDone = 1 } = {}) {
+  let phase = 'running';
+  let polls = 0;
+  return fakeFetch((b) => {
+    if (b.action === 'preview') return ok(previewBody());
+    if (b.action === 'pause') { phase = 'pausing'; return accepted({ state: 'PAUSING', estateId: ESTATE_ID, snapshotId: 's1' }); }
+    if (phase === 'running') return ok(runningBody());
+    polls += 1;
+    return ok(polls <= pollsBeforeDone ? pausedBody('PAUSING', false) : pausedBody('PAUSED', finalAtExpected));
+  });
+}
 
 test('boundary guard: GCC-High requested while az is AzureCloud refuses with ZERO token and ZERO network calls', async () => {
   // Input that breaks it: removing assertBoundary makes fetch.calls.length 1 and the exit 0.
   const spawn = fakeSpawn({ cloud: 'AzureCloud' });
-  const fetchFn = fakeFetch(() => ok({ resources: RES('Online') }));
+  const fetchFn = fakeFetch(() => ok(runningBody()));
   const c = capture();
   const code = await runPower(base({ boundary: 'GCC-High', action: 'resume' }), { env: ENV, spawn, fetchFn, ...c.deps, ...fakeClock() });
   assert.equal(code, EXIT.BOUNDARY);
@@ -23,7 +44,7 @@ test('boundary guard: GCC-High requested while az is AzureCloud refuses with ZER
 
 test('boundary guard POSITIVE CONTROL: matching clouds proceed (both boundaries)', async () => {
   for (const [boundary, cloud] of [['Commercial', 'AzureCloud'], ['GCC-High', 'AzureUSGovernment']]) {
-    const fetchFn = fakeFetch(() => ok({ resources: RES('Online') }));
+    const fetchFn = fakeFetch(() => ok(runningBody()));
     const c = capture();
     const code = await runPower(base({ boundary }), { env: ENV, spawn: fakeSpawn({ cloud }), fetchFn, ...c.deps, ...fakeClock() });
     assert.equal(code, EXIT.OK, boundary);
@@ -38,7 +59,7 @@ test('boundary guard: an unreadable az cloud is a refusal, never a pass', async 
   assert.equal(fetchFn.calls.length, 0);
 });
 
-test('classifyCloud: a sovereign az for Commercial is refused (the Commercial/Gov swap in both directions)', () => {
+test('classifyCloud: a sovereign az for Commercial is refused (the swap in both directions)', () => {
   assert.equal(classifyCloud('Commercial', 'AzureUSGovernment').ok, false);
   assert.equal(classifyCloud('GCC-High', 'AzureCloud').ok, false);
   assert.equal(classifyCloud('GCC-High', 'AzureUSGovernment').ok, true);
@@ -49,7 +70,7 @@ test('classifyCloud: a sovereign az for Commercial is refused (the Commercial/Go
 test('token never reaches stdout/stderr even when the server echoes it; it IS sent as the bearer', async () => {
   // Input that breaks it: deleting scrub() from out/err leaves SENTINEL in the echoed error.
   const spawn = fakeSpawn();
-  const fetchFn = fakeFetch(() => ({ status: 400, json: { ok: false, error: `bad request, you sent Bearer ${SENTINEL}` } }));
+  const fetchFn = fakeFetch(() => bad(400, `bad request, you sent Bearer ${SENTINEL}`));
   const c = capture();
   const code = await runPower(base(), { env: ENV, spawn, fetchFn, ...c.deps, ...fakeClock() });
   assert.equal(code, EXIT.FAILED);
@@ -60,111 +81,204 @@ test('token never reaches stdout/stderr even when the server echoes it; it IS se
   assert.ok(!spawn.calls.some((a) => a.join(' ').includes(SENTINEL)), 'token must not be in any argv');
 });
 
-test('pause: preview -> pause(confirm + confirmToken from preview) -> poll; exit 0 only once read back Paused', async () => {
-  let polls = 0;
-  const fetchFn = fakeFetch((b) => {
-    if (b.action === 'preview') return ok({ resources: RES('Online'), confirmToken: 'tok-from-preview' });
-    if (b.action === 'pause') return ok({});
-    polls += 1;
-    return ok({ resources: RES(polls < 2 ? 'Pausing' : 'Paused') });
-  });
-  const c = capture();
-  const code = await runPower(base({ action: 'pause', confirm: 'PAUSE' }), { env: ENV, spawn: fakeSpawn(), fetchFn, ...c.deps, ...fakeClock() });
-  assert.equal(code, EXIT.OK);
-  assert.deepEqual(fetchFn.calls.map((x) => x.body.action), ['preview', 'pause', 'state', 'state']);
-  assert.equal(fetchFn.calls[1].body.confirmToken, 'tok-from-preview');
-  assert.equal(fetchFn.calls[1].body.confirm, 'PAUSE');
-  assert.match(c.out.join('\n'), /aas-one \| Microsoft\.AnalysisServices\/servers \| Online/, 'the real set is printed');
+test('parseEnvelope: fields are TOP LEVEL (no `data`), error is a string, ok must be exactly true', () => {
+  const good = parseEnvelope({ ok: true, state: 'RUNNING', estateId: 'e' });
+  assert.equal(good.ok, true);
+  assert.equal(good.data.state, 'RUNNING');
+  assert.ok(!('ok' in good.data));
+  assert.deepEqual(parseEnvelope({ ok: false, error: 'nope' }), { ok: false, data: null, error: 'nope' });
+  assert.equal(parseEnvelope({ ok: 'true', state: 'RUNNING' }).ok, false, 'a truthy string is not ok:true');
+  assert.equal(parseEnvelope({ ok: true, data: { state: 'X' } }).data.state, undefined, 'a nested data object is NOT the real shape');
+  assert.equal(parseEnvelope(null).ok, false);
 });
 
-test('poll loop exits NON-ZERO when a resource never reaches the target state, naming it', async () => {
-  // Input that breaks it: a loop that returns OK after the first state read (or after the timeout).
+test('pause: state -> preview -> pause(confirm=estateId, confirmToken from preview) -> poll; exit 0 only on PAUSED with every row at expected state', async () => {
+  const fetchFn = pausingConsole({ pollsBeforeDone: 1 });
+  const { code, c } = await run(base({ action: 'pause', confirm: ESTATE_ID }), fetchFn);
+  assert.equal(code, EXIT.OK);
+  assert.deepEqual(actions(fetchFn), ['state', 'preview', 'pause', 'state', 'state']);
+  const p = fetchFn.calls[2].body;
+  assert.equal(p.confirmToken, 'tok-from-preview');
+  assert.equal(p.confirm, ESTATE_ID);
+  assert.match(c.out.join('\n'), /aas-one \| microsoft\.analysisservices\/servers \| arm-suspend/, 'the real set is printed');
+});
+
+test('pause: --confirm that is not the estate id exits 2 and the pause is never sent', async () => {
+  // Input that breaks it: passing args.confirm straight through (server would be the only check).
+  const fetchFn = pausingConsole();
+  const { code, c } = await run(base({ action: 'pause', confirm: 'PAUSE' }), fetchFn);
+  assert.equal(code, EXIT.USAGE);
+  assert.ok(!actions(fetchFn).includes('pause'));
+  assert.match(c.err.join('\n'), new RegExp(ESTATE_ID));
+});
+
+test('pause: no --confirm at all exits 2, pause never sent', async () => {
+  const fetchFn = pausingConsole();
+  const { code } = await run(base({ action: 'pause' }), fetchFn);
+  assert.equal(code, EXIT.USAGE);
+  assert.ok(!actions(fetchFn).includes('pause'));
+});
+
+test('poll exits NON-ZERO when PAUSED but one resource is not at its expected state, naming only that one', async () => {
+  // Input that breaks it: a loop that trusts state==PAUSED alone.
   const fetchFn = fakeFetch((b) => {
-    if (b.action === 'preview') return ok({ resources: RES('Online'), confirmToken: 't' });
-    if (b.action === 'pause') return ok({});
-    return ok({ resources: [{ name: 'aas-one', type: 'Microsoft.AnalysisServices/servers', state: 'Paused' }, { name: 'adx-one', type: 'Microsoft.Kusto/clusters', state: 'Pausing' }] });
+    if (b.action === 'preview') return ok(previewBody());
+    if (b.action === 'pause') return accepted({ state: 'PAUSING' });
+    if (fetchFn.calls.length <= 2) return ok(runningBody());
+    const body = pausedBody('PAUSED', true);
+    body.progress[1] = { ...body.progress[1], atExpectedState: false, powerState: 'Online', detail: 'still Online' };
+    return ok(body);
   });
-  const c = capture();
-  const code = await runPower(base({ action: 'pause', confirm: 'PAUSE', timeoutMin: 2 }), { env: ENV, spawn: fakeSpawn(), fetchFn, ...c.deps, ...fakeClock() });
+  const { code, c } = await run(base({ action: 'pause', confirm: ESTATE_ID, timeoutMin: 2 }), fetchFn);
   assert.equal(code, EXIT.FAILED);
   const e = c.err.join('\n');
-  assert.match(e, /1 of 2 resource\(s\) were NOT read back/);
-  assert.match(e, /adx-one \| Microsoft\.Kusto\/clusters \| Pausing/);
-  assert.ok(!/aas-one \|.*Paused \(/.test(e), 'the resource that DID pause is not listed as a failure');
-  assert.ok(fetchFn.calls.filter((x) => x.body.action === 'state').length >= 2, 'it polled more than once before giving up');
+  assert.match(e, /adx-one \| microsoft\.kusto\/clusters \| Online \(still Online\)/);
+  assert.ok(!/aas-one \|/.test(e), 'the resource that DID pause is not listed as a failure');
+  assert.ok(actions(fetchFn).filter((a) => a === 'state').length >= 3, 'it polled more than once before giving up');
 });
 
-test('verifyTarget: a resource ABSENT from the read-back is a failure, not a pass', () => {
-  const v = verifyTarget([{ name: 'a', type: 't', state: 'Paused' }], [{ name: 'a', type: 't' }, { name: 'b', type: 't' }], ['Paused']);
+test('poll exits NON-ZERO when the estate stays PAUSING until the deadline', async () => {
+  const fetchFn = pausingConsole({ pollsBeforeDone: 10000 });
+  const { code, c } = await run(base({ action: 'pause', confirm: ESTATE_ID, timeoutMin: 2 }), fetchFn);
+  assert.equal(code, EXIT.FAILED);
+  assert.match(c.err.join('\n'), /not PAUSED|not "PAUSED"|, not PAUSED/);
+});
+
+test('verifyPaused: a resource ABSENT from progress is a failure; empty progress verifies nothing; drifted fails', () => {
+  const ids = [AAS_ID, ADX_ID];
+  assert.equal(verifyPaused(pausedBody('PAUSED', true), ids).ok, true, 'positive control');
+  const missing = pausedBody('PAUSED', true);
+  missing.progress = missing.progress.slice(0, 1);
+  const v = verifyPaused(missing, ids);
   assert.equal(v.ok, false);
-  assert.deepEqual(v.failures.map((f) => f.name), ['b']);
-  assert.equal(verifyTarget([{ name: 'a', type: 't', state: 'Stopped' }], [{ name: 'a', type: 't' }], ['Paused', 'Stopped']).ok, true, 'positive control');
+  assert.deepEqual(v.failures.map((f) => f.name), [ADX_ID]);
+  assert.equal(verifyPaused({ ...pausedBody('PAUSED', true), progress: [] }, ids).ok, false);
+  assert.equal(verifyPaused({ ...pausedBody('PAUSED', true), drifted: true, driftedResources: ['x'] }, ids).ok, false);
+  assert.equal(verifyPaused(pausedBody('PAUSING', true), ids).ok, false, 'PAUSING is not PAUSED even if rows look done');
 });
 
-test('pause without --confirm: exit 2 and the pause call is never sent', async () => {
-  const fetchFn = fakeFetch((b) => ok({ resources: RES('Online'), confirmToken: 't' }));
-  const code = await runPower(base({ action: 'pause' }), { env: ENV, spawn: fakeSpawn(), fetchFn, ...capture().deps, ...fakeClock() });
-  assert.equal(code, EXIT.USAGE);
-  assert.deepEqual(fetchFn.calls.map((x) => x.body.action), ['preview']);
+test('pause when already PAUSED (verified): exit 0, nothing sent', async () => {
+  const fetchFn = fakeFetch(() => ok(pausedBody('PAUSED', true)));
+  const { code } = await run(base({ action: 'pause', confirm: ESTATE_ID }), fetchFn);
+  assert.equal(code, EXIT.OK);
+  assert.deepEqual(actions(fetchFn), ['state']);
 });
 
-test('pause with preview returning NO confirmToken or no resources: fails, pause never sent', async () => {
-  for (const data of [{ resources: RES('Online') }, { resources: [], confirmToken: 't' }, {}]) {
-    const fetchFn = fakeFetch(() => ok(data));
-    const code = await runPower(base({ action: 'pause', confirm: 'PAUSE' }), { env: ENV, spawn: fakeSpawn(), fetchFn, ...capture().deps, ...fakeClock() });
-    assert.equal(code, EXIT.FAILED, JSON.stringify(data));
-    assert.ok(!fetchFn.calls.some((x) => x.body.action === 'pause'), JSON.stringify(data));
+test('pause or resume while PAUSING/RESUMING: fails, nothing sent', async () => {
+  for (const [action, body] of [['pause', pausedBody('PAUSING', false)], ['resume', resumeBody('RESUMING')]]) {
+    const fetchFn = fakeFetch(() => ok(body));
+    const { code, c } = await run(base({ action, confirm: ESTATE_ID }), fetchFn);
+    assert.equal(code, EXIT.FAILED, action);
+    assert.deepEqual(actions(fetchFn), ['state'], action);
+    assert.match(c.err.join('\n'), /in flight/);
+  }
+});
+
+test('pause with preview returning NO confirmToken, NO estateId, or an empty wouldPause: fails, pause never sent', async () => {
+  const cases = [
+    previewBody({ confirmToken: undefined }),
+    previewBody({ estateId: undefined }),
+    previewBody({ preview: { wouldPause: [] } }),
+    previewBody({ preview: undefined }),
+  ];
+  for (const pv of cases) {
+    const fetchFn = fakeFetch((b) => (b.action === 'preview' ? ok(pv) : ok(runningBody())));
+    const { code } = await run(base({ action: 'pause', confirm: ESTATE_ID }), fetchFn);
+    assert.equal(code, EXIT.FAILED, JSON.stringify(Object.keys(pv)));
+    assert.ok(!actions(fetchFn).includes('pause'));
   }
 });
 
 test('--dry-run pause/resume reads but sends no mutation', async () => {
-  for (const action of ['pause', 'resume']) {
-    const fetchFn = fakeFetch(() => ok({ resources: RES('Online'), confirmToken: 't' }));
-    const code = await runPower(base({ action, dryRun: true, confirm: 'PAUSE' }), { env: ENV, spawn: fakeSpawn(), fetchFn, ...capture().deps, ...fakeClock() });
-    assert.equal(code, EXIT.OK);
-    assert.equal(fetchFn.calls.length, 1);
-    assert.notEqual(fetchFn.calls[0].body.action, action);
-  }
+  const pf = fakeFetch((b) => (b.action === 'preview' ? ok(previewBody()) : ok(runningBody())));
+  assert.equal((await run(base({ action: 'pause', dryRun: true }), pf)).code, EXIT.OK);
+  assert.ok(!actions(pf).includes('pause'));
+  const rf = fakeFetch(() => ok(pausedBody('PAUSED', true)));
+  assert.equal((await run(base({ action: 'resume', dryRun: true }), rf)).code, EXIT.OK);
+  assert.deepEqual(actions(rf), ['state']);
 });
 
-test('resume: state -> resume -> poll until Online; exit 0', async () => {
-  let n = 0;
+test('resume: state(PAUSED) -> resume -> poll RESUMING then RUNNING; exit 0', async () => {
+  let sent = false;
+  let polls = 0;
   const fetchFn = fakeFetch((b) => {
-    if (b.action === 'resume') return ok({});
-    n += 1;
-    return ok({ resources: RES(n === 1 ? 'Paused' : 'Online') });
+    if (b.action === 'resume') { sent = true; return accepted({ state: 'RESUMING', estateId: ESTATE_ID }); }
+    if (!sent) return ok(pausedBody('PAUSED', true));
+    polls += 1;
+    return ok(polls === 1 ? resumeBody('RESUMING') : runningBody());
   });
-  const code = await runPower(base({ action: 'resume' }), { env: ENV, spawn: fakeSpawn(), fetchFn, ...capture().deps, ...fakeClock() });
+  const { code } = await run(base({ action: 'resume' }), fetchFn);
   assert.equal(code, EXIT.OK);
-  assert.deepEqual(fetchFn.calls.map((x) => x.body.action), ['state', 'resume', 'state']);
+  assert.deepEqual(actions(fetchFn), ['state', 'resume', 'state', 'state']);
+});
+
+test('resume: RESUME_FAILED is terminal -- exit 1 on the FIRST such read, naming the failed resource and the console reason', async () => {
+  // Input that breaks it: a loop that keeps polling to the deadline, or treats RESUME_FAILED as "not yet".
+  let sent = false;
+  const outcomes = [
+    { resourceId: AAS_ID, confirmation: 'confirmed-running', reason: 'ok' },
+    { resourceId: ADX_ID, confirmation: 'unknown', reason: 'ADX answered no query' },
+  ];
+  const fetchFn = fakeFetch((b) => {
+    if (b.action === 'resume') { sent = true; return accepted({ state: 'RESUMING' }); }
+    return ok(sent ? resumeBody('RESUME_FAILED', outcomes) : pausedBody('PAUSED', true));
+  });
+  const { code, c } = await run(base({ action: 'resume' }), fetchFn);
+  assert.equal(code, EXIT.FAILED);
+  assert.equal(actions(fetchFn).filter((a) => a === 'state').length, 2, 'one pre-read, ONE poll, then stop');
+  const e = c.err.join('\n');
+  assert.match(e, /adx-one \| microsoft\.kusto\/clusters \| unknown \(ADX answered no query\)/);
+  assert.ok(!/aas-one \|/.test(e));
+});
+
+test('verifyResumed: RUNNING ok; RESUMING keeps polling; RESUME_FAILED terminal; unknown state is not ok', () => {
+  assert.equal(verifyResumed(runningBody()).ok, true);
+  assert.deepEqual([verifyResumed(resumeBody('RESUMING')).ok, verifyResumed(resumeBody('RESUMING')).terminal], [false, false]);
+  assert.equal(verifyResumed(resumeBody('RESUME_FAILED')).terminal, true);
+  assert.equal(verifyResumed({}).ok, false);
+  assert.equal(verifyResumed(pausedBody('PAUSED', true)).ok, false);
+});
+
+test('resume when the estate is already RUNNING: exit 0 and NO resume sent', async () => {
+  const fetchFn = fakeFetch(() => ok(runningBody()));
+  const { code } = await run(base({ action: 'resume' }), fetchFn);
+  assert.equal(code, EXIT.OK);
+  assert.deepEqual(actions(fetchFn), ['state']);
 });
 
 test('retry: a persistent 503 on a read is retried exactly MAX_ATTEMPTS then FAILS CLOSED', async () => {
-  const fetchFn = fakeFetch(() => ({ status: 503, json: { ok: false, error: 'busy' } }));
-  const c = capture();
-  const code = await runPower(base(), { env: ENV, spawn: fakeSpawn(), fetchFn, ...c.deps, ...fakeClock() });
+  const fetchFn = fakeFetch(() => bad(503, 'busy'));
+  const { code, c } = await run(base(), fetchFn);
   assert.equal(code, EXIT.FAILED);
   assert.equal(fetchFn.calls.length, MAX_ATTEMPTS);
   assert.match(c.err.join('\n'), /\[transient\] after 3 attempt/);
 });
 
 test('retry: 403 is NOT retried (1 attempt) and the remediation names Estate.Power', async () => {
-  const fetchFn = fakeFetch(() => ({ status: 403, json: { ok: false, error: 'forbidden' } }));
-  const c = capture();
-  assert.equal(await runPower(base(), { env: ENV, spawn: fakeSpawn(), fetchFn, ...c.deps, ...fakeClock() }), EXIT.FAILED);
+  const fetchFn = fakeFetch(() => bad(403, 'forbidden'));
+  const { code, c } = await run(base(), fetchFn);
+  assert.equal(code, EXIT.FAILED);
   assert.equal(fetchFn.calls.length, 1);
   assert.match(c.err.join('\n'), /Estate\.Power/);
 });
 
+test('retry: 409 (arming gate / confirm drift) is config, NOT retried, and the console message is quoted', async () => {
+  const fetchFn = fakeFetch(() => bad(409, 'The set of resources to pause changed between the preview you confirmed and now'));
+  const { code, c } = await run(base(), fetchFn);
+  assert.equal(code, EXIT.FAILED);
+  assert.equal(fetchFn.calls.length, 1);
+  assert.match(c.err.join('\n'), /\[config\].*set of resources to pause changed/);
+});
+
 test('retry: a MUTATING call is not blindly re-sent on a network error; outcome stated as unverified', async () => {
   const fetchFn = fakeFetch((b) => {
-    if (b.action === 'preview') return ok({ resources: RES('Online'), confirmToken: 't' });
-    throw new Error('socket hang up');
+    if (b.action === 'preview') return ok(previewBody());
+    if (b.action === 'pause') throw new Error('socket hang up');
+    return ok(runningBody());
   });
-  const c = capture();
-  const code = await runPower(base({ action: 'pause', confirm: 'PAUSE' }), { env: ENV, spawn: fakeSpawn(), fetchFn, ...c.deps, ...fakeClock() });
+  const { code, c } = await run(base({ action: 'pause', confirm: ESTATE_ID }), fetchFn);
   assert.equal(code, EXIT.FAILED);
-  assert.equal(fetchFn.calls.filter((x) => x.body.action === 'pause').length, 1, 'pause sent exactly once');
+  assert.equal(actions(fetchFn).filter((a) => a === 'pause').length, 1, 'pause sent exactly once');
   assert.match(c.err.join('\n'), /may or may not have been applied/);
 });
 
@@ -197,12 +311,22 @@ test('endpointUrl: http, credentials and paths are rejected; a plain https origi
   assert.equal(endpointUrl('https://c.example.test'), 'https://c.example.test/api/estate/power');
 });
 
+test('pauseSetOf reads preview.wouldPause (the real nesting), not a top-level list', () => {
+  assert.equal(pauseSetOf(previewBody()).length, 2);
+  assert.equal(pauseSetOf({ wouldPause: [{ resourceId: 'x' }] }), null);
+});
+
+test('state action prints the real power block fields', async () => {
+  const { code, c } = await run(base(), fakeFetch(() => ok(runningBody())));
+  assert.equal(code, EXIT.OK);
+  assert.match(c.out.join('\n'), /state=RUNNING estateId=estate-loom-1 lastActivityAt=2026-10-13T07:00:00\.000Z/);
+});
+
 test('parseArgs / main: bad boundary and bad action exit 2 without running anything', async () => {
   assert.throws(() => parseArgs(['--boundary', 'IL5', '--action', 'state']));
   assert.throws(() => parseArgs(['--boundary', 'Commercial', '--action', 'nuke']));
   assert.throws(() => parseArgs(['--boundary', 'Commercial', '--action', 'state', '--bogus']));
-  const c = capture();
-  assert.equal(await main(['--boundary', 'IL5', '--action', 'state'], c.deps), EXIT.USAGE);
+  assert.equal(await main(['--boundary', 'IL5', '--action', 'state'], capture().deps), EXIT.USAGE);
 });
 
 test('missing console URL / audience: exit 2 before the az cloud is even read', async () => {
@@ -210,4 +334,9 @@ test('missing console URL / audience: exit 2 before the az cloud is even read', 
   assert.equal(await runPower(base(), { env: {}, spawn, ...capture().deps }), EXIT.USAGE);
   assert.equal(await runPower(base(), { env: { CSA_LOOM_CONSOLE_URL: ENV.CSA_LOOM_CONSOLE_URL }, spawn, ...capture().deps }), EXIT.USAGE);
   assert.equal(spawn.calls.length, 0);
+});
+
+test('progressRows fixture sanity: atExpected=false rows are the failing ones (guards the fixture itself)', () => {
+  assert.ok(progressRows(false).every((r) => r.atExpectedState === false));
+  assert.ok(progressRows(true).every((r) => r.atExpectedState === true));
 });

@@ -45378,6 +45378,72 @@
           }
         },
         {
+          "id": "sec:publication:scripts/estate-power/autopause.mjs#module",
+          "kind": "publication",
+          "provenance": "declared",
+          "label": "scripts/estate-power/autopause.mjs",
+          "facet": {
+            "kind": "publication",
+            "module": "scripts/estate-power/autopause.mjs",
+            "declaredSinkCount": 2,
+            "sinks": [
+              {
+                "id": "stdout:member:26",
+                "surface": "stdout",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "stderr:member:27",
+                "surface": "stderr",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              }
+            ]
+          }
+        },
+        {
+          "id": "sec:publication:scripts/estate-power/estate-power.mjs#module",
+          "kind": "publication",
+          "provenance": "declared",
+          "label": "scripts/estate-power/estate-power.mjs",
+          "facet": {
+            "kind": "publication",
+            "module": "scripts/estate-power/estate-power.mjs",
+            "declaredSinkCount": 2,
+            "sinks": [
+              {
+                "id": "stdout:member:158",
+                "surface": "stdout",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "stderr:member:159",
+                "surface": "stderr",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              }
+            ]
+          }
+        },
+        {
           "id": "sec:publication:scripts/measure/__tests__/injection-arms.mjs#module",
           "kind": "publication",
           "provenance": "declared",
@@ -51999,6 +52065,16 @@
         {
           "nodeId": "sec:publication:scripts/dev/local-golden-path.mjs#module",
           "codeModuleId": "code:scripts/dev/local-golden-path.mjs",
+          "reason": "repository tooling — run by a developer or by CI, never by a deployed Loom service."
+        },
+        {
+          "nodeId": "sec:publication:scripts/estate-power/autopause.mjs#module",
+          "codeModuleId": "code:scripts/estate-power/autopause.mjs",
+          "reason": "repository tooling — run by a developer or by CI, never by a deployed Loom service."
+        },
+        {
+          "nodeId": "sec:publication:scripts/estate-power/estate-power.mjs#module",
+          "codeModuleId": "code:scripts/estate-power/estate-power.mjs",
           "reason": "repository tooling — run by a developer or by CI, never by a deployed Loom service."
         },
         {
