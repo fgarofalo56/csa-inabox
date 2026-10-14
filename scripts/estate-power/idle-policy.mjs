@@ -69,9 +69,21 @@ export function decideIdlePause({ state, activity, now, declared }) {
   }
 
   // Both clocks must agree: the console's own idleForSeconds AND ours from lastActivityAt.
-  const idleMs = Math.min(nowMs - lastMs, serverIdle * 1000);
+  // A resume (power route / PAT) does not refresh lastActivityAt, so a freshly
+  // resumed estate would otherwise be re-paused by the next cron. The idle clock
+  // starts at the LATER of the two. Absent lastResumedAt = ignored; present but
+  // unparseable or in the future = unknown, which is never idle.
+  const rawResumed = power?.[FIELD.lastResumedAt];
+  let effLastMs = lastMs;
+  if (rawResumed !== null && rawResumed !== undefined) {
+    const resumedMs = ms(rawResumed);
+    if (resumedMs === null || resumedMs > nowMs) return skip('resume-unknown', `power.lastResumedAt is ${JSON.stringify(rawResumed)} (unparseable or in the future); unknown is never idle`);
+    effLastMs = Math.max(lastMs, resumedMs);
+  }
+
+  const idleMs = Math.min(nowMs - effLastMs, serverIdle * 1000);
   if (idleMs < windowMs) {
-    return skip('not-idle-long-enough', `last activity ${new Date(lastMs).toISOString()}; idle ${Math.floor(idleMs / 1000)}s of the required ${windowMs / 1000}s`);
+    return skip('not-idle-long-enough', `last activity/resume ${new Date(effLastMs).toISOString()}; idle ${Math.floor(idleMs / 1000)}s of the required ${windowMs / 1000}s`);
   }
   return { decision: 'pause', code: 'idle', reason: `idle ${Math.floor(idleMs / 1000)}s >= ${windowMs / 1000}s (idleHours=${idleHours}), no pipeline run in the window` };
 }

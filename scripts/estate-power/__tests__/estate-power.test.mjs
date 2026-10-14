@@ -336,6 +336,17 @@ test('missing console URL / audience: exit 2 before the az cloud is even read', 
   assert.equal(spawn.calls.length, 0);
 });
 
+test('console-supplied names cannot forge log lines or workflow commands (CR/LF stripped, :: broken)', async () => {
+  // Input that breaks it: printing r.name raw -> a line starting with ::error::x appears in output.
+  const evil = 'aas\n::error::pwned';
+  const body = previewBody({ preview: { wouldPause: [{ resourceId: AAS_ID, name: evil, resourceType: 't\r::warning::w', mechanism: 'm' }], wouldLeaveRunning: [] } });
+  const fetchFn = fakeFetch((b) => (b.action === 'preview' ? ok(body) : ok(runningBody())));
+  const { code, c } = await run(base({ action: 'pause', dryRun: true }), fetchFn);
+  assert.equal(code, EXIT.OK);
+  assert.ok(c.out.every((l) => !/[\r\n]/.test(l) && !l.includes('::')), 'no line carries CR/LF or ::');
+  assert.ok(c.out.some((l) => l.includes('aas') && l.includes('pwned')), 'positive: the name is still shown, defanged');
+});
+
 test('progressRows fixture sanity: atExpected=false rows are the failing ones (guards the fixture itself)', () => {
   assert.ok(progressRows(false).every((r) => r.atExpectedState === false));
   assert.ok(progressRows(true).every((r) => r.atExpectedState === true));

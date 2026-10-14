@@ -24,6 +24,14 @@ export function scrub(text, secrets) {
   return s;
 }
 
+/**
+ * Console- or az-supplied text is untrusted. Strip CR/LF (so it cannot start a
+ * new log line) and break every `::` (so it cannot become a workflow command).
+ */
+export function sanitizeLine(text) {
+  return String(text ?? '').replace(/[\r\n]+/g, ' ').replace(/::/g, ': :');
+}
+
 /** Read the active cloud. Never mutates anything. */
 export function readActiveCloud(spawn = defaultSpawn) {
   const r = spawn('az', ['account', 'show', '--output', 'json']);

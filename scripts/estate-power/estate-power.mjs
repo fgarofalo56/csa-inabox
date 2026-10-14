@@ -23,7 +23,7 @@ import {
   ACTIONS, FIELD, ENDPOINT_PATH, ESTATE_STATE, RESUME_SUCCESS,
   boundaryInfo, parseEnvelope, pauseSetOf, rowsOf,
 } from './contract.mjs';
-import { acquireToken, assertBoundary, defaultSpawn, scrub } from './token.mjs';
+import { acquireToken, assertBoundary, defaultSpawn, sanitizeLine, scrub } from './token.mjs';
 
 export const EXIT = Object.freeze({ OK: 0, FAILED: 1, USAGE: 2, BOUNDARY: 3 });
 export const MAX_ATTEMPTS = 3;
@@ -209,8 +209,8 @@ export async function runPower(args, deps = {}) {
   const sleep = deps.sleep ?? realSleep;
   const now = deps.now ?? (() => Date.now());
   const secrets = [];
-  const out = (s) => (deps.out ?? stdoutSink)(scrub(s, secrets));
-  const err = (s) => (deps.err ?? stderrSink)(scrub(s, secrets));
+  const out = (s) => (deps.out ?? stdoutSink)(sanitizeLine(scrub(s, secrets)));
+  const err = (s) => (deps.err ?? stderrSink)(sanitizeLine(scrub(s, secrets)));
   const fail = (code, msg) => { err(`ERROR: ${msg}`); return code; };
 
   const url = endpointUrl(env.CSA_LOOM_CONSOLE_URL);

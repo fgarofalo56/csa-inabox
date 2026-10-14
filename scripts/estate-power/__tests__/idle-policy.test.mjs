@@ -98,3 +98,42 @@ test('pipeline run with an unparseable startedAt is treated as activity, not ign
 test('Date objects as now are accepted (same answer as epoch ms)', () => {
   assert.equal(go({ now: new Date(NOW) }).decision, 'pause');
 });
+
+// ── lastResumedAt: a resume does not refresh lastActivityAt ────────────────
+const withResume = (resumedAt, over = {}) => {
+  const s = state(over);
+  s.power.lastResumedAt = resumedAt;
+  return s;
+};
+
+test('RESUME REPAUSE BUG: lastResumedAt 1 minute ago, lastActivityAt 10h ago, idleHours 2 -> SKIP (red against the pre-fix policy)', () => {
+  const d = go({ state: withResume(iso(60), { last: iso(36000), idle: 36000, hours: 2 }) });
+  assert.equal(d.decision, 'skip');
+  assert.equal(d.code, 'not-idle-long-enough');
+});
+
+test('lastResumedAt exactly idleHours (2h = 7200s) ago pauses; 1s short skips (literal timestamps)', () => {
+  const at = (sec) => withResume(iso(sec), { last: iso(36000), idle: 36000, hours: 2 });
+  assert.equal(go({ state: at(7200) }).decision, 'pause');
+  assert.equal(go({ state: at(7199) }).decision, 'skip');
+});
+
+test('lastResumedAt present but unparseable, empty, or in the future skips as resume-unknown', () => {
+  for (const bad of ['not-a-date', '', iso(-60)]) {
+    const d = go({ state: withResume(bad, { last: iso(36000), idle: 36000, hours: 2 }) });
+    assert.equal(d.code, 'resume-unknown', JSON.stringify(bad));
+  }
+});
+
+test('POSITIVE CONTROL: old activity AND old resume (both 10h) still pauses; null/absent lastResumedAt is ignored', () => {
+  assert.equal(go({ state: withResume(iso(36000), { last: iso(36000), idle: 36000, hours: 2 }) }).decision, 'pause');
+  assert.equal(go({ state: withResume(null, { last: iso(36000), idle: 36000, hours: 2 }) }).decision, 'pause');
+  const s = state({ last: iso(36000), idle: 36000, hours: 2 });
+  delete s.power.lastResumedAt;
+  assert.equal(go({ state: s }).decision, 'pause');
+});
+
+test('an OLDER lastResumedAt than lastActivityAt does not shorten the idle clock (max, not replace)', () => {
+  const d = go({ state: withResume(iso(36000), { last: iso(60), idle: 60, hours: 2 }) });
+  assert.equal(d.decision, 'skip');
+});

@@ -17,7 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { FIELD, boundaryInfo, pauseSetOf } from './contract.mjs';
-import { acquireToken, assertBoundary, defaultSpawn, scrub } from './token.mjs';
+import { acquireToken, assertBoundary, defaultSpawn, sanitizeLine, scrub } from './token.mjs';
 import { callConsole, endpointUrl, EXIT, runPower } from './estate-power.mjs';
 import { decideIdlePause } from './idle-policy.mjs';
 import { discoverActivityTargets, readRecentPipelineRuns } from './read-activity.mjs';
@@ -91,7 +91,7 @@ export async function runAutopause({ boundary, dryRun = false }, deps = {}) {
   const activity = found.ok
     ? readRecentPipelineRuns({ targets: found.targets, boundary, now: nowDate, windowHours, spawn })
     : found;
-  if (!activity.ok) out(`::warning::pipeline activity not established: ${scrub(activity.reason, secrets)}`);
+  if (!activity.ok) out(`::warning::pipeline activity not established: ${sanitizeLine(scrub(activity.reason, secrets))}`);
 
   const decision = decideIdlePause({ state, activity, now: nowDate, declared });
   skip(decision);
