@@ -39,6 +39,7 @@ permissions:
 jobs:
   commercial:
     name: Idle auto-pause - Commercial
+    # DELIBERATELY LITERAL (PR 4492): the estate pause and resume control must not ride the fleet it can pause.
     runs-on: ubuntu-latest
     timeout-minutes: 40
     concurrency:
@@ -104,6 +105,7 @@ jobs:
 
   gcch:
     name: Idle auto-pause - GCC-High
+    # DELIBERATELY LITERAL (PR 4492): the estate pause and resume control must not ride the fleet it can pause.
     runs-on: ubuntu-latest
     timeout-minutes: 40
     concurrency:

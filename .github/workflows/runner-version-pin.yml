@@ -67,6 +67,7 @@ concurrency:
 jobs:
   pin-age:
     name: Runner version pin age
+    # DELIBERATELY LITERAL (PR 4492): this watches the runner fleet pin, so a stalled fleet must not hide a stale pin.
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -120,6 +121,7 @@ jobs:
     name: Notify on failure
     needs: pin-age
     if: failure() && github.event_name != 'pull_request'
+    # DELIBERATELY LITERAL (PR 4492): this watches the runner fleet pin, so a stalled fleet must not hide a stale pin.
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

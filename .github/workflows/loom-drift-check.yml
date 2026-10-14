@@ -462,7 +462,7 @@ jobs:
   op19-retired-timers:
     name: Retired Function-host timers still disabled (Commercial)
     if: github.event_name == 'schedule' || inputs.cloud == 'both' || inputs.cloud == 'commercial'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(startsWith(vars.CI_RUNNER, '[') && vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7.0.1
