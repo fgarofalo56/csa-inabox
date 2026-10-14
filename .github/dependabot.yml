@@ -349,6 +349,16 @@ updates:
       interval: "weekly"
     labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 5
+    # #4963/#4964 (2026-10-14): vitest 5 declares peer @types/node ^22 || >=24 and these
+    # packages sit on @types/node 20, so `npm ci` fails ERESOLVE in the standalone
+    # vitest suites. Hold the majors; minor/patch still arrive. Lift with a migration PR.
+    ignore:
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "vitest"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
       fiab-label-propagation-version:
         applies-to: version-updates
@@ -363,6 +373,16 @@ updates:
       interval: "weekly"
     labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 5
+    # #4963/#4964 (2026-10-14): vitest 5 declares peer @types/node ^22 || >=24 and these
+    # packages sit on @types/node 20, so `npm ci` fails ERESOLVE in the standalone
+    # vitest suites. Hold the majors; minor/patch still arrive. Lift with a migration PR.
+    ignore:
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "vitest"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
       secret-expiry-monitor-version:
         applies-to: version-updates
