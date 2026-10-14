@@ -32,6 +32,7 @@ import {
   type PausedResourceSnapshot,
 } from './pause-state';
 import { pausableTypeSpec, type PauseCandidate } from './pause-inventory';
+import { containerAppPauseGuard } from './pause-guards';
 
 // ---------------------------------------------------------------------------
 // The injected actuator
@@ -44,6 +45,12 @@ export interface ActuatorResult {
   detail: string;
   /** Raw failure text when `ok` is false. Classified by ./capacity-preflight. */
   error?: string;
+  /**
+   * True when the actuator established that stopping changes nothing and so sent
+   * no mutation (already at the floor, or a plan that bills $0 at idle). The
+   * orchestrator reports it as `no-op` and does not record it in the snapshot.
+   */
+  noop?: boolean;
 }
 
 /** An AUTHORITATIVE ARM read: power state + the SKU/replica facts resume needs. */
@@ -339,12 +346,26 @@ export async function createArmActuator(): Promise<EstateActuator> {
   /** Container App pause: record-free here (the snapshot already holds the range). */
   const pauseContainerApp = async (resource: { resourceId: string; name: string }): Promise<ActuatorResult> => {
     const version = apiVersion('microsoft.app/containerapps');
+    // Defence in depth: the orchestrator already guarded this app, but the
+    // actuator is the last line before the mutation, so it re-checks with a
+    // fresh tag read and its own process identity. Unknown => refuse.
+    const guard = containerAppPauseGuard(
+      { name: resource.name, tags: await readTags(resource.resourceId) },
+      process.env.CONTAINER_APP_NAME,
+    );
+    if (!guard.eligible) {
+      return { ok: false, detail: guard.reason, error: 'aca-console-guard' };
+    }
     const current = await readAcaScale(resource.resourceId, version);
     const max = current.maxReplicas;
     if (current.minReplicas === 0) {
       // Already 0: nothing to change and nothing to invent. Resume will not touch it
       // because its recorded pre-pause state is not Online.
-      return { ok: true, detail: `Container App ${resource.name} already has minReplicas 0; nothing was changed.` };
+      return {
+        ok: true,
+        noop: true,
+        detail: `Container App ${resource.name} already has minReplicas 0; nothing was changed and no saving is claimed.`,
+      };
     }
     if (typeof current.minReplicas !== 'number' || typeof max !== 'number') {
       return {
@@ -440,6 +461,33 @@ export async function createArmActuator(): Promise<EstateActuator> {
           return { ok: true, detail: `ARM accepted the stop of Stream Analytics job ${resource.name}.` };
         }
         case 'microsoft.web/sites': {
+          // A site on a Consumption (Dynamic, e.g. Y1) plan bills $0 at idle, so
+          // stopping it saves nothing and only disables its triggers. That is a
+          // disclosed no-op, never a fabricated saving. If the plan cannot be
+          // read, fail SAFE: refuse rather than guess.
+          const site = await armGet<{ properties?: { serverFarmId?: string } }>(
+            `${resource.resourceId}?api-version=${apiVersion(type)}`,
+          );
+          const farmId = String(site?.properties?.serverFarmId ?? '');
+          if (!farmId.startsWith('/subscriptions/')) {
+            return {
+              ok: false,
+              detail: `The hosting plan of ${resource.name} could not be established, so whether stopping it saves anything is unknown. Left RUNNING.`,
+              error: 'web-plan-unreadable',
+            };
+          }
+          const plan = await armGet<{ sku?: { name?: string; tier?: string } }>(
+            `${farmId}?api-version=${apiVersion(type)}`,
+          );
+          const tier = String(plan?.sku?.tier ?? '').toLowerCase();
+          const skuName = String(plan?.sku?.name ?? '').toLowerCase();
+          if (tier === 'dynamic' || skuName === 'y1') {
+            return {
+              ok: true,
+              noop: true,
+              detail: `${resource.name} runs on a Consumption plan (${plan?.sku?.name ?? 'Dynamic'}) that bills $0 at idle; it was NOT stopped and no saving is claimed.`,
+            };
+          }
           await armPost(`${resource.resourceId}/stop?api-version=${apiVersion(type)}`);
           return { ok: true, detail: `ARM accepted the stop of web app ${resource.name}.` };
         }

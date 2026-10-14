@@ -91,10 +91,25 @@ function acaWorld(init: { min: number; max: number; replicas?: number; ignorePat
   return w;
 }
 
+const PLAN_ID = `${base}/Microsoft.Web/serverfarms/plan-v`;
+/** Default reads: a web site on a non-consumption plan. */
+function webOnPlan(sku: { name?: string; tier?: string } | null, farmId: string | null = PLAN_ID) {
+  armGet.mockImplementation(async (url: unknown) => {
+    if (String(url).includes('/serverfarms/')) {
+      if (!sku) throw new Error('403 plan');
+      return { sku };
+    }
+    return { properties: { ...(farmId ? { serverFarmId: farmId } : {}), state: 'Running' } };
+  });
+}
+
 beforeEach(() => {
   vi.resetAllMocks();
   armPost.mockResolvedValue({});
   armPatch.mockResolvedValue({});
+  webOnPlan({ name: 'P1v3', tier: 'PremiumV3' });
+  // The identity of the running process; none of the fixture apps is named this.
+  process.env.CONTAINER_APP_NAME = 'loom-brain';
 });
 
 describe('normalizePowerState — new vocabularies', () => {
@@ -381,5 +396,75 @@ describe('resume ordering', () => {
     const out = await startResume(snap, actuator);
     expect(called).toEqual(['aks-v', 'adx-v', 'asa-v', 'aca-v', 'vm-v', 'web-v']);
     expect(out.dispatches.map((d) => d.name)).toEqual(called);
+  });
+});
+
+describe('Web sites on Consumption plans, and the actuator-level console guard', () => {
+  // Breaks if: a Y1/Dynamic site is stopped (a fabricated saving that also kills its triggers).
+  it.each([
+    [{ name: 'Y1', tier: 'Dynamic' }],
+    [{ name: 'Y1' }],
+    [{ tier: 'Dynamic' }],
+  ])('web on a Consumption plan %j is a disclosed no-op: noop:true, no POST', async (sku) => {
+    webOnPlan(sku);
+    const a = await createArmActuator();
+    const r = await a.pause(candidate('web'));
+    expect(r).toMatchObject({ ok: true, noop: true });
+    expect(r.detail).toContain('NOT stopped');
+    expect(armPost).not.toHaveBeenCalled();
+  });
+
+  // Breaks if: the guard is inverted and a dedicated-plan site is no-op'd instead of stopped.
+  it('web on a dedicated plan is stopped, not no-op', async () => {
+    const a = await createArmActuator();
+    const r = await a.pause(candidate('web'));
+    expect(r.noop).toBeUndefined();
+    expect(String(armPost.mock.calls[0][0]).startsWith(`${ids.web}/stop?`)).toBe(true);
+  });
+
+  // Breaks if: an unreadable plan is treated as non-consumption and the site is stopped.
+  it.each([['plan read 403', null, PLAN_ID], ['no serverFarmId', { name: 'P1v3' }, null]])(
+    'web with %s is refused (left running), never stopped',
+    async (_label, sku, farm) => {
+      webOnPlan(sku as { name: string } | null, farm as string | null);
+      const a = await createArmActuator();
+      const r = await a.pause(candidate('web'));
+      expect(r.ok).toBe(false);
+      expect(armPost).not.toHaveBeenCalled();
+    },
+  );
+
+  // Breaks if: the actuator trusts the orchestrator and scales the app that IS this process.
+  it('actuator refuses to scale the Container App that is the running process', async () => {
+    acaWorld({ min: 2, max: 5 });
+    process.env.CONTAINER_APP_NAME = 'aca-v';
+    const a = await createArmActuator();
+    const r = await a.pause(candidate('aca'));
+    expect(r).toMatchObject({ ok: false, error: 'aca-console-guard' });
+    expect(armPatch).not.toHaveBeenCalled();
+  });
+
+  // Breaks if: an unset CONTAINER_APP_NAME is read as "not the console" and the PATCH goes out.
+  it('actuator refuses every Container App when its own identity is unknown', async () => {
+    acaWorld({ min: 2, max: 5 });
+    delete process.env.CONTAINER_APP_NAME;
+    const a = await createArmActuator();
+    const r = await a.pause(candidate('aca'));
+    expect(r).toMatchObject({ ok: false, error: 'aca-console-guard' });
+    expect(armPatch).not.toHaveBeenCalled();
+  });
+
+  // Breaks if: the live tags are not consulted by the actuator itself.
+  it('actuator refuses a Container App whose fresh tags mark it as the resume surface', async () => {
+    const w = acaWorld({ min: 2, max: 5 });
+    const inner = armGet.getMockImplementation()!;
+    armGet.mockImplementation(async (url: unknown) => {
+      const body: any = await inner(url);
+      return String(url).includes('/revisions?') ? body : { ...body, tags: { 'loom-role': 'console' } };
+    });
+    const a = await createArmActuator();
+    const r = await a.pause(candidate('aca'));
+    expect(r.ok).toBe(false);
+    expect(w.min).toBe(2);
   });
 });

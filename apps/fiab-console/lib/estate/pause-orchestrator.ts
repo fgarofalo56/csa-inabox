@@ -52,11 +52,15 @@
  *     recency-vs-serving error as #3676 — the fix is to probe the thing, not to
  *     trust the field that describes it.
  *
- *  5. The console cannot pause itself out of existence. `ESTATE_PAUSE_TIER`
- *     omits Container Apps: the Loom console IS a Container App, and the
- *     surface that resumes the estate must survive the pause. ACA scale-to-zero
- *     is a real saving (~$388/mo) and is tracked as a follow-up, but it needs
- *     per-app ownership re-verification that this slice does not build.
+ *  5. The console cannot pause itself out of existence. Container Apps ARE in
+ *     `ESTATE_PAUSE_TIER` (operator decision, #4876), but each one passes
+ *     `containerAppPauseGuard` twice - at plan time and again in `startPause`
+ *     against fresh tags. The guard FAILS SAFE: an app is touched only when it
+ *     is positively identified as not the console (own name known, differs,
+ *     not named "console", not tagged as the resume surface). Anything it
+ *     cannot identify stays running. Resources whose stop would change
+ *     nothing (Y1 Consumption sites) come back from the actuator as `noop`
+ *     and are reported as `no-op`, never as a saving.
  */
 
 import {
@@ -91,6 +95,9 @@ import {
   type PauseScope,
 } from './pause-inventory';
 import { assertNoFalseGreen } from './capacity-preflight';
+import { containerAppPauseGuard } from './pause-guards';
+
+export { containerAppPauseGuard };
 import type {
   ActuatorResult,
   EstateActuator,
@@ -120,20 +127,22 @@ export const ESTATE_PAUSE_TIER: readonly string[] = [
   'microsoft.kusto/clusters',
   'microsoft.analysisservices/servers',
   'microsoft.compute/virtualmachinescalesets',
+  // Widened by operator decision (#4876 step 2). Every addition has a stated
+  // safety rule below; Container Apps have a per-app guard (see
+  // `containerAppPauseGuard`) because the Loom console IS a Container App.
+  'microsoft.compute/virtualmachines',
+  'microsoft.containerservice/managedclusters',
+  'microsoft.app/containerapps',
+  'microsoft.streamanalytics/streamingjobs',
+  'microsoft.web/sites',
 ];
 
-/** Why a Loom-owned, pausable-typed resource is nevertheless out of this tier. */
-export const OUT_OF_TIER_REASONS: Readonly<Record<string, string>> = {
-  'microsoft.app/containerapps':
-    'Container Apps are excluded from this slice. The Loom console itself runs as a Container App, '
-    + 'so the surface that resumes the estate must stay reachable; scale-to-zero across the app '
-    + 'fleet needs per-app ownership re-verification that this work item does not build.',
-  'microsoft.streamanalytics/streamingjobs':
-    'Stream Analytics jobs bill only while STARTED, and every job measured on this estate is already '
-    + 'stopped. Stopping a stopped job saves nothing and widens the blast radius.',
-  'microsoft.web/sites':
-    'Function Apps / App Service here run on Y1 Consumption plans, which are already $0 at idle.',
-};
+/**
+ * Why a Loom-owned, pausable-typed resource is nevertheless out of this tier.
+ * Every pausable type is now in the tier, so this is empty by design; it stays
+ * as the seam `planPause` consults for any future type held back.
+ */
+export const OUT_OF_TIER_REASONS: Readonly<Record<string, string>> = {};
 
 /**
  * TYPICAL resume time per type, in seconds. Used ONLY to draw a progress bar.
@@ -322,6 +331,8 @@ export function planPause(
     gateReason?: string;
     /** How many resources the deploy env NAMES, armed or not. */
     namedByDeploy?: number;
+    /** This process's own Container App name; defaults to CONTAINER_APP_NAME. */
+    selfAppName?: string;
   },
 ): EstatePlan {
   const full = buildPauseInventory(discovered, ctx);
@@ -331,6 +342,21 @@ export function planPause(
   for (const c of full.pausable) {
     const type = c.resource.resourceType.toLowerCase();
     if (ESTATE_PAUSE_TIER.includes(type)) {
+      if (type === 'microsoft.app/containerapps') {
+        const guard = containerAppPauseGuard(
+          { name: c.resource.name, tags: c.resource.tags },
+          ctx.selfAppName ?? process.env.CONTAINER_APP_NAME,
+        );
+        if (!guard.eligible) {
+          outOfTier.push({
+            resourceId: c.resource.resourceId,
+            name: c.resource.name,
+            resourceType: c.resource.resourceType,
+            reason: guard.reason,
+          });
+          continue;
+        }
+      }
       inTier.push(c);
       continue;
     }
@@ -461,6 +487,12 @@ export type PauseActionStatus =
   | 'dispatched'
   /** ARM already reported it stopped; nothing was sent. */
   | 'already-paused'
+  /**
+   * The actuator established that stopping would change nothing (e.g. a Y1
+   * Consumption site that bills $0 at idle). Nothing was sent, no saving is
+   * claimed, and the resource is NOT recorded in the snapshot.
+   */
+  | 'no-op'
   /** Left RUNNING on purpose — ownership or the ARM read did not establish enough. */
   | 'skipped'
   /** The ARM verb was rejected. */
@@ -525,6 +557,8 @@ export async function startPause(
     readManifest?: () => Promise<DeployManifest | null>;
     createdBy?: string;
     now?: string;
+    /** This process's own Container App name; defaults to CONTAINER_APP_NAME. */
+    selfAppName?: string;
   },
 ): Promise<PauseRunResult> {
   const snapshot = newPauseSnapshot({
@@ -560,6 +594,26 @@ export async function startPause(
     if (!recheck.proceed) {
       actions.push({ ...base, status: 'skipped', detail: recheck.reason });
       continue;
+    }
+
+    // (1b) Container Apps only: the console must survive the pause. Re-check
+    //      identity against FRESH tags, so a tag added since the preview (an
+    //      exemption) is honoured and an unreadable tag set fails safe.
+    if (resource.resourceType.toLowerCase() === 'microsoft.app/containerapps') {
+      let freshTags: Readonly<Record<string, string>> | null = null;
+      try {
+        freshTags = await actuator.readTags(resource.resourceId);
+      } catch {
+        freshTags = null;
+      }
+      const guard = containerAppPauseGuard(
+        { name: resource.name, tags: freshTags },
+        ctx.selfAppName ?? process.env.CONTAINER_APP_NAME,
+      );
+      if (!guard.eligible) {
+        actions.push({ ...base, status: 'skipped', detail: guard.reason });
+        continue;
+      }
     }
 
     // (2) Authoritative ARM power read. No reading -> no snapshot -> no pause.
@@ -612,6 +666,15 @@ export async function startPause(
 
     // (5) The mutation.
     const result = await actuator.pause(candidate);
+    if (result.ok && result.noop) {
+      // The actuator established that stopping changes nothing. Un-record it:
+      // there is nothing to restore, and keeping it would leave the estate in
+      // PAUSING forever waiting for a state change that was never requested.
+      const at = snapshot.resources.indexOf(entry);
+      if (at >= 0) snapshot.resources.splice(at, 1);
+      actions.push({ ...base, status: 'no-op', detail: result.detail });
+      continue;
+    }
     dispatchedAny = dispatchedAny || result.ok;
     actions.push({
       ...base,

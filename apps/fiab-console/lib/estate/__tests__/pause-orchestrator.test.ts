@@ -667,21 +667,102 @@ describe('R-CAP-4 — an unconfirmed resume is RESUME_FAILED, NEVER RUNNING', ()
 // ===========================================================================
 
 describe('the PAUSE tier', () => {
-  it('excludes Container Apps, so the console cannot pause the surface that resumes it', () => {
-    expect(ESTATE_PAUSE_TIER).not.toContain('microsoft.app/containerapps');
-    const aca = res({ name: 'loom-console', rg: 'rg-shared-mixed-dev', type: 'Microsoft.App/containerApps', tags: ours });
-    const plan = planPause([...ALL, aca], { scope: SCOPE });
-    expect(plan.dryRun.wouldPause.map((r) => r.resourceId)).not.toContain(aca.resourceId);
-    const held = plan.outOfTier.find((r) => r.resourceId === aca.resourceId);
-    expect(held?.reason).toMatch(/console itself runs as a Container App/);
+  const SELF = 'loom-console';
+  const aca = (name: string, tags: Record<string, string> = ours) =>
+    res({ name, rg: 'rg-shared-mixed-dev', type: 'Microsoft.App/containerApps', tags });
+  const pausedIds = (rs: DiscoveredResource[], selfAppName?: string) =>
+    planPause([...ALL, ...rs], { scope: SCOPE, selfAppName }).dryRun.wouldPause.map((r) => r.resourceId);
+
+  // Breaks if: a type is added or dropped without this list (and its safety rule) being revisited.
+  it('tier membership is exactly this list (asserted literally)', () => {
+    expect([...ESTATE_PAUSE_TIER].sort()).toEqual([
+      'microsoft.analysisservices/servers',
+      'microsoft.app/containerapps',
+      'microsoft.compute/virtualmachines',
+      'microsoft.compute/virtualmachinescalesets',
+      'microsoft.containerservice/managedclusters',
+      'microsoft.kusto/clusters',
+      'microsoft.streamanalytics/streamingjobs',
+      'microsoft.synapse/workspaces/sqlpools',
+      'microsoft.web/sites',
+    ]);
+  });
+
+  // Breaks if: the guard is removed and an app named like the console enters the pause set.
+  it('the console app is NEVER in the pause set: by name, by own identity, and by tag', () => {
+    const byName = aca('loom-console');
+    const byOtherConsoleName = aca('ca-loom-console-eu');
+    const bySelf = aca('loom-brain'); // not console-named; it is whoever this process is
+    const byTag = aca('loom-resumer', { ...ours, 'loom-role': 'resume-surface' });
+    const exempt = aca('loom-keep', { ...ours, 'loom-estate-pause': 'exempt' });
+    const all = [byName, byOtherConsoleName, bySelf, byTag, exempt];
+    const set = pausedIds(all, 'loom-brain');
+    for (const r of all) expect(set).not.toContain(r.resourceId);
+    // Each is held with a stated reason, visible in the preview.
+    const plan = planPause([...ALL, ...all], { scope: SCOPE, selfAppName: 'loom-brain' });
+    for (const r of all) expect(plan.outOfTier.find((o) => o.resourceId === r.resourceId)?.reason).toMatch(/Left RUNNING/);
+  });
+
+  // Breaks if: an unidentifiable process (CONTAINER_APP_NAME unset) lets any Container App through.
+  it('with the own app name unknown, NO Container App is paused (fail safe)', () => {
+    const worker = aca('loom-orchestrator');
+    expect(pausedIds([worker], undefined)).not.toContain(worker.resourceId);
+    expect(pausedIds([worker], '')).not.toContain(worker.resourceId);
+  });
+
+  // Breaks if: the guard over-blocks and a plainly non-console Loom app can never be paused.
+  it('a positively identified non-console Loom app IS in the pause set', () => {
+    const worker = aca('loom-orchestrator');
+    expect(pausedIds([worker], SELF)).toContain(worker.resourceId);
+  });
+
+  // Breaks if: startPause trusts the plan-time tags and ignores an exemption added since.
+  it('startPause re-checks FRESH tags: an app exempted after the preview stays running and is untouched', async () => {
+    const worker = aca('loom-orchestrator');
+    const plan = planPause([...ALL, worker], { scope: SCOPE, selfAppName: SELF });
+    expect(plan.dryRun.wouldPause.map((r) => r.resourceId)).toContain(worker.resourceId);
+    const rec = recorder({ tags: (id) => (id === worker.resourceId ? { ...ours, 'loom-role': 'console' } : undefined as never) });
+    const run = await startPause(plan, rec.actuator, { ...ctx(), selfAppName: SELF });
+    expect(rec.touched).not.toContain(worker.resourceId);
+    expect(run.actions.find((a) => a.resourceId === worker.resourceId)?.status).toBe('skipped');
+  });
+
+  // Breaks if: unreadable tags are treated as "no exempt marker" and the app is paused.
+  it('startPause: an unreadable tag set on a Container App fails safe', async () => {
+    const worker = aca('loom-orchestrator');
+    const plan = planPause([...ALL, worker], { scope: SCOPE, selfAppName: SELF });
+    let n = 0;
+    // First read (ownership re-verify) succeeds; the guard's own read throws.
+    const rec = recorder({ tags: (id) => (id === worker.resourceId ? (n++ === 1 ? new Error('403') : ours) : (undefined as never)) });
+    const run = await startPause(plan, rec.actuator, { ...ctx(), selfAppName: SELF });
+    // Both reads must have happened, or the skip below could be the ownership gate and prove nothing.
+    expect(n).toBe(2);
+    expect(rec.touched).not.toContain(worker.resourceId);
+    expect(run.actions.find((a) => a.resourceId === worker.resourceId)?.detail).toMatch(/could not be read/);
+  });
+
+  // Breaks if: a no-op result is recorded as dispatched (fabricated saving) or left in the snapshot (poll never settles).
+  it('an actuator no-op is reported as no-op, claims no saving, and is not snapshotted', async () => {
+    const plan = planPause(ALL, { scope: SCOPE });
+    const rec = recorder();
+    const noopActuator: EstateActuator = {
+      ...rec.actuator,
+      pause: async (c) => ({ ok: true, noop: true, detail: `${c.resource.name} bills $0 at idle` }),
+    };
+    const run = await startPause(plan, noopActuator, ctx());
+    expect(run.actions.map((a) => a.status)).toEqual(['no-op', 'no-op']);
+    expect(run.snapshot.resources).toHaveLength(0);
+    expect(run.dispatchedAny).toBe(false);
+    expect(run.capturedNone).toBe(true);
   });
 
   it('an out-of-tier resource is still VISIBLE — nothing vanishes from the preview', () => {
-    const asa = res({ name: 'asa-job', rg: 'rg-shared-mixed-dev', type: 'Microsoft.StreamAnalytics/streamingJobs', tags: ours });
-    const plan = planPause([...ALL, asa], { scope: SCOPE });
-    expect(plan.outOfTier.map((r) => r.resourceId)).toContain(asa.resourceId);
+    const console_ = aca('loom-console');
+    const plan = planPause([...ALL, console_], { scope: SCOPE, selfAppName: SELF });
+    expect(plan.outOfTier.map((r) => r.resourceId)).toContain(console_.resourceId);
   });
 });
+
 
 describe('resolveDeployManifest — ownership from the deploy, per RESOURCE', () => {
   const env = {
