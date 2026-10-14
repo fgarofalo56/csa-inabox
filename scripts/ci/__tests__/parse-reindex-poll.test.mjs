@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { pollFields, parsePollFile, redactBodyFile } from '../parse-reindex-poll.mjs';
+import { postJobId, pollFields, parsePollFile, redactBodyFile } from '../parse-reindex-poll.mjs';
 
 /**
  * #4498 round 6. These cover `parse-reindex-poll.mjs`, which was an inline
@@ -245,4 +245,84 @@ test('parser: redactBodyFile still TRUNCATES — redacting first must not remove
   assert.equal(out.length, 800, 'the 800-char bound must still apply after redaction');
 });
 
+/**
+ * #4517 — A REMOTE VALUE THAT CANNOT BE COERCED MUST YIELD "no readable id",
+ * NOT A NON-ZERO EXIT.
+ *
+ * THE VALUE THAT BREAKS IT: a body that is well-formed JSON, whose `jobId` is
+ * an object with a NON-CALLABLE `toString`. `JSON.parse` accepts it and the key
+ * is readable, so both of the reads `postJobId` guards have already succeeded
+ * when `String(j.jobId)` runs OUTSIDE the `try`. `ToPrimitive` then falls
+ * through to `Object.prototype.valueOf` (callable, returns the receiver, not a
+ * primitive) and the spec requires a `TypeError`:
+ *
+ *   {"ok":true,"jobId":{"toString":42}}   ->  TypeError: Cannot convert object
+ *                                             to primitive value
+ *
+ * Reproduced against the real CLI before this test was written:
+ * `node scripts/ci/parse-reindex-poll.mjs --post <file>` exits 1 and prints the
+ * stack. In `reindex-loom-docs.sh:342` that is a non-zero `PRC`, so the run
+ * proceeds with `job=unknown` and the #4497 durable-record correlation is
+ * disabled for that attempt — silently, because the operator sees a parser
+ * crash rather than the "carried no readable jobId" disclosure that path
+ * reserves for a WELL-FORMED body that simply had nothing usable in it.
+ *
+ * The issue (#4517) names two constructions; only B is reachable through
+ * `JSON.parse`, and B is what is asserted. A is unreachable here — an object
+ * with NO `toString` at all cannot be produced by parsing a JSON document, and
+ * claiming to test it would be a fixture that witnesses nothing.
+ */
+test('parser: a jobId that cannot be coerced yields an EMPTY id, not a thrown TypeError (#4517)', () => {
+  const p = writeBody({ ok: true, jobId: { toString: 42 } });
+  // Control, so the assertion below cannot pass on a fixture that never reached
+  // the rule: the body parses, and the key is readable.
+  const parsed = JSON.parse(fs.readFileSync(p, 'utf8'));
+  assert.equal(typeof parsed.jobId, 'object', 'the fixture must carry an object jobId');
+  assert.equal(typeof parsed.jobId.toString, 'number', 'toString must be NON-callable');
 
+  assert.equal(
+    postJobId(p),
+    '',
+    'a non-coercible jobId must read as "no readable id" — a ValueError here is the #4517 defect',
+  );
+});
+
+test('parser: postJobId still returns a USABLE id — the coercion guard must not eat the normal path', () => {
+  // Paired positive. The test above is satisfied by `return ''`, which would
+  // delete the correlation outright; this pins that the id still comes back,
+  // redacted by the SAME shared boundary the poll side uses.
+  const p = writeBody({ ok: true, jobId: 'job-4517-ok' });
+  assert.equal(postJobId(p), 'job-4517-ok');
+});
+
+/**
+ * THE SAME CLASS, AT THE OTHER SITES #4517's LINE-141 FIX WOULD NOT COVER.
+ *
+ * `pollFields` coerces three more remote values with a bare `String(...)` and
+ * no catch: `lastRun.outcome` (:86), `lastRun.jobId` (:88), and `lastRun.error`
+ * (:102, inside `redactSecrets`). A body carrying any one of them as a
+ * non-coercible object crashes the DEFAULT entry point — `parsePollFile`, what
+ * `reindex-loom-docs.sh:458` runs on every poll — not just the `--post` one.
+ * Measured before the fix: `--post` and the default path both exit 1 with the
+ * identical stack shape.
+ *
+ * Closing this at the LABEL ("postJobId") rather than the SITE would leave
+ * these three open, which is the #4498 round-18 lesson this issue was filed
+ * under.
+ */
+test('parser: the SAME non-coercible value is total at every remote coercion site, not only postJobId (#4517)', () => {
+  const bad = { toString: 42 };
+  for (const [label, body] of [
+    ['lastRun.outcome', { freshness: { state: 'stale', lastRun: { outcome: bad } } }],
+    ['lastRun.jobId', { freshness: { state: 'stale', lastRun: { jobId: bad } } }],
+    ['lastRun.error', { freshness: { state: 'stale', lastRun: { error: bad } } }],
+    ['freshness.state', { freshness: { state: bad } }],
+    ['job.state', { job: { state: bad } }],
+  ]) {
+    const fields = pollFields(body);
+    assert.equal(fields.length, 7, `${label}: the seven-field contract must survive`);
+    for (const f of fields) {
+      assert.equal(typeof f, 'string', `${label}: every field must still be a string, got ${typeof f}`);
+    }
+  }
+});
