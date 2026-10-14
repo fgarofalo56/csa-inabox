@@ -1928,13 +1928,13 @@ pydantic-core==2.46.3 \
     # via
     #   cohere
     #   pydantic
-pydantic-evals==1.106.0 \
-    --hash=sha256:7994f8bebfac5e482fe62e5a5434b2e5f94118ca8bd766628635b84835118a78 \
-    --hash=sha256:ec870c2e93e2a34aea83468a7d7c21cba3e9dacf62f145eef2229d9fd71b2cac
+pydantic-evals==1.107.7 \
+    --hash=sha256:818623cf712cb4fdc1b9e132ff238a8342c58bd158de4b4f2ec1d6b6c9dee1e5 \
+    --hash=sha256:c42e39fec380f6126604021fa7b7da3d9b20a855746d4f17e6922d19458f35f9
     # via pydantic-ai-slim
-pydantic-graph==1.106.0 \
-    --hash=sha256:55afa33df4f699ed5c1185f81b6a06e2161958f1aa0c20742b2dae5745e84cce \
-    --hash=sha256:e6bb61aef0fdb49185a81142d311f94fc3315329345471d12cab85ab5845221f
+pydantic-graph==1.107.7 \
+    --hash=sha256:0a7b964d6895f80b51ebab5e77f59b500d39ca7b17095e2233861e6dfd338ec6 \
+    --hash=sha256:f58b7dfa3bf60eb7d68946e64dff2ccbb8e8c67458e957efd7d14bc9338c9400
     # via pydantic-ai-slim
 pydantic-handlebars==0.1.0 \
     --hash=sha256:1931c54946add1b5e3796c9bf6a005ed7662cef0109bb05c352f0b3d031a1260 \
