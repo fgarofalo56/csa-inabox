@@ -407,7 +407,7 @@ function DesignerInner(props: DomainDesignerCanvasProps) {
 
   // Drag-to-reparent: on drop, find the node under the dragged card that is not
   // itself or one of its descendants, and reparent onto it.
-  const onNodeDragStop = useCallback((_e: React.MouseEvent, node: Node) => {
+  const onNodeDragStop = useCallback((_e: unknown, node: Node) => {
     setDropTargetId(null);
     if (!canEditTree) return;
     const dragged = domains.find((d) => d.id === node.id);
@@ -422,7 +422,7 @@ function DesignerInner(props: DomainDesignerCanvasProps) {
     applyReparent(node.id, dragged.parentId || null, target.id, true);
   }, [canEditTree, domains, rf, applyReparent, rebuild]);
 
-  const onNodeDrag = useCallback((_e: React.MouseEvent, node: Node) => {
+  const onNodeDrag = useCallback((_e: unknown, node: Node) => {
     if (!canEditTree) return;
     const banned = descendantIds(domains, node.id);
     const hit = rf.getIntersectingNodes(node).find((n) => n.id !== node.id && !banned.has(n.id));
