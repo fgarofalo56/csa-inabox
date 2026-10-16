@@ -312,6 +312,14 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "@azure/msal-browser"
         update-types: ["version-update:semver-major"]
+      # @fluentui/react-components 9.74.x (#4997, 2026-10-14..16): its lock pulls
+      # tabster 8.8.0 ("type":"module" with a CJS main and no exports map, so Node ESM
+      # cannot see createTabster -- 379 test files fail; worked around for tests by
+      # test.server.deps.inline in vitest.config.ts) AND resolves two
+      # @fluentui/react-motion copies (9.15.0 + 9.16.4), after which react-dialog fails
+      # with "presenceFn is not a function" -- a likely real runtime Dialog bug, not just
+      # a test problem. Hold until a migration PR pins react-motion and walks a Dialog.
+      - dependency-name: "@fluentui/react-components"
     groups:
       fiab-console-version:
         applies-to: version-updates
