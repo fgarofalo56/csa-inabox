@@ -25,6 +25,70 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.112.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.111.0...csa-inabox-v0.112.0) (2026-10-16)
+
+
+### Features
+
+* **bootstrap:** Estate.Power app role + console repo variables ([#4876](https://github.com/fgarofalo56/csa-inabox/issues/4876) step 3 bootstrap) ([#4980](https://github.com/fgarofalo56/csa-inabox/issues/4980)) ([8aeb990](https://github.com/fgarofalo56/csa-inabox/commit/8aeb990f6870c73a5246ce318d96433b18070f60))
+* **canvas:** minimap show/hide toggle across all 25 real canvas surfaces ([#3699](https://github.com/fgarofalo56/csa-inabox/issues/3699) Phase 1) ([#4951](https://github.com/fgarofalo56/csa-inabox/issues/4951)) ([281aded](https://github.com/fgarofalo56/csa-inabox/commit/281aded4f71cacaa8ec0a61c660e7c77800b69c8))
+* **ci:** measure Gov loom-console's activeRevisionsMode in gov-discover ([#4925](https://github.com/fgarofalo56/csa-inabox/issues/4925)) ([d626a72](https://github.com/fgarofalo56/csa-inabox/commit/d626a72db62e036b59c978b4c01e05984966a77c))
+* **estate:** actuate all pausable types + widen tier with console guard + Databricks ([#4876](https://github.com/fgarofalo56/csa-inabox/issues/4876) step 2) ([#4978](https://github.com/fgarofalo56/csa-inabox/issues/4978)) ([2612d57](https://github.com/fgarofalo56/csa-inabox/commit/2612d57aafb1593c3e171ce325ee9b4c4c44980b))
+* **estate:** estate-power CLI + workflows + idle auto-pause ([#4876](https://github.com/fgarofalo56/csa-inabox/issues/4876) step 3 actions) ([#4985](https://github.com/fgarofalo56/csa-inabox/issues/4985)) ([2da5751](https://github.com/fgarofalo56/csa-inabox/commit/2da57514cf75579576ca96b3ef61d6634ae02435))
+* **estate:** recover AAS readiness probe + honest resume states ([#4876](https://github.com/fgarofalo56/csa-inabox/issues/4876) step 1) ([#4976](https://github.com/fgarofalo56/csa-inabox/issues/4976)) ([7362e41](https://github.com/fgarofalo56/csa-inabox/commit/7362e41da2b63bbd295713b2bee9145f1a6a81d2))
+* **estate:** SP power route, activity + auto-pause setting, panel ([#4876](https://github.com/fgarofalo56/csa-inabox/issues/4876) step 3 console) ([#4979](https://github.com/fgarofalo56/csa-inabox/issues/4979)) ([4393860](https://github.com/fgarofalo56/csa-inabox/commit/439386022e0cf900644b0d3b66b8f179c29a89d4))
+
+
+### Bug Fixes
+
+* **auth:** map JWKS client errors to 401 instead of an unhandled 500 ([#4872](https://github.com/fgarofalo56/csa-inabox/issues/4872)) ([#4926](https://github.com/fgarofalo56/csa-inabox/issues/4926)) ([e3d7ebd](https://github.com/fgarofalo56/csa-inabox/commit/e3d7ebdc444d09456d9cdc9686aac8acef915f54))
+* **bicep:** close [#4406](https://github.com/fgarofalo56/csa-inabox/issues/4406) -- sql-cancel-intents TTL drift guard ([#4917](https://github.com/fgarofalo56/csa-inabox/issues/4917)) ([46a15de](https://github.com/fgarofalo56/csa-inabox/commit/46a15de82dd21af710ada951b57032414785108c))
+* **bicep:** dlz-attach schema-group env + paginated-render-key secretRef gating ([#4774](https://github.com/fgarofalo56/csa-inabox/issues/4774), [#4779](https://github.com/fgarofalo56/csa-inabox/issues/4779)) ([#4948](https://github.com/fgarofalo56/csa-inabox/issues/4948)) ([36db43b](https://github.com/fgarofalo56/csa-inabox/commit/36db43b6e3736473363abb8f62bcff96d10b7503))
+* **bicep:** gh-runner-job default image repo matches the live job ([#4828](https://github.com/fgarofalo56/csa-inabox/issues/4828) partial) ([#4949](https://github.com/fgarofalo56/csa-inabox/issues/4949)) ([393e66e](https://github.com/fgarofalo56/csa-inabox/commit/393e66e0baed11aa1ec5c8a2bbd839d1b732ddeb))
+* **bicep:** secure-default the Windows image offer in two unreferenced, instance-less VM modules ([#4944](https://github.com/fgarofalo56/csa-inabox/issues/4944)) ([8d2b1bc](https://github.com/fgarofalo56/csa-inabox/commit/8d2b1bc9526c6901a2f6eb3a0f3a9f65cf9a1552))
+* **bicep:** write the missing loom-trino-lake-rbac.bicep module ([#4923](https://github.com/fgarofalo56/csa-inabox/issues/4923)) ([bef07db](https://github.com/fgarofalo56/csa-inabox/commit/bef07dbebe8dc96be311501c56f9269c5207e5a9))
+* **capacity-broker:** default to TLS-on for the Redis TLS heuristic ([#4270](https://github.com/fgarofalo56/csa-inabox/issues/4270)) ([#4927](https://github.com/fgarofalo56/csa-inabox/issues/4927)) ([0fecbf6](https://github.com/fgarofalo56/csa-inabox/commit/0fecbf6c58800369c6ca582d840236ac0c589b46))
+* **ci:** a non-coercible remote jobId crashed the reindex parser outside every guard ([#4517](https://github.com/fgarofalo56/csa-inabox/issues/4517)) ([#4969](https://github.com/fgarofalo56/csa-inabox/issues/4969)) ([e558a99](https://github.com/fgarofalo56/csa-inabox/commit/e558a99ef77b4141b5bbd17b0ec2d3f8f8a92c00))
+* **ci:** ACR firewall denial reported as 'Loom defect, not fixable' and retry refused on it ([#4920](https://github.com/fgarofalo56/csa-inabox/issues/4920)) ([3e6f5f5](https://github.com/fgarofalo56/csa-inabox/commit/3e6f5f55115af58df5ea0240e65dc21d30d4aac1))
+* **ci:** apply the dist-upgrade CVE fix to 5 more Dockerfiles ([#4924](https://github.com/fgarofalo56/csa-inabox/issues/4924)) ([9c0c36a](https://github.com/fgarofalo56/csa-inabox/commit/9c0c36a0be9f4ebb16b49900c6252343c00263eb))
+* **ci:** classify an ACR task-run timeout transient instead of unknown ([#4921](https://github.com/fgarofalo56/csa-inabox/issues/4921)) ([27d6b24](https://github.com/fgarofalo56/csa-inabox/commit/27d6b24e24c60726d27b919082808c959d5f2375))
+* **ci:** commit a package-lock.json for ops-agent-evaluator (npm 10 edgesOut crash) ([#5000](https://github.com/fgarofalo56/csa-inabox/issues/5000)) ([556920f](https://github.com/fgarofalo56/csa-inabox/commit/556920ff9330076b27b26ae2c9b42fc7f5b581fa))
+* **ci:** gate the Drain Mutation Matrix on a fail-open tools/drain detector ([#4885](https://github.com/fgarofalo56/csa-inabox/issues/4885)) ([fd4150f](https://github.com/fgarofalo56/csa-inabox/commit/fd4150f3b0e152b0b38b8e72782cc4fa103de5e6))
+* **ci:** guard the three app-gateway timeout bounds against drift ([#4747](https://github.com/fgarofalo56/csa-inabox/issues/4747)) ([#4945](https://github.com/fgarofalo56/csa-inabox/issues/4945)) ([43f5c0a](https://github.com/fgarofalo56/csa-inabox/commit/43f5c0ab6e822e74202bb2d1c340c6e86ea24cdd))
+* **ci:** untag the pushed image when the Trivy CRITICAL gate refuses it ([#4922](https://github.com/fgarofalo56/csa-inabox/issues/4922)) ([4b859ce](https://github.com/fgarofalo56/csa-inabox/commit/4b859ce8563ddc601ed7c75fa64b0bae85dcff77))
+* **console:** loom-duckdb cold-start retry ([#3571](https://github.com/fgarofalo56/csa-inabox/issues/3571)); [#4740](https://github.com/fgarofalo56/csa-inabox/issues/4740) confirmed already fixed ([#4915](https://github.com/fgarofalo56/csa-inabox/issues/4915)) ([087b5c9](https://github.com/fgarofalo56/csa-inabox/commit/087b5c96af9f52933503497a6376274d30f63a22))
+* **console:** metastores route reports unityOk honestly instead of ok:true over a failed Unity listing ([#4916](https://github.com/fgarofalo56/csa-inabox/issues/4916)) ([2160e7a](https://github.com/fgarofalo56/csa-inabox/commit/2160e7a6682c9e971e2bd00b8d7c8d4e35904fec))
+* **console:** widen xyflow drag-handler event type for 12.12 compat ([#4998](https://github.com/fgarofalo56/csa-inabox/issues/4998)) ([c5c1646](https://github.com/fgarofalo56/csa-inabox/commit/c5c16466e567661990bf3ff1999e7d630d50eb4b))
+* correct stale claims and one info-leak across 4 unsized issues ([#4904](https://github.com/fgarofalo56/csa-inabox/issues/4904)) ([803d23f](https://github.com/fgarofalo56/csa-inabox/commit/803d23f15158253e9a507bd5e127d16794795b72))
+* **deploy:** bootstrap-msal-app-reg.sh fails closed when it can't set the Application ID URI ([#4943](https://github.com/fgarofalo56/csa-inabox/issues/4943)) ([2114a26](https://github.com/fgarofalo56/csa-inabox/commit/2114a268821416f044488cf79ad802166a7badf8))
+* **deploy:** single-quote UAT_GREP YAML entries so az's YAML loader doesn't choke on the regex ([#4919](https://github.com/fgarofalo56/csa-inabox/issues/4919)) ([e7c530a](https://github.com/fgarofalo56/csa-inabox/commit/e7c530ad9e9f2f1024329c2d4248437b7500c8cd))
+* **deps:** add dependabot npm coverage for 6 uncovered manifests ([#4932](https://github.com/fgarofalo56/csa-inabox/issues/4932)) ([f000bc5](https://github.com/fgarofalo56/csa-inabox/commit/f000bc5897541a0049a1ff46f86f5dc5748e706e))
+* **deps:** pin patched tinypool for Vitest workers ([#4973](https://github.com/fgarofalo56/csa-inabox/issues/4973)) ([eb4ac9c](https://github.com/fgarofalo56/csa-inabox/commit/eb4ac9c6761800414aa4682e88a01d649c4e3b77))
+* **images:** update Debian runtime security packages ([4c16a4d](https://github.com/fgarofalo56/csa-inabox/commit/4c16a4d711834c54c3164687e92f01857f115423))
+* **images:** update loom-directlake runtime packages ([3919f23](https://github.com/fgarofalo56/csa-inabox/commit/3919f23044f5572a673cc9a0a50a2a1eb8946540))
+* **portal:** drop 8 stale duplicate devDependencies keys from react-webapp package.json ([#4989](https://github.com/fgarofalo56/csa-inabox/issues/4989)) ([427534a](https://github.com/fgarofalo56/csa-inabox/commit/427534ab346c6ffd7b6bcda5a1faf0d306a6c1ab))
+
+
+### Documentation
+
+* **deployment:** re-point the dangling t169 FINISHLINE pointer at [#4550](https://github.com/fgarofalo56/csa-inabox/issues/4550) ([#4942](https://github.com/fgarofalo56/csa-inabox/issues/4942)) ([b5be17c](https://github.com/fgarofalo56/csa-inabox/commit/b5be17c18d05d86a6a8a87b6fd2bfa66a14dd3a2))
+* **parity:** re-score slate-app rows 5 and 24 against code ([#4930](https://github.com/fgarofalo56/csa-inabox/issues/4930)) ([9bbb803](https://github.com/fgarofalo56/csa-inabox/commit/9bbb8038bdf7f45d9802cad1af310d45fbabe9c8)), closes [#4384](https://github.com/fgarofalo56/csa-inabox/issues/4384)
+* **posture-refresh:** fix 4 non-blocking findings from [#4770](https://github.com/fgarofalo56/csa-inabox/issues/4770)'s review ([#4931](https://github.com/fgarofalo56/csa-inabox/issues/4931)) ([f074771](https://github.com/fgarofalo56/csa-inabox/commit/f074771eddb312ec5264714c108ff7e9387bb831))
+* **prp:** add master PRP index - run order, model, current status ([#4959](https://github.com/fgarofalo56/csa-inabox/issues/4959)) ([9191211](https://github.com/fgarofalo56/csa-inabox/commit/9191211a995159042f9ecb4132cbcb96172253e6))
+* **prp:** add PRP for [#3699](https://github.com/fgarofalo56/csa-inabox/issues/3699) Phases 2-3 (StackedSplit + first adoption) ([#4958](https://github.com/fgarofalo56/csa-inabox/issues/4958)) ([68f77c7](https://github.com/fgarofalo56/csa-inabox/commit/68f77c70fd78d23ef71fe1f30517892af0f5d180))
+
+
+### Tests
+
+* **fiab-console:** inline [@fluentui](https://github.com/fluentui) and tabster in vitest so tabster 8.8.0 loads ([#5001](https://github.com/fgarofalo56/csa-inabox/issues/5001)) ([eb08e69](https://github.com/fgarofalo56/csa-inabox/commit/eb08e697519564a08ebbd9fd910e365e4cc5667b))
+
+
+### Miscellaneous
+
+* **deps:** hold @fluentui/react-components until the tabster and react-motion split is resolved ([#5002](https://github.com/fgarofalo56/csa-inabox/issues/5002)) ([cf0aed4](https://github.com/fgarofalo56/csa-inabox/commit/cf0aed49e977b0c71b3b1026744b361b155babb9))
+* **deps:** hold fiab-console major bumps that broke dependabot PR 4941 ([#4986](https://github.com/fgarofalo56/csa-inabox/issues/4986)) ([8502f7b](https://github.com/fgarofalo56/csa-inabox/commit/8502f7b89f6d51cefc8c6f85ecfe7021d100e2db))
+* **deps:** hold pydantic-ai family and the majors that broke the console and duckdb groups ([#4993](https://github.com/fgarofalo56/csa-inabox/issues/4993)) ([99030b2](https://github.com/fgarofalo56/csa-inabox/commit/99030b248a2636aa994a7a10296ba79b7d263501))
+
 ## [0.111.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.110.0...csa-inabox-v0.111.0) (2026-10-04)
 
 
