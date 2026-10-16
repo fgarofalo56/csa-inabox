@@ -70,7 +70,7 @@ concurrency:
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(startsWith(vars.CI_RUNNER, '[') && vars.CI_RUNNER || '["ubuntu-latest"]') }}
     # Per-language budget. Python interprets in ~2 minutes; JS/TS normally takes
     # 11-14 but a single pathological query can blow far past that (see below).
     # The JOB budget is deliberately larger than the ANALYSIS budget so that when
@@ -262,4 +262,3 @@ jobs:
           fi
           echo "[codeql] ${LANGUAGE}: stored analysis ${SHA} — rules=${RULES} results=${RESULTS} (category ${CATEGORY}, ref ${ANALYSIS_REF})."
           echo "[codeql] ${LANGUAGE}: analysis completed AND the upload was confirmed non-empty."
-

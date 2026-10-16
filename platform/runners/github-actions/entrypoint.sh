@@ -68,14 +68,14 @@ mint_token() {
 }
 
 # --- cleanup: de-register the ephemeral runner on any exit -----------------
+# Uses the PRE-MINTED remove token, never the PAT -- see the exec below. The
+# token is minted while the PAT is still in scope and survives into the
+# replacement process image; nothing after that point can reach the PAT.
 cleanup() {
   local rc=$?
   log "cleanup: de-registering runner ${RUNNER_NAME} (exit=${rc})"
-  # --ephemeral runners auto-remove after a job, but a crash before/at config
-  # can leave a stale registration. Best-effort remove; never block exit.
-  local remove_token
-  if remove_token="$(mint_token "${REMOVE_TOKEN_API_URL}" 2>/dev/null)"; then
-    ./config.sh remove --token "${remove_token}" >/dev/null 2>&1 || true
+  if [ -n "${RUNNER_REMOVE_TOKEN:-}" ]; then
+    ./config.sh remove --token "${RUNNER_REMOVE_TOKEN}" >/dev/null 2>&1 || true
   fi
   exit "${rc}"
 }
@@ -96,11 +96,53 @@ REG_TOKEN="$(mint_token "${REGISTRATION_TOKEN_API_URL}")"
   --work _work \
   || fail "config.sh failed — runner not registered"
 
-# Drop the registration token from the env. GITHUB_PAT is intentionally KEPT so
-# the EXIT trap can mint a remove-token to de-register a crashed runner; it lives
-# in the container env regardless and is never echoed.
+# Drop the registration token from the env.
 unset REG_TOKEN
+
+# --- THE PAT MUST NOT SURVIVE INTO THE JOB ---------------------------------
+#
+# It used to. This block is the fix, and the defect it replaces was real and
+# live: `GITHUB_PAT` is injected as a container env var (secretref), this script
+# is PID 1, and `./run.sh` was its CHILD -- so every `run:` block in every job
+# inherited a PAT scoped `Administration: Read & Write`. It is not a GitHub
+# Actions secret, so the log masker does not redact it, and this repository is
+# PUBLIC. `printenv GITHUB_PAT` in any step would have printed a repo-admin
+# credential into a world-readable log.
+#
+# The previous comment here said the PAT "lives in the container env regardless
+# and is never echoed" -- true of THIS script, and not the property that
+# mattered. Before the CI migration ~10 mostly-dispatch jobs ran here; the
+# migration took that to ~167, including `pull_request`-triggered ones. Found
+# by two independent reviewers, separately, on the migration PR.
+#
+# WHY `exec env -u` AND NOT JUST `unset`. `unset GITHUB_PAT` would clear it for
+# children, but `/proc/1/environ` is a snapshot taken at process START and does
+# not change -- a job running as root could still read it there. `exec` REPLACES
+# the process image, and the new environ is the one `env -u` composed, so the
+# PAT is gone from the process table entirely rather than merely out of scope.
+#
+# The remove token is minted here, while the PAT is still reachable, and carried
+# across the exec. That is a deliberate downgrade, not an oversight: a
+# runner-removal token is short-lived and can only de-register a runner, so the
+# worst an attacker gains from it is a nuisance -- whereas the PAT it replaces
+# administers the repository. The residual is stated rather than hidden.
+log "pre-minting the remove token, then dropping the PAT from the process image"
+REMOVE_TOKEN="$(mint_token "${REMOVE_TOKEN_API_URL}" 2>/dev/null || true)"
+[ -n "${REMOVE_TOKEN}" ] || log "WARNING: could not pre-mint a remove token; a crashed runner will rely on GitHub's own offline reaping"
 
 # --- run exactly one job (ephemeral), then exit ----------------------------
 log "starting runner (ephemeral — processes one job then exits)"
-./run.sh
+exec env -u GITHUB_PAT -u REGISTRATION_TOKEN_API_URL -u REMOVE_TOKEN_API_URL \
+     RUNNER_REMOVE_TOKEN="${REMOVE_TOKEN}" \
+     RUNNER_NAME="${RUNNER_NAME}" \
+     bash -c '
+       cleanup() {
+         rc=$?
+         if [ -n "${RUNNER_REMOVE_TOKEN:-}" ]; then
+           ./config.sh remove --token "${RUNNER_REMOVE_TOKEN}" >/dev/null 2>&1 || true
+         fi
+         exit "${rc}"
+       }
+       trap cleanup INT TERM EXIT
+       ./run.sh
+     '
