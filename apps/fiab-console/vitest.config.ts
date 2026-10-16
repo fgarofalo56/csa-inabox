@@ -52,6 +52,22 @@ export default defineConfig({
     // asserts the EXECUTED file count against the DERIVED count, because this
     // flag only catches ZERO files — not "ran 1 of the 41 it claimed".
     passWithNoTests: false,
+    // Inline tabster so vite-node transforms it instead of handing it to Node's
+    // native ESM loader. tabster 8.8.0 ships "type":"module" with no "exports"
+    // map and "main" pointing at a CJS bundle (dist/cjs/index.cjs); Node's ESM
+    // loader cannot detect its named exports, so @fluentui/react-tabster's
+    // `import { createTabster } from 'tabster'` throws SyntaxError and every
+    // test that imports @fluentui/react-components fails. Inlining resolves the
+    // "module" (ESM) entry instead. All of @fluentui is inlined too: an
+    // externalized @fluentui/* package (react-components, react-button, ...)
+    // would import react-tabster/tabster through Node natively and hit the same
+    // error, so inlining react-tabster alone does not help (measured). Harmless
+    // on older tabster.
+    server: {
+      deps: {
+        inline: [/tabster/, /@fluentui/],
+      },
+    },
     // API / logic tests run on node; component + editor render tests (*.test.tsx)
     // run on jsdom. vitest.setup.ts (jest-dom matchers + next/navigation, monaco,
     // ResizeObserver/matchMedia stubs) is now wired so render() actually mounts —
