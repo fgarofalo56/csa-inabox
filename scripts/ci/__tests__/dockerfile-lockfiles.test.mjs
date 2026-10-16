@@ -36,7 +36,8 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   REPO_ROOT,
@@ -165,9 +166,19 @@ test('COPY package*.json delivers a lockfile only if one is on disk', () => {
   assert.deepEqual(deliveredLockfiles('package*.json', withLock, ['package-lock.json']), [
     'package-lock.json',
   ]);
-  // A directory with package.json but no lockfile — the lineage-extractor shape.
-  const noLock = path.join(REPO_ROOT, 'azure-functions/ops-agent-evaluator');
-  assert.deepEqual(deliveredLockfiles('package*.json', noLock, ['package-lock.json']), []);
+  // A directory with package.json but no lockfile. This used to point at
+  // azure-functions/ops-agent-evaluator, which went red the moment that package
+  // gained its (needed) lockfile -- a fixture that depends on a real repo
+  // directory staying lockless. Build the shape in a throwaway directory instead.
+  // Breaks if: deliveredLockfiles starts reporting a lockfile that is not on disk
+  // (the dir below holds package.json ONLY, so any non-empty result is the defect).
+  const noLock = mkdtempSync(path.join(tmpdir(), 'no-lock-'));
+  try {
+    writeFileSync(path.join(noLock, 'package.json'), '{"name":"x","version":"1.0.0"}\n');
+    assert.deepEqual(deliveredLockfiles('package*.json', noLock, ['package-lock.json']), []);
+  } finally {
+    rmSync(noLock, { recursive: true, force: true });
+  }
 });
 
 test('landedLockfiles places the file at WORKDIR when dest is ./', () => {
