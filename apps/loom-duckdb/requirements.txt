@@ -1,6 +1,6 @@
-fastapi==0.142.2
+fastapi==0.143.0
 uvicorn[standard]==0.54.0
-pydantic==2.13.5
+pydantic==2.14.0
 # --- the engine ---------------------------------------------------------------
 # DuckDB is a single embedded OSS binary; the azure/httpfs/delta/iceberg
 # extensions are INSTALLed into the image at build time (see Dockerfile) so a

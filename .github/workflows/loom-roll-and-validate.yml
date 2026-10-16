@@ -369,7 +369,7 @@ jobs:
        && github.event.workflow_run.conclusion != 'failure' }}
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version: 20
       - name: Is the estate stranded, or is a build still coming?
@@ -411,7 +411,7 @@ jobs:
       # YAML — see #2819. Pin the runtime rather than relying on whatever the
       # runner image happens to ship.
       - name: Use Node.js 20
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@v7.1.0
         with:
           node-version: '20'
 
