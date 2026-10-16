@@ -552,6 +552,19 @@ Each has a recommended default; execution proceeds on the default if not answere
 | D10 | Cross-workspace visibility for tenant admins in Copilot | Tenant admin may use `scope:'tenant'`; everyone else sees accessible workspaces only; all tenant-scope calls audited | (a) as recommended; (b) per-workspace consent |
 | D11 | Reconcile host | Container App Job calling the BFF internal route | Azure Function; scheduler JobKind inside the BFF only |
 
+### 11.1 Decisions recorded by the operator (2026-10-16)
+
+Answered through the planning session; all four took the recommended default.
+
+| # | Decision | Answer |
+|---|---|---|
+| D1 | Automatic scanning by default | **On by default, with caps** (concurrency and a daily full-scan cap). Real enablement waits on W0 measuring the Purview scan cost. |
+| D2 | Label automation level | **Auto-apply up to Confidential; suggest above** for one-click approval; never downgrade a human label. |
+| D4 | Priority position | **Third** in the run order, as written in MASTER-INDEX.md. |
+| D10 | Copilot scope | **Tenant admins get tenant-wide scope** (`scope:'tenant'`); everyone else limited to workspaces they can access; every tenant-scope call audited. |
+
+D3, D5, D6, D7, D8, D9 and D11 are NOT yet answered: execution proceeds on the recommended default in the table above unless the operator says otherwise before the wave that depends on it starts.
+
 ## 12. Done
 
 This PRP is done when all of the following hold, on **deployed-and-verified** receipts and never on merge alone (`deploy-integrity.md` R2; report anything merged but not rolled as "merged, not deployed"):
