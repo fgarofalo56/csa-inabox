@@ -76,7 +76,7 @@
     "eslint-config-next": "15.5.27",
     "jsdom": "^25.0.1",
     "typescript": "^5.6.0",
-    "vitest": "3.2.7"
+    "vitest": "5.0.5"
   },
   "pnpm": {
     "comment": "MIRRORS pnpm-workspace.yaml. Both are required: pnpm 9 (the Dockerfile + CI builder) reads ONLY this field and ignores pnpm-workspace.yaml; pnpm 10+ reads ONLY that file and warns this one is ignored. Declaring in one place alone makes the floors inert under the other major. scripts/ci/check-pnpm-overrides.mjs asserts the two stay identical.",
@@ -88,7 +88,7 @@
       "@opentelemetry/core": ">=2.8.0",
       "@opentelemetry/propagator-jaeger": ">=2.9.0",
       "sharp": ">=0.35.0",
-      "js-yaml": ">=4.3.1 <5",
+      "js-yaml": ">=4.3.2 <5",
       "form-data": ">=4.0.6 <5",
       "brace-expansion@1": ">=1.1.16 <2",
       "brace-expansion@2": ">=2.1.2 <3",
