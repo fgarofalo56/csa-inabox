@@ -49,6 +49,7 @@ Per `OWED.md` §6. Nothing was dropped; everything folded somewhere named.
 | `PRPs/active/estate-pause-resume/` | **Folds into the drain's W1 estate-power lane.** Its Gov half is OWED U5: `scripts/measure/estate-resume.mjs` hard-codes the Commercial RG, which cannot satisfy "arm the power button in every boundary" |
 | `PRPs/active/loom-brain/` | **Folds into the drain's W1 brain lane** (#4222 — the Brain has zero inbound links — plus #3933-family items per the ledger) |
 | `PRPs/active/omnibus-2026-08-22/` | **Superseded.** Its open items are absorbed into `LEDGER.md`; the directory stays for history. Its population count (261) was stale against reality before it was superseded — do not quote it |
+| `PRPs/active/governance-autopilot/` | **New 2026-10-16, operator-directed, not a fold-in.** Zero-touch Purview enrollment/scan/classify/label plus Copilot governance tools. Run order and bicep-collision rules are in `MASTER-INDEX.md` (row 3) |
 | `PRPs/active/snowflake-parity/` | **Feature-class → W6** (defects-first operator decision). Its decisions are recorded and binding: migration-first · transpiler now, wire-compat later · **outcome** parity |
 
 ## 3. Standing operator decisions carried by the program
