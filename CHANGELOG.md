@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.112.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.112.0...csa-inabox-v0.112.1) (2026-10-17)
+
+
+### Documentation
+
+* **prp:** Governance Autopilot - zero-touch Purview enrollment + Copilot governance tools ([#5012](https://github.com/fgarofalo56/csa-inabox/issues/5012)) ([d42ca7b](https://github.com/fgarofalo56/csa-inabox/commit/d42ca7b353dc58591b3e08f70f006b9ade32c700))
+
 ## [0.112.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.111.0...csa-inabox-v0.112.0) (2026-10-16)
 
 
