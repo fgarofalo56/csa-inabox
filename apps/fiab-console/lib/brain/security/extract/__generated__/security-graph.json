@@ -45693,6 +45693,108 @@
           }
         },
         {
+          "id": "sec:publication:scripts/measure/governance-arm-inventory.mjs#module",
+          "kind": "publication",
+          "provenance": "declared",
+          "label": "scripts/measure/governance-arm-inventory.mjs",
+          "facet": {
+            "kind": "publication",
+            "module": "scripts/measure/governance-arm-inventory.mjs",
+            "declaredSinkCount": 1,
+            "sinks": [
+              {
+                "id": "console:member:114",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              }
+            ]
+          }
+        },
+        {
+          "id": "sec:publication:scripts/measure/governance-cost.mjs#module",
+          "kind": "publication",
+          "provenance": "declared",
+          "label": "scripts/measure/governance-cost.mjs",
+          "facet": {
+            "kind": "publication",
+            "module": "scripts/measure/governance-cost.mjs",
+            "declaredSinkCount": 1,
+            "sinks": [
+              {
+                "id": "console:member:97",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              }
+            ]
+          }
+        },
+        {
+          "id": "sec:publication:scripts/measure/governance-purview-dataplane.mjs#module",
+          "kind": "publication",
+          "provenance": "declared",
+          "label": "scripts/measure/governance-purview-dataplane.mjs",
+          "facet": {
+            "kind": "publication",
+            "module": "scripts/measure/governance-purview-dataplane.mjs",
+            "declaredSinkCount": 2,
+            "sinks": [
+              {
+                "id": "console:member:138",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:141",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              }
+            ]
+          }
+        },
+        {
+          "id": "sec:publication:scripts/measure/governance-run.mjs#module",
+          "kind": "publication",
+          "provenance": "declared",
+          "label": "scripts/measure/governance-run.mjs",
+          "facet": {
+            "kind": "publication",
+            "module": "scripts/measure/governance-run.mjs",
+            "declaredSinkCount": 1,
+            "sinks": [
+              {
+                "id": "console:member:70",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              }
+            ]
+          }
+        },
+        {
           "id": "sec:publication:scripts/measure/measure.mjs#module",
           "kind": "publication",
           "provenance": "declared",
@@ -52093,6 +52195,26 @@
           "reason": "repository tooling — run by a developer or by CI, never by a deployed Loom service."
         },
         {
+          "nodeId": "sec:publication:scripts/measure/governance-arm-inventory.mjs#module",
+          "codeModuleId": "code:scripts/measure/governance-arm-inventory.mjs",
+          "reason": "repository tooling — run by a developer or by CI, never by a deployed Loom service."
+        },
+        {
+          "nodeId": "sec:publication:scripts/measure/governance-cost.mjs#module",
+          "codeModuleId": "code:scripts/measure/governance-cost.mjs",
+          "reason": "repository tooling — run by a developer or by CI, never by a deployed Loom service."
+        },
+        {
+          "nodeId": "sec:publication:scripts/measure/governance-purview-dataplane.mjs#module",
+          "codeModuleId": "code:scripts/measure/governance-purview-dataplane.mjs",
+          "reason": "repository tooling — run by a developer or by CI, never by a deployed Loom service."
+        },
+        {
+          "nodeId": "sec:publication:scripts/measure/governance-run.mjs#module",
+          "codeModuleId": "code:scripts/measure/governance-run.mjs",
+          "reason": "repository tooling — run by a developer or by CI, never by a deployed Loom service."
+        },
+        {
           "nodeId": "sec:publication:scripts/measure/measure.mjs#module",
           "codeModuleId": "code:scripts/measure/measure.mjs",
           "reason": "repository tooling — run by a developer or by CI, never by a deployed Loom service."
@@ -53224,6 +53346,22 @@
         {
           "subject": "scripts/measure/drain-status.mjs",
           "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 8). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+        },
+        {
+          "subject": "scripts/measure/governance-arm-inventory.mjs",
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 1). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+        },
+        {
+          "subject": "scripts/measure/governance-cost.mjs",
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 1). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+        },
+        {
+          "subject": "scripts/measure/governance-purview-dataplane.mjs",
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 2). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+        },
+        {
+          "subject": "scripts/measure/governance-run.mjs",
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 1). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
           "subject": "scripts/measure/measure.mjs",
