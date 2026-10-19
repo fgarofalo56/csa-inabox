@@ -36,6 +36,24 @@ export function readRegister(root = process.cwd()) {
   }
 }
 
+/**
+ * PURE. The console's server-side pipeline read, normalised to the policy's
+ * `{ok, reason?, runs}` shape — or null when the console sent none. A present
+ * but malformed block is NOT null: it becomes `ok:false`, so a broken console
+ * answer can never fall through to "no runs" and read as idle.
+ */
+export function consolePipelineActivity(state) {
+  const pa = state?.[FIELD.power]?.[FIELD.pipelineActivity];
+  if (pa === undefined || pa === null) return null;
+  const sources = Array.isArray(pa.sources) ? pa.sources.map(String) : [];
+  if (typeof pa !== 'object' || typeof pa.ok !== 'boolean') {
+    return { ok: false, reason: 'the console sent a malformed pipelineActivity block', sources };
+  }
+  if (!pa.ok) return { ok: false, reason: `console: ${String(pa.reason ?? 'no reason reported')}`, sources };
+  if (!Array.isArray(pa.runs)) return { ok: false, reason: 'the console reported ok but sent no runs array', sources };
+  return { ok: true, runs: pa.runs, sources };
+}
+
 export async function runAutopause({ boundary, dryRun = false }, deps = {}) {
   const env = deps.env ?? process.env;
   const spawn = deps.spawn ?? defaultSpawn;
@@ -86,11 +104,22 @@ export async function runAutopause({ boundary, dryRun = false }, deps = {}) {
     return EXIT.OK;
   }
 
-  const windowHours = Number(state[FIELD.power]?.[FIELD.autoPause]?.[FIELD.autoPauseIdleHours]);
-  const found = discoverActivityTargets({ state, spawn });
-  const activity = found.ok
-    ? readRecentPipelineRuns({ targets: found.targets, boundary, now: nowDate, windowHours, spawn })
-    : found;
+  // Prefer the console's SERVER-SIDE read: the runner cannot reach a private
+  // Synapse endpoint (PublicNetworkAccessDenied, run 39242926745). Fall back to
+  // the runner read only when the console did not send one (older console).
+  const fromConsole = consolePipelineActivity(state);
+  let activity;
+  if (fromConsole) {
+    activity = fromConsole;
+    out(`pipeline activity: read by the console (sources: ${fromConsole.sources.join(', ') || 'none configured'})`);
+  } else {
+    const windowHours = Number(state[FIELD.power]?.[FIELD.autoPause]?.[FIELD.autoPauseIdleHours]);
+    const found = discoverActivityTargets({ state, spawn });
+    activity = found.ok
+      ? readRecentPipelineRuns({ targets: found.targets, boundary, now: nowDate, windowHours, spawn })
+      : found;
+    out('pipeline activity: read from the runner (the console sent none)');
+  }
   if (!activity.ok) out(`::warning::pipeline activity not established: ${sanitizeLine(scrub(activity.reason, secrets))}`);
 
   const decision = decideIdlePause({ state, activity, now: nowDate, declared });

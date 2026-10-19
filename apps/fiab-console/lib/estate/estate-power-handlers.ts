@@ -53,6 +53,7 @@ import {
 import { detectLoomCloud } from '@/lib/azure/cloud-boundary';
 import { loadActivity } from '@/lib/estate/estate-activity';
 import { loadAutoPause } from '@/lib/estate/estate-autopause';
+import { loadPipelineActivity } from '@/lib/estate/estate-pipeline-activity';
 import type { EstatePowerStatus } from '@/lib/estate/estate-power-contract';
 import type { EstatePauseSnapshot } from '@/lib/estate/pause-state';
 
@@ -89,10 +90,17 @@ export async function audit(caller: EstateCaller, kind: string, fields: Record<s
 export async function buildPowerStatus(
   tenantId: string,
   snapshot: EstatePauseSnapshot | null,
+  opts?: { pipelineActivity?: boolean },
 ): Promise<EstatePowerStatus> {
   const [activity, autoPause] = await Promise.all([loadActivity(tenantId), loadAutoPause(tenantId)]);
+  // Only the auto-pause caller asks for this: the panel polls state every few
+  // seconds and must not cost two ARM/data-plane listings per poll.
+  const pipelineActivity = opts?.pipelineActivity
+    ? await loadPipelineActivity(Number(autoPause.idleHours))
+    : undefined;
   return {
     activity,
+    ...(pipelineActivity ? { pipelineActivity } : {}),
     autoPause,
     lastPausedAt: snapshot?.pausedAt ?? null,
     lastResumedAt: snapshot?.resumeConfirmedAt ?? null,
@@ -184,7 +192,7 @@ async function runningPayload(actuator: EstateActuator) {
 }
 
 /** State read (GET). Identical for the cookie and SP entry points. */
-export async function handleStateRead(caller: EstateCaller) {
+export async function handleStateRead(caller: EstateCaller, opts?: { pipelineActivity?: boolean }) {
   const { tenantId } = caller;
   let actuator: EstateActuator;
   try {
@@ -195,7 +203,7 @@ export async function handleStateRead(caller: EstateCaller) {
   }
 
   const snapshot = await loadPauseSnapshot(tenantId).catch(() => null);
-  const power = await buildPowerStatus(tenantId, snapshot);
+  const power = await buildPowerStatus(tenantId, snapshot, { pipelineActivity: opts?.pipelineActivity === true });
 
   // No snapshot, or a snapshot that says the estate is up -> show the preview.
   if (!snapshot || snapshot.state === 'RUNNING') {
