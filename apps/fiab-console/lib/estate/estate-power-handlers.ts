@@ -55,7 +55,7 @@ import { loadActivity } from '@/lib/estate/estate-activity';
 import { loadAutoPause } from '@/lib/estate/estate-autopause';
 import { loadPipelineActivity } from '@/lib/estate/estate-pipeline-activity';
 import type { EstatePowerStatus } from '@/lib/estate/estate-power-contract';
-import type { EstatePauseSnapshot } from '@/lib/estate/pause-state';
+import { resolveReadVerdict, type EstatePauseSnapshot } from '@/lib/estate/pause-state';
 
 /** Who is acting, however they authenticated. */
 export interface EstateCaller {
@@ -236,12 +236,20 @@ export async function handleStateRead(caller: EstateCaller, opts?: { pipelineAct
 
   // RESUMING or RESUME_FAILED — poll, which is what produces the verdict.
   const poll = await pollResume(snapshot, actuator);
-  if (poll.state !== snapshot.state) {
+  // A read persists only a LEGAL transition (see resolveReadVerdict): an
+  // illegal RESUME_FAILED -> RUNNING used to throw here and 500 every read.
+  const verdict = resolveReadVerdict(snapshot.state, poll);
+  if (verdict.persist) {
     await savePauseSnapshot(applyResumePoll(snapshot, poll)).catch(() => {});
   }
-  const summary = summarizeResume(poll.state, poll.outcomes, snapshot.resources);
+  const illegal = verdict.state !== poll.state;
+  // When the stored state is kept over a better poll, summarizeResume's
+  // RESUME_FAILED headline ("N NOT confirmed running") would be false — say why instead.
+  const summary = illegal
+    ? { headline: verdict.reason, details: [] }
+    : summarizeResume(poll.state, poll.outcomes, snapshot.resources);
   return apiOk({
-    state: poll.state,
+    state: verdict.state,
     estateId: snapshot.estateId,
     cloud: detectLoomCloud(),
     snapshotId: snapshot.id,
@@ -250,7 +258,7 @@ export async function handleStateRead(caller: EstateCaller, opts?: { pipelineAct
     outcomes: poll.outcomes,
     unconfirmed: poll.unconfirmed,
     terminal: poll.terminal,
-    reason: poll.reason,
+    reason: verdict.reason,
     summary,
     resources: snapshot.resources,
     typicalResumeSeconds: TYPICAL_RESUME_SECONDS,
