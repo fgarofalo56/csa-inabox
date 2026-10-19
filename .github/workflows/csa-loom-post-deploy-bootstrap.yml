@@ -55,9 +55,10 @@ on:
         type: string
         required: true
       admin_subscription:
-        description: 'Subscription id holding the ADMIN plane (hub) — Console UAMI, Key Vault, APIM, Purview, Foundry. REQUIRED — no estate default is shipped.'
+        description: 'Subscription id holding the ADMIN plane (hub) — Console UAMI, Key Vault, APIM, Purview, Foundry. LEAVE EMPTY to use the boundary subscription secret (AZURE_SUBSCRIPTION_ID / AZURE_GOV_SUBSCRIPTION_ID) — dispatch inputs are shown on the public run page, so a sovereign subscription id should not be typed here.'
         type: string
-        required: true
+        required: false
+        default: ''
       dlz_subscription:
         description: 'OPTIONAL OVERRIDE. Subscription id holding the Data Landing Zone (Synapse / Databricks / ADLS). Leave EMPTY: it is discovered from Azure Resource Graph, cross-subscription included. Supply it only to pick between several landing zones.'
         type: string
