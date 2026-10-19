@@ -59,6 +59,7 @@
 
 import {
   assertTransition,
+  canTransition,
   armPowerReading,
   capturePrePauseState,
   confirmResume,
@@ -1051,6 +1052,37 @@ export function applyResumePoll(
     updatedAt: now,
     resumeOutcomes: poll.outcomes,
     ...(poll.state === 'RUNNING' ? { resumeConfirmedAt: now } : {}),
+  };
+}
+
+/**
+ * What a STATE READ may report and persist for a poll it just took.
+ *
+ * A read re-polls RESUMING and RESUME_FAILED estates. When every resource has
+ * since come up (e.g. one was resumed out-of-band), the poll says RUNNING — but
+ * RESUME_FAILED -> RUNNING is deliberately illegal: a failed resume is cleared
+ * only by a NEW Resume (-> RESUMING), never laundered by a read. The read used
+ * to call `applyResumePoll` anyway; it threw OUTSIDE the save's `.catch`, and
+ * every state read became an empty HTTP 500 (live, 2026-10-19: "Illegal estate
+ * transition RESUME_FAILED -> RUNNING"), so the panel could not render the very
+ * Resume button that is the legal way out.
+ *
+ * So: persist only a legal transition; otherwise keep the stored state and say
+ * exactly why, and what clears it.
+ */
+export function resolveReadVerdict(
+  stored: EstatePauseSnapshot['state'],
+  poll: Pick<ResumePollResult, 'state' | 'reason'>,
+): { state: EstatePauseSnapshot['state']; persist: boolean; reason: string } {
+  if (poll.state === stored) return { state: stored, persist: false, reason: poll.reason };
+  if (canTransition(stored, poll.state)) return { state: poll.state, persist: true, reason: poll.reason };
+  return {
+    state: stored,
+    persist: false,
+    reason:
+      `Every resource now reports ${poll.state === 'RUNNING' ? 'its expected state' : `a ${poll.state} verdict`}, `
+      + `but this estate is ${stored}, and ${stored} -> ${poll.state} is not a legal transition. `
+      + 'A failed resume is cleared only by a new Resume, which re-verifies every resource. Press Resume.',
   };
 }
 
