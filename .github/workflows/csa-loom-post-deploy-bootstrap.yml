@@ -500,7 +500,7 @@ jobs:
           else
             for AFD_PROFILE in $(az afd profile list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[].name" -o tsv 2> temp/estate-power-afd.err); do
               FD_HOST=$(az afd endpoint list --profile-name "$AFD_PROFILE" -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[0].hostName" -o tsv 2>> temp/estate-power-afd.err) || FD_HOST=""
-              [ -n "$FD_HOST" ] && { CONSOLE_URL="https://$FD_HOST"; break; }
+              [ -n "$FD_HOST" ] && [ "$FD_HOST" != "None" ] && { CONSOLE_URL="https://$FD_HOST"; break; }
             done
             if [ -z "$CONSOLE_URL" ]; then
               CONSOLE_FQDN=$(az containerapp show -n loom-console -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "properties.configuration.ingress.fqdn" -o tsv 2> temp/estate-power-fqdn.err) || {
