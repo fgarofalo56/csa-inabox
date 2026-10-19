@@ -25,6 +25,23 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.112.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.112.0...csa-inabox-v0.112.1) (2026-10-19)
+
+
+### Bug Fixes
+
+* **bootstrap:** make admin_subscription optional on dispatch (secret fallback) ([#5028](https://github.com/fgarofalo56/csa-inabox/issues/5028)) ([460f3fb](https://github.com/fgarofalo56/csa-inabox/commit/460f3fb06850972fb1fd3eca838a7290a1971c92))
+* **ci:** reap idle ACR agent pools left at count=1 by cancelled builds ([#5021](https://github.com/fgarofalo56/csa-inabox/issues/5021)) ([ed0da81](https://github.com/fgarofalo56/csa-inabox/commit/ed0da81aae111538ed4d5056da16044b570b7933))
+* **estate-power:** make the Actions power lane work (Graph read-back lag, Front Door URL, describe non-JSON replies) ([#5023](https://github.com/fgarofalo56/csa-inabox/issues/5023)) ([4a9dfaa](https://github.com/fgarofalo56/csa-inabox/commit/4a9dfaa9842b0f114198348381420b427d4f66c8))
+* **estate-power:** read pipeline activity in the console so idle auto-pause can fire ([#5026](https://github.com/fgarofalo56/csa-inabox/issues/5026)) ([068ef97](https://github.com/fgarofalo56/csa-inabox/commit/068ef974bca2cc3ef82182cf51c5a0fa4933c5a6))
+* **estate:** a state read must not attempt RESUME_FAILED -&gt; RUNNING (500 on every read) ([#5024](https://github.com/fgarofalo56/csa-inabox/issues/5024)) ([43787c1](https://github.com/fgarofalo56/csa-inabox/commit/43787c10f370e1aa3cc5be2bc3ff372551db3baa))
+* **loom-mcp:** bump aspnet runtime 10.0.3 -&gt; 10.0.13 (CRITICAL CVEs) ([#5020](https://github.com/fgarofalo56/csa-inabox/issues/5020)) ([da29e75](https://github.com/fgarofalo56/csa-inabox/commit/da29e75538c8e3d995e525ee49495c7c0b23ed54))
+
+
+### Documentation
+
+* **prp:** Governance Autopilot - zero-touch Purview enrollment + Copilot governance tools ([#5012](https://github.com/fgarofalo56/csa-inabox/issues/5012)) ([d42ca7b](https://github.com/fgarofalo56/csa-inabox/commit/d42ca7b353dc58591b3e08f70f006b9ade32c700))
+
 ## [0.112.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.111.0...csa-inabox-v0.112.0) (2026-10-16)
 
 
