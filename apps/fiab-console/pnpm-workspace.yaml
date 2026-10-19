@@ -67,7 +67,7 @@ overrides:
   # Advisory <0.35.0. Transitive here (Next.js image optimisation pulls it);
   # the same floor was applied to portal/react-webapp in #2730, which is a
   # separate npm manifest with its own overrides block.
-  sharp: '>=0.35.0'
+  sharp: '>=0.35.5'
   #
   # ── Batch 1 — dev-toolchain transitives (refs #2671) ──────────────────────
   #
@@ -83,7 +83,7 @@ overrides:
   # js-yaml <4.2.0 and <4.3.0 advisories. Sole consumer is @eslint/eslintrc@3.3.5
   # (`js-yaml: ^4.1.1`), so 4.3.1 is a drop-in. Without `<5` this would resolve
   # js-yaml 5.x into a parent that never declared support for it.
-  js-yaml: '>=4.3.1 <5'
+  js-yaml: '>=4.3.2 <5'
   # form-data <4.0.6 advisory. Sole consumer is jsdom@25.0.1 (`form-data: ^4.0.0`).
   form-data: '>=4.0.6 <5'
   #
@@ -108,9 +108,9 @@ overrides:
   #   minimatch@3.1.5  → 'brace-expansion': ^1.1.7  → floored to 1.x
   #   minimatch@9.0.9  → 'brace-expansion': ^2.0.2  → floored to 2.x
   #   minimatch@10.2.5 → 'brace-expansion': ^5.0.5  → floored to 5.x
-  'brace-expansion@1': '>=1.1.16 <2'
-  'brace-expansion@2': '>=2.1.2 <3'
-  'brace-expansion@5': '>=5.0.7 <6'
+  'brace-expansion@1': '>=1.1.21 <2'
+  'brace-expansion@2': '>=2.1.7 <3'
+  'brace-expansion@5': '>=5.0.12 <6'
   # THE ONE DELIBERATE EXCEPTION TO THE `>=` CONVENTION ABOVE — read before
   # "fixing" this to match its neighbours.
   #

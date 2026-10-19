@@ -98,19 +98,22 @@ const lock = readFileSync(LOCKFILE, 'utf8');
 
 /** Floors are per-major: a parent's declared range cannot cross a major. */
 const FLOORS: Array<{ pkg: string; major: number; floor: string; why: string }> = [
-  { pkg: 'js-yaml', major: 4, floor: '4.3.1', why: 'advisories fixed in 4.2.0 and 4.3.0' },
+  { pkg: 'js-yaml', major: 4, floor: '4.3.2', why: 'GHSA-2883-xcg3-v3hh fixed in 4.3.2' },
   { pkg: 'form-data', major: 4, floor: '4.0.6', why: 'advisory fixed in 4.0.6' },
-  { pkg: 'brace-expansion', major: 1, floor: '1.1.16', why: 'advisory fixed in the 1.1.x line' },
-  { pkg: 'brace-expansion', major: 2, floor: '2.1.2', why: 'advisory fixed in 2.1.2' },
-  { pkg: 'brace-expansion', major: 5, floor: '5.0.7', why: 'advisory fixed in 5.0.7' },
+  { pkg: 'brace-expansion', major: 1, floor: '1.1.21', why: 'GHSA-q2hr-2g5m-vwhr fixed in 1.1.21' },
+  { pkg: 'brace-expansion', major: 2, floor: '2.1.7', why: 'GHSA-q2hr-2g5m-vwhr fixed in 2.1.7' },
+  { pkg: 'brace-expansion', major: 5, floor: '5.0.12', why: 'GHSA-q2hr-2g5m-vwhr fixed in 5.0.12' },
 ];
 
 const BANNED: ReadonlyArray<readonly [string, string]> = [
   ['js-yaml', '4.1.1'],
   ['form-data', '4.0.5'],
   ['brace-expansion', '1.1.14'],
+  ['brace-expansion', '1.1.18'],
   ['brace-expansion', '2.1.1'],
+  ['brace-expansion', '2.1.4'],
   ['brace-expansion', '5.0.6'],
+  ['brace-expansion', '5.0.9'],
 ];
 
 describe('Batch-1 advisory floors — pnpm-lock.yaml (what a clean install produces)', () => {
@@ -156,11 +159,11 @@ describe.skipIf(!existsSync(PNPM_STORE))('Batch-1 floors — what each consumer 
 
   /** The exact virtual-store dirs for the consumers this batch touches. */
   const CONSUMERS: Array<{ dir: string; dep: string; floor: string; callable: boolean }> = [
-    { dir: 'minimatch@3.1.5', dep: 'brace-expansion', floor: '1.1.16', callable: true },
-    { dir: 'minimatch@9.0.9', dep: 'brace-expansion', floor: '2.1.2', callable: true },
+    { dir: 'minimatch@3.1.5', dep: 'brace-expansion', floor: '1.1.21', callable: true },
+    { dir: 'minimatch@9.0.9', dep: 'brace-expansion', floor: '2.1.7', callable: true },
     // minimatch 10 is the ONLY consumer that wants the named-export 5.x shape.
-    { dir: 'minimatch@10.2.5', dep: 'brace-expansion', floor: '5.0.7', callable: false },
-    { dir: '@eslint+eslintrc@3.3.5', dep: 'js-yaml', floor: '4.3.1', callable: false },
+    { dir: 'minimatch@10.2.5', dep: 'brace-expansion', floor: '5.0.12', callable: false },
+    { dir: '@eslint+eslintrc@3.3.5', dep: 'js-yaml', floor: '4.3.2', callable: false },
     { dir: 'jsdom@25.0.1', dep: 'form-data', floor: '4.0.6', callable: false },
   ];
 
