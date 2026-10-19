@@ -17,8 +17,10 @@ const DEPLOY_SP = 'cccccccc-0000-4000-8000-00000000000c';
  * In-memory Graph. `log` records every call as "METHOD path-without-query";
  * writes are the non-GET entries. Options let a test break one behaviour.
  */
-function fakeGraph({ appRoles = [], consoleSpExists = true, assignments = [], failOn = null, dropRoleOnPatch = false, dropAssignOnPost = false } = {}) {
+function fakeGraph({ appRoles = [], consoleSpExists = true, assignments = [], failOn = null, dropRoleOnPatch = false, dropAssignOnPost = false, lagReads = 0 } = {}) {
   const state = { appRoles: [...appRoles], consoleSpExists, assignments: [...assignments] };
+  // lagReads: after a write, the next N GETs of that collection return the PRE-write value (Graph replication).
+  let staleRoles = null; let staleRoleReads = 0; let staleAssign = null; let staleAssignReads = 0;
   const log = [];
   const io = {
     log: () => {},
@@ -33,9 +35,11 @@ function fakeGraph({ appRoles = [], consoleSpExists = true, assignments = [], fa
         if (r) throw r;
       }
       if (method === 'GET' && path.startsWith('/applications')) {
-        return { json: { value: [{ id: APP_OBJ, appId: CLIENT, appRoles: state.appRoles }] } };
+        const roles = staleRoleReads > 0 ? (staleRoleReads--, staleRoles) : state.appRoles;
+        return { json: { value: [{ id: APP_OBJ, appId: CLIENT, appRoles: roles }] } };
       }
       if (method === 'PATCH' && path === `/applications/${APP_OBJ}`) {
+        if (lagReads) { staleRoles = state.appRoles; staleRoleReads = lagReads; }
         if (!dropRoleOnPatch) state.appRoles = body.appRoles;
         return { json: null };
       }
@@ -50,9 +54,11 @@ function fakeGraph({ appRoles = [], consoleSpExists = true, assignments = [], fa
         return { json: { value: [{ id: DEPLOY_SP, appId: DEPLOY_APPID }] } };
       }
       if (method === 'GET' && path === `/servicePrincipals/${DEPLOY_SP}/appRoleAssignments`) {
-        return { json: { value: state.assignments } };
+        const list = staleAssignReads > 0 ? (staleAssignReads--, staleAssign) : state.assignments;
+        return { json: { value: list } };
       }
       if (method === 'POST' && path === `/servicePrincipals/${DEPLOY_SP}/appRoleAssignments`) {
+        if (lagReads) { staleAssign = [...state.assignments]; staleAssignReads = lagReads; }
         if (!dropAssignOnPost) state.assignments.push({ resourceId: body.resourceId, appRoleId: body.appRoleId });
         return { json: {} };
       }
@@ -107,13 +113,28 @@ test('a disabled same-value role is repaired in place (id kept)', async () => {
 test('read-back mismatch FAILS: a PATCH that Graph accepted but did not persist', async () => {
   // Breaks if: success is taken from the write returning 2xx instead of the re-read.
   const g = fakeGraph({ dropRoleOnPatch: true });
-  await assert.rejects(ensure({ clientId: CLIENT }, g.io), /read-back FAILED: the Estate\.Power appRole/);
+  await assert.rejects(ensure({ clientId: CLIENT }, g.io), /read-back FAILED after 7 reads: the Estate\.Power appRole/);
+});
+
+test('a write that replicates LATE (Graph lag) passes within the read-back budget; one that never lands still fails', async () => {
+  // The bootstrap run 39201066384 shape: PATCH and POST accepted, the next reads
+  // return the pre-write state. Breaks if the read-back is single-shot (lagReads=2
+  // then rejects), or if the retry loop does not re-read (stale forever).
+  const g = fakeGraph({ consoleSpExists: true, lagReads: 2 });
+  let sleeps = 0;
+  g.io.sleep = async () => { sleeps++; };
+  const r = await ensure({ clientId: CLIENT }, g.io);
+  assert.equal(r.roleId, ESTATE_POWER_ROLE_ID);
+  assert.equal(sleeps, 2, 'two stale reads -> exactly two waits before the third read sees the write');
+  // Breaks if the budget is unbounded: a lag longer than READBACK_ATTEMPTS must fail.
+  const never = fakeGraph({ consoleSpExists: true, lagReads: 99 });
+  await assert.rejects(ensure({ clientId: CLIENT }, never.io), /read-back FAILED after 7 reads/);
 });
 
 test('read-back mismatch FAILS: an assignment POST that did not persist', async () => {
   // Breaks if: the assignment is not re-listed after the POST.
   const g = fakeGraph({ appRoles: [goodRole()], dropAssignOnPost: true });
-  await assert.rejects(ensure({ clientId: CLIENT }, g.io), /read-back FAILED: no appRoleAssignment/);
+  await assert.rejects(ensure({ clientId: CLIENT }, g.io), /read-back FAILED after 7 reads: no appRoleAssignment/);
 });
 
 test('403 yields exit 3 with the named Graph permissions and consent owner, and is NOT retried', async () => {

@@ -176,11 +176,20 @@ export async function callConsole({ url, token, body, mutating, fetchFn, sleep, 
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
       status = res.status;
+      // Read TEXT first so an unparseable body can be described rather than
+      // reduced to "not a JSON object" — that string did not say whether the
+      // reply was a Front Door/WAF page, an HTML 5xx, or an empty 200 (R7).
+      const raw = await res.text().catch(() => '');
       let json = null;
-      try { json = await res.json(); } catch { json = null; }
+      try { json = JSON.parse(raw); } catch { json = null; }
       const env = parseEnvelope(json);
       if (res.ok && env.ok) return { ok: true, data: env.data };
       message = env.error ?? `HTTP ${status} with no readable envelope`;
+      if (json === null) {
+        const ctype = res.headers?.get?.('content-type') ?? 'no content-type';
+        const snippet = raw.replace(/[^\x20-\x7e]+/g, ' ').trim().slice(0, 120);
+        message = `HTTP ${status} (${ctype}) body was not JSON${snippet ? `: ${snippet}` : ' (empty body)'}`;
+      }
       if (res.ok && !env.ok) status = 200;
     } catch (e) {
       networkError = true;
