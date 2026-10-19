@@ -55,6 +55,7 @@ vi.mock('@/lib/azure/arm-client', () => ({
 import {
   armPowerReading,
   isResumeSuccess,
+  resolveReadVerdict,
   type EstatePauseSnapshot,
   type EstatePowerState,
 } from '../pause-state';
@@ -1148,5 +1149,33 @@ describe('#4243 resolveDeployManifest — the SHIR entry gets COHERENT coordinat
     expect(u).toBeDefined();
     expect(u!.needs.join(' ')).toContain('LOOM_SHIR_SUB');
     expect(u!.needs.join(' ')).toContain('LOOM_PURVIEW_SHIR_VMSS_NAME');
+  });
+});
+
+describe('resolveReadVerdict — a state READ never attempts an illegal transition', () => {
+  // Live 2026-10-19: stored RESUME_FAILED, every resource then came up, the read
+  // re-polled RUNNING, called applyResumePoll, and threw "Illegal estate
+  // transition RESUME_FAILED -> RUNNING" -> an empty HTTP 500 on EVERY read.
+  it('RESUME_FAILED + poll RUNNING keeps RESUME_FAILED, persists nothing, and names the way out', () => {
+    // Breaks if the illegal branch returns poll.state ('RUNNING' laundering a
+    // failed resume) or persist:true (applyResumePoll would throw again).
+    const v = resolveReadVerdict('RESUME_FAILED', { state: 'RUNNING', reason: 'all confirmed' });
+    expect(v.state).toBe('RESUME_FAILED');
+    expect(v.persist).toBe(false);
+    expect(v.reason).toMatch(/RESUME_FAILED -> RUNNING is not a legal transition/);
+    expect(v.reason).toMatch(/Press Resume/);
+  });
+
+  it('a LEGAL change is persisted and reported as polled (RESUMING -> RUNNING)', () => {
+    // Positive pair for the case above. Breaks if the guard refuses every change
+    // (the read would never record a completed resume).
+    const v = resolveReadVerdict('RESUMING', { state: 'RUNNING', reason: 'all confirmed' });
+    expect(v).toEqual({ state: 'RUNNING', persist: true, reason: 'all confirmed' });
+  });
+
+  it('an unchanged state is reported without a write', () => {
+    // Breaks if equal states are treated as a transition (a needless Cosmos write per read).
+    expect(resolveReadVerdict('RESUME_FAILED', { state: 'RESUME_FAILED', reason: 'r' }))
+      .toEqual({ state: 'RESUME_FAILED', persist: false, reason: 'r' });
   });
 });
