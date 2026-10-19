@@ -1,0 +1,140 @@
+# ACR agent-pool reaper — scale idle ACR Tasks agent pools back to 0.
+#
+# The build workflows scale a dedicated pool 0 -> 1 around `az acr build`, but
+# the scale-down lives in the same shell as the build, so a cancelled or
+# timed-out run leaves the pool allocated with nothing to come back for it.
+# Measured 2026-10-19: two S3 pools at count=1, idle, $1,037 EACH per 30 days.
+#
+# The decision rule (and why every doubt keeps the pool) is in
+# scripts/ci/reap-acr-agent-pools.mjs. Registries are DISCOVERED (every
+# `acrloom*` registry in every subscription the deploy SP can read), not named
+# here, so no estate identifier ships in this public file.
+name: acr-agentpool-reaper
+run-name: acr-agentpool-reaper${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && ' - DRY RUN (nothing scaled)' || '' }}
+
+on:
+  schedule:
+    - cron: '23 * * * *'   # hourly, off the :00 herd
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Decide and report, but scale nothing.'
+        type: boolean
+        default: true
+      idle_minutes:
+        description: 'Minutes a pool must be idle (unmodified and unused) before it is reaped. Minimum 5.'
+        type: string
+        default: '30'
+
+permissions:
+  contents: read
+
+jobs:
+  reap:
+    name: Reap idle agent pools - ${{ matrix.boundary }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        boundary: [Commercial, GCC-High]
+    concurrency:
+      group: acr-agentpool-reaper-${{ matrix.boundary }}
+      cancel-in-progress: false
+    env:
+      C: ${{ matrix.boundary == 'GCC-High' && secrets.AZURE_GOV_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+      S: ${{ matrix.boundary == 'GCC-High' && secrets.AZURE_GOV_CLIENT_SECRET || secrets.AZURE_CLIENT_SECRET }}
+      T: ${{ matrix.boundary == 'GCC-High' && secrets.AZURE_GOV_TENANT_ID || secrets.AZURE_TENANT_ID }}
+      U: ${{ matrix.boundary == 'GCC-High' && secrets.AZURE_GOV_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - id: check
+        name: Check configuration (NEUTRAL SKIP when missing)
+        env:
+          BOUNDARY: ${{ matrix.boundary }}
+        run: |
+          missing=""
+          [[ -z "$C" ]] && missing="$missing CLIENT_ID"
+          [[ -z "$S" ]] && missing="$missing CLIENT_SECRET"
+          [[ -z "$T" ]] && missing="$missing TENANT_ID"
+          [[ -z "$U" ]] && missing="$missing SUBSCRIPTION_ID"
+          if [[ -n "$missing" ]]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::NEUTRAL SKIP - $BOUNDARY agent-pool reaper did NOT run. Missing secret(s):$missing"
+            echo "### ACR agent-pool reaper ($BOUNDARY): SKIPPED, nothing was evaluated" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.check.outputs.configured == 'true'
+        uses: actions/checkout@v7.0.1
+
+      - if: steps.check.outputs.configured == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+
+      - if: steps.check.outputs.configured == 'true' && matrix.boundary == 'Commercial'
+        name: Azure login (Commercial)
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      - if: steps.check.outputs.configured == 'true' && matrix.boundary == 'GCC-High'
+        name: Azure login (Gov)
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - if: steps.check.outputs.configured == 'true' && matrix.boundary == 'GCC-High'
+        name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - if: steps.check.outputs.configured == 'true'
+        name: Discover acrloom* registries and reap idle pools
+        env:
+          BOUNDARY: ${{ matrix.boundary }}
+          IN_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+          IDLE_MIN: ${{ inputs.idle_minutes || '30' }}
+        run: |
+          set -uo pipefail
+          if ! SUBS=$(az account list --query "[?state=='Enabled'].id" -o tsv 2>az-err.txt); then
+            echo "::error::$BOUNDARY: could not list subscriptions ($(tail -1 az-err.txt)). Nothing was evaluated."
+            exit 1
+          fi
+          found=0; rc=0
+          for sub in $SUBS; do
+            sub=${sub//$'\r'/}
+            if ! ACRS=$(az acr list --subscription "$sub" --query "[?starts_with(name,'acrloom')].name" -o tsv 2>az-err.txt); then
+              echo "::error::$BOUNDARY: could not list registries in a subscription ($(tail -1 az-err.txt)). Its pools were NOT evaluated."
+              rc=1; continue
+            fi
+            for acr in $ACRS; do
+              acr=${acr//$'\r'/}
+              found=$((found + 1))
+              args=(--acr "$acr" --subscription "$sub" --idle-minutes "$IDLE_MIN")
+              [[ "$IN_DRY_RUN" == "true" ]] && args+=(--dry-run)
+              node scripts/ci/reap-acr-agent-pools.mjs "${args[@]}" || rc=1
+            done
+          done
+          if [[ "$found" -eq 0 ]]; then
+            echo "::notice::$BOUNDARY: no acrloom* registry is visible to this identity; nothing to reap."
+          fi
+          exit $rc
