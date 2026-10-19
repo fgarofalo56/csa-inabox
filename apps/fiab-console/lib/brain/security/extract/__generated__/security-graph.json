@@ -40198,6 +40198,89 @@
           }
         },
         {
+          "id": "sec:publication:scripts/ci/reap-acr-agent-pools.mjs#module",
+          "kind": "publication",
+          "provenance": "declared",
+          "label": "scripts/ci/reap-acr-agent-pools.mjs",
+          "facet": {
+            "kind": "publication",
+            "module": "scripts/ci/reap-acr-agent-pools.mjs",
+            "declaredSinkCount": 7,
+            "sinks": [
+              {
+                "id": "console:member:129",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:134",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:142",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:149",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:153",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:157",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:159",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              }
+            ]
+          }
+        },
+        {
           "id": "sec:publication:scripts/ci/reconcile-policy.mjs#module",
           "kind": "publication",
           "provenance": "declared",
@@ -51818,6 +51901,11 @@
           "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
         },
         {
+          "nodeId": "sec:publication:scripts/ci/reap-acr-agent-pools.mjs#module",
+          "codeModuleId": "code:scripts/ci/reap-acr-agent-pools.mjs",
+          "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
+        },
+        {
           "nodeId": "sec:publication:scripts/ci/reconcile-policy.mjs#module",
           "codeModuleId": "code:scripts/ci/reconcile-policy.mjs",
           "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
@@ -53020,6 +53108,10 @@
         {
           "subject": "scripts/ci/parse-reindex-poll.mjs",
           "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 3). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+        },
+        {
+          "subject": "scripts/ci/reap-acr-agent-pools.mjs",
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 7). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
           "subject": "scripts/ci/reconcile-policy.mjs",
