@@ -198,6 +198,20 @@ test('console-sent ok:false or a MALFORMED block => SKIP, never treated as "no r
   }
 });
 
+test('console sources are allowlisted before printing, and "none configured" raises a ::warning::', async () => {
+  // Breaks if an unexpected source string reaches the public log, or if an
+  // estate with no configured source pauses silently with no visible warning.
+  const odd = runningBody({ power: power({ pipelineActivity: { ok: true, runs: [], sources: ['synapse', '<script>evil'] } }) });
+  const h1 = harness({ st: odd });
+  await h1.run();
+  const o1 = h1.c.out.join('\n');
+  assert.match(o1, /\(sources: synapse\)/);
+  assert.ok(!o1.includes('evil'), 'a non-allowlisted source name must not be printed');
+  const none = harness({ st: runningBody({ power: power({ pipelineActivity: { ok: true, runs: [], sources: [] } }) }) });
+  await none.run();
+  assert.match(none.c.out.join('\n'), /::warning::the console reports NO Data Factory or Synapse workspace configured/);
+});
+
 test('no console block (older console) => falls back to the runner read', async () => {
   // Breaks if the fallback is removed: azReads would be 0 for a console that sent nothing.
   const h = harness();

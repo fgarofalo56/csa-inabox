@@ -42,10 +42,13 @@ export function readRegister(root = process.cwd()) {
  * but malformed block is NOT null: it becomes `ok:false`, so a broken console
  * answer can never fall through to "no runs" and read as idle.
  */
+export const KNOWN_SOURCES = ['adf', 'synapse'];
+
 export function consolePipelineActivity(state) {
   const pa = state?.[FIELD.power]?.[FIELD.pipelineActivity];
   if (pa === undefined || pa === null) return null;
-  const sources = Array.isArray(pa.sources) ? pa.sources.map(String) : [];
+  // Allowlisted: these names are printed to a PUBLIC Actions log.
+  const sources = Array.isArray(pa.sources) ? pa.sources.map(String).filter((s) => KNOWN_SOURCES.includes(s)) : [];
   if (typeof pa !== 'object' || typeof pa.ok !== 'boolean') {
     return { ok: false, reason: 'the console sent a malformed pipelineActivity block', sources };
   }
@@ -111,7 +114,10 @@ export async function runAutopause({ boundary, dryRun = false }, deps = {}) {
   let activity;
   if (fromConsole) {
     activity = fromConsole;
-    out(`pipeline activity: read by the console (sources: ${fromConsole.sources.join(', ') || 'none configured'})`);
+    out(sanitizeLine(`pipeline activity: read by the console (sources: ${fromConsole.sources.join(', ') || 'none configured'})`));
+    if (fromConsole.ok && fromConsole.sources.length === 0) {
+      out('::warning::the console reports NO Data Factory or Synapse workspace configured (LOOM_ADF_NAME / LOOM_SYNAPSE_WORKSPACE unset), so pipeline runs cannot block a pause. If this estate has pipelines, that env is missing.');
+    }
   } else {
     const windowHours = Number(state[FIELD.power]?.[FIELD.autoPause]?.[FIELD.autoPauseIdleHours]);
     const found = discoverActivityTargets({ state, spawn });
