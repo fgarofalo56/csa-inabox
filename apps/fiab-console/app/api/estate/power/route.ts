@@ -49,7 +49,9 @@ async function dispatch(
   await audit(caller, 'estate-power.request', { action });
   switch (action) {
     case 'state':
-      return handleStateRead(caller);
+      // The SP route is the idle auto-pause caller: it needs the server-side
+      // pipeline-run read the runner cannot make (private Synapse endpoint).
+      return handleStateRead(caller, { pipelineActivity: true });
     case 'preview':
       return handlePausePost(caller, { dryRun: true });
     case 'pause':
