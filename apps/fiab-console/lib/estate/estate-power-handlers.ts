@@ -24,7 +24,6 @@ import { emitAuditEvent } from '@/lib/admin/audit-stream';
 import {
   applyPausePoll,
   applyResumePoll,
-  resolveReadVerdict,
   armGateMessage,
   createArmActuator,
   createManifestTagReader,
@@ -55,7 +54,7 @@ import { detectLoomCloud } from '@/lib/azure/cloud-boundary';
 import { loadActivity } from '@/lib/estate/estate-activity';
 import { loadAutoPause } from '@/lib/estate/estate-autopause';
 import type { EstatePowerStatus } from '@/lib/estate/estate-power-contract';
-import type { EstatePauseSnapshot } from '@/lib/estate/pause-state';
+import { resolveReadVerdict, type EstatePauseSnapshot } from '@/lib/estate/pause-state';
 
 /** Who is acting, however they authenticated. */
 export interface EstateCaller {

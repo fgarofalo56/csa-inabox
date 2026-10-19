@@ -37,7 +37,6 @@ import {
   startResume,
   pollResume,
   applyResumePoll,
-  resolveReadVerdict,
   resolveDeployManifest,
   discoverFromManifest,
   createManifestTagReader,
@@ -56,6 +55,7 @@ vi.mock('@/lib/azure/arm-client', () => ({
 import {
   armPowerReading,
   isResumeSuccess,
+  resolveReadVerdict,
   type EstatePauseSnapshot,
   type EstatePowerState,
 } from '../pause-state';
