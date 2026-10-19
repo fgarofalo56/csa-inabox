@@ -163,3 +163,59 @@ test('read-activity: unsupported kind and az failure are surfaced, not swallowed
   const bad2 = fakeSpawn({ rest: () => ({ status: 1, stdout: '', stderr: 'ResourceNotFound', error: null }) });
   assert.match(readRecentPipelineRuns({ targets: [{ kind: 'adf', id: ADF_ID, name: 'a' }], boundary: 'Commercial', now, windowHours: 4, spawn: bad2 }).reason, /ResourceNotFound/);
 });
+
+// ── console-side pipeline activity (server-side read; the runner cannot reach a
+// private Synapse endpoint, run 39242926745) ────────────────────────────────
+const azReads = (h) => h.spawn.calls.filter((a) => a[1] === 'rest' || a[1] === 'resource').length;
+
+test('console-sent pipelineActivity ok + no runs => pauses WITHOUT any runner-side az read (the fix)', async () => {
+  // Breaks if autopause ignores the console block: the runner read would run
+  // (azReads > 0), hit the denied endpoint below, and skip instead of pausing.
+  const st = runningBody({ power: power({ pipelineActivity: { ok: true, runs: [], sources: ['synapse'] } }) });
+  const h = harness({ st, rest: () => ({ status: 1, stdout: '', stderr: 'PublicNetworkAccessDenied', error: null }) });
+  assert.equal(await h.run(), EXIT.OK);
+  assert.equal(pauseCalls(h), 1, 'positive: an idle estate with a clean console read is paused');
+  assert.equal(azReads(h), 0, 'the runner must not re-read what the console already read');
+  assert.match(h.c.out.join('\n'), /pipeline activity: read by the console \(sources: synapse\)/);
+});
+
+test('console-sent pipelineActivity with a recent run => SKIP', async () => {
+  // Breaks if console runs are dropped on the way into the policy.
+  const runs = [{ startedAt: new Date(NOW - 3600e3).toISOString(), status: 'Succeeded' }];
+  const h = harness({ st: runningBody({ power: power({ pipelineActivity: { ok: true, runs, sources: ['adf'] } }) }) });
+  assert.equal(await h.run(), EXIT.OK);
+  assert.equal(pauseCalls(h), 0);
+  assert.match(h.c.out.join('\n'), /recent-pipeline-run/);
+});
+
+test('console-sent ok:false or a MALFORMED block => SKIP, never treated as "no runs"', async () => {
+  // Breaks if a failed or malformed console answer falls through to runs: [] (would pause a busy estate).
+  for (const pa of [{ ok: false, reason: 'synapse: timeout', sources: ['synapse'] }, { ok: 'yes' }, { ok: true, sources: [] }]) {
+    const h = harness({ st: runningBody({ power: power({ pipelineActivity: pa }) }) });
+    assert.equal(await h.run(), EXIT.OK);
+    assert.equal(pauseCalls(h), 0, `must not pause on ${JSON.stringify(pa)}`);
+    assert.match(h.c.out.join('\n'), /activity-read-failed/);
+  }
+});
+
+test('console sources are allowlisted before printing, and "none configured" raises a ::warning::', async () => {
+  // Breaks if an unexpected source string reaches the public log, or if an
+  // estate with no configured source pauses silently with no visible warning.
+  const odd = runningBody({ power: power({ pipelineActivity: { ok: true, runs: [], sources: ['synapse', '<script>evil'] } }) });
+  const h1 = harness({ st: odd });
+  await h1.run();
+  const o1 = h1.c.out.join('\n');
+  assert.match(o1, /\(sources: synapse\)/);
+  assert.ok(!o1.includes('evil'), 'a non-allowlisted source name must not be printed');
+  const none = harness({ st: runningBody({ power: power({ pipelineActivity: { ok: true, runs: [], sources: [] } }) }) });
+  await none.run();
+  assert.match(none.c.out.join('\n'), /::warning::the console reports NO Data Factory or Synapse workspace configured/);
+});
+
+test('no console block (older console) => falls back to the runner read', async () => {
+  // Breaks if the fallback is removed: azReads would be 0 for a console that sent nothing.
+  const h = harness();
+  assert.equal(await h.run(), EXIT.OK);
+  assert.ok(azReads(h) > 0, 'the runner read ran');
+  assert.match(h.c.out.join('\n'), /pipeline activity: read from the runner/);
+});
