@@ -43,6 +43,9 @@ export const EXIT_PERMISSION = 3;
 export const EXIT_TRANSIENT = 4;
 
 export const MAX_ATTEMPTS = 4;
+/** Reads a fresh write gets to become visible (Graph replication), ~60s total. */
+export const READBACK_ATTEMPTS = 7;
+export const READBACK_DELAY_MS = 10_000;
 
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -233,13 +236,23 @@ export async function ensure(opts, io) {
     wrote++;
   }
 
-  // 4. read-back
-  const appAfter = (await listAll(io, host, `/applications?$filter=appId eq '${clientId}'&$select=id,appId,appRoles`))[0];
-  const roleAfter = (appAfter?.appRoles ?? []).find((r) => r.value === ESTATE_POWER_ROLE_VALUE);
-  if (!roleOk(roleAfter)) throw new Fatal(EXIT_FAILED, 'read-back FAILED: the Estate.Power appRole is not present, enabled and Application-typed on the app registration');
+  // 4. read-back. Graph is eventually consistent: a GET straight after an
+  // accepted PATCH can return the PRE-write appRoles. Measured on bootstrap run
+  // 39201066384 (2026-10-19): read-back FAILED on the role, yet the role and the
+  // assignment were both present minutes later. So a write is given a bounded
+  // number of reads to appear; one that never appears still fails.
+  let roleAfter;
+  let assignAfter = [];
+  for (let attempt = 1; attempt <= READBACK_ATTEMPTS; attempt++) {
+    const appAfter = (await listAll(io, host, `/applications?$filter=appId eq '${clientId}'&$select=id,appId,appRoles`))[0];
+    roleAfter = (appAfter?.appRoles ?? []).find((r) => r.value === ESTATE_POWER_ROLE_VALUE);
+    assignAfter = await listAll(io, host, assignedPath);
+    if ((roleOk(roleAfter) && has(assignAfter)) || wrote === 0) break;
+    if (attempt < READBACK_ATTEMPTS) await io.sleep(READBACK_DELAY_MS);
+  }
+  if (!roleOk(roleAfter)) throw new Fatal(EXIT_FAILED, `read-back FAILED after ${READBACK_ATTEMPTS} reads: the Estate.Power appRole is not present, enabled and Application-typed on the app registration`);
   if (roleAfter.id !== roleId) throw new Fatal(EXIT_FAILED, `read-back FAILED: appRole id changed (${roleId} -> ${roleAfter.id})`);
-  const assignAfter = await listAll(io, host, assignedPath);
-  if (!has(assignAfter)) throw new Fatal(EXIT_FAILED, `read-back FAILED: no appRoleAssignment of ${roleId} on ${consoleSp.id} for deploy SP ${deploySp.id}`);
+  if (!has(assignAfter)) throw new Fatal(EXIT_FAILED, `read-back FAILED after ${READBACK_ATTEMPTS} reads: no appRoleAssignment of ${roleId} on ${consoleSp.id} for deploy SP ${deploySp.id}`);
 
   const audience = `api://${clientId}`;
   io.log(`ensure-estate-power-role: OK (${wrote} write(s)); role ${roleId} -> deploy SP ${who.name}; audience ${audience}`);
