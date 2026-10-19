@@ -85,6 +85,9 @@ function run({
   labelLookupFails = false,
   deleteIsNoop = false,
   consoleUpdateFails = false,
+  // `az ad app list` outcome when EXISTING_CLIENT_ID is blank: 'found' prints an
+  // app id, 'empty' prints nothing (exit 0), 'forbidden' is Graph's 403 (exit 1).
+  appList = 'found',
   // Commercial by default. MEASURED 2026-09-07 from `az cloud list`: these are
   // the literal endpoint values the CLI reports, and the Gov ones a parity
   // case overrides them with are different HOSTS, not a different path.
@@ -129,6 +132,11 @@ case "$*" in
   "keyvault show"*) echo "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/kv-loom-test"; exit 0 ;;
 esac
 case "$*" in
+  "ad app list"*)
+    ${appList === 'forbidden'
+      ? `echo 'ERROR: Insufficient privileges to complete the operation.' >&2; exit 1`
+      : appList === 'empty' ? 'exit 0' : `echo ${q(APP_ID)}; exit 0`} ;;
+  "ad app create"*) echo "created-app-0000"; exit 0 ;;
   "ad app credential reset"*)
     label=""; years=1; prev=""
     for a in "$@"; do
@@ -1001,4 +1009,34 @@ test('PARITY-3: the Commercial default is unchanged — the counterfactual for P
     armCalls.every((l) => l.includes('https://management.azure.com/subscriptions/')),
     `Commercial must still address Commercial ARM: ${armCalls.join(' | ')}`,
   );
+});
+
+// ── APP-RESOLVE: an UNREADABLE app list is not an EMPTY one (GCC-High, 2026-10-19) ──
+// The CONSOLE sign-in registration only: the empty-list path also runs the
+// dedicated catalog-app sibling (#3339), which makes its own `ad app create`.
+const createCalls = (calls) => calls.split('\n')
+  .filter((l) => l.startsWith('ad app create') && l.includes('CSA Loom Console (kv-loom-test)'));
+
+test('APP-RESOLVE-1: a FORBIDDEN app list refuses — no app is created, the cause is named', () => {
+  // Breaks if the list error is swallowed again (2>/dev/null || true): the script
+  // would read 403 as "no app" and CREATE a duplicate sign-in registration.
+  const r = run({ creds: [cred('live-key', -30, 300, 'loom-console-x')], kvTag: 'live-key', appList: 'forbidden', env: { EXISTING_CLIENT_ID: '' } });
+  assert.notEqual(r.rc, 0, 'an unknown answer must fail the run');
+  assert.equal(createCalls(r.calls).length, 0, 'nothing may be created when existence is unknown');
+  assert.match(r.out, /could not LIST app registrations/);
+  assert.match(r.out, /Insufficient privileges/);
+});
+
+test('APP-RESOLVE-2: a FOUND app is reused and nothing is created (positive control)', () => {
+  const r = run({ creds: [cred('live-key', -30, 300, 'loom-console-x')], kvTag: 'live-key', appList: 'found', env: { EXISTING_CLIENT_ID: '' } });
+  assert.equal(r.rc, 0, r.out.slice(-600));
+  assert.equal(createCalls(r.calls).length, 0);
+  assert.match(r.out, new RegExp(`Reusing app registration: ${APP_ID}`));
+});
+
+test('APP-RESOLVE-3: a genuinely EMPTY list still creates exactly one app', () => {
+  // Pairs with -1: breaks if the fix over-corrects and refuses every first run.
+  const r = run({ creds: [], appList: 'empty', env: { EXISTING_CLIENT_ID: '' } });
+  assert.equal(createCalls(r.calls).length, 1, r.out.slice(-600));
+  assert.match(r.out, /Creating new app registration/);
 });
