@@ -15,6 +15,10 @@ export async function register() {
   const { startReadWarmer } = await import('./lib/perf/read-warmer');
   startReadWarmer();
 
+  // One [mem] line per minute so a heap-limit crash leaves a trail.
+  const { startMemLog } = await import('./lib/perf/mem-log');
+  startMemLog();
+
   // Pylance-grade Python IntelliSense over a WebSocket bridge for notebook
   // cells. Opt-in via LOOM_PYLSP_ENABLED so the default deployment (which runs
   // `node server.js` with no Python) is completely untouched. We patch the CJS
