@@ -41,14 +41,25 @@ export function fakeSpawn({ cloud = 'AzureCloud', accountFails = false, tokenFai
   return fn;
 }
 
-/** fetch fake: handler(body, callIndex) -> {status, json} | throws */
+/**
+ * fetch fake: handler(body, callIndex) -> {status, json} | {status, raw, contentType} | throws.
+ * `raw` is a literal body (e.g. an HTML error page); otherwise `json` is serialised.
+ */
 export function fakeFetch(handler) {
   const calls = [];
   const fn = async (url, init) => {
     const body = JSON.parse(init.body);
     calls.push({ url, body, auth: init.headers.authorization });
     const r = await handler(body, calls.length - 1);
-    return { ok: r.status >= 200 && r.status < 300, status: r.status, json: async () => r.json };
+    const text = r.raw !== undefined ? r.raw : (r.json === undefined ? '' : JSON.stringify(r.json));
+    const ctype = r.contentType ?? (r.raw !== undefined ? 'text/html' : 'application/json');
+    return {
+      ok: r.status >= 200 && r.status < 300,
+      status: r.status,
+      headers: { get: (k) => (k.toLowerCase() === 'content-type' ? ctype : null) },
+      text: async () => text,
+      json: async () => JSON.parse(text),
+    };
   };
   fn.calls = calls;
   return fn;

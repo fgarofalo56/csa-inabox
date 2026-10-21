@@ -316,8 +316,23 @@ if [ -n "${EXISTING_CLIENT_ID}" ]; then
   APP_ID="${EXISTING_CLIENT_ID}"
   echo "    Using existing app (client) id: ${APP_ID}"
 else
-  APP_ID="$(az ad app list --filter "displayName eq '${APP_DISPLAY_NAME}'" --query "[0].appId" -o tsv 2>/dev/null || true)"
-  if [ -z "${APP_ID:-}" ]; then
+  # An UNREADABLE list is not an EMPTY one (deploy-integrity R7). This used to be
+  # `2>/dev/null || true`, so a deploy SP without Graph read rights saw "no app"
+  # and went on to CREATE one — a duplicate sign-in registration beside the one
+  # the Console uses (measured on GCC-High, 2026-10-19: "Creating new app
+  # registration" then "Insufficient privileges"). Refuse instead.
+  APP_LIST_ERR="$(mktemp)"
+  if ! APP_ID="$(az ad app list --filter "displayName eq '${APP_DISPLAY_NAME}'" --query "[0].appId" -o tsv 2>"${APP_LIST_ERR}")"; then
+    echo "ERROR: could not LIST app registrations, so whether '${APP_DISPLAY_NAME}' already exists is UNKNOWN — refusing to create a possibly-duplicate registration." >&2
+    echo "       az said: $(tail -n 2 "${APP_LIST_ERR}" | tr '\n' ' ')" >&2
+    echo "       Fix: give the deploy identity Graph Application.Read.All (or the Entra 'Application Administrator' role), or pass EXISTING_CLIENT_ID." >&2
+    rm -f "${APP_LIST_ERR}"
+    exit 1
+  fi
+  rm -f "${APP_LIST_ERR}"
+  APP_ID="$(printf '%s' "${APP_ID}" | tr -d '\r')"
+  if [ -z "${APP_ID:-}" ] || [ "${APP_ID}" = "None" ]; then
+    APP_ID=""
     echo "    Creating new app registration"
     APP_ID="$(az ad app create --display-name "${APP_DISPLAY_NAME}" --sign-in-audience AzureADMyOrg --query appId -o tsv)"
     sleep 20 # allow Entra replication before subsequent updates

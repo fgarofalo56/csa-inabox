@@ -51,7 +51,13 @@ RUN dotnet publish -c Release -o /app --no-self-contained
 # Runtime pinned to the same band as the SDK above, for the same reason: a
 # floating tag makes the image non-reproducible and lets an upstream release
 # change what ships without a commit here.
-FROM mcr.microsoft.com/dotnet/aspnet:10.0.3
+#
+# 10.0.13, not 10.0.3: the 10.0.3 shared framework carries CVE-2026-70188 and
+# CVE-2026-88092 (both CRITICAL, Microsoft.AspNetCore.App.Runtime). Trivy on
+# the bare base image, 2026-10-19: aspnet:10.0.3 -> 2 CRITICAL, aspnet:10.0.13
+# -> 0. The SC1 gate refused every build on 10.0.3 and its #4464 cleanup
+# untagged loom-mcp:v0.1, which broke the nightly deploy's image preflight.
+FROM mcr.microsoft.com/dotnet/aspnet:10.0.13
 WORKDIR /app
 COPY --from=build /app .
 COPY ./config/ /app/config/

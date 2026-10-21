@@ -1,0 +1,194 @@
+name: governance-w0-measure
+
+# CSA Loom - Governance Autopilot W0 measurement (PRPs/active/governance-autopilot).
+#
+# READ-ONLY. Lists ARM resources and issues HTTP GET against the Purview Data
+# Map data plane, then uploads ONE json artifact of names, ids and counts. It
+# creates, updates, deletes and runs nothing. All logic lives in
+# scripts/measure/governance-*.mjs (tests: scripts/measure/governance-w0.test.mjs).
+#
+# Why it exists: Gov actions run ONLY through GitHub Actions, never from a
+# workstation (cloud-parity.md item 4). For GCC-High this is the only way to
+# learn which token audience the Purview data plane accepts (PRP risk R4) and
+# what is registered there.
+#
+# Pattern copied from estate-power.yml: same secrets, same sovereign endpoint
+# fields, `az cloud set --name AzureUSGovernment`, the same manual-approval
+# environment, and the same visible-skip precheck when secrets are missing.
+#
+# The script exits 2 when any section is BLOCKED (for example the runner cannot
+# reach a private-endpoint-only Purview account). That makes the job red on
+# purpose: a blind run must not look green. The artifact is still uploaded
+# (if: always()) so the BLOCKED reasons are readable.
+#
+# Dispatch:
+#   gh workflow run governance-w0-measure.yml -f boundary=Commercial
+#   gh workflow run governance-w0-measure.yml -f boundary=GCC-High
+#   (optional) -f subscriptions=<guid>,<guid>   default: every subscription the SP can read
+
+run-name: governance-w0-measure ${{ inputs.boundary }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      boundary:
+        description: 'Which estate to measure.'
+        type: choice
+        required: true
+        options:
+          - Commercial
+          - GCC-High
+      subscriptions:
+        description: 'Optional comma-separated subscription GUIDs. Empty = every enabled subscription the identity can read.'
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: governance-w0-measure-${{ inputs.boundary }}
+  cancel-in-progress: false
+
+jobs:
+  precheck:
+    name: Verify secrets for ${{ inputs.boundary }}
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - id: check
+        env:
+          BOUNDARY: ${{ inputs.boundary }}
+          IN_SUBS: ${{ inputs.subscriptions }}
+          COM_C: ${{ secrets.AZURE_CLIENT_ID }}
+          COM_S: ${{ secrets.AZURE_CLIENT_SECRET }}
+          COM_T: ${{ secrets.AZURE_TENANT_ID }}
+          COM_U: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          GOV_C: ${{ secrets.AZURE_GOV_CLIENT_ID }}
+          GOV_S: ${{ secrets.AZURE_GOV_CLIENT_SECRET }}
+          GOV_T: ${{ secrets.AZURE_GOV_TENANT_ID }}
+          GOV_U: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+        run: |
+          missing=""
+          if [[ "$BOUNDARY" == "GCC-High" ]]; then
+            [[ -z "$GOV_C" ]] && missing="$missing AZURE_GOV_CLIENT_ID"
+            [[ -z "$GOV_S" ]] && missing="$missing AZURE_GOV_CLIENT_SECRET"
+            [[ -z "$GOV_T" ]] && missing="$missing AZURE_GOV_TENANT_ID"
+            [[ -z "$GOV_U" ]] && missing="$missing AZURE_GOV_SUBSCRIPTION_ID"
+          else
+            [[ -z "$COM_C" ]] && missing="$missing AZURE_CLIENT_ID"
+            [[ -z "$COM_S" ]] && missing="$missing AZURE_CLIENT_SECRET"
+            [[ -z "$COM_T" ]] && missing="$missing AZURE_TENANT_ID"
+            [[ -z "$COM_U" ]] && missing="$missing AZURE_SUBSCRIPTION_ID"
+          fi
+          if [[ -n "$IN_SUBS" ]] && ! [[ "$IN_SUBS" =~ ^[0-9a-fA-F-]{36}(,[0-9a-fA-F-]{36})*$ ]]; then
+            echo "::error::subscriptions input is not a comma-separated list of GUIDs"
+            exit 1
+          fi
+          if [[ -n "$missing" ]]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::NEUTRAL SKIP - $BOUNDARY governance-w0-measure did NOT run. Missing:$missing"
+            {
+              echo "### governance-w0-measure $BOUNDARY: SKIPPED, nothing was measured"
+              echo "Missing configuration (names only):$missing"
+              echo "Bootstrap per docs/fiab/runbooks/secrets-bootstrap.md"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  commercial:
+    name: Measure - Commercial
+    needs: [precheck]
+    if: inputs.boundary == 'Commercial' && needs.precheck.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+
+      - name: Azure login (Commercial)
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      - name: Measure (read-only)
+        env:
+          IN_SUBS: ${{ inputs.subscriptions }}
+        run: |
+          mkdir -p temp
+          args=(--boundary Commercial --out temp/governance-w0-commercial.json)
+          [[ -n "$IN_SUBS" ]] && args+=(--subscriptions "$IN_SUBS")
+          node scripts/measure/governance-run.mjs "${args[@]}"
+
+      - name: Upload measurement (names and ids only)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: governance-w0-commercial
+          path: temp/governance-w0-commercial.json
+          if-no-files-found: error
+          retention-days: 14
+
+  gcch:
+    name: Measure - GCC-High
+    needs: [precheck]
+    if: inputs.boundary == 'GCC-High' && needs.precheck.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: gcc-high-deploy   # requires manual approval (same gate as deploy-fiab-gcch.yml)
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+
+      - name: Azure login (Gov sub) - limitlessdata_deploy SP
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Measure (read-only)
+        env:
+          IN_SUBS: ${{ inputs.subscriptions }}
+        run: |
+          mkdir -p temp
+          args=(--boundary GCC-High --out temp/governance-w0-gcch.json)
+          [[ -n "$IN_SUBS" ]] && args+=(--subscriptions "$IN_SUBS")
+          node scripts/measure/governance-run.mjs "${args[@]}"
+
+      - name: Upload measurement (names and ids only)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: governance-w0-gcch
+          path: temp/governance-w0-gcch.json
+          if-no-files-found: error
+          retention-days: 14

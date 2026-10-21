@@ -73,6 +73,7 @@ export const FIELD = Object.freeze({
   autoPauseSource: 'source', // EstateAutoPauseSetting.source 'stored'|'default'|'unreadable'
   lastPausedAt: 'lastPausedAt', // EstatePowerStatus.lastPausedAt
   lastResumedAt: 'lastResumedAt', // EstatePowerStatus.lastResumedAt
+  pipelineActivity: 'pipelineActivity', // EstatePowerStatus.pipelineActivity (SP state route only)
 });
 
 export const AUTOPAUSE_SOURCE_UNREADABLE = 'unreadable'; // EstateAutoPauseSetting.source

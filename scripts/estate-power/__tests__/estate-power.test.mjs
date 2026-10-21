@@ -81,6 +81,22 @@ test('token never reaches stdout/stderr even when the server echoes it; it IS se
   assert.ok(!spawn.calls.some((a) => a.join(' ').includes(SENTINEL)), 'token must not be in any argv');
 });
 
+test('a non-JSON reply is DESCRIBED (status, content-type, snippet), and a token in it is still scrubbed', async () => {
+  // Run 39206594987 (2026-10-19) printed only "response was not a JSON object",
+  // which could not tell a Front Door/WAF page from an HTML 5xx or an empty 200.
+  // Input that breaks it: reverting to res.json() drops "HTTP 403 (text/html)"
+  // and the "<html" snippet from the message.
+  const fetchFn = fakeFetch(() => ({ status: 403, raw: `<html><body>Request blocked. token=${SENTINEL}</body></html>` }));
+  const { code, c } = await run(base(), fetchFn);
+  assert.equal(code, EXIT.FAILED);
+  const all = [...c.out, ...c.err].join('\n');
+  assert.match(all, /HTTP 403 \(text\/html\) body was not JSON: <html><body>Request blocked/);
+  assert.ok(!all.includes(SENTINEL), 'a token echoed in the HTML body must still be scrubbed');
+  // An empty 200 is named as such, not as a parse failure of nothing.
+  const empty = await run(base(), fakeFetch(() => ({ status: 200, raw: '', contentType: 'text/plain' })));
+  assert.match([...empty.c.out, ...empty.c.err].join('\n'), /HTTP 200 \(text\/plain\) body was not JSON \(empty body\)/);
+});
+
 test('parseEnvelope: fields are TOP LEVEL (no `data`), error is a string, ok must be exactly true', () => {
   const good = parseEnvelope({ ok: true, state: 'RUNNING', estateId: 'e' });
   assert.equal(good.ok, true);

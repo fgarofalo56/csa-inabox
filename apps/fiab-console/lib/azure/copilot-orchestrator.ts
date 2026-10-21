@@ -101,6 +101,7 @@ import { buildActivatorTools } from '@/lib/copilot/activator-tools';
 import { resolvePersona, type CopilotPersonaDef } from './copilot-personas';
 import { registerDaxTools } from '@/lib/copilot/dax-tools';
 import { registerKnowledgeTools } from '@/lib/copilot/knowledge-tools';
+import { registerGovernanceInventoryTool, listToolParameters } from '@/lib/governance/inventory-tool';
 // Opt-in Power BI remote MCP (no-fabric-dependency): config state + per-user
 // delegated token. Used ONLY by the powerbi_mcp_status meta-tool below — never
 // to reach a Fabric/Power BI host on a default path. The remote MCP's tools
@@ -942,37 +943,24 @@ export function buildDefaultRegistry(): LoomToolRegistry {
   r.register({
     name: 'item_list',
     service: 'Loom',
-    description: 'List the Loom items the current user owns (id + type + displayName + workspace). Omit itemType (or pass "all") to list every type; pass a hyphenated slug to filter; optionally pass workspaceId to scope to one workspace. Use to find an item to configure or check for duplicates.',
-    parameters: obj({ itemType: S_STRING, workspaceId: S_STRING }, []),
-    handler: async ({ itemType, workspaceId }, ctx) => {
-      const raw = String(itemType ?? '').trim().toLowerCase();
-      const wid = String(workspaceId ?? '').trim() || undefined;
-      const { listOwnedItems, listAllOwnedItems } = await import('@/app/api/items/_lib/item-crud');
-      // No type, "all"/"*", or a workspace filter → list across all types.
-      let items: any[];
-      if (!raw || raw === 'all' || raw === '*' || wid) {
-        items = await listAllOwnedItems(ctx.userOid, wid);
-        if (raw && raw !== 'all' && raw !== '*') {
-          const norm = normalizeItemType(raw);
-          if (!('error' in norm)) items = items.filter((it) => it.itemType === norm.slug);
-        }
-      } else {
-        const norm = normalizeItemType(raw);
-        items = await listOwnedItems('error' in norm ? raw : norm.slug, ctx.userOid);
-      }
-      return items.map((it: any) => ({ id: it.id, itemType: it.itemType, displayName: it.displayName, workspaceId: it.workspaceId }));
+    // Envelope, scope:'tenant' (audited) and access resolution: lib/governance/inventory.ts
+    description: 'List Loom items you can access (id + type + displayName + workspaceId + workspaceName). Omit itemType (or pass "all") to list every type; pass a hyphenated slug to filter; optionally pass workspaceId to scope to one workspace. Returns an envelope {items, total, returned, truncated, nextCursor}: when truncated is true more rows exist - call again with cursor=nextCursor until truncated is false and do not report totals from a partial page. A tenant admin may pass scope:"tenant" for every workspace in the tenant (audited); non-admins asking for it are refused. Use to find an item to configure or check for duplicates.',
+    parameters: listToolParameters({ itemType: S_STRING }),
+    handler: async (a, ctx) => {
+      const raw = String(a.itemType ?? '').trim().toLowerCase();
+      const norm = raw && raw !== 'all' && raw !== '*' ? normalizeItemType(raw) : null;
+      const { itemListTool } = await import('@/lib/governance/inventory');
+      return itemListTool(ctx, { ...a, itemType: norm ? ('error' in norm ? raw : norm.slug) : undefined });
     },
   });
   r.register({
     name: 'workspace_list',
     service: 'Loom',
-    description: 'List the Loom workspaces the current user owns (id + name + description). Use this to answer "what workspaces exist" or to find a workspace id before item_create — do NOT call workspace_create to list.',
-    parameters: obj({}),
-    handler: async (_args, ctx) => {
-      const { listOwnedWorkspaces } = await import('@/app/api/items/_lib/item-crud');
-      return listOwnedWorkspaces(ctx.userOid);
-    },
+    description: 'List the Loom workspaces you can access (id + name + description + domainId): the ones you own plus those shared with you. Returns an envelope {workspaces, total, returned, truncated, nextCursor}: when truncated is true more rows exist - call again with cursor=nextCursor. A tenant admin may pass scope:"tenant" for every workspace in the tenant (audited); non-admins asking for it are refused. Use this to answer "what workspaces exist" or to find a workspace id before item_create — do NOT call workspace_create to list.',
+    parameters: listToolParameters({}),
+    handler: async (a, ctx) => (await import('@/lib/governance/inventory')).workspaceListTool(ctx, a),
   });
+  registerGovernanceInventoryTool(r); // read-only manifest: lib/governance/inventory-tool.ts
 
   // -------- agent-loom: self-audit + healer --------
   // These let the built-in Copilot (agent-loom) review the whole deployment and

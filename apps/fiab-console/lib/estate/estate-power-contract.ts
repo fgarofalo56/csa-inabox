@@ -90,9 +90,23 @@ export interface EstateActivityStatus {
   unreadable: boolean;
 }
 
+/**
+ * Recent pipeline runs, read server-side for idle auto-pause (estate-pipeline-activity.ts).
+ * Same shape `scripts/estate-power/read-activity.mjs` produces; `ok:false` = unknown.
+ */
+export interface EstatePipelineActivity {
+  ok: boolean;
+  reason?: string;
+  runs?: Array<{ startedAt: string | null; status: string | null }>;
+  /** Which sources were read ('adf' | 'synapse'); an unconfigured source is absent. */
+  sources: string[];
+}
+
 /** Added under `power` on every `state` and `preview` response (cookie and SP). */
 export interface EstatePowerStatus {
   activity: EstateActivityStatus;
+  /** Present ONLY on the SP state route (the auto-pause caller), never the panel poll. */
+  pipelineActivity?: EstatePipelineActivity;
   autoPause: EstateAutoPauseSetting;
   /** `pausedAt` of the last snapshot (ISO) or null. */
   lastPausedAt: string | null;

@@ -77,7 +77,6 @@ import {
 import {
   buildPauseInventory,
   dryRunPause,
-  pausableTypeSpec,
   reverifyBeforeAct,
   LOOM_ESTATE_TAG_KEY,
   LOOM_ITEM_TAG_KEY,
@@ -89,6 +88,7 @@ import {
   type PauseScope,
 } from './pause-inventory';
 import { assertNoFalseGreen } from './capacity-preflight';
+import { holdStateForThrottle, throttledDetail, throttleHoldReason } from './pause-throttle';
 import { containerAppPauseGuard } from './pause-guards';
 import { ESTATE_PAUSE_TIER, OUT_OF_TIER_REASONS, TYPICAL_RESUME_SECONDS, orderForResume, resumeRank } from './pause-tier';
 
@@ -123,9 +123,6 @@ export {
 } from './pause-actuator';
 export type { ActuatorResult, EstateActuator, PowerRead, ServabilityProbe };
 
-// A LOCAL binding too — `export … from` re-exports without binding, and the
-// discovery tag reader below derives its api-version from the id's own type.
-import { armTypeFromId } from './pause-actuator';
 
 // ---------------------------------------------------------------------------
 // Planning — R-SCOPE-4
@@ -676,6 +673,8 @@ export interface PausePollResult {
   /** Which ones. Empty unless `drifted`. */
   driftedResources: string[];
   reason: string;
+  /** How many resources' power reads were throttled (429) in this poll. */
+  throttled: number;
 }
 
 /**
@@ -692,6 +691,7 @@ export async function pollPause(
   const progress: ResourceProgress[] = [];
   const driftedResources: string[] = [];
   let confirmed = 0;
+  let throttled = 0;
 
   for (const entry of snapshot.resources) {
     const power = await actuator.readPower(entry);
@@ -727,9 +727,12 @@ export async function pollPause(
             + 'out of band. Loom has NOT re-paused it — the invariant reconciler that would (PRP W6) '
             + 'is not built yet.'
           : `ARM reports ${entry.name} is ${state}.`
-        : `Could not read the ARM power state of ${entry.name}`
-          + `${power.error ? `: ${power.error}` : ''}. Whether it stopped was NOT established.`,
+        : power.throttled
+          ? throttledDetail(entry.name, power.error, 'it stopped')
+          : `Could not read the ARM power state of ${entry.name}`
+            + `${power.error ? `: ${power.error}` : ''}. Whether it stopped was NOT established.`,
     });
+    if (power.throttled) throttled += 1;
   }
 
   const total = snapshot.resources.length;
@@ -756,7 +759,8 @@ export async function pollPause(
   } else {
     reason =
       `${confirmed} of ${total} resource(s) confirmed stopped. The estate is still ${snapshot.state} — `
-      + 'a resource whose state could not be read counts as NOT confirmed.';
+      + 'a resource whose state could not be read counts as NOT confirmed.'
+      + (throttled > 0 ? ` ${throttleHoldReason(throttled, total)}` : '');
   }
 
   return {
@@ -767,6 +771,7 @@ export async function pollPause(
     drifted: driftedResources.length > 0,
     driftedResources,
     reason,
+    throttled,
   };
 }
 
@@ -877,6 +882,8 @@ export interface ResumePollResult {
   reason: string;
   /** True once every resource has settled one way or the other. */
   terminal: boolean;
+  /** How many resources' reads/probes were throttled (429) in this poll. */
+  throttled: number;
 }
 
 /**
@@ -910,10 +917,15 @@ export async function pollResume(
 ): Promise<ResumePollResult> {
   const outcomes: ResumeOutcome[] = [];
   const progress: ResourceProgress[] = [];
+  const throttledIds = new Set<string>();
 
   for (const entry of snapshot.resources) {
     const power = await actuator.readPower(entry);
     let outcome = confirmResume(entry, power.reading, power.error);
+    if (power.throttled) {
+      throttledIds.add(entry.resourceId);
+      outcome = { ...outcome, reason: throttledDetail(entry.name, power.error, 'it is running') };
+    }
     const observed = power.reading?.powerState ?? 'Unknown';
 
     // Where this resource is SUPPOSED to end up. Resume restores the estate to
@@ -937,6 +949,7 @@ export async function pollResume(
       servable = probe.servable;
       probed = probe.probed;
       if (!probe.servable) {
+        if (probe.throttled) throttledIds.add(entry.resourceId);
         outcome = {
           resourceId: entry.resourceId,
           confirmation: 'unknown',
@@ -977,6 +990,14 @@ export async function pollResume(
   }
 
   const verdict = deriveResumeState(snapshot, outcomes);
+  const throttled = throttledIds.size;
+
+  // A verdict manufactured by throttling alone is HELD, never settled (./pause-throttle).
+  const held = holdStateForThrottle(verdict, throttledIds, snapshot.state);
+  if (held) {
+    const reason = throttleHoldReason(throttled, snapshot.resources.length);
+    return { state: held, outcomes, progress, unconfirmed: verdict.unconfirmed, terminal: false, reason, throttled };
+  }
 
   // Still inside the published resume window: report RESUMING rather than a
   // premature failure. This can only DELAY a verdict, never manufacture a
@@ -999,6 +1020,7 @@ export async function pollResume(
         + `confirmed servable, and the resume started ${Math.round((nowMs - startedAt) / 1000)}s ago `
         + `(typical window ${Math.round(settleAfterMs / 1000)}s). Still RESUMING — this is not a `
         + 'success claim, it is a statement that the window has not elapsed.',
+      throttled,
     };
   }
 
@@ -1009,6 +1031,7 @@ export async function pollResume(
     unconfirmed: verdict.unconfirmed,
     terminal: true,
     reason: verdict.reason,
+    throttled,
   };
 }
 
@@ -1451,34 +1474,7 @@ export type {
   TagReadObservationKind,
 } from './pause-discovery-classify';
 
-/**
- * #4243 — the DISCOVERY tag reader: same read contract as the actuator's
- * `readTags` (ARM omitting `tags` is a successful "no tags" -> `{}`; only a
- * throw is a failed read), but routed through `armGetWithRetry`, so a
- * transient 429 is retried honoring `Retry-After` and only a SUSTAINED
- * throttle surfaces — as an `ArmThrottledError` whose message says
- * "throttled", which `partitionDiscovery` (`./pause-discovery-classify`)
- * classifies distinctly from a generic unreachable read.
- *
- * Deliberately NOT wired into `createArmActuator` (`./pause-actuator`): the
- * act-time re-verify must stay single-shot fail-safe — on any doubt it skips
- * the mutation, which is cheaper and safer than retrying at the moment of
- * acting. Discovery is the read whose transient failure was manufacturing
- * drift refusals, so discovery is where the retry goes.
- */
-export function createManifestTagReader(): (
-  resourceId: string,
-) => Promise<Readonly<Record<string, string>> | null> {
-  return async (resourceId: string) => {
-    const { armGetWithRetry } = await import('@/lib/azure/arm-client');
-    const type = armTypeFromId(resourceId);
-    const version = pausableTypeSpec(type)?.armApiVersion ?? '2021-04-01';
-    const body = await armGetWithRetry<{ tags?: Record<string, string> }>(
-      `${resourceId}?api-version=${version}`,
-    );
-    return body?.tags ?? {};
-  };
-}
+export { createManifestTagReader } from './pause-manifest-tag-reader';
 
 /**
  * Name what is missing rather than echoing a raw failure.

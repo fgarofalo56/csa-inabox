@@ -55,9 +55,10 @@ on:
         type: string
         required: true
       admin_subscription:
-        description: 'Subscription id holding the ADMIN plane (hub) — Console UAMI, Key Vault, APIM, Purview, Foundry. REQUIRED — no estate default is shipped.'
+        description: 'Subscription id holding the ADMIN plane (hub) — Console UAMI, Key Vault, APIM, Purview, Foundry. LEAVE EMPTY to use the boundary subscription secret (AZURE_SUBSCRIPTION_ID / AZURE_GOV_SUBSCRIPTION_ID) — dispatch inputs are shown on the public run page, so a sovereign subscription id should not be typed here.'
         type: string
-        required: true
+        required: false
+        default: ''
       dlz_subscription:
         description: 'OPTIONAL OVERRIDE. Subscription id holding the Data Landing Zone (Synapse / Databricks / ADLS). Leave EMPTY: it is discovered from Azure Resource Graph, cross-subscription included. Supply it only to pick between several landing zones.'
         type: string
@@ -482,15 +483,38 @@ jobs:
         if: env.LOOM_MSAL_CLIENT_ID != ''
         env:
           AZURE_CLOUD: ${{ ((inputs.boundary == 'GCC-High' || inputs.boundary == 'IL5') && 'AzureUSGovernment') || 'AzureCloud' }}
+          VERIFY_URL: ${{ vars.LOOM_VERIFY_URL || '' }}
         run: |
           set -euo pipefail
           mkdir -p temp
-          CONSOLE_FQDN=$(az containerapp show -n loom-console -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "properties.configuration.ingress.fqdn" -o tsv 2> temp/estate-power-fqdn.err) || {
-            echo "::warning::Could not resolve the console FQDN (the console URL output will be empty): $(cat temp/estate-power-fqdn.err)"
-            CONSOLE_FQDN=""
-          }
+          # The URL the estate-power lanes CALL, so it must be reachable from a
+          # GitHub runner. The direct ACA ingress FQDN is NOT (2026-10-19: TLS
+          # handshake refused, run 39206389531 "fetch failed") — the same
+          # Front-Door-not-ACA lesson as the 2026-06-17 redirect-URI incident
+          # above. Same precedence as the docs-reindex step: LOOM_VERIFY_URL ->
+          # vanity host -> Front Door endpoint -> ACA FQDN (last resort, warned).
           CONSOLE_URL=""
-          if [ -n "$CONSOLE_FQDN" ]; then CONSOLE_URL="https://$CONSOLE_FQDN"; fi
+          if [ -n "${VERIFY_URL:-}" ]; then
+            CONSOLE_URL="${VERIFY_URL%/}"
+          elif [ -n "${CSA_LOOM_CONSOLE_HOSTS:-}" ]; then
+            CONSOLE_URL="https://${CSA_LOOM_CONSOLE_HOSTS%%,*}"
+          else
+            for AFD_PROFILE in $(az afd profile list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[].name" -o tsv 2> temp/estate-power-afd.err); do
+              FD_HOST=$(az afd endpoint list --profile-name "$AFD_PROFILE" -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[0].hostName" -o tsv 2>> temp/estate-power-afd.err) || FD_HOST=""
+              [ -n "$FD_HOST" ] && [ "$FD_HOST" != "None" ] && { CONSOLE_URL="https://$FD_HOST"; break; }
+            done
+            if [ -z "$CONSOLE_URL" ]; then
+              CONSOLE_FQDN=$(az containerapp show -n loom-console -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "properties.configuration.ingress.fqdn" -o tsv 2> temp/estate-power-fqdn.err) || {
+                echo "::warning::Could not resolve the console FQDN (the console URL output will be empty): $(cat temp/estate-power-fqdn.err)"
+                CONSOLE_FQDN=""
+              }
+              if [ -n "$CONSOLE_FQDN" ]; then
+                CONSOLE_URL="https://$CONSOLE_FQDN"
+                echo "::warning::No LOOM_VERIFY_URL, vanity host or Front Door endpoint resolved (az afd: $(tail -1 temp/estate-power-afd.err 2>/dev/null || echo none)); falling back to the ACA FQDN $CONSOLE_FQDN, which a GitHub runner may NOT be able to reach."
+              fi
+            fi
+          fi
+          echo "::notice::estate-power console URL: ${CONSOLE_URL:-<none>}"
           node scripts/csa-loom/ensure-estate-power-role.mjs --client-id "$LOOM_MSAL_CLIENT_ID" --console-url "$CONSOLE_URL"
 
       - name: Persist console URL + audience as repo variables (PRP-02 step 3 / #4876)
