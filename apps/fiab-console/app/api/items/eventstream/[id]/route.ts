@@ -19,6 +19,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadKustoItem, saveItemState, KustoError } from '@/lib/azure/kusto-client';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
+import { teardownItemBackend } from '@/lib/azure/resource-teardown';
 import { recordItemOpen } from '@/lib/items/record-open';
 
 export const runtime = 'nodejs';
@@ -183,9 +184,26 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: str
   try {
     const item = await loadKustoItem((await ctx.params).id, 'eventstream', session.claims.oid);
     if (!item) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
+    // Tear down the backing Event Hub + Stream Analytics job BEFORE the Cosmos
+    // doc goes (the refs live on it). Best-effort: teardownItemBackend never
+    // throws, and a failed teardown must not make the item undeletable, but it
+    // is SURFACED in the response (never silent) so the caller can see what was
+    // left behind. The job name is derived from the item id, so a later sweep
+    // can still find it.
+    const outcome = await teardownItemBackend(
+      { id: item.id, workspaceId: item.workspaceId, itemType: 'eventstream', displayName: item.displayName, state: item.state as Record<string, unknown> | null },
+      session.claims.oid,
+    );
+    const failed = outcome.resources.filter((r) => r.result === 'error');
     const items = await itemsContainer();
     await items.item(item.id, item.workspaceId).delete();
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({
+      ok: true,
+      teardown: outcome,
+      ...(failed.length
+        ? { warning: `Item deleted, but ${failed.length} backing resource(s) could not be removed: ${failed.map((f) => `${f.kind} ${f.ref}`).join(', ')}.` }
+        : {}),
+    });
   } catch (e: any) {
     const status = e instanceof KustoError ? e.status : 500;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
