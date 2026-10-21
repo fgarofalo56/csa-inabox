@@ -16,11 +16,11 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { loadKustoItem, saveItemState, KustoError } from '@/lib/azure/kusto-client';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { teardownItemBackend } from '@/lib/azure/resource-teardown';
 import { recordItemOpen } from '@/lib/items/record-open';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -112,11 +112,9 @@ function configFromContent(content: any): StreamConfig | null {
   };
 }
 
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
   try {
-    const item = await loadKustoItem((await ctx.params).id, 'eventstream', session.claims.oid);
+    const item = await loadKustoItem(params.id, 'eventstream', session.claims.oid);
     if (!item) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
     // Feed "Recent": type-specific base routes bypass the generic GET's write.
     await recordItemOpen({ oid: session.claims.oid, upn: session.claims.upn }, { id: item.id, itemType: 'eventstream', workspaceId: item.workspaceId });
@@ -165,7 +163,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     const status = e instanceof KustoError ? e.status : 500;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-}
+});
 
 /**
  * DELETE /api/items/eventstream/[id]
@@ -178,11 +176,9 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
  * to tear down on the default path per no-fabric-dependency.md). Returns 404 when
  * the caller's tenant doesn't own it.
  */
-export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const DELETE = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
   try {
-    const item = await loadKustoItem((await ctx.params).id, 'eventstream', session.claims.oid);
+    const item = await loadKustoItem(params.id, 'eventstream', session.claims.oid);
     if (!item) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
     // Tear down the backing Event Hub + Stream Analytics job BEFORE the Cosmos
     // doc goes (the refs live on it). Best-effort: teardownItemBackend never
@@ -208,15 +204,13 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: str
     const status = e instanceof KustoError ? e.status : 500;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-}
+});
 
-export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const PUT = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
   const body = await req.json().catch(() => ({}));
   const config = sanitizeConfig(body?.config ?? body);
   try {
-    const item = await loadKustoItem((await ctx.params).id, 'eventstream', session.claims.oid);
+    const item = await loadKustoItem(params.id, 'eventstream', session.claims.oid);
     if (!item) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
     const saved = await saveItemState(item, {
       source: config.source ?? null,
@@ -239,4 +233,4 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     const status = e instanceof KustoError ? e.status : 500;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-}
+});

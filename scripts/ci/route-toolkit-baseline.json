@@ -548,7 +548,6 @@
     "apps/fiab-console/app/api/items/eventstream/[id]/mirror-cdf/route.ts": 1,
     "apps/fiab-console/app/api/items/eventstream/[id]/provision/route.ts": 1,
     "apps/fiab-console/app/api/items/eventstream/[id]/publish/route.ts": 1,
-    "apps/fiab-console/app/api/items/eventstream/[id]/route.ts": 1,
     "apps/fiab-console/app/api/items/feature-table/[id]/online/route.ts": 1,
     "apps/fiab-console/app/api/items/feature-table/[id]/pit-join/route.ts": 1,
     "apps/fiab-console/app/api/items/feature-table/[id]/route.ts": 1,
