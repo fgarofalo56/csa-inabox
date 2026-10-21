@@ -353,10 +353,11 @@ jobs:
     if: ${{ !cancelled() && needs.resolve.result == 'success' && needs.acr_enable.result == 'success' }}
     runs-on: ubuntu-latest
     # A hung build must not hold billed pool agents indefinitely. The retry
-    # harness caps one az acr build at 90m wall-clock; 120m covers checkout,
-    # scan and sign. On timeout the job fails and pool_release (if: always())
-    # still runs.
-    timeout-minutes: 120
+    # harness caps the build at 110m wall-clock (the run poll gives up at 105m:
+    # a measured default-agent queue + Rust compile was ~89m); 150m covers
+    # checkout, scan and sign. On timeout the job fails and pool_release
+    # (if: always()) still runs.
+    timeout-minutes: 150
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.resolve.outputs.app_matrix) }}
@@ -482,12 +483,21 @@ jobs:
           # a QuotaExceeded or an OOM-killed compile still fails on attempt 1
           # rather than burning three attempts and then reporting a less accurate
           # error. An unclassifiable failure fails closed.
+          # THE VERDICT IS THE ACR RUN STATUS, NOT THE LOG STREAM. `az acr build`
+          # streams the task log over a SAS that expires ~70 min after submission.
+          # Run 39634317953: loom-directlake queued 52 min, SUCCEEDED and pushed
+          # :v0.1, but the stream died with AuthenticationFailed, the step went red
+          # and the Trivy gate + cosign signing were SKIPPED on an already-pushed
+          # image. acr-build-run.mjs submits with --no-wait, streams logs
+          # best-effort (a stream error is a warning, nothing more), polls
+          # `az acr task show-run`, and decides via acr-run-verdict.mjs.
           node "$GITHUB_WORKSPACE/scripts/ci/deploy-retry.mjs" \
             --class-allow transient \
-            --max-attempts 3 --backoff 45 --jitter 0.3 --wall-clock 90m \
+            --max-attempts 3 --backoff 45 --jitter 0.3 --wall-clock 110m \
             --step "az acr build (${{ matrix.name }})" \
             --artifact "$GITHUB_WORKSPACE/deploy-failure.json" \
-            -- az acr build \
+            -- node "$GITHUB_WORKSPACE/scripts/ci/acr-build-run.mjs" \
+            --max-minutes 105 --poll-seconds 30 -- \
             --registry "$ACR" $POOL_ARGS \
             --image "${{ matrix.name }}:${TAG}" \
             --image "${{ matrix.name }}:${{ github.sha }}" \
