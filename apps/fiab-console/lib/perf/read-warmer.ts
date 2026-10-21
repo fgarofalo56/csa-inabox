@@ -137,6 +137,7 @@
  * over `fetchWithTimeout` — so that helper covers NO warm target today.
  */
 
+import { randomUUID } from 'node:crypto';
 import { buildScopedCacheKey, getOrComputeCached, resolveBackendTtl } from '@/lib/azure/query-result-cache';
 import type { ArmThrottledError } from '@/lib/azure/arm-client';
 // A zero-dependency leaf module ON PURPOSE: reading the marker must not pull in
@@ -806,7 +807,7 @@ export function createReadWarmer(deps: ReadWarmerDeps = {}): ReadWarmer {
   const acquireLease = deps.acquireLease
     ?? createDefaultLeaseAcquirer(
       WARM_INTERVAL_MS,
-      `${process.env.CONTAINER_APP_REPLICA_NAME || process.env.HOSTNAME || 'local'}-${Math.random().toString(36).slice(2, 8)}`,
+      `${process.env.CONTAINER_APP_REPLICA_NAME || process.env.HOSTNAME || 'local'}-${randomUUID().slice(0, 8)}`,
     );
   const warn = deps.warn ?? ((m: string) => { console.warn(m); });
 
