@@ -925,16 +925,23 @@ describe(`the COMMITTED ${SCALABILITY_SOURCE}`, () => {
       'loom-redis-oss',
       'loom-risingwave',
     ]);
-    expect(unresolvedShape.map(nameOf).sort()).toEqual(['loom-trino', 'loom-unity']);
-    expect(elastic).toHaveLength(21);
-    // 7 of 27 stay performable. The five apps from the generic `apps[]` loop are
+    // direct-lake-shim #5068: its `minReplicas` is now `loomDirectLakeShimEnabled ? 1 : 0`,
+    // a parameter-dependent shape the derivation cannot resolve, so it joins the
+    // unresolved-shape bucket (2 -> 3), elastic goes 21 -> 20 and performable 7 -> 6.
+    // That is the safe direction: an unevaluated replica shape refuses.
+    expect(unresolvedShape.map(nameOf).sort()).toEqual([
+      'loom-direct-lake-shim',
+      'loom-trino',
+      'loom-unity',
+    ]);
+    expect(elastic).toHaveLength(20);
+    // 6 of 27 stay performable. The five apps from the generic `apps[]` loop are
     // there because expanding that loop turned them from an UNBOUNDED population
     // hole into real, elastic declarations. `loom-console` is NOT among them —
     // the `self` arm refuses it. Over-refusal on a destructive action is the safe
     // direction, but which apps it covers is recorded, never implied.
     expect(performable).toEqual([
       'loom-activator',
-      'loom-direct-lake-shim',
       'loom-mcp',
       'loom-mcp-bridge',
       'loom-mirroring',
