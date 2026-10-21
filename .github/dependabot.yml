@@ -96,6 +96,15 @@ updates:
       interval: "weekly"
     labels: ["dependencies", "ci"]
     open-pull-requests-limit: 5
+    # Azure/login 2 -> 3 (#5059, 2026-10-21) fails the Copilot quality evals login:
+    # "Login failed ... Not all parameters are provided in 'creds'". About 126 workflow
+    # sites pass a `creds:` JSON (Gov ones with extra endpoint fields), so v3 is a
+    # migration across every deploy lane, not a bump. Hold the major; minor/patch of
+    # v2 still arrive. Lift with a migration PR that moves every lane and proves a
+    # Commercial and a GCC-High login.
+    ignore:
+      - dependency-name: "Azure/login"
+        update-types: ["version-update:semver-major"]
     # github/codeql-action/{init,autobuild,analyze} are three actions from ONE
     # repo that MUST run the same release. Bumping them separately is not a
     # partial upgrade, it is an outage: on 2026-08-09 `init` sat at v4.37.6
