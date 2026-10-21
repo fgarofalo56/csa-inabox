@@ -23,6 +23,7 @@ import {
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope } from './cloud-endpoints';
 import { fetchWithTimeout } from './fetch-with-timeout';
+import { beginArmRead } from './arm-read-gate';
 import { isAbsoluteHttpUrl, resolveSameOriginUrl } from '@/lib/util/same-origin-url';
 
 const ARM_SCOPE = armScope();
@@ -67,7 +68,7 @@ async function armFetch(path: string, init?: RequestInit, timeoutMs?: number): P
   // page) spin forever. 202 LROs are polled by the caller; each poll round-trip
   // inherits this same per-request ceiling. `timeoutMs` lets a PagingBudget hand
   // a nextLink walk's REMAINING wall clock down to one page (#2557/#2582).
-  return fetchWithTimeout(armUrl(path), {
+  const doFetch = () => fetchWithTimeout(armUrl(path), {
     ...init,
     headers: {
       ...(init?.headers || {}),
@@ -75,6 +76,19 @@ async function armFetch(path: string, init?: RequestInit, timeoutMs?: number): P
       'content-type': 'application/json',
     },
   }, timeoutMs); // undefined => the shared DEFAULT_SERVER_FETCH_TIMEOUT_MS
+  // Per-caller read counter (+ the warmer gate inside a warmer cycle). GETs only;
+  // observation/pacing — the request itself is unchanged.
+  if (init?.method && init.method !== 'GET') return doFetch();
+  const ticket = await beginArmRead();
+  let res: Response;
+  try {
+    res = await doFetch();
+  } catch (e) {
+    ticket.done(null);
+    throw e;
+  }
+  ticket.done(res.status, res.headers?.get?.('retry-after'));
+  return res;
 }
 
 async function jsonOrThrow<T = any>(res: Response, label: string): Promise<T> {
