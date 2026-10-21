@@ -35,10 +35,10 @@ export function decideRunVerdict(run, { elapsedMs = 0, maxMs = Infinity } = {}) 
     return { verdict: 'fail', reason: 'the run status could not be read, so success was NOT established' };
   }
   if (status === 'Succeeded') return { verdict: 'continue', reason: 'ACR run status is Succeeded' };
-  if (TERMINAL_FAIL.includes(status)) return { verdict: 'fail', reason: `ACR run finished with status ${status}` };
+  if (TERMINAL_FAIL.includes(status)) return { verdict: 'fail', reason: `ACR run finished with status ${status === 'Timeout' ? 'TimeLimitExceeded' : status}` };
   if (IN_FLIGHT.includes(status)) {
     if (elapsedMs >= maxMs) {
-      return { verdict: 'fail', reason: `timed out: run still ${status} after ${Math.round(elapsedMs / 60000)} min (limit ${Math.round(maxMs / 60000)} min)` };
+      return { verdict: 'fail', reason: `poll limit reached: run still ${status} after ${Math.round(elapsedMs / 60000)} min (limit ${Math.round(maxMs / 60000)} min)` };
     }
     return { verdict: 'wait', reason: `run is ${status}` };
   }
