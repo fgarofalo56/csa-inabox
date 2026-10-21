@@ -248,3 +248,25 @@ Recommended but NOT applied (need your call or later evidence):
 - `.github/workflows/governance-w0-measure.yml` (workflow_dispatch only, `contents: read`, not dispatched).
 - Mutation evidence (sandbox copy under `temp/`, tracked tree untouched): 5 mutations, all RED (killed): remove the `diffRegistered` INCONCLUSIVE guard; remove the `readList` `value[]` check; remove the inventory positive control; widen `isLoomOwned` to every `rg-` group; accept a non-2xx audience probe.
 - Gates run: the six `scripts/ci/check-*` checks pass on the new workflow; `extract-security-graph.mjs` drifted by +4 nodes from the new scripts and was regenerated in this commit (additions only); Snyk Code scan of `scripts/measure` authenticated and returned 4 pre-existing Medium findings in `drain-status.mjs` and `red-tally.mjs` (CWE-78 through `measure.mjs`), none in the governance files.
+
+## 10. Live receipt: Commercial measure run (added 2026-10-20)
+
+Run `governance-w0-measure.yml` (boundary Commercial), GitHub Actions run **39522529002**, dispatched 2026-10-20 from main. The job exited 2 by design (the Purview data-plane datum is BLOCKED); the JSON artifact `governance-w0-commercial.json` was uploaded and read.
+
+| Datum | State | Value |
+|---|---|---|
+| ARM inventory across the 4 Limitless subscriptions | MEASURED | positive control read 51 storage accounts; 0 blocked reads |
+| Loom-owned resources | MEASURED | storage 18 of 51, Kusto 1, Event Hubs 1 of 5, Azure SQL servers 3 of 9, SQL databases 5 of 17, AAS 2, Synapse workspaces 1 of 3, SQL pool 1, Databricks 1 of 4, Purview accounts 1 |
+| Expected Purview sources | MEASURED | 6: ADX `adx-csa-loom-z52x3p`, 2 Azure SQL databases (`sql-loom-plan-k6mvh5sm6z7do`, `sql-loom-e2e-cus`), ADLS Gen2 `saloomdefaulttr4nm4dcgsq`, Synapse `syn-loom-default-centralus`, Databricks `adb-loom-default-centralus` |
+| Not scannable as a Data Map source | MEASURED | AAS `aasloomk6mvh5sm6z7do`, Event Hubs `evhns-loom-default-centralus`, SQL server `loomdefault` (Event Hubs = entity plus lineage only, per D9) |
+| Purview data plane from a GitHub-hosted runner | **BLOCKED, now explained** | A token for audience `https://purview.azure.net` was minted, and the data plane answered HTTP **403** `AccountProtectedByPrivateEndpoint` ("Not authorized to access account") on `purview-csa-loom-eastus2.purview.azure.com`. |
+| Registered sources, scans, last runs | BLOCKED | not readable from a public runner |
+| Registered-vs-expected diff | INCONCLUSIVE | the registered list was not read |
+
+### What this changes in the design (PRP sections 4, 5, 6 and decision D11)
+
+1. **The Purview Data Map is reachable only from inside the network.** `publicNetworkAccess` is Disabled with 2 private endpoints, and a public runner gets 403. So Data Map calls (register source, create scan, run scan, read status) must come from a host in the VNet: the Console (its UAMI), or the in-VNet reconcile job (D11). They must NOT come from a GitHub-hosted Actions runner. W4 and W5 acceptance receipts for the Data Map must therefore be taken through the console or the in-VNet job, not through a hosted-runner workflow. Gov (GCC-High) is expected to behave the same way; confirm with the same workflow there.
+2. **Copilot tools run inside the console**, which already sits on the private network. No new network path is needed for the Copilot side.
+3. **The workflow is still useful** for the ARM-side facts (inventory, expected sources, cost inputs), which are all MEASURED above.
+4. **Scans of private-endpoint sources** (the lakehouse account, Synapse, SQL, ADX, Databricks) still need a managed-VNet or self-hosted integration runtime. That remains W3/W4's job and is not measured here.
+5. **Still BLOCKED** and owned by W4/W5 via the in-VNet host: the registered-source list, existing scans, and Purview quotas.

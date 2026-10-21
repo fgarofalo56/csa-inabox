@@ -48,6 +48,7 @@ vi.mock('@/lib/estate/pause-orchestrator', async (importOriginal) => {
 import { armPowerReading, type EstatePauseSnapshot } from '@/lib/estate/pause-state';
 import { previewToken } from '@/lib/estate/pause-orchestrator';
 import { __setEntraJwksForTest } from '@/lib/azure/entra-bearer-verify';
+import { clearStateCache } from '@/lib/estate/estate-state-cache';
 
 const TENANT = '11111111-2222-3333-4444-555555555555';
 const OTHER_TENANT = '99999999-2222-3333-4444-555555555555';
@@ -162,6 +163,7 @@ let saved: Record<string, string | undefined> = {};
 
 beforeEach(() => {
   vi.clearAllMocks();
+  clearStateCache(); // the state verdict is cached per tenant; each test is a fresh estate
   saved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
   for (const k of ENV_KEYS) delete process.env[k];
   process.env.LOOM_ENTRA_TENANT_ID = TENANT;

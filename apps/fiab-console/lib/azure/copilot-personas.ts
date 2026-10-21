@@ -962,6 +962,7 @@ export const PERSONA_REGISTRY: Record<ContextSlug, PersonaEntry> = {
       'item_list',
       'item_configure',
       'workspace_list',
+      'governance_inventory',
       'lakehouse_list',
     ],
     suggestedPrompts: [
@@ -994,6 +995,7 @@ export const PERSONA_REGISTRY: Record<ContextSlug, PersonaEntry> = {
       'databricks_run_notebook',
       'item_list',
       'workspace_list',
+      'governance_inventory',
     ],
     suggestedPrompts: ['Explain this cell', 'Fix the error', 'Optimize this cell', 'Add comments'],
     systemPrompt: (p) =>
@@ -1018,6 +1020,7 @@ export const PERSONA_REGISTRY: Record<ContextSlug, PersonaEntry> = {
       'item_list',
       'item_configure',
       'workspace_list',
+      'governance_inventory',
     ],
     suggestedPrompts: [
       'List files in the bronze container',
@@ -1047,6 +1050,7 @@ export const PERSONA_REGISTRY: Record<ContextSlug, PersonaEntry> = {
       'item_list',
       'item_configure',
       'workspace_list',
+      'governance_inventory',
     ],
     suggestedPrompts: [
       'List my pipelines',
@@ -1074,6 +1078,7 @@ export const PERSONA_REGISTRY: Record<ContextSlug, PersonaEntry> = {
       'adx_list_tables',
       'item_list',
       'workspace_list',
+      'governance_inventory',
     ],
     suggestedPrompts: [
       'Explain this KQL query',
@@ -1099,6 +1104,7 @@ export const PERSONA_REGISTRY: Record<ContextSlug, PersonaEntry> = {
       'item_list',
       'item_configure',
       'workspace_list',
+      'governance_inventory',
       'synapse_serverless_query',
       'adx_query',
       'lakehouse_list',
@@ -1138,6 +1144,7 @@ export const PERSONA_REGISTRY: Record<ContextSlug, PersonaEntry> = {
       'item_list',
       'item_configure',
       'workspace_list',
+      'governance_inventory',
       'loom_self_audit',
     ],
     suggestedPrompts: [
