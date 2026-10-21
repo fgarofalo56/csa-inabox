@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { clampCount, decideRelease, release } from '../acr-build-pool.mjs';
+import { clampCount, decideRelease, release, acquire, resolvePoolApps } from '../acr-build-pool.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const WF = (process.env.ACR_POOL_TEST_WF
@@ -132,7 +132,7 @@ test('workflow: pool_release exists, is if: always(), and needs resolve+acr_enab
   const needs = /^ {4}needs: \[([^\]]*)\]/m.exec(J.pool_release);
   assert.ok(needs, 'pool_release must declare needs');
   const set = needs[1].split(',').map((x) => x.trim());
-  for (const j of Object.keys(J).filter((k) => ['resolve', 'acr_enable', 'build'].includes(k))) {
+  for (const j of Object.keys(J).filter((k) => ['resolve', 'acr_enable', 'pool_acquire', 'build'].includes(k))) {
     assert.ok(set.includes(j), `pool_release must need ${j}; adding a build job without listing it turns this red`);
   }
   assert.match(J.pool_release, /acr-build-pool\.mjs release /, 'must call the read-back release script');
@@ -150,10 +150,11 @@ test('workflow: build jobs have a hard timeout-minutes', () => {
   assert.ok(Number(t[1]) <= 180, `timeout ${t[1]} is above 180`);
 });
 test('workflow: scale-up uses the clamped shared count, never a literal --count 1', () => {
-  assert.match(J.build, /acr-build-pool\.mjs" clamp "\$POOL_AGENT_COUNT"/, 'scale-up must go through the clamp');
-  assert.match(J.build, /--count "\$WANT"/, 'update must use the clamped value');
-  assert.doesNotMatch(J.build, /agentpool update[^\n]*--count 1\b/, 'a literal --count 1 bypasses POOL_AGENT_COUNT');
-  assert.doesNotMatch(J.build, /agentpool update[^\n]*--count 0\b/, 'scale-down belongs to pool_release only; an in-step one is skipped on failure');
+  assert.match(J.pool_acquire, /acr-build-pool\.mjs clamp "\$POOL_AGENT_COUNT"/, 'scale-up must go through the clamp');
+  assert.match(J.pool_acquire, /acquire --acr "\$ACR" --pool "\$BUILD_POOL_NAME" --count "\$WANT"/, 'acquire must use the clamped value');
+  for (const j of ['build', 'pool_acquire']) {
+    assert.doesNotMatch(J[j], /agentpool update/, `${j}: no direct az scale; the scripted acquire/release own every scale call`);
+  }
 });
 test('workflow: POOL_AGENT_COUNT defaults 2 for Commercial and 1 for Gov', () => {
   const line = /^ {2}POOL_AGENT_COUNT: (.*)$/m.exec(text);
@@ -166,8 +167,8 @@ test('workflow: POOL_AGENT_COUNT defaults 2 for Commercial and 1 for Gov', () =>
 // ---- routing: exactly the declared heavy images use the pool -------------
 const HEAVY = ['loom-console', 'loom-directlake'];
 const poolApps = () => {
-  const m = /^ {2}POOL_APPS: (.*)$/m.exec(text);
-  assert.ok(m, 'env POOL_APPS must exist');
+  const m = /^ {2}POOL_APPS_DEFAULT: (.*)$/m.exec(text);
+  assert.ok(m, 'env POOL_APPS_DEFAULT must exist');
   return m[1].trim().split(',').map((x) => x.trim());
 };
 test('routing: POOL_APPS is exactly console + directlake', () => {
@@ -190,4 +191,82 @@ test('routing: --agent-pool is applied only through the POOL_APPS case gate', ()
   const lits = step.split('\n').filter((l) => /--agent-pool/.test(l) && !/^\s*#/.test(l));
   assert.deepEqual(lits.map((l) => l.trim()), ['POOL_ARGS="--agent-pool $POOL"'], 'a second non-comment --agent-pool site would route an app outside the gate');
   assert.doesNotMatch(step, /matrix\.name \}\}" = "loom-console"/, 'a hard-coded console-only gate bypasses POOL_APPS');
+});
+
+// ---- acquire (single scale-up, tolerant of a concurrent update) ----------
+/** az fake whose `show` returns the next count in `counts` (last repeats). */
+function acquireAz({ counts, updateFails = false, pools = [{ name: 'p' }] }) {
+  const calls = [];
+  let i = 0;
+  const az = (args) => {
+    const j = args.join(' ');
+    calls.push(j);
+    if (j.startsWith('acr agentpool list')) return { ok: true, value: pools };
+    if (j.startsWith('acr agentpool create')) return { ok: true, value: {} };
+    if (j.startsWith('acr agentpool update')) return updateFails ? { ok: false, err: 'Conflict: operation in progress' } : { ok: true, value: {} };
+    if (j.startsWith('acr agentpool show')) { const c = counts[Math.min(i, counts.length - 1)]; i += 1; return { ok: true, value: { count: c } }; }
+    return { ok: false, err: 'unexpected ' + j };
+  };
+  return { az, calls };
+}
+test('acquire: scales 0 -> 2 and reads back', () => {
+  const f = acquireAz({ counts: [0, 2] });
+  const r = acquire('acr', 'p', 2, f.az);
+  assert.equal(r.code, 0);
+  assert.ok(f.calls.some((c) => c.includes('--count 2')), 'a pool at 0 must be updated to 2');
+});
+test('acquire: a CONCURRENT update (our update 409s) is tolerated when the re-read shows count >= want', () => {
+  const f = acquireAz({ counts: [0, 2], updateFails: true });
+  const r = acquire('acr', 'p', 2, f.az, { attempts: 3 });
+  assert.equal(r.code, 0, 'update error + re-read count=2 must proceed');
+});
+test('acquire: FAILS when count stays below want after all attempts (count 1 < 2)', () => {
+  const f = acquireAz({ counts: [0, 1, 1, 1, 1, 1, 1], updateFails: true });
+  const slept = [];
+  const r = acquire('acr', 'p', 2, f.az, { attempts: 3, sleep: (ms) => slept.push(ms) });
+  assert.equal(r.code, 1, 'count=1 < want=2 must fail loudly');
+  assert.match(r.msg, /did NOT reach count 2/);
+  assert.equal(slept.length, 2, 'bounded: attempts=3 sleeps exactly twice');
+  assert.equal(f.calls.filter((c) => c.startsWith('acr agentpool update')).length, 3);
+});
+test('acquire: a pool already above want is accepted without an update', () => {
+  const f = acquireAz({ counts: [3] });
+  assert.equal(acquire('acr', 'p', 2, f.az).code, 0);
+  assert.equal(f.calls.some((c) => c.startsWith('acr agentpool update')), false);
+});
+test('acquire: creates the pool when absent', () => {
+  const f = acquireAz({ counts: [2], pools: [] });
+  assert.equal(acquire('acr', 'p', 2, f.az).code, 0);
+  assert.ok(f.calls.some((c) => c.startsWith('acr agentpool create') && c.includes('--tier S3')));
+});
+
+// ---- pool_apps resolution + run-filter fail-closed -----------------------
+test('resolvePoolApps: default / none / list / malformed', () => {
+  assert.deepEqual(resolvePoolApps('default', 'a,b'), ['a', 'b']);
+  assert.deepEqual(resolvePoolApps('', 'a,b'), ['a', 'b']);
+  assert.deepEqual(resolvePoolApps('none', 'a,b'), [], '"none" must put nothing on the pool');
+  assert.deepEqual(resolvePoolApps('x, y', 'a,b'), ['x', 'y']);
+  assert.throws(() => resolvePoolApps('x;rm -rf', 'a'), /invalid app name/, 'a shell metachar must be rejected');
+});
+test('release: fails CLOSED if listed runs carry no agentPoolName key at all (renamed field)', () => {
+  const f = fakeAz({ runs: [{ somethingElse: 'p' }] });
+  const r = release('acr', 'p', f.az);
+  assert.equal(r.code, 1, 'rows without the key must not be read as "no active runs"');
+  assert.equal(updated(f.calls), false);
+  // positive pair: rows WITH the key (null = default agent) are readable and do not block.
+  const g = fakeAz({ runs: [{ agentPoolName: null }] });
+  release('acr', 'p', g.az);
+  assert.equal(updated(g.calls), true);
+});
+test('workflow: pool_acquire exists, build needs it but tolerates its failure, release needs it', () => {
+  assert.ok(J.pool_acquire, 'pool_acquire job must exist');
+  assert.match(J.pool_acquire, /^ {4}needs: \[resolve, acr_enable\]/m);
+  assert.match(J.pool_acquire, /acr-build-pool\.mjs acquire /);
+  assert.match(J.build, /^ {4}needs: \[[^\]]*pool_acquire[^\]]*\]/m, 'both pool legs must wait for the single scale-up');
+  assert.match(J.build, /^ {4}if: \$\{\{ !cancelled\(\)/m, 'build must not require pool_acquire success (default-agent images still build); and !cancelled() not always()');
+  assert.doesNotMatch(J.build, /^ {4}if: .*always\(\)/m, 'always() would start builds on a cancelled run');
+  assert.match(J.build, /needs\.pool_acquire\.result \}\}" != "success"/, 'a pool leg must fail loudly when acquire did not succeed');
+});
+test('workflow: pool_apps input exists on dispatch and call', () => {
+  assert.equal((text.match(/^ {6}pool_apps:/gm) || []).length, 2, 'workflow_dispatch and workflow_call must both declare pool_apps');
 });

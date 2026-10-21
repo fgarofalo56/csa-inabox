@@ -56,6 +56,10 @@ on:
         description: 'Comma-separated app list, or "all"'
         type: string
         default: all
+      pool_apps:
+        description: 'Apps to build on the dedicated pool (--agent-pool): comma list, or "default" (loom-console,loom-directlake), or "none" (every app on default agents). Lets the operator flip routing at dispatch without a code change.'
+        type: string
+        default: default
       pool_agent_count:
         description: 'Agents to scale the loom-console build pool UP to for this run (clamped 1..4 by scripts/ci/acr-build-pool.mjs). Blank = 2 on Commercial, 1 on GCC-High/IL5. The pool_release job scales it back to 0 and reads the count back.'
         type: string
@@ -84,6 +88,9 @@ on:
       pool_agent_count:
         type: string
         default: ''
+      pool_apps:
+        type: string
+        default: default
   push:
     branches: [main]
     paths:
@@ -177,7 +184,11 @@ env:
   # Comma-separated, exact names. Sized with POOL_AGENT_COUNT=2 = one agent per
   # heavy app (Learn documents S3 = 8 CPU / 16 GB PER INSTANCE and does not state
   # how many task runs one instance executes concurrently, so we assume 1).
-  POOL_APPS: loom-console,loom-directlake
+  POOL_APPS_DEFAULT: loom-console,loom-directlake
+  # Raw operator override: 'default' | 'none' | comma list. Resolved (and
+  # shape-validated) by `acr-build-pool.mjs pool-apps`; push runs have no
+  # inputs so they get 'default'.
+  POOL_APPS_INPUT: ${{ inputs.pool_apps || 'default' }}
 
 jobs:
   resolve:
@@ -333,7 +344,13 @@ jobs:
 
   build:
     name: Build ${{ matrix.name }} via ACR Tasks
-    needs: [resolve, acr_enable]
+    needs: [resolve, acr_enable, pool_acquire]
+    # pool_acquire may be skipped (no pool app in this run) or FAIL (ARM). Either
+    # way default-agent images must still build, so the job does not require
+    # pool_acquire to succeed; a pool-routed leg checks its result in the build
+    # step and fails LOUDLY itself. !cancelled() (not always()) so a cancelled
+    # run does not start new builds.
+    if: ${{ !cancelled() && needs.resolve.result == 'success' && needs.acr_enable.result == 'success' }}
     runs-on: ubuntu-latest
     # A hung build must not hold billed pool agents indefinitely. The retry
     # harness caps one az acr build at 90m wall-clock; 120m covers checkout,
@@ -427,14 +444,17 @@ jobs:
           # the pool is simply created on first use.
           POOL="$BUILD_POOL_NAME"
           POOL_ARGS=""
+          POOL_APPS=$(node "$GITHUB_WORKSPACE/scripts/ci/acr-build-pool.mjs" pool-apps --input "$POOL_APPS_INPUT" --default "$POOL_APPS_DEFAULT")
           case ",$POOL_APPS," in *",${{ matrix.name }},"*)
-            az acr agentpool show -r "$ACR" -n "$POOL" -o none 2>/dev/null \
-              || az acr agentpool create -r "$ACR" -n "$POOL" --tier S3 -o none
-            WANT=$(node "$GITHUB_WORKSPACE/scripts/ci/acr-build-pool.mjs" clamp "$POOL_AGENT_COUNT")
-            CNT=$(az acr agentpool show -r "$ACR" -n "$POOL" --query count -o tsv | tr -d '\r')
-            [ "${CNT:-0}" -ge "$WANT" ] || az acr agentpool update -r "$ACR" -n "$POOL" --count "$WANT" -o none
+            # The pool is scaled up ONCE by the pool_acquire job (no per-leg
+            # race). A pool app whose acquire did not succeed fails here, loudly,
+            # instead of queueing on a pool at count 0.
+            if [ "${{ needs.pool_acquire.result }}" != "success" ]; then
+              echo "::error::${{ matrix.name }} is routed to pool $POOL but pool_acquire result was '${{ needs.pool_acquire.result }}', so the pool is not known to be scaled up. Failing this image; default-agent images are unaffected. Re-run, or dispatch with pool_apps=none to build it on default agents."
+              exit 1
+            fi
             POOL_ARGS="--agent-pool $POOL"
-            echo "::notice::#2706 - building ${{ matrix.name }} on ACR agent pool: $POOL (boundary=$BOUNDARY, scaled to $WANT agent(s); scale-down is the pool_release job)"
+            echo "::notice::#2706 - building ${{ matrix.name }} on ACR agent pool: $POOL (boundary=$BOUNDARY; scale-down is the pool_release job)"
             ;;
           esac
           # loom-uat carries the Playwright specs, but apps/fiab-console/.dockerignore
@@ -720,6 +740,66 @@ jobs:
   # re-lock. If another run legitimately holds it (a Gov roll, a human's
   # deploy-*-job.sh), this job waits — bounded, 25 min by default — and then
   # fails loudly naming the holder rather than stomping on it.
+  # ONE scale-up for the whole run. Both pool-routed build legs used to scale
+  # the pool themselves at the same instant (show + update --count N), so a
+  # concurrent-update 409 from ARM could fail an image. This job scales once,
+  # tolerates an in-progress update by re-reading the count (bounded retry in
+  # acr-build-pool.mjs acquire), reads it back, and fails loudly if the pool
+  # never reaches the wanted count.
+  pool_acquire:
+    name: Scale build pool up (read back)
+    needs: [resolve, acr_enable]
+    if: ${{ !cancelled() && needs.resolve.result == 'success' && needs.acr_enable.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Azure login (Commercial)
+        if: env.BOUNDARY == 'Commercial'
+        uses: azure/login@v2.3.0
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+      - name: Azure login (Gov)
+        if: env.BOUNDARY != 'Commercial'
+        uses: azure/login@v2.3.0
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+      - name: Set Azure cloud to Gov
+        if: env.BOUNDARY != 'Commercial'
+        run: az cloud set --name AzureUSGovernment
+      - name: Scale the build pool up and read the count back
+        env:
+          ACR: ${{ needs.resolve.outputs.acr_name }}
+          MATRIX: ${{ needs.resolve.outputs.app_matrix }}
+        run: |
+          set -uo pipefail
+          POOL_APPS=$(node scripts/ci/acr-build-pool.mjs pool-apps --input "$POOL_APPS_INPUT" --default "$POOL_APPS_DEFAULT") || exit 1
+          NEED=$(jq -r --arg a ",$POOL_APPS," '[.include[].name | select($a | contains("," + . + ","))] | length' <<< "$MATRIX")
+          if [ "${NEED:-0}" = "0" ]; then
+            echo "No app in this run is routed to the pool (pool apps: ${POOL_APPS:-none}); pool left untouched."
+            exit 0
+          fi
+          WANT=$(node scripts/ci/acr-build-pool.mjs clamp "$POOL_AGENT_COUNT")
+          node scripts/ci/acr-build-pool.mjs acquire --acr "$ACR" --pool "$BUILD_POOL_NAME" --count "$WANT"
+
   acr_enable:
     name: Acquire ACR firewall lease + open (temp)
     needs: resolve
@@ -862,7 +942,7 @@ jobs:
   # the pool): it says so and leaves it to acr-agentpool-reaper.yml.
   pool_release:
     name: Scale build pool to 0 (read back)
-    needs: [resolve, acr_enable, build]
+    needs: [resolve, acr_enable, pool_acquire, build]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 15
