@@ -25,6 +25,39 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.113.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.112.1...csa-inabox-v0.113.0) (2026-10-21)
+
+
+### Features
+
+* **governance:** W0 measurement spike for governance autopilot ([#5016](https://github.com/fgarofalo56/csa-inabox/issues/5016)) ([8261467](https://github.com/fgarofalo56/csa-inabox/commit/8261467cf4a5dcb9a94e4f4fa29a0fc6576b1939))
+* **governance:** W1 Copilot visibility fixes + governance_inventory read tool ([#5042](https://github.com/fgarofalo56/csa-inabox/issues/5042)) ([92242c5](https://github.com/fgarofalo56/csa-inabox/commit/92242c5b2eee4e623d5f220ea11485a81553db24))
+
+
+### Bug Fixes
+
+* **ci:** nightly UAT surfaces its real failure, can file its issue, and stands down when the estate is declared paused ([#5045](https://github.com/fgarofalo56/csa-inabox/issues/5045)) ([#5050](https://github.com/fgarofalo56/csa-inabox/issues/5050)) ([491b414](https://github.com/fgarofalo56/csa-inabox/commit/491b4145f550fdce76addf72aafdad54d2065227))
+* **console:** set runtime heap ceiling to 1536 MiB and log process memory every 60 s ([#5057](https://github.com/fgarofalo56/csa-inabox/issues/5057)) ([fd8c9bf](https://github.com/fgarofalo56/csa-inabox/commit/fd8c9bf17be2998b70ffedeeb5e0a853be6ee84a))
+* **console:** stop the read-warmer exhausting the Console UAMI ARM read quota ([#5041](https://github.com/fgarofalo56/csa-inabox/issues/5041)) ([e8484fe](https://github.com/fgarofalo56/csa-inabox/commit/e8484fea803217f685afe87ec50b91e57b5eb604))
+* **deps:** bump certifi to 2026.10.19 in the eight remaining pip locks (GHSA-6q48-6c7w-9gw2) ([#5049](https://github.com/fgarofalo56/csa-inabox/issues/5049)) ([65a10f2](https://github.com/fgarofalo56/csa-inabox/commit/65a10f23e415a82ece6e6d75a977495eeb40728b))
+* **deps:** bump next 15.5.24 -&gt; 15.5.27 in fiab-console (GHSA-4jqv-mc3x-m676, GHSA-mcj8-r9mp-w47p) ([#5047](https://github.com/fgarofalo56/csa-inabox/issues/5047)) ([f6703f2](https://github.com/fgarofalo56/csa-inabox/commit/f6703f267746467d663ae136efa2cd10018a429a))
+* **deps:** console security bumps with CVE floors in both pnpm homes ([#5018](https://github.com/fgarofalo56/csa-inabox/issues/5018)) ([2998abf](https://github.com/fgarofalo56/csa-inabox/commit/2998abf5acb738cbd4b1eb6c938ce6cc62d7ba2b))
+* **deps:** vitest ^4.1.11 in loom-sdk, loom-cli, fiab-label-propagation (GHSA-82fw-gwwq-j7x9) ([#5019](https://github.com/fgarofalo56/csa-inabox/issues/5019)) ([80176ff](https://github.com/fgarofalo56/csa-inabox/commit/80176ffb7a36887816f88c9605f68f2ba54d3a6b))
+* **estate:** a throttled ARM read is not a verdict - retry, hold state, share one fan-out ([#5039](https://github.com/fgarofalo56/csa-inabox/issues/5039)) ([057173e](https://github.com/fgarofalo56/csa-inabox/commit/057173e4320c4ce89fd03ada868be0c612e8b814))
+* **eventstream:** stop leaking Stream Analytics jobs (delete path + UAT cascade) ([#5044](https://github.com/fgarofalo56/csa-inabox/issues/5044)) ([1d41e22](https://github.com/fgarofalo56/csa-inabox/commit/1d41e228a5161f1bed26581bd58efb86445f772a))
+* **msal-bootstrap:** an unreadable app list is not an empty one (no duplicate app) ([#5032](https://github.com/fgarofalo56/csa-inabox/issues/5032)) ([19d3d3c](https://github.com/fgarofalo56/csa-inabox/commit/19d3d3cc71a43c596c96728da1c9b98c149f1ed4))
+
+
+### Documentation
+
+* **prp:** record the live Commercial W0 measurement and the private-endpoint finding ([#5040](https://github.com/fgarofalo56/csa-inabox/issues/5040)) ([77c41d7](https://github.com/fgarofalo56/csa-inabox/commit/77c41d73b0256d06f5d94e1819a9c23c93f6434c))
+
+
+### Miscellaneous
+
+* **deps:** hold the Azure/login 2 -&gt; 3 major ([#5060](https://github.com/fgarofalo56/csa-inabox/issues/5060)) ([b788377](https://github.com/fgarofalo56/csa-inabox/commit/b7883777e8f1df2d4e5468b3880a7b18e25bd60a))
+* **deps:** ignore arrow/parquet major bumps for loom-directlake ([#5048](https://github.com/fgarofalo56/csa-inabox/issues/5048)) ([789a221](https://github.com/fgarofalo56/csa-inabox/commit/789a22195c9eeaaeca4f50f268d5057409af80fd))
+
 ## [0.112.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.112.0...csa-inabox-v0.112.1) (2026-10-19)
 
 
