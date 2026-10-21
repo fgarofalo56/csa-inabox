@@ -162,3 +162,32 @@ test('workflow: POOL_AGENT_COUNT defaults 2 for Commercial and 1 for Gov', () =>
   assert.match(line[1], /'IL5'/);
   assert.match(line[1], /&& '1' \|\| '2'/, 'Gov -> 1, otherwise 2');
 });
+
+// ---- routing: exactly the declared heavy images use the pool -------------
+const HEAVY = ['loom-console', 'loom-directlake'];
+const poolApps = () => {
+  const m = /^ {2}POOL_APPS: (.*)$/m.exec(text);
+  assert.ok(m, 'env POOL_APPS must exist');
+  return m[1].trim().split(',').map((x) => x.trim());
+};
+test('routing: POOL_APPS is exactly console + directlake', () => {
+  assert.deepEqual(poolApps(), HEAVY, 'adding or dropping an app in POOL_APPS changes which builds hit the pool');
+});
+test('routing: every POOL_APPS name is a real matrix app, and the other apps are NOT routed', () => {
+  const names = [...text.matchAll(/\{"name":"([a-z0-9-]+)","ctx"/g)].map((x) => x[1]);
+  const all = [...new Set(names)];
+  assert.ok(all.length >= 13, `positive control: parsed ${all.length} apps from the default matrix`);
+  for (const h of HEAVY) assert.ok(all.includes(h), `${h} is not in the matrix: a typo routes nothing`);
+  const routed = all.filter((n) => poolApps().includes(n));
+  const unrouted = all.filter((n) => !poolApps().includes(n));
+  assert.deepEqual([...routed].sort(), [...HEAVY].sort());
+  assert.equal(unrouted.length, all.length - HEAVY.length, 'every non-heavy app must stay on default agents');
+  for (const n of ['loom-unity', 'loom-trino', 'loom-migrate']) assert.ok(unrouted.includes(n), `${n} must stay on default agents`);
+});
+test('routing: --agent-pool is applied only through the POOL_APPS case gate', () => {
+  const step = J.build;
+  assert.match(step, /case ",\$POOL_APPS," in \*",\$\{\{ matrix\.name \}\},"\*\)/, 'the gate must test the exact matrix name against POOL_APPS');
+  const lits = step.split('\n').filter((l) => /--agent-pool/.test(l) && !/^\s*#/.test(l));
+  assert.deepEqual(lits.map((l) => l.trim()), ['POOL_ARGS="--agent-pool $POOL"'], 'a second non-comment --agent-pool site would route an app outside the gate');
+  assert.doesNotMatch(step, /matrix\.name \}\}" = "loom-console"/, 'a hard-coded console-only gate bypasses POOL_APPS');
+});

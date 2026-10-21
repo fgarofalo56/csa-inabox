@@ -169,6 +169,15 @@ env:
   # scale-down applies to them, but the 2026-10-21 decision was Commercial).
   POOL_AGENT_COUNT: ${{ inputs.pool_agent_count || ((inputs.boundary == 'GCC-High' || inputs.boundary == 'IL5') && '1' || '2') }}
   BUILD_POOL_NAME: loombuild2
+  # Apps built on the dedicated S3 pool (--agent-pool): the two long poles.
+  # loom-console (Next.js compile, OOMs the 8 GB default agent) and
+  # loom-directlake (Rust release build; sat 52 min queued on the shared default
+  # agents, ACR run cj90w, 2026-10-21). Everything else stays on default agents:
+  # moving all 14 would only re-serialize them behind POOL_AGENT_COUNT agents.
+  # Comma-separated, exact names. Sized with POOL_AGENT_COUNT=2 = one agent per
+  # heavy app (Learn documents S3 = 8 CPU / 16 GB PER INSTANCE and does not state
+  # how many task runs one instance executes concurrently, so we assume 1).
+  POOL_APPS: loom-console,loom-directlake
 
 jobs:
   resolve:
@@ -418,15 +427,16 @@ jobs:
           # the pool is simply created on first use.
           POOL="$BUILD_POOL_NAME"
           POOL_ARGS=""
-          if [ "${{ matrix.name }}" = "loom-console" ]; then
+          case ",$POOL_APPS," in *",${{ matrix.name }},"*)
             az acr agentpool show -r "$ACR" -n "$POOL" -o none 2>/dev/null \
               || az acr agentpool create -r "$ACR" -n "$POOL" --tier S3 -o none
             WANT=$(node "$GITHUB_WORKSPACE/scripts/ci/acr-build-pool.mjs" clamp "$POOL_AGENT_COUNT")
             CNT=$(az acr agentpool show -r "$ACR" -n "$POOL" --query count -o tsv | tr -d '\r')
             [ "${CNT:-0}" -ge "$WANT" ] || az acr agentpool update -r "$ACR" -n "$POOL" --count "$WANT" -o none
             POOL_ARGS="--agent-pool $POOL"
-            echo "::notice::#2706 - building loom-console on ACR agent pool: $POOL (boundary=$BOUNDARY, scaled to $WANT agent(s); scale-down is the pool_release job)"
-          fi
+            echo "::notice::#2706 - building ${{ matrix.name }} on ACR agent pool: $POOL (boundary=$BOUNDARY, scaled to $WANT agent(s); scale-down is the pool_release job)"
+            ;;
+          esac
           # loom-uat carries the Playwright specs, but apps/fiab-console/.dockerignore
           # excludes e2e/ + tests/ to keep the CONSOLE image lean — and ACR Tasks
           # does not honour a per-Dockerfile <Dockerfile>.dockerignore. Drop those
