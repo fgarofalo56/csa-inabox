@@ -70,8 +70,9 @@ declarations.
 | 32 | workspace_create | Loom | `cosmos-client.workspacesContainer().items.create` | REAL |
 | 33 | item_create | Loom | `item-crud.createOwnedItem` (Cosmos + AI Search + Purview) | REAL |
 | 34 | item_configure | Loom | `item-crud.updateOwnedItem` (Cosmos replace) | REAL |
-| 35 | item_list | Loom | `item-crud.listOwnedItems` / `listAllOwnedItems` | REAL |
-| 36 | workspace_list | Loom | `item-crud.listOwnedWorkspaces` | REAL |
+| 35 | item_list | Loom | `lib/governance/inventory.itemListTool`: workspaces you can access resolved once per request, then a projected Cosmos read of only those workspaces. Returns `{items, total, returned, truncated, nextCursor}` (whole-row pages, 12,000-char budget; `truncated:true` means call again with `cursor`). `scope:'tenant'` is tenant admins only (non-admins are refused, not downgraded), bounded to the caller tid, and audited | REAL |
+| 36 | workspace_list | Loom | `lib/governance/inventory.workspaceListTool`: `listAccessibleWorkspaces` (owned + directly shared; group-only shares open via `workspaceId`). Same envelope `{workspaces, total, returned, truncated, nextCursor}` and the same audited `scope:'tenant'` | REAL |
+| 36a | governance_inventory | Loom | `lib/governance/inventory.governanceInventoryTool`: one row per item with its backing service and backing id (URLs are returned without userinfo, query or fragment; connection-string-like values are dropped), `resolverStatus`, and `governance.{registered,scanned}` = null (not yet measured). Same envelope and `scope:'tenant'` rules; audit action `governance.inventory`. Read-only | REAL |
 | 37 | loom_self_audit | Loom | `admin/self-audit.runSelfAudit` (live env + Cosmos + AOAI probes) | REAL |
 | 38 | loom_heal | Loom | `admin/self-audit.applyFix` (Cosmos createIfNotExists; honest gate otherwise) | REAL |
 

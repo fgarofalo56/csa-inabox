@@ -298,11 +298,26 @@ async function runListTool(
   const scope: Scope = rawScope === 'tenant' ? 'tenant' : 'mine';
   const workspaceId = str(args.workspaceId);
 
+  // At most ONE audit event per call, and an audit failure never converts a
+  // completed read into an error (which would then write a second, "failure"
+  // event for the same call). emitAuditEvent is fire-and-forget and does not
+  // throw today; this keeps that true if it ever does.
+  let audited = false;
+  const auditOnce = (...a: Parameters<typeof audit>): void => {
+    if (audited) return;
+    audited = true;
+    try {
+      audit(...a);
+    } catch (e) {
+      console.warn('[governance-inventory] audit emit failed:', (e as Error)?.message ?? e);
+    }
+  };
+
   let tenantAuth: { callerTid: string; groups?: string[] } | null = null;
   if (scope === 'tenant') {
     const auth = await authorizeTenantScope(ctx);
     if (!auth.ok) {
-      audit(ctx, auditAction, undefined, 'denied', { scope, code: auth.code, workspaceId: workspaceId ?? null }, workspaceId ?? 'tenant');
+      auditOnce(ctx, auditAction, undefined, 'denied', { scope, code: auth.code, workspaceId: workspaceId ?? null }, workspaceId ?? 'tenant');
       return auth;
     }
     tenantAuth = auth;
@@ -312,7 +327,7 @@ async function runListTool(
     const resolved = await resolveVisible(ctx, scope, workspaceId, tenantAuth);
     const built = await build(resolved);
     if (tenantAuth) {
-      audit(
+      auditOnce(
         ctx,
         auditAction,
         tenantAuth.callerTid,
@@ -324,7 +339,7 @@ async function runListTool(
     return built.envelope;
   } catch (e) {
     if (tenantAuth) {
-      audit(ctx, auditAction, tenantAuth.callerTid, 'failure', { scope, workspaceId: workspaceId ?? null, error: (e as Error)?.message ?? String(e) }, workspaceId ?? 'tenant');
+      auditOnce(ctx, auditAction, tenantAuth.callerTid, 'failure', { scope, workspaceId: workspaceId ?? null, error: (e as Error)?.message ?? String(e) }, workspaceId ?? 'tenant');
     }
     if (e instanceof InvalidCursorError) {
       return { ok: false, error: e.message };

@@ -124,6 +124,35 @@ export function classifyBackingId(value: string): BackingIdKind {
   return 'name-or-path';
 }
 
+/** Values that look like a credential or connection string are never surfaced. */
+const SECRET_LIKE_RE = /AccountKey=|SharedAccessSignature|sig=|Password=|;Key=/i;
+/** abfs-family URLs carry the FILESYSTEM name as userinfo (`container@host`); that is not a credential. */
+const FILESYSTEM_USERINFO_SCHEMES = new Set(['abfss:', 'abfs:', 'wasbs:', 'wasb:']);
+
+/**
+ * Make a stored backing value safe to show a model. Returns null when the value
+ * must be dropped. URL-kind values lose userinfo (password always; username too
+ * except the filesystem name of abfs-family URLs), the whole query string and
+ * the fragment; scheme, host, port and path are kept. Anything that looks like
+ * a connection string / SAS is dropped outright, as is a URL that cannot be
+ * parsed (a value we cannot sanitize is a value we do not surface).
+ */
+export function sanitizeBackingValue(value: string): string | null {
+  // Non-URL values are checked as stored; URL values are stripped FIRST (a SAS
+  // `sig=` lives in the query string we are about to remove) and the rebuilt
+  // URL is checked after.
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return SECRET_LIKE_RE.test(value) ? null : value;
+  let u: URL;
+  try {
+    u = new URL(value);
+  } catch {
+    return null;
+  }
+  const user = FILESYSTEM_USERINFO_SCHEMES.has(u.protocol) && !u.password ? u.username : '';
+  const out = `${u.protocol}//${user ? `${user}@` : ''}${u.host}${u.pathname}`;
+  return SECRET_LIKE_RE.test(out) ? null : out;
+}
+
 /**
  * Resolve the backing store of one item. `values` maps state-relative key
  * paths to what the item holds there (only the paths in {@link allKeyPaths}
@@ -134,8 +163,9 @@ export function resolveBacking(itemType: string, values: Readonly<Record<string,
   if (spec) {
     for (const path of spec.keys) {
       const v = values[path];
-      if (typeof v === 'string' && v.trim()) {
-        const trimmed = v.trim();
+      const safe = typeof v === 'string' && v.trim() ? sanitizeBackingValue(v.trim()) : null;
+      if (safe) {
+        const trimmed = safe;
         return {
           resolverStatus: 'resolved',
           backingService: spec.service,

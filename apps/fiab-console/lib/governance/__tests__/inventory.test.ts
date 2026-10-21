@@ -99,6 +99,7 @@ const item = (id: string, workspaceId: string, itemType = 'lakehouse', displayNa
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.emitAuditEvent.mockReset(); // clearAllMocks keeps implementations; one test makes it throw
   h.itemQueries.length = 0;
   h.wsQueries.length = 0;
   h.items = [];
@@ -447,6 +448,45 @@ describe('governance_inventory rows', () => {
     expect(text.length).toBeLessThan(TOOL_LOOP_CHAR_CAP);
     expect(() => JSON.parse(text)).not.toThrow();
     expect(r.truncated).toBe(true);
+  });
+});
+
+describe('credential hygiene through the tool output', () => {
+  it('a SAS token and URL userinfo stored on items never appear in the serialized result; scheme/host/path still do', async () => {
+    h.items.push(
+      item('sas', 'ws-owned', 'lakehouse', 'SAS LH', { provisioning: { secondaryIds: { adlsRoot: 'https://acct.dfs.core.windows.net/bronze/Sales?sv=2022&sig=SECRETSENTINEL' } } }),
+      item('ui', 'ws-owned', 'synapse-serverless-sql-pool', 'UI pool', { provisioning: { secondaryIds: { endpoint: 'https://user:pass@syn-host.example/x' } } }),
+      item('cs', 'ws-owned', 'lakehouse', 'CS LH', { provisioning: { secondaryIds: { adlsRoot: 'DefaultEndpointsProtocol=https;AccountKey=SECRETSENTINEL==' } } }),
+    );
+    const r: any = await governanceInventoryTool(ctx, {});
+    const text = JSON.stringify(r);
+    // Break value: the unsanitized resolver emits all three of these.
+    expect(text).not.toContain('SECRETSENTINEL');
+    expect(text).not.toContain('user:pass');
+    expect(text).not.toContain('pass@');
+    const by = Object.fromEntries(r.items.map((i: any) => [i.itemId, i]));
+    expect(by.sas.backingResourceId).toBe('https://acct.dfs.core.windows.net/bronze/Sales');
+    expect(by.ui.backingResourceId).toBe('https://syn-host.example/x');
+    expect(by.cs).toMatchObject({ resolverStatus: 'no-backing-key', backingResourceId: null });
+  });
+});
+
+describe('audit: at most one event per call', () => {
+  it('emitAuditEvent throwing after a successful tenant read yields ONE attempted event, a successful result, and no second failure event', async () => {
+    asAdmin();
+    h.emitAuditEvent.mockImplementation(() => { throw new Error('siem down'); });
+    const r: any = await workspaceListTool(ctx, { scope: 'tenant' });
+    // Break value: without the guard the catch emits a second ('failure') event and returns ok:false.
+    expect(r.ok).toBe(true);
+    expect(h.emitAuditEvent).toHaveBeenCalledTimes(1);
+    expect(h.emitAuditEvent.mock.calls[0][0].outcome).toBe('success');
+  });
+
+  it('a failed read emits exactly one (failure) event', async () => {
+    asAdmin();
+    h.wsFail = new Error('boom');
+    await workspaceListTool(ctx, { scope: 'tenant' });
+    expect(h.emitAuditEvent).toHaveBeenCalledTimes(1);
   });
 });
 

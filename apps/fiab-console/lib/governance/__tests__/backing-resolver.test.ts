@@ -10,6 +10,7 @@ import {
   allKeyPaths,
   classifyBackingId,
   resolveBacking,
+  sanitizeBackingValue,
 } from '../backing-resolver';
 
 describe('resolveBacking', () => {
@@ -88,6 +89,54 @@ describe('resolveBacking', () => {
   it('truncates an over-long value so a row cannot blow the page budget', () => {
     const r = resolveBacking('ai-search-index', { indexName: 'i'.repeat(1000) });
     expect(r.backingResourceId!.length).toBeLessThanOrEqual(303);
+  });
+});
+
+describe('credential hygiene (a SAS/userinfo in a stored URL must never reach the model)', () => {
+  const SENTINEL = 'SECRETSENTINEL';
+
+  it('strips the whole query string: SAS sig/sv do not survive; scheme, host and path do', () => {
+    const r = resolveBacking('lakehouse', {
+      'provisioning.secondaryIds.adlsRoot': `https://acct.dfs.core.windows.net/bronze/lakehouses/Sales?sv=2022-11-02&sig=${SENTINEL}&se=2030`,
+    });
+    // Break value: the pre-fix resolver returned the value verbatim, query included.
+    expect(r.backingResourceId).toBe('https://acct.dfs.core.windows.net/bronze/lakehouses/Sales');
+    expect(JSON.stringify(r)).not.toContain(SENTINEL);
+    expect(JSON.stringify(r)).not.toContain('sv=');
+  });
+
+  it('strips userinfo and fragment from an https URL; host and path survive (positive control)', () => {
+    const r = resolveBacking('synapse-serverless-sql-pool', {
+      'provisioning.secondaryIds.endpoint': 'https://user:pass@syn-x.sql.azuresynapse.net:1433/db#frag-secret',
+    });
+    expect(r.backingResourceId).toBe('https://syn-x.sql.azuresynapse.net:1433/db');
+    expect(JSON.stringify(r)).not.toMatch(/user|pass|frag-secret/);
+  });
+
+  it('abfss keeps the filesystem name (container@host) but never a password', () => {
+    expect(sanitizeBackingValue('abfss://bronze@acct.dfs.core.windows.net/p?sig=SECRETSENTINEL')).toBe('abfss://bronze@acct.dfs.core.windows.net/p');
+    expect(sanitizeBackingValue('abfss://bronze:hunter2@acct.dfs.core.windows.net/p')).toBe('abfss://acct.dfs.core.windows.net/p');
+  });
+
+  it.each(['AccountKey=abc==;EndpointSuffix=core.windows.net', 'SharedAccessSignature=sv=1', 'Server=x;Password=hunter2', 'Endpoint=sb://x/;Key=k', 'a b sig=zzz'])(
+    'drops connection-string-like value %s and falls through to the next key / no-backing-key',
+    (bad) => {
+      expect(sanitizeBackingValue(bad)).toBeNull();
+      const r = resolveBacking('lakehouse', { 'provisioning.secondaryIds.adlsRoot': bad });
+      expect(r).toMatchObject({ resolverStatus: 'no-backing-key', backingResourceId: null });
+      // lower-priority clean key still resolves
+      const r2 = resolveBacking('lakehouse', { 'provisioning.secondaryIds.adlsRoot': bad, 'provisioning.secondaryIds.container': 'bronze' });
+      expect(r2).toMatchObject({ resolverStatus: 'resolved', backingResourceId: 'bronze' });
+    },
+  );
+
+  it('an unparsable URL-looking value is dropped, not passed through', () => {
+    expect(sanitizeBackingValue('https://')).toBeNull();
+  });
+
+  it('plain names and ARM ids are unchanged', () => {
+    expect(sanitizeBackingValue('loompool')).toBe('loompool');
+    expect(sanitizeBackingValue('/subscriptions/s/resourceGroups/r')).toBe('/subscriptions/s/resourceGroups/r');
   });
 });
 
