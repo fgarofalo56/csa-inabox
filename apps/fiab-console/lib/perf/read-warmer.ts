@@ -143,6 +143,10 @@ import type { ArmThrottledError } from '@/lib/azure/arm-client';
 // `monitor-arm.ts`, which builds an `@azure/identity` credential chain at module
 // scope. The warmer stays free of that edge.
 import { readSwallowedArmError, type SwallowedArmError } from '@/lib/azure/swallowed-arm-error';
+// Leaf modules too (no credential chain): the per-sweep ARM read gate + counters,
+// and the single-replica lease.
+import { consumeWarmerToken, runWithArmCaller, WarmerCycleGuard } from '@/lib/azure/arm-read-gate';
+import { createDefaultLeaseAcquirer, type WarmerLeaseResult } from '@/lib/perf/read-warmer-lease';
 
 const SETTLE_MS = 90_000;
 const WARM_INTERVAL_MS = Number(process.env.LOOM_READ_WARMER_INTERVAL_MS) || 10 * 60_000;
@@ -539,6 +543,11 @@ export interface ReadWarmerCycleReport {
   succeeded: number;
   skipped: ReadWarmerSkip[];
   failed: { label: string; kind: WarmFailureKind; message: string }[];
+  /**
+   * Set when ARM answered 429 to a read INSIDE a target (the diagnostics sweep):
+   * the queued reads of that cycle were dropped unsent. States only what was seen.
+   */
+  armAbandon?: string;
   /** Set when a 429 tripped the breaker and ended the cycle early. */
   abortedBy: { label: string; retryAfterMs: number | null; cooldownUntil: string } | null;
 }
@@ -749,6 +758,11 @@ export interface ReadWarmerDeps {
   /** Injectable executor for ONE target. Defaults to the real cache write. */
   runTarget?: (t: WarmTarget) => Promise<unknown>;
   budget?: ReadWarmerBudget;
+  /**
+   * Injectable single-replica check. Defaults to the Cosmos lease in
+   * `read-warmer-lease.ts`. Must never throw; `held:false` means do not run.
+   */
+  acquireLease?: () => Promise<WarmerLeaseResult>;
   /** Injectable logger so specs do not spam the reporter. */
   warn?: (message: string) => void;
 }
@@ -759,6 +773,20 @@ interface BucketState {
   cooldownUntil: number;
   consecutiveThrottles: number;
   lastThrottle: { at: number; label: string; retryAfterMs: number | null; message: string } | null;
+}
+
+/** Caller label the per-minute `[arm-reads]` line attributes a target's reads to. */
+export function warmerCallerLabel(targetLabel: string): string {
+  if (targetLabel.startsWith('monitor/diagnostics')) return 'warmer.diagnostics';
+  if (targetLabel.startsWith('monitor/cost')) return 'warmer.cost';
+  if (targetLabel.includes('chargeback')) return 'warmer.chargeback';
+  if (targetLabel.startsWith('monitor/health')) return 'warmer.health';
+  return `warmer.${targetLabel.split(' ')[0]!.replace(/[^a-z0-9/_-]/gi, '_')}`;
+}
+
+/** Cost Management queries use a transport the ARM hook cannot see: charge them one bucket token per target. */
+function isCostTarget(label: string): boolean {
+  return label.startsWith('monitor/cost') || label.includes('chargeback');
 }
 
 export interface ReadWarmer {
@@ -775,6 +803,11 @@ export function createReadWarmer(deps: ReadWarmerDeps = {}): ReadWarmer {
   const runTarget = deps.runTarget
     ?? ((t: WarmTarget) => getOrComputeCached(t.key, t.modelId, t.produce, { ttlMs: t.ttlMs, bypass: true }));
   const budget = deps.budget ?? resolveReadWarmerBudget();
+  const acquireLease = deps.acquireLease
+    ?? createDefaultLeaseAcquirer(
+      WARM_INTERVAL_MS,
+      `${process.env.CONTAINER_APP_REPLICA_NAME || process.env.HOSTNAME || 'local'}-${Math.random().toString(36).slice(2, 8)}`,
+    );
   const warn = deps.warn ?? ((m: string) => { console.warn(m); });
 
   const buckets = new Map<string, BucketState>();
@@ -876,7 +909,24 @@ export function createReadWarmer(deps: ReadWarmerDeps = {}): ReadWarmer {
     }
     running = true;
     cyclesStarted += 1;
+    const guard = new WarmerCycleGuard();
     try {
+      // Single-replica guard: only the lease holder warms. A replica that cannot
+      // prove it holds the lease does not run (fail closed).
+      let lease: WarmerLeaseResult;
+      try {
+        lease = await acquireLease();
+      } catch (e) {
+        lease = { held: false, reason: `warmer lease check threw (${(e as Error)?.message}); not running` };
+      }
+      if (!lease.held) {
+        const reason = `this replica is not the warmer: ${lease.reason}`;
+        report.skipped.push({ label: '(cycle)', reason });
+        record('skipped', '(cycle)', reason);
+        report.finishedAt = iso(now());
+        lastCycle = report;
+        return report;
+      }
       let list: WarmTarget[];
       try {
         list = await loadTargets();
@@ -972,7 +1022,13 @@ export function createReadWarmer(deps: ReadWarmerDeps = {}): ReadWarmer {
         try {
           // bypass:true recomputes + rewrites the tiers even when a fresh copy
           // exists — the warmer's job is keeping copies YOUNG, not reading them.
-          const result = await runTarget(t);
+          // Reads inside the target are attributed to `warmer.<kind>` and queue in
+          // the shared gate (concurrency cap + token bucket) under this cycle's
+          // guard; a 429 inside the target abandons the guard and drops the rest.
+          const result = await runWithArmCaller(warmerCallerLabel(t.label), async () => {
+            if (isCostTarget(t.label)) await consumeWarmerToken();
+            return runTarget(t);
+          }, { guard });
           // A client that CAUGHT its own 429 resolves normally, so the throttle
           // never reaches the `catch` below — it survives only inside the
           // payload. `findSwallowedThrottle` looks for it two ways, in priority
@@ -1029,6 +1085,10 @@ export function createReadWarmer(deps: ReadWarmerDeps = {}): ReadWarmer {
           const b = buckets.get(id);
           if (b && b.cooldownUntil <= now()) b.consecutiveThrottles = 0;
         }
+      }
+      if (guard.abandoned) {
+        report.armAbandon = guard.abandoned.reason;
+        record('throttled', '(cycle)', `ARM read gate abandoned the cycle: ${guard.abandoned.reason}; queued reads were dropped unsent.`);
       }
       report.finishedAt = iso(now());
       lastCycle = report;
