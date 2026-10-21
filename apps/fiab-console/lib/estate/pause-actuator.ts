@@ -34,6 +34,7 @@ import {
 } from './pause-state';
 import { pausableTypeSpec, type PauseCandidate } from './pause-inventory';
 import { containerAppPauseGuard } from './pause-guards';
+import { ESTATE_READ_RETRY, isThrottleError, shortCircuitedError } from './pause-throttle';
 
 // ---------------------------------------------------------------------------
 // The injected actuator
@@ -59,6 +60,12 @@ export interface PowerRead {
   /** null when the read did not establish a state. NEVER a default of Online. */
   reading: ArmPowerReading | null;
   error?: string;
+  /**
+   * True when the read failed because ARM throttled it (429). A throttle is a
+   * statement about the control plane's rate limit, never about the resource,
+   * so callers MUST NOT settle a state on it (see ./pause-throttle).
+   */
+  throttled?: boolean;
   sku?: EstateSkuSnapshot;
   replicaCount?: number;
   /** Container Apps: the template.scale range, so resume restores it exactly. */
@@ -74,6 +81,8 @@ export interface ServabilityProbe {
   detail: string;
   /** False when this type has no probe wired — reported, never assumed servable. */
   probed: boolean;
+  /** True when the probe's ARM read was throttled: unknown, not a failure. */
+  throttled?: boolean;
 }
 
 /**
@@ -265,7 +274,28 @@ function acaPowerWord(minReplicas: number | undefined, liveReplicas: number): st
  * unit test without constructing an Azure credential chain.
  */
 export async function createArmActuator(): Promise<EstateActuator> {
-  const { armGet, armPost, armPatch } = await import('@/lib/azure/arm-client');
+  const { armGet, armGetWithRetry, armPost, armPatch } = await import('@/lib/azure/arm-client');
+
+  /**
+   * Every STATE-path ARM read (readPower, the probes, the Databricks host
+   * lookup) goes through the 429-aware GET with a bounded budget, plus a
+   * per-actuator breaker: once one read stays throttled, later reads in the
+   * same request are not sent (the read quota is shared by the whole
+   * subscription, so sending N more would deepen the throttle and multiply the
+   * latency by N). They fail with the same ArmThrottledError-named, honest
+   * message. `readTags` and the act-time reads stay single-shot on purpose: at
+   * the moment of acting, any doubt must skip the mutation rather than wait.
+   */
+  let firstThrottle: string | null = null;
+  const stateGet = async <T = any>(path: string): Promise<T> => {
+    if (firstThrottle !== null) throw shortCircuitedError(path, firstThrottle);
+    try {
+      return await armGetWithRetry<T>(path, ESTATE_READ_RETRY);
+    } catch (err) {
+      if (isThrottleError(err)) firstThrottle = err instanceof Error ? err.message : String(err);
+      throw err;
+    }
+  };
 
   const apiVersion = (resourceType: string): string =>
     pausableTypeSpec(resourceType)?.armApiVersion ?? '2021-04-01';
@@ -298,7 +328,7 @@ export async function createArmActuator(): Promise<EstateActuator> {
       }
       // A VM's power state lives in instanceView, which GET only returns on request.
       const expand = type === 'microsoft.compute/virtualmachines' ? '&$expand=instanceView' : '';
-      const body = await armGet<{
+      const body = await stateGet<{
         sku?: { name?: string; tier?: string; family?: string; capacity?: number };
         properties?: {
           status?: string;
@@ -335,7 +365,11 @@ export async function createArmActuator(): Promise<EstateActuator> {
       };
     } catch (err) {
       // R7 — say what happened, do not convert a failed read into a state.
-      return { reading: null, error: err instanceof Error ? err.message : String(err) };
+      return {
+        reading: null,
+        error: err instanceof Error ? err.message : String(err),
+        ...(isThrottleError(err) ? { throttled: true } : {}),
+      };
     }
   };
 
@@ -347,7 +381,7 @@ export async function createArmActuator(): Promise<EstateActuator> {
    */
   const dbxHostFor = async (resourceId: string, version: string): Promise<string> => {
     const { assertDatabricksHost } = await import('@/lib/azure/databricks-estate-client');
-    const ws = await armGet<{ properties?: { workspaceUrl?: string; provisioningState?: string } }>(
+    const ws = await stateGet<{ properties?: { workspaceUrl?: string; provisioningState?: string } }>(
       `${resourceId}?api-version=${version}`,
     );
     const prov = String(ws?.properties?.provisioningState ?? '');
@@ -478,8 +512,8 @@ export async function createArmActuator(): Promise<EstateActuator> {
    * calling a busy app Paused.
    */
   const readContainerAppPower = async (resourceId: string, version: string): Promise<PowerRead> => {
-    const app = await armGet<AcaBody>(`${resourceId}?api-version=${version}`);
-    const revs = await armGet<{ value?: Array<{ properties?: { active?: boolean; replicas?: number } }> }>(
+    const app = await stateGet<AcaBody>(`${resourceId}?api-version=${version}`);
+    const revs = await stateGet<{ value?: Array<{ properties?: { active?: boolean; replicas?: number } }> }>(
       `${resourceId}/revisions?api-version=${version}`,
     );
     const live = (revs?.value ?? []).reduce(
@@ -813,7 +847,7 @@ export async function createArmActuator(): Promise<EstateActuator> {
         case 'microsoft.kusto/clusters': {
           const version = apiVersion(type);
           // The cluster's OWN query endpoint, not kusto-client's module default.
-          const cluster = await armGet<{ properties?: { uri?: string } }>(
+          const cluster = await stateGet<{ properties?: { uri?: string } }>(
             `${entry.resourceId}?api-version=${version}`,
           );
           const clusterUri = String(cluster?.properties?.uri ?? '').trim();
@@ -822,7 +856,7 @@ export async function createArmActuator(): Promise<EstateActuator> {
           }
           // A database to run `print` in, derived from the cluster we verified.
           // ARM names a child database `{clusterName}/{databaseName}`.
-          const dbs = await armGet<{ value?: Array<{ name?: string }> }>(
+          const dbs = await stateGet<{ value?: Array<{ name?: string }> }>(
             `${entry.resourceId}/databases?api-version=${version}`,
           );
           const first = (dbs?.value ?? []).map((d) => String(d?.name ?? '').trim()).filter(Boolean)[0] ?? '';
@@ -846,10 +880,13 @@ export async function createArmActuator(): Promise<EstateActuator> {
           if (!serverName) return unprobed(entry, 'its resource id does not name an AAS server');
           let server;
           try {
-            server = await armGet<{ properties?: { serverFullName?: string } }>(
+            server = await stateGet<{ properties?: { serverFullName?: string } }>(
               `${entry.resourceId}?api-version=${apiVersion(type)}`,
             );
-          } catch {
+          } catch (metaErr) {
+            // A throttle is rethrown so the outer catch flags it `throttled`:
+            // the AAS metadata read is exactly the read the 2026-10-20 429 hit.
+            if (isThrottleError(metaErr)) throw metaErr;
             return unprobed(entry, 'AAS readiness is unverified: its ARM connection metadata could not be read');
           }
           const serverUri = server.properties?.serverFullName;
@@ -859,7 +896,7 @@ export async function createArmActuator(): Promise<EstateActuator> {
         }
         case 'microsoft.compute/virtualmachines': {
           // Running per instanceView AND, when the guest agent reports, Ready.
-          const vm = await armGet<{
+          const vm = await stateGet<{
             properties?: { instanceView?: { statuses?: Array<{ code?: string }>; vmAgent?: { statuses?: Array<{ displayStatus?: string }> } } };
           }>(`${entry.resourceId}?api-version=${apiVersion(type)}&$expand=instanceView`);
           const view = vm?.properties?.instanceView;
@@ -880,7 +917,7 @@ export async function createArmActuator(): Promise<EstateActuator> {
           };
         }
         case 'microsoft.containerservice/managedclusters': {
-          const aks = await armGet<{ properties?: { provisioningState?: string; powerState?: { code?: string } } }>(
+          const aks = await stateGet<{ properties?: { provisioningState?: string; powerState?: { code?: string } } }>(
             `${entry.resourceId}?api-version=${apiVersion(type)}`,
           );
           const prov = String(aks?.properties?.provisioningState ?? '');
@@ -895,7 +932,7 @@ export async function createArmActuator(): Promise<EstateActuator> {
         }
         case 'microsoft.app/containerapps': {
           const read = await readContainerAppPower(entry.resourceId, apiVersion(type));
-          const app = await armGet<AcaBody>(`${entry.resourceId}?api-version=${apiVersion(type)}`);
+          const app = await stateGet<AcaBody>(`${entry.resourceId}?api-version=${apiVersion(type)}`);
           const prov = String(app?.properties?.provisioningState ?? '');
           const restored =
             read.scale?.minReplicas === entry.scale?.minReplicas && read.scale?.maxReplicas === entry.scale?.maxReplicas;
@@ -932,7 +969,7 @@ export async function createArmActuator(): Promise<EstateActuator> {
           };
         }
         case 'microsoft.streamanalytics/streamingjobs': {
-          const job = await armGet<{ properties?: { jobState?: string } }>(`${entry.resourceId}?api-version=${apiVersion(type)}`);
+          const job = await stateGet<{ properties?: { jobState?: string } }>(`${entry.resourceId}?api-version=${apiVersion(type)}`);
           const ok = normalizePowerState(type, job?.properties?.jobState) === 'Online';
           return {
             servable: ok,
@@ -941,7 +978,7 @@ export async function createArmActuator(): Promise<EstateActuator> {
           };
         }
         case 'microsoft.web/sites': {
-          const site = await armGet<{ properties?: { state?: string; availabilityState?: string } }>(
+          const site = await stateGet<{ properties?: { state?: string; availabilityState?: string } }>(
             `${entry.resourceId}?api-version=${apiVersion(type)}`,
           );
           const availability = String(site?.properties?.availabilityState ?? '');
@@ -963,7 +1000,12 @@ export async function createArmActuator(): Promise<EstateActuator> {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return { servable: false, probed: true, detail: `${entry.name} did not answer a probe request: ${message}` };
+      return {
+        servable: false,
+        probed: true,
+        detail: `${entry.name} did not answer a probe request: ${message}`,
+        ...(isThrottleError(err) ? { throttled: true } : {}),
+      };
     }
   };
 

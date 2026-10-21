@@ -7,6 +7,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 const armGet = vi.fn();
 vi.mock('@/lib/azure/arm-client', () => ({
   armGet: (...a: unknown[]) => armGet(...a),
+  armGetWithRetry: (p: unknown) => armGet(p),
   armPost: vi.fn(),
   armPatch: vi.fn(),
   armPut: vi.fn(),

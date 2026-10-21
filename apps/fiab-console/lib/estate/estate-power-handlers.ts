@@ -51,6 +51,7 @@ import {
   summarizeResume,
 } from '@/lib/estate/capacity-preflight';
 import { detectLoomCloud } from '@/lib/azure/cloud-boundary';
+import { cachedStateRead, clearStateCache } from '@/lib/estate/estate-state-cache';
 import { loadActivity } from '@/lib/estate/estate-activity';
 import { loadAutoPause } from '@/lib/estate/estate-autopause';
 import { loadPipelineActivity } from '@/lib/estate/estate-pipeline-activity';
@@ -144,8 +145,10 @@ async function runningPayload(actuator: EstateActuator) {
 
   // R-CAP-3 — read the live SKU so the confirm dialog names what is at risk.
   const live: Record<string, { sku?: string; powerState?: string }> = {};
+  let throttledPower = 0;
   for (const c of plan.inventory.pausable) {
     const power = await actuator.readPower(c.resource);
+    if (power.throttled) throttledPower += 1;
     live[c.resource.resourceId.toLowerCase()] = {
       ...(power.sku?.name ? { sku: power.sku.name } : {}),
       ...(power.reading ? { powerState: power.reading.powerState } : {}),
@@ -155,6 +158,8 @@ async function runningPayload(actuator: EstateActuator) {
 
   return {
     state: 'RUNNING' as const,
+    /** Reads ARM throttled (429) in this preview: tag reads + live-SKU reads. The panel backs off on > 0. */
+    throttled: readFailures.filter((f) => f.throttled).length + throttledPower,
     estateId: manifest.estateId,
     /** Which Azure boundary this console is bound to. See the cloud note below. */
     cloud: detectLoomCloud(),
@@ -201,14 +206,28 @@ export async function handleStateRead(caller: EstateCaller, opts?: { pipelineAct
     // ARM is not reachable/configured. An honest gate, not a fake RUNNING.
     return apiHonestError(e, 503, armGateMessage(e));
   }
+  // Readers of the same tenant (tabs, the estate-power lane, the idle lane)
+  // share ONE ARM fan-out per TTL (./estate-state-cache). Only the read verdict
+  // is cached; pause/resume clear it.
+  const fields = await cachedStateRead(
+    `${tenantId}|${opts?.pipelineActivity === true ? 'pipeline' : 'std'}`,
+    async () => ({ cacheable: true, value: await computeStateFields(tenantId, actuator, opts) }),
+  );
+  return apiOk(fields);
+}
 
+async function computeStateFields(
+  tenantId: string,
+  actuator: EstateActuator,
+  opts?: { pipelineActivity?: boolean },
+): Promise<Record<string, unknown>> {
   const snapshot = await loadPauseSnapshot(tenantId).catch(() => null);
   const power = await buildPowerStatus(tenantId, snapshot, { pipelineActivity: opts?.pipelineActivity === true });
 
   // No snapshot, or a snapshot that says the estate is up -> show the preview.
   if (!snapshot || snapshot.state === 'RUNNING') {
     const payload = await runningPayload(actuator);
-    return apiOk({ ...payload, snapshotId: snapshot?.id ?? null, power });
+    return { ...payload, snapshotId: snapshot?.id ?? null, power };
   }
 
   if (snapshot.state === 'PAUSING' || snapshot.state === 'PAUSED') {
@@ -216,7 +235,7 @@ export async function handleStateRead(caller: EstateCaller, opts?: { pipelineAct
     if (poll.state !== snapshot.state) {
       await savePauseSnapshot(applyPausePoll(snapshot, poll)).catch(() => {});
     }
-    return apiOk({
+    return {
       state: poll.state,
       estateId: snapshot.estateId,
       cloud: detectLoomCloud(),
@@ -231,7 +250,8 @@ export async function handleStateRead(caller: EstateCaller, opts?: { pipelineAct
       resources: snapshot.resources,
       typicalResumeSeconds: TYPICAL_RESUME_SECONDS,
       power,
-    });
+      throttled: poll.throttled,
+    };
   }
 
   // RESUMING or RESUME_FAILED — poll, which is what produces the verdict.
@@ -245,10 +265,10 @@ export async function handleStateRead(caller: EstateCaller, opts?: { pipelineAct
   const illegal = verdict.state !== poll.state;
   // When the stored state is kept over a better poll, summarizeResume's
   // RESUME_FAILED headline ("N NOT confirmed running") would be false — say why instead.
-  const summary = illegal
+  const summary = illegal || (poll.throttled > 0 && !poll.terminal)
     ? { headline: verdict.reason, details: [] }
     : summarizeResume(poll.state, poll.outcomes, snapshot.resources);
-  return apiOk({
+  return {
     state: verdict.state,
     estateId: snapshot.estateId,
     cloud: detectLoomCloud(),
@@ -263,11 +283,23 @@ export async function handleStateRead(caller: EstateCaller, opts?: { pipelineAct
     resources: snapshot.resources,
     typicalResumeSeconds: TYPICAL_RESUME_SECONDS,
     power,
-  });
+    throttled: poll.throttled,
+  };
 }
 
 /** Pause / dry-run preview (POST). */
 export async function handlePausePost(caller: EstateCaller, body: PauseBody) {
+  // Cleared BEFORE and AFTER: a cached pre-action verdict must not outlive the
+  // action, and a read that was in flight when it began must not repopulate it.
+  clearStateCache();
+  try {
+    return await pausePostImpl(caller, body);
+  } finally {
+    clearStateCache();
+  }
+}
+
+async function pausePostImpl(caller: EstateCaller, body: PauseBody) {
   const { tenantId, who } = caller;
   let actuator: EstateActuator;
   try {
@@ -646,6 +678,15 @@ export async function handlePausePost(caller: EstateCaller, body: PauseBody) {
 
 /** Resume (POST). */
 export async function handleResumePost(caller: EstateCaller) {
+  clearStateCache();
+  try {
+    return await resumePostImpl(caller);
+  } finally {
+    clearStateCache();
+  }
+}
+
+async function resumePostImpl(caller: EstateCaller) {
   const { tenantId, who } = caller;
   const snapshot = await loadPauseSnapshot(tenantId).catch(() => null);
   if (!snapshot) {
