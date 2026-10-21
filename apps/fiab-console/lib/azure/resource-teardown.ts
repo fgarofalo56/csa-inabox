@@ -34,7 +34,8 @@ import {
 } from '@/lib/azure/synapse-dev-client';
 import { deleteKustoDatabase } from '@/lib/azure/kusto-arm-client';
 import { deleteEventHub } from '@/lib/azure/eventhubs-client';
-import { deleteStreamingJob } from '@/lib/azure/stream-analytics-client';
+import { deleteStreamingJob, readAsaConfig } from '@/lib/azure/stream-analytics-client';
+import { asaJobNameForItem } from '@/lib/azure/asa-job-name';
 import { deleteMonitorActivatorRule } from '@/lib/azure/activator-monitor';
 import { deletePipeline as adfDeletePipeline, deleteAdfCdc } from '@/lib/azure/adf-client';
 import {
@@ -291,7 +292,15 @@ export async function teardownItemBackend(
       } else {
         push(skip('event-hub', '(unknown)', 'No Event Hub recorded on the item state.'));
       }
-      const asaJob = st(item, 'asaJobName') || sid(item, 'asaJobName');
+      // The job name is a pure function of the item id, so a missing
+      // `asaJobName` ref (the auto-bind seed path never records it) does not
+      // strand the job. The derived name is only tried when ASA is configured,
+      // and deleteStreamingJob treats 404 as already-gone, so an eventstream
+      // that never had a transform job costs one idempotent DELETE, not an error.
+      let asaJob = st(item, 'asaJobName') || sid(item, 'asaJobName');
+      if (!asaJob) {
+        try { readAsaConfig(); asaJob = asaJobNameForItem(item.id); } catch { /* ASA not configured: nothing to derive */ }
+      }
       if (asaJob) {
         push(await attempt('stream-analytics-job', asaJob, () => deleteStreamingJob(asaJob)));
       }

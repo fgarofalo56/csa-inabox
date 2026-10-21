@@ -210,12 +210,28 @@ updates:
     # plus the release profile on every PR touching this crate. That lane is the
     # backstop; this group only ensures the four crates are judged together
     # instead of one at a time.
-    # DO NOT CLOSE the grouped arrow-stack PR. Closing a Dependabot PR without
-    # merging is a signal to Dependabot that the version is unwanted, and it
-    # will not raise that version again — so closing this one silently destroys
-    # the exact notification this entry exists to produce, and #3982 goes back
-    # to having no watcher at all. If the bump is not takeable yet (it will not
-    # be until delta-rs ships on arrow 59), LEAVE IT OPEN, or reopen it.
+    # The `ignore` below REPLACES the old "leave the grouped PR open as a
+    # watcher" mechanism. That mechanism left PR #4982 permanently red: it
+    # bundled arrow/parquet 60 with datafusion 55.2.0 and deltalake 1.1.1, and
+    # the 60 half can never build. Measured on crates.io 2026-10-21:
+    #   * datafusion 55.2.0 (newest) depends on `arrow ^59.2.0`
+    #   * deltalake-core 1.1.1 (newest) depends on `arrow ^59`, `parquet ^59`
+    # so arrow/parquet 60 splits the graph (`arrow::datatypes::Schema` !=
+    # `datafusion::arrow::datatypes::Schema`; 5x E0308 in src/scan.rs).
+    # Major bumps of arrow/parquet are therefore ignored; minor/patch of the
+    # whole stack (arrow 59.x, datafusion 55.x, deltalake 1.x) still arrive as
+    # the grouped PR. LIFT the ignore when a datafusion release admits arrow 60
+    # AND delta-rs follows. Do not close a grouped PR to dismiss a major: this
+    # ignore, not a closed PR, is the supported way to decline it.
+    ignore:
+      - dependency-name: "arrow"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "arrow-*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "parquet"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "parquet-*"
+        update-types: ["version-update:semver-major"]
     groups:
       arrow-stack:
         patterns:

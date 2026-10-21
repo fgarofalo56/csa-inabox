@@ -42,6 +42,7 @@ import {
   saveTransformation,
 } from './stream-analytics-client';
 import { clusterUri, defaultDatabase } from './kusto-client';
+import { asaJobNameForItem } from './asa-job-name';
 import { trimEdges } from '@/lib/util/trim';
 import { EVENT_HUB_NAME_RULES, sanitizeBackingName } from './backing-name';
 
@@ -298,7 +299,7 @@ export async function standUpEventstreamAzure(
   }
 
   // ── Provision the ASA job from the topology ────────────────────────────
-  const jobName = `asa-loom-${(id || '').slice(0, 8).toLowerCase().replace(/[^a-z0-9-]/g, '')}` || 'asa-loom';
+  const jobName = asaJobNameForItem(id);
   const location = process.env.LOOM_ASA_LOCATION || process.env.LOOM_LOCATION || 'eastus';
   const job = await createOrUpdateJob({ name: jobName, location });
   steps.push(`Created Stream Analytics job '${jobName}' (${location}).`);
