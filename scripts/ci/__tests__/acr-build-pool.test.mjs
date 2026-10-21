@@ -1,0 +1,164 @@
+/**
+ * Tests for scripts/ci/acr-build-pool.mjs and the pool wiring in
+ * .github/workflows/build-fiab-images-acr-tasks.yml.
+ *
+ * The repo has no node YAML parser, so the workflow is sliced into top-level
+ * jobs by indentation (same technique as the other workflow guards). Every
+ * assertion below names, in its message, the input that turns it red.
+ *
+ * Run: node --test scripts/ci/__tests__/acr-build-pool.test.mjs
+ */
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { clampCount, decideRelease, release } from '../acr-build-pool.mjs';
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+const WF = (process.env.ACR_POOL_TEST_WF
+  ?? join(ROOT, '.github', 'workflows', 'build-fiab-images-acr-tasks.yml'));
+const text = readFileSync(WF, 'utf8').replace(/\r\n/g, '\n');
+
+/** Map job-id -> body, from the `jobs:` section (2-space-indented keys). */
+function jobs() {
+  const body = text.slice(text.indexOf('\njobs:\n') + 6);
+  const out = {};
+  let cur = null;
+  for (const line of body.split('\n')) {
+    const m = /^  ([a-z0-9_-]+):\s*$/.exec(line);
+    if (m) { cur = m[1]; out[cur] = ''; continue; }
+    if (cur) out[cur] += line + '\n';
+  }
+  return out;
+}
+const J = jobs();
+
+// ---- clamp ---------------------------------------------------------------
+test('clampCount: 0 and negatives clamp UP to 1 (a 0 would starve the build)', () => {
+  assert.equal(clampCount('0'), 1, 'input "0" must not yield 0');
+  assert.equal(clampCount('-3'), 1);
+});
+test('clampCount: 99 clamps DOWN to 4 (a typo must not multiply spend)', () => {
+  assert.equal(clampCount('99'), 4, 'input "99" must be capped at 4');
+  assert.equal(clampCount('4'), 4);
+  assert.equal(clampCount('2'), 2);
+});
+test('clampCount: blank/junk falls back to the default 2', () => {
+  assert.equal(clampCount(''), 2);
+  assert.equal(clampCount('abc'), 2);
+  assert.equal(clampCount(undefined), 2);
+});
+
+// ---- release decision ----------------------------------------------------
+const base = { exists: true, count: 2, queueCount: 0, activeRuns: 0 };
+test('decideRelease: scales only when count>0 AND queue=0 AND active=0', () => {
+  assert.equal(decideRelease(base).action, 'scale');
+  assert.equal(decideRelease({ ...base, queueCount: 1 }).action, 'leave', 'queueCount=1 must NOT scale');
+  assert.equal(decideRelease({ ...base, activeRuns: 1 }).action, 'leave', 'activeRuns=1 must NOT scale');
+  assert.equal(decideRelease({ ...base, activeRuns: null }).action, 'unknown', 'unreadable runs must NOT scale');
+  assert.equal(decideRelease({ ...base, queueCount: null }).action, 'unknown');
+  assert.equal(decideRelease({ ...base, count: 0 }).action, 'noop');
+});
+
+/** Fake az keyed on the verb; records calls. */
+function fakeAz({ pools = [{ name: 'p', count: 2 }], queue = 0, runs = [], failRuns = false, failList = false, afterCount = 0, failUpdate = false }) {
+  const calls = [];
+  const az = (args) => {
+    calls.push(args.join(' '));
+    const j = args.join(' ');
+    if (j.startsWith('acr agentpool list')) return failList ? { ok: false, err: 'boom' } : { ok: true, value: pools };
+    if (j.includes('--queue-count')) return { ok: true, value: { count: queue } };
+    if (j.startsWith('acr task list-runs')) return failRuns ? { ok: false, err: 'denied' } : { ok: true, value: runs };
+    if (j.startsWith('acr agentpool update')) return failUpdate ? { ok: false, err: 'conflict' } : { ok: true, value: {} };
+    if (j.startsWith('acr agentpool show')) return { ok: true, value: { count: afterCount } };
+    return { ok: false, err: 'unexpected ' + j };
+  };
+  return { az, calls };
+}
+const updated = (calls) => calls.some((c) => c.startsWith('acr agentpool update'));
+
+test('release: scales to 0 and reads back when idle', () => {
+  const f = fakeAz({});
+  const r = release('acr', 'p', f.az);
+  assert.equal(r.code, 0);
+  assert.ok(updated(f.calls), 'an idle pool at count 2 must be updated');
+  assert.match(r.msg, /read-back count=0/);
+});
+test('release: FAILS when the read-back count is not 0 (afterCount=1)', () => {
+  const r = release('acr', 'p', fakeAz({ afterCount: 1 }).az);
+  assert.equal(r.code, 1, 'read-back count=1 must exit 1, not report success');
+  assert.match(r.msg, /still billing/);
+});
+test('release: FAILS when the update itself errors', () => {
+  assert.equal(release('acr', 'p', fakeAz({ failUpdate: true }).az).code, 1);
+});
+test('release: does NOT scale while a run is active on the pool (kill-in-flight guard)', () => {
+  const f = fakeAz({ runs: [{ agentPoolName: 'p' }] });
+  const r = release('acr', 'p', f.az);
+  assert.equal(r.code, 0);
+  assert.equal(updated(f.calls), false, 'an active run on pool p must prevent any update');
+  // positive pair: the same run on a DIFFERENT pool does not block.
+  const g = fakeAz({ runs: [{ agentPoolName: 'other' }] });
+  release('acr', 'p', g.az);
+  assert.equal(updated(g.calls), true, 'a run on another pool must not block the release');
+});
+test('release: does NOT scale while the queue is non-empty (queue=2)', () => {
+  const f = fakeAz({ queue: 2 });
+  release('acr', 'p', f.az);
+  assert.equal(updated(f.calls), false);
+});
+test('release: fails closed when runs cannot be listed (failRuns)', () => {
+  const f = fakeAz({ failRuns: true });
+  const r = release('acr', 'p', f.az);
+  assert.equal(r.code, 1, 'unlistable runs must exit 1');
+  assert.equal(updated(f.calls), false, 'and must not scale');
+});
+test('release: fails closed when pools cannot be listed', () => {
+  const f = fakeAz({ failList: true });
+  assert.equal(release('acr', 'p', f.az).code, 1);
+  assert.equal(updated(f.calls), false);
+});
+test('release: absent pool is a clean no-op (fresh registry, no console build)', () => {
+  const f = fakeAz({ pools: [] });
+  assert.equal(release('acr', 'p', f.az).code, 0);
+  assert.equal(updated(f.calls), false);
+});
+
+// ---- workflow wiring -----------------------------------------------------
+test('workflow: pool_release exists, is if: always(), and needs resolve+acr_enable+build', () => {
+  assert.ok(J.pool_release, 'a pool_release job must exist (missing job turns this red)');
+  assert.match(J.pool_release, /^ {4}if: always\(\)\s*$/m, 'dropping `if: always()` lets a failed build skip the scale-down');
+  const needs = /^ {4}needs: \[([^\]]*)\]/m.exec(J.pool_release);
+  assert.ok(needs, 'pool_release must declare needs');
+  const set = needs[1].split(',').map((x) => x.trim());
+  for (const j of Object.keys(J).filter((k) => ['resolve', 'acr_enable', 'build'].includes(k))) {
+    assert.ok(set.includes(j), `pool_release must need ${j}; adding a build job without listing it turns this red`);
+  }
+  assert.match(J.pool_release, /acr-build-pool\.mjs release /, 'must call the read-back release script');
+  assert.match(J.pool_release, /timeout-minutes: \d+/, 'release job needs its own timeout');
+});
+test('workflow: every job that runs `az acr build` is a need of pool_release', () => {
+  const needs = /^ {4}needs: \[([^\]]*)\]/m.exec(J.pool_release)[1].split(',').map((x) => x.trim());
+  const builders = Object.keys(J).filter((k) => /az acr build/.test(J[k]));
+  assert.ok(builders.length >= 1, 'positive control: at least one job builds');
+  for (const b of builders) assert.ok(needs.includes(b), `builder job ${b} is not in pool_release needs`);
+});
+test('workflow: build jobs have a hard timeout-minutes', () => {
+  const t = /^ {4}timeout-minutes: (\d+)\s*$/m.exec(J.build);
+  assert.ok(t, 'build job must set timeout-minutes (removing it lets a hang hold the pool for 6h)');
+  assert.ok(Number(t[1]) <= 180, `timeout ${t[1]} is above 180`);
+});
+test('workflow: scale-up uses the clamped shared count, never a literal --count 1', () => {
+  assert.match(J.build, /acr-build-pool\.mjs" clamp "\$POOL_AGENT_COUNT"/, 'scale-up must go through the clamp');
+  assert.match(J.build, /--count "\$WANT"/, 'update must use the clamped value');
+  assert.doesNotMatch(J.build, /agentpool update[^\n]*--count 1\b/, 'a literal --count 1 bypasses POOL_AGENT_COUNT');
+  assert.doesNotMatch(J.build, /agentpool update[^\n]*--count 0\b/, 'scale-down belongs to pool_release only; an in-step one is skipped on failure');
+});
+test('workflow: POOL_AGENT_COUNT defaults 2 for Commercial and 1 for Gov', () => {
+  const line = /^ {2}POOL_AGENT_COUNT: (.*)$/m.exec(text);
+  assert.ok(line, 'env POOL_AGENT_COUNT must exist');
+  assert.match(line[1], /'GCC-High'/);
+  assert.match(line[1], /'IL5'/);
+  assert.match(line[1], /&& '1' \|\| '2'/, 'Gov -> 1, otherwise 2');
+});

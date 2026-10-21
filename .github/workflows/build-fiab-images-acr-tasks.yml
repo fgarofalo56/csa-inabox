@@ -56,6 +56,10 @@ on:
         description: 'Comma-separated app list, or "all"'
         type: string
         default: all
+      pool_agent_count:
+        description: 'Agents to scale the loom-console build pool UP to for this run (clamped 1..4 by scripts/ci/acr-build-pool.mjs). Blank = 2 on Commercial, 1 on GCC-High/IL5. The pool_release job scales it back to 0 and reads the count back.'
+        type: string
+        default: ''
       skip_supply_chain:
         description: 'EMERGENCY VALVE — skip the Trivy CRITICAL gate + cosign signing (e.g. Trivy DB / Sigstore outage). The unsigned image will be REJECTED by the roll gates unless their skip valves are also set.'
         type: boolean
@@ -77,6 +81,9 @@ on:
       skip_supply_chain:
         type: boolean
         default: false
+      pool_agent_count:
+        type: string
+        default: ''
   push:
     branches: [main]
     paths:
@@ -156,6 +163,12 @@ env:
   # Trivy scan + cosign sign). Size the lease so a legitimate run never expires
   # mid-push and gets its registry swept out from under it.
   LOOM_ACR_LEASE_TTL_MINUTES: '120'
+  # Build-pool size for the loom-console compile (the only app on the dedicated
+  # pool). Raw value; clamped to 1..4 by `acr-build-pool.mjs clamp` at use.
+  # Commercial defaults to 2; Gov lanes stay at 1 (the same guaranteed
+  # scale-down applies to them, but the 2026-10-21 decision was Commercial).
+  POOL_AGENT_COUNT: ${{ inputs.pool_agent_count || ((inputs.boundary == 'GCC-High' || inputs.boundary == 'IL5') && '1' || '2') }}
+  BUILD_POOL_NAME: loombuild2
 
 jobs:
   resolve:
@@ -313,6 +326,11 @@ jobs:
     name: Build ${{ matrix.name }} via ACR Tasks
     needs: [resolve, acr_enable]
     runs-on: ubuntu-latest
+    # A hung build must not hold billed pool agents indefinitely. The retry
+    # harness caps one az acr build at 90m wall-clock; 120m covers checkout,
+    # scan and sign. On timeout the job fails and pool_release (if: always())
+    # still runs.
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.resolve.outputs.app_matrix) }}
@@ -398,15 +416,16 @@ jobs:
           # removes the branch that let this one silently inherit the dead queue;
           # the `show || create` below makes it self-healing on Commercial, where
           # the pool is simply created on first use.
-          POOL="loombuild2"
+          POOL="$BUILD_POOL_NAME"
           POOL_ARGS=""
           if [ "${{ matrix.name }}" = "loom-console" ]; then
             az acr agentpool show -r "$ACR" -n "$POOL" -o none 2>/dev/null \
               || az acr agentpool create -r "$ACR" -n "$POOL" --tier S3 -o none
+            WANT=$(node "$GITHUB_WORKSPACE/scripts/ci/acr-build-pool.mjs" clamp "$POOL_AGENT_COUNT")
             CNT=$(az acr agentpool show -r "$ACR" -n "$POOL" --query count -o tsv | tr -d '\r')
-            [ "${CNT:-0}" -ge 1 ] || az acr agentpool update -r "$ACR" -n "$POOL" --count 1 -o none
+            [ "${CNT:-0}" -ge "$WANT" ] || az acr agentpool update -r "$ACR" -n "$POOL" --count "$WANT" -o none
             POOL_ARGS="--agent-pool $POOL"
-            echo "::notice::#2706 — building loom-console on ACR agent pool: $POOL (boundary=$BOUNDARY)"
+            echo "::notice::#2706 - building loom-console on ACR agent pool: $POOL (boundary=$BOUNDARY, scaled to $WANT agent(s); scale-down is the pool_release job)"
           fi
           # loom-uat carries the Playwright specs, but apps/fiab-console/.dockerignore
           # excludes e2e/ + tests/ to keep the CONSOLE image lean — and ACR Tasks
@@ -452,12 +471,9 @@ jobs:
           echo "IMAGE_TAG=$TAG" >> "$GITHUB_ENV"
           echo "ACR_NAME=$ACR" >> "$GITHUB_ENV"
           echo "ACR_LOGIN_SERVER=${{ needs.resolve.outputs.acr_login_server }}" >> "$GITHUB_ENV"
-          if [ -n "$POOL_ARGS" ]; then
-            # Scale the pool back to 0 when nothing else is queued (pool
-            # allocation is what bills; idle pools cost nothing at count 0).
-            q=$(az acr agentpool show -r "$ACR" -n "$POOL" --queue-count -o tsv 2>/dev/null | tr -d '\r' || echo 1)
-            [ "${q:-1}" = "0" ] && az acr agentpool update -r "$ACR" -n "$POOL" --count 0 --no-wait -o none || true
-          fi
+          # No in-step scale-down: a line in this shell is skipped by a failed
+          # build, a cancel or a timeout (the 2026-10-19 leak). The final
+          # pool_release job (if: always()) owns it and reads the count back.
 
       # Ported from gov-provision-runner-images.yml (#3416) to this lane (#4461):
       # this is THE producer of every production app image, Commercial and Gov
@@ -828,3 +844,57 @@ jobs:
         run: |
           bash scripts/csa-loom/acr-firewall-lease.sh release \
             --acr "${{ needs.resolve.outputs.acr_name }}"
+
+  # Guaranteed scale-down of the build pool. Runs on success, failure, cancel
+  # and build timeout (always()); needs EVERY job that can scale the pool up.
+  # It reads the count back and FAILS the run if the pool is still billing.
+  # It will not kill in-flight work from another lane (queue or active runs on
+  # the pool): it says so and leaves it to acr-agentpool-reaper.yml.
+  pool_release:
+    name: Scale build pool to 0 (read back)
+    needs: [resolve, acr_enable, build]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Azure login (Commercial)
+        if: env.BOUNDARY == 'Commercial'
+        uses: azure/login@v2.3.0
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+      - name: Azure login (Gov)
+        if: env.BOUNDARY != 'Commercial'
+        uses: azure/login@v2.3.0
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+      - name: Set Azure cloud to Gov
+        if: env.BOUNDARY != 'Commercial'
+        run: az cloud set --name AzureUSGovernment
+      - name: Scale the build pool to 0 and read the count back
+        env:
+          ACR: ${{ needs.resolve.outputs.acr_name }}
+        run: |
+          if [ -z "$ACR" ]; then
+            echo "::warning::resolve produced no registry name, so no build job could have scaled a pool. Nothing to release."
+            exit 0
+          fi
+          node scripts/ci/acr-build-pool.mjs release --acr "$ACR" --pool "$BUILD_POOL_NAME"
