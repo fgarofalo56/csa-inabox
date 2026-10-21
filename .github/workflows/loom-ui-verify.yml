@@ -205,7 +205,7 @@ jobs:
       #    repo (see docs/fiab/agent-unattended-access.md §one-time-setup).
       # -----------------------------------------------------------------------
       - name: Azure login (OIDC)
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id:       ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id:       ${{ secrets.AZURE_TENANT_ID }}

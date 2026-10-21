@@ -77,7 +77,7 @@ jobs:
       # empty credential, which authenticates to nothing and reads as "no
       # resources found".
       - name: Azure login (Gov sub) — deploy SP
-        uses: Azure/login@v2
+        uses: Azure/login@v3
         with:
           creds: |
             {

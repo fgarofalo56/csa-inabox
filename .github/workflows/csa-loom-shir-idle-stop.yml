@@ -75,7 +75,7 @@ jobs:
 
       - name: Azure login (limitlessdata_deploy SP)
         if: ${{ steps.guard.outputs.run == 'true' }}
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           creds: |
             {

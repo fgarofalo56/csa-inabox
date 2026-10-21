@@ -416,7 +416,7 @@ jobs:
           node-version: '20'
 
       - name: Azure login
-        uses: azure/login@v2.3.0
+        uses: azure/login@v3
         with:
           creds: |
             {

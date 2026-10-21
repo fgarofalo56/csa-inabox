@@ -64,7 +64,7 @@ jobs:
       # ── Auth: Commercial vs Gov SP (mirrors full-app-deploy / gov-console-roll) ──
       - name: Azure login (Commercial)
         if: ${{ inputs.cloud == 'commercial' }}
-        uses: Azure/login@v2
+        uses: Azure/login@v3
         with:
           creds: |
             {
@@ -76,7 +76,7 @@ jobs:
 
       - name: Azure login (Gov)
         if: ${{ inputs.cloud == 'gov' }}
-        uses: Azure/login@v2
+        uses: Azure/login@v3
         with:
           environment: AzureUSGovernment
           creds: |

@@ -27,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       - name: Azure login
-        uses: Azure/login@v2
+        uses: Azure/login@v3
         with:
           creds: |
             {

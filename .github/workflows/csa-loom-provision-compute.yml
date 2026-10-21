@@ -71,7 +71,7 @@ jobs:
 
       - name: Azure login (Commercial — deploy SP)
         if: inputs.boundary == 'Commercial'
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           creds: |
             {
@@ -83,7 +83,7 @@ jobs:
 
       - name: Azure login (GCC — public cloud)
         if: inputs.boundary == 'GCC'
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           creds: |
             {
@@ -95,7 +95,7 @@ jobs:
 
       - name: Azure login (Gov — GCC-High / IL5)
         if: inputs.boundary == 'GCC-High' || inputs.boundary == 'IL5'
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           environment: AzureUSGovernment
           creds: |

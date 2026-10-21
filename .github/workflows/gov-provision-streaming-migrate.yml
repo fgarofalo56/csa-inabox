@@ -114,7 +114,7 @@ jobs:
             exit 1
           fi
       - name: Azure Gov Login
-        uses: Azure/login@v2
+        uses: Azure/login@v3
         with:
           creds: |
             {

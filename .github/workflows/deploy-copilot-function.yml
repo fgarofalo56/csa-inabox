@@ -121,7 +121,7 @@ jobs:
         run: python -m pytest tests/ -v
 
       - name: Azure login (SP-based RBAC)
-        uses: azure/login@1384c340ab2dda50fed2bee3041d1d87018aa5e8 # v2.3.0
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.0
         with:
           creds: |
             {

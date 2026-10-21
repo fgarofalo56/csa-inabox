@@ -45,7 +45,7 @@ jobs:
     timeout-minutes: 40
     steps:
       - name: Azure login (Gov sub) — deploy SP
-        uses: Azure/login@v2
+        uses: Azure/login@v3
         with:
           creds: |
             {

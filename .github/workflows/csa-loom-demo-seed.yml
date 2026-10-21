@@ -47,7 +47,7 @@ jobs:
         with:
           node-version: '20'
       - name: Azure login (limitlessdata_deploy SP)
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           creds: |
             {

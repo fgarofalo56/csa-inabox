@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Azure Gov Login
-        uses: Azure/login@v2
+        uses: Azure/login@v3
         with:
           creds: |
             {

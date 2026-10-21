@@ -89,7 +89,7 @@ jobs:
       # BRANCH — the OIDC federated credential is pinned to refs/heads/main and
       # a branch dispatch dies at AADSTS700213.
       - name: Azure login (deploy SP — for the ACR data-plane probe)
-        uses: azure/login@v2.3.0
+        uses: azure/login@v3
         with:
           creds: |
             {

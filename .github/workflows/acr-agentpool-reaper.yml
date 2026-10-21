@@ -75,7 +75,7 @@ jobs:
 
       - if: steps.check.outputs.configured == 'true' && matrix.boundary == 'Commercial'
         name: Azure login (Commercial)
-        uses: Azure/login@v2
+        uses: Azure/login@v3
         with:
           creds: |
             {
@@ -87,7 +87,7 @@ jobs:
 
       - if: steps.check.outputs.configured == 'true' && matrix.boundary == 'GCC-High'
         name: Azure login (Gov)
-        uses: Azure/login@v2
+        uses: Azure/login@v3
         with:
           creds: |
             {

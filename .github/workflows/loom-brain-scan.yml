@@ -260,7 +260,7 @@ jobs:
           node-version: '20'
 
       - name: Azure login (Commercial)
-        uses: Azure/login@v2
+        uses: Azure/login@v3
         with:
           creds: |
             {
@@ -586,7 +586,7 @@ jobs:
           node-version: '20'
 
       - name: Azure login (Gov)
-        uses: Azure/login@v2
+        uses: Azure/login@v3
         with:
           creds: |
             {

@@ -39,7 +39,7 @@ jobs:
     runs-on: [self-hosted, loom-aca]
     steps:
       - name: Azure login (deploy SP)
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"e093f4fd-5047-4ee4-968d-a56942c665f3","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'
 

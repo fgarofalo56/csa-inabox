@@ -96,7 +96,7 @@ jobs:
 
       - name: Azure login
         if: steps.guard.outputs.skip != 'true'
-        uses: azure/login@v2.3.0
+        uses: azure/login@v3
         with:
           creds: |
             {
@@ -143,7 +143,7 @@ jobs:
 
       - name: Azure login (Gov sub)
         if: steps.guard.outputs.skip != 'true'
-        uses: azure/login@v2.3.0
+        uses: azure/login@v3
         with:
           creds: |
             {

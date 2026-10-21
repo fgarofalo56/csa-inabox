@@ -83,7 +83,7 @@ jobs:
 
       - if: steps.check.outputs.configured == 'true'
         name: Azure login (Commercial)
-        uses: Azure/login@v2
+        uses: Azure/login@v3
         with:
           creds: |
             {
@@ -148,7 +148,7 @@ jobs:
 
       - if: steps.check.outputs.configured == 'true'
         name: Azure login (Gov sub) - limitlessdata_deploy SP
-        uses: Azure/login@v2
+        uses: Azure/login@v3
         with:
           creds: |
             {

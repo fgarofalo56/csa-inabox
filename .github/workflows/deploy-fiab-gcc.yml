@@ -162,7 +162,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
 
       - name: Azure login (GCC sub)
-        uses: Azure/login@v2
+        uses: Azure/login@v3
         with:
           creds: |
             {

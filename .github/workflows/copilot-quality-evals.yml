@@ -213,7 +213,7 @@ jobs:
           echo "::notice::corpus manifest commit $COMMIT"
 
       - name: Azure login
-        uses: Azure/login@v2
+        uses: Azure/login@v3
         with:
           creds: |
             {

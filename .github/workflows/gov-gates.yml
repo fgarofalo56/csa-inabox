@@ -49,7 +49,7 @@ jobs:
       github.event.workflow_run.conclusion == 'success'
     steps:
       - name: Azure login (Gov sub) — deploy SP
-        uses: Azure/login@v2
+        uses: Azure/login@v3
         with:
           creds: |
             {

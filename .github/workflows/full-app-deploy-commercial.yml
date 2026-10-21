@@ -96,7 +96,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       - name: Azure login
-        uses: Azure/login@v2
+        uses: Azure/login@v3
         with:
           creds: |
             {
@@ -263,7 +263,7 @@ jobs:
       # Needed for scripts/csa-loom/acr-firewall-lease.sh (#2603).
       - uses: actions/checkout@v7.0.1
       - name: Azure login
-        uses: Azure/login@v2
+        uses: Azure/login@v3
         with:
           creds: |
             {
@@ -500,7 +500,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       - name: Azure login
-        uses: Azure/login@v2
+        uses: Azure/login@v3
         with:
           creds: |
             {
@@ -729,7 +729,7 @@ jobs:
       # and must never skip an image on the strength of the second.
       - uses: actions/checkout@v7.0.1
       - name: Azure login
-        uses: Azure/login@v2
+        uses: Azure/login@v3
         with:
           creds: |
             {
@@ -952,7 +952,7 @@ jobs:
       # Needed for scripts/csa-loom/acr-firewall-lease.sh (#2603).
       - uses: actions/checkout@v7.0.1
       - name: Azure login
-        uses: Azure/login@v2
+        uses: Azure/login@v3
         with:
           creds: |
             {
@@ -1016,7 +1016,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       - name: Azure login
-        uses: Azure/login@v2
+        uses: Azure/login@v3
         with:
           creds: |
             {
@@ -1123,7 +1123,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       - name: Azure login
-        uses: Azure/login@v2
+        uses: Azure/login@v3
         with:
           creds: |
             {
@@ -1289,7 +1289,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       - name: Azure login
-        uses: Azure/login@v2
+        uses: Azure/login@v3
         with:
           creds: |
             {
