@@ -36,11 +36,16 @@
 # which also treats a group with NO `patterns` key as a catch-all — GitHub does,
 # and a checker that only knows `["*"]` reports green while a group sits dead.
 version: 2
+# CADENCE (2026-10-21): every ecosystem is MONTHLY. Weekly grouped version PRs cost a
+# ~45-minute CI suite each and produced 11 new PRs in one afternoon after config edits.
+# SECURITY updates are NOT governed by `schedule` (GitHub raises them as soon as an
+# advisory matches), so the vulnerable-package PRs (certifi, next, vitest ...) still
+# arrive at once; only routine version bumps are batched.
 updates:
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     labels: ["dependencies", "python"]
     open-pull-requests-limit: 10
     # pydantic-ai 1.107.x (#4974/#4977, combined attempt #4984, 2026-10-14) cannot be
@@ -55,6 +60,8 @@ updates:
       - dependency-name: "pydantic-ai-slim"
       - dependency-name: "pydantic-graph"
       - dependency-name: "pydantic-evals"
+      # aiohttp 3.14.4 needs yarl>=1.25.1; the stale copilot lock pins older yarl (#5035, PR #5061).
+      - dependency-name: "aiohttp"
     groups:
       azure-sdk:
         patterns:
@@ -74,7 +81,7 @@ updates:
   - package-ecosystem: "pip"
     directory: "/apps/loom-duckdb"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     labels: ["dependencies", "python"]
     open-pull-requests-limit: 5
     # pyarrow 26.0.0 requires Python >=3.11 but the Test Suite matrix runs 3.10 (#4988:
@@ -93,7 +100,7 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     labels: ["dependencies", "ci"]
     open-pull-requests-limit: 5
     # Azure/login 2 -> 3 (#5059, 2026-10-21) fails the Copilot quality evals login:
@@ -129,7 +136,7 @@ updates:
   - package-ecosystem: "npm"
     directory: "/portal/react-webapp"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 10
     # The largest single cluster in the 2026-09-20 backlog: 10 of the 22 open
@@ -194,7 +201,7 @@ updates:
   - package-ecosystem: "cargo"
     directory: "/apps/loom-directlake"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     # `dependencies` only: there is no `rust` label in this repo (measured
     # 2026-09-18 — `gh label list` returns `dependencies`, `javascript`,
     # `security`, `sp:*`, `lane:*` and no `rust`), and naming one that does not
@@ -284,7 +291,7 @@ updates:
   - package-ecosystem: "npm"
     directory: "/apps/fiab-console"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 10
     # MAJOR bumps held back, each measured to break CI in dependabot PR #4941
@@ -356,7 +363,7 @@ updates:
   - package-ecosystem: "npm"
     directory: "/apps/loom-sdk"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 5
     # #4965/#4966 (2026-10-14): typescript 7 + vitest 5 + @types/node 26 made npm
@@ -380,7 +387,7 @@ updates:
   - package-ecosystem: "npm"
     directory: "/apps/loom-embed"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 5
     groups:
@@ -394,7 +401,7 @@ updates:
   - package-ecosystem: "npm"
     directory: "/apps/loom-cli"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 5
     # #4965/#4966 (2026-10-14): typescript 7 + vitest 5 + @types/node 26 made npm
@@ -418,7 +425,7 @@ updates:
   - package-ecosystem: "npm"
     directory: "/apps/fiab-label-propagation"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 5
     # #4963/#4964 (2026-10-14): vitest 5 declares peer @types/node ^22 || >=24 and these
@@ -442,7 +449,7 @@ updates:
   - package-ecosystem: "npm"
     directory: "/azure-functions/secret-expiry-monitor"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 5
     # #4963/#4964 (2026-10-14): vitest 5 declares peer @types/node ^22 || >=24 and these
