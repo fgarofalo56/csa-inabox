@@ -1,9 +1,17 @@
 name: loom-aca runner smoke test
 
 # Proves the scale-to-zero in-VNet self-hosted runner (gh-aca-runner ACA Job)
-# registers + runs a job + reaches Azure as the console UAMI. Manual trigger only
+# registers + runs a job + reaches Azure. Manual trigger only
 # (workflow_dispatch) so it never runs on normal pushes. See
 # docs/fiab/github-actions-runner.md.
+#
+# NOT "as the console UAMI", which this header claimed until PR #4492. That PR
+# detaches the console identity from the ACA Job and attaches `uami-loom-ci`
+# (AcrPull only), so the `az login --identity` step below now authenticates as
+# a near-powerless identity. Nothing functional in this workflow depends on it:
+# every `az` call that matters runs after the `azure/login` service-principal
+# step further down. The identity step is retained as an OBSERVATION of what
+# the runner carries, and is labelled as such at its site.
 #
 # ── ACR DATA-PLANE PROBE / IMAGE PREFLIGHT (refs #2958) ─────────────────────
 # Every Loom ACR rests at publicNetworkAccess=Disabled + defaultAction=Deny with
@@ -77,9 +85,13 @@ jobs:
           pnpm --version || true
           bicep --version 2>/dev/null || az bicep version || true
           gh --version || true
-      - name: Azure login as the console UAMI (in-VNet)
+      - name: Observe which identity the runner actually carries (in-VNet)
+        # NOT a gate, and NOT the console UAMI any more — see the header. This
+        # reports what the ACA Job carries; since PR #4492 that is
+        # `uami-loom-ci`, which holds AcrPull and nothing else. Everything
+        # functional below authenticates via `azure/login` instead.
         run: |
-          az login --identity --output none && echo "az login --identity OK (console UAMI)"
+          az login --identity --output none && echo "az login --identity OK"
           az account show --query "{sub:name, user:user.name}" -o json || true
 
       # The deploy SP, not the console UAMI, for the data-plane probe: it is the

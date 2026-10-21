@@ -65,6 +65,7 @@ concurrency:
 jobs:
   precheck:
     name: Verify secrets and variables for ${{ inputs.boundary }}
+    # DELIBERATELY LITERAL (PR 4492): the estate pause and resume control must not ride the fleet it can pause.
     runs-on: ubuntu-latest
     outputs:
       configured: ${{ steps.check.outputs.configured }}
@@ -118,6 +119,7 @@ jobs:
     name: Estate power - Commercial
     needs: [precheck]
     if: inputs.boundary == 'Commercial' && needs.precheck.outputs.configured == 'true'
+    # DELIBERATELY LITERAL (PR 4492): the estate pause and resume control must not ride the fleet it can pause.
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -155,6 +157,7 @@ jobs:
     name: Estate power - GCC-High
     needs: [precheck]
     if: inputs.boundary == 'GCC-High' && needs.precheck.outputs.configured == 'true'
+    # DELIBERATELY LITERAL (PR 4492): the estate pause and resume control must not ride the fleet it can pause.
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: gcc-high-deploy   # requires manual approval (same gate as deploy-fiab-gcch.yml)
