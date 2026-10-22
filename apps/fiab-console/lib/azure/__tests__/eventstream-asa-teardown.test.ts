@@ -167,10 +167,18 @@ describe('teardownItemBackend(eventstream) derived-name ownership check', () => 
     expect(jobRow(out)?.result).toBe('not_found');
   });
 
-  it('a RECORDED asaJobName is deleted without any tag lookup', async () => {
+  it('an asaJobName in the SERVER-OWNED receipt is deleted without any tag lookup', async () => {
     getJobTags.mockResolvedValue({});
-    await teardownItemBackend(es({ asaJobName: 'asa-loom-recorded' }), 't');
+    await teardownItemBackend(es({ provisioning: { secondaryIds: { asaJobName: 'asa-loom-recorded' } } }), 't');
     expect(getJobTags).not.toHaveBeenCalled();
     expect(deleteStreamingJob).toHaveBeenCalledWith('asa-loom-recorded');
+  });
+
+  it('a top-level (user-editable) asaJobName is NOT ownership proof: untagged => not deleted (cascade mode too)', async () => {
+    getJobTags.mockResolvedValue({});
+    const out = await teardownItemBackend(es({ asaJobName: 'victim-job' }), 't');
+    expect(getJobTags).toHaveBeenCalledWith('victim-job');
+    expect(deleteStreamingJob).not.toHaveBeenCalled();
+    expect(jobRow(out)?.result).toBe('skipped');
   });
 });

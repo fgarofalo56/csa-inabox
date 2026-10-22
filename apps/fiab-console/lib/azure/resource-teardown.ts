@@ -68,6 +68,8 @@ export interface TeardownResourceResult {
   result: TeardownResourceStatus;
   /** Error message (result==='error') or the reason a resource was skipped. */
   error?: string;
+  /** True when the resource was RETAINED only because a safety check could not run (fail closed). */
+  unverified?: boolean;
 }
 
 export interface TeardownOutcome {
@@ -88,6 +90,13 @@ export interface TeardownOptions {
    * (default `false`) because the operator opted into `?cascade=true`.
    */
   recordedOnly?: boolean;
+  /**
+   * Recorded-only cross-item lookup: does any OTHER item record one of these
+   * values as its backing resource? Returns that item, or null when none does.
+   * Throwing means "could not check" and the delete is retained (fail closed).
+   * REQUIRED for recorded-only deletes to run at all.
+   */
+  sharedCheck?: (selfItemId: string, values: string[]) => Promise<{ id: string; workspaceId: string; itemType: string } | null>;
 }
 
 /** Minimal item shape the teardown needs (a full Cosmos item doc, state included). */
@@ -121,7 +130,7 @@ function sid(item: TeardownItem, key: string): string | undefined {
 }
 
 /** A top-level state key value (string, trimmed) or undefined. */
-function st(item: TeardownItem, key: string): string | undefined {
+function stField(item: TeardownItem, key: string): string | undefined {
   const v = (item.state as any)?.[key];
   return typeof v === 'string' && v.trim() ? v.trim() : undefined;
 }
@@ -132,7 +141,7 @@ function resourceId(item: TeardownItem): string | undefined {
 }
 
 function backendOf(item: TeardownItem): string | undefined {
-  return sid(item, 'backend') || st(item, 'backend');
+  return sid(item, 'backend') || stField(item, 'backend');
 }
 
 /** Reproduce the provisioners' safe path/name sanitiser (adls safeRelPath). */
@@ -173,9 +182,12 @@ function isSharedAdxDatabase(db: string): boolean {
  * Jobs created before the tag existed carry no tag and are skipped here; they
  * are removed by the approval-gated leftover cleanup, not guessed at.
  */
-async function deriveOwnedAsaJob(itemId: string): Promise<TeardownResourceResult | null> {
+async function deriveOwnedAsaJob(itemId: string, candidate?: string): Promise<TeardownResourceResult | null> {
   try { readAsaConfig(); } catch { return null; }
-  const name = asaJobNameForItem(itemId);
+  // `candidate` is an UNTRUSTED top-level `state.asaJobName` (any Member can
+  // PATCH it, and asa-sync/sql-operator write operator-chosen job names there);
+  // it is only a name to look at, and the tag decides whether it is ours.
+  const name = candidate || asaJobNameForItem(itemId);
   let tags: Record<string, string> | null;
   try {
     tags = await getJobTags(name);
@@ -192,10 +204,10 @@ async function deriveOwnedAsaJob(itemId: string): Promise<TeardownResourceResult
     return skip(
       'stream-analytics-job',
       name,
-      `Job '${name}' exists but its loomItemId tag is ${tags.loomItemId ? `'${tags.loomItemId}'` : 'absent'}, not this item's id, and no job name is recorded on the item; not deleted.`,
+      `Job '${name}' exists but its loomItemId tag is ${tags.loomItemId ? `'${tags.loomItemId}'` : 'absent'}, not this item's id, and no job name is recorded in the item's server-owned provisioning receipt; not deleted.`,
     );
   }
-  return attempt('stream-analytics-job', name, () => deleteStreamingJob(name));
+  return attemptDelete('stream-analytics-job', name, () => deleteStreamingJob(name));
 }
 
 /**
@@ -203,7 +215,7 @@ async function deriveOwnedAsaJob(itemId: string): Promise<TeardownResourceResult
  * "does not exist" is reported as `not_found` (already gone — an idempotent
  * success for teardown), any other failure as `error` with the message.
  */
-async function attempt(
+async function attemptDelete(
   kind: string,
   ref: string,
   fn: () => Promise<unknown>,
@@ -242,6 +254,49 @@ export async function teardownItemBackend(
   const displayName = item.displayName || item.id;
   const resources: TeardownResourceResult[] = [];
   const push = (r: TeardownResourceResult) => resources.push(r);
+
+  // #5046 review blocker 2 - in recorded-only mode ONLY the server-owned
+  // `state.provisioning` receipt is trusted. Every plain top-level state key
+  // (transportHub, asaJobName, databaseName, pipelineName, notebookPath,
+  // indexName, rules[], ...) is writable by any Member who can PATCH the item,
+  // so reading one would let that Member aim a delete at another workspace's
+  // resource. `st` is shadowed to "absent" so no case below can reach one.
+  // `provisioning` itself is in SERVER_DERIVED_SCOPE_KEYS: PATCH can neither set
+  // nor drop it. (`state.autoBind` is NOT protected, so it is not read either.)
+  const st = (i: TeardownItem, k: string): string | undefined => (recordedOnly ? undefined : stField(i, k));
+  if (recordedOnly && Object.keys(provRecord(item)).length === 0) {
+    push(skip(type, '(none)', 'The item has no server-owned provisioning receipt (state.provisioning), so there is no trustworthy record of a backing resource; nothing was deleted.'));
+    return { itemId: item.id, itemType: type, displayName, resources };
+  }
+
+  // Every delete goes through here. In recorded-only mode it first proves no
+  // OTHER item records the same backing resource (two items can share a name:
+  // e.g. same-named KQL databases in two workspaces), and fails CLOSED when the
+  // lookup is unavailable or was not supplied.
+  const attempt = async (
+    kind: string,
+    ref: string,
+    fn: () => Promise<unknown>,
+    sharedValues: string[] = [ref],
+  ): Promise<TeardownResourceResult> => {
+    if (recordedOnly) {
+      if (!opts.sharedCheck) {
+        return { ...skip(kind, ref, 'No cross-item lookup is available, so it could not be verified that no other item records this resource; not deleted.'), unverified: true };
+      }
+      try {
+        const other = await opts.sharedCheck(item.id, sharedValues);
+        if (other) {
+          return skip(kind, ref, `Shared by another item (${other.itemType} ${other.id} in workspace ${other.workspaceId}) that records the same backing resource; not deleted.`);
+        }
+      } catch (e: any) {
+        return {
+          ...skip(kind, ref, `Could not verify that no other item records this resource (cross-item lookup failed: ${(e?.message || String(e)).slice(0, 200)}); not deleted.`),
+          unverified: true,
+        };
+      }
+    }
+    return attemptDelete(kind, ref, fn);
+  };
   const be = backendOf(item);
   const sids = provRecord(item).secondaryIds || {};
 
@@ -277,14 +332,26 @@ export async function teardownItemBackend(
       // Recorded-only never falls back to `lakehouses/<displayName>`: a recursive
       // ADLS delete on a name guessed from the display name is the exact blind
       // delete #5046 forbids. An empty root would also be the container itself.
-      const rootPath = recordedRoot || (recordedOnly ? '' : `lakehouses/${safeName(displayName) || item.id}`);
-      if (recordedOnly && !safeName(rootPath)) {
-        push(skip('adls-path', container || '(unknown)', 'No ADLS root path is recorded on the item state; data left in place (a path is never derived from the display name).'));
+      const rawRoot = recordedRoot || (recordedOnly ? '' : `lakehouses/${safeName(displayName) || item.id}`);
+      // The value handed to deletePath is the SANITISED one: `safeName` drops
+      // '', '.' and '..' segments, and a root that tried traversal is refused
+      // outright rather than quietly rewritten to a different (shallower) path.
+      const rootPath = safeName(rawRoot);
+      const rootSegments = rootPath ? rootPath.split('/').length : 0;
+      if (rawRoot.replace(/\\/g, '/').split('/').some((s) => s.trim() === '..')) {
+        push(skip('adls-path', `${container || '(unknown)'}/${rawRoot}`, 'The recorded ADLS root contains a ".." segment; refused, data left in place.'));
+      } else if (recordedOnly && rootSegments < 2) {
+        // A single segment is a top-level folder shared by the container, and an
+        // empty root is the container itself.
+        push(skip('adls-path', container || '(unknown)', rootSegments === 0
+          ? 'No ADLS root path is recorded in the server-owned provisioning receipt; data left in place (a path is never derived from the display name).'
+          : `The recorded ADLS root '${rootPath}' has fewer than 2 path segments (it could be a shared top-level folder); data left in place.`));
+      } else if (container && /[/\\]/.test(container)) {
+        push(skip('adls-path', container, 'The recorded ADLS container name contains a path separator; refused.'));
       } else if (container) {
         push(
-          await attempt('adls-path', `${container}/${rootPath}`, () =>
-            deletePath(container, `${rootPath.replace(/\/+$/, '')}/`, true),
-          ),
+          await attempt('adls-path', `${container}/${rootPath}`, () => deletePath(container, `${rootPath}/`, true),
+            [rootPath, `${container}/${rootPath}`]),
         );
       } else {
         push(skip('adls-path', rootPath, 'No ADLS container recorded on the item state; data left in place.'));
@@ -359,8 +426,12 @@ export async function teardownItemBackend(
       const hub = st(item, 'transportHub') || sid(item, 'eventHub') || resourceId(item);
       if (hub) {
         // transportHub / eventHub are the hub NAME; ehId is the ARM id — take the leaf.
-        const hubName = hub.includes('/') ? hub.split('/').pop()! : hub;
-        push(await attempt('event-hub', hubName, () => deleteEventHub(hubName)));
+        const hubName = (hub.includes('/') ? hub.split('/').pop()! : hub).trim();
+        if (hubName) {
+          push(await attempt('event-hub', hubName, () => deleteEventHub(hubName)));
+        } else {
+          push(skip('event-hub', hub, 'The recorded Event Hub reference has an empty name segment; nothing was deleted.'));
+        }
       } else {
         push(skip('event-hub', '(unknown)', 'No Event Hub recorded on the item state.'));
       }
@@ -369,12 +440,15 @@ export async function teardownItemBackend(
       // strand the job. The derived name is only tried when ASA is configured,
       // and deleteStreamingJob treats 404 as already-gone, so an eventstream
       // that never had a transform job costs one idempotent DELETE, not an error.
-      const recordedJob = st(item, 'asaJobName') || sid(item, 'asaJobName');
-      if (recordedJob) {
-        // Recorded state IS the ownership proof.
-        push(await attempt('stream-analytics-job', recordedJob, () => deleteStreamingJob(recordedJob)));
+      // Ownership proof is the SERVER-OWNED receipt only. A top-level
+      // `state.asaJobName` is user-editable (PATCH) and is also where
+      // asa-sync / sql-operator store an operator-chosen job that this item did
+      // not create, so it is only a candidate NAME: the loomItemId tag decides.
+      const trustedJob = sid(item, 'asaJobName');
+      if (trustedJob) {
+        push(await attempt('stream-analytics-job', trustedJob, () => deleteStreamingJob(trustedJob)));
       } else {
-        const derived = await deriveOwnedAsaJob(item.id);
+        const derived = await deriveOwnedAsaJob(item.id, stField(item, 'asaJobName'));
         if (derived) push(derived);
       }
       break;
@@ -382,7 +456,9 @@ export async function teardownItemBackend(
 
     // --- Activator → Azure Monitor scheduled-query alert rule(s) --------------
     case 'activator': {
-      const rules = (item.state as any)?.rules;
+      // `state.rules[].azureRuleName` is a top-level, user-editable key: ignored
+      // in recorded-only mode (only the receipt's last authored rule is trusted).
+      const rules = recordedOnly ? undefined : (item.state as any)?.rules;
       const names: string[] = Array.isArray(rules)
         ? rules.map((r: any) => r?.azureRuleName).filter((n: any) => typeof n === 'string' && n)
         : [];
@@ -432,8 +508,14 @@ export async function teardownItemBackend(
         // The provisioner records that root as `secondaryIds.adlsRoot` (abfss).
         // Recorded-only deletes THAT, not a path rebuilt from ids.
         const root = parseAbfss(sid(item, 'adlsRoot') || '');
-        if (root && root.path) {
-          push(await attempt('adls-path', `${root.container}/${root.path}`, () => deletePath(root.container, `${root.path}/`, true)));
+        // The ref encodes the item's own scope (mirrors/<workspaceId>/<itemId>);
+        // a root that is not exactly that item's is retained, not deleted.
+        const expected = `mirrors/${item.workspaceId}/${item.id}`;
+        if (root && root.path && root.path !== expected) {
+          push(skip('adls-path', `${root.container}/${root.path}`, `The recorded Bronze root is not this item's own mirror root ('${expected}'); retained.`));
+        } else if (root && root.path) {
+          push(await attempt('adls-path', `${root.container}/${root.path}`, () => deletePath(root.container, `${root.path}/`, true),
+            [root.path, `${root.container}/${root.path}`]));
         } else {
           push(skip('adls-path', '(unknown)', 'No Bronze mirror root (adlsRoot) is recorded on the item state; landed data left in place.'));
         }
@@ -529,10 +611,16 @@ export async function teardownItemBackend(
     case 'materialized-lake-view': {
       const deltaUrl = sid(item, 'deltaUrl') || resourceId(item);
       const parsed = deltaUrl ? parseAbfss(deltaUrl) : null;
-      if (parsed) {
+      const mlvSegs = parsed ? parsed.path.split('/') : [];
+      if (parsed && mlvSegs.some((s) => s === '..' || s === '.' || s === '')) {
+        push(skip('adls-path', `${parsed.container}/${parsed.path}`, 'The recorded Delta path has an empty, "." or ".." segment; refused, data left in place.'));
+      } else if (parsed && recordedOnly && mlvSegs.length < 2) {
+        push(skip('adls-path', `${parsed.container}/${parsed.path}`, 'The recorded Delta path has fewer than 2 segments (could be a shared top-level folder); data left in place.'));
+      } else if (parsed) {
         push(
           await attempt('adls-path', `${parsed.container}/${parsed.path}`, () =>
             deletePath(parsed.container, `${parsed.path}/`, true),
+            [parsed.path, `${parsed.container}/${parsed.path}`],
           ),
         );
       } else {

@@ -41,10 +41,29 @@ vi.mock('@/lib/azure/synapse-dev-client', () => ({
 }));
 vi.mock('@/lib/azure/kusto-arm-client', () => ({ deleteKustoDatabase: (...a: any[]) => deleteKustoDatabase(...a) }));
 vi.mock('@/lib/azure/eventhubs-client', () => ({ deleteEventHub: (...a: any[]) => deleteEventHub(...a) }));
+const deleteStreamingJob = vi.fn(async (..._a: any[]) => undefined);
+const getJobTags = vi.fn(async (..._a: any[]): Promise<Record<string, string> | null> => null);
 vi.mock('@/lib/azure/stream-analytics-client', () => ({
-  deleteStreamingJob: vi.fn(),
-  getJobTags: vi.fn(),
-  readAsaConfig: () => { throw new Error('ASA not configured'); },
+  deleteStreamingJob: (...a: any[]) => deleteStreamingJob(...a),
+  getJobTags: (...a: any[]) => getJobTags(...a),
+  readAsaConfig: () => ({ subscriptionId: 's', resourceGroup: 'rg' }),
+}));
+
+// Cross-item lookup (Cosmos). `world.other` is the item another workspace owns
+// that records the same ref; `world.throws` makes the lookup itself fail.
+const world: { other: any | null; throws: Error | null; queries: any[] } = { other: null, throws: null, queries: [] };
+vi.mock('@/lib/azure/cosmos-client', () => ({
+  itemsContainer: async () => ({
+    items: {
+      query: (q: any) => ({
+        fetchAll: async () => {
+          world.queries.push(q);
+          if (world.throws) throw world.throws;
+          return { resources: world.other ? [world.other] : [] };
+        },
+      }),
+    },
+  }),
 }));
 vi.mock('@/lib/azure/activator-monitor', () => ({ deleteMonitorActivatorRule: vi.fn() }));
 vi.mock('@/lib/azure/adf-client', () => ({ deletePipeline: vi.fn(), deleteAdfCdc: vi.fn(async () => undefined) }));
@@ -69,6 +88,8 @@ const item = (itemType: string, state: Record<string, unknown> | null, displayNa
 
 beforeEach(() => {
   vi.clearAllMocks();
+  world.other = null; world.throws = null; world.queries = [];
+  getJobTags.mockResolvedValue(null);
   delete process.env.LOOM_SYNAPSE_DEDICATED_POOL;
   delete process.env.LOOM_WORKSPACE_MONITOR_DB;
 });
@@ -196,5 +217,164 @@ describe('failure is loud and does not drop the delete decision', () => {
     expect(r.orphans[0].ref).toBe('(unknown)');
     expect(r.warning).toContain('unknown which backing resources remain');
     expect(r.warning).toContain('boom');
+  });
+});
+
+/**
+ * REVIEW BLOCKER 1 - a name two items both record must not be deleted by one.
+ * Fixture: items A (ws-1) and B (ws-2) both record ADX database 'Sales'
+ * (safeAdxDatabaseName(displayName) is the same for same-named items).
+ */
+describe('blocker 1: a ref recorded by ANOTHER item is retained', () => {
+  const A = () => ({ id: 'item-A', workspaceId: 'ws-1', itemType: 'kql-database', displayName: 'Sales', state: prov({ database: 'Sales' }, 'Sales') });
+
+  it('(a) deleting A when B records the same database: delete fn called 0 times, reason in retained', async () => {
+    world.other = { id: 'item-B', workspaceId: 'ws-2', itemType: 'kql-database' };
+    const r = await teardownForItemDelete(A(), 't');
+    expect(deleteKustoDatabase, "B's database was deleted by A's delete").toHaveBeenCalledTimes(0);
+    expect(r.removed).toEqual([]);
+    expect(r.retained).toHaveLength(1);
+    expect(r.retained[0].error).toContain('Shared by another item');
+    expect(r.retained[0].error).toContain('item-B');
+    expect(r.retained[0].error).toContain('ws-2');
+    expect(r.warning).toBeUndefined(); // an intentional retain is not a failure
+  });
+
+  it('the lookup is a bound-parameter query that excludes the item itself and carries the recorded value', async () => {
+    await teardownForItemDelete(A(), 't');
+    const q = world.queries[0];
+    expect(q.query).toContain('c.id != @self');
+    expect(q.query).toContain('TOP 1');
+    expect(q.parameters).toEqual(expect.arrayContaining([
+      { name: '@self', value: 'item-A' },
+      { name: '@vals', value: ['Sales'] },
+    ]));
+  });
+
+  it('CONTROL: with no other item recording it, the SAME fixture deletes exactly once', async () => {
+    const r = await teardownForItemDelete(A(), 't');
+    expect(deleteKustoDatabase).toHaveBeenCalledTimes(1);
+    expect(deleteKustoDatabase).toHaveBeenCalledWith('Sales');
+    expect(r.retained).toEqual([]);
+  });
+
+  it('a lakehouse root recorded by another item is retained (path AND container/path are looked up)', async () => {
+    world.other = { id: 'item-B', workspaceId: 'ws-2', itemType: 'lakehouse' };
+    const r = await teardownForItemDelete(item('lakehouse', prov({ container: 'silver', rootPath: 'lakehouses/sales' })), 't');
+    expect(deletePath).not.toHaveBeenCalled();
+    expect(r.retained[0].error).toContain('Shared by another item');
+    expect(world.queries[0].parameters).toContainEqual({ name: '@vals', value: ['lakehouses/sales', 'silver/lakehouses/sales'] });
+  });
+});
+
+describe('blocker 1(c): a failed cross-item lookup fails CLOSED', () => {
+  it('retains, flags unverified, and warns - delete fn called 0 times', async () => {
+    world.throws = new Error('cosmos 429 throttled');
+    const r = await teardownForItemDelete(item('kql-database', prov({ database: 'orders_db' })), 't');
+    expect(deleteKustoDatabase, 'deleted although the shared-ref check could not run').toHaveBeenCalledTimes(0);
+    expect(r.retained).toHaveLength(1);
+    expect(r.retained[0].unverified).toBe(true);
+    expect(r.retained[0].error).toContain('Could not verify');
+    expect(r.retained[0].error).toContain('429');
+    expect(r.warning).toContain('safety check could not be completed');
+    expect(r.orphans).toEqual([]);
+  });
+});
+
+/**
+ * REVIEW BLOCKER 2 - plain top-level state keys are PATCH-able by any Member.
+ * Fixtures: the top-level keys name VICTIM resources; the server-owned
+ * provisioning receipt names the item's OWN resources. Teardown must touch only
+ * the receipt's.
+ */
+describe('blocker 2: only the server-owned provisioning receipt is trusted', () => {
+  it('(b) kql-database: PATCH-set state.databaseName="victim-db" is never deleted; the receipt\'s "own-db" is', async () => {
+    // The receipt names the db ONLY via resourceId, so a trusted-top-level defect
+    // (st() is consulted before resourceId) would pick 'victim-db' here.
+    const it = item('kql-database', { databaseName: 'victim-db', ...prov({}, 'own-db') });
+    await teardownForItemDelete(it, 't');
+    expect(deleteKustoDatabase).toHaveBeenCalledTimes(1);
+    expect(deleteKustoDatabase).toHaveBeenCalledWith('own-db');
+    expect(deleteKustoDatabase).not.toHaveBeenCalledWith('victim-db');
+  });
+
+  it('(b) eventstream: PATCH-set transportHub="victim-hub" is ignored; receipt hub deleted; asaJobName=victim-job is NOT deleted (tag mismatch)', async () => {
+    getJobTags.mockResolvedValue({ loomItemId: 'someone-elses-item' });
+    const it = item('eventstream', {
+      transportHub: 'victim-hub',
+      asaJobName: 'victim-job',
+      ...prov({ eventHub: 'own-hub' }, 'own-hub'), // receipt records NO asaJobName
+    });
+    const r = await teardownForItemDelete(it, 't');
+    expect(deleteEventHub).toHaveBeenCalledTimes(1);
+    expect(deleteEventHub).toHaveBeenCalledWith('own-hub');
+    expect(deleteEventHub).not.toHaveBeenCalledWith('victim-hub');
+    expect(getJobTags).toHaveBeenCalledWith('victim-job'); // looked at, as a candidate only
+    expect(deleteStreamingJob, 'deleted a job named only by a user-editable key').toHaveBeenCalledTimes(0);
+    expect(r.retained.map((x) => x.kind)).toContain('stream-analytics-job');
+  });
+
+  it('eventstream: asaJobName from the RECEIPT is the ownership proof (deleted, no tag lookup); a differing top-level one is ignored', async () => {
+    const it = item('eventstream', { asaJobName: 'victim-job', ...prov({ eventHub: 'own-hub', asaJobName: 'own-job' }, 'own-hub') });
+    await teardownForItemDelete(it, 't');
+    expect(deleteStreamingJob).toHaveBeenCalledTimes(1);
+    expect(deleteStreamingJob).toHaveBeenCalledWith('own-job');
+    expect(getJobTags).not.toHaveBeenCalled();
+  });
+
+  it('a user-named top-level asaJobName whose tag names THIS item is deleted (the tag, not the key, is the proof)', async () => {
+    getJobTags.mockResolvedValue({ loomItemId: 'item-1' });
+    await teardownForItemDelete(item('eventstream', { asaJobName: 'asa-loom-item-1x', ...prov({ eventHub: 'h' }, 'h') }), 't');
+    expect(deleteStreamingJob).toHaveBeenCalledWith('asa-loom-item-1x');
+  });
+
+  it('pipeline / index / notebook / activator top-level keys are ignored in the same way', async () => {
+    // Receipts are shaped so the top-level key would win under the defect
+    // (pipeline: st before resourceId; index: st before sid('index')).
+    const pf = item('synapse-pipeline', { pipelineName: 'victim-p', ...prov({ backend: 'synapse' }, 'own-p') });
+    const ix = item('ai-search-index', { indexName: 'victim-ix', ...prov({ service: 's', index: 'own-ix' }) });
+    const ac = item('activator', { rules: [{ azureRuleName: 'victim-rule' }], ...prov({ backend: 'azure-monitor' }, 'own-rule') });
+    const reports = [await teardownForItemDelete(pf, 't'), await teardownForItemDelete(ix, 't'), await teardownForItemDelete(ac, 't')];
+    const refs = reports.flatMap((r) => r.removed.map((x) => x.ref));
+    expect(refs.sort()).toEqual(['own-ix', 'own-p', 'own-rule']);
+    expect(refs).not.toContain('victim-p');
+    expect(refs).not.toContain('victim-ix');
+    expect(refs).not.toContain('victim-rule');
+  });
+
+  it('an item with ONLY top-level refs and no server-owned receipt: retained, ZERO Azure calls', async () => {
+    const it = item('kql-database', { databaseName: 'victim-db', transportHub: 'victim-hub', asaJobName: 'victim-job' });
+    const r = await teardownForItemDelete(it, 't');
+    expect(deleteKustoDatabase).not.toHaveBeenCalled();
+    expect(deleteEventHub).not.toHaveBeenCalled();
+    expect(deleteStreamingJob).not.toHaveBeenCalled();
+    expect(r.retained).toHaveLength(1);
+    expect(r.retained[0].error).toContain('no server-owned provisioning receipt');
+  });
+});
+
+describe('non-blocking review items', () => {
+  it('eventstream whose recorded hub is "ns/" (empty leaf): deleteEventHub is NOT called with an empty name', async () => {
+    const r = await teardownForItemDelete(item('eventstream', prov({ eventHub: 'ns/' })), 't');
+    expect(deleteEventHub).not.toHaveBeenCalled();
+    expect(r.retained.some((x) => x.kind === 'event-hub' && /empty name/.test(x.error || ''))).toBe(true);
+  });
+
+  it('lakehouse: a ".." root is refused; a 1-segment root is refused; the delete gets the SANITISED path', async () => {
+    await teardownForItemDelete(item('lakehouse', prov({ container: 'silver', rootPath: 'lakehouses/../other' })), 't');
+    await teardownForItemDelete(item('lakehouse', prov({ container: 'silver', rootPath: 'onlyone' })), 't');
+    expect(deletePath).not.toHaveBeenCalled();
+    await teardownForItemDelete(item('lakehouse', prov({ container: 'silver', rootPath: '/lakehouses//sales/./' })), 't');
+    expect(deletePath).toHaveBeenCalledTimes(1);
+    expect(deletePath).toHaveBeenCalledWith('silver', 'lakehouses/sales/', true);
+  });
+
+  it('mirrored-database whose recorded root is another item\'s mirror root is retained', async () => {
+    const r = await teardownForItemDelete(
+      item('mirrored-database', prov({ pipeline: 'cdc-1', adlsRoot: 'abfss://bronze@a.dfs.core.windows.net/mirrors/ws-1/OTHER-ITEM' })),
+      't',
+    );
+    expect(deletePath).not.toHaveBeenCalled();
+    expect(r.retained.some((x) => x.kind === 'adls-path' && /own mirror root/.test(x.error || ''))).toBe(true);
   });
 });
