@@ -303,6 +303,25 @@ jobs:
           fi
 
           # ── workflow_run: unchanged behaviour ────────────────────────────────
+          # ── (changed-app plan) console NOT rebuilt by the producer ───────────
+          # The producer now builds only the apps whose inputs changed on a push
+          # and RE-TAGS the rest to this SHA (its carry_forward job). A
+          # carried-forward console has the right tag but its build-marker still
+          # names the OLDER commit, so the post-roll marker gate (expected =
+          # head_sha[:8]) would fail and roll back a healthy estate. Nothing new
+          # to roll: skip, and say why. Detected from the producer run's own
+          # jobs - NO loom-console build job AND a carry-forward job. Unreadable
+          # jobs fall through to the unchanged logic below, never to a claim.
+          if ALLJOBS="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs?per_page=100" --jq '.jobs[].name' 2>"$ERR")"; then
+            if ! printf '%s\n' "$ALLJOBS" | grep -q 'loom-console' && printf '%s\n' "$ALLJOBS" | grep -q '^Carry forward unchanged images'; then
+              echo "::notice::Upstream run ${RUN_ID} did not rebuild loom-console (inputs unchanged; image carried forward to this SHA) - nothing new to roll. The estate console stays on its current build."
+              echo "proceed=false" >> "$GITHUB_OUTPUT"
+              echo "console_build=carried-forward" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          else
+            echo "::warning::Could not list the jobs of upstream run ${RUN_ID} to tell whether loom-console was rebuilt (detail: $(head -c 300 "$ERR")). Continuing with the unchanged logic; the post-roll build-marker gate still decides."
+          fi
           # The upstream run's own conclusion already answers this when it is a
           # success; only a failed run needs the per-job lookup.
           if [ "$CONCLUSION" = 'success' ]; then
