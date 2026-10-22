@@ -59,7 +59,7 @@ function realAz(args, subscription) {
 }
 
 /** @param {(args:string[])=>{ok:boolean,value?:any,err?:string}} az */
-export function release(acr, pool, az) {
+export function release(acr, pool, az, { attempts = 3, sleep = () => {} } = {}) {
   const list = az(['acr', 'agentpool', 'list', '-r', acr]);
   if (!list.ok) return { code: 1, msg: `could not list pools on ${acr}: ${list.err}. Pool left as-is.` };
   const found = (list.value || []).find((x) => x.name === pool);
@@ -90,10 +90,22 @@ export function release(acr, pool, az) {
   });
   if (d.action === 'unknown') return { code: 1, msg: `${acr}/${pool}: ${d.reason}; whether it is idle was NOT established. Left as-is - the reaper retries hourly.` };
   if (d.action !== 'scale') return { code: 0, msg: `${acr}/${pool}: ${d.action} - ${d.reason}.` };
-  const up = az(['acr', 'agentpool', 'update', '-r', acr, '-n', pool, '--count', '0']);
-  const back = up.ok ? az(['acr', 'agentpool', 'show', '-r', acr, '-n', pool]) : up;
-  if (up.ok && back.ok && back.value?.count === 0) return { code: 0, msg: `${acr}/${pool} scaled to 0; read-back count=0.` };
-  return { code: 1, msg: `${acr}/${pool} scale-down NOT confirmed (${up.ok ? `read-back count=${back.value?.count}` : up.err}). It is still billing.` };
+  // Bounded retry (#5082): one transient ARM error must not leave the pool
+  // billing. Each round is update + READ BACK; only a read-back of 0 passes.
+  let last = 'no attempt ran';
+  for (let i = 1; i <= attempts; i += 1) {
+    const up = az(['acr', 'agentpool', 'update', '-r', acr, '-n', pool, '--count', '0']);
+    const back = up.ok ? az(['acr', 'agentpool', 'show', '-r', acr, '-n', pool]) : up;
+    if (up.ok && back.ok && back.value?.count === 0) {
+      return { code: 0, msg: `${acr}/${pool} scaled to 0; read-back count=0 (attempt ${i}).` };
+    }
+    last = !up.ok ? `update: ${up.err}` : !back.ok ? `read-back: ${back.err}` : `read-back count=${back.value?.count}`;
+    if (i < attempts) sleep(i * 15_000);
+  }
+  return {
+    code: 1,
+    msg: `${acr}/${pool} scale-down NOT confirmed after ${attempts} attempts (last: ${last}). It is still billing. Run: az acr agentpool update -r ${acr} -n ${pool} --count 0`,
+  };
 }
 
 /**
@@ -180,7 +192,9 @@ function main(argv) {
     const pool = arg('--pool');
     if (!acr || !pool) { console.error('usage: acr-build-pool.mjs release --acr A --pool P [--subscription S]'); return 2; }
     const sub = arg('--subscription') ?? '';
-    const r = release(acr, pool, (a) => realAz(a, sub));
+    const r = release(acr, pool, (a) => realAz(a, sub), {
+      sleep: (ms) => spawnSync(process.execPath, ['-e', `setTimeout(()=>{},${ms})`]),
+    });
     console.log(r.code ? `::error::${r.msg}` : r.msg);
     if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### ACR build pool release\n\n${r.msg}\n\nNote: if this run was CANCELLED or this job could not run, the pool may stay scaled up until the hourly acr-agentpool-reaper collects it.\n`);
     return r.code;
