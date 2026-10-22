@@ -591,6 +591,9 @@ jobs:
               -- node "$GITHUB_WORKSPACE/scripts/ci/acr-build-run.mjs" submit \
               --run-file "$RUN_FILE" -- "${BUILD_ARGS[@]}"
             RUN_ID=$(tr -d '\r\n' < "$RUN_FILE")
+            # #5082: hand the run id to the Diagnose step BEFORE waiting, so a
+            # failed wait still names the run whose log must be read.
+            echo "ACR_RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
             node "$GITHUB_WORKSPACE/scripts/ci/acr-build-run.mjs" wait \
               --registry "$ACR" --run-id "$RUN_ID" --max-minutes 105 --poll-seconds 30
           fi
@@ -637,6 +640,58 @@ jobs:
           ACR="${ACR:-}"
           if [ -z "$ACR" ]; then
             echo "::warning::No registry name is set on this runner, so this run failed at or before the registry was resolved — i.e. before any ACR build was attempted. There is no task log to fetch and none is claimed to exist. This says WHERE the run stopped, not anything about an image build: the cause is in the failing step above."
+            exit 0
+          fi
+
+          # 0. POLL MODE (#5082). The build step exported the run id it submitted
+          #    (ACR_RUN_ID), so no guessing from deploy-failure.json or the
+          #    registry run list is needed. This runs while the ACR firewall
+          #    lease is still open (acr_restore is a later job). It is purely
+          #    diagnostic: every failure below is REPORTED, none changes this
+          #    step's exit code, and nothing here masks the failure above.
+          redact_file() {
+            node -e "const fs=require('fs');import('./scripts/ci/_azure-redact.mjs').then(m=>process.stdout.write(m.redact(fs.readFileSync(process.argv[1],'utf8')))).catch(e=>{console.error(String(e&&e.message||e));process.exit(9);});" "$1"
+          }
+          if [ -n "${ACR_RUN_ID:-}" ]; then
+            echo "::group::ACR run ${ACR_RUN_ID} diagnostics (${{ matrix.name }}, redacted)"
+            DIAG_DIR="${RUNNER_TEMP:-/tmp}"
+            SHOW_OUT="$DIAG_DIR/acr-diag-show-$ACR_RUN_ID.json"
+            SHOW_ERR="$DIAG_DIR/acr-diag-show-$ACR_RUN_ID.err"
+            az acr task show-run -r "$ACR" --run-id "$ACR_RUN_ID" --query "{status:status, runErrorMessage:runErrorMessage}" -o json > "$SHOW_OUT" 2> "$SHOW_ERR"
+            RC=$?
+            RUN_STATUS=""
+            if [ "$RC" != "0" ]; then
+              echo "could not read the run record for ${ACR_RUN_ID} (az acr task show-run exited $RC). This says nothing about the build. az said:"
+              redact_file "$SHOW_ERR" || echo "(the az error text could not be redacted, so it is not printed; it is at $SHOW_ERR)"
+            else
+              RUN_STATUS=$(jq -r '.status // empty' "$SHOW_OUT")
+              echo "run ${ACR_RUN_ID} status: ${RUN_STATUS:-unknown}"
+              echo "runErrorMessage:"
+              jq -r '.runErrorMessage // "(none recorded)"' "$SHOW_OUT" > "$SHOW_OUT.msg"
+              redact_file "$SHOW_OUT.msg" || echo "(the run error message could not be redacted, so it is not printed; it is at $SHOW_OUT.msg)"
+              echo
+            fi
+            if [ "$RUN_STATUS" = "Succeeded" ]; then
+              echo "The ACR run itself Succeeded, so this job failed in a LATER step; there is no task failure to show."
+            else
+              LOG_TAIL="$DIAG_DIR/acr-diag-tail-$ACR_RUN_ID.log"
+              LOG_ERR="$DIAG_DIR/acr-diag-logs-$ACR_RUN_ID.err"
+              az acr task logs -r "$ACR" --run-id "$ACR_RUN_ID" 2> "$LOG_ERR" | tail -n 80 > "$LOG_TAIL"
+              RC=${PIPESTATUS[0]}
+              if [ "$RC" != "0" ]; then
+                echo "could not read the task log for ${ACR_RUN_ID} (az acr task logs exited $RC). This is not evidence about the build. az said:"
+                redact_file "$LOG_ERR" || echo "(the az error text could not be redacted, so it is not printed; it is at $LOG_ERR)"
+                echo "Read it manually with: az acr task logs -r $ACR --run-id $ACR_RUN_ID"
+              elif [ ! -s "$LOG_TAIL" ]; then
+                echo "the task log for ${ACR_RUN_ID} was read successfully but is EMPTY (the task produced no output; it usually never started)."
+              else
+                echo "last lines of the task log for ${ACR_RUN_ID}:"
+                redact_file "$LOG_TAIL" || echo "(the log tail could not be redacted, so it is deliberately not printed; it is at $LOG_TAIL)"
+              fi
+            fi
+            echo "::endgroup::"
+            # The run id is known, so the guess-from-registry fallbacks below
+            # would only print a misleading "no deploy-failure.json" warning.
             exit 0
           fi
 
@@ -1130,37 +1185,27 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7.0.1
-      - name: Azure login (Commercial)
+      # #5082: this job is the cost backstop, so its login must survive a
+      # transient. azure/login failed once with an empty creds read ("JSON is
+      # invalid ... char 0") and loombuild2 stayed at count 2. These two steps
+      # call scripts/ci/az-login-retry.sh (bounded retry, last error printed,
+      # exit 1 on exhaustion) instead of azure/login or a discarded step result.
+      - name: Azure login with retry (Commercial)
         if: env.BOUNDARY == 'Commercial'
-        uses: azure/login@v2.3.0
-        with:
-          creds: |
-            {
-              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
-              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
-              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
-              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
-            }
-      - name: Azure login (Gov)
+        env:
+          AZ_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZ_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZ_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZ_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: bash scripts/ci/az-login-retry.sh
+      - name: Azure login with retry (Gov)
         if: env.BOUNDARY != 'Commercial'
-        uses: azure/login@v2.3.0
-        with:
-          creds: |
-            {
-              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
-              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
-              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
-              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
-              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
-              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
-              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
-              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
-              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
-            }
-          environment: AzureUSGovernment
-      - name: Set Azure cloud to Gov
-        if: env.BOUNDARY != 'Commercial'
-        run: az cloud set --name AzureUSGovernment
+        env:
+          AZ_CLIENT_ID: ${{ secrets.AZURE_GOV_CLIENT_ID }}
+          AZ_CLIENT_SECRET: ${{ secrets.AZURE_GOV_CLIENT_SECRET }}
+          AZ_TENANT_ID: ${{ secrets.AZURE_GOV_TENANT_ID }}
+          AZ_SUBSCRIPTION_ID: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+        run: bash scripts/ci/az-login-retry.sh --cloud AzureUSGovernment
       - name: Scale the build pool to 0 and read the count back
         env:
           ACR: ${{ needs.resolve.outputs.acr_name }}
@@ -1169,4 +1214,12 @@ jobs:
             echo "::warning::resolve produced no registry name, so no build job could have scaled a pool. Nothing to release."
             exit 0
           fi
-          node scripts/ci/acr-build-pool.mjs release --acr "$ACR" --pool "$BUILD_POOL_NAME"
+          # release retries update + read-back itself (3 attempts) and, if the
+          # pool is still above 0, exits 1 naming the exact az command to run.
+          # The next run's pool_acquire sets the count it WANTS (acquire() in
+          # acr-build-pool.mjs updates --count until the read-back is >= want),
+          # so a stale count left by a failed release is never assumed to be 0.
+          node scripts/ci/acr-build-pool.mjs release --acr "$ACR" --pool "$BUILD_POOL_NAME" || {
+            echo "::error::POOL STILL BILLING: ${ACR}/${BUILD_POOL_NAME} was not confirmed at 0. Scale it down by hand: az acr agentpool update -r ${ACR} -n ${BUILD_POOL_NAME} --count 0 (acr-agentpool-reaper.yml is the backstop for an idle pool)."
+            exit 1
+          }
