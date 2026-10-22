@@ -402,9 +402,11 @@ jobs:
           else
             echo "::notice::changed-app plan not applied (event=$GITHUB_EVENT_NAME workflow=$GITHUB_WORKFLOW apps=$INPUT) - building exactly the requested set."
           fi
-          echo "carry_apps=$CARRY" >> "$GITHUB_OUTPUT"
-          echo "build_count=$(jq 'length' <<< "$APPS")" >> "$GITHUB_OUTPUT"
-          echo "matrix={\"include\":$APPS}" >> "$GITHUB_OUTPUT"
+          {
+            echo "carry_apps=$CARRY"
+            echo "build_count=$(jq 'length' <<< "$APPS")"
+            echo "matrix={\"include\":$APPS}"
+          } >> "$GITHUB_OUTPUT"
 
   build:
     name: Build ${{ matrix.name }} via ACR Tasks
