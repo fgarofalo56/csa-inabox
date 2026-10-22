@@ -25,46 +25,69 @@ The console logs ONE line per minute (silent when nothing was read):
 AsyncLocalStorage). `unlabeled` means nobody set a label for that work; find the
 route or job and wrap it. Only GETs are counted (writes are a separate ARM bucket).
 
-## What is counted (census, 2026-10-21)
+## What is counted (census, 2026-10-22, PR #5074 head)
 
 Population: non-test `.ts/.tsx` under `apps/fiab-console/{lib,app}` whose code
 (comments stripped) contains `armBase(`, `armHost(` or a management-host
 literal — the guard's own `ARM_MARKER`. Reproduce with
 `node scripts/ci/check-arm-counted-fetch.mjs` and the counts below with the
-`classify()` export of that script.
+`classify()` export of that script. The allowlist JSON is authoritative.
 
 | | Before | After |
 |---|---|---|
-| ARM-marked files | 127 | 128 (+ the new wrapper) |
+| ARM-marked files | 127 | 129 |
 | Counted transport (`beginArmRead` inside) | 2 (`arm-client.ts`, `monitor-arm.ts`) | 3 (+ `arm-counted-fetch.ts`) |
-| Raw `fetch`/`fetchWithTimeout`, **uncounted** | **100** | **1** (allowlisted, see below) |
-| Route through `armCountedFetch` / `armCountedRawFetch` | 0 | 99 |
+| Raw `fetch`/`fetchWithTimeout`, **uncounted** | **100** | **17**, all allowlisted with a reason (13 of them tracked in #5079) |
+| Files using `armCountedFetch` / `armCountedRawFetch` | 0 | 87 |
 | ARM marker but no raw fetch of their own | 25 | 25 |
 
-After-state by file (the 25 "no raw fetch" files only build a URL, scope or
-token and are not individually proven to read through a counted transport):
+The 87 and the 17 overlap by 3 files that use a wrapper for their ARM calls and
+keep one justified raw fetch (`azure-connections-client.ts`,
+`jupyter-server-client.ts`, and the raw wrapper itself).
+
+After-state:
 
 - **Counted transport (3):** `lib/azure/` `arm-client.ts`, `monitor-arm.ts`, `arm-counted-fetch.ts`.
-- **`armCountedFetch` (77)** — drop-in for `fetchWithTimeout`: `lib/apps/app-resources.ts`;
-  `lib/azure/` 56 clients (every `*-client.ts` / `*-arm*.ts` that built its own ARM URL, incl.
-  `adf`, `aas`, `aml*`, `apim`, `kusto*`, `eventhubs`, `synapse-*`, `foundry*`, `cost*`, `monitor-client`);
-  `lib/brain-actions/arm*.ts`; `lib/clients/{azure-connections,cmk,workspace-egress}-client.ts`;
-  `lib/coe-library/.../live-bindings.ts`; `lib/deploy/discovery-scanner.ts`;
-  `lib/install/provisioners/{logic-app,mirrored-database,workspace-monitor}.ts`;
-  `lib/setup/{deploy-preflight,estate-scan,user-arm-deploy}.ts`; 7 `app/api` routes
-  (`adf/factories/create`, `admin/gates/[id]/options`, `admin/security/purview/discover`,
-  `azure/connectables`, `azure/resources`, `setup/scan-cosmos`, `setup/subscriptions`).
-- **`armCountedRawFetch` (22, `lib/util/`, kept out of `lib/azure` because breaker-coverage forbids unbounded fetch there)** — drop-in for bare `fetch` (no timeout added):
-  `lib/clients/{cost,jupyter-server,networking}-client.ts`, `lib/setup/{lz-rbac,wire-existing}.ts`,
-  and 17 `app/api` routes (`admin/azure-resources`, `apim/instances`, `azure/function-apps`,
-  `azure/iothub/policies`, `landing-zones/*`, `setup/*`, two `items/*` routes).
-- **Allowlisted raw fetch (1):** `lib/admin/health-probes.ts` — `armHost()` only compares a
-  hostname; its raw fetches probe Key Vault / app endpoints, not ARM reads.
+- **`armCountedFetch`** — drop-in for `fetchWithTimeout` (bounded): `lib/azure/` ARM
+  clients (`adf`, `aas`, `aml*`, `apim`, `kusto*`, `eventhubs`, `synapse-*`, `foundry*`,
+  `cost*`, `monitor-client`, …), `lib/brain-actions/arm*.ts`, `lib/clients/{azure-connections,workspace-egress}-client.ts`,
+  `lib/deploy/discovery-scanner.ts`, `lib/install/provisioners/{logic-app,mirrored-database,workspace-monitor}.ts`,
+  `lib/setup/{deploy-preflight,estate-scan,user-arm-deploy}.ts`, and the routes
+  `adf/factories/create`, `admin/gates/[id]/options`, `azure/connectables`, `azure/resources`,
+  `setup/scan-cosmos`, `setup/subscriptions`.
+- **`armCountedRawFetch`** (`lib/util/`, no timeout added, pinned to the ARM origin, kept out of
+  `lib/azure` because breaker-coverage forbids unbounded fetch there):
+  `lib/clients/{cmk,cost,jupyter-server,networking}-client.ts`, `lib/setup/{lz-rbac,wire-existing}.ts`,
+  and the routes `apim/instances`, `landing-zones/[id]/attach`, `landing-zones/[id]/attach/preflight`,
+  `items/data-pipeline/[id]/approval-logicapp`, `items/eventhouse/[id]/ingest`.
 - **No raw fetch (25):** `lib/admin/{env-checks/*,lcu-autopilot-loop}`, `lib/auth/obo.ts`,
   `lib/azure/{attach-integration,cloud-endpoints,mcp-obo-token-store,powerplatform-client,
   role-grant-client,user-pool-registry,workspace-grants}.ts`, `lib/brain/run/cli.ts`,
   `lib/deploy/fitness-probe.ts`, `lib/logic-app/auto-bind.ts`, `lib/mcp/catalog.ts`,
-  two content bundles, `power-automate-editor.tsx`, and 7 `app/` routes.
+  two content bundles, `power-automate-editor.tsx`, and 7 `app/` routes. They only build a
+  URL, scope or token; not individually proven to read through a counted transport.
+
+### Allowlisted raw fetch (17) — `scripts/ci/arm-counted-fetch-allowlist.json`
+
+| File (under `apps/fiab-console/`) | Why it keeps a raw fetch |
+|---|---|
+| `lib/admin/health-probes.ts` | `armHost()` only compares a hostname; its raw fetches probe Key Vault / app endpoints, not ARM reads. |
+| `lib/util/arm-counted-raw-fetch.ts` | It IS the counted path for bare fetch: pins the URL to the `armBase()` origin and books the read. |
+| `lib/clients/azure-connections-client.ts` | The remaining raw fetch is the Log Analytics query data plane, not ARM; the raw wrapper refuses non-ARM origins. |
+| `lib/clients/jupyter-server-client.ts` | `jupyterFetch` targets the compute instance's own `https://<host>/jupyter` data plane; its ARM call is counted. |
+| `app/api/admin/azure-resources/route.ts` | Baselined route-toolkit route; migrate in #5079. |
+| `app/api/admin/security/purview/discover/route.ts` | same, #5079 |
+| `app/api/azure/function-apps/route.ts` | same, #5079 |
+| `app/api/azure/iothub/policies/route.ts` | same, #5079 |
+| `app/api/landing-zones/discover/route.ts` | same, #5079 |
+| `app/api/setup/config/route.ts` | same, #5079 |
+| `app/api/setup/existing-aoai/route.ts` | same, #5079 |
+| `app/api/setup/existing-storage/route.ts` | same, #5079 |
+| `app/api/setup/landing-zones/route.ts` | same, #5079 |
+| `app/api/setup/quota-preflight/route.ts` | same, #5079 |
+| `app/api/setup/regions/route.ts` | same, #5079 |
+| `app/api/setup/scan-purview/route.ts` | same, #5079 |
+| `app/api/setup/scan/route.ts` | same, #5079 |
 
 ## How the wrapper behaves
 
