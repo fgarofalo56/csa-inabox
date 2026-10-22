@@ -213,15 +213,27 @@ jobs:
   resolve:
     name: Resolve ACR + filter apps
     runs-on: ubuntu-latest
+    # actions: read -- the matrix step asks which push run last SUCCEEDED (the diff
+    # base for the changed-app plan). The workflow-level block grants neither.
+    permissions:
+      contents: read
+      actions: read
     outputs:
       acr_name: ${{ steps.acr.outputs.acr_name }}
       acr_login_server: ${{ steps.acr.outputs.acr_login_server }}
       app_matrix: ${{ steps.matrix.outputs.matrix }}
+      # JSON array of the apps NOT rebuilt on this push; carry_forward re-tags
+      # each one's current image to <sha>. '[]' on dispatch / call / build-all.
+      carry_apps: ${{ steps.matrix.outputs.carry_apps }}
+      build_count: ${{ steps.matrix.outputs.build_count }}
     steps:
       # The matrix resolver probes ./apps/<name> to decide each build context, so this
       # job needs the tree. It had no checkout before — the probe silently evaluated
       # false for every app and everything fell through to the ./apps/fiab-* convention.
       - uses: actions/checkout@v7.0.1
+        with:
+          # Full history: the changed-app plan diffs <last successful push run>..sha.
+          fetch-depth: 0
       # Fail LOUDLY rather than silently building into the wrong cloud: a Gov
       # dispatch with no AZURE_GOV_* secret set would otherwise fall through to
       # an unauthenticated `az` and report a confusing "ACR not found".
@@ -300,6 +312,8 @@ jobs:
           echo "acr_login_server=$ACR_LOGIN" >> "$GITHUB_OUTPUT"
           echo "::notice::boundary=$BOUNDARY acr=$ACR login=$ACR_LOGIN"
       - id: matrix
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           INPUT="${{ inputs.apps || 'all' }}"
           if [[ "$INPUT" == "all" ]]; then
@@ -359,7 +373,40 @@ jobs:
               echo "::notice::$APP -> $CTX (${FILE:-$CTX/Dockerfile})"
             done
           fi
-          echo "matrix={\"include\":$APPS}" >> "$GITHUB_OUTPUT"
+          # ── CHANGED-APP PLAN (push to main only) ──────────────────────────────
+          # A push builds only the apps whose inputs changed since the last
+          # SUCCESSFUL push run; the rest are carried forward (re-tagged to this
+          # SHA by the carry_forward job) so <app>:<sha> exists for every app and
+          # the rolls never reference a missing tag. Dispatch and workflow_call
+          # (github.workflow is the CALLER's name there) keep building exactly
+          # what they asked for. FAIL CLOSED: any failure to compute the plan
+          # builds ALL, loudly. Logic + tests: scripts/ci/plan-image-builds.mjs.
+          CARRY='[]'
+          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_WORKFLOW" == "build-fiab-images-acr-tasks" && "$INPUT" == "all" ]]; then
+            ERRF="${RUNNER_TEMP:-/tmp}/plan-base.err"
+            BASE=""
+            if ! BASE=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/build-fiab-images-acr-tasks.yml/runs?branch=main&event=push&status=success&per_page=1" --jq '.workflow_runs[0].head_sha // empty' 2>"$ERRF"); then
+              echo "::warning::could not read the last successful push run ($(head -c 300 "$ERRF")) - the plan will fail closed to ALL."
+              BASE=""
+            fi
+            PLAN=""
+            if PLAN=$(node scripts/ci/plan-image-builds.mjs --matrix "$APPS" --sha "$GITHUB_SHA" --base "$BASE") \
+               && jq -e '.build and .carry and .mode' <<< "$PLAN" > /dev/null; then
+              BUILD_NAMES=$(jq -c '.build' <<< "$PLAN")
+              CARRY=$(jq -c '.carry' <<< "$PLAN")
+              APPS=$(jq -c --argjson b "$BUILD_NAMES" '[.[] | select(.name as $n | $b | index($n))]' <<< "$APPS")
+            else
+              echo "::warning::image build planner failed or returned an unusable plan - building ALL (fail closed)."
+              CARRY='[]'
+            fi
+          else
+            echo "::notice::changed-app plan not applied (event=$GITHUB_EVENT_NAME workflow=$GITHUB_WORKFLOW apps=$INPUT) - building exactly the requested set."
+          fi
+          {
+            echo "carry_apps=$CARRY"
+            echo "build_count=$(jq 'length' <<< "$APPS")"
+            echo "matrix={\"include\":$APPS}"
+          } >> "$GITHUB_OUTPUT"
 
   build:
     name: Build ${{ matrix.name }} via ACR Tasks
@@ -369,7 +416,7 @@ jobs:
     # pool_acquire to succeed; a pool-routed leg checks its result in the build
     # step and fails LOUDLY itself. !cancelled() (not always()) so a cancelled
     # run does not start new builds.
-    if: ${{ !cancelled() && needs.resolve.result == 'success' && needs.acr_enable.result == 'success' }}
+    if: ${{ !cancelled() && needs.resolve.result == 'success' && needs.acr_enable.result == 'success' && needs.resolve.outputs.build_count != '0' }}
     runs-on: ubuntu-latest
     # A hung build must not hold billed pool agents indefinitely. The retry
     # harness caps the build at 110m wall-clock (the run poll gives up at 105m:
@@ -920,9 +967,85 @@ jobs:
           bash scripts/csa-loom/acr-firewall-lease.sh acquire \
             --acr "${{ needs.resolve.outputs.acr_name }}"
 
+  # Unchanged apps on a push: re-tag the digest already behind <app>:<TAG> to
+  # <app>:<sha> so every roll that addresses <app>:<head_sha> finds it. The
+  # manifest is COPIED, not rebuilt: same digest, so the Trivy result and the
+  # cosign signature (stored against the digest) carry over untouched.
+  # FAILS CLOSED: a missing source tag or a digest that differs after the copy
+  # fails this job loudly - it never reports a tag it did not verify (R7).
+  carry_forward:
+    name: Carry forward unchanged images (re-tag to this SHA)
+    needs: [resolve, acr_enable]
+    if: ${{ !cancelled() && needs.resolve.result == 'success' && needs.acr_enable.result == 'success' && needs.resolve.outputs.carry_apps != '' && needs.resolve.outputs.carry_apps != '[]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Azure login (Commercial)
+        if: env.BOUNDARY == 'Commercial'
+        uses: azure/login@v2.3.0
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+      - name: Azure login (Gov)
+        if: env.BOUNDARY != 'Commercial'
+        uses: azure/login@v2.3.0
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+      - name: Set Azure cloud to Gov
+        if: env.BOUNDARY != 'Commercial'
+        run: az cloud set --name AzureUSGovernment
+      - name: Re-tag each unchanged image to the new SHA and verify the digest
+        env:
+          ACR: ${{ needs.resolve.outputs.acr_name }}
+          LOGIN: ${{ needs.resolve.outputs.acr_login_server }}
+          CARRY: ${{ needs.resolve.outputs.carry_apps }}
+          SRC_TAG: ${{ inputs.tag_override || 'v0.1' }}
+        run: |
+          set -uo pipefail
+          bash scripts/ci/acr-login-retry.sh --acr "$ACR" || exit 1
+          FAILED=0
+          for APP in $(jq -r '.[]' <<< "$CARRY"); do
+            SRC=$(bash scripts/ci/resolve-acr-digest.sh --acr "$ACR" --image "$APP:$SRC_TAG")
+            RC=$?
+            if [ "$RC" != "0" ] || [ -z "$SRC" ]; then
+              echo "::error::$APP: could not read $APP:$SRC_TAG (resolver exit $RC; 3 = registry answered and the tag is absent, 4 = could not be read). Nothing was re-tagged for $APP. Dispatch this workflow with apps=$APP to build it."
+              FAILED=1; continue
+            fi
+            if ! docker buildx imagetools create --tag "$LOGIN/$APP:${{ github.sha }}" "$LOGIN/$APP:$SRC_TAG"; then
+              echo "::error::$APP: imagetools create failed re-tagging $APP:$SRC_TAG to $APP:${{ github.sha }} (output above). Dispatch with apps=$APP to build it."
+              FAILED=1; continue
+            fi
+            DST=$(bash scripts/ci/resolve-acr-digest.sh --acr "$ACR" --image "$APP:${{ github.sha }}")
+            RC=$?
+            if [ "$RC" != "0" ] || [ "$DST" != "$SRC" ]; then
+              echo "::error::$APP: after the re-tag, $APP:${{ github.sha }} reads '${DST}' (resolver exit $RC) but $APP:$SRC_TAG is '$SRC'. The new tag is NOT verified; do not roll it."
+              FAILED=1; continue
+            fi
+            echo "::notice::$APP: carried forward $SRC_TAG to ${{ github.sha }} ($SRC)"
+          done
+          exit $FAILED
+
   acr_restore:
     name: Release ACR firewall lease (re-lock if still the holder)
-    needs: [resolve, build, acr_enable]
+    needs: [resolve, build, acr_enable, carry_forward]
     if: always()
     runs-on: ubuntu-latest
     steps:

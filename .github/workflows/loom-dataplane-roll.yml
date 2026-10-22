@@ -218,7 +218,10 @@ on:
   # ACR-tasks lane fires on `push` to main for apps/loom-unity/**,
   # apps/loom-trino/** (and the fiab-* glob), and its push path builds the FULL
   # 13-app matrix, stamping `<name>:${{ github.sha }}` on every one. So a push
-  # run always produces exactly the tag this lane needs.
+  # run always produces exactly the tag this lane needs. (Since the changed-app
+  # plan, scripts/ci/plan-image-builds.mjs, a push BUILDS only the apps whose
+  # inputs changed and its carry_forward job re-tags the rest to the same SHA,
+  # digest-verified - so the tag still exists for all 13.)
   #
   # This is the SAME chain loom-roll-and-validate.yml:121-124 already uses to
   # roll the Commercial console off that producer. The console has had it since
