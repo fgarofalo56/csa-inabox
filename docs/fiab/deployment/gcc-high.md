@@ -143,6 +143,62 @@ param complianceTags = {
 }
 ```
 
+## Bootstrap with an existing console app registration
+
+The post-deploy bootstrap (`csa-loom-post-deploy-bootstrap.yml`) normally
+discovers the console app registration by **listing** app registrations. Listing
+is tenant-wide, so it needs the Graph permission `Application.Read.All` or a
+directory role; a deploy service principal with neither fails there with
+`Insufficient privileges to complete the operation` (GCC-High run 39319044221),
+which skips the `Estate.Power` role step and the repo-variables step after it.
+
+If the console app registration already exists (operator-owned), supply it
+instead. Brownfield rule R5: an existing value is a first-class input.
+
+| Input (dispatch / `workflow_call`) | Repo variable fallback | Meaning |
+|---|---|---|
+| `console_app_client_id` | `LOOM_CONSOLE_APP_CLIENT_ID` | Client (app) id of the existing console app. Not a secret. |
+| `console_app_object_id` (optional) | `LOOM_CONSOLE_APP_OBJECT_ID` | Object id; read by object id and cross-checked against the client id. |
+| none | `LOOM_CONSOLE_APP_NAME` (optional) | Display name the app must carry. |
+
+When the client id is supplied:
+
+- The MSAL step reads that one app by id, validates it (app id, object id,
+  `signInAudience = AzureADMyOrg`, optional display name) and changes nothing
+  if it is not the expected app. It never lists app registrations and never
+  creates one. A refusal is reported as *could not read, existence unknown*
+  (naming `Application.Read.All`), a 404 as *not found*; the two are not mixed up.
+  Not covered: the later `az ad app ... --id` calls in that script resolve the id
+  with the Azure CLI's own filtered lookup, so the deploy identity still needs
+  to be able to read that one app.
+- The `Estate.Power` step reads the app and the two service principals by id (no
+  listing). If the role and its assignment already exist it makes **zero
+  writes**. It runs even when the MSAL step failed, and the repo-variables step
+  runs whenever the `Estate.Power` step succeeded.
+- The audience written to `CSA_LOOM_GCCH_CONSOLE_AUDIENCE` is derived from the
+  app's live identifier URIs: `api://<appId>` when that URI is set, the bare
+  app id when the app exposes none.
+
+Without the input or variable nothing changes: discover-or-create, as before.
+
+**What needs an admin and what does not**
+
+| Action | Needs |
+|---|---|
+| List app registrations tenant-wide (discovery) | `Application.Read.All` or a directory role |
+| Read one named app by id | `Application.Read.All`, or `Application.ReadWrite.OwnedBy` with the deploy SP as an owner of the app, or a directory role |
+| Edit the app's `appRoles` (create `Estate.Power`) | `Application.ReadWrite.OwnedBy` + ownership of the app, or `Application.ReadWrite.All`, or Application Administrator |
+| Assign the role to the deploy SP (appRoleAssignment) | `AppRoleAssignment.ReadWrite.All` or a directory role; app ownership does not cover it |
+| Everything above, once the role and assignment exist | Reads only; no admin action per run |
+
+The permission names in this table come from the Microsoft Graph permission
+reference and were **not** exercised against a live Gov tenant; whether adding
+the deploy SP as an owner of the app, with no Graph permission, is enough for an
+app-only token has not been verified, and the step's error text says so. If the
+`Estate.Power` step is refused (exit 3) the log names the exact change that was
+missing and the fix. Once the operator has created the role and the assignment,
+re-runs need no admin.
+
 ## Deploy time
 
 - Admin Plane: 45-65 min (AKS cluster spin-up is slower than Container
