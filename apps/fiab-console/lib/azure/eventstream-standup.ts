@@ -301,7 +301,7 @@ export async function standUpEventstreamAzure(
   // ── Provision the ASA job from the topology ────────────────────────────
   const jobName = asaJobNameForItem(id);
   const location = process.env.LOOM_ASA_LOCATION || process.env.LOOM_LOCATION || 'eastus';
-  const job = await createOrUpdateJob({ name: jobName, location });
+  const job = await createOrUpdateJob({ name: jobName, location, tags: { loomItemId: id } });
   steps.push(`Created Stream Analytics job '${jobName}' (${location}).`);
 
   // ASA needs a dedicated consumer group on the transport hub to read from.

@@ -8,6 +8,7 @@ import { apiError } from '@/lib/api/respond';
 import { recordItemOpen } from '@/lib/items/record-open';
 import { assertNoServerOwnedStateChange, carryServerDerivedScope, ServerOwnedStateError } from '@/app/api/items/_lib/item-crud';
 import { withSession } from '@/lib/api/route-toolkit';
+import { teardownForItemDelete } from '@/lib/azure/item-teardown-registry';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -246,9 +247,30 @@ export const DELETE = withSession<{ type: string; id: string }>(async (
     const { item, denied } = await loadItem(params.id, params.type, session, { allowReadRoles: false });
     if (denied) return denied;
     if (!item) return err('Item not found', 404, 'not_found');
+    // #5046 — tear down the backing Azure resource(s) the item's state RECORDS
+    // BEFORE the doc goes (the refs live on it). `loadItem` above already
+    // required a write-capable workspace role (Owner/Admin/Member or tenant
+    // admin; `allowReadRoles:false`), so a Reader cannot reach this teardown.
+    // The Cosmos delete proceeds even when teardown failed: the response then
+    // carries `warning` + `teardown.orphans` so nothing is lost silently (see
+    // lib/azure/item-teardown-registry.ts for the decision record).
+    const teardown = await teardownForItemDelete(
+      {
+        id: item.id,
+        workspaceId: item.workspaceId,
+        itemType: params.type,
+        displayName: item.displayName,
+        state: (item.state ?? null) as Record<string, unknown> | null,
+      },
+      session.claims.oid,
+    );
     const items = await itemsContainer();
     await items.item(item.id, item.workspaceId).delete();
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({
+      ok: true,
+      teardown,
+      ...(teardown.warning ? { warning: teardown.warning } : {}),
+    });
   } catch (e: any) {
     return err(e?.message || 'Failed to delete item', 500, 'cosmos_error');
   }
