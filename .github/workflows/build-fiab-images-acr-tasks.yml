@@ -890,7 +890,15 @@ jobs:
         run: |
           set -uo pipefail
           POOL_APPS=$(node scripts/ci/acr-build-pool.mjs pool-apps --input "$POOL_APPS_INPUT" --default "$POOL_APPS_DEFAULT") || exit 1
-          NEED=$(jq -r --arg a ",$POOL_APPS," '[.include[].name | select($a | contains("," + . + ","))] | length' <<< "$MATRIX")
+          # Bind the name BEFORE the pipe into contains(): after `$a | ...` the
+          # filter input `.` is $a, so the unbound form compared the pool list
+          # against itself and returned 0 for every matrix, never scaling the
+          # pool (2026-10-22: console + directlake queued 105 min on an empty
+          # pool, three runs failed). A jq failure is fatal, not "0 apps".
+          if ! NEED=$(jq -r --arg a ",$POOL_APPS," '[.include[].name | . as $n | select($a | contains("," + $n + ","))] | length' <<< "$MATRIX"); then
+            echo "::error::could not read the build matrix to decide whether the pool is needed (jq failed); refusing to assume no app is pool-routed."
+            exit 1
+          fi
           if [ "${NEED:-0}" = "0" ]; then
             echo "No app in this run is routed to the pool (pool apps: ${POOL_APPS:-none}); pool left untouched."
             exit 0
