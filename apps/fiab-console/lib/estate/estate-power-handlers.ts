@@ -54,6 +54,8 @@ import { detectLoomCloud } from '@/lib/azure/cloud-boundary';
 import { cachedStateRead, clearStateCache } from '@/lib/estate/estate-state-cache';
 import { loadActivity } from '@/lib/estate/estate-activity';
 import { loadAutoPause } from '@/lib/estate/estate-autopause';
+import { mergeForPause, resolveContainerAppsForPause } from '@/lib/estate/estate-pause-set';
+import { discardPauseProgress, withIncrementalSnapshot } from '@/lib/estate/pause-incremental';
 import { loadPipelineActivity } from '@/lib/estate/estate-pipeline-activity';
 import type { EstatePowerStatus } from '@/lib/estate/estate-power-contract';
 import { resolveReadVerdict, type EstatePauseSnapshot } from '@/lib/estate/pause-state';
@@ -126,7 +128,7 @@ export interface PauseBody {
  * is bounded by the pause tier (at most a handful of resources) and mutates
  * nothing.
  */
-async function runningPayload(actuator: EstateActuator) {
+async function runningPayload(actuator: EstateActuator, tenantId: string) {
   const { manifest, entries, unresolved, manifestGated, namedByDeploy, gateReason } =
     resolveDeployManifest();
   // #4243 — discovery goes through the 429-retrying manifest tag reader, so a
@@ -135,7 +137,12 @@ async function runningPayload(actuator: EstateActuator) {
   // as the pause POST excludes it, so the two sides mint the same token while
   // the absence persists — and it is surfaced in `absent`, never dropped.
   const discovered = await discoverFromManifest(entries, createManifestTagReader());
-  const { present, absent, readFailures } = partitionDiscovery(discovered, entries);
+  const part = partitionDiscovery(discovered, entries);
+  const { absent } = part;
+  // Container Apps join through the stored policy (default ON), listed per app.
+  const apps = await resolveContainerAppsForPause(tenantId, manifest.estateId);
+  const readFailures = [...part.readFailures, ...apps.readFailures];
+  const present = mergeForPause(part.present, apps);
   const plan = planPause(present, {
     scope: { kind: 'explicit-inventory', estateId: manifest.estateId },
     manifest,
@@ -168,6 +175,8 @@ async function runningPayload(actuator: EstateActuator) {
     outOfTier: plan.outOfTier,
     /** Types this tier covers that no env var named — an honest coverage gap. */
     unresolved,
+    /** Per-app fate of every Container App in the group + the opt-out policy applied. */
+    containerApps: apps.status,
     /** True when the deploy names resources but the opt-in is unset. */
     manifestGated,
     risks,
@@ -226,7 +235,7 @@ async function computeStateFields(
 
   // No snapshot, or a snapshot that says the estate is up -> show the preview.
   if (!snapshot || snapshot.state === 'RUNNING') {
-    const payload = await runningPayload(actuator);
+    const payload = await runningPayload(actuator, tenantId);
     return { ...payload, snapshotId: snapshot?.id ?? null, power };
   }
 
@@ -320,7 +329,11 @@ async function pausePostImpl(caller: EstateCaller, body: PauseBody) {
   // GET /state, so the token stays coherent while the absence persists. It is
   // surfaced (`absent` + audit row below), never silently dropped. Unreadable
   // rows (throttled/timeout) stay IN the population and refuse below.
-  const { present, absent, readFailures } = partitionDiscovery(discovered, entries);
+  const part = partitionDiscovery(discovered, entries);
+  const { absent } = part;
+  const apps = await resolveContainerAppsForPause(tenantId, manifest.estateId);
+  const readFailures = [...part.readFailures, ...apps.readFailures];
+  const present = mergeForPause(part.present, apps);
   const plan = planPause(present, {
     scope: { kind: 'explicit-inventory', estateId: manifest.estateId },
     manifest,
@@ -357,6 +370,7 @@ async function pausePostImpl(caller: EstateCaller, body: PauseBody) {
       population: plan.population,
       outOfTier: plan.outOfTier,
       unresolved,
+      containerApps: apps.status,
       manifestGated,
       risks,
       highRisk: highRiskCount(risks),
@@ -548,10 +562,21 @@ async function pausePostImpl(caller: EstateCaller, body: PauseBody) {
     estateId: manifest.estateId,
     resources: plan.dryRun.wouldPause.map((r) => ({ id: r.resourceId, mechanism: r.mechanism })),
     highRisk: highRiskCount(risks),
+    // Who/what decided which Container Apps joined: the policy in force and each app's fate.
+    containerApps: {
+      policy: apps.status.policy,
+      listError: apps.status.listError ?? null,
+      apps: apps.status.apps.map((a) => ({ name: a.name, state: a.state })),
+    },
   });
 
-  const run = await startPause(plan, actuator, {
-    snapshotId: randomUUID(),
+  // Record first, then patch (review N1): each resource's pre-pause state is persisted
+  // BEFORE its mutation, so a crash mid-loop leaves a recoverable PAUSING snapshot.
+  const snapshotId = randomUUID();
+  const progressBase = { id: snapshotId, tenantId, estateId: manifest.estateId, createdBy: who };
+  const incremental = withIncrementalSnapshot(actuator, progressBase);
+  const run = await startPause(plan, incremental.actuator, {
+    snapshotId,
     tenantId,
     estateId: manifest.estateId,
     // A CALLBACK, not the manifest we resolved above. W1 removed the ability to
@@ -566,6 +591,7 @@ async function pausePostImpl(caller: EstateCaller, body: PauseBody) {
   // records that as RUNNING rather than as an empty PAUSING snapshot; report it
   // as the no-op it is, with the per-resource reasons.
   if (run.capturedNone) {
+    if (incremental.wasPersisted()) await discardPauseProgress(existing, progressBase).catch(() => {});
     await audit(caller, 'estate-pause.captured-nothing', {
       estateId: manifest.estateId,
       actions: run.actions.map((a) => ({ id: a.resourceId, status: a.status })),
@@ -592,6 +618,7 @@ async function pausePostImpl(caller: EstateCaller, body: PauseBody) {
   // resource is physically stopped. All-already-paused with zero failures
   // still saves: that snapshot settles to PAUSED on the first poll, truly.)
   if (dispatched.length === 0 && failed.length > 0) {
+    if (incremental.wasPersisted()) await discardPauseProgress(existing, progressBase).catch(() => {});
     const alreadyPaused = run.actions.filter((a) => a.status === 'already-paused').length;
     const skipped = run.actions.filter((a) => a.status === 'skipped').length;
     await audit(caller, 'estate-pause.all-dispatches-rejected', {
@@ -624,6 +651,12 @@ async function pausePostImpl(caller: EstateCaller, body: PauseBody) {
     );
   }
 
+  // Record which resources the pause verb was REJECTED for, so the banner does not
+  // count them as stopped (review N4).
+  for (const a of failed) {
+    const r = run.snapshot.resources.find((x) => x.resourceId === a.resourceId);
+    if (r) r.pauseFailed = String(a.error || a.detail || 'pause rejected').slice(0, 300);
+  }
   await savePauseSnapshot(run.snapshot);
 
   await audit(caller, failed.length ? 'estate-pause.partial' : 'estate-pause.dispatched', {

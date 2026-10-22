@@ -21,6 +21,8 @@ service-principal entry point for the Actions/CLI lane.
 | 5 | Idle-based auto-pause / auto-suspend with a configurable idle time | Synapse auto-pause, Databricks auto-termination, ADX auto-stop |
 | 6 | Last activity / last state change visibility | Azure activity log, Fabric capacity metrics |
 | 7 | Drive pause/resume from automation (REST / CLI) | Azure REST pause/resume verbs |
+| 8 | Scale-to-zero for Container Apps with per-app control | Azure portal Container Apps > Scale and replicas |
+| 9 | A visible "capacity is paused" notice with a one-click resume wherever you are | Fabric capacity-paused banner |
 
 ## Loom coverage
 
@@ -33,11 +35,13 @@ service-principal entry point for the Actions/CLI lane.
 | 5 | Auto-pause switch + idle-hours input (1 to 168, default on / 2 h), Save, Retry, Reset to defaults | built this PR (setting + UI). The pause action itself is the Actions lane (separate work item) |
 | 6 | Last activity, idle-for, last paused, last resumed badges | built this PR; recorded via `withSession` |
 | 7 | `POST /api/estate/power` with the deploy service principal | built this PR |
+| 8 | Container Apps in the pause set by default; global and per-app opt-out in the panel; never-pause list shown with reasons | built 2026-10-22 ([guide](../admin/estate-idle-auto-pause.md)). Not exercised against a live app |
+| 9 | Shell banner (count, names, when, by whom) with admin Resume / Retry resume; read-only text for others | built 2026-10-22. jsdom only, no in-browser walk (G1) |
 
 **Activity recording** is wired: `withSession` (lib/api/route-toolkit.ts) calls
 `recordHumanActivity` fire-and-forget, throttled to one Cosmos write per 5 minutes
 per replica. PAT sessions, health, session refresh, `/api/internal/*`, the state
-poll and `/api/estate/power` do not count. Routes that bypass the toolkit do not
+poll, `/api/estate/power` and the banner's `/api/estate/paused` do not count. Routes that bypass the toolkit do not
 count either; until none do, a null or stale `lastActivityAt` can under-report use,
 so the contract still forbids auto-pausing on null.
 
@@ -48,7 +52,9 @@ so the contract still forbids auto-pausing on null.
 | State, preview, progress | `GET /api/admin/estate/state` | ARM reads of each resource, Cosmos snapshot (`maintenance-jobs`) |
 | Pause | `POST /api/admin/estate/pause` | native ARM pause verbs via the orchestrator |
 | Resume | `POST /api/admin/estate/resume` | native ARM resume verbs + data-plane probes |
-| Auto-pause setting | `GET/PUT /api/admin/estate/autopause` | Cosmos doc `estate-autopause:current` |
+| Auto-pause setting (incl. Container Apps opt-outs) | `GET/PUT /api/admin/estate/autopause` | Cosmos doc `estate-autopause:current` |
+| Container Apps list + per-app fate | `containerApps` in the RUNNING state / preview response | ARM list of `Microsoft.App/containerApps` in `LOOM_ACA_RG` (else `LOOM_ADMIN_RG`) |
+| Paused banner | `GET /api/estate/paused` (any signed-in user) | Cosmos pause snapshot only, no ARM call |
 | Idle / last activity | in `power` of the state response | Cosmos doc `estate-activity:current` |
 | Automation | `GET/POST /api/estate/power` | same handlers as the cookie routes |
 

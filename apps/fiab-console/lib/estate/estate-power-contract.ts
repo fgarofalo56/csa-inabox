@@ -68,9 +68,24 @@ export const AUTOPAUSE_DEFAULT_IDLE_HOURS = 2;
 export const AUTOPAUSE_MIN_IDLE_HOURS = 1;
 export const AUTOPAUSE_MAX_IDLE_HOURS = 168;
 
+/**
+ * Container Apps in the estate pause set (operator decision 2026-10-22): ON BY
+ * DEFAULT for every app that is not on the never-pause list (`pause-guards.ts`).
+ * `enabled:false` is the GLOBAL opt-out; `exempt` is the per-app opt-out (lower-case
+ * Container App names). Persisted with the auto-pause setting, not in a second store.
+ */
+export interface EstateContainerAppsPolicy {
+  enabled: boolean;
+  exempt: string[];
+}
+
+export const CONTAINER_APPS_MAX_EXEMPT = 100;
+
 export interface EstateAutoPauseSetting {
   enabled: boolean;
   idleHours: number;
+  /** Container Apps pause policy: default `{ enabled: true, exempt: [] }`. */
+  containerApps: EstateContainerAppsPolicy;
   /**
    * `stored`: read from Cosmos. `default`: nothing stored yet (armed by default,
    * 2h). `unreadable`: the read FAILED; the values are the defaults but must not

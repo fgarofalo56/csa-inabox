@@ -13,9 +13,9 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1700 |
+| Total routes | 1701 |
 | Public (no session) | 60 |
-| Session-only | 614 |
+| Session-only | 615 |
 | Owner-scoped | 697 |
 | Admin | 329 |
 | Unknown (generator fails) | 0 |
@@ -256,9 +256,9 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `admin/embed-codes/route.ts` | GET POST DELETE | admin | ● | ADLS, ARM, Azure Storage, Cosmos, Managed Identity |
 | `admin/env-config/route.ts` | GET PUT | admin |  | ADLS, AKS, ARM, Azure Monitor, Container Apps, Cosmos, Microsoft Graph |
 | `admin/estate/autopause/route.ts` | GET PUT | admin |  | Azure Monitor, Cosmos |
-| `admin/estate/pause/route.ts` | POST | admin |  | AAS, ADX, ARM, Azure Monitor, Azure SQL, Compute, Cosmos, Databricks, Managed Identity, Synapse, Synapse SQL |
+| `admin/estate/pause/route.ts` | POST | admin |  | AAS, ADX, ARM, Azure Monitor, Azure SQL, Compute, Container Apps, Cosmos, Databricks, Managed Identity, Synapse, Synapse SQL |
 | `admin/estate/resume/route.ts` | POST | admin |  | AAS, ARM, Azure Monitor, Azure SQL, Cosmos, Databricks, Managed Identity, Synapse SQL |
-| `admin/estate/state/route.ts` | GET | admin |  | AAS, ADX, ARM, Azure SQL, Compute, Cosmos, Databricks, Managed Identity, Synapse, Synapse SQL |
+| `admin/estate/state/route.ts` | GET | admin |  | AAS, ADX, ARM, Azure SQL, Compute, Container Apps, Cosmos, Databricks, Managed Identity, Synapse, Synapse SQL |
 | `admin/feedback-forwarding/route.ts` | GET PUT | admin |  | Cosmos |
 | `admin/finops/anomalies/route.ts` | GET PUT DELETE | admin |  | ARM, Azure Cache for Redis, Azure Monitor, Cosmos, Cost Management |
 | `admin/finops/breakdown/route.ts` | GET | admin |  | ARM, Azure Cache for Redis, Cosmos, Cost Management |
@@ -903,8 +903,9 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
 | `estate/execute/route.ts` | POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, ARM, Azure SQL, Azure Storage, Compute, Cosmos, Managed Identity, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Stream Analytics, Synapse |
+| `estate/paused/route.ts` | GET | session-only |  | Cosmos |
 | `estate/plan/route.ts` | POST | session-only |  | AML, ARM, Azure AI Services, Azure Cache for Redis, Azure OpenAI, Cosmos, Stream Analytics |
-| `estate/power/route.ts` | GET POST | public |  | AAS, ADX, ARM, Azure Monitor, Azure SQL, Compute, Cosmos, Databricks, Managed Identity, Synapse, Synapse SQL |
+| `estate/power/route.ts` | GET POST | public |  | AAS, ADX, ARM, Azure Monitor, Azure SQL, Compute, Container Apps, Cosmos, Databricks, Managed Identity, Synapse, Synapse SQL |
 
 ## eventhubs
 
@@ -2549,7 +2550,7 @@ silently downgrading the route.
 
 ## Backend signals (derived)
 
-458 module(s) ORIGINATE a backend label — the derivation read an
+459 module(s) ORIGINATE a backend label — the derivation read an
 Azure identifier out of them. Every other route/module below inherits through the
 call graph. Nothing in this section is a Loom module name someone typed: the
 modules are derived, and only the Microsoft-owned identifier vocabulary is seeded.
@@ -3199,6 +3200,7 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/editors/synapse-spark-editor.tsx` | ADLS |
 | `apps/fiab-console/lib/editors/tapestry-editor.tsx` | Azure Maps |
 | `apps/fiab-console/lib/editors/unified-sql-database-editor.tsx` | Azure Networking, Azure SQL, PostgreSQL |
+| `apps/fiab-console/lib/estate/pause-container-apps.ts` | Container Apps |
 | `apps/fiab-console/lib/estate/pause-orchestrator.ts` | AAS, ADX, Compute, Synapse |
 | `apps/fiab-console/lib/gates/registry/azure-services.ts` | Cost Management |
 | `apps/fiab-console/lib/gates/registry/data-plane.ts` | Azure RBAC |
