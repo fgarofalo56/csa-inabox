@@ -27,7 +27,7 @@ import { getSession } from '@/lib/auth/session';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { apiServerError } from '@/lib/api/respond';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
-import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   armBase, armScope,
   dfsSuffix, getBlobSuffix, getSqlSuffix, synapseSqlSuffix,
@@ -97,7 +97,7 @@ async function runArg(
     if (skipToken) options.$skipToken = skipToken;
     let res: Response;
     try {
-      res = await armCountedFetch(ARG_URL, {
+      res = await fetchWithTimeout(ARG_URL, {
         method: 'POST',
         headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify({ query, options }),

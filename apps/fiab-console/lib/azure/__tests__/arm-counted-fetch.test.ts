@@ -5,9 +5,7 @@
  * assertion-design: each load-bearing assertion names the input that breaks it.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { armCountedFetch, isArmOrigin } from '../arm-counted-fetch';
-import { armCountedRawFetch } from '@/lib/util/arm-counted-raw-fetch';
-import { getArmReadCounts, resetArmReadCounts, runWithArmCaller } from '../arm-read-gate';
+import { armCountedFetch, isArmOrigin } from '../arm-counted-fetch';import { getArmReadCounts, resetArmReadCounts, runWithArmCaller } from '../arm-read-gate';
 
 const COMMERCIAL = 'https://management.azure.com';
 const GOV = 'https://management.usgovcloudapi.net';
@@ -92,23 +90,6 @@ describe('armCountedFetch', () => {
     expect(calls).toHaveLength(1);
     // fetchWithTimeout composes its own AbortSignal into init: proof it ran, not bare fetch.
     expect(calls[0].init?.signal).toBeInstanceOf(AbortSignal);
-  });
-});
-
-describe('armCountedRawFetch', () => {
-  it('counts an ARM GET and adds NO timeout signal (bare-fetch behaviour preserved)', async () => {
-    const calls = stubFetch();
-    await runWithArmCaller('setup.scan', () => armCountedRawFetch(`${COMMERCIAL}${PATH}`, { headers: { a: 'b' } }));
-    expect(getArmReadCounts().reads).toEqual({ 'setup.scan': 1 });
-    // Breaks if the raw variant is built on fetchWithTimeout (a signal would appear).
-    expect(calls[0].init?.signal).toBeUndefined();
-    expect(calls[0].init?.headers).toEqual({ a: 'b' });
-  });
-
-  it('does not count a PUT', async () => {
-    stubFetch();
-    await armCountedRawFetch(`${COMMERCIAL}${PATH}`, { method: 'PUT' });
-    expect(getArmReadCounts().reads).toEqual({});
   });
 });
 

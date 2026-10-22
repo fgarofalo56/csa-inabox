@@ -21,7 +21,6 @@ import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { armBase, cloudBoundaryLabel } from '@/lib/azure/cloud-endpoints';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
-import { armCountedRawFetch } from '@/lib/util/arm-counted-raw-fetch';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -37,7 +36,7 @@ async function resolveSubName(subId: string): Promise<string | undefined> {
     const arm = armBase();
     const t = await credential.getToken(`${arm}/.default`);
     if (!t?.token) return undefined;
-    const r = await armCountedRawFetch(`${arm}/subscriptions/${subId}?api-version=2022-12-01`, {
+    const r = await fetch(`${arm}/subscriptions/${subId}?api-version=2022-12-01`, {
       headers: { authorization: `Bearer ${t.token}` },
       cache: 'no-store',
     });

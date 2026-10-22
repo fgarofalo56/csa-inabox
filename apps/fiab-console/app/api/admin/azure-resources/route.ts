@@ -23,7 +23,6 @@ import { getSession } from '@/lib/auth/session';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
-import { armCountedRawFetch } from '@/lib/util/arm-counted-raw-fetch';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -79,7 +78,7 @@ export async function GET(_req: NextRequest) {
   for (const { rg, sub: rgSub } of rgPairs) {
     try {
       const url = `${armBase()}/subscriptions/${rgSub}/resourceGroups/${rg}/resources?api-version=2024-03-01&$expand=provisioningState`;
-      const r = await armCountedRawFetch(url, { headers: { authorization: `Bearer ${token}` } });
+      const r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
       if (!r.ok) {
         const t = await r.text();
         errors.push(`${rg}: ${r.status} ${t.slice(0, 120)}`);

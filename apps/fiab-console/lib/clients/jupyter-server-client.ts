@@ -247,7 +247,7 @@ export async function jupyterFetch(
   init: RequestInit = {},
 ): Promise<Response> {
   const url = `https://${hostName}/jupyter/api${apiPath.startsWith('/') ? apiPath : `/${apiPath}`}`;
-  return armCountedRawFetch(url, {
+  return fetch(url, {
     ...init,
     headers: {
       ...(init.headers || {}),

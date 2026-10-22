@@ -28,7 +28,6 @@ import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { armBase } from '@/lib/azure/cloud-endpoints';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
-import { armCountedRawFetch } from '@/lib/util/arm-counted-raw-fetch';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -77,7 +76,7 @@ export async function GET() {
   // 1) Resource Graph: AIServices / OpenAI accounts the principal can read.
   let accountsRaw: any[] = [];
   try {
-    const res = await armCountedRawFetch(
+    const res = await fetch(
       `${arm}/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01`,
       {
         method: 'POST',
@@ -117,7 +116,7 @@ export async function GET() {
       const url =
         `${arm}/subscriptions/${a.subscriptionId}/resourceGroups/${a.resourceGroup}` +
         `/providers/Microsoft.CognitiveServices/accounts/${a.name}/deployments?api-version=2023-05-01`;
-      const r = await armCountedRawFetch(url, {
+      const r = await fetch(url, {
         headers: { authorization: `Bearer ${token}` },
         cache: 'no-store',
       });

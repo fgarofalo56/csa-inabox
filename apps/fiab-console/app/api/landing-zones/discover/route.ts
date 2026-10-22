@@ -29,7 +29,6 @@ import {
   parseKindsParam,
   type ArgResourceRow,
 } from '@/lib/azure/attached-discovery';
-import { armCountedRawFetch } from '@/lib/util/arm-counted-raw-fetch';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -54,7 +53,7 @@ async function runArg(
     if (skipToken) options.$skipToken = skipToken;
     let res: Response;
     try {
-      res = await armCountedRawFetch(ARG_URL, {
+      res = await fetch(ARG_URL, {
         method: 'POST',
         headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify({ query, options }),

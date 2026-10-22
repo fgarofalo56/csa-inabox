@@ -15,7 +15,6 @@ import { NextResponse } from 'next/server';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { getSession } from '@/lib/auth/session';
 import { armBase } from '@/lib/azure/cloud-endpoints';
-import { armCountedRawFetch } from '@/lib/util/arm-counted-raw-fetch';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -66,7 +65,7 @@ export async function GET() {
   try {
     const token = await armToken();
     const url = `${arm()}/subscriptions/${sub}/providers/Microsoft.Web/sites?api-version=2023-12-01`;
-    const res = await armCountedRawFetch(url, {
+    const res = await fetch(url, {
       headers: {
         authorization: `Bearer ${token}`,
         'content-type': 'application/json',

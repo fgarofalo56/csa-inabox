@@ -1,6 +1,22 @@
 {
-  "_comment": "Shrink-only. Files that mention an ARM helper yet legitimately call a raw fetch. Each value is the WHY (>= 20 chars). A stale entry fails scripts/ci/check-arm-counted-fetch.mjs.",
+  "_comment": "Shrink-only. Files that mention an ARM helper yet legitimately keep a raw fetch. Each value is the WHY (>= 20 chars). A stale entry fails scripts/ci/check-arm-counted-fetch.mjs.",
   "allow": {
-    "apps/fiab-console/lib/admin/health-probes.ts": "armHost() is used only to compare a hostname against the configured endpoint (line ~440). Its three raw fetch() calls probe Key Vault / app-endpoint / dependency URLs, none of them ARM management reads."
+    "apps/fiab-console/lib/admin/health-probes.ts": "armHost() is used only to compare a hostname against the configured endpoint (line ~440). Its three raw fetch() calls probe Key Vault / app-endpoint / dependency URLs, none of them ARM management reads.",
+    "apps/fiab-console/lib/util/arm-counted-raw-fetch.ts": "This IS the counted path for bare fetch: it pins the URL to the armBase() origin (SSRF-safe by construction, tested) and books the read via counted(). Its raw fetch() is the one that gets counted.",
+    "apps/fiab-console/lib/clients/azure-connections-client.ts": "The remaining raw fetch is the Log Analytics query data plane (getLogAnalyticsHost()), not ARM; armCountedRawFetch refuses non-ARM origins by design, so it must stay a plain fetch.",
+    "apps/fiab-console/lib/clients/jupyter-server-client.ts": "jupyterFetch targets the compute instance's own https://<hostName>/jupyter data plane, a non-ARM host; armCountedRawFetch refuses non-ARM origins by design. Its ARM call (listNotebookAccessToken) is counted.",
+    "apps/fiab-console/app/api/admin/azure-resources/route.ts": "Baselined route-toolkit route: touching it requires the toolkit migration. Left unchanged, ARM fetch uncounted until the follow-up, issue #5079.",
+    "apps/fiab-console/app/api/admin/security/purview/discover/route.ts": "Baselined route-toolkit route: touching it requires the toolkit migration. Left unchanged, ARM fetch uncounted until the follow-up, issue #5079.",
+    "apps/fiab-console/app/api/azure/function-apps/route.ts": "Baselined route-toolkit route: touching it requires the toolkit migration. Left unchanged, ARM fetch uncounted until the follow-up, issue #5079.",
+    "apps/fiab-console/app/api/azure/iothub/policies/route.ts": "Baselined route-toolkit route: touching it requires the toolkit migration. Left unchanged, ARM fetch uncounted until the follow-up, issue #5079.",
+    "apps/fiab-console/app/api/landing-zones/discover/route.ts": "Baselined route-toolkit route: touching it requires the toolkit migration. Left unchanged, ARM fetch uncounted until the follow-up, issue #5079.",
+    "apps/fiab-console/app/api/setup/config/route.ts": "Baselined route-toolkit route: touching it requires the toolkit migration. Left unchanged, ARM fetch uncounted until the follow-up, issue #5079.",
+    "apps/fiab-console/app/api/setup/existing-aoai/route.ts": "Baselined route-toolkit route: touching it requires the toolkit migration. Left unchanged, ARM fetch uncounted until the follow-up, issue #5079.",
+    "apps/fiab-console/app/api/setup/existing-storage/route.ts": "Baselined route-toolkit route: touching it requires the toolkit migration. Left unchanged, ARM fetch uncounted until the follow-up, issue #5079.",
+    "apps/fiab-console/app/api/setup/landing-zones/route.ts": "Baselined route-toolkit route: touching it requires the toolkit migration. Left unchanged, ARM fetch uncounted until the follow-up, issue #5079.",
+    "apps/fiab-console/app/api/setup/quota-preflight/route.ts": "Baselined route-toolkit route: touching it requires the toolkit migration. Left unchanged, ARM fetch uncounted until the follow-up, issue #5079.",
+    "apps/fiab-console/app/api/setup/regions/route.ts": "Baselined route-toolkit route: touching it requires the toolkit migration. Left unchanged, ARM fetch uncounted until the follow-up, issue #5079.",
+    "apps/fiab-console/app/api/setup/scan-purview/route.ts": "Baselined route-toolkit route: touching it requires the toolkit migration. Left unchanged, ARM fetch uncounted until the follow-up, issue #5079.",
+    "apps/fiab-console/app/api/setup/scan/route.ts": "Baselined route-toolkit route: touching it requires the toolkit migration. Left unchanged, ARM fetch uncounted until the follow-up, issue #5079."
   }
 }

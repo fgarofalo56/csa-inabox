@@ -36,7 +36,6 @@ import {
   type QuotaBoundary,
   type QuotaEvaluation,
 } from '@/lib/setup/quota-preflight';
-import { armCountedRawFetch } from '@/lib/util/arm-counted-raw-fetch';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -66,7 +65,7 @@ async function readComputeUsages(
   token: string,
 ): Promise<{ usages: ComputeUsageEntry[]; error?: string }> {
   try {
-    const res = await armCountedRawFetch(
+    const res = await fetch(
       `${armBase()}/subscriptions/${subscriptionId}/providers/Microsoft.Compute/locations/${encodeURIComponent(
         location,
       )}/usages?api-version=2024-07-01`,
