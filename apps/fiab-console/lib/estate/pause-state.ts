@@ -427,6 +427,13 @@ export interface PausedResourceSnapshot {
 
   /** R-SCOPE-3/4 — why this resource was judged Loom's, recorded at capture. */
   ownership: LoomOwnershipEvidence;
+
+  /**
+   * Set when the pause verb for this resource was REJECTED or could not be recorded:
+   * the resource was not stopped, so it is not counted as paused by the banner.
+   * Optional and additive; absent = the verb was accepted.
+   */
+  pauseFailed?: string;
 }
 
 /**

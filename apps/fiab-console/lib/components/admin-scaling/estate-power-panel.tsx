@@ -28,6 +28,7 @@ import { clientFetch } from '@/lib/client-fetch';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { LearnPopover } from '@/lib/components/ui/learn-popover';
 import { jsonGet } from '@/lib/components/admin-scaling/json-get';
+import { EstateContainerAppsSection } from '@/lib/components/admin-scaling/estate-container-apps-section';
 import { isTabHidden, isThrottledResponse, nextPollDelayMs } from '@/lib/components/admin-scaling/estate-power-poll';
 
 // ===========================================================================
@@ -177,7 +178,7 @@ export function EstateAutoPauseSection({ power, styles, onChanged }: {
   const parsed = parseIdleHours(hours);
   const hoursInvalid = dirty && parsed === null;
 
-  async function save(next: { enabled: boolean; idleHours: number }) {
+  async function save(next: { enabled: boolean; idleHours: number; containerApps?: { enabled: boolean; exempt: string[] } }) {
     setSaving(true);
     setSaveError(null);
     setSaved(false);
@@ -243,7 +244,7 @@ export function EstateAutoPauseSection({ power, styles, onChanged }: {
           </MessageBarBody>
           <MessageBarActions>
             <Button size="small" disabled={saving}
-              onClick={() => { void save({ enabled: true, idleHours: 2 }); }}>
+              onClick={() => { void save({ enabled: true, idleHours: 2, containerApps: { enabled: true, exempt: [] } }); }}>
               Reset to defaults (on, 2 hours)
             </Button>
           </MessageBarActions>
@@ -499,7 +500,8 @@ export function EstatePowerPanel({ styles }: { styles: Record<string, string> })
                 title="Pausing the estate"
                 content={
                   'Pause issues each backing service’s NATIVE pause verb — Synapse pause, ADX stop, '
-                  + 'Analysis Services suspend, scale-set capacity 0. Nothing is deleted and no data is '
+                  + 'Analysis Services suspend, scale-set capacity 0, Container Apps scaled to zero replicas '
+                  + '(the console and a short never-pause list excepted). Nothing is deleted and no data is '
                   + 'touched; only compute stops billing. Resume restores each resource to exactly the '
                   + 'state and SKU recorded in a snapshot taken at pause time.'
                 }
@@ -623,6 +625,11 @@ export function EstatePowerPanel({ styles }: { styles: Record<string, string> })
 
       {!loading && data?.power && (
         <EstateAutoPauseSection power={data.power} styles={styles} onChanged={refresh} />
+      )}
+      {!loading && data?.power && (
+        <EstateContainerAppsSection
+          power={data.power} containerApps={data.containerApps} styles={styles} onChanged={refresh}
+        />
       )}
 
       {/* RESUME_FAILED — loud, terminal, and per-resource. Never a spinner. */}

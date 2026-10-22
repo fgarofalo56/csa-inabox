@@ -122,7 +122,7 @@ export interface DiscoveredResource {
   tags: Readonly<Record<string, string>> | null;
   /** Why tags are null. Surfaced verbatim in the exclusion reason. */
   tagsError?: string;
-  discoverySource: 'resource-graph' | 'deploy-manifest';
+  discoverySource: 'resource-graph' | 'deploy-manifest' | 'arm-rg-list';
   /**
    * Structurally impossible to populate. Do not remove: this is what stops a
    * Resource Graph `properties.state` from being carried into the state model.

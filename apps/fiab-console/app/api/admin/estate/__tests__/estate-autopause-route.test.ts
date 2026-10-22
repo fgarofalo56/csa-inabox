@@ -71,10 +71,66 @@ describe('PUT', () => {
     expect(upsert).toHaveBeenCalledWith(expect.objectContaining({ tenantId: 'tenant-1', enabled: false, idleHours: 6 }));
     expect(auditCreate).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'estate-autopause.updated',
-      before: { enabled: true, idleHours: 2, source: 'default' },
-      after: { enabled: false, idleHours: 6 },
+      before: { enabled: true, idleHours: 2, containerApps: { enabled: true, exempt: [] }, source: 'default' },
+      after: { enabled: false, idleHours: 6, containerApps: { enabled: true, exempt: [] } },
     }));
     expect(emitAuditEvent).toHaveBeenCalledWith(expect.objectContaining({ action: 'platform.estate-autopause', outcome: 'success' }));
+  });
+
+  const STORED = {
+    kind: 'estate-autopause', enabled: true, idleHours: 2, updatedAt: 'T', updatedBy: 'u',
+    containerApps: { enabled: false, exempt: ['loom-udf-runtime'] },
+  };
+
+  it('a PUT that OMITS containerApps (the idle-hours form, the CLI) keeps the stored opt-outs -- breaks if it resets them to the default', async () => {
+    read.mockResolvedValue({ resource: STORED });
+    const { PUT } = await import('../autopause/route');
+    const res = await PUT(put({ enabled: true, idleHours: 5 }), ctx);
+    expect(res.status).toBe(200);
+    expect(upsert).toHaveBeenCalledWith(expect.objectContaining({
+      idleHours: 5, containerApps: { enabled: false, exempt: ['loom-udf-runtime'] },
+    }));
+  });
+
+  it('a PUT carrying containerApps stores it and audits before AND after (the opt-out is never silent)', async () => {
+    read.mockResolvedValue({ resource: STORED });
+    const { PUT } = await import('../autopause/route');
+    const next = { enabled: true, exempt: ['loom-dab-preview'] };
+    const res = await PUT(put({ enabled: true, idleHours: 2, containerApps: next }), ctx);
+    expect(res.status).toBe(200);
+    expect(upsert).toHaveBeenCalledWith(expect.objectContaining({ containerApps: next }));
+    expect(auditCreate).toHaveBeenCalledWith(expect.objectContaining({
+      before: expect.objectContaining({ containerApps: { enabled: false, exempt: ['loom-udf-runtime'] } }),
+      after: expect.objectContaining({ containerApps: next }),
+    }));
+  });
+
+  it('a malformed containerApps (exempt name "loom_mcp") -> 400 and NOTHING written or audited', async () => {
+    const { PUT } = await import('../autopause/route');
+    const res = await PUT(put({ enabled: true, idleHours: 2, containerApps: { enabled: true, exempt: ['loom_mcp'] } }), ctx);
+    expect(res.status).toBe(400);
+    expect(upsert).not.toHaveBeenCalled();
+    expect(auditCreate).not.toHaveBeenCalled();
+  });
+
+  // Breaks if: a transient Cosmos READ failure lets an omitted-containerApps PUT write the default and erase a global opt-out (N2).
+  it('PUT omitting containerApps while the stored setting is UNREADABLE -> 503, nothing written, true message', async () => {
+    read.mockRejectedValue(new Error('cosmos down'));
+    const { PUT } = await import('../autopause/route');
+    const res = await PUT(put({ enabled: true, idleHours: 3 }), ctx);
+    expect(res.status).toBe(503);
+    expect((await res.json()).error).toMatch(/could not be read/);
+    expect(upsert).not.toHaveBeenCalled();
+    expect(auditCreate).not.toHaveBeenCalled();
+  });
+
+  // The deliberate overwrite path (the panel's Reset to defaults) still works when the body carries the policy.
+  it('PUT WITH containerApps while the stored setting is unreadable overwrites explicitly (Reset to defaults)', async () => {
+    read.mockRejectedValue(new Error('cosmos down'));
+    const { PUT } = await import('../autopause/route');
+    const res = await PUT(put({ enabled: true, idleHours: 2, containerApps: { enabled: true, exempt: [] } }), ctx);
+    expect(res.status).toBe(200);
+    expect(upsert).toHaveBeenCalledWith(expect.objectContaining({ containerApps: { enabled: true, exempt: [] } }));
   });
 
   it.each([[0], [169], [NaN], ['4']])('idleHours %s -> 400 and NOTHING written or audited', async (idleHours) => {
