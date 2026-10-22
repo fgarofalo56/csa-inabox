@@ -256,6 +256,18 @@ export function runWithArmCaller<T>(
   return callerStore.run(ctx, fn);
 }
 
+/**
+ * Label `fn` as `label` UNLESS it already runs inside a warmer guard. A guarded
+ * ctx carries the gate + abandon-on-429 semantics; replacing it with a plain
+ * label would silently un-pace the warmer's own sweep. Outside a guard (route,
+ * detached install job) this is `runWithArmCaller(label, fn)`: counted and
+ * attributable, never queued.
+ */
+export function runWithArmCallerUnlessGuarded<T>(label: string, fn: () => Promise<T>): Promise<T> {
+  if (callerStore.getStore()?.guard) return fn();
+  return runWithArmCaller(label, fn);
+}
+
 // ---------------------------------------------------------------------------
 // Counters + the once-a-minute line
 // ---------------------------------------------------------------------------

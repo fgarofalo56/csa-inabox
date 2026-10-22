@@ -59,6 +59,7 @@ import {
 } from '@/lib/install/report-binding';
 import { decodeIdList } from '@/lib/install/secondary-id-list';
 import { withRequiredLibraryBootstrap } from '@/lib/install/provisioners/notebook'; // #3530
+import { runWithArmCaller } from '@/lib/azure/arm-read-gate';
 import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
@@ -171,7 +172,10 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
 
   // Fire the worker. The Container App Node process stays alive across the
   // response, so the loop completes and the poll observes the progress.
-  void runInstallJob(s, jobId, app, refs, workspaceId, { deploy, mode, folderId, targetOverrides });
+  // Labeled so the detached job's ARM reads count as `install.job`, not
+  // `unlabeled` (the AsyncLocalStorage context follows the floating promise).
+  void runWithArmCaller('install.job', () =>
+    runInstallJob(s, jobId, app, refs, workspaceId, { deploy, mode, folderId, targetOverrides }));
 
   return NextResponse.json(
     { ok: true, jobId, totalItems: refs.length },
