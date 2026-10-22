@@ -16,7 +16,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { planBuild, readChangedFiles, SHARED_PREFIXES } from '../plan-image-builds.mjs';
+import { planBuild, readChangedFiles, SHARED_PREFIXES, CONSOLE } from '../plan-image-builds.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..', '..', '..');
@@ -36,26 +36,43 @@ test('lifted matrix is the 13-app default set (input: an app dropped from or add
   assert.equal(MATRIX.length, 13, `matrix has ${MATRIX.length} apps; update this pin AND the carry contract if it changed on purpose`);
 });
 
-test('a file in EACH matrix context builds exactly that app and carries the other 12', () => {
+test('a file in EACH matrix context builds exactly that app plus the always-built console', () => {
   for (const app of MATRIX) {
     const p = planBuild({ changedFiles: [`${app.ctx.replace('./', '')}/src/x.ts`], matrix: MATRIX });
-    assert.deepEqual(p.build, [app.name], `file under ${app.ctx}: must build only ${app.name}, got ${p.build}`);
-    assert.equal(p.carry.length, 12, `file under ${app.ctx}: 12 others must be carried, got ${p.carry.length}`);
+    const want = [...new Set([app.name, CONSOLE])].sort();
+    assert.deepEqual([...p.build].sort(), want, `file under ${app.ctx}: must build ${want}, got ${p.build}`);
+    assert.equal(p.carry.length, 13 - want.length, `file under ${app.ctx}: the rest must be carried, got ${p.carry.length}`);
     assert.equal(p.mode, 'subset', `file under ${app.ctx}: mode must be subset`);
+  }
+});
+
+test('B1: the console is in the plan for a loom-unity-ONLY push (input: apps/loom-unity/x, no console path)', () => {
+  const p = planBuild({ changedFiles: ['apps/loom-unity/src/authz.py'], matrix: MATRIX });
+  assert.ok(p.build.includes(CONSOLE), `a carried console strands an unrolled console change when its roll replaces a pending one; build=${p.build}`);
+  assert.ok(!p.carry.includes(CONSOLE), 'console must never be in carry');
+  assert.ok(p.build.includes('loom-unity'), 'the changed app is still built');
+});
+
+test('S2: console-embedded corpus paths alone still yield a plan WITH the console (inputs: each corpus root)', () => {
+  for (const f of ['docs/fiab/x.md', 'PRPs/active/a.md', 'PRPs/completed/csa-loom-pillar/b.md', 'PRPs/archive/c.md']) {
+    const p = planBuild({ changedFiles: [f], matrix: MATRIX });
+    assert.deepEqual(p.build, [CONSOLE], `${f}: the corpus is baked into the console image; plan must build it, got ${p.build}`);
+    assert.equal(p.carry.length, 12, `${f}: the other 12 are carried`);
   }
 });
 
 test('build and carry partition the matrix: no app lost, none in both (input: two apps changed)', () => {
   const p = planBuild({ changedFiles: ['apps/loom-trino/a', 'apps/fiab-mcp-config/b'], matrix: MATRIX });
-  assert.deepEqual([...p.build].sort(), ['loom-mcp', 'loom-trino'], 'loom-mcp is dir fiab-mcp-config (name != dir stem)');
+  assert.deepEqual([...p.build].sort(), ['loom-console', 'loom-mcp', 'loom-trino'], 'loom-mcp is dir fiab-mcp-config (name != dir stem); console always built');
   assert.deepEqual([...p.build, ...p.carry].sort(), [...names].sort(), 'build+carry must equal the matrix exactly');
   assert.equal(p.build.filter((n) => p.carry.includes(n)).length, 0, 'an app in both lists would be built AND re-tagged over');
 });
 
-test('a sibling directory sharing a name prefix does NOT map to the app (input: apps/fiab-console-extra/x)', () => {
-  const p = planBuild({ changedFiles: ['apps/fiab-console-extra/x.ts', 'apps/loom-trino/a'], matrix: MATRIX });
-  assert.deepEqual(p.build, ['loom-trino'], `prefix match without a trailing slash would add loom-console; got ${p.build}`);
-  assert.ok(p.ignored.includes('apps/fiab-console-extra/x.ts'), 'the unowned path must be listed as ignored');
+test('a sibling directory sharing a name prefix does NOT map to the app (input: apps/loom-trino-extra/x)', () => {
+  // loom-trino is used (not the console, which is always built and would hide the defect).
+  const p = planBuild({ changedFiles: ['apps/loom-trino-extra/x.ts', 'apps/loom-unity/a'], matrix: MATRIX });
+  assert.deepEqual([...p.build].sort(), ['loom-console', 'loom-unity'], `prefix match without a trailing slash would add loom-trino; got ${p.build}`);
+  assert.ok(p.ignored.includes('apps/loom-trino-extra/x.ts'), 'the unowned path must be listed as ignored');
 });
 
 test('every shared build input forces ALL (input: each SHARED_PREFIXES entry plus one file)', () => {
@@ -76,17 +93,18 @@ test('root build config forces ALL, a root README does not (inputs: package.json
     assert.equal(planBuild({ changedFiles: [f], matrix: MATRIX }).mode, 'all', `${f} is root build config`);
   }
   const p = planBuild({ changedFiles: ['README.md', 'apps/loom-trino/a'], matrix: MATRIX });
-  assert.deepEqual(p.build, ['loom-trino'], `README.md must not widen the build, got ${p.build}`);
+  assert.deepEqual([...p.build].sort(), ['loom-console', 'loom-trino'], `README.md must not widen the build, got ${p.build}`);
   // Root-config match is anchored to the repo root: a nested package.json is the app's own.
   const n = planBuild({ changedFiles: ['apps/loom-trino/package.json'], matrix: MATRIX });
-  assert.deepEqual(n.build, ['loom-trino'], 'apps/loom-trino/package.json is that app only, not root config');
+  assert.deepEqual([...n.build].sort(), ['loom-console', 'loom-trino'], 'apps/loom-trino/package.json is that app only, not root config');
 });
 
-test('only unowned paths (docs) build NOTHING and carry ALL 13 (input: docs/x.md)', () => {
+test('only unowned paths build JUST the console and carry the other 12 (input: docs + an unmatrixed app)', () => {
   const p = planBuild({ changedFiles: ['docs/x.md', 'apps/fiab-dbt-runner/main.py'], matrix: MATRIX });
   assert.equal(p.mode, 'subset');
-  assert.deepEqual(p.build, [], 'no matrix context changed');
-  assert.equal(p.carry.length, 13, 'every app must still receive the new SHA tag');
+  assert.deepEqual(p.build, [CONSOLE], 'no matrix context changed, so only the always-built console');
+  assert.equal(p.carry.length, 12, 'every other app must still receive the new SHA tag');
+  assert.ok(p.ignored.includes('apps/fiab-dbt-runner/main.py'), 'the unowned path is reported as ignored');
 });
 
 test('FAIL CLOSED: null diff, empty diff, empty/odd inputs all build ALL with a reason', () => {
@@ -99,13 +117,16 @@ test('FAIL CLOSED: null diff, empty diff, empty/odd inputs all build ALL with a 
 });
 
 // ---- readChangedFiles: each failure branch must yield null + a reason ----------
-const okRun = (calls = []) => (cmd, args) => { calls.push([cmd, ...args]); return args[0] === 'diff' ? 'apps/loom-trino/a\n\nscripts/x\r\n' : ''; };
+const okRun = (calls = []) => (cmd, args) => { calls.push([cmd, ...args]); return args.includes('diff') ? 'apps/loom-trino/a\0scripts/x \r\0' : ''; };
 
-test('readChangedFiles: success returns the diff lines and uses base..sha (input: a good base)', () => {
+test('readChangedFiles: success splits the diff on NUL and uses base..sha (input: a good base)', () => {
   const calls = [];
   const r = readChangedFiles({ base: BASE, sha: SHA, run: okRun(calls) });
-  assert.deepEqual(r.files, ['apps/loom-trino/a', 'scripts/x'], 'blank lines dropped, CR stripped');
+  assert.deepEqual(r.files, ['apps/loom-trino/a', 'scripts/x \r'], 'NUL-separated names kept verbatim (a trailing space/CR is part of the name)');
   assert.ok(calls.some((c) => c.includes(`${BASE}..${SHA}`)), 'diff must be base..sha; a swapped range would list the reverse change');
+  const d = calls.find((c) => c.includes('diff'));
+  assert.ok(d.includes('-z'), 'without -z git C-quotes odd names and the path maps to no app');
+  assert.ok(d.includes('core.quotepath=false'), 'quotepath must be off so non-ASCII names are not octal-escaped');
 });
 
 test('readChangedFiles: every unestablished base returns files=null (inputs: blank, zeros, short, non-hex)', () => {
@@ -120,7 +141,7 @@ test('readChangedFiles: every unestablished base returns files=null (inputs: bla
 
 test('readChangedFiles: base absent from checkout, non-ancestor, and git diff failure each return null', () => {
   const failOn = (verb) => (cmd, args) => {
-    if (args[0] === verb) throw new Error(`boom ${verb}`);
+    if (args.includes(verb)) throw new Error(`boom ${verb}`);
     return '';
   };
   const missing = readChangedFiles({ base: BASE, sha: SHA, run: failOn('cat-file') });
@@ -164,8 +185,8 @@ test('CLI on a real repo: one-app commit builds one app; unknown/rewritten base 
 
     const p = plan(dir, c1, c2);
     assert.equal(p.mode, 'subset', `c1..c2 touched only apps/loom-trino: ${p.reason}`);
-    assert.deepEqual(p.build, ['loom-trino'], 'only loom-trino changed between c1 and c2');
-    assert.equal(p.carry.length, 12);
+    assert.deepEqual([...p.build].sort(), ['loom-console', 'loom-trino'], 'only loom-trino changed between c1 and c2 (+ always-built console)');
+    assert.equal(p.carry.length, 11);
 
     const absent = plan(dir, 'c'.repeat(40), c2);
     assert.equal(absent.mode, 'all', 'a base sha that is not in the repo (force push) must build ALL');
@@ -232,8 +253,38 @@ test('workflow: the guard-read default matrix literal is still the first APPS=[.
   assert.ok(first && JSON.parse(first[1]).length === 13, 'check-build-trigger-covers-matrix reads this literal; the plan must not replace it');
 });
 
-test('roll gate: a push run that did not build loom-console and carried it forward does not roll', () => {
-  assert.match(rollText, /console_build=carried-forward/, 'without this the roll marker gate (expected=head_sha) fails on a carried console and rolls back a healthy estate');
-  assert.match(rollText, /\^Carry forward unchanged images/, 'must key off the producer carry job name');
-  assert.ok(wfText.includes('name: Carry forward unchanged images'), 'the job name the roll greps for must match the producer');
+test('roll gate has NO carried-forward skip: every push run builds and rolls the console (B1)', () => {
+  // Pair: absence of the skip + presence of the unchanged success path.
+  assert.doesNotMatch(rollText, /carried-forward/, 'a skip for a carried console strands an unrolled console change when its roll replaces a pending one');
+  assert.match(rollText, /if \[ "\$CONCLUSION" = 'success' \]; then\s+echo "proceed=true"/, 'the success path must still proceed');
+});
+
+test('S1: odd file names (double quote, non-ASCII) map to the right app via a real git diff -z', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'plan-odd-'));
+  const idx = (cwd, ...a) => execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  try {
+    idx(dir, 'init', '-q', '-b', 'main');
+    idx(dir, 'config', 'user.email', 't@example.invalid');
+    idx(dir, 'config', 'user.name', 't');
+    idx(dir, 'config', 'commit.gpgsign', 'false');
+    idx(dir, 'config', 'core.protectNTFS', 'false'); // Windows git otherwise refuses a name with a quote
+    const blob = (txt) => execFileSync('git', ['hash-object', '-w', '--stdin'], { cwd: dir, input: txt, encoding: 'utf8' }).trim();
+    // Built through the index: a double quote is not a legal file name on Windows.
+    idx(dir, 'update-index', '--add', '--cacheinfo', `100644,${blob('1')},apps/loom-unity/seed`);
+    idx(dir, 'commit', '-q', '-m', 'one');
+    const c1 = idx(dir, 'rev-parse', 'HEAD');
+    const odd = 'apps/loom-trino/we"ird é.txt';
+    idx(dir, 'update-index', '--add', '--cacheinfo', `100644,${blob('2')},${odd}`);
+    idx(dir, 'commit', '-q', '-m', 'two');
+    const c2 = idx(dir, 'rev-parse', 'HEAD');
+    // Control: what the pre-fix invocation returns for this name (C-quoted, leading quote).
+    const quoted = idx(dir, 'diff', '--name-only', `${c1}..${c2}`);
+    assert.ok(quoted.startsWith('"'), `positive control: plain git diff must C-quote this name, got ${quoted}`);
+    const p = plan(dir, c1, c2);
+    assert.equal(p.mode, 'subset', `odd name must not trip fail-closed: ${p.reason}`);
+    assert.ok(p.build.includes('loom-trino'), `${odd} lives under apps/loom-trino; a quoted name starts with " and matches no context, so it would be ignored. build=${p.build}`);
+    assert.ok(!p.build.includes('loom-unity'), 'the unchanged loom-unity must not be built');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -58,6 +58,9 @@ export const SHARED_PREFIXES = [
 const ROOT_CONFIG_RE =
   /^(package(-lock)?\.json|pnpm-(lock|workspace)\.yaml|yarn\.lock|pyproject\.toml|uv\.lock|requirements[^/]*\.txt|Makefile|\.dockerignore|\.trivyignore|\.npmrc|\.nvmrc|\.tool-versions|tsconfig[^/]*\.json)$/;
 
+/** Built on every push; see planBuild. */
+export const CONSOLE = 'loom-console';
+
 const norm = (p) => p.replace(/\\/g, '/').replace(/^\.\//, '');
 const ctxDir = (ctx) => norm(ctx).replace(/\/+$/, '');
 
@@ -102,17 +105,21 @@ export function planBuild({ changedFiles, matrix, unknown }) {
     }
     ignored.push(f);
   }
+  // ALWAYS BUILD THE CONSOLE (reviewer B1 on #5070). loom-roll-and-validate
+  // rolls the console per run and a superseded PENDING roll is dropped
+  // (cancel-in-progress false: newest pending wins). The old invariant that
+  // makes that safe is "the newest run builds the console, so it carries every
+  // earlier merge". A carried console would break it: push N+1 changes the
+  // console, push N+2 changes only loom-unity, N+2's roll replaces N+1's
+  // pending roll and the console change is never rolled. This also covers the
+  // corpus the console embeds (docs/, PRPs/*, via stage-copilot-corpus.sh):
+  // those paths map to no context, and the console is built regardless.
+  hit.add(CONSOLE);
   const build = names.filter((n) => hit.has(n));
   const carry = names.filter((n) => !hit.has(n));
-  if (build.length === 0) {
-    // Only paths that no matrix context owns (docs, an app built elsewhere).
-    // Build nothing and carry everything: the invariant still holds because
-    // nothing any image is built from changed.
-    return { mode: 'subset', reason: 'no changed path belongs to a matrix build context - carrying ALL', build, carry, ignored };
-  }
   return {
     mode: 'subset',
-    reason: `changed contexts -> build ${build.join(',')}; carry ${carry.length} unchanged`,
+    reason: `changed contexts + ${CONSOLE} (always built) -> build ${build.join(',')}; carry ${carry.length} unchanged`,
     build,
     carry,
     ignored,
@@ -146,8 +153,11 @@ export function readChangedFiles({ base, sha, run = execFileSync }) {
     return { files: null, unknown: `base ${base} is not an ancestor of ${sha} (history rewritten)` };
   }
   try {
-    const out = git(['diff', '--name-only', '--no-renames', `${base}..${sha}`], run);
-    return { files: out.split(/\r?\n/).filter(Boolean) };
+    // -z + quotepath=false: without them git C-quotes names with a double quote
+    // or non-ASCII bytes (`"apps/x/we\"ird \303\251"`), the leading quote makes
+    // the path match no context, and a real app change is silently ignored.
+    const out = git(['-c', 'core.quotepath=false', 'diff', '-z', '--name-only', '--no-renames', `${base}..${sha}`], run);
+    return { files: out.split('\0').filter(Boolean) };
   } catch (e) {
     return { files: null, unknown: `git diff failed: ${String(e.message).split('\n')[0]}` };
   }
