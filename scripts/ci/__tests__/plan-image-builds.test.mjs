@@ -241,8 +241,8 @@ test('workflow: the plan is gated to a DIRECT push with apps=all (inputs: dispat
 test('workflow: carry_forward exists, re-tags and VERIFIES, and is awaited by acr_restore and gated on carry list', () => {
   const body = jobBody(wfText, 'carry_forward');
   assert.ok(body, 'job carry_forward must exist: unchanged apps would have no <app>:<sha> tag and the rolls would reference a missing tag');
-  assert.match(body, /imagetools create --tag/, 'the re-tag must copy the manifest');
-  assert.match(body, /"\$DST" != "\$SRC"/, 'the new tag digest must be compared to the source digest (no unverified tag)');
+  assert.match(body, /scripts\/ci\/carry-forward-retag\.sh/, 'the re-tag + digest verification live in the tested script; inline logic would be untested (see carry-forward-retag.test.mjs)');
+  assert.doesNotMatch(body, /imagetools create/, 'imagetools create rewrites the manifest (new digest, run 39820244128)');
   assert.match(body, /carry_apps != '\[\]'/, 'carry job must be skipped when nothing is carried (dispatch)');
   assert.match(jobBody(wfText, 'acr_restore'), /needs: \[resolve, build, acr_enable, carry_forward\]/, 'registry must not be re-locked under a running carry');
   assert.match(jobBody(wfText, 'build'), /build_count != '0'/, 'an all-carry push has an empty matrix; build must be skipped, not fail on it');

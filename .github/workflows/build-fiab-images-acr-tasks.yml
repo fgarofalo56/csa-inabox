@@ -1090,27 +1090,11 @@ jobs:
         run: |
           set -uo pipefail
           bash scripts/ci/acr-login-retry.sh --acr "$ACR" || exit 1
-          FAILED=0
-          for APP in $(jq -r '.[]' <<< "$CARRY"); do
-            SRC=$(bash scripts/ci/resolve-acr-digest.sh --acr "$ACR" --image "$APP:$SRC_TAG")
-            RC=$?
-            if [ "$RC" != "0" ] || [ -z "$SRC" ]; then
-              echo "::error::$APP: could not read $APP:$SRC_TAG (resolver exit $RC; 3 = registry answered and the tag is absent, 4 = could not be read). Nothing was re-tagged for $APP. Dispatch this workflow with apps=$APP to build it."
-              FAILED=1; continue
-            fi
-            if ! docker buildx imagetools create --tag "$LOGIN/$APP:${{ github.sha }}" "$LOGIN/$APP:$SRC_TAG"; then
-              echo "::error::$APP: imagetools create failed re-tagging $APP:$SRC_TAG to $APP:${{ github.sha }} (output above). Dispatch with apps=$APP to build it."
-              FAILED=1; continue
-            fi
-            DST=$(bash scripts/ci/resolve-acr-digest.sh --acr "$ACR" --image "$APP:${{ github.sha }}")
-            RC=$?
-            if [ "$RC" != "0" ] || [ "$DST" != "$SRC" ]; then
-              echo "::error::$APP: after the re-tag, $APP:${{ github.sha }} reads '${DST}' (resolver exit $RC) but $APP:$SRC_TAG is '$SRC'. The new tag is NOT verified; do not roll it."
-              FAILED=1; continue
-            fi
-            echo "::notice::$APP: carried forward $SRC_TAG to ${{ github.sha }} ($SRC)"
-          done
-          exit $FAILED
+          # az acr import (ARM) preserves the digest; a buildx re-tag did NOT
+          # (run 39820244128). Logic + verification: scripts/ci/carry-forward-retag.sh.
+          APPS=$(jq -r '.[]' <<< "$CARRY" | tr '\n' ' ')
+          bash scripts/ci/carry-forward-retag.sh --acr "$ACR" --login "$LOGIN" \
+            --apps "$APPS" --src-tag "$SRC_TAG" --sha "${{ github.sha }}"
 
   acr_restore:
     name: Release ACR firewall lease (re-lock if still the holder)
