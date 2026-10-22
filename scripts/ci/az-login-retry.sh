@@ -43,6 +43,12 @@ if [ -n "$CLOUD" ]; then
   fi
 fi
 
+# Belt and braces: GitHub already masks the secret, but a runner that received
+# it through a path Actions does not know is a secret would print it verbatim.
+if [ -n "${AZ_CLIENT_SECRET:-}" ]; then
+  echo "::add-mask::${AZ_CLIENT_SECRET}"
+fi
+
 LAST=""
 SECONDS=0
 for i in $(seq 1 "$ATTEMPTS"); do

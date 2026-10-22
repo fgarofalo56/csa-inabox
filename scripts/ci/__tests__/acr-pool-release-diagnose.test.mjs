@@ -20,7 +20,6 @@ import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { release } from '../acr-build-pool.mjs';
-
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const WF = process.env.ACR_POOL_TEST_WF ?? join(ROOT, '.github', 'workflows', 'build-fiab-images-acr-tasks.yml');
 const text = readFileSync(WF, 'utf8').replace(/\r\n/g, '\n');
@@ -177,7 +176,9 @@ test('workflow: Diagnose prints the log tail and runErrorMessage inside a ::grou
   assert.match(diag, /redact_file "\$LOG_ERR"/, 'a failed fetch must SHOW its stderr (redacted)');
   assert.match(diag, /could not read the task log/, 'R7: a failed read says "could not read", never "no log"');
 });
-test('workflow: Diagnose never fails the job for a diagnostics problem and does not mask the failure', () => {
+// DOCUMENTATION ONLY: a static grep cannot witness the bash -e abort (#5084 B1);
+// the EXECUTED Diagnose tests at the end of this file do.
+test('workflow: [documentation] Diagnose poll block has no non-zero exit and ends cleanly', () => {
   const a = diag.indexOf('if [ -n "${ACR_RUN_ID:-}" ]');
   const b = diag.indexOf('RUN_IDS=""');
   assert.ok(a >= 0 && b > a, 'poll-mode block must come before the legacy fallbacks');

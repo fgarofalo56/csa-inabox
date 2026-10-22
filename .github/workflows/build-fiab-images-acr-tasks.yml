@@ -633,6 +633,12 @@ jobs:
           ART: ${{ github.workspace }}/deploy-failure.json
         run: |
           set -uo pipefail
+          # This step has no `shell:` key, so Actions runs it as `bash -e`, and
+          # `set -uo pipefail` does NOT clear -e. Every az call below is followed
+          # by an RC=$? read; under -e the first failed az aborted the step before
+          # the could-not-read branches ran (#5084 review B1). A diagnostics
+          # step must report a failed fetch, never die of it.
+          set +e
 
           # Same unbound-variable guard as the ported step: this is `if:
           # failure()`, so it also runs when an earlier step in this job (ACR
@@ -650,7 +656,7 @@ jobs:
           #    diagnostic: every failure below is REPORTED, none changes this
           #    step's exit code, and nothing here masks the failure above.
           redact_file() {
-            node -e "const fs=require('fs');import('./scripts/ci/_azure-redact.mjs').then(m=>process.stdout.write(m.redact(fs.readFileSync(process.argv[1],'utf8')))).catch(e=>{console.error(String(e&&e.message||e));process.exit(9);});" "$1"
+            node -e "const fs=require('fs');import('./scripts/ci/_azure-redact.mjs').then(m=>process.stdout.write(m.redact(m.redactSecrets(fs.readFileSync(process.argv[1],'utf8'))))).catch(e=>{console.error(String(e&&e.message||e));process.exit(9);});" "$1"
           }
           if [ -n "${ACR_RUN_ID:-}" ]; then
             echo "::group::ACR run ${ACR_RUN_ID} diagnostics (${{ matrix.name }}, redacted)"
@@ -749,7 +755,7 @@ jobs:
               continue
             fi
             echo "───── ACR task log: run $ID, image ${{ matrix.name }} (redacted) ─────"
-            node -e "const fs=require('fs');import('./scripts/ci/_azure-redact.mjs').then(m=>process.stdout.write(m.redact(fs.readFileSync(process.argv[1],'utf8')))).catch(e=>{console.error(String(e&&e.message||e));process.exit(9);});" "$LOG"
+            node -e "const fs=require('fs');import('./scripts/ci/_azure-redact.mjs').then(m=>process.stdout.write(m.redact(m.redactSecrets(fs.readFileSync(process.argv[1],'utf8'))))).catch(e=>{console.error(String(e&&e.message||e));process.exit(9);});" "$LOG"
             RC=$?
             if [ "$RC" != "0" ]; then
               echo "::error::The ACR task log for run $ID was fetched but the redactor could not be loaded (exit $RC), so it is deliberately NOT printed — this repository is public and an unredacted Azure log is a publication surface. It is on this runner at $LOG; re-read it with: az acr task logs -r $ACR --run-id $ID"
@@ -1220,6 +1226,10 @@ jobs:
           # acr-build-pool.mjs updates --count until the read-back is >= want),
           # so a stale count left by a failed release is never assumed to be 0.
           node scripts/ci/acr-build-pool.mjs release --acr "$ACR" --pool "$BUILD_POOL_NAME" || {
-            echo "::error::POOL STILL BILLING: ${ACR}/${BUILD_POOL_NAME} was not confirmed at 0. Scale it down by hand: az acr agentpool update -r ${ACR} -n ${BUILD_POOL_NAME} --count 0 (acr-agentpool-reaper.yml is the backstop for an idle pool)."
+            # The specific cause (scale-down not confirmed, state unreadable, ...)
+            # is the ::error:: line acr-build-pool.mjs printed just above; it is
+            # not restated here because a generic "still billing" would be
+            # untrue when the cause was an unreadable pool state (R7).
+            echo "::error::Pool release for ${ACR}/${BUILD_POOL_NAME} did not complete; the cause is the message printed above by acr-build-pool.mjs. If the pool is above 0 the manual fix is: az acr agentpool update -r ${ACR} -n ${BUILD_POOL_NAME} --count 0 (acr-agentpool-reaper.yml is the backstop for an idle pool)."
             exit 1
           }
