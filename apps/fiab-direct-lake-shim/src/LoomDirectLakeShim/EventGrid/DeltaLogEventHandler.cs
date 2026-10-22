@@ -21,10 +21,10 @@ namespace CsaLoom.DirectLakeShim.EventGrid;
 /// </summary>
 public class DeltaLogEventHandler : BackgroundService
 {
-    private readonly ServiceBusClient _sb;
+    private readonly ServiceBusClient? _sb;
+    private readonly ShimSettings _settings;
     private readonly TomRefreshClient _tom;
     private readonly SemanticModelConfigStore _configStore;
-    private readonly IConfiguration _config;
     private readonly ILogger<DeltaLogEventHandler> _log;
 
     private static readonly Regex DeltaLogPath =
@@ -32,16 +32,16 @@ public class DeltaLogEventHandler : BackgroundService
             RegexOptions.Compiled);
 
     public DeltaLogEventHandler(
-        ServiceBusClient sb,
+        ShimSettings settings,
         TomRefreshClient tom,
         SemanticModelConfigStore configStore,
-        IConfiguration config,
-        ILogger<DeltaLogEventHandler> log)
+        ILogger<DeltaLogEventHandler> log,
+        ServiceBusClient? sb = null)
     {
+        _settings = settings;
         _sb = sb;
         _tom = tom;
         _configStore = configStore;
-        _config = config;
         _log = log;
     }
 
@@ -50,30 +50,22 @@ public class DeltaLogEventHandler : BackgroundService
         // Master switch (LOOM_DIRECT_LAKE_SHIM_ENABLED, set by admin-plane/main.bicep
         // from loomDirectLakeShimEnabled). When not "1"/"true" the shim idles even
         // if a queue is configured, letting operators pause refresh without redeploy.
-        var enabled = _config["LOOM_DIRECT_LAKE_SHIM_ENABLED"];
-        if (!string.Equals(enabled, "1", StringComparison.Ordinal) &&
-            !string.Equals(enabled, "true", StringComparison.OrdinalIgnoreCase))
+        // ShimSettings.Resolve already failed startup if enabled but misconfigured.
+        var sb = _sb;
+        if (!_settings.Enabled || sb is null || _settings.QueueName is null)
         {
-            _log.LogWarning("DeltaLogEventHandler idling - LOOM_DIRECT_LAKE_SHIM_ENABLED not set to '1'/'true'");;
-            while (!stoppingToken.IsCancellationRequested)
+            _log.LogInformation("Direct Lake shim is disabled (LOOM_DIRECT_LAKE_SHIM_ENABLED is not 1/true); idling.");
+            try
             {
-                await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
+                await Task.Delay(Timeout.Infinite, stoppingToken);
             }
+            catch (OperationCanceledException) { }
             return;
         }
 
-        var queueName = _config["EVENTGRID_QUEUE"];
-        if (string.IsNullOrEmpty(queueName))
-        {
-            _log.LogWarning("DeltaLogEventHandler idling - EVENTGRID_QUEUE not set");
-            while (!stoppingToken.IsCancellationRequested)
-            {
-                await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
-            }
-            return;
-        }
+        var queueName = _settings.QueueName;
 
-        await using var processor = _sb.CreateProcessor(queueName, new ServiceBusProcessorOptions
+        await using var processor = sb.CreateProcessor(queueName, new ServiceBusProcessorOptions
         {
             AutoCompleteMessages = false,
             MaxConcurrentCalls = 8,
