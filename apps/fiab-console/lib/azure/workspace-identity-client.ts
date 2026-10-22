@@ -21,7 +21,7 @@
 
 import { createHash } from 'node:crypto';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
 
 const ARM_SCOPE = armScope();
@@ -112,7 +112,7 @@ function uamiUrl(workspaceId: string): string {
 async function callArm(url: string, init?: RequestInit): Promise<Response> {
   const t = await uamiArmCredential().getToken(ARM_SCOPE);
   if (!t?.token) throw new WorkspaceIdentityError(401, undefined, 'Failed to acquire ARM token');
-  return fetchWithTimeout(url, {
+  return armCountedFetch(url, {
     ...init,
     headers: { ...(init?.headers || {}), authorization: `Bearer ${t.token}`, 'content-type': 'application/json' },
   });

@@ -34,7 +34,7 @@ import { kqlEscapeSingle } from '@/lib/azure/kql-escape';
 import type { TokenCredential } from '@azure/identity';
 import { loomServerCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope } from './cloud-endpoints';
-import { fetchWithTimeout } from './fetch-with-timeout';
+import { armCountedFetch } from './arm-counted-fetch';
 
 const RESOURCE_GRAPH_API = '2022-10-01';
 
@@ -97,7 +97,7 @@ export async function discoverResourceCoordsByName(
   try {
     const token = await credential.getToken(armScope());
     if (!token?.token) return null;
-    const res = await fetchWithTimeout(
+    const res = await armCountedFetch(
       `${base}/providers/Microsoft.ResourceGraph/resources?api-version=${RESOURCE_GRAPH_API}`,
       {
         method: 'POST',
@@ -181,7 +181,7 @@ export async function discoverFirstResourceOfType(opts: {
   try {
     const token = await credential.getToken(armScope());
     if (!token?.token) return null;
-    const res = await fetchWithTimeout(
+    const res = await armCountedFetch(
       `${base}/providers/Microsoft.ResourceGraph/resources?api-version=${RESOURCE_GRAPH_API}`,
       {
         method: 'POST',

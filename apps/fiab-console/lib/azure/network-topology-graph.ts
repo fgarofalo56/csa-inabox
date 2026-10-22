@@ -34,7 +34,7 @@
  * Learn: https://learn.microsoft.com/azure/governance/resource-graph/overview
  *        https://learn.microsoft.com/azure/network-watcher/network-insights-topology
  */
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -190,7 +190,7 @@ async function queryNetworkEstate(subscriptions: string[]): Promise<ArgRow[]> {
       ? { resultFormat: 'objectArray', $top: 1000, $skipToken: skipToken }
       : { resultFormat: 'objectArray', $top: 1000 };
     const token = await argToken();
-    const r = await fetchWithTimeout(`${ARG_URL}?api-version=${ARG_API}`, {
+    const r = await armCountedFetch(`${ARG_URL}?api-version=${ARG_API}`, {
       method: 'POST',
       headers: {
         authorization: `Bearer ${token}`,

@@ -60,7 +60,8 @@ import {
   CONNECTABLE_ARM_TYPES, armTypeToConnType, normalizeHost, CONN_TYPE_AUTH_OPTIONS,
   type ConnectableResource,
 } from '@/lib/azure/connectable-types';
-import { fetchWithTimeout, FetchTimeoutError } from '@/lib/azure/fetch-with-timeout';
+import { FetchTimeoutError } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   PagingBudget, PAGE_DEADLINE, isContinuationAllowed, type PageDeadline, type PagingTruncation,
 } from '@/lib/azure/paging-budget';
@@ -221,7 +222,7 @@ async function runArg(
     if (skipToken) options.$skipToken = skipToken;
     let page: Response | PageDeadline;
     try {
-      page = await budget.runPage((timeoutMs) => fetchWithTimeout(ARG_URL, {
+      page = await budget.runPage((timeoutMs) => armCountedFetch(ARG_URL, {
         method: 'POST',
         headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify({ query, options }),
@@ -274,7 +275,7 @@ async function armGet(
     // SECURITY (GHSA-4gvx-9p49-p43g): both walks below feed this a `nextLink`
     // read out of a RESPONSE BODY while an ARM bearer token rides on the
     // request. Pin it to `armBase()` and fail closed rather than fetching.
-    res = await fetchWithTimeout(resolveSameOriginUrl(url, armBase(), 'the ARM token'), {
+    res = await armCountedFetch(resolveSameOriginUrl(url, armBase(), 'the ARM token'), {
       method: 'GET',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     }, timeoutMs);

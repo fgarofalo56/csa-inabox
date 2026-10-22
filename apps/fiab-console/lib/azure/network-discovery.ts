@@ -24,7 +24,7 @@
  * Learn: https://learn.microsoft.com/rest/api/virtualnetwork/private-endpoints/list-by-subscription
  *        https://learn.microsoft.com/azure/dns/private-dns-overview
  */
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -119,7 +119,7 @@ async function armToken(): Promise<string> {
 
 async function armGet<T = any>(path: string, timeoutMs?: number): Promise<T> {
   const token = await armToken();
-  const res = await fetchWithTimeout(`${armBase()}${path}`, {
+  const res = await armCountedFetch(`${armBase()}${path}`, {
     headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
     cache: 'no-store',
   }, timeoutMs); // undefined => the shared DEFAULT_SERVER_FETCH_TIMEOUT_MS
@@ -310,7 +310,7 @@ async function argPagedQuery<T>(
     const options: Record<string, unknown> = { resultFormat: 'objectArray', $top: 1000, ...baseOptions };
     if (skipToken) options.$skipToken = skipToken;
     const token = await armToken();
-    const page = await budget.runPage((timeoutMs) => fetchWithTimeout(
+    const page = await budget.runPage((timeoutMs) => armCountedFetch(
       `${armBase()}/providers/Microsoft.ResourceGraph/resources?api-version=${RESOURCE_GRAPH_API}`,
       {
         method: 'POST',
@@ -1162,7 +1162,7 @@ export async function findVpnGateway(): Promise<VpnGatewayInfo> {
 export async function generateVpnProfile(gatewayId: string): Promise<string> {
   const token = await armToken();
   const url = `${armBase()}${stripArmBase(gatewayId)}/generatevpnprofile?api-version=${VPN_API}`;
-  let res = await fetchWithTimeout(url, {
+  let res = await armCountedFetch(url, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     body: JSON.stringify({ authenticationMethod: 'EAPTLS' }),
@@ -1175,7 +1175,7 @@ export async function generateVpnProfile(gatewayId: string): Promise<string> {
     const loc = res.headers.get('location') || res.headers.get('azure-asyncoperation');
     if (!loc) break;
     await new Promise((r) => setTimeout(r, 4000));
-    res = await fetchWithTimeout(loc, { headers: { authorization: `Bearer ${token}` }, cache: 'no-store' });
+    res = await armCountedFetch(loc, { headers: { authorization: `Bearer ${token}` }, cache: 'no-store' });
   }
   const text = await res.text();
   if (!res.ok) {
@@ -1186,4 +1186,3 @@ export async function generateVpnProfile(gatewayId: string): Promise<string> {
   try { out = JSON.parse(text); } catch { out = text; }
   return String(out).replace(/^"|"$/g, '');
 }
-

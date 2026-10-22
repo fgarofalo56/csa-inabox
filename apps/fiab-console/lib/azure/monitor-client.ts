@@ -24,7 +24,7 @@
  * still renders.
  */
 
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import { armBase, getLogAnalyticsHost, logAnalyticsTokenScope } from './cloud-endpoints';
 import { PagingBudget, PAGE_DEADLINE, walkPagedListResult, isContinuationAllowed, type PagingTruncation } from './paging-budget';
 import { ACTION_GROUP_RECEIVER_KINDS, emptyReceiverMap, type ActionGroupReceiverKind, type ActionGroupReceiverRead } from './action-group-receivers';
@@ -528,7 +528,7 @@ export async function queryLogs(kql: string, timespan = 'P1D'): Promise<LogQuery
   if (!kql?.trim()) throw new MonitorError('query required', 400);
   const tk = await token(LA_SCOPE);
   const url = `${LA_ENDPOINT}/v1/workspaces/${workspaceId}/query`;
-  const res = await fetchWithTimeout(url, {
+  const res = await armCountedFetch(url, {
     method: 'POST',
     headers: {
       authorization: `Bearer ${tk}`,

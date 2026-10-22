@@ -15,7 +15,7 @@
  * No mocks. Real ARM REST only.
  */
 
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -79,7 +79,7 @@ function serviceUrl(cfg: SearchServiceConfig): string {
 async function callArm(url: string, init?: RequestInit): Promise<Response> {
   const t = await credential.getToken(ARM_SCOPE);
   if (!t?.token) throw new SearchArmError(401, undefined, 'Failed to acquire ARM token');
-  return fetchWithTimeout(url, {
+  return armCountedFetch(url, {
     ...init,
     headers: {
       ...(init?.headers || {}),

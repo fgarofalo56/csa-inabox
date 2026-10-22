@@ -1906,6 +1906,7 @@ nav:
               - Activator Rules Not Firing: fiab/runbooks/activator-rules-not-firing.md
               - Mirroring CDC Lag: fiab/runbooks/mirroring-cdc-lag.md
               - Loom Copilot Throttling: fiab/runbooks/loom-copilot-throttling.md
+              - ARM Read Quota: fiab/runbooks/arm-read-quota.md
               - Capacity Overrun: fiab/runbooks/capacity-overrun.md
               - DLZ Onboard New Domain: fiab/runbooks/dlz-onboard-new-domain.md
               - Forward Migrate to Fabric: fiab/runbooks/forward-migrate-to-fabric.md

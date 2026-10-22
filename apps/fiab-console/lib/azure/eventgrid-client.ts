@@ -22,7 +22,7 @@
  *   https://learn.microsoft.com/rest/api/eventgrid/controlplane/system-topics
  */
 
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope } from './cloud-endpoints';
@@ -60,7 +60,7 @@ async function armToken(): Promise<string> {
 
 async function arm<T = any>(url: string, init: RequestInit = {}): Promise<T> {
   const token = await armToken();
-  const res = await fetchWithTimeout(url, {
+  const res = await armCountedFetch(url, {
     ...init,
     headers: {
       ...(init.headers || {}),

@@ -23,7 +23,7 @@
  *   https://learn.microsoft.com/azure/batch/batch-aad-auth
  */
 
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -98,7 +98,7 @@ function accountUrl(cfg: BatchConfig): string {
 async function callArm(url: string, init?: RequestInit): Promise<Response> {
   const t = await credential.getToken(ARM_SCOPE);
   if (!t?.token) throw new BatchError(401, undefined, 'Failed to acquire ARM token');
-  return fetchWithTimeout(url, {
+  return armCountedFetch(url, {
     ...init,
     headers: {
       ...(init?.headers || {}),
@@ -111,7 +111,7 @@ async function callArm(url: string, init?: RequestInit): Promise<Response> {
 async function callData(url: string, init?: RequestInit): Promise<Response> {
   const t = await credential.getToken(batchScope());
   if (!t?.token) throw new BatchError(401, undefined, 'Failed to acquire Batch data-plane token');
-  return fetchWithTimeout(url, {
+  return armCountedFetch(url, {
     ...init,
     headers: {
       ...(init?.headers || {}),

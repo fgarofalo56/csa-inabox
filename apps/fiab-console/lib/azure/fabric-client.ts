@@ -31,7 +31,7 @@
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope } from './cloud-endpoints';
-import { fetchWithTimeout } from './fetch-with-timeout';
+import { armCountedFetch } from './arm-counted-fetch';
 import { assertSameOrigin, isAbsoluteHttpUrl } from '@/lib/util/same-origin-url';
 
 const FABRIC_BASE = process.env.LOOM_FABRIC_BASE || 'https://api.fabric.microsoft.com/v1';
@@ -113,7 +113,7 @@ async function call<T = any>(path: string, opts: CallOpts = {}): Promise<T> {
     const s = qs.toString();
     if (s) url += (url.includes('?') ? '&' : '?') + s;
   }
-  const res = await fetchWithTimeout(url, {
+  const res = await armCountedFetch(url, {
     method,
     headers: {
       'authorization': `Bearer ${token}`,
@@ -260,7 +260,7 @@ export async function updateCapacitySku(
   const tier = isPowerBI ? 'PBIE_Azure' : 'Fabric';
   const url = `${armBase()}${resourceId}?api-version=${apiVersion}`;
   const token = await getArmToken();
-  const res = await fetchWithTimeout(url, {
+  const res = await armCountedFetch(url, {
     method: 'PATCH',
     headers: {
       authorization: `Bearer ${token}`,
@@ -423,7 +423,7 @@ function operationUrl(locationOrId: string): string {
 export async function getOperationState(locationOrId: string): Promise<FabricOperationState> {
   const url = operationUrl(locationOrId);
   const token = await getToken();
-  const res = await fetchWithTimeout(url, {
+  const res = await armCountedFetch(url, {
     method: 'GET',
     headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
     cache: 'no-store',
@@ -447,7 +447,7 @@ export async function getOperationState(locationOrId: string): Promise<FabricOpe
   if (state.status === 'Succeeded') {
     // Fetch the result payload (best-effort — some operations have no result body).
     try {
-      const rRes = await fetchWithTimeout(`${url.replace(/\/result$/, '')}/result`, {
+      const rRes = await armCountedFetch(`${url.replace(/\/result$/, '')}/result`, {
         method: 'GET',
         headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
         cache: 'no-store',

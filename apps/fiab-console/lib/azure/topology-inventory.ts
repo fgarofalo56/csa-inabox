@@ -17,7 +17,7 @@
  * to enumerate its resources; without it ARG returns an empty set and the route
  * surfaces an honest gate naming the exact `az role assignment create` grant.
  */
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -104,7 +104,7 @@ export async function domainResourceInventory(
     if (subscriptionIds.length) payload.subscriptions = subscriptionIds;
 
     const tk = await token();
-    const res = await fetchWithTimeout(
+    const res = await armCountedFetch(
       `${ARM}/providers/Microsoft.ResourceGraph/resources?api-version=${RESOURCE_GRAPH_API}`,
       {
         method: 'POST',

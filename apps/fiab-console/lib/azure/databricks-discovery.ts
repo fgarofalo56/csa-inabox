@@ -30,7 +30,7 @@
  *   - Subscriptions - List:
  *     https://learn.microsoft.com/rest/api/resources/subscriptions/list
  */
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -92,7 +92,7 @@ async function armToken(): Promise<string> {
 async function armGet<T = any>(path: string, timeoutMs?: number): Promise<T> {
   const token = await armToken();
   const url = `${armBase()}${path}`;
-  const res = await fetchWithTimeout(url, {
+  const res = await armCountedFetch(url, {
     headers: {
       authorization: `Bearer ${token}`,
       accept: 'application/json',

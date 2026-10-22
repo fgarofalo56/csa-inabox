@@ -24,7 +24,7 @@ import { apiNotFound, apiError } from '@/lib/api/respond';
 import { getGate, type GateOptionsLoader } from '@/lib/gates/registry';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import { PagingBudget, PAGE_DEADLINE, defaultPagingBudgetMs, isContinuationAllowed } from '@/lib/azure/paging-budget';
 import { resolveSameOriginUrl } from '@/lib/util/same-origin-url';
 
@@ -56,7 +56,7 @@ function subs(): string[] {
  */
 async function armGet(token: string, url: string, timeoutMs?: number): Promise<any> {
   const target = resolveSameOriginUrl(url, armBase(), 'the ARM token');
-  const r = await fetchWithTimeout(target, { headers: { Authorization: `Bearer ${token}` } }, timeoutMs);
+  const r = await armCountedFetch(target, { headers: { Authorization: `Bearer ${token}` } }, timeoutMs);
   if (!r.ok) throw new Error(`ARM ${r.status}: ${(await r.text()).slice(0, 300)}`);
   return r.json();
 }

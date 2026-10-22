@@ -17,7 +17,7 @@
  * No mocks. Real ARM REST only (sovereign-cloud aware via cloud-endpoints).
  */
 
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -124,7 +124,7 @@ function locationBase(cfg: AsaConfig, location: string): string {
 async function call(url: string, init?: RequestInit): Promise<Response> {
   const tok = await credential.getToken(ARM_SCOPE);
   if (!tok?.token) throw new Error('Failed to acquire ARM token');
-  return fetchWithTimeout(url, {
+  return armCountedFetch(url, {
     ...init,
     headers: {
       ...(init?.headers || {}),
@@ -885,7 +885,7 @@ export async function testTransformation(
   let outputRows: any[] = [];
   if (outputUri) {
     try {
-      const blob = await fetchWithTimeout(outputUri);
+      const blob = await armCountedFetch(outputUri);
       if (blob.ok) {
         const text = await blob.text();
         outputRows = parseAsaOutput(text);

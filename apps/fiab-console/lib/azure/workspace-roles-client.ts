@@ -29,7 +29,7 @@
  * No mocks. No stubs. All non-Cosmos calls hit ARM / Graph / (opt-in) Fabric.
  */
 
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -140,7 +140,7 @@ interface ArmResponse<T = any> {
 
 async function armFetch<T = any>(url: string, init: RequestInit = {}): Promise<ArmResponse<T>> {
   const token = await armToken();
-  const res = await fetchWithTimeout(url, {
+  const res = await armCountedFetch(url, {
     ...init,
     headers: {
       ...(init.headers || {}),
@@ -240,7 +240,7 @@ async function fabricAddRole(
 ): Promise<SideEffectResult> {
   try {
     const token = await fabricToken();
-    const res = await fetchWithTimeout(`${fabricBase()}/workspaces/${fabricWorkspace}/roleAssignments`, {
+    const res = await armCountedFetch(`${fabricBase()}/workspaces/${fabricWorkspace}/roleAssignments`, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json' },
       cache: 'no-store',
@@ -263,7 +263,7 @@ async function fabricAddRole(
 async function fabricRemoveRole(fabricWorkspace: string, principalId: string): Promise<SideEffectResult> {
   try {
     const token = await fabricToken();
-    const res = await fetchWithTimeout(`${fabricBase()}/workspaces/${fabricWorkspace}/roleAssignments/${principalId}`, {
+    const res = await armCountedFetch(`${fabricBase()}/workspaces/${fabricWorkspace}/roleAssignments/${principalId}`, {
       method: 'DELETE',
       headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
       cache: 'no-store',
@@ -631,7 +631,7 @@ async function graphUserInGroup(token: string, groupId: string, userId: string):
   // Microsoft Graph: members/{id} existence check across the transitive closure.
   const url = `${graphBase()}/groups/${groupId}/transitiveMembers/${userId}?$select=id`;
   try {
-    const res = await fetchWithTimeout(url, {
+    const res = await armCountedFetch(url, {
       headers: { authorization: `Bearer ${token}`, accept: 'application/json', ConsistencyLevel: 'eventual' },
       cache: 'no-store',
     });
@@ -697,7 +697,7 @@ async function graphUserInGroup(token: string, groupId: string, userId: string):
     // request. It is already refused below before being assigned; this is the
     // check at the point the credential is attached, so a future edit to the
     // loop cannot quietly remove the only guard.
-    const res = await budget.runPage((timeoutMs) => fetchWithTimeout(resolveSameOriginUrl(next, graphBase(), 'the Microsoft Graph token'), {
+    const res = await budget.runPage((timeoutMs) => armCountedFetch(resolveSameOriginUrl(next, graphBase(), 'the Microsoft Graph token'), {
       headers: { authorization: `Bearer ${token}`, accept: 'application/json', ConsistencyLevel: 'eventual' },
       cache: 'no-store',
     }, timeoutMs));

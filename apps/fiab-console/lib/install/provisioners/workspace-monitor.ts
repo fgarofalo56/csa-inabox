@@ -44,7 +44,7 @@
  *   - Kusto database principal roles (Viewer = read-only):
  *     https://learn.microsoft.com/azure/data-explorer/kusto/access-control/role-based-access-control
  */
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -292,7 +292,7 @@ async function armPut(path: string, body: unknown): Promise<{ ok: boolean; statu
   // SECURITY (GHSA-4gvx-9p49-p43g): the absolute branch accepted ANY host while
   // an ARM bearer token rides on the request. Pin it to `armBase()` and fail
   // closed instead of fetching.
-  const res = await fetchWithTimeout(resolveSameOriginUrl(path, ARM, 'the ARM token'), {
+  const res = await armCountedFetch(resolveSameOriginUrl(path, ARM, 'the ARM token'), {
     method: 'PUT',
     headers: { authorization: `Bearer ${t?.token}`, 'content-type': 'application/json', accept: 'application/json' },
     body: JSON.stringify(body),

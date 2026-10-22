@@ -14,7 +14,7 @@
 import { trimSlashes } from '@/lib/util/trim';
 import { logSafe } from '@/lib/util/log-safe';
 import { randomUuid } from '@/lib/util/random-id';
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import { type TokenCredential } from '@azure/identity';
 import { workspaceScopedCredential } from '@/lib/azure/workspace-credential-factory';
 import {
@@ -1146,7 +1146,7 @@ function containerScope(coords: { sub: string; rg: string }, account: string, co
 
 async function armCall<T = any>(url: string, init: RequestInit = {}): Promise<T> {
   const token = await armToken();
-  const res = await fetchWithTimeout(url, {
+  const res = await armCountedFetch(url, {
     ...init,
     headers: {
       ...(init.headers || {}),

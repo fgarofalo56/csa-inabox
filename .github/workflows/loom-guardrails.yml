@@ -267,6 +267,9 @@ jobs:
       - name: cloud-endpoint-literals (bare Commercial host literals ratchet — X1)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-cloud-endpoint-literals.mjs
+      - name: arm-counted-fetch (ARM GETs must be counted in [arm-reads])
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-arm-counted-fetch.mjs
       - name: bicep-sync (orphan modules + env-sync core)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-bicep-sync.mjs

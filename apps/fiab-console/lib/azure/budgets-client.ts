@@ -14,7 +14,7 @@
  * CRUD round-trip is the C4 G1 receipt).
  */
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import { armBase, armScope } from './cloud-endpoints';
 
 export const BUDGETS_API = '2023-05-01';
@@ -134,7 +134,7 @@ export class BudgetWriteError extends Error {
 export async function upsertBudget(input: BudgetInput, deps: BudgetDeps = {}): Promise<any> {
   const err = validateBudgetInput(input);
   if (err) throw new BudgetWriteError(err, 400);
-  const fetchImpl = deps.fetchImpl ?? ((u: any, i?: any) => fetchWithTimeout(u, i));
+  const fetchImpl = deps.fetchImpl ?? ((u: any, i?: any) => armCountedFetch(u, i));
   const getToken = deps.getToken ?? defaultGetToken;
   const token = await getToken(armScope());
   const url = `${armBase()}${budgetScope(input.subscription, input.resourceGroup)}/providers/Microsoft.Consumption/budgets/${encodeURIComponent(input.name)}?api-version=${BUDGETS_API}`;
@@ -159,7 +159,7 @@ export async function deleteBudget(
 ): Promise<void> {
   if (!SUB_RE.test(subscription)) throw new BudgetWriteError('a valid subscription id is required', 400);
   if (!NAME_RE.test(name)) throw new BudgetWriteError('invalid budget name', 400);
-  const fetchImpl = deps.fetchImpl ?? ((u: any, i?: any) => fetchWithTimeout(u, i));
+  const fetchImpl = deps.fetchImpl ?? ((u: any, i?: any) => armCountedFetch(u, i));
   const getToken = deps.getToken ?? defaultGetToken;
   const token = await getToken(armScope());
   const url = `${armBase()}${budgetScope(subscription, resourceGroup)}/providers/Microsoft.Consumption/budgets/${encodeURIComponent(name)}?api-version=${BUDGETS_API}`;

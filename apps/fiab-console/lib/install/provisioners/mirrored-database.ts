@@ -34,7 +34,7 @@ import { resolveAbfssRoot } from '@/lib/azure/adls-client';
 import { armBase, armScope, dfsUrl } from '@/lib/azure/cloud-endpoints';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { deterministicAssignmentGuid, grantScriptFor } from '@/lib/azure/role-grant-client';
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   listMirroredDatabases,
   createMirroredDatabase,
@@ -213,7 +213,7 @@ async function grantFactoryBronzeAccess(
     // The precedent this was modelled on, lib/azure/role-grant-client.ts, takes
     // `fetchImpl: typeof fetch = fetch` for injection; this copy had taken
     // neither the injection nor the ceiling.
-    const res = await fetchWithTimeout(url, {
+    const res = await armCountedFetch(url, {
       method: 'PUT',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify({
