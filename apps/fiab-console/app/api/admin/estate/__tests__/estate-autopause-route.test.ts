@@ -71,10 +71,53 @@ describe('PUT', () => {
     expect(upsert).toHaveBeenCalledWith(expect.objectContaining({ tenantId: 'tenant-1', enabled: false, idleHours: 6 }));
     expect(auditCreate).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'estate-autopause.updated',
-      before: { enabled: true, idleHours: 2, source: 'default' },
-      after: { enabled: false, idleHours: 6 },
+      before: { enabled: true, idleHours: 2, containerApps: { enabled: true, exempt: [] }, source: 'default' },
+      after: { enabled: false, idleHours: 6, containerApps: { enabled: true, exempt: [] } },
     }));
     expect(emitAuditEvent).toHaveBeenCalledWith(expect.objectContaining({ action: 'platform.estate-autopause', outcome: 'success' }));
+  });
+
+  const STORED = {
+    kind: 'estate-autopause', enabled: true, idleHours: 2, updatedAt: 'T', updatedBy: 'u',
+    containerApps: { enabled: false, exempt: ['loom-mcp'] },
+  };
+
+  it('a PUT that OMITS containerApps (the idle-hours form, the CLI) keeps the stored opt-outs -- breaks if it resets them to the default', async () => {
+    read.mockResolvedValue({ resource: STORED });
+    const { PUT } = await import('../autopause/route');
+    const res = await PUT(put({ enabled: true, idleHours: 5 }), ctx);
+    expect(res.status).toBe(200);
+    expect(upsert).toHaveBeenCalledWith(expect.objectContaining({
+      idleHours: 5, containerApps: { enabled: false, exempt: ['loom-mcp'] },
+    }));
+  });
+
+  it('a PUT carrying containerApps stores it and audits before AND after (the opt-out is never silent)', async () => {
+    read.mockResolvedValue({ resource: STORED });
+    const { PUT } = await import('../autopause/route');
+    const next = { enabled: true, exempt: ['loom-airflow'] };
+    const res = await PUT(put({ enabled: true, idleHours: 2, containerApps: next }), ctx);
+    expect(res.status).toBe(200);
+    expect(upsert).toHaveBeenCalledWith(expect.objectContaining({ containerApps: next }));
+    expect(auditCreate).toHaveBeenCalledWith(expect.objectContaining({
+      before: expect.objectContaining({ containerApps: { enabled: false, exempt: ['loom-mcp'] } }),
+      after: expect.objectContaining({ containerApps: next }),
+    }));
+  });
+
+  it('a malformed containerApps (exempt name "loom_mcp") -> 400 and NOTHING written or audited', async () => {
+    const { PUT } = await import('../autopause/route');
+    const res = await PUT(put({ enabled: true, idleHours: 2, containerApps: { enabled: true, exempt: ['loom_mcp'] } }), ctx);
+    expect(res.status).toBe(400);
+    expect(upsert).not.toHaveBeenCalled();
+    expect(auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('an UNREADABLE stored setting does not invent opt-outs: the save writes the default policy', async () => {
+    read.mockRejectedValue(new Error('cosmos down'));
+    const { PUT } = await import('../autopause/route');
+    await PUT(put({ enabled: true, idleHours: 3 }), ctx);
+    expect(upsert).toHaveBeenCalledWith(expect.objectContaining({ containerApps: { enabled: true, exempt: [] } }));
   });
 
   it.each([[0], [169], [NaN], ['4']])('idleHours %s -> 400 and NOTHING written or audited', async (idleHours) => {

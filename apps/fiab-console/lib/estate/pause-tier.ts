@@ -114,3 +114,20 @@ export function orderForResume<T extends { resourceType: string }>(entries: read
     .sort((a, b) => resumeRank(a.entry.resourceType) - resumeRank(b.entry.resourceType) || a.index - b.index)
     .map((x) => x.entry);
 }
+
+/**
+ * Pause dispatch order: the REVERSE of resume. Consumers (Container Apps, VMs)
+ * are stopped first, then data services, then the platform, so an app is never
+ * left running against a database that was paused underneath it. Resume's
+ * existing order (platform, data, consumers) is the exact mirror, so a dependent
+ * is always started AFTER what it depends on and stopped BEFORE it. Stable
+ * within a rank. No app-to-app edge among the Container Apps was found in the
+ * deploy env wiring (every cross-app URL is console -> app), so the dependency
+ * model stays type-level on purpose rather than carrying an invented per-app map.
+ */
+export function orderForPause<T extends { resourceType: string }>(entries: readonly T[]): T[] {
+  return entries
+    .map((entry, index) => ({ entry, index }))
+    .sort((a, b) => resumeRank(b.entry.resourceType) - resumeRank(a.entry.resourceType) || a.index - b.index)
+    .map((x) => x.entry);
+}

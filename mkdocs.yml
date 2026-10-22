@@ -1848,6 +1848,7 @@ nav:
               - "How to: Create OneLake shortcut": fiab/catalog/how-to-shortcut.md
           - Feature Permissions (Fabric-style RBAC): fiab/admin/feature-rbac.md
           - Scale by SKU: fiab/admin/scaling.md
+          - Idle auto-pause for Container Apps: fiab/admin/estate-idle-auto-pause.md
           - Admin console pages:
               - Health & self-audit: fiab/admin/health.md
               - Capacity & compute: fiab/admin/capacity.md

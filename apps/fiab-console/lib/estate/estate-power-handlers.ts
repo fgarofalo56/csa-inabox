@@ -54,6 +54,7 @@ import { detectLoomCloud } from '@/lib/azure/cloud-boundary';
 import { cachedStateRead, clearStateCache } from '@/lib/estate/estate-state-cache';
 import { loadActivity } from '@/lib/estate/estate-activity';
 import { loadAutoPause } from '@/lib/estate/estate-autopause';
+import { mergeForPause, resolveContainerAppsForPause } from '@/lib/estate/estate-pause-set';
 import { loadPipelineActivity } from '@/lib/estate/estate-pipeline-activity';
 import type { EstatePowerStatus } from '@/lib/estate/estate-power-contract';
 import { resolveReadVerdict, type EstatePauseSnapshot } from '@/lib/estate/pause-state';
@@ -126,7 +127,7 @@ export interface PauseBody {
  * is bounded by the pause tier (at most a handful of resources) and mutates
  * nothing.
  */
-async function runningPayload(actuator: EstateActuator) {
+async function runningPayload(actuator: EstateActuator, tenantId: string) {
   const { manifest, entries, unresolved, manifestGated, namedByDeploy, gateReason } =
     resolveDeployManifest();
   // #4243 — discovery goes through the 429-retrying manifest tag reader, so a
@@ -135,7 +136,12 @@ async function runningPayload(actuator: EstateActuator) {
   // as the pause POST excludes it, so the two sides mint the same token while
   // the absence persists — and it is surfaced in `absent`, never dropped.
   const discovered = await discoverFromManifest(entries, createManifestTagReader());
-  const { present, absent, readFailures } = partitionDiscovery(discovered, entries);
+  const part = partitionDiscovery(discovered, entries);
+  const { absent } = part;
+  // Container Apps join through the stored policy (default ON), listed per app.
+  const apps = await resolveContainerAppsForPause(tenantId, manifest.estateId);
+  const readFailures = [...part.readFailures, ...apps.readFailures];
+  const present = mergeForPause(part.present, apps);
   const plan = planPause(present, {
     scope: { kind: 'explicit-inventory', estateId: manifest.estateId },
     manifest,
@@ -168,6 +174,8 @@ async function runningPayload(actuator: EstateActuator) {
     outOfTier: plan.outOfTier,
     /** Types this tier covers that no env var named — an honest coverage gap. */
     unresolved,
+    /** Per-app fate of every Container App in the group + the opt-out policy applied. */
+    containerApps: apps.status,
     /** True when the deploy names resources but the opt-in is unset. */
     manifestGated,
     risks,
@@ -226,7 +234,7 @@ async function computeStateFields(
 
   // No snapshot, or a snapshot that says the estate is up -> show the preview.
   if (!snapshot || snapshot.state === 'RUNNING') {
-    const payload = await runningPayload(actuator);
+    const payload = await runningPayload(actuator, tenantId);
     return { ...payload, snapshotId: snapshot?.id ?? null, power };
   }
 
@@ -320,7 +328,11 @@ async function pausePostImpl(caller: EstateCaller, body: PauseBody) {
   // GET /state, so the token stays coherent while the absence persists. It is
   // surfaced (`absent` + audit row below), never silently dropped. Unreadable
   // rows (throttled/timeout) stay IN the population and refuse below.
-  const { present, absent, readFailures } = partitionDiscovery(discovered, entries);
+  const part = partitionDiscovery(discovered, entries);
+  const { absent } = part;
+  const apps = await resolveContainerAppsForPause(tenantId, manifest.estateId);
+  const readFailures = [...part.readFailures, ...apps.readFailures];
+  const present = mergeForPause(part.present, apps);
   const plan = planPause(present, {
     scope: { kind: 'explicit-inventory', estateId: manifest.estateId },
     manifest,
@@ -357,6 +369,7 @@ async function pausePostImpl(caller: EstateCaller, body: PauseBody) {
       population: plan.population,
       outOfTier: plan.outOfTier,
       unresolved,
+      containerApps: apps.status,
       manifestGated,
       risks,
       highRisk: highRiskCount(risks),
@@ -548,6 +561,12 @@ async function pausePostImpl(caller: EstateCaller, body: PauseBody) {
     estateId: manifest.estateId,
     resources: plan.dryRun.wouldPause.map((r) => ({ id: r.resourceId, mechanism: r.mechanism })),
     highRisk: highRiskCount(risks),
+    // Who/what decided which Container Apps joined: the policy in force and each app's fate.
+    containerApps: {
+      policy: apps.status.policy,
+      listError: apps.status.listError ?? null,
+      apps: apps.status.apps.map((a) => ({ name: a.name, state: a.state })),
+    },
   });
 
   const run = await startPause(plan, actuator, {
