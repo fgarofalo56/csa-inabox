@@ -18,7 +18,7 @@
  *   - enableSqlServer2025Features(server, db)             — runs SET options for JSON_AGG / regex / vector (no-op on SQL Server 2022 or older — caller gets a MessageBar).
  */
 
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import sql from 'mssql';
@@ -71,7 +71,7 @@ async function armToken(): Promise<string> {
 async function armRequest<T = any>(path: string, init: RequestInit = {}): Promise<T> {
   const token = await armToken();
   const url = `${arm()}${path}`;
-  const res = await fetchWithTimeout(url, {
+  const res = await armCountedFetch(url, {
     ...init,
     headers: {
       'authorization': `Bearer ${token}`,
@@ -907,7 +907,7 @@ async function pollScaleLro(url: string | null, token: string, timeoutMs = 600_0
   while (Date.now() < deadline) {
     let res: Response;
     try {
-      res = await fetchWithTimeout(url, { headers: { authorization: `Bearer ${token}` }, cache: 'no-store' });
+      res = await armCountedFetch(url, { headers: { authorization: `Bearer ${token}` }, cache: 'no-store' });
     } catch {
       return undefined; // transient — caller re-GETs the resource for the real state
     }
@@ -966,7 +966,7 @@ export async function scaleDatabase(spec: ScaleDatabaseSpec): Promise<ScaleDatab
 
   // 3. PATCH via raw fetch so we can read the LRO headers (armRequest discards them).
   const token = await armToken();
-  const patchRes = await fetchWithTimeout(`${arm()}${dbPath}`, {
+  const patchRes = await armCountedFetch(`${arm()}${dbPath}`, {
     method: 'PATCH',
     headers: {
       authorization: `Bearer ${token}`,
@@ -1276,7 +1276,7 @@ export async function startPointInTimeRestore(spec: StartRestoreSpec): Promise<S
     }
 
     const token = await armToken();
-    const res = await fetchWithTimeout(`${arm()}${targetPath}`, {
+    const res = await armCountedFetch(`${arm()}${targetPath}`, {
       method: 'PUT',
       headers: {
         authorization: `Bearer ${token}`,
@@ -1334,7 +1334,7 @@ export async function getRestoreOperationStatus(opts: {
     if (!host || host !== new URL(arm()).origin) {
       throw new AzureSqlError('asyncOperationUrl is not on the ARM host', 400);
     }
-    const res = await fetchWithTimeout(opts.asyncOperationUrl, {
+    const res = await armCountedFetch(opts.asyncOperationUrl, {
       headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
       cache: 'no-store',
     });

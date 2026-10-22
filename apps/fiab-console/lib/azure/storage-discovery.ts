@@ -11,7 +11,7 @@
  * Needs Reader (Microsoft.Storage/storageAccounts/read).
  * Docs: https://learn.microsoft.com/rest/api/storagerp/storage-accounts/list
  */
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -60,7 +60,7 @@ type DataPlaneCred = { getToken(s: string): Promise<{ token: string } | null> };
 async function armGet<T = any>(path: string, cred: DataPlaneCred = credential, timeoutMs?: number): Promise<T> {
   const t = await cred.getToken(ARM_SCOPE);
   if (!t?.token) throw new StorageDiscoveryError('Failed to acquire ARM token', 401);
-  const res = await fetchWithTimeout(`${armBase()}${path}`, {
+  const res = await armCountedFetch(`${armBase()}${path}`, {
     headers: { authorization: `Bearer ${t.token}`, accept: 'application/json' }, cache: 'no-store',
   }, timeoutMs); // undefined => the shared DEFAULT_SERVER_FETCH_TIMEOUT_MS
   const text = await res.text();

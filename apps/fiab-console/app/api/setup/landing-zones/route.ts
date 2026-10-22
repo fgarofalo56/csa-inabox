@@ -35,6 +35,7 @@ import {
   type LogicalLandingZoneRow,
 } from '@/lib/setup/landing-zones-model';
 import { listLandingZones } from '@/lib/azure/landing-zones-store';
+import { armCountedRawFetch } from '@/lib/util/arm-counted-raw-fetch';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -90,7 +91,7 @@ export async function GET() {
 
   let dlzRows: DlzRgRow[] = [];
   try {
-    const res = await fetch(
+    const res = await armCountedRawFetch(
       `${armBase()}/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01`,
       {
         method: 'POST',

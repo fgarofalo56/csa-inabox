@@ -28,7 +28,7 @@
  * zero real rows, never fabricated sample rows.
  */
 
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -173,7 +173,7 @@ async function runArg(query: string, subscriptions: string[]): Promise<Record<st
     options: { resultFormat: 'objectArray', $top: 1000 },
   };
   if (subscriptions.length) payload.subscriptions = subscriptions;
-  const res = await fetchWithTimeout(
+  const res = await armCountedFetch(
     `${ARM}/providers/Microsoft.ResourceGraph/resources?api-version=${ARG_API}`,
     {
       method: 'POST',

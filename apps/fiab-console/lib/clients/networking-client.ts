@@ -44,6 +44,7 @@ import { OffOriginUrlError, resolveSameOriginUrl } from '@/lib/util/same-origin-
 import { networkingConfigContainer } from '@/lib/azure/cosmos-client';
 import { normalizePrivateLinkTargetId, privateDnsZoneNameForGroupId } from '@/lib/azure/pe-subresource-groups';
 import { listPrivateDnsZones } from '@/lib/azure/network-discovery';
+import { armCountedRawFetch } from '@/lib/util/arm-counted-raw-fetch';
 
 const ARM = armBase();
 const ARM_SCOPE = armScope();
@@ -186,7 +187,7 @@ export function resolveArmUrl(path: string, armBase: string = ARM): string {
 async function armReq<T>(method: string, path: string, body?: unknown): Promise<T> {
   const tk = await token();
   const url = resolveArmUrl(path);
-  const res = await fetch(url, {
+  const res = await armCountedRawFetch(url, {
     method,
     headers: {
       authorization: `Bearer ${tk}`,

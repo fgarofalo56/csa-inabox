@@ -51,8 +51,9 @@ import { loomSubscriptionScope } from '@/lib/azure/loom-subscriptions';
 import { getServiceClientFor } from '@/lib/azure/adls-client';
 import { listStorageAccounts, type StorageAccountSummary } from '@/lib/azure/storage-discovery';
 import { azureConnectionsContainer } from '@/lib/azure/cosmos-client';
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import { walkPagedList, type PagedEnvelope } from '@/lib/azure/paging-budget';
+import { armCountedRawFetch } from '@/lib/util/arm-counted-raw-fetch';
 
 // ---------------------------------------------------------------------------
 // Built-in role GUIDs (global across every Azure cloud).
@@ -190,7 +191,7 @@ async function armGet<T = any>(pathOrUrl: string, timeoutMs?: number): Promise<T
   const url = resolveSameOriginUrl(pathOrUrl, armBase(), 'the ARM token');
   // fetchWithTimeout, not bare fetch: this runs on a BFF request path, and an
   // ARM round-trip with NO deadline is the unbounded await #2557 exists to kill.
-  const res = await fetchWithTimeout(url, {
+  const res = await armCountedFetch(url, {
     headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
     cache: 'no-store',
   }, timeoutMs); // undefined => the shared DEFAULT_SERVER_FETCH_TIMEOUT_MS
@@ -373,7 +374,7 @@ async function probeLawQuery(customerId: string): Promise<void> {
   }
   if (!t?.token) throw new AzureConnectionError(credentialErrorMessage('the Log Analytics query data plane'), 401);
   const url = `${getLogAnalyticsHost()}/v1/workspaces/${customerId}/query`;
-  const res = await fetch(url, {
+  const res = await armCountedRawFetch(url, {
     method: 'POST',
     headers: {
       authorization: `Bearer ${t.token}`,

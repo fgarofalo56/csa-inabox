@@ -48,7 +48,7 @@
  * carrying status + parsed body so the BFF surfaces ARM's own message.
  */
 
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -147,7 +147,7 @@ async function armFetch(
   if (!token?.token) throw new CosmosArmError(401, null, 'Failed to acquire ARM token for Cosmos DB');
   const sep = path.includes('?') ? '&' : '?';
   const url = `${accountBase()}${path}${sep}api-version=${COSMOS_ARM_API}`;
-  return fetchWithTimeout(url, {
+  return armCountedFetch(url, {
     ...init,
     headers: {
       ...(init.headers || {}),

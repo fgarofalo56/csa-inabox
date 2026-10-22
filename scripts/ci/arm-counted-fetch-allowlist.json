@@ -1,0 +1,6 @@
+{
+  "_comment": "Shrink-only. Files that mention an ARM helper yet legitimately call a raw fetch. Each value is the WHY (>= 20 chars). A stale entry fails scripts/ci/check-arm-counted-fetch.mjs.",
+  "allow": {
+    "apps/fiab-console/lib/admin/health-probes.ts": "armHost() is used only to compare a hostname against the configured endpoint (line ~440). Its three raw fetch() calls probe Key Vault / app-endpoint / dependency URLs, none of them ARM management reads."
+  }
+}

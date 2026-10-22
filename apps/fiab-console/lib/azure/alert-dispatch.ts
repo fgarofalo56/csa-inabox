@@ -38,7 +38,7 @@
  * sinks only, per the V1 IL5 note) — the action-group leg is fully in-boundary.
  */
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import { armBase, armScope } from './cloud-endpoints';
 
 export type AlertSeverity = 'P1' | 'P2' | 'P3';
@@ -190,7 +190,7 @@ export async function dispatchAlert(
   deps: AlertDispatchDeps = {},
 ): Promise<AlertDispatchResult> {
   const env = deps.env ?? process.env;
-  const fetchImpl = deps.fetchImpl ?? ((url: any, init?: any) => fetchWithTimeout(url, init));
+  const fetchImpl = deps.fetchImpl ?? ((url: any, init?: any) => armCountedFetch(url, init));
   const getToken = deps.getToken ?? defaultGetToken;
 
   const result: AlertDispatchResult = {
@@ -288,7 +288,7 @@ export async function upsertDedupIssue(
   input: DedupIssueInput,
   deps: Pick<AlertDispatchDeps, 'fetchImpl'> = {},
 ): Promise<{ action: 'created' | 'commented' | 'error'; number?: number; detail?: string }> {
-  const fetchImpl = deps.fetchImpl ?? ((url: any, init?: any) => fetchWithTimeout(url, init));
+  const fetchImpl = deps.fetchImpl ?? ((url: any, init?: any) => armCountedFetch(url, init));
   const GH = 'https://api.github.com';
   const headers = {
     authorization: `Bearer ${input.token}`,

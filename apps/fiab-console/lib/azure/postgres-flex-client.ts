@@ -22,7 +22,7 @@
  * ARM inventory, provisioning, databases, and firewall are all live.
  */
 
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase } from './cloud-endpoints';
@@ -83,7 +83,7 @@ async function armRequest<T = any>(pathOrUrl: string, init: RequestInit = {}, ti
   const token = await armToken();
   const rel = isAbsoluteHttpUrl(pathOrUrl) || pathOrUrl.startsWith('/') ? pathOrUrl : `/${pathOrUrl}`;
   const url = resolveSameOriginUrl(rel, arm(), 'the ARM token');
-  const res = await fetchWithTimeout(url, {
+  const res = await armCountedFetch(url, {
     ...init,
     headers: {
       authorization: `Bearer ${token}`,

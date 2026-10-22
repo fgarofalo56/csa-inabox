@@ -24,6 +24,7 @@ import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { armBase } from '@/lib/azure/cloud-endpoints';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
+import { armCountedRawFetch } from '@/lib/util/arm-counted-raw-fetch';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -61,7 +62,7 @@ export async function GET() {
   }
 
   try {
-    const res = await fetch(
+    const res = await armCountedRawFetch(
       `${arm}/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01`,
       {
         method: 'POST',

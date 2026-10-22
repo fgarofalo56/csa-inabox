@@ -25,6 +25,7 @@ import {
   type AzureRegion,
   type RegionBoundary,
 } from '@/lib/azure/azure-regions';
+import { armCountedRawFetch } from '@/lib/util/arm-counted-raw-fetch';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -40,7 +41,7 @@ async function liveRegions(subId: string): Promise<AzureRegion[] | null> {
     const arm = armBase();
     const t = await credential.getToken(`${arm}/.default`);
     if (!t?.token) return null;
-    const r = await fetch(
+    const r = await armCountedRawFetch(
       `${arm}/subscriptions/${subId}/locations?api-version=2022-12-01`,
       { headers: { authorization: `Bearer ${t.token}` }, cache: 'no-store' },
     );

@@ -39,8 +39,9 @@ import {
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope, kvScope } from '@/lib/azure/cloud-endpoints';
 import { trimTrailingSlashes } from '@/lib/util/trim';
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import { walkPagedList, type PagedEnvelope } from '@/lib/azure/paging-budget';
+import { armCountedRawFetch } from '@/lib/util/arm-counted-raw-fetch';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: TokenCredential = uamiClientId
@@ -90,7 +91,7 @@ async function kvToken(): Promise<string> {
 
 async function armCall<T = any>(url: string, init: RequestInit = {}): Promise<T> {
   const token = await armToken();
-  const res = await fetch(url, {
+  const res = await armCountedRawFetch(url, {
     ...init,
     headers: {
       ...(init.headers || {}),
@@ -114,7 +115,7 @@ async function kvGet<T = any>(url: string, timeoutMs?: number): Promise<T> {
   const token = await kvToken();
   // fetchWithTimeout, not bare fetch: an un-deadlined data-plane round-trip on a
   // BFF request path is the unbounded await #2557 exists to remove.
-  const res = await fetchWithTimeout(url, {
+  const res = await armCountedFetch(url, {
     headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
     cache: 'no-store',
   }, timeoutMs); // undefined => the shared DEFAULT_SERVER_FETCH_TIMEOUT_MS

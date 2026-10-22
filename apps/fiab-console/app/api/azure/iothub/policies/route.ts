@@ -21,6 +21,7 @@ import { getSession } from '@/lib/auth/session';
 import { getUserArmToken } from '@/lib/azure/user-token-store';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { armBase, armScope } from '@/lib/azure/arm-endpoint';
+import { armCountedRawFetch } from '@/lib/util/arm-counted-raw-fetch';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -53,7 +54,7 @@ async function listKeys(
   const url = `${armBase()}${iotHubId}/listkeys?api-version=${IOTHUB_API}`;
   let res: Response;
   try {
-    res = await fetch(url, {
+    res = await armCountedRawFetch(url, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       cache: 'no-store',

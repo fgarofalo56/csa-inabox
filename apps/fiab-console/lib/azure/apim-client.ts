@@ -17,7 +17,7 @@
  * BFF can surface APIM's own validation messages to the editor UI.
  */
 
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -113,7 +113,7 @@ async function apimFetch(
     : '';
   const url = `${apimBase()}${path}${sep}api-version=${APIM_API}${query}`;
   const { query: _q, ...rest } = init;
-  return fetchWithTimeout(url, {
+  return armCountedFetch(url, {
     ...rest,
     headers: {
       ...(rest.headers || {}),
@@ -170,7 +170,7 @@ export async function getApimService(): Promise<ApimServiceShape | null> {
   const token = await credential.getToken(ARM_SCOPE);
   if (!token?.token) throw new Error('Failed to acquire ARM token for APIM');
   const url = `${apimBase()}?api-version=${APIM_API}`;
-  const res = await fetchWithTimeout(url, {
+  const res = await armCountedFetch(url, {
     headers: {
       authorization: `Bearer ${token.token}`,
       'content-type': 'application/json',
@@ -207,7 +207,7 @@ export async function updateApimSku(
   if (!token?.token) throw new Error('Failed to acquire ARM token for APIM');
   const url = `${apimBase()}?api-version=${APIM_API}`;
   const body = { sku: { name: newSku, capacity } };
-  const res = await fetchWithTimeout(url, {
+  const res = await armCountedFetch(url, {
     method: 'PATCH',
     headers: {
       authorization: `Bearer ${token.token}`,
@@ -1181,7 +1181,7 @@ export async function testApiCall(args: {
   const headers: Record<string, string> = { ...(args.headers || {}) };
   if (key) headers['Ocp-Apim-Subscription-Key'] = key;
 
-  const res = await fetchWithTimeout(url, {
+  const res = await armCountedFetch(url, {
     method: args.method || 'GET',
     headers,
     body: ['GET', 'HEAD'].includes((args.method || 'GET').toUpperCase()) ? undefined : args.body,
