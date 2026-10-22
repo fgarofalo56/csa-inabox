@@ -226,6 +226,26 @@ export interface AsaJobCreateSpec {
   name: string;
   location: string;        // e.g. 'eastus', 'usgovvirginia'
   streamingUnits?: number; // applied to the default transformation; default 3
+  /**
+   * ARM resource tags. `standUpEventstreamAzure` stamps `loomItemId` so teardown
+   * can PROVE ownership of a job whose name it had to derive (#5046 finding 3).
+   */
+  tags?: Record<string, string>;
+}
+
+/**
+ * Read a streaming job's ARM tags WITHOUT expanding its children. Returns
+ * `null` on 404 (job is not in the configured scope), otherwise the tag map
+ * (empty object when the job carries no tags). Any other failure throws with
+ * the real status so the caller can report "could not verify" truthfully.
+ */
+export async function getJobTags(name: string): Promise<Record<string, string> | null> {
+  if (!name) throw new Error('getJobTags: name is required');
+  const cfg = readAsaConfig();
+  const r = await call(`${rgBase(cfg)}/${encodeURIComponent(name)}?api-version=${API}`);
+  if (r.status === 404) return null;
+  const body = await jsonOrThrow<{ tags?: Record<string, string> }>(r, `ASA get tags(${name})`);
+  return body.tags && typeof body.tags === 'object' ? body.tags : {};
 }
 
 /**
@@ -240,6 +260,7 @@ export async function createOrUpdateJob(
   const url = `${rgBase(cfg)}/${encodeURIComponent(spec.name)}?api-version=${API}`;
   const body = {
     location: spec.location,
+    ...(spec.tags && Object.keys(spec.tags).length ? { tags: spec.tags } : {}),
     identity: { type: 'SystemAssigned' },
     properties: {
       sku: { name: 'Standard' },

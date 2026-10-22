@@ -13858,6 +13858,25 @@
           }
         },
         {
+          "id": "sec:verdict-call:apps/fiab-console/app/api/items/eventstream/[id]/route.ts#DELETE:authorizeItemWorkspace:12",
+          "kind": "verdict-call",
+          "provenance": "declared",
+          "label": "DELETE /api/items/eventstream/[id] -> authorizeItemWorkspace",
+          "facet": {
+            "kind": "verdict-call",
+            "callSite": "DELETE /api/items/eventstream/[id]:12",
+            "symbol": "authorizeItemWorkspace",
+            "returnsVerdictUnion": true,
+            "pathsToPrivilegedSink": 1,
+            "pathsConsumingAsRefusal": 1,
+            "consumption": "returned",
+            "allowlisted": false,
+            "allowlistPremiseTested": false,
+            "sinkPrivileged": true,
+            "sinkKind": "delete-cascade"
+          }
+        },
+        {
           "id": "sec:authorizer:apps/fiab-console/app/api/items/eventstream/spark-binding/route.ts#GET",
           "kind": "authorizer",
           "provenance": "declared",
@@ -17980,7 +17999,7 @@
             "declaredSinkCount": 1,
             "sinks": [
               {
-                "id": "console:member:3456",
+                "id": "console:member:3458",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -40490,6 +40509,69 @@
           }
         },
         {
+          "id": "sec:publication:scripts/ci/plan-image-builds.mjs#module",
+          "kind": "publication",
+          "provenance": "declared",
+          "label": "scripts/ci/plan-image-builds.mjs",
+          "facet": {
+            "kind": "publication",
+            "module": "scripts/ci/plan-image-builds.mjs",
+            "declaredSinkCount": 5,
+            "sinks": [
+              {
+                "id": "stdout:member:194",
+                "surface": "stdout",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:176",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:185",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:190",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:192",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              }
+            ]
+          }
+        },
+        {
           "id": "sec:publication:scripts/ci/reap-acr-agent-pools.mjs#module",
           "kind": "publication",
           "provenance": "declared",
@@ -50603,6 +50685,11 @@
           "deployedAs": "loom-console"
         },
         {
+          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/items/eventstream/[id]/route.ts#DELETE:authorizeItemWorkspace:12",
+          "codeModuleId": "code:apps/fiab-console/app/api/items/eventstream/[id]/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
           "nodeId": "sec:authorizer:apps/fiab-console/app/api/items/eventstream/spark-binding/route.ts#GET",
           "codeModuleId": "code:apps/fiab-console/app/api/items/eventstream/spark-binding/route.ts",
           "deployedAs": "loom-console"
@@ -52315,6 +52402,11 @@
           "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
         },
         {
+          "nodeId": "sec:publication:scripts/ci/plan-image-builds.mjs#module",
+          "codeModuleId": "code:scripts/ci/plan-image-builds.mjs",
+          "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
+        },
+        {
           "nodeId": "sec:publication:scripts/ci/reap-acr-agent-pools.mjs#module",
           "codeModuleId": "code:scripts/ci/reap-acr-agent-pools.mjs",
           "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
@@ -53558,6 +53650,10 @@
         {
           "subject": "scripts/ci/parse-reindex-poll.mjs",
           "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 3). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+        },
+        {
+          "subject": "scripts/ci/plan-image-builds.mjs",
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 5). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
           "subject": "scripts/ci/reap-acr-agent-pools.mjs",
