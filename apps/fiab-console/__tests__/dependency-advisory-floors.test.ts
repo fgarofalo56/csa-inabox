@@ -269,14 +269,14 @@ describe('Batch-1 overrides are declared in BOTH pnpm homes', () => {
 
 /**
  * `next` is a DIRECT, exact-pinned dependency (no override), so its floor is
- * the pin itself. GHSA-4jqv-mc3x-m676 and GHSA-mcj8-r9mp-w47p (both medium) are
- * patched at 15.5.27. Breaking inputs, by assertion:
- *   - package.json `next` reverted to "15.5.24" (or any 15.5.x < 27) -> pin test red.
+ * the pin itself. GHSA-2464-fhr4-w9xw (critical) is patched at 15.5.28;
+ * GHSA-4jqv-mc3x-m676 and GHSA-mcj8-r9mp-w47p (medium) at 15.5.27. Breaking inputs:
+ *   - package.json `next` reverted to "15.5.27" (or any 15.5.x < 28) -> pin test red.
  *   - a lockfile re-resolve leaving next@15.5.24 resolved             -> lock test red.
  * The lock-presence assertion keeps the floor loop from passing over an empty list.
  */
-describe('next security floor (GHSA-4jqv-mc3x-m676, GHSA-mcj8-r9mp-w47p)', () => {
-  const NEXT_FLOOR = '15.5.27';
+describe('next security floor (GHSA-2464-fhr4-w9xw, GHSA-4jqv-mc3x-m676, GHSA-mcj8-r9mp-w47p)', () => {
+  const NEXT_FLOOR = '15.5.28';
   const declared = (JSON.parse(readFileSync(join(CONSOLE_ROOT, 'package.json'), 'utf8')).dependencies?.next ??
     '') as string;
 
@@ -290,6 +290,7 @@ describe('next security floor (GHSA-4jqv-mc3x-m676, GHSA-mcj8-r9mp-w47p)', () =>
     const vs = lockedVersions(lock, 'next');
     expect(vs.length, 'next is absent from the lockfile; this guard would be vacuous').toBeGreaterThan(0);
     for (const v of vs) expect(gte(v, NEXT_FLOOR), `next@${v} is below the ${NEXT_FLOOR} floor`).toBe(true);
+    expect(vs, 'next@15.5.27 is vulnerable (GHSA-2464-fhr4-w9xw) and must not be resolved').not.toContain('15.5.27');
     expect(vs, 'next@15.5.24 is vulnerable and must not be resolved').not.toContain('15.5.24');
   });
 });
