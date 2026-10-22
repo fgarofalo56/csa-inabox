@@ -15,11 +15,15 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
+const ITEM_ID = '3f9a1c2e-aaaa-bbbb-cccc-111122223333';
 const deleteStreamingJob = vi.fn(async (_n: string) => undefined);
 const readAsaConfig = vi.fn(() => ({ subscriptionId: 's', resourceGroup: 'rg' }));
 const deleteEventHub = vi.fn(async (_n: string) => undefined);
 
+const getJobTags = vi.fn(async (_n: string): Promise<Record<string, string> | null> => ({ loomItemId: ITEM_ID }));
+
 vi.mock('@/lib/azure/stream-analytics-client', () => ({
+  getJobTags: (n: string) => getJobTags(n),
   deleteStreamingJob: (n: string) => deleteStreamingJob(n),
   readAsaConfig: () => readAsaConfig(),
 }));
@@ -41,9 +45,9 @@ vi.mock('@/lib/azure/synapse-sql-client', () => ({ executeQuery: vi.fn(), server
 import { teardownItemBackend } from '../resource-teardown';
 import { asaJobNameForItem } from '../asa-job-name';
 
-const ITEM_ID = '3f9a1c2e-aaaa-bbbb-cccc-111122223333';
-
 beforeEach(() => {
+  getJobTags.mockReset();
+  getJobTags.mockResolvedValue({ loomItemId: ITEM_ID });
   deleteStreamingJob.mockClear();
   deleteEventHub.mockClear();
   readAsaConfig.mockReset();
@@ -101,5 +105,72 @@ describe('teardownItemBackend(eventstream) ASA job', () => {
     const row = out.resources.find((r) => r.kind === 'stream-analytics-job');
     expect(row?.result).toBe('error');
     expect(row?.error).toContain('403');
+  });
+});
+
+/**
+ * #5046 finding 3 - a DERIVED job name is only 8 id chars, so the name alone is
+ * not proof of ownership. Each case names the input that breaks it:
+ *   - tag absent (a pre-tag legacy job)  -> fails if the check is removed (the
+ *     job would be deleted blind, which is exactly what we must not do).
+ *   - tag names a DIFFERENT item          -> fails if the check only tests for
+ *     "a loomItemId tag exists" instead of equality with THIS item's id.
+ *   - tag READ fails                      -> fails if an unverifiable job is
+ *     deleted anyway, or if the message claims the job is not ours (it states
+ *     only that ownership could not be verified).
+ *   - job absent (null)                   -> not_found, no delete issued.
+ *   - recorded asaJobName                 -> no tag read at all (recorded state
+ *     is the proof); fails if a tag lookup were required for recorded jobs.
+ */
+describe('teardownItemBackend(eventstream) derived-name ownership check', () => {
+  const es = (state: Record<string, unknown> = {}) => ({ id: ITEM_ID, workspaceId: 'w', itemType: 'eventstream', state });
+  const jobRow = (out: Awaited<ReturnType<typeof teardownItemBackend>>) => out.resources.find((r) => r.kind === 'stream-analytics-job');
+
+  it('deletes the derived job when its loomItemId tag equals THIS item id', async () => {
+    const out = await teardownItemBackend(es(), 't');
+    expect(getJobTags).toHaveBeenCalledWith('asa-loom-3f9a1c2e');
+    expect(deleteStreamingJob).toHaveBeenCalledWith('asa-loom-3f9a1c2e');
+    expect(jobRow(out)?.result).toBe('deleted');
+  });
+
+  it('SKIPS (does not delete) a derived job that carries no loomItemId tag', async () => {
+    getJobTags.mockResolvedValue({});
+    const out = await teardownItemBackend(es(), 't');
+    expect(deleteStreamingJob).not.toHaveBeenCalled();
+    expect(jobRow(out)?.result).toBe('skipped');
+    expect(jobRow(out)?.error).toContain('absent');
+  });
+
+  it('SKIPS a derived job tagged for a DIFFERENT item (8-char collision)', async () => {
+    getJobTags.mockResolvedValue({ loomItemId: '3f9a1c2e-0000-0000-0000-999999999999' });
+    const out = await teardownItemBackend(es(), 't');
+    expect(deleteStreamingJob).not.toHaveBeenCalled();
+    expect(jobRow(out)?.result).toBe('skipped');
+    expect(jobRow(out)?.error).toContain('3f9a1c2e-0000-0000-0000-999999999999');
+  });
+
+  it('reports an error (and deletes nothing) when the tag read fails, without claiming the job is not ours', async () => {
+    getJobTags.mockRejectedValue(new Error('ASA get tags failed 403'));
+    const out = await teardownItemBackend(es(), 't');
+    expect(deleteStreamingJob).not.toHaveBeenCalled();
+    const row = jobRow(out);
+    expect(row?.result).toBe('error');
+    expect(row?.error).toContain('Could not verify ownership');
+    expect(row?.error).toContain('403');
+    expect(row?.error).not.toMatch(/not (ours|this item)/i);
+  });
+
+  it('is not_found, with no delete issued, when the derived job does not exist', async () => {
+    getJobTags.mockResolvedValue(null);
+    const out = await teardownItemBackend(es(), 't');
+    expect(deleteStreamingJob).not.toHaveBeenCalled();
+    expect(jobRow(out)?.result).toBe('not_found');
+  });
+
+  it('a RECORDED asaJobName is deleted without any tag lookup', async () => {
+    getJobTags.mockResolvedValue({});
+    await teardownItemBackend(es({ asaJobName: 'asa-loom-recorded' }), 't');
+    expect(getJobTags).not.toHaveBeenCalled();
+    expect(deleteStreamingJob).toHaveBeenCalledWith('asa-loom-recorded');
   });
 });

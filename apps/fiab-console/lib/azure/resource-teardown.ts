@@ -34,7 +34,7 @@ import {
 } from '@/lib/azure/synapse-dev-client';
 import { deleteKustoDatabase } from '@/lib/azure/kusto-arm-client';
 import { deleteEventHub } from '@/lib/azure/eventhubs-client';
-import { deleteStreamingJob, readAsaConfig } from '@/lib/azure/stream-analytics-client';
+import { deleteStreamingJob, getJobTags, readAsaConfig } from '@/lib/azure/stream-analytics-client';
 import { asaJobNameForItem } from '@/lib/azure/asa-job-name';
 import { deleteMonitorActivatorRule } from '@/lib/azure/activator-monitor';
 import { deletePipeline as adfDeletePipeline, deleteAdfCdc } from '@/lib/azure/adf-client';
@@ -75,6 +75,19 @@ export interface TeardownOutcome {
   itemType: string;
   displayName: string;
   resources: TeardownResourceResult[];
+}
+
+export interface TeardownOptions {
+  /**
+   * RECORDED-ONLY mode (the generic item-delete route, #5046). A resource is
+   * deleted only when the item's persisted state NAMES it. Every fallback that
+   * derives a name from the display name or the item id is disabled, and a
+   * recorded ref that points at a SHARED resource (the shared dedicated SQL
+   * pool, the workspace-monitor database) is skipped rather than deleted. The
+   * workspace-delete cascade keeps its historical derive-on-missing behaviour
+   * (default `false`) because the operator opted into `?cascade=true`.
+   */
+  recordedOnly?: boolean;
 }
 
 /** Minimal item shape the teardown needs (a full Cosmos item doc, state included). */
@@ -139,6 +152,52 @@ function parseAbfss(url: string): { container: string; path: string } | null {
   return { container: m[1], path: m[2].replace(/\/+$/, '') };
 }
 
+/** The platform-wide workspace-monitor ADX database (workspace-monitor.ts MONITOR_DB). */
+function isSharedAdxDatabase(db: string): boolean {
+  return db === (process.env.LOOM_WORKSPACE_MONITOR_DB || 'loomdb_workspace_monitor');
+}
+
+/**
+ * Delete the Stream Analytics job whose name was DERIVED from the item id
+ * (no `asaJobName` recorded), but only after PROVING the job is this item's.
+ *
+ * `standUpEventstreamAzure` stamps the ARM tag `loomItemId=<item id>` on every
+ * job it creates. The derived name is only 8 chars of the id, so the name alone
+ * cannot establish ownership; the tag can. Outcomes, each stating only what was
+ * established (deploy-integrity.md R7):
+ *   - ASA not configured          -> null (nothing to look for, no row)
+ *   - job absent (404)            -> not_found
+ *   - tag === item id             -> delete it
+ *   - tag absent / different      -> skipped (NOT deleted), reason names the tag seen
+ *   - tag read failed             -> error, "could not verify ownership"
+ * Jobs created before the tag existed carry no tag and are skipped here; they
+ * are removed by the approval-gated leftover cleanup, not guessed at.
+ */
+async function deriveOwnedAsaJob(itemId: string): Promise<TeardownResourceResult | null> {
+  try { readAsaConfig(); } catch { return null; }
+  const name = asaJobNameForItem(itemId);
+  let tags: Record<string, string> | null;
+  try {
+    tags = await getJobTags(name);
+  } catch (e: any) {
+    return {
+      kind: 'stream-analytics-job',
+      ref: name,
+      result: 'error',
+      error: `Could not verify ownership of Stream Analytics job '${name}' (tag read failed: ${(e?.message || String(e)).slice(0, 200)}); it was NOT deleted.`,
+    };
+  }
+  if (tags === null) return { kind: 'stream-analytics-job', ref: name, result: 'not_found' };
+  if (tags.loomItemId !== itemId) {
+    return skip(
+      'stream-analytics-job',
+      name,
+      `Job '${name}' exists but its loomItemId tag is ${tags.loomItemId ? `'${tags.loomItemId}'` : 'absent'}, not this item's id, and no job name is recorded on the item; not deleted.`,
+    );
+  }
+  return attempt('stream-analytics-job', name, () => deleteStreamingJob(name));
+}
+
 /**
  * Run one delete, classifying the outcome. Never throws. A 404 / "not found" /
  * "does not exist" is reported as `not_found` (already gone — an idempotent
@@ -176,7 +235,9 @@ function skip(kind: string, ref: string, reason: string): TeardownResourceResult
 export async function teardownItemBackend(
   item: TeardownItem,
   tenantId: string,
+  opts: TeardownOptions = {},
 ): Promise<TeardownOutcome> {
+  const recordedOnly = opts.recordedOnly === true;
   const type = item.itemType;
   const displayName = item.displayName || item.id;
   const resources: TeardownResourceResult[] = [];
@@ -210,11 +271,16 @@ export async function teardownItemBackend(
       const rid = resourceId(item); // "<container>/<root>" on the azure-native path
       const container =
         sid(item, 'container') || (rid && rid.includes('/') ? rid.split('/')[0] : undefined);
-      const rootPath =
+      const recordedRoot =
         sid(item, 'rootPath') ||
-        (rid && rid.includes('/') ? rid.split('/').slice(1).join('/') : undefined) ||
-        `lakehouses/${safeName(displayName) || item.id}`;
-      if (container) {
+        (rid && rid.includes('/') ? rid.split('/').slice(1).join('/') : undefined);
+      // Recorded-only never falls back to `lakehouses/<displayName>`: a recursive
+      // ADLS delete on a name guessed from the display name is the exact blind
+      // delete #5046 forbids. An empty root would also be the container itself.
+      const rootPath = recordedRoot || (recordedOnly ? '' : `lakehouses/${safeName(displayName) || item.id}`);
+      if (recordedOnly && !safeName(rootPath)) {
+        push(skip('adls-path', container || '(unknown)', 'No ADLS root path is recorded on the item state; data left in place (a path is never derived from the display name).'));
+      } else if (container) {
         push(
           await attempt('adls-path', `${container}/${rootPath}`, () =>
             deletePath(container, `${rootPath.replace(/\/+$/, '')}/`, true),
@@ -255,6 +321,10 @@ export async function teardownItemBackend(
       const shared = process.env.LOOM_SYNAPSE_DEDICATED_POOL;
       if (!db) {
         push(skip('synapse-dedicated-sql-pool', '(unknown)', 'No dedicated SQL pool recorded on the item state.'));
+      } else if (recordedOnly && !shared) {
+        // The shared-pool env is the only way to tell a per-item pool from the
+        // shared one. Unset means "cannot tell", and unknown is not deletable.
+        push(skip('synapse-dedicated-sql-pool', db, 'LOOM_SYNAPSE_DEDICATED_POOL is not set, so it cannot be verified that the recorded pool is not the shared one; pool retained.'));
       } else if (shared && db === shared) {
         push(
           skip(
@@ -273,7 +343,9 @@ export async function teardownItemBackend(
     case 'kql-database':
     case 'eventhouse': {
       const db = sid(item, 'database') || st(item, 'databaseName') || resourceId(item);
-      if (db) {
+      if (db && recordedOnly && isSharedAdxDatabase(db)) {
+        push(skip('adx-database', db, 'The recorded database is the shared workspace-monitor database; retained.'));
+      } else if (db) {
         // Deleting the ADX database drops its tables + any child data connections.
         push(await attempt('adx-database', db, () => deleteKustoDatabase(db)));
       } else {
@@ -297,12 +369,13 @@ export async function teardownItemBackend(
       // strand the job. The derived name is only tried when ASA is configured,
       // and deleteStreamingJob treats 404 as already-gone, so an eventstream
       // that never had a transform job costs one idempotent DELETE, not an error.
-      let asaJob = st(item, 'asaJobName') || sid(item, 'asaJobName');
-      if (!asaJob) {
-        try { readAsaConfig(); asaJob = asaJobNameForItem(item.id); } catch { /* ASA not configured: nothing to derive */ }
-      }
-      if (asaJob) {
-        push(await attempt('stream-analytics-job', asaJob, () => deleteStreamingJob(asaJob)));
+      const recordedJob = st(item, 'asaJobName') || sid(item, 'asaJobName');
+      if (recordedJob) {
+        // Recorded state IS the ownership proof.
+        push(await attempt('stream-analytics-job', recordedJob, () => deleteStreamingJob(recordedJob)));
+      } else {
+        const derived = await deriveOwnedAsaJob(item.id);
+        if (derived) push(derived);
       }
       break;
     }
@@ -355,11 +428,22 @@ export async function teardownItemBackend(
       if (pipeline) push(await attempt('adf-cdc-pipeline', pipeline, () => deleteAdfCdc(pipeline)));
       else push(skip('adf-cdc-pipeline', '(unknown)', 'No CDC pipeline recorded on the item state.'));
       // The mirror engine lands each table under bronze/mirrors/<ws>/<itemId>/…
-      push(
-        await attempt('adls-path', `bronze/mirrors/${item.workspaceId}/${item.id}`, () =>
-          deletePath('bronze', `mirrors/${item.workspaceId}/${item.id}/`, true),
-        ),
-      );
+      if (recordedOnly) {
+        // The provisioner records that root as `secondaryIds.adlsRoot` (abfss).
+        // Recorded-only deletes THAT, not a path rebuilt from ids.
+        const root = parseAbfss(sid(item, 'adlsRoot') || '');
+        if (root && root.path) {
+          push(await attempt('adls-path', `${root.container}/${root.path}`, () => deletePath(root.container, `${root.path}/`, true)));
+        } else {
+          push(skip('adls-path', '(unknown)', 'No Bronze mirror root (adlsRoot) is recorded on the item state; landed data left in place.'));
+        }
+      } else {
+        push(
+          await attempt('adls-path', `bronze/mirrors/${item.workspaceId}/${item.id}`, () =>
+            deletePath('bronze', `mirrors/${item.workspaceId}/${item.id}/`, true),
+          ),
+        );
+      }
       break;
     }
 
@@ -427,7 +511,14 @@ export async function teardownItemBackend(
 
     // --- ML model → UC/MLflow registered model (+ serving endpoint) -----------
     case 'ml-model': {
-      const model = sid(item, 'modelName') || safeName(displayName) || item.id;
+      const recordedModel = sid(item, 'modelName');
+      if (recordedOnly && !recordedModel) {
+        // ml-model.ts records the notebook path / run id, never the registered
+        // model name, so a display-name-derived delete would be a blind one.
+        push(skip('databricks-registered-model', '(unknown)', 'No registered model name is recorded on the item state; the model and any serving endpoint are left in place.'));
+        break;
+      }
+      const model = recordedModel || safeName(displayName) || item.id;
       push(await attempt('databricks-registered-model', model, () => deleteRegisteredModel(model)));
       // Best-effort: a matching serving endpoint (may not exist → not_found).
       push(await attempt('databricks-serving-endpoint', model, () => deleteServingEndpoint(model)));
@@ -471,7 +562,11 @@ export async function teardownItemBackend(
     // --- Workspace monitor → ADX usage/perf database --------------------------
     case 'workspace-monitor': {
       const db = sid(item, 'database') || resourceId(item);
-      if (db) push(await attempt('adx-database', db, () => deleteKustoDatabase(db)));
+      if (db && recordedOnly && isSharedAdxDatabase(db)) {
+        // The monitor DB is a platform-wide constant (workspace-monitor.ts
+        // MONITOR_DB), not per item: one item's delete must not drop it.
+        push(skip('adx-database', db, 'The workspace-monitor database is shared by the whole platform; retained.'));
+      } else if (db) push(await attempt('adx-database', db, () => deleteKustoDatabase(db)));
       else push(skip('adx-database', '(unknown)', 'No ADX database recorded on the item state.'));
       break;
     }

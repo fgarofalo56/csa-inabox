@@ -13858,6 +13858,25 @@
           }
         },
         {
+          "id": "sec:verdict-call:apps/fiab-console/app/api/items/eventstream/[id]/route.ts#DELETE:authorizeItemWorkspace:12",
+          "kind": "verdict-call",
+          "provenance": "declared",
+          "label": "DELETE /api/items/eventstream/[id] -> authorizeItemWorkspace",
+          "facet": {
+            "kind": "verdict-call",
+            "callSite": "DELETE /api/items/eventstream/[id]:12",
+            "symbol": "authorizeItemWorkspace",
+            "returnsVerdictUnion": true,
+            "pathsToPrivilegedSink": 1,
+            "pathsConsumingAsRefusal": 1,
+            "consumption": "returned",
+            "allowlisted": false,
+            "allowlistPremiseTested": false,
+            "sinkPrivileged": true,
+            "sinkKind": "delete-cascade"
+          }
+        },
+        {
           "id": "sec:authorizer:apps/fiab-console/app/api/items/eventstream/spark-binding/route.ts#GET",
           "kind": "authorizer",
           "provenance": "declared",
@@ -50547,6 +50566,11 @@
         {
           "nodeId": "sec:verdict-call:apps/fiab-console/app/api/items/event-schema-set/[id]/versions/route.ts#POST:authorizeItemWorkspace:9",
           "codeModuleId": "code:apps/fiab-console/app/api/items/event-schema-set/[id]/versions/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/items/eventstream/[id]/route.ts#DELETE:authorizeItemWorkspace:12",
+          "codeModuleId": "code:apps/fiab-console/app/api/items/eventstream/[id]/route.ts",
           "deployedAs": "loom-console"
         },
         {

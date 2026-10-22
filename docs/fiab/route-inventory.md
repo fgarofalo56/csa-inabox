@@ -1462,7 +1462,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/eventstream/[id]/mirror-cdf/route.ts` | GET POST | owner-scoped | ● | ADLS, ARM, Azure Storage, Cosmos, Event Hubs, Event Hubs / Service Bus, Managed Identity |
 | `items/eventstream/[id]/provision/route.ts` | POST | owner-scoped | ● | ADX, ARM, Azure SQL, Azure Storage, Cosmos, Event Hubs, IoT Hub, PostgreSQL, Service Bus, Stream Analytics |
 | `items/eventstream/[id]/publish/route.ts` | POST | owner-scoped |  | Cosmos, Fabric |
-| `items/eventstream/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | ADF, ADLS, ADX, AI Search, AML, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Event Hubs, IoT Hub, Managed Identity, PostgreSQL, Resource Graph, Service Bus, Stream Analytics, Synapse, Synapse SQL |
+| `items/eventstream/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | Cosmos, Microsoft Graph |
 | `items/eventstream/[id]/source/route.ts` | POST | owner-scoped | ● | ADF, ADLS, ARM, Azure Storage, Cosmos, Event Hubs, Event Hubs / Service Bus, IoT Hub, Managed Identity, Resource Graph, Synapse |
 | `items/eventstream/[id]/sql-operator/route.ts` | GET POST | owner-scoped |  | ADX, ARM, Azure SQL, Azure Storage, Cosmos, Event Hubs, IoT Hub, PostgreSQL, Service Bus, Stream Analytics |
 | `items/eventstream/spark-binding/route.ts` | GET PUT | admin |  | ARM, Cosmos, Databricks, Synapse |
