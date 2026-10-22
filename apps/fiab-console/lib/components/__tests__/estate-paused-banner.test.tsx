@@ -9,7 +9,7 @@ import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 const clientFetch = vi.fn();
 vi.mock('@/lib/client-fetch', () => ({ clientFetch: (...a: unknown[]) => clientFetch(...a) }));
 
-import { EstatePausedBanner, nameList, BANNER_POLL_MS } from '../estate-paused-banner';
+import { EstatePausedBanner, nameList, BANNER_POLL_MS, PAUSING_POLL_BUDGET_MS } from '../estate-paused-banner';
 import { SessionProvider, type ShellSession } from '../session-context';
 
 const session = (over: Partial<ShellSession> = {}): ShellSession => ({
@@ -21,7 +21,7 @@ const mount = (s: ShellSession) => render(
 
 const json = (body: unknown, ok = true, status = 200) => ({ ok, status, json: async () => body });
 const paused = (over: Record<string, unknown> = {}) => ({
-  ok: true, paused: true, state: 'PAUSED', count: 3, names: ['loom-mcp', 'loom-airflow', 'loom-activator'],
+  ok: true, paused: true, state: 'PAUSED', count: 3, names: ['loom-udf-runtime', 'loom-dab-preview', 'loom-transform-runner'],
   pausedAt: '2026-10-22T01:04:00.000Z', pausedBy: null, pausedByKind: 'automation', failure: null, canResume: false, ...over,
 });
 
@@ -64,7 +64,7 @@ describe('shown when paused', () => {
     clientFetch.mockResolvedValue(json(paused()));
     mount(session());
     expect(await screen.findByText('3 services are paused to save cost')).toBeTruthy();
-    expect(screen.getByText(/loom-mcp, loom-airflow, loom-activator/)).toBeTruthy();
+    expect(screen.getByText(/loom-udf-runtime, loom-dab-preview, loom-transform-runner/)).toBeTruthy();
     // The exact rendered instant, computed the same way the component does (a loose date regex would pass for any date).
     const when = new Date('2026-10-22T01:04:00.000Z').toLocaleString();
     expect(screen.getByText((t) => t.includes(`Paused ${when} by automation`))).toBeTruthy();
@@ -72,7 +72,7 @@ describe('shown when paused', () => {
 
   // Breaks if: singular/plural agreement is wrong.
   it('1 service uses the singular', async () => {
-    clientFetch.mockResolvedValue(json(paused({ count: 1, names: ['loom-mcp'] })));
+    clientFetch.mockResolvedValue(json(paused({ count: 1, names: ['loom-udf-runtime'] })));
     mount(session());
     expect(await screen.findByText('1 service is paused to save cost')).toBeTruthy();
   });
@@ -137,11 +137,11 @@ describe('Resume (admin)', () => {
   // Breaks if: RESUME_FAILED is shown as success/info, loses the failure text, or drops the retry button.
   it('RESUME_FAILED: error intent with the failure text, and the button stays as "Retry resume"', async () => {
     clientFetch.mockResolvedValue(json(paused({
-      canResume: true, state: 'RESUME_FAILED', failure: '1 service(s) are not confirmed back up: loom-airflow.',
+      canResume: true, state: 'RESUME_FAILED', failure: '1 service(s) are not confirmed back up: loom-dab-preview.',
     })));
     mount(session({ isTenantAdmin: true }));
     expect(await screen.findByText('Resume did not complete')).toBeTruthy();
-    expect(screen.getByText(/not confirmed back up: loom-airflow/)).toBeTruthy();
+    expect(screen.getByText(/not confirmed back up: loom-dab-preview/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Retry resume' })).toBeTruthy();
     expect(screen.getByTestId('estate-paused-banner').getAttribute('data-intent')).toBe('error');
   });
@@ -184,5 +184,105 @@ describe('Resume (admin)', () => {
     const before = clientFetch.mock.calls.length;
     await act(async () => { await vi.advanceTimersByTimeAsync(BANNER_POLL_MS * 3); });
     expect(clientFetch.mock.calls.length).toBe(before);
+  });
+});
+
+describe('polling is bounded and throttle-aware (review N3)', () => {
+  const pausedCalls = () => clientFetch.mock.calls.filter((c) => c[0] === '/api/estate/paused').length;
+  const flush = async () => { await act(async () => { await Promise.resolve(); await Promise.resolve(); }); };
+
+  // Breaks if: the poll is a fixed 10s interval that ignores ARM throttling (the pre-fix behaviour).
+  it('while the admin state read reports throttling the next poll backs off (10s -> 20s), unlike a fixed interval', async () => {
+    vi.useFakeTimers();
+    clientFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/estate/paused') return json(paused({ state: 'RESUMING', canResume: true }));
+      if (url === '/api/admin/estate/state') return json({ ok: true, throttled: 2 });
+      return json({ ok: true });
+    });
+    mount(session({ isTenantAdmin: true }));
+    await flush();
+    expect(pausedCalls()).toBe(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(BANNER_POLL_MS + 50); });
+    expect(pausedCalls()).toBe(2);
+    // A fixed 10s interval would have polled again by t=20s; the backed-off delay is 20s after the throttled read.
+    await act(async () => { await vi.advanceTimersByTimeAsync(BANNER_POLL_MS + 50); });
+    expect(pausedCalls()).toBe(2);
+    await act(async () => { await vi.advanceTimersByTimeAsync(BANNER_POLL_MS + 50); });
+    expect(pausedCalls()).toBe(3);
+  });
+
+  // Control for the test above: the same sequence WITHOUT throttling polls at the base cadence.
+  it('with no throttling it keeps the base 10s cadence', async () => {
+    vi.useFakeTimers();
+    clientFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/estate/paused') return json(paused({ state: 'RESUMING', canResume: true }));
+      return json({ ok: true });
+    });
+    mount(session({ isTenantAdmin: true }));
+    await flush();
+    await act(async () => { await vi.advanceTimersByTimeAsync(BANNER_POLL_MS * 2 + 100); });
+    expect(pausedCalls()).toBe(3);
+  });
+
+  // Breaks if: a pause that never settles is polled forever with no notice.
+  it('PAUSING polling stops after the 10 minute budget and says so; "Check again" resumes polling', async () => {
+    vi.useFakeTimers();
+    clientFetch.mockImplementation(async () => json(paused({ state: 'PAUSING' })));
+    mount(session({ isTenantAdmin: false }));
+    await flush();
+    await act(async () => { await vi.advanceTimersByTimeAsync(PAUSING_POLL_BUDGET_MS + 2 * BANNER_POLL_MS); });
+    expect(screen.getByText(/Still pausing after 10 minutes; automatic refresh has stopped/)).toBeTruthy();
+    const frozen = pausedCalls();
+    await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60_000); });
+    expect(pausedCalls()).toBe(frozen); // really stopped, not merely showing a notice
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(BANNER_POLL_MS + 50); });
+    expect(pausedCalls()).toBeGreaterThan(frozen);
+  });
+
+  // Breaks if: a settled state still shows a give-up notice.
+  it('a PAUSING that settles to PAUSED shows no give-up notice', async () => {
+    vi.useFakeTimers();
+    let state = 'PAUSING';
+    clientFetch.mockImplementation(async () => json(paused({ state })));
+    mount(session());
+    await flush();
+    state = 'PAUSED';
+    await act(async () => { await vi.advanceTimersByTimeAsync(BANNER_POLL_MS + 50); });
+    expect(screen.queryByText(/automatic refresh has stopped/)).toBeNull();
+    expect(screen.getByText('3 services are paused to save cost')).toBeTruthy();
+  });
+});
+
+describe('services that failed to pause are shown separately (review N4)', () => {
+  // Breaks if: the failed app is folded into the count/names, or the failure is not shown at all.
+  it('count covers only stopped services; the failed one is named as still running', async () => {
+    clientFetch.mockResolvedValue(json(paused({
+      state: 'PAUSING', count: 2, names: ['loom-udf-runtime', 'loom-transform-runner'], failedToPause: ['loom-dab-preview'], canResume: false,
+    })));
+    mount(session());
+    expect(await screen.findByText('Pausing 2 services')).toBeTruthy();
+    expect(screen.getByText(/1 service failed to pause and is still running: loom-dab-preview/)).toBeTruthy();
+    expect(screen.getByTestId('estate-paused-banner').getAttribute('data-intent')).toBe('warning');
+  });
+
+  // Breaks if: an all-failed pause renders "Pausing 0 services" (a lie of progress).
+  it('nothing stopped: says the pause did not stop any service', async () => {
+    clientFetch.mockResolvedValue(json(paused({ state: 'PAUSING', count: 0, names: [], failedToPause: ['a', 'b'] })));
+    mount(session());
+    expect(await screen.findByText('The pause did not stop any service')).toBeTruthy();
+    expect(screen.queryByText(/Pausing 0/)).toBeNull();
+  });
+
+  // Breaks if: an admin has no way to undo a stalled partial pause from the banner.
+  it('admin gets a Resume (undo the partial pause) button on a PAUSING record with failures; non-admin does not', async () => {
+    clientFetch.mockResolvedValue(json(paused({ state: 'PAUSING', count: 1, names: ['x'], failedToPause: ['y'], canResume: true })));
+    mount(session({ isTenantAdmin: true }));
+    expect(await screen.findByRole('button', { name: 'Resume (undo the partial pause)' })).toBeTruthy();
+    cleanup();
+    clientFetch.mockResolvedValue(json(paused({ state: 'PAUSING', count: 1, names: ['x'], failedToPause: ['y'], canResume: false })));
+    mount(session());
+    await screen.findByText('Pausing 1 service');
+    expect(screen.queryByRole('button', { name: /resume/i })).toBeNull();
   });
 });

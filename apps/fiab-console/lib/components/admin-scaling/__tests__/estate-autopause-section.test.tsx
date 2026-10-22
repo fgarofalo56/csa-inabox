@@ -106,7 +106,7 @@ describe('EstateAutoPauseSection', () => {
     expect(JSON.parse((clientFetch.mock.calls[1][1] as { body: string }).body)).toEqual({ enabled: true, idleHours: 6 });
   });
 
-  it('an UNREADABLE stored setting offers one-click "Reset to defaults" which PUTs {enabled:true, idleHours:2}', async () => {
+  it('an UNREADABLE stored setting offers one-click "Reset to defaults" which PUTs the explicit defaults incl. containerApps (a bare PUT is refused 503 while unreadable)', async () => {
     clientFetch.mockResolvedValue(okResponse());
     mount(
       <EstateAutoPauseSection
@@ -118,7 +118,7 @@ describe('EstateAutoPauseSection', () => {
     expect(screen.getByText('The saved auto-pause setting could not be read')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Reset to defaults (on, 2 hours)' }));
     await waitFor(() => expect(clientFetch).toHaveBeenCalledTimes(1));
-    expect(JSON.parse((clientFetch.mock.calls[0][1] as { body: string }).body)).toEqual({ enabled: true, idleHours: 2 });
+    expect(JSON.parse((clientFetch.mock.calls[0][1] as { body: string }).body)).toEqual({ enabled: true, idleHours: 2, containerApps: { enabled: true, exempt: [] } });
   });
 
   it('unreadable ACTIVITY says idleness is unknown (and shows no idle-for badge)', () => {

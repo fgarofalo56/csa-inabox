@@ -42,11 +42,20 @@ export const PUT = withTenantAdmin(async (req: NextRequest, { session }) => {
   const before = await loadAutoPause(caller.tenantId);
   // `containerApps` omitted from the body = leave the stored opt-outs alone (the CLI
   // and the idle-hours form send only {enabled, idleHours}); they must never be reset
-  // by an unrelated save. An UNREADABLE stored setting has nothing to preserve.
-  const containerApps = v.value.containerApps ?? (before.source === 'unreadable' ? undefined : before.containerApps);
+  // by an unrelated save. If the stored setting could not be read we cannot preserve
+  // them, and writing the default would silently erase a global opt-out after a
+  // transient Cosmos read failure: refuse instead (review N2).
+  if (v.value.containerApps === undefined && before.source === 'unreadable') {
+    return apiError(
+      'The stored auto-pause setting could not be read, so its Container Apps opt-outs cannot be preserved. '
+        + 'Nothing was changed. Retry in a moment, or include containerApps in the request to overwrite them explicitly.',
+      503,
+    );
+  }
+  const containerApps = v.value.containerApps ?? before.containerApps;
   let saved;
   try {
-    saved = await saveAutoPause(caller.tenantId, { ...v.value, ...(containerApps ? { containerApps } : {}) }, caller.who);
+    saved = await saveAutoPause(caller.tenantId, { ...v.value, containerApps }, caller.who);
   } catch (e) {
     return apiHonestError(
       e,

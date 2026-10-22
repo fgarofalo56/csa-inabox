@@ -73,8 +73,8 @@ describe('validateAutoPause containerApps policy', () => {
   });
 
   it('exempt names are trimmed, lower-cased and de-duplicated', () => {
-    const r = validateAutoPause({ ...base, containerApps: { enabled: true, exempt: [' Loom-MCP ', 'loom-mcp', 'loom-airflow'] } });
-    expect(r).toEqual({ ok: true, value: { ...base, containerApps: { enabled: true, exempt: ['loom-mcp', 'loom-airflow'] } } });
+    const r = validateAutoPause({ ...base, containerApps: { enabled: true, exempt: [' Loom-UDF-Runtime ', 'loom-udf-runtime', 'loom-dab-preview'] } });
+    expect(r).toEqual({ ok: true, value: { ...base, containerApps: { enabled: true, exempt: ['loom-udf-runtime', 'loom-dab-preview'] } } });
   });
 
   it.each([
@@ -82,7 +82,7 @@ describe('validateAutoPause containerApps policy', () => {
     ['enabled as string', { enabled: 'true', exempt: [] }],
     ['enabled missing', { exempt: [] }],
     ['exempt missing', { enabled: true }],
-    ['exempt not an array', { enabled: true, exempt: 'loom-mcp' }],
+    ['exempt not an array', { enabled: true, exempt: 'loom-udf-runtime' }],
     ['non-string name', { enabled: true, exempt: [7] }],
     ['underscore (not a valid ACA name char)',{ enabled: true, exempt: ['loom_mcp'] }],
     ['single char (ACA names are 2-32)', { enabled: true, exempt: ['a'] }],
@@ -123,9 +123,9 @@ describe('defaults and persistence', () => {
   it('a stored containerApps policy round-trips (opt-out + exemptions are read back, not defaulted)', async () => {
     read.mockResolvedValue({ resource: {
       kind: 'estate-autopause', enabled: true, idleHours: 2, updatedAt: 'T', updatedBy: 'u',
-      containerApps: { enabled: false, exempt: ['loom-mcp', 'loom-airflow'] },
+      containerApps: { enabled: false, exempt: ['loom-udf-runtime', 'loom-dab-preview'] },
     } });
-    expect((await loadAutoPause('t1')).containerApps).toEqual({ enabled: false, exempt: ['loom-mcp', 'loom-airflow'] });
+    expect((await loadAutoPause('t1')).containerApps).toEqual({ enabled: false, exempt: ['loom-udf-runtime', 'loom-dab-preview'] });
   });
 
   it('a stored doc whose containerApps is malformed -> unreadable (never partially trusted)', async () => {
@@ -158,7 +158,7 @@ describe('defaults and persistence', () => {
   });
 
   it('save persists the supplied containerApps policy in the doc (global opt-out + exemptions)', async () => {
-    const policy = { enabled: false, exempt: ['loom-mcp'] };
+    const policy = { enabled: false, exempt: ['loom-udf-runtime'] };
     const out = await saveAutoPause('t1', { enabled: true, idleHours: 4, containerApps: policy }, 'admin@x');
     expect(upsert).toHaveBeenCalledWith(expect.objectContaining({ containerApps: policy }));
     expect(out.containerApps).toEqual(policy);

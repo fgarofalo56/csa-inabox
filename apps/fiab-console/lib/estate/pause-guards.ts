@@ -35,6 +35,22 @@ export const NEVER_PAUSE_CONTAINER_APPS: Readonly<Record<string, string>> = {
     + '(modules/compute/loom-capacity-broker-app.bicep).',
   'loom-onelake':
     'namespace resolution is on the hot path, so it deliberately keeps one warm replica (modules/compute/loom-onelake-app.bicep).',
+  'loom-activator':
+    'it is a background worker with no inbound traffic and is pinned to minReplicas 1 on purpose, so pausing it silently stops '
+    + 'Activator rule evaluation and nothing wakes it (admin-plane/main.bicep, loom-activator app entry).',
+  'loom-mirroring':
+    'it is a background replication worker with no inbound traffic and is pinned to minReplicas 1 on purpose, so pausing it '
+    + 'silently stops Mirroring replication and nothing wakes it (admin-plane/main.bicep, loom-mirroring app entry).',
+  'loom-airflow':
+    'LocalExecutor runs the webserver and the singleton scheduler in one replica pinned to minReplicas 1, so pausing it silently '
+    + 'stops every cron DAG and nothing wakes it (modules/admin-plane/airflow.bicep, "scheduler must be a singleton").',
+  'loom-mcp':
+    'the console calls it synchronously on user request paths (agent flows, MCP server list and test-connection) with a 5s client '
+    + 'timeout (lib/azure/mcp-client.ts), and its wake time from zero, with an Azure Files volume to mount, is unmeasured, '
+    + 'so a first call could time out as a false "unreachable".',
+  'loom-mcp-bridge':
+    'the console fetches its catalog synchronously when the External-MCP panel opens, aborting after 5s '
+    + '(app/api/admin/mcp-servers/bridge/route.ts); its wake time from zero is unmeasured, so the first open could report a false timeout.',
   'loom-duckdb':
     'the interactive serving tier is documented "never scale-to-zero" (modules/data-plane/duckdb-aca.bicep).',
 };

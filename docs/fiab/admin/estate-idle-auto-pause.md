@@ -29,6 +29,9 @@ evidence.
 | `loom-console` and anything this process is, or that is tagged `loom-role=console` / `resume-surface` | It is the surface that resumes the estate and signs people in. If the console cannot be identified, **no** app is paused. |
 | `loom-risingwave` | Holds materialized-view and meta state in process; scale-to-zero loses every MV. |
 | `iceberg-catalog`, `loom-unity` | Cold start is 23-30 s against a hard 30 s Front Door ceiling, so the first call after a pause returns a 504; where the durable Postgres store is not wired, scale-to-zero also destroys the catalog. |
+| `loom-activator`, `loom-mirroring` | Background workers with no inbound traffic, pinned to minReplicas 1 on purpose (`admin-plane/main.bicep`). Pausing them silently stops Activator rules and Mirroring replication, and nothing wakes them. |
+| `loom-airflow` | LocalExecutor runs the webserver and the singleton scheduler in one replica pinned to minReplicas 1 (`airflow.bicep`). Pausing it silently stops every cron DAG. |
+| `loom-mcp`, `loom-mcp-bridge` | The console calls them synchronously on user request paths (agent flows, MCP server list and test-connection, the External-MCP panel) with a 5 s client timeout. Their wake time from zero is unmeasured, so the first call could report a false timeout; unverified wake time is treated as a reason to hold them out. |
 | `loom-redis-oss` | A shared cache that scales to zero loses every key. |
 | `loom-capacity-broker` | HA-critical admission control (minReplicas 2). |
 | `loom-onelake` | Namespace resolution is on the hot path. |
@@ -64,11 +67,11 @@ started before what it depends on. Each step is read back: Loom reports a servic
 paused or running only after Azure confirms it. No app-to-app dependency exists in the
 deploy wiring (every cross-app URL is console to app), so ordering is by type.
 
-An app with ingress wakes on traffic even while "paused", because its minimum is 0
-and its HTTP rule is unchanged. The panel then reports that app as running again
-(drift); this is true, not a fault. Background workers (for example scheduled Airflow
-DAGs, Activator rules, Mirroring) do **not** run while paused; exempt any app whose
-schedule must keep running.
+An app with ingress wakes on traffic even while "paused", because its minimum is 0 and its HTTP rule is unchanged. The panel then reports that app as running again (drift); this is true, not a fault. Apps that do background work with nothing calling them are on the never-pause list for that reason; exempt any other app whose schedule must keep running.
+
+## Crash safety
+
+Before each app is scaled down, its exact replica range is written to the pause snapshot (record first, then patch). A process death or a Cosmos error mid-pause therefore leaves a PAUSING record that resume can restore from, and a re-pause cannot lose the original range. If the record cannot be written, that app is not touched. A pause in which every verb is rejected leaves no record behind. A service whose pause verb was rejected is shown in the banner as "failed to pause" and is not counted as stopped.
 
 ## The banner
 
@@ -80,7 +83,10 @@ the banner turns red, names the services not confirmed back up, and keeps the bu
 as **Retry resume**. Everyone else sees "An administrator can resume them."
 
 The banner reads the pause snapshot only (no Azure call per page) and its polling is
-excluded from the idle signal, so it cannot keep the estate awake.
+excluded from the idle signal, so it cannot keep the estate awake. While a pause or
+resume is in flight it polls every 10 s, backs off while Azure throttles, and stops
+after 10 minutes (pause) or 20 minutes (resume) with a visible notice and a
+"Check again" link.
 
 ## How to resume
 

@@ -29,13 +29,13 @@ describe('global switch', () => {
   it('turning it OFF PUTs {enabled, idleHours} unchanged plus containerApps {enabled:false, exempt kept}', async () => {
     clientFetch.mockResolvedValue(ok);
     const onChanged = vi.fn();
-    mount(<EstateContainerAppsSection power={power({ enabled: true, exempt: ['loom-mcp'] })} containerApps={status([])} styles={styles} onChanged={onChanged} />);
+    mount(<EstateContainerAppsSection power={power({ enabled: true, exempt: ['loom-udf-runtime'] })} containerApps={status([])} styles={styles} onChanged={onChanged} />);
     fireEvent.click(screen.getByRole('switch', { name: /Include Container Apps in pause/ }));
     await waitFor(() => expect(clientFetch).toHaveBeenCalledTimes(1));
     const [url, init] = clientFetch.mock.calls[0] as [string, { method: string; body: string }];
     expect(url).toBe('/api/admin/estate/autopause');
     expect(init.method).toBe('PUT');
-    expect(JSON.parse(init.body)).toEqual({ enabled: true, idleHours: 4, containerApps: { enabled: false, exempt: ['loom-mcp'] } });
+    expect(JSON.parse(init.body)).toEqual({ enabled: true, idleHours: 4, containerApps: { enabled: false, exempt: ['loom-udf-runtime'] } });
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
   });
 
@@ -51,25 +51,25 @@ describe('global switch', () => {
 
 describe('per-app opt-out', () => {
   const apps = [
-    A('loom-mcp', 'will-pause'), A('loom-airflow', 'exempt'), A('loom-risingwave', 'held-out', 'it holds MV state'),
+    A('loom-udf-runtime', 'will-pause'), A('loom-dab-preview', 'exempt'), A('loom-risingwave', 'held-out', 'it holds MV state'),
     A('loom-trino', 'already-zero'), A('foreign', 'not-owned'),
   ];
 
   // Breaks if: unticking an app does not add it to `exempt` (lower-case), or drops the existing exemption.
   it('unticking a will-pause app PUTs it appended to the exempt list; existing exemptions are kept', async () => {
     clientFetch.mockResolvedValue(ok);
-    mount(<EstateContainerAppsSection power={power({ enabled: true, exempt: ['loom-airflow'] })} containerApps={status(apps)} styles={styles} onChanged={vi.fn()} />);
-    fireEvent.click(screen.getByRole('switch', { name: 'Auto-pause loom-mcp' }));
+    mount(<EstateContainerAppsSection power={power({ enabled: true, exempt: ['loom-dab-preview'] })} containerApps={status(apps)} styles={styles} onChanged={vi.fn()} />);
+    fireEvent.click(screen.getByRole('switch', { name: 'Auto-pause loom-udf-runtime' }));
     await waitFor(() => expect(clientFetch).toHaveBeenCalledTimes(1));
     expect(JSON.parse((clientFetch.mock.calls[0][1] as { body: string }).body).containerApps)
-      .toEqual({ enabled: true, exempt: ['loom-airflow', 'loom-mcp'] });
+      .toEqual({ enabled: true, exempt: ['loom-dab-preview', 'loom-udf-runtime'] });
   });
 
   // Breaks if: re-ticking an exempt app leaves it in `exempt`.
   it('ticking an exempt app PUTs it REMOVED from the exempt list', async () => {
     clientFetch.mockResolvedValue(ok);
-    mount(<EstateContainerAppsSection power={power({ enabled: true, exempt: ['loom-airflow'] })} containerApps={status(apps)} styles={styles} onChanged={vi.fn()} />);
-    fireEvent.click(screen.getByRole('switch', { name: 'Auto-pause loom-airflow' }));
+    mount(<EstateContainerAppsSection power={power({ enabled: true, exempt: ['loom-dab-preview'] })} containerApps={status(apps)} styles={styles} onChanged={vi.fn()} />);
+    fireEvent.click(screen.getByRole('switch', { name: 'Auto-pause loom-dab-preview' }));
     await waitFor(() => expect(clientFetch).toHaveBeenCalledTimes(1));
     expect(JSON.parse((clientFetch.mock.calls[0][1] as { body: string }).body).containerApps).toEqual({ enabled: true, exempt: [] });
   });
@@ -84,13 +84,13 @@ describe('per-app opt-out', () => {
     expect(screen.getByText('it holds MV state')).toBeTruthy();
     expect(screen.getByText('never paused')).toBeTruthy();
     // Positive pair: the pausable apps do have toggles.
-    expect(screen.getByRole('switch', { name: 'Auto-pause loom-mcp' })).toBeTruthy();
+    expect(screen.getByRole('switch', { name: 'Auto-pause loom-udf-runtime' })).toBeTruthy();
   });
 
   // Breaks if: per-app toggles stay live while the global opt-out is on (they would write meaningless exemptions).
   it('per-app toggles are disabled while the global switch is off', () => {
-    mount(<EstateContainerAppsSection power={power({ enabled: false, exempt: [] })} containerApps={status([A('loom-mcp', 'will-pause')])} styles={styles} onChanged={vi.fn()} />);
-    expect((screen.getByRole('switch', { name: 'Auto-pause loom-mcp' }) as HTMLInputElement).disabled).toBe(true);
+    mount(<EstateContainerAppsSection power={power({ enabled: false, exempt: [] })} containerApps={status([A('loom-udf-runtime', 'will-pause')])} styles={styles} onChanged={vi.fn()} />);
+    expect((screen.getByRole('switch', { name: 'Auto-pause loom-udf-runtime' }) as HTMLInputElement).disabled).toBe(true);
   });
 });
 
@@ -109,7 +109,7 @@ describe('honest states', () => {
 
   // Breaks if: an unreadable stored setting still lets the operator flip a switch blind.
   it('an UNREADABLE setting disables the switches and says no app is paused', () => {
-    mount(<EstateContainerAppsSection power={power(undefined, 'unreadable')} containerApps={status([A('loom-mcp', 'setting-unreadable')])} styles={styles} onChanged={vi.fn()} />);
+    mount(<EstateContainerAppsSection power={power(undefined, 'unreadable')} containerApps={status([A('loom-udf-runtime', 'setting-unreadable')])} styles={styles} onChanged={vi.fn()} />);
     expect(screen.getByText('Opt-outs cannot be read')).toBeTruthy();
     expect((screen.getByRole('switch', { name: /Include Container Apps in pause/ }) as HTMLInputElement).disabled).toBe(true);
   });

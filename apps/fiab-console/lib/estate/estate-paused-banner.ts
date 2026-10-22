@@ -25,6 +25,8 @@ export interface PausedBannerModel {
   count: number;
   /** Display names of those services. */
   names: string[];
+  /** Services whose pause was REJECTED: still running, so NOT in count/names (review N4). */
+  failedToPause: string[];
   pausedAt: string | null;
   /** Admins: the identity. Everyone else: null. */
   pausedBy: string | null;
@@ -50,8 +52,10 @@ export function summarizePausedSnapshot(
   if (!snapshot || !SHOWN.includes(snapshot.state)) return { paused: false };
   // An entry whose pre-pause state was already stopped was not paused by Loom and
   // is not restarted by resume: counting it would overstate what the banner claims.
-  const stopped = snapshot.resources.filter((r) => !isPausedState(r.prePausePowerState));
-  if (stopped.length === 0) return { paused: false };
+  const failedToPause = snapshot.resources.filter((r) => r.pauseFailed !== undefined && !isPausedState(r.prePausePowerState));
+  const stopped = snapshot.resources.filter((r) => !isPausedState(r.prePausePowerState) && r.pauseFailed === undefined);
+  // Nothing stopped AND nothing failed: there is nothing to tell anyone. Failures alone are worth a banner.
+  if (stopped.length === 0 && failedToPause.length === 0) return { paused: false };
 
   const by = snapshot.createdBy ?? null;
   const kind: PausedBannerModel['pausedByKind'] = by === null ? 'unknown' : by.startsWith('sp:') ? 'automation' : 'person';
@@ -70,6 +74,7 @@ export function summarizePausedSnapshot(
     state: snapshot.state as PausedBannerState,
     count: stopped.length,
     names: stopped.map((r) => r.name),
+    failedToPause: failedToPause.map((r) => r.name),
     pausedAt: snapshot.pausedAt ?? snapshot.createdAt ?? null,
     pausedBy: opts.isAdmin ? by : null,
     pausedByKind: kind,

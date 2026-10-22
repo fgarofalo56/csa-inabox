@@ -23,7 +23,7 @@ const entry = (name: string) => ({
   resourceType: 'microsoft.app/containerapps', name, prePausePowerState: 'Online',
 });
 const snapshot = (over: Record<string, unknown> = {}) => ({
-  state: 'PAUSED', resources: [entry('loom-mcp'), entry('loom-airflow')],
+  state: 'PAUSED', resources: [entry('loom-udf-runtime'), entry('loom-dab-preview')],
   createdAt: '2026-10-22T01:00:00.000Z', pausedAt: '2026-10-22T01:04:00.000Z', createdBy: 'admin@contoso.com', ...over,
 });
 
@@ -55,7 +55,7 @@ describe('GET /api/estate/paused', () => {
     loadPauseSnapshot.mockResolvedValue(snapshot());
     const { GET } = await import('../route');
     const j = await (await GET(req(), ctx)).json();
-    expect(j).toMatchObject({ paused: true, state: 'PAUSED', count: 2, names: ['loom-mcp', 'loom-airflow'], canResume: false, pausedBy: null, pausedByKind: 'person' });
+    expect(j).toMatchObject({ paused: true, state: 'PAUSED', count: 2, names: ['loom-udf-runtime', 'loom-dab-preview'], canResume: false, pausedBy: null, pausedByKind: 'person' });
     expect(JSON.stringify(j)).not.toContain('admin@contoso.com');
     expect(JSON.stringify(j)).not.toContain('/subscriptions/');
   });

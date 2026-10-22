@@ -16,7 +16,7 @@ const entry = (name: string, pre: PausedResourceSnapshot['prePausePowerState'] =
 
 const snap = (over: Partial<EstatePauseSnapshot> = {}): EstatePauseSnapshot => ({
   id: 'snap', tenantId: 't', schemaVersion: 1, estateId: 'e', state: 'PAUSED',
-  resources: [entry('loom-mcp'), entry('loom-airflow'), entry('loom-activator')],
+  resources: [entry('loom-udf-runtime'), entry('loom-dab-preview'), entry('loom-transform-runner')],
   createdAt: '2026-10-22T01:00:00.000Z', updatedAt: '2026-10-22T01:05:00.000Z',
   createdBy: 'sp:app-123', pausedAt: '2026-10-22T01:04:00.000Z',
   ...over,
@@ -43,10 +43,10 @@ describe('hidden when nothing is paused', () => {
 describe('shown with the correct count', () => {
   // Breaks if: count is resources.length (4) instead of the number Loom stopped (3).
   it('counts only services Loom stopped; pre-stopped ones are excluded from count AND names', () => {
-    const s = snap({ resources: [entry('loom-mcp'), entry('loom-airflow'), entry('loom-activator'), entry('old', 'Paused')] });
+    const s = snap({ resources: [entry('loom-udf-runtime'), entry('loom-dab-preview'), entry('loom-transform-runner'), entry('old', 'Paused')] });
     const m = summarizePausedSnapshot(s, { isAdmin: true });
     expect(m).toMatchObject({ paused: true, state: 'PAUSED', count: 3 });
-    expect((m as { names: string[] }).names).toEqual(['loom-mcp', 'loom-airflow', 'loom-activator']);
+    expect((m as { names: string[] }).names).toEqual(['loom-udf-runtime', 'loom-dab-preview', 'loom-transform-runner']);
   });
 
   // Breaks if: PAUSING / RESUMING / RESUME_FAILED stop being surfaced (the banner would vanish mid-transition).
@@ -59,6 +59,31 @@ describe('shown with the correct count', () => {
     expect(summarizePausedSnapshot(snap(), { isAdmin: true })).toMatchObject({ pausedAt: '2026-10-22T01:04:00.000Z' });
     const pausing = snap({ state: 'PAUSING', pausedAt: undefined });
     expect(summarizePausedSnapshot(pausing, { isAdmin: true })).toMatchObject({ pausedAt: '2026-10-22T01:00:00.000Z' });
+  });
+});
+
+describe('apps whose pause FAILED are not counted as stopped (review N4)', () => {
+  const failedEntry = (name: string) => ({ ...entry(name), pauseFailed: 'ARM 409' });
+
+  // Breaks if: count = resources not pre-stopped (ignores pauseFailed): 3 would show instead of 2.
+  it('count and names exclude the rejected app, which is listed separately in failedToPause', () => {
+    const s = snap({ state: 'PAUSING', resources: [entry('loom-udf-runtime'), failedEntry('loom-dab-preview'), entry('loom-transform-runner')] });
+    const m = summarizePausedSnapshot(s, { isAdmin: true }) as { count: number; names: string[]; failedToPause: string[] };
+    expect(m.count).toBe(2);
+    expect(m.names).toEqual(['loom-udf-runtime', 'loom-transform-runner']);
+    expect(m.failedToPause).toEqual(['loom-dab-preview']);
+  });
+
+  // Breaks if: an all-rejected snapshot is hidden (the operator would never learn the pause failed) or counted as paused.
+  it('only failures: still shown, with count 0 and the failures named', () => {
+    const m = summarizePausedSnapshot(snap({ state: 'PAUSING', resources: [failedEntry('a'), failedEntry('b')] }), { isAdmin: false });
+    expect(m).toMatchObject({ paused: true, count: 0, failedToPause: ['a', 'b'] });
+  });
+
+  // Breaks if: pre-stopped entries that also carry a marker are reported as failures.
+  it('an already-stopped entry is neither counted nor reported failed', () => {
+    const m = summarizePausedSnapshot(snap({ resources: [entry('x'), { ...entry('old', 'Paused'), pauseFailed: 'n/a' }] }), { isAdmin: true });
+    expect(m).toMatchObject({ count: 1, failedToPause: [] });
   });
 });
 
@@ -83,16 +108,16 @@ describe('RESUME_FAILED is honest', () => {
     const s = snap({
       state: 'RESUME_FAILED',
       resumeOutcomes: [
-        { resourceId: entry('loom-mcp').resourceId, confirmation: 'confirmed-running', reason: 'ok' },
-        { resourceId: entry('loom-airflow').resourceId, confirmation: 'unknown', reason: 'no reading' },
-        { resourceId: entry('loom-activator').resourceId, confirmation: 'confirmed-mismatch', reason: 'min 0' },
+        { resourceId: entry('loom-udf-runtime').resourceId, confirmation: 'confirmed-running', reason: 'ok' },
+        { resourceId: entry('loom-dab-preview').resourceId, confirmation: 'unknown', reason: 'no reading' },
+        { resourceId: entry('loom-transform-runner').resourceId, confirmation: 'confirmed-mismatch', reason: 'min 0' },
       ],
     });
     const m = summarizePausedSnapshot(s, { isAdmin: true }) as { failure: string };
     expect(m.failure).toContain('2 service(s)');
-    expect(m.failure).toContain('loom-airflow');
-    expect(m.failure).toContain('loom-activator');
-    expect(m.failure).not.toContain('loom-mcp');
+    expect(m.failure).toContain('loom-dab-preview');
+    expect(m.failure).toContain('loom-transform-runner');
+    expect(m.failure).not.toContain('loom-udf-runtime');
     expect(m.failure).not.toContain('/subscriptions/');
   });
 

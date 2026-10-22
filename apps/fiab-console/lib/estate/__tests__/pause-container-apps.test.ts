@@ -38,8 +38,8 @@ const pausedNames = (r: ReturnType<typeof classify>) => r.discovered.map((d) => 
 describe('default: every ordinary Container App joins the pause set', () => {
   // Breaks if: the default flips to opt-in (an app with no setting is not discovered) -> []
   it('an owned, min>=1 app is will-pause and is discovered as a containerapps resource with its range recorded', () => {
-    const r = classify([app('loom-mcp', { min: 1, max: 3 }), app('loom-airflow', { min: 2, max: 2 })]);
-    expect(pausedNames(r)).toEqual(['loom-mcp', 'loom-airflow']);
+    const r = classify([app('loom-udf-runtime', { min: 1, max: 3 }), app('loom-dab-preview', { min: 2, max: 2 })]);
+    expect(pausedNames(r)).toEqual(['loom-udf-runtime', 'loom-dab-preview']);
     expect(r.discovered[0]).toMatchObject({
       resourceType: 'microsoft.app/containerapps', subscriptionId: SUB, resourceGroup: RG, discoverySource: 'arm-rg-list',
     });
@@ -48,8 +48,8 @@ describe('default: every ordinary Container App joins the pause set', () => {
 
   // Breaks if: the tag key match is case-sensitive and a differently-cased tag drops the app.
   it('the estate tag key is matched case-insensitively', () => {
-    const r = classify([app('loom-mcp', { tags: { 'Loom-Estate-Id': ESTATE } })]);
-    expect(pausedNames(r)).toEqual(['loom-mcp']);
+    const r = classify([app('loom-udf-runtime', { tags: { 'Loom-Estate-Id': ESTATE } })]);
+    expect(pausedNames(r)).toEqual(['loom-udf-runtime']);
   });
 });
 
@@ -60,10 +60,10 @@ describe('the console is never pausable', () => {
     ['ca-loom-console-eu', SELF],     // named like a console
     ['loom-brain', 'loom-brain'],     // not console-named; it IS this process
   ])('%s (self=%s) is held out and absent from the pause set', (name, self) => {
-    const r = classify([app(name), app('loom-mcp')], { selfAppName: self });
+    const r = classify([app(name), app('loom-udf-runtime')], { selfAppName: self });
     expect(stateOf(r, name)).toBe('held-out');
     expect(pausedNames(r)).not.toContain(name);
-    expect(pausedNames(r)).toContain('loom-mcp'); // positive pair: the filter is not just "pause nothing"
+    expect(pausedNames(r)).toContain('loom-udf-runtime'); // positive pair: the filter is not just "pause nothing"
   });
 
   // Breaks if: a loom-role=console tag stops being honoured on a name that does not say console.
@@ -75,9 +75,9 @@ describe('the console is never pausable', () => {
 
   // Breaks if: an unset CONTAINER_APP_NAME is read as "not the console" -> everything is discovered.
   it('with the process identity unknown NO app is discovered (fail safe)', () => {
-    const r = classify([app('loom-mcp'), app('loom-console')], { selfAppName: undefined });
+    const r = classify([app('loom-udf-runtime'), app('loom-console')], { selfAppName: undefined });
     expect(r.discovered).toHaveLength(0);
-    expect(stateOf(r, 'loom-mcp')).toBe('held-out');
+    expect(stateOf(r, 'loom-udf-runtime')).toBe('held-out');
   });
 });
 
@@ -95,51 +95,53 @@ describe('the never-pause list is skipped', () => {
     expect(stateOf(classify([app('Loom-RisingWave')]), 'Loom-RisingWave')).toBe('held-out');
   });
 
-  // Breaks if: the list swallows its neighbours (a prefix match on 'loom-unity' would hold 'loom-unity-postgres' - not an app here - or 'loom-mcp').
+  // Breaks if: the list swallows its neighbours (a prefix match on 'loom-unity' would hold 'loom-unity-postgres' - not an app here - or 'loom-udf-runtime').
   it('an app that merely resembles a listed name is NOT held out', () => {
     const r = classify([app('loom-risingwave-sandbox')]);
     expect(stateOf(r, 'loom-risingwave-sandbox')).toBe('will-pause');
   });
 
-  // The operator's list of 13 always-on apps: only the three with MEASURED data-loss / outage on wake are excluded.
-  it('of the operator\'s always-on apps exactly risingwave, iceberg-catalog and unity are held out; the rest are pausable', () => {
+  // The operator's 12 named always-on apps: those with measured data loss, a silent stop with nothing to wake them,
+  // or an unproven wake against a 5s/30s user-path timeout are held out (see NEVER_PAUSE_CONTAINER_APPS).
+  it('of the 12 apps the operator named apps exactly 8 are held out and the 4 remaining are pausable', () => {
     const named = ['loom-activator', 'loom-airflow', 'iceberg-catalog', 'loom-dab-preview', 'loom-directlake', 'loom-mcp',
       'loom-mcp-bridge', 'loom-mirroring', 'loom-risingwave', 'loom-transform-runner', 'loom-udf-runtime', 'loom-unity'];
     const r = classify(named.map((n) => app(n)));
-    expect(r.rows.filter((x) => x.state === 'held-out').map((x) => x.name).sort())
-      .toEqual(['iceberg-catalog', 'loom-risingwave', 'loom-unity']);
-    expect(pausedNames(r)).toHaveLength(9);
+    expect(r.rows.filter((x) => x.state === 'held-out').map((x) => x.name).sort()).toEqual([
+      'iceberg-catalog', 'loom-activator', 'loom-airflow', 'loom-mcp', 'loom-mcp-bridge', 'loom-mirroring', 'loom-risingwave', 'loom-unity',
+    ]);
+    expect(pausedNames(r).sort()).toEqual(['loom-dab-preview', 'loom-directlake', 'loom-transform-runner', 'loom-udf-runtime']);
   });
 });
 
 describe('opt-outs are respected', () => {
-  // Breaks if: `exempt` is ignored -> loom-airflow is discovered.
+  // Breaks if: `exempt` is ignored -> loom-dab-preview is discovered.
   it('a per-app exemption removes exactly that app and no other', () => {
-    const apps = [app('loom-airflow'), app('loom-mcp')];
-    const without = classify(apps, { policy: { enabled: true, exempt: ['loom-airflow'] } });
-    expect(stateOf(without, 'loom-airflow')).toBe('exempt');
-    expect(pausedNames(without)).toEqual(['loom-mcp']);
+    const apps = [app('loom-dab-preview'), app('loom-udf-runtime')];
+    const without = classify(apps, { policy: { enabled: true, exempt: ['loom-dab-preview'] } });
+    expect(stateOf(without, 'loom-dab-preview')).toBe('exempt');
+    expect(pausedNames(without)).toEqual(['loom-udf-runtime']);
     // The same input minus the exemption pauses it: the exemption is what changed the outcome.
-    expect(pausedNames(classify(apps))).toEqual(['loom-airflow', 'loom-mcp']);
+    expect(pausedNames(classify(apps))).toEqual(['loom-dab-preview', 'loom-udf-runtime']);
   });
 
   // Breaks if: exempt names are compared case-sensitively against ARM's name.
   it('exemption matches case-insensitively', () => {
-    expect(stateOf(classify([app('Loom-Mcp')], { policy: { enabled: true, exempt: ['loom-mcp'] } }), 'Loom-Mcp')).toBe('exempt');
+    expect(stateOf(classify([app('Loom-Udf-Runtime')], { policy: { enabled: true, exempt: ['loom-udf-runtime'] } }), 'Loom-Udf-Runtime')).toBe('exempt');
   });
 
   // Breaks if: the global switch is ignored -> apps are discovered with enabled:false.
   it('the global opt-out leaves EVERY app running, each listed as opted-out', () => {
-    const r = classify([app('loom-mcp'), app('loom-airflow')], { policy: { enabled: false, exempt: [] } });
+    const r = classify([app('loom-udf-runtime'), app('loom-dab-preview')], { policy: { enabled: false, exempt: [] } });
     expect(r.discovered).toHaveLength(0);
     expect(r.rows.map((x) => x.state)).toEqual(['opted-out', 'opted-out']);
   });
 
   // Breaks if: an unreadable setting falls back to the default (ON) and pauses apps that may have been exempted.
   it('an UNREADABLE setting pauses nothing (we cannot know what was exempted)', () => {
-    const r = classify([app('loom-mcp')], { settingUnreadable: true });
+    const r = classify([app('loom-udf-runtime')], { settingUnreadable: true });
     expect(r.discovered).toHaveLength(0);
-    expect(stateOf(r, 'loom-mcp')).toBe('setting-unreadable');
+    expect(stateOf(r, 'loom-udf-runtime')).toBe('setting-unreadable');
   });
 });
 
@@ -182,17 +184,17 @@ describe('discoverContainerApps', () => {
     discoverContainerApps({ policy: ON, settingUnreadable: false, estateId: ESTATE, env, list, ...over });
 
   it('lists the configured group and returns will-pause apps (the list was called with the real sub + rg)', async () => {
-    const list = vi.fn(async () => [app('loom-mcp'), app('loom-console')]);
+    const list = vi.fn(async () => [app('loom-udf-runtime'), app('loom-console')]);
     const out = await run(list);
     expect(list).toHaveBeenCalledWith(SUB, RG);
-    expect(out.discovered.map((d) => d.name)).toEqual(['loom-mcp']);
+    expect(out.discovered.map((d) => d.name)).toEqual(['loom-udf-runtime']);
     expect(out.status).toMatchObject({ configured: true, resourceGroup: RG, listed: 2, willPause: 1 });
     expect(out.readFailures).toEqual([]);
   });
 
   // Breaks if: an AKS-platform deployment tries to list Container Apps (they do not exist there).
   it('a deployment on LOOM_CONTAINER_PLATFORM=aks is not configured and makes no ARM call', async () => {
-    const list = vi.fn(async () => [app('loom-mcp')]);
+    const list = vi.fn(async () => [app('loom-udf-runtime')]);
     const out = await run(list, { env: { ...env, LOOM_CONTAINER_PLATFORM: 'aks' } as NodeJS.ProcessEnv });
     expect(list).not.toHaveBeenCalled();
     expect(out.status.configured).toBe(false);

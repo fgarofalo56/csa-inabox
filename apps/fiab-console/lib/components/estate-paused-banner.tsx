@@ -26,13 +26,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, MessageBar, MessageBarActions, MessageBarBody, MessageBarTitle, Spinner, makeStyles, tokens } from '@fluentui/react-components';
 import { clientFetch } from '@/lib/client-fetch';
 import { useShellSession } from './session-context';
-import { isTabHidden } from '@/lib/components/admin-scaling/estate-power-poll';
+import { BASE_POLL_MS, isTabHidden, isThrottledResponse, nextPollDelayMs } from '@/lib/components/admin-scaling/estate-power-poll';
 
 interface PausedBannerData {
   paused: boolean;
   state?: 'PAUSING' | 'PAUSED' | 'RESUMING' | 'RESUME_FAILED';
   count?: number;
   names?: string[];
+  failedToPause?: string[];
   pausedAt?: string | null;
   pausedBy?: string | null;
   pausedByKind?: 'person' | 'automation' | 'unknown';
@@ -46,8 +47,11 @@ const useStyles = makeStyles({
   meta: { color: tokens.colorNeutralForeground3, display: 'block', marginTop: tokens.spacingVerticalXXS },
 });
 
-/** Poll cadence while a transition is in flight. */
-export const BANNER_POLL_MS = 10_000;
+/** Base poll cadence while a transition is in flight (backs off while ARM throttles, like the panel). */
+export const BANNER_POLL_MS = BASE_POLL_MS;
+/** Automatic refresh stops after this long in one in-flight state; the banner then says so. */
+export const PAUSING_POLL_BUDGET_MS = 10 * 60_000;
+export const RESUMING_POLL_BUDGET_MS = 20 * 60_000;
 const MAX_NAMES = 5;
 
 /** "a, b, c and 2 more". Pure, exported for the test. */
@@ -82,8 +86,11 @@ export function EstatePausedBanner() {
 
   // An admin read of the state route is what PROMOTES an in-flight snapshot
   // (RESUMING -> RUNNING). Its body is not used: the banner re-reads the cheap view.
-  const promote = useCallback(async () => {
-    try { await clientFetch('/api/admin/estate/state'); } catch { /* the next tick retries */ }
+  const promote = useCallback(async (): Promise<boolean> => {
+    try {
+      const r = await clientFetch('/api/admin/estate/state');
+      return isThrottledResponse(await r.json().catch(() => null));
+    } catch { return false; /* the next tick retries */ }
   }, []);
 
   useEffect(() => {
@@ -94,15 +101,39 @@ export function EstatePausedBanner() {
   }, [session.authenticated, load]);
 
   const inFlight = data?.state === 'PAUSING' || data?.state === 'RESUMING';
+  const streak = useRef(0);
+  const flightSince = useRef<{ state: string; at: number } | null>(null);
+  const [gaveUp, setGaveUp] = useState<string | null>(null);
+  const [pollNonce, setPollNonce] = useState(0);
+  const flightState = data?.state;
   useEffect(() => {
-    if (!session.authenticated || !(inFlight || resuming)) return;
-    const t = setInterval(async () => {
-      if (isTabHidden()) return;
-      if (session.isTenantAdmin) await promote();
-      await load();
-    }, BANNER_POLL_MS);
-    return () => clearInterval(t);
-  }, [session.authenticated, session.isTenantAdmin, inFlight, resuming, load, promote]);
+    if (!session.authenticated || !(inFlight || resuming)) {
+      flightSince.current = null;
+      streak.current = 0;
+      setGaveUp(null);
+      return;
+    }
+    const key = flightState ?? 'RESUMING';
+    if (!flightSince.current || flightSince.current.state !== key) flightSince.current = { state: key, at: Date.now() };
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const schedule = () => { timer = setTimeout(tick, nextPollDelayMs(streak.current)); };
+    const tick = async () => {
+      if (cancelled) return;
+      const budget = key === 'PAUSING' ? PAUSING_POLL_BUDGET_MS : RESUMING_POLL_BUDGET_MS;
+      if (flightSince.current && Date.now() - flightSince.current.at > budget) {
+        setGaveUp(key);
+        return;
+      }
+      if (!isTabHidden()) {
+        streak.current = session.isTenantAdmin && (await promote()) ? streak.current + 1 : 0;
+        await load();
+      }
+      if (!cancelled) schedule();
+    };
+    schedule();
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [session.authenticated, session.isTenantAdmin, inFlight, resuming, flightState, pollNonce, load, promote]);
 
   // Once the server reports a state other than the one we asked for, stop "resuming".
   useEffect(() => {
@@ -137,17 +168,34 @@ export function EstatePausedBanner() {
   const failed = data.state === 'RESUME_FAILED';
   const busy = resuming || data.state === 'RESUMING';
 
-  const intent = failed ? 'error' : data.state === 'PAUSED' ? 'warning' : 'info';
+  const failedPause = data.failedToPause ?? [];
+  const intent = failed ? 'error' : failedPause.length > 0 || data.state === 'PAUSED' ? 'warning' : 'info';
+  // A pause that stalled (rejected verbs, or a crash mid-run) can only be recovered by resuming the record.
+  const canRecoverPause = data.state === 'PAUSING' && (failedPause.length > 0 || gaveUp === 'PAUSING');
 
   return (
     <div className={s.wrap} data-testid="estate-paused-banner" data-intent={intent}>
       <MessageBar intent={intent}>
         <MessageBarBody>
-          {data.state === 'PAUSING' && (
+          {data.state === 'PAUSING' && count > 0 && (
             <>
               <MessageBarTitle>Pausing {count} {count === 1 ? 'service' : 'services'}</MessageBarTitle>
               <span className={s.names}>{names}</span>
             </>
+          )}
+          {data.state === 'PAUSING' && count === 0 && (
+            <MessageBarTitle>The pause did not stop any service</MessageBarTitle>
+          )}
+          {failedPause.length > 0 && !failed && (
+            <span className={s.names} role="status">
+              {failedPause.length} {failedPause.length === 1 ? 'service' : 'services'} failed to pause and {failedPause.length === 1 ? 'is' : 'are'} still running: {nameList(failedPause)}.
+            </span>
+          )}
+          {gaveUp && (
+            <span className={s.meta} role="status">
+              Still {gaveUp === 'PAUSING' ? 'pausing' : 'resuming'} after {gaveUp === 'PAUSING' ? PAUSING_POLL_BUDGET_MS / 60_000 : RESUMING_POLL_BUDGET_MS / 60_000} minutes; automatic refresh has stopped. Open Admin &gt; Scaling for per-service status.{' '}
+              <Button size="small" appearance="subtle" onClick={() => { flightSince.current = null; setGaveUp(null); setPollNonce((n) => n + 1); }}>Check again</Button>
+            </span>
           )}
           {data.state === 'PAUSED' && (
             <>
@@ -175,10 +223,10 @@ export function EstatePausedBanner() {
             <span role="alert" className={s.meta}>Resume was not started: {resumeError}</span>
           )}
         </MessageBarBody>
-        {canResume && (data.state === 'PAUSED' || failed) && (
+        {canResume && (data.state === 'PAUSED' || failed || canRecoverPause) && (
           <MessageBarActions>
             <Button size="small" appearance="primary" disabled={busy} onClick={() => { void resume(); }}>
-              {busy ? 'Resuming…' : failed ? 'Retry resume' : 'Resume'}
+              {busy ? 'Resuming…' : failed ? 'Retry resume' : canRecoverPause ? 'Resume (undo the partial pause)' : 'Resume'}
             </Button>
           </MessageBarActions>
         )}

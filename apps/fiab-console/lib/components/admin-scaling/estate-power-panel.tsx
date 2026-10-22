@@ -178,7 +178,7 @@ export function EstateAutoPauseSection({ power, styles, onChanged }: {
   const parsed = parseIdleHours(hours);
   const hoursInvalid = dirty && parsed === null;
 
-  async function save(next: { enabled: boolean; idleHours: number }) {
+  async function save(next: { enabled: boolean; idleHours: number; containerApps?: { enabled: boolean; exempt: string[] } }) {
     setSaving(true);
     setSaveError(null);
     setSaved(false);
@@ -244,7 +244,7 @@ export function EstateAutoPauseSection({ power, styles, onChanged }: {
           </MessageBarBody>
           <MessageBarActions>
             <Button size="small" disabled={saving}
-              onClick={() => { void save({ enabled: true, idleHours: 2 }); }}>
+              onClick={() => { void save({ enabled: true, idleHours: 2, containerApps: { enabled: true, exempt: [] } }); }}>
               Reset to defaults (on, 2 hours)
             </Button>
           </MessageBarActions>

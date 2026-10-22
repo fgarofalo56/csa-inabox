@@ -55,6 +55,7 @@ import { cachedStateRead, clearStateCache } from '@/lib/estate/estate-state-cach
 import { loadActivity } from '@/lib/estate/estate-activity';
 import { loadAutoPause } from '@/lib/estate/estate-autopause';
 import { mergeForPause, resolveContainerAppsForPause } from '@/lib/estate/estate-pause-set';
+import { discardPauseProgress, withIncrementalSnapshot } from '@/lib/estate/pause-incremental';
 import { loadPipelineActivity } from '@/lib/estate/estate-pipeline-activity';
 import type { EstatePowerStatus } from '@/lib/estate/estate-power-contract';
 import { resolveReadVerdict, type EstatePauseSnapshot } from '@/lib/estate/pause-state';
@@ -569,8 +570,13 @@ async function pausePostImpl(caller: EstateCaller, body: PauseBody) {
     },
   });
 
-  const run = await startPause(plan, actuator, {
-    snapshotId: randomUUID(),
+  // Record first, then patch (review N1): each resource's pre-pause state is persisted
+  // BEFORE its mutation, so a crash mid-loop leaves a recoverable PAUSING snapshot.
+  const snapshotId = randomUUID();
+  const progressBase = { id: snapshotId, tenantId, estateId: manifest.estateId, createdBy: who };
+  const incremental = withIncrementalSnapshot(actuator, progressBase);
+  const run = await startPause(plan, incremental.actuator, {
+    snapshotId,
     tenantId,
     estateId: manifest.estateId,
     // A CALLBACK, not the manifest we resolved above. W1 removed the ability to
@@ -585,6 +591,7 @@ async function pausePostImpl(caller: EstateCaller, body: PauseBody) {
   // records that as RUNNING rather than as an empty PAUSING snapshot; report it
   // as the no-op it is, with the per-resource reasons.
   if (run.capturedNone) {
+    if (incremental.wasPersisted()) await discardPauseProgress(existing, progressBase).catch(() => {});
     await audit(caller, 'estate-pause.captured-nothing', {
       estateId: manifest.estateId,
       actions: run.actions.map((a) => ({ id: a.resourceId, status: a.status })),
@@ -611,6 +618,7 @@ async function pausePostImpl(caller: EstateCaller, body: PauseBody) {
   // resource is physically stopped. All-already-paused with zero failures
   // still saves: that snapshot settles to PAUSED on the first poll, truly.)
   if (dispatched.length === 0 && failed.length > 0) {
+    if (incremental.wasPersisted()) await discardPauseProgress(existing, progressBase).catch(() => {});
     const alreadyPaused = run.actions.filter((a) => a.status === 'already-paused').length;
     const skipped = run.actions.filter((a) => a.status === 'skipped').length;
     await audit(caller, 'estate-pause.all-dispatches-rejected', {
@@ -643,6 +651,12 @@ async function pausePostImpl(caller: EstateCaller, body: PauseBody) {
     );
   }
 
+  // Record which resources the pause verb was REJECTED for, so the banner does not
+  // count them as stopped (review N4).
+  for (const a of failed) {
+    const r = run.snapshot.resources.find((x) => x.resourceId === a.resourceId);
+    if (r) r.pauseFailed = String(a.error || a.detail || 'pause rejected').slice(0, 300);
+  }
   await savePauseSnapshot(run.snapshot);
 
   await audit(caller, failed.length ? 'estate-pause.partial' : 'estate-pause.dispatched', {

@@ -52,7 +52,7 @@ describe('AppShell mounts the paused banner', () => {
   it('paused estate: the banner renders inside <main>, BEFORE the page content', async () => {
     clientFetch.mockImplementation(async (url: string) => {
       if (url === '/api/me') return json(ME);
-      if (url === '/api/estate/paused') return json({ ok: true, paused: true, state: 'PAUSED', count: 2, names: ['loom-mcp', 'loom-airflow'], pausedAt: '2026-10-22T01:04:00.000Z', pausedBy: 'a@x', pausedByKind: 'person', failure: null, canResume: true });
+      if (url === '/api/estate/paused') return json({ ok: true, paused: true, state: 'PAUSED', count: 2, names: ['loom-udf-runtime', 'loom-dab-preview'], pausedAt: '2026-10-22T01:04:00.000Z', pausedBy: 'a@x', pausedByKind: 'person', failure: null, canResume: true });
       return json({ ok: true });
     });
     mount();
