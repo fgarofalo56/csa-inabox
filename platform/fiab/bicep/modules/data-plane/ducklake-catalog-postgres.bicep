@@ -198,12 +198,20 @@ var privateDnsZoneName = 'privatelink.postgres${pgHostSuffix}'
 var peVnetId = join(take(split(privateEndpointSubnetId, '/'), 9), '/')
 var createDnsZone = empty(privateDnsZoneId)
 var dnsVnetIds = union([peVnetId], additionalDnsVnetIds)
+// Estate Power (#5099 phase B): the apps that connect to this server. loom-duckdb
+// ATTACHes the catalog and the Console binds LOOM_DUCKLAKE_CATALOG_URL from it (main.bicep
+// secretRef), so the server is pinned by the never-pause duckdb tier AND by the console and
+// is never stopped. Applied to the SERVER only (the dependency guard reads servers).
+@description('Estate Power consumers tag (loom-estate-pause-consumers): comma-separated Container App names that use this server. Absent/empty means "consumers unknown" and the server is never stopped; the literal value none certifies no running app uses it.')
+param estatePauseConsumers string = 'loom-console,loom-duckdb'
+
 var tags = union(complianceTags, { 'loom-band': 'data-plane', 'loom-item': 'ducklake-catalog' })
+var serverTags = union(tags, { 'loom-estate-pause-consumers': estatePauseConsumers })
 
 resource pg 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
   name: name
   location: location
-  tags: tags
+  tags: serverTags
   sku: {
     name: skuName
     tier: tier

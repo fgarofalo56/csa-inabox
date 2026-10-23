@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "10779105138870699135"
+      "templateHash": "4634642744041404638"
     }
   },
   "definitions": {
@@ -2626,7 +2626,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "6741796519755356659"
+              "templateHash": "8279651210516474802"
             }
           },
           "definitions": {
@@ -9713,7 +9713,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "8604523805224697774"
+                      "templateHash": "3309861384972782382"
                     }
                   },
                   "parameters": {
@@ -9873,7 +9873,7 @@
                       "apiVersion": "2024-04-01",
                       "name": "[parameters('functionAppName')]",
                       "location": "[parameters('location')]",
-                      "tags": "[parameters('complianceTags')]",
+                      "tags": "[union(parameters('complianceTags'), createObject('loom-estate-pause', 'exempt'))]",
                       "kind": "functionapp,linux",
                       "identity": {
                         "type": "SystemAssigned"
@@ -18862,7 +18862,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "16564982185907125048"
+                      "templateHash": "8646268931646634492"
                     }
                   },
                   "parameters": {
@@ -18976,6 +18976,13 @@
                       "metadata": {
                         "description": "Deny public network access (publicNetworkAccess=Disabled) — reachable only over a private endpoint / VNet path. Hardened default true. The orchestrator passes false in topologies with no private-endpoint wiring for this service, keeping it reachable over Entra-only public access until a private endpoint is added. Derivation mirrors admin-plane/ai-foundry.bicep."
                       }
+                    },
+                    "estatePauseConsumers": {
+                      "type": "string",
+                      "defaultValue": "loom-airflow",
+                      "metadata": {
+                        "description": "Estate Power consumers tag (loom-estate-pause-consumers): comma-separated Container App names that use this server. Absent/empty means \"consumers unknown\" and the server is never stopped; the literal value none certifies no running app uses it."
+                      }
                     }
                   },
                   "variables": {
@@ -19057,7 +19064,7 @@
                       "apiVersion": "2024-08-01",
                       "name": "[variables('pgServerName')]",
                       "location": "[parameters('location')]",
-                      "tags": "[parameters('complianceTags')]",
+                      "tags": "[union(parameters('complianceTags'), createObject('loom-estate-pause-consumers', parameters('estatePauseConsumers')))]",
                       "sku": {
                         "name": "[parameters('pgSkuName')]",
                         "tier": "[parameters('pgTier')]"
@@ -19394,7 +19401,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "15828280024890952245"
+                      "templateHash": "5747251598628451308"
                     }
                   },
                   "parameters": {
@@ -19577,6 +19584,13 @@
                       "metadata": {
                         "description": "Compliance/cost tags."
                       }
+                    },
+                    "estatePauseConsumers": {
+                      "type": "string",
+                      "defaultValue": "loom-console,loom-duckdb",
+                      "metadata": {
+                        "description": "Estate Power consumers tag (loom-estate-pause-consumers): comma-separated Container App names that use this server. Absent/empty means \"consumers unknown\" and the server is never stopped; the literal value none certifies no running app uses it."
+                      }
                     }
                   },
                   "variables": {
@@ -19586,7 +19600,8 @@
                     "peVnetId": "[join(take(split(parameters('privateEndpointSubnetId'), '/'), 9), '/')]",
                     "createDnsZone": "[empty(parameters('privateDnsZoneId'))]",
                     "dnsVnetIds": "[union(createArray(variables('peVnetId')), parameters('additionalDnsVnetIds'))]",
-                    "tags": "[union(parameters('complianceTags'), createObject('loom-band', 'data-plane', 'loom-item', 'ducklake-catalog'))]"
+                    "tags": "[union(parameters('complianceTags'), createObject('loom-band', 'data-plane', 'loom-item', 'ducklake-catalog'))]",
+                    "serverTags": "[union(variables('tags'), createObject('loom-estate-pause-consumers', parameters('estatePauseConsumers')))]"
                   },
                   "resources": [
                     {
@@ -19594,7 +19609,7 @@
                       "apiVersion": "2024-08-01",
                       "name": "[parameters('name')]",
                       "location": "[parameters('location')]",
-                      "tags": "[variables('tags')]",
+                      "tags": "[variables('serverTags')]",
                       "sku": {
                         "name": "[parameters('skuName')]",
                         "tier": "[parameters('tier')]"
@@ -22005,7 +22020,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "14120305549051796820"
+                      "templateHash": "9409846581383789882"
                     }
                   },
                   "parameters": {
@@ -22167,6 +22182,13 @@
                       "metadata": {
                         "description": "Compliance/cost tags."
                       }
+                    },
+                    "estatePauseConsumers": {
+                      "type": "string",
+                      "defaultValue": "loom-unity",
+                      "metadata": {
+                        "description": "Estate Power consumers tag (loom-estate-pause-consumers): comma-separated Container App names that use this server. Absent/empty means \"consumers unknown\" and the server is never stopped; the literal value none certifies no running app uses it."
+                      }
                     }
                   },
                   "variables": {
@@ -22183,7 +22205,7 @@
                       "apiVersion": "2024-08-01",
                       "name": "[parameters('name')]",
                       "location": "[parameters('location')]",
-                      "tags": "[parameters('complianceTags')]",
+                      "tags": "[union(parameters('complianceTags'), createObject('loom-estate-pause-consumers', parameters('estatePauseConsumers')))]",
                       "sku": {
                         "name": "[parameters('skuName')]",
                         "tier": "[parameters('tier')]"
@@ -24158,7 +24180,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "18024727965054590603"
+                      "templateHash": "4689078298093223568"
                     }
                   },
                   "parameters": {
@@ -24271,6 +24293,13 @@
                       "metadata": {
                         "description": "Deny public network access (publicNetworkAccess=Disabled) — reachable only over a private endpoint / VNet path. Hardened default true. The orchestrator passes false in topologies with no private-endpoint wiring for this service, keeping it reachable over Entra-only public access until a private endpoint is added. Derivation mirrors admin-plane/ai-foundry.bicep."
                       }
+                    },
+                    "estatePauseConsumers": {
+                      "type": "string",
+                      "defaultValue": "loom-console",
+                      "metadata": {
+                        "description": "Estate Power consumers tag (loom-estate-pause-consumers): comma-separated Container App names that use this server. Absent/empty means \"consumers unknown\" and the server is never stopped; the literal value none certifies no running app uses it."
+                      }
                     }
                   },
                   "variables": {
@@ -24285,7 +24314,7 @@
                       "apiVersion": "2024-08-01",
                       "name": "[variables('serverName')]",
                       "location": "[parameters('location')]",
-                      "tags": "[parameters('complianceTags')]",
+                      "tags": "[union(parameters('complianceTags'), createObject('loom-estate-pause-consumers', parameters('estatePauseConsumers')))]",
                       "sku": {
                         "name": "[parameters('skuName')]",
                         "tier": "[parameters('tier')]"
@@ -28481,7 +28510,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "8811315141868147000"
+                      "templateHash": "11947852018637031248"
                     }
                   },
                   "parameters": {
@@ -28573,7 +28602,7 @@
                       "apiVersion": "2024-04-01",
                       "name": "[variables('siteName')]",
                       "location": "[parameters('location')]",
-                      "tags": "[parameters('complianceTags')]",
+                      "tags": "[union(parameters('complianceTags'), createObject('loom-estate-pause', 'exempt'))]",
                       "kind": "functionapp",
                       "identity": {
                         "type": "SystemAssigned"
@@ -28880,7 +28909,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "404399983341232405"
+                      "templateHash": "7837736891998114236"
                     }
                   },
                   "parameters": {
@@ -28985,7 +29014,7 @@
                       "apiVersion": "2024-05-01",
                       "name": "[format('agw-loom-{0}', parameters('location'))]",
                       "location": "[parameters('location')]",
-                      "tags": "[parameters('complianceTags')]",
+                      "tags": "[union(parameters('complianceTags'), createObject('loom-estate-pause', 'exempt'))]",
                       "zones": [
                         "1",
                         "2",
@@ -31014,7 +31043,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "4374726465065143471"
+              "templateHash": "6765520873705654304"
             }
           },
           "functions": [
@@ -39838,7 +39867,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "18024727965054590603"
+                      "templateHash": "4689078298093223568"
                     }
                   },
                   "parameters": {
@@ -39951,6 +39980,13 @@
                       "metadata": {
                         "description": "Deny public network access (publicNetworkAccess=Disabled) — reachable only over a private endpoint / VNet path. Hardened default true. The orchestrator passes false in topologies with no private-endpoint wiring for this service, keeping it reachable over Entra-only public access until a private endpoint is added. Derivation mirrors admin-plane/ai-foundry.bicep."
                       }
+                    },
+                    "estatePauseConsumers": {
+                      "type": "string",
+                      "defaultValue": "loom-console",
+                      "metadata": {
+                        "description": "Estate Power consumers tag (loom-estate-pause-consumers): comma-separated Container App names that use this server. Absent/empty means \"consumers unknown\" and the server is never stopped; the literal value none certifies no running app uses it."
+                      }
                     }
                   },
                   "variables": {
@@ -39965,7 +40001,7 @@
                       "apiVersion": "2024-08-01",
                       "name": "[variables('serverName')]",
                       "location": "[parameters('location')]",
-                      "tags": "[parameters('complianceTags')]",
+                      "tags": "[union(parameters('complianceTags'), createObject('loom-estate-pause-consumers', parameters('estatePauseConsumers')))]",
                       "sku": {
                         "name": "[parameters('skuName')]",
                         "tier": "[parameters('tier')]"
@@ -40884,7 +40920,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "4374726465065143471"
+              "templateHash": "6765520873705654304"
             }
           },
           "functions": [
@@ -49708,7 +49744,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "18024727965054590603"
+                      "templateHash": "4689078298093223568"
                     }
                   },
                   "parameters": {
@@ -49821,6 +49857,13 @@
                       "metadata": {
                         "description": "Deny public network access (publicNetworkAccess=Disabled) — reachable only over a private endpoint / VNet path. Hardened default true. The orchestrator passes false in topologies with no private-endpoint wiring for this service, keeping it reachable over Entra-only public access until a private endpoint is added. Derivation mirrors admin-plane/ai-foundry.bicep."
                       }
+                    },
+                    "estatePauseConsumers": {
+                      "type": "string",
+                      "defaultValue": "loom-console",
+                      "metadata": {
+                        "description": "Estate Power consumers tag (loom-estate-pause-consumers): comma-separated Container App names that use this server. Absent/empty means \"consumers unknown\" and the server is never stopped; the literal value none certifies no running app uses it."
+                      }
                     }
                   },
                   "variables": {
@@ -49835,7 +49878,7 @@
                       "apiVersion": "2024-08-01",
                       "name": "[variables('serverName')]",
                       "location": "[parameters('location')]",
-                      "tags": "[parameters('complianceTags')]",
+                      "tags": "[union(parameters('complianceTags'), createObject('loom-estate-pause-consumers', parameters('estatePauseConsumers')))]",
                       "sku": {
                         "name": "[parameters('skuName')]",
                         "tier": "[parameters('tier')]"
@@ -50919,7 +50962,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "4374726465065143471"
+              "templateHash": "6765520873705654304"
             }
           },
           "functions": [
@@ -59743,7 +59786,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "18024727965054590603"
+                      "templateHash": "4689078298093223568"
                     }
                   },
                   "parameters": {
@@ -59856,6 +59899,13 @@
                       "metadata": {
                         "description": "Deny public network access (publicNetworkAccess=Disabled) — reachable only over a private endpoint / VNet path. Hardened default true. The orchestrator passes false in topologies with no private-endpoint wiring for this service, keeping it reachable over Entra-only public access until a private endpoint is added. Derivation mirrors admin-plane/ai-foundry.bicep."
                       }
+                    },
+                    "estatePauseConsumers": {
+                      "type": "string",
+                      "defaultValue": "loom-console",
+                      "metadata": {
+                        "description": "Estate Power consumers tag (loom-estate-pause-consumers): comma-separated Container App names that use this server. Absent/empty means \"consumers unknown\" and the server is never stopped; the literal value none certifies no running app uses it."
+                      }
                     }
                   },
                   "variables": {
@@ -59870,7 +59920,7 @@
                       "apiVersion": "2024-08-01",
                       "name": "[variables('serverName')]",
                       "location": "[parameters('location')]",
-                      "tags": "[parameters('complianceTags')]",
+                      "tags": "[union(parameters('complianceTags'), createObject('loom-estate-pause-consumers', parameters('estatePauseConsumers')))]",
                       "sku": {
                         "name": "[parameters('skuName')]",
                         "tier": "[parameters('tier')]"
@@ -61443,7 +61493,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "17317182802523013844"
+              "templateHash": "15839467219459667878"
             }
           },
           "parameters": {
@@ -61532,6 +61582,13 @@
               "metadata": {
                 "description": "Deny public network access (publicNetworkAccess=Disabled) — reachable only over a private endpoint. Default false: this opt-in deploy-planner sandbox service is provisioned with no private-endpoint wiring, so it stays publicly reachable behind Entra-only auth. Set true after wiring a private endpoint to harden. Derivation mirrors admin-plane/ai-foundry.bicep."
               }
+            },
+            "estatePauseConsumers": {
+              "type": "string",
+              "defaultValue": "loom-console",
+              "metadata": {
+                "description": "Estate Power consumers tag (loom-estate-pause-consumers): comma-separated Container App names that use this server. Absent/empty means \"consumers unknown\" and the server is never stopped; the literal value none certifies no running app uses it."
+              }
             }
           },
           "variables": {
@@ -61544,7 +61601,7 @@
               "apiVersion": "2024-08-01",
               "name": "[variables('serverName')]",
               "location": "[parameters('location')]",
-              "tags": "[parameters('complianceTags')]",
+              "tags": "[union(parameters('complianceTags'), createObject('loom-estate-pause-consumers', parameters('estatePauseConsumers')))]",
               "sku": {
                 "name": "[parameters('skuName')]",
                 "tier": "[parameters('tier')]"
@@ -61657,7 +61714,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "6177611703041414508"
+              "templateHash": "4503957858728717364"
             }
           },
           "parameters": {
@@ -61739,6 +61796,13 @@
               "metadata": {
                 "description": "Deny public network access (publicNetworkAccess=Disabled) — reachable only over a private endpoint. Default false: this opt-in deploy-planner sandbox service is provisioned with no private-endpoint wiring, so it stays publicly reachable behind Entra-only auth. Set true after wiring a private endpoint to harden. Derivation mirrors admin-plane/ai-foundry.bicep."
               }
+            },
+            "estatePauseConsumers": {
+              "type": "string",
+              "defaultValue": "loom-console",
+              "metadata": {
+                "description": "Estate Power consumers tag (loom-estate-pause-consumers): comma-separated Container App names that use this server. Absent/empty means \"consumers unknown\" and the server is never stopped; the literal value none certifies no running app uses it."
+              }
             }
           },
           "variables": {
@@ -61751,7 +61815,7 @@
               "apiVersion": "2023-12-30",
               "name": "[variables('serverName')]",
               "location": "[parameters('location')]",
-              "tags": "[parameters('complianceTags')]",
+              "tags": "[union(parameters('complianceTags'), createObject('loom-estate-pause-consumers', parameters('estatePauseConsumers')))]",
               "sku": {
                 "name": "[parameters('skuName')]",
                 "tier": "[parameters('tier')]"
@@ -63863,7 +63927,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "7372074482440197958"
+              "templateHash": "2613556281891672817"
             }
           },
           "parameters": {
@@ -63939,7 +64003,7 @@
               "apiVersion": "2024-04-01",
               "name": "[variables('siteName')]",
               "location": "[parameters('location')]",
-              "tags": "[parameters('complianceTags')]",
+              "tags": "[union(parameters('complianceTags'), createObject('loom-estate-pause', 'exempt'))]",
               "identity": {
                 "type": "SystemAssigned"
               },

@@ -90,10 +90,17 @@ param complianceTags object = {}
 var serverName = take('psql-loom-lakebase-${instanceName}-${uniqueString(resourceGroup().id)}', 63)
 var effectivePublicNetworkAccess = privateEndpointsEnabled ? 'Disabled' : 'Enabled'
 
+// Estate Power (#5099 phase B): the apps that connect to this server. A Lakebase server
+// is bound and queried by the Console's lakebase-postgres editor (Entra token as the
+// console UAMI), and the Console is never paused, so this server is never stopped by
+// default. Tag only; no behavioural change to the deployment.
+@description('Estate Power consumers tag (loom-estate-pause-consumers): comma-separated Container App names that use this server. Absent/empty means "consumers unknown" and the server is never stopped; the literal value none certifies no running app uses it.')
+param estatePauseConsumers string = 'loom-console'
+
 resource pg 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = if (lakebaseEnabled) {
   name: serverName
   location: location
-  tags: complianceTags
+  tags: union(complianceTags, { 'loom-estate-pause-consumers': estatePauseConsumers })
   sku: {
     name: skuName
     tier: tier
