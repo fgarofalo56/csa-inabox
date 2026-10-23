@@ -2,7 +2,7 @@
 # dicom-engine-deploy.sh - LHDS W0-2: dcm4chee-arc-light on AKS + PostgreSQL + Azure Blob storage descriptor,
 # in the class-S SANDBOX resource group only.
 #
-# STATUS: authored, NOT EXECUTED (operator decision 2026-10-22: no Azure spend; sandbox not provisioned).
+# STATUS: authored, NOT EXECUTED against a subscription (the DEV sandbox from sandbox.sh exists since 2026-10-22).
 # Everything below the guard section is therefore untested against a real subscription.
 #
 # HARD GUARDS (checked first, before any az call):
