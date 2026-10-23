@@ -6,7 +6,7 @@
  *   clamp <n>                      print the pool size to scale UP to: integer,
  *                                  clamped to [1,4]; junk/empty -> DEFAULT (never 0,
  *                                  never unbounded - a typo must not multiply spend)
- *   release --acr A --pool P [--subscription S]
+ *   release --acr A --pool P [--subscription S] [--wait-seconds N<=900]
  *                                  scale pool P to 0 and READ BACK the count.
  *
  * release is the guaranteed scale-down (final `if: always()` job). It does NOT
@@ -59,7 +59,23 @@ function realAz(args, subscription) {
 }
 
 /** @param {(args:string[])=>{ok:boolean,value?:any,err?:string}} az */
-export function release(acr, pool, az, { attempts = 3, sleep = () => {} } = {}) {
+export function release(acr, pool, az, { attempts = 3, sleep = () => {}, waitSeconds = 0, pollSeconds = 15 } = {}) {
+  // Bounded drain wait (Gov/blue-green rolls): while the ONLY thing stopping the
+  // scale-down is a non-empty queue or an active run, poll up to waitSeconds
+  // (never longer) and re-assess. Any other outcome returns at once. After the
+  // budget the pool is still left alone (it may be another lane's work), but the
+  // message says so and the reaper collects it once idle.
+  const rounds = Math.max(0, Math.ceil(waitSeconds / pollSeconds));
+  let r = releaseOnce(acr, pool, az, { attempts, sleep });
+  for (let i = 0; i < rounds && r.left; i += 1) {
+    sleep(pollSeconds * 1000);
+    r = releaseOnce(acr, pool, az, { attempts, sleep });
+  }
+  if (r.left && rounds > 0) r.msg += ` Still busy after waiting ${waitSeconds}s; acr-agentpool-reaper.yml scales it down once idle.`;
+  return { code: r.code, msg: r.msg };
+}
+
+function releaseOnce(acr, pool, az, { attempts, sleep }) {
   const list = az(['acr', 'agentpool', 'list', '-r', acr]);
   if (!list.ok) return { code: 1, msg: `could not list pools on ${acr}: ${list.err}. Pool left as-is.` };
   const found = (list.value || []).find((x) => x.name === pool);
@@ -89,7 +105,7 @@ export function release(acr, pool, az, { attempts = 3, sleep = () => {} } = {}) 
     activeRuns,
   });
   if (d.action === 'unknown') return { code: 1, msg: `${acr}/${pool}: ${d.reason}; whether it is idle was NOT established. Left as-is - the reaper retries hourly.` };
-  if (d.action !== 'scale') return { code: 0, msg: `${acr}/${pool}: ${d.action} - ${d.reason}.` };
+  if (d.action !== 'scale') return { code: 0, left: d.action === 'leave', msg: `${acr}/${pool}: ${d.action} - ${d.reason}.` };
   // Bounded retry (#5082): one transient ARM error must not leave the pool
   // billing. Each round is update + READ BACK; only a read-back of 0 passes.
   let last = 'no attempt ran';
@@ -192,7 +208,11 @@ function main(argv) {
     const pool = arg('--pool');
     if (!acr || !pool) { console.error('usage: acr-build-pool.mjs release --acr A --pool P [--subscription S]'); return 2; }
     const sub = arg('--subscription') ?? '';
+    const waitRaw = Number(arg('--wait-seconds') ?? 0);
+    // A typo or negative must not mean "wait forever"; cap at 15 minutes.
+    const waitSeconds = Number.isFinite(waitRaw) ? Math.min(900, Math.max(0, waitRaw)) : 0;
     const r = release(acr, pool, (a) => realAz(a, sub), {
+      waitSeconds,
       sleep: (ms) => spawnSync(process.execPath, ['-e', `setTimeout(()=>{},${ms})`]),
     });
     console.log(r.code ? `::error::${r.msg}` : r.msg);

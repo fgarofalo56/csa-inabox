@@ -110,7 +110,7 @@ Common failure modes:
 | Symptom | Class | Likely cause | Fix |
 |---|---|---|---|
 | `Quota exceeded` for Databricks Premium | quota | Region quota | Request quota via Azure portal → Subscriptions → Usage + quotas; or pick a different region. **Do not retry — it is deterministic** |
-| `QuotaExceeded: standardDDSv5Family Cores` during an image build | quota | The ACR-task agent pool has no cores | Raise the VM-family quota for that region, or build without the dedicated pool |
+| `QuotaExceeded: standardDDSv5Family Cores` during an image build | quota | The region's VM-family quota is fully used, so the ACR-task agent pool cannot get cores | Read the [quota inventory](#acr-agent-pool-quota-failures-and-the-reaper) first to see who holds the cores, then free them or raise the quota. Do not assume a leaked pool |
 | `RoleAssignmentExists` | config | The grant is **already in place** under a different assignment NAME. ARM enforces uniqueness on the `(scope, principalId, roleDefinitionId)` triple, not on the name, so a name-seed change (e.g. the Website Contributor role id correction …706ee → …84772) or a grant created out-of-band by `az role assignment create` (random GUID) blocks the template's create forever | Converge the name: `az role assignment delete --ids <the id printed in the error message>`, then re-run — the template recreates it under its deterministic name. `skip_role_grants=true` suppresses the symptom and leaves the estate un-reconciled; it is a workaround, not a fix |
 | `BadRequest: A virtual network cannot be linked to multiple zones with overlapping namespaces` | config | The hub VNet is already linked to a **different** Private DNS zone of the same namespace — usually a leftover zone from a superseded design in another resource group or subscription. Azure permits one link per namespace per VNet, so the admin plane's own link can never be created | **Do not delete the existing link first** — the A records live in that zone and unlinking takes the service dark. Run `node scripts/csa-loom/migrate-private-dns-zone-owner.mjs …` (dry-run by default; `--apply` to execute). It dual-registers under a **new** zone-group config name, moves the links, removes **only** the config that still points at the stale zone, refuses any removal that would empty the group, and re-verifies the group and the record before deleting the stale zone — see [Private DNS zone-owner migration](#private-dns-zone-owner-migration-3039--3046). `node scripts/csa-loom/preflight-private-dns-links.mjs` detects it before the deploy, and `deploy-fiab-commercial.yml` runs that preflight automatically |
 | `InvalidTemplateDeployment` on Container Apps in IL4 | config | Container Apps not at IL4 | Set `containerPlatform = 'aks'` in `.bicepparam` |
@@ -123,6 +123,37 @@ Common failure modes:
 | `ResourceGroupNotFound` early in `full-app-deploy-commercial` | config | The workflow's `region` input does not match the estate's region | Pass `-f region=<your-region>` |
 | `ResourceGroupNotFound` on a multi-sub DLZ | config | A sub-scoped deploy cannot create an RG in a remote subscription | `bash scripts/csa-loom/bootstrap-dlz-rgs.sh` first |
 | `ContainerAppOperationInProgress` | transient | A previous roll is still settling | Wait and retry; serialize rolls, never cancel an in-flight roll of the same SHA |
+
+## ACR agent-pool quota failures and the reaper
+
+**Signature** (Gov console roll, 2026-10-23, run 40021972356): `az acr build`
+fails with `The status for Agent Pool loombuild2 is Error ... exceeding approved
+standardDDSv5Family Cores quota ... Current Limit: 100, Current Usage: 100,
+Additional Required: 8` (an S3 pool instance is 8 vCPUs; S1 is 2, S2 is 4).
+
+**What keeps pools from leaking.** Two layers, both fail closed:
+
+- Each build lane ends with an `if: always()` step that waits up to 5 minutes for
+  the pool queue to drain, scales to 0 and reads the count back
+  (`scripts/ci/acr-build-pool.mjs release --wait-seconds 300`). It leaves a pool
+  alone while another run is queued or active on it, and says so.
+- `acr-agentpool-reaper.yml` runs hourly in Commercial and GCC-High and scales any
+  idle pool (queue 0, no active run, idle 30+ minutes, `Succeeded`) to 0, reading
+  the count back. Dispatch it with `dry_run=true` (default) to report only.
+
+**Diagnose before you blame the pool.** The reaper also runs
+`scripts/ci/acr-quota-inventory.mjs` per registry: usage vs limit per family, the
+visible consumers (VMs, VMSS, AKS node pools) with cores, the pools with tier
+cores, and the unattributed remainder. A read that fails prints `UNKNOWN` and fails
+the job; it is never shown as zero. Measured on 2026-10-23, the Gov reaper had read
+`loombuild2` at count 0 about 90 minutes before the failure, so the 100 cores were held by
+something else; a leaked pool is only the answer when the inventory says so.
+
+**Fallback: request a quota increase.** If the inventory shows the cores are
+legitimately in use, raise the limit: Azure portal, Subscriptions, Usage + quotas,
+filter the region and family (for the incident: `usgovvirginia`,
+`standardDDSv5Family`), request a limit above `used + 8`. In Azure Government use
+the Government portal. Then re-run the failed roll.
 
 ## Remediation
 
