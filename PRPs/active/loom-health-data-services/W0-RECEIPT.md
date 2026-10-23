@@ -22,7 +22,7 @@ receipt.** W0-7, the decision pass, has not started.
 |---|---|---|
 | W0-1 FHIR engines | Scripts written and smoke-run locally (HAPI 8.12.0, Medplum 5.2.7). Sandbox not measured. | Sections 1-2 |
 | W0-2 DICOM engine | Scripts written and smoke-run locally (dcm4chee-arc-light 5.35.2, filesystem storage). Sandbox and Blob not measured. | Section 3 |
-| W0-3 Gov closure | Read-only probe workflow in PR #5092 to `main` (review required). Not dispatched, so no run id yet. | Section 4 |
+| W0-3 Gov closure | **Done for usgovvirginia.** #5092 merged and dispatched; run 39887825372 succeeded (11 steps, 15/15 probes rc 0). Arizona and Texas PostgreSQL not probed. | Section 4 |
 | W0-4 Egress | Scripts written. The report's exit codes were tested on fixtures. Capture not executed, because there is no cluster. | Section 5 |
 | W0-5 Synthea | Scripts written and smoke-run locally. Pool throughput and the 48 h cohort size not measured. | Section 6 |
 | W0-6 Loom integration | **Done.** All 7 facts measured at `b192f05ea`, each with `file:line`. | Section 7 |
@@ -60,7 +60,14 @@ receipt.** W0-7, the decision pass, has not started.
    driver reached about 14 of 60 requested senders in flight.
 7. **A fixed Synthea seed is not byte-reproducible.** One CarePlan differed
    between two runs, so the manifest hash, not the seed, identifies a cohort.
-8. **GHSA-g7m7 (Q7) is only partly answered.** Commercial is established; Gov is
+8. **PostgreSQL is not available to the Gov subscription in usgovvirginia (Q1),
+   measured.** The API offers zero SKUs, `OfferRestricted` is on, and the reason
+   is "open a support request". Every LHDS engine sits on PostgreSQL, so the Gov
+   stamp is blocked until a support request lifts the restriction or another
+   Gov region proves usable. Arizona and Texas are not probed yet (section 4.1).
+9. **Azure Load Testing does not exist in Gov.** The resource type is absent,
+   so Gov load tests must use in-cluster drivers.
+10. **GHSA-g7m7 (Q7) is only partly answered.** Commercial is established; Gov is
    not. Details are in section 7.6, deliberately neutral.
 
 
@@ -352,42 +359,78 @@ Caveats that change how to read the numbers:
 
 ## 4. Gov availability closure (W0-3)
 
-**Status: workflow authored. Not dispatched, so there is no receipt yet.**
+**Receipt:** GitHub Actions run
+[39887825372](https://github.com/fgarofalo56/csa-inabox/actions/runs/39887825372).
 
-- Workflow: `.github/workflows/health-w0-gov-probe.yml`, in PR #5092 against
-  `main`. It is a separate PR because a `workflow_dispatch` workflow can only be
-  dispatched once it is on the default branch.
-- The PRP requires review for this item, because it is a new Gov workflow.
-- Auth: the Gov OIDC block copied from the existing Gov workflows
-  (`AZURE_GOV_*` secrets, `environment: AzureUSGovernment`,
-  `az cloud set --name AzureUSGovernment`).
-- Read-only: `az provider show` for the 10 resource providers in
-  `AZURE-GOV-AVAILABILITY.md` section 5, `az account list-locations`,
-  `az postgres flexible-server list-skus --location usgovvirginia`, and
-  `az aks get-versions` for the three Gov regions. Each probe records its
-  return code and stderr, so a failed probe shows as FAILED rather than empty.
-- Validation: `actionlint` is clean, and the `scripts/ci` workflow guards pass.
-  PR CI showed 40 pass and 6 skipped on 2026-10-22.
+- Workflow `.github/workflows/health-w0-gov-probe.yml`, dispatched from `main`
+  at `79141929f` (PR #5092, merged on the operator's approval 2026-10-22).
+- Conclusion `success`. The job "Probe Azure Government availability
+  (read-only)" executed 11 steps, so the run counts as a receipt.
+- All 15 probes returned rc 0, per `status.tsv` in the run artifact.
+- Identity: the existing Gov workflow identity, read-only calls only.
+- Facts below come from the artifact, parsed locally on 2026-10-22.
 
-Gaps the workflow states openly:
+### 4.1 PostgreSQL Flexible Server, usgovvirginia (Q1): NOT AVAILABLE to this subscription
 
-- **Event Hubs Premium:** the PRP's create dry-run has no read-only form,
-  because it needs a resource group. Provider resource-type locations are read
-  instead. That does not prove Premium can be ordered.
-- **KEDA add-on:** there is no per-cloud read-only API, so its availability is
-  not established by this workflow.
+`az postgres flexible-server list-skus --location usgovvirginia` returned one
+capabilities record with:
 
-| Cell | Result |
+- **zero** `supportedServerEditions`, **zero** `supportedServerVersions`, and
+  **zero** storage editions;
+- feature `OfferRestricted: Enabled`;
+- `reason`: "Provisioning is restricted in this region. Please choose a
+  different region. For exceptions to this rule please open a support request
+  with Issue type of 'Service and subscription limits'."
+- Zone-redundant HA is `Disabled`, as is zone-redundant HA with geo-backup.
+  `GeoBackup` is `Enabled`.
+
+Consequences:
+
+- This contradicts `AZURE-GOV-AVAILABILITY.md`, whose PostgreSQL row reads
+  "zone-redundant HA and geo-backup in Virginia only". For this subscription,
+  Virginia offers no PostgreSQL at all until a support request lifts the
+  restriction.
+- E-series and SSD v2 cannot be assessed while zero SKUs are offered.
+- Every LHDS engine (FHIR, DICOM metadata, terminology, MPI, audit index) sits
+  on PostgreSQL. The Gov stamp is blocked on either (a) a support request for
+  usgovvirginia, or (b) a region where this subscription is not restricted.
+- **Not probed:** usgovarizona and usgovtexas, because the workflow is pinned to
+  Virginia. Next step: add a region input and re-dispatch.
+
+### 4.2 Resource providers (all `Registered`), Gov locations per resource type
+
+| Resource type | Gov/DoD locations listed |
 |---|---|
-| Run id | not measured: #5092 not merged or dispatched yet |
-| Provider and region matrix | not measured: pending that run |
-| PostgreSQL E-series and SSD v2 in usgovvirginia (Q1) | not measured: pending that run |
-| Pairing | not measured: pending that run |
+| ContainerService/managedClusters | USGov Arizona, Texas, Virginia |
+| DBforPostgreSQL/flexibleServers | USGov Virginia, Arizona, Texas (listed, but see 4.1: Virginia is restricted for this subscription) |
+| Storage/storageAccounts | USGov Virginia, Texas, Arizona; USDoD East, Central |
+| EventHub/namespaces, EventHub/clusters | USDoD Central, East; USGov Arizona, Texas, Virginia |
+| ApiManagement/service | USDoD Central, East; USGov Arizona, Texas, Virginia |
+| KeyVault/vaults | USGov Virginia, Texas, Arizona; USDoD Central, East |
+| KeyVault/managedHSMs | USGov Virginia, Arizona, Texas; USDoD East |
+| Cdn/profiles | `global` |
+| Network/frontDoors (classic) | resource type absent |
+| Network/privateEndpoints, Network/azureFirewalls | all five Gov/DoD regions |
+| LoadTestService/loadTests | **resource type absent**: Azure Load Testing is not offered, so Gov load tests need in-cluster drivers |
+| App/managedEnvironments, App/containerApps | USGov Virginia, Arizona, Texas (region listing only; this is not IL5 audit scope) |
 
-Pass rule from the PRP: `gh run view <id>` must show `success`, with the probe
-job having executed more than 0 steps. Remember the Gov environment approval:
-an approval-held run sits in the queue silently.
+### 4.3 Region pairing (`az account list-locations`)
 
+usgovvirginia pairs with usgovtexas, usgovarizona with usgovtexas, and
+usdodcentral with usdodeast.
+
+### 4.4 AKS (`az aks get-versions`)
+
+Kubernetes 1.31 through 1.37 are offered in usgovvirginia, usgovarizona and
+usgovtexas alike.
+
+### 4.5 Still open (not establishable read-only; stated in the workflow)
+
+- **Event Hubs Premium orderability:** only the resource-type locations were
+  read. That a namespace can be listed there does not prove the Premium SKU can
+  be ordered.
+- **KEDA add-on:** availability is not established, because there is no
+  per-cloud read API for it.
 
 ## 5. No-calls-home / egress check (W0-4)
 
@@ -698,7 +741,9 @@ What the decision pass needs:
 1. Q2: the sandbox budget approved, and its subscription named.
 2. The sandbox run of W0-1, W0-2, W0-4 and W0-5, using the scripts in
    `scripts/measure/health/`. Load drivers run as Linux pods, not Git Bash.
-3. #5092 reviewed, merged and dispatched, with its run id quoted in section 4.
+3. Q1 resolved for the Gov stamp: a support request for PostgreSQL in
+   usgovvirginia, or a re-dispatch of the probe for usgovarizona and
+   usgovtexas (section 4.1).
 4. Questions for the decision pass to carry from the local findings:
    - Is 4.5 KB per resource realistic, or should the capacity model move toward
      the roughly 10 KB measured here and cited by ADR-001?

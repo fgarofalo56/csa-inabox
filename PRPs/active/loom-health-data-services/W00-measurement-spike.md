@@ -67,7 +67,7 @@ Sonnet sessions ~6; one Opus decision session; Azure ~$4 k (Q2).
 |---|---|---|---|---|---|
 | W0-1 | blocked | feat/lhds-w0-no-cost | sonnet | scripts + local smoke done (W0-RECEIPT s1-2); sandbox run blocked on Q2 | 2026-10-22 |
 | W0-2 | blocked | feat/lhds-w0-no-cost | sonnet | scripts + local smoke done (W0-RECEIPT s3); sandbox/Blob run blocked on Q2 | 2026-10-22 |
-| W0-3 | review | feat/lhds-w0-gov-probe | sonnet | PR #5092; not dispatched, so no run id yet (W0-RECEIPT s4) | 2026-10-22 |
+| W0-3 | merged | feat/lhds-w0-gov-probe | sonnet | PR #5092 merged; run 39887825372 success, 11 steps (W0-RECEIPT s4) | 2026-10-22 |
 | W0-4 | blocked | feat/lhds-w0-no-cost | sonnet | scripts done, report exit codes fixture-tested (W0-RECEIPT s5); capture blocked on Q2 | 2026-10-22 |
 | W0-5 | blocked | feat/lhds-w0-no-cost | sonnet | scripts + local smoke done (W0-RECEIPT s6); pool run blocked on Q2 | 2026-10-22 |
 | W0-6 | verifying | feat/lhds-w0-no-cost | sonnet | all 7 facts measured at b192f05ea (W0-RECEIPT s7) | 2026-10-22 |
