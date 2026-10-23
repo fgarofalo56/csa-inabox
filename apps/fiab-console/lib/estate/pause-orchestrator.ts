@@ -89,14 +89,14 @@ import {
 } from './pause-inventory';
 import { assertNoFalseGreen } from './capacity-preflight';
 import { holdStateForThrottle, throttledDetail, throttleHoldReason } from './pause-throttle';
-import { containerAppPauseGuard } from './pause-guards';
+import { guardedTierType, tierPauseGuard } from './pause-guards';
 import { ESTATE_PAUSE_TIER, OUT_OF_TIER_REASONS, TYPICAL_RESUME_SECONDS, orderForResume, resumeRank } from './pause-tier';
 
 // Re-exported with `export ... from` (not `import {X}; export {X}`): istanbul coverage
 // instrumentation leaves the latter form undefined at first read (CI shards run with it).
 export { ESTATE_PAUSE_TIER, OUT_OF_TIER_REASONS, TYPICAL_RESUME_SECONDS, orderForResume, resumeRank } from './pause-tier';
 
-export { containerAppPauseGuard } from './pause-guards';
+export { containerAppPauseGuard, aksPauseGuard } from './pause-guards';
 import type {
   ActuatorResult,
   EstateActuator,
@@ -273,20 +273,11 @@ export function planPause(
   for (const c of full.pausable) {
     const type = c.resource.resourceType.toLowerCase();
     if (ESTATE_PAUSE_TIER.includes(type)) {
-      if (type === 'microsoft.app/containerapps') {
-        const guard = containerAppPauseGuard(
-          { name: c.resource.name, tags: c.resource.tags },
-          ctx.selfAppName ?? process.env.CONTAINER_APP_NAME,
-        );
-        if (!guard.eligible) {
-          outOfTier.push({
-            resourceId: c.resource.resourceId,
-            name: c.resource.name,
-            resourceType: c.resource.resourceType,
-            reason: guard.reason,
-          });
-          continue;
-        }
+      // Container Apps and AKS clusters can host the console: per-resource guard (#5099).
+      const guard = tierPauseGuard(c.resource, ctx.selfAppName ?? process.env.CONTAINER_APP_NAME);
+      if (!guard.eligible) {
+        outOfTier.push({ resourceId: c.resource.resourceId, name: c.resource.name, resourceType: c.resource.resourceType, reason: guard.reason });
+        continue;
       }
       inTier.push(c);
       continue;
@@ -530,15 +521,15 @@ export async function startPause(
     // (1b) Container Apps only: the console must survive the pause. Re-check
     //      identity against FRESH tags, so a tag added since the preview (an
     //      exemption) is honoured and an unreadable tag set fails safe.
-    if (resource.resourceType.toLowerCase() === 'microsoft.app/containerapps') {
+    if (guardedTierType(resource.resourceType)) {
       let freshTags: Readonly<Record<string, string>> | null = null;
       try {
         freshTags = await actuator.readTags(resource.resourceId);
       } catch {
         freshTags = null;
       }
-      const guard = containerAppPauseGuard(
-        { name: resource.name, tags: freshTags },
+      const guard = tierPauseGuard(
+        { resourceType: resource.resourceType, name: resource.name, tags: freshTags },
         ctx.selfAppName ?? process.env.CONTAINER_APP_NAME,
       );
       if (!guard.eligible) {

@@ -22,6 +22,30 @@ now lists the Container Apps in its own resource group (`LOOM_ACA_RG`, else
 `loom-estate-id` tag for this estate. The resource-group name is never used as
 evidence.
 
+### Other pausable types are found by tag (#5099)
+
+AKS clusters, VMs, Databricks workspaces, Stream Analytics jobs and web sites are
+found with one Azure Resource Graph query: resources of those types whose
+`loom-estate-id` equals this estate's id, in every subscription the console identity
+can read. They are added to the manifest and Container Apps sets (nothing already
+discovered changes). A resource with no tag, or another estate's tag, is not
+discovered even when it sits in the same resource group. Tag a resource
+`loom-estate-pause=exempt` to keep it running.
+
+- **The AKS cluster that hosts the console is never paused** (`containerPlatform=aks`,
+  `LOOM_AKS_CLUSTER_NAME`). If the console runs on AKS and cannot tell which cluster is
+  its own, no cluster is paused.
+- **A failed or partial discovery says so.** The panel shows "Discovery incomplete" with
+  the raw reason when the Resource Graph query fails (403, 500, throttled) or when a
+  subscription this console is configured for (`LOOM_SUBSCRIPTION_ID`,
+  `LOOM_DLZ_SUBSCRIPTION_ID`, ...) is not readable by its identity. That is not
+  "nothing to pause". A throttled query also blocks the pause (retry).
+- **Container Apps outside the console's resource group are not covered yet**; they keep
+  their own per-app policy above.
+- Resources created by the console at run time (Stream Analytics jobs carry only
+  `loomItemId`) or by bootstrap workflows (some function apps) are not tagged by the
+  bicep and are therefore not discovered until their creators stamp the tag.
+
 ## Never paused
 
 | App | Why (from the Bicep that deploys it) |

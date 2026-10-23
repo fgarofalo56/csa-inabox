@@ -649,6 +649,23 @@ export function EstatePowerPanel({ styles }: { styles: Record<string, string> })
         </MessageBar>
       )}
 
+      {/* TAG DISCOVERY (#5099). A Resource Graph failure, or a subscription the console cannot
+          read, makes the list PARTIAL. Say so in words: it is never "nothing to pause". */}
+      {!loading && state === 'RUNNING' && data?.discovery?.incomplete && (
+        <MessageBar intent="warning" data-testid="estate-discovery-incomplete">
+          <MessageBarBody>
+            <MessageBarTitle>Discovery incomplete — this preview may be missing resources</MessageBarTitle>
+            {data.discovery.note}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {!loading && state === 'RUNNING' && (data?.discovery?.heldOut?.length ?? 0) > 0 && (
+        <Caption1 className={styles.powerSub} data-testid="estate-discovery-heldout">
+          Tagged for this estate but deliberately left running:{' '}
+          {data.discovery.heldOut.map((h: any) => `${h.name} (${h.reason})`).join(' · ')}
+        </Caption1>
+      )}
+
       {/* THE POPULATION. Always stated; when it is zero, that is the headline. */}
       {!loading && state === 'RUNNING' && population && (
         notArmed ? (
@@ -684,7 +701,11 @@ export function EstatePowerPanel({ styles }: { styles: Record<string, string> })
         ) : population.empty ? (
           <MessageBar intent="warning">
             <MessageBarBody>
-              <MessageBarTitle>Nothing is in scope to pause — and that is the safe answer</MessageBarTitle>
+              <MessageBarTitle>
+                {data?.discovery?.incomplete
+                  ? 'Nothing was found in scope to pause — but discovery is incomplete'
+                  : 'Nothing is in scope to pause — and that is the safe answer'}
+              </MessageBarTitle>
               {population.statement}
               {/*
                 Every signal counted SEPARATELY. Never one summed "tagged"
