@@ -34,6 +34,7 @@ import {
 } from './pause-state';
 import { pausableTypeSpec, type PauseCandidate } from './pause-inventory';
 import { containerAppPauseGuard } from './pause-guards';
+import { createPhaseBVerbs, isPhaseBType, normalizePhaseBPowerState, phaseBPowerRaw } from './pause-actuator-phase-b';
 import { ESTATE_READ_RETRY, isThrottleError, shortCircuitedError } from './pause-throttle';
 
 // ---------------------------------------------------------------------------
@@ -53,6 +54,12 @@ export interface ActuatorResult {
    * orchestrator reports it as `no-op` and does not record it in the snapshot.
    */
   noop?: boolean;
+  /**
+   * True when the actuator re-checked a safety guard AT ACT TIME and held the
+   * resource out (left running): not a rejected verb. The orchestrator reports it
+   * as 'skipped' and does not record it in the snapshot. `detail` carries the reason.
+   */
+  held?: boolean;
 }
 
 /** An AUTHORITATIVE ARM read: power state + the SKU/replica facts resume needs. */
@@ -189,6 +196,11 @@ export function normalizePowerState(resourceType: string, raw: unknown): EstateP
       if (s === 'running') return 'Online';
       if (s === 'stopped') return 'Stopped';
       return 'Unknown';
+    case 'microsoft.dbforpostgresql/flexibleservers':
+    case 'microsoft.dbformysql/flexibleservers':
+    case 'microsoft.network/applicationgateways':
+    case 'microsoft.powerbidedicated/capacities':
+      return normalizePhaseBPowerState(resourceType, raw);
     default:
       if (s === 'online' || s === 'running' || s === 'succeeded') return 'Online';
       if (s === 'paused' || s === 'stopped' || s === 'suspended') return 'Paused';
@@ -300,6 +312,9 @@ export async function createArmActuator(): Promise<EstateActuator> {
   const apiVersion = (resourceType: string): string =>
     pausableTypeSpec(resourceType)?.armApiVersion ?? '2021-04-01';
 
+  // #5099 phase B: PostgreSQL / MySQL, Application Gateway, Power BI Embedded.
+  const phaseB = createPhaseBVerbs({ armGet, armPost, stateGet, apiVersion });
+
   const readTags = async (resourceId: string) => {
     // The api-version is per-provider, so derive it from the id's own type.
     const type = armTypeFromId(resourceId);
@@ -338,6 +353,7 @@ export async function createArmActuator(): Promise<EstateActuator> {
           powerState?: { code?: string };
           hardwareProfile?: { vmSize?: string };
           instanceView?: { statuses?: Array<{ code?: string }> };
+          operationalState?: string;
         };
       }>(`${resource.resourceId}?api-version=${version}${expand}`);
       let raw: unknown = body?.properties?.status ?? body?.properties?.state;
@@ -353,6 +369,8 @@ export async function createArmActuator(): Promise<EstateActuator> {
         raw = prov === 'starting' || prov === 'stopping' ? prov : body?.properties?.powerState?.code;
       } else if (type === 'microsoft.streamanalytics/streamingjobs') {
         raw = body?.properties?.jobState;
+      } else if (isPhaseBType(type)) {
+        raw = phaseBPowerRaw(type, body?.properties);
       }
       return {
         reading: armPowerReading({
@@ -666,6 +684,11 @@ export async function createArmActuator(): Promise<EstateActuator> {
           await armPost(`${resource.resourceId}/stop?api-version=${apiVersion(type)}`);
           return { ok: true, detail: `ARM accepted the stop of Stream Analytics job ${resource.name}.` };
         }
+        case 'microsoft.dbforpostgresql/flexibleservers':
+        case 'microsoft.dbformysql/flexibleservers':
+        case 'microsoft.network/applicationgateways':
+        case 'microsoft.powerbidedicated/capacities':
+          return await phaseB.pause(resource);
         case 'microsoft.web/sites': {
           // A site on a Consumption (Dynamic, e.g. Y1) plan bills $0 at idle, so
           // stopping it saves nothing and only disables its triggers. That is a
@@ -751,6 +774,11 @@ export async function createArmActuator(): Promise<EstateActuator> {
           });
           return { ok: true, detail: `ARM accepted the start of Stream Analytics job ${entry.name} (LastOutputEventTime).` };
         }
+        case 'microsoft.dbforpostgresql/flexibleservers':
+        case 'microsoft.dbformysql/flexibleservers':
+        case 'microsoft.network/applicationgateways':
+        case 'microsoft.powerbidedicated/capacities':
+          return await phaseB.resume(entry);
         case 'microsoft.web/sites': {
           await armPost(`${entry.resourceId}/start?api-version=${apiVersion(type)}`);
           return { ok: true, detail: `ARM accepted the start of web app ${entry.name}.` };
@@ -977,6 +1005,11 @@ export async function createArmActuator(): Promise<EstateActuator> {
             detail: `${entry.name} jobState is '${String(job?.properties?.jobState ?? '')}' (control-plane evidence; output flow was not measured).`,
           };
         }
+        case 'microsoft.dbforpostgresql/flexibleservers':
+        case 'microsoft.dbformysql/flexibleservers':
+        case 'microsoft.network/applicationgateways':
+        case 'microsoft.powerbidedicated/capacities':
+          return await phaseB.probe(entry);
         case 'microsoft.web/sites': {
           const site = await stateGet<{ properties?: { state?: string; availabilityState?: string } }>(
             `${entry.resourceId}?api-version=${apiVersion(type)}`,

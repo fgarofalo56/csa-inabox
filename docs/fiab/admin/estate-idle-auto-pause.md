@@ -24,8 +24,9 @@ evidence.
 
 ### Other pausable types are found by tag (#5099)
 
-AKS clusters, VMs, Databricks workspaces, Stream Analytics jobs and web sites are
-found with one Azure Resource Graph query: resources of those types whose
+AKS clusters, VMs, Databricks workspaces, Stream Analytics jobs, web sites and (phase
+B, below) PostgreSQL / MySQL flexible servers, Application Gateways and Power BI
+Embedded capacities are found with one Azure Resource Graph query: resources of those types whose
 `loom-estate-id` equals this estate's id, in every subscription the console identity
 can read. They are added to the manifest and Container Apps sets (nothing already
 discovered changes). A resource with no tag, or another estate's tag, is not
@@ -45,6 +46,67 @@ discovered even when it sits in the same resource group. Tag a resource
 - Resources created by the console at run time (Stream Analytics jobs carry only
   `loomItemId`) or by bootstrap workflows (some function apps) are not tagged by the
   bicep and are therefore not discovered until their creators stamp the tag.
+
+### Databases, Application Gateway and Power BI Embedded (#5099 phase B)
+
+Four more types join the tag-discovered set. They stop and start with these ARM verbs
+(Microsoft Learn REST reference, checked 2026-10-23):
+
+| Type | Stop / start | Power read-back | Tier |
+|---|---|---|---|
+| PostgreSQL flexible server | `POST .../stop`, `.../start` (api `2024-08-01`) | `properties.state`: Ready, Stopped, Stopping, Starting, Updating | data |
+| MySQL flexible server | `POST .../stop`, `.../start` (api `2023-12-30`) | `properties.state`, same values | data |
+| Application Gateway | `POST .../stop`, `.../start` (api `2024-05-01`) | `properties.operationalState`: Running, Stopped, Starting, Stopping | platform |
+| Power BI Embedded capacity | `POST .../suspend`, `.../resume` (api `2021-01-01`) | `properties.state`: Succeeded, Paused, Suspended, Pausing, Resuming | data |
+
+The platform tier resumes first and pauses last; the data tier resumes before the apps
+that use it and pauses after them. A stop is only reported as done after a fresh ARM
+read shows it stopped, and a start reads the state first: Learn documents that starting
+a server that is not Stopped fails (`ServerIsNotStopped`), so an already-running server
+is reported as already running and no start is sent.
+
+**A database is stopped only if every app that uses it is stopped too.** Most estate
+Postgres servers back always-on apps (`loom-unity`, `loom-airflow`, `loom-duckdb`, the
+console), and stopping one breaks the app. The consumers come from a tag stamped by
+bicep, `loom-estate-pause-consumers=<comma-separated app names>`:
+
+- **No tag, or an empty one: held out, "consumers unknown".** Nothing is guessed. The
+  panel lists it under "deliberately NOT paused" with that reason.
+- **A consumer on the never-pause list, the console, or an app that is not in this pause
+  set (exempt, opted out, not tagged for this estate): held out.** The reason and a
+  "pinned by" badge name the exact consumer.
+- **Every consumer is in the set:** the server is stopped after them. At pause time the
+  check is repeated against what actually happened: a consumer whose pause was skipped or
+  rejected pins the server, which is then left running.
+- `loom-estate-pause-consumers=none` is the one explicit way to say no running app uses a
+  server. It is an operator decision; bicep stamps never write it. The shipped modules
+  stamp their real consumers, so as deployed **none of the stock servers is stopped**
+  (each is pinned by the console or a never-pause app). Each module exposes an
+  `estatePauseConsumers` parameter; a redeploy rewrites the tag, so change it there, not
+  by hand.
+
+**Azure restarts a stopped flexible server on its own.** PostgreSQL after 7 days
+(`how-to-stop-server`); MySQL after 30 days (`how-to-stop-start-server-portal`). The
+estate stays PAUSED when that happens: `drifted` and the per-row state say the server is
+running again, and the state never becomes an error or RESUME_FAILED. The idle auto-pause
+lane reads the state every 30 minutes, and on that read Loom re-sends the stop for a
+PostgreSQL or MySQL server (only those two types, only when the arming switch is on, only
+for a server that was running before Loom paused it) unless one of its consumers is
+running again, in which case the server is left running and the row names that consumer.
+A panel poll never re-stops anything. The panel row says all of this.
+
+**An Application Gateway fronting the console is never stopped.** Loom reads the
+gateway's backend pools and holds it out if any pool targets the console (its app name,
+its configured public host, any host containing "console"), targets an IP with no FQDN
+(an IP cannot be shown not to be the console's), or if the console cannot be identified,
+runs on AKS, or the config could not be read ("could not be established"). A throttled
+read refuses the pause with a retry rather than counting as a hold-out. The bicep also
+stamps the shipped gateway `loom-estate-pause=exempt`.
+
+**Web apps.** The only `Microsoft.Web/sites` in the Loom bicep on a non-Consumption plan
+is the deploy-planner App Service; it is stamped `loom-estate-pause=exempt`, as are the
+two Function Apps the console calls synchronously (built-in MCP server, SCC labels).
+Consumption (Y1) sites remain a disclosed no-op.
 
 ## Never paused
 
@@ -124,6 +186,19 @@ Same code path in every boundary: the GCC-High and IL5 parameter files also set
 listing, the guard, the banner and the opt-outs behave identically. The one exception
 is a deployment that sets `LOOM_CONTAINER_PLATFORM=aks`: there are no Container Apps
 to list, the panel says so, and the AKS cluster stays in its own pause tier.
+
+Phase-B types, per cloud (**none exercised live in any cloud**; the ARM path is the
+cloud's own host via `armBase()`):
+
+| Type | Commercial | GCC-High / DoD | GCC | IL5 |
+|---|---|---|---|---|
+| PostgreSQL flexible | supported-in-code | supported-in-code. Learn lists PostgreSQL flexible server availability in Azure Government regions | supported-in-code, never exercised | supported-in-code, never exercised |
+| MySQL flexible | supported-in-code | supported-in-code. Azure Government availability **not established** on Learn in this pass | supported-in-code, never exercised | supported-in-code, never exercised |
+| Application Gateway | supported-in-code | supported-in-code. The `/stop` and `/start` verbs are the same ARM operations; v2 SKU only | supported-in-code, never exercised | supported-in-code, never exercised |
+| Power BI Embedded | supported-in-code | supported-in-code. Learn: Azure Embedded (F) capacities are supported in GCC High and DoD, only EM and P SKUs in GCC; whether `Microsoft.PowerBIDedicated` `suspend`/`resume` behaves the same there is **not established** | supported-in-code, never exercised | supported-in-code, never exercised |
+
+The shipped `gcc-high` and `il5` parameter files do not stamp anything the Commercial
+ones do not (the tags are in the modules), and every touched module compiles.
 
 **Verified:** unit and component tests only (jsdom), with mutation runs for the
 load-bearing arms. **Not verified:** no live pause or resume of any Container App in

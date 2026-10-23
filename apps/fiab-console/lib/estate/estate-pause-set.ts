@@ -9,6 +9,7 @@ import type { DiscoveryReadFailure } from './pause-discovery-classify';
 import { loadAutoPause } from './estate-autopause';
 import { discoverContainerApps, type ContainerAppsStatus } from './pause-container-apps';
 import { orderForPause } from './pause-tier';
+import { resolveGatewayHolds } from './pause-appgateway-guard';
 import { discoverByEstateTag, unionDiscovered, type TagDiscoveryResult } from './pause-tag-discovery';
 
 export interface PauseSetExtension {
@@ -47,6 +48,14 @@ export function mergeForPause(
 ): DiscoveredResource[] {
   const base = [...manifestPresent, ...ext.discovered];
   return orderForPause(tagged ? unionDiscovered(base, tagged.discovered) : base);
+}
+
+/**
+ * Judge every Application Gateway in the set against its backend pools (#5099 phase B).
+ * Reads ARM only when the set contains a gateway. Never throws.
+ */
+export function resolveGatewayHoldsForPause(present: readonly DiscoveredResource[]) {
+  return resolveGatewayHolds(present);
 }
 
 /** Resolve the estate-tagged resources for `estateId` (Resource Graph). Never throws. */

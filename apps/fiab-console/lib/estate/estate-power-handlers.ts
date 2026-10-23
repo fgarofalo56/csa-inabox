@@ -29,6 +29,7 @@ import {
   createManifestTagReader,
   discoverFromManifest,
   ESTATE_PAUSE_ENABLED_ENV,
+  estatePauseEnabled,
   evaluateDrift,
   loadPauseSnapshot,
   partitionDiscovery,
@@ -54,7 +55,13 @@ import { detectLoomCloud } from '@/lib/azure/cloud-boundary';
 import { cachedStateRead, clearStateCache } from '@/lib/estate/estate-state-cache';
 import { loadActivity } from '@/lib/estate/estate-activity';
 import { loadAutoPause } from '@/lib/estate/estate-autopause';
-import { mergeForPause, resolveContainerAppsForPause, resolveTaggedForPause } from '@/lib/estate/estate-pause-set';
+import {
+  mergeForPause,
+  resolveContainerAppsForPause,
+  resolveGatewayHoldsForPause,
+  resolveTaggedForPause,
+} from '@/lib/estate/estate-pause-set';
+import { applyReassert, reassertAutoRestarted } from '@/lib/estate/pause-reassert';
 import { discardPauseProgress, withIncrementalSnapshot } from '@/lib/estate/pause-incremental';
 import { loadPipelineActivity } from '@/lib/estate/estate-pipeline-activity';
 import type { EstatePowerStatus } from '@/lib/estate/estate-power-contract';
@@ -143,13 +150,17 @@ async function runningPayload(actuator: EstateActuator, tenantId: string) {
   const apps = await resolveContainerAppsForPause(tenantId, manifest.estateId);
   // #5099 — estate-tagged resources (AKS, VMs, Databricks, ASA, web sites), unioned in.
   const tagged = await resolveTaggedForPause(manifest.estateId);
-  const readFailures = [...part.readFailures, ...apps.readFailures, ...tagged.readFailures];
   const present = mergeForPause(part.present, apps, tagged);
+  // #5099 phase B - an Application Gateway is held out unless its backend pools are read
+  // and shown not to target the console; a THROTTLED read is a read failure (retry), not a hold-out.
+  const gateways = await resolveGatewayHoldsForPause(present);
+  const readFailures = [...part.readFailures, ...apps.readFailures, ...tagged.readFailures, ...gateways.readFailures];
   const plan = planPause(present, {
     scope: { kind: 'explicit-inventory', estateId: manifest.estateId },
     manifest,
     ...(gateReason ? { gateReason } : {}),
     namedByDeploy,
+    holds: gateways.holds,
   });
 
   // R-CAP-3 — read the live SKU so the confirm dialog names what is at risk.
@@ -244,7 +255,16 @@ async function computeStateFields(
   }
 
   if (snapshot.state === 'PAUSING' || snapshot.state === 'PAUSED') {
-    const poll = await pollPause(snapshot, actuator);
+    const polled = await pollPause(snapshot, actuator);
+    // #5099 phase B - Azure restarts a stopped PostgreSQL (7 d) / MySQL (30 d) flexible server on
+    // its own. The estate stays PAUSED (drift is a report, never a state change); the idle
+    // auto-pause lane, which reads this state every 30 min, re-stops it. Only that lane, only
+    // when armed, and only those two types (see ./pause-reassert).
+    const reassert =
+      snapshot.state === 'PAUSED' && polled.drifted && opts?.pipelineActivity === true && estatePauseEnabled()
+        ? await reassertAutoRestarted(snapshot, polled, actuator)
+        : [];
+    const poll = applyReassert(polled, reassert);
     if (poll.state !== snapshot.state) {
       await savePauseSnapshot(applyPausePoll(snapshot, poll)).catch(() => {});
     }
@@ -259,6 +279,7 @@ async function computeStateFields(
       total: poll.total,
       drifted: poll.drifted,
       driftedResources: poll.driftedResources,
+      reassert,
       reason: poll.reason,
       resources: snapshot.resources,
       typicalResumeSeconds: TYPICAL_RESUME_SECONDS,
@@ -337,13 +358,17 @@ async function pausePostImpl(caller: EstateCaller, body: PauseBody) {
   const { absent } = part;
   const apps = await resolveContainerAppsForPause(tenantId, manifest.estateId);
   const tagged = await resolveTaggedForPause(manifest.estateId);
-  const readFailures = [...part.readFailures, ...apps.readFailures, ...tagged.readFailures];
   const present = mergeForPause(part.present, apps, tagged);
+  // #5099 phase B - an Application Gateway is held out unless its backend pools are read
+  // and shown not to target the console; a THROTTLED read is a read failure (retry), not a hold-out.
+  const gateways = await resolveGatewayHoldsForPause(present);
+  const readFailures = [...part.readFailures, ...apps.readFailures, ...tagged.readFailures, ...gateways.readFailures];
   const plan = planPause(present, {
     scope: { kind: 'explicit-inventory', estateId: manifest.estateId },
     manifest,
     ...(gateReason ? { gateReason } : {}),
     namedByDeploy,
+    holds: gateways.holds,
   });
 
   // R-CAP-3 — the live SKU, so the risk names the thing at risk.

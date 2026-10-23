@@ -277,7 +277,7 @@ export async function discoverByEstateTag(args: {
         incomplete: true,
         note:
           `discovery incomplete: the Azure Resource Graph tag query failed${kind === 'throttled' ? ' (throttled; retry)' : ''}, `
-          + 'so resources found by the loom-estate-id tag (AKS, VMs, Databricks, Stream Analytics, web sites) are NOT in this preview. '
+          + 'so resources found by the loom-estate-id tag (AKS, VMs, Databricks, Stream Analytics, web sites, PostgreSQL/MySQL, Application Gateways, Power BI Embedded) are NOT in this preview. '
           + `This is NOT a statement that there is nothing to pause. Raw: ${error.slice(0, 300)}`,
       }),
       readFailures:
