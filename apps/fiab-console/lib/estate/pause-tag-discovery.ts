@@ -135,7 +135,16 @@ export async function queryAllPages(query: string, post: ArgPost): Promise<{ row
     if (skipToken) options.$skipToken = skipToken;
     const body = await post({ query, options });
     pages += 1;
-    if (Array.isArray(body?.data)) rows.push(...(body.data as ArgRow[]));
+    // A 2xx whose body carries `error`, or no `data` array, is a failed read - never "zero rows, complete".
+    const bodyError = (body as { error?: unknown } | undefined)?.error;
+    if (bodyError) {
+      const msg = typeof bodyError === 'object' ? JSON.stringify(bodyError) : String(bodyError);
+      throw new Error(`Resource Graph returned an error body on page ${pages}: ${msg.slice(0, 300)}`);
+    }
+    if (!Array.isArray(body?.data)) {
+      throw new Error(`Resource Graph page ${pages} has no data array; refusing to read it as zero rows.`);
+    }
+    rows.push(...(body.data as ArgRow[]));
     skipToken = typeof body?.$skipToken === 'string' && body.$skipToken ? body.$skipToken : undefined;
   } while (skipToken && pages < MAX_PAGES);
   if (skipToken) {

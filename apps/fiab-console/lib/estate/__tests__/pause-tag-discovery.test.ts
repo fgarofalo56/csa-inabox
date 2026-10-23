@@ -81,6 +81,32 @@ describe('queryAllPages ($skipToken)', () => {
     await expect(queryAllPages('q', post)).rejects.toThrow(/refusing a partial list/);
     expect(calls).toBe(MAX_PAGES);
   });
+
+  // Breaks if: a 2xx carrying `error` (or no `data` array) is read as zero rows, complete.
+  // Without the check, { error: {...} } and {} both come back as rows=[] - the inputs below.
+  it('a 2xx error body or a missing data array throws instead of reading as zero rows', async () => {
+    const errBody = { error: { code: 'BadRequest', message: 'Query is invalid' } } as any;
+    await expect(queryAllPages('q', async () => errBody)).rejects.toThrow(/error body on page 1: .*BadRequest/);
+    await expect(queryAllPages('q', async () => ({}))).rejects.toThrow(/no data array/);
+    // A page-2 error after a good page 1 also throws: no partial list from a mid-stream failure.
+    const post: ArgPost = async (body) =>
+      (body as any).options.$skipToken ? errBody : { data: [row('microsoft.compute/virtualmachines', 'vm1')], $skipToken: 't' };
+    await expect(queryAllPages('q', post)).rejects.toThrow(/page 2/);
+    // Positive control: an empty-but-valid page is a genuine zero.
+    await expect(queryAllPages('q', async () => ({ data: [] }))).resolves.toEqual({ rows: [], pages: 1 });
+  });
+
+  // Breaks if: discoverByEstateTag stops routing a 2xx error body into the fail-closed path.
+  it('a 2xx error body surfaces as "discovery incomplete" end to end', async () => {
+    const r = await discoverByEstateTag({
+      estateId: EST,
+      env: ENV_CA,
+      post: async () => ({ error: { code: 'BadRequest' } }) as any,
+    });
+    expect(r.status.incomplete).toBe(true);
+    expect(r.status.note).toMatch(/^discovery incomplete: .*BadRequest/);
+    expect(r.discovered).toEqual([]);
+  });
 });
 
 describe('discoverByEstateTag - fail closed', () => {
