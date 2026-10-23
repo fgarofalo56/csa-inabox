@@ -6,7 +6,7 @@
 
 | PRP | Priority | Progress | Items | Models | Review |
 |---|---|---|---|---|---|
-| [loom-health-data-services](active/loom-health-data-services/PRP.md) | P1 | 0/13 (0%) | todo 13 | sonnet / sonnet | required |
+| [loom-health-data-services](active/loom-health-data-services/PRP.md) | P1 | 0/13 (0%) | todo 12, in-progress 1 | sonnet / sonnet | required |
 
 ## Backlog
 

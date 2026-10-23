@@ -137,7 +137,7 @@ defaults.
 
 | Item | Status | Branch | Model | Evidence | Updated |
 |---|---|---|---|---|---|
-| W00-measurement-spike | todo | | sonnet | `W00-measurement-spike.md` | 2026-10-22 |
+| W00-measurement-spike | in-progress | feat/lhds-w0-no-cost | sonnet | `W00-measurement-spike.md` (W0-3 merged #5092/#5094; W0-1/2/4/5 scripts in #5093, pass-bar runs blocked on Q2; W0-7 todo) | 2026-10-23 |
 | W01-control-plane-identity-stamp | todo | | sonnet | `W01-control-plane-identity-stamp.md` | 2026-10-22 |
 | W02-fhir-core | todo | | sonnet | `W02-fhir-core.md` | 2026-10-22 |
 | W03-dicom-core-dicomweb | todo | | sonnet | `W03-dicom-core-dicomweb.md` | 2026-10-22 |
