@@ -270,3 +270,50 @@ test('workflow: pool_acquire exists, build needs it but tolerates its failure, r
 test('workflow: pool_apps input exists on dispatch and call', () => {
   assert.equal((text.match(/^ {6}pool_apps:/gm) || []).length, 2, 'workflow_dispatch and workflow_call must both declare pool_apps');
 });
+
+// ---- bounded drain wait (Gov / blue-green release) ----------------------
+/** Fake az whose queue depth follows a script, one value per --queue-count read. */
+function drainingAz(queueSeq) {
+  const f = fakeAz({});
+  let i = 0;
+  const az = (args) => {
+    if (args.join(' ').includes('--queue-count')) {
+      f.calls.push(args.join(' '));
+      const q = queueSeq[Math.min(i, queueSeq.length - 1)];
+      i += 1;
+      return { ok: true, value: { count: q } };
+    }
+    return f.az(args);
+  };
+  return { az, calls: f.calls };
+}
+
+test('release --wait: a queue that drains within the budget IS scaled down (queue 2 -> 1 -> 0)', () => {
+  const d = drainingAz([2, 1, 0]);
+  const slept = [];
+  const r = release('acr', 'p', d.az, { waitSeconds: 60, pollSeconds: 15, sleep: (ms) => slept.push(ms) });
+  assert.equal(r.code, 0);
+  assert.ok(updated(d.calls), 'queue reaching 0 inside the wait must trigger the scale-down; a release that never re-reads turns this red');
+  assert.deepEqual(slept, [15000, 15000], 'two polls, then the pool is released');
+});
+test('release --wait: a queue that never drains is NOT scaled and the wait is BOUNDED (60s/15s = 4 polls, not more)', () => {
+  const d = drainingAz([3]);
+  const slept = [];
+  const r = release('acr', 'p', d.az, { waitSeconds: 60, pollSeconds: 15, sleep: (ms) => slept.push(ms) });
+  assert.equal(updated(d.calls), false, 'queue=3 for the whole budget must never reach an update');
+  assert.equal(slept.length, 4, 'an unbounded loop would sleep more than ceil(60/15)=4 times');
+  assert.match(r.msg, /Still busy after waiting 60s/);
+});
+test('release --wait: waitSeconds=0 (default) never sleeps on a busy pool', () => {
+  const slept = [];
+  release('acr', 'p', drainingAz([3]).az, { sleep: (ms) => slept.push(ms) });
+  assert.equal(slept.length, 0, 'the default must stay the old single-read behaviour');
+});
+test('release --wait: an UNREADABLE run list is not waited on and not scaled (unknown is not busy)', () => {
+  const f = fakeAz({ failRuns: true });
+  const slept = [];
+  const r = release('acr', 'p', f.az, { waitSeconds: 60, sleep: (ms) => slept.push(ms) });
+  assert.equal(r.code, 1);
+  assert.equal(slept.length, 0, 'only a measured-busy pool is waited on');
+  assert.equal(updated(f.calls), false);
+});

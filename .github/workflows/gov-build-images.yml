@@ -366,6 +366,7 @@ jobs:
         run: az cloud set --name AzureUSGovernment
 
       - name: Build + push ${{ matrix.app }}
+        id: build
         run: |
           set -euo pipefail
           APP='${{ matrix.app }}'
@@ -467,10 +468,9 @@ jobs:
               az acr build --registry "$ACR" --no-logs $IMG_ARGS "apps/$APP"
               ;;
           esac
-          if [ "$APP" = "loom-console" ]; then
-            q=$(az acr agentpool show -r "$ACR" -n "$POOL" --queue-count -o tsv 2>/dev/null | tr -d '\r' || echo 1)
-            [ "${q:-1}" = "0" ] && az acr agentpool update -r "$ACR" -n "$POOL" --count 0 --no-wait -o none || true
-          fi
+          # Pool scale-down: see the verified, if: always() step "Release the ACR
+          # build pool" below (the inline `--no-wait || true` it replaces never
+          # ran on a cancelled run and discarded every failure).
           # The lease is released by the dedicated always() step below, AFTER
           # the supply-chain steps have pulled the image + pushed the signature.
 
@@ -579,6 +579,19 @@ jobs:
         # publicly reachable registry. If this step goes red, read the exact
         # remediation the script prints — the registry may be OPEN.
         run: bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR"
+
+      # Verified pool release (console leg only: it is the one build that scales
+      # a pool). Runs on success, failure, cancel and timeout; waits up to 5 min
+      # for the queue to drain, scales to 0 and READS THE COUNT BACK, exit 1 if
+      # not 0. Leaves a pool another run is using and says so; the hourly
+      # acr-agentpool-reaper.yml collects it once idle. Pool name matches the
+      # `POOL=` in the build step (kept in step by acr-pool-release-wiring test).
+      - name: Release the ACR build pool (verified)
+        if: always() && matrix.app == 'loom-console' && (steps.build.conclusion == 'success' || steps.build.conclusion == 'failure' || steps.build.conclusion == 'cancelled')
+        run: |
+          set -euo pipefail
+          node scripts/ci/acr-build-pool.mjs release --acr "$ACR" \
+            --pool loombuild2 --wait-seconds 300
 
   summary:
     name: Image summary
