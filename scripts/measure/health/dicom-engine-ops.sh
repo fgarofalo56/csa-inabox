@@ -82,10 +82,10 @@ ldap_probe() {
     MSYS_NO_PATHCONV=1 docker run --name "$rname" --entrypoint sh \
       -v "$(host_path "$OUT/ops"):/dump:ro" "$LHDS_LDAP_IMAGE" -c '
         set -e
-        mkdir -p /tmp/slapd.d /tmp/db
-        slapadd -n 0 -F /tmp/slapd.d -l /dump/ldap-config.ldif >/dev/null
-        slapadd -n 1 -F /tmp/slapd.d -l /dump/ldap-data.ldif  >/dev/null
-        slapcat -n 1 -F /tmp/slapd.d | grep -c "^dn:"' > "$OUT/ops/ldap-restore-count.txt" 2> "$OUT/ops/ldap-restore.err" \
+        cfg="$(mktemp -d)"   # db -n 1 lands in the olcDbDirectory named by the dump (/var/lib/openldap/openldap-data)
+        slapadd -n 0 -F "$cfg" -l /dump/ldap-config.ldif >/dev/null
+        slapadd -n 1 -F "$cfg" -l /dump/ldap-data.ldif  >/dev/null
+        slapcat -n 1 -F "$cfg" | grep -c "^dn:"' > "$OUT/ops/ldap-restore-count.txt" 2> "$OUT/ops/ldap-restore.err" \
       || { cat "$OUT/ops/ldap-restore.err" >&2; docker rm -f "$rname" > /dev/null; metric "$M" ldap_backup_ok 0 bool "$CTX; restore into a fresh container failed"; die "restore of the LDAP dump into a fresh container FAILED (see $OUT/ops/ldap-restore.err)"; }
     docker rm -f "$rname" > /dev/null
     local restored
