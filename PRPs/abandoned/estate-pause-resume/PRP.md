@@ -1,3 +1,15 @@
+---
+name: estate-pause-resume
+status: abandoned  # folded into finish-2026-10/PRP-02-estate-power (#4876) (operator, 2026-10-23)
+priority: P2
+order: 2
+depends_on: []
+review: none
+orchestrator_model: opus
+implementer_model: sonnet
+created: 2026-08-23
+---
+
 # ESTATE PAUSE / RESUME — a Fabric-SKU-style switch for the whole Loom estate
 
 **Status:** DRAFT — execution-ready. Created 2026-08-22. Operator-directed, **priority #1**.

@@ -1,3 +1,15 @@
+---
+name: omnibus-2026-08-22
+status: abandoned  # superseded by finish-2026-10 umbrella (operator, 2026-10-23); files kept, issues stay open
+priority: P2
+order: 1
+depends_on: []
+review: none
+orchestrator_model: opus
+implementer_model: sonnet
+created: 2026-08-22
+---
+
 # OMNIBUS — one program for everything open (2026-08-22)
 
 **Status:** DRAFT (execution-ready — 2026-08-22). Author: Claude Code, operator-directed.
