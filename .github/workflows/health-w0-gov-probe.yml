@@ -36,7 +36,8 @@ permissions:
   contents: read
 
 env:
-  PG_REGION: usgovvirginia
+  # All three Gov regions: run 39887825372 found usgovvirginia OfferRestricted (0 SKUs).
+  PG_REGIONS: usgovvirginia usgovarizona usgovtexas
   AKS_REGIONS: usgovvirginia usgovarizona usgovtexas
   PROVIDERS: Microsoft.ContainerService Microsoft.DBforPostgreSQL Microsoft.Storage Microsoft.EventHub Microsoft.ApiManagement Microsoft.KeyVault Microsoft.Cdn Microsoft.Network Microsoft.LoadTestService Microsoft.App
 
@@ -101,8 +102,10 @@ jobs:
 
           probe "account:list-locations" "locations.json" az account list-locations -o json
 
-          probe "postgres:list-skus:$PG_REGION" "pg-skus-$PG_REGION.json" \
-            az postgres flexible-server list-skus --location "$PG_REGION" -o json
+          for r in $PG_REGIONS; do
+            probe "postgres:list-skus:$r" "pg-skus-$r.json" \
+              az postgres flexible-server list-skus --location "$r" -o json
+          done
 
           for r in $AKS_REGIONS; do
             probe "aks:get-versions:$r" "aks-versions-$r.json" \

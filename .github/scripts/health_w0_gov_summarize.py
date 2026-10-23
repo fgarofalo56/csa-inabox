@@ -105,8 +105,19 @@ def main(out_dir: str) -> int:
             print(
                 f"- substring 'premiumv2' in raw output: {'premiumv2' in blob}; "
                 f"'ssdv2': {'ssdv2' in blob}  (SSD v2 judgement is made from the raw "
-                "artifact, these are only hints)\n"
+                "artifact, these are only hints)"
             )
+            # A region can list the resource type yet offer zero SKUs to this subscription
+            # (run 39887825372: usgovvirginia, OfferRestricted). Surface that explicitly.
+            caps = data if isinstance(data, list) else [data]
+            for cap in caps:
+                feats = {f.get("name"): f.get("status") for f in cap.get("supportedFeatures", [])}
+                print(
+                    f"- OfferRestricted: {feats.get('OfferRestricted', 'absent')}; "
+                    f"ZoneRedundantHa: {feats.get('ZoneRedundantHa', 'absent')}; "
+                    f"reason: {cap.get('reason') or 'none'}"
+                )
+            print()
         elif name.startswith("aks:get-versions"):
             vers = [v.get("version") for v in data.get("values", data.get("orchestrators", []))]
             print(
