@@ -1,3 +1,15 @@
+---
+name: apim-ai-gateway
+status: backlog
+priority: P2
+order: 6
+depends_on: []
+review: none
+orchestrator_model: opus
+implementer_model: sonnet
+created: 2026-09-11
+---
+
 # PRP — APIM AI Gateway as the day-one path for every Loom AI endpoint
 
 **Status:** DRAFT (2026-09-10; corrected 2026-09-11) — design unblocked; no wave

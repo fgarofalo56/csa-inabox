@@ -1,3 +1,15 @@
+---
+name: drain-2026-08-31
+status: abandoned  # superseded by finish-2026-10 umbrella (operator, 2026-10-23); files kept, issues stay open
+priority: P2
+order: 4
+depends_on: []
+review: none
+orchestrator_model: opus
+implementer_model: sonnet
+created: 2026-08-31
+---
+
 # PRP — Backlog Drain 2026-08-31
 
 **Status:** active · **Opened:** 2026-08-31 · **Branch:** `docs/drain-prp-2026-08-31`

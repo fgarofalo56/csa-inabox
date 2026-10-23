@@ -1,3 +1,15 @@
+---
+name: loom-brain
+status: backlog
+priority: P2
+order: 3
+depends_on: []
+review: none
+orchestrator_model: opus
+implementer_model: sonnet
+created: 2026-08-23
+---
+
 # LOOM BRAIN — self-managing estate intelligence
 
 **Status:** DRAFT — execution-ready. Created 2026-08-23. Operator-directed.
