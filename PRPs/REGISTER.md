@@ -1,6 +1,6 @@
 # ACTIVE WORK REGISTER
 
-**Superseded as the entry point by `PRPs/active/MASTER-INDEX.md` (2026-10-05).**
+**Superseded as the entry point by `PRPs/MASTER-INDEX.md` (2026-10-05).**
 That file carries the current run order, per-PRP status (re-verified against
 live GitHub state, not this file's 2026-08-31 snapshot), and model
 recommendations. This file's own disposition table in §2 below is still

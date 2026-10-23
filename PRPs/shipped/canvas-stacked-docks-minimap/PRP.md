@@ -1,6 +1,6 @@
 ---
 name: canvas-stacked-docks-minimap
-status: active
+status: shipped
 priority: P1
 order: 1
 depends_on: []
@@ -9,6 +9,8 @@ orchestrator_model: sonnet
 implementer_model: sonnet
 created: 2026-10-05
 started: 2026-10-22
+shipped: 2026-10-23
+pr: 5095
 issues: [3699]
 branch: feat/3699-stacked-split
 ---
@@ -200,6 +202,20 @@ Plus the G1 live-browser walks described per-phase above — not optional, per `
 - [x] Non-goals are explicit and linked to filed issues, not silently absent (§1).
 - [x] A known environment blocker (dev-server bootstrap) is named with a workaround, not left for the next session to rediscover (§3 verification note).
 - [x] Validation gates are literal, runnable commands (§6).
+
+## Completion note
+
+Shipped 2026-10-23 as PR #5095 (squash `2e56f50c4`), deployed to Commercial and Gov (live markers both `2e56f50c`). **Verified live on Commercial only** (signed-in walk of a UAT data-pipeline item on the Microsoft Fabric runtime path: 3-pane stack, ArrowDown +24px per press, expand/collapse restores 351/174/29 exactly, layout persisted). **Gov: deployed, not click-walked** — #3699 stays open until it is.
+
+Deviations:
+- Item A's root cause differed from the PRP: the `crypto` import was `lib/azure/query-result-cache.ts` traced via `instrumentation.ts`'s early return. Fixed with a positive `NEXT_RUNTIME === 'nodejs'` check and a new `instrumentation-node.ts` (a file outside the PRP's list; behaviour-identical, independently reviewed).
+- The harness route `app/dev/` needed `error.tsx` + `loading.tsx` (route-boundaries test) — added after the first CI run failed.
+- The guard allowlists 4 R2 hits in `report/free-form-canvas.tsx` (element-resize handles, a heuristic false positive).
+- The new layout appears only under the Fabric (opt-in) runtime radio; the default ADF/Synapse view still uses `pipeline-editor-core.tsx` (#4952, out of scope as the PRP stated).
+
+Not proven: the 70% double-click-fit cap (its fixture cannot fail); the workflow edit was YAML-parsed only (no local actionlint); one unidentified failure in a first full local node:test run (rerun clean, output not captured).
+
+Descoped / deferred (already filed): #4952-#4957. Reviewer follow-ups not yet filed: pointer comment in `instrumentation.ts`, guard regex edge cases (#4957), config-dock 80px floor confirmation.
 
 ## Execution state
 
