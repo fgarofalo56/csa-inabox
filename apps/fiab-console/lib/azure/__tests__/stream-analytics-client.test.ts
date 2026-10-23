@@ -68,6 +68,42 @@ beforeEach(() => {
   delete process.env.LOOM_DLZ_RG;
 });
 
+/**
+ * #5046 - ownership tags. Breaking inputs:
+ *   - getJobTags on 404 must be `null` (absent), on 200 the tag map, on 200 with
+ *     no `tags` property `{}`, on 403 a THROW (fails if a read failure is
+ *     reported as "no tags", which would make teardown skip silently).
+ *   - createOrUpdateJob must put `tags` in the PUT body only when supplied.
+ */
+describe('getJobTags / createOrUpdateJob tags (#5046)', () => {
+  it('returns null on 404, the tag map on 200, {} when untagged', async () => {
+    const { getJobTags } = await import('../stream-analytics-client');
+    fetchWithTimeout.mockResolvedValueOnce(armResponse(404, { error: { code: 'ResourceNotFound' } }));
+    expect(await getJobTags('j')).toBeNull();
+    fetchWithTimeout.mockResolvedValueOnce(armResponse(200, { name: 'j', tags: { loomItemId: 'abc' } }));
+    expect(await getJobTags('j')).toEqual({ loomItemId: 'abc' });
+    fetchWithTimeout.mockResolvedValueOnce(armResponse(200, { name: 'j' }));
+    expect(await getJobTags('j')).toEqual({});
+  });
+
+  it('THROWS on a 403 instead of reporting "no tags"', async () => {
+    const { getJobTags } = await import('../stream-analytics-client');
+    fetchWithTimeout.mockResolvedValueOnce(armResponse(403, { error: { code: 'AuthorizationFailed' } }));
+    await expect(getJobTags('j')).rejects.toThrow(/403/);
+  });
+
+  it('createOrUpdateJob sends tags in the PUT body when given, and omits the key when not', async () => {
+    const { createOrUpdateJob } = await import('../stream-analytics-client');
+    fetchWithTimeout.mockResolvedValue(armResponse(201, { id: '/x', name: 'j' }));
+    await createOrUpdateJob({ name: 'j', location: 'eastus', tags: { loomItemId: 'abc' } });
+    const tagged = JSON.parse(fetchWithTimeout.mock.calls.at(-1)![1].body);
+    expect(tagged.tags).toEqual({ loomItemId: 'abc' });
+    await createOrUpdateJob({ name: 'j', location: 'eastus' });
+    const plain = JSON.parse(fetchWithTimeout.mock.calls.at(-1)![1].body);
+    expect('tags' in plain).toBe(false);
+  });
+});
+
 describe('getJob — the three conditions #3573 separated', () => {
   it('throws AsaJobNotFoundError on an ARM 404, naming the RG and sub it looked in', async () => {
     fetchWithTimeout.mockResolvedValue(

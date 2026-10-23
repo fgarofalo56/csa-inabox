@@ -59,6 +59,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { armBase } from '@/lib/azure/cloud-endpoints';
 import { swrAwait } from '@/lib/azure/cross-sub-cache';
+import { armCountedRawFetch } from '@/lib/util/arm-counted-raw-fetch';
 
 // ───────────────────────────────────────────────────────────────────────────
 // L3 — strict allow-lists
@@ -165,7 +166,7 @@ export async function scanDeployedDlzs(token: string): Promise<DiscoveredDlz[]> 
   const dlzs: DiscoveredDlz[] = [];
   let skipToken: string | undefined;
   do {
-    const res = await fetch(
+    const res = await armCountedRawFetch(
       `${arm}/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01`,
       {
         method: 'POST',

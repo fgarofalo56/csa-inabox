@@ -12,7 +12,7 @@
  * route renders (per no-vaporware.md). Tag values are normalized so both
  * `loom-domain:<id>` and a bare `<id>` fold to the same domain.
  */
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -151,7 +151,7 @@ async function queryDomainCost(sub: string, timeframe: CostTimeframe): Promise<T
   const maxAttempts = 4;
   let lastErr: MonitorError | null = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const res = await fetchWithTimeout(url, {
+    const res = await armCountedFetch(url, {
       method: 'POST',
       headers: { authorization: `Bearer ${t.token}`, 'content-type': 'application/json', accept: 'application/json' },
       body: JSON.stringify(body),

@@ -30,7 +30,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope } from './cloud-endpoints';
-import { fetchWithTimeout } from './fetch-with-timeout';
+import { armCountedFetch } from './arm-counted-fetch';
 import { discoverResourceCoordsByName } from './resource-graph-coords';
 
 const ARM_SCOPE = armScope();
@@ -104,7 +104,7 @@ function clusterUrl(cfg: KustoClusterArmConfig): string {
 async function callArm(url: string, init?: RequestInit): Promise<Response> {
   const t = await credential.getToken(ARM_SCOPE);
   if (!t?.token) throw new KustoArmError(401, undefined, 'Failed to acquire ARM token');
-  return fetchWithTimeout(url, {
+  return armCountedFetch(url, {
     ...init,
     headers: {
       ...(init?.headers || {}),
@@ -752,4 +752,3 @@ export async function updateKustoStreamingIngest(
   }
   return shape(await r.json());
 }
-

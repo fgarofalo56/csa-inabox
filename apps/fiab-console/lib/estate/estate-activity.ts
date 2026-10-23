@@ -31,6 +31,8 @@ const NOT_ACTIVITY_PREFIXES = [
   '/api/auth/refresh',
   '/api/estate/power',
   '/api/admin/estate/state',
+  // The shell banner polls this on every page for every user (2026-10-22).
+  '/api/estate/paused',
   '/api/internal/',
 ];
 

@@ -56,6 +56,21 @@ on:
         description: 'Comma-separated app list, or "all"'
         type: string
         default: all
+      submit_mode:
+        description: 'poll (default): submit with --no-wait and decide from the ACR run status (immune to the ~70 min log-stream SAS expiry). legacy: the previous bare az acr build whose log stream is the verdict (rollback).'
+        type: choice
+        default: poll
+        options:
+          - poll
+          - legacy
+      pool_apps:
+        description: 'Apps to build on the dedicated pool (--agent-pool): comma list, or "default" (loom-console,loom-directlake), or "none" (every app on default agents). Lets the operator flip routing at dispatch without a code change.'
+        type: string
+        default: default
+      pool_agent_count:
+        description: 'Agents to scale the loom-console build pool UP to for this run (clamped 1..4 by scripts/ci/acr-build-pool.mjs). Blank = 2 on Commercial, 1 on GCC-High/IL5. The pool_release job scales it back to 0 and reads the count back.'
+        type: string
+        default: ''
       skip_supply_chain:
         description: 'EMERGENCY VALVE — skip the Trivy CRITICAL gate + cosign signing (e.g. Trivy DB / Sigstore outage). The unsigned image will be REJECTED by the roll gates unless their skip valves are also set.'
         type: boolean
@@ -77,6 +92,15 @@ on:
       skip_supply_chain:
         type: boolean
         default: false
+      pool_agent_count:
+        type: string
+        default: ''
+      pool_apps:
+        type: string
+        default: default
+      submit_mode:
+        type: string
+        default: poll
   push:
     branches: [main]
     paths:
@@ -155,21 +179,61 @@ env:
   # This workflow is the longest-lived holder (console compile + matrix builds +
   # Trivy scan + cosign sign). Size the lease so a legitimate run never expires
   # mid-push and gets its registry swept out from under it.
-  LOOM_ACR_LEASE_TTL_MINUTES: '120'
+  LOOM_ACR_LEASE_TTL_MINUTES: '180'
+  # 180 = build job timeout (150) + the acr_enable -> build gap and margin. The
+  # lease is taken in acr_enable BEFORE the build queues, so it must outlive
+  # queue + the 105-min run poll + scan/sign, or a sweeper/second holder could
+  # re-lock the registry under a live build. (acr-firewall-lease.sh has no
+  # renew verb.) Cost: after a crash that skips release, the scheduled sweeper
+  # re-locks up to 60 min later than at 120.
+  # Rollback switch for the build submit path: dispatch with submit_mode=legacy,
+  # or set repo variable LOOM_ACR_SUBMIT_MODE=legacy. Default poll.
+  SUBMIT_MODE: ${{ inputs.submit_mode || vars.LOOM_ACR_SUBMIT_MODE || 'poll' }}
+  # Build-pool size for the loom-console compile (the only app on the dedicated
+  # pool). Raw value; clamped to 1..4 by `acr-build-pool.mjs clamp` at use.
+  # Commercial defaults to 2; Gov lanes stay at 1 (the same guaranteed
+  # scale-down applies to them, but the 2026-10-21 decision was Commercial).
+  POOL_AGENT_COUNT: ${{ inputs.pool_agent_count || ((inputs.boundary == 'GCC-High' || inputs.boundary == 'IL5') && '1' || '2') }}
+  BUILD_POOL_NAME: loombuild2
+  # Apps built on the dedicated S3 pool (--agent-pool): the two long poles.
+  # loom-console (Next.js compile, OOMs the 8 GB default agent) and
+  # loom-directlake (Rust release build; sat 52 min queued on the shared default
+  # agents, ACR run cj90w, 2026-10-21). Everything else stays on default agents:
+  # moving all 14 would only re-serialize them behind POOL_AGENT_COUNT agents.
+  # Comma-separated, exact names. Sized with POOL_AGENT_COUNT=2 = one agent per
+  # heavy app (Learn documents S3 = 8 CPU / 16 GB PER INSTANCE and does not state
+  # how many task runs one instance executes concurrently, so we assume 1).
+  POOL_APPS_DEFAULT: loom-console,loom-directlake
+  # Raw operator override: 'default' | 'none' | comma list. Resolved (and
+  # shape-validated) by `acr-build-pool.mjs pool-apps`; push runs have no
+  # inputs so they get 'default'.
+  POOL_APPS_INPUT: ${{ inputs.pool_apps || 'default' }}
 
 jobs:
   resolve:
     name: Resolve ACR + filter apps
     runs-on: ubuntu-latest
+    # actions: read -- the matrix step asks which push run last SUCCEEDED (the diff
+    # base for the changed-app plan). The workflow-level block grants neither.
+    permissions:
+      contents: read
+      actions: read
     outputs:
       acr_name: ${{ steps.acr.outputs.acr_name }}
       acr_login_server: ${{ steps.acr.outputs.acr_login_server }}
       app_matrix: ${{ steps.matrix.outputs.matrix }}
+      # JSON array of the apps NOT rebuilt on this push; carry_forward re-tags
+      # each one's current image to <sha>. '[]' on dispatch / call / build-all.
+      carry_apps: ${{ steps.matrix.outputs.carry_apps }}
+      build_count: ${{ steps.matrix.outputs.build_count }}
     steps:
       # The matrix resolver probes ./apps/<name> to decide each build context, so this
       # job needs the tree. It had no checkout before — the probe silently evaluated
       # false for every app and everything fell through to the ./apps/fiab-* convention.
       - uses: actions/checkout@v7.0.1
+        with:
+          # Full history: the changed-app plan diffs <last successful push run>..sha.
+          fetch-depth: 0
       # Fail LOUDLY rather than silently building into the wrong cloud: a Gov
       # dispatch with no AZURE_GOV_* secret set would otherwise fall through to
       # an unauthenticated `az` and report a confusing "ACR not found".
@@ -248,6 +312,8 @@ jobs:
           echo "acr_login_server=$ACR_LOGIN" >> "$GITHUB_OUTPUT"
           echo "::notice::boundary=$BOUNDARY acr=$ACR login=$ACR_LOGIN"
       - id: matrix
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           INPUT="${{ inputs.apps || 'all' }}"
           if [[ "$INPUT" == "all" ]]; then
@@ -307,12 +373,57 @@ jobs:
               echo "::notice::$APP -> $CTX (${FILE:-$CTX/Dockerfile})"
             done
           fi
-          echo "matrix={\"include\":$APPS}" >> "$GITHUB_OUTPUT"
+          # ── CHANGED-APP PLAN (push to main only) ──────────────────────────────
+          # A push builds only the apps whose inputs changed since the last
+          # SUCCESSFUL push run; the rest are carried forward (re-tagged to this
+          # SHA by the carry_forward job) so <app>:<sha> exists for every app and
+          # the rolls never reference a missing tag. Dispatch and workflow_call
+          # (github.workflow is the CALLER's name there) keep building exactly
+          # what they asked for. FAIL CLOSED: any failure to compute the plan
+          # builds ALL, loudly. Logic + tests: scripts/ci/plan-image-builds.mjs.
+          CARRY='[]'
+          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_WORKFLOW" == "build-fiab-images-acr-tasks" && "$INPUT" == "all" ]]; then
+            ERRF="${RUNNER_TEMP:-/tmp}/plan-base.err"
+            BASE=""
+            if ! BASE=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/build-fiab-images-acr-tasks.yml/runs?branch=main&event=push&status=success&per_page=1" --jq '.workflow_runs[0].head_sha // empty' 2>"$ERRF"); then
+              echo "::warning::could not read the last successful push run ($(head -c 300 "$ERRF")) - the plan will fail closed to ALL."
+              BASE=""
+            fi
+            PLAN=""
+            if PLAN=$(node scripts/ci/plan-image-builds.mjs --matrix "$APPS" --sha "$GITHUB_SHA" --base "$BASE") \
+               && jq -e '.build and .carry and .mode' <<< "$PLAN" > /dev/null; then
+              BUILD_NAMES=$(jq -c '.build' <<< "$PLAN")
+              CARRY=$(jq -c '.carry' <<< "$PLAN")
+              APPS=$(jq -c --argjson b "$BUILD_NAMES" '[.[] | select(.name as $n | $b | index($n))]' <<< "$APPS")
+            else
+              echo "::warning::image build planner failed or returned an unusable plan - building ALL (fail closed)."
+              CARRY='[]'
+            fi
+          else
+            echo "::notice::changed-app plan not applied (event=$GITHUB_EVENT_NAME workflow=$GITHUB_WORKFLOW apps=$INPUT) - building exactly the requested set."
+          fi
+          {
+            echo "carry_apps=$CARRY"
+            echo "build_count=$(jq 'length' <<< "$APPS")"
+            echo "matrix={\"include\":$APPS}"
+          } >> "$GITHUB_OUTPUT"
 
   build:
     name: Build ${{ matrix.name }} via ACR Tasks
-    needs: [resolve, acr_enable]
+    needs: [resolve, acr_enable, pool_acquire]
+    # pool_acquire may be skipped (no pool app in this run) or FAIL (ARM). Either
+    # way default-agent images must still build, so the job does not require
+    # pool_acquire to succeed; a pool-routed leg checks its result in the build
+    # step and fails LOUDLY itself. !cancelled() (not always()) so a cancelled
+    # run does not start new builds.
+    if: ${{ !cancelled() && needs.resolve.result == 'success' && needs.acr_enable.result == 'success' && needs.resolve.outputs.build_count != '0' }}
     runs-on: ubuntu-latest
+    # A hung build must not hold billed pool agents indefinitely. The retry
+    # harness caps the build at 110m wall-clock (the run poll gives up at 105m:
+    # a measured default-agent queue + Rust compile was ~89m); 150m covers
+    # checkout, scan and sign. On timeout the job fails and pool_release
+    # (if: always()) still runs.
+    timeout-minutes: 150
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.resolve.outputs.app_matrix) }}
@@ -398,16 +509,21 @@ jobs:
           # removes the branch that let this one silently inherit the dead queue;
           # the `show || create` below makes it self-healing on Commercial, where
           # the pool is simply created on first use.
-          POOL="loombuild2"
+          POOL="$BUILD_POOL_NAME"
           POOL_ARGS=""
-          if [ "${{ matrix.name }}" = "loom-console" ]; then
-            az acr agentpool show -r "$ACR" -n "$POOL" -o none 2>/dev/null \
-              || az acr agentpool create -r "$ACR" -n "$POOL" --tier S3 -o none
-            CNT=$(az acr agentpool show -r "$ACR" -n "$POOL" --query count -o tsv | tr -d '\r')
-            [ "${CNT:-0}" -ge 1 ] || az acr agentpool update -r "$ACR" -n "$POOL" --count 1 -o none
+          POOL_APPS=$(node "$GITHUB_WORKSPACE/scripts/ci/acr-build-pool.mjs" pool-apps --input "$POOL_APPS_INPUT" --default "$POOL_APPS_DEFAULT")
+          case ",$POOL_APPS," in *",${{ matrix.name }},"*)
+            # The pool is scaled up ONCE by the pool_acquire job (no per-leg
+            # race). A pool app whose acquire did not succeed fails here, loudly,
+            # instead of queueing on a pool at count 0.
+            if [ "${{ needs.pool_acquire.result }}" != "success" ]; then
+              echo "::error::${{ matrix.name }} is routed to pool $POOL but pool_acquire result was '${{ needs.pool_acquire.result }}', so the pool is not known to be scaled up. Failing this image; default-agent images are unaffected. Re-run, or dispatch with pool_apps=none to build it on default agents."
+              exit 1
+            fi
             POOL_ARGS="--agent-pool $POOL"
-            echo "::notice::#2706 — building loom-console on ACR agent pool: $POOL (boundary=$BOUNDARY)"
-          fi
+            echo "::notice::#2706 - building ${{ matrix.name }} on ACR agent pool: $POOL (boundary=$BOUNDARY; scale-down is the pool_release job)"
+            ;;
+          esac
           # loom-uat carries the Playwright specs, but apps/fiab-console/.dockerignore
           # excludes e2e/ + tests/ to keep the CONSOLE image lean — and ACR Tasks
           # does not honour a per-Dockerfile <Dockerfile>.dockerignore. Drop those
@@ -433,31 +549,62 @@ jobs:
           # a QuotaExceeded or an OOM-killed compile still fails on attempt 1
           # rather than burning three attempts and then reporting a less accurate
           # error. An unclassifiable failure fails closed.
-          node "$GITHUB_WORKSPACE/scripts/ci/deploy-retry.mjs" \
-            --class-allow transient \
-            --max-attempts 3 --backoff 45 --jitter 0.3 --wall-clock 90m \
-            --step "az acr build (${{ matrix.name }})" \
-            --artifact "$GITHUB_WORKSPACE/deploy-failure.json" \
-            -- az acr build \
-            --registry "$ACR" $POOL_ARGS \
+          # THE VERDICT IS THE ACR RUN STATUS, NOT THE LOG STREAM. `az acr build`
+          # streams the task log over a SAS that expires ~70 min after submission.
+          # Run 39634317953: loom-directlake queued 52 min, SUCCEEDED and pushed
+          # :v0.1, but the stream died with AuthenticationFailed, the step went red
+          # and the Trivy gate + cosign signing were SKIPPED on an already-pushed
+          # image.
+          #
+          # SUBMIT_MODE=poll (default): `submit` queues the run (--no-wait) UNDER
+          # deploy-retry.mjs - a failure there happened before any ACR run
+          # existed, so a retry cannot duplicate a build. `wait` then runs
+          # OUTSIDE the retry harness: once a run id exists the outcome is final
+          # for this job (a re-submit would race the first run, which can still
+          # push :v0.1). It polls `az acr task show-run`, streams logs
+          # best-effort, and CANCELS the run on a poll limit / cancel / error.
+          # SUBMIT_MODE=legacy: the previous bare `az acr build` (log stream is
+          # the verdict) under the same retry harness - the rollback switch.
+          BUILD_ARGS=(--registry "$ACR" $POOL_ARGS \
             --image "${{ matrix.name }}:${TAG}" \
             --image "${{ matrix.name }}:${{ github.sha }}" \
             --image "${{ matrix.name }}:latest" \
             --file "${{ matrix.file || format('{0}/Dockerfile', matrix.ctx) }}" \
             --build-arg "LOOM_BUILD_SHA=${{ github.sha }}" \
             --build-arg "LOOM_BUILD_TIMESTAMP=${STAMP}" \
-            "${{ matrix.ctx }}"
+            "${{ matrix.ctx }}")
+          if [ "$SUBMIT_MODE" = "legacy" ]; then
+            node "$GITHUB_WORKSPACE/scripts/ci/deploy-retry.mjs" \
+              --class-allow transient \
+              --max-attempts 3 --backoff 45 --jitter 0.3 --wall-clock 90m \
+              --step "az acr build (${{ matrix.name }})" \
+              --artifact "$GITHUB_WORKSPACE/deploy-failure.json" \
+              -- az acr build "${BUILD_ARGS[@]}"
+          else
+            RUN_FILE="${RUNNER_TEMP:-/tmp}/acr-run-id-${{ matrix.name }}"
+            rm -f "$RUN_FILE"
+            node "$GITHUB_WORKSPACE/scripts/ci/deploy-retry.mjs" \
+              --class-allow transient \
+              --max-attempts 3 --backoff 45 --jitter 0.3 --wall-clock 30m \
+              --step "az acr build submit (${{ matrix.name }})" \
+              --artifact "$GITHUB_WORKSPACE/deploy-failure.json" \
+              -- node "$GITHUB_WORKSPACE/scripts/ci/acr-build-run.mjs" submit \
+              --run-file "$RUN_FILE" -- "${BUILD_ARGS[@]}"
+            RUN_ID=$(tr -d '\r\n' < "$RUN_FILE")
+            # #5082: hand the run id to the Diagnose step BEFORE waiting, so a
+            # failed wait still names the run whose log must be read.
+            echo "ACR_RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
+            node "$GITHUB_WORKSPACE/scripts/ci/acr-build-run.mjs" wait \
+              --registry "$ACR" --run-id "$RUN_ID" --max-minutes 105 --poll-seconds 30
+          fi
           echo "::notice::Built ${{ matrix.name }}:${TAG} via ACR Tasks (sha=${{ github.sha }})"
           # Export coordinates for the SC1 scan/sign steps below.
           echo "IMAGE_TAG=$TAG" >> "$GITHUB_ENV"
           echo "ACR_NAME=$ACR" >> "$GITHUB_ENV"
           echo "ACR_LOGIN_SERVER=${{ needs.resolve.outputs.acr_login_server }}" >> "$GITHUB_ENV"
-          if [ -n "$POOL_ARGS" ]; then
-            # Scale the pool back to 0 when nothing else is queued (pool
-            # allocation is what bills; idle pools cost nothing at count 0).
-            q=$(az acr agentpool show -r "$ACR" -n "$POOL" --queue-count -o tsv 2>/dev/null | tr -d '\r' || echo 1)
-            [ "${q:-1}" = "0" ] && az acr agentpool update -r "$ACR" -n "$POOL" --count 0 --no-wait -o none || true
-          fi
+          # No in-step scale-down: a line in this shell is skipped by a failed
+          # build, a cancel or a timeout (the 2026-10-19 leak). The final
+          # pool_release job (if: always()) owns it and reads the count back.
 
       # Ported from gov-provision-runner-images.yml (#3416) to this lane (#4461):
       # this is THE producer of every production app image, Commercial and Gov
@@ -486,6 +633,12 @@ jobs:
           ART: ${{ github.workspace }}/deploy-failure.json
         run: |
           set -uo pipefail
+          # This step has no `shell:` key, so Actions runs it as `bash -e`, and
+          # `set -uo pipefail` does NOT clear -e. Every az call below is followed
+          # by an RC=$? read; under -e the first failed az aborted the step before
+          # the could-not-read branches ran (#5084 review B1). A diagnostics
+          # step must report a failed fetch, never die of it.
+          set +e
 
           # Same unbound-variable guard as the ported step: this is `if:
           # failure()`, so it also runs when an earlier step in this job (ACR
@@ -493,6 +646,58 @@ jobs:
           ACR="${ACR:-}"
           if [ -z "$ACR" ]; then
             echo "::warning::No registry name is set on this runner, so this run failed at or before the registry was resolved — i.e. before any ACR build was attempted. There is no task log to fetch and none is claimed to exist. This says WHERE the run stopped, not anything about an image build: the cause is in the failing step above."
+            exit 0
+          fi
+
+          # 0. POLL MODE (#5082). The build step exported the run id it submitted
+          #    (ACR_RUN_ID), so no guessing from deploy-failure.json or the
+          #    registry run list is needed. This runs while the ACR firewall
+          #    lease is still open (acr_restore is a later job). It is purely
+          #    diagnostic: every failure below is REPORTED, none changes this
+          #    step's exit code, and nothing here masks the failure above.
+          redact_file() {
+            node -e "const fs=require('fs');import('./scripts/ci/_azure-redact.mjs').then(m=>process.stdout.write(m.redact(m.redactSecrets(fs.readFileSync(process.argv[1],'utf8'))))).catch(e=>{console.error(String(e&&e.message||e));process.exit(9);});" "$1"
+          }
+          if [ -n "${ACR_RUN_ID:-}" ]; then
+            echo "::group::ACR run ${ACR_RUN_ID} diagnostics (${{ matrix.name }}, redacted)"
+            DIAG_DIR="${RUNNER_TEMP:-/tmp}"
+            SHOW_OUT="$DIAG_DIR/acr-diag-show-$ACR_RUN_ID.json"
+            SHOW_ERR="$DIAG_DIR/acr-diag-show-$ACR_RUN_ID.err"
+            az acr task show-run -r "$ACR" --run-id "$ACR_RUN_ID" --query "{status:status, runErrorMessage:runErrorMessage}" -o json > "$SHOW_OUT" 2> "$SHOW_ERR"
+            RC=$?
+            RUN_STATUS=""
+            if [ "$RC" != "0" ]; then
+              echo "could not read the run record for ${ACR_RUN_ID} (az acr task show-run exited $RC). This says nothing about the build. az said:"
+              redact_file "$SHOW_ERR" || echo "(the az error text could not be redacted, so it is not printed; it is at $SHOW_ERR)"
+            else
+              RUN_STATUS=$(jq -r '.status // empty' "$SHOW_OUT")
+              echo "run ${ACR_RUN_ID} status: ${RUN_STATUS:-unknown}"
+              echo "runErrorMessage:"
+              jq -r '.runErrorMessage // "(none recorded)"' "$SHOW_OUT" > "$SHOW_OUT.msg"
+              redact_file "$SHOW_OUT.msg" || echo "(the run error message could not be redacted, so it is not printed; it is at $SHOW_OUT.msg)"
+              echo
+            fi
+            if [ "$RUN_STATUS" = "Succeeded" ]; then
+              echo "The ACR run itself Succeeded, so this job failed in a LATER step; there is no task failure to show."
+            else
+              LOG_TAIL="$DIAG_DIR/acr-diag-tail-$ACR_RUN_ID.log"
+              LOG_ERR="$DIAG_DIR/acr-diag-logs-$ACR_RUN_ID.err"
+              az acr task logs -r "$ACR" --run-id "$ACR_RUN_ID" 2> "$LOG_ERR" | tail -n 80 > "$LOG_TAIL"
+              RC=${PIPESTATUS[0]}
+              if [ "$RC" != "0" ]; then
+                echo "could not read the task log for ${ACR_RUN_ID} (az acr task logs exited $RC). This is not evidence about the build. az said:"
+                redact_file "$LOG_ERR" || echo "(the az error text could not be redacted, so it is not printed; it is at $LOG_ERR)"
+                echo "Read it manually with: az acr task logs -r $ACR --run-id $ACR_RUN_ID"
+              elif [ ! -s "$LOG_TAIL" ]; then
+                echo "the task log for ${ACR_RUN_ID} was read successfully but is EMPTY (the task produced no output; it usually never started)."
+              else
+                echo "last lines of the task log for ${ACR_RUN_ID}:"
+                redact_file "$LOG_TAIL" || echo "(the log tail could not be redacted, so it is deliberately not printed; it is at $LOG_TAIL)"
+              fi
+            fi
+            echo "::endgroup::"
+            # The run id is known, so the guess-from-registry fallbacks below
+            # would only print a misleading "no deploy-failure.json" warning.
             exit 0
           fi
 
@@ -550,7 +755,7 @@ jobs:
               continue
             fi
             echo "───── ACR task log: run $ID, image ${{ matrix.name }} (redacted) ─────"
-            node -e "const fs=require('fs');import('./scripts/ci/_azure-redact.mjs').then(m=>process.stdout.write(m.redact(fs.readFileSync(process.argv[1],'utf8')))).catch(e=>{console.error(String(e&&e.message||e));process.exit(9);});" "$LOG"
+            node -e "const fs=require('fs');import('./scripts/ci/_azure-redact.mjs').then(m=>process.stdout.write(m.redact(m.redactSecrets(fs.readFileSync(process.argv[1],'utf8'))))).catch(e=>{console.error(String(e&&e.message||e));process.exit(9);});" "$LOG"
             RC=$?
             if [ "$RC" != "0" ]; then
               echo "::error::The ACR task log for run $ID was fetched but the redactor could not be loaded (exit $RC), so it is deliberately NOT printed — this repository is public and an unredacted Azure log is a publication surface. It is on this runner at $LOG; re-read it with: az acr task logs -r $ACR --run-id $ID"
@@ -694,6 +899,74 @@ jobs:
   # re-lock. If another run legitimately holds it (a Gov roll, a human's
   # deploy-*-job.sh), this job waits — bounded, 25 min by default — and then
   # fails loudly naming the holder rather than stomping on it.
+  # ONE scale-up for the whole run. Both pool-routed build legs used to scale
+  # the pool themselves at the same instant (show + update --count N), so a
+  # concurrent-update 409 from ARM could fail an image. This job scales once,
+  # tolerates an in-progress update by re-reading the count (bounded retry in
+  # acr-build-pool.mjs acquire), reads it back, and fails loudly if the pool
+  # never reaches the wanted count.
+  pool_acquire:
+    name: Scale build pool up (read back)
+    needs: [resolve, acr_enable]
+    if: ${{ !cancelled() && needs.resolve.result == 'success' && needs.acr_enable.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Azure login (Commercial)
+        if: env.BOUNDARY == 'Commercial'
+        uses: azure/login@v2.3.0
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+      - name: Azure login (Gov)
+        if: env.BOUNDARY != 'Commercial'
+        uses: azure/login@v2.3.0
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+      - name: Set Azure cloud to Gov
+        if: env.BOUNDARY != 'Commercial'
+        run: az cloud set --name AzureUSGovernment
+      - name: Scale the build pool up and read the count back
+        env:
+          ACR: ${{ needs.resolve.outputs.acr_name }}
+          MATRIX: ${{ needs.resolve.outputs.app_matrix }}
+        run: |
+          set -uo pipefail
+          POOL_APPS=$(node scripts/ci/acr-build-pool.mjs pool-apps --input "$POOL_APPS_INPUT" --default "$POOL_APPS_DEFAULT") || exit 1
+          # Bind the name BEFORE the pipe into contains(): after `$a | ...` the
+          # filter input `.` is $a, so the unbound form compared the pool list
+          # against itself and returned 0 for every matrix, never scaling the
+          # pool (2026-10-22: console + directlake queued 105 min on an empty
+          # pool, three runs failed). A jq failure is fatal, not "0 apps".
+          if ! NEED=$(jq -r --arg a ",$POOL_APPS," '[.include[].name | . as $n | select($a | contains("," + $n + ","))] | length' <<< "$MATRIX"); then
+            echo "::error::could not read the build matrix to decide whether the pool is needed (jq failed); refusing to assume no app is pool-routed."
+            exit 1
+          fi
+          if [ "${NEED:-0}" = "0" ]; then
+            echo "No app in this run is routed to the pool (pool apps: ${POOL_APPS:-none}); pool left untouched."
+            exit 0
+          fi
+          WANT=$(node scripts/ci/acr-build-pool.mjs clamp "$POOL_AGENT_COUNT")
+          node scripts/ci/acr-build-pool.mjs acquire --acr "$ACR" --pool "$BUILD_POOL_NAME" --count "$WANT"
+
   acr_enable:
     name: Acquire ACR firewall lease + open (temp)
     needs: resolve
@@ -763,9 +1036,69 @@ jobs:
           bash scripts/csa-loom/acr-firewall-lease.sh acquire \
             --acr "${{ needs.resolve.outputs.acr_name }}"
 
+  # Unchanged apps on a push: re-tag the digest already behind <app>:<TAG> to
+  # <app>:<sha> so every roll that addresses <app>:<head_sha> finds it. The
+  # manifest is COPIED, not rebuilt: same digest, so the Trivy result and the
+  # cosign signature (stored against the digest) carry over untouched.
+  # FAILS CLOSED: a missing source tag or a digest that differs after the copy
+  # fails this job loudly - it never reports a tag it did not verify (R7).
+  carry_forward:
+    name: Carry forward unchanged images (re-tag to this SHA)
+    needs: [resolve, acr_enable]
+    if: ${{ !cancelled() && needs.resolve.result == 'success' && needs.acr_enable.result == 'success' && needs.resolve.outputs.carry_apps != '' && needs.resolve.outputs.carry_apps != '[]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Azure login (Commercial)
+        if: env.BOUNDARY == 'Commercial'
+        uses: azure/login@v2.3.0
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+      - name: Azure login (Gov)
+        if: env.BOUNDARY != 'Commercial'
+        uses: azure/login@v2.3.0
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+      - name: Set Azure cloud to Gov
+        if: env.BOUNDARY != 'Commercial'
+        run: az cloud set --name AzureUSGovernment
+      - name: Re-tag each unchanged image to the new SHA and verify the digest
+        env:
+          ACR: ${{ needs.resolve.outputs.acr_name }}
+          LOGIN: ${{ needs.resolve.outputs.acr_login_server }}
+          CARRY: ${{ needs.resolve.outputs.carry_apps }}
+          SRC_TAG: ${{ inputs.tag_override || 'v0.1' }}
+        run: |
+          set -uo pipefail
+          bash scripts/ci/acr-login-retry.sh --acr "$ACR" || exit 1
+          # az acr import (ARM) preserves the digest; a buildx re-tag did NOT
+          # (run 39820244128). Logic + verification: scripts/ci/carry-forward-retag.sh.
+          APPS=$(jq -r '.[]' <<< "$CARRY" | tr '\n' ' ')
+          bash scripts/ci/carry-forward-retag.sh --acr "$ACR" --login "$LOGIN" \
+            --apps "$APPS" --src-tag "$SRC_TAG" --sha "${{ github.sha }}"
+
   acr_restore:
     name: Release ACR firewall lease (re-lock if still the holder)
-    needs: [resolve, build, acr_enable]
+    needs: [resolve, build, acr_enable, carry_forward]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -828,3 +1161,59 @@ jobs:
         run: |
           bash scripts/csa-loom/acr-firewall-lease.sh release \
             --acr "${{ needs.resolve.outputs.acr_name }}"
+
+  # Guaranteed scale-down of the build pool. Runs on success, failure, cancel
+  # and build timeout (always()); needs EVERY job that can scale the pool up.
+  # It reads the count back and FAILS the run if the pool is still billing.
+  # It will not kill in-flight work from another lane (queue or active runs on
+  # the pool): it says so and leaves it to acr-agentpool-reaper.yml.
+  pool_release:
+    name: Scale build pool to 0 (read back)
+    needs: [resolve, acr_enable, pool_acquire, build]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+      # #5082: this job is the cost backstop, so its login must survive a
+      # transient. azure/login failed once with an empty creds read ("JSON is
+      # invalid ... char 0") and loombuild2 stayed at count 2. These two steps
+      # call scripts/ci/az-login-retry.sh (bounded retry, last error printed,
+      # exit 1 on exhaustion) instead of azure/login or a discarded step result.
+      - name: Azure login with retry (Commercial)
+        if: env.BOUNDARY == 'Commercial'
+        env:
+          AZ_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZ_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZ_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZ_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: bash scripts/ci/az-login-retry.sh
+      - name: Azure login with retry (Gov)
+        if: env.BOUNDARY != 'Commercial'
+        env:
+          AZ_CLIENT_ID: ${{ secrets.AZURE_GOV_CLIENT_ID }}
+          AZ_CLIENT_SECRET: ${{ secrets.AZURE_GOV_CLIENT_SECRET }}
+          AZ_TENANT_ID: ${{ secrets.AZURE_GOV_TENANT_ID }}
+          AZ_SUBSCRIPTION_ID: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+        run: bash scripts/ci/az-login-retry.sh --cloud AzureUSGovernment
+      - name: Scale the build pool to 0 and read the count back
+        env:
+          ACR: ${{ needs.resolve.outputs.acr_name }}
+        run: |
+          if [ -z "$ACR" ]; then
+            echo "::warning::resolve produced no registry name, so no build job could have scaled a pool. Nothing to release."
+            exit 0
+          fi
+          # release retries update + read-back itself (3 attempts) and, if the
+          # pool is still above 0, exits 1 naming the exact az command to run.
+          # The next run's pool_acquire sets the count it WANTS (acquire() in
+          # acr-build-pool.mjs updates --count until the read-back is >= want),
+          # so a stale count left by a failed release is never assumed to be 0.
+          node scripts/ci/acr-build-pool.mjs release --acr "$ACR" --pool "$BUILD_POOL_NAME" || {
+            # The specific cause (scale-down not confirmed, state unreadable, ...)
+            # is the ::error:: line acr-build-pool.mjs printed just above; it is
+            # not restated here because a generic "still billing" would be
+            # untrue when the cause was an unreadable pool state (R7).
+            echo "::error::Pool release for ${ACR}/${BUILD_POOL_NAME} did not complete; the cause is the message printed above by acr-build-pool.mjs. If the pool is above 0 the manual fix is: az acr agentpool update -r ${ACR} -n ${BUILD_POOL_NAME} --count 0 (acr-agentpool-reaper.yml is the backstop for an idle pool)."
+            exit 1
+          }

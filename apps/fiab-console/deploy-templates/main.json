@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "17488362022822894265"
+      "templateHash": "10779105138870699135"
     }
   },
   "definitions": {
@@ -2626,7 +2626,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "15241579984764971170"
+              "templateHash": "6741796519755356659"
             }
           },
           "definitions": {
@@ -17099,7 +17099,8 @@
                         "external": false,
                         "healthPath": "/health",
                         "tier": "direct-lake-shim",
-                        "minReplicas": 1,
+                        "minReplicas": "[if(parameters('loomDirectLakeShimEnabled'), 1, 0)]",
+                        "noProbes": "[not(parameters('loomDirectLakeShimEnabled'))]",
                         "maxReplicas": 2,
                         "env": [
                           {
@@ -17138,7 +17139,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "15055987687473065375"
+                      "templateHash": "6803474633524452821"
                     }
                   },
                   "parameters": {
@@ -17312,41 +17313,7 @@
                               "image": "[format('{0}/{1}', parameters('acrLoginServer'), parameters('apps')[copyIndex()].image)]",
                               "env": "[concat(createArray(createObject('name', 'APPLICATIONINSIGHTS_CONNECTION_STRING', 'value', if(and(contains(parameters('apps')[copyIndex()], 'telemetryEnabled'), not(parameters('apps')[copyIndex()].telemetryEnabled)), '', parameters('appInsightsConnectionString'))), createObject('name', 'CSA_LOOM_BOUNDARY', 'value', parameters('boundary')), createObject('name', 'AZURE_CLIENT_ID', 'value', parameters('apps')[copyIndex()].uamiClientId), createObject('name', 'KEYVAULT_URI', 'value', parameters('keyVaultUri')), createObject('name', 'LOOM_TIER', 'value', if(contains(parameters('apps')[copyIndex()], 'tier'), parameters('apps')[copyIndex()].tier, 'service')), createObject('name', 'LOOM_PYLSP_ENABLED', 'value', if(parameters('pylspEnabled'), 'true', '')), createObject('name', 'LOOM_AML_INSTANCE', 'value', parameters('amlInstance')), createObject('name', 'LOOM_AML_WORKSPACE_ID', 'value', parameters('amlWorkspaceId')), createObject('name', 'LOOM_AML_PORTAL_BASE', 'value', parameters('amlPortalBase')), createObject('name', 'LOOM_SERVER_FETCH_TIMEOUT_MS', 'value', '30000'), createObject('name', 'LOOM_LLM_FETCH_TIMEOUT_MS', 'value', '120000'), createObject('name', 'LOOM_ARM_PAGING_MAX_PAGES', 'value', '50'), createObject('name', 'LOOM_ARM_PAGING_BUDGET_MS', 'value', '15000'), createObject('name', 'LOOM_FOUNDRY_CONNECTIONS_BUDGET_MS', 'value', '8000'), createObject('name', 'LOOM_FOUNDRY_CONNECTIONS_TTL_MS', 'value', '300000'), createObject('name', 'LOOM_CONNECTABLES_ARG_BUDGET_MS', 'value', '20000'), createObject('name', 'LOOM_CONNECTABLES_ARM_BUDGET_MS', 'value', '40000'), createObject('name', 'LOOM_RETAIL_PRICES_BASE', 'value', parameters('retailPricesBase'))), if(contains(parameters('apps')[copyIndex()], 'env'), parameters('apps')[copyIndex()].env, createArray()))]",
                               "resources": "[if(contains(parameters('apps')[copyIndex()], 'resources'), parameters('apps')[copyIndex()].resources, if(and(contains(parameters('apps')[copyIndex()], 'tier'), equals(parameters('apps')[copyIndex()].tier, 'console')), createObject('cpu', json(parameters('consoleCpu')), 'memory', parameters('consoleMemory')), createObject('cpu', json('0.5'), 'memory', '1Gi')))]",
-                              "probes": [
-                                {
-                                  "type": "Liveness",
-                                  "httpGet": {
-                                    "path": "[if(contains(parameters('apps')[copyIndex()], 'healthPath'), parameters('apps')[copyIndex()].healthPath, '/health')]",
-                                    "port": "[if(contains(parameters('apps')[copyIndex()], 'ingressPort'), parameters('apps')[copyIndex()].ingressPort, 8080)]"
-                                  },
-                                  "periodSeconds": 30,
-                                  "failureThreshold": 3,
-                                  "initialDelaySeconds": "[parameters('livenessInitialDelaySeconds')]",
-                                  "timeoutSeconds": "[parameters('probeTimeoutSeconds')]"
-                                },
-                                {
-                                  "type": "Readiness",
-                                  "httpGet": {
-                                    "path": "[if(contains(parameters('apps')[copyIndex()], 'healthPath'), parameters('apps')[copyIndex()].healthPath, '/health')]",
-                                    "port": "[if(contains(parameters('apps')[copyIndex()], 'ingressPort'), parameters('apps')[copyIndex()].ingressPort, 8080)]"
-                                  },
-                                  "periodSeconds": 10,
-                                  "failureThreshold": 3,
-                                  "initialDelaySeconds": 5,
-                                  "timeoutSeconds": "[parameters('probeTimeoutSeconds')]"
-                                },
-                                {
-                                  "type": "Startup",
-                                  "httpGet": {
-                                    "path": "[if(contains(parameters('apps')[copyIndex()], 'healthPath'), parameters('apps')[copyIndex()].healthPath, '/health')]",
-                                    "port": "[if(contains(parameters('apps')[copyIndex()], 'ingressPort'), parameters('apps')[copyIndex()].ingressPort, 8080)]"
-                                  },
-                                  "periodSeconds": 2,
-                                  "failureThreshold": 30,
-                                  "initialDelaySeconds": 0,
-                                  "timeoutSeconds": "[parameters('probeTimeoutSeconds')]"
-                                }
-                              ],
+                              "probes": "[if(and(contains(parameters('apps')[copyIndex()], 'noProbes'), parameters('apps')[copyIndex()].noProbes), createArray(), createArray(createObject('type', 'Liveness', 'httpGet', createObject('path', if(contains(parameters('apps')[copyIndex()], 'healthPath'), parameters('apps')[copyIndex()].healthPath, '/health'), 'port', if(contains(parameters('apps')[copyIndex()], 'ingressPort'), parameters('apps')[copyIndex()].ingressPort, 8080)), 'periodSeconds', 30, 'failureThreshold', 3, 'initialDelaySeconds', parameters('livenessInitialDelaySeconds'), 'timeoutSeconds', parameters('probeTimeoutSeconds')), createObject('type', 'Readiness', 'httpGet', createObject('path', if(contains(parameters('apps')[copyIndex()], 'healthPath'), parameters('apps')[copyIndex()].healthPath, '/health'), 'port', if(contains(parameters('apps')[copyIndex()], 'ingressPort'), parameters('apps')[copyIndex()].ingressPort, 8080)), 'periodSeconds', 10, 'failureThreshold', 3, 'initialDelaySeconds', 5, 'timeoutSeconds', parameters('probeTimeoutSeconds')), createObject('type', 'Startup', 'httpGet', createObject('path', if(contains(parameters('apps')[copyIndex()], 'healthPath'), parameters('apps')[copyIndex()].healthPath, '/health'), 'port', if(contains(parameters('apps')[copyIndex()], 'ingressPort'), parameters('apps')[copyIndex()].ingressPort, 8080)), 'periodSeconds', 2, 'failureThreshold', 30, 'initialDelaySeconds', 0, 'timeoutSeconds', parameters('probeTimeoutSeconds'))))]",
                               "volumeMounts": "[if(contains(parameters('apps')[copyIndex()], 'volumeMounts'), parameters('apps')[copyIndex()].volumeMounts, createArray())]"
                             }
                           ],

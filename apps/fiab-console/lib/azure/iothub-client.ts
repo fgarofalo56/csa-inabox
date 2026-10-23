@@ -25,7 +25,7 @@
  * iotHubConfigGate() with the exact missing variable.
  */
 
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -94,7 +94,7 @@ async function callArm(url: string, init?: RequestInit, timeoutMs?: number): Pro
   const scope = `${armBase()}/.default`;
   const t = await credential.getToken(scope);
   if (!t?.token) throw new IoTHubArmError(401, undefined, 'Failed to acquire ARM token');
-  return fetchWithTimeout(resolveSameOriginUrl(url, armBase(), 'the ARM token'), {
+  return armCountedFetch(resolveSameOriginUrl(url, armBase(), 'the ARM token'), {
     ...init,
     headers: {
       ...(init?.headers || {}),

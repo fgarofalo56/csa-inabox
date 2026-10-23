@@ -3354,7 +3354,9 @@ test('CONTRACT: the build lane carries ACR_LEASE_STATE across the acquire/releas
   assert.match(yaml, /lease_state: \$\{\{ steps\.acquire\.outputs\.lease_state \}\}/,
     'acr_enable must publish the lease state; $GITHUB_ENV does not cross jobs, and without this the release ' +
       'job cannot tell an erased lease from one it never held');
-  assert.match(yaml, /needs: \[resolve, build, acr_enable\]/,
+  // carry_forward is awaited too: re-locking the registry under a running re-tag
+  // would deny its data-plane reads (changed-app plan, plan-image-builds.mjs).
+  assert.match(yaml, /needs: \[resolve, build, acr_enable, carry_forward\]/,
     'acr_restore must depend on acr_enable or it cannot read those outputs');
   assert.match(yaml, /ACR_LEASE_STATE: \$\{\{ needs\.acr_enable\.outputs\.lease_state \|\| 'none' \}\}/,
     'and it must actually consume it — a published output nobody reads is the guard-adoption gap');

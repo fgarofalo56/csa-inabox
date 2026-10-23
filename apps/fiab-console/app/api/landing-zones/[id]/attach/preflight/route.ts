@@ -29,6 +29,7 @@ import { composePreflight, type PreflightResult } from '@/lib/azure/attach-prefl
 import { isAttachedServiceKind, armTypeToKind, type AttachedServiceKind } from '@/lib/azure/attached-service-kinds';
 import { decodeLandingZoneId } from '@/lib/azure/landing-zone-id';
 import { escapeKqlLiteral } from '@/lib/sql/quoting';
+import { armCountedRawFetch } from '@/lib/util/arm-counted-raw-fetch';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -56,7 +57,7 @@ function buildIdQuery(ids: string[]): string {
 
 async function runArgById(token: string, ids: string[]): Promise<{ ok: boolean; rows: ArgIdRow[] }> {
   try {
-    const res = await fetch(ARG_URL, {
+    const res = await armCountedRawFetch(ARG_URL, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify({ query: buildIdQuery(ids), options: { resultFormat: 'objectArray' } }),

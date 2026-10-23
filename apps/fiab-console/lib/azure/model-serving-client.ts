@@ -28,7 +28,7 @@
  *   AML online-endpoint metrics https://learn.microsoft.com/azure/azure-monitor/reference/supported-metrics/microsoft-machinelearningservices-workspaces-onlineendpoints-metrics
  *   Databricks serving REST     https://docs.databricks.com/api/azure/workspace/servingendpoints
  */
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -246,7 +246,7 @@ async function armFetch(path: string, init: RequestInit = {}): Promise<Response>
   if (!token?.token) throw new ServingError(401, undefined, 'Failed to acquire ARM token for Azure ML serving');
   const sep = path.includes('?') ? '&' : '?';
   const url = `${amlBase()}${path}${sep}api-version=${ML_API}`;
-  return fetchWithTimeout(url, {
+  return armCountedFetch(url, {
     ...init,
     headers: { ...(init.headers || {}), authorization: `Bearer ${token.token}`, 'content-type': 'application/json' },
   });
@@ -395,7 +395,7 @@ async function amlInvoke(name: string, payload: unknown): Promise<ServingInvokeR
   const key = keys.primaryKey || keys.secondaryKey;
   if (!key) throw new ServingError(403, undefined, `Could not read a scoring key for "${name}". Grant the Console UAMI onlineEndpoints/listkeys/action.`);
   const started = Date.now();
-  const res = await fetchWithTimeout(ep.scoringUri, {
+  const res = await armCountedFetch(ep.scoringUri, {
     method: 'POST',
     headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
     body: JSON.stringify(payload ?? {}),

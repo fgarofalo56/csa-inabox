@@ -20,7 +20,7 @@
  * and REJECTS any raw plaintext secret — key-based connections must reference a
  * Key Vault secret identifier. A raw key can never appear in the request body.
  */
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -95,7 +95,7 @@ async function armFetch(
   const sep = fullPath.includes('?') ? '&' : '?';
   const url = `${fullPath}${sep}api-version=${apiVer}`;
   const { apiVersion: _av, ...rest } = init;
-  return fetchWithTimeout(url, {
+  return armCountedFetch(url, {
     ...rest,
     headers: {
       ...(rest.headers || {}),

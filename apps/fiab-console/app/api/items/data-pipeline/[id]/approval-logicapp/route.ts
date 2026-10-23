@@ -32,6 +32,7 @@ import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
 import { apiError } from '@/lib/api/respond';
+import { armCountedRawFetch } from '@/lib/util/arm-counted-raw-fetch';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -59,7 +60,7 @@ function approvalConfigGate(): { missing: string } | null {
 async function armPost(url: string): Promise<{ ok: boolean; status: number; body: unknown }> {
   const tok = await credential.getToken(ARM_SCOPE);
   if (!tok?.token) throw new Error('Failed to acquire ARM token');
-  const r = await fetch(url, {
+  const r = await armCountedRawFetch(url, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok.token}`, 'content-type': 'application/json' },
     body: '{}',

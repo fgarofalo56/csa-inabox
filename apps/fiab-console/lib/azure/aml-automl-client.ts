@@ -36,7 +36,7 @@
  * via `automlConfigGate()` when env is unset.
  */
 
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -108,7 +108,7 @@ async function automlFetch(
   const wsPath = amlWorkspaceArmPath(target ?? resolveAmlTarget());
   const extra = query ? '&' + new URLSearchParams(query).toString() : '';
   const url = `${armBase()}${wsPath}${path}?api-version=${ML_API}${extra}`;
-  return fetchWithTimeout(
+  return armCountedFetch(
     url,
     {
       ...rest,
@@ -395,7 +395,7 @@ export async function listAutoMlJobs(opts: { maxResults?: number } = {}): Promis
   while (budget.claimPage()) {
     const res = await budget.runPage(async (timeoutMs) =>
       next
-        ? fetchWithTimeout(
+        ? armCountedFetch(
             // SECURITY (GHSA-4gvx-9p49-p43g) — `next` is an absolute URL read out
             // of a RESPONSE BODY and this expression mints an ARM token for it.
             // Pin it to `armBase()` and fail closed rather than fetching.

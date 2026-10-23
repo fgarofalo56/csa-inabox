@@ -33,6 +33,7 @@ import {
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope } from './cloud-endpoints';
 import { walkPagedList } from './paging-budget';
+import { beginArmRead } from './arm-read-gate';
 import { resolveSameOriginUrl } from '@/lib/util/same-origin-url';
 
 // Sovereign-cloud ARM host + scope (Commercial / GCC-High / IL5).
@@ -150,10 +151,20 @@ const ARM_TOKEN_LABEL = 'the ARM token';
 export async function armGet(path: string, timeoutMs?: number, authToken?: string): Promise<any> {
   const tk = authToken || await token(ARM_SCOPE);
   const url = resolveSameOriginUrl(path, ARM, ARM_TOKEN_LABEL);
-  const res = await fetchWithTimeout(url, {
-    headers: { authorization: `Bearer ${tk}`, accept: 'application/json' },
-    cache: 'no-store',
-  }, timeoutMs); // undefined => the shared DEFAULT_SERVER_FETCH_TIMEOUT_MS
+  // Per-caller read counter + (inside a warmer cycle only) the shared read gate.
+  // Observation/pacing only: the request below is unchanged.
+  const ticket = await beginArmRead();
+  let res: Response;
+  try {
+    res = await fetchWithTimeout(url, {
+      headers: { authorization: `Bearer ${tk}`, accept: 'application/json' },
+      cache: 'no-store',
+    }, timeoutMs); // undefined => the shared DEFAULT_SERVER_FETCH_TIMEOUT_MS
+  } catch (e) {
+    ticket.done(null);
+    throw e;
+  }
+  ticket.done(res.status, res.headers?.get?.('retry-after'));
   const text = await res.text();
   let json: any = null;
   try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }

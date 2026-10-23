@@ -26,7 +26,7 @@
  */
 import { NextResponse } from 'next/server';
 import { armBase } from '@/lib/azure/cloud-endpoints';
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import { PagingBudget, PAGE_DEADLINE, isContinuationAllowed } from '@/lib/azure/paging-budget';
 import { resolveSameOriginUrl } from '@/lib/util/same-origin-url';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
@@ -91,7 +91,7 @@ async function armGetAll(url: string, token: string, budget: PagingBudget): Prom
     // continuation is refused below too; this is the check at the point the
     // credential is attached.
     const r = await budget.runPage((timeoutMs) =>
-      fetchWithTimeout(resolveSameOriginUrl(next, arm(), 'the ARM token'), { headers: { authorization: `Bearer ${token}` } }, timeoutMs),
+      armCountedFetch(resolveSameOriginUrl(next, arm(), 'the ARM token'), { headers: { authorization: `Bearer ${token}` } }, timeoutMs),
     );
     if (r === PAGE_DEADLINE) break; // wall clock spent mid-fetch — keep what we have
     if (!r.ok) {

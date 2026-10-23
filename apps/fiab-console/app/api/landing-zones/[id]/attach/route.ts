@@ -42,6 +42,7 @@ import { resolveUamiPrincipalId } from '@/lib/clients/azure-connections-client';
 import { decodeLandingZoneId } from '@/lib/azure/landing-zone-id';
 import { emitAuditEvent } from '@/lib/admin/audit-stream';
 import { escapeKqlLiteral } from '@/lib/sql/quoting';
+import { armCountedRawFetch } from '@/lib/util/arm-counted-raw-fetch';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -59,7 +60,7 @@ function buildIdQuery(ids: string[]): string {
 
 async function runArgById(token: string, ids: string[]): Promise<ArgIdRow[]> {
   try {
-    const res = await fetch(ARG_URL, {
+    const res = await armCountedRawFetch(ARG_URL, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify({ query: buildIdQuery(ids), options: { resultFormat: 'objectArray' } }),

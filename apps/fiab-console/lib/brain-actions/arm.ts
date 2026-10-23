@@ -16,7 +16,7 @@
  * exist".
  */
 
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
 
@@ -80,7 +80,7 @@ export async function armDeleteResource(
     );
   }
   const token = await armToken();
-  const r = await fetchWithTimeout(`${armBase()}${id}?api-version=${apiVersion}`, {
+  const r = await armCountedFetch(`${armBase()}${id}?api-version=${apiVersion}`, {
     method: 'DELETE',
     headers: { authorization: `Bearer ${token}` },
   });

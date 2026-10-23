@@ -56,7 +56,8 @@
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { getUserArmToken } from '@/lib/azure/user-token-store';
-import { fetchWithTimeout, FetchTimeoutError } from '@/lib/azure/fetch-with-timeout';
+import { FetchTimeoutError } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import { PagingBudget, PAGE_DEADLINE, type PagingTruncation } from '@/lib/azure/paging-budget';
 import { resolveSameOriginUrl, sameOriginUrlOrNull } from '@/lib/util/same-origin-url';
 import {
@@ -126,7 +127,7 @@ async function readJson(res: Response): Promise<HttpResult> {
 export const liveTransport: DiscoveryTransport = {
   async argQuery(token, payload, timeoutMs) {
     const url = `${armBase()}/providers/Microsoft.ResourceGraph/resources?api-version=${ARG_API_VERSION}`;
-    const res = await fetchWithTimeout(
+    const res = await armCountedFetch(
       url,
       {
         method: 'POST',
@@ -139,7 +140,7 @@ export const liveTransport: DiscoveryTransport = {
     return readJson(res);
   },
   async armGet(token, url, timeoutMs) {
-    const res = await fetchWithTimeout(
+    const res = await armCountedFetch(
       // SECURITY (GHSA-4gvx-9p49-p43g): the subscription walk feeds this a
       // `nextLink` read out of a RESPONSE BODY while an ARM bearer token rides
       // on the request. Pin it to `armBase()` and fail closed.

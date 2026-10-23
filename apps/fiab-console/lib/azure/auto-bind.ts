@@ -123,6 +123,14 @@ export interface AutoBindSeedResult {
   detail?: string;
   /** Set when content EXISTED but could not be authored. */
   error?: string;
+  /**
+   * Item `state` keys for backing objects the seed CREATED, merged into the
+   * persisted state (e.g. `asaJobName` for an eventstream's Stream Analytics
+   * job). Without this a seed that creates a backing resource discards its ref
+   * and teardown can only guess the name (#5046 finding 4). Provider and
+   * `autoBind` keys always win over these on a collision.
+   */
+  statePatch?: Record<string, unknown>;
 }
 
 /** The inspectable mapping record written to `state.autoBind`. */
@@ -567,11 +575,13 @@ export async function ensureAutoBinding(
       (record.seeded === true) !== (next.seeded === true) ||
       (record.seedError || '') !== (next.seedError || '') ||
       (record.seedDetail || '') !== (next.seedDetail || '') ||
+      Object.entries(seed?.statePatch ?? {}).some(([k, v]) => ctx.state?.[k] !== v) ||
       via !== 'existing';
     return {
       status: 'bound',
       record: next,
       statePatch: {
+        ...(seed?.statePatch ?? {}),
         ...keys,
         [AUTO_BIND_STATE_KEY]: next,
       },

@@ -12,6 +12,7 @@ const armPost = vi.fn();
 const armPatch = vi.fn();
 vi.mock('@/lib/azure/arm-client', () => ({
   armGet: (...a: unknown[]) => armGet(...a),
+  armGetWithRetry: (p: unknown) => armGet(p),
   armPost: (...a: unknown[]) => armPost(...a),
   armPatch: (...a: unknown[]) => armPatch(...a),
   armPut: vi.fn(),

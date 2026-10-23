@@ -1,7 +1,11 @@
 /**
  * GET/PUT /api/admin/estate/autopause — the idle auto-pause setting
- * (PRP-02 step 3, #4876). `{ enabled: boolean, idleHours: number }`, idleHours in
- * [1, 168], default enabled / 2h (operator decision: armed by default). Stored in
+ * (PRP-02 step 3, #4876). `{ enabled: boolean, idleHours: number,
+ * containerApps?: { enabled: boolean, exempt: string[] } }`, idleHours in
+ * [1, 168], default enabled / 2h (operator decision: armed by default).
+ * `containerApps` (default `{ enabled: true, exempt: [] }`, 2026-10-22) is the
+ * global opt-out and the per-app opt-out for Container Apps; omitted on a PUT it
+ * leaves the stored value untouched. Stored in
  * Cosmos (`estate-autopause:current`, see lib/estate/estate-autopause.ts).
  *
  * This is only the knob the auto-pause lane reads. Saving it does not pause
@@ -19,6 +23,7 @@ import { emitAuditEvent } from '@/lib/admin/audit-stream';
 import { callerFromSession } from '@/lib/estate/estate-caller';
 import { audit } from '@/lib/estate/estate-power-handlers';
 import { loadAutoPause, saveAutoPause, validateAutoPause } from '@/lib/estate/estate-autopause';
+import { clearStateCache } from '@/lib/estate/estate-state-cache';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -35,9 +40,22 @@ export const PUT = withTenantAdmin(async (req: NextRequest, { session }) => {
   if (!v.ok) return apiError(v.error, 400);
 
   const before = await loadAutoPause(caller.tenantId);
+  // `containerApps` omitted from the body = leave the stored opt-outs alone (the CLI
+  // and the idle-hours form send only {enabled, idleHours}); they must never be reset
+  // by an unrelated save. If the stored setting could not be read we cannot preserve
+  // them, and writing the default would silently erase a global opt-out after a
+  // transient Cosmos read failure: refuse instead (review N2).
+  if (v.value.containerApps === undefined && before.source === 'unreadable') {
+    return apiError(
+      'The stored auto-pause setting could not be read, so its Container Apps opt-outs cannot be preserved. '
+        + 'Nothing was changed. Retry in a moment, or include containerApps in the request to overwrite them explicitly.',
+      503,
+    );
+  }
+  const containerApps = v.value.containerApps ?? before.containerApps;
   let saved;
   try {
-    saved = await saveAutoPause(caller.tenantId, v.value, caller.who);
+    saved = await saveAutoPause(caller.tenantId, { ...v.value, containerApps }, caller.who);
   } catch (e) {
     return apiHonestError(
       e,
@@ -46,9 +64,11 @@ export const PUT = withTenantAdmin(async (req: NextRequest, { session }) => {
         + 'did not accept the write. Nothing was changed.',
     );
   }
+  // The cached state read still carries the old policy and the old per-app list.
+  clearStateCache();
   const change = {
-    before: { enabled: before.enabled, idleHours: before.idleHours, source: before.source },
-    after: { enabled: saved.enabled, idleHours: saved.idleHours },
+    before: { enabled: before.enabled, idleHours: before.idleHours, containerApps: before.containerApps, source: before.source },
+    after: { enabled: saved.enabled, idleHours: saved.idleHours, containerApps: saved.containerApps },
   };
   await audit(caller, 'estate-autopause.updated', change);
   emitAuditEvent({

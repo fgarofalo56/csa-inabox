@@ -38,6 +38,16 @@ on:
         type: string
         required: false
         default: ''
+      console_app_client_id:
+        description: 'OPTIONAL. Client (app) id of the EXISTING console app registration. When set, the MSAL step reads that one app by id and validates it instead of LISTING app registrations (which needs Application.Read.All or a directory role). Empty -> repo variable LOOM_CONSOLE_APP_CLIENT_ID -> discover-or-create as before.'
+        type: string
+        required: false
+        default: ''
+      console_app_object_id:
+        description: 'OPTIONAL. Object id of that app registration; when set it is read by object id and cross-checked against the client id. Empty -> repo variable LOOM_CONSOLE_APP_OBJECT_ID.'
+        type: string
+        required: false
+        default: ''
   workflow_dispatch:
     inputs:
       boundary:
@@ -65,6 +75,16 @@ on:
         required: false
       dlz_domain:
         description: 'OPTIONAL OVERRIDE. The <domain> segment of rg-csa-loom-dlz-<domain>-<region>. Leave EMPTY: it is discovered. An override that matches no existing group fails the run rather than rebuilding a name ARM will reject.'
+        type: string
+        default: ''
+        required: false
+      console_app_client_id:
+        description: 'OPTIONAL. Client (app) id of the EXISTING console app registration (an app id is not a secret). When set, the MSAL step reads that one app by id and validates it instead of LISTING app registrations (which needs Application.Read.All or a directory role), and the Estate.Power steps run even if the MSAL step fails. Empty -> repo variable LOOM_CONSOLE_APP_CLIENT_ID -> discover-or-create as before.'
+        type: string
+        default: ''
+        required: false
+      console_app_object_id:
+        description: 'OPTIONAL. Object id of that app registration; when set it is read by object id and cross-checked against the client id. Empty -> repo variable LOOM_CONSOLE_APP_OBJECT_ID.'
         type: string
         default: ''
         required: false
@@ -154,7 +174,12 @@ env:
   # per-deployment app registration. For a Gov boundary a pre-created Gov MSAL
   # app can be supplied via the LOOM_GOV_MSAL_CLIENT_ID secret; else set the repo
   # var to BYO, or the step self-provisions one.
-  LOOM_MSAL_CLIENT_ID: ${{ vars.LOOM_MSAL_CLIENT_ID || ((inputs.boundary == 'GCC-High' || inputs.boundary == 'IL5') && secrets.LOOM_GOV_MSAL_CLIENT_ID) || '' }}
+  # SUPPLIED console app (deploy-integrity R5): an operator-named EXISTING app wins
+  # over every other source and switches step "Provision MSAL app registration" to
+  # read-by-id + validate (no app-registration LISTING). Input beats repo variable.
+  CONSOLE_APP_SUPPLIED: ${{ (inputs.console_app_client_id || vars.LOOM_CONSOLE_APP_CLIENT_ID) && 'true' || 'false' }}
+  CONSOLE_APP_OBJECT_ID: ${{ inputs.console_app_object_id || vars.LOOM_CONSOLE_APP_OBJECT_ID || '' }}
+  LOOM_MSAL_CLIENT_ID: ${{ inputs.console_app_client_id || vars.LOOM_CONSOLE_APP_CLIENT_ID || vars.LOOM_MSAL_CLIENT_ID || ((inputs.boundary == 'GCC-High' || inputs.boundary == 'IL5') && secrets.LOOM_GOV_MSAL_CLIENT_ID) || '' }}
   # Console host(s) (no scheme) whose https://<host>/auth/callback redirect URIs
   # are reconciled onto the app registration. Defaults to the vanity domain.
   CSA_LOOM_CONSOLE_HOSTS: ${{ vars.CSA_LOOM_VANITY_DOMAIN || '' }}
@@ -197,6 +222,15 @@ jobs:
             Commercial|GCC|GCC-High|IL5) : ;;
             *) echo "::error::'boundary' must be one of Commercial | GCC | GCC-High | IL5 (got '${{ inputs.boundary }}')."; FAIL=1 ;;
           esac
+          GUID_RE='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+          if [ "${CONSOLE_APP_SUPPLIED}" = "true" ] && ! [[ "${LOOM_MSAL_CLIENT_ID}" =~ $GUID_RE ]]; then
+            echo "::error::The supplied console app client id (input console_app_client_id / variable LOOM_CONSOLE_APP_CLIENT_ID) is not a GUID."
+            FAIL=1
+          fi
+          if [ -n "${CONSOLE_APP_OBJECT_ID}" ] && ! [[ "${CONSOLE_APP_OBJECT_ID}" =~ $GUID_RE ]]; then
+            echo "::error::The supplied console app object id (input console_app_object_id / variable LOOM_CONSOLE_APP_OBJECT_ID) is not a GUID."
+            FAIL=1
+          fi
           [ "$FAIL" = "0" ] || exit 1
           if [ -z "${{ inputs.admin_subscription }}" ]; then
             echo "::notice::admin_subscription input was empty (GitHub scrubs a job output that matches a registered secret) — using the boundary's subscription secret instead."
@@ -366,6 +400,13 @@ jobs:
           az account set --subscription "$SUB" 2>/dev/null || true
 
       - name: Provision MSAL app registration (sign-in app + redirect URIs + secret in KV)
+        id: msal-app
+        env:
+          AZURE_CLOUD: ${{ ((inputs.boundary == 'GCC-High' || inputs.boundary == 'IL5') && 'AzureUSGovernment') || 'AzureCloud' }}
+          CONSOLE_APP_EXPECTED_NAME: ${{ vars.LOOM_CONSOLE_APP_NAME || '' }}
+        # SUPPLIED path (CONSOLE_APP_SUPPLIED=true): the script reads the named app by
+        # id and validates it; it does NOT list app registrations. Not supplied:
+        # discover-or-create exactly as before.
         # Day-one deploy-readiness (GH #1383): create/reconcile the per-deployment
         # Entra app registration, write the client secret + a stable SESSION_SECRET
         # to Key Vault, and wire LOOM_MSAL_CLIENT_ID + secretRefs onto the Console
@@ -480,10 +521,21 @@ jobs:
         # authenticate without it. Needs Graph Application.ReadWrite.All +
         # AppRoleAssignment.ReadWrite.All (admin-consented) or Application
         # Administrator on the deploy SP; the failure output names them.
-        if: env.LOOM_MSAL_CLIENT_ID != ''
+        #
+        # SUPPLIED console app: the app id was handed in, so this step does not depend
+        # on the MSAL step having discovered anything -- it also runs after that step
+        # FAILED (measured: GCC-High run 39319044221 failed the MSAL step on a list
+        # call and that skipped this step and the variables step). It still requires
+        # that the MSAL step was reached (outcome != skipped) and the run not cancelled.
+        # Without a supplied app the condition is the old one (MSAL step succeeded).
+        if: >-
+          !cancelled() && env.LOOM_MSAL_CLIENT_ID != '' &&
+          (steps.msal-app.outcome == 'success' ||
+          (env.CONSOLE_APP_SUPPLIED == 'true' && steps.msal-app.outcome == 'failure'))
         env:
           AZURE_CLOUD: ${{ ((inputs.boundary == 'GCC-High' || inputs.boundary == 'IL5') && 'AzureUSGovernment') || 'AzureCloud' }}
           VERIFY_URL: ${{ vars.LOOM_VERIFY_URL || '' }}
+          CONSOLE_APP_EXPECTED_NAME: ${{ vars.LOOM_CONSOLE_APP_NAME || '' }}
         run: |
           set -euo pipefail
           mkdir -p temp
@@ -515,7 +567,13 @@ jobs:
             fi
           fi
           echo "::notice::estate-power console URL: ${CONSOLE_URL:-<none>}"
-          node scripts/csa-loom/ensure-estate-power-role.mjs --client-id "$LOOM_MSAL_CLIENT_ID" --console-url "$CONSOLE_URL"
+          ROLE_ARGS=(--client-id "$LOOM_MSAL_CLIENT_ID" --console-url "$CONSOLE_URL")
+          if [ "$CONSOLE_APP_SUPPLIED" = "true" ]; then
+            ROLE_ARGS+=(--supplied)
+            if [ -n "$CONSOLE_APP_OBJECT_ID" ]; then ROLE_ARGS+=(--object-id "$CONSOLE_APP_OBJECT_ID"); fi
+            if [ -n "${CONSOLE_APP_EXPECTED_NAME:-}" ]; then ROLE_ARGS+=(--expected-name "$CONSOLE_APP_EXPECTED_NAME"); fi
+          fi
+          node scripts/csa-loom/ensure-estate-power-role.mjs "${ROLE_ARGS[@]}"
 
       - name: Persist console URL + audience as repo variables (PRP-02 step 3 / #4876)
         # Feeds estate-power.yml / estate-idle-autopause.yml. Commercial writes
@@ -526,7 +584,12 @@ jobs:
         # GCC and IL5 are skipped on purpose: they have no variable pair the
         # estate-power workflows read, and writing the GCC-High pair from IL5
         # would overwrite the GCC-High console's values.
-        if: env.LOOM_MSAL_CLIENT_ID != '' && (inputs.boundary == 'Commercial' || inputs.boundary == 'GCC-High')
+        # Runs whenever the role step succeeded (its console_url / console_audience
+        # outputs are the inputs), including after a FAILED MSAL step on a supplied app.
+        if: >-
+          !cancelled() && env.LOOM_MSAL_CLIENT_ID != '' &&
+          steps.estate-role.outcome == 'success' &&
+          (inputs.boundary == 'Commercial' || inputs.boundary == 'GCC-High')
         env:
           GH_TOKEN: ${{ secrets.LOOM_REPO_VARS_TOKEN }}
           GH_REPO: ${{ github.repository }}

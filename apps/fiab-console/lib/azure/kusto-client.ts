@@ -20,7 +20,7 @@
  */
 
 import { kqlEscapeDouble, kqlEscapeSingle, kqlVerbatimSingle } from '@/lib/azure/kql-escape';
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import { workspaceScopedCredential } from '@/lib/azure/workspace-credential-factory';
 import { itemsContainer, workspacesContainer } from './cosmos-client';
 import { armBase, armScope, isGovCloud, kustoClusterUri } from './cloud-endpoints';
@@ -253,7 +253,7 @@ async function postRest(path: '/v1/rest/query' | '/v1/rest/mgmt', db: string, cs
   // RBAC. Otherwise the shared service credential, byte-identical to before.
   const token = userToken || (await getToken(base));
   const url = `${base}${path}`;
-  const res = await fetchWithTimeout(url, {
+  const res = await armCountedFetch(url, {
     method: 'POST',
     headers: {
       'authorization': `Bearer ${token}`,
@@ -284,7 +284,7 @@ async function postRest(path: '/v1/rest/query' | '/v1/rest/mgmt', db: string, cs
 async function postMgmtDm(db: string, csl: string): Promise<any> {
   const token = await getToken();
   const url = `${DM_URI}/v1/rest/mgmt`;
-  const res = await fetchWithTimeout(url, {
+  const res = await armCountedFetch(url, {
     method: 'POST',
     headers: {
       'authorization': `Bearer ${token}`,
@@ -1965,7 +1965,7 @@ export async function createDatabase(
       hotCachePeriod: `P${opts?.hotCacheDays ?? 7}D`,
     },
   };
-  const res = await fetchWithTimeout(url, {
+  const res = await armCountedFetch(url, {
     method: 'PUT',
     headers: {
       'authorization': `Bearer ${armToken}`,

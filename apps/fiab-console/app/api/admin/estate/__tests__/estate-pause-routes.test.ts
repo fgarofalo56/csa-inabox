@@ -21,7 +21,7 @@
  * routes are asserted against the real decisions, so a scope regression fails
  * here as well as in the unit suite.
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 // --- Auth seams (the ONLY auth mocking) ------------------------------------
 const getSession = vi.fn();
@@ -72,6 +72,7 @@ vi.mock('@/lib/estate/pause-orchestrator', async (importOriginal) => {
 
 import { armPowerReading, type EstatePauseSnapshot, type EstatePowerState } from '@/lib/estate/pause-state';
 import { previewToken } from '@/lib/estate/pause-orchestrator';
+import { clearStateCache, __setStateCacheClock } from '@/lib/estate/estate-state-cache';
 
 const ADMIN = {
   claims: { oid: 'admin-oid', upn: 'admin@contoso.com', tid: 'tenant-1' },
@@ -234,6 +235,7 @@ function pausedSnapshotFixture(over?: Partial<EstatePauseSnapshot>): EstatePause
 
 beforeEach(() => {
   vi.clearAllMocks();
+  clearStateCache(); // the state verdict is cached per tenant; each test is a fresh estate
   getSession.mockReturnValue(ADMIN);
   requireTenantAdmin.mockReturnValue(null);
   loadPauseSnapshot.mockResolvedValue(null);
@@ -1230,5 +1232,156 @@ describe('POST /api/admin/estate/resume', () => {
     const res = await POST(post({}), { params: Promise.resolve({}) } as never);
     expect(res.status).toBe(202);
     expect((await res.json()).state).toBe('RESUMING');
+  });
+});
+
+// ===========================================================================
+// 2026-10-20 - ARM read throttling: shared fan-out cache + throttle HOLD.
+// Live defect: SubscriptionRequestsThrottled (429) on the AAS read left the
+// panel unable to show what it stopped. Each case names the input that breaks it.
+// ===========================================================================
+
+describe('GET /api/admin/estate/state - ARM read throttling (2026-10-20)', () => {
+  const throttledRead = () => ({
+    reading: null,
+    error: 'ARM GET x was throttled (429) and stayed throttled after 3 attempt(s)',
+    throttled: true as const,
+  });
+  const callState = async () => {
+    const { GET } = await import('../state/route');
+    return (await GET(get(), { params: Promise.resolve({}) } as never)).json();
+  };
+
+  afterEach(() => { __setStateCacheClock(null); });
+
+  it('5 CONCURRENT readers inside the TTL share ONE fan-out: readPower calls == 2 resources, not 5 x 2', async () => {
+    loadPauseSnapshot.mockResolvedValue(pausedSnapshotFixture({ state: 'PAUSING' }));
+    const fake = fakeActuator({ power: () => 'Paused' });
+    createArmActuator.mockResolvedValue(fake.actuator);
+    const results = await Promise.all([callState(), callState(), callState(), callState(), callState()]);
+    // Breaks at 10 if single-flight is removed (each reader fans out itself).
+    expect(fake.actuator.readPower).toHaveBeenCalledTimes(2);
+    expect(results.every((r) => r.state === 'PAUSED')).toBe(true);
+    // A 6th reader, sequential but still inside the TTL, is served from cache: still 2.
+    await callState();
+    expect(fake.actuator.readPower).toHaveBeenCalledTimes(2);
+  });
+
+  it('after the TTL elapses the next read fans out again (breaks at 2 if the entry never expires)', async () => {
+    let t = 1_000_000;
+    __setStateCacheClock(() => t);
+    loadPauseSnapshot.mockResolvedValue(pausedSnapshotFixture({ state: 'PAUSING' }));
+    const fake = fakeActuator({ power: () => 'Paused' });
+    createArmActuator.mockResolvedValue(fake.actuator);
+    await callState();
+    t += 9_999; // default TTL is 10 000 ms
+    await callState();
+    expect(fake.actuator.readPower).toHaveBeenCalledTimes(2);
+    t += 2; // now 10 001 ms after the read
+    await callState();
+    expect(fake.actuator.readPower).toHaveBeenCalledTimes(4);
+  });
+
+  it('a RESUME action CLEARS the cache: the read after it fans out again (breaks at the pre-action count if not cleared)', async () => {
+    loadPauseSnapshot.mockResolvedValue(pausedSnapshotFixture());
+    const fake = fakeActuator({ power: () => 'Paused' });
+    createArmActuator.mockResolvedValue(fake.actuator);
+    await callState();
+    expect(fake.actuator.readPower).toHaveBeenCalledTimes(2);
+    const { POST } = await import('../resume/route');
+    expect((await POST(post({}), { params: Promise.resolve({}) } as never)).status).toBe(202);
+    const afterPost = fake.actuator.readPower.mock.calls.length;
+    await callState();
+    expect(fake.actuator.readPower.mock.calls.length).toBe(afterPost + 2);
+  });
+
+  it('a read IN FLIGHT when an action begins cannot repopulate the cache with its pre-action verdict', async () => {
+    loadPauseSnapshot.mockResolvedValue(pausedSnapshotFixture({ state: 'PAUSING' }));
+    const fake = fakeActuator({ power: () => 'Paused' });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const realRead = fake.actuator.readPower.getMockImplementation()!;
+    fake.actuator.readPower.mockImplementationOnce(async (r: { resourceId: string }) => {
+      await gate;
+      return realRead(r);
+    });
+    createArmActuator.mockResolvedValue(fake.actuator);
+    const inflight = callState();
+    await new Promise((r) => setTimeout(r, 0));
+    clearStateCache(); // what handlePausePost / handleResumePost do on entry
+    release();
+    await inflight;
+    const before = fake.actuator.readPower.mock.calls.length;
+    await callState();
+    // Breaks (stays == before) if the stale in-flight read was stored after the clear.
+    expect(fake.actuator.readPower.mock.calls.length).toBe(before + 2);
+  });
+
+  it('RESUMING past the settle window with BOTH reads throttled stays RESUMING and persists nothing - NOT RESUME_FAILED', async () => {
+    // resumeStartedAt is hours before "now": without the hold this is exactly the RESUME_FAILED path.
+    loadPauseSnapshot.mockResolvedValue(
+      pausedSnapshotFixture({ state: 'RESUMING', resumeStartedAt: '2026-08-23T00:10:00.000Z' }),
+    );
+    const fake = fakeActuator();
+    fake.actuator.readPower.mockImplementation(async () => throttledRead());
+    createArmActuator.mockResolvedValue(fake.actuator);
+    const j = await callState();
+    expect(j.state).toBe('RESUMING');
+    expect(j.throttled).toBe(2);
+    expect(j.terminal).toBe(false);
+    expect(j.reason).toMatch(/rate limit, not a verdict/);
+    expect(savePauseSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('CONTROL: the same snapshot with a NON-throttled null read still ends RESUME_FAILED (the hold keys on the throttle flag only)', async () => {
+    loadPauseSnapshot.mockResolvedValue(
+      pausedSnapshotFixture({ state: 'RESUMING', resumeStartedAt: '2026-08-23T00:10:00.000Z' }),
+    );
+    const fake = fakeActuator();
+    fake.actuator.readPower.mockImplementation(async () => ({ reading: null, error: 'ARM 503 on the state read' }));
+    createArmActuator.mockResolvedValue(fake.actuator);
+    const j = await callState();
+    expect(j.state).toBe('RESUME_FAILED');
+    expect(j.throttled).toBe(0);
+  });
+
+  it('one throttled read + one DEFINITE mismatch: the real failure stands (RESUME_FAILED), the throttle does not soften it', async () => {
+    loadPauseSnapshot.mockResolvedValue(
+      pausedSnapshotFixture({ state: 'RESUMING', resumeStartedAt: '2026-08-23T00:10:00.000Z' }),
+    );
+    const fake = fakeActuator({ power: () => 'Stopped' }); // ARM answered: still Stopped, expected Online
+    const answered = fake.actuator.readPower.getMockImplementation()!;
+    fake.actuator.readPower.mockImplementation(async (r: { resourceId: string }) =>
+      r.resourceId === POOL_ID ? throttledRead() : answered(r));
+    createArmActuator.mockResolvedValue(fake.actuator);
+    const j = await callState();
+    expect(j.state).toBe('RESUME_FAILED');
+    expect(j.throttled).toBe(1);
+  });
+
+  it('a stored RESUME_FAILED whose re-read is throttled stays RESUME_FAILED (not walked back to RESUMING) and says why', async () => {
+    loadPauseSnapshot.mockResolvedValue(
+      pausedSnapshotFixture({ state: 'RESUME_FAILED', resumeStartedAt: '2026-08-23T00:10:00.000Z' }),
+    );
+    const fake = fakeActuator();
+    fake.actuator.readPower.mockImplementation(async () => throttledRead());
+    createArmActuator.mockResolvedValue(fake.actuator);
+    const j = await callState();
+    expect(j.state).toBe('RESUME_FAILED');
+    expect(j.summary.headline).toMatch(/rate limit, not a verdict/);
+    expect(savePauseSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('PAUSING with throttled reads stays PAUSING, reports throttled=2, and the per-resource text says throttle, not failure', async () => {
+    loadPauseSnapshot.mockResolvedValue(pausedSnapshotFixture({ state: 'PAUSING' }));
+    const fake = fakeActuator();
+    fake.actuator.readPower.mockImplementation(async () => throttledRead());
+    createArmActuator.mockResolvedValue(fake.actuator);
+    const j = await callState();
+    expect(j.state).toBe('PAUSING');
+    expect(j.throttled).toBe(2);
+    expect(j.progress[0].detail).toMatch(/rate-limiting reads/);
+    expect(j.progress[0].detail).toMatch(/Whether it stopped was NOT established/);
+    expect(savePauseSnapshot).not.toHaveBeenCalled();
   });
 });

@@ -6864,7 +6864,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
         external: false
         healthPath: '/health'
         tier: 'direct-lake-shim'
-        minReplicas: 1
+        // Disabled (default) => no always-on failing replica: scale to zero and declare
+        // no probes (the worker serves no /health listener; crash-looped since 2026-07-23).
+        // Enabled => unchanged (min 1, the three HTTP probes).
+        minReplicas: loomDirectLakeShimEnabled ? 1 : 0
+        noProbes: !loomDirectLakeShimEnabled
         maxReplicas: 2
         env: [
           // Cosmos config store the shim reads its per-model refresh policy from

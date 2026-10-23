@@ -28,6 +28,8 @@ import { clientFetch } from '@/lib/client-fetch';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { LearnPopover } from '@/lib/components/ui/learn-popover';
 import { jsonGet } from '@/lib/components/admin-scaling/json-get';
+import { EstateContainerAppsSection } from '@/lib/components/admin-scaling/estate-container-apps-section';
+import { isTabHidden, isThrottledResponse, nextPollDelayMs } from '@/lib/components/admin-scaling/estate-power-poll';
 
 // ===========================================================================
 // ESTATE POWER — the pause / resume switch (PRP: estate-pause-resume, W5)
@@ -176,7 +178,7 @@ export function EstateAutoPauseSection({ power, styles, onChanged }: {
   const parsed = parseIdleHours(hours);
   const hoursInvalid = dirty && parsed === null;
 
-  async function save(next: { enabled: boolean; idleHours: number }) {
+  async function save(next: { enabled: boolean; idleHours: number; containerApps?: { enabled: boolean; exempt: string[] } }) {
     setSaving(true);
     setSaveError(null);
     setSaved(false);
@@ -242,7 +244,7 @@ export function EstateAutoPauseSection({ power, styles, onChanged }: {
           </MessageBarBody>
           <MessageBarActions>
             <Button size="small" disabled={saving}
-              onClick={() => { void save({ enabled: true, idleHours: 2 }); }}>
+              onClick={() => { void save({ enabled: true, idleHours: 2, containerApps: { enabled: true, exempt: [] } }); }}>
               Reset to defaults (on, 2 hours)
             </Button>
           </MessageBarActions>
@@ -314,9 +316,13 @@ export function EstatePowerPanel({ styles }: { styles: Record<string, string> })
   // captured by an interval and would otherwise read a stale `data`.
   const dataRef = useRef<any>(null);
   dataRef.current = data;
+  // Consecutive reads that reported ARM throttling; drives the poll back-off.
+  const throttledStreak = useRef(0);
+  const [nextRetryAt, setNextRetryAt] = useState<number | null>(null);
 
   const refresh = useCallback(async () => {
     const j = await jsonGet('/api/admin/estate/state');
+    throttledStreak.current = isThrottledResponse(j) ? throttledStreak.current + 1 : 0;
     setData(j);
     setLoading(false);
     // A gate (503) is a real answer, not a spinner. Surface it verbatim.
@@ -329,12 +335,36 @@ export function EstatePowerPanel({ styles }: { styles: Record<string, string> })
 
   // Poll while a transition is in flight. 10s: fast enough that the operator
   // sees movement, slow enough that a resume poll's data-plane probes do not
-  // hammer a warming engine.
+  // hammer a warming engine. Every poll is an ARM fan-out on a read quota the
+  // whole subscription shares, so: NO poll while the tab is hidden (it resumes
+  // with an immediate read when the tab returns), and an exponential back-off
+  // (to 60 s) while the last read reported throttling.
   useEffect(() => {
     const state: EstateState | undefined = data?.state;
     if (state !== 'PAUSING' && state !== 'RESUMING') return;
-    const t = setInterval(() => { void refresh(); }, 10_000);
-    return () => clearInterval(t);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let cancelled = false;
+    const schedule = () => {
+      const delay = nextPollDelayMs(throttledStreak.current);
+      setNextRetryAt(throttledStreak.current > 0 ? Date.now() + delay : null);
+      timer = setTimeout(async () => {
+        if (cancelled) return;
+        if (!isTabHidden()) await refresh();
+        if (!cancelled) schedule();
+      }, delay);
+    };
+    const onVisibility = () => {
+      if (isTabHidden() || cancelled) return;
+      clearTimeout(timer);
+      void refresh().then(() => { if (!cancelled) schedule(); });
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    schedule();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, [data?.state, refresh]);
 
   const state: EstateState = (data?.state as EstateState) ?? 'RUNNING';
@@ -470,7 +500,8 @@ export function EstatePowerPanel({ styles }: { styles: Record<string, string> })
                 title="Pausing the estate"
                 content={
                   'Pause issues each backing service’s NATIVE pause verb — Synapse pause, ADX stop, '
-                  + 'Analysis Services suspend, scale-set capacity 0. Nothing is deleted and no data is '
+                  + 'Analysis Services suspend, scale-set capacity 0, Container Apps scaled to zero replicas '
+                  + '(the console and a short never-pause list excepted). Nothing is deleted and no data is '
                   + 'touched; only compute stops billing. Resume restores each resource to exactly the '
                   + 'state and SKU recorded in a snapshot taken at pause time.'
                 }
@@ -571,6 +602,21 @@ export function EstatePowerPanel({ styles }: { styles: Record<string, string> })
           </MessageBarBody>
         </MessageBar>
       )}
+      {/* ARM throttled this read. A rate limit is not a failure and not a verdict
+          on any resource: calm info, the last confirmed state stays on screen. */}
+      {!error && isThrottledResponse(data) && (
+        <MessageBar intent="info">
+          <MessageBarBody>
+            <MessageBarTitle>Azure is rate-limiting power-state reads</MessageBarTitle>
+            Reads of {data.throttled} resource(s) were throttled by Azure Resource Manager, so their state
+            was not read this time. Nothing was changed and no failure was recorded; the state shown is the
+            last one Loom confirmed.{' '}
+            {nextRetryAt
+              ? `Next automatic retry at ${new Date(nextRetryAt).toLocaleTimeString()}.`
+              : 'It is re-read on the next refresh.'}
+          </MessageBarBody>
+        </MessageBar>
+      )}
       {notice && !error && (
         <MessageBar intent="success">
           <MessageBarBody>{notice}</MessageBarBody>
@@ -579,6 +625,11 @@ export function EstatePowerPanel({ styles }: { styles: Record<string, string> })
 
       {!loading && data?.power && (
         <EstateAutoPauseSection power={data.power} styles={styles} onChanged={refresh} />
+      )}
+      {!loading && data?.power && (
+        <EstateContainerAppsSection
+          power={data.power} containerApps={data.containerApps} styles={styles} onChanged={refresh}
+        />
       )}
 
       {/* RESUME_FAILED — loud, terminal, and per-resource. Never a spinner. */}

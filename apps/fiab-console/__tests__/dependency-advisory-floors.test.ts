@@ -98,19 +98,22 @@ const lock = readFileSync(LOCKFILE, 'utf8');
 
 /** Floors are per-major: a parent's declared range cannot cross a major. */
 const FLOORS: Array<{ pkg: string; major: number; floor: string; why: string }> = [
-  { pkg: 'js-yaml', major: 4, floor: '4.3.1', why: 'advisories fixed in 4.2.0 and 4.3.0' },
+  { pkg: 'js-yaml', major: 4, floor: '4.3.2', why: 'GHSA-2883-xcg3-v3hh fixed in 4.3.2' },
   { pkg: 'form-data', major: 4, floor: '4.0.6', why: 'advisory fixed in 4.0.6' },
-  { pkg: 'brace-expansion', major: 1, floor: '1.1.16', why: 'advisory fixed in the 1.1.x line' },
-  { pkg: 'brace-expansion', major: 2, floor: '2.1.2', why: 'advisory fixed in 2.1.2' },
-  { pkg: 'brace-expansion', major: 5, floor: '5.0.7', why: 'advisory fixed in 5.0.7' },
+  { pkg: 'brace-expansion', major: 1, floor: '1.1.21', why: 'GHSA-q2hr-2g5m-vwhr fixed in 1.1.21' },
+  { pkg: 'brace-expansion', major: 2, floor: '2.1.7', why: 'GHSA-q2hr-2g5m-vwhr fixed in 2.1.7' },
+  { pkg: 'brace-expansion', major: 5, floor: '5.0.12', why: 'GHSA-q2hr-2g5m-vwhr fixed in 5.0.12' },
 ];
 
 const BANNED: ReadonlyArray<readonly [string, string]> = [
   ['js-yaml', '4.1.1'],
   ['form-data', '4.0.5'],
   ['brace-expansion', '1.1.14'],
+  ['brace-expansion', '1.1.18'],
   ['brace-expansion', '2.1.1'],
+  ['brace-expansion', '2.1.4'],
   ['brace-expansion', '5.0.6'],
+  ['brace-expansion', '5.0.9'],
 ];
 
 describe('Batch-1 advisory floors — pnpm-lock.yaml (what a clean install produces)', () => {
@@ -156,11 +159,11 @@ describe.skipIf(!existsSync(PNPM_STORE))('Batch-1 floors — what each consumer 
 
   /** The exact virtual-store dirs for the consumers this batch touches. */
   const CONSUMERS: Array<{ dir: string; dep: string; floor: string; callable: boolean }> = [
-    { dir: 'minimatch@3.1.5', dep: 'brace-expansion', floor: '1.1.16', callable: true },
-    { dir: 'minimatch@9.0.9', dep: 'brace-expansion', floor: '2.1.2', callable: true },
+    { dir: 'minimatch@3.1.5', dep: 'brace-expansion', floor: '1.1.21', callable: true },
+    { dir: 'minimatch@9.0.9', dep: 'brace-expansion', floor: '2.1.7', callable: true },
     // minimatch 10 is the ONLY consumer that wants the named-export 5.x shape.
-    { dir: 'minimatch@10.2.5', dep: 'brace-expansion', floor: '5.0.7', callable: false },
-    { dir: '@eslint+eslintrc@3.3.5', dep: 'js-yaml', floor: '4.3.1', callable: false },
+    { dir: 'minimatch@10.2.5', dep: 'brace-expansion', floor: '5.0.12', callable: false },
+    { dir: '@eslint+eslintrc@3.3.5', dep: 'js-yaml', floor: '4.3.2', callable: false },
     { dir: 'jsdom@25.0.1', dep: 'form-data', floor: '4.0.6', callable: false },
   ];
 
@@ -261,5 +264,33 @@ describe('Batch-1 overrides are declared in BOTH pnpm homes', () => {
     for (const key of KEYS) {
       expect(pkgOverrides[key], `${key} floor must be bounded, got "${pkgOverrides[key]}"`).toMatch(/<\s*\d/);
     }
+  });
+});
+
+/**
+ * `next` is a DIRECT, exact-pinned dependency (no override), so its floor is
+ * the pin itself. GHSA-2464-fhr4-w9xw (critical) is patched at 15.5.28;
+ * GHSA-4jqv-mc3x-m676 and GHSA-mcj8-r9mp-w47p (medium) at 15.5.27. Breaking inputs:
+ *   - package.json `next` reverted to "15.5.27" (or any 15.5.x < 28) -> pin test red.
+ *   - a lockfile re-resolve leaving next@15.5.24 resolved             -> lock test red.
+ * The lock-presence assertion keeps the floor loop from passing over an empty list.
+ */
+describe('next security floor (GHSA-2464-fhr4-w9xw, GHSA-4jqv-mc3x-m676, GHSA-mcj8-r9mp-w47p)', () => {
+  const NEXT_FLOOR = '15.5.28';
+  const declared = (JSON.parse(readFileSync(join(CONSOLE_ROOT, 'package.json'), 'utf8')).dependencies?.next ??
+    '') as string;
+
+  it(`package.json pins next exactly, at >= ${NEXT_FLOOR}`, () => {
+    expect(declared, `next must be an exact x.y.z pin, got "${declared}"`).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(parse(declared)[0], `next major changed: "${declared}"`).toBe(15);
+    expect(gte(declared, NEXT_FLOOR), `next "${declared}" is below the ${NEXT_FLOOR} floor`).toBe(true);
+  });
+
+  it(`every next version in pnpm-lock.yaml is >= ${NEXT_FLOOR}`, () => {
+    const vs = lockedVersions(lock, 'next');
+    expect(vs.length, 'next is absent from the lockfile; this guard would be vacuous').toBeGreaterThan(0);
+    for (const v of vs) expect(gte(v, NEXT_FLOOR), `next@${v} is below the ${NEXT_FLOOR} floor`).toBe(true);
+    expect(vs, 'next@15.5.27 is vulnerable (GHSA-2464-fhr4-w9xw) and must not be resolved').not.toContain('15.5.27');
+    expect(vs, 'next@15.5.24 is vulnerable and must not be resolved').not.toContain('15.5.24');
   });
 });
