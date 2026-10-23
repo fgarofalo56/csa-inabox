@@ -47,6 +47,7 @@ import {
 // A5/G3: shared draggable divider — sizes the palette column and the
 // canvas↔config-dock split with persisted sizingKeys (ux-baseline G3).
 import { SplitPane } from '@/lib/components/shared/split-pane';
+import { StackedSplit } from '@/lib/components/shared/stacked-split';
 import {
   Play20Regular, Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Flow20Regular,
   Checkmark20Regular, Bug20Regular, Clock20Regular, Settings20Regular, CloudArrowUp20Regular,
@@ -142,19 +143,19 @@ const useLocalStyles = makeStyles({
   // The canvas↔dock SplitPane fills the main column; the U13 output dock (when
   // pinned) stacks below it, so the split flexes instead of claiming 100%.
   dockSplit: { flex: 1, minHeight: 0, height: 'auto' },
+  // StackedSplit's pane body is a block (not flex), so the canvas wrapper fills
+  // it by percentage height; `stackCanvasFill` below gives the canvas pane's
+  // natural-height wrapper a definite 100% so that percentage resolves.
+  stackCanvasFill: {
+    '& [data-pane-id="canvas"] > div:last-child > div': { height: '100%' },
+  },
   canvasWrap: {
     position: 'relative',
-    flex: 1,
+    height: '100%',
     minHeight: 0,
     display: 'flex',
     overflow: 'hidden',
     borderRadius: tokens.borderRadiusMedium,
-  },
-  configDock: {
-    overflow: 'auto',
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusSmall,
   },
 
   // ── Web-5.0 polish: elevated, interactive start-cards (blank / practice /
@@ -218,12 +219,96 @@ function fromB64(b: string): string {
 // flex-fills everything above the divider (the ADF Studio model — dragging the
 // divider reallocates canvas↔dock space). Raw px below are resize bounds that
 // no Fluent token expresses (documented carve-out from web3-ui).
-const DOCK_MIN_PX = 240;          // floor — below this the config form is unusable
 const DOCK_DEFAULT_PX = 300;      // initial dock height
-// SplitPane persistence (G3 sizingKey) + the pre-A5 custom-divider key it
-// migrates from, so a previously dragged dock height carries over.
+// Legacy persistence (kept for the one-time migration; never deleted so a
+// downgrade still finds them): the A5 SplitPane sizingKey, the pre-A5
+// custom-divider key, and the U13 output dock's ResizableCanvasRegion key.
 const DOCK_SIZING_KEY = 'adf-data-pipeline.config-dock';
 const LEGACY_DOCK_STORAGE_KEY = 'loom.dockHeight.adf-data-pipeline';
+const LEGACY_OUTPUT_DOCK_STORAGE_KEY = 'loom.canvasHeight.data-pipeline-output-dock';
+const OUTPUT_DOCK_DEFAULT_PX = 300;
+
+// #3699 Phase 3 — the designer's ONE StackedSplit (canvas | configDock |
+// outputDock). `loom.stackedsplit.<key>` holds `{v:1, shares, collapsed}`.
+export const DESIGNER_STACK_KEY = 'data-pipeline.designer-stack';
+export const DESIGNER_STACK_STORAGE_KEY = `loom.stackedsplit.${DESIGNER_STACK_KEY}`;
+const OUTPUT_PANE_ID = 'outputDock';
+// Reference stack height the legacy px sizes are converted against. Shares are
+// relative weights, so the exact value only matters for the canvas↔dock ratio
+// (≈ designerRow min-height 560 + chrome).
+const STACK_REF_PX = 640;
+const STACK_CANVAS_MIN_PX = 120;
+const STACK_DOCK_MIN_PX = 80;
+
+/**
+ * Convert legacy px sizes to StackedSplit flex shares.
+ *
+ * Legacy layout: canvas = H - config (output dock closed, the default state),
+ * and with the output dock open it took `output` px MORE off the bottom.
+ * Shares are weights over the EXPANDED panes, so we pick them such that:
+ *   - output closed: canvas:config = (REF - config):config   (as the old SplitPane)
+ *   - output open:   output / total = output / REF            (as the old region)
+ * i.e. canvas = REF - config, config = config, output = output*REF / (REF - output).
+ * Inputs are clamped so a wild stored value cannot produce a degenerate stack.
+ */
+export function pxToStackShares(configPx: number, outputPx: number): { canvas: number; configDock: number; outputDock: number } {
+  const cfg = Math.min(Math.max(configPx, STACK_DOCK_MIN_PX), STACK_REF_PX - STACK_CANVAS_MIN_PX);
+  const out = Math.min(Math.max(outputPx, STACK_DOCK_MIN_PX), STACK_REF_PX * 0.9);
+  const r3 = (n: number) => Math.round(n * 1000) / 1000;
+  return {
+    canvas: r3(STACK_REF_PX - cfg),
+    configDock: r3(cfg),
+    outputDock: r3((out * STACK_REF_PX) / (STACK_REF_PX - out)),
+  };
+}
+
+export const DESIGNER_STACK_DEFAULT_SHARES = pxToStackShares(DOCK_DEFAULT_PX, OUTPUT_DOCK_DEFAULT_PX);
+
+const parseLegacyPx = (raw: string | null): number | null => {
+  if (raw == null) return null;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
+type StorageLike = Pick<Storage, 'getItem' | 'setItem'>;
+
+/**
+ * One-time seed of the StackedSplit key from the legacy px keys (G3). Never
+ * overwrites an existing new-format key; malformed legacy values are ignored;
+ * legacy keys are left in place. Never throws.
+ */
+export function migrateDesignerStackLayout(storage: StorageLike): void {
+  try {
+    if (storage.getItem(DESIGNER_STACK_STORAGE_KEY) != null) return;
+    const cfg = parseLegacyPx(storage.getItem(`loom.splitpane.${DOCK_SIZING_KEY}`))
+      ?? parseLegacyPx(storage.getItem(LEGACY_DOCK_STORAGE_KEY));
+    const out = parseLegacyPx(storage.getItem(LEGACY_OUTPUT_DOCK_STORAGE_KEY));
+    if (cfg == null && out == null) return;
+    const sh = pxToStackShares(cfg ?? DOCK_DEFAULT_PX, out ?? OUTPUT_DOCK_DEFAULT_PX);
+    storage.setItem(DESIGNER_STACK_STORAGE_KEY, JSON.stringify({
+      v: 1,
+      shares: { canvas: sh.canvas, configDock: sh.configDock, [OUTPUT_PANE_ID]: sh.outputDock },
+      collapsed: { [OUTPUT_PANE_ID]: true },
+    }));
+  } catch { /* storage unavailable / quota — defaults apply */ }
+}
+
+/** Set the persisted output-dock collapsed flag, leaving everything else untouched. */
+export function writeOutputDockCollapsed(storage: StorageLike, collapsed: boolean): void {
+  try {
+    const raw = storage.getItem(DESIGNER_STACK_STORAGE_KEY);
+    let parsed: { v?: unknown; shares?: unknown; collapsed?: Record<string, unknown> } | null = null;
+    if (raw != null) { try { parsed = JSON.parse(raw); } catch { parsed = null; } }
+    if (!parsed || typeof parsed !== 'object' || parsed.v !== 1) {
+      // Nothing valid stored — the pane's defaultCollapsed already matches state.
+      if (raw != null) return;
+      parsed = { v: 1, shares: {}, collapsed: {} };
+    }
+    const cur = parsed.collapsed && typeof parsed.collapsed === 'object' ? parsed.collapsed : {};
+    if (cur[OUTPUT_PANE_ID] === collapsed) return;
+    storage.setItem(DESIGNER_STACK_STORAGE_KEY, JSON.stringify({ ...parsed, collapsed: { ...cur, [OUTPUT_PANE_ID]: collapsed } }));
+  } catch { /* storage unavailable */ }
+}
 
 const STARTER: PipelineSpec = {
   properties: {
@@ -338,25 +423,30 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
   const [showGrid, setShowGrid] = useState(true);
   const [outputPinned, setOutputPinned] = useState(false);
 
-  // A5 — one-time key migration: carry a config-dock height dragged with the
-  // pre-A5 custom divider (loom.dockHeight.*) into the SplitPane sizingKey so
-  // the user's chosen dock height survives the divider-model change. A lazy
-  // initializer runs during the FIRST render — before the SplitPane child's
-  // layout effect reads its storage key.
+  // A5 + #3699 — one-time key migration: carry the dock heights users dragged
+  // under the older layouts (pre-A5 loom.dockHeight.*, the A5 SplitPane key,
+  // the U13 output-region key) into the StackedSplit key, so the chosen sizes
+  // survive the layout-model change. A lazy initializer runs during the FIRST
+  // render — before the StackedSplit child's mount effect reads its key. The
+  // output dock always starts closed per session (outputDockOpen=false), so
+  // the persisted collapsed flag is reconciled to that too.
   useState<null>(() => {
     if (typeof window !== 'undefined') {
       try {
-        const splitKey = `loom.splitpane.${DOCK_SIZING_KEY}`;
-        if (window.localStorage.getItem(splitKey) == null) {
-          const legacy = window.localStorage.getItem(LEGACY_DOCK_STORAGE_KEY);
-          if (legacy != null && Number.isFinite(parseInt(legacy, 10))) {
-            window.localStorage.setItem(splitKey, String(parseInt(legacy, 10)));
-          }
-        }
+        migrateDesignerStackLayout(window.localStorage);
+        writeOutputDockCollapsed(window.localStorage, true);
       } catch { /* storage unavailable (private mode / quota) — defaults apply */ }
     }
     return null;
   });
+  // The ONE writer of output-dock open/closed from the ribbon / debug run.
+  // StackedSplit's collapse is uncontrolled (it re-reads storage when the
+  // pane's defaultCollapsed flips), so mirror the flag into storage FIRST, then
+  // flip state. Chevron clicks take the opposite path via onLayoutChange.
+  const setOutputDock = useCallback((open: boolean) => {
+    if (typeof window !== 'undefined') writeOutputDockCollapsed(window.localStorage, !open);
+    setOutputDockOpen(open);
+  }, []);
 
   // Lifecycle state
   const [saving, setSaving] = useState(false);
@@ -800,10 +890,10 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
         // the Output tab, which hid the graph while the run streamed).
         if (j.runId) streamRunToCanvas(j.runId);
         setTopTab('pipeline');
-        setOutputDockOpen(true);
+        setOutputDock(true);
       }
     } finally { setDebugging(false); }
-  }, [workspaceId, pipelineId, dispatchToast, publishToAdf, streamRunToCanvas]);
+  }, [workspaceId, pipelineId, dispatchToast, publishToAdf, streamRunToCanvas, setOutputDock]);
 
   const create = useCallback(async () => {
     if (!workspaceId || !createName.trim()) return;
@@ -1090,7 +1180,7 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
           { label: outputPinned ? 'Unpin' : 'Pin output', onClick: () => setOutputPinned((v) => !v) },
           { label: 'Open Output tab', onClick: pipelineId ? () => setTopTab('output') : undefined, disabled: !pipelineId },
           // U13 — toggle the in-canvas Output dock (run receipts + canvas together).
-          { label: outputDockOpen ? 'Hide output dock' : 'Show output dock', onClick: pipelineId ? () => { setOutputDockOpen((v) => !v); setTopTab('pipeline'); } : undefined, disabled: !pipelineId },
+          { label: outputDockOpen ? 'Hide output dock' : 'Show output dock', onClick: pipelineId ? () => { setOutputDock(!outputDockOpen); setTopTab('pipeline'); } : undefined, disabled: !pipelineId },
         ]},
       ],
     },
@@ -1098,7 +1188,7 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
     canCreate, saving, canSave, save, workspaceId, loadList, canDiscard, dirty, discard,
     validating, canValidate, validate, running, canRun, run, debugging, canDebug, debug,
     publish, publishing,
-    pipelineId, canDelete, del, showGrid, snapToGrid, outputPinned, outputDockOpen,
+    pipelineId, canDelete, del, showGrid, snapToGrid, outputPinned, outputDockOpen, setOutputDock,
     exportPipeline, openManageHub,
   ]);
 
@@ -1408,72 +1498,103 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
                       <ActivityPalette onInsert={(d) => insertActivity(d)} />
                     </div>
                     <div className={s.designerMain}>
-                      {/* A5: ONE vertical SplitPane reallocates canvas↔dock space
-                          exactly like ADF Studio — the canvas FILLS everything
-                          above the divider, the config dock below is the sized
-                          pane with its own internal scroll (so expanding config
-                          sections never resizes the canvas). Persisted under
-                          loom.splitpane.adf-data-pipeline.config-dock. */}
-                      <SplitPane
-                        direction="vertical"
-                        primary="second"
-                        storageKey={DOCK_SIZING_KEY}
-                        defaultSize={DOCK_DEFAULT_PX}
-                        minSize={DOCK_MIN_PX}
-                        className={s.dockSplit}
-                        dividerLabel="Resize activity configuration panel"
-                      >
-                        <div className={s.canvasWrap}>
-                          <PipelineCanvas
-                            ref={canvasRef}
-                            activities={activities}
-                            selectedName={selectedActivity || undefined}
-                            onSelect={setSelectedActivity}
-                            snapToGrid={snapToGrid}
-                            showGrid={showGrid}
-                            onDropPaletteKey={(key) => {
-                              const def = findByKey(key);
-                              if (def) insertActivity(def);
-                            }}
-                            onConnect={connect}
-                            onDeleteActivity={deleteActivity}
-                            onExplainNode={setExplainActivity}
-                            aiSuggest
-                            itemType={itemSlug}
-                            itemId={pipelineId || undefined}
-                          />
-                        </div>
-                        {/* Bottom-docked activity configuration — own scroll. */}
-                        <div className={s.configDock}>
-                          <PropertiesPanel
-                            activity={selected}
-                            allActivities={activities}
-                            parameters={parameters}
-                            variables={variables}
-                            layout="dock"
-                            itemId={pipelineId}
-                            pipelineId={pipelineId}
-                            workspaceId={workspaceId}
-                            apiSlug="data-pipeline"
-                            onPatch={(patch) => { if (selected) patchActivity(selected.name, patch); }}
-                            onDelete={() => { if (selected) deleteActivity(selected.name); }}
-                          />
-                        </div>
-                      </SplitPane>
-                      {/* U13 — the in-canvas Output dock (ADF's output strip
-                          below the canvas): run receipts + graph together. */}
-                      {outputDockOpen && pipelineId && (
-                        <PipelineOutputDock
-                          workspaceId={workspaceId}
-                          pipelineId={pipelineId}
-                          pipelineParams={parameters}
-                          paramNames={parameters.map((p) => p.name)}
-                          variableNames={variables.map((v) => v.name)}
-                          activityNames={activities.map((a) => a.name)}
-                          onOpenFullTab={() => setTopTab('output')}
-                          onClose={() => setOutputDockOpen(false)}
-                        />
-                      )}
+                      {/* #3699 Phase 3: ONE 3-pane StackedSplit (canvas | activity
+                          config dock | output dock) replaces the old canvas↔dock
+                          SplitPane + separate output dock, so growing any dock
+                          reflows the others (docks first, canvas last) and each
+                          dock collapses to its header. Layout persisted under
+                          loom.stackedsplit.data-pipeline.designer-stack.
+                          Output-dock collapse has ONE owner: `outputDockOpen`
+                          (writes go through setOutputDock; chevron clicks come
+                          back via onLayoutChange). */}
+                      <StackedSplit
+                        sizingKey={DESIGNER_STACK_KEY}
+                        className={mergeClasses(s.dockSplit, s.stackCanvasFill)}
+                        onLayoutChange={(st) => setOutputDockOpen(!st.collapsed[OUTPUT_PANE_ID])}
+                        panes={[
+                          {
+                            id: 'canvas',
+                            role: 'canvas',
+                            title: 'Pipeline canvas',
+                            collapsible: false,
+                            defaultFlex: DESIGNER_STACK_DEFAULT_SHARES.canvas,
+                            content: (
+                              <div className={s.canvasWrap}>
+                                <PipelineCanvas
+                                  ref={canvasRef}
+                                  activities={activities}
+                                  selectedName={selectedActivity || undefined}
+                                  onSelect={setSelectedActivity}
+                                  snapToGrid={snapToGrid}
+                                  showGrid={showGrid}
+                                  onDropPaletteKey={(key) => {
+                                    const def = findByKey(key);
+                                    if (def) insertActivity(def);
+                                  }}
+                                  onConnect={connect}
+                                  onDeleteActivity={deleteActivity}
+                                  onExplainNode={setExplainActivity}
+                                  aiSuggest
+                                  itemType={itemSlug}
+                                  itemId={pipelineId || undefined}
+                                />
+                              </div>
+                            ),
+                          },
+                          // Bottom-docked activity configuration — own scroll.
+                          {
+                            id: 'configDock',
+                            role: 'dock',
+                            title: 'Activity configuration',
+                            minHeight: 80,
+                            defaultFlex: DESIGNER_STACK_DEFAULT_SHARES.configDock,
+                            content: (
+                              <PropertiesPanel
+                                activity={selected}
+                                allActivities={activities}
+                                parameters={parameters}
+                                variables={variables}
+                                layout="dock"
+                                itemId={pipelineId}
+                                pipelineId={pipelineId}
+                                workspaceId={workspaceId}
+                                apiSlug="data-pipeline"
+                                onPatch={(patch) => { if (selected) patchActivity(selected.name, patch); }}
+                                onDelete={() => { if (selected) deleteActivity(selected.name); }}
+                              />
+                            ),
+                          },
+                          // U13 — the Output dock (ADF's output strip below the
+                          // canvas): run receipts + graph together. The pane only
+                          // exists once a pipeline is bound (pipelineId gate).
+                          ...(pipelineId ? [{
+                            id: OUTPUT_PANE_ID,
+                            role: 'dock' as const,
+                            title: 'Output',
+                            minHeight: 80,
+                            defaultFlex: DESIGNER_STACK_DEFAULT_SHARES.outputDock,
+                            defaultCollapsed: !outputDockOpen,
+                            headerActions: (
+                              <Button size="small" appearance="subtle" onClick={() => setTopTab('output')}>
+                                Open full tab
+                              </Button>
+                            ),
+                            content: (
+                              <PipelineOutputDock
+                                layout="dock"
+                                workspaceId={workspaceId}
+                                pipelineId={pipelineId}
+                                pipelineParams={parameters}
+                                paramNames={parameters.map((p) => p.name)}
+                                variableNames={variables.map((v) => v.name)}
+                                activityNames={activities.map((a) => a.name)}
+                                onOpenFullTab={() => setTopTab('output')}
+                                onClose={() => setOutputDock(false)}
+                              />
+                            ),
+                          }] : []),
+                        ]}
+                      />
                     </div>
                   </SplitPane>
                 </div>
