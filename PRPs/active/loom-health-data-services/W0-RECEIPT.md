@@ -772,7 +772,7 @@ usgovtexas alike.
 Scripts: `scripts/measure/health/egress-capture.sh`, `egress-report.sh` (authored on the
 `feat/lhds-w0-no-cost` worktree, base `7da37991c`).
 
-### 5.1 Status: NOT EXECUTED
+### 5.1 Status: 24 h pass-bar capture NOT EXECUTED (a bounded DEV capture is in 5.5)
 
 The 24-hour capture, per candidate engine image, needs the class-S AKS sandbox with an isolated node
 pool. **not measured yet: sandbox provisioned 2026-10-22 (DEV profile), engine run pending.** No Azure resource was
@@ -840,6 +840,102 @@ CoreDNS log.
   tcpdump for a 24 h single-node capture.
 - tcpdump packet output lists destination IPs only; mapping them back to names (for IP-literal calls) is a
   manual step in `packets-nonprivate.txt` and is not automated.
+
+### 5.5 DEV run (2026-10-23)
+
+**DEV: function proof, bounded window, not the 24 h pass-bar capture.** Sandbox `rg-lhds-w0-sandbox-cus` (centralus,
+Commercial only; Gov not measured). Isolated pool `egressprobe` (1x D4s_v5, scaled 0 to 1 with `az aks nodepool scale`
+because `sandbox.sh up` would also rewrite the budget, PostgreSQL and Key Vault settings; scaled back to 0 and read back
+as 0). Each engine ran alone, pinned to the pool with `LHDS_EGRESS_PROBE=yes` (additive flag in both deploy scripts; the
+dcm4chee manifests rendered with it differ from Lane 1's applied manifest by exactly two scheduling lines per pod spec).
+Raw logs, pcap text and per-engine reports are under `temp/lhds-w0/egress/` (not committed).
+
+**Windows (UTC).** Each engine: startup, a short load burst, then at least 30 minutes with no traffic from us.
+
+| Engine | Capture | Ready | Burst | Idle (no traffic from us) |
+|---|---|---|---|---|
+| HAPI 8.12.0 | 22:02:18 to 22:36:00 (33 m 42 s) | 22:03:31 | 22:03:34 to 22:04:10: 8 bundles, 5,039 resources, 2 threads, then 6 reads (all 200) | 22:04:13 to 22:35:53 (31 m 40 s) |
+| Medplum 5.2.7 + Redis 7 | 22:36:46 to 23:10:17 (33 m 31 s) | 22:37:24 | 22:37:26 to 22:38:28: same 8 bundles, 2 threads, 6 reads (all 200) | 22:38:29 to 23:10:09 (31 m 40 s) |
+| dcm4chee-arc 5.35.2 + slapd | 23:10:28 to 23:44:18 (33 m 50 s) | 23:11:39 | see below | 23:14:00 to 23:44:11 (30 m 12 s) |
+
+dcm4chee burst: phase A (default `fs1` storage) 100 STOWs at 5 senders, 100/100 returned 200, then the load script's
+own check stopped it ("instance count rose by 99 but 100 STOWs returned 200", not investigated; probably a seed-42
+instance that already existed, unconfirmed), so its QIDO/WADO steps did not run. Phase B registered an `azureblob`
+descriptor with a **placeholder credential** (not a secret; it exists only to make the archive dial the Blob private
+endpoint), restarted the archive, and sent 20 STOWs: 0/20 succeeded, as expected. Then a manual read burst at 23:13:59:
+QIDO studies/series/count 200 x3, WADO metadata and retrieve of one study 500 x2 (probably that study's recorded
+location is the Lane 1 Blob descriptor, now placeholder-credentialed; not verified). The AE was set back to `fs1` and
+the descriptor deleted after the capture.
+
+**Disclosure: a window this short can miss periodic check-ins.** A daily or hourly update check, license ping or
+telemetry flush on a timer will not fire inside about 31 minutes of idle. A clean row below means "nothing in this
+window", not "never". That gap is the reason the class-S 24 h run exists, and this run does not close it.
+
+**Result per engine** (full FQDN and IP tables in the per-engine `report.txt`):
+
+| Engine | Real FQDNs resolved by the pods (search-path noise excluded) | Non-Azure FQDN | Engine-sourced external IPs | Positive control |
+|---|---|---|---|---|
+| HAPI | `pg-lhdsw0-83072b.postgres.database.azure.com` only | 0 | 0 | required PG FQDN present; report exit 0 |
+| Medplum + Redis | PG FQDN; `redis.lhds-w0.svc.cluster.local`; **`meta.medplum.com`**; **`api.pwnedpasswords.com`** | **2** | **2** (`3.169.149.32` for meta.medplum.com, `104.17.175.230` for api.pwnedpasswords.com, 1 SYN each) | PG FQDN present; report exit 10 (finding) |
+| dcm4chee-arc + slapd | PG FQDN; `lhdsw0dicom83072b.blob.core.windows.net`; `ldap.lhds-w0.svc.cluster.local` | 0 | 0 | both required FQDNs present; report exit 0 |
+
+**Findings (non-Azure first).**
+1. **Medplum -> `meta.medplum.com`**, one A+AAAA lookup and one TCP 443 connection at 22:37:20, before the server
+   reported Ready (22:37:24). Cause is inferred from timing (a startup version or metadata check); the Medplum source was
+   not read. No second connection in the idle window.
+2. **Medplum -> `api.pwnedpasswords.com`**, one lookup and one connection at 22:37:29, seconds into the load step, when
+   `fhir-engine-medplum-token.py` registered a throwaway project and user. Cause is inferred from that timing (a
+   breached-password check on user registration); the code was not read. It is therefore triggered by our own harness
+   registering a user, but any Medplum deployment that lets a user set a password would make the same call. Whether
+   Medplum fails open or closed when this host is unreachable (the Gov and IL5 case) was **not tested**.
+3. HAPI and dcm4chee-arc/slapd made no non-Azure call in their windows. dcm4chee's `blob.core.windows.net` lookup is
+   Azure-required and appears only because of the placeholder descriptor in phase B.
+
+**Kubelet, CNI and DaemonSet destinations (listed apart, never merged into the engine rows):** 28 flows on the HAPI
+capture, 30 on Medplum, 31 on dcm4chee. Identified: image pulls from `registry-1.docker.io` and `auth.docker.io`
+(HAPI, Medplum, Redis and dcm4che images are all Docker Hub), `mcr.microsoft.com`, Azure Monitor, Azure Front Door, the
+node's `168.63.129.16` wire server and unnamed `AzureCloud.centralus` addresses. Many CDN IPs are unnamed because the name was resolved after the
+capture and the CDN had rotated, so they are not attributed to any process. Note the node-level rows are not an engine
+finding, but a Gov or IL5 boundary without a Docker Hub path needs the images in ACR first.
+
+**Controls and what would break them.**
+- *Canary:* before any engine, a pod on the probe pool fetched `example.com` and `login.microsoftonline.com`. Both
+  witnesses saw it: CoreDNS logged both names (`example.com` classed non-azure), tcpdump showed `104.20.23.154` and
+  `172.66.147.243` as NON-AZURE and `20.190.155.1` as `AzureCloud.centralus`. The report on that canary-only capture
+  exited 3 (no required name, no in-cluster name), so the control bites an empty-of-engine capture. Value that would
+  break the capture: a filter that dropped the pod IP, as happened with the namespace-wide snapshot (below).
+- *Required FQDN list (new, exit 4):* the PG FQDN, plus the Blob FQDN for dcm4chee. A list missing either fails instead
+  of reporting "no calls home". Fixtures: required name absent -> 4, present -> 0.
+- *Report fixtures* (`temp/lhds-w0/egress/fixtures/`, tests of the scripts): 9 cases for `egress-report.sh` (empty 2,
+  comment-only 2, clean 0, finding 10, no in-cluster name 3, expansion-only 3, required missing 4, missing file 1) and 6
+  for `egress-ips.py` (banner-only capture 2, engine to non-Azure 11, engine to Azure 0, node-level non-Azure 0, no
+  service-tag file 11, missing file 1). All 15 as expected.
+- *Mutation, on a sandbox copy* (tracked file hash unchanged afterwards): with the search-expansion rule disabled the
+  expansion-only fixture returns 10 instead of 3 (RED); with the required-FQDN check disabled the missing-Blob fixture
+  returns 0 instead of 4 (RED). Neither mutant is blind. The IP script's classification was not mutated.
+
+**Limits of the witnesses.** tcpdump keeps only non-RFC1918 destinations, so PostgreSQL and the Blob private endpoint
+are visible through DNS only. IPv6 is not captured. The in-cluster control is now a fallback used only when no required
+FQDN is given: HAPI resolves no in-cluster name, so the old "must contain an in-cluster name" control failed on a good
+HAPI capture. A search-path expansion whose bare name is missing from the list would still count as in-cluster
+(fixture-tested boundary).
+
+**Defects found in the scripts by running them (all fixed in this commit).**
+- `logs deployment/coredns` read ONE of two CoreDNS replicas, so half the queries would be missing; it now reads every
+  replica since the capture start.
+- Pod IPs were snapshotted for the whole namespace, which would include the load client's apt and pip lookups; it is now
+  pods of the namespace that run on the probe node.
+- CoreDNS search-path expansions (`<name>.<ns>.svc.cluster.local`, `.cluster.local`, `.internal.cloudapp.net`) satisfied
+  the in-cluster control: on the canary capture all three "in-cluster" names were expansions of `example.com` and
+  `login.microsoftonline.com`. Expansions are now a separate class, recognised by the bare name being in the list.
+- Windows Python wrote CRLF into `fqdns.txt`, so the later `dig` name-to-IP map came out empty without any error;
+  fixed with `newline="\n"`.
+- `coredns-custom` already exists on AKS (applied over it; `cleanup` now removes only our key, never the ConfigMap).
+- The scripts had no analysis of the packet witness at all; `egress-ips.py` now classifies destination IPs against the
+  Azure service tags (`az network list-service-tags`) and splits engine, node and other-pod sources.
+
+**Sandbox state after the run.** Engines, Redis and LDAP at 0 replicas, driver and client pods removed, `coredns-custom`
+log key removed, `egressprobe` read back as 0, AKS and PostgreSQL stopped (status quoted in the lane report).
 
 ## 6. Synthea generation throughput and cohort manifests (W0-5)
 

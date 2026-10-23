@@ -68,7 +68,7 @@ Sonnet sessions ~6; one Opus decision session; Azure ~$4 k (Q2).
 | W0-1 | blocked | feat/lhds-w0-dev-run | sonnet | DEV run done, see W0-RECEIPT s1/2 DEV; pass bar still needs class S (Q2) | 2026-10-23 |
 | W0-2 | blocked | feat/lhds-w0-dev-run | sonnet | DEV run done, see W0-RECEIPT s3 DEV; pass bar still needs class S (Q2) | 2026-10-23 |
 | W0-3 | merged | feat/lhds-w0-gov-probe | sonnet | PR #5092 merged; run 39887825372 success, 11 steps (W0-RECEIPT s4) | 2026-10-22 |
-| W0-4 | blocked | feat/lhds-w0-no-cost | sonnet | scripts done, report exit codes fixture-tested (W0-RECEIPT s5); capture blocked on Q2 | 2026-10-22 |
+| W0-4 | blocked | feat/lhds-w0-dev-run | sonnet | DEV capture done, see W0-RECEIPT s5 DEV; 24 h pass-bar capture still needs class S (Q2) | 2026-10-23 |
 | W0-5 | blocked | feat/lhds-w0-dev-run | sonnet | DEV run done, see W0-RECEIPT s6 DEV; in-pool throughput and 48 h cohort still need class S (Q2) | 2026-10-23 |
 | W0-6 | verifying | feat/lhds-w0-no-cost | sonnet | all 7 facts measured at b192f05ea (W0-RECEIPT s7) | 2026-10-22 |
 | W0-7 | todo | | opus | | 2026-10-22 |
