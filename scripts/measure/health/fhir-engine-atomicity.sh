@@ -134,6 +134,12 @@ for case in cases:
     oo = ""
     if isinstance(resp, dict) and resp.get("resourceType") == "OperationOutcome":
         oo = (resp.get("issue", [{}])[0].get("diagnostics") or resp["issue"][0].get("details", {}).get("text", ""))[:140]
+    # Per-entry statuses of the non-2xx entries: a 200 bundle response whose bad entry says 400/404/412 is the whole
+    # evidence that the engine reported entry-level failure instead of failing the transaction.
+    bad = ["#%d:%s" % (i, e.get("response", {}).get("status", "?")) for i, e in enumerate(ents)
+           if not str(e.get("response", {}).get("status", "")).startswith("2")]
+    if bad:
+        oo = (oo + " entry-statuses " + " ".join(bad[:5])).strip()
     out.append((case, st, good, len(entries), per, nvalid, verdict, oo))
 for case, st, good, n, per, nvalid, verdict, oo in out:
     print("%s\t%s\t%d\t%d\t%d\t%s\t%s" % (case, st, good, n, per, verdict, oo.replace("\t", " ").replace("\n", " ")))

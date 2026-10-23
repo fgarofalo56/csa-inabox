@@ -229,6 +229,108 @@ Not executed locally: 100 k cohort; 1 M-patient projection; class-M database; In
 CVE-process criterion of the ADR-001 bar; k6 (a documented Python-stdlib timer is used instead; its
 req/s is a lower bound on the engine).
 
+### 1.3 DEV run (2026-10-23)
+
+Every number in sections 1.3 and 2.4 is labelled **DEV (1x D8s_v5, PG D2ds_v5): function proof, not pass bar.** The 1.1
+and 2.2 class-S cells above are unchanged and still read "not measured". `fhir-engine-report.sh` exits 0 on these files
+and prints `ADR-001 pass bar: NOT PASS-BAR EVIDENCE (context=sandbox-dev; only context sandbox-classS counts)`.
+
+**Environment.** Sandbox in "Limitlessdata - DLZ", centralus, Commercial only; Gov not exercised. AKS 1.36, one D8s_v5
+node shared by the engine, Redis (Medplum) and the load client pod; PostgreSQL 16 D2ds_v5 (2 vCore), one database per
+engine, `sslmode=require`, credential from the k8s secret. HAPI `hapiproject/hapi@sha256:0ff86aac...` (8.12.0, JVM
+`-Xmx4g`), Medplum `medplum/medplum-server@sha256:7ccb89e5...` (5.2.7) + `redis:7`: the digests the local smoke ran.
+**One engine at a time**: HAPI fully measured and scaled to 0, then Medplum. The load client is a `python:3.12-bookworm` pod
+on the same node (so client and engine share the 8 vCPU) with `psql` 15 from apt. Raw files:
+`temp/lhds-w0/fhir/results/` (not committed).
+
+**Cohort.** A SUBSET of the section 6.3 Synthea cohort: the 2 shared bundles plus the first 50 patient bundles in C-locale
+file-name order (254 MB, 92,551 resources acknowledged 2xx per entry, 0 failed bundles), identical for both engines. This
+is about the size of the local smoke (102,507 resources), not the 100 k-patient cohort.
+
+| Metric (DEV: function proof, not pass bar) | HAPI 8.12.0 | Medplum 5.2.7 | Notes |
+|---|---|---|---|
+| resources acknowledged (per-entry 2xx) | 92,551 | 92,551 | same bundles, same order, 2 POST threads |
+| resources stored per SQL | 92,551 | 92,620 | Medplum +69 are non-Synthea rows (below) |
+| bytes per resource, net | 9,952.7 B | 7,705.3 B | (PG total relation size after minus before) / live resources |
+| bytes per resource, gross | 9,978.6 B | 9,025.5 B | includes the empty-schema floor; PG total 923.5 MB vs 835.9 MB |
+| import | 529.27 res/s (174.9 s) | 146.97 res/s (629.7 s) | Medplum run 1 on a first load: 153.02 res/s (604.8 s) |
+| L1 mix, 60 s, 8 threads | 303.4 req/s, p95 63.3 ms, 18,208 req, 0 errors | 567.8 req/s, p95 26.8 ms, 34,076 req, 0 errors | Python client, so a lower bound |
+| `$export` system level | 2,629.76 res/s (93,434 res, 35.5 s) | 18,946.95 res/s (94,255 res, 5.0 s) | export counts include the mix's Observation writes |
+
+Compared with the ADR-001 6 KB reversal bar (**not a bar result**: wrong profile, 92 k resources not 1 M patients): both
+engines are above 6 KB net on this cohort, HAPI at 9.95 KB and Medplum at 7.71 KB. The local smoke gave 9.90 KB and 7.85 KB on a
+different Synthea build (`master-branch-latest`) and cohort slice; the near-identical figures say the per-resource size here
+tracks the data shape more than the host. Medplum's two loads (run 1 and the reload) differ by 0.02 % in bytes per resource.
+
+Observations:
+1. **Medplum stored 69 more rows than were posted** (run 1: 68). They are not Synthea data: outside Medplum's built-in
+   project the non-Synthea tables held AsyncJob 52, AccessPolicy 8, ProjectMembership 5, Project 3, User 3, Login 2,
+   ClientApplication 2, JsonWebKey 1 (sampled after a second throwaway project had been created, so that sum, 76, is 8 above
+   the 68 at count time). 52 equals the bundle count, which suggests one AsyncJob per transaction bundle; that is a
+   hypothesis, not checked. This resolves the local smoke's "remaining ~68 not attributed" as engine bookkeeping, not
+   partial commits of the failing bundle.
+2. **HAPI's slow `ImagingStudy?patient=` (394 ms locally, section 2.3) did not reproduce**: p95 16.7 ms here (section 2.4).
+3. **Medplum on Azure Database for PostgreSQL did not start out of the box, twice, and both are W1 deploy-preflight items.**
+   (a) The image CMD is a config file path that is absent in the image (CrashLoopBackOff); `args: [env]` selects
+   configuration from `MEDPLUM_*` variables, as the local smoke did. (b) Its schema migration runs `CREATE EXTENSION` for
+   `btree_gin`, `pg_trgm`, `btree_gist` and `unaccent`; Azure refuses every extension not in the server parameter
+   `azure.extensions` (default empty): `extension "btree_gin" is not allow-listed for users in Azure Database for
+   PostgreSQL`. `fhir-engine-deploy.sh` now sets the parameter additively. HAPI needed neither.
+4. **A Medplum token only sees its own project.** The first token script minted a new project per run, so a refreshed token
+   returned an empty project (`no Patient resources found`) while the data sat in the old one. That cost one Medplum
+   reload (database dropped and recreated; the table above is the reload; run 1 is kept in
+   `medplum-run1-first-project.tsv`). The script now stores the throwaway credential in the pod (mode 600) and re-enters the
+   same project. The token is a project admin's, from a user created in-cluster (a `ClientApplication` was not used).
+5. The first HAPI query run aborted at P6 with 5 of 200 requests failed. The failure body was not captured and the
+   cause is **not established**; the sampled names hold no spaces or apostrophes. The rerun (identical script apart from
+   URL-encoding the sampled values and printing the first failure on abort) had 0 errors.
+6. AKS `resume` returned `Running`, but the first `kubectl` call failed for a few minutes with a connection timeout; the
+   API answered about 4 minutes after the node was Ready. Scripts that follow `resume` need a bounded wait.
+
+What was not done: 100 k cohort, 1 M-patient projection, class-M database, Inferno US Core, the CVE criterion, and more
+than one run per cell on HAPI (Medplum has two loads). Bundles were posted over the in-cluster Service, not through
+an ingress, so no TLS or gateway cost is included.
+
+### 1.4 Atomicity of a failed transaction bundle (DEV run, 2026-10-23)
+
+Question from the local smoke: does a failed transaction bundle roll back fully on Medplum? `fhir-engine-atomicity.sh`
+posts four transaction bundles per engine, tags every entry, and counts what persisted by walking
+`Patient?_tag=<marker>` pages. Each case is 5 valid Patients followed by ONE bad last entry; the control has 6 valid
+Patients and must be counted as 6 or the script records nothing (so "0 persisted" cannot be a blind counter).
+
+DEV (1x D8s_v5, PG D2ds_v5): function proof, not pass bar:
+
+| Case (bad last entry) | HAPI: HTTP, entries 2xx, persisted | Medplum: HTTP, entries 2xx, persisted |
+|---|---|---|
+| control (none, 6 valid) | 200, 6 of 6, 6 | 200, 6 of 6, 6 |
+| Observation without the required `status` | 200, 6 of 6, 5 Patients (the Observation was **accepted**) | 200, 5 of 6, **5** |
+| Observation whose subject is a conditional reference matching nothing (the Synthea failure shape) | **404**, 0 of 6, **0** (HAPI-1091) | 200, 5 of 6, **5** |
+| resource of an unknown `resourceType` | **400**, 0 of 6, **0** (HAPI-1684) | 200, 5 of 6, **5** |
+
+**Verdict, observed not inferred: Medplum 5.2.7 does not roll back.** For all three bad bundles it returned HTTP 200 with a
+`transaction-response` in which the bad entry carries status 400 and the other five entries 2xx, and the five valid Patients
+were found persisted. That is batch semantics under a transaction label. HAPI 8.12.0 failed the whole transaction (404 or
+400) and persisted nothing, for the two bad entries it rejects; for the missing-`status` Observation it rejected nothing
+(HAPI validates required elements only with a validation interceptor, which is not configured), so that row is a control
+for HAPI's leniency, not an atomicity result. A client that treats HTTP 200 as success on Medplum will silently lose the bad
+entry and keep the rest; that is consistent with the local smoke's 486-of-496 bundle (not re-run here). Whether Medplum rolls back on
+database-level failures (a constraint violation mid-transaction) was not tested: only validation and reference
+failures were. The HAPI row ran on the script revision before the per-entry-status detail was added (counts and verdicts are
+the same code path); the Medplum rows are from the final revision, whose detail is `entry-statuses #5:400` in all three cases.
+
+Control runs on sandbox copies of the DEV result files (tracked tree untouched), `fhir-engine-report.sh`:
+
+| Mutation | Value that should break it | Result |
+|---|---|---|
+| medplum.tsv = byte copy of hapi.tsv | identical core metrics | exit 2, "bytes_per_resource has identical values" |
+| medplum `export_res_s` line deleted | missing cell | exit 1, "EMPTY CELL: engine=medplum metric=export_res_s" |
+| medplum labelled `local-smoke`, hapi `sandbox-dev` | context mismatch | exit 3 |
+| both files relabelled `sandbox-classS` | the verdict guard's other branch | exit 0 and the bar lines print (HAPI 9,953 B > 6,144, FAIL; Medplum 7,705 B > 6,144, FAIL; worst p95 60 / 20 ms); proves the DEV run is held back by its label, not by the numbers |
+| unmutated DEV files | none | exit 0, `NOT PASS-BAR EVIDENCE` |
+
+The atomicity classifier was not mutation-tested against a deliberately wrong engine; its discrimination is shown by the
+engines returning different verdicts on the same bundles, and its blind-probe guard by construction only.
+
 ## 2. Query and export patterns (W0-1, ADR-008 patterns and the L1 mix)
 
 Script: `scripts/measure/health/fhir-engine-query.sh` (patterns and mix), `fhir-engine-export.sh` (`$export`).
@@ -325,6 +427,45 @@ Controls: every pattern aborts the script if more than 1 % of its requests are n
 must not publish a latency), and the mix aborts on more than 1 % errors; `mean_hits_*` is recorded so an
 empty-result pattern is visible. The abort thresholds were not mutation-tested (no failing engine was
 available); they are asserted by construction only.
+
+### 2.4 DEV run (2026-10-23)
+
+Same environment, cohort subset and caveats as section 1.3 (92,551 resources, one engine at a time, client pod on the
+same node, Python client). Labelled **DEV (1x D8s_v5, PG D2ds_v5): function proof, not pass bar.** The ADR-001 and ADR-008
+bar is p95 > 1 s at 1 M patients on a class-M database; this database is about 1/10 of a 100 k-patient cohort and 2 vCore, so
+no row below says anything about the bar either way.
+
+p95 per pattern, ms, 200 requests each at concurrency 1, fixed draw seed 42, context `sandbox-dev`:
+
+| Pattern | HAPI p95 | Medplum p95 | Mean entries per page (both engines, identical) |
+|---|---|---|---|
+| P1 Patient?identifier | 19.1 | 3.9 | 1.0 |
+| P2 Observation vitals sorted | 56.1 | 19.9 | 68.3 |
+| P3 Condition | 27.7 | 4.1 | 19.1 |
+| P3 MedicationRequest | 26.1 | 5.0 | 11.4 |
+| P3 AllergyIntolerance | 14.8 | 3.6 | 1.1 |
+| P4 Encounter patient+date | 29.1 | 4.7 | 18.7 |
+| P4 Encounter location+date | 9.7 | 4.3 | 1.0 |
+| P5 DocumentReference | 32.6 | 5.2 | 19.0 |
+| P6 Patient name+birthdate | 13.1 | 3.3 | **0.0** |
+| P7 ImagingStudy | 16.7 | 4.0 | 1.3 |
+| P9 `_lastUpdated` scan | 59.6 | 5.8 | 100.0 |
+
+The mean page sizes are identical to one decimal on both engines for all eleven patterns: both answered the same
+questions on the same data, so the latency columns compare like with like. Value that would break that reading: a
+different mean on any row (none).
+
+- **P6 is still a miss latency, not a lookup**: mean hits 0.0 on both engines. Local-smoke observation (b) asked for the
+  sandbox run to sample names that exist; `fhir-engine-query.sh` still draws family name and birthdate independently, so
+  almost every pair matches nobody. Not fixed in this run. Its 13.1 ms and 3.3 ms are the cost of an empty result.
+- HAPI's P7 outlier (394 to 402 ms locally) is gone: 16.7 ms. Local observation (a) is **not reproduced**; the cause
+  stays undiagnosed, and the local result may have been the Docker host or a cold result cache.
+- Medplum is faster than HAPI on every pattern (3.9 to 19.9 ms against 9.7 to 59.6 ms) and on the mix and `$export`;
+  HAPI imported 3.6x faster. All of this is one run per cell at 92 k resources, and the local smoke's run-to-run swing on
+  HAPI was 44 %.
+- `$export`, mix and import are in the section 1.3 table. HAPI had `HAPI_FHIR_BULK_EXPORT_ENABLED=true` and
+  worked first time; Medplum's export worked with the project admin's token. Both are single-path figures against the
+  23 k res/s CAPACITY-MODEL target (HAPI 2.6 k, Medplum 18.9 k res/s), which says nothing about the W6 parallel design.
 
 ## 3. DICOM engine: dcm4chee-arc-light (W0-2, ADR-002 / ADR-004)
 
@@ -755,6 +896,38 @@ Findings:
   excludes file names.)
 - The first draft of the generator wrote a record that the manifest step could not source when the host label held
   spaces or parentheses; found by running it and fixed (values are now shell-quoted).
+
+### 6.3 DEV run (2026-10-23)
+
+Labelled **DEV (1x D8s_v5, PG D2ds_v5): function proof, not pass bar.** The in-pool cells of section 6 (throughput in the
+pool, largest cohort in 48 h) remain **not measured**: generation ran on the laptop, not on the AKS node, because the node
+was the engine and database host for W0-1 and the brief allowed the local docker runner.
+
+| Cell | Value |
+|---|---|
+| Host (`SYNTHEA_HOST_LABEL`) | `laptop-docker (Docker Desktop 8 CPU, eclipse-temurin:17-jre, NOT the AKS pool)`, `-Xmx6g`, default thread count |
+| Synthea | v4.0.0 `synthea-with-dependencies.jar`, sha256 `ed43c20ad40ba5c3bc724503a5af032715fe3c491620b766148e7c2361e6ecc1` (downloaded to a clean directory and verified against the pin before use) |
+| Seed / reference date / state | 20261022 (`-s` and `-cs`) / 20261022 / Massachusetts, FHIR R4, 10 years of history |
+| Requested (`-p`) / patient bundles produced | 1,000 / 1,129 (Synthea exports the deceased on top of the 1,000 living) |
+| Wall time (JVM start included) | 136.0 s |
+| Throughput | **29,885 patient bundles/hour** (1,129 / 136.0 s); 26,471 living patients/hour (1,000 / 136.0 s). Laptop figure |
+| Output | 1,131 files (2 shared + 1,129 patient bundles), 4.0 GB, 1,682,303 textual `resourceType` occurrences including 1,131 `Bundle` wrappers (about 1,490 per patient bundle); Patient 1,129, Observation 605,235, DiagnosticReport 135,889, Procedure 145,228, Claim 122,108, Encounter 68,925 |
+| Manifest hash (sha256 of the sorted per-file sha256 list) | `8599c65c7ee33fc761485c0eed5cf8567b6c2d6185c808b2e13051c1fdc26065` |
+| Manifest in Blob | `lhdsw0dicom83072b/lhds-w0-cohorts/8599c65c.../manifest.json` and `manifest.sha256`: both PUT returned 201 and the read-back sha256 equals the local file's. The 4 GB of bundles were NOT uploaded |
+
+`synthea-upload.sh` as written (`az storage blob upload-batch` from a workstation) **cannot reach this account**: public
+network access is policy-disabled and shared-key access is off, so the manifest went up in-cluster, from the `fhir-client`
+pod with `curl` PUT and an Entra bearer token fed over stdin (never printed, not stored). That path is ad hoc, not a script in
+the repo; the upload script needs an in-cluster mode before class S.
+
+Cohort selection for the engines: the two shared bundles and the first 50 patient bundles by C-locale name (254 MB). The
+1,000-patient cohort itself was not loaded into either engine; at the measured Medplum import rate of about 147 res/s the 1.68 M
+resources would take about 3.2 hours, and about 53 minutes on HAPI at 529 res/s, on this DEV node.
+
+Reading these: one generation run, so no run-to-run spread and no reproducibility check at this size (the section 6.1 finding
+that a fixed seed is not byte-identical was not re-tested). 1,000 patients amortise JVM start better than the 30-patient smoke
+(2,862 to 4,394 patients/hour) and this figure is 7x to 10x higher; amortised start-up is the likely reason, not isolated
+(a different Synthea heap setting and laptop background load also differ). No 100 M-patient extrapolation is made.
 
 ## 7. Loom integration measurements (W0-6)
 
