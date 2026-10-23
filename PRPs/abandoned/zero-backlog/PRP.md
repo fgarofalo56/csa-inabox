@@ -1,3 +1,15 @@
+---
+name: zero-backlog
+status: abandoned  # superseded by finish-2026-10 umbrella (operator, 2026-10-23); files kept, issues stay open
+priority: P2
+order: 7
+depends_on: []
+review: none
+orchestrator_model: opus
+implementer_model: sonnet
+created: 2026-09-11
+---
+
 # PRP — ZERO-BACKLOG: drain all 297 open issues under an autonomous harness
 
 **Status:** active · **Opened:** 2026-09-11 · **Owner:** the drain harness

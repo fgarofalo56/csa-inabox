@@ -1,3 +1,15 @@
+---
+name: snowflake-parity
+status: backlog
+priority: P2
+order: 5
+depends_on: []
+review: none
+orchestrator_model: opus
+implementer_model: sonnet
+created: 2026-08-31
+---
+
 # SNOWFLAKE PARITY + SNOWFLAKE MCP — migrate customers OFF Snowflake onto Azure-native Loom, in every boundary
 
 **Status:** DRAFT — execution-ready for **W0, W1, W2** immediately; **W3–W8** execution-ready

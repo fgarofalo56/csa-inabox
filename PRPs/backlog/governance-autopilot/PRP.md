@@ -1,3 +1,15 @@
+---
+name: governance-autopilot
+status: backlog
+priority: P2
+order: 16
+depends_on: []
+review: none
+orchestrator_model: opus
+implementer_model: sonnet
+created: 2026-10-16
+---
+
 # PRP: Governance Autopilot — zero-touch Purview enrollment, scanning, classification and labeling, plus Copilot governance tools
 
 | Field | Value |

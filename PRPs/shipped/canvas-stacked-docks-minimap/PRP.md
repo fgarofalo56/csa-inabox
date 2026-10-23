@@ -1,3 +1,20 @@
+---
+name: canvas-stacked-docks-minimap
+status: shipped
+priority: P1
+order: 1
+depends_on: []
+review: none
+orchestrator_model: sonnet
+implementer_model: sonnet
+created: 2026-10-05
+started: 2026-10-22
+shipped: 2026-10-23
+pr: 5095
+issues: [3699]
+branch: feat/3699-stacked-split
+---
+
 # PRP: Canvas stacked docks — StackedSplit primitive + first adoption (#3699 Phases 2-3)
 
 | Field | Value |
@@ -185,3 +202,26 @@ Plus the G1 live-browser walks described per-phase above — not optional, per `
 - [x] Non-goals are explicit and linked to filed issues, not silently absent (§1).
 - [x] A known environment blocker (dev-server bootstrap) is named with a workaround, not left for the next session to rediscover (§3 verification note).
 - [x] Validation gates are literal, runnable commands (§6).
+
+## Completion note
+
+Shipped 2026-10-23 as PR #5095 (squash `2e56f50c4`), deployed to Commercial and Gov (live markers both `2e56f50c`). **Verified live on Commercial only** (signed-in walk of a UAT data-pipeline item on the Microsoft Fabric runtime path: 3-pane stack, ArrowDown +24px per press, expand/collapse restores 351/174/29 exactly, layout persisted). **Gov: deployed, not click-walked** — #3699 stays open until it is.
+
+Deviations:
+- Item A's root cause differed from the PRP: the `crypto` import was `lib/azure/query-result-cache.ts` traced via `instrumentation.ts`'s early return. Fixed with a positive `NEXT_RUNTIME === 'nodejs'` check and a new `instrumentation-node.ts` (a file outside the PRP's list; behaviour-identical, independently reviewed).
+- The harness route `app/dev/` needed `error.tsx` + `loading.tsx` (route-boundaries test) — added after the first CI run failed.
+- The guard allowlists 4 R2 hits in `report/free-form-canvas.tsx` (element-resize handles, a heuristic false positive).
+- The new layout appears only under the Fabric (opt-in) runtime radio; the default ADF/Synapse view still uses `pipeline-editor-core.tsx` (#4952, out of scope as the PRP stated).
+
+Not proven: the 70% double-click-fit cap (its fixture cannot fail); the workflow edit was YAML-parsed only (no local actionlint); one unidentified failure in a first full local node:test run (rerun clean, output not captured).
+
+Descoped / deferred (already filed): #4952-#4957. Reviewer follow-ups not yet filed: pointer comment in `instrumentation.ts`, guard regex edge cases (#4957), config-dock 80px floor confirmation.
+
+## Execution state
+
+| Item | Status | Branch | Model | Evidence | Updated |
+|---|---|---|---|---|---|
+| A. Dev-server unblock (crypto import) | merged | worktree-agent-ae2f000b1b2bab549 | sonnet | next dev GET / 500->200; vitest lib/perf 175 pass; lint clean; commit f33e0c041, merge 35d24efff; next build NOT run | 2026-10-22 |
+| B. Phase 2: StackedSplit + resize-keyboard + harness | merged | worktree-agent-a1666c5cca94dc7e6 | sonnet | 32 new vitest tests pass; next build exit 0; mutation RED x3 in scratch copy; Playwright harness walk 24/24 (CSP bypassed, /api stubbed; 70% cap check weak); NOT walked signed-in; commit d50af81a3 | 2026-10-23 |
+| C. Phase 3: data-pipeline-editor adoption (review: required) | merged | worktree-agent-a7ec79aa2b106eb20 | sonnet | 21 new tests; 258 pass in touched dirs (re-run by orchestrator); mutation RED x2 in scratch copy; reviewer APPROVE (no blockers); real-editor browser walk NOT done (G1 pending: canvas height:100% chain, 80px config-dock floor); commit e7e00c8cf | 2026-10-23 |
+| D. Fixed-height dock guard | merged | worktree-agent-ae2c8ef939bd66f0f | sonnet | guard scans 374 files, 4 allowlisted R2 hits (report free-form-canvas false positives); 8/8 tests; mutation RED x2 in scratch copy; security-graph regenerated; one unidentified failure in first full node:test run (rerun clean, not captured); workflow YAML-parsed only (no actionlint); commit 67888c2d4 | 2026-10-23 |

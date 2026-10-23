@@ -1,3 +1,16 @@
+---
+name: per-workspace-spark-identity
+status: backlog
+priority: P2
+order: 1
+depends_on: []
+review: none
+orchestrator_model: opus
+implementer_model: sonnet
+created: 2026-10-02
+shipped: 2026-10-02
+---
+
 # PRP: Per-workspace Spark compute identity
 
 | Field | Value |

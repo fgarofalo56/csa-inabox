@@ -104,7 +104,8 @@ test('invalid values are rejected before any gh call', () => {
   const bad = [
     ['--url', 'http://x.example.com'], ['--url', 'https://x.example.com/path'], ['--url', 'https://x.example.com/'],
     ['--url', 'https://x.example.com\nINJECT=1'], ['--url', 'https://x.example.com:8443'], ['--url', ''],
-    ['--audience', 'api://not-a-guid'], ['--audience', `${AUD}\nX=1`], ['--audience', '11111111-1111-4111-8111-111111111111'],
+    ['--audience', 'api://not-a-guid'], ['--audience', `${AUD}\nX=1`],
+    ['--audience', '11111111-1111-4111-8111-111111111111\nX=1'], ['--audience', 'api://11111111-1111-4111-8111-111111111111/.default'],
   ];
   for (const [k, v] of bad) {
     const args = ['--boundary', 'Commercial', '--url', URL, '--audience', AUD];
@@ -114,4 +115,12 @@ test('invalid values are rejected before any gh call', () => {
     assert.equal(f.calls.length, 0);
   }
   assert.doesNotThrow(() => validate(URL, AUD));
+});
+
+test('a BARE app-id audience is accepted (console app with no identifier URI); a trailing-newline variant is not', () => {
+  // Breaks if: AUD_RE goes back to requiring api:// (the supplied Gov app has no identifier URI, so
+  // the hand-set variable is the bare id and the step would exit 2 on it), or if the bare form
+  // loses its end anchor.
+  assert.doesNotThrow(() => validate(URL, '11111111-1111-4111-8111-111111111111'));
+  assert.throws(() => validate(URL, '11111111-1111-4111-8111-111111111111\nX=1'));
 });
