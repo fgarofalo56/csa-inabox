@@ -20,7 +20,7 @@ Isolation PA in US Gov regions.
 | Service | Comm | Gov | DoD | FH | IL4 | IL5 | LHDS use | If missing: substitute |
 |---|---|---|---|---|---|---|---|---|
 | AKS | yes | yes | UNVERIFIED | yes | yes | yes (CMK, dedicated/isolated node sizes) | Stamp compute (ADR-009) | — |
-| Azure Container Apps | yes | yes (VA/TX cited; AZ unverified) | UNVERIFIED | yes | **no** | **no** | Control plane only in Commercial/GCC-High (existing Loom pattern) | AKS at IL5/DoD (existing `containerPlatform` switch) |
+| Azure Container Apps | yes | yes (VA/TX cited; AZ unverified) | UNVERIFIED | yes | **no** | **no** | Control plane only in Commercial/GCC-High (existing Loom pattern) | AKS at IL5/DoD (new W1-3 work: `containerPlatform` is `containerApps` in every param file incl. `il5.bicepparam:121`, W0 receipt section 7) |
 | Container Registry | yes | yes (`azurecr.us`) | UNVERIFIED | yes | yes | yes (CMK) | Images per cloud | — |
 | PostgreSQL Flexible Server | yes | yes (all 3; zone-redundant HA and geo-backup in Virginia only; Intel v3/v4 only listed) | yes (IL5 list) | yes | yes | yes (CMK text covers Single Server; Flexible CMK guidance UNVERIFIED) | FHIR, DICOM metadata, terminology, MPI, audit index | — ; SSD v2 and v5 SKUs in Gov UNVERIFIED (W0) |
 | Cosmos DB for PostgreSQL (Citus) | yes (retiring) | **no** | no | — | — | — | not used | Stamps + per-tenant DBs (ADR-003); Elastic Clusters re-evaluated when a Gov row appears |

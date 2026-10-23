@@ -86,8 +86,11 @@ operator's mandate is that IL5/DoD are configuration, not redesign, so the
 stamp runs on AKS in every cloud (ADR-009). The existing Loom admin plane keeps
 its Container Apps dispatcher (`container-platform.bicep`); LHDS does not change
 it. The control-plane service (`apps/loom-health-cp`) is a Container App in
-Commercial/GCC-High and an AKS Deployment at IL5, via the existing
-`containerPlatform` switch.
+Commercial/GCC-High and an AKS Deployment at IL5. The `containerPlatform`
+parameter exists, but every param file at `main` `b192f05ea` sets it to
+`containerApps`, including `il5.bicepparam:121` (W0 receipt section 7). The IL5
+AKS path is therefore new W1-3 work, not an existing setting, and flipping the
+admin-plane-wide switch at IL5 would move all of Loom, not only LHDS.
 
 ### 3.3 Tenancy
 A tenant = a health organisation boundary (a VISN's facilities, an IHS Area, a
