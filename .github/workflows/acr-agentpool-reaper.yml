@@ -132,6 +132,13 @@ jobs:
               args=(--acr "$acr" --subscription "$sub" --idle-minutes "$IDLE_MIN")
               [[ "$IN_DRY_RUN" == "true" ]] && args+=(--dry-run)
               node scripts/ci/reap-acr-agent-pools.mjs "${args[@]}" || rc=1
+              # Read-only. Runs AFTER the reap so a failing read can never stop a
+              # scale-down, but its verdict is kept (rc=1): an unreadable consumer
+              # list is UNKNOWN, never zero. Names who holds the regional VM-family
+              # quota a pool scale-up needs (gov-console-roll 40021972356, 2026-10-23:
+              # standardDDSv5Family 100/100 in usgovvirginia).
+              inv=(--acr "$acr" --subscription "$sub")
+              node scripts/ci/acr-quota-inventory.mjs "${inv[@]}" || rc=1
             done
           done
           if [[ "$found" -eq 0 ]]; then
