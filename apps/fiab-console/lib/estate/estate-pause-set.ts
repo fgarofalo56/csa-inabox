@@ -9,6 +9,7 @@ import type { DiscoveryReadFailure } from './pause-discovery-classify';
 import { loadAutoPause } from './estate-autopause';
 import { discoverContainerApps, type ContainerAppsStatus } from './pause-container-apps';
 import { orderForPause } from './pause-tier';
+import { discoverByEstateTag, unionDiscovered, type TagDiscoveryResult } from './pause-tag-discovery';
 
 export interface PauseSetExtension {
   /** Container Apps that join the pause set, to merge with the manifest-named rows. */
@@ -33,12 +34,22 @@ export async function resolveContainerAppsForPause(
 }
 
 /**
- * The full discovered set in PAUSE order: manifest-named rows plus the policy-
- * selected Container Apps, consumers before data services (see `orderForPause`).
+ * The full discovered set in PAUSE order: manifest-named rows, the policy-selected
+ * Container Apps, and the estate-tagged resources (#5099), consumers before data
+ * services (see `orderForPause`). The tagged rows are UNIONED in by lower-cased id
+ * and never displace a manifest or Container Apps row, so nothing that was
+ * discovered before can change.
  */
 export function mergeForPause(
   manifestPresent: readonly DiscoveredResource[],
   ext: PauseSetExtension,
+  tagged?: TagDiscoveryResult,
 ): DiscoveredResource[] {
-  return orderForPause([...manifestPresent, ...ext.discovered]);
+  const base = [...manifestPresent, ...ext.discovered];
+  return orderForPause(tagged ? unionDiscovered(base, tagged.discovered) : base);
+}
+
+/** Resolve the estate-tagged resources for `estateId` (Resource Graph). Never throws. */
+export function resolveTaggedForPause(estateId: string): Promise<TagDiscoveryResult> {
+  return discoverByEstateTag({ estateId });
 }

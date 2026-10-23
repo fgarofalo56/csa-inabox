@@ -37,6 +37,7 @@ service-principal entry point for the Actions/CLI lane.
 | 7 | `POST /api/estate/power` with the deploy service principal | built this PR |
 | 8 | Container Apps in the pause set by default; global and per-app opt-out in the panel; never-pause list shown with reasons | built 2026-10-22 ([guide](../admin/estate-idle-auto-pause.md)). Not exercised against a live app |
 | 9 | Shell banner (count, names, when, by whom) with admin Resume / Retry resume; read-only text for others | built 2026-10-22. jsdom only, no in-browser walk (G1) |
+| 10 | AKS, VMs, Databricks, Stream Analytics jobs and web sites discovered by the `loom-estate-id` tag (Resource Graph, every subscription the console identity can read), unioned with the manifest and Container Apps; "discovery incomplete" banner when the query fails or a configured subscription is unreadable; the AKS cluster hosting the console is never paused | built 2026-10-23 (#5099 phase A). Merged is not deployed: no live pause/resume walk, GCC-High receipt pending; IL5/DoD supported-in-code only |
 
 **Activity recording** is wired: `withSession` (lib/api/route-toolkit.ts) calls
 `recordHumanActivity` fire-and-forget, throttled to one Cosmos write per 5 minutes
@@ -54,6 +55,7 @@ so the contract still forbids auto-pausing on null.
 | Resume | `POST /api/admin/estate/resume` | native ARM resume verbs + data-plane probes |
 | Auto-pause setting (incl. Container Apps opt-outs) | `GET/PUT /api/admin/estate/autopause` | Cosmos doc `estate-autopause:current` |
 | Container Apps list + per-app fate | `containerApps` in the RUNNING state / preview response | ARM list of `Microsoft.App/containerApps` in `LOOM_ACA_RG` (else `LOOM_ADMIN_RG`) |
+| Tag discovery + completeness (`discovery` in the RUNNING state / preview response) | `lib/estate/pause-tag-discovery.ts` | `POST {arm}/providers/Microsoft.ResourceGraph/resources` (the cloud's own ARM host, so `management.usgovcloudapi.net` in Gov), `$skipToken` paged, tier types except Container Apps, `tags['loom-estate-id'] ==` this estate id; plus a `resourcecontainers` probe that every configured subscription is readable |
 | Paused banner | `GET /api/estate/paused` (any signed-in user) | Cosmos pause snapshot only, no ARM call |
 | Idle / last activity | in `power` of the state response | Cosmos doc `estate-activity:current` |
 | Automation | `GET/POST /api/estate/power` | same handlers as the cookie routes |

@@ -113,3 +113,82 @@ export function containerAppPauseGuard(
   }
   return { eligible: true, reason: `${app.name} is positively identified as a non-console Loom app.` };
 }
+
+/**
+ * Decide whether an AKS managed cluster may be stopped (#5099). FAILS SAFE, and
+ * is the AKS mirror of {@link containerAppPauseGuard}: on `containerPlatform=aks`
+ * the console itself runs ON a cluster, and stopping that cluster would strand
+ * the only surface that can start it again.
+ *
+ * Held out (left running) when ANY of these holds:
+ *   - this process runs on AKS (`LOOM_CONTAINER_PLATFORM=aks`, or the pod-injected
+ *     `KUBERNETES_SERVICE_HOST`) and its own cluster name (`LOOM_AKS_CLUSTER_NAME`)
+ *     is unknown - we cannot tell which cluster is ours, so none may be touched;
+ *   - the cluster is named the same as this process's own cluster (the name match
+ *     is deliberately NOT narrowed by resource group: holding out too much is the
+ *     safe error);
+ *   - its tags could not be read;
+ *   - a `loom-role` or `loom-estate-pause` tag marks it console / resume-surface /
+ *     exempt.
+ */
+export function aksPauseGuard(
+  cluster: { name: string; tags: Readonly<Record<string, string>> | null },
+  env: NodeJS.ProcessEnv = process.env,
+): { eligible: boolean; reason: string } {
+  const name = String(cluster.name ?? '').trim().toLowerCase();
+  if (!name) return { eligible: false, reason: 'An AKS cluster with no name cannot be identified. Left RUNNING.' };
+  const platform = String(env.LOOM_CONTAINER_PLATFORM ?? '').trim().toLowerCase();
+  const inCluster = platform === 'aks' || String(env.KUBERNETES_SERVICE_HOST ?? '').trim() !== '';
+  const self = String(env.LOOM_AKS_CLUSTER_NAME ?? '').trim().toLowerCase();
+  if (inCluster) {
+    if (!self) {
+      return {
+        eligible: false,
+        reason:
+          `${cluster.name} is an AKS cluster and this console runs on AKS but could not identify its own cluster `
+          + '(LOOM_AKS_CLUSTER_NAME unset), so it cannot be established that the cluster is not the one hosting the console. Left RUNNING.',
+      };
+    }
+    if (name === self) {
+      return {
+        eligible: false,
+        reason: `${cluster.name} is the AKS cluster hosting this console (containerPlatform=aks); stopping it would strand the resume surface. Left RUNNING.`,
+      };
+    }
+  }
+  if (!cluster.tags) {
+    return { eligible: false, reason: `The tags of ${cluster.name} could not be read, so an exempt marker could not be ruled out. Left RUNNING.` };
+  }
+  for (const [k, v] of Object.entries(cluster.tags)) {
+    const key = k.toLowerCase();
+    const val = String(v).trim().toLowerCase();
+    if (key === 'loom-role' && RESUME_SURFACE_TAG_VALUES.includes(val)) {
+      return { eligible: false, reason: `${cluster.name} is tagged loom-role=${v}, the resume surface. Left RUNNING.` };
+    }
+    if (key === 'loom-estate-pause' && val === 'exempt') {
+      return { eligible: false, reason: `${cluster.name} is tagged loom-estate-pause=exempt. Left RUNNING.` };
+    }
+  }
+  return { eligible: true, reason: `${cluster.name} is positively identified as an AKS cluster that does not host the console.` };
+}
+
+/** True for the types whose loss can strand the console, and so carry a per-resource guard. */
+export function guardedTierType(resourceType: string): boolean {
+  const t = String(resourceType ?? '').toLowerCase();
+  return t === 'microsoft.app/containerapps' || t === 'microsoft.containerservice/managedclusters';
+}
+
+/**
+ * The per-type guard the planner and the act-time re-check share. Every other
+ * type is eligible here and is judged by ownership alone.
+ */
+export function tierPauseGuard(
+  resource: { resourceType: string; name: string; tags: Readonly<Record<string, string>> | null },
+  selfAppName: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): { eligible: boolean; reason: string } {
+  const t = String(resource.resourceType ?? '').toLowerCase();
+  if (t === 'microsoft.app/containerapps') return containerAppPauseGuard(resource, selfAppName);
+  if (t === 'microsoft.containerservice/managedclusters') return aksPauseGuard(resource, env);
+  return { eligible: true, reason: '' };
+}
