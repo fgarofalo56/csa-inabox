@@ -972,6 +972,11 @@ jobs:
           node-version: '20'
       - name: 'Discover and run every node:test suite'
         run: node scripts/ci/check-node-test-suites.mjs
+      # Best-effort ratchet (#3699, #4957): a new canvas dock must not ship
+      # fixed-height or with a hand-rolled resize handle. Pattern matching, not
+      # a comprehensive guarantee -- see the script header. Pure node, no install.
+      - name: 'Canvas docks are resizable (best-effort ratchet)'
+        run: node scripts/ci/check-canvas-dock-resizable.mjs
 
   # ── THE SECURITY GRAPH IS A BUILD ARTIFACT, SO ITS FRESHNESS IS A GATE ────
   #
