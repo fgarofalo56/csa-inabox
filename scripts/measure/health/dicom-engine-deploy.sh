@@ -88,6 +88,13 @@ PG_SECRET="${LHDS_PG_K8S_SECRET:-lhds-pg}"
 JAVA_OPTS_ARC="${LHDS_ARC_JAVA_OPTS:--Xms256m -Xmx4g -XX:MetaspaceSize=96M -XX:MaxMetaspaceSize=256m -Djava.net.preferIPv4Stack=true -Djboss.modules.system.pkgs=org.jboss.byteman -Djava.awt.headless=true}"
 VALUES_DIR="${LHDS_VALUES_DIR:-temp/lhds-w0/l2/deploy}"
 CONTAINER=lhds-w0-dicom
+# LHDS_EGRESS_PROBE=yes (W0-4): pin the ldap + arc pods to the isolated egress-probe pool that egress-capture.sh
+# watches. Unset = the same manifests as before (one blank line aside).
+SCHED=""
+if [[ "${LHDS_EGRESS_PROBE:-}" == "yes" ]]; then
+  SCHED="      nodeSelector: {loom.io/pool: egress-probe}
+      tolerations: [{key: loom.io/egress-probe, operator: Exists}]"
+fi
 export MSYS_NO_PATHCONV=1   # Git Bash would otherwise rewrite /subscriptions/... ids
 
 # ---------------- values + manifests (written to temp/, no secrets inside) ----------------
@@ -120,6 +127,7 @@ spec:
   template:
     metadata: {labels: {app: ldap}}
     spec:
+$SCHED
       containers:
         - name: ldap
           image: $LDAP_IMAGE
@@ -149,6 +157,7 @@ spec:
   template:
     metadata: {labels: {app: arc}}
     spec:
+$SCHED
       containers:
         - name: arc
           image: $ARC_IMAGE

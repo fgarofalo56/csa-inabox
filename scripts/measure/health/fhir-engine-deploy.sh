@@ -71,6 +71,13 @@ HAPI_JAVA_OPTS="${LHDS_HAPI_JAVA_OPTS:--Xmx4g}"
 VALUES_DIR="${LHDS_FHIR_VALUES_DIR:-temp/lhds-w0/fhir/deploy}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 mkdir -p "$VALUES_DIR" temp/lhds-w0
+# LHDS_EGRESS_PROBE=yes (W0-4): pin the ENGINE pods (hapi, medplum, redis; not the load client) to the isolated
+# egress-probe pool that egress-capture.sh watches. Unset = the same manifests as before (one blank line aside).
+SCHED=""
+if [[ "${LHDS_EGRESS_PROBE:-}" == "yes" ]]; then
+  SCHED="      nodeSelector: {loom.io/pool: egress-probe}
+      tolerations: [{key: loom.io/egress-probe, operator: Exists}]"
+fi
 
 # ---------------- manifests (written to temp/, no secrets inside) ----------------
 cat > "$VALUES_DIR/hapi.yaml" <<MANIFEST
@@ -89,6 +96,7 @@ spec:
   template:
     metadata: {labels: {app: hapi}}
     spec:
+$SCHED
       containers:
         - name: hapi
           image: $HAPI_IMAGE
@@ -122,6 +130,7 @@ spec:
   template:
     metadata: {labels: {app: redis}}
     spec:
+$SCHED
       containers:
         - name: redis
           image: $REDIS_IMAGE
@@ -146,6 +155,7 @@ spec:
   template:
     metadata: {labels: {app: medplum}}
     spec:
+$SCHED
       containers:
         - name: medplum
           image: $MEDPLUM_IMAGE
