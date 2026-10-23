@@ -1,0 +1,140 @@
+name: health-w0-gov-probe
+
+# READ-ONLY Azure Government availability probe for the Loom Health Data
+# Services (LHDS) PRP, item W0-3 (PRPs/active/loom-health-data-services/
+# W00-measurement-spike.md; closes the UNVERIFIED cells of
+# AZURE-GOV-AVAILABILITY.md section 5). Docs PR #5091.
+#
+# READ-ONLY BY CONSTRUCTION. Every Azure call below is `provider show`,
+# `account list-locations`, `postgres flexible-server list-skus` or
+# `aks get-versions`. No create, no what-if, no role assignment, no resource
+# group. `az cloud set` and the summary script touch only the runner. The auth
+# block is copied verbatim from gov-adx-sku-probe.yml / gov-discover.yml (same
+# four AZURE_GOV_* secrets, same endpoints, `environment: AzureUSGovernment`);
+# no secret name is invented here.
+#
+# LEFT OUT, no read-only form exists:
+#   * Event Hubs Premium "create dry-run": a dry run needs a resource group and
+#     is a write-shaped call. Instead the Microsoft.EventHub provider resource
+#     types (namespaces, clusters) and their Gov locations are read. That shows
+#     where namespaces and Dedicated clusters exist; it does NOT prove the
+#     Premium SKU is orderable (no SKU-capabilities GET is used), and the
+#     summary says so.
+#   * KEDA add-on: there is no per-cloud read API for the add-on itself.
+#     `az aks get-versions` is read for the Kubernetes versions on offer; that
+#     bounds the question and the summary says it does not answer it.
+#
+# CONTRACT: each probe writes raw JSON to the artifact and a row to the step
+# summary. A probe whose az call exits non-zero is FAILED (rc and stderr are
+# printed); the job fails at the end but the artifact is still uploaded.
+# workflow_dispatch only: no schedule, no push trigger.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  PG_REGION: usgovvirginia
+  AKS_REGIONS: usgovvirginia usgovarizona usgovtexas
+  PROVIDERS: Microsoft.ContainerService Microsoft.DBforPostgreSQL Microsoft.Storage Microsoft.EventHub Microsoft.ApiManagement Microsoft.KeyVault Microsoft.Cdn Microsoft.Network Microsoft.LoadTestService Microsoft.App
+
+jobs:
+  probe:
+    name: Probe Azure Government availability (read-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Azure login (Gov sub) — deploy SP
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Run read-only probes
+        run: |
+          set -uo pipefail
+          OUT="$RUNNER_TEMP/health-w0-gov-probe"
+          mkdir -p "$OUT"
+          : > "$OUT/status.tsv"
+          echo "OUT=$OUT" >> "$GITHUB_ENV"
+
+          # probe <name> <stdout-file> <az args...>
+          # stdout and stderr are captured SEPARATELY (az prints extension and
+          # preview banners to stderr). rc is recorded; nothing is discarded.
+          probe() {
+            local name="$1" file="$2"; shift 2
+            local rc=0
+            "$@" > "$OUT/$file" 2> "$OUT/$file.stderr" || rc=$?
+            if [ "$rc" -eq 0 ]; then
+              echo "ok: $name"
+              printf '%s\tOK\t0\t%s\n' "$name" "$file" >> "$OUT/status.tsv"
+            else
+              echo "::error::[health-w0-gov-probe] FAILED $name rc=$rc"
+              echo "---- stderr for $name ----"; cat "$OUT/$file.stderr"
+              printf '%s\tFAILED\t%s\t%s\n' "$name" "$rc" "$file" >> "$OUT/status.tsv"
+            fi
+          }
+
+          az account show --query "{cloud:environmentName,subscriptionState:state}" -o json
+
+          for rp in $PROVIDERS; do
+            probe "provider:$rp" "provider-$rp.json" az provider show -n "$rp" -o json
+          done
+
+          probe "account:list-locations" "locations.json" az account list-locations -o json
+
+          probe "postgres:list-skus:$PG_REGION" "pg-skus-$PG_REGION.json" \
+            az postgres flexible-server list-skus --location "$PG_REGION" -o json
+
+          for r in $AKS_REGIONS; do
+            probe "aks:get-versions:$r" "aks-versions-$r.json" \
+              az aks get-versions --location "$r" -o json
+          done
+
+          echo "---- status ----"; cat "$OUT/status.tsv"
+
+      - name: Summarize probes
+        if: always()
+        run: |
+          set -uo pipefail
+          test -n "${OUT:-}" || { echo "::error::probe step never set OUT; nothing ran"; exit 1; }
+          python3 .github/scripts/health_w0_gov_summarize.py "$OUT" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload raw JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: health-w0-gov-probe
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+
+      - name: Fail if any probe failed
+        if: always()
+        run: |
+          set -uo pipefail
+          test -s "$OUT/status.tsv" || { echo "::error::no probe recorded a status"; exit 1; }
+          FAILED=$(awk -F'\t' '$2=="FAILED"' "$OUT/status.tsv" | wc -l)
+          TOTAL=$(wc -l < "$OUT/status.tsv")
+          echo "probes=$TOTAL failed=$FAILED"
+          if [ "$FAILED" -gt 0 ]; then
+            echo "::error::[health-w0-gov-probe] $FAILED of $TOTAL probes FAILED; see the step summary"
+            exit 1
+          fi
