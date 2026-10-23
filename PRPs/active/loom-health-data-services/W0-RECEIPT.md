@@ -338,6 +338,8 @@ run against a subscription; it was only
 executed to prove its guards (refuses with no `LHDS_SANDBOX_SUBSCRIPTION`/`LHDS_SANDBOX_RG`; with both set and
 `LHDS_DEPLOY_CONFIRM` unset it writes the values/manifests under `temp/` and prints a plan, touching nothing).
 `dicom-engine-ops.sh blob` was never run against Blob.
+**Superseded for the DEV profile: the deploy script and the ops probes were run on 2026-10-23, see 3.3.** The
+class-S cells in 3.1 are unchanged: the DEV run is function proof, not pass-bar evidence.
 
 ### 3.1 Sandbox table (class-M stamp, AKS + PostgreSQL + Azure Blob, CMK, private endpoint)
 
@@ -412,6 +414,121 @@ Caveats that change how to read the numbers:
   measurement of Blob.
 - The synthetic instance is a minimal CT with no overlay or multi-frame structure; real modality mix and sizes (the
   VA/IHS evidence in `research/scale-evidence-va-ihs-dicom-pricing.md`) are not represented.
+
+### 3.3 DEV run (2026-10-23)
+
+Every number below is labelled **DEV (1x D8s_v5, PG D2ds_v5): function proof, not pass bar.** Environment: the
+sandbox in "Limitlessdata - DLZ", centralus, Commercial only. dcm4chee-arc-light 5.35.2 (WildFly 41, Java 21, jclouds
+2.7.0), slapd-dcm4chee 2.6.15-35.2, schema from postgres-dcm4chee 17.9-35, PostgreSQL 16 `dcm4chee` database over the
+private subnet. Archive heap 4 GB (the image default is 512 MB). The load driver is a Linux pod (`python:3.12`) on the
+same single node as the archive, so driver and archive compete for the same 8 vCPU. "Senders" is the requested
+`xargs -P` count; achieved concurrency was not measured server-side. Instances are the generated 512 KiB synthetic CT
+(random pixel data), 1,000 per step, a fresh seed per step. Raw metric files: `temp/lhds-w0/l2/raw/` (not committed).
+
+**What ran:** `dicom-engine-deploy.sh` (after fixes, commit `4cd495b22`), `dicom-engine-load.sh` at six steps,
+`dicom-engine-ops.sh ldap` with `LHDS_RUNTIME=k8s`, `dicom-engine-ops.sh blob`, `dicom-engine-report.sh` (exit 0,
+19/19 cells populated, verdict `NOT PASS-BAR EVIDENCE (profile=dev)`). The `stowrs` real-client pass was skipped: it
+needs docker and the driver pod has none.
+
+#### Load, DEV (1x D8s_v5, PG D2ds_v5): function proof, not pass bar
+
+Storage was Azure Blob (Entra bearer descriptor, see the findings table), private endpoint only, CMK on. All STOW and
+WADO requests returned 200 at every step, and the archive instance count rose by exactly the number of 200s.
+
+| Senders | STOW p50 / p95 / p99 (ms) | STOW req/s, MiB/s | QIDO p95 (ms), req/s, failed | WADO p95 (ms), req/s, MiB/s |
+|---|---|---|---|---|
+| 10 | 76 / 782 / 1,075 | 61.0, 30.6 | 1,000, 90.7, 0 | 128, 120.9, 60.5 |
+| 25 | 91 / 940 / 1,092 | 104.8, 52.5 | 1,528, 103.0, 0 | 169, 179.4, 89.8 |
+| 50 | 153 / 1,175 / 3,647 | 100.8, 50.4 | 1,870, 94.0, 0 | 302, 178.0, 89.1 |
+| 100 | 450 / 1,041 / 1,294 | 136.6, 68.4 | 1,666, 169.6, 0 | 377, 179.9, 90.1 |
+| 150 | 666 / 1,466 / 1,852 | 134.7, 67.4 | 93,482, 9.5, 45 (of 1,000) | 401, 178.2, 89.2 |
+| 200 | 1,109 / 3,280 / 3,664 | 109.6, 54.9 | 94,716, 9.3, 60 (of 1,000) | 324, 185.1, 92.7 |
+
+Where it saturates on this node:
+- **QIDO between 100 and 150 senders.** From 150 the failures are HTTP 500s and p95 jumps to about 93 s. `server.log`
+  holds 1,916 `IJ000453: Unable to get managed connection for java:/PacsDS` lines (the JDBC pool, across the 150/200/300
+  runs), on a 2 vCPU database. The pool size was not tuned.
+- **STOW throughput plateaus at about 100 to 137 req/s from 25 senders up** (68 MiB/s at the best step), while p95 climbs
+  from 0.9 s to 3.3 s at 200.
+- One earlier run at 300 senders (before the request-count fix below, otherwise the same): STOW 1,000/1,000 ok, p95
+  6,940 ms; QIDO 630 of 1,000 HTTP 500, p50 217 s. Not repeated.
+- WADO did not saturate in this range (about 180 req/s, 90 MiB/s, zero failures).
+- The ADR-002 STOW bar is p95 <= 300 ms at 100 senders. The DEV value is 1,041 ms. That is **not** a bar result (wrong
+  profile, shared node, small database), and it is not evidence that the bar fails at class S either.
+- `server.log` also carries about 2,000 `duplicate key value violates unique constraint` errors
+  (`study_study_iuid_key` 345, `series_study_fk_series_iuid_key` 462, `study_query_attrs_view_id_study_fk_key` 1,151)
+  under concurrent STOW into the same study, while every STOW still returned 200. Needs triage before class S: either
+  harmless retry noise or a hot spot.
+- A 300-instance run after the archive was pointed back at filesystem (PVC) storage and restarted, 25 senders: STOW
+  p50 826 / p95 3,724 ms, 20.3 req/s. That archive had just restarted (cold JVM), so it is not a Blob-versus-PVC
+  comparison.
+
+#### Operational probes, DEV (1x D8s_v5, PG D2ds_v5): function proof, not pass bar
+
+| Probe | Result |
+|---|---|
+| LDAP backup (`slapcat -n 0` and `-n 1`) | 1,595 data entries, 14 config entries |
+| Restore into a throwaway pod of the same image (`slapadd`, then `slapcat`) | 1,595 restored = 1,595 dumped (`ldap_backup_ok=1`) |
+| LDAP StatefulSet restart (`rollout restart`) to rootDSE answering | 12.2 s (an earlier identical run recorded 8.9 s) |
+| First HTTP 200 STOW after the restart began | 13.6 s, no manual step (`ldap_restart_ok=1`) |
+| Blob 503 onset (direct 512 KiB PUTs from the cluster over the private endpoint, Entra bearer) | none up to 400 requested senders: 250, 500, 1,000, 2,000 and 4,000 PUTs per step, 7,750 of 7,750 returned 201. Achieved concurrency not measured; the 503 detection was only positive-controlled against a local fake (3.2) |
+
+The LDAP dumps contain the Blob descriptor's `credential` property in clear text. Anyone who can run `slapcat` or has
+LDAP admin can read the storage credential. Keep dumps out of the repo, and treat this as an ADR-004 input.
+
+#### Azure Blob descriptor findings (the ADR-004 question)
+
+| Question | Result | Evidence |
+|---|---|---|
+| Does dcm4chee-arc accept a jclouds `azureblob` descriptor? | **Yes** | The `dcmStorage` LDAP entry (`dcmURI: jclouds:azureblob:https://<acct>.blob.core.windows.net`, properties `container`, `identity`, `credential`, `containerExists`) loaded, and the archive's `PurgeStorageScheduler` logged `Storage[id=azure1, uri=jclouds:azureblob:...]`. `azureblob-2.7.0.jar` and `oauth-2.7.0.jar` ship in the image. `CloudStorage` passes every descriptor property that starts with `jclouds.` to the jclouds `ContextBuilder` overrides (bytecode read, `javap`) |
+| Account key (SharedKey, the jclouds default) | **Refused in this subscription. "Key works" was never observed.** | STOW failed with `HTTP/1.1 403 Key based authentication is not permitted on this storage account` on the blob `HEAD`. The account reports `allowSharedKeyAccess=false`: `az policy state list` shows tenant policy assignment `MCAPSGovDeployPolicies` / `StorageAccount_DisableLocalAuth_Modify` (effect `modify`). `az storage account update --allow-shared-key-access true` returned success and the property stayed `false`. No policy exemption was sought. jclouds 2.7.0 `AuthType` has only `AZURE_KEY`, `AZURE_AD`, `AZURE_SHARED_KEY`, so there is no SAS mode, and an account SAS needs the key anyway |
+| Private endpoint | **Yes, and it was the only path** | `publicNetworkAccess=Disabled` (forced by `StorageAccount_PublicNetwork_Modify`), so a workstation cannot reach the data plane at all. The first try failed with `UnknownHostException` because the DNS zone group was missing; after the fix the pod resolved the account to the private-endpoint address 10.240.17.5 and requests reached the service. Every successful run used it |
+| CMK | **Yes** | `encryption.keySource=Microsoft.Keyvault`, key `lhds-w0-cmk`, identity `id-lhds-w0-cmk` (assigned to the account at creation), against a Key Vault with public access disabled. The update succeeded and all data was written and read with it on |
+| Entra ID via jclouds (`azureAd`) with a static bearer token | **Yes, as a probe. Not operable as is** | Properties: `jclouds.azureblob.auth=azureAd` (the value `azureAD` fails with `No enum constant AuthType.AZURE_A_D`), `jclouds.azureblob.account`, `jclouds.azureblob.tenantId`, `jclouds.oauth.credential-type=bearerTokenCredentials`, `jclouds.oauth.resource=https://storage.azure.com`, `credential=<token>`. STOW returned 200 and a listing from an in-cluster pod showed the blob (Content-Length 524,974). All load, QIDO/WADO and the Blob PUT probe ran on it. The token's lifetime is 89 minutes (JWT `exp - iat`, token not printed) and a static bearer has no refresh, so a descriptor like this stops working when the token expires. It needed the operator's identity to hold `Storage Blob Data Contributor` on the account (assigned for the test, removed afterwards) |
+| Entra ID with a service principal (client secret or certificate) | **Not tried** | `CredentialType` in the shipped oauth jar lists `CLIENT_CREDENTIALS_SECRET` and `CLIENT_CREDENTIALS_P12_AND_CERTIFICATE`. That needs an app registration, which is outside the sandbox resource group. It would still put a long-lived secret in the descriptor |
+| Managed identity | **Not established** | Not tested at runtime. A string search of the jclouds oauth jar for the IMDS address, `IDENTITY_ENDPOINT` and "managed identity" found nothing, and the shipped credential types are the four above. That is static evidence of no managed-identity flow in jclouds 2.7.0, not a failed attempt |
+| Gov endpoint (`*.blob.core.usgovcloudapi.net`) | **Not measured** | A Gov receipt must come from a GitHub Actions run |
+
+What this means for ADR-004 (input, not a decision): the Azure-native Blob path works end to end with CMK and a private
+endpoint, **but only with a bearer credential that jclouds cannot refresh**, because this tenant's guardrails (shared
+key off, public network off) are the same ones a regulated customer will have. Using the archive on Blob as shipped
+needs one of: a descriptor refresher (a sidecar or CronJob that rewrites the LDAP property before expiry), a patched
+or newer jclouds with a managed-identity flow, or a service-principal secret with its rotation burden. The filesystem
+(PVC) path works as the fallback and was used to leave the sandbox in a working state.
+
+#### Deploy script and probe defects found and fixed by running them
+
+- The script's PostgreSQL step assumed a password env and a `pacsdb` database. It now takes an existing secret and a
+  database name, and loads the schema with a one-shot Job (the arc image does not carry the SQL).
+- The storage account was created without the CMK identity, the container was created over the data plane (impossible
+  once public access is off), and nothing created the `privatelink.blob` zone or zone group.
+- az 2.91 `private-endpoint dns-zone-group show` prints `{}` and exits 0 for a group that does not exist. The script's
+  existence check believed it, so the group was never created. It now counts through `list` and asserts an A record.
+- The arc Deployment had no readiness probe, so `rollout status` returned before the archive could serve.
+- Registering the descriptor needs `ldapmodify` inside the LDAP pod (root password read by the pod, never by the script).
+  An LDIF line wrapped at 78 characters, which put the tail of a storage key into an agent transcript during a
+  debugging query. Both account keys were renewed straight afterwards; with shared key off they authorise nothing.
+- Load driver: `curl -w` already prints a result line (code 000) when a connection fails, so the `|| printf` fallback
+  printed a second line (measured: 1,006 WADO lines for 1,000 requests). Fixed, and `summarise` now dies when the line
+  count differs from the requests sent. Mutation check: the old shape printed 2 lines for a refused connection, the new
+  `emit` prints 1.
+- A DEV run could have printed `ADR-002 STOW bar: PASS` because the report only looked at `env=sandbox`. The load
+  script now records `profile=` and the report calls a run pass-bar evidence only when it is `class-s`. Mutation check:
+  the same metrics rewritten to `profile=class-s` print `FAIL (p95=1041.38 ms > 300 ms ...)`, with `profile=dev` they
+  print `NOT PASS-BAR EVIDENCE`.
+- k8s LDAP restore check: busybox turns `sh -c 'cat > file'` into a bare `cat` that is killed when `kubectl exec` closes
+  stdin, leaving a 0-byte file (`Copying stdin failed ... websocket: close sent`), which `slapadd` then reported as
+  `Database number selected via -n is out of range`. The script now verifies the byte count of each pushed dump
+  (a trailing `sync` keeps the shell alive). Before the fix the 0-byte transfer tripped the new byte-count check
+  (`0 of 328977 bytes arrived`, three tries), and the earlier truncated config tripped the `slapadd` failure path.
+  The `restored != dumped` comparison itself was never mutated, so it has not been shown to go red.
+
+#### Sandbox state after the run
+
+Archive pointed back at `fs1` (PVC), the `azure1` / `azure-ad1` descriptors and the `lhds-blob` secret deleted,
+driver pod removed, role assignment removed, storage account keys renewed. Still present and billing while paused:
+storage account `lhdsw0dicom83072b` (about 8 GB of test blobs, estimated from the instance and PUT counts, private endpoint, `privatelink.blob` zone and link), and
+the PVCs `arc-storage` (32 Gi), `data-ldap-0`, `conf-ldap-0`.
 
 ## 4. Gov availability closure (W0-3)
 

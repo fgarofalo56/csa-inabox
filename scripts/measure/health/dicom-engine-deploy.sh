@@ -45,7 +45,10 @@
 #       descriptor `jclouds:azureblob:https://<acct>.blob.core.windows.net` with identity=<account name>,
 #       credential=<key or SAS>, container=<name> uses the azureblob provider jar that ships in the arc image
 #       (/opt/wildfly/modules/org/apache/jclouds, azureblob-2.7.0.jar). What a running archive does with it is
-#       recorded in the receipt, not here. Shared-key auth also means no managed identity.
+#       recorded in the receipt (section 3.3), not here. Measured on the DEV sandbox: the key path is REFUSED (403 "Key
+#       based authentication is not permitted") when policy forces allowSharedKeyAccess=false, as it does in the DLZ
+#       subscription, so this script's azureblob mode registers a descriptor that cannot store there. Only an Entra
+#       bearer descriptor worked (token lifetime 89 min, no refresh); that variant is not automated here.
 #   G2  There is no Loom-owned Helm chart yet (ADR-002 says Loom will own one). W0 uses plain manifests rendered here;
 #       "Helm values" below is the parameter record that a future chart would consume.
 #   G3  The schema is loaded by a one-shot Job (psql from the postgres-dcm4chee image's init SQL). The Gov path and
