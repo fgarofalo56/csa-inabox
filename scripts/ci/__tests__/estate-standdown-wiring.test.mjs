@@ -53,6 +53,23 @@ function evalGate(frag, { event, result, standdown }) {
   return Function(`return (${js});`)();
 }
 
+/**
+ * Top-level `||` operators in a full `if:` (paren depth 0, string literals skipped). The
+ * fragment test above only evaluates the inner group, so it is blind to precedence: GitHub
+ * binds && tighter than ||, and `!cancelled() && x && A || B` lets B bypass !cancelled() and x.
+ */
+function topLevelOrs(cond) {
+  const s = cond.replace(/^\$\{\{\s*/, '').replace(/\s*\}\}$/, '').replace(/'[^']*'/g, "''");
+  let depth = 0;
+  let ors = 0;
+  for (let i = 0; i < s.length; i += 1) {
+    if (s[i] === '(') depth += 1;
+    else if (s[i] === ')') depth -= 1;
+    else if (depth === 0 && s.startsWith('||', i)) { ors += 1; i += 1; }
+  }
+  return ors;
+}
+
 // lane file, boundary the gate is called with, the job that must stand down
 const LANES = [
   ['deploy-fiab-commercial.yml', 'Commercial', 'deploy-validate'],
@@ -100,6 +117,17 @@ for (const [file, boundary, target] of LANES) {
       assert.equal(evalGate(frag, { event, result: 'cancelled', standdown: '' }), true, `${event} + gate cancelled/no outputs must PROCEED (fail-open)`);
       assert.equal(evalGate(frag, { event, result: 'success', standdown: 'true' }), false, `${event} + paused must stand down`);
     }
+  });
+
+  // Breaks if any edit drops the parentheses around the gate expression (e.g. `!cancelled() && x && A || B`):
+  // the || branch would then bypass every other precondition of the lane (review of #5114, non-blocking 1).
+  test(`${file}: ${target} if: has NO top-level || (the gate expression cannot bypass the lane's other terms)`, () => {
+    const cond = jobIf(jobBlock(wf(file), target));
+    assert.equal(topLevelOrs(cond), 0, `top-level || in ${target} if: ${cond.slice(0, 240)}`);
+    // Positive control: the detector does see a top-level || (and ignores one inside parentheses).
+    assert.equal(topLevelOrs("${{ !cancelled() && inputs.x && a == 'b' || c != 'd' }}"), 1);
+    assert.equal(topLevelOrs("${{ !cancelled() && (a == 'b' || c != 'd') }}"), 0);
+    assert.equal(topLevelOrs("${{ a == '(x || y' }}"), 0, 'a || inside a string literal is not an operator');
   });
 
   test(`${file}: override_estate_pause is a boolean input defaulting to false`, () => {
