@@ -175,10 +175,14 @@ jobs:
   deploy-validate:
     name: Deploy + validate CSA Loom in Commercial
     needs: estate-gate
-    # `!= 'true'`, not `== 'false'`: a gate that failed to run leaves the output
-    # EMPTY and the deploy proceeds (fail-open by design). `!cancelled()` is what
-    # lets a job run after a needed job that did not succeed.
-    if: ${{ !cancelled() && (needs.estate-gate.outputs.standdown != 'true' || (github.event_name == 'workflow_dispatch' && inputs.run_mode != 'full')) }}
+    # Fail mode (2026-10-24, run 40113111843: the gate hung in azure/login, left NO
+    # outputs, and the deploy proceeded toward the ADX preflight):
+    #   schedule -> fail CLOSED: proceed only if the gate SUCCEEDED and said
+    #     standdown == 'false'. A failed/timed-out/cancelled gate stands the lane down.
+    #   anything else (dispatch, push, ...) -> fail OPEN: `!= 'true'` (an unrun gate
+    #     leaves the output empty and the run proceeds; a human chose to deploy).
+    # `!cancelled()` is what lets a job run after a needed job that did not succeed.
+    if: ${{ !cancelled() && ((github.event_name == 'schedule' && needs.estate-gate.result == 'success' && needs.estate-gate.outputs.standdown == 'false' || github.event_name != 'schedule' && needs.estate-gate.outputs.standdown != 'true') || (github.event_name == 'workflow_dispatch' && inputs.run_mode != 'full')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     # JOB-SCOPED, so the widening stops here (#3799). A job-level block REPLACES

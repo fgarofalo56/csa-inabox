@@ -284,15 +284,17 @@ jobs:
     # #3368 filed a false P0 over, so the conclusion is asserted POSITIVELY
     # (== 'success'), never as != something. The `event == 'push'` half is the
     # stated gap documented on the trigger above. The last conjunct is the estate
-    # stand-down: `!= 'true'` is fail-open (an unrun/failed gate leaves the
-    # output empty), and `!cancelled()` lets this run after a needed job that
-    # was skipped or failed.
+    # stand-down: schedule fails CLOSED (gate must have SUCCEEDED with standdown ==
+    # 'false'; this lane has no schedule today), every other event fails OPEN
+    # (`!= 'true'`: an unrun/failed gate leaves the output empty, so push and
+    # workflow_run keep proceeding). `!cancelled()` lets this run after a needed
+    # job that was skipped or failed.
     if: >-
       !cancelled()
       && (github.event_name != 'workflow_run'
           || (github.event.workflow_run.conclusion == 'success'
               && github.event.workflow_run.event == 'push'))
-      && needs.estate-gate.outputs.standdown != 'true'
+      && (github.event_name == 'schedule' && needs.estate-gate.result == 'success' && needs.estate-gate.outputs.standdown == 'false' || github.event_name != 'schedule' && needs.estate-gate.outputs.standdown != 'true')
     runs-on: ubuntu-latest
     # ── #4823 — THE LEASE WAITS MUST FIT INSIDE THIS NUMBER ──────────────────
     #

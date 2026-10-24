@@ -3616,7 +3616,11 @@ test('the gate keeps actions:read and the auto-heal gets actions:write on the JO
   // run-delete / artifact-delete / cancel for no reason.
   const jobAt = yaml.indexOf('    name: Deploy + validate CSA Loom in Commercial');
   assert.notEqual(jobAt, -1, 'the deploy-validate job was renamed; this assertion is looking at the wrong job');
-  const jobHead = yaml.slice(jobAt, jobAt + 1600);
+  // The job's own keys (if:, needs:, permissions:) all precede `steps:`, so read up to there. A
+  // fixed 1600-byte window broke when #5114 lengthened the job's if: (permissions moved to byte 1635).
+  const stepsAt = yaml.indexOf('\n    steps:', jobAt);
+  assert.notEqual(stepsAt, -1, 'the deploy-validate job has no steps: key after its name; the slicer is looking at the wrong job');
+  const jobHead = yaml.slice(jobAt, stepsAt);
   const jobPerms = /\n {4}permissions:\n((?: {6}\S.*\n)+)/.exec(jobHead);
   assert.ok(jobPerms, 'the deploy-validate job declares no permissions block, so it inherits the workflow-level ' +
     'one — and the auto-heal dispatch (#3799) would 403 on the one run where the estate is already wrong');

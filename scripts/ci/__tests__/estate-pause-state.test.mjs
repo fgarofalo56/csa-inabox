@@ -48,16 +48,36 @@ test('PAUSED and PAUSING stand down on every unattended event', () => {
   }
 });
 
-test('RUNNING, RESUMING, RESUME_FAILED and UNKNOWN never stand down (UNKNOWN fails OPEN)', () => {
-  // UNKNOWN = the breaking value for a fail-closed regression: standdown must be false.
-  for (const state of ['RUNNING', 'RESUMING', 'RESUME_FAILED', UNKNOWN]) {
-    assert.equal(decideStandDown({ state, event: 'schedule', override: false }).standdown, false, `${state} must proceed`);
+test('RUNNING, RESUMING and RESUME_FAILED never stand down, on any event incl. schedule', () => {
+  // Breaks if the fail-closed rule leaked from UNKNOWN to the readable states.
+  for (const state of ['RUNNING', 'RESUMING', 'RESUME_FAILED']) {
+    for (const event of ['schedule', 'workflow_dispatch', 'push']) {
+      assert.equal(decideStandDown({ state, event, override: false }).standdown, false, `${state}/${event} must proceed`);
+    }
+  }
+});
+
+test('UNKNOWN on a SCHEDULE stands down (fail-closed) and says failClosed; override cannot bypass it', () => {
+  // Breaks if UNKNOWN+schedule returns standdown:false (the 2026-10-24 run 40113111843 shape).
+  const d = decideStandDown({ state: UNKNOWN, event: 'schedule', override: false });
+  assert.deepEqual(d, { standdown: true, overridden: false, overrideIgnored: false, failClosed: true });
+  const o = decideStandDown({ state: UNKNOWN, event: 'schedule', override: true });
+  assert.equal(o.standdown, true, 'nobody is there to override a scheduled run');
+  assert.equal(o.overrideIgnored, true);
+});
+
+test('UNKNOWN on workflow_dispatch and on every other event PROCEEDS (fail-open, failClosed=false)', () => {
+  // Breaks if fail-closed widened past `schedule` (the decision named only schedule vs manual).
+  for (const event of ['workflow_dispatch', 'push', 'workflow_run', 'workflow_call', '', undefined]) {
+    const d = decideStandDown({ state: UNKNOWN, event, override: false });
+    assert.equal(d.standdown, false, `UNKNOWN/${String(event)} must proceed`);
+    assert.equal(d.failClosed, false);
   }
 });
 
 test('override on workflow_dispatch proceeds and says it overrode', () => {
   const d = decideStandDown({ state: 'PAUSED', event: 'workflow_dispatch', override: true });
-  assert.deepEqual(d, { standdown: false, overridden: true, overrideIgnored: false });
+  assert.deepEqual(d, { standdown: false, overridden: true, overrideIgnored: false, failClosed: false });
   assert.equal(decideStandDown({ state: 'PAUSED', event: 'workflow_dispatch', override: 'true' }).standdown, false, 'the string "true" is what Actions passes');
 });
 
@@ -173,10 +193,24 @@ test('dispatch with override=true proceeds with a ::warning::', async () => {
   assert.match(h.lines.join('\n'), /^::warning::OVERRIDE/m);
 });
 
-test('unreadable state: standdown=false, state=UNKNOWN, loud ::warning::, reason recorded', async () => {
-  const h = harness(fakeFetch(() => bad(503, 'console not configured')));
+test('SCHEDULED run, unreadable state: standdown=true, state=UNKNOWN, summary says it stood down fail-closed', async () => {
+  const h = harness(fakeFetch(() => bad(503, 'console not configured')), { GITHUB_EVENT_NAME: 'schedule' });
   const res = await h.run();
-  assert.equal(res.decision.standdown, false, 'an unreadable read must not freeze the deploy (R1)');
+  assert.equal(res.decision.failClosed, true);
+  const o = h.outputs();
+  assert.equal(o.state, 'UNKNOWN');
+  assert.equal(o.standdown, 'true', 'a scheduled run that cannot read the state must stand down');
+  assert.match(o.reason, /console state read failed/, 'the reason is still recorded');
+  assert.match(h.lines.join('\n'), /^::notice::STOOD DOWN: estate state UNKNOWN on a scheduled run: standing down \(fail-closed\); the next scheduled run retries/m);
+  assert.match(h.summary(), /Stood down: estate state could not be established on a scheduled run \(fail-closed\)/);
+  assert.match(h.summary(), /Nothing was deployed/);
+  assert.ok(!/WILL wake it|PROCEEDING/.test(h.lines.join('\n') + h.summary()), 'a stood-down run must not claim it proceeds');
+});
+
+test('unreadable state on a DISPATCH: standdown=false, state=UNKNOWN, loud ::warning::, reason recorded', async () => {
+  const h = harness(fakeFetch(() => bad(503, 'console not configured')), { GITHUB_EVENT_NAME: 'workflow_dispatch' });
+  const res = await h.run();
+  assert.equal(res.decision.standdown, false, 'an unreadable read must not freeze a manual deploy (R1)');
   const o = h.outputs();
   assert.equal(o.state, 'UNKNOWN');
   assert.equal(o.standdown, 'false');

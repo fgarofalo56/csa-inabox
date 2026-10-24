@@ -317,9 +317,10 @@ jobs:
     # top is inert on exactly the trigger it exists for
     # (gcch-standdown-completeness.test.mjs round 4 names that exact bypass).
     needs: [precheck, pause-declaration, build-gov-images, estate-gate]
-    # Estate stand-down (#5111): `!= 'true'` is fail-open (an unrun/failed gate
-    # leaves the output empty); whatif-only applies nothing so it still runs.
-    if: always() && github.event_name != 'schedule' && needs.precheck.outputs.configured == 'true' && (needs.estate-gate.outputs.standdown != 'true' || inputs.run_mode != 'full')
+    # Estate stand-down (#5111): this lane has no schedule path (the conjunct above),
+    # so the fail-open `!= 'true'` branch is the live one; the schedule branch is
+    # kept so the expression is identical in every lane. whatif-only applies nothing.
+    if: always() && github.event_name != 'schedule' && needs.precheck.outputs.configured == 'true' && ((github.event_name == 'schedule' && needs.estate-gate.result == 'success' && needs.estate-gate.outputs.standdown == 'false' || github.event_name != 'schedule' && needs.estate-gate.outputs.standdown != 'true') || inputs.run_mode != 'full')
     runs-on: ubuntu-latest
     timeout-minutes: 120
     environment: gcc-high-deploy   # requires manual approval

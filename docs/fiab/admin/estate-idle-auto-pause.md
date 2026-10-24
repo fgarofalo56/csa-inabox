@@ -266,7 +266,18 @@ makes: no new secret, no new role).
 |---|---|
 | PAUSING, PAUSED | **Stands down.** Nothing is deployed. The job summary says "Stood down: estate paused" and a `::notice::` names who paused it and when. |
 | RUNNING, RESUMING, RESUME_FAILED | Proceeds. |
-| UNKNOWN (console unreachable, variable unset, token refused) | **Proceeds** with a `::warning::`. Fail-open on purpose: an unreadable read must not freeze every deploy. If the estate is paused at that moment, the run wakes it. |
+| UNKNOWN or no verdict, on a **`schedule`** run (console unreachable, variable unset, token refused, or the gate job itself failed / timed out / was cancelled) | **Stands down (fail-closed).** The run says "Stood down: estate state could not be established on a scheduled run (fail-closed)" in its summary and the next scheduled run retries. A missed daily reconcile is cheap; waking a paused estate is not. |
+| UNKNOWN or no verdict, on a **`workflow_dispatch`** run | **Proceeds** with a `::warning::` (fail-open): a human chose to deploy. If the estate is paused at that moment, the run wakes it. |
+| UNKNOWN or no verdict, on any other event (`push`, `workflow_run`) | **Proceeds** with a `::warning::`, unchanged from before. The operator decision (2026-10-24) named only schedule versus manual. |
+
+Why fail-closed on schedule: on 2026-10-24 `deploy-fiab-commercial` run 40113111843's gate
+hung in `azure/login` until its 10-minute timeout. A timed-out gate leaves no outputs, the
+lane's old `!= 'true'` test read that as "proceed", and the run was heading for the ADX
+preflight (which had started ADX during a pause that morning) when it was cancelled by
+hand. Each lane's `if:` now carries one expression:
+`github.event_name == 'schedule' && needs.estate-gate.result == 'success' && needs.estate-gate.outputs.standdown == 'false' || github.event_name != 'schedule' && needs.estate-gate.outputs.standdown != 'true'`.
+The estate-gate run may itself conclude `failure` in that case (the gate job failed); that
+is accurate, and the run is still not a deployed SHA.
 
 Lanes and what stands down: `deploy-fiab-commercial` (the whole `deploy-validate` job;
 `whatif-only` dispatches still run), `deploy-fiab-gcch`, `deploy-fiab-gcc` and
@@ -278,7 +289,8 @@ console is never paused.
 
 To proceed anyway: resume the estate (below), or dispatch the lane with
 `override_estate_pause: true`. A scheduled, push or `workflow_run` run can never
-override. A stood-down run is not a deployed SHA: `check-deploy-staleness.mjs` skips it,
+override. A stood-down run (paused, or fail-closed on an unreadable state: the job is
+named `Stood down - estate state unknown`) is not a deployed SHA: `check-deploy-staleness.mjs` skips it,
 so a lane that has only stood down since its last deploy still reads as stale.
 
 The console's state body does not yet carry who paused the estate, so the notice says

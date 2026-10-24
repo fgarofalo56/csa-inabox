@@ -4,7 +4,7 @@
 // transcribed: lane names and job names come from the files themselves.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 const ROOT = join(import.meta.dirname, '..', '..', '..');
@@ -32,6 +32,44 @@ function jobIf(block) {
   return out.join(' ');
 }
 
+/**
+ * Lift the (paren-free) schedule/gate-result sub-expression out of a lane's `if:`.
+ * It is the parenthesised group that mentions needs.estate-gate.result.
+ */
+function gateFragment(cond) {
+  const m = cond.match(/\(([^()]*needs\.estate-gate\.result[^()]*)\)/);
+  return m ? m[1] : null;
+}
+
+/** Evaluate the lifted fragment: only ==, !=, &&, || over three contexts, so a JS eval is faithful. */
+function evalGate(frag, { event, result, standdown }) {
+  const js = frag
+    .replace(/github\.event_name/g, JSON.stringify(event))
+    .replace(/needs\.estate-gate\.result/g, JSON.stringify(result))
+    .replace(/needs\.estate-gate\.outputs\.standdown/g, JSON.stringify(standdown))
+    .replace(/ == /g, ' === ')
+    .replace(/ != /g, ' !== ');
+  assert.ok(!/[A-Za-z_]\w*\.[A-Za-z_]/.test(js.replace(/"[^"]*"|'[^']*'/g, '')), `unevaluated context left in: ${js}`);
+  return Function(`return (${js});`)();
+}
+
+/**
+ * Top-level `||` operators in a full `if:` (paren depth 0, string literals skipped). The
+ * fragment test above only evaluates the inner group, so it is blind to precedence: GitHub
+ * binds && tighter than ||, and `!cancelled() && x && A || B` lets B bypass !cancelled() and x.
+ */
+function topLevelOrs(cond) {
+  const s = cond.replace(/^\$\{\{\s*/, '').replace(/\s*\}\}$/, '').replace(/'[^']*'/g, "''");
+  let depth = 0;
+  let ors = 0;
+  for (let i = 0; i < s.length; i += 1) {
+    if (s[i] === '(') depth += 1;
+    else if (s[i] === ')') depth -= 1;
+    else if (depth === 0 && s.startsWith('||', i)) { ors += 1; i += 1; }
+  }
+  return ors;
+}
+
 // lane file, boundary the gate is called with, the job that must stand down
 const LANES = [
   ['deploy-fiab-commercial.yml', 'Commercial', 'deploy-validate'],
@@ -54,9 +92,42 @@ for (const [file, boundary, target] of LANES) {
     const block = jobBlock(text, target);
     assert.match(block, /needs:.*estate-gate/, `${target} must need estate-gate`);
     const cond = jobIf(block);
-    // `!= 'true'` is the fail-open spelling: an unrun gate leaves the output empty.
+    // `!= 'true'` is the fail-open spelling (non-schedule): an unrun gate leaves the output empty.
     assert.ok(cond.includes("needs.estate-gate.outputs.standdown != 'true'"), `${target} if: must test standdown != 'true' (got: ${cond.slice(0, 200)})`);
-    assert.ok(!cond.includes("standdown == 'false'"), "== 'false' would FREEZE the lane when the gate fails to run");
+    // `== 'false'` is allowed ONLY inside the schedule branch, which also requires the gate to have succeeded.
+    const frag = gateFragment(cond);
+    assert.ok(frag, `${target} if: must carry the schedule/gate-result expression`);
+    assert.ok(cond.replace(frag, '').indexOf("standdown == 'false'") < 0, "== 'false' outside the schedule branch would FREEZE a dispatch when the gate fails to run");
+  });
+
+  test(`${file}: ${target} gate expression is fail-CLOSED on schedule, fail-OPEN elsewhere (evaluated, not pattern-matched)`, () => {
+    const frag = gateFragment(jobIf(jobBlock(wf(file), target)));
+    assert.ok(frag, 'expression missing');
+    // schedule: only (gate success AND standdown 'false') proceeds. The breaking values for the
+    // 2026-10-24 incident are result 'cancelled'/'failure' with standdown '' (no outputs).
+    for (const result of ['cancelled', 'failure', 'skipped']) {
+      assert.equal(evalGate(frag, { event: 'schedule', result, standdown: '' }), false, `schedule + gate ${result} + no outputs must STAND DOWN`);
+    }
+    assert.equal(evalGate(frag, { event: 'schedule', result: 'success', standdown: 'true' }), false, 'schedule + paused must stand down');
+    assert.equal(evalGate(frag, { event: 'schedule', result: 'success', standdown: '' }), false, 'schedule + success but EMPTY standdown must stand down');
+    assert.equal(evalGate(frag, { event: 'schedule', result: 'failure', standdown: 'false' }), false, 'schedule + failed gate must stand down even if a stale false is visible');
+    assert.equal(evalGate(frag, { event: 'schedule', result: 'success', standdown: 'false' }), true, 'positive: a healthy gate on a schedule must proceed');
+    // everything else keeps today's fail-open behaviour
+    for (const event of ['workflow_dispatch', 'push', 'workflow_run']) {
+      assert.equal(evalGate(frag, { event, result: 'cancelled', standdown: '' }), true, `${event} + gate cancelled/no outputs must PROCEED (fail-open)`);
+      assert.equal(evalGate(frag, { event, result: 'success', standdown: 'true' }), false, `${event} + paused must stand down`);
+    }
+  });
+
+  // Breaks if any edit drops the parentheses around the gate expression (e.g. `!cancelled() && x && A || B`):
+  // the || branch would then bypass every other precondition of the lane (review of #5114, non-blocking 1).
+  test(`${file}: ${target} if: has NO top-level || (the gate expression cannot bypass the lane's other terms)`, () => {
+    const cond = jobIf(jobBlock(wf(file), target));
+    assert.equal(topLevelOrs(cond), 0, `top-level || in ${target} if: ${cond.slice(0, 240)}`);
+    // Positive control: the detector does see a top-level || (and ignores one inside parentheses).
+    assert.equal(topLevelOrs("${{ !cancelled() && inputs.x && a == 'b' || c != 'd' }}"), 1);
+    assert.equal(topLevelOrs("${{ !cancelled() && (a == 'b' || c != 'd') }}"), 0);
+    assert.equal(topLevelOrs("${{ a == '(x || y' }}"), 0, 'a || inside a string literal is not an operator');
   });
 
   test(`${file}: override_estate_pause is a boolean input defaulting to false`, () => {
@@ -83,6 +154,14 @@ test('full-app-deploy-commercial: the gate reads the state AFTER the build, just
   assert.match(jobIf(roll), /needs\.estate-gate\.outputs\.standdown != 'true'/);
   // The summary says "stood down", so a skipped roll never reads as a plain skip.
   assert.match(jobBlock(text, 'notify'), /STOOD DOWN: the estate is paused/);
+  assert.match(jobBlock(text, 'notify'), /STOOD DOWN: estate state could not be established on a scheduled run \(fail-closed\)/, 'a fail-closed stand-down must not be reported as "estate is paused"');
+});
+
+test('every workflow that calls the gate is in LANES (a new caller cannot skip the schedule rule)', () => {
+  const called = readdirSync(join(ROOT, '.github', 'workflows'))
+    .filter((f) => f.endsWith('.yml') && f !== 'estate-pause-gate.yml' && wf(f).includes('estate-pause-gate.yml'))
+    .sort();
+  assert.deepEqual(called, LANES.map(([f]) => f).sort(), 'a workflow calls estate-pause-gate.yml but is not covered by the lane tests');
 });
 
 test('commercial: a schedule cannot reach the override and whatif-only still runs', () => {
@@ -95,6 +174,22 @@ test('gcch: a scheduled run never calls the gate (it never applies) and the stan
   const text = wf('deploy-fiab-gcch.yml');
   assert.ok(jobIf(jobBlock(text, 'estate-gate')).includes("github.event_name != 'schedule'"));
   assert.match(jobBlock(text, 'deploy-validate'), /environment: gcc-high-deploy/, 'control: the approval environment is still on the job whose if: now stands down');
+});
+
+test('the gate workflow: fail-closed marker job exists only on a scheduled unreadable/failed gate and says so', () => {
+  const text = wf('estate-pause-gate.yml');
+  const u = jobBlock(text, 'stood-down-unknown');
+  const cond = jobIf(u);
+  // Breaks if `always()` is dropped (a failed/timed-out gate would skip the marker job: silent stand-down).
+  assert.ok(cond.includes('always()'), 'must run after a FAILED gate job');
+  assert.ok(cond.includes("github.event_name == 'schedule'"), 'must exist only on a scheduled run (a dispatch proceeds)');
+  assert.ok(cond.includes("needs.gate.result != 'success'"), 'must fire when the gate job failed/timed out (no outputs)');
+  assert.ok(cond.includes("needs.gate.outputs.state == 'UNKNOWN'"), 'must fire when the script read UNKNOWN');
+  assert.match(u, /name: Stood down - estate state unknown/);
+  assert.match(u, /Stood down: estate state could not be established on a scheduled run \(fail-closed\)/);
+  // The paused marker must NOT also claim "estate paused" for an UNKNOWN stand-down.
+  assert.ok(jobIf(jobBlock(text, 'stood-down')).includes("needs.gate.outputs.state != 'UNKNOWN'"), 'an UNKNOWN stand-down must not be reported as a paused estate');
+  assert.ok(!/continue-on-error|\|\| true|2>\/dev\/null/.test(u));
 });
 
 test('the gate workflow: fail-open, marker job only on standdown, no result-discarding', () => {

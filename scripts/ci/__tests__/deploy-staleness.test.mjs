@@ -45,6 +45,7 @@ import {
   pickLastRealSuccess,
   isStoodDownJobs,
   STOOD_DOWN_JOB_MARKER,
+  STOOD_DOWN_UNKNOWN_JOB_MARKER,
   DAY_MS,
   DRY_RUN_MARKER,
   ESTATES,
@@ -207,6 +208,16 @@ test('isStoodDownJobs: only a SUCCESSFUL marker job counts, named exactly by the
   // The marker string is what estate-pause-gate.yml's job is named; drift here silently disarms the filter.
   const gate = readFileSync(join(import.meta.dirname, '..', '..', '..', '.github', 'workflows', 'estate-pause-gate.yml'), 'utf8');
   assert.ok(gate.includes(`name: ${STOOD_DOWN_JOB_MARKER}`), 'estate-pause-gate.yml must name its stood-down job with the marker');
+});
+
+test('isStoodDownJobs: a fail-closed (estate state unknown) stand-down is NOT a deployed SHA either', () => {
+  // Breaks if the unknown marker is dropped from isStoodDownJobs: a scheduled run that read UNKNOWN
+  // concludes `success` having deployed nothing and would be counted as a deploy.
+  const marker = `estate-gate / ${STOOD_DOWN_UNKNOWN_JOB_MARKER} (nothing deployed)`;
+  assert.equal(isStoodDownJobs([{ name: marker, conclusion: 'success' }]), true);
+  assert.equal(isStoodDownJobs([{ name: marker, conclusion: 'skipped' }]), false, 'skipped marker = the lane did not stand down');
+  const gate = readFileSync(join(import.meta.dirname, '..', '..', '..', '.github', 'workflows', 'estate-pause-gate.yml'), 'utf8');
+  assert.ok(gate.includes(`name: ${STOOD_DOWN_UNKNOWN_JOB_MARKER}`), 'estate-pause-gate.yml must name its fail-closed job with the marker');
 });
 
 test('an empty run history is null (feeds the never-ran branch)', () => {

@@ -92,8 +92,11 @@ Typed in `apps/fiab-console/lib/estate/estate-power-contract.ts`.
 The deploy lanes are a second reader of the `state` call above. `estate-pause-gate.yml`
 runs `scripts/ci/estate-pause-state.mjs`, which POSTs `{ action: 'state' }` as the deploy
 service principal and maps `state` to a decision: PAUSING / PAUSED stand the lane down;
-RUNNING / RESUMING / RESUME_FAILED proceed; anything unreadable is `UNKNOWN` and
-proceeds with a warning (fail-open, so a console fault cannot freeze deploys). Only a
+RUNNING / RESUMING / RESUME_FAILED proceed; anything unreadable is `UNKNOWN`. On a
+`schedule` run UNKNOWN, or a gate job that failed / timed out / was cancelled, **stands
+the lane down (fail-closed)**; on `workflow_dispatch` (and, unchanged, `push` /
+`workflow_run`) it proceeds with a warning (fail-open, so a console fault cannot freeze
+a manual deploy). Only a
 `workflow_dispatch` run with `override_estate_pause: true` can override a stand-down.
 See the [guide](../admin/estate-idle-auto-pause.md#deploy-lanes-stand-down-while-the-estate-is-paused-5111)
 for the per-lane list. Not yet verified live: no scheduled deploy has been observed
