@@ -137,7 +137,7 @@ defaults.
 
 | Item | Status | Branch | Model | Evidence | Updated |
 |---|---|---|---|---|---|
-| W00-measurement-spike | merged | docs/lhds-w0-7-decision | sonnet | `W00-measurement-spike.md` (W0-3 #5092/#5094; W0-1/2/4/5 DEV function proof #5107, pass bars deferred to W7 on operator Q2 2026-10-24; W0-6 #5093; W0-7 decision #THIS_PR) | 2026-10-24 |
+| W00-measurement-spike | merged | docs/lhds-w0-7-decision | sonnet | `W00-measurement-spike.md` (W0-3 #5092/#5094; W0-1/2/4/5 DEV function proof #5107, pass bars deferred to W7 on operator Q2 2026-10-24; W0-6 #5093; W0-7 decision #5118) | 2026-10-24 |
 | W01-control-plane-identity-stamp | todo | | sonnet | `W01-control-plane-identity-stamp.md` | 2026-10-22 |
 | W02-fhir-core | todo | | sonnet | `W02-fhir-core.md` | 2026-10-22 |
 | W03-dicom-core-dicomweb | todo | | sonnet | `W03-dicom-core-dicomweb.md` | 2026-10-22 |

@@ -71,4 +71,4 @@ Sonnet sessions ~6; one Opus decision session; Azure ~$4 k (Q2).
 | W0-4 | merged | feat/lhds-w0-dev-run | sonnet | DEV function proof #5107; pass bar deferred to W7 (operator 2026-10-24) | 2026-10-24 |
 | W0-5 | merged | feat/lhds-w0-dev-run | sonnet | DEV function proof #5107; pass bar deferred to W7 (operator 2026-10-24) | 2026-10-24 |
 | W0-6 | merged | feat/lhds-w0-no-cost | sonnet | #5093; all 7 facts measured at b192f05ea (W0-RECEIPT s7) | 2026-10-24 |
-| W0-7 | merged | docs/lhds-w0-7-decision | opus | #THIS_PR; W0-RECEIPT s8, ADR-001..004 status lines | 2026-10-24 |
+| W0-7 | merged | docs/lhds-w0-7-decision | opus | #5118; W0-RECEIPT s8, ADR-001..004 status lines | 2026-10-24 |
