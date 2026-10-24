@@ -1,11 +1,16 @@
 # LHDS W0 receipt — measurement and decision spike
 
-**Status: PARTIAL (2026-10-22).** The sandbox is now provisioned on a **DEV
-profile** ($750/month; see the Sandbox section) and smoke-tested in-cluster. No
-engine has been measured on it yet, so every sandbox cell below still reads "not
-measured". DEV numbers will prove function, not the pass bars, which need class
-S. **No ADR status line moves on this receipt.** W0-7, the decision pass, has not
-started.
+**Status: DECIDED on DEV evidence (2026-10-24, section 8).** The DEV runs of
+2026-10-23 (sections 1.3, 1.4, 2.4, 3.3, 5.5, 6.3) prove function, not the
+pass bars.
+
+- There was no class-S run. The operator decided Q2 on 2026-10-24 to "decide on
+  DEV evidence".
+- ADR-001..004 moved off `Proposed` on function proof in W0-7 (section 8).
+- Every throughput and latency pass bar DEV could not establish is carried to
+  W7 as unmeasured.
+- The class-S cells below (1.1, 2.2, 3.1, 5.1) still read "not measured" and
+  stay that way.
 
 - Plan: `W00-measurement-spike.md`. Branch `feat/lhds-w0-no-cost`, stacked on
   the PRD/PRP docs PR #5091. Integration facts were measured at `origin/main`
@@ -29,7 +34,7 @@ started.
 | W0-4 Egress | Scripts written. The report's exit codes were tested on fixtures. Capture not executed, because there is no cluster. | Section 5 |
 | W0-5 Synthea | Scripts written and smoke-run locally. Pool throughput and the 48 h cohort size not measured. | Section 6 |
 | W0-6 Loom integration | **Done.** All 7 facts measured at `b192f05ea`, each with `file:line`. | Section 7 |
-| W0-7 Decision | Not started. Needs W0-1..W0-5 sandbox numbers. | Section 8 |
+| W0-7 Decision | **Done (2026-10-24, on DEV evidence).** All four ADRs are Accepted on function proof: ADR-001 keeps HAPI, with the reversal bar crossed and the reversal not taken; ADR-002 uses a token refresher, else Fallback B. The unmeasured bars go to W7, with W3 and W2 gates. Issues #5116 and #5117. | Section 8 |
 
 ## Findings so far (all subject to the sandbox run)
 
@@ -1265,9 +1270,6 @@ bars carried into W7".
 
 ### 8.4 Follow-ups this pass did not do
 
-- **FHIR-store sizes need re-deriving.** `CAPACITY-MODEL.md` section 2 ("40 B x
-  4.5 KB", about 180 TB) and the class sizes and costs built on it still use
-  4.5 KB. They are outside this pass's file ownership, so they are not edited.
 - **IL5 `containerPlatform` question (7.5).** Already reflected in the W1-3
   row. Not reopened here.
 
