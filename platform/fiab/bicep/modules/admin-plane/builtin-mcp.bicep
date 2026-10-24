@@ -101,10 +101,14 @@ resource plan 'Microsoft.Web/serverfarms@2024-04-01' = {
   properties: { reserved: true } // Linux
 }
 
+// Estate Power (#5099 phase B): the console calls this MCP server synchronously on user
+// request paths (agent flows, MCP server list and test-connection), so it must stay up while
+// the estate is paused. It is on a Consumption (Y1) plan today, where a stop is already a
+// disclosed no-op, but the exemption must not depend on the plan staying Y1. Tag only.
 resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
   name: functionAppName
   location: location
-  tags: complianceTags
+  tags: union(complianceTags, { 'loom-estate-pause': 'exempt' })
   kind: 'functionapp,linux'
   identity: { type: 'SystemAssigned' }
   properties: {

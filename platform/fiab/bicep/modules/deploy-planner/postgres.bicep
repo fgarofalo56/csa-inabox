@@ -49,10 +49,17 @@ param privateEndpointsEnabled bool = false
 
 var effectivePublicNetworkAccess = privateEndpointsEnabled ? 'Disabled' : 'Enabled'
 
+// Estate Power (#5099 phase B): the apps that connect to this server. The deploy-planner
+// Postgres is bound by the Console (LOOM_POSTGRES_HOST, Entra token as the console UAMI)
+// and is not wired to any other app, so its only consumer is the Console, which is never
+// paused: the server is never stopped by default. Tag only; no behavioural change.
+@description('Estate Power consumers tag (loom-estate-pause-consumers): comma-separated Container App names that use this server. Absent/empty means "consumers unknown" and the server is never stopped; the literal value none certifies no running app uses it.')
+param estatePauseConsumers string = 'loom-console'
+
 resource pg 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
   name: serverName
   location: location
-  tags: complianceTags
+  tags: union(complianceTags, { 'loom-estate-pause-consumers': estatePauseConsumers })
   sku: {
     name: skuName
     tier: tier

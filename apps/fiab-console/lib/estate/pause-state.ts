@@ -422,6 +422,14 @@ export interface PausedResourceSnapshot {
    * these back. Optional and additive, like `scale`.
    */
   children?: EstateComputeChild[];
+  /**
+   * PostgreSQL / MySQL flexible servers (#5099 phase B): the lower-cased consumer
+   * app names the dependency guard judged at pause time (from the
+   * `loom-estate-pause-consumers` tag). The re-stop of a server Azure auto-restarted
+   * while the estate is PAUSED checks that none of these is running again.
+   * Optional and additive, like `scale`.
+   */
+  consumers?: string[];
   /** R-CAP-1 — used only when the original SKU is unavailable on resume. */
   fallbackSku?: EstateFallbackSku;
 
@@ -744,6 +752,7 @@ export function capturePrePauseState(args: {
   replicaCount?: number;
   scale?: EstateScaleSnapshot;
   children?: EstateComputeChild[];
+  consumers?: string[];
   fallbackSku?: EstateFallbackSku;
   ownership: LoomOwnershipEvidence;
 }): PausedResourceSnapshot {
@@ -787,6 +796,7 @@ export function capturePrePauseState(args: {
     ...(typeof args.replicaCount === 'number' ? { replicaCount: args.replicaCount } : {}),
     ...(args.scale ? { scale: args.scale } : {}),
     ...(args.children ? { children: args.children } : {}),
+    ...(args.consumers && args.consumers.length ? { consumers: args.consumers } : {}),
     ...(args.fallbackSku ? { fallbackSku: args.fallbackSku } : {}),
     ownership: args.ownership,
   };

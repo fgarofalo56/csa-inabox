@@ -88,10 +88,14 @@ var baseAppSettings = [
   { name: 'SCC_CONNECTION_URI', value: sccConnectionUri }
 ]
 
+// Estate Power (#5099 phase B): the console proxies sensitivity-label CRUD here
+// synchronously (with a Functions host key), so it must stay up while the estate is
+// paused. Y1 today (a stop is a disclosed no-op); the exemption must not depend on that.
+// Tag only; no behavioural change to the deployment.
 resource site 'Microsoft.Web/sites@2024-04-01' = {
   name: siteName
   location: location
-  tags: complianceTags
+  tags: union(complianceTags, { 'loom-estate-pause': 'exempt' })
   kind: 'functionapp'
   identity: { type: 'SystemAssigned' }
   properties: {

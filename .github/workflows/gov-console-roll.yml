@@ -471,8 +471,10 @@ jobs:
             exit 1
           fi
           echo "::notice::loom-console:$SHA verified present on $ACR -> $DIGEST"
-          q=$(az acr agentpool show -r "$ACR" -n "$POOL" --queue-count -o tsv 2>/dev/null | tr -d '\r' || echo 1)
-          [ "${q:-1}" = "0" ] && az acr agentpool update -r "$ACR" -n "$POOL" --count 0 --no-wait -o none || true
+          # The pool scale-down is no longer an inline best-effort line here: a
+          # `... && update --no-wait || true` swallowed every failure and never ran
+          # on a cancelled or early-exit run. It is the verified, if: always()
+          # step "Release the ACR build pool" below.
           # NOTE (SC1): the ACR re-lock moved to a dedicated `if: always()` step
           # below so (a) the supply-chain gate can pull the image + push the
           # signature while the data plane is still open, and (b) a failed
@@ -851,3 +853,21 @@ jobs:
           set -euo pipefail
           node .github/scripts/deploy-notify-failure.mjs \
             --workflow gov-console-roll --result "${{ job.status }}"
+
+      # Verified pool release. Runs on success, failure, cancel and timeout, and
+      # keys on the build step having executed (an unrun step has an EMPTY
+      # conclusion, so a staleness-gate refusal before the Azure login never
+      # reaches this). Waits up to 5 min for the queue to drain, scales to 0,
+      # READS THE COUNT BACK and exits 1 if it is not 0 - no `|| true`, no
+      # `--no-wait`. It leaves a pool alone while another run is queued/active on
+      # it and says so; acr-agentpool-reaper.yml collects it once idle.
+      # 2026-10-23: a leaked/held S3 pool consumes standardDDSv5Family cores in
+      # usgovvirginia (limit 100), which is what failed the roll's scale-up.
+      - name: Release the ACR build pool (verified)
+        if: always() && (steps.build.conclusion == 'success' || steps.build.conclusion == 'failure' || steps.build.conclusion == 'cancelled')
+        env:
+          POOL_INPUT: ${{ inputs.agent_pool_name }}
+        run: |
+          set -euo pipefail
+          node scripts/ci/acr-build-pool.mjs release --acr "$ACR" \
+            --pool "${POOL_INPUT:-loombuild2}" --wait-seconds 300

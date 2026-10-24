@@ -89,14 +89,15 @@ import {
 } from './pause-inventory';
 import { assertNoFalseGreen } from './capacity-preflight';
 import { holdStateForThrottle, throttledDetail, throttleHoldReason } from './pause-throttle';
-import { containerAppPauseGuard } from './pause-guards';
+import { dbActGuard, guardedTierType, isDbTierType, tierPauseGuard } from './pause-guards';
+import { applySetGuards, type OutOfTierRow } from './pause-set-guards';
 import { ESTATE_PAUSE_TIER, OUT_OF_TIER_REASONS, TYPICAL_RESUME_SECONDS, orderForResume, resumeRank } from './pause-tier';
 
 // Re-exported with `export ... from` (not `import {X}; export {X}`): istanbul coverage
 // instrumentation leaves the latter form undefined at first read (CI shards run with it).
 export { ESTATE_PAUSE_TIER, OUT_OF_TIER_REASONS, TYPICAL_RESUME_SECONDS, orderForResume, resumeRank } from './pause-tier';
 
-export { containerAppPauseGuard } from './pause-guards';
+export { containerAppPauseGuard, aksPauseGuard } from './pause-guards';
 import type {
   ActuatorResult,
   EstateActuator,
@@ -132,7 +133,7 @@ export interface EstatePlan {
   inventory: PauseInventory;
   dryRun: DryRunResult;
   /** Loom-owned + pausable, but held out of THIS tier, with the reason. */
-  outOfTier: Array<{ resourceId: string; name: string; resourceType: string; reason: string }>;
+  outOfTier: OutOfTierRow[];
   /**
    * THE POPULATION REPORT. What the ownership resolver actually found, and by
    * which evidence.
@@ -264,6 +265,8 @@ export function planPause(
     namedByDeploy?: number;
     /** This process's own Container App name; defaults to CONTAINER_APP_NAME. */
     selfAppName?: string;
+    /** Resources held out by an async guard (App Gateway backend read): lower-cased id -> reason. */
+    holds?: ReadonlyMap<string, string>;
   },
 ): EstatePlan {
   const full = buildPauseInventory(discovered, ctx);
@@ -273,20 +276,11 @@ export function planPause(
   for (const c of full.pausable) {
     const type = c.resource.resourceType.toLowerCase();
     if (ESTATE_PAUSE_TIER.includes(type)) {
-      if (type === 'microsoft.app/containerapps') {
-        const guard = containerAppPauseGuard(
-          { name: c.resource.name, tags: c.resource.tags },
-          ctx.selfAppName ?? process.env.CONTAINER_APP_NAME,
-        );
-        if (!guard.eligible) {
-          outOfTier.push({
-            resourceId: c.resource.resourceId,
-            name: c.resource.name,
-            resourceType: c.resource.resourceType,
-            reason: guard.reason,
-          });
-          continue;
-        }
+      // Container Apps and AKS clusters can host the console: per-resource guard (#5099).
+      const guard = tierPauseGuard(c.resource, ctx.selfAppName ?? process.env.CONTAINER_APP_NAME);
+      if (!guard.eligible) {
+        outOfTier.push({ resourceId: c.resource.resourceId, name: c.resource.name, resourceType: c.resource.resourceType, reason: guard.reason });
+        continue;
       }
       inTier.push(c);
       continue;
@@ -301,6 +295,8 @@ export function planPause(
     });
   }
 
+  // #5099 phase B: set-level guards (gateway holds; a database needs its consumers in the set).
+  inTier.splice(0, inTier.length, ...applySetGuards(inTier, outOfTier, ctx.holds));
   const inventory: PauseInventory = { ...full, pausable: inTier };
   const dryRun = dryRunPause(inventory);
 
@@ -527,24 +523,28 @@ export async function startPause(
       continue;
     }
 
-    // (1b) Container Apps only: the console must survive the pause. Re-check
-    //      identity against FRESH tags, so a tag added since the preview (an
-    //      exemption) is honoured and an unreadable tag set fails safe.
-    if (resource.resourceType.toLowerCase() === 'microsoft.app/containerapps') {
+    // (1b) Guarded types (the console's Container App / AKS / gateway; databases
+    //      with consumers): re-check against FRESH tags, so a tag added since the
+    //      preview (an exemption) is honoured and an unreadable tag set fails safe.
+    let consumers: string[] | undefined;
+    if (guardedTierType(resource.resourceType)) {
       let freshTags: Readonly<Record<string, string>> | null = null;
       try {
         freshTags = await actuator.readTags(resource.resourceId);
       } catch {
         freshTags = null;
       }
-      const guard = containerAppPauseGuard(
-        { name: resource.name, tags: freshTags },
+      const guard = tierPauseGuard(
+        { resourceType: resource.resourceType, name: resource.name, tags: freshTags },
         ctx.selfAppName ?? process.env.CONTAINER_APP_NAME,
       );
-      if (!guard.eligible) {
-        actions.push({ ...base, status: 'skipped', detail: guard.reason });
+      // A database is judged against what this run ACTUALLY did to its consumers (they pause first).
+      const dep = isDbTierType(resource.resourceType) ? dbActGuard({ name: resource.name, tags: freshTags }, actions) : null;
+      if (!guard.eligible || (dep && !dep.eligible)) {
+        actions.push({ ...base, status: 'skipped', detail: guard.eligible ? dep!.reason : guard.reason });
         continue;
       }
+      consumers = dep?.consumers;
     }
 
     // (2) Authoritative ARM power read. No reading -> no snapshot -> no pause.
@@ -578,6 +578,7 @@ export async function startPause(
       replicaCount: power.replicaCount,
       scale: power.scale,
       children: power.children,
+      consumers,
       fallbackSku: candidate.fallbackSku,
       ownership: recheck.ownership,
     });
@@ -598,13 +599,14 @@ export async function startPause(
 
     // (5) The mutation.
     const result = await actuator.pause(candidate, entry);
-    if (result.ok && result.noop) {
-      // The actuator established that stopping changes nothing. Un-record it:
-      // there is nothing to restore, and keeping it would leave the estate in
-      // PAUSING forever waiting for a state change that was never requested.
+    if (result.held || (result.ok && result.noop)) {
+      // The actuator established that stopping changes nothing (noop), or re-checked
+      // a guard at act time and held the resource out (held, reported 'skipped').
+      // Un-record it: there is nothing to restore, and keeping it would leave the
+      // estate in PAUSING forever waiting for a state change that was never requested.
       const at = snapshot.resources.indexOf(entry);
       if (at >= 0) snapshot.resources.splice(at, 1);
-      actions.push({ ...base, status: 'no-op', detail: result.detail });
+      actions.push({ ...base, status: result.held ? 'skipped' : 'no-op', detail: result.detail });
       continue;
     }
     dispatchedAny = dispatchedAny || result.ok;
