@@ -21,6 +21,10 @@ on:
         description: 'Decide and report, but scale nothing.'
         type: boolean
         default: true
+      prune_failed:
+        description: 'DELETE pools whose provisioning state is Failed AND count is 0 AND queue is 0, then read the pool list back to confirm they are gone (#5102 dead-pool cleanup). Dispatch only, never scheduled. Needs dry_run=false to delete; with dry_run=true it only reports what it would prune. Applies to both boundaries in the matrix.'
+        type: boolean
+        default: false
       idle_minutes:
         description: 'Minutes a pool must be idle (unmodified and unused) before it is reaped. Minimum 5.'
         type: string
@@ -113,6 +117,7 @@ jobs:
           BOUNDARY: ${{ matrix.boundary }}
           IN_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
           IDLE_MIN: ${{ inputs.idle_minutes || '30' }}
+          IN_PRUNE: ${{ github.event_name == 'workflow_dispatch' && inputs.prune_failed || false }}
         run: |
           set -uo pipefail
           if ! SUBS=$(az account list --query "[?state=='Enabled'].id" -o tsv 2>az-err.txt); then
@@ -131,6 +136,7 @@ jobs:
               found=$((found + 1))
               args=(--acr "$acr" --subscription "$sub" --idle-minutes "$IDLE_MIN")
               [[ "$IN_DRY_RUN" == "true" ]] && args+=(--dry-run)
+              [[ "$IN_PRUNE" == "true" ]] && args+=(--prune-failed)
               node scripts/ci/reap-acr-agent-pools.mjs "${args[@]}" || rc=1
               # Read-only. Runs AFTER the reap so a failing read can never stop a
               # scale-down, but its verdict is kept (rc=1): an unreadable consumer

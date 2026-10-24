@@ -74,6 +74,29 @@ export function decideReap(p, nowMs, idleMinutes) {
   };
 }
 
+/**
+ * #5102 — dead-pool prune (dispatch only, `--prune-failed`). A pool is DELETED
+ * only when all three are ESTABLISHED: provisioningState is Failed, count is 0,
+ * and its queue holds 0. An unreadable value yields `unknown`, which deletes
+ * nothing. Distinct from decideReap, which never mutates a Failed pool.
+ *
+ * @returns {{ action: 'prune'|'keep'|'unknown', reason: string }}
+ */
+export function decidePrune(p) {
+  if (p.count === null || p.count === undefined || !p.provisioningState) {
+    return { action: 'unknown', reason: 'its count or provisioning state could not be read' };
+  }
+  if (p.provisioningState !== 'Failed') {
+    return { action: 'keep', reason: `provisioningState is '${p.provisioningState}', not Failed` };
+  }
+  if (p.count !== 0) return { action: 'keep', reason: `Failed but count=${p.count}, not 0` };
+  if (p.queueCount === null || p.queueCount === undefined) {
+    return { action: 'unknown', reason: 'Failed at count 0 but its queue could not be read, so it is not proven empty' };
+  }
+  if (p.queueCount !== 0) return { action: 'keep', reason: `Failed at count 0 but ${p.queueCount} run(s) queued` };
+  return { action: 'prune', reason: 'Failed, count=0, queue=0' };
+}
+
 let SUBSCRIPTION = '';
 function az(args) {
   if (SUBSCRIPTION) args = [...args, '--subscription', SUBSCRIPTION];
@@ -87,6 +110,18 @@ function az(args) {
 }
 
 const ms = (iso) => (iso ? Date.parse(iso) : NaN);
+
+/**
+ * `az acr agentpool show --queue-count` result -> a finite count, or NaN when it is not ESTABLISHED.
+ * Number(null) and Number('') are both 0, so a null/empty read would otherwise become "queue empty"
+ * and let prune delete a pool whose queue was never read (review of #5110).
+ */
+export function parseQueueCount(queue) {
+  if (!queue || !queue.ok) return NaN;
+  const raw = queue.value !== null && typeof queue.value === 'object' ? queue.value.count : queue.value;
+  if (raw === null || raw === undefined || raw === '' || typeof raw === 'boolean') return NaN;
+  return Number(raw);
+}
 
 function readPool(acr, pool) {
   const show = az(['acr', 'agentpool', 'show', '-r', acr, '-n', pool.name]);
@@ -102,7 +137,7 @@ function readPool(acr, pool) {
   const mine = recent.ok ? (recent.value || []).filter((x) => x.agentPoolName === pool.name) : [];
   const finishes = mine.map((x) => ms(x.finishTime)).filter(Number.isFinite);
   const modified = show.ok ? ms(show.value?.systemData?.lastModifiedAt) : NaN;
-  const queueCount = queue.ok ? Number(queue.value?.count ?? queue.value) : NaN;
+  const queueCount = parseQueueCount(queue);
   return {
     name: pool.name,
     count: show.ok ? show.value?.count ?? null : null,
@@ -124,9 +159,10 @@ function main(argv) {
   const acr = arg('--acr');
   const idle = Number(arg('--idle-minutes') ?? 30);
   const dryRun = argv.includes('--dry-run');
+  const prune = argv.includes('--prune-failed');
   SUBSCRIPTION = arg('--subscription') ?? '';
   if (!acr || !Number.isFinite(idle) || idle < 5) {
-    console.error('usage: reap-acr-agent-pools.mjs --acr <name> [--idle-minutes >=5] [--dry-run]');
+    console.error('usage: reap-acr-agent-pools.mjs --acr <name> [--idle-minutes >=5] [--dry-run] [--prune-failed]');
     return 2;
   }
   const list = az(['acr', 'agentpool', 'list', '-r', acr]);
@@ -141,6 +177,29 @@ function main(argv) {
     const d = decideReap(p, Date.now(), idle);
     for (const e of p.readErrors) console.log(`::warning::${acr}/${p.name} read failed (${e}).`);
     let outcome = d.action;
+    const pr = prune ? decidePrune(p) : null;
+    if (pr && pr.action === 'prune') {
+      if (dryRun) {
+        outcome = 'would prune';
+      } else {
+        const del = az(['acr', 'agentpool', 'delete', '-r', acr, '-n', p.name, '--yes']);
+        const after = del.ok ? az(['acr', 'agentpool', 'list', '-r', acr]) : del;
+        const gone = after.ok && !(after.value || []).some((x) => x.name === p.name);
+        if (gone) {
+          outcome = 'pruned';
+          console.log(`::notice::${acr}/${p.name} deleted (${pr.reason}); read-back list no longer contains it.`);
+        } else {
+          outcome = 'prune FAILED';
+          failed += 1;
+          console.log(`::error::${acr}/${p.name} delete was NOT confirmed (${del.ok ? 'still listed after delete' : del.err}).`);
+        }
+      }
+      summary.push(`| ${p.name} | ${p.count ?? '?'} | ${outcome} | ${pr.reason} |`);
+      continue;
+    }
+    if (pr && pr.action === 'unknown') {
+      console.log(`::warning::${acr}/${p.name}: prune NOT attempted - ${pr.reason}.`);
+    }
     if (d.action === 'reap' && !dryRun) {
       const up = az(['acr', 'agentpool', 'update', '-r', acr, '-n', p.name, '--count', '0']);
       const back = up.ok ? az(['acr', 'agentpool', 'show', '-r', acr, '-n', p.name]) : up;
