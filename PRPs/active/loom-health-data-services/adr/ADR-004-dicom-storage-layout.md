@@ -1,6 +1,44 @@
 # ADR-004 — DICOM pixel data in Blob, metadata in PostgreSQL, DICOMweb front-end scaling and caching
 
-Status: Proposed. Date: 2026-10-22. Evidence: `../research/scale-evidence-va-ihs-dicom-pricing.md` (Blob limits, prices), `../research/oss-engine-evaluation.md` (dcm4chee storage descriptors), `../research/terminology-conformance-ops-facts.md` section C (immutability, object replication, HNS limitation).
+Status: **Accepted: pixel data in Azure Blob with CMK and private endpoint,
+metadata in PostgreSQL** (function proof, DEV 2026-10-23, Commercial only;
+W0-7 decision 2026-10-24 on the operator's Q2 ruling).
+- Carried to a W3 entry gate: the descriptor against a Gov Blob endpoint.
+- Unmeasured, carried to W7: Blob 503 onset and request rate at class M, and
+  the multi-account tenant-year sharding.
+- Pixel-path auth follows ADR-002: a bearer-token refresher, with Fallback B
+  if W3 cannot prove it.
+
+Measured values: W0 DEV, `../W0-RECEIPT.md` section 3.3, Commercial
+(centralus). Function proof, not class-M pass-bar evidence.
+- **Blob, CMK and private endpoint work end to end.**
+  - `encryption.keySource=Microsoft.Keyvault` against a Key Vault with public
+    access disabled.
+  - `publicNetworkAccess=Disabled`, with the private endpoint as the only
+    path.
+  - STOW and WADO returned 200 at every load step.
+- **No HTTP 503 up to 400 requested senders**: 7,750 of 7,750 direct 512 KiB
+  PUTs returned 201. Achieved concurrency was not measured, so the onset at
+  class M is unmeasured and goes to W7.
+- **Auth constraint**:
+  - Shared key is policy-disabled in a regulated-shaped tenant.
+  - jclouds 2.7.0 shows no managed-identity flow.
+  - The descriptor works only with a static Entra bearer token: 89 minutes, no
+    refresh.
+  - Decision: see ADR-002 (refresher, else Fallback B).
+- **LDAP dumps carry the descriptor `credential` in clear text** (s3.3). Under
+  the refresher this is a short-lived bearer token, not a storage key. Dumps
+  stay out of the repo, and LDAP admin is a privileged role (W3 input).
+- **Not measured**:
+  - The Gov endpoint (`*.blob.core.usgovcloudapi.net`), a W3 entry gate run
+    through Actions.
+  - Flat namespace versus HNS on the DEV account.
+  - Per-tenant-year descriptor rotation.
+  - Object replication.
+  - Valkey caching.
+  - Archive rehydration.
+
+Date: 2026-10-22 (decision 2026-10-24). Evidence: `../research/scale-evidence-va-ihs-dicom-pricing.md` (Blob limits, prices), `../research/oss-engine-evaluation.md` (dcm4chee storage descriptors), `../research/terminology-conformance-ops-facts.md` section C (immutability, object replication, HNS limitation).
 
 ## Decision
 - **Pixel data**: Azure Blob Storage, **flat namespace** (not ADLS Gen2 HNS, so

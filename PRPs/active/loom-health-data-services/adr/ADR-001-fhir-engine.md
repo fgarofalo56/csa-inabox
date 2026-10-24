@@ -1,7 +1,44 @@
 # ADR-001 — FHIR protocol engine: HAPI FHIR JPA (primary), Medplum (fallback)
 
-Status: **Proposed** (fixed by the W0 receipt; the operator may override via D1).
-Date: 2026-10-22. Evidence: `../research/oss-engine-evaluation.md` (retrieved 2026-10-22).
+Status: **Accepted: HAPI FHIR JPA retained** (function proof, DEV 2026-10-23;
+W0-7 decision 2026-10-24 on the operator's Q2 ruling "decide on DEV evidence").
+The bytes/resource reversal bar was **crossed on DEV by both engines**, and the
+reversal to Medplum was **not taken**; the reason is below. Pass bars still
+unmeasured go to W7: search p95 at 1 M patients on class M, and bytes/resource
+at 1 M patients. Inferno US Core and the CVE-process review go to W2. The
+operator may still override via D1.
+Date: 2026-10-22 (decision 2026-10-24). Evidence: `../research/oss-engine-evaluation.md`
+(retrieved 2026-10-22); `../W0-RECEIPT.md` sections 1.3, 1.4, 2.4, 5.5, 8.
+
+Measured values (W0 DEV: 1x D8s_v5, PostgreSQL D2ds_v5, 92,551 Synthea
+resources, HAPI 8.12.0 vs Medplum 5.2.7. Function proof, not class-M pass-bar
+evidence):
+- **Bytes per resource, net: HAPI 9,952.7 B, Medplum 7,705.3 B** (receipt
+  s1.3). Both are above the 6 KB (6,144 B) bar. This is 92 k resources, not
+  1 M patients. The receipt notes that the local smoke gave 9,903 / 7,854 B on a
+  different cohort, so the size tracks the data shape more than the host.
+  - **What the bar says**: crossing it reverses the decision, and Medplum
+    becomes primary.
+  - **Why the reversal is not taken**: the fallback fails the same bar (7,705 B
+    > 6,144 B), so swapping engines does not bring storage under 6 KB.
+  - **Medplum also fails correctness.** It does not roll back a failed
+    `transaction` bundle (receipt s1.4). On 3 of 3 bad bundles it returned
+    HTTP 200 with the bad entry at 400 and kept the 5 valid entries. FHIR
+    requires a `transaction` to succeed or fail as a whole. HAPI rejected the
+    two bundles it validates with 404 or 400 and kept nothing.
+  - **Medplum also called two non-Azure hosts** in its egress window:
+    `meta.medplum.com` and `api.pwnedpasswords.com` (s5.5). HAPI made 0 such
+    calls in a 31-minute idle window. That is not the 24 h capture, which
+    stays unmeasured.
+  - **Consequence**: the bar's purpose, the capacity assumption, moves instead
+    (`../CAPACITY-MODEL.md` s1.3 is re-based to about 10 KB). Medplum stays
+    only as a buildable fallback. It cannot become primary while its
+    transactions are not atomic.
+- Search p95, ADR-008 patterns: worst p95 is HAPI 59.6 ms and Medplum 19.9 ms
+  at 92 k resources (s2.4). This is **not** a bar result: the bar is 1 s at
+  1 M patients on class M, which is **unmeasured** and goes to W7.
+- **Not measured, carried forward**: the CVE-process criterion and an Inferno
+  US Core run (s1.3 "What was not done"). Both go to W2.
 
 ## Context
 Loom owns the platform (auth, tenancy, storage, scale, ops, UI); the FHIR

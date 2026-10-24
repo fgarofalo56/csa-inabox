@@ -1,7 +1,61 @@
 # ADR-002 — DICOM engine: dcm4chee-arc-light (primary); fallback Orthanc (isolated) or a Loom DICOMweb-on-Blob service
 
-Status: **Proposed** (fixed by the W0 receipt; operator override via D2).
-Date: 2026-10-22. Evidence: `../research/oss-engine-evaluation.md`.
+Status: **Accepted: dcm4chee-arc-light on Azure Blob, with a Loom-owned
+bearer-token refresher** (function proof, DEV 2026-10-23; W0-7 decision
+2026-10-24 on the operator's Q2 ruling). If W3 cannot prove the refresher,
+**Fallback B** (a Loom-built DICOMweb-on-Blob service) is taken, not Orthanc.
+- Pass bars unmeasured, carried to W7: STOW p95 at 100 senders on class M.
+- Carried to a W3 entry gate: the Blob descriptor against a Gov endpoint.
+- Operator override via D2.
+
+Date: 2026-10-22 (decision 2026-10-24). Evidence: `../research/oss-engine-evaluation.md`;
+`../W0-RECEIPT.md` sections 3.3, 5.5 and 8.
+
+Measured values: W0 DEV, dcm4chee-arc-light 5.35.2, jclouds 2.7.0, 1x D8s_v5
+with the driver on the same node, PostgreSQL D2ds_v5, Commercial (centralus)
+only. Function proof, not class-M pass-bar evidence.
+- **STOW p95 at 100 senders: 1,041 ms against the 300 ms bar** (s3.3). The
+  receipt says this is not a bar result (wrong profile, shared node, small
+  database) and is not evidence that class M fails it either. It is
+  **unmeasured** and goes to W7.
+- Other saturation points on DEV (s3.3), to triage before the class-M run:
+  - QIDO saturates between 100 and 150 senders, with JDBC pool exhaustion
+    (`IJ000453`).
+  - About 2,000 duplicate-key errors appear under concurrent STOW into the
+    same study, while every STOW still returned 200.
+- **Blob descriptor with CMK and a private endpoint: works** (s3.3). The
+  `jclouds:azureblob` descriptor was accepted. CMK was on, and the private
+  endpoint was the only path.
+- **Blob descriptor against a Gov endpoint: not measured.** This becomes a W3
+  entry gate (a GitHub Actions run).
+- **Auth, the operability finding** (s3.3):
+  - Shared key is refused by tenant policy, and jclouds 2.7.0 has no SAS mode.
+  - jclouds shows no managed-identity flow (static evidence).
+  - The only working mode was `azureAd` with a **static bearer token**: an
+    89-minute lifetime and no refresh.
+  - Decision per the Fallback text above: **a refresher sidecar/CronJob** that
+    rewrites the descriptor's `credential` property before expiry. That keeps
+    the storage-descriptor layer Loom-owned, as the Decision section already
+    says, at a fraction of Fallback B's build cost.
+  - A service-principal secret is rejected because it is a long-lived secret.
+  - Orthanc is not the fallback: its Azure Blob plugin is under paid support,
+    and the Q3 default is "AGPL no".
+  - **Kill criterion for W3**: it is not established that the archive picks up
+    a rewritten credential without a restart. The DEV runs restarted the
+    archive after descriptor changes (s3.3 on the switch back to PVC, s5.5
+    phase B), so hot pickup was never tested.
+  - W3 must show at least two token expiries under STOW load with zero failed
+    STOWs, and no restart or only a bounded reload. If it cannot, Fallback B
+    is taken.
+- **LDAP/WildFly as an AKS workload: met on DEV** (s3.3).
+  - `slapcat` backup gave 1,595 entries and restored 1,595.
+  - A StatefulSet restart had rootDSE answering in 12.2 s.
+  - The first STOW returned 200 at 13.6 s with no manual step.
+  - Caveat: the `restored != dumped` check was never mutation-tested.
+- No-calls-home: dcm4chee and slapd made 0 non-Azure calls in a 30-minute idle
+  window (s5.5). The 24 h capture is unmeasured.
+- Licence (D2/Q3): not measured. Q3 is unanswered, so its default applies:
+  "MPL/LGPL yes, AGPL no".
 
 ## Context
 Imaging is the largest volume (~1 PB/yr stored for all VA, `../CAPACITY-MODEL.md`).

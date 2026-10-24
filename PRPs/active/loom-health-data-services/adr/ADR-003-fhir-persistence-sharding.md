@@ -1,7 +1,42 @@
 # ADR-003 — FHIR persistence, per-tenant databases, partitioning, versioning, conditional ops, referential integrity, reindex
 
-Status: Proposed. Date: 2026-10-22. Evidence: `../research/oss-engine-evaluation.md`,
-`../research/azure-gov-availability.md`, `../research/scale-evidence-va-ihs-dicom-pricing.md`.
+Status: **Accepted: option 1, relational PostgreSQL with one database per
+tenant** (function proof, DEV 2026-10-23; W0-7 decision 2026-10-24 on the
+operator's Q2 ruling).
+- Unmeasured, carried to W7: index-to-JSON disk ratio at 1 M patients, read
+  replica routing, partition mode, and 20 TB restore time.
+- The Gov region is corrected by W0-3.
+
+Date: 2026-10-22 (decision 2026-10-24). Evidence: `../research/oss-engine-evaluation.md`,
+`../research/azure-gov-availability.md`, `../research/scale-evidence-va-ihs-dicom-pricing.md`,
+`../W0-RECEIPT.md` sections 1.3, 4.1, 4.1b and 8.
+
+Measured values: W0 DEV on 1x D8s_v5 and PostgreSQL 16 D2ds_v5. Function
+proof, not class-M pass-bar evidence.
+- **One database per engine on one Flexible Server works** for HAPI, Medplum
+  and dcm4chee (`hapi`, `medplum`, `dcm4chee`, `sslmode=require`, private
+  access; Sandbox section and s1.3). Per-tenant roles and partition mode were
+  **not** exercised. HAPI ran with default config.
+- **HAPI disk per resource: 9,952.7 B net** (s1.3), including index tables.
+  - The Consequences line assumed 3x, about 4.5 KB. The absolute figure is
+    about 2.2x that.
+  - The raw-JSON-to-disk ratio itself was not measured.
+  - The 20 TB working-set cap now holds about 2 B resources per tenant
+    database, not about 4.4 B (20 TB / 9.95 KB vs / 4.5 KB). That is derived,
+    not measured.
+- **Azure Flexible Server needs `azure.extensions` set for Medplum**
+  (`btree_gin`, `pg_trgm`, `btree_gist`, `unaccent`; s1.3 obs 3). HAPI needed
+  none. This is a W1 preflight item.
+- **Gov, measured by W0-3** (s4.1, s4.1b):
+  - usgovvirginia offers **0 SKUs** to this subscription (`OfferRestricted`).
+  - usgovarizona offers 31 SKUs with zone-redundant HA, so the Gov primary is
+    usgovarizona, paired with usgovtexas.
+  - E-series is v3/v4 only, not v5.
+  - No SSD v2 was seen, so plan on Premium SSD.
+  - Geo-redundant backup outside Virginia was not measured.
+- **Unmeasured, carried to W7**: read-replica routing of searches and exports
+  ("verified in W0" in the Decision was not verified), partition mode at
+  1 M patients, `$reindex` duration, and restore time against the 20 TB cap.
 
 ## Context
 Need a FHIR store that scales to ~40 B resources across an estate, isolates

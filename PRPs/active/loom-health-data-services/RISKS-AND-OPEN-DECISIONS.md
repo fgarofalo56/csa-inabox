@@ -40,7 +40,7 @@ before the wave that depends on it starts. Nothing here blocks W0.
 | # | Question | Why it matters | Default if unanswered |
 |---|---|---|---|
 | Q1 | Which Gov subscription/tenant hosts the LHDS GCC-High stamp, and does it have PostgreSQL E-series + SSD v2 quota in US Gov Virginia? | W0 availability closure and W1 bicep | W0 reports the quota probe result; no stamp until answered |
-| Q2 | Budget ceiling for W0 (engine load tests at the 1 M cohort in Commercial, ~1 class-M stamp for ~2 weeks, order of $12-15 k) and for the first Gov stamp | Cost rules in `MASTER-INDEX.md` | W0 runs at class S (~$4 k) and extrapolates, disclosed |
+| Q2 | Budget ceiling for W0 (engine load tests at the 1 M cohort in Commercial, ~1 class-M stamp for ~2 weeks, order of $12-15 k) and for the first Gov stamp | Cost rules in `MASTER-INDEX.md` | **Resolved 2026-10-24 (operator): decide on DEV evidence.** W0-7 ran on the DEV receipts (#5107) with no class-S spend ($0 Azure). ADRs move off Proposed on function proof, and every throughput or latency pass bar DEV could not establish is carried to W7's class-M receipts (`W0-RECEIPT.md` s8) |
 | Q3 | Licence posture: is MPL/LGPL use of dcm4chee acceptable for the public csa-inabox repo, and is AGPL (Orthanc plugins) acceptable as an isolated service? | D2 | MPL/LGPL yes, AGPL no |
 | Q4 | Will Loom become a SNOMED affiliate (sub-licence tracking obligations)? | D8 | No |
 | Q5 | Are VA/IHS agency partners available to validate the VistA/RPMS adapter specs and provide HL7 v2 samples? | D10 | Specs marked unverified |

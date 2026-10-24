@@ -39,15 +39,15 @@ Nothing here is a measurement of LHDS; W0 and W7 produce the first measurements.
 
 | Factor | Value | Basis |
 |---|---|---|
-| FHIR resources per synthetic lifetime patient | 1,123 (112.3 M resources / 100 k patients) | arXiv 2607.23619 (Synthea 100 k cohort) — CITED |
-| Bundle size per Synthea patient | ~178 KB gzipped (17.8 GB / 100 k) | same |
-| **ASSUMPTION** average stored FHIR resource JSON | 1.5 KB raw; 4.5 KB on disk including engine indexes and history (3x; HAPI's index tables typically dominate — W0 measures the real ratio per engine) | — |
-| **ASSUMPTION** resources per outpatient visit / inpatient stay | 60 / 500 (encounter, conditions, observations incl. vitals and labs, medications, procedures, documents, claims) | to be replaced by W5 converter measurements on VistA-shaped feeds |
-| **ASSUMPTION** reads per write | 20 (clinician workflows, apps, population queries) | AHDS publishes no RPS; W0 load mix |
-| **ASSUMPTION** peak-to-average | 5x (business hours, Monday peaks) | — |
-| DICOM study size, typical | CR/DX 15 MB; CT 500 MB (cardiac CT up to 3 GB); MR 400 MB; US 50-200 MB; DBT 1.5 GB; PET-CT 2 GB; WSI ~15 GB raw / ~300 MB JPEG 2000 | research file section C (vendor planning guides, not peer-reviewed) |
-| Lossless compression | JPEG 2000 1.5-3:1 by modality; HTJ2K ~ JPEG-LS ~2.6-2.7:1 | research file |
-| **ASSUMPTION** VA modality-weighted average study size | 200 MB raw, 100 MB stored (compressed) | mix dominated by CR/DX count, CT/MR bytes |
+| FHIR resources per synthetic lifetime patient | 1,123 (112.3 M resources / 100 k patients) | arXiv 2607.23619 (Synthea 100 k cohort) — CITED. **W0 DEV observed** about 1,490 per patient bundle (Synthea v4.0.0, 10-year history, 1,129 bundles; `W0-RECEIPT.md` s6.3). Different generator settings, so the cited value is kept |
+| Bundle size per Synthea patient | ~178 KB gzipped (17.8 GB / 100 k) | same. W0 DEV: not measured gzipped (s6.3 records 4.0 GB uncompressed for 1,131 files) |
+| **DEV-MEASURED (on disk) / ASSUMPTION (raw)** average stored FHIR resource | 1.5 KB raw (ASSUMPTION, not measured); **about 10 KB on disk for HAPI** (W0 DEV: HAPI 9,952.7 B, Medplum 7,705.3 B net per resource, indexes included; 92,551 Synthea resources, not 1 M patients). Replaces the 4.5 KB assumption (W0-7 decision 2026-10-24) | **DEV**, `W0-RECEIPT.md` s1.3. The class-M value at 1 M patients is unmeasured and goes to W7. Section 2's "40 B x 4.5 KB" row, and every FHIR-store size built on it, still uses 4.5 KB. Those sizes understate FHIR storage by about 2.2x until they are re-derived (follow-up) |
+| **ASSUMPTION** resources per outpatient visit / inpatient stay | 60 / 500 (encounter, conditions, observations incl. vitals and labs, medications, procedures, documents, claims) | to be replaced by W5 converter measurements on VistA-shaped feeds. W0 DEV: not measured |
+| **ASSUMPTION** reads per write | 20 (clinician workflows, apps, population queries) | AHDS publishes no RPS. W0 DEV: not measured. The L1 mix used 5 % writes as an *input* (`W0-RECEIPT.md` s2.1), so it does not measure this ratio. Goes to W7 |
+| **ASSUMPTION** peak-to-average | 5x (business hours, Monday peaks) | W0 DEV: not measured |
+| DICOM study size, typical | CR/DX 15 MB; CT 500 MB (cardiac CT up to 3 GB); MR 400 MB; US 50-200 MB; DBT 1.5 GB; PET-CT 2 GB; WSI ~15 GB raw / ~300 MB JPEG 2000 | research file section C (vendor planning guides, not peer-reviewed). W0 DEV: not measured, because it used synthetic 512 KiB CT instances |
+| Lossless compression | JPEG 2000 1.5-3:1 by modality; HTJ2K ~ JPEG-LS ~2.6-2.7:1 | research file. W0 DEV: not measured |
+| **ASSUMPTION** VA modality-weighted average study size | 200 MB raw, 100 MB stored (compressed) | mix dominated by CR/DX count, CT/MR bytes. W0 DEV: not measured |
 
 ## 2. Steady-state volumes — all VA
 
