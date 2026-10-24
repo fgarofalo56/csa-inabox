@@ -97,6 +97,10 @@ on:
         description: 'topology=tenant only: bypass the "hub already exists in target sub" guard to idempotently reconcile/retry an existing or partially-deployed GCC hub. Does NOT stamp a second Console — the incremental deploy reconciles the existing admin RG. Leave false for first-run installs. (Cloud parity: commercial and gcch have carried this; gcc did not, because its guard could not fail in the first place.)'
         type: boolean
         default: false
+      override_estate_pause:
+        description: 'Deploy even though the estate is PAUSED (Estate Power). Default false: while the estate is PAUSING/PAUSED a scheduled or run_mode=full run STANDS DOWN (nothing deployed) because the apply would wake paused resources (#5111). true = you accept that. A scheduled run can never override.'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -146,10 +150,25 @@ jobs:
             echo "configured=true" >> $GITHUB_OUTPUT
           fi
 
-  deploy-validate:
-    name: Deploy + validate CSA Loom in GCC
+  # ESTATE STAND-DOWN (PRP-02 step 6, #5111). Supported-in-code, never exercised
+  # (this lane is disabled and no GCC tenant exists - cloud-parity.md). The GCC
+  # console URL/audience variables (CSA_LOOM_GCC_CONSOLE_*) do not exist yet, so
+  # today the state reads UNKNOWN and the lane proceeds with a ::warning::.
+  estate-gate:
+    name: Estate pause gate
     needs: precheck
     if: needs.precheck.outputs.configured == 'true'
+    uses: ./.github/workflows/estate-pause-gate.yml
+    secrets: inherit
+    with:
+      boundary: GCC
+      override_estate_pause: ${{ inputs.override_estate_pause == true }}
+
+  deploy-validate:
+    name: Deploy + validate CSA Loom in GCC
+    needs: [precheck, estate-gate]
+    # Fail-open on an unrun/failed gate; whatif-only applies nothing.
+    if: ${{ !cancelled() && needs.precheck.outputs.configured == 'true' && (needs.estate-gate.outputs.standdown != 'true' || (github.event_name == 'workflow_dispatch' && inputs.run_mode != 'full')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     # Coordinates exported for the chained Gov post-deploy bootstrap (rel-T32).

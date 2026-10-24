@@ -66,6 +66,10 @@ on:
         description: 'topology=tenant only: bypass the "hub already exists in target sub" guard to idempotently reconcile/retry an existing or partially-deployed Gov hub. Does NOT stamp a second Console — the incremental deploy reconciles the existing admin RG. Leave false for first-run installs. (Cloud parity: deploy-fiab-commercial.yml has had this since audit-t157; the Gov lanes did not, so once a Gov hub existed this workflow could never succeed again.)'
         type: boolean
         default: false
+      override_estate_pause:
+        description: 'Deploy even though the estate is PAUSED (Estate Power). Default false: while the estate is PAUSING/PAUSED a run_mode=full dispatch STANDS DOWN (nothing deployed, no approval requested) because the apply would start ADX and rewrite the paused Container Apps (#5111). true = you accept that.'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -235,6 +239,24 @@ jobs:
       - id: read
         run: node scripts/ci/estate-pause-declared.mjs --boundary "$CSA_LOOM_BOUNDARY"
 
+  # ESTATE STAND-DOWN (PRP-02 step 6, #5111): the OBSERVED half of "is the estate
+  # paused" - the console's Estate Power state - complementing the checked-in
+  # declaration above. A schedule never applies on this lane, so it is skipped
+  # there. `deploy-validate` below cannot be split (one `az deployment sub
+  # create` re-renders every resource and the ADX preflight starts a cluster
+  # first), so a run_mode=full dispatch stands down whole BEFORE the approval gate
+  # is asked. The image phase builds into the ACR, which Estate Power never
+  # pauses, so it keeps running. UNKNOWN proceeds with a ::warning::.
+  estate-gate:
+    name: Estate pause gate
+    needs: precheck
+    if: ${{ github.event_name != 'schedule' && needs.precheck.outputs.configured == 'true' }}
+    uses: ./.github/workflows/estate-pause-gate.yml
+    secrets: inherit
+    with:
+      boundary: GCC-High
+      override_estate_pause: ${{ inputs.override_estate_pause == true }}
+
   # IMAGE PHASE (no-vaporware.md two-phase contract). admin-plane/main.bicep
   # deploys loom-migrate + loom-risingwave DEFAULT-ON in every Container Apps
   # boundary, GCC-High included, and params/gcc-high.bicepparam sets
@@ -294,8 +316,10 @@ jobs:
     # not nested inside the existing `||` — a guard one disjunct away from the
     # top is inert on exactly the trigger it exists for
     # (gcch-standdown-completeness.test.mjs round 4 names that exact bypass).
-    needs: [precheck, pause-declaration, build-gov-images]
-    if: always() && github.event_name != 'schedule' && needs.precheck.outputs.configured == 'true'
+    needs: [precheck, pause-declaration, build-gov-images, estate-gate]
+    # Estate stand-down (#5111): `!= 'true'` is fail-open (an unrun/failed gate
+    # leaves the output empty); whatif-only applies nothing so it still runs.
+    if: always() && github.event_name != 'schedule' && needs.precheck.outputs.configured == 'true' && (needs.estate-gate.outputs.standdown != 'true' || inputs.run_mode != 'full')
     runs-on: ubuntu-latest
     timeout-minutes: 120
     environment: gcc-high-deploy   # requires manual approval

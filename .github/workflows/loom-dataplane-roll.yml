@@ -192,6 +192,11 @@ on:
         type: boolean
         required: false
         default: true
+      override_estate_pause:
+        description: 'Roll even though the estate is PAUSED (Estate Power). Default false: while the estate is PAUSING/PAUSED this roll STANDS DOWN because it writes a new revision on loom-unity / iceberg-catalog / loom-trino, Container Apps the pause scaled to zero (#5111). After resuming, dispatch this lane for the tag to catch up. A workflow_run roll can never override.'
+        type: boolean
+        required: false
+        default: false
 
   # ── #3346 — THE MISSING HALF OF THIS LANE ────────────────────────────────
   #
@@ -253,17 +258,41 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  roll:
-    name: Roll ${{ inputs.apps || 'all' }} on ${{ inputs.boundary || 'commercial' }}
-    # A `completed` producer run includes failure, cancelled and skipped. Rolling
-    # the estate onto a tag whose build did NOT succeed is the exact shape
-    # #3368 filed a false P0 over, so the conclusion is asserted POSITIVELY
-    # (== 'success'), never as != something. The `event == 'push'` half is the
-    # stated gap documented on the trigger above.
+  # ESTATE STAND-DOWN (PRP-02 step 6, #5111). The roll writes a new revision on
+  # loom-unity / iceberg-catalog / loom-trino, which Estate Power scales to zero;
+  # it also waits on their health. Not splittable (every step serves that one
+  # roll), so the whole `roll` job stands down while the estate is PAUSING/PAUSED.
+  # The image is already built and pushed, so a stood-down roll loses nothing:
+  # after resuming, dispatch this lane for the tag. UNKNOWN proceeds (::warning::).
+  estate-gate:
+    name: Estate pause gate
     if: >-
       github.event_name != 'workflow_run'
       || (github.event.workflow_run.conclusion == 'success'
           && github.event.workflow_run.event == 'push')
+    uses: ./.github/workflows/estate-pause-gate.yml
+    secrets: inherit
+    with:
+      boundary: ${{ inputs.boundary == 'gcc-high' && 'GCC-High' || inputs.boundary == 'il5' && 'IL5' || 'Commercial' }}
+      override_estate_pause: ${{ inputs.override_estate_pause == true }}
+
+  roll:
+    name: Roll ${{ inputs.apps || 'all' }} on ${{ inputs.boundary || 'commercial' }}
+    needs: estate-gate
+    # A `completed` producer run includes failure, cancelled and skipped. Rolling
+    # the estate onto a tag whose build did NOT succeed is the exact shape
+    # #3368 filed a false P0 over, so the conclusion is asserted POSITIVELY
+    # (== 'success'), never as != something. The `event == 'push'` half is the
+    # stated gap documented on the trigger above. The last conjunct is the estate
+    # stand-down: `!= 'true'` is fail-open (an unrun/failed gate leaves the
+    # output empty), and `!cancelled()` lets this run after a needed job that
+    # was skipped or failed.
+    if: >-
+      !cancelled()
+      && (github.event_name != 'workflow_run'
+          || (github.event.workflow_run.conclusion == 'success'
+              && github.event.workflow_run.event == 'push'))
+      && needs.estate-gate.outputs.standdown != 'true'
     runs-on: ubuntu-latest
     # ── #4823 — THE LEASE WAITS MUST FIT INSIDE THIS NUMBER ──────────────────
     #

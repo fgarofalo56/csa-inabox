@@ -253,6 +253,39 @@ resume it from **Admin > Scale by SKU > Estate power**. The estate's own Resume 
 blocked. If the stored state cannot be read (a Cosmos fault), the wake is allowed and a
 warning is logged: a database hiccup must not make every warehouse unusable.
 
+## Deploy lanes stand down while the estate is paused (#5111)
+
+On 2026-10-24 a scheduled `deploy-fiab-commercial` run started ADX and re-rendered the
+paused Container Apps (`minReplicas` 0 back to 1), undoing a pause made eight hours
+earlier. Every deploy lane that writes a paused resource now asks the console for the
+estate state first (reusable workflow `estate-pause-gate.yml`, script
+`scripts/ci/estate-pause-state.mjs`, the same service-principal state call the idle lane
+makes: no new secret, no new role).
+
+| State read | What the lane does |
+|---|---|
+| PAUSING, PAUSED | **Stands down.** Nothing is deployed. The job summary says "Stood down: estate paused" and a `::notice::` names who paused it and when. |
+| RUNNING, RESUMING, RESUME_FAILED | Proceeds. |
+| UNKNOWN (console unreachable, variable unset, token refused) | **Proceeds** with a `::warning::`. Fail-open on purpose: an unreadable read must not freeze every deploy. If the estate is paused at that moment, the run wakes it. |
+
+Lanes and what stands down: `deploy-fiab-commercial` (the whole `deploy-validate` job;
+`whatif-only` dispatches still run), `deploy-fiab-gcch`, `deploy-fiab-gcc` and
+`deploy-fiab-il5` (the whole `deploy-validate` job, before any approval is requested),
+`full-app-deploy-commercial` (only the Container App roll; the image build still runs) and
+`loom-dataplane-roll` (the whole roll of loom-unity, iceberg-catalog and loom-trino).
+The console-only rolls (`loom-roll-and-validate`, `gov-console-roll`) keep running: the
+console is never paused.
+
+To proceed anyway: resume the estate (below), or dispatch the lane with
+`override_estate_pause: true`. A scheduled, push or `workflow_run` run can never
+override. A stood-down run is not a deployed SHA: `check-deploy-staleness.mjs` skips it,
+so a lane that has only stood down since its last deploy still reads as stale.
+
+The console's state body does not yet carry who paused the estate, so the notice says
+"not reported by the console state route" until it does. GCC and IL5 read UNKNOWN today
+(their console variables `CSA_LOOM_GCC_CONSOLE_*` / `CSA_LOOM_IL5_CONSOLE_*` do not
+exist); both are supported-in-code, never exercised.
+
 ## How to resume
 
 1. Click **Resume** in the banner, or **Resume estate** in the panel; or

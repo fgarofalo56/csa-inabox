@@ -1508,6 +1508,13 @@ const JOB_DISPOSITIONS = new Map([
       why: 'IS the declaration gate. scripts/ci/estate-pause-declared.mjs is a checkout + a pure file read; _estate-pause-declaration.mjs has no az, fetch, https or child_process. Gating it on itself is not a thing.',
     },
   ],
+  [
+    'estate-gate',
+    {
+      mode: 'exempt',
+      why: 'IS the OBSERVED-state stand-down (#5111): a `uses:` call of the reusable estate-pause-gate.yml, which only READS the console state (POST action=state) and decides. It writes no estate resource; the verdict it publishes is what deploy-validate reads in its own if:.',
+    },
+  ],
   ['build-gov-images', { mode: 'job-guard' }],
   [
     'deploy-validate',
@@ -3402,7 +3409,7 @@ test('the job parser sees the real job list and is not matching comment text', (
   const names = parseJobs(workflowText()).map((j) => j.name);
   assert.deepEqual(
     names,
-    ['precheck', 'pause-declaration', 'build-gov-images', 'deploy-validate', 'post-deploy-bootstrap'],
+    ['precheck', 'pause-declaration', 'estate-gate', 'build-gov-images', 'deploy-validate', 'post-deploy-bootstrap'],
     'the parsed job list must be the workflow\'s real jobs, in order',
   );
 });

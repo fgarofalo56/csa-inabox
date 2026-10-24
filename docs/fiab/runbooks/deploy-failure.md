@@ -18,6 +18,19 @@
 `azd up` or Loom Setup Wizard deploy fails with a non-`Succeeded`
 ARM deployment state. Console URL doesn't return 200.
 
+## A deploy run that shows green but deployed nothing: "Stood down: estate paused"
+
+If the run summary says **Stood down: estate paused**, the deploy was skipped on purpose:
+Estate Power has the estate PAUSING or PAUSED, and applying would start ADX and rewrite
+the paused Container Apps (#5111). The run is green, but it is **not a deployed SHA** and
+the staleness check does not count it. To deploy: resume the estate in **Admin > Scale by
+SKU > Estate power**, then re-run; or dispatch the lane with `override_estate_pause: true`
+if you accept waking paused resources. A scheduled run cannot override. If the gate could
+not read the state it prints `::warning::estate-pause-state is UNKNOWN` and the deploy
+proceeds, so a paused estate can still be woken by a run whose gate was unreadable: check
+the `Estate pause gate` job's log and the `CSA_LOOM_CONSOLE_URL` / `_AUDIENCE` repo
+variables. Details: [estate-idle-auto-pause](../admin/estate-idle-auto-pause.md#deploy-lanes-stand-down-while-the-estate-is-paused-5111).
+
 ## Diagnosis
 
 **Start here.** The top-level ARM error on a failed subscription deploy is

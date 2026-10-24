@@ -62,6 +62,19 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const REPO = process.env.GITHUB_REPOSITORY || 'fgarofalo56/csa-inabox';
 
 /**
+ * Sources of the estate stand-down verdict (#5111), shared by every lane that
+ * calls the reusable estate-pause-gate workflow. Editing any of them changes
+ * whether a lane applies, so a commit to one without a later real deploy is drift.
+ */
+const ESTATE_STAND_DOWN_PATHS = [
+  '.github/workflows/estate-pause-gate.yml',
+  'scripts/ci/estate-pause-state.mjs',
+  'scripts/estate-power/estate-power.mjs',
+  'scripts/estate-power/token.mjs',
+  'scripts/estate-power/contract.mjs',
+];
+
+/**
  * Watched deploy paths. `paths` are the sources whose change should trigger a
  * redeploy — the workflow itself PLUS whatever it applies. `maxDays` is how much
  * drift is tolerable before this fails.
@@ -373,6 +386,7 @@ export const WATCHED = [
     why: 'The ONLY workflow that applies platform/fiab/bicep/main.bicep to the Commercial estate — every env var, role grant and module the Console depends on reaches production through this path and no other. Stale here means main and the running estate have silently diverged: merged bicep is inert, and the daily cron that should be reconciling it is failing in a way that looks like yesterday.',
     paths: [
       '.github/workflows/deploy-fiab-commercial.yml',
+      ...ESTATE_STAND_DOWN_PATHS,
       'platform/fiab/bicep/main.bicep',
       'platform/fiab/bicep/modules/admin-plane/**',
       'platform/fiab/bicep/params/commercial.bicepparam',
@@ -613,6 +627,7 @@ export const WATCHED = [
     why: 'The ONLY workflow that applies platform/fiab/bicep/main.bicep to the GCC-High (Azure Government) estate — every env var, role grant and module the sovereign Console depends on reaches production through this path and no other. Databricks Unity Catalog has no Gov endpoint, so this is also the lane that adopts and re-points the loom-unity catalog that IS the sovereign catalog story (cloud-parity.md). Stale, failing or disabled here means merged bicep is inert in the boundary that can least afford it. This row is the "did the deploy lane RUN" half of the sovereign signal; the ESTATES probe of the Gov console\'s live /build-marker.txt is the "did it LAND" half (#3730). Neither implies the other: a lane can succeed having deployed nothing, and an estate can be current because someone rolled it by hand.',
     paths: [
       '.github/workflows/deploy-fiab-gcch.yml',
+      ...ESTATE_STAND_DOWN_PATHS,
       'platform/fiab/bicep/main.bicep',
       // Same reasoning as the Commercial entry: main.bicep composes the admin
       // plane, and a module change there is applied by this lane and no other.
@@ -765,6 +780,7 @@ export const WATCHED = [
     boundary: 'GCC',
     why: 'The ONLY workflow that applies platform/fiab/bicep/main.bicep to the GCC estate (Azure public cloud under GCC M365 identity). It is `disabled_manually` as of 2026-08-08 — its 08:00 UTC cron therefore cannot fire, so GCC accrues drift forever and nothing anywhere said so. Registering it is what turns "switched off" from an invisible state into a named row: classifyWorkflowState reports the disablement separately from the drift, because "the reconcile is off" and "the reconcile is behind" have different fixes.',
     paths: [
+      ...ESTATE_STAND_DOWN_PATHS,
       // #4224 - this lane now resolves the estate's existing Entra app-reg
       // client id BEFORE rendering the console template, like the three sibling
       // console lanes already did. That makes the resolver a deploy source of
@@ -906,6 +922,7 @@ export const WATCHED = [
     why: 'The ONLY workflow that applies platform/fiab/bicep/main.bicep to the DoD IL5 estate, and it was in no watchdog anywhere: not this table, and therefore not the report an operator reads. It has NEVER run. It also carries an `az deployment sub what-if` with adxEnabled=true and, before #3888, no ADX preflight — the identical #3449 shape that failed GCC-High nine consecutive times — so the boundary with the least margin was the one carrying a known unmitigated defect with nothing measuring it (cloud-parity.md).',
     paths: [
       '.github/workflows/deploy-fiab-il5.yml',
+      ...ESTATE_STAND_DOWN_PATHS,
       'platform/fiab/bicep/main.bicep',
       'platform/fiab/bicep/modules/admin-plane/**',
       // `--parameters` / `--param-file` are not detected deploy shapes, so the
@@ -1008,6 +1025,7 @@ export const WATCHED = [
     why: 'Phase 2 of the documented from-scratch Commercial path — the ONLY lane that builds every app image and rolls the Container Apps onto them, and the ONLY producer of loom-wrangler-host / loom-dbt-runner / loom-transform-runner / loom-duckdb / loom-uat. It is also the Commercial half of the #2682 upstream-image mirror. Stale or failing here means a from-scratch deploy CANNOT complete, and the images those five apps run — plus every mirrored third-party image — are whatever was last pushed, with no signal anywhere that the path is red.',
     paths: [
       '.github/workflows/full-app-deploy-commercial.yml',
+      ...ESTATE_STAND_DOWN_PATHS,
       'scripts/csa-loom/stage-copilot-corpus.sh',
       'platform/fiab/bicep/main.bicep',
       // refs #2958/#3001 — this lane now runs the same ACR image preflight the
@@ -1124,6 +1142,7 @@ export const WATCHED = [
     why: 'The ONLY roll path for loom-unity, iceberg-catalog and loom-trino — the Loom Unity catalog, its Iceberg REST endpoint and the Trino federation engine. Databricks Unity Catalog does not exist in Azure Government, so in a sovereign boundary these three ARE the catalog and federation story (cloud-parity.md). Before this lane they had no automated roll at all: full-app-deploy-commercial.yml builds the loom-unity and loom-trino images but rolls neither, and loom-roll-and-validate.yml is hard-wired to a single fixed APP_NAME. Stale here means a fix merged into the catalog image cannot reach the estate, which is exactly the state PR #3150 (the Iceberg warehouse auto-bind, which lives in the loom-unity entrypoint) was in.',
     paths: [
       '.github/workflows/loom-dataplane-roll.yml',
+      ...ESTATE_STAND_DOWN_PATHS,
       'scripts/ci/resolve-acr-digest.sh',
       'scripts/ci/roll-plan.mjs',
       // #4240 — roll-plan.mjs IMPORTS this to derive the consequence of an
@@ -1289,7 +1308,7 @@ function gh(args) {
  *   null when the boundary is not declared paused.
  * @returns {{at:string|null, dryRunsSkipped:number, pausedRunsSkipped:number}}
  */
-export function pickLastRealSuccess(rows, pausedSince = null) {
+export function pickLastRealSuccess(rows, pausedSince = null, isStoodDown = null) {
   const notDry = rows.filter((r) => !String(r.displayTitle || '').includes(DRY_RUN_MARKER));
   // Lexical compare is valid because both sides are ISO-8601 and `createdAt` is
   // a full timestamp while `declaredOn` is a date — so a run ON the declaration
@@ -1297,11 +1316,49 @@ export function pickLastRealSuccess(rows, pausedSince = null) {
   const real = pausedSince
     ? notDry.filter((r) => String(r.createdAt || '') < pausedSince)
     : notDry;
+  // DYNAMIC stand-down (#5111): a run that stood down because the estate was
+  // paused SUCCEEDED having deployed nothing, exactly like a dry run, so it is
+  // skipped too. `isStoodDown` is evaluated lazily, newest first, and stops at the
+  // first run that really deployed, so a healthy lane costs one lookup.
+  let standDownRunsSkipped = 0;
+  let pick = null;
+  for (const r of real) {
+    if (isStoodDown && isStoodDown(r)) { standDownRunsSkipped += 1; continue; }
+    pick = r;
+    break;
+  }
   return {
-    at: real[0]?.createdAt || null,
+    at: pick?.createdAt || null,
     dryRunsSkipped: rows.length - notDry.length,
     pausedRunsSkipped: notDry.length - real.length,
+    standDownRunsSkipped,
   };
+}
+
+/**
+ * The job-name marker the reusable estate-pause-gate workflow's `stood-down` job
+ * carries, and ONLY on a stand-down. Keep in step with
+ * .github/workflows/estate-pause-gate.yml.
+ */
+export const STOOD_DOWN_JOB_MARKER = 'Stood down - estate paused';
+
+/**
+ * Does this workflow file call the reusable estate-pause gate? An unreadable file
+ * answers true: the safe direction is to look at the jobs rather than skip it.
+ */
+function usesEstatePauseGate(workflow) {
+  try {
+    return readFileSync(path.join(REPO_ROOT, '.github', 'workflows', workflow), 'utf8')
+      .includes('estate-pause-gate.yml');
+  } catch {
+    return true;
+  }
+}
+
+/** PURE. Did this run's job list include a SUCCESSFUL stand-down marker job? */
+export function isStoodDownJobs(jobs) {
+  return Array.isArray(jobs)
+    && jobs.some((j) => String(j?.name ?? '').includes(STOOD_DOWN_JOB_MARKER) && j?.conclusion === 'success');
 }
 
 /**
@@ -1325,9 +1382,15 @@ function lastSuccessfulRun(workflow, pausedSince = null) {
   try {
     const out = gh([
       'run', 'list', '--workflow', workflow, '--status', 'success',
-      '--limit', '20', '--json', 'createdAt,displayTitle', '--repo', REPO,
+      '--limit', '20', '--json', 'createdAt,displayTitle,databaseId', '--repo', REPO,
     ]);
-    return pickLastRealSuccess(JSON.parse(out || '[]'), pausedSince);
+    // Only lanes that call the estate-pause gate can have stood down; reading
+    // their jobs costs one `gh run view` per candidate run, so other lanes pay 0.
+    const gated = usesEstatePauseGate(workflow);
+    const isStoodDown = gated
+      ? (r) => isStoodDownJobs(JSON.parse(gh(['run', 'view', String(r.databaseId), '--json', 'jobs', '--repo', REPO]) || '{}').jobs)
+      : null;
+    return pickLastRealSuccess(JSON.parse(out || '[]'), pausedSince, isStoodDown);
   } catch (e) {
     return { queryFailed: true, error: String(e?.stderr || e?.message || e).slice(0, 160) };
   }
