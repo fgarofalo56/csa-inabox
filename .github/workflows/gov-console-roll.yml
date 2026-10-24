@@ -116,6 +116,11 @@ on:
         description: 'EMERGENCY VALVE — skip the SC1 Trivy CRITICAL gate + cosign sign/verify (mirrors skip_uat semantics). The roll ships WITHOUT supply-chain verification.'
         type: boolean
         default: false
+      builder:
+        description: 'Where the console image is built (#5102). acr-pool = ACR Tasks agent pool (the original path). gh-runner = docker buildx on the GitHub-hosted runner, pushed to the Gov ACR; use it when ACR Tasks itself is out of capacity (QuotaExceeded on standardDDSv5Family in the ACR service subscription). BLANK = repo variable GOV_CONSOLE_BUILDER, else acr-pool. Scan/sign/verify are identical on both.'
+        required: false
+        type: string
+        default: ''
       bypass_agent_pool:
         description: 'DIAGNOSTIC (#2706) — build on the DEFAULT hosted ACR agent instead of the S3 pool. Separates "the pool is broken" from "ACR is broken". ANSWERED 2026-07-30 (run 30564119314): the default agent SIGKILLs the Next.js build worker at ~7min, so the pool is genuinely required — keep this false unless re-testing that.'
         type: boolean
@@ -171,6 +176,10 @@ env:
   ACR: acrloomdcmt6cqoezlgs
   ACR_LOGIN: acrloomdcmt6cqoezlgs.azurecr.us
   APP: loom-console
+  # #5102 — effective builder: dispatch input, else repo variable (so a
+  # push-triggered roll can use gh-runner with no code change), else acr-pool.
+  # `inputs.*` is empty on push, which is why the input default is blank.
+  BUILDER: ${{ inputs.builder || vars.GOV_CONSOLE_BUILDER || 'acr-pool' }}
 
 jobs:
   roll:
@@ -323,109 +332,121 @@ jobs:
           # denial. Pass --on-unconfirmed fail to stop here instead.
           bash scripts/ci/acr-dataplane-gate.sh --acr "$ACR" --timeout-seconds 180
           bash scripts/ci/acr-login-retry.sh --acr "$ACR"
-          # 2026-07-16: console builds run on a dedicated 16 GB S3 agent pool —
-          # the default 8 GB agent cgroup-OOM-SIGKILLs the compile. Agent pools
-          # are available in USGov Arizona/Texas/Virginia. Pool builds don't get
-          # the trusted-service bypass, so the ACR stays open through the build
-          # (it already is for the tarball upload).
-          # #2706 — the pool NAME is an input. The original `loombuild` queue on
-          # this registry is stuck in "being deleted" (409), which is what made
-          # az acr build exit 0 while pushing nothing; `loombuild2` is the fresh
-          # name that fixed it and is now the DEFAULT (8+ consecutive green rolls,
-          # 17-23min each). Recreating the wedged pool did NOT work (run
-          # 30565655935) — a fresh NAME is the reliable move.
-          POOL="${{ inputs.agent_pool_name }}"
-          POOL="${POOL:-loombuild2}"
-          echo "::notice::building on ACR agent pool: $POOL"
-
-          # #2706 REMEDIATION — recreate the pool when asked. The bypass diagnostic
-          # (run 30564119314) established the pool is at fault: ON it `az acr build`
-          # runs 60min, exits 0 and pushes NOTHING; OFF it the same commit fails in
-          # 7min with real streaming logs. Deleting is safe — an agent pool is
-          # stateless build compute, and the `|| create` below rebuilds it, so this
-          # is self-healing rather than destructive.
-          if [ "${{ inputs.recreate_agent_pool }}" = "true" ]; then
-            echo "::warning::#2706 — recreating the $POOL agent pool."
-            echo "  runs before delete (evidence for Azure support if this does not fix it):"
-            az acr task list-runs -r "$ACR" --top 10 -o table 2>&1 | sed 's/^/    /' | head -14 || true
-            az acr agentpool delete -r "$ACR" -n "$POOL" --yes -o none 2>&1 | head -3 || true
-            az acr agentpool create -r "$ACR" -n "$POOL" --tier S3 --count 1 -o none
-            echo "::notice::$POOL recreated (S3, count 1)"
-          fi
-
-          az acr agentpool show -r "$ACR" -n "$POOL" -o none 2>/dev/null \
-            || az acr agentpool create -r "$ACR" -n "$POOL" --tier S3 -o none
-          CNT=$(az acr agentpool show -r "$ACR" -n "$POOL" --query count -o tsv | tr -d '\r')
-          [ "${CNT:-0}" -ge 1 ] || az acr agentpool update -r "$ACR" -n "$POOL" --count 1 -o none
           STAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          # #2706 — report the agent pool BEFORE building. Two consecutive runs
-          # sat in `az acr build` for 3.5-4.5h with zero output; if the single S3
-          # agent is unhealthy or still scaling from 0 the run just queues rather
-          # than failing, and `--no-logs` made a stall indistinguishable from a
-          # slow build. Print what we are about to build on.
-          #
-          # provisioningState is NOT the tell — it read `Succeeded` on BOTH
-          # silent failures (runs 30552543683, 30558316496). Printed for
-          # forensics only; do not gate on it.
-          echo "::notice::agent pool state before build:"
-          az acr agentpool show -r "$ACR" -n "$POOL" \
-            --query "{count:count,tier:tier,state:provisioningState}" -o tsv 2>&1 | sed 's/^/  pool: /' || true
 
-          # #2706 — QUEUE DEPTH IS THE SIGNAL, and it used to be printed and
-          # DISCARDED. Measured, on this exact registry:
-          #
-          #   loombuild  (wedged queue)  queued=3 / queued=4  -> ~60min, exit 0, NO image
-          #   loombuild2 (healthy)       queued=0  x8 runs    -> 17-23min, image pushed
-          #
-          # This run already holds the ACR firewall lease — a real mutex (see
-          # scripts/csa-loom/acr-firewall-lease.sh), and every `az acr build`
-          # call site on this registry takes it. So no other legitimate build can
-          # be occupying the queue right now: a queue that will not drain is a
-          # STUCK queue, not contention. Wait briefly for a straggler, then FAIL
-          # FAST with the remediation instead of burning an hour discovering the
-          # same thing. An unreadable probe is reported as UNKNOWN, never as
-          # "clear" — a check that cannot distinguish those measures nothing.
-          read_queue() {
-            az acr agentpool show -r "$ACR" -n "$POOL" --queue-count -o tsv 2>/dev/null \
-              | tr -d '\r' | grep -E '^[0-9]+$' | tail -1 || true
-          }
-          Q="$(read_queue)"
-          if [ -n "$Q" ] && [ "$Q" != "0" ]; then
-            echo "::warning::#2706 — $POOL reports $Q queued item(s) before this build; waiting up to 5min for it to drain."
-            for i in $(seq 1 20); do
-              sleep 15
-              N="$(read_queue)"
-              if [ -z "$N" ]; then
-                echo "  queued: UNKNOWN (read failed) — NOT treating that as drained ($i/20)"
-                continue
-              fi
-              Q="$N"
-              echo "  queued: $Q ($i/20)"
-              if [ "$Q" = "0" ]; then break; fi
-            done
-          fi
-          if [ -z "$Q" ]; then
-            echo "::warning::#2706 — could not read the queue depth for $POOL. This is UNKNOWN, not zero; proceeding, but if this build runs long and pushes nothing, the wedged-queue failure mode is the first thing to check."
-          elif [ "$Q" != "0" ]; then
-            echo "::error::#2706 — the '$POOL' queue on $ACR still holds $Q item(s) after 5 minutes, and this run holds the ACR firewall lease so nothing legitimate is building. That is the signature of the queue stuck in 'being deleted' that made az acr build exit 0 after ~60min having pushed NO image. Do NOT retry on this pool and do NOT bother recreating it (that returned 409 in run 30565655935) — re-dispatch with agent_pool_name set to a FRESH name, e.g. loombuild3. Precedent: loombuild -> loombuild2 here, loompool -> loompool2 in the 2026-07-14 Spark incident."
-            exit 1
-          else
-            echo "::notice::  queued: 0 — the $POOL queue is clear"
-          fi
+          # #5102 — WHICH BUILDER. Resolved once, in the job env (dispatch input,
+          # else repo variable GOV_CONSOLE_BUILDER, else acr-pool). An unknown
+          # value fails here rather than silently falling back to the other path.
+          case "$BUILDER" in
+            acr-pool|gh-runner) echo "::notice::#5102 console builder: $BUILDER" ;;
+            *) echo "::error::builder='$BUILDER' is not one of: acr-pool, gh-runner. Fix the dispatch input or the GOV_CONSOLE_BUILDER repo variable."; exit 1 ;;
+          esac
 
-          # Logs STREAM now (the `--no-logs` opt-out is gone). A silent build is
-          # exactly the shape this repo keeps getting burned by: it looks
-          # identical whether it is compiling or wedged. The extra output is a
-          # rounding error next to a 4-hour blind wait.
-          # #2706 diagnostic — bypass_agent_pool builds on the DEFAULT hosted ACR
-          # agent. Two instrumented runs had `az acr build` exit 0 on the pool
-          # while pushing no tag; this separates "the pool is broken" from "ACR is
-          # broken". An OOM on the default agent is a MEANINGFUL result (the pool
-          # is genuinely required); a successful build indicts the pool.
-          POOL_ARGS=(--agent-pool "$POOL")
-          if [ "${{ inputs.bypass_agent_pool }}" = "true" ]; then
-            echo "::warning::#2706 DIAGNOSTIC — building on the DEFAULT hosted agent, NOT the $POOL S3 pool. This is EXPECTED to fail: run 30564119314 proved the default 8 GB agent SIGKILLs the Next.js build worker at ~7min."
-            POOL_ARGS=()
+          if [ "$BUILDER" = "acr-pool" ]; then
+            # 2026-07-16: console builds run on a dedicated 16 GB S3 agent pool —
+            # the default 8 GB agent cgroup-OOM-SIGKILLs the compile. Agent pools
+            # are available in USGov Arizona/Texas/Virginia. Pool builds don't get
+            # the trusted-service bypass, so the ACR stays open through the build
+            # (it already is for the tarball upload).
+            # #2706 — the pool NAME is an input. The original `loombuild` queue on
+            # this registry is stuck in "being deleted" (409), which is what made
+            # az acr build exit 0 while pushing nothing; `loombuild2` is the fresh
+            # name that fixed it and is now the DEFAULT (8+ consecutive green rolls,
+            # 17-23min each). Recreating the wedged pool did NOT work (run
+            # 30565655935) — a fresh NAME is the reliable move.
+            POOL="${{ inputs.agent_pool_name }}"
+            POOL="${POOL:-loombuild2}"
+            echo "::notice::building on ACR agent pool: $POOL"
+
+            # #2706 REMEDIATION — recreate the pool when asked. The bypass diagnostic
+            # (run 30564119314) established the pool is at fault: ON it `az acr build`
+            # runs 60min, exits 0 and pushes NOTHING; OFF it the same commit fails in
+            # 7min with real streaming logs. Deleting is safe — an agent pool is
+            # stateless build compute, and the `|| create` below rebuilds it, so this
+            # is self-healing rather than destructive.
+            if [ "${{ inputs.recreate_agent_pool }}" = "true" ]; then
+              echo "::warning::#2706 — recreating the $POOL agent pool."
+              echo "  runs before delete (evidence for Azure support if this does not fix it):"
+              az acr task list-runs -r "$ACR" --top 10 -o table 2>&1 | sed 's/^/    /' | head -14 || true
+              az acr agentpool delete -r "$ACR" -n "$POOL" --yes -o none 2>&1 | head -3 || true
+              az acr agentpool create -r "$ACR" -n "$POOL" --tier S3 --count 1 -o none
+              echo "::notice::$POOL recreated (S3, count 1)"
+            fi
+
+            az acr agentpool show -r "$ACR" -n "$POOL" -o none 2>/dev/null \
+              || az acr agentpool create -r "$ACR" -n "$POOL" --tier S3 -o none
+            CNT=$(az acr agentpool show -r "$ACR" -n "$POOL" --query count -o tsv | tr -d '\r')
+            [ "${CNT:-0}" -ge 1 ] || az acr agentpool update -r "$ACR" -n "$POOL" --count 1 -o none
+            # (STAMP is computed above, shared by both builders.)
+            # #2706 — report the agent pool BEFORE building. Two consecutive runs
+            # sat in `az acr build` for 3.5-4.5h with zero output; if the single S3
+            # agent is unhealthy or still scaling from 0 the run just queues rather
+            # than failing, and `--no-logs` made a stall indistinguishable from a
+            # slow build. Print what we are about to build on.
+            #
+            # provisioningState is NOT the tell — it read `Succeeded` on BOTH
+            # silent failures (runs 30552543683, 30558316496). Printed for
+            # forensics only; do not gate on it.
+            echo "::notice::agent pool state before build:"
+            az acr agentpool show -r "$ACR" -n "$POOL" \
+              --query "{count:count,tier:tier,state:provisioningState}" -o tsv 2>&1 | sed 's/^/  pool: /' || true
+
+            # #2706 — QUEUE DEPTH IS THE SIGNAL, and it used to be printed and
+            # DISCARDED. Measured, on this exact registry:
+            #
+            #   loombuild  (wedged queue)  queued=3 / queued=4  -> ~60min, exit 0, NO image
+            #   loombuild2 (healthy)       queued=0  x8 runs    -> 17-23min, image pushed
+            #
+            # This run already holds the ACR firewall lease — a real mutex (see
+            # scripts/csa-loom/acr-firewall-lease.sh), and every `az acr build`
+            # call site on this registry takes it. So no other legitimate build can
+            # be occupying the queue right now: a queue that will not drain is a
+            # STUCK queue, not contention. Wait briefly for a straggler, then FAIL
+            # FAST with the remediation instead of burning an hour discovering the
+            # same thing. An unreadable probe is reported as UNKNOWN, never as
+            # "clear" — a check that cannot distinguish those measures nothing.
+            read_queue() {
+              az acr agentpool show -r "$ACR" -n "$POOL" --queue-count -o tsv 2>/dev/null \
+                | tr -d '\r' | grep -E '^[0-9]+$' | tail -1 || true
+            }
+            Q="$(read_queue)"
+            if [ -n "$Q" ] && [ "$Q" != "0" ]; then
+              echo "::warning::#2706 — $POOL reports $Q queued item(s) before this build; waiting up to 5min for it to drain."
+              for i in $(seq 1 20); do
+                sleep 15
+                N="$(read_queue)"
+                if [ -z "$N" ]; then
+                  echo "  queued: UNKNOWN (read failed) — NOT treating that as drained ($i/20)"
+                  continue
+                fi
+                Q="$N"
+                echo "  queued: $Q ($i/20)"
+                if [ "$Q" = "0" ]; then break; fi
+              done
+            fi
+            if [ -z "$Q" ]; then
+              echo "::warning::#2706 — could not read the queue depth for $POOL. This is UNKNOWN, not zero; proceeding, but if this build runs long and pushes nothing, the wedged-queue failure mode is the first thing to check."
+            elif [ "$Q" != "0" ]; then
+              echo "::error::#2706 — the '$POOL' queue on $ACR still holds $Q item(s) after 5 minutes, and this run holds the ACR firewall lease so nothing legitimate is building. That is the signature of the queue stuck in 'being deleted' that made az acr build exit 0 after ~60min having pushed NO image. Do NOT retry on this pool and do NOT bother recreating it (that returned 409 in run 30565655935) — re-dispatch with agent_pool_name set to a FRESH name, e.g. loombuild3. Precedent: loombuild -> loombuild2 here, loompool -> loompool2 in the 2026-07-14 Spark incident."
+              exit 1
+            else
+              echo "::notice::  queued: 0 — the $POOL queue is clear"
+            fi
+
+            # Logs STREAM now (the `--no-logs` opt-out is gone). A silent build is
+            # exactly the shape this repo keeps getting burned by: it looks
+            # identical whether it is compiling or wedged. The extra output is a
+            # rounding error next to a 4-hour blind wait.
+            # #2706 diagnostic — bypass_agent_pool builds on the DEFAULT hosted ACR
+            # agent. Two instrumented runs had `az acr build` exit 0 on the pool
+            # while pushing no tag; this separates "the pool is broken" from "ACR is
+            # broken". An OOM on the default agent is a MEANINGFUL result (the pool
+            # is genuinely required); a successful build indicts the pool.
+            POOL_ARGS=(--agent-pool "$POOL")
+            if [ "${{ inputs.bypass_agent_pool }}" = "true" ]; then
+              echo "::warning::#2706 DIAGNOSTIC — building on the DEFAULT hosted agent, NOT the $POOL S3 pool. This is EXPECTED to fail: run 30564119314 proved the default 8 GB agent SIGKILLs the Next.js build worker at ~7min."
+              POOL_ARGS=()
+            fi
           fi
 
           # #2929 — stage the Copilot RAG corpus INTO the build context first.
@@ -436,11 +457,31 @@ jobs:
           # Enforced by scripts/ci/check-console-corpus-staged.mjs.
           bash scripts/csa-loom/stage-copilot-corpus.sh
 
-          az acr build --registry "$ACR" "${POOL_ARGS[@]}" \
-            --image "loom-console:$SHA" --image "loom-console:latest" \
-            --file apps/fiab-console/Dockerfile \
-            --build-arg "LOOM_BUILD_SHA=$SHA" --build-arg "LOOM_BUILD_TIMESTAMP=$STAMP" \
-            apps/fiab-console
+          if [ "$BUILDER" = "acr-pool" ]; then
+            az acr build --registry "$ACR" "${POOL_ARGS[@]}" \
+              --image "loom-console:$SHA" --image "loom-console:latest" \
+              --file apps/fiab-console/Dockerfile \
+              --build-arg "LOOM_BUILD_SHA=$SHA" --build-arg "LOOM_BUILD_TIMESTAMP=$STAMP" \
+              apps/fiab-console
+          else
+            # #5102 — build on THIS GitHub-hosted runner and push to the Gov ACR.
+            # ACR Tasks' own backend VMSS fails preflight with QuotaExceeded
+            # (standardDDSv5Family 100/100, usgovvirginia) in a subscription we do
+            # not own, so no pool (loombuild2/3) and no quota request on ours can
+            # help. Same Dockerfile, context, build args and tags as the az acr
+            # build above; amd64 because that is what ACR Tasks builds. The runner
+            # IP is allowed on the data plane by the firewall lease taken above.
+            # No `|| true` / `2>/dev/null`: a failed build or push fails the step
+            # with docker's own output (deploy-integrity R7).
+            echo "::notice::runner memory (the Dockerfile sets NODE_OPTIONS=--max-old-space-size=8192 for the build stage):"
+            free -g
+            docker version --format 'docker server {{.Server.Version}}'
+            docker buildx build --platform linux/amd64 --push \
+              --tag "$ACR_LOGIN/loom-console:$SHA" --tag "$ACR_LOGIN/loom-console:latest" \
+              --file apps/fiab-console/Dockerfile \
+              --build-arg "LOOM_BUILD_SHA=$SHA" --build-arg "LOOM_BUILD_TIMESTAMP=$STAMP" \
+              apps/fiab-console
+          fi
 
           # #2706 — VERIFY THE TAG EXISTS HERE, not one step later. Both failures
           # had this command report success and the tag be absent; asserting it
@@ -462,6 +503,10 @@ jobs:
                      --acr "$ACR" --image "loom-console:$SHA")
           RC=$?
           set -e
+          if [ $RC -eq 3 ] && [ "$BUILDER" = "gh-runner" ]; then
+            echo "::error::docker buildx build --push exited 0 but the registry ANSWERED NOT FOUND for loom-console:$SHA on $ACR (#5102). Read the push output above; this is not a wedged ACR agent pool, none was used."
+            exit 1
+          fi
           if [ $RC -eq 3 ]; then
             echo "::error::az acr build exited 0 but the registry ANSWERED NOT FOUND for loom-console:$SHA on $ACR — the build silently produced nothing (#2706). Re-dispatch with agent_pool_name set to a FRESH name, e.g. loombuild3."
             exit 1
@@ -863,8 +908,10 @@ jobs:
       # it and says so; acr-agentpool-reaper.yml collects it once idle.
       # 2026-10-23: a leaked/held S3 pool consumes standardDDSv5Family cores in
       # usgovvirginia (limit 100), which is what failed the roll's scale-up.
+      # #5102: skipped when BUILDER=gh-runner — no pool was acquired, so there is
+      # nothing to release and the step must not touch the pool.
       - name: Release the ACR build pool (verified)
-        if: always() && (steps.build.conclusion == 'success' || steps.build.conclusion == 'failure' || steps.build.conclusion == 'cancelled')
+        if: always() && env.BUILDER != 'gh-runner' && (steps.build.conclusion == 'success' || steps.build.conclusion == 'failure' || steps.build.conclusion == 'cancelled')
         env:
           POOL_INPUT: ${{ inputs.agent_pool_name }}
         run: |
