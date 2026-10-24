@@ -33,7 +33,7 @@ import {
   type PausedResourceSnapshot,
 } from './pause-state';
 import { pausableTypeSpec, type PauseCandidate } from './pause-inventory';
-import { containerAppPauseGuard } from './pause-guards';
+import { containerAppPauseGuard, isConsumptionPlanSku } from './pause-guards';
 import { createPhaseBVerbs, isPhaseBType, normalizePhaseBPowerState, phaseBPowerRaw } from './pause-actuator-phase-b';
 import { ESTATE_READ_RETRY, isThrottleError, shortCircuitedError } from './pause-throttle';
 
@@ -79,6 +79,12 @@ export interface PowerRead {
   scale?: EstateScaleSnapshot;
   /** Databricks workspaces: the compute RUNNING right now (see PausedResourceSnapshot.children). */
   children?: EstateComputeChild[];
+  /**
+   * Web sites only (#5111): true when the site's hosting plan was READ and is a
+   * Consumption plan. Absent means "not established", never "not Consumption", so an
+   * unreadable plan leaves a site unconfirmed (fail safe) rather than settled.
+   */
+  consumptionPlan?: boolean;
 }
 
 /** Whether the resource can actually SERVE, as opposed to reporting a state. */
@@ -327,6 +333,24 @@ export async function createArmActuator(): Promise<EstateActuator> {
     return body?.tags ?? {};
   };
 
+  /** Per-actuator memo: one plan GET per hosting plan per request. Only a successful read is stored. */
+  const consumptionByFarm = new Map<string, boolean>();
+  const readConsumptionPlan = async (serverFarmId: string | undefined, version: string): Promise<boolean> => {
+    const farmId = String(serverFarmId ?? '');
+    if (!farmId.startsWith('/subscriptions/')) return false;
+    const key = farmId.toLowerCase();
+    const known = consumptionByFarm.get(key);
+    if (known !== undefined) return known;
+    try {
+      const plan = await stateGet<{ sku?: { name?: string; tier?: string } }>(`${farmId}?api-version=${version}`);
+      const isConsumption = isConsumptionPlanSku(plan?.sku?.name, plan?.sku?.tier);
+      consumptionByFarm.set(key, isConsumption);
+      return isConsumption;
+    } catch {
+      return false; // not established: the caller leaves the site unconfirmed, never settled
+    }
+  };
+
   const readPower = async (resource: {
     resourceId: string;
     resourceType: string;
@@ -354,6 +378,7 @@ export async function createArmActuator(): Promise<EstateActuator> {
           hardwareProfile?: { vmSize?: string };
           instanceView?: { statuses?: Array<{ code?: string }> };
           operationalState?: string;
+          serverFarmId?: string;
         };
       }>(`${resource.resourceId}?api-version=${version}${expand}`);
       let raw: unknown = body?.properties?.status ?? body?.properties?.state;
@@ -372,12 +397,17 @@ export async function createArmActuator(): Promise<EstateActuator> {
       } else if (isPhaseBType(type)) {
         raw = phaseBPowerRaw(type, body?.properties);
       }
+      // #5111: tell a Consumption site (a disclosed no-op, nothing to stop) from a stuck one.
+      const consumptionPlan = type === 'microsoft.web/sites'
+        ? await readConsumptionPlan(body?.properties?.serverFarmId, version)
+        : false;
       return {
         reading: armPowerReading({
           resourceId: resource.resourceId,
           powerState: normalizePowerState(resource.resourceType, raw),
           armApiVersion: version,
         }),
+        ...(consumptionPlan ? { consumptionPlan: true } : {}),
         ...(sku ? { sku } : {}),
         ...(typeof sku?.capacity === 'number' ? { replicaCount: sku.capacity } : {}),
       };
@@ -708,9 +738,7 @@ export async function createArmActuator(): Promise<EstateActuator> {
           const plan = await armGet<{ sku?: { name?: string; tier?: string } }>(
             `${farmId}?api-version=${apiVersion(type)}`,
           );
-          const tier = String(plan?.sku?.tier ?? '').toLowerCase();
-          const skuName = String(plan?.sku?.name ?? '').toLowerCase();
-          if (tier === 'dynamic' || skuName === 'y1') {
+          if (isConsumptionPlanSku(plan?.sku?.name, plan?.sku?.tier)) {
             return {
               ok: true,
               noop: true,

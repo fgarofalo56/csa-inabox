@@ -51,6 +51,7 @@ import { streamAnalyticsJobProvisioner } from './provisioners/stream-analytics-j
 import { ITEM_PAIRING_RULES } from '@/lib/items/registry';
 import { createOwnedItem } from '@/app/api/items/_lib/item-crud';
 import { getPoolState, resumePool } from '@/lib/azure/synapse-pool-arm';
+import { isEstatePausedError } from '@/lib/estate/estate-wake-guard';
 // #3537 — the SHARED Loom→ADX database-name mapping kql-db.ts provisions with.
 import { safeAdxDatabaseName } from '@/lib/azure/backing-name';
 
@@ -297,6 +298,11 @@ async function prewarmDedicatedPool(
       steps.push(`Pre-warm: dedicated SQL pool already ${state}; resume in progress.`);
     }
   } catch (e: any) {
+    if (isEstatePausedError(e)) {
+      // #5111: deliberate, not a probe failure; the warehouse step returns the gate.
+      steps.push(`Pre-warm NOT sent: ${e.message}`);
+      return;
+    }
     steps.push(`Pre-warm skipped (${e?.message || String(e)}); warehouse step will handle resume.`);
   }
 }

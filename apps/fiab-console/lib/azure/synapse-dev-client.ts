@@ -16,6 +16,7 @@
  */
 
 import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
+import { assertEstateAllowsWake } from '@/lib/estate/estate-wake-guard';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -1259,6 +1260,8 @@ export async function listDedicatedSqlPools(): Promise<Array<{ name: string; sta
  */
 export async function resumeDedicatedPool(name: string): Promise<void> {
   if (!name) throw new Error('resumeDedicatedPool: name is required');
+  // #5111: refuse while the estate is paused (the estate's own resume posts to ARM directly).
+  await assertEstateAllowsWake(`the Synapse dedicated SQL pool ${name}`);
   const r = await callArm(`${armBase()}/sqlPools/${encodeURIComponent(name)}/resume?api-version=${ARM_API}`, { method: 'POST' });
   if (!r.ok && r.status !== 202) {
     throw new Error(`resumeDedicatedPool(${name}) failed ${r.status}: ${await r.text()}`);

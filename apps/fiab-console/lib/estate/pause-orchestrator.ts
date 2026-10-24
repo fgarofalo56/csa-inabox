@@ -90,7 +90,7 @@ import {
 } from './pause-inventory';
 import { assertNoFalseGreen } from './capacity-preflight';
 import { holdStateForThrottle, throttledDetail, throttleHoldReason } from './pause-throttle';
-import { dbActGuard, guardedTierType, isConsumerType, isDbTierType, tierPauseGuard } from './pause-guards';
+import { CONSUMPTION_PLAN_REASON, dbActGuard, guardedTierType, isConsumerType, isDbTierType, tierPauseGuard } from './pause-guards';
 import { applySetGuards, type OutOfTierRow } from './pause-set-guards';
 import { ESTATE_PAUSE_TIER, OUT_OF_TIER_REASONS, TYPICAL_RESUME_SECONDS, orderForResume, resumeRank } from './pause-tier';
 
@@ -695,6 +695,8 @@ export interface ResourceProgress {
   /** 'done' | 'in-flight' | 'unknown' | 'failed'. */
   phase: 'done' | 'in-flight' | 'unknown' | 'failed';
   detail: string;
+  /** Pause only (#5111): settled as a no-op - nothing was stopped, so it must not read "Stopped". */
+  noop?: boolean;
   /** Resume only: whether a real data-plane round-trip succeeded. */
   servable?: boolean;
   /** Resume only: false when no probe is wired for this type. */
@@ -740,9 +742,17 @@ export async function pollPause(
 
     // A resource that was ALREADY stopped before the pause counts as settled —
     // there was nothing to stop.
-    const expectation: 'running' | 'stopped' = 'stopped';
     const wasRunning = isRunningState(entry.prePausePowerState);
-    const settled = wasRunning ? isPausedState(state) : !isRunningState(state);
+    // #5111: `expectation` is where the resource goes on RESUME, i.e. its recorded
+    // pre-pause state - the same meaning pause-resume gives it. It used to be a
+    // hard-coded 'stopped', so the panel labelled EVERY row "was stopped before the
+    // pause", Online-before-pause resources included.
+    const expectation: 'running' | 'stopped' = wasRunning ? 'running' : 'stopped';
+    // A site on a Consumption plan (plan READ, not assumed) has nothing to stop and no
+    // idle charge. If one is in the snapshot (recorded before it was held out), it is a
+    // confirmed NO-OP rather than a resource the estate waits on forever.
+    const consumptionNoop = entry.resourceType === 'microsoft.web/sites' && power.consumptionPlan === true && wasRunning;
+    const settled = consumptionNoop || (wasRunning ? isPausedState(state) : !isRunningState(state));
     if (settled) confirmed += 1;
 
     // DRIFT — a resource that came back up under a PAUSED estate. PRP §5 lists
@@ -751,7 +761,7 @@ export async function pollPause(
     // rolls itself on every merge to main, and ANY ARM PUT resumes App
     // Gateway/Firewall. Detecting it is this slice's job; RE-ASSERTING the
     // paused state is the reconciler's (W6), which does not exist yet.
-    const drifted = snapshot.state === 'PAUSED' && isRunningState(state);
+    const drifted = snapshot.state === 'PAUSED' && isRunningState(state) && !consumptionNoop;
     if (drifted) driftedResources.push(entry.resourceId);
 
     progress.push({
@@ -762,8 +772,12 @@ export async function pollPause(
       expectation,
       atExpectedState: settled,
       phase: settled ? 'done' : state === 'Unknown' ? 'unknown' : 'in-flight',
+      ...(consumptionNoop ? { noop: true } : {}),
       detail: power.reading
-        ? drifted
+        ? consumptionNoop
+          // R7: say what is true. It is NOT stopped - it reads `state` and was never stopped.
+          ? `no-op (Consumption plan): ${entry.name} reads ${state} and was never stopped - ${CONSUMPTION_PLAN_REASON}`
+          : drifted
           ? `ARM reports ${entry.name} is ${state}, but this estate is PAUSED. Something restarted it `
             + 'out of band. Loom has NOT re-paused it — the invariant reconciler that would (PRP W6) '
             + 'is not built yet.'
