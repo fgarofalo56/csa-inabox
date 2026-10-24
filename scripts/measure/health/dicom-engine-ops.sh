@@ -14,7 +14,10 @@
 #   LHDS_RUNTIME=docker|k8s (required)
 #   LHDS_DICOM_BASE_URL (required; archive RS base, used to prove the archive recovers)
 #   docker: LHDS_LDAP_CONTAINER (required)
-#   k8s:    LHDS_K8S_NAMESPACE LHDS_LDAP_STATEFULSET (required)   [NOT exercised in this session]
+#   k8s:    LHDS_K8S_NAMESPACE LHDS_LDAP_STATEFULSET (required); LHDS_LDAP_IMAGE optional (default: the
+#           StatefulSet's own image). Run from a workstation with kubectl; LHDS_DICOM_BASE_URL may be a
+#           `kubectl port-forward` URL. The dumps contain whatever is in LDAP, INCLUDING a Blob storage
+#           credential property: keep $LHDS_DICOM_RESULTS_DIR under temp/ and never publish it.
 #   LHDS_LDAP_BASE_DN=dc=dcm4che,dc=org (image default)  LHDS_OPS_TIMEOUT=300 (bounded waits, s)
 #   Backup uses slapcat inside the LDAP pod/container: no LDAP credential is needed or used.
 #   Restore check loads the dump into a THROWAWAY container of the same image
@@ -42,6 +45,7 @@ now() { date +%s.%N; }
 TMO="${LHDS_OPS_TIMEOUT:-300}"
 
 # ============================ LDAP ============================
+# shellcheck disable=SC2016  # the sh -c bodies below are expanded by the shell INSIDE the pod, on purpose
 ldap_probe() {
   need_env LHDS_RUNTIME LHDS_DICOM_BASE_URL
   local base_dn="${LHDS_LDAP_BASE_DN:-dc=dcm4che,dc=org}"
@@ -53,6 +57,7 @@ ldap_probe() {
       restart() { docker restart "$LHDS_LDAP_CONTAINER" > /dev/null; } ;;
     k8s)
       need_env LHDS_K8S_NAMESPACE LHDS_LDAP_STATEFULSET
+      export MSYS_NO_PATHCONV=1   # Git Bash would rewrite the /tmp/... directory names passed back to kubectl exec
       ex() { kubectl -n "$LHDS_K8S_NAMESPACE" exec "statefulset/$LHDS_LDAP_STATEFULSET" -- "$@"; }
       restart() {
         kubectl -n "$LHDS_K8S_NAMESPACE" rollout restart "statefulset/$LHDS_LDAP_STATEFULSET"
@@ -97,8 +102,63 @@ ldap_probe() {
     fi
     metric "$M" ldap_backup_ok 1 bool "$CTX; dump=$data_entries restored=$restored in a fresh container"
   else
-    metric "$M" ldap_backup_ok 0 bool "$CTX; k8s restore-into-fresh-pod check not implemented: dump only"
-    die "k8s runtime: dump taken but the restore check is not implemented, so ldap_backup_ok stays 0"
+    # Throwaway pod of the SAME image as the StatefulSet (read from the StatefulSet unless LHDS_LDAP_IMAGE is set).
+    local rpod="lhds-w0-ldap-restore" rimg="${LHDS_LDAP_IMAGE:-}" rdir rcount rfail=""
+    if [[ -z "$rimg" ]]; then
+      rimg="$(kubectl -n "$LHDS_K8S_NAMESPACE" get "statefulset/$LHDS_LDAP_STATEFULSET" -o jsonpath='{.spec.template.spec.containers[0].image}')"
+    fi
+    [[ -n "$rimg" ]] || die "could not determine the LDAP image for the restore pod (set LHDS_LDAP_IMAGE)"
+    kubectl -n "$LHDS_K8S_NAMESPACE" delete pod "$rpod" --ignore-not-found --wait=true > /dev/null   # stale pod from an aborted run
+    kubectl -n "$LHDS_K8S_NAMESPACE" run "$rpod" --image="$rimg" --restart=Never --command -- sleep 600 > /dev/null
+    if ! kubectl -n "$LHDS_K8S_NAMESPACE" wait --for=condition=Ready "pod/$rpod" --timeout="${TMO}s" > "$OUT/ops/ldap-restore.err" 2>&1; then
+      rfail="restore pod never became Ready"
+    else
+      # No fixed /tmp path: the working directory inside the pod comes from mktemp -d (check-temp-artifact-safety).
+      rdir="$(kubectl -n "$LHDS_K8S_NAMESPACE" exec "$rpod" -- mktemp -d)"
+      [[ -n "$rdir" ]] || die "mktemp -d inside $rpod returned nothing"
+      # push FILE: stream a dump into the pod and PROVE it arrived whole (value that breaks it: remote bytes != local).
+      # Measured: in this busybox image `sh -c 'cat > file'` is exec-optimised to a bare cat that dies when kubectl closes
+      # stdin, leaving a 0-byte file (kubectl: "Copying stdin failed ... websocket: close sent"); the trailing `sync`
+      # keeps the shell alive until cat has drained stdin. A 0-byte config then surfaced as the misleading
+      # "Database number selected via -n is out of range" from slapadd.
+      push() {
+        local f="$1" name want got try
+        name="$(basename "$f")"; want="$(wc -c < "$f" | tr -d '[:space:]')"
+        for try in 1 2 3; do
+          cat "$f" | kubectl -n "$LHDS_K8S_NAMESPACE" exec -i "$rpod" -- sh -c 'cat > "$0/$1"; sync' "$rdir" "$name" 2>> "$OUT/ops/ldap-restore.err" || true
+          got="$(kubectl -n "$LHDS_K8S_NAMESPACE" exec "$rpod" -- sh -c 'wc -c < "$0/$1"' "$rdir" "$name" | tr -d '[:space:]')"
+          [[ "$got" == "$want" ]] && return 0
+          echo "push $name try $try: $got of $want bytes arrived" >> "$OUT/ops/ldap-restore.err"
+        done
+        return 1
+      }
+      push "$OUT/ops/ldap-config.ldif" && push "$OUT/ops/ldap-data.ldif" || rfail="dump transfer into the restore pod was truncated"
+      if [[ -z "$rfail" ]]; then
+        : > "$OUT/ops/ldap-restore-count.txt"
+        # db -n 1 lands in the olcDbDirectory named by the dump (/var/lib/openldap/openldap-data) inside THIS pod, not the live one.
+        kubectl -n "$LHDS_K8S_NAMESPACE" exec "$rpod" -- sh -c '
+          set -e
+          cfg="$(mktemp -d)"
+          slapadd -n 0 -F "$cfg" -l "$0/ldap-config.ldif" >/dev/null
+          slapadd -n 1 -F "$cfg" -l "$0/ldap-data.ldif"  >/dev/null
+          slapcat -n 1 -F "$cfg" | grep -c "^dn:"' "$rdir" > "$OUT/ops/ldap-restore-count.txt" 2>> "$OUT/ops/ldap-restore.err" \
+          || rfail="slapadd/slapcat inside the restore pod failed"
+      fi
+    fi
+    kubectl -n "$LHDS_K8S_NAMESPACE" delete pod "$rpod" --ignore-not-found --wait=false > /dev/null
+    if [[ -n "$rfail" ]]; then
+      cat "$OUT/ops/ldap-restore.err" >&2
+      metric "$M" ldap_backup_ok 0 bool "$CTX; $rfail"
+      die "restore of the LDAP dump into a fresh pod FAILED: $rfail (see $OUT/ops/ldap-restore.err)"
+    fi
+    rcount="$(tr -d '[:space:]' < "$OUT/ops/ldap-restore-count.txt")"
+    metric "$M" ldap_restored_entries "$rcount" entries "$CTX"
+    # Value that breaks it: any restored count different from the dumped count (a truncated dump, or an empty restore = 0).
+    if [[ -z "$rcount" || "$rcount" != "$data_entries" ]]; then
+      metric "$M" ldap_backup_ok 0 bool "$CTX; restored=$rcount dumped=$data_entries"
+      die "restored '$rcount' entries but dump had $data_entries"
+    fi
+    metric "$M" ldap_backup_ok 1 bool "$CTX; dump=$data_entries restored=$rcount in a fresh pod of $rimg"
   fi
 
   # --- restart: time to LDAP serving, then time until the archive accepts a STOW again ---
@@ -115,7 +175,7 @@ ldap_probe() {
 
   local gdir="$OUT/ops/gen"
   rm -rf "$gdir"
-  python -I "$here/dicom-engine-gen.py" "$gdir" 1 "$(( $(date +%s) % 100000 ))" 64 > /dev/null
+  python -I "$(host_path "$here")/dicom-engine-gen.py" "$gdir" 1 "$(( $(date +%s) % 100000 ))" 64 > /dev/null
   local body
   body="$(ls "$gdir"/body-*.mp)"
   until [[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
@@ -131,7 +191,11 @@ ldap_probe() {
 
 # ============================ BLOB ============================
 blob_probe() {
-  need_env LHDS_BLOB_ACCOUNT LHDS_BLOB_CONTAINER LHDS_BLOB_SAS
+  need_env LHDS_BLOB_ACCOUNT LHDS_BLOB_CONTAINER
+  # One credential, either a SAS or a full Authorization header (an Entra bearer token). Shared key / account SAS
+  # are refused by accounts with allowSharedKeyAccess=false, which the DLZ policy forces (W0-RECEIPT s3 DEV run).
+  [[ -n "${LHDS_BLOB_SAS:-}" || -n "${LHDS_BLOB_AUTH_HEADER:-}" ]] \
+    || die "set LHDS_BLOB_SAS (query string, no leading ?) or LHDS_BLOB_AUTH_HEADER (full header line, e.g. 'Authorization: Bearer ...')"
   local endpoint="${LHDS_BLOB_ENDPOINT:-https://$LHDS_BLOB_ACCOUNT.blob.core.windows.net}"
   local ramp="${LHDS_BLOB_RAMP:-25 50 100 200 400 800}"
   local per="${LHDS_BLOB_REQS_PER_WORKER:-20}"
@@ -140,12 +204,20 @@ blob_probe() {
   head -c 524288 /dev/urandom > "$work/payload.bin"   # random bytes, no patient data
   cat > "$work/put.sh" <<'PUT'
 #!/usr/bin/env bash
-# usage: put.sh STEP N ; env: URL SAS PAYLOAD
+# usage: put.sh STEP N ; env: URL PAYLOAD and one of SAS / AUTH (full header line)
 set -u
-curl -s -o /dev/null -w '%{http_code}\n' -X PUT -H 'x-ms-blob-type: BlockBlob' \
-  -H 'x-ms-version: 2023-11-03' --data-binary "@$PAYLOAD" "$URL/lhds-w0-probe/step-$1-$2?$SAS" || printf '000\n'
+hdr=(); q=""
+[[ -n "${AUTH:-}" ]] && hdr=(-H "$AUTH")
+[[ -n "${SAS:-}" ]] && q="?$SAS"
+# Exactly ONE line per PUT: curl -w prints 000 itself when the connection fails, so a bare `|| printf` made two.
+if o="$(curl -s -o /dev/null -w '%{http_code}' -X PUT "${hdr[@]}" -H 'x-ms-blob-type: BlockBlob' \
+  -H 'x-ms-version: 2023-11-03' --data-binary "@$PAYLOAD" "$URL/lhds-w0-probe/step-$1-$2$q")" && [[ -n "$o" ]]; then
+  printf '%s\n' "$o"
+else
+  printf '000\n'
+fi
 PUT
-  export PAYLOAD="$work/payload.bin" SAS="$LHDS_BLOB_SAS" URL="$endpoint/$LHDS_BLOB_CONTAINER"
+  export PAYLOAD="$work/payload.bin" SAS="${LHDS_BLOB_SAS:-}" AUTH="${LHDS_BLOB_AUTH_HEADER:-}" URL="$endpoint/$LHDS_BLOB_CONTAINER"
   local onset="" step total
   for step in $ramp; do
     total=$((step * per))
@@ -153,6 +225,8 @@ PUT
     local n503 nok
     n503="$(awk '$1=="503"{n++} END{print n+0}' "$work/step-$step.codes")"
     nok="$(awk '$1=="201"{n++} END{print n+0}' "$work/step-$step.codes")"
+    # Value that breaks it: a code file with != $total lines (lost or double-printed results).
+    [[ "$(wc -l < "$work/step-$step.codes")" -eq "$total" ]] || die "step $step: $(wc -l < "$work/step-$step.codes") result lines for $total PUTs (see $work/step-$step.codes)"
     metric "$M" "blob_step_${step}_503s" "$n503" count "$CTX; of $total PUTs, $nok returned 201"
     [[ "$nok" -ge 1 || "$n503" -ge 1 ]] || die "step $step: no 201 and no 503 in $total PUTs - the probe is not reaching Blob (see $work/step-$step.codes)"
     if [[ -z "$onset" && "$n503" -ge 1 ]]; then onset="$step"; fi

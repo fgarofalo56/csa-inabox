@@ -37,7 +37,7 @@ export MIX_WRITE_PCT="${MIX_WRITE_PCT:-5}"
 
 PY=$(
   cat <<'EOF'
-import json, os, random, sys, threading, time, urllib.request, urllib.error
+import json, os, random, sys, threading, time, urllib.parse, urllib.request, urllib.error
 from concurrent.futures import ThreadPoolExecutor
 
 base = os.environ["FHIR_BASE_URL"].rstrip("/")
@@ -103,15 +103,19 @@ if s3 == 200:
             break
 
 def pid(): return rnd.choice(pids)
+# Sampled values are URL-encoded defensively. On the DEV sandbox the first HAPI run aborted at P6 with 5/200 failed
+# requests; the failure body was not captured (the abort now prints the first failure), the Patient names in that
+# cohort slice hold no spaces or apostrophes, so encoding is NOT established as the cause. The rerun had 0 errors.
+def q(v): return urllib.parse.quote(v, safe="")
 patterns = {
-    "P1_patient_identifier": lambda: "Patient?identifier=" + rnd.choice(idents),
+    "P1_patient_identifier": lambda: "Patient?identifier=" + q(rnd.choice(idents)),
     "P2_observation_vitals": lambda: "Observation?patient=%s&category=vital-signs&date=ge2000-01-01&_sort=-date&_count=100" % pid(),
     "P3_condition": lambda: "Condition?patient=" + pid(),
     "P3_medicationrequest": lambda: "MedicationRequest?patient=" + pid(),
     "P3_allergyintolerance": lambda: "AllergyIntolerance?patient=" + pid(),
     "P4_encounter_patient_date": lambda: "Encounter?patient=%s&date=ge2000-01-01" % pid(),
     "P5_documentreference": lambda: "DocumentReference?patient=%s&date=ge2000-01-01%s" % (pid(), ("&type=" + doc_type) if doc_type else ""),
-    "P6_patient_name_birthdate": lambda: "Patient?name=%s&birthdate=%s" % (rnd.choice(fams), rnd.choice(bds)),
+    "P6_patient_name_birthdate": lambda: "Patient?name=%s&birthdate=%s" % (q(rnd.choice(fams)), rnd.choice(bds)),
     "P7_imagingstudy": lambda: "ImagingStudy?patient=" + pid(),
     "P9_lastupdated_scan": lambda: "Observation?_lastUpdated=ge2000-01-01&_count=100",
 }
@@ -128,17 +132,19 @@ weights = {  # CAPACITY-MODEL section 4 ranking -> weights (documented, not meas
 
 out = []  # (metric, value, unit)
 for name, mk in patterns.items():
-    lat, errs, hits = [], 0, []
+    lat, errs, hits, first_err = [], 0, [], None
     for _ in range(N):
-        ms, status, raw = call("GET", mk())
+        path = mk()
+        ms, status, raw = call("GET", path)
         lat.append(ms)
         if not (200 <= status < 300):
             errs += 1
+            first_err = first_err or (path[:160], status, raw[:200])
         else:
             try: hits.append(len(json.loads(raw).get("entry", [])))
             except ValueError: errs += 1
     if errs * 100 > N:
-        sys.exit("pattern %s: %d/%d requests failed (>1%%); refusing to publish a latency for a failing query" % (name, errs, N))
+        sys.exit("pattern %s: %d/%d requests failed (>1%%); refusing to publish a latency for a failing query. First failure: %r" % (name, errs, N, first_err))
     out.append(("p95_" + name, "%.1f" % p95(lat), "ms"))
     out.append(("p50_" + name, "%.1f" % sorted(lat)[len(lat) // 2], "ms"))
     out.append(("mean_hits_" + name, "%.1f" % (sum(hits) / max(1, len(hits))), "entries/page"))
