@@ -399,3 +399,16 @@ export function tierPauseGuard(
   if (t === 'microsoft.network/applicationgateways') return appGatewayTagGuard(resource);
   return { eligible: true, reason: '' };
 }
+
+/** The reason shown wherever a Consumption-plan site is left out of, or settled in, a pause. */
+export const CONSUMPTION_PLAN_REASON = 'Consumption plan: nothing to stop and no idle charge.';
+
+/**
+ * True for an App Service plan that bills $0 at idle (Consumption: tier `Dynamic`,
+ * sku `Y1`). Stopping a site on one saves nothing and only disables its triggers
+ * (#5111), so the estate neither pauses it nor waits for it to read Stopped.
+ * Flex Consumption (`FC1`) is NOT matched: it can hold always-ready instances.
+ */
+export function isConsumptionPlanSku(name: string | undefined | null, tier: string | undefined | null): boolean {
+  return String(tier ?? '').trim().toLowerCase() === 'dynamic' || String(name ?? '').trim().toLowerCase() === 'y1';
+}

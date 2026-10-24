@@ -124,7 +124,11 @@ stopped, otherwise the database is left running with that reason.
 **Web apps.** The only `Microsoft.Web/sites` in the Loom bicep on a non-Consumption plan
 is the deploy-planner App Service; it is stamped `loom-estate-pause=exempt`, as are the
 two Function Apps the console calls synchronously (built-in MCP server, SCC labels).
-Consumption (Y1) sites remain a disclosed no-op.
+Consumption (Y1) sites are held out of the pause set at plan time ("Consumption plan:
+nothing to stop and no idle charge"), because a site that bills nothing at idle never
+reads Stopped and would keep the estate in PAUSING for ever (#5111). A site already in a
+snapshot from before that change is settled as "no-op (Consumption plan)", never shown as
+Stopped.
 
 ### Always on, not pausable, with what it costs (#5099 phase C)
 
@@ -238,6 +242,16 @@ excluded from the idle signal, so it cannot keep the estate awake. While a pause
 resume is in flight it polls every 10 s, backs off while Azure throttles, and stops
 after 10 minutes (pause) or 20 minutes (resume) with a visible notice and a
 "Check again" link.
+
+## Nothing wakes a paused estate behind your back (#5111)
+
+While the estate is PAUSING or PAUSED, the routine paths that restart a resource it
+paused are refused: the warehouse provisioner, grant enforcement, the Copilot
+`synapse_pool_resume` tool, the compute-targets Start, the ADX start and the Databricks
+cluster and warehouse starts. Each says who paused the estate and when, and that you
+resume it from **Admin > Scale by SKU > Estate power**. The estate's own Resume is never
+blocked. If the stored state cannot be read (a Cosmos fault), the wake is allowed and a
+warning is logged: a database hiccup must not make every warehouse unusable.
 
 ## How to resume
 

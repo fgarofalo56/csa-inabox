@@ -81,7 +81,15 @@ export function withIncrementalSnapshot(
             };
           }
         }
-        return actuator.pause(candidate, entry);
+        const result = await actuator.pause(candidate, entry);
+        // #5111: `startPause` un-records a no-op / held resource from ITS snapshot; this
+        // in-memory copy must follow, or every later progress save (and a crash-leftover
+        // PAUSING doc) carries a resource that was never stopped and can never confirm.
+        if (entry && (result.held || (result.ok && result.noop))) {
+          const at = snap.resources.indexOf(entry);
+          if (at >= 0) snap.resources.splice(at, 1);
+        }
+        return result;
       },
     },
   };

@@ -27,7 +27,7 @@
  */
 import { kqlEscapeSingle } from '@/lib/azure/kql-escape';
 import { classifyTagReadFailure, type DiscoveryReadFailure } from './pause-discovery-classify';
-import { aksPauseGuard } from './pause-guards';
+import { aksPauseGuard, CONSUMPTION_PLAN_REASON, isConsumptionPlanSku } from './pause-guards';
 import { LOOM_ESTATE_TAG_KEY, type DiscoveredResource } from './pause-inventory';
 import { ESTATE_PAUSE_TIER } from './pause-tier';
 
@@ -50,6 +50,10 @@ export interface ArgRow {
   subscriptionId?: string;
   location?: string;
   tags?: Record<string, string> | null;
+  /** Web sites only (#5111): `properties.sku` ('Dynamic' on Consumption) and the joined plan's sku. */
+  siteSku?: string;
+  planName?: string;
+  planTier?: string;
 }
 
 export interface TagHeldOut {
@@ -95,7 +99,12 @@ export function buildEstateTagQuery(estateId: string): string {
     'resources',
     `| where type in~ (${types})`,
     `| where tostring(tags['${LOOM_ESTATE_TAG_KEY}']) == '${kqlEscapeSingle(estateId)}'`,
-    '| project id, name, type, resourceGroup, subscriptionId, location, tags',
+    // #5111: carry each site's hosting plan so a Consumption site (nothing to stop, no idle
+    // charge) can be held out at plan time. A site whose plan is unreadable gets empty plan
+    // columns and stays in the set; the actuator then judges it at act time.
+    '| extend farm = tolower(tostring(properties.serverFarmId)), siteSku = tostring(properties.sku)',
+    "| join kind=leftouter (resources | where type =~ 'microsoft.web/serverfarms' | project farm = tolower(id), planName = tostring(sku.name), planTier = tostring(sku.tier)) on farm",
+    '| project id, name, type, resourceGroup, subscriptionId, location, tags, siteSku, planName, planTier',
     '| order by id asc',
   ].join('\n');
 }
@@ -190,6 +199,14 @@ export function classifyTagRows(args: {
         hold(g.reason);
         continue;
       }
+    }
+    if (
+      type === 'microsoft.web/sites'
+      && (isConsumptionPlanSku(row.planName, row.planTier) || String(row.siteSku ?? '').trim().toLowerCase() === 'dynamic')
+    ) {
+      // #5111: its stop is a disclosed no-op, and a no-op in the set kept the estate in PAUSING forever.
+      hold(`${name}: ${CONSUMPTION_PLAN_REASON} Left RUNNING.`);
+      continue;
     }
     const exempt = Object.entries(tags ?? {}).find(([k]) => k.toLowerCase() === 'loom-estate-pause');
     if (exempt && String(exempt[1]).trim().toLowerCase() === 'exempt') {
