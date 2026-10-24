@@ -103,10 +103,75 @@ runs on AKS, or the config could not be read ("could not be established"). A thr
 read refuses the pause with a retry rather than counting as a hold-out. The bicep also
 stamps the shipped gateway `loom-estate-pause=exempt`.
 
+**The console's custom hostnames also hold a gateway out** (#5099 phase C). Besides the
+app name and the configured public host, the console identity now includes
+`LOOM_PUBLIC_URL`, `LOOM_SELF_BASE_URL`, `LOOM_VANITY_DOMAIN` and a comma-separated
+`LOOM_CONSOLE_HOSTNAMES`, and a gateway listener whose host name is one of those holds the
+gateway out too. A hostname that is in none of those is not known to the console, so a pool
+on it is judged like any other app; list your Front Door or vanity hostnames in
+`LOOM_CONSOLE_HOSTNAMES` if the gateway fronts them. With no console identity at all, the
+gateway is still held out.
+
+**Resume order for a database's consumers** (#5099 phase C). A database is started first,
+and its consumers (the apps named in its consumers tag) are held until the database reads
+Online; the state poll starts them then, and the estate is not reported RUNNING until each
+one answers a real request. If the database's start request fails, its consumers are not
+started: they are reported "database not started" and the resume ends RESUME_FAILED.
+At pause time a consumer's scale-to-zero being accepted is not enough: its replicas must
+read back as zero (or its state as stopped) within a bounded wait before the database is
+stopped, otherwise the database is left running with that reason.
+
 **Web apps.** The only `Microsoft.Web/sites` in the Loom bicep on a non-Consumption plan
 is the deploy-planner App Service; it is stamped `loom-estate-pause=exempt`, as are the
 two Function Apps the console calls synchronously (built-in MCP server, SCC labels).
 Consumption (Y1) sites remain a disclosed no-op.
+
+### Always on, not pausable, with what it costs (#5099 phase C)
+
+Some resources the estate owns have no pause verb, or are deliberately never paused. The
+panel lists them in an "Always on, not pausable" section, so a PAUSED estate does not hide
+what is still billing. Ownership is the same `loom-estate-id` tag the pause set uses, read
+with one Resource Graph query (`GET /api/admin/estate/always-on`, tenant admin only,
+read-only). Each row has the name, type, a plain-words reason and a cost.
+
+| Type | Why it is not paused |
+|---|---|
+| Azure Firewall | Never paused (operator decision): the console's outbound traffic routes through it, so a deallocated firewall would make a paused estate impossible to resume from Loom. There is no pause action for it. |
+| Azure Bastion, VPN gateway, ExpressRoute gateway | Azure has no stop verb; the only way to stop the charge is to delete the resource, which Loom never does on its own. |
+| API Management, Azure Cache for Redis / Managed Redis, Azure AI Search, Event Hubs, Purview, Container Registry | No stop verb; the resource bills while it exists (a registry's images are also needed to resume apps, and stopping Redis would discard the cache). |
+| Azure OpenAI / AI Services | No stop verb; billed by use, so there is no idle charge to save. Only accounts of kind `OpenAI` or `AIServices` are listed. |
+| Front Door | Never paused: it is the public path to the console. |
+
+Container Apps and databases that are in the pause set but held out keep their reasons in
+the existing "Loom-owned, but deliberately NOT paused" list; the new section links to it
+rather than repeating them.
+
+**Where each cost comes from** (a figure is never shown without its provenance):
+
+- **actual month-to-date**: Azure Cost Management spend for that exact resource id
+  (`MonthToDate`, grouped by `ResourceId`, one query per subscription). It needs Cost
+  Management Reader and can lag by a day or more. Used whenever Cost Management returns a
+  row for the resource.
+- **estimate (list price, East US)**: otherwise, in Commercial only, a list price from a
+  small SKU table in `lib/estate/estate-always-on.ts` (Azure Retail Prices API, East US,
+  USD, read 2026-10-23). It covers Firewall, Bastion, ExpressRoute and Basic VPN gateway,
+  API Management, Redis (Basic/Standard C0-C1, Premium P1), AI Search, Event Hubs
+  (Basic/Standard), Front Door (Standard/Premium base fee) and Container Registry. It
+  excludes data processing, ingress, egress, discounts and usage charges, so it is labelled
+  an estimate on the badge and on the card, and a resource outside East US says it was
+  priced at East US.
+- **cost unknown**: any SKU not in the table, usage-priced types (OpenAI / AI Services,
+  Purview, Managed Redis, classic Front Door), and every non-Commercial cloud without an
+  actual row. No number is shown.
+
+The totals keep actual and estimate separate and never add them. If Cost Management
+cannot be read for a subscription the section says so and the affected rows fall back to a
+labelled estimate or "cost unknown".
+
+**Incomplete, not empty.** If the Resource Graph query fails, the console has no estate
+id, or a configured subscription cannot be read, the section shows "inventory incomplete:
+<reason>" and never "nothing is always on". The empty state appears only for a complete
+inventory with zero rows.
 
 ## Never paused
 
@@ -199,6 +264,11 @@ cloud's own host via `armBase()`):
 
 The shipped `gcc-high` and `il5` parameter files do not stamp anything the Commercial
 ones do not (the tags are in the modules), and every touched module compiles.
+
+The always-on section (#5099 phase C) uses the cloud's own ARM and Cost Management hosts.
+Commercial: estimates and actual cost. GCC-High / DoD: supported-in-code, actual cost or
+"cost unknown" (no Gov price table exists), never exercised. GCC and IL5: supported-in-code,
+never exercised. No live run in any cloud.
 
 **Verified:** unit and component tests only (jsdom), with mutation runs for the
 load-bearing arms. **Not verified:** no live pause or resume of any Container App in

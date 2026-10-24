@@ -30,6 +30,7 @@ import { LearnPopover } from '@/lib/components/ui/learn-popover';
 import { jsonGet } from '@/lib/components/admin-scaling/json-get';
 import { autoRestartCaption } from '@/lib/estate/pause-autorestart';
 import { EstateContainerAppsSection } from '@/lib/components/admin-scaling/estate-container-apps-section';
+import { EstateAlwaysOnSection } from '@/lib/components/admin-scaling/estate-always-on-section';
 import { isTabHidden, isThrottledResponse, nextPollDelayMs } from '@/lib/components/admin-scaling/estate-power-poll';
 
 // ===========================================================================
@@ -789,7 +790,7 @@ export function EstatePowerPanel({ styles }: { styles: Record<string, string> })
         operator who needs to know why their ACA spend is untouched.
       */}
       {!loading && state === 'RUNNING' && outOfTier.length > 0 && (
-        <div className={styles.powerSection}>
+        <div className={styles.powerSection} id="estate-held-out">
           <Caption1 className={styles.fieldLabel}>
             Loom-owned, but deliberately NOT paused ({outOfTier.length})
           </Caption1>
@@ -804,6 +805,13 @@ export function EstatePowerPanel({ styles }: { styles: Record<string, string> })
               <Caption1 className={styles.progressDetail}>{r.reason}</Caption1>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* #5099 phase C: what keeps billing while the estate is paused, and why. */}
+      {!loading && (
+        <div className={`${styles.powerSection} ${styles.powerDivider}`}>
+          <EstateAlwaysOnSection />
         </div>
       )}
 
