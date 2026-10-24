@@ -85,6 +85,19 @@ if len(engines) > 1:
             print("COPY-PASTE CONTROL FAILED: core metric %s has identical values across engines: %s" % (m, vals), file=sys.stderr)
             sys.exit(2)
 print("OK: all required cells non-empty; core metrics differ across engines")
+# ADR-001 verdict guard (same rule as dicom-engine-report.sh): only a class-S sandbox run may print a bar comparison.
+# Value that breaks it: a DEV (1x D8s_v5, PG D2ds_v5) run whose bytes/resource happens to be <= 6144 must NOT print PASS.
+context = sorted(ctx[engines[0]])[0] if len(ctx[engines[0]]) == 1 else ",".join(sorted(ctx[engines[0]]))
+if context != "sandbox-classS":
+    print("ADR-001 pass bar: NOT PASS-BAR EVIDENCE (context=%s; only context sandbox-classS counts, DEV proves function)" % context)
+else:
+    for e in engines:
+        b = float(data[e]["bytes_per_resource"])
+        worst = max(float(data[e][m]) for m in p95s)
+        print("ADR-001 bar [%s]: bytes/resource %.0f %s 6144 (%s); worst pattern p95 %.0f ms %s 1000 ms (%s)" % (
+            e, b, "<=" if b <= 6144 else ">", "PASS" if b <= 6144 else "FAIL",
+            worst, "<=" if worst <= 1000 else ">", "PASS" if worst <= 1000 else "FAIL"))
+    print("NOTE: the bar is stated at 1 M patients; these numbers are only as good as the cohort size recorded in the receipt.")
 EOF
 )
 python -I -c "$PY"

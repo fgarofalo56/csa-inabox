@@ -16,6 +16,7 @@
 # Optional env:
 #   LHDS_DICOM_CONCURRENCY=100  LHDS_DICOM_INSTANCES=1000  LHDS_DICOM_SEED=42  LHDS_DICOM_ROWS=512
 #   LHDS_DICOM_QIDO_REQUESTS (default = INSTANCES)  LHDS_DICOM_WADO_REQUESTS (default = INSTANCES)
+#   LHDS_SANDBOX_PROFILE     dev | class-s (recorded with every metric; anything but class-s is never pass-bar evidence)
 #   LHDS_DICOM_AUTH_HEADER   full header line, e.g. "Authorization: Bearer ..." (from env only)
 #   LHDS_DICOM_TOOLS_IMAGE=dcm4che/dcm4che-tools:5.35.1  LHDS_DICOM_TOOLS_URL (default: BASE with
 #   localhost -> host.docker.internal)  LHDS_DICOM_TOOLS_NETWORK (docker network to join, e.g. the
@@ -47,7 +48,9 @@ OUT="$LHDS_DICOM_RESULTS_DIR"
 WORK="$OUT/work"
 mkdir -p "$WORK"
 M="$OUT/metrics.tsv"
-CTX="env=$LHDS_DICOM_ENV_LABEL base=$BASE conc=$CONC"
+# profile= records which sandbox size produced the numbers; the report only calls a result pass-bar evidence
+# when it is exactly class-s (a DEV run, or a run that never said, can never print PASS).
+CTX="env=$LHDS_DICOM_ENV_LABEL profile=${LHDS_SANDBOX_PROFILE:-unspecified} base=$BASE conc=$CONC"
 
 # ---- one-request helper (kept as a file so xargs -P can call it) -------------------------
 cat > "$WORK/one.sh" <<'ONE'
@@ -58,21 +61,25 @@ kind="$1"; idx="$2"
 hdr=()
 [[ -n "${AUTH:-}" ]] && hdr=(-H "$AUTH")
 fmt='%{time_total}\t%{http_code}\t%{size_download}\n'
+# emit CMD...: print exactly ONE result line per request. curl -w already prints a line (code 000) when the
+# connection fails, so a bare `|| printf` fallback printed a SECOND line and inflated the request count
+# (measured: wado_requests=1006 for 1000 requests, 12 connection failures). Value that breaks it: any
+# request count != the number asked for.
+emit() { local o; if o="$("$@")" && [[ -n "$o" ]]; then printf '%s\n' "$o"; else printf '0\t000\t0\n'; fi; }
 case "$kind" in
   stow)
     f="$WORK/body-$(printf '%05d' "$idx").mp"
-    curl -s -o /dev/null -w "$fmt" -X POST "${hdr[@]}" \
+    emit curl -s -o /dev/null -w "$fmt" -X POST "${hdr[@]}" \
       -H 'Content-Type: multipart/related; type="application/dicom"; boundary=LHDSW0BOUNDARY' \
-      -H 'Accept: application/dicom+json' --data-binary "@$f" "$BASE/studies" \
-      || printf '0\t000\t0\n' ;;
+      -H 'Accept: application/dicom+json' --data-binary "@$f" "$BASE/studies" ;;
   qido)
     row="$(awk -F'\t' -v i="$idx" 'NR==i{print $2}' "$WORK/uids.tsv")"
-    curl -s -o /dev/null -w "$fmt" "${hdr[@]}" -H 'Accept: application/dicom+json' \
-      "$BASE/studies?StudyInstanceUID=$row" || printf '0\t000\t0\n' ;;
+    emit curl -s -o /dev/null -w "$fmt" "${hdr[@]}" -H 'Accept: application/dicom+json' \
+      "$BASE/studies?StudyInstanceUID=$row" ;;
   wado)
     read -r st se so < <(awk -F'\t' -v i="$idx" 'NR==i{print $2, $3, $4}' "$WORK/uids.tsv")
-    curl -s -o /dev/null -w "$fmt" "${hdr[@]}" -H 'Accept: multipart/related; type="application/dicom"' \
-      "$BASE/studies/$st/series/$se/instances/$so" || printf '0\t000\t0\n' ;;
+    emit curl -s -o /dev/null -w "$fmt" "${hdr[@]}" -H 'Accept: multipart/related; type="application/dicom"' \
+      "$BASE/studies/$st/series/$se/instances/$so" ;;
 esac
 ONE
 chmod +x "$WORK/one.sh"
@@ -95,13 +102,15 @@ BEFORE="$(count_instances)" || die "cannot read $BASE/instances/count before loa
 export BASE WORK
 export AUTH="${LHDS_DICOM_AUTH_HEADER:-}"
 
-# summarise KIND FILE CONTEXT_EXTRA MINBYTES : writes metrics, echoes req/s
+# summarise KIND FILE WALL MINBYTES EXPECTED : writes metrics, echoes req/s; dies if lines != EXPECTED
 summarise() {
-  local kind="$1" file="$2" wall="$3" minbytes="$4"
+  local kind="$1" file="$2" wall="$3" minbytes="$4" expected="$5"
   # success = HTTP 200 and (for wado) a body at least as large as the instance
   awk -F'\t' -v mb="$minbytes" '$2=="200" && $3>=mb {print $1*1000}' "$file" > "$file.ok_ms"
   local total ok
   total="$(wc -l < "$file")"
+  # Value that breaks it: 1006 result lines for 1000 requests (a double-printing fallback) or 998 (a lost line).
+  [[ "$total" -eq "$expected" ]] || die "$kind: $total result lines for $expected requests (see $file)"
   ok="$(wc -l < "$file.ok_ms")"
   metric "$M" "${kind}_requests" "$total" count "$CTX"
   metric "$M" "${kind}_fail_count" "$((total - ok))" count "$CTX; non-200, or body < $minbytes B"
@@ -126,7 +135,7 @@ t1="$(now)"
 wall="$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.3f", b-a}')"
 metric "$M" stow_concurrency "$CONC" senders "$CTX"
 metric "$M" stow_instance_bytes "$INST_BYTES" bytes "$CTX; synthetic CT, random pixel data"
-summarise stow "$OUT/stow.raw" "$wall" 0
+summarise stow "$OUT/stow.raw" "$wall" 0 "$N"
 
 # Assertion: the archive's instance count rose by exactly the number of 200s. A silent drop or
 # a duplicate-collapse (delta != successes) makes this fail.
@@ -146,7 +155,7 @@ t0="$(now)"
 seq 1 "$NQ" | awk -v n="$N" '{print (($1-1)%n)+1}' | xargs -P "$CONC" -I{} bash "$WORK/one.sh" qido {} >> "$OUT/qido.raw"
 t1="$(now)"
 wall="$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.3f", b-a}')"
-summarise qido "$OUT/qido.raw" "$wall" 1   # 204 (no match) or empty body = fail
+summarise qido "$OUT/qido.raw" "$wall" 1 "$NQ"   # 204 (no match) or empty body = fail
 
 # ---- 4. WADO-RS (retrieve whole instance; body must be >= the stored instance size) ------
 : > "$OUT/wado.raw"
@@ -154,7 +163,7 @@ t0="$(now)"
 seq 1 "$NW" | awk -v n="$N" '{print (($1-1)%n)+1}' | xargs -P "$CONC" -I{} bash "$WORK/one.sh" wado {} >> "$OUT/wado.raw"
 t1="$(now)"
 wall="$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.3f", b-a}')"
-summarise wado "$OUT/wado.raw" "$wall" "$INST_BYTES"
+summarise wado "$OUT/wado.raw" "$wall" "$INST_BYTES" "$NW"
 
 # ---- 5. real-tool client pass (dcm4che stowrs) -------------------------------------------
 if [[ "${LHDS_DICOM_SKIP_TOOL_PASS:-}" == "1" ]]; then
@@ -169,8 +178,8 @@ else
   net=(); [[ -n "${LHDS_DICOM_TOOLS_NETWORK:-}" ]] && net=(--network "$LHDS_DICOM_TOOLS_NETWORK")
   MSYS_NO_PATHCONV=1 docker run --rm --name lhds-w0-l2-stowrs "${net[@]}" \
     -v "$(host_path "$WORK/tool"):/in:ro" "$TOOLS_IMAGE" \
-    stowrs --url "$TOOLS_URL/studies" /in/inst-$(printf '%05d' "$((N + 1))").dcm \
-    /in/inst-$(printf '%05d' "$((N + 2))").dcm /in/inst-$(printf '%05d' "$((N + 3))").dcm > "$tool_out" 2>&1 \
+    stowrs --url "$TOOLS_URL/studies" "/in/inst-$(printf '%05d' "$((N + 1))").dcm" \
+    "/in/inst-$(printf '%05d' "$((N + 2))").dcm" "/in/inst-$(printf '%05d' "$((N + 3))").dcm" > "$tool_out" 2>&1 \
     || { cat "$tool_out" >&2; die "dcm4che stowrs failed (log: $tool_out)"; }
   AFTER2="$(count_instances)"
   if [[ "$((AFTER2 - AFTER))" -ne 3 ]]; then
