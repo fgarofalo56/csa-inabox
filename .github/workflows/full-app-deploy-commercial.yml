@@ -40,6 +40,10 @@ on:
         description: 'EMERGENCY VALVE — skip the SC1 Trivy CRITICAL gate + cosign sign/verify (mirrors skip_uat semantics). Images ship WITHOUT supply-chain verification.'
         type: boolean
         default: false
+      override_estate_pause:
+        description: 'Roll the Container Apps even though the estate is PAUSED (Estate Power). Default false: while the estate is PAUSING/PAUSED the build phase still runs (the ACR is never paused) but the roll STANDS DOWN, because re-rendering the apps would put the paused apps minReplicas back to 1 (#5111). true = you accept that.'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -995,9 +999,22 @@ jobs:
           # turns this job RED instead of green.
           bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR_NAME"
 
+  # ESTATE STAND-DOWN (PRP-02 step 6, #5111). Only the roll (`redeploy-with-apps`)
+  # and what chains off it stand down: it re-renders the Container Apps and so
+  # undoes a pause. The image build/verify phase writes only the ACR, which Estate
+  # Power never pauses, so it keeps running. UNKNOWN proceeds (::warning::).
+  estate-gate:
+    name: Estate pause gate
+    if: ${{ inputs.enable_apps_after }}
+    uses: ./.github/workflows/estate-pause-gate.yml
+    secrets: inherit
+    with:
+      boundary: Commercial
+      override_estate_pause: ${{ inputs.override_estate_pause == true }}
+
   redeploy-with-apps:
     name: Roll Container Apps to new image
-    needs: [resolve, close-acr, verify-images]
+    needs: [resolve, close-acr, verify-images, estate-gate]
     # SC1: the roll additionally requires the verify-images gate to have
     # PASSED (it exits 0 with a loud warning when skip_supply_chain is set,
     # so the emergency valve still rolls). skip_build rolls pre-existing
@@ -1011,7 +1028,7 @@ jobs:
     # Apps anyway. `!cancelled()` still runs the roll on an upstream FAILURE
     # where the guards above allow it (the lenient partial-build path), but a
     # cancelled run now actually stops.
-    if: ${{ !cancelled() && inputs.enable_apps_after && (needs.close-acr.result == 'success' || inputs.skip_build) && (needs.verify-images.result == 'success' || inputs.skip_build) }}
+    if: ${{ !cancelled() && inputs.enable_apps_after && (needs.close-acr.result == 'success' || inputs.skip_build) && (needs.verify-images.result == 'success' || inputs.skip_build) && needs.estate-gate.outputs.standdown != 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1

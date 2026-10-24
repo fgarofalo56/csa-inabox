@@ -43,6 +43,8 @@ import {
   classifyWorkflowState,
   decide,
   pickLastRealSuccess,
+  isStoodDownJobs,
+  STOOD_DOWN_JOB_MARKER,
   DAY_MS,
   DRY_RUN_MARKER,
   ESTATES,
@@ -165,6 +167,46 @@ test('CONTROL: with no dry runs the newest success wins', () => {
   const r = pickLastRealSuccess(rows);
   assert.equal(r.at, '2026-03-10T00:00:00Z');
   assert.equal(r.dryRunsSkipped, 0);
+});
+
+// A run that stood down on a paused estate (#5111) succeeds having deployed nothing.
+test('a newer STOOD-DOWN success is skipped: the last REAL deploy is the older run', () => {
+  const rows = [
+    { createdAt: '2026-10-24T06:00:00Z', displayTitle: 'sched', databaseId: 2 },
+    { createdAt: '2026-10-23T06:00:00Z', displayTitle: 'sched', databaseId: 1 },
+  ];
+  // Breaks if pickLastRealSuccess ignores isStoodDown: it would answer 2026-10-24.
+  const r = pickLastRealSuccess(rows, null, (row) => row.databaseId === 2);
+  assert.equal(r.at, '2026-10-23T06:00:00Z');
+  assert.equal(r.standDownRunsSkipped, 1);
+});
+
+test('a history of ONLY stood-down runs is "never deployed", not the stand-down timestamp', () => {
+  const rows = [{ createdAt: '2026-10-24T06:00:00Z', displayTitle: 's', databaseId: 2 }];
+  assert.equal(pickLastRealSuccess(rows, null, () => true).at, null);
+});
+
+test('CONTROL: isStoodDown is lazy and stops at the first real deploy', () => {
+  const seen = [];
+  const rows = [
+    { createdAt: '2026-10-24T06:00:00Z', displayTitle: 'a', databaseId: 3 },
+    { createdAt: '2026-10-23T06:00:00Z', displayTitle: 'b', databaseId: 2 },
+    { createdAt: '2026-10-22T06:00:00Z', displayTitle: 'c', databaseId: 1 },
+  ];
+  const r = pickLastRealSuccess(rows, null, (row) => { seen.push(row.databaseId); return false; });
+  assert.equal(r.at, '2026-10-24T06:00:00Z');
+  assert.deepEqual(seen, [3], 'only the newest run may be looked up when it really deployed');
+});
+
+test('isStoodDownJobs: only a SUCCESSFUL marker job counts, named exactly by the gate workflow', () => {
+  const marker = `estate-gate / ${STOOD_DOWN_JOB_MARKER} (nothing deployed)`;
+  assert.equal(isStoodDownJobs([{ name: 'estate-gate / Estate pause gate (Commercial)', conclusion: 'success' }]), false, 'the gate job runs on EVERY run; it is not the marker');
+  assert.equal(isStoodDownJobs([{ name: marker, conclusion: 'success' }]), true);
+  assert.equal(isStoodDownJobs([{ name: marker, conclusion: 'skipped' }]), false, 'a skipped marker job means the lane did NOT stand down');
+  assert.equal(isStoodDownJobs(undefined), false);
+  // The marker string is what estate-pause-gate.yml's job is named; drift here silently disarms the filter.
+  const gate = readFileSync(join(import.meta.dirname, '..', '..', '..', '.github', 'workflows', 'estate-pause-gate.yml'), 'utf8');
+  assert.ok(gate.includes(`name: ${STOOD_DOWN_JOB_MARKER}`), 'estate-pause-gate.yml must name its stood-down job with the marker');
 });
 
 test('an empty run history is null (feeds the never-ran branch)', () => {

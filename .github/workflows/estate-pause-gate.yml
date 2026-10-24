@@ -1,0 +1,156 @@
+name: estate-pause-gate
+
+# Reusable: is the estate PAUSED (Estate Power), so the calling deploy lane must
+# stand down? (PRP-02 step 6, refs #5111 #5099)
+#
+# INCIDENT 2026-10-24: the operator paused the Commercial estate at 02:38Z; the
+# scheduled deploy-fiab-commercial run at 10:36Z started ADX and rewrote the
+# paused Container Apps (minReplicas 0 -> 1), undoing the pause. No deploy lane
+# knew the estate was paused.
+#
+# This workflow runs scripts/ci/estate-pause-state.mjs, which asks the console
+# (the only reader of the pause snapshot; Cosmos is private-endpoint-only) for
+# the estate state as the deploy service principal, the same call the idle
+# auto-pause lane makes. It adds NO secret and NO role.
+#
+# OUTPUTS: state, standdown, paused_by, paused_at. A caller skips ONLY the work
+# that would wake or rescale paused resources when standdown == 'true':
+#
+#   needs: estate-gate
+#   if: ${{ !cancelled() && needs.estate-gate.outputs.standdown != 'true' }}
+#
+# `!= 'true'` (not `== 'false'`) is deliberate and is the fail-open half of the
+# design: if this whole workflow fails (login, checkout, runner), the output is
+# EMPTY and the caller PROCEEDS. A broken gate must not freeze every deploy
+# (deploy-integrity.md R1). UNKNOWN state is handled the same way inside the
+# script, with a ::warning::.
+#
+# A stood-down run SUCCEEDS having deployed nothing, so it is marked: the
+# `Stood down` job below exists ONLY on a stand-down, and
+# scripts/ci/check-deploy-staleness.mjs discards any run carrying it, so a
+# stood-down deploy is never read as a deployed SHA (deploy-integrity.md R2/R3).
+
+on:
+  workflow_call:
+    inputs:
+      boundary:
+        description: 'Commercial | GCC-High | GCC | IL5 (selects secrets, az cloud and console variables).'
+        required: true
+        type: string
+      override_estate_pause:
+        description: 'Operator override. Honoured ONLY when the caller was started by workflow_dispatch; a schedule / push / workflow_run event can never override.'
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      state:
+        description: 'RUNNING | PAUSING | PAUSED | RESUMING | RESUME_FAILED | UNKNOWN'
+        value: ${{ jobs.gate.outputs.state }}
+      standdown:
+        description: "'true' when the lane must skip steps that wake or rescale paused resources"
+        value: ${{ jobs.gate.outputs.standdown }}
+      paused_by:
+        description: 'Who paused the estate, when the console reports it'
+        value: ${{ jobs.gate.outputs.paused_by }}
+      paused_at:
+        description: 'When the estate was paused (ISO), when the console reports it'
+        value: ${{ jobs.gate.outputs.paused_at }}
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: Estate pause gate (${{ inputs.boundary }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      state: ${{ steps.state.outputs.state }}
+      standdown: ${{ steps.state.outputs.standdown }}
+      paused_by: ${{ steps.state.outputs.paused_by }}
+      paused_at: ${{ steps.state.outputs.paused_at }}
+    env:
+      BOUNDARY: ${{ inputs.boundary }}
+      OVERRIDE_ESTATE_PAUSE: ${{ inputs.override_estate_pause }}
+      CSA_LOOM_CONSOLE_URL: ${{ inputs.boundary == 'GCC-High' && vars.CSA_LOOM_GCCH_CONSOLE_URL || inputs.boundary == 'IL5' && vars.CSA_LOOM_IL5_CONSOLE_URL || inputs.boundary == 'GCC' && vars.CSA_LOOM_GCC_CONSOLE_URL || vars.CSA_LOOM_CONSOLE_URL }}
+      CSA_LOOM_CONSOLE_AUDIENCE: ${{ inputs.boundary == 'GCC-High' && vars.CSA_LOOM_GCCH_CONSOLE_AUDIENCE || inputs.boundary == 'IL5' && vars.CSA_LOOM_IL5_CONSOLE_AUDIENCE || inputs.boundary == 'GCC' && vars.CSA_LOOM_GCC_CONSOLE_AUDIENCE || vars.CSA_LOOM_CONSOLE_AUDIENCE }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+
+      - name: Azure login (Commercial)
+        if: ${{ inputs.boundary == 'Commercial' }}
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      - name: Azure login (GCC)
+        if: ${{ inputs.boundary == 'GCC' }}
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GCC_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GCC_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GCC_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GCC_SUBSCRIPTION_ID }}"
+            }
+
+      - name: Azure login (Gov)
+        if: ${{ inputs.boundary == 'GCC-High' || inputs.boundary == 'IL5' }}
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        if: ${{ inputs.boundary == 'GCC-High' || inputs.boundary == 'IL5' }}
+        run: az cloud set --name AzureUSGovernment
+
+      # Never fails the job: the script exits 0 and writes standdown=false on
+      # every read failure (fail-open, see the header).
+      - id: state
+        name: Read the estate state and decide
+        run: node scripts/ci/estate-pause-state.mjs --boundary "$BOUNDARY"
+
+  # Exists ONLY when the lane stands down. Its presence in the run's job list is
+  # the machine-readable "this run deployed nothing because the estate is paused"
+  # that check-deploy-staleness.mjs reads. Keep the name in step with
+  # STOOD_DOWN_JOB_MARKER there.
+  stood-down:
+    name: Stood down - estate paused (nothing deployed)
+    needs: gate
+    if: ${{ needs.gate.outputs.standdown == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Say so
+        env:
+          BOUNDARY: ${{ inputs.boundary }}
+        run: |
+          echo "::notice::Stood down: the $BOUNDARY estate is paused. This run deployed NOTHING. Resume in Admin > Scale by SKU > Estate power, or dispatch with override_estate_pause=true."
+          {
+            echo "### Stood down: estate paused ($BOUNDARY)"
+            echo
+            echo "No wake or rescale step ran. This run is NOT a deployed SHA."
+          } >> "$GITHUB_STEP_SUMMARY"

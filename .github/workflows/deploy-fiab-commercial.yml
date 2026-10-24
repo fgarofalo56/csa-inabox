@@ -110,6 +110,10 @@ on:
         description: 'Optional vanity URL for the console (e.g. csa-loom.contoso.ai). Deploy emits the CNAME + _dnsauth TXT to add at your DNS provider.'
         type: string
         required: false
+      override_estate_pause:
+        description: 'Deploy even though the estate is PAUSED (Estate Power). Default false: while the estate is PAUSING/PAUSED this run STANDS DOWN (nothing deployed) because the apply would start ADX and rewrite the paused Container Apps, undoing the pause (#5111). true = you accept that. A scheduled run can never override.'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -151,8 +155,30 @@ env:
   CSA_LOOM_VANITY_DOMAIN: ${{ inputs.vanity_domain }}
 
 jobs:
+  # ESTATE STAND-DOWN (PRP-02 step 6, #5111). 2026-10-24: the operator paused the
+  # estate at 02:38Z; the scheduled run at 10:36Z started ADX (ADX preflight),
+  # resumed AAS (AAS preflight) and re-rendered the whole template, putting the
+  # paused Container Apps' minReplicas back to 1. This lane cannot be split: ONE
+  # `az deployment sub create` re-renders every resource, and both preflights wake
+  # a resource BEFORE it, so the whole `deploy-validate` job stands down while the
+  # estate is PAUSING/PAUSED. Only the read-only `whatif-only` dispatch still runs
+  # (its wake steps are all gated on schedule || run_mode == full). An UNKNOWN
+  # state PROCEEDS with a ::warning:: (a broken read must not freeze deploys, R1).
+  estate-gate:
+    name: Estate pause gate
+    uses: ./.github/workflows/estate-pause-gate.yml
+    secrets: inherit
+    with:
+      boundary: Commercial
+      override_estate_pause: ${{ inputs.override_estate_pause == true }}
+
   deploy-validate:
     name: Deploy + validate CSA Loom in Commercial
+    needs: estate-gate
+    # `!= 'true'`, not `== 'false'`: a gate that failed to run leaves the output
+    # EMPTY and the deploy proceeds (fail-open by design). `!cancelled()` is what
+    # lets a job run after a needed job that did not succeed.
+    if: ${{ !cancelled() && (needs.estate-gate.outputs.standdown != 'true' || (github.event_name == 'workflow_dispatch' && inputs.run_mode != 'full')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     # JOB-SCOPED, so the widening stops here (#3799). A job-level block REPLACES

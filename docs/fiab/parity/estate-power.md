@@ -87,6 +87,18 @@ Typed in `apps/fiab-console/lib/estate/estate-power-contract.ts`.
 - Caller rule: never auto-pause when `activity.lastActivityAt` is null,
   `autoPause.source` is `unreadable`, or `autoPause.enabled` is false.
 
+## Deploy-lane stand-down (#5111)
+
+The deploy lanes are a second reader of the `state` call above. `estate-pause-gate.yml`
+runs `scripts/ci/estate-pause-state.mjs`, which POSTs `{ action: 'state' }` as the deploy
+service principal and maps `state` to a decision: PAUSING / PAUSED stand the lane down;
+RUNNING / RESUMING / RESUME_FAILED proceed; anything unreadable is `UNKNOWN` and
+proceeds with a warning (fail-open, so a console fault cannot freeze deploys). Only a
+`workflow_dispatch` run with `override_estate_pause: true` can override a stand-down.
+See the [guide](../admin/estate-idle-auto-pause.md#deploy-lanes-stand-down-while-the-estate-is-paused-5111)
+for the per-lane list. Not yet verified live: no scheduled deploy has been observed
+standing down during a live pause. The state body has no `pausedBy` field today.
+
 ## Cloud boundaries
 
 Cloud-agnostic by construction (authority host from `AZURE_CLOUD`, ARM from
