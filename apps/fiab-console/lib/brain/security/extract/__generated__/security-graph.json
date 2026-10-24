@@ -3979,6 +3979,33 @@
           }
         },
         {
+          "id": "sec:authorizer:apps/fiab-console/app/api/admin/estate/always-on/route.ts#GET",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "GET /api/admin/estate/always-on",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "GET /api/admin/estate/always-on",
+            "params": [],
+            "resourceScoped": false,
+            "callerNamedResourceInputs": [],
+            "allowPaths": [
+              {
+                "id": "get:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": false,
+            "privilegedSinkKinds": []
+          }
+        },
+        {
           "id": "sec:authorizer:apps/fiab-console/app/api/admin/estate/autopause/route.ts#GET",
           "kind": "authorizer",
           "provenance": "declared",
@@ -48698,6 +48725,11 @@
         {
           "nodeId": "sec:verdict-call:apps/fiab-console/app/api/admin/env-config/route.ts#PUT:pdpCheck:9",
           "codeModuleId": "code:apps/fiab-console/app/api/admin/env-config/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/admin/estate/always-on/route.ts#GET",
+          "codeModuleId": "code:apps/fiab-console/app/api/admin/estate/always-on/route.ts",
           "deployedAs": "loom-console"
         },
         {

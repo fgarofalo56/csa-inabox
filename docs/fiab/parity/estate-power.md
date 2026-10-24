@@ -40,6 +40,9 @@ service-principal entry point for the Actions/CLI lane.
 | 10 | AKS, VMs, Databricks, Stream Analytics jobs and web sites discovered by the `loom-estate-id` tag (Resource Graph, every subscription the console identity can read), unioned with the manifest and Container Apps; "discovery incomplete" banner when the query fails or a configured subscription is unreadable; the AKS cluster hosting the console is never paused | built 2026-10-23 (#5099 phase A). Merged is not deployed: no live pause/resume walk, GCC-High receipt pending; IL5/DoD supported-in-code only |
 | 11 | PostgreSQL and MySQL flexible servers (stop / start, `state` read-back), Application Gateway (stop / start, `operationalState`), Power BI Embedded (suspend / resume, `state`), all tag-discovered. A database is paused only when every consumer named by the `loom-estate-pause-consumers` tag is in the pause set (paused after them, resumed before them); no tag is held out as "consumers unknown", and a held-out server names the consumer that pins it. A gateway whose backend pools target the console, or whose config cannot be read, is held out. A flexible server Azure auto-restarts under a PAUSED estate (PostgreSQL 7 days, MySQL 30) leaves the estate PAUSED and is re-stopped by the idle lane unless a consumer is running again; the panel row discloses it. Console-critical web apps are stamped `loom-estate-pause=exempt` | built 2026-10-23 (#5099 phase B). Merged is not deployed: no live pause/resume walk, GCC-High receipt pending; IL5/DoD supported-in-code only. As stamped by bicep every stock server is pinned by the console or a never-pause app, so none is stopped until an operator changes a consumers tag |
 
+| 12 | "Always on, not pausable" section: Azure Firewall, Bastion, VPN and ExpressRoute gateways, API Management, Redis, AI Search, Azure OpenAI / AI Services, Event Hubs, Purview, Front Door and Container Registry found by the `loom-estate-id` tag, each with name, type, a plain-words reason and a cost labelled actual month-to-date (Cost Management), estimate (list price, East US, Commercial only) or cost unknown; "inventory incomplete: <reason>" instead of an empty list when discovery fails; links to the existing hold-out list for held-out Container Apps and databases. No pause action for the Firewall (operator decision) | built 2026-10-23 (#5099 phase C). jsdom render tests only, live click-walk (G1) owed. Merged is not deployed; GCC-High receipt pending |
+| 13 | Phase B review fixes: a database's consumers wait for the database to read Online on resume and are skipped when its start failed; a consumer's replicas are read back before its database is stopped; the App Gateway guard knows the console's custom hostnames and listener hosts; the re-stop gate has a test per input | built 2026-10-23 (#5099 phase C). Not exercised against a live database |
+
 **Activity recording** is wired: `withSession` (lib/api/route-toolkit.ts) calls
 `recordHumanActivity` fire-and-forget, throttled to one Cosmos write per 5 minutes
 per replica. PAT sessions, health, session refresh, `/api/internal/*`, the state
@@ -60,6 +63,7 @@ so the contract still forbids auto-pausing on null.
 | Database / gateway / Power BI verbs (phase B) | `lib/estate/pause-actuator-phase-b.ts` | `POST {id}/stop` or `/start` (PostgreSQL `2024-08-01`, MySQL `2023-12-30`, Application Gateway `2024-05-01`); `POST {id}/suspend` or `/resume` (Power BI `2021-01-01`); a start is preceded by a state read |
 | Dependency guard + gateway guard | `lib/estate/pause-guards.ts`, `pause-set-guards.ts`, `pause-appgateway-guard.ts` | tags only for databases; one ARM GET of the gateway for its `backendAddressPools`, at plan time and again at act time |
 | Re-stop of an Azure-restarted server | `lib/estate/pause-reassert.ts`, called from the state read of the idle lane | `POST {id}/stop`, only PostgreSQL / MySQL, only while the estate is PAUSED and armed |
+| Always-on inventory + cost | `GET /api/admin/estate/always-on` (`lib/estate/estate-always-on.ts`) | Resource Graph (tag `loom-estate-id`, tier types listed in the guide) plus per-subscription Cost Management `MonthToDate` by `ResourceId`; list-price table for estimates (Commercial only) |
 | Paused banner | `GET /api/estate/paused` (any signed-in user) | Cosmos pause snapshot only, no ARM call |
 | Idle / last activity | in `power` of the state response | Cosmos doc `estate-activity:current` |
 | Automation | `GET/POST /api/estate/power` | same handlers as the cookie routes |
@@ -98,3 +102,7 @@ not establish for Azure Government (MySQL flexible and the Power BI Embedded
 suspend/resume verb are **not established** there), is in the
 [guide](../admin/estate-idle-auto-pause.md#clouds). No phase-B verb has been run live in
 any cloud.
+
+Phase C (always-on section): Commercial shows actual month-to-date cost or a labelled
+list-price estimate; GCC-High and DoD show actual cost or "cost unknown" (no Gov price
+table); GCC and IL5 are supported-in-code, never exercised. No live run in any cloud.

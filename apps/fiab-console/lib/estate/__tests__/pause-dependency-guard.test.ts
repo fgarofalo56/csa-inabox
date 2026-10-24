@@ -211,7 +211,7 @@ describe('pause order: consumers BEFORE the database; resume: database BEFORE co
   });
 
   // Breaks if: startResume starts an app before the database it needs.
-  it('startResume dispatches psql-o FIRST, then the apps', async () => {
+  it('startResume dispatches psql-o and HOLDS the apps (phase C: they start once the database reads Online)', async () => {
     const ordered = orderForPause(discovery);
     const { actuator, calls } = fakeActuator();
     const run = await startPause(planOf(ordered), actuator, {
@@ -220,7 +220,7 @@ describe('pause order: consumers BEFORE the database; resume: database BEFORE co
     calls.length = 0;
     const paused = { ...run.snapshot, state: 'PAUSED' as const };
     await startResume(paused, actuator);
-    expect(calls).toEqual(['resume:psql-o', 'resume:app-a', 'resume:app-b']);
+    expect(calls).toEqual(['resume:psql-o']); // app-a/app-b wait for the database (see pause-phase-c-review-fixes.test.ts)
   });
 
   // Breaks if: the act-time check is removed - the plan PREDICTED app-b would pause, but its pause was
