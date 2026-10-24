@@ -172,6 +172,11 @@ on:
         description: 'Override the ACR NAME (default: the single registry found in the admin RG).'
         type: string
         default: ''
+      builder:
+        description: 'Where images are built (#5102). gh-runner = docker buildx on the GitHub-hosted runner with a registry layer cache, pushed to the Gov ACR (the durable default: ACR Tasks capacity in usgovvirginia is out). acr-pool = az acr build (console on the loombuild2 S3 pool). BLANK = repo variable GOV_IMAGES_BUILDER, else gh-runner. Scan/sign/verify are identical on both.'
+        required: false
+        type: string
+        default: ''
       skip_supply_chain:
         description: 'EMERGENCY VALVE — skip the Trivy CRITICAL gate + cosign sign/verify. Images ship UNVERIFIED.'
         type: boolean
@@ -195,6 +200,9 @@ on:
         type: string
         default: ''
       acr:
+        type: string
+        default: ''
+      builder:
         type: string
         default: ''
       skip_supply_chain:
@@ -230,6 +238,10 @@ env:
   BOUNDARY: ${{ inputs.boundary || 'gcc-high' }}
   APPS_IN: ${{ inputs.apps || 'loom-console,loom-uat,loom-unity' }}
   TAG_IN: ${{ inputs.tag || 'v0.1' }}
+  # #5102 — effective builder: dispatch/call input, else repo variable
+  # GOV_IMAGES_BUILDER (so the schedule can be overridden with no code change),
+  # else gh-runner. `inputs.*` is empty on schedule, hence the blank input default.
+  BUILDER: ${{ inputs.builder || vars.GOV_IMAGES_BUILDER || 'gh-runner' }}
 
 jobs:
   resolve:
@@ -402,9 +414,16 @@ jobs:
           # pushed NOTHING. loombuild2 is proven on this registry by 8+
           # consecutive green console rolls. Keep the two Gov lanes on the same
           # pool name so this lane cannot silently inherit the wedged one.
+          # #5102 — an unknown builder fails here rather than silently using the
+          # other path.
+          case "$BUILDER" in
+            acr-pool|gh-runner) echo "::notice::#5102 image builder: $BUILDER" ;;
+            *) echo "::error::builder='$BUILDER' is not one of: acr-pool, gh-runner. Fix the dispatch input or the GOV_IMAGES_BUILDER repo variable."; exit 1 ;;
+          esac
           POOL="loombuild2"
           POOL_ARGS=""
-          if [ "$APP" = "loom-console" ]; then
+          # Pool acquire is skipped on gh-runner: nothing is built on a pool.
+          if [ "$APP" = "loom-console" ] && [ "$BUILDER" = "acr-pool" ]; then
             az acr agentpool show -r "$ACR" -n "$POOL" -o none 2>/dev/null \
               || az acr agentpool create -r "$ACR" -n "$POOL" --tier S3 -o none
             CNT=$(az acr agentpool show -r "$ACR" -n "$POOL" --query count -o tsv | tr -d '\r')
@@ -424,7 +443,11 @@ jobs:
           fi
           TAG_LIST=$(printf '%s\n' $TAG_LIST | awk 'NF && !seen[$0]++' | tr '\n' ' ')
           IMG_ARGS=""
-          for t in $TAG_LIST; do IMG_ARGS="$IMG_ARGS --image $APP:$t"; done
+          GH_TAGS=()
+          for t in $TAG_LIST; do
+            IMG_ARGS="$IMG_ARGS --image $APP:$t"
+            GH_TAGS+=(--tag "$ACR_LOGIN/$APP:$t")
+          done
           echo "TAG_LIST=$TAG_LIST" >> "$GITHUB_ENV"
           echo "::notice::$APP will be pushed as: $TAG_LIST"
           # #2929 — the console (and the UAT image built from the same context)
@@ -437,6 +460,29 @@ jobs:
           if [ "$APP" = "loom-console" ] || [ "$APP" = "loom-uat" ]; then
             bash scripts/csa-loom/stage-copilot-corpus.sh
           fi
+          # #5102 — gh-runner: same Dockerfile, context, build args and tag set as
+          # the az acr build leg of the same app below, built on THIS runner with
+          # a registry layer cache (scripts/ci/gh-runner-buildx-push.sh) and pushed
+          # inside the firewall lease taken above. Pool is not touched.
+          if [ "$BUILDER" = "gh-runner" ]; then
+            GHB=(bash scripts/ci/gh-runner-buildx-push.sh --acr-login "$ACR_LOGIN" --cache-image "$APP" --)
+            case "$APP" in
+              loom-console)
+                "${GHB[@]}" "${GH_TAGS[@]}" --file apps/fiab-console/Dockerfile \
+                  --build-arg "LOOM_BUILD_SHA=$SHA_TAG" --build-arg "LOOM_BUILD_TIMESTAMP=$STAMP" \
+                  apps/fiab-console
+                ;;
+              loom-uat)
+                cp apps/fiab-console/.dockerignore /tmp/di.bak
+                grep -vxE 'e2e|tests' /tmp/di.bak > apps/fiab-console/.dockerignore
+                "${GHB[@]}" "${GH_TAGS[@]}" --file apps/fiab-console/Dockerfile.uat apps/fiab-console
+                cp /tmp/di.bak apps/fiab-console/.dockerignore
+                ;;
+              *)
+                "${GHB[@]}" "${GH_TAGS[@]}" "apps/$APP"
+                ;;
+            esac
+          else
           case "$APP" in
             loom-console)
               # #2706 — logs STREAM for the console build (no `--no-logs`). This
@@ -468,6 +514,7 @@ jobs:
               az acr build --registry "$ACR" --no-logs $IMG_ARGS "apps/$APP"
               ;;
           esac
+          fi
           # Pool scale-down: see the verified, if: always() step "Release the ACR
           # build pool" below (the inline `--no-wait || true` it replaces never
           # ran on a cancelled run and discarded every failure).
@@ -587,7 +634,7 @@ jobs:
       # acr-agentpool-reaper.yml collects it once idle. Pool name matches the
       # `POOL=` in the build step (kept in step by acr-pool-release-wiring test).
       - name: Release the ACR build pool (verified)
-        if: always() && matrix.app == 'loom-console' && (steps.build.conclusion == 'success' || steps.build.conclusion == 'failure' || steps.build.conclusion == 'cancelled')
+        if: always() && env.BUILDER != 'gh-runner' && matrix.app == 'loom-console' && (steps.build.conclusion == 'success' || steps.build.conclusion == 'failure' || steps.build.conclusion == 'cancelled')
         run: |
           set -euo pipefail
           node scripts/ci/acr-build-pool.mjs release --acr "$ACR" \

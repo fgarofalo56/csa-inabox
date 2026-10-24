@@ -8,7 +8,7 @@
  *     the Trivy/cosign steps scan is the image the roll deploys);
  *   - the pool release step must be skipped on gh-runner (it must not touch a pool
  *     no run acquired);
- *   - the effective builder resolves input -> repo variable -> acr-pool.
+ *   - the effective builder resolves input -> repo variable -> gh-runner.
  *
  * Each assertion names the edit that turns it red.
  *
@@ -37,27 +37,30 @@ function command(marker) {
   return out;
 }
 
-const buildArgs = (cmd) => [...cmd.matchAll(/--build-arg\s+"([^"]+)"/g)].map((m) => m[1]).sort();
+// The gh-runner leg is a call to the shared script (cache + builder + --push live
+// there; scripts/ci/__tests__/gov-gh-runner-build.test.mjs pins and executes it).
+const GH_CALL = 'bash scripts/ci/gh-runner-buildx-push.sh';
+const buildArgs =(cmd) => [...cmd.matchAll(/--build-arg\s+"([^"]+)"/g)].map((m) => m[1]).sort();
 
 test('both builders pass the identical --build-arg set (parity; a dropped arg breaks the build marker)', () => {
   const acr = buildArgs(command('az acr build'));
-  const gh = buildArgs(command('docker buildx build'));
+  const gh = buildArgs(command(GH_CALL));
   assert.deepEqual(acr, ['LOOM_BUILD_SHA=$SHA', 'LOOM_BUILD_TIMESTAMP=$STAMP'], 'acr-pool path lost an arg');
   assert.deepEqual(gh, acr, 'gh-runner build args differ from the acr-pool path');
 });
 
 test('both builders use the same Dockerfile, context and the SHA + latest tags', () => {
   const acr = command('az acr build');
-  const gh = command('docker buildx build');
+  const gh = command(GH_CALL);
   for (const c of [acr, gh]) {
     assert.match(c, /--file apps\/fiab-console\/Dockerfile/);
     assert.match(c, /apps\/fiab-console\s*$/, 'context must be apps/fiab-console');
     assert.match(c, /loom-console:\$SHA/);
     assert.match(c, /loom-console:latest/);
   }
-  assert.match(gh, /--push/, 'without --push nothing reaches the Gov ACR and the digest check fails');
   assert.match(gh, /\$ACR_LOGIN\/loom-console:\$SHA/, 'tag must be fully qualified to the Gov ACR login server');
-  assert.match(gh, /--platform linux\/amd64/, 'ACR Tasks builds amd64; the Container App is amd64');
+  assert.match(gh, /--cache-image loom-console/, 'cache repo name must be the image name');
+  // --push and --platform are asserted on the script itself (gov-gh-runner-build.test.mjs).
 });
 
 test('gh-runner branch discards no result (R7): no || true, no 2>/dev/null', () => {
@@ -67,10 +70,10 @@ test('gh-runner branch discards no result (R7): no || true, no 2>/dev/null', () 
   assert.match(m[0], /free -g/, 'runner memory evidence must be printed');
 });
 
-test('effective builder resolves input, then repo variable, then acr-pool', () => {
+test('effective builder resolves input, then repo variable, then gh-runner (#5102 durable default)', () => {
   assert.ok(
-    SRC.includes("BUILDER: ${{ inputs.builder || vars.GOV_CONSOLE_BUILDER || 'acr-pool' }}"),
-    'reordering this expression changes which source wins',
+    SRC.includes("BUILDER: ${{ inputs.builder || vars.GOV_CONSOLE_BUILDER || 'gh-runner' }}"),
+    "reordering this expression, or restoring the 'acr-pool' fallback, changes which source wins",
   );
   // The dispatch default must be blank: a non-blank default would shadow the variable on dispatch.
   assert.match(SRC, /\n {6}builder:\n(?: {8}.*\n)*? {8}default: ''\n/, "builder input default must be '' so the variable can apply");
@@ -89,7 +92,7 @@ test('pool release is skipped on gh-runner and still runs on acr-pool conclusion
 });
 
 test('pool acquire/preflight lives only inside the acr-pool branch', () => {
-  const acquire = SRC.indexOf('az acr agentpool create -r "$ACR" -n "$POOL" --tier S3 -o none');
+  const acquire = SRC.indexOf('az acr agentpool create -r "$ACR" -n "$POOL" --tier "$TIER" -o none');
   const guard = SRC.lastIndexOf('if [ "$BUILDER" = "acr-pool" ]; then', acquire);
   const close = SRC.indexOf('# #2929', acquire);
   assert.ok(acquire > 0 && guard > 0 && guard < acquire && acquire < close, 'pool create is outside the acr-pool branch');

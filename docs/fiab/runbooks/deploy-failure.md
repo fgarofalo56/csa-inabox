@@ -162,27 +162,42 @@ the Government portal. Then re-run the failed roll.
 with `QuotaExceeded ... standardDDSv5Family ... 100/100` while deploying the ACR
 service's OWN backing VMSS, and a fresh pool name (`loombuild3`) fails the same
 way. The exhausted quota is in the ACR service's subscription, so raising ours
-does nothing; the fix is a Microsoft support case for ACR Tasks agent-pool
-capacity in the region. `bypass_agent_pool` is not an escape: the default 8 GB
+does nothing; only Microsoft can restore ACR Tasks agent-pool capacity in the
+region (operator decision 2026-10-24: no support case, build on the GitHub
+runner instead). `bypass_agent_pool` is not an escape: the default 8 GB
 agent OOMs on the Next.js build (#2706).
 
-**Switch builders.** `gov-console-roll.yml` can build the image on the
-GitHub-hosted runner (16 GB) with `docker buildx` and push it to the Gov ACR. It
-uses the same Dockerfile, context, build args and tags, inside the same ACR
-firewall lease, and the verified-digest check, Trivy CRITICAL gate and cosign
-sign/verify are unchanged. No pool is acquired or released.
+**The GitHub runner is the Gov default (2026-10-24).** `gov-console-roll.yml`
+and `gov-build-images.yml` build with `docker buildx` on the GitHub-hosted runner
+and push to the Gov ACR. Same Dockerfile, context, build args and tags, inside the
+same ACR firewall lease and after the data-plane gate; the verified-digest check,
+Trivy CRITICAL gate and cosign sign/verify are unchanged. No pool is acquired or
+released. Operator decision: no Microsoft support case; gh-runner stays the default.
 
-- One run: `gh workflow run gov-console-roll.yml -f builder=gh-runner`.
-- Every run, including push-triggered rolls: set the repo variable
-  `gh variable set GOV_CONSOLE_BUILDER --body gh-runner`.
-- Precedence: dispatch input, then `GOV_CONSOLE_BUILDER`, then `acr-pool`. Any other
-  value fails the build step.
+- Precedence: dispatch input `builder`, then the repo variable
+  (`GOV_CONSOLE_BUILDER` for the console roll, `GOV_IMAGES_BUILDER` for
+  gov-build-images), then `gh-runner`. Any other value fails the build step.
+- Pool path on demand: `gh workflow run gov-console-roll.yml -f builder=acr-pool`.
 
-**Switch back** once Microsoft confirms capacity: delete the variable
-(`gh variable delete GOV_CONSOLE_BUILDER`) and do not pass `builder` (or pass
-`-f builder=acr-pool`). Verify with one roll and check the log's
-`#5102 console builder:` line. Then confirm the live revision's image digest and
-`/api/health`.
+**Layer cache.** gh-runner builds use a registry cache at
+`<acr>.azurecr.us/buildcache/<image>:cache`
+(`mode=max,image-manifest=true,oci-mediatypes=true`, docker-container buildx
+driver), via `scripts/ci/gh-runner-buildx-push.sh`. A cache EXPORT failure prints a
+`::warning::` and the build is re-run once without `--cache-to`; a push failure
+still fails the step. A missing cache is a cold build, not an error. The script
+fails early if `az acr login` left no docker credentials for the registry.
+
+**Test whether a small pool tier fits.**
+`gh workflow run gov-console-roll.yml -f builder=acr-pool -f agent_pool_tier=S1 -f agent_pool_name=loombuilds1`.
+The tier is used only when the run creates the pool. Expect the Next.js build to
+OOM below S3; read the result as a capacity measurement.
+
+**Clean up dead pools.**
+`gh workflow run acr-agentpool-reaper.yml -f dry_run=false -f prune_failed=true`
+deletes pools that are Failed AND count 0 AND queue 0, then reads the pool list
+back to confirm. A pool whose queue cannot be read (the wedged `InternalServerError`
+shape) is reported and left alone. With `dry_run=true` it only reports. Dispatch
+only, never scheduled; applies to both boundaries in the matrix.
 
 ## Remediation
 

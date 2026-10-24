@@ -117,7 +117,7 @@ on:
         type: boolean
         default: false
       builder:
-        description: 'Where the console image is built (#5102). acr-pool = ACR Tasks agent pool (the original path). gh-runner = docker buildx on the GitHub-hosted runner, pushed to the Gov ACR; use it when ACR Tasks itself is out of capacity (QuotaExceeded on standardDDSv5Family in the ACR service subscription). BLANK = repo variable GOV_CONSOLE_BUILDER, else acr-pool. Scan/sign/verify are identical on both.'
+        description: 'Where the console image is built (#5102). acr-pool = ACR Tasks agent pool (the original path). gh-runner = docker buildx on the GitHub-hosted runner, pushed to the Gov ACR; use it when ACR Tasks itself is out of capacity (QuotaExceeded on standardDDSv5Family in the ACR service subscription). BLANK = repo variable GOV_CONSOLE_BUILDER, else gh-runner (the durable default since 2026-10-24: ACR Tasks capacity in usgovvirginia is out; layers are cached in the registry under buildcache/loom-console). Scan/sign/verify are identical on both.'
         required: false
         type: string
         default: ''
@@ -129,6 +129,14 @@ on:
         description: 'ACR agent pool to build on (#2706). Default loombuild2 — the ORIGINAL `loombuild` pool on the Gov ACR has a backing queue stuck in "being deleted" (409); builds submitted to it sit ~60min and `az acr build` exits 0 having pushed NOTHING. loombuild2 is the fresh name that fixed it, proven by 8+ consecutive green rolls (17-23min each). If loombuild2 ever wedges the same way, pass a FRESH name (loombuild3) rather than retrying. Precedent: loompool -> loompool2, 2026-07-14 Spark incident.'
         type: string
         default: 'loombuild2'
+      agent_pool_tier:
+        description: 'Tier used when this run CREATES the agent pool (acr-pool builder only; #5102). S3 (default, 16 GB, proven) | S2 | S1. Exists for the capacity test: ACR Tasks is out of standardDDSv5Family in usgovvirginia and a smaller tier may still fit. Expect the Next.js build to OOM below S3. Ignored when the pool already exists.'
+        type: choice
+        default: 'S3'
+        options:
+          - S3
+          - S2
+          - S1
       recreate_agent_pool:
         description: 'REMEDIATION (#2706) — delete + recreate the agent pool named by agent_pool_name before building. NOTE: this did NOT work on the wedged `loombuild` pool (run 30565655935 got "The specified queue is being deleted", 409) — a fresh NAME is the reliable move. Safe: an agent pool is stateless build compute and the build step recreates it when absent.'
         type: boolean
@@ -177,9 +185,10 @@ env:
   ACR_LOGIN: acrloomdcmt6cqoezlgs.azurecr.us
   APP: loom-console
   # #5102 — effective builder: dispatch input, else repo variable (so a
-  # push-triggered roll can use gh-runner with no code change), else acr-pool.
+  # push-triggered roll can override with no code change), else gh-runner (the
+  # durable default: ACR Tasks capacity in usgovvirginia is out, 2026-10-24).
   # `inputs.*` is empty on push, which is why the input default is blank.
-  BUILDER: ${{ inputs.builder || vars.GOV_CONSOLE_BUILDER || 'acr-pool' }}
+  BUILDER: ${{ inputs.builder || vars.GOV_CONSOLE_BUILDER || 'gh-runner' }}
 
 jobs:
   roll:
@@ -335,7 +344,7 @@ jobs:
           STAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
           # #5102 — WHICH BUILDER. Resolved once, in the job env (dispatch input,
-          # else repo variable GOV_CONSOLE_BUILDER, else acr-pool). An unknown
+          # else repo variable GOV_CONSOLE_BUILDER, else gh-runner). An unknown
           # value fails here rather than silently falling back to the other path.
           case "$BUILDER" in
             acr-pool|gh-runner) echo "::notice::#5102 console builder: $BUILDER" ;;
@@ -356,6 +365,12 @@ jobs:
             # 30565655935) — a fresh NAME is the reliable move.
             POOL="${{ inputs.agent_pool_name }}"
             POOL="${POOL:-loombuild2}"
+            # #5102 — pool tier is an input (default S3, the proven 16 GB tier).
+            # S1 (3 GB) / S2 (8 GB) exist only to test whether a smaller tier fits
+            # in the capacity ACR Tasks still has; the Next.js build is expected to
+            # OOM below S3, so treat an S1/S2 result as a measurement, not a roll.
+            TIER="${{ inputs.agent_pool_tier }}"
+            TIER="${TIER:-S3}"
             echo "::notice::building on ACR agent pool: $POOL"
 
             # #2706 REMEDIATION — recreate the pool when asked. The bypass diagnostic
@@ -369,12 +384,12 @@ jobs:
               echo "  runs before delete (evidence for Azure support if this does not fix it):"
               az acr task list-runs -r "$ACR" --top 10 -o table 2>&1 | sed 's/^/    /' | head -14 || true
               az acr agentpool delete -r "$ACR" -n "$POOL" --yes -o none 2>&1 | head -3 || true
-              az acr agentpool create -r "$ACR" -n "$POOL" --tier S3 --count 1 -o none
-              echo "::notice::$POOL recreated (S3, count 1)"
+              az acr agentpool create -r "$ACR" -n "$POOL" --tier "$TIER" --count 1 -o none
+              echo "::notice::$POOL recreated ($TIER, count 1)"
             fi
 
             az acr agentpool show -r "$ACR" -n "$POOL" -o none 2>/dev/null \
-              || az acr agentpool create -r "$ACR" -n "$POOL" --tier S3 -o none
+              || az acr agentpool create -r "$ACR" -n "$POOL" --tier "$TIER" -o none
             CNT=$(az acr agentpool show -r "$ACR" -n "$POOL" --query count -o tsv | tr -d '\r')
             [ "${CNT:-0}" -ge 1 ] || az acr agentpool update -r "$ACR" -n "$POOL" --count 1 -o none
             # (STAMP is computed above, shared by both builders.)
@@ -473,10 +488,14 @@ jobs:
             # IP is allowed on the data plane by the firewall lease taken above.
             # No `|| true` / `2>/dev/null`: a failed build or push fails the step
             # with docker's own output (deploy-integrity R7).
+            # Layer cache + docker-container builder + cache-failure policy live in
+            # scripts/ci/gh-runner-buildx-push.sh (shared with gov-build-images.yml,
+            # unit-tested): registry cache at $ACR_LOGIN/buildcache/loom-console:cache,
+            # --platform linux/amd64 --push always passed.
             echo "::notice::runner memory (the Dockerfile sets NODE_OPTIONS=--max-old-space-size=8192 for the build stage):"
             free -g
             docker version --format 'docker server {{.Server.Version}}'
-            docker buildx build --platform linux/amd64 --push \
+            bash scripts/ci/gh-runner-buildx-push.sh --acr-login "$ACR_LOGIN" --cache-image loom-console -- \
               --tag "$ACR_LOGIN/loom-console:$SHA" --tag "$ACR_LOGIN/loom-console:latest" \
               --file apps/fiab-console/Dockerfile \
               --build-arg "LOOM_BUILD_SHA=$SHA" --build-arg "LOOM_BUILD_TIMESTAMP=$STAMP" \
