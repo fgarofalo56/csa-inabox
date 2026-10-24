@@ -9,7 +9,8 @@
 #   0  every required cell has a value and no probe recorded a failure
 #   1  at least one required cell is EMPTY (never measured)  <- the guard this script exists for
 #   2  every cell has a value but at least one correctness probe recorded 0 (a measured failure)
-# Local-smoke results are printed but the verdict column says NOT PASS-BAR EVIDENCE.
+# Local-smoke results, and sandbox results whose recorded profile is not class-s (see LHDS_SANDBOX_PROFILE in
+# dicom-engine-load.sh), are printed but the verdict says NOT PASS-BAR EVIDENCE.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=dicom-engine-lib.sh
@@ -45,7 +46,8 @@ CELLS=(
 PROBES=(stow_count_ok ldap_backup_ok ldap_restart_ok)
 
 label="$(awk -F'\t' '$1=="stow_p95_ms" {n=split($4,a," "); for(i=1;i<=n;i++) if (a[i] ~ /^env=/) v=substr(a[i],5)} END{print v}' "$M")"
-printf 'DICOM engine receipt table (W0-2)  results=%s  env=%s\n' "$M" "${label:-UNKNOWN}"
+profile="$(awk -F'\t' '$1=="stow_p95_ms" {n=split($4,a," "); for(i=1;i<=n;i++) if (a[i] ~ /^profile=/) v=substr(a[i],9)} END{print v}' "$M")"
+printf 'DICOM engine receipt table (W0-2)  results=%s  env=%s  profile=%s\n' "$M" "${label:-UNKNOWN}" "${profile:-unspecified}"
 printf '%-62s | %-12s | %s\n' "cell" "value" "unit"
 printf -- '-------------------------------------------------------------- | ------------ | ------\n'
 
@@ -69,6 +71,9 @@ p95="$(last_metric "$M" stow_p95_ms)"; conc="$(last_metric "$M" stow_concurrency
 echo
 if [[ "${label:-}" != "sandbox" ]]; then
   echo "ADR-002 STOW bar: NOT PASS-BAR EVIDENCE (env=${label:-UNKNOWN}; only a sandbox AKS+Blob run counts)"
+elif [[ "${profile:-unspecified}" != "class-s" ]]; then
+  # Value that breaks it: a DEV (1x D8s_v5) run whose p95 happens to be <= 300 ms must NOT print PASS.
+  echo "ADR-002 STOW bar: NOT PASS-BAR EVIDENCE (profile=${profile:-unspecified}; only a class-s sandbox run counts, DEV proves function)"
 elif [[ -z "$p95" || -z "$conc" || -z "$sz" ]]; then
   echo "ADR-002 STOW bar: NOT COMPUTABLE (missing p95/concurrency/size)"
 elif awk -v c="$conc" -v s="$sz" 'BEGIN{exit !(c>=100 && s>=524288)}'; then
