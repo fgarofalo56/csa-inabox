@@ -26,8 +26,8 @@ evidence list an agency authorization package needs from the platform.
    `tenantId` at the storage boundary (separate database or schema per tenant on
    a shared stamp; separate storage container per tenant; per-tenant CMK) and
    every data-plane query is tested with a cross-tenant probe that must return
-   zero rows. This is the lesson of the private advisory GHSA-g7m7 (lakehouse
-   storage that was not workspace-isolated): a filter in application code is a
+   zero rows. This is the lesson of the private advisory on lakehouse
+   storage that was not workspace-isolated: a filter in application code is a
    bug away from a breach; a boundary in the store is not.
 3. **Deny by default, authorize at a single PDP.** FHIR scopes, DICOM roles,
    consent directives and security labels are evaluated by one policy decision
@@ -65,7 +65,7 @@ evidence list an agency authorization package needs from the platform.
 | DICOM store | One metadata schema per tenant; one Blob container per tenant with per-tenant CMK (ADR-004) | Same probe at DICOMweb; a storage-level listing shows no cross-container SAS or role |
 | Search / cache | Redis keyspace prefix per tenant, separate database index per tenant; cache keys include `tenantId`, never derived from user input | Fuzz test that a crafted resource id cannot escape the prefix |
 | Event stream | Event Hubs: one hub per tenant per event class, consumer groups per subscriber tenant | Role assignments enumerated per hub |
-| Lakehouse sink | Separate ADLS container per tenant under the Loom workspace that owns the health tenant (reusing Loom's workspace isolation, with the GHSA-g7m7 fix as a prerequisite — `RISKS-AND-OPEN-DECISIONS.md` Q7) | Loom's existing workspace-isolation tests plus the health-specific probe |
+| Lakehouse sink | Separate ADLS container per tenant under the Loom workspace that owns the health tenant (reusing Loom's workspace isolation, with the private lakehouse-isolation advisory fix as a prerequisite — `RISKS-AND-OPEN-DECISIONS.md` Q7) | Loom's existing workspace-isolation tests plus the health-specific probe |
 | Keys | One CMK per tenant per purpose (storage, database, backup) | Key Vault access policy enumeration |
 | Blast radius | A stamp outage affects only its tenants; a tenant key revocation affects only that tenant | DR drill in `OPERATIONS-AND-BCDR.md` section 6 |
 
@@ -211,7 +211,7 @@ Microsoft Presidio (text) — ADR-015, licences per `research/oss-engine-evaluat
 | Event / outbox | Replayed events → idempotency key per event | Event order tamper → sequence numbers in the outbox table | Lost event claims → outbox row retained until consumer ack | PHI in event payload → events carry ids only; consumers fetch | Consumer lag → KEDA scaling on lag, dead-letter with alert | Consumer group hijack → Entra RBAC per consumer group |
 | Converter (HL7 v2 / C-CDA) | Spoofed MLLP sender → MLLP only over TLS inside the customer network; API path requires system token | Template tamper → templates versioned, signed, tested | Conversion not traceable → `Provenance` resource per converted bundle with template version | Source message retained in logs → scrubber + raw message store with the same retention class as PHI | Message floods → queue-backed, backpressure | Template code execution → Liquid sandboxed, no custom filters that touch the filesystem |
 | De-id / export jobs | Job submitted by wrong tenant → job scoped to the caller's tenant | Output substituted → output written with content hash manifest | Export unaccounted → `AuditEvent` per export with file list | Re-identification via quasi-identifiers → Expert Determination hook, k-anonymity report | Giant exports → chunked, resumable, quota | Job identity reused → per-job managed identity federated credential, short-lived |
-| Lakehouse sink | Fake sink writer → sink identity is the stamp's UAMI only | Delta table rewritten → Delta log + Loom's existing lakehouse ACLs | Rows without lineage → `_provenance` columns (resource id, version, stamp, ts) | Labeled (Part 2) rows in the lake → PDP redaction before sink; a tenant flag to exclude labeled data entirely | Backfill storms → rate-limited backfill job | Workspace crossing → GHSA-g7m7 fix prerequisite |
+| Lakehouse sink | Fake sink writer → sink identity is the stamp's UAMI only | Delta table rewritten → Delta log + Loom's existing lakehouse ACLs | Rows without lineage → `_provenance` columns (resource id, version, stamp, ts) | Labeled (Part 2) rows in the lake → PDP redaction before sink; a tenant flag to exclude labeled data entirely | Backfill storms → rate-limited backfill job | Workspace crossing → the private lakehouse-isolation advisory fix prerequisite |
 | Viewer (OHIF) | Token in URL → tokens in header via the Loom BFF, never in query | Tampered viewer bundle → built in the pool, SRI hashes | Viewing not logged → WADO fetch is the audited event | Cached frames on disk → viewer served with `Cache-Control: no-store` for PHI responses | Large series → progressive loading, HTJ2K later (D16) | Viewer config injection → config from the BFF only |
 | Control plane (Loom console + health CP) | Admin session theft → existing Loom session hardening | Stamp registry tamper → Cosmos with etag + audit | Routing changes unlogged → every registry change audited | Registry leaks tenant names → registry access is tenant-admin scoped | Registry down → router caches last-known-good map | Loom admin → health admin → separate `Health Tenant Admin` capability, not inherited from Loom Admin by default (D12) |
 

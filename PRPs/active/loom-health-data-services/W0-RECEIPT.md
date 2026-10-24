@@ -76,7 +76,7 @@ pass bars.
    and no SSD v2 was seen (section 4.1b).
 9. **Azure Load Testing does not exist in Gov.** The resource type is absent,
    so Gov load tests must use in-cluster drivers.
-10. **GHSA-g7m7 (Q7) is only partly answered.** Commercial is established; Gov is
+10. **The private lakehouse-isolation advisory (Q7) is only partly answered.** Commercial is established; Gov is
    not. Details are in section 7.6, deliberately neutral.
 
 
@@ -1048,7 +1048,7 @@ dispatched. Paths below are repo-relative and refer to that SHA.
 | 3 | `apimSku` usage | Required param (no default) `platform/fiab/bicep/main.bicep:64`; see 7.4 | `AZURE-GOV-AVAILABILITY.md:37,67`, `RISKS-AND-OPEN-DECISIONS.md:15`: Loom parameterises `apimSku`; classic Premium in Gov | CONFIRMED |
 | 4 | `boundary` enum | `@allowed(['Commercial', 'GCC', 'GCC-High', 'IL5'])` at `platform/fiab/bicep/main.bicep:20` (param at :21); no `DoD` | `ARCHITECTURE.md:174`, `RISKS-AND-OPEN-DECISIONS.md:12`: enum lacks DoD at `main.bicep:20` | CONFIRMED |
 | 5 | `containerPlatform` per param file | All 7 param files set `'containerApps'`; none sets `'aks'`; see 7.5 | `adr/ADR-009-compute-platform-aks.md:7-8`: ContainerApps in every boundary file incl. IL5 (`il5.bicepparam:121`). BUT `ARCHITECTURE.md:88-90` and `AZURE-GOV-AVAILABILITY.md:23`: "AKS at IL5/DoD (existing `containerPlatform` switch)" | CONTRADICTED within the PRP set, see 7.5 |
-| 6 | GHSA-g7m7 existence and deploy state | Advisory exists, state `draft` (private, unpublished). Fix deploy: see 7.6 | `RISKS-AND-OPEN-DECISIONS.md:48` (Q7) and `OPERATOR-DECISIONS-2026-10-22.md:38`: "not yet verified" | Q7 partly established, see 7.6 |
+| 6 | Private lakehouse-isolation advisory: existence and deploy state | Advisory exists, state `draft` (private, unpublished). Fix deploy: see 7.6 | `RISKS-AND-OPEN-DECISIONS.md:48` (Q7) and `OPERATOR-DECISIONS-2026-10-22.md:38`: "not yet verified" | Q7 partly established, see 7.6 |
 | 7 | #4584 state | OPEN, closedAt null | `LOOM-INTEGRATION.md:76`, `RISKS-AND-OPEN-DECISIONS.md:59`: Gov image lanes lack Trivy/cosign | CONFIRMED |
 
 ### 7.2 Fact 1 - `backingStore` (governance-autopilot W2)
@@ -1162,13 +1162,13 @@ comments say ACA is GA in USGov.)
   wording "via the existing switch" understates that. Left for the W0-7 decision
   pass; not edited here.
 
-### 7.6 Fact 6 - GHSA-g7m7 existence and deploy state (existence only)
+### 7.6 Fact 6 - private lakehouse-isolation advisory: existence and deploy state (existence only)
 
 Public repo: this section deliberately carries no advisory body, no fix PR
 number, no commit and no affected-component description (operator convention:
 public surfaces stay neutral until patched AND deployed on every estate).
 
-- Existence: a private advisory with the `g7m7` id prefix exists, `state: draft`
+- Existence: the private advisory exists, `state: draft`
   (unpublished), read 2026-10-22 via the repository security-advisories API; only
   the id and state fields were read.
 - Commercial: the candidate fix is an ancestor of `b192f05ea`, and the live

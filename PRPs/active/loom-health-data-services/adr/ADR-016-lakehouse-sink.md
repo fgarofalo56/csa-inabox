@@ -27,7 +27,7 @@ Status: Proposed. Date: 2026-10-22. Evidence: `../research/ahds-feature-inventor
   totals at the watermark).
 
 ## Prerequisite
-Loom lakehouse workspace isolation (GHSA-g7m7) must be fixed and deployed
+Loom lakehouse workspace isolation (a private advisory) must be fixed and deployed
 before any health tenant's sink is enabled (`../RISKS-AND-OPEN-DECISIONS.md` Q7).
 
 ## Reversal cost
