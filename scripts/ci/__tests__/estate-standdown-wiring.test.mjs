@@ -70,6 +70,21 @@ for (const [file, boundary, target] of LANES) {
   });
 }
 
+// Breaks if the full-app gate reads the state at RUN START (no needs): a pause taken during the 20+ min image build
+// would be missed and the roll would undo it (review of #5113). It must also survive a skipped/failed build.
+test('full-app-deploy-commercial: the gate reads the state AFTER the build, just before the roll', () => {
+  const text = wf('full-app-deploy-commercial.yml');
+  const gate = jobBlock(text, 'estate-gate');
+  assert.match(gate, /^    needs: \[close-acr, verify-images\]$/m, 'the gate must wait for the build to finish');
+  assert.match(jobIf(gate), /!cancelled\(\)/, 'a skipped or failed build must not skip the gate (it would leave standdown empty: proceed)');
+  // Positive pair: the roll still waits on the gate and honours its verdict.
+  const roll = jobBlock(text, 'redeploy-with-apps');
+  assert.match(roll, /needs: \[[^\]]*estate-gate[^\]]*\]/);
+  assert.match(jobIf(roll), /needs\.estate-gate\.outputs\.standdown != 'true'/);
+  // The summary says "stood down", so a skipped roll never reads as a plain skip.
+  assert.match(jobBlock(text, 'notify'), /STOOD DOWN: the estate is paused/);
+});
+
 test('commercial: a schedule cannot reach the override and whatif-only still runs', () => {
   const cond = jobIf(jobBlock(wf('deploy-fiab-commercial.yml'), 'deploy-validate'));
   assert.ok(cond.includes("github.event_name == 'workflow_dispatch' && inputs.run_mode != 'full'"), 'only a dispatched whatif-only run may bypass the stand-down');

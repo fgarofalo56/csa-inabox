@@ -1003,9 +1003,13 @@ jobs:
   # and what chains off it stand down: it re-renders the Container Apps and so
   # undoes a pause. The image build/verify phase writes only the ACR, which Estate
   # Power never pauses, so it keeps running. UNKNOWN proceeds (::warning::).
+  # The gate reads the state AFTER the build (needs close-acr/verify-images), right
+  # before the roll: a pause taken during a long build must still stop the roll.
+  # !cancelled() keeps it running when the build was skipped or failed.
   estate-gate:
     name: Estate pause gate
-    if: ${{ inputs.enable_apps_after }}
+    needs: [close-acr, verify-images]
+    if: ${{ !cancelled() && inputs.enable_apps_after }}
     uses: ./.github/workflows/estate-pause-gate.yml
     secrets: inherit
     with:
@@ -1345,7 +1349,7 @@ jobs:
         run: bash scripts/csa-loom/start-copilot-evaluator-rebaseline.sh
   notify:
     name: Notify final state
-    needs: [resolve, build, close-acr, redeploy-with-apps]
+    needs: [resolve, build, close-acr, redeploy-with-apps, estate-gate]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -1358,6 +1362,9 @@ jobs:
       - name: Summarise
         run: |
           echo "full-app-deploy-commercial run ${{ github.run_id }}: build=${{ needs.build.result }}, close-acr=${{ needs.close-acr.result }}, redeploy=${{ needs.redeploy-with-apps.result }}" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ needs.estate-gate.outputs.standdown }}" = "true" ]; then
+            echo "**Roll STOOD DOWN: the estate is paused.** The images were built; nothing was rolled, so this run is NOT a deployed SHA. Resume the estate (Admin > Scale by SKU > Estate power) or dispatch with override_estate_pause." >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Notify on failure (dedicated, OPEN issue)
         # #3368 — this WAS
         #     needs.redeploy-with-apps.result != 'success' || needs.build.result == 'failure'
