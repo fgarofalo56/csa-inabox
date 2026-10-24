@@ -28,12 +28,7 @@
 | [loom-brain](backlog/loom-brain/PRP.md) | P2 | 3 | - | - | opus / sonnet | none |
 | [snowflake-parity](backlog/snowflake-parity/PRP.md) | P2 | 5 | - | - | opus / sonnet | none |
 | [apim-ai-gateway](backlog/apim-ai-gateway/PRP.md) | P2 | 6 | - | - | opus / sonnet | none |
-| [PRP-01-tooling-hygiene](backlog/finish-2026-10/PRP-01-tooling-hygiene.md) | P2 | 10 | - | - | opus / sonnet | none |
-| [PRP-03-land-open-prs](backlog/finish-2026-10/PRP-03-land-open-prs.md) | P2 | 11 | - | - | opus / sonnet | none |
 | [W10-device-ingest](active/loom-health-data-services/W10-device-ingest.md) | P2 | 11 | W07-search-performance-at-scale | W07-search-performance-at-scale (backlog) | sonnet / sonnet | none |
-| [PRP-04-gov-unity](backlog/finish-2026-10/PRP-04-gov-unity.md) | P2 | 12 | - | - | opus / sonnet | none |
-| [PRP-05-backlog](backlog/finish-2026-10/PRP-05-backlog.md) | P2 | 13 | - | - | opus / sonnet | none |
-| [PRP-02-estate-power](backlog/finish-2026-10/PRP-02-estate-power.md) | P2 | 15 | - | - | opus / sonnet | none |
 | [governance-autopilot](backlog/governance-autopilot/PRP.md) | P2 | 16 | - | - | opus / sonnet | none |
 
 ## Blocked
@@ -51,7 +46,6 @@ _none_
 | PRP | Priority |
 |---|---|
 | [drain-2026-08-31](abandoned/drain-2026-08-31/PRP.md) | P2 |
-| [drain-2026-09-28](abandoned/drain-2026-09-28/PRP.md) | P2 |
 | [estate-pause-resume](abandoned/estate-pause-resume/PRP.md) | P2 |
 | [omnibus-2026-08-22](abandoned/omnibus-2026-08-22/PRP.md) | P2 |
 | [zero-backlog](abandoned/zero-backlog/PRP.md) | P2 |
