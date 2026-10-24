@@ -38,6 +38,7 @@ service-principal entry point for the Actions/CLI lane.
 | 8 | Container Apps in the pause set by default; global and per-app opt-out in the panel; never-pause list shown with reasons | built 2026-10-22 ([guide](../admin/estate-idle-auto-pause.md)). Not exercised against a live app |
 | 9 | Shell banner (count, names, when, by whom) with admin Resume / Retry resume; read-only text for others | built 2026-10-22. jsdom only, no in-browser walk (G1) |
 | 10 | AKS, VMs, Databricks, Stream Analytics jobs and web sites discovered by the `loom-estate-id` tag (Resource Graph, every subscription the console identity can read), unioned with the manifest and Container Apps; "discovery incomplete" banner when the query fails or a configured subscription is unreadable; the AKS cluster hosting the console is never paused | built 2026-10-23 (#5099 phase A). Merged is not deployed: no live pause/resume walk, GCC-High receipt pending; IL5/DoD supported-in-code only |
+| 11 | PostgreSQL and MySQL flexible servers (stop / start, `state` read-back), Application Gateway (stop / start, `operationalState`), Power BI Embedded (suspend / resume, `state`), all tag-discovered. A database is paused only when every consumer named by the `loom-estate-pause-consumers` tag is in the pause set (paused after them, resumed before them); no tag is held out as "consumers unknown", and a held-out server names the consumer that pins it. A gateway whose backend pools target the console, or whose config cannot be read, is held out. A flexible server Azure auto-restarts under a PAUSED estate (PostgreSQL 7 days, MySQL 30) leaves the estate PAUSED and is re-stopped by the idle lane unless a consumer is running again; the panel row discloses it. Console-critical web apps are stamped `loom-estate-pause=exempt` | built 2026-10-23 (#5099 phase B). Merged is not deployed: no live pause/resume walk, GCC-High receipt pending; IL5/DoD supported-in-code only. As stamped by bicep every stock server is pinned by the console or a never-pause app, so none is stopped until an operator changes a consumers tag |
 
 **Activity recording** is wired: `withSession` (lib/api/route-toolkit.ts) calls
 `recordHumanActivity` fire-and-forget, throttled to one Cosmos write per 5 minutes
@@ -56,6 +57,9 @@ so the contract still forbids auto-pausing on null.
 | Auto-pause setting (incl. Container Apps opt-outs) | `GET/PUT /api/admin/estate/autopause` | Cosmos doc `estate-autopause:current` |
 | Container Apps list + per-app fate | `containerApps` in the RUNNING state / preview response | ARM list of `Microsoft.App/containerApps` in `LOOM_ACA_RG` (else `LOOM_ADMIN_RG`) |
 | Tag discovery + completeness (`discovery` in the RUNNING state / preview response) | `lib/estate/pause-tag-discovery.ts` | `POST {arm}/providers/Microsoft.ResourceGraph/resources` (the cloud's own ARM host, so `management.usgovcloudapi.net` in Gov), `$skipToken` paged, tier types except Container Apps, `tags['loom-estate-id'] ==` this estate id; plus a `resourcecontainers` probe that every configured subscription is readable |
+| Database / gateway / Power BI verbs (phase B) | `lib/estate/pause-actuator-phase-b.ts` | `POST {id}/stop` or `/start` (PostgreSQL `2024-08-01`, MySQL `2023-12-30`, Application Gateway `2024-05-01`); `POST {id}/suspend` or `/resume` (Power BI `2021-01-01`); a start is preceded by a state read |
+| Dependency guard + gateway guard | `lib/estate/pause-guards.ts`, `pause-set-guards.ts`, `pause-appgateway-guard.ts` | tags only for databases; one ARM GET of the gateway for its `backendAddressPools`, at plan time and again at act time |
+| Re-stop of an Azure-restarted server | `lib/estate/pause-reassert.ts`, called from the state read of the idle lane | `POST {id}/stop`, only PostgreSQL / MySQL, only while the estate is PAUSED and armed |
 | Paused banner | `GET /api/estate/paused` (any signed-in user) | Cosmos pause snapshot only, no ARM call |
 | Idle / last activity | in `power` of the state response | Cosmos doc `estate-activity:current` |
 | Automation | `GET/POST /api/estate/power` | same handlers as the cookie routes |
@@ -87,3 +91,10 @@ unit tests only, including a Commercial issuer refused by a Gov console and the
 `.us` issuer accepted. **Not verified:** no live Commercial or GCC-High call, no
 live Entra token, no in-browser walk (G1). GCC and IL5/DoD are supported-in-code
 only, never exercised.
+
+Phase-B types (PostgreSQL / MySQL flexible, Application Gateway, Power BI Embedded) use
+the same ARM transport. Per-cloud availability, with what Microsoft Learn does and does
+not establish for Azure Government (MySQL flexible and the Power BI Embedded
+suspend/resume verb are **not established** there), is in the
+[guide](../admin/estate-idle-auto-pause.md#clouds). No phase-B verb has been run live in
+any cloud.

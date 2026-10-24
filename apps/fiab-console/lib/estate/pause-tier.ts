@@ -38,6 +38,15 @@ export const ESTATE_PAUSE_TIER: readonly string[] = [
   'microsoft.streamanalytics/streamingjobs',
   'microsoft.web/sites',
   'microsoft.databricks/workspaces',
+  // #5099 phase B. PostgreSQL/MySQL are DATA tier but guarded by their CONSUMERS
+  // (see `dbPauseGuard` in ./pause-guards): a server is paused only when every
+  // app that uses it is itself being paused. App Gateway is PLATFORM tier and
+  // guarded by its backend pools (`./pause-appgateway-guard`). Power BI Embedded
+  // is DATA tier.
+  'microsoft.dbforpostgresql/flexibleservers',
+  'microsoft.dbformysql/flexibleservers',
+  'microsoft.network/applicationgateways',
+  'microsoft.powerbidedicated/capacities',
 ];
 
 /**
@@ -74,14 +83,23 @@ export const TYPICAL_RESUME_SECONDS: Readonly<Record<string, number>> = {
   'microsoft.web/sites': 60,
   // Warehouses start in minutes; classic clusters 5-10.
   'microsoft.databricks/workspaces': 420,
+  // Learn (PostgreSQL/MySQL flexible server start): minutes; start is not
+  // guaranteed during regional capacity outages.
+  'microsoft.dbforpostgresql/flexibleservers': 300,
+  'microsoft.dbformysql/flexibleservers': 300,
+  // Application Gateway v2 start re-provisions instances: Microsoft publishes
+  // 15-20 minutes provisioning for a new gateway; a start is typically shorter.
+  'microsoft.network/applicationgateways': 600,
+  // Capacity resume is minutes; Learn publishes no figure.
+  'microsoft.powerbidedicated/capacities': 180,
 };
 
 /**
  * Resume dispatch order: platform first, then data services, then the things
  * that consume them. Lower rank dispatches earlier.
  *
- *   0  platform   AKS clusters (workloads cannot schedule without one)
- *   1  data       ADX, Synapse pools, AAS, Stream Analytics
+ *   0  platform   AKS clusters (workloads cannot schedule without one), Application Gateways
+ *   1  data       ADX, Synapse pools, AAS, Stream Analytics, PostgreSQL/MySQL, Power BI Embedded
  *   2  consumers  Container Apps, VMs, VM scale sets, Web sites
  *
  * An unrecognised type ranks with the consumers (last) rather than first, so
@@ -93,11 +111,18 @@ export const TYPICAL_RESUME_SECONDS: Readonly<Record<string, number>> = {
  */
 const RESUME_RANK: Readonly<Record<string, number>> = {
   'microsoft.containerservice/managedclusters': 0,
+  // #5099 phase B: the gateway is platform (rank 0): resumed first, paused last.
+  'microsoft.network/applicationgateways': 0,
   'microsoft.kusto/clusters': 1,
   'microsoft.synapse/workspaces/sqlpools': 1,
   'microsoft.analysisservices/servers': 1,
   'microsoft.streamanalytics/streamingjobs': 1,
   'microsoft.databricks/workspaces': 1,
+  // #5099 phase B data tier: a database is resumed BEFORE its consumers (rank 2)
+  // and paused AFTER them, so an app is never left running against a stopped DB.
+  'microsoft.dbforpostgresql/flexibleservers': 1,
+  'microsoft.dbformysql/flexibleservers': 1,
+  'microsoft.powerbidedicated/capacities': 1,
   'microsoft.app/containerapps': 2,
   'microsoft.compute/virtualmachines': 2,
   'microsoft.compute/virtualmachinescalesets': 2,

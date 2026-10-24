@@ -364,6 +364,69 @@ export const PAUSABLE_RESOURCE_TYPES: Readonly<Record<string, PausableTypeSpec>>
     capacityConstrained: false,
     armApiVersion: '2023-12-01',
   },
+  // ── #5099 phase B ─────────────────────────────────────────────────────────
+  // Verbs and power fields verified on Microsoft Learn (REST reference), 2026-10-23:
+  //   PostgreSQL flexible  POST .../flexibleServers/{n}/stop | /start; properties.state
+  //                        Ready | Stopped | Stopping | Starting | Updating | Disabled | Dropping
+  //   MySQL flexible       same verbs and states.
+  //   Application Gateway  POST .../applicationGateways/{n}/stop | /start; properties.operationalState
+  //                        Running | Stopped | Starting | Stopping
+  //   Power BI Embedded    POST .../capacities/{n}/suspend | /resume; properties.state
+  //                        Succeeded | Paused | Suspended | Pausing | Suspending | Resuming | Preparing | Scaling ...
+  'microsoft.dbforpostgresql/flexibleservers': {
+    resourceType: 'microsoft.dbforpostgresql/flexibleservers',
+    label: 'PostgreSQL flexible server',
+    mechanism: 'arm-stop-action',
+    // Learn: "Starting a server depends on the available capacity in the region.
+    // During capacity outages, the server start operation isn't guaranteed to succeed."
+    capacityConstrained: true,
+    fallbackSku: {
+      name: 'Standard_B1ms',
+      tier: 'Burstable',
+      reason:
+        'The original compute size could not be started in the region on resume. Standard_B1ms is the '
+        + 'smallest PostgreSQL flexible-server size; scale back up once capacity frees.',
+    },
+    armApiVersion: '2024-08-01',
+  },
+  'microsoft.dbformysql/flexibleservers': {
+    resourceType: 'microsoft.dbformysql/flexibleservers',
+    label: 'MySQL flexible server',
+    mechanism: 'arm-stop-action',
+    capacityConstrained: true,
+    fallbackSku: {
+      name: 'Standard_B1ms',
+      tier: 'Burstable',
+      reason:
+        'The original compute size could not be started in the region on resume. Standard_B1ms is the '
+        + 'smallest MySQL flexible-server size; scale back up once capacity frees.',
+    },
+    armApiVersion: '2023-12-30',
+  },
+  'microsoft.network/applicationgateways': {
+    resourceType: 'microsoft.network/applicationgateways',
+    label: 'Application Gateway',
+    mechanism: 'arm-stop-action',
+    // A stop deallocates the gateway instances; a start re-provisions them, but
+    // it is not a SKU/size reservation Loom can substitute, so there is no fallback.
+    capacityConstrained: false,
+    armApiVersion: '2024-05-01',
+  },
+  'microsoft.powerbidedicated/capacities': {
+    resourceType: 'microsoft.powerbidedicated/capacities',
+    label: 'Power BI Embedded capacity',
+    mechanism: 'arm-pause-action',
+    capacityConstrained: true,
+    fallbackSku: {
+      name: 'A1',
+      tier: 'PBIE_Azure',
+      capacity: 1,
+      reason:
+        'The original capacity SKU was unavailable on resume. A1 is the smallest Power BI Embedded SKU; '
+        + 'reports needing more memory will need the original SKU.',
+    },
+    armApiVersion: '2021-01-01',
+  },
 };
 
 /** The spec for an ARM type, or null when the type is not pausable. */

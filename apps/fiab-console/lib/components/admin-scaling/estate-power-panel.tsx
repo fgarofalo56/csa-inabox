@@ -28,6 +28,7 @@ import { clientFetch } from '@/lib/client-fetch';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { LearnPopover } from '@/lib/components/ui/learn-popover';
 import { jsonGet } from '@/lib/components/admin-scaling/json-get';
+import { autoRestartCaption } from '@/lib/estate/pause-autorestart';
 import { EstateContainerAppsSection } from '@/lib/components/admin-scaling/estate-container-apps-section';
 import { isTabHidden, isThrottledResponse, nextPollDelayMs } from '@/lib/components/admin-scaling/estate-power-poll';
 
@@ -456,7 +457,14 @@ export function EstatePowerPanel({ styles }: { styles: Record<string, string> })
     },
     {
       key: 'mechanism', label: 'How it stops', width: 160, sortable: false, filterable: false,
-      render: (r) => <Caption1 className={styles.subtle}>{r.mechanism}</Caption1>,
+      render: (r) => (
+        <div className={styles.progressLabel}>
+          <Caption1 className={styles.subtle}>{r.mechanism}</Caption1>
+          {autoRestartCaption(r.resourceType) && (
+            <Caption1 className={styles.progressDetail}>{autoRestartCaption(r.resourceType)}</Caption1>
+          )}
+        </div>
+      ),
     },
     {
       key: 'risk', label: 'Resume risk', width: 240, sortable: false, filterable: false,
@@ -788,6 +796,11 @@ export function EstatePowerPanel({ styles }: { styles: Record<string, string> })
           {outOfTier.map((r) => (
             <div key={r.resourceId} className={styles.remediationNeutral}>
               <Caption1><strong>{r.name}</strong> · {r.resourceType}</Caption1>
+              {r.pinnedBy && (
+                <div className={styles.badgeRow}>
+                  <Badge appearance="tint" color="warning">pinned by {r.pinnedBy}</Badge>
+                </div>
+              )}
               <Caption1 className={styles.progressDetail}>{r.reason}</Caption1>
             </div>
           ))}
@@ -844,6 +857,9 @@ export function EstatePowerPanel({ styles }: { styles: Record<string, string> })
                   {p.probed === false && <Badge appearance="tint" color="warning">no probe wired</Badge>}
                 </div>
                 <Caption1 className={styles.subtle}>{p.resourceType}</Caption1>
+                {autoRestartCaption(p.resourceType) && (
+                  <Caption1 className={styles.subtle}>{autoRestartCaption(p.resourceType)}</Caption1>
+                )}
               </div>
               <div className={styles.progressLabel}>
                 {p.phase === 'done'
