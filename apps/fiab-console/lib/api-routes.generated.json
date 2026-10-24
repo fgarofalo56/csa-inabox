@@ -1,6 +1,6 @@
 {
   "__generated": "node scripts/ci/generate-client-route-map.mjs — do not edit by hand",
-  "count": 1701,
+  "count": 1702,
   "patterns": [
     "/api/a2a",
     "/api/a2a/agent-cards",
@@ -106,6 +106,7 @@
     "/api/admin/dspm-ai",
     "/api/admin/embed-codes",
     "/api/admin/env-config",
+    "/api/admin/estate/always-on",
     "/api/admin/estate/autopause",
     "/api/admin/estate/pause",
     "/api/admin/estate/resume",
@@ -1809,6 +1810,7 @@
     "^/api/admin/dspm-ai/?$",
     "^/api/admin/embed-codes/?$",
     "^/api/admin/env-config/?$",
+    "^/api/admin/estate/always-on/?$",
     "^/api/admin/estate/autopause/?$",
     "^/api/admin/estate/pause/?$",
     "^/api/admin/estate/resume/?$",

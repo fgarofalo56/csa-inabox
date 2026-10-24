@@ -62,6 +62,7 @@ import {
   resolveTaggedForPause,
 } from '@/lib/estate/estate-pause-set';
 import { applyReassert, reassertAutoRestarted } from '@/lib/estate/pause-reassert';
+import { resumeHoldsChanged } from '@/lib/estate/pause-resume';
 import { discardPauseProgress, withIncrementalSnapshot } from '@/lib/estate/pause-incremental';
 import { loadPipelineActivity } from '@/lib/estate/estate-pipeline-activity';
 import type { EstatePowerStatus } from '@/lib/estate/estate-power-contract';
@@ -295,6 +296,10 @@ async function computeStateFields(
   const verdict = resolveReadVerdict(snapshot.state, poll);
   if (verdict.persist) {
     await savePauseSnapshot(applyResumePoll(snapshot, poll)).catch(() => {});
+  } else if (poll.resumeHeld && resumeHoldsChanged(snapshot, poll)) {
+    // A released hold must be stored even when the STATE did not change (RESUMING -> RESUMING),
+    // or every later poll re-sends the consumer's start. Only the hold list is written.
+    await savePauseSnapshot({ ...snapshot, resumeHeld: poll.resumeHeld, updatedAt: new Date().toISOString() }).catch(() => {});
   }
   const illegal = verdict.state !== poll.state;
   // When the stored state is kept over a better poll, summarizeResume's

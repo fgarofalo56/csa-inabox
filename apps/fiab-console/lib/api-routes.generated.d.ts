@@ -1,6 +1,6 @@
 /**
  * GENERATED — do not edit by hand. TYPE-ONLY (no runtime import is emitted).
- * Source: apps/fiab-console/app/api/**\/route.ts   (1701 routes)
+ * Source: apps/fiab-console/app/api/**\/route.ts   (1702 routes)
  * Regenerate: node scripts/ci/generate-client-route-map.mjs
  * Drift gate:  node scripts/ci/generate-client-route-map.mjs --check
  *
@@ -96,6 +96,7 @@ export type StaticApiRoute =
   | '/api/admin/dspm-ai'
   | '/api/admin/embed-codes'
   | '/api/admin/env-config'
+  | '/api/admin/estate/always-on'
   | '/api/admin/estate/autopause'
   | '/api/admin/estate/pause'
   | '/api/admin/estate/resume'
