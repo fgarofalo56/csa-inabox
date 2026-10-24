@@ -1,11 +1,16 @@
 # LHDS W0 receipt — measurement and decision spike
 
-**Status: PARTIAL (2026-10-22).** The sandbox is now provisioned on a **DEV
-profile** ($750/month; see the Sandbox section) and smoke-tested in-cluster. No
-engine has been measured on it yet, so every sandbox cell below still reads "not
-measured". DEV numbers will prove function, not the pass bars, which need class
-S. **No ADR status line moves on this receipt.** W0-7, the decision pass, has not
-started.
+**Status: DECIDED on DEV evidence (2026-10-24, section 8).** The DEV runs of
+2026-10-23 (sections 1.3, 1.4, 2.4, 3.3, 5.5, 6.3) prove function, not the
+pass bars.
+
+- There was no class-S run. The operator decided Q2 on 2026-10-24 to "decide on
+  DEV evidence".
+- ADR-001..004 moved off `Proposed` on function proof in W0-7 (section 8).
+- Every throughput and latency pass bar DEV could not establish is carried to
+  W7 as unmeasured.
+- The class-S cells below (1.1, 2.2, 3.1, 5.1) still read "not measured" and
+  stay that way.
 
 - Plan: `W00-measurement-spike.md`. Branch `feat/lhds-w0-no-cost`, stacked on
   the PRD/PRP docs PR #5091. Integration facts were measured at `origin/main`
@@ -29,7 +34,7 @@ started.
 | W0-4 Egress | Scripts written. The report's exit codes were tested on fixtures. Capture not executed, because there is no cluster. | Section 5 |
 | W0-5 Synthea | Scripts written and smoke-run locally. Pool throughput and the 48 h cohort size not measured. | Section 6 |
 | W0-6 Loom integration | **Done.** All 7 facts measured at `b192f05ea`, each with `file:line`. | Section 7 |
-| W0-7 Decision | Not started. Needs W0-1..W0-5 sandbox numbers. | Section 8 |
+| W0-7 Decision | **Done (2026-10-24, on DEV evidence).** All four ADRs are Accepted on function proof: ADR-001 keeps HAPI, with the reversal bar crossed and the reversal not taken; ADR-002 uses a token refresher, else Fallback B. The unmeasured bars go to W7, with W3 and W2 gates. Issues #5116 and #5117. | Section 8 |
 
 ## Findings so far (all subject to the sandbox run)
 
@@ -1195,25 +1200,80 @@ Commercial". Confirms `LOOM-INTEGRATION.md:76` and `RISKS-AND-OPEN-DECISIONS.md:
 
 ## 8. Decision (W0-7)
 
-**Not started.** ADR-001, ADR-002, ADR-003 and ADR-004 stay at `Proposed`.
-`CAPACITY-MODEL.md` section 1.3 is unchanged. Moving any of these on local-smoke
-numbers would claim a result this receipt did not establish.
+**Decided 2026-10-24, on DEV evidence.** No class-S run was made and no Azure
+spend was incurred.
 
-What the decision pass needs:
+### 8.1 Operator decision (Q2)
 
-1. Engine runs on the DEV sandbox (function). Then the operator's approval of
-   class S for the pass-bar numbers: same script, env overrides.
-2. The sandbox run of W0-1, W0-2, W0-4 and W0-5, using the scripts in
-   `scripts/measure/health/`. Load drivers run as Linux pods, not Git Bash.
-3. Q1 is answered by measurement (section 4.1b): usgovarizona as the Gov
-   primary, usgovtexas as its pair, and v4 E-series in place of v5. A support
-   request is still needed if the operator wants Virginia.
-4. Questions for the decision pass to carry from the local findings:
-   - Is 4.5 KB per resource realistic, or should the capacity model move toward
-     the roughly 10 KB measured here and cited by ADR-001?
-   - Does dcm4chee's Blob storage work with managed identity at all?
-   - Does Medplum keep failed transactions atomic, and does its rate limiting
-     shape the W6 export design?
+On 2026-10-24 the operator chose to **"Decide on DEV evidence."** The
+orchestrator recorded the choice verbatim. What it means:
 
-The tracking issue and the W1 bicep issue named in W0-7 are not filed. They are
-filed at the decision pass.
+- W0-7 runs now, on the merged DEV receipts (#5107) plus the defaults in
+  `RISKS-AND-OPEN-DECISIONS.md`.
+- There is no class-S spend.
+- ADRs move off `Proposed` on **function proof**.
+- Every throughput or latency pass bar that DEV could not establish is
+  **disclosed as unmeasured** and carried to W7's class-M receipts.
+- Azure cost is $0.
+
+Q2 is marked resolved in `RISKS-AND-OPEN-DECISIONS.md`. **None of the outcomes
+below is a pass-bar result.** Each is a decision taken on function proof, with
+its open bars named.
+
+### 8.2 Outcome per ADR
+
+| ADR | Outcome | Measured on DEV (section) | Unmeasured, carried |
+|---|---|---|---|
+| ADR-001 FHIR engine | **Accepted: HAPI FHIR JPA retained. The reversal bar was crossed and the reversal was not taken.** | Bytes per resource, net: HAPI 9,952.7 B and Medplum 7,705.3 B, both above the 6 KB reversal bar (1.3). Medplum 5.2.7 does not roll back a failed transaction bundle, which violates the FHIR `transaction` semantics; HAPI 8.12.0 does roll back (1.4). Medplum called 2 non-Azure hosts; HAPI called 0 in its window (5.5). | Search p95 at 1 M patients on class M, and bytes per resource at 1 M (W7). Inferno US Core and the CVE-process review (W2). |
+| ADR-002 DICOM engine | **Accepted: dcm4chee on Blob with a Loom-owned bearer-token refresher.** If W3 cannot prove the refresher, Fallback B (Loom DICOMweb-on-Blob) is taken, not Orthanc. | Blob with CMK and private endpoint works. Shared key is refused by policy. jclouds 2.7.0 has no managed-identity flow, so only a static bearer token works (89 min, no refresh). LDAP backup gave 1,595 = 1,595 restored, restart 12.2 s, first STOW at 13.6 s (3.3). STOW p95 at 100 senders was 1,041 ms (not a bar result). | STOW p95 at most 300 ms at 100 senders on class M (W7). The Gov Blob endpoint and the refresher proof (W3 entry gates). |
+| ADR-003 FHIR persistence | **Accepted: option 1** (PostgreSQL, one database per tenant). | Per-engine databases on one Flexible Server work (1.3). HAPI disk is about 2.2x the assumed 4.5 KB (1.3). Medplum needs `azure.extensions` set (1.3). The Gov primary is usgovarizona, because usgovvirginia offers 0 SKUs, and Gov has E-series v3/v4 only (4.1, 4.1b). | Read-replica routing, partition mode at 1 M, `$reindex` duration, and restore time against the 20 TB cap (W7). |
+| ADR-004 DICOM storage | **Accepted: Blob plus PostgreSQL metadata, Commercial only.** | CMK and private endpoint work end to end. No 503 up to 400 requested senders (7,750 of 7,750 PUTs returned 201). The LDAP dump holds the descriptor credential in clear text (3.3). | Gov Blob endpoint (W3 entry gate). 503 onset at class M, and tenant-year sharding (W7). |
+
+**Why ADR-001's reversal was not taken.**
+
+- ADR-001 says a HAPI miss on the pass bar makes Medplum primary "without
+  re-planning".
+- On DEV the bytes bar is crossed by **both** engines, so the swap would not
+  restore 6 KB.
+- The fallback also fails transaction atomicity, a correctness requirement,
+  and calls home (1.4, 5.5).
+- The bar existed to protect the capacity assumption. The assumption moves
+  instead: `CAPACITY-MODEL.md` s1.3 now carries about 10 KB, DEV-measured.
+- That is a deviation from the bar's literal text, decided on the evidence.
+  The operator can still override it through D1.
+
+**Why ADR-002 uses a refresher and not a fallback.**
+
+- The refresher keeps the descriptor layer Loom-owned, as ADR-002's Decision
+  already says, and costs a sidecar or CronJob.
+- Fallback B is a new service, and Orthanc fails the Q3 default (AGPL no).
+- The kill criterion is that hot pickup of a rewritten credential was **never
+  tested**. W3 must show it across two or more token expiries under STOW load.
+
+### 8.3 Pass bars carried forward (unmeasured)
+
+The canonical list is in `W07-search-performance-at-scale.md`, section "W0 pass
+bars carried into W7".
+
+- **To W7 (class M):**
+  - ADR-001 search p95 at 1 M patients;
+  - bytes per resource at 1 M patients;
+  - ADR-002 STOW p95 at 100 senders, after triage of the QIDO pool
+    saturation and the duplicate-key errors;
+  - ADR-004 Blob 503 onset with achieved concurrency;
+  - ADR-003 replica routing, partition mode, reindex and restore;
+  - `CAPACITY-MODEL.md` s11 items 2, 3 and 6;
+  - the W0-4 24 h egress capture.
+- **To W2:** Inferno US Core and the ADR-001 CVE-process review.
+- **To W3, as entry gates:** the Blob descriptor against a Gov endpoint
+  (Actions run), and the bearer-token refresher proof.
+
+### 8.4 Follow-ups this pass did not do
+
+- **IL5 `containerPlatform` question (7.5).** Already reflected in the W1-3
+  row. Not reopened here.
+
+### 8.5 Issues filed
+
+- Tracking: #5116.
+- W1 stamp and tenant bicep: #5117.

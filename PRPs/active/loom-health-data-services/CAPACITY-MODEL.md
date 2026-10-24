@@ -4,7 +4,8 @@ Every input is either **CITED** (URL in `research/scale-evidence-va-ihs-dicom-pr
 retrieved 2026-10-22, publication year noted there) or an **ASSUMPTION**
 (stated, with the reason, and replaced by a W0 or W7 measurement). Derived
 numbers are arithmetic on those inputs and are reproducible from this file.
-Nothing here is a measurement of LHDS; W0 and W7 produce the first measurements.
+The only LHDS measurement here is the W0 DEV bytes per resource (section 1.3,
+function proof, not class M). W7 produces the class-M measurements.
 
 ## 1. Demand inputs
 
@@ -39,15 +40,15 @@ Nothing here is a measurement of LHDS; W0 and W7 produce the first measurements.
 
 | Factor | Value | Basis |
 |---|---|---|
-| FHIR resources per synthetic lifetime patient | 1,123 (112.3 M resources / 100 k patients) | arXiv 2607.23619 (Synthea 100 k cohort) — CITED |
-| Bundle size per Synthea patient | ~178 KB gzipped (17.8 GB / 100 k) | same |
-| **ASSUMPTION** average stored FHIR resource JSON | 1.5 KB raw; 4.5 KB on disk including engine indexes and history (3x; HAPI's index tables typically dominate — W0 measures the real ratio per engine) | — |
-| **ASSUMPTION** resources per outpatient visit / inpatient stay | 60 / 500 (encounter, conditions, observations incl. vitals and labs, medications, procedures, documents, claims) | to be replaced by W5 converter measurements on VistA-shaped feeds |
-| **ASSUMPTION** reads per write | 20 (clinician workflows, apps, population queries) | AHDS publishes no RPS; W0 load mix |
-| **ASSUMPTION** peak-to-average | 5x (business hours, Monday peaks) | — |
-| DICOM study size, typical | CR/DX 15 MB; CT 500 MB (cardiac CT up to 3 GB); MR 400 MB; US 50-200 MB; DBT 1.5 GB; PET-CT 2 GB; WSI ~15 GB raw / ~300 MB JPEG 2000 | research file section C (vendor planning guides, not peer-reviewed) |
-| Lossless compression | JPEG 2000 1.5-3:1 by modality; HTJ2K ~ JPEG-LS ~2.6-2.7:1 | research file |
-| **ASSUMPTION** VA modality-weighted average study size | 200 MB raw, 100 MB stored (compressed) | mix dominated by CR/DX count, CT/MR bytes |
+| FHIR resources per synthetic lifetime patient | 1,123 (112.3 M resources / 100 k patients) | arXiv 2607.23619 (Synthea 100 k cohort) — CITED. **W0 DEV observed** about 1,490 per patient bundle (Synthea v4.0.0, 10-year history, 1,129 bundles; `W0-RECEIPT.md` s6.3). Different generator settings, so the cited value is kept |
+| Bundle size per Synthea patient | ~178 KB gzipped (17.8 GB / 100 k) | same. W0 DEV: not measured gzipped (s6.3 records 4.0 GB uncompressed for 1,131 files) |
+| **DEV-MEASURED (on disk) / ASSUMPTION (raw)** average stored FHIR resource | 1.5 KB raw (ASSUMPTION, not measured); **about 10 KB on disk for HAPI** (W0 DEV: HAPI 9,952.7 B, Medplum 7,705.3 B net per resource, indexes included; 92,551 Synthea resources, not 1 M patients). Replaces the 4.5 KB assumption (W0-7 decision 2026-10-24) | **DEV**, `W0-RECEIPT.md` s1.3. The class-M value at 1 M patients is unmeasured and goes to W7. Sections 2, 3, 5 and 9 are re-derived on ~10 KB, and each changed figure is marked "DEV, W0-RECEIPT s1.3" |
+| **ASSUMPTION** resources per outpatient visit / inpatient stay | 60 / 500 (encounter, conditions, observations incl. vitals and labs, medications, procedures, documents, claims) | to be replaced by W5 converter measurements on VistA-shaped feeds. W0 DEV: not measured |
+| **ASSUMPTION** reads per write | 20 (clinician workflows, apps, population queries) | AHDS publishes no RPS. W0 DEV: not measured. The L1 mix used 5 % writes as an *input* (`W0-RECEIPT.md` s2.1), so it does not measure this ratio. Goes to W7 |
+| **ASSUMPTION** peak-to-average | 5x (business hours, Monday peaks) | W0 DEV: not measured |
+| DICOM study size, typical | CR/DX 15 MB; CT 500 MB (cardiac CT up to 3 GB); MR 400 MB; US 50-200 MB; DBT 1.5 GB; PET-CT 2 GB; WSI ~15 GB raw / ~300 MB JPEG 2000 | research file section C (vendor planning guides, not peer-reviewed). W0 DEV: not measured, because it used synthetic 512 KiB CT instances |
+| Lossless compression | JPEG 2000 1.5-3:1 by modality; HTJ2K ~ JPEG-LS ~2.6-2.7:1 | research file. W0 DEV: not measured |
+| **ASSUMPTION** VA modality-weighted average study size | 200 MB raw, 100 MB stored (compressed) | mix dominated by CR/DX count, CT/MR bytes. W0 DEV: not measured |
 
 ## 2. Steady-state volumes — all VA
 
@@ -55,7 +56,7 @@ Nothing here is a measurement of LHDS; W0 and W7 produce the first measurements.
 |---|---|---|
 | Patient records in the store | **ASSUMPTION** 20 M (8 M active + historical/deceased records retained; VA retains records for decades) | 20 M |
 | FHIR resources (backfill) | 20 M x **ASSUMPTION** 2,000 (real longitudinal records exceed Synthea's 1,123; historical data is sparser per year) | 40 B resources |
-| FHIR store on disk | 40 B x 4.5 KB | ~180 TB (plus history growth) |
+| FHIR store on disk | 40 B x ~10 KB (DEV, W0-RECEIPT s1.3) | ~400 TB (plus history growth) (DEV, W0-RECEIPT s1.3) |
 | New resources per year | 154.5 M x 60 + 1.25 M x 500 | ~9.9 B / yr |
 | Average write rate | 9.9 B / 31.5 M s | ~315 resources/s |
 | Peak write rate | x5 | ~1,600 resources/s |
@@ -72,7 +73,7 @@ Nothing here is a measurement of LHDS; W0 and W7 produce the first measurements.
 ## 3. Steady-state volumes — all IHS
 
 Scaled by visits (1/10 of VA) unless cited: patients 2.8 M (+ historical,
-**ASSUMPTION** 5 M records), resources ~10 B, store ~45 TB, writes ~32/s avg,
+**ASSUMPTION** 5 M records), resources ~10 B, store ~100 TB (10 B x ~10 KB; DEV, W0-RECEIPT s1.3), writes ~32/s avg,
 reads ~640/s avg, imaging **ASSUMPTION** ~1 M studies/yr, ~110 TB/yr stored.
 IHS fits in a handful of stamps; the reason for stamps there is Area
 alignment, data residency per tribal agreement and blast radius, not capacity
@@ -102,9 +103,20 @@ A stamp (`ARCHITECTURE.md` section 3) hosts N tenants. Size classes:
 
 | Class | Patient records (max) | FHIR store | PostgreSQL | DICOM ingest | Blob accounts | AKS nodes (steady) |
 |---|---|---|---|---|---|---|
-| S | 250 k | 2.5 TB | E8ds_v5 HA + 1 replica, SSD v2 | 50 GB/day | 1 per tenant (flat-namespace) | 6 x D8s_v5 |
-| M | 1.5 M | 15 TB | E16ds_v5 HA + 2 replicas | 300 GB/day | per tenant, split yearly past 1 PB | 12 x D16s_v5 |
-| L | 3 M | 30 TB | E32ds_v5 HA + 2 replicas (storage 64 TiB ceiling, SSD v2 — Gov SSD v2 **UNVERIFIED**) | 600 GB/day | as M | 24 x D16s_v5 |
+| S | 250 k | 5 TB (DEV, W0-RECEIPT s1.3) | E8ds_v5 HA + 1 replica, SSD v2 | 50 GB/day | 1 per tenant (flat-namespace) | 6 x D8s_v5 |
+| M | 1.5 M | 30 TB (DEV, W0-RECEIPT s1.3) | E16ds_v5 HA + 2 replicas | 300 GB/day | per tenant, split yearly past 1 PB | 12 x D16s_v5 |
+| L | 3 M | 60 TB (DEV, W0-RECEIPT s1.3) | E32ds_v5 HA + 2 replicas (storage 64 TiB ceiling, SSD v2 — Gov SSD v2 **UNVERIFIED**) | 600 GB/day | as M | 24 x D16s_v5 |
+
+FHIR store column = records x 2,000 resources x ~10 KB (DEV, W0-RECEIPT s1.3).
+At ~10 KB per resource:
+- Class M (30 TB, about 27 TiB) still fits the 32 TiB Premium SSD ceiling.
+- Class L (60 TB, about 55 TiB) fits only on SSD v2 (64 TiB). W0-3 saw no SSD
+  v2 in Gov (W0-RECEIPT s4.1b), so class L as sized does not fit one Gov
+  server.
+- Both M and L exceed the 20 TB per-tenant working-set cap, so a tenant that
+  fills a stamp must be split by facility group.
+
+The record caps are unchanged. Revisiting them is a W7/W11 decision.
 
 Ceilings that fix the class sizes:
 - PostgreSQL Flexible Server: 32 TiB (Premium SSD) / 64 TiB (SSD v2) max
@@ -163,13 +175,13 @@ Per class-M stamp per month (730 h):
 |---|---|---|---|
 | PostgreSQL E16ds_v5 primary + HA standby | $2.44/h x2 | 1,460 h | $3,560 |
 | PostgreSQL read replicas | $2.44/h x2 | 1,460 h | $3,560 |
-| PostgreSQL storage SSD v2 | $0.138/GiB-mo (Gov **UNVERIFIED** meter) | 15 TB -> 15,360 GiB | $2,120 |
+| PostgreSQL storage SSD v2 | $0.138/GiB-mo (Gov **UNVERIFIED** meter) | 30 TB -> 30,720 GiB (DEV, W0-RECEIPT s1.3) | $4,240 (DEV, W0-RECEIPT s1.3) |
 | AKS nodes D16s_v5 | $0.968/h | 12 x 730 h | $8,480 |
 | Event Hubs Premium | $1.284/PU-h | 2 x 730 h | $1,875 |
 | Log Analytics | $2.88/GB | 30 GB/day x 30 (scrubbed app logs; audit stream is cheaper Blob) | $2,590 |
 | Key Vault Premium / HSM operations | — | shared; Managed HSM B1 $4.00/h if required at IL5 | $0-2,920 |
 | Front Door Premium / App Gateway WAF v2 | $412.50/mo base (FD, Gov AZ/TX only) | shared across stamps | ~$200 allocated |
-| **Stamp compute subtotal** | | | **~$22-25 k/mo** |
+| **Stamp compute subtotal** | | | **~$24.5-27.5 k/mo** (DEV, W0-RECEIPT s1.3) |
 
 Imaging storage, all VA (20 PB by 2030, LRS, Gov prices; GRS/object replication
 roughly doubles the stored-bytes cost):
@@ -181,11 +193,14 @@ roughly doubles the stored-bytes cost):
 | Archive | 60 % | 12.0 M | $0.0024 | $29 k |
 | **Total** | | 20 PB | | **~$185 k/mo** (+ transactions, + rehydration $0.026/GB on demand) |
 
-All-VA order of magnitude: 18 stamps x ~$24 k = ~$430 k/mo compute + ~$185 k
-imaging + ~$25 k FHIR storage across stamps + audit/backup storage (~$30 k) ->
-**~$0.7 M/mo, ~$8 M/yr, LRS, before reserved-instance discounts and before
-cross-region DR copies (which add most of the storage figure again).** All-IHS:
-~4 stamps -> ~$0.15 M/mo. These are order-of-magnitude figures with the stated
+All-VA order of magnitude: 18 stamps x ~$26 k = ~$470 k/mo compute + ~$185 k
+imaging + ~$57 k FHIR storage across stamps (~400 TB -> 409,600 GiB x $0.138)
++ audit/backup storage (~$30 k) -> **~$0.74 M/mo, ~$9 M/yr, LRS, before
+reserved-instance discounts and before cross-region DR copies (which add most of
+the storage figure again).** The stamp, FHIR-storage and total figures are DEV,
+W0-RECEIPT s1.3. All-IHS: ~4 stamps -> ~$0.17 M/mo (DEV, W0-RECEIPT s1.3). That
+is +~$16 k against the 4.5 KB basis: +~$8 k stamp compute, and +~$8 k FHIR
+storage for ~100 TB. These are order-of-magnitude figures with the stated
 assumptions; they are not a quote and are not a measured bill.
 
 ## 10. First bottleneck at each 10x (from one class-S stamp, 50 k records)
