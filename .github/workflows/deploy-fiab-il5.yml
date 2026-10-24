@@ -170,8 +170,10 @@ jobs:
   deploy-validate:
     name: Deploy + validate CSA Loom in IL5
     needs: [precheck, build-gov-images, estate-gate]
-    # `!= 'true'` is fail-open; whatif-only applies nothing so it still runs.
-    if: always() && needs.precheck.outputs.configured == 'true' && (needs.estate-gate.outputs.standdown != 'true' || inputs.run_mode != 'full')
+    # No schedule trigger exists, so the fail-open `!= 'true'` branch is the live
+    # one; the schedule branch keeps the expression identical in every lane.
+    # whatif-only applies nothing so it still runs.
+    if: always() && needs.precheck.outputs.configured == 'true' && ((github.event_name == 'schedule' && needs.estate-gate.result == 'success' && needs.estate-gate.outputs.standdown == 'false' || github.event_name != 'schedule' && needs.estate-gate.outputs.standdown != 'true') || inputs.run_mode != 'full')
     runs-on: ubuntu-latest
     timeout-minutes: 150
     environment: il5-deploy   # requires manual approval

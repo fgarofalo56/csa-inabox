@@ -32,14 +32,24 @@
  *     override: nobody is there to have meant it.
  *   - RUNNING / RESUMING / RESUME_FAILED -> proceed. RESUMING and RESUME_FAILED
  *     mean the operator is waking the estate; deploying is what they want.
- *   - UNKNOWN -> PROCEED with a loud ::warning::. This FAILS OPEN on purpose. The
- *     read can fail for reasons unrelated to the estate (console briefly down,
- *     variable unset, token refused, a greenfield estate with no console yet).
- *     If an unreadable state froze deploys, one transient console fault would
- *     stop every lane, and a broken deploy path is P0 (deploy-integrity.md R1).
- *     The price is that an unreadable read during a pause lets the old
- *     behaviour through; the warning says so, and the state read is
- *     retried inside callConsole before giving up.
+ *   - UNKNOWN on a `schedule` run -> STAND DOWN (fail CLOSED, operator decision
+ *     2026-10-24). Run 40113111843: the gate's azure/login hung until the job
+ *     timeout, so no state was ever established, and an unattended run was
+ *     heading for the ADX preflight that had started ADX during a pause that
+ *     morning. A missed daily reconcile is cheap and the next scheduled run
+ *     retries; nobody is there to have chosen to risk waking a paused estate.
+ *   - UNKNOWN on `workflow_dispatch` -> PROCEED with a loud ::warning:: (fail
+ *     OPEN): a human chose to deploy.
+ *   - UNKNOWN on any OTHER event (push, workflow_run, ...) -> PROCEED with the
+ *     ::warning:: (today's behaviour, deliberately unchanged: the decision named
+ *     only schedule vs manual). The read can fail for reasons unrelated to the
+ *     estate (console briefly down, variable unset, a greenfield estate with no
+ *     console yet) and a broken deploy path is P0 (deploy-integrity.md R1); the
+ *     read is retried inside callConsole before giving up.
+ *
+ * The workflow side of fail-closed (a gate JOB that fails, times out or is
+ * cancelled leaves no outputs at all) lives in each lane's `if:` and in
+ * estate-pause-gate.yml; this script cannot speak for a job that never reached it.
  *
  * Exit code is ALWAYS 0: this script decides, the workflow acts. It never throws.
  *
@@ -69,6 +79,9 @@ export const BOUNDARY_AZ_CLOUD = Object.freeze({
 /** Events a human started. Everything else (schedule, push, workflow_run...) is unattended. */
 export const OVERRIDE_EVENTS = Object.freeze(['workflow_dispatch']);
 
+/** Events where an UNREADABLE state fails CLOSED (stands down): unattended AND recurring. */
+export const FAIL_CLOSED_EVENTS = Object.freeze(['schedule']);
+
 const isTrue = (v) => v === true || String(v ?? '').trim().toLowerCase() === 'true';
 
 /**
@@ -94,15 +107,20 @@ export function interpretState(data) {
 /**
  * PURE. The stand-down decision.
  * @param {{state:string, event?:string, override?:unknown}} p
- * @returns {{standdown:boolean, overridden:boolean, overrideIgnored:boolean}}
+ * @returns {{standdown:boolean, overridden:boolean, overrideIgnored:boolean, failClosed:boolean}}
+ *   `failClosed` is true when the stand-down is because the state is UNKNOWN on a
+ *   scheduled run, as opposed to the estate being paused.
  */
 export function decideStandDown({ state, event, override }) {
   const wantsOverride = isTrue(override);
   const canOverride = OVERRIDE_EVENTS.includes(String(event ?? ''));
   const paused = STAND_DOWN_STATES.includes(state);
-  if (!paused) return { standdown: false, overridden: false, overrideIgnored: false };
-  if (wantsOverride && canOverride) return { standdown: false, overridden: true, overrideIgnored: false };
-  return { standdown: true, overridden: false, overrideIgnored: wantsOverride && !canOverride };
+  if (state === UNKNOWN && FAIL_CLOSED_EVENTS.includes(String(event ?? ''))) {
+    return { standdown: true, overridden: false, overrideIgnored: wantsOverride && !canOverride, failClosed: true };
+  }
+  if (!paused) return { standdown: false, overridden: false, overrideIgnored: false, failClosed: false };
+  if (wantsOverride && canOverride) return { standdown: false, overridden: true, overrideIgnored: false, failClosed: false };
+  return { standdown: true, overridden: false, overrideIgnored: wantsOverride && !canOverride, failClosed: false };
 }
 
 /**
@@ -140,6 +158,19 @@ export function renderVerdict({ boundary, state, pausedAt, pausedBy, reason, dec
   const who = pausedBy ?? 'not reported by the console state route (see the estate-power.pause audit rows)';
   const when = pausedAt ?? 'unknown';
   const how = 'Resume the estate in Admin > Scale by SKU > Estate power, or dispatch this workflow with override_estate_pause=true.';
+  if (decision.failClosed) {
+    return {
+      level: 'notice', text: `STOOD DOWN: estate state UNKNOWN on a scheduled run: standing down (fail-closed); the next scheduled run retries (${boundary}: ${reason ?? 'unreadable'}).`,
+      summary: [
+        `### Stood down: estate state could not be established (${boundary})`,
+        '',
+        '**Nothing was deployed by this run.** Stood down: estate state could not be established on a scheduled run (fail-closed). '
+          + `Could not read the estate state (${reason ?? 'unreadable'}). Deploying blind could wake a paused estate; the next scheduled run retries.`,
+        '',
+        'A manual dispatch is not stopped by an unreadable state (it proceeds with a warning). A stood-down run is NOT a deployed SHA: the deploy staleness check does not count it.',
+      ].join('\n'),
+    };
+  }
   if (decision.standdown) {
     return {
       level: 'notice', text: `STOOD DOWN: the ${boundary} estate is ${state} (paused by ${who} at ${when}). The steps that would wake or rescale paused resources were skipped. ${how}`,
@@ -162,7 +193,7 @@ export function renderVerdict({ boundary, state, pausedAt, pausedBy, reason, dec
   }
   if (state === UNKNOWN) {
     return {
-      level: 'warning', text: `estate-pause-state is UNKNOWN for ${boundary}: ${reason ?? 'unreadable'}. PROCEEDING (fail-open: an unreadable state must not freeze every deploy). If the estate is paused this run WILL wake it.`,
+      level: 'warning', text: `estate-pause-state is UNKNOWN for ${boundary}: ${reason ?? 'unreadable'}. PROCEEDING (fail-open for a dispatch or other non-scheduled event: an unreadable state must not freeze every deploy). If the estate is paused this run WILL wake it.`,
       summary: `### Estate pause state UNKNOWN (${boundary})\nCould not read the estate state (${reason ?? 'unreadable'}). The deploy proceeds; if the estate is paused it will be woken.`,
     };
   }
@@ -202,8 +233,9 @@ export async function main(argv, deps = {}) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main(process.argv.slice(2)).catch((e) => {
-    // Last resort: still fail open, still say so.
-    process.stdout.write(`::warning::estate-pause-state crashed (${sanitizeLine(e?.message)}); PROCEEDING.\n`);
-    if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, 'state=UNKNOWN\nstanddown=false\n');
+    // Last resort: same rule as UNKNOWN. A schedule fails closed; anything else says so and proceeds.
+    const closed = FAIL_CLOSED_EVENTS.includes(process.env.GITHUB_EVENT_NAME ?? '');
+    process.stdout.write(`::${closed ? 'notice' : 'warning'}::estate-pause-state crashed (${sanitizeLine(e?.message)}); ${closed ? 'STANDING DOWN (scheduled run, fail-closed)' : 'PROCEEDING'}.\n`);
+    if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `state=UNKNOWN\nstanddown=${closed}\n`);
   });
 }

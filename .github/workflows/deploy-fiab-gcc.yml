@@ -167,8 +167,9 @@ jobs:
   deploy-validate:
     name: Deploy + validate CSA Loom in GCC
     needs: [precheck, estate-gate]
-    # Fail-open on an unrun/failed gate; whatif-only applies nothing.
-    if: ${{ !cancelled() && needs.precheck.outputs.configured == 'true' && (needs.estate-gate.outputs.standdown != 'true' || (github.event_name == 'workflow_dispatch' && inputs.run_mode != 'full')) }}
+    # Fail mode: schedule fails CLOSED (gate must have SUCCEEDED with standdown ==
+    # 'false'); every other event fails OPEN (`!= 'true'`). whatif-only applies nothing.
+    if: ${{ !cancelled() && needs.precheck.outputs.configured == 'true' && ((github.event_name == 'schedule' && needs.estate-gate.result == 'success' && needs.estate-gate.outputs.standdown == 'false' || github.event_name != 'schedule' && needs.estate-gate.outputs.standdown != 'true') || (github.event_name == 'workflow_dispatch' && inputs.run_mode != 'full')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     # Coordinates exported for the chained Gov post-deploy bootstrap (rel-T32).

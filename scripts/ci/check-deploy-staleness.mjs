@@ -1343,6 +1343,14 @@ export function pickLastRealSuccess(rows, pausedSince = null, isStoodDown = null
 export const STOOD_DOWN_JOB_MARKER = 'Stood down - estate paused';
 
 /**
+ * The second marker: a SCHEDULED run that stood down fail-closed because the
+ * estate state could not be established (the gate's `stood-down-unknown` job).
+ * Such a run can still conclude `success` (script read UNKNOWN), so without this
+ * marker it would be read as a deployed SHA.
+ */
+export const STOOD_DOWN_UNKNOWN_JOB_MARKER = 'Stood down - estate state unknown';
+
+/**
  * Does this workflow file call the reusable estate-pause gate? An unreadable file
  * answers true: the safe direction is to look at the jobs rather than skip it.
  */
@@ -1358,7 +1366,8 @@ function usesEstatePauseGate(workflow) {
 /** PURE. Did this run's job list include a SUCCESSFUL stand-down marker job? */
 export function isStoodDownJobs(jobs) {
   return Array.isArray(jobs)
-    && jobs.some((j) => String(j?.name ?? '').includes(STOOD_DOWN_JOB_MARKER) && j?.conclusion === 'success');
+    && jobs.some((j) => j?.conclusion === 'success'
+      && [STOOD_DOWN_JOB_MARKER, STOOD_DOWN_UNKNOWN_JOB_MARKER].some((m) => String(j?.name ?? '').includes(m)));
 }
 
 /**

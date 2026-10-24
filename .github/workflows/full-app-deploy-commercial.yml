@@ -1032,7 +1032,7 @@ jobs:
     # Apps anyway. `!cancelled()` still runs the roll on an upstream FAILURE
     # where the guards above allow it (the lenient partial-build path), but a
     # cancelled run now actually stops.
-    if: ${{ !cancelled() && inputs.enable_apps_after && (needs.close-acr.result == 'success' || inputs.skip_build) && (needs.verify-images.result == 'success' || inputs.skip_build) && needs.estate-gate.outputs.standdown != 'true' }}
+    if: ${{ !cancelled() && inputs.enable_apps_after && (needs.close-acr.result == 'success' || inputs.skip_build) && (needs.verify-images.result == 'success' || inputs.skip_build) && (github.event_name == 'schedule' && needs.estate-gate.result == 'success' && needs.estate-gate.outputs.standdown == 'false' || github.event_name != 'schedule' && needs.estate-gate.outputs.standdown != 'true') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
@@ -1362,7 +1362,11 @@ jobs:
       - name: Summarise
         run: |
           echo "full-app-deploy-commercial run ${{ github.run_id }}: build=${{ needs.build.result }}, close-acr=${{ needs.close-acr.result }}, redeploy=${{ needs.redeploy-with-apps.result }}" >> "$GITHUB_STEP_SUMMARY"
-          if [ "${{ needs.estate-gate.outputs.standdown }}" = "true" ]; then
+          if [ "${{ needs.estate-gate.outputs.state }}" = "UNKNOWN" ] && [ "${{ needs.estate-gate.outputs.standdown }}" = "true" ]; then
+            echo "**Roll STOOD DOWN: estate state could not be established on a scheduled run (fail-closed).** The images were built; nothing was rolled, so this run is NOT a deployed SHA. The next scheduled run retries." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "${{ github.event_name }}" = "schedule" ] && [ "${{ needs.estate-gate.result }}" != "success" ] && [ "${{ needs.estate-gate.result }}" != "skipped" ]; then
+            echo "**Roll STOOD DOWN: the estate gate ${{ needs.estate-gate.result }} on a scheduled run (fail-closed).** Estate state could not be established; nothing was rolled, so this run is NOT a deployed SHA." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "${{ needs.estate-gate.outputs.standdown }}" = "true" ]; then
             echo "**Roll STOOD DOWN: the estate is paused.** The images were built; nothing was rolled, so this run is NOT a deployed SHA. Resume the estate (Admin > Scale by SKU > Estate power) or dispatch with override_estate_pause." >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Notify on failure (dedicated, OPEN issue)

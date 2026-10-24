@@ -25,11 +25,14 @@ Estate Power has the estate PAUSING or PAUSED, and applying would start ADX and 
 the paused Container Apps (#5111). The run is green, but it is **not a deployed SHA** and
 the staleness check does not count it. To deploy: resume the estate in **Admin > Scale by
 SKU > Estate power**, then re-run; or dispatch the lane with `override_estate_pause: true`
-if you accept waking paused resources. A scheduled run cannot override. If the gate could
-not read the state it prints `::warning::estate-pause-state is UNKNOWN` and the deploy
-proceeds, so a paused estate can still be woken by a run whose gate was unreadable: check
-the `Estate pause gate` job's log and the `CSA_LOOM_CONSOLE_URL` / `_AUDIENCE` repo
-variables. Details: [estate-idle-auto-pause](../admin/estate-idle-auto-pause.md#deploy-lanes-stand-down-while-the-estate-is-paused-5111).
+if you accept waking paused resources. A scheduled run cannot override. If the summary
+says **Stood down: estate state could not be established on a scheduled run
+(fail-closed)**, the gate could not read the state (or its job failed or timed out in
+`azure/login`) on a scheduled run, so the lane skipped rather than risk waking a paused
+estate; the next scheduled run retries. Check the `Estate pause gate` job's log and the
+`CSA_LOOM_CONSOLE_URL` / `_AUDIENCE` repo variables. A **manual dispatch** with an
+unreadable state prints `::warning::estate-pause-state is UNKNOWN` and proceeds, so a
+paused estate can still be woken by a dispatch whose gate was unreadable. Details: [estate-idle-auto-pause](../admin/estate-idle-auto-pause.md#deploy-lanes-stand-down-while-the-estate-is-paused-5111).
 
 ## Diagnosis
 
