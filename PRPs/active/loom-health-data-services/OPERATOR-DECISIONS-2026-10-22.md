@@ -35,5 +35,5 @@ Q4 Loom does not become a SNOMED affiliate; Q10 keep the name Loom Health Data S
 
 ## Work the orchestrator owns that these answers imply
 
-- Q7: verify whether the GHSA-g7m7 lakehouse workspace-isolation fix is deployed on every estate the sink will run on (the `health-lakehouse-isolation` gate blocks the sink until it is). Not yet verified in this session.
+- Q7: verify whether the private lakehouse workspace-isolation advisory fix is deployed on every estate the sink will run on (the `health-lakehouse-isolation` gate blocks the sink until it is). Not yet verified in this session.
 - Q8: the Gov image lanes still have no Trivy / cosign gate (#4584). W1 must include that lane fix before any Gov stamp image ships.

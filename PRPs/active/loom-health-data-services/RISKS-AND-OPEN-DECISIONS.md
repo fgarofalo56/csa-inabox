@@ -45,7 +45,7 @@ before the wave that depends on it starts. Nothing here blocks W0.
 | Q4 | Will Loom become a SNOMED affiliate (sub-licence tracking obligations)? | D8 | No |
 | Q5 | Are VA/IHS agency partners available to validate the VistA/RPMS adapter specs and provide HL7 v2 samples? | D10 | Specs marked unverified |
 | Q6 | DoD: add the boundary now (D3)? | bicep enum change touches every param file (bicep collision rule) | Add in W1 as its own small bicep PR |
-| Q7 | GHSA-g7m7 (lakehouse workspace isolation): is the fix deployed on every estate the sink will run on? | ADR-016 prerequisite; the `health-lakehouse-isolation` gate blocks the sink until it is | Sink disabled until confirmed |
+| Q7 | The private lakehouse workspace-isolation advisory: is the fix deployed on every estate the sink will run on? | ADR-016 prerequisite; the `health-lakehouse-isolation` gate blocks the sink until it is | Sink disabled until confirmed |
 | Q8 | Trivy/cosign on the Gov image lanes (#4584): can W1 include that lane fix (it is a shared workflow, outside LHDS ownership)? | Gov stamps cannot ship unsigned images (`SECURITY-AND-COMPLIANCE.md` 8.1) | W1 files the issue and blocks Gov rollout on it |
 | Q9 | Who is the owner and date for the IL5 lane receipt (`deploy-fiab-il5.yml` has no run)? `cloud-parity.md` requires a dated owner for a boundary that lags | Per-cloud table honesty | Listed as supported-in-code, never exercised, owner "unassigned" |
 | Q10 | Product naming and public positioning (Loom Health Data Services vs another name) and whether the HITRUST/FedRAMP evidence pack is a sellable deliverable | Docs and PRD wording | Keep LHDS; evidence pack is internal until decided |
@@ -60,7 +60,7 @@ before the wave that depends on it starts. Nothing here blocks W0.
 | R4 | PostgreSQL SKU/SSD v2 or Event Hubs Premium absent in Gov Virginia | M / M | W0 closure; design degrades to Premium SSD / Standard TUs with re-sized classes |
 | R5 | Repo claims ACA GA in Gov for the admin plane while audit scope shows IL2 only | — / M (not LHDS scope) | Recorded in ADR-009; raised as an issue for the platform owner |
 | R6 | Engine CVEs (both engines had critical advisories in 2026) | H / M | Weekly watch job; image rebuilds; blue/green |
-| R7 | Lakehouse isolation defect propagates to health data | M / H | Hard gate until GHSA-g7m7 is deployed (Q7) |
+| R7 | Lakehouse isolation defect propagates to health data | M / H | Hard gate until the private lakehouse-isolation advisory is deployed (Q7) |
 | R8 | Synthea 100 M generation infeasible in the pool | M / L | W0 reports the reachable size; load tests scale with what exists |
 | R9 | Scope creep toward an EHR | M / M | PRD non-goals; PRP wave ownership |
 | R10 | 45-min CI budget broken by engine tests | M / M | Engine suites nightly, not PR CI |

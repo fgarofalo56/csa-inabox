@@ -72,7 +72,7 @@ rate limits — the same contract the governance-autopilot PRP section 5.8 sets.
 | `health-control-plane` | `LOOM_HEALTH_CP_URL` | resource-picker (deployed by bicep) | deploy |
 | `health-stamp-capacity` | a stamp with headroom for the tenant class | wizard: create stamp (bicep) | platform action, never a message |
 | `health-terminology-licensed` | customer package for SNOMED/CPT/full RxNorm | wizard: upload package + licence attestation | genuine licence gate (allowed, disclosed) |
-| `health-lakehouse-isolation` | GHSA-g7m7 fix deployed on the estate | n/a — blocks sink enablement until the fix is live (truthful) | platform |
+| `health-lakehouse-isolation` | Private lakehouse-isolation advisory fix deployed on the estate | n/a — blocks sink enablement until the fix is live (truthful) | platform |
 | `health-gov-image-gate` | Trivy + cosign on the Gov image lane (#4584) | n/a — blocks Gov stamp rollout until present | platform |
 | `health-entra-patient-access` | External ID / B2B configuration for patient apps | wizard (tenant consent flow) | tenant-level consent (allowed) |
 
