@@ -32,6 +32,18 @@ if len(sys.argv) != 2:
 out_path = sys.argv[1]
 cred_path = out_path + ".cred"
 base = os.environ.get("MEDPLUM_BASE", "http://medplum:8103").rstrip("/")
+# MEDPLUM_BASE is operator-supplied: allow-list the scheme (file:, ftp: etc. would break it), and open only through an
+# opener that has no other transports - the pattern of scripts/csa-loom/livy-session-census.py (bandit B310).
+if urllib.parse.urlsplit(base).scheme not in ("http", "https"):
+    sys.exit(f"MEDPLUM_BASE must be http(s)://, got scheme {urllib.parse.urlsplit(base).scheme!r}")
+_opener = urllib.request.OpenerDirector()
+for _h in (
+    urllib.request.HTTPHandler(),
+    urllib.request.HTTPSHandler(),
+    urllib.request.HTTPDefaultErrorHandler(),  # non-2xx -> HTTPError, which post() relies on
+    urllib.request.HTTPErrorProcessor(),
+):
+    _opener.add_handler(_h)
 verifier = secrets.token_urlsafe(48)
 
 
@@ -40,7 +52,7 @@ def post(path, body, form=False):
     r = urllib.request.Request(base + path, data=data, method="POST")
     r.add_header("Content-Type", "application/x-www-form-urlencoded" if form else "application/json")
     try:
-        with urllib.request.urlopen(r, timeout=60) as x:
+        with _opener.open(r, timeout=60) as x:
             return json.loads(x.read())
     except urllib.error.HTTPError as e:
         sys.exit(f"{path} -> HTTP {e.code}")  # body deliberately not echoed: it can carry a login or code
