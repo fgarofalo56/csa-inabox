@@ -111,6 +111,18 @@ function az(args) {
 
 const ms = (iso) => (iso ? Date.parse(iso) : NaN);
 
+/**
+ * `az acr agentpool show --queue-count` result -> a finite count, or NaN when it is not ESTABLISHED.
+ * Number(null) and Number('') are both 0, so a null/empty read would otherwise become "queue empty"
+ * and let prune delete a pool whose queue was never read (review of #5110).
+ */
+export function parseQueueCount(queue) {
+  if (!queue || !queue.ok) return NaN;
+  const raw = queue.value !== null && typeof queue.value === 'object' ? queue.value.count : queue.value;
+  if (raw === null || raw === undefined || raw === '' || typeof raw === 'boolean') return NaN;
+  return Number(raw);
+}
+
 function readPool(acr, pool) {
   const show = az(['acr', 'agentpool', 'show', '-r', acr, '-n', pool.name]);
   const queue = az(['acr', 'agentpool', 'show', '-r', acr, '-n', pool.name, '--queue-count']);
@@ -125,7 +137,7 @@ function readPool(acr, pool) {
   const mine = recent.ok ? (recent.value || []).filter((x) => x.agentPoolName === pool.name) : [];
   const finishes = mine.map((x) => ms(x.finishTime)).filter(Number.isFinite);
   const modified = show.ok ? ms(show.value?.systemData?.lastModifiedAt) : NaN;
-  const queueCount = queue.ok ? Number(queue.value?.count ?? queue.value) : NaN;
+  const queueCount = parseQueueCount(queue);
   return {
     name: pool.name,
     count: show.ok ? show.value?.count ?? null : null,

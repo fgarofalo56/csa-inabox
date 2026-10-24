@@ -134,6 +134,8 @@ function harness() {
 echo "$*" >> "${calls.replace(/\\/g, '/')}"
 if [ "$1 $2" = "buildx build" ]; then
   case " $* " in *" --cache-to "*) HAS_TO=1 ;; *) HAS_TO=0 ;; esac
+  # The progress lines every HEALTHY --cache-to build prints (BuildKit), i.e. not an error.
+  if [ "\${FAKE_CACHE_PROGRESS:-}" = 1 ] && [ $HAS_TO = 1 ]; then echo "#15 exporting cache to registry"; echo "#15 writing cache image manifest ref=acr.example.us/buildcache/app:cache done"; fi
   if [ "\${FAKE_CACHE_FAIL:-}" = 1 ] && [ $HAS_TO = 1 ]; then echo "error: failed to configure registry cache exporter: denied"; exit 1; fi
   if [ "\${FAKE_PUSH_FAIL:-}" = 1 ]; then echo "error: failed to solve: failed to push: 401 Unauthorized"; exit 1; fi
   if [ "\${FAKE_COMPILE_FAIL:-}" = 1 ]; then echo "error: process npm run build did not complete successfully: exit code: 1"; exit 1; fi
@@ -192,6 +194,20 @@ test('push failure whose log also names the cache exporter still fails (retry ca
   assert.notEqual(r.rc, 0, 'cache failure + push failure must be a failure');
   assert.equal(r.builds.length, 2, 'the retry must have happened, else this test does not reach the laundering path');
   assert.doesNotMatch(r.builds[1], /--cache-to/);
+});
+
+// Breaks if the retry pattern matches HEALTHY cache-progress lines ("exporting cache", the cache ref): review of #5110
+// found the original pattern did, so every push/auth failure got a wasted rebuild under a false cache warning.
+test('a push failure whose log carries normal cache-PROGRESS lines is NOT retried', () => {
+  const h = harness();
+  const r = h.run({ FAKE_CACHE_PROGRESS: '1', FAKE_PUSH_FAIL: '1' });
+  assert.notEqual(r.rc, 0, 'a push failure must fail the step');
+  assert.equal(r.builds.length, 1, 'progress lines are not a cache-exporter error, so no retry');
+  assert.doesNotMatch(r.out, /::warning::registry cache export/, 'no false "cache export failed" warning');
+  // Positive pair: a REAL exporter error amid the same progress lines still takes the retry.
+  const c = h.run({ FAKE_CACHE_PROGRESS: '1', FAKE_CACHE_FAIL: '1' });
+  assert.equal(c.rc, 0, c.out);
+  assert.equal(c.builds.length - r.builds.length, 2, 'the exporter error must still retry once (2 more builds logged)');
 });
 
 test('a compile failure is NOT retried and fails', () => {

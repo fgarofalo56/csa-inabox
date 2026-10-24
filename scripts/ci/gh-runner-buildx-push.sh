@@ -93,7 +93,9 @@ build() {
 build cache
 RC=$?
 if [ $RC -ne 0 ]; then
-  if grep -qiE 'cache exporter|exporting cache|error writing (layer blob|manifest blob|config blob).*buildcache|ref=[^ ]*/buildcache/' "$LOG"; then
+  # Error shapes only: "exporting cache to registry" and the cache ref appear in EVERY successful --cache-to log,
+  # so matching them sent push/auth failures through a wasted rebuild under a false "cache export failed" warning.
+  if grep -qiE 'cache exporter|error writing (layer blob|manifest blob|config blob).*buildcache|error.*/buildcache/' "$LOG"; then
     echo "::warning::registry cache export to ${CACHE_REF} failed (exit $RC); the build is NOT failed for that. Re-running once without --cache-to; a push failure will fail that run too."
     build nocache-export
     RC=$?
