@@ -155,6 +155,35 @@ filter the region and family (for the incident: `usgovvirginia`,
 `standardDDSv5Family`), request a limit above `used + 8`. In Azure Government use
 the Government portal. Then re-run the failed roll.
 
+### When ACR Tasks itself is out of capacity (#5102)
+
+**Backend-capacity signature.** The inventory reads our subscription's
+`standardDDSv5Family` as 0/100 (or far from the limit), yet `az acr build` fails
+with `QuotaExceeded ... standardDDSv5Family ... 100/100` while deploying the ACR
+service's OWN backing VMSS, and a fresh pool name (`loombuild3`) fails the same
+way. The exhausted quota is in the ACR service's subscription, so raising ours
+does nothing; the fix is a Microsoft support case for ACR Tasks agent-pool
+capacity in the region. `bypass_agent_pool` is not an escape: the default 8 GB
+agent OOMs on the Next.js build (#2706).
+
+**Switch builders.** `gov-console-roll.yml` can build the image on the
+GitHub-hosted runner (16 GB) with `docker buildx` and push it to the Gov ACR. It
+uses the same Dockerfile, context, build args and tags, inside the same ACR
+firewall lease, and the verified-digest check, Trivy CRITICAL gate and cosign
+sign/verify are unchanged. No pool is acquired or released.
+
+- One run: `gh workflow run gov-console-roll.yml -f builder=gh-runner`.
+- Every run, including push-triggered rolls: set the repo variable
+  `gh variable set GOV_CONSOLE_BUILDER --body gh-runner`.
+- Precedence: dispatch input, then `GOV_CONSOLE_BUILDER`, then `acr-pool`. Any other
+  value fails the build step.
+
+**Switch back** once Microsoft confirms capacity: delete the variable
+(`gh variable delete GOV_CONSOLE_BUILDER`) and do not pass `builder` (or pass
+`-f builder=acr-pool`). Verify with one roll and check the log's
+`#5102 console builder:` line. Then confirm the live revision's image digest and
+`/api/health`.
+
 ## Remediation
 
 1. **Triage** — note the failed module + Azure error code
