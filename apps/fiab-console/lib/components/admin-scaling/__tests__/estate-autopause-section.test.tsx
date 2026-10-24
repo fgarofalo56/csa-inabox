@@ -9,6 +9,8 @@ import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 const clientFetch = vi.fn();
 vi.mock('@/lib/client-fetch', () => ({ clientFetch: (...a: unknown[]) => clientFetch(...a) }));
 const jsonGet = vi.fn();
+// #5099 phase C: the always-on section also reads through jsonGet, so the cadence is counted on the STATE route only.
+const stateReads = () => jsonGet.mock.calls.filter((c) => c[0] === '/api/admin/estate/state').length;
 vi.mock('@/lib/components/admin-scaling/json-get', () => ({ jsonGet: (...a: unknown[]) => jsonGet(...a) }));
 
 import { EstateAutoPauseSection, EstatePowerPanel, formatIdle, parseIdleHours } from '../estate-power-panel';
@@ -148,7 +150,7 @@ describe('mounted in EstatePowerPanel', () => {
     cleanup();
     jsonGet.mockResolvedValue({ ok: true, state: 'RUNNING', estateId: 'loom:e', preview: { wouldPause: [] } });
     mount(<EstatePowerPanel styles={styles} />);
-    await waitFor(() => expect(jsonGet).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(stateReads()).toBe(2));
     await screen.findByText('Estate power');
     expect(screen.queryByTestId('estate-autopause')).toBeNull();
   });

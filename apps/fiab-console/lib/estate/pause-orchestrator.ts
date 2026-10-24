@@ -72,6 +72,7 @@ import {
   type EstatePowerState,
   type EstateSkuSnapshot,
   type PausedResourceSnapshot,
+  type ResumeHold,
   type ResumeOutcome,
 } from './pause-state';
 import {
@@ -89,7 +90,7 @@ import {
 } from './pause-inventory';
 import { assertNoFalseGreen } from './capacity-preflight';
 import { holdStateForThrottle, throttledDetail, throttleHoldReason } from './pause-throttle';
-import { dbActGuard, guardedTierType, isDbTierType, tierPauseGuard } from './pause-guards';
+import { dbActGuard, guardedTierType, isConsumerType, isDbTierType, tierPauseGuard } from './pause-guards';
 import { applySetGuards, type OutOfTierRow } from './pause-set-guards';
 import { ESTATE_PAUSE_TIER, OUT_OF_TIER_REASONS, TYPICAL_RESUME_SECONDS, orderForResume, resumeRank } from './pause-tier';
 
@@ -486,6 +487,11 @@ export async function startPause(
     now?: string;
     /** This process's own Container App name; defaults to CONTAINER_APP_NAME. */
     selfAppName?: string;
+    /**
+     * Bounded wait for a database's consumers to drain after their scale-to-zero
+     * was accepted (#5099 phase C). Default 6 reads, 5s apart.
+     */
+    consumerDrain?: { attempts?: number; delayMs?: number };
   },
 ): Promise<PauseRunResult> {
   const snapshot = newPauseSnapshot({
@@ -543,6 +549,21 @@ export async function startPause(
       if (!guard.eligible || (dep && !dep.eligible)) {
         actions.push({ ...base, status: 'skipped', detail: guard.eligible ? dep!.reason : guard.reason });
         continue;
+      }
+      // ARM accepts a scale-to-zero before the replicas drain, so `dispatched` is
+      // not `stopped`: read each consumer back before the database goes down.
+      if (dep && dep.consumers.length) {
+        const drained = await confirmConsumersStopped(dep.consumers, actions, actuator, ctx.consumerDrain);
+        if (!drained.ok) {
+          actions.push({
+            ...base,
+            status: 'skipped',
+            detail:
+              `${resource.name} is held out: ${drained.reason} Stopping the server underneath a running app `
+              + 'would break it. Left RUNNING.',
+          });
+          continue;
+        }
       }
       consumers = dep?.consumers;
     }
@@ -795,6 +816,54 @@ export interface ResumeRunResult {
 }
 
 /**
+ * Read each dispatched consumer's power state back (ARM, authoritative) until it
+ * is stopped (paused state, or zero replicas), within a bounded number of reads.
+ * Anything that cannot be confirmed fails closed with the reason.
+ */
+export async function confirmConsumersStopped(
+  consumers: readonly string[],
+  actions: ReadonlyArray<{ resourceId: string; name: string; resourceType: string; status: string }>,
+  actuator: Pick<EstateActuator, 'readPower'>,
+  drain?: { attempts?: number; delayMs?: number },
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const attempts = Math.max(1, drain?.attempts ?? 6);
+  const delayMs = Math.max(0, drain?.delayMs ?? 5000);
+  for (const name of consumers) {
+    const done = actions.find(
+      (a) => isConsumerType(a.resourceType) && a.name.trim().toLowerCase() === name.trim().toLowerCase(),
+    );
+    // Not dispatched in this run (already-paused was read as stopped; anything else
+    // was already refused by dbActGuard) -> nothing to wait for.
+    if (!done || done.status !== 'dispatched') continue;
+    let last = 'no reading';
+    let stopped = false;
+    for (let i = 0; i < attempts && !stopped; i += 1) {
+      if (i > 0 && delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
+      let power: Awaited<ReturnType<EstateActuator['readPower']>>;
+      try {
+        power = await actuator.readPower(done);
+      } catch (e) {
+        last = e instanceof Error ? e.message : String(e);
+        continue;
+      }
+      if (!power.reading) {
+        last = power.error ?? 'the power read established nothing';
+        continue;
+      }
+      if (isPausedState(power.reading.powerState) || power.replicaCount === 0) stopped = true;
+      else last = `still ${power.reading.powerState}${typeof power.replicaCount === 'number' ? ` with ${power.replicaCount} replica(s)` : ''}`;
+    }
+    if (!stopped) {
+      return {
+        ok: false,
+        reason: `its consumer ${done.name} was asked to stop but could not be confirmed stopped after ${attempts} read(s) (${last}).`,
+      };
+    }
+  }
+  return { ok: true };
+}
+
+/**
  * Dispatch the resume. Moves the estate to `RESUMING` and NOTHING further.
  *
  * `RUNNING` is never reachable from here — it is only ever produced by
@@ -816,9 +885,11 @@ export async function startResume(
     resumeStartedAt: now,
     updatedAt: now,
     resumeOutcomes: [],
+    resumeHeld: [],
   };
 
   const dispatches: ResumeDispatch[] = [];
+  const held: ResumeHold[] = [];
   for (const entry of orderForResume(snapshot.resources)) {
     // Restore TO the pre-pause state. Something that was already stopped when
     // Loom found it stays stopped — resuming it would be Loom starting a
@@ -863,6 +934,36 @@ export async function startResume(
       continue;
     }
 
+    // #5099 phase C: a database's consumers start only against a database that
+    // STARTED. Databases dispatch first (rank 1 < 2), so their verdicts are known here.
+    if (isConsumerType(entry.resourceType)) {
+      const gate = consumerResumeGate(entry, snapshot.resources, dispatches);
+      if (gate.kind === 'db-failed') {
+        dispatches.push({
+          resourceId: entry.resourceId,
+          name: entry.name,
+          status: 'skipped',
+          detail:
+            `${entry.name} was NOT started: database not started (the start request for ${gate.db.name} failed), `
+            + 'so the app would come up against a database that is not there. Retry the resume once the database is fixed.',
+          error: `database-not-started:${gate.db.name}`,
+        });
+        continue;
+      }
+      if (gate.kind === 'db-pending') {
+        held.push({ resourceId: entry.resourceId, name: entry.name, dbResourceId: gate.db.resourceId, dbName: gate.db.name });
+        dispatches.push({
+          resourceId: entry.resourceId,
+          name: entry.name,
+          status: 'skipped',
+          detail:
+            `${entry.name} is held until ${gate.db.name} reads Online; the state poll starts it then. `
+            + 'It is not reported running until a real request to it succeeds.',
+        });
+        continue;
+      }
+    }
+
     const result = await actuator.resume(entry);
     dispatches.push({
       resourceId: entry.resourceId,
@@ -873,7 +974,32 @@ export async function startResume(
     });
   }
 
+  next.resumeHeld = held;
   return { snapshot: next, dispatches };
+}
+
+/**
+ * The database (in this snapshot, started by this resume run) that `entry` waits
+ * for, judged against what the run did to it so far.
+ */
+function consumerResumeGate(
+  entry: PausedResourceSnapshot,
+  all: readonly PausedResourceSnapshot[],
+  dispatches: readonly ResumeDispatch[],
+):
+  | { kind: 'free' }
+  | { kind: 'db-failed'; db: PausedResourceSnapshot }
+  | { kind: 'db-pending'; db: PausedResourceSnapshot } {
+  const me = entry.name.trim().toLowerCase();
+  let pending: PausedResourceSnapshot | undefined;
+  for (const db of all) {
+    if (!isDbTierType(db.resourceType) || !db.consumers?.includes(me)) continue;
+    const d = dispatches.find((x) => x.resourceId === db.resourceId);
+    if (!d) continue;
+    if (d.status === 'failed') return { kind: 'db-failed', db };
+    if (d.status === 'dispatched') pending = pending ?? db;
+  }
+  return pending ? { kind: 'db-pending', db: pending } : { kind: 'free' };
 }
 
 export interface ResumePollResult {
@@ -886,6 +1012,8 @@ export interface ResumePollResult {
   terminal: boolean;
   /** How many resources' reads/probes were throttled (429) in this poll. */
   throttled: number;
+  /** Held consumers still waiting for their database (persist this over the snapshot's list). */
+  resumeHeld?: ResumeHold[];
 }
 
 /**
@@ -920,6 +1048,21 @@ export async function pollResume(
   const outcomes: ResumeOutcome[] = [];
   const progress: ResourceProgress[] = [];
   const throttledIds = new Set<string>();
+
+  // #5099 phase C: release consumers held for a database that now reads Online.
+  const stillHeld: ResumeHold[] = [];
+  for (const hold of snapshot.resumeHeld ?? []) {
+    const entry = snapshot.resources.find((r) => r.resourceId === hold.resourceId);
+    const db = snapshot.resources.find((r) => r.resourceId === hold.dbResourceId);
+    if (!entry || !db) continue;
+    const dbPower = await actuator.readPower(db);
+    if (dbPower.throttled) throttledIds.add(db.resourceId);
+    if (dbPower.reading && isRunningState(dbPower.reading.powerState)) {
+      const r = await actuator.resume(entry);
+      if (r.ok) continue;
+    }
+    stillHeld.push(hold);
+  }
 
   for (const entry of snapshot.resources) {
     const power = await actuator.readPower(entry);
@@ -998,7 +1141,7 @@ export async function pollResume(
   const held = holdStateForThrottle(verdict, throttledIds, snapshot.state);
   if (held) {
     const reason = throttleHoldReason(throttled, snapshot.resources.length);
-    return { state: held, outcomes, progress, unconfirmed: verdict.unconfirmed, terminal: false, reason, throttled };
+    return { state: held, outcomes, progress, unconfirmed: verdict.unconfirmed, terminal: false, reason, throttled, resumeHeld: stillHeld };
   }
 
   // Still inside the published resume window: report RESUMING rather than a
@@ -1023,6 +1166,7 @@ export async function pollResume(
         + `(typical window ${Math.round(settleAfterMs / 1000)}s). Still RESUMING — this is not a `
         + 'success claim, it is a statement that the window has not elapsed.',
       throttled,
+      resumeHeld: stillHeld,
     };
   }
 
@@ -1034,6 +1178,7 @@ export async function pollResume(
     terminal: true,
     reason: verdict.reason,
     throttled,
+    resumeHeld: stillHeld,
   };
 }
 
@@ -1075,6 +1220,7 @@ export function applyResumePoll(
     state: poll.state,
     updatedAt: now,
     resumeOutcomes: poll.outcomes,
+    ...(poll.resumeHeld ? { resumeHeld: poll.resumeHeld } : {}),
     ...(poll.state === 'RUNNING' ? { resumeConfirmedAt: now } : {}),
   };
 }

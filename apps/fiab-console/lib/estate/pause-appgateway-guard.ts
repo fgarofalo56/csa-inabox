@@ -34,6 +34,10 @@ const APP_GATEWAY_API_VERSION = '2024-05-01';
 /** The slice of an Application Gateway GET this guard reads. */
 export interface GatewayBackendConfig {
   properties?: {
+    httpListeners?: Array<{
+      name?: string;
+      properties?: { hostName?: string; hostNames?: string[] };
+    }>;
     backendAddressPools?: Array<{
       name?: string;
       properties?: { backendAddresses?: Array<{ fqdn?: string; ipAddress?: string }> };
@@ -61,9 +65,18 @@ export function consoleIdentifiers(env: NodeJS.ProcessEnv = process.env): { name
     'LOOM_CONSOLE_BASE_URL',
     'LOOM_CONSOLE_PUBLIC_URL',
     'LOOM_CONSOLE_URL',
+    'LOOM_PUBLIC_URL',
+    'LOOM_SELF_BASE_URL',
+    'LOOM_VANITY_DOMAIN',
     'CONTAINER_APP_HOSTNAME',
   ]) {
     const v = String(env[k] ?? '').trim();
+    if (v) hosts.add(hostOf(v));
+  }
+  // #5099 phase C: a comma-separated list of the console's custom hostnames
+  // (Front Door / vanity domains), for a console reached by more than one.
+  for (const raw of String(env.LOOM_CONSOLE_HOSTNAMES ?? '').split(',')) {
+    const v = raw.trim();
     if (v) hosts.add(hostOf(v));
   }
   return { names: [...names], hosts: [...hosts] };
@@ -95,6 +108,17 @@ export function appGatewayBackendGuard(
   const pools = config.properties?.backendAddressPools;
   if (!Array.isArray(pools)) {
     return hold('its backend pools were not present in the ARM response, so they could not be established.');
+  }
+  // A listener that serves one of the console's own hostnames is the console's
+  // public path, whatever its pool addresses look like.
+  for (const l of config.properties?.httpListeners ?? []) {
+    const names = [l?.properties?.hostName, ...(l?.properties?.hostNames ?? [])]
+      .map((h) => String(h ?? '').trim().toLowerCase())
+      .filter(Boolean);
+    const hit = names.find((h) => ids.hosts.includes(h));
+    if (hit) {
+      return hold(`its listener '${String(l?.name ?? 'unnamed')}' serves ${hit}, a hostname of the console, and stopping the gateway would make the resume surface unreachable.`);
+    }
   }
   for (const pool of pools) {
     const poolName = String(pool?.name ?? 'unnamed');

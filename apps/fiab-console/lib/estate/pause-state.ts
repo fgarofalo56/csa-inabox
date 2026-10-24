@@ -489,6 +489,21 @@ export interface EstatePauseSnapshot {
    * matters, and it must name which resources are unconfirmed.
    */
   resumeOutcomes?: ResumeOutcome[];
+  /**
+   * Consumers (Container Apps / web apps) whose start is HELD until the database
+   * they connect to reads Online (#5099 phase C). `pollResume` releases each one
+   * when its database is Online; `startResume` never records a hold for a
+   * database whose start failed (that consumer is `skipped`, not held).
+   */
+  resumeHeld?: ResumeHold[];
+}
+
+export interface ResumeHold {
+  resourceId: string;
+  name: string;
+  /** The database this consumer waits for. */
+  dbResourceId: string;
+  dbName: string;
 }
 
 // ---------------------------------------------------------------------------

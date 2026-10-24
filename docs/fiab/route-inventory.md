@@ -13,11 +13,11 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1701 |
+| Total routes | 1702 |
 | Public (no session) | 60 |
 | Session-only | 615 |
 | Owner-scoped | 697 |
-| Admin | 329 |
+| Admin | 330 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 500 |
 | Areas | 122 |
@@ -255,6 +255,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `admin/dspm-ai/route.ts` | GET | admin | ● | ARM, Cosmos, Log Analytics, Microsoft Graph |
 | `admin/embed-codes/route.ts` | GET POST DELETE | admin | ● | ADLS, ARM, Azure Storage, Cosmos, Managed Identity |
 | `admin/env-config/route.ts` | GET PUT | admin |  | ADLS, AKS, ARM, Azure Monitor, Container Apps, Cosmos, Microsoft Graph |
+| `admin/estate/always-on/route.ts` | GET | admin |  | ARM, Cosmos, Cost Management, Resource Graph |
 | `admin/estate/autopause/route.ts` | GET PUT | admin |  | Azure Monitor, Cosmos |
 | `admin/estate/pause/route.ts` | POST | admin |  | AAS, ADX, ARM, Azure Monitor, Azure SQL, Compute, Container Apps, Cosmos, Databricks, Managed Identity, Resource Graph, Synapse, Synapse SQL |
 | `admin/estate/resume/route.ts` | POST | admin |  | AAS, ARM, Azure Monitor, Azure SQL, Cosmos, Databricks, Managed Identity, Synapse SQL |
@@ -2550,7 +2551,7 @@ silently downgrading the route.
 
 ## Backend signals (derived)
 
-460 module(s) ORIGINATE a backend label — the derivation read an
+461 module(s) ORIGINATE a backend label — the derivation read an
 Azure identifier out of them. Every other route/module below inherits through the
 call graph. Nothing in this section is a Loom module name someone typed: the
 modules are derived, and only the Microsoft-owned identifier vocabulary is seeded.
@@ -3200,6 +3201,7 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/editors/synapse-spark-editor.tsx` | ADLS |
 | `apps/fiab-console/lib/editors/tapestry-editor.tsx` | Azure Maps |
 | `apps/fiab-console/lib/editors/unified-sql-database-editor.tsx` | Azure Networking, Azure SQL, PostgreSQL |
+| `apps/fiab-console/lib/estate/estate-always-on.ts` | Resource Graph |
 | `apps/fiab-console/lib/estate/pause-container-apps.ts` | Container Apps |
 | `apps/fiab-console/lib/estate/pause-orchestrator.ts` | AAS, ADX, Compute, Synapse |
 | `apps/fiab-console/lib/estate/pause-tag-discovery.ts` | Resource Graph |
