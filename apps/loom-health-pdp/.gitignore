@@ -1,2 +1,4 @@
 dist/
 *.pem
+# generated per run (contains signed JWT-shaped fixtures; secret scanners flag them)
+tests/jwt_fixtures.rego
