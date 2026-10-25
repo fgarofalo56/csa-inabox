@@ -32,6 +32,30 @@ SMART layer (the archived `fhir-proxy` / sample SMART authorizer, research).
   per cloud (research row "Entra"); otherwise tenant-issued patient accounts in
   Entra B2B — Decision D13.
 
+## Implementation choice (W1-4 design pass, 2026-10-25; not yet confirmed)
+Selected candidate: `node-oidc-provider` (MIT) embedded in `apps/loom-health-cp`.
+Fallback 1: Medplum authorizer extracted (Apache-2.0). Fallback 2: a minimal
+authorizer on `jose`. None of these libraries' code or docs was read for this
+pass, so their fitness is UNVERIFIED. The choice is confirmed only by the W1-4
+implementation receipt meeting **all four** points of this pass bar:
+
+1. The Inferno SMART App Launch STU2 kit has zero failures (standalone and EHR
+   launch).
+2. Negative-scope matrix rows N1-N23 run, with mutation arms (i)-(iii)
+   red-then-green.
+3. Token signing uses non-exportable, HSM-backed Key Vault keys, unless the
+   operator decides otherwise (Q1).
+4. Per-cloud authority and Graph hosts are unit-tested, and the GCC-High
+   receipt comes from Actions.
+
+If point 1 or 3 is still unmet after three implementation sessions, the work
+moves to Fallback 1. The full design is in `docs/fiab/health/security.md`
+section A: the scope grammar, launch contexts, the role-to-scope table
+(canonical data in `apps/loom-health-cp/src/auth/role-scope-map.v1.json`), the
+per-cloud Entra mapping, Backend Services JWKS, the access-token claims
+contract (`lhds-at/1`) the PDP consumes, the tenant-match rule, the test
+matrix, and the open questions.
+
 ## Consequences
 One more service in the control plane with a strict security review
 (`review: required`); SMART conformance tested by Inferno.
