@@ -493,7 +493,7 @@ test('POPULATION X4: piping the list into xargs instead of redirecting is caught
   );
   const r5 = analyze(mutated, PARAMS).violations.filter((v) => v.startsWith('R5'));
   // FAILS IF: the guard only judges the enumeration line and not how the list
-  // reaches the compiler. `head -n 1 list | xargs …` compiled 1 of 17 with the
+  // reaches the compiler. `head -n 1 list | xargs …` compiled 1 of 20 with the
   // previous revision fully green.
   assert.ok(r5.length, `expected R5, got: ${analyze(mutated, PARAMS).violations.join(' | ')}`);
   assert.ok(
@@ -512,7 +512,7 @@ test('POPULATION A5: a pathspec TYPO that matches nothing is caught', () => {
   // same substring-vs-glob confusion R6 was already built to avoid, on the
   // other side of the same job. Reviewer-measured as a survivor.
   assert.ok(r4, `expected R4, got: ${analyze(mutated, PARAMS).violations.join(' | ')}`);
-  assert.match(r4, /matches none of 17 tracked param file\(s\)/);
+  assert.match(r4, /matches none of 20 tracked param file\(s\)/);
 });
 
 test('POPULATION A7/R8: deleting the reconciliation is a violation', () => {
