@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "LHDS PDP decision input (PROVISIONAL v0)",
+  "description": "PROVISIONAL, owned by W1-5. MUST be reconciled with the token-claims contract from W1-4 (feat/lhds-w1-4-scope-design, apps/loom-health-cp/src/auth/**) before any interceptor depends on it. Single place the PDP input shape is defined; the Rego reads only these paths.",
+  "type": "object",
+  "required": ["token", "request"],
+  "properties": {
+    "token": {
+      "type": "object",
+      "description": "Claims of the already-verified LHDS access token. The PDP does not verify signatures; the interceptor does (ADR-010).",
+      "required": ["sub", "tenant"],
+      "properties": {
+        "sub": { "type": "string" },
+        "tenant": { "type": "string", "description": "Tenant slug the token was minted for." },
+        "scopes": { "type": "array", "items": { "type": "string" }, "description": "SMART v2 scopes, ctx/Type.cruds. Granular (?query) scopes are NOT honoured in v1 and grant nothing." },
+        "roles": { "type": "array", "items": { "type": "string" }, "description": "Keys of data.lhds.mapping.roles." },
+        "patient": { "type": "string", "description": "Launch patient id; required for patient/* scopes." }
+      }
+    },
+    "request": {
+      "type": "object",
+      "required": ["service", "interaction", "tenant", "resource_type"],
+      "properties": {
+        "service": { "type": "string", "enum": ["fhir", "dicom"] },
+        "interaction": { "type": "string", "description": "Key of data.lhds.mapping.interactions[service]." },
+        "tenant": { "type": "string", "description": "Tenant slug the request targets, taken from the route by the interceptor, never from the body." },
+        "resource_type": { "type": "string", "description": "FHIR resource type, or the literal dicom for service=dicom." },
+        "patient": { "type": "string", "description": "Patient compartment id of the target, when known." }
+      }
+    }
+  }
+}

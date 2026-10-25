@@ -1,0 +1,28 @@
+# OPA config template for the per-stamp PDP Deployment (workload lives in
+# platform/fiab/bicep/modules/health/engines.bicep, queued behind the bicep PR).
+# Placeholders in <angle brackets> are filled by the deployment, never committed.
+services:
+  health-cp:
+    url: https://<control-plane-host>/api/health/pdp
+    credentials:
+      oauth2:
+        grant_type: client_credentials
+        token_url: https://<authority-host>/<entra-tenant>/oauth2/v2.0/token
+        client_id: <pdp-uami-or-app-client-id>
+        scopes: ["<control-plane-audience>/.default"]
+bundles:
+  lhds:
+    service: health-cp
+    resource: stamps/<stamp-id>/bundle.tar.gz
+    persist: true            # last-known-good survives a control-plane outage
+    signing:
+      keyid: global
+    polling:
+      min_delay_seconds: 30
+      max_delay_seconds: 60
+keys:
+  global:
+    algorithm: ES256
+    key: <PEM public key, from Key Vault / ConfigMap>
+decision_logs:
+  console: true              # W8 replaces with the audit chain
