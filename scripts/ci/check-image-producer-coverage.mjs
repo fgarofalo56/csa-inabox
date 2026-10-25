@@ -75,7 +75,7 @@ const ROOT = rootFlag >= 0 ? process.argv[rootFlag + 1] : process.cwd();
 const KNOWN_UNBUILT = new Map([
   ['fiab-prpt-renderer', 'integration/prpt-renderer.bicep is a standalone entrypoint not invoked by admin-plane/main.bicep, so no deploy references the image yet. Needs a producer before it is wired.'],
   ['loom-capacity-broker', 'compute/loom-capacity-broker-app.bicep is a standalone entrypoint not invoked by admin-plane/main.bicep. Needs a producer before it is wired.'],
-  ['loom-health-cp', 'LHDS control plane (W1-3). No bicep references its image yet: health/control-plane.bicep and the admin-plane wiring land in the W1 bicep follow-up, which must add the Commercial + Gov producers and remove this entry in the same change.'],
+  // loom-health-cp was here (W1-3); REMOVED when health/control-plane.bicep landed with producers in full-app-deploy-commercial.yml, build-fiab-images-acr-tasks.yml and gov-provision-dataplane-images.yml.
   // loom-directlake was here. REMOVED (#3291): the HYP-5 Direct Lake columnar
   // scan/frame service now has real producers — full-app-deploy-commercial.yml
   // (Commercial), build-fiab-images-acr-tasks.yml (both matrices), and

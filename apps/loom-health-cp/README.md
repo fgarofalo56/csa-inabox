@@ -11,9 +11,17 @@ It holds identities, pointers, policy and telemetry only - never clinical data.
 | SLO | Stamps report counts and capacity; the API aggregates availability, error budget and state per stamp and fleet-wide |
 
 Not in this service yet: the authorization server (W1-4, `src/auth/**`), tenant
-jobs (W1-2), the MPI, the bicep module (`control-plane.bicep`) and the
-admin-plane env rows. Until that bicep follow-up lands the service is not
-deployable; merging this code does not deploy it.
+jobs (W1-2) and the MPI.
+
+Deployment: `platform/fiab/bicep/modules/health/control-plane.bicep`, invoked from
+`main.bicep` only when `healthEnabled` is true (default false in every param file)
+and `healthConfig.cpAudiences` is non-empty. It creates the Cosmos account with the
+five containers, the identity and its Data Contributor role, and the workload:
+a Container App (Commercial, GCC, GCC-High) or a Deployment on the stamp AKS
+cluster (IL5), chosen by `healthConfig.controlPlane`, which is independent of the
+admin-plane `containerPlatform`. On AKS the Service is ClusterIP only: no route
+from outside the cluster exists until the stamp ingress (W1-6) publishes one.
+Neither path has produced a deploy receipt (supported-in-code, never exercised).
 
 ## API
 

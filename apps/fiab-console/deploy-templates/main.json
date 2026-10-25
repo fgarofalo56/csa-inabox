@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "210054164779298554"
+      "templateHash": "11990548119515232220"
     }
   },
   "definitions": {
@@ -2164,6 +2164,15 @@
     "healthPgOverride": "[toLower(string(coalesce(tryGet(parameters('healthConfig'), 'postgres'), '')))]",
     "healthPgAllowed": "[if(equals(variables('healthPgOverride'), 'enabled'), true(), if(equals(variables('healthPgOverride'), 'disabled'), false(), parameters('postgresQuotaAvailable')))]",
     "healthDeploy": "[and(parameters('healthEnabled'), variables('healthPgAllowed'))]",
+    "healthCpPlatformRaw": "[toLower(string(coalesce(tryGet(parameters('healthConfig'), 'controlPlane'), if(equals(parameters('boundary'), 'IL5'), 'aks', 'containerApps'))))]",
+    "healthCpPlatform": "[if(equals(variables('healthCpPlatformRaw'), 'aks'), 'aks', 'containerApps')]",
+    "healthCpAudiences": "[coalesce(tryGet(parameters('healthConfig'), 'cpAudiences'), createArray())]",
+    "healthCpAcrName": "[string(coalesce(tryGet(parameters('healthConfig'), 'cpAcrName'), if(variables('deployAdminPlane'), take(format('acrloom{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('adminPlaneRgName')))), 50), '')))]",
+    "healthCpAcrRg": "[string(coalesce(tryGet(parameters('healthConfig'), 'cpAcrResourceGroup'), variables('adminPlaneRgName')))]",
+    "healthCpHostable": "[or(equals(variables('healthCpPlatform'), 'aks'), and(variables('deployAdminPlane'), equals(parameters('containerPlatform'), 'containerApps')))]",
+    "healthCpAcrKnown": "[or(variables('deployAdminPlane'), and(not(empty(string(coalesce(tryGet(parameters('healthConfig'), 'cpAcrName'), '')))), not(empty(string(coalesce(tryGet(parameters('healthConfig'), 'acrLoginServer'), ''))))))]",
+    "healthCpDeploy": "[and(and(and(and(variables('healthDeploy'), not(empty(variables('healthCpAudiences')))), variables('healthCpHostable')), variables('healthCpAcrKnown')), contains(createArray('containerApps', 'aks'), variables('healthCpPlatformRaw')))]",
+    "healthCpSkipReason": "[if(not(parameters('healthEnabled')), 'healthEnabled is false', if(not(variables('healthPgAllowed')), 'stamp not deployed: PostgreSQL unavailable in this region (healthConfig.postgres)', if(empty(variables('healthCpAudiences')), 'healthConfig.cpAudiences is empty: the service refuses to start without an accepted token audience', if(not(contains(createArray('containerApps', 'aks'), variables('healthCpPlatformRaw'))), 'healthConfig.controlPlane must be containerApps or aks', if(not(variables('healthCpHostable')), 'containerApps path needs the admin plane with containerPlatform=containerApps; set healthConfig.controlPlane=aks otherwise', if(not(variables('healthCpAcrKnown')), 'no admin plane to derive the registry from: set healthConfig.cpAcrName, cpAcrResourceGroup and acrLoginServer', ''))))))]",
     "dlzAttachConsoleEnvWired": "[and(and(equals(parameters('topology'), 'dlz-attach'), equals(parameters('containerPlatform'), 'containerApps')), variables('dlzAttachHasHubConsoleUami'))]"
   },
   "resources": {
@@ -71858,6 +71867,852 @@
       "dependsOn": [
         "healthRg"
       ]
+    },
+    "healthControlPlane": {
+      "condition": "[variables('healthCpDeploy')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('lhds-control-plane-{0}', variables('healthStampName'))]",
+      "resourceGroup": "[format('rg-csa-loom-health-{0}-{1}', variables('healthStampName'), variables('healthLocation'))]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": "[if(equals(variables('healthCpPlatform'), 'aks'), createObject('value', variables('healthLocation')), createObject('value', parameters('location')))]",
+          "boundary": {
+            "value": "[parameters('boundary')]"
+          },
+          "platform": {
+            "value": "[variables('healthCpPlatform')]"
+          },
+          "image": {
+            "value": "[format('{0}/loom-health-cp:{1}', if(variables('deployAdminPlane'), reference('adminPlane').outputs.acrLoginServer.value, string(coalesce(tryGet(parameters('healthConfig'), 'acrLoginServer'), ''))), string(coalesce(tryGet(parameters('healthConfig'), 'cpImageTag'), 'v0.1')))]"
+          },
+          "acrLoginServer": "[if(variables('deployAdminPlane'), createObject('value', reference('adminPlane').outputs.acrLoginServer.value), createObject('value', string(coalesce(tryGet(parameters('healthConfig'), 'acrLoginServer'), ''))))]",
+          "acrName": {
+            "value": "[variables('healthCpAcrName')]"
+          },
+          "acrResourceGroup": {
+            "value": "[variables('healthCpAcrRg')]"
+          },
+          "audiences": {
+            "value": "[variables('healthCpAudiences')]"
+          },
+          "allowedCallerAppIds": {
+            "value": "[coalesce(tryGet(parameters('healthConfig'), 'cpAllowedCallerAppIds'), createArray())]"
+          },
+          "environmentId": "[if(equals(variables('healthCpPlatform'), 'containerApps'), createObject('value', reference('adminPlane').outputs.caeId.value), createObject('value', ''))]",
+          "aksClusterName": "[if(equals(variables('healthCpPlatform'), 'aks'), createObject('value', reference('healthStamp').outputs.stamp.value.aksClusterName), createObject('value', ''))]",
+          "aksOidcIssuerUrl": "[if(equals(variables('healthCpPlatform'), 'aks'), createObject('value', reference('healthStamp').outputs.stamp.value.aksOidcIssuerUrl), createObject('value', ''))]",
+          "privateEndpointSubnetId": {
+            "value": "[string(coalesce(tryGet(parameters('healthConfig'), 'cpPrivateEndpointSubnetId'), ''))]"
+          },
+          "cosmosPrivateDnsZoneId": {
+            "value": "[string(coalesce(tryGet(parameters('healthConfig'), 'cpCosmosPrivateDnsZoneId'), ''))]"
+          },
+          "skipRoleGrants": {
+            "value": "[parameters('skipRoleGrants')]"
+          },
+          "workspaceId": {
+            "value": "[reference('healthStamp').outputs.stamp.value.lawId]"
+          },
+          "tags": {
+            "value": "[variables('loomTags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "11367438287760422129"
+            }
+          },
+          "parameters": {
+            "name": {
+              "type": "string",
+              "defaultValue": "loom-health-cp",
+              "maxLength": 32,
+              "metadata": {
+                "description": "Workload name (Container App name / Kubernetes Deployment name), DNS-label safe."
+              }
+            },
+            "location": {
+              "type": "string",
+              "defaultValue": "[resourceGroup().location]",
+              "metadata": {
+                "description": "Primary region."
+              }
+            },
+            "boundary": {
+              "type": "string",
+              "allowedValues": [
+                "Commercial",
+                "GCC",
+                "GCC-High",
+                "IL5"
+              ],
+              "metadata": {
+                "description": "Cloud boundary. Selects the LOOM_HEALTH_CP_CLOUD value, hence the Entra authority host the service validates tokens against."
+              }
+            },
+            "platform": {
+              "type": "string",
+              "allowedValues": [
+                "containerApps",
+                "aks"
+              ],
+              "metadata": {
+                "description": "Hosting path. containerApps = Container App on `environmentId`; aks = Deployment on the stamp cluster. Independent of the admin-plane containerPlatform."
+              }
+            },
+            "image": {
+              "type": "string",
+              "metadata": {
+                "description": "Container image reference (pin an explicit tag, never :latest)."
+              }
+            },
+            "acrLoginServer": {
+              "type": "string",
+              "metadata": {
+                "description": "Login server of the ACR holding the image, for example acrloomxxxx.azurecr.io or .azurecr.us."
+              }
+            },
+            "acrName": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of that ACR. It may live in another resource group (the hub), in this subscription."
+              }
+            },
+            "acrResourceGroup": {
+              "type": "string",
+              "metadata": {
+                "description": "Resource group of that ACR."
+              }
+            },
+            "entraTenantId": {
+              "type": "string",
+              "defaultValue": "[tenant().tenantId]",
+              "metadata": {
+                "description": "Entra tenant id whose tokens the service accepts (pins the issuer)."
+              }
+            },
+            "audiences": {
+              "type": "array",
+              "minLength": 1,
+              "metadata": {
+                "description": "Accepted token audiences (app id URI and/or client id). At least one: the service refuses to start without one."
+              }
+            },
+            "allowedCallerAppIds": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "Optional allow-list of caller app ids (token azp/appid). Empty = any caller with a valid role."
+              }
+            },
+            "sloAvailabilityTarget": {
+              "type": "string",
+              "defaultValue": "0.999",
+              "metadata": {
+                "description": "SLO availability target, a fraction strictly between 0 and 1."
+              }
+            },
+            "environmentId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "containerApps path: resource id of the Container Apps managed environment. Ignored on aks."
+              }
+            },
+            "aksClusterName": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "aks path: name of the stamp cluster (same resource group as this module). Ignored on containerApps."
+              }
+            },
+            "aksOidcIssuerUrl": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "aks path: OIDC issuer URL of that cluster, for the workload-identity federated credential. Ignored on containerApps."
+              }
+            },
+            "aksNamespace": {
+              "type": "string",
+              "defaultValue": "loom-health",
+              "metadata": {
+                "description": "aks path: Kubernetes namespace for the control plane."
+              }
+            },
+            "privateEndpointSubnetId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Private endpoint subnet for the Cosmos account. Empty = no private endpoint and the account keeps public network access (AAD-only, local auth disabled). A deployment that needs the private posture must supply this and cosmosPrivateDnsZoneId."
+              }
+            },
+            "cosmosPrivateDnsZoneId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Private DNS zone id (privatelink.documents.azure.<com|us>) for the Cosmos private endpoint. Empty skips the DNS zone group."
+              }
+            },
+            "cosmosMaxThroughput": {
+              "type": "int",
+              "defaultValue": 1000,
+              "minValue": 1000,
+              "metadata": {
+                "description": "Cosmos database autoscale ceiling in RU/s (shared by the five containers). Autoscale scales to 10 percent of this."
+              }
+            },
+            "cosmosZoneRedundant": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "Spread the Cosmos account over availability zones. Off by default: not every region has zonal Cosmos capacity."
+              }
+            },
+            "skipRoleGrants": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "Skip role assignments (re-deploys where the deployer cannot write RBAC)."
+              }
+            },
+            "workspaceId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Log Analytics workspace id for Cosmos diagnostics. Empty = none."
+              }
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {},
+              "metadata": {
+                "description": "Tags."
+              }
+            }
+          },
+          "variables": {
+            "isGov": "[or(equals(parameters('boundary'), 'GCC-High'), equals(parameters('boundary'), 'IL5'))]",
+            "cloudName": "[if(equals(parameters('boundary'), 'Commercial'), 'commercial', if(equals(parameters('boundary'), 'GCC'), 'gcc', if(equals(parameters('boundary'), 'GCC-High'), 'gcc-high', 'il5')))]",
+            "cosmosSuffix": "[if(variables('isGov'), 'azure.us', 'azure.com')]",
+            "accountName": "[take(format('cosmos-lhds-cp-{0}', uniqueString(resourceGroup().id)), 44)]",
+            "databaseName": "loom-health-cp",
+            "containerNames": [
+              "health-stamps",
+              "health-tenants",
+              "health-routing",
+              "health-jobs",
+              "health-slo"
+            ],
+            "onAks": "[equals(parameters('platform'), 'aks')]",
+            "servicePort": 8080,
+            "cosmosDataContributorId": "00000000-0000-0000-0000-000000000002",
+            "aksClusterAdminRoleId": "0ab0b1a8-8aac-4efd-b8c2-3ee1fb270be8",
+            "aksRbacClusterAdminRoleId": "b1ff04bb-8a4e-4dc4-8eb5-8693973ce19b",
+            "cosmosEndpointUrl": "[format('https://{0}.documents.{1}:443/', variables('accountName'), variables('cosmosSuffix'))]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+              "apiVersion": "2024-11-30",
+              "name": "[format('uami-{0}-{1}', parameters('name'), parameters('location'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]"
+            },
+            {
+              "type": "Microsoft.DocumentDB/databaseAccounts",
+              "apiVersion": "2024-12-01-preview",
+              "name": "[variables('accountName')]",
+              "location": "[parameters('location')]",
+              "kind": "GlobalDocumentDB",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "databaseAccountOfferType": "Standard",
+                "disableLocalAuth": true,
+                "minimalTlsVersion": "Tls12",
+                "publicNetworkAccess": "[if(empty(parameters('privateEndpointSubnetId')), 'Enabled', 'Disabled')]",
+                "consistencyPolicy": {
+                  "defaultConsistencyLevel": "Session"
+                },
+                "locations": [
+                  {
+                    "locationName": "[parameters('location')]",
+                    "failoverPriority": 0,
+                    "isZoneRedundant": "[parameters('cosmosZoneRedundant')]"
+                  }
+                ],
+                "backupPolicy": {
+                  "type": "Continuous",
+                  "continuousModeProperties": {
+                    "tier": "Continuous7Days"
+                  }
+                }
+              }
+            },
+            {
+              "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases",
+              "apiVersion": "2024-12-01-preview",
+              "name": "[format('{0}/{1}', variables('accountName'), variables('databaseName'))]",
+              "properties": {
+                "resource": {
+                  "id": "[variables('databaseName')]"
+                },
+                "options": {
+                  "autoscaleSettings": {
+                    "maxThroughput": "[parameters('cosmosMaxThroughput')]"
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.DocumentDB/databaseAccounts', variables('accountName'))]"
+              ]
+            },
+            {
+              "copy": {
+                "name": "containers",
+                "count": "[length(variables('containerNames'))]"
+              },
+              "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
+              "apiVersion": "2024-12-01-preview",
+              "name": "[format('{0}/{1}/{2}', variables('accountName'), variables('databaseName'), variables('containerNames')[copyIndex()])]",
+              "properties": {
+                "resource": {
+                  "id": "[variables('containerNames')[copyIndex()]]",
+                  "partitionKey": {
+                    "paths": [
+                      "/id"
+                    ],
+                    "kind": "Hash"
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', variables('accountName'), variables('databaseName'))]"
+              ]
+            },
+            {
+              "condition": "[not(parameters('skipRoleGrants'))]",
+              "type": "Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments",
+              "apiVersion": "2024-12-01-preview",
+              "name": "[format('{0}/{1}', variables('accountName'), guid(resourceId('Microsoft.DocumentDB/databaseAccounts', variables('accountName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('uami-{0}-{1}', parameters('name'), parameters('location'))), variables('cosmosDataContributorId')))]",
+              "properties": {
+                "roleDefinitionId": "[format('{0}/sqlRoleDefinitions/{1}', resourceId('Microsoft.DocumentDB/databaseAccounts', variables('accountName')), variables('cosmosDataContributorId'))]",
+                "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('uami-{0}-{1}', parameters('name'), parameters('location'))), '2024-11-30').principalId]",
+                "scope": "[format('{0}/dbs/{1}', resourceId('Microsoft.DocumentDB/databaseAccounts', variables('accountName')), variables('databaseName'))]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.DocumentDB/databaseAccounts', variables('accountName'))]",
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('uami-{0}-{1}', parameters('name'), parameters('location')))]",
+                "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', variables('accountName'), variables('databaseName'))]"
+              ]
+            },
+            {
+              "condition": "[not(empty(parameters('privateEndpointSubnetId')))]",
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2024-05-01",
+              "name": "[format('pe-{0}', variables('accountName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "subnet": {
+                  "id": "[parameters('privateEndpointSubnetId')]"
+                },
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "cosmos-sql",
+                    "properties": {
+                      "privateLinkServiceId": "[resourceId('Microsoft.DocumentDB/databaseAccounts', variables('accountName'))]",
+                      "groupIds": [
+                        "Sql"
+                      ]
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.DocumentDB/databaseAccounts', variables('accountName'))]"
+              ]
+            },
+            {
+              "condition": "[and(not(empty(parameters('privateEndpointSubnetId'))), not(empty(parameters('cosmosPrivateDnsZoneId'))))]",
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}', format('pe-{0}', variables('accountName')), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": [
+                  {
+                    "name": "cosmos",
+                    "properties": {
+                      "privateDnsZoneId": "[parameters('cosmosPrivateDnsZoneId')]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateEndpoints', format('pe-{0}', variables('accountName')))]"
+              ]
+            },
+            {
+              "condition": "[not(empty(parameters('workspaceId')))]",
+              "type": "Microsoft.Insights/diagnosticSettings",
+              "apiVersion": "2021-05-01-preview",
+              "scope": "[resourceId('Microsoft.DocumentDB/databaseAccounts', variables('accountName'))]",
+              "name": "to-law",
+              "properties": {
+                "workspaceId": "[parameters('workspaceId')]",
+                "logs": [
+                  {
+                    "category": "DataPlaneRequests",
+                    "enabled": true
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.DocumentDB/databaseAccounts', variables('accountName'))]"
+              ]
+            },
+            {
+              "condition": "[not(variables('onAks'))]",
+              "type": "Microsoft.App/containerApps",
+              "apiVersion": "2025-02-02-preview",
+              "name": "[parameters('name')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "identity": {
+                "type": "UserAssigned",
+                "userAssignedIdentities": {
+                  "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('uami-{0}-{1}', parameters('name'), parameters('location'))))]": {}
+                }
+              },
+              "properties": {
+                "environmentId": "[parameters('environmentId')]",
+                "configuration": {
+                  "activeRevisionsMode": "Single",
+                  "ingress": {
+                    "external": false,
+                    "targetPort": "[variables('servicePort')]",
+                    "transport": "auto"
+                  },
+                  "registries": [
+                    {
+                      "server": "[parameters('acrLoginServer')]",
+                      "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('uami-{0}-{1}', parameters('name'), parameters('location')))]"
+                    }
+                  ]
+                },
+                "template": {
+                  "containers": [
+                    {
+                      "name": "[parameters('name')]",
+                      "image": "[parameters('image')]",
+                      "env": [
+                        {
+                          "name": "PORT",
+                          "value": "[string(variables('servicePort'))]"
+                        },
+                        {
+                          "name": "LOOM_HEALTH_CP_CLOUD",
+                          "value": "[variables('cloudName')]"
+                        },
+                        {
+                          "name": "LOOM_HEALTH_CP_TENANT_ID",
+                          "value": "[parameters('entraTenantId')]"
+                        },
+                        {
+                          "name": "LOOM_HEALTH_CP_AUDIENCE",
+                          "value": "[join(parameters('audiences'), ',')]"
+                        },
+                        {
+                          "name": "LOOM_HEALTH_CP_COSMOS_ENDPOINT",
+                          "value": "[variables('cosmosEndpointUrl')]"
+                        },
+                        {
+                          "name": "LOOM_HEALTH_CP_COSMOS_DATABASE",
+                          "value": "[variables('databaseName')]"
+                        },
+                        {
+                          "name": "LOOM_HEALTH_CP_ALLOWED_CALLER_APP_IDS",
+                          "value": "[join(parameters('allowedCallerAppIds'), ',')]"
+                        },
+                        {
+                          "name": "LOOM_HEALTH_CP_SLO_AVAILABILITY_TARGET",
+                          "value": "[parameters('sloAvailabilityTarget')]"
+                        },
+                        {
+                          "name": "AZURE_CLIENT_ID",
+                          "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('uami-{0}-{1}', parameters('name'), parameters('location'))), '2024-11-30').clientId]"
+                        }
+                      ],
+                      "resources": {
+                        "cpu": "[json('0.5')]",
+                        "memory": "1Gi"
+                      },
+                      "probes": [
+                        {
+                          "type": "Liveness",
+                          "httpGet": {
+                            "path": "/healthz",
+                            "port": "[variables('servicePort')]",
+                            "scheme": "HTTP"
+                          },
+                          "initialDelaySeconds": 10,
+                          "periodSeconds": 30,
+                          "failureThreshold": 3
+                        },
+                        {
+                          "type": "Readiness",
+                          "httpGet": {
+                            "path": "/healthz",
+                            "port": "[variables('servicePort')]",
+                            "scheme": "HTTP"
+                          },
+                          "initialDelaySeconds": 5,
+                          "periodSeconds": 15,
+                          "failureThreshold": 6
+                        }
+                      ]
+                    }
+                  ],
+                  "scale": {
+                    "minReplicas": 1,
+                    "maxReplicas": 2
+                  }
+                }
+              },
+              "dependsOn": [
+                "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('acrResourceGroup')), 'Microsoft.Resources/deployments', 'lhds-cp-acrpull-app')]",
+                "containers",
+                "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments', variables('accountName'), guid(resourceId('Microsoft.DocumentDB/databaseAccounts', variables('accountName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('uami-{0}-{1}', parameters('name'), parameters('location'))), variables('cosmosDataContributorId')))]",
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('uami-{0}-{1}', parameters('name'), parameters('location')))]"
+              ]
+            },
+            {
+              "condition": "[variables('onAks')]",
+              "type": "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials",
+              "apiVersion": "2024-11-30",
+              "name": "[format('{0}/{1}', format('uami-{0}-{1}', parameters('name'), parameters('location')), parameters('name'))]",
+              "properties": {
+                "issuer": "[parameters('aksOidcIssuerUrl')]",
+                "subject": "[format('system:serviceaccount:{0}:{1}', parameters('aksNamespace'), parameters('name'))]",
+                "audiences": [
+                  "api://AzureADTokenExchange"
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('uami-{0}-{1}', parameters('name'), parameters('location')))]"
+              ]
+            },
+            {
+              "condition": "[variables('onAks')]",
+              "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+              "apiVersion": "2024-11-30",
+              "name": "[format('uami-{0}-deploy-{1}', parameters('name'), parameters('location'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]"
+            },
+            {
+              "condition": "[and(variables('onAks'), not(parameters('skipRoleGrants')))]",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.ContainerService/managedClusters', parameters('aksClusterName'))]",
+              "name": "[guid(resourceId('Microsoft.ContainerService/managedClusters', parameters('aksClusterName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('uami-{0}-deploy-{1}', parameters('name'), parameters('location'))), variables('aksClusterAdminRoleId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('aksClusterAdminRoleId'))]",
+                "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('uami-{0}-deploy-{1}', parameters('name'), parameters('location'))), '2024-11-30').principalId]",
+                "principalType": "ServicePrincipal"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('uami-{0}-deploy-{1}', parameters('name'), parameters('location')))]"
+              ]
+            },
+            {
+              "condition": "[and(variables('onAks'), not(parameters('skipRoleGrants')))]",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.ContainerService/managedClusters', parameters('aksClusterName'))]",
+              "name": "[guid(resourceId('Microsoft.ContainerService/managedClusters', parameters('aksClusterName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('uami-{0}-deploy-{1}', parameters('name'), parameters('location'))), variables('aksRbacClusterAdminRoleId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('aksRbacClusterAdminRoleId'))]",
+                "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('uami-{0}-deploy-{1}', parameters('name'), parameters('location'))), '2024-11-30').principalId]",
+                "principalType": "ServicePrincipal"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('uami-{0}-deploy-{1}', parameters('name'), parameters('location')))]"
+              ]
+            },
+            {
+              "condition": "[variables('onAks')]",
+              "type": "Microsoft.Resources/deploymentScripts",
+              "apiVersion": "2023-08-01",
+              "name": "[format('apply-{0}', parameters('name'))]",
+              "location": "[parameters('location')]",
+              "kind": "AzureCLI",
+              "tags": "[parameters('tags')]",
+              "identity": {
+                "type": "UserAssigned",
+                "userAssignedIdentities": {
+                  "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('uami-{0}-deploy-{1}', parameters('name'), parameters('location'))))]": {}
+                }
+              },
+              "properties": {
+                "azCliVersion": "2.67.0",
+                "retentionInterval": "PT1H",
+                "timeout": "PT20M",
+                "cleanupPreference": "OnSuccess",
+                "forceUpdateTag": "[uniqueString(join(createArray('apiVersion: v1', 'kind: Namespace', 'metadata:', format('  name: {0}', parameters('aksNamespace')), '---', 'apiVersion: v1', 'kind: ServiceAccount', 'metadata:', format('  name: {0}', parameters('name')), format('  namespace: {0}', parameters('aksNamespace')), '  annotations:', format('    azure.workload.identity/client-id: \"{0}\"', reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('uami-{0}-{1}', parameters('name'), parameters('location'))), '2024-11-30').clientId), '---', 'apiVersion: apps/v1', 'kind: Deployment', 'metadata:', format('  name: {0}', parameters('name')), format('  namespace: {0}', parameters('aksNamespace')), 'spec:', '  replicas: 2', '  selector:', '    matchLabels:', format('      app: {0}', parameters('name')), '  template:', '    metadata:', '      labels:', format('        app: {0}', parameters('name')), '        azure.workload.identity/use: \"true\"', '    spec:', format('      serviceAccountName: {0}', parameters('name')), '      securityContext:', '        runAsNonRoot: true', '        runAsUser: 1000', '        seccompProfile:', '          type: RuntimeDefault', '      containers:', format('        - name: {0}', parameters('name')), format('          image: {0}', parameters('image')), '          ports:', format('            - containerPort: {0}', variables('servicePort')), '          env:', join(map(createArray(createObject('name', 'PORT', 'value', string(variables('servicePort'))), createObject('name', 'LOOM_HEALTH_CP_CLOUD', 'value', variables('cloudName')), createObject('name', 'LOOM_HEALTH_CP_TENANT_ID', 'value', parameters('entraTenantId')), createObject('name', 'LOOM_HEALTH_CP_AUDIENCE', 'value', join(parameters('audiences'), ',')), createObject('name', 'LOOM_HEALTH_CP_COSMOS_ENDPOINT', 'value', variables('cosmosEndpointUrl')), createObject('name', 'LOOM_HEALTH_CP_COSMOS_DATABASE', 'value', variables('databaseName')), createObject('name', 'LOOM_HEALTH_CP_ALLOWED_CALLER_APP_IDS', 'value', join(parameters('allowedCallerAppIds'), ',')), createObject('name', 'LOOM_HEALTH_CP_SLO_AVAILABILITY_TARGET', 'value', parameters('sloAvailabilityTarget')), createObject('name', 'AZURE_CLIENT_ID', 'value', reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('uami-{0}-{1}', parameters('name'), parameters('location'))), '2024-11-30').clientId)), lambda('e', format('            - name: {0}\n              value: \"{1}\"', lambdaVariables('e').name, lambdaVariables('e').value))), '\n'), '          resources:', '            requests: { cpu: 250m, memory: 512Mi }', '            limits: { cpu: 500m, memory: 1Gi }', '          securityContext:', '            allowPrivilegeEscalation: false', '            readOnlyRootFilesystem: true', '            capabilities: { drop: [\"ALL\"] }', '          livenessProbe:', format('            httpGet: {{ path: /healthz, port: {0} }}', variables('servicePort')), '            initialDelaySeconds: 10', '            periodSeconds: 30', '          readinessProbe:', format('            httpGet: {{ path: /healthz, port: {0} }}', variables('servicePort')), '            initialDelaySeconds: 5', '            periodSeconds: 15', '---', 'apiVersion: v1', 'kind: Service', 'metadata:', format('  name: {0}', parameters('name')), format('  namespace: {0}', parameters('aksNamespace')), 'spec:', '  type: ClusterIP', '  selector:', format('    app: {0}', parameters('name')), '  ports:', '    - port: 80', format('      targetPort: {0}', variables('servicePort'))), '\n'))]",
+                "environmentVariables": [
+                  {
+                    "name": "MANIFEST_B64",
+                    "value": "[base64(join(createArray('apiVersion: v1', 'kind: Namespace', 'metadata:', format('  name: {0}', parameters('aksNamespace')), '---', 'apiVersion: v1', 'kind: ServiceAccount', 'metadata:', format('  name: {0}', parameters('name')), format('  namespace: {0}', parameters('aksNamespace')), '  annotations:', format('    azure.workload.identity/client-id: \"{0}\"', reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('uami-{0}-{1}', parameters('name'), parameters('location'))), '2024-11-30').clientId), '---', 'apiVersion: apps/v1', 'kind: Deployment', 'metadata:', format('  name: {0}', parameters('name')), format('  namespace: {0}', parameters('aksNamespace')), 'spec:', '  replicas: 2', '  selector:', '    matchLabels:', format('      app: {0}', parameters('name')), '  template:', '    metadata:', '      labels:', format('        app: {0}', parameters('name')), '        azure.workload.identity/use: \"true\"', '    spec:', format('      serviceAccountName: {0}', parameters('name')), '      securityContext:', '        runAsNonRoot: true', '        runAsUser: 1000', '        seccompProfile:', '          type: RuntimeDefault', '      containers:', format('        - name: {0}', parameters('name')), format('          image: {0}', parameters('image')), '          ports:', format('            - containerPort: {0}', variables('servicePort')), '          env:', join(map(createArray(createObject('name', 'PORT', 'value', string(variables('servicePort'))), createObject('name', 'LOOM_HEALTH_CP_CLOUD', 'value', variables('cloudName')), createObject('name', 'LOOM_HEALTH_CP_TENANT_ID', 'value', parameters('entraTenantId')), createObject('name', 'LOOM_HEALTH_CP_AUDIENCE', 'value', join(parameters('audiences'), ',')), createObject('name', 'LOOM_HEALTH_CP_COSMOS_ENDPOINT', 'value', variables('cosmosEndpointUrl')), createObject('name', 'LOOM_HEALTH_CP_COSMOS_DATABASE', 'value', variables('databaseName')), createObject('name', 'LOOM_HEALTH_CP_ALLOWED_CALLER_APP_IDS', 'value', join(parameters('allowedCallerAppIds'), ',')), createObject('name', 'LOOM_HEALTH_CP_SLO_AVAILABILITY_TARGET', 'value', parameters('sloAvailabilityTarget')), createObject('name', 'AZURE_CLIENT_ID', 'value', reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('uami-{0}-{1}', parameters('name'), parameters('location'))), '2024-11-30').clientId)), lambda('e', format('            - name: {0}\n              value: \"{1}\"', lambdaVariables('e').name, lambdaVariables('e').value))), '\n'), '          resources:', '            requests: { cpu: 250m, memory: 512Mi }', '            limits: { cpu: 500m, memory: 1Gi }', '          securityContext:', '            allowPrivilegeEscalation: false', '            readOnlyRootFilesystem: true', '            capabilities: { drop: [\"ALL\"] }', '          livenessProbe:', format('            httpGet: {{ path: /healthz, port: {0} }}', variables('servicePort')), '            initialDelaySeconds: 10', '            periodSeconds: 30', '          readinessProbe:', format('            httpGet: {{ path: /healthz, port: {0} }}', variables('servicePort')), '            initialDelaySeconds: 5', '            periodSeconds: 15', '---', 'apiVersion: v1', 'kind: Service', 'metadata:', format('  name: {0}', parameters('name')), format('  namespace: {0}', parameters('aksNamespace')), 'spec:', '  type: ClusterIP', '  selector:', format('    app: {0}', parameters('name')), '  ports:', '    - port: 80', format('      targetPort: {0}', variables('servicePort'))), '\n'))]"
+                  },
+                  {
+                    "name": "CLUSTER_RG",
+                    "value": "[resourceGroup().name]"
+                  },
+                  {
+                    "name": "CLUSTER_NAME",
+                    "value": "[parameters('aksClusterName')]"
+                  },
+                  {
+                    "name": "NAMESPACE",
+                    "value": "[parameters('aksNamespace')]"
+                  },
+                  {
+                    "name": "DEPLOYMENT",
+                    "value": "[parameters('name')]"
+                  }
+                ],
+                "scriptContent": "      set -euo pipefail\n      echo \"$MANIFEST_B64\" | base64 -d > manifest.yaml\n      az aks command invoke -g \"$CLUSTER_RG\" -n \"$CLUSTER_NAME\" --file manifest.yaml \\\n        --command \"kubectl apply -f manifest.yaml\"\n      az aks command invoke -g \"$CLUSTER_RG\" -n \"$CLUSTER_NAME\" \\\n        --command \"kubectl -n $NAMESPACE rollout status deployment/$DEPLOYMENT --timeout=300s\"\n    "
+              },
+              "dependsOn": [
+                "containers",
+                "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments', variables('accountName'), guid(resourceId('Microsoft.DocumentDB/databaseAccounts', variables('accountName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('uami-{0}-{1}', parameters('name'), parameters('location'))), variables('cosmosDataContributorId')))]",
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('uami-{0}-{1}', parameters('name'), parameters('location')))]",
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials', format('uami-{0}-{1}', parameters('name'), parameters('location')), parameters('name'))]",
+                "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('acrResourceGroup')), 'Microsoft.Resources/deployments', 'lhds-cp-acrpull-kubelet')]",
+                "[extensionResourceId(resourceId('Microsoft.ContainerService/managedClusters', parameters('aksClusterName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.ContainerService/managedClusters', parameters('aksClusterName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('uami-{0}-deploy-{1}', parameters('name'), parameters('location'))), variables('aksClusterAdminRoleId')))]",
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('uami-{0}-deploy-{1}', parameters('name'), parameters('location')))]",
+                "[extensionResourceId(resourceId('Microsoft.ContainerService/managedClusters', parameters('aksClusterName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.ContainerService/managedClusters', parameters('aksClusterName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('uami-{0}-deploy-{1}', parameters('name'), parameters('location'))), variables('aksRbacClusterAdminRoleId')))]"
+              ]
+            },
+            {
+              "condition": "[not(variables('onAks'))]",
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "lhds-cp-acrpull-app",
+              "resourceGroup": "[parameters('acrResourceGroup')]",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "acrName": {
+                    "value": "[parameters('acrName')]"
+                  },
+                  "principalId": {
+                    "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('uami-{0}-{1}', parameters('name'), parameters('location'))), '2024-11-30').principalId]"
+                  },
+                  "skipRoleGrants": {
+                    "value": "[parameters('skipRoleGrants')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "13943385247618309406"
+                    }
+                  },
+                  "parameters": {
+                    "acrName": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Name of the registry in this resource group."
+                      }
+                    },
+                    "principalId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Principal granted AcrPull."
+                      }
+                    },
+                    "skipRoleGrants": {
+                      "type": "bool",
+                      "defaultValue": false,
+                      "metadata": {
+                        "description": "Skip the grant (re-deploys where the deployer cannot write RBAC)."
+                      }
+                    }
+                  },
+                  "variables": {
+                    "acrPullRoleId": "7f951dda-4ed3-4680-a7ca-43fe172d538d"
+                  },
+                  "resources": [
+                    {
+                      "condition": "[not(parameters('skipRoleGrants'))]",
+                      "type": "Microsoft.Authorization/roleAssignments",
+                      "apiVersion": "2022-04-01",
+                      "scope": "[resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName'))]",
+                      "name": "[guid(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), parameters('principalId'), variables('acrPullRoleId'))]",
+                      "properties": {
+                        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('acrPullRoleId'))]",
+                        "principalId": "[parameters('principalId')]",
+                        "principalType": "ServicePrincipal"
+                      }
+                    }
+                  ]
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('uami-{0}-{1}', parameters('name'), parameters('location')))]"
+              ]
+            },
+            {
+              "condition": "[variables('onAks')]",
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "lhds-cp-acrpull-kubelet",
+              "resourceGroup": "[parameters('acrResourceGroup')]",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "acrName": {
+                    "value": "[parameters('acrName')]"
+                  },
+                  "principalId": {
+                    "value": "[reference(resourceId('Microsoft.ContainerService/managedClusters', parameters('aksClusterName')), '2025-04-01').identityProfile.kubeletidentity.objectId]"
+                  },
+                  "skipRoleGrants": {
+                    "value": "[parameters('skipRoleGrants')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "13943385247618309406"
+                    }
+                  },
+                  "parameters": {
+                    "acrName": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Name of the registry in this resource group."
+                      }
+                    },
+                    "principalId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Principal granted AcrPull."
+                      }
+                    },
+                    "skipRoleGrants": {
+                      "type": "bool",
+                      "defaultValue": false,
+                      "metadata": {
+                        "description": "Skip the grant (re-deploys where the deployer cannot write RBAC)."
+                      }
+                    }
+                  },
+                  "variables": {
+                    "acrPullRoleId": "7f951dda-4ed3-4680-a7ca-43fe172d538d"
+                  },
+                  "resources": [
+                    {
+                      "condition": "[not(parameters('skipRoleGrants'))]",
+                      "type": "Microsoft.Authorization/roleAssignments",
+                      "apiVersion": "2022-04-01",
+                      "scope": "[resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName'))]",
+                      "name": "[guid(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), parameters('principalId'), variables('acrPullRoleId'))]",
+                      "properties": {
+                        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('acrPullRoleId'))]",
+                        "principalId": "[parameters('principalId')]",
+                        "principalType": "ServicePrincipal"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          ],
+          "outputs": {
+            "platform": {
+              "type": "string",
+              "metadata": {
+                "description": "Hosting path actually deployed."
+              },
+              "value": "[parameters('platform')]"
+            },
+            "fqdn": {
+              "type": "string",
+              "metadata": {
+                "description": "Internal FQDN of the control plane (containerApps path). Empty on aks: the Deployment is exposed as a ClusterIP Service only, with no route from outside the cluster until the stamp ingress (W1-6) publishes one."
+              },
+              "value": "[if(variables('onAks'), '', reference(resourceId('Microsoft.App/containerApps', parameters('name')), '2025-02-02-preview').configuration.ingress.fqdn)]"
+            },
+            "identityClientId": {
+              "type": "string",
+              "metadata": {
+                "description": "Control-plane identity client id (workload identity / managed identity)."
+              },
+              "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('uami-{0}-{1}', parameters('name'), parameters('location'))), '2024-11-30').clientId]"
+            },
+            "identityPrincipalId": {
+              "type": "string",
+              "metadata": {
+                "description": "Control-plane identity principal id."
+              },
+              "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('uami-{0}-{1}', parameters('name'), parameters('location'))), '2024-11-30').principalId]"
+            },
+            "cosmosAccountName": {
+              "type": "string",
+              "metadata": {
+                "description": "Cosmos account name."
+              },
+              "value": "[variables('accountName')]"
+            },
+            "cosmosEndpoint": {
+              "type": "string",
+              "metadata": {
+                "description": "Cosmos endpoint the service is configured with."
+              },
+              "value": "[variables('cosmosEndpointUrl')]"
+            },
+            "cosmosNetworkPosture": {
+              "type": "string",
+              "metadata": {
+                "description": "Cosmos network posture, so a public account is visible in the deployment output rather than silent."
+              },
+              "value": "[if(empty(parameters('privateEndpointSubnetId')), 'public-network-access-enabled-aad-only', 'private-endpoint')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "adminPlane",
+        "healthRg",
+        "healthStamp"
+      ]
     }
   },
   "outputs": {
@@ -71867,6 +72722,13 @@
         "description": "LHDS stamp manifest (resource ids, endpoints, region, profile). Empty while healthEnabled is false."
       },
       "value": "[if(variables('healthDeploy'), reference('healthStamp').outputs.stamp.value, createObject())]"
+    },
+    "healthControlPlaneState": {
+      "type": "object",
+      "metadata": {
+        "description": "LHDS control-plane state: deployed true/false, the hosting platform, and when not deployed the specific precondition that was missing. Never reports deployed over a skipped module."
+      },
+      "value": "[if(variables('healthCpDeploy'), createObject('deployed', true(), 'platform', variables('healthCpPlatform'), 'fqdn', reference('healthControlPlane').outputs.fqdn.value, 'cosmosAccountName', reference('healthControlPlane').outputs.cosmosAccountName.value, 'cosmosNetworkPosture', reference('healthControlPlane').outputs.cosmosNetworkPosture.value, 'identityClientId', reference('healthControlPlane').outputs.identityClientId.value), createObject('deployed', false(), 'platform', variables('healthCpPlatform'), 'reason', variables('healthCpSkipReason')))]"
     },
     "dlzSynapseWorkspaceName": {
       "type": "string",

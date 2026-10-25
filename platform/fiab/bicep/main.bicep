@@ -3412,8 +3412,71 @@ module healthStamp 'modules/health/stamp.bicep' = if (healthDeploy) {
   }
 }
 
+// ── LHDS control plane (apps/loom-health-cp) - W1-3 bicep follow-up ──────────
+// Deployed into the stamp resource group, only with healthEnabled. Its OWN hosting
+// selector, because containerPlatform is containerApps in every param file including
+// il5.bicepparam (W0-RECEIPT.md s7), so it cannot say "AKS at IL5":
+//   healthConfig.controlPlane  'containerApps' | 'aks'   (default: aks at IL5, else containerApps)
+//   healthConfig.cpAudiences   array, REQUIRED: accepted token audiences. Empty = not deployed.
+//   healthConfig.cpAllowedCallerAppIds, cpImageTag (default v0.1), cpAcrName + cpAcrResourceGroup
+//   (only needed when this deployment has no admin plane to derive the registry from),
+//   cpPrivateEndpointSubnetId, cpCosmosPrivateDnsZoneId.
+// Container Apps path: the Container App sits in the hub region next to its environment
+// (a Container App must share the environment's region); the aks path uses the stamp region.
+// A missing precondition SKIPS the module and says why in the healthControlPlane output,
+// rather than failing the whole stamp deployment with an opaque ARM error.
+var healthCpPlatformRaw = toLower(string(healthConfig.?controlPlane ?? (boundary == 'IL5' ? 'aks' : 'containerApps')))
+// An unrecognised value is NOT coerced into a deployment: healthCpDeploy requires the raw
+// value to be one of the two, and the skip reason names it.
+var healthCpPlatform = healthCpPlatformRaw == 'aks' ? 'aks' : 'containerApps'
+var healthCpAudiences = healthConfig.?cpAudiences ?? []
+var healthCpAcrName = string(healthConfig.?cpAcrName ?? (deployAdminPlane ? take('acrloom${uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', adminPlaneRgName))}', 50) : ''))
+var healthCpAcrRg = string(healthConfig.?cpAcrResourceGroup ?? adminPlaneRgName)
+var healthCpHostable = healthCpPlatform == 'aks' || (deployAdminPlane && containerPlatform == 'containerApps')
+var healthCpAcrKnown = deployAdminPlane || (!empty(string(healthConfig.?cpAcrName ?? '')) && !empty(string(healthConfig.?acrLoginServer ?? '')))
+var healthCpDeploy = healthDeploy && !empty(healthCpAudiences) && healthCpHostable && healthCpAcrKnown && contains(['containerApps', 'aks'], healthCpPlatformRaw)
+var healthCpSkipReason = !healthEnabled ? 'healthEnabled is false' : (!healthPgAllowed ? 'stamp not deployed: PostgreSQL unavailable in this region (healthConfig.postgres)' : (empty(healthCpAudiences) ? 'healthConfig.cpAudiences is empty: the service refuses to start without an accepted token audience' : (!contains(['containerApps', 'aks'], healthCpPlatformRaw) ? 'healthConfig.controlPlane must be containerApps or aks' : (!healthCpHostable ? 'containerApps path needs the admin plane with containerPlatform=containerApps; set healthConfig.controlPlane=aks otherwise' : (!healthCpAcrKnown ? 'no admin plane to derive the registry from: set healthConfig.cpAcrName, cpAcrResourceGroup and acrLoginServer' : '')))))
+
+module healthControlPlane 'modules/health/control-plane.bicep' = if (healthCpDeploy) {
+  name: 'lhds-control-plane-${healthStampName}'
+  scope: healthRg
+  params: {
+    location: healthCpPlatform == 'aks' ? healthLocation : location
+    boundary: boundary
+    platform: healthCpPlatform
+    image: '${deployAdminPlane ? adminPlane!.outputs.acrLoginServer : string(healthConfig.?acrLoginServer ?? '')}/loom-health-cp:${string(healthConfig.?cpImageTag ?? 'v0.1')}'
+    acrLoginServer: deployAdminPlane ? adminPlane!.outputs.acrLoginServer : string(healthConfig.?acrLoginServer ?? '')
+    acrName: healthCpAcrName
+    acrResourceGroup: healthCpAcrRg
+    audiences: healthCpAudiences
+    allowedCallerAppIds: healthConfig.?cpAllowedCallerAppIds ?? []
+    environmentId: healthCpPlatform == 'containerApps' ? adminPlane!.outputs.caeId : ''
+    aksClusterName: healthCpPlatform == 'aks' ? healthStamp!.outputs.stamp.aksClusterName : ''
+    aksOidcIssuerUrl: healthCpPlatform == 'aks' ? healthStamp!.outputs.stamp.aksOidcIssuerUrl : ''
+    privateEndpointSubnetId: string(healthConfig.?cpPrivateEndpointSubnetId ?? '')
+    cosmosPrivateDnsZoneId: string(healthConfig.?cpCosmosPrivateDnsZoneId ?? '')
+    skipRoleGrants: skipRoleGrants
+    workspaceId: healthStamp!.outputs.stamp.lawId
+    tags: loomTags
+  }
+}
+
 @description('LHDS stamp manifest (resource ids, endpoints, region, profile). Empty while healthEnabled is false.')
 output healthStamp object = healthDeploy ? healthStamp!.outputs.stamp : {}
+
+@description('LHDS control-plane state: deployed true/false, the hosting platform, and when not deployed the specific precondition that was missing. Never reports deployed over a skipped module.')
+output healthControlPlaneState object = healthCpDeploy ? {
+  deployed: true
+  platform: healthCpPlatform
+  fqdn: healthControlPlane!.outputs.fqdn
+  cosmosAccountName: healthControlPlane!.outputs.cosmosAccountName
+  cosmosNetworkPosture: healthControlPlane!.outputs.cosmosNetworkPosture
+  identityClientId: healthControlPlane!.outputs.identityClientId
+} : {
+  deployed: false
+  platform: healthCpPlatform
+  reason: healthCpSkipReason
+}
 
 output dlzSynapseWorkspaceName string = useSingleDlz ? singleDlz!.outputs.synapseWorkspaceName : ''
 output dlzSynapseDedicatedPoolName string = useSingleDlz ? singleDlz!.outputs.synapseDedicatedPoolName : ''

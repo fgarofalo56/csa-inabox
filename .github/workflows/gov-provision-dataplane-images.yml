@@ -226,6 +226,19 @@ jobs:
           echo "::notice::TEMPLATE PULLS  $ACR_LOGIN/loom-directlake:$TAG"
           az acr build --registry "$ACR" --no-logs --image "loom-directlake:$TAG" --image "loom-directlake:$SHA_TAG" --image "loom-directlake:latest" apps/loom-directlake
 
+      # LHDS control plane (W1-3). health/control-plane.bicep pulls
+      # <acr>/loom-health-cp:<healthConfig.cpImageTag, default v0.1> on GCC-High
+      # (Container Apps) and IL5 (AKS) once healthEnabled=true. Same firewall lease
+      # as the builds above. Cloud parity: built for Gov, not Commercial-only. It is
+      # NOT in the preflight tag assertions below: those list what the live Gov
+      # template pulls today, and healthEnabled is false in every param file.
+      - name: Build loom-health-cp on the Gov ACR
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          set -euo pipefail
+          echo "::notice::TEMPLATE PULLS  $ACR_LOGIN/loom-health-cp:$TAG"
+          az acr build --registry "$ACR" --no-logs --image "loom-health-cp:$TAG" --image "loom-health-cp:$SHA_TAG" --image "loom-health-cp:latest" apps/loom-health-cp
+
       # ── Mirror third-party upstream images into the Gov ACR (#2682) ──────────
       # No sovereign Container App may pull a third-party image from a public
       # registry. `az acr import` is a server-side copy under the SAME firewall
