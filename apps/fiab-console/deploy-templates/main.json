@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "4634642744041404638"
+      "templateHash": "210054164779298554"
     }
   },
   "definitions": {
@@ -2026,6 +2026,20 @@
       "metadata": {
         "description": "Static private IP the DNS Private Resolver INBOUND endpoint holds; empty means dynamic allocation. IMMUTABLE on the live resource — both the allocation method and the address — so no literal is correct on every estate: a Static literal broke Commercial (#2775) and the Dynamic literal that replaced it has broken every GCC-High deploy since (#3754). The deploy lane DISCOVERS the live value (scripts/ci/resolve-dns-inbound-allocation.mjs) and passes it on the command line; greenfield leaves it empty and gets a dynamically-allocated endpoint, and an unreadable control plane refuses rather than guessing (deploy-integrity.md R5.3/R7). Do NOT pin this per boundary in a .bicepparam — that only moves the guess."
       }
+    },
+    "healthEnabled": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Deploy an LHDS stamp (private AKS, PostgreSQL Flexible Server, Blob, Event Hubs, Key Vault, WAF v2 ingress) into its own resource group. Default false."
+      }
+    },
+    "healthConfig": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "LHDS stamp settings (see the block comment above the health module in main.bicep). Ignored while healthEnabled is false."
+      }
     }
   },
   "variables": {
@@ -2143,6 +2157,13 @@
     "wsIdentityRbacRg": "[if(not(empty(coalesce(tryGet(parameters('workspaceIdentityConfig'), 'wsIdentityRg'), ''))), coalesce(tryGet(parameters('workspaceIdentityConfig'), 'wsIdentityRg'), ''), if(variables('useSingleDlz'), format('rg-csa-loom-dlz-single-{0}', parameters('location')), ''))]",
     "programBudgetEnabled": "[bool(coalesce(tryGet(parameters('observabilityConfig'), 'programBudgetEnabled'), true()))]",
     "programBudgetStartDate": "[string(coalesce(tryGet(parameters('observabilityConfig'), 'programBudgetStartDate'), ''))]",
+    "healthIsGov": "[or(equals(parameters('boundary'), 'GCC-High'), equals(parameters('boundary'), 'IL5'))]",
+    "healthStampName": "[string(coalesce(tryGet(parameters('healthConfig'), 'stampName'), 'dev01'))]",
+    "healthLocation": "[string(coalesce(tryGet(parameters('healthConfig'), 'location'), if(variables('healthIsGov'), 'usgovarizona', parameters('location'))))]",
+    "healthPairedLocation": "[string(coalesce(tryGet(parameters('healthConfig'), 'pairedLocation'), if(variables('healthIsGov'), 'usgovtexas', '')))]",
+    "healthPgOverride": "[toLower(string(coalesce(tryGet(parameters('healthConfig'), 'postgres'), '')))]",
+    "healthPgAllowed": "[if(equals(variables('healthPgOverride'), 'enabled'), true(), if(equals(variables('healthPgOverride'), 'disabled'), false(), parameters('postgresQuotaAvailable')))]",
+    "healthDeploy": "[and(parameters('healthEnabled'), variables('healthPgAllowed'))]",
     "dlzAttachConsoleEnvWired": "[and(and(equals(parameters('topology'), 'dlz-attach'), equals(parameters('containerPlatform'), 'containerApps')), variables('dlzAttachHasHubConsoleUami'))]"
   },
   "resources": {
@@ -2168,6 +2189,14 @@
       "apiVersion": "2024-03-01",
       "name": "[format('rg-csa-loom-dlz-{0}-{1}', parameters('attachDomainName'), parameters('location'))]",
       "location": "[parameters('location')]",
+      "tags": "[variables('loomTags')]"
+    },
+    "healthRg": {
+      "condition": "[variables('healthDeploy')]",
+      "type": "Microsoft.Resources/resourceGroups",
+      "apiVersion": "2024-03-01",
+      "name": "[format('rg-csa-loom-health-{0}-{1}', variables('healthStampName'), variables('healthLocation'))]",
+      "location": "[variables('healthLocation')]",
       "tags": "[variables('loomTags')]"
     },
     "adminPlane": {
@@ -68125,9 +68154,3720 @@
       "dependsOn": [
         "adminPlane"
       ]
+    },
+    "healthStamp": {
+      "condition": "[variables('healthDeploy')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('lhds-stamp-{0}', variables('healthStampName'))]",
+      "resourceGroup": "[format('rg-csa-loom-health-{0}-{1}', variables('healthStampName'), variables('healthLocation'))]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[variables('healthLocation')]"
+          },
+          "pairedLocation": {
+            "value": "[variables('healthPairedLocation')]"
+          },
+          "stampName": {
+            "value": "[variables('healthStampName')]"
+          },
+          "boundary": {
+            "value": "[parameters('boundary')]"
+          },
+          "postgresQuotaAvailable": {
+            "value": "[variables('healthPgAllowed')]"
+          },
+          "profile": {
+            "value": "[coalesce(tryGet(parameters('healthConfig'), 'profile'), 'dev')]"
+          },
+          "adminEntraGroupId": {
+            "value": "[string(coalesce(tryGet(parameters('healthConfig'), 'adminEntraGroupId'), parameters('adminEntraGroupId')))]"
+          },
+          "vnetAddressPrefix": {
+            "value": "[string(coalesce(tryGet(parameters('healthConfig'), 'vnetAddressPrefix'), '10.60.0.0/16'))]"
+          },
+          "egressModeOverride": {
+            "value": "[coalesce(tryGet(parameters('healthConfig'), 'egressMode'), '')]"
+          },
+          "postgresHaOverride": {
+            "value": "[coalesce(tryGet(parameters('healthConfig'), 'postgresHa'), '')]"
+          },
+          "useAvailabilityZones": {
+            "value": "[bool(coalesce(tryGet(parameters('healthConfig'), 'useAvailabilityZones'), true()))]"
+          },
+          "kubernetesVersion": {
+            "value": "[string(coalesce(tryGet(parameters('healthConfig'), 'kubernetesVersion'), '1.34'))]"
+          },
+          "acrLoginServer": {
+            "value": "[string(coalesce(tryGet(parameters('healthConfig'), 'acrLoginServer'), ''))]"
+          },
+          "extraAllowedFqdns": {
+            "value": "[coalesce(tryGet(parameters('healthConfig'), 'extraAllowedFqdns'), createArray())]"
+          },
+          "extraDnsLinkVnetIds": {
+            "value": "[coalesce(tryGet(parameters('healthConfig'), 'extraDnsLinkVnetIds'), createArray())]"
+          },
+          "tlsCertificateSecretUri": {
+            "value": "[string(coalesce(tryGet(parameters('healthConfig'), 'tlsCertificateSecretUri'), ''))]"
+          },
+          "auditRetentionDays": {
+            "value": "[int(coalesce(tryGet(parameters('healthConfig'), 'auditRetentionDays'), 2190))]"
+          },
+          "logRetentionDays": {
+            "value": "[int(coalesce(tryGet(parameters('healthConfig'), 'logRetentionDays'), 90))]"
+          },
+          "tags": {
+            "value": "[variables('loomTags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "16825677820086439235"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "defaultValue": "[resourceGroup().location]",
+              "metadata": {
+                "description": "Primary region. Gov default is usgovarizona (zone-redundant PostgreSQL HA); usgovvirginia is offer-restricted for the measured subscription (W0-RECEIPT.md s4.1b)."
+              }
+            },
+            "pairedLocation": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Paired region for DR. Recorded in tags and outputs; DR resources are W11. Gov default is usgovtexas."
+              }
+            },
+            "stampName": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 12,
+              "metadata": {
+                "description": "Stamp short name, 2-12 chars: lowercase letters, digits and hyphen, starting with a letter."
+              }
+            },
+            "boundary": {
+              "type": "string",
+              "allowedValues": [
+                "Commercial",
+                "GCC",
+                "GCC-High",
+                "IL5"
+              ],
+              "metadata": {
+                "description": "Cloud boundary. Selects sovereign DNS suffixes, the Gov PostgreSQL SKU generation, and the AKS KEDA add-on."
+              }
+            },
+            "profile": {
+              "type": "string",
+              "defaultValue": "dev",
+              "allowedValues": [
+                "dev",
+                "S",
+                "M",
+                "L"
+              ],
+              "metadata": {
+                "description": "Size profile."
+              }
+            },
+            "tenantId": {
+              "type": "string",
+              "defaultValue": "[subscription().tenantId]",
+              "metadata": {
+                "description": "Entra tenant id."
+              }
+            },
+            "adminEntraGroupId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Object id of the Entra group that administers the vault, the PostgreSQL server and the cluster. Empty = the operator grants roles after the deploy."
+              }
+            },
+            "vnetAddressPrefix": {
+              "type": "string",
+              "defaultValue": "10.60.0.0/16",
+              "metadata": {
+                "description": "Stamp VNet address space. Stamps do not peer with each other, so the default can repeat across stamps; change it when the VNet is peered to a hub that uses the same range."
+              }
+            },
+            "egressModeOverride": {
+              "type": "string",
+              "defaultValue": "",
+              "allowedValues": [
+                "",
+                "firewall",
+                "loadBalancer"
+              ],
+              "metadata": {
+                "description": "Outbound model override. Empty = profile default (firewall for S/M/L, loadBalancer for dev)."
+              }
+            },
+            "postgresHaOverride": {
+              "type": "string",
+              "defaultValue": "",
+              "allowedValues": [
+                "",
+                "Disabled",
+                "SameZone",
+                "ZoneRedundant"
+              ],
+              "metadata": {
+                "description": "PostgreSQL HA override. Empty = profile default (ZoneRedundant for S/M/L, Disabled for dev). Use SameZone in a region without zone-redundant HA (usgovtexas)."
+              }
+            },
+            "useAvailabilityZones": {
+              "type": "bool",
+              "defaultValue": true,
+              "metadata": {
+                "description": "Spread zonal resources over availability zones. Set false in a region without zones."
+              }
+            },
+            "kubernetesVersion": {
+              "type": "string",
+              "defaultValue": "1.34",
+              "metadata": {
+                "description": "Kubernetes version (W0 read 1.31 to 1.37 as offered in all three Gov regions)."
+              }
+            },
+            "acrLoginServer": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Login server of the shared ACR the stamp pulls images from. Empty = no ACR firewall rule."
+              }
+            },
+            "extraAllowedFqdns": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "Extra FQDNs allowed through the egress firewall. A reviewed change."
+              }
+            },
+            "extraDnsLinkVnetIds": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "VNets (for example the hub that hosts the control plane) linked to every stamp private DNS zone."
+              }
+            },
+            "tlsCertificateSecretUri": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Version-less Key Vault secret URI of the ingress TLS certificate. Empty = no TLS listener yet; port 80 only redirects."
+              }
+            },
+            "auditRetentionDays": {
+              "type": "int",
+              "defaultValue": 2190,
+              "metadata": {
+                "description": "Audit blob retention in days applied as an Unlocked version-level immutability policy. 2190 = 6 years (45 CFR 164.316). Locking is irreversible and left to the operator."
+              }
+            },
+            "logRetentionDays": {
+              "type": "int",
+              "defaultValue": 90,
+              "minValue": 30,
+              "maxValue": 730,
+              "metadata": {
+                "description": "Log Analytics retention in days."
+              }
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {},
+              "metadata": {
+                "description": "Tags applied to every resource."
+              }
+            },
+            "postgresQuotaAvailable": {
+              "type": "bool",
+              "defaultValue": true,
+              "metadata": {
+                "description": "PostgreSQL gate (3449d). main.bicep forwards the per-stamp resolved value (healthPgAllowed); the stamp does not deploy a PostgreSQL server when false."
+              }
+            }
+          },
+          "variables": {
+            "isGov": "[or(equals(parameters('boundary'), 'GCC-High'), equals(parameters('boundary'), 'IL5'))]",
+            "stampTags": "[union(parameters('tags'), createObject('lhds-stamp', parameters('stampName'), 'lhds-profile', parameters('profile'), 'lhds-paired-region', if(empty(parameters('pairedLocation')), 'none', parameters('pairedLocation'))))]",
+            "profiles": {
+              "dev": {
+                "aksSystem": {
+                  "vmSize": "Standard_D8s_v5",
+                  "count": 1,
+                  "minCount": 1,
+                  "maxCount": 1
+                },
+                "aksEngines": {
+                  "vmSize": "Standard_D8s_v5",
+                  "count": 0,
+                  "minCount": 0,
+                  "maxCount": 0
+                },
+                "aksEgress": {
+                  "vmSize": "Standard_D4s_v5",
+                  "count": 0,
+                  "minCount": 0,
+                  "maxCount": 2
+                },
+                "isolateSystemPool": false,
+                "pgSize": "D2ds",
+                "pgTier": "GeneralPurpose",
+                "pgStorageGB": 128,
+                "pgHa": "Disabled",
+                "pgReplicas": 0,
+                "eventHubsTier": "Standard",
+                "eventHubsCapacity": 1,
+                "storageSku": "Standard_LRS",
+                "egressMode": "loadBalancer",
+                "agwMin": 1,
+                "agwMax": 2
+              },
+              "S": {
+                "aksSystem": {
+                  "vmSize": "Standard_D4s_v5",
+                  "count": 3,
+                  "minCount": 3,
+                  "maxCount": 5
+                },
+                "aksEngines": {
+                  "vmSize": "Standard_D8s_v5",
+                  "count": 6,
+                  "minCount": 6,
+                  "maxCount": 12
+                },
+                "aksEgress": {
+                  "vmSize": "Standard_D4s_v5",
+                  "count": 0,
+                  "minCount": 0,
+                  "maxCount": 3
+                },
+                "isolateSystemPool": true,
+                "pgSize": "E8ds",
+                "pgTier": "MemoryOptimized",
+                "pgStorageGB": 8192,
+                "pgHa": "ZoneRedundant",
+                "pgReplicas": 1,
+                "eventHubsTier": "Premium",
+                "eventHubsCapacity": 1,
+                "storageSku": "Standard_ZRS",
+                "egressMode": "firewall",
+                "agwMin": 2,
+                "agwMax": 6
+              },
+              "M": {
+                "aksSystem": {
+                  "vmSize": "Standard_D4s_v5",
+                  "count": 3,
+                  "minCount": 3,
+                  "maxCount": 5
+                },
+                "aksEngines": {
+                  "vmSize": "Standard_D16s_v5",
+                  "count": 12,
+                  "minCount": 12,
+                  "maxCount": 20
+                },
+                "aksEgress": {
+                  "vmSize": "Standard_D4s_v5",
+                  "count": 0,
+                  "minCount": 0,
+                  "maxCount": 4
+                },
+                "isolateSystemPool": true,
+                "pgSize": "E16ds",
+                "pgTier": "MemoryOptimized",
+                "pgStorageGB": 32767,
+                "pgHa": "ZoneRedundant",
+                "pgReplicas": 2,
+                "eventHubsTier": "Premium",
+                "eventHubsCapacity": 2,
+                "storageSku": "Standard_ZRS",
+                "egressMode": "firewall",
+                "agwMin": 2,
+                "agwMax": 10
+              },
+              "L": {
+                "aksSystem": {
+                  "vmSize": "Standard_D4s_v5",
+                  "count": 3,
+                  "minCount": 3,
+                  "maxCount": 5
+                },
+                "aksEngines": {
+                  "vmSize": "Standard_D16s_v5",
+                  "count": 24,
+                  "minCount": 24,
+                  "maxCount": 36
+                },
+                "aksEgress": {
+                  "vmSize": "Standard_D8s_v5",
+                  "count": 0,
+                  "minCount": 0,
+                  "maxCount": 6
+                },
+                "isolateSystemPool": true,
+                "pgSize": "E32ds",
+                "pgTier": "MemoryOptimized",
+                "pgStorageGB": 32767,
+                "pgHa": "ZoneRedundant",
+                "pgReplicas": 2,
+                "eventHubsTier": "Premium",
+                "eventHubsCapacity": 4,
+                "storageSku": "Standard_ZRS",
+                "egressMode": "firewall",
+                "agwMin": 3,
+                "agwMax": 15
+              }
+            },
+            "p": "[variables('profiles')[parameters('profile')]]",
+            "egressMode": "[if(empty(parameters('egressModeOverride')), variables('p').egressMode, parameters('egressModeOverride'))]",
+            "pgHa": "[if(empty(parameters('postgresHaOverride')), variables('p').pgHa, parameters('postgresHaOverride'))]",
+            "pgSkuName": "[format('Standard_{0}_{1}', variables('p').pgSize, if(variables('isGov'), 'v4', 'v5'))]",
+            "storageSku": "[if(parameters('useAvailabilityZones'), variables('p').storageSku, 'Standard_LRS')]",
+            "nameSeed": "[uniqueString(resourceGroup().id)]",
+            "cleanStamp": "[replace(parameters('stampName'), '-', '')]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.OperationalInsights/workspaces",
+              "apiVersion": "2023-09-01",
+              "name": "[format('log-lhds-{0}', parameters('stampName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[variables('stampTags')]",
+              "properties": {
+                "sku": {
+                  "name": "PerGB2018"
+                },
+                "retentionInDays": "[parameters('logRetentionDays')]"
+              }
+            },
+            {
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "[format('lhds-{0}-network', parameters('stampName'))]",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "stampName": {
+                    "value": "[parameters('stampName')]"
+                  },
+                  "boundary": {
+                    "value": "[parameters('boundary')]"
+                  },
+                  "vnetAddressPrefix": {
+                    "value": "[parameters('vnetAddressPrefix')]"
+                  },
+                  "egressMode": {
+                    "value": "[variables('egressMode')]"
+                  },
+                  "acrLoginServer": {
+                    "value": "[parameters('acrLoginServer')]"
+                  },
+                  "extraAllowedFqdns": {
+                    "value": "[parameters('extraAllowedFqdns')]"
+                  },
+                  "extraDnsLinkVnetIds": {
+                    "value": "[parameters('extraDnsLinkVnetIds')]"
+                  },
+                  "tags": {
+                    "value": "[variables('stampTags')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "3899164230838300084"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Region of the stamp."
+                      }
+                    },
+                    "stampName": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Stamp short name (lowercase letters/digits/hyphen); folded into resource names."
+                      }
+                    },
+                    "boundary": {
+                      "type": "string",
+                      "allowedValues": [
+                        "Commercial",
+                        "GCC",
+                        "GCC-High",
+                        "IL5"
+                      ],
+                      "metadata": {
+                        "description": "Cloud boundary. Drives the Key Vault / Service Bus private-link zone suffixes and the monitor FQDNs on the egress allow-list."
+                      }
+                    },
+                    "vnetAddressPrefix": {
+                      "type": "string",
+                      "defaultValue": "10.60.0.0/16",
+                      "metadata": {
+                        "description": "Stamp VNet address space. Must not overlap the AKS pod CIDR, the AKS service CIDR, or any network the stamp is peered with."
+                      }
+                    },
+                    "egressMode": {
+                      "type": "string",
+                      "defaultValue": "firewall",
+                      "allowedValues": [
+                        "firewall",
+                        "loadBalancer"
+                      ],
+                      "metadata": {
+                        "description": "Outbound model for the AKS node subnet. firewall = user-defined routing through an Azure Firewall with an FQDN allow-list (class S/M/L default). loadBalancer = the cluster load balancer SNAT (dev profile only; no allow-list)."
+                      }
+                    },
+                    "firewallSku": {
+                      "type": "string",
+                      "defaultValue": "Standard",
+                      "allowedValues": [
+                        "Standard",
+                        "Premium"
+                      ],
+                      "metadata": {
+                        "description": "Azure Firewall policy tier."
+                      }
+                    },
+                    "acrLoginServer": {
+                      "type": "string",
+                      "defaultValue": "",
+                      "metadata": {
+                        "description": "Login server of the shared ACR the stamp pulls images from (for example myacr.azurecr.io). Empty = no ACR rule. The matching data endpoint wildcard is added automatically."
+                      }
+                    },
+                    "extraAllowedFqdns": {
+                      "type": "array",
+                      "defaultValue": [],
+                      "metadata": {
+                        "description": "Extra FQDNs to allow outbound. Adding one is a reviewed change (SECURITY-AND-COMPLIANCE.md s5)."
+                      }
+                    },
+                    "extraDnsLinkVnetIds": {
+                      "type": "array",
+                      "defaultValue": [],
+                      "metadata": {
+                        "description": "Resource ids of additional VNets (for example the hub that hosts the control plane) to link to every private DNS zone so they resolve stamp endpoints privately."
+                      }
+                    },
+                    "tags": {
+                      "type": "object",
+                      "defaultValue": {},
+                      "metadata": {
+                        "description": "Tags applied to every resource."
+                      }
+                    }
+                  },
+                  "variables": {
+                    "isGov": "[or(equals(parameters('boundary'), 'GCC-High'), equals(parameters('boundary'), 'IL5'))]",
+                    "useFirewall": "[equals(parameters('egressMode'), 'firewall')]",
+                    "aksPrefix": "[cidrSubnet(parameters('vnetAddressPrefix'), 22, 0)]",
+                    "pePrefix": "[cidrSubnet(parameters('vnetAddressPrefix'), 24, 4)]",
+                    "pgPrefix": "[cidrSubnet(parameters('vnetAddressPrefix'), 24, 5)]",
+                    "agwPrefix": "[cidrSubnet(parameters('vnetAddressPrefix'), 24, 6)]",
+                    "fwPrefix": "[cidrSubnet(parameters('vnetAddressPrefix'), 26, 28)]",
+                    "ingressIlbIp": "[cidrHost(variables('aksPrefix'), 1000)]",
+                    "pgHostSuffix": "[if(equals(environment().suffixes.sqlServerHostname, '.database.windows.net'), '.database.azure.com', environment().suffixes.sqlServerHostname)]",
+                    "postgresZoneName": "[format('lhds-{0}.private.postgres{1}', parameters('stampName'), variables('pgHostSuffix'))]",
+                    "vaultZoneName": "[format('privatelink.vaultcore{0}', substring(environment().suffixes.keyvaultDns, length('.vault')))]",
+                    "blobZoneName": "[format('privatelink.blob.{0}', environment().suffixes.storage)]",
+                    "serviceBusZoneName": "[format('privatelink.servicebus.{0}', if(variables('isGov'), 'usgovcloudapi.net', 'windows.net'))]",
+                    "zoneNames": [
+                      {
+                        "key": "vault",
+                        "name": "[variables('vaultZoneName')]"
+                      },
+                      {
+                        "key": "blob",
+                        "name": "[variables('blobZoneName')]"
+                      },
+                      {
+                        "key": "eventhubs",
+                        "name": "[variables('serviceBusZoneName')]"
+                      }
+                    ],
+                    "loginHost": "[replace(replace(environment().authentication.loginEndpoint, 'https://', ''), '/', '')]",
+                    "armHost": "[replace(replace(environment().resourceManager, 'https://', ''), '/', '')]",
+                    "monitorDomain": "[if(variables('isGov'), 'azure.us', 'azure.com')]",
+                    "acrDataFqdn": "[if(empty(parameters('acrLoginServer')), createArray(), createArray(parameters('acrLoginServer'), format('*.data.{0}', substring(parameters('acrLoginServer'), add(indexOf(parameters('acrLoginServer'), '.'), 1)))))]",
+                    "allowedFqdns": "[union(createArray(variables('loginHost'), variables('armHost'), format('*.ods.opinsights.{0}', variables('monitorDomain')), format('*.oms.opinsights.{0}', variables('monitorDomain')), format('*.monitoring.{0}', variables('monitorDomain'))), variables('acrDataFqdn'), parameters('extraAllowedFqdns'))]"
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.Network/networkSecurityGroups",
+                      "apiVersion": "2024-05-01",
+                      "name": "[format('nsg-lhds-{0}-agw', parameters('stampName'))]",
+                      "location": "[parameters('location')]",
+                      "tags": "[parameters('tags')]",
+                      "properties": {
+                        "securityRules": [
+                          {
+                            "name": "allow-gateway-manager",
+                            "properties": {
+                              "priority": 100,
+                              "direction": "Inbound",
+                              "access": "Allow",
+                              "protocol": "Tcp",
+                              "sourceAddressPrefix": "GatewayManager",
+                              "sourcePortRange": "*",
+                              "destinationAddressPrefix": "*",
+                              "destinationPortRange": "65200-65535"
+                            }
+                          },
+                          {
+                            "name": "allow-https-http-inbound",
+                            "properties": {
+                              "priority": 110,
+                              "direction": "Inbound",
+                              "access": "Allow",
+                              "protocol": "Tcp",
+                              "sourceAddressPrefix": "Internet",
+                              "sourcePortRange": "*",
+                              "destinationAddressPrefix": "*",
+                              "destinationPortRanges": [
+                                "80",
+                                "443"
+                              ]
+                            }
+                          },
+                          {
+                            "name": "allow-azure-load-balancer",
+                            "properties": {
+                              "priority": 120,
+                              "direction": "Inbound",
+                              "access": "Allow",
+                              "protocol": "*",
+                              "sourceAddressPrefix": "AzureLoadBalancer",
+                              "sourcePortRange": "*",
+                              "destinationAddressPrefix": "*",
+                              "destinationPortRange": "*"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "condition": "[variables('useFirewall')]",
+                      "type": "Microsoft.Network/publicIPAddresses",
+                      "apiVersion": "2024-05-01",
+                      "name": "[format('pip-fw-lhds-{0}', parameters('stampName'))]",
+                      "location": "[parameters('location')]",
+                      "tags": "[parameters('tags')]",
+                      "sku": {
+                        "name": "Standard"
+                      },
+                      "zones": [
+                        "1",
+                        "2",
+                        "3"
+                      ],
+                      "properties": {
+                        "publicIPAllocationMethod": "Static",
+                        "publicIPAddressVersion": "IPv4"
+                      }
+                    },
+                    {
+                      "condition": "[variables('useFirewall')]",
+                      "type": "Microsoft.Network/firewallPolicies",
+                      "apiVersion": "2024-05-01",
+                      "name": "[format('fwp-lhds-{0}', parameters('stampName'))]",
+                      "location": "[parameters('location')]",
+                      "tags": "[parameters('tags')]",
+                      "properties": {
+                        "sku": {
+                          "tier": "[parameters('firewallSku')]"
+                        },
+                        "threatIntelMode": "Deny"
+                      }
+                    },
+                    {
+                      "condition": "[variables('useFirewall')]",
+                      "type": "Microsoft.Network/firewallPolicies/ruleCollectionGroups",
+                      "apiVersion": "2024-05-01",
+                      "name": "[format('{0}/{1}', format('fwp-lhds-{0}', parameters('stampName')), 'lhds-egress')]",
+                      "properties": {
+                        "priority": 200,
+                        "ruleCollections": [
+                          {
+                            "ruleCollectionType": "FirewallPolicyFilterRuleCollection",
+                            "name": "aks-required",
+                            "priority": 100,
+                            "action": {
+                              "type": "Allow"
+                            },
+                            "rules": [
+                              {
+                                "ruleType": "ApplicationRule",
+                                "name": "aks-fqdn-tag",
+                                "sourceAddresses": [
+                                  "[variables('aksPrefix')]"
+                                ],
+                                "protocols": [
+                                  {
+                                    "protocolType": "Https",
+                                    "port": 443
+                                  }
+                                ],
+                                "fqdnTags": [
+                                  "AzureKubernetesService"
+                                ]
+                              },
+                              {
+                                "ruleType": "ApplicationRule",
+                                "name": "stamp-allow-list",
+                                "sourceAddresses": [
+                                  "[variables('aksPrefix')]"
+                                ],
+                                "protocols": [
+                                  {
+                                    "protocolType": "Https",
+                                    "port": 443
+                                  }
+                                ],
+                                "targetFqdns": "[variables('allowedFqdns')]"
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/firewallPolicies', format('fwp-lhds-{0}', parameters('stampName')))]"
+                      ]
+                    },
+                    {
+                      "condition": "[variables('useFirewall')]",
+                      "type": "Microsoft.Network/azureFirewalls",
+                      "apiVersion": "2024-05-01",
+                      "name": "[format('fw-lhds-{0}', parameters('stampName'))]",
+                      "location": "[parameters('location')]",
+                      "tags": "[parameters('tags')]",
+                      "zones": [
+                        "1",
+                        "2",
+                        "3"
+                      ],
+                      "properties": {
+                        "sku": {
+                          "name": "AZFW_VNet",
+                          "tier": "[parameters('firewallSku')]"
+                        },
+                        "firewallPolicy": {
+                          "id": "[resourceId('Microsoft.Network/firewallPolicies', format('fwp-lhds-{0}', parameters('stampName')))]"
+                        },
+                        "ipConfigurations": [
+                          {
+                            "name": "fw-ipconfig",
+                            "properties": {
+                              "subnet": {
+                                "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', format('vnet-lhds-{0}', parameters('stampName')), 'AzureFirewallSubnet')]"
+                              },
+                              "publicIPAddress": {
+                                "id": "[resourceId('Microsoft.Network/publicIPAddresses', format('pip-fw-lhds-{0}', parameters('stampName')))]"
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/publicIPAddresses', format('pip-fw-lhds-{0}', parameters('stampName')))]",
+                        "[resourceId('Microsoft.Network/firewallPolicies', format('fwp-lhds-{0}', parameters('stampName')))]",
+                        "[resourceId('Microsoft.Network/firewallPolicies/ruleCollectionGroups', format('fwp-lhds-{0}', parameters('stampName')), 'lhds-egress')]",
+                        "[resourceId('Microsoft.Network/virtualNetworks/subnets', format('vnet-lhds-{0}', parameters('stampName')), 'AzureFirewallSubnet')]"
+                      ]
+                    },
+                    {
+                      "condition": "[variables('useFirewall')]",
+                      "type": "Microsoft.Network/routeTables",
+                      "apiVersion": "2024-05-01",
+                      "name": "[format('rt-lhds-{0}-aks', parameters('stampName'))]",
+                      "location": "[parameters('location')]",
+                      "tags": "[parameters('tags')]",
+                      "properties": {
+                        "disableBgpRoutePropagation": true,
+                        "routes": [
+                          {
+                            "name": "default-via-firewall",
+                            "properties": {
+                              "addressPrefix": "0.0.0.0/0",
+                              "nextHopType": "VirtualAppliance",
+                              "nextHopIpAddress": "[reference(resourceId('Microsoft.Network/azureFirewalls', format('fw-lhds-{0}', parameters('stampName'))), '2024-05-01').ipConfigurations[0].properties.privateIPAddress]"
+                            }
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/azureFirewalls', format('fw-lhds-{0}', parameters('stampName')))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Network/virtualNetworks",
+                      "apiVersion": "2024-05-01",
+                      "name": "[format('vnet-lhds-{0}', parameters('stampName'))]",
+                      "location": "[parameters('location')]",
+                      "tags": "[parameters('tags')]",
+                      "properties": {
+                        "addressSpace": {
+                          "addressPrefixes": [
+                            "[parameters('vnetAddressPrefix')]"
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "condition": "[variables('useFirewall')]",
+                      "type": "Microsoft.Network/virtualNetworks/subnets",
+                      "apiVersion": "2024-05-01",
+                      "name": "[format('{0}/{1}', format('vnet-lhds-{0}', parameters('stampName')), 'AzureFirewallSubnet')]",
+                      "properties": {
+                        "addressPrefix": "[variables('fwPrefix')]"
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/virtualNetworks', format('vnet-lhds-{0}', parameters('stampName')))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Network/virtualNetworks/subnets",
+                      "apiVersion": "2024-05-01",
+                      "name": "[format('{0}/{1}', format('vnet-lhds-{0}', parameters('stampName')), 'snet-pe')]",
+                      "properties": {
+                        "addressPrefix": "[variables('pePrefix')]",
+                        "privateEndpointNetworkPolicies": "Enabled"
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/virtualNetworks/subnets', format('vnet-lhds-{0}', parameters('stampName')), 'AzureFirewallSubnet')]",
+                        "[resourceId('Microsoft.Network/virtualNetworks', format('vnet-lhds-{0}', parameters('stampName')))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Network/virtualNetworks/subnets",
+                      "apiVersion": "2024-05-01",
+                      "name": "[format('{0}/{1}', format('vnet-lhds-{0}', parameters('stampName')), 'snet-postgres')]",
+                      "properties": {
+                        "addressPrefix": "[variables('pgPrefix')]",
+                        "delegations": [
+                          {
+                            "name": "postgres-flexible",
+                            "properties": {
+                              "serviceName": "Microsoft.DBforPostgreSQL/flexibleServers"
+                            }
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/virtualNetworks/subnets', format('vnet-lhds-{0}', parameters('stampName')), 'snet-pe')]",
+                        "[resourceId('Microsoft.Network/virtualNetworks', format('vnet-lhds-{0}', parameters('stampName')))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Network/virtualNetworks/subnets",
+                      "apiVersion": "2024-05-01",
+                      "name": "[format('{0}/{1}', format('vnet-lhds-{0}', parameters('stampName')), 'snet-agw')]",
+                      "properties": {
+                        "addressPrefix": "[variables('agwPrefix')]",
+                        "networkSecurityGroup": {
+                          "id": "[resourceId('Microsoft.Network/networkSecurityGroups', format('nsg-lhds-{0}-agw', parameters('stampName')))]"
+                        }
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/networkSecurityGroups', format('nsg-lhds-{0}-agw', parameters('stampName')))]",
+                        "[resourceId('Microsoft.Network/virtualNetworks/subnets', format('vnet-lhds-{0}', parameters('stampName')), 'snet-postgres')]",
+                        "[resourceId('Microsoft.Network/virtualNetworks', format('vnet-lhds-{0}', parameters('stampName')))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Network/virtualNetworks/subnets",
+                      "apiVersion": "2024-05-01",
+                      "name": "[format('{0}/{1}', format('vnet-lhds-{0}', parameters('stampName')), 'snet-aks')]",
+                      "properties": {
+                        "addressPrefix": "[variables('aksPrefix')]",
+                        "routeTable": "[if(variables('useFirewall'), createObject('id', resourceId('Microsoft.Network/routeTables', format('rt-lhds-{0}-aks', parameters('stampName')))), null())]"
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/routeTables', format('rt-lhds-{0}-aks', parameters('stampName')))]",
+                        "[resourceId('Microsoft.Network/virtualNetworks/subnets', format('vnet-lhds-{0}', parameters('stampName')), 'snet-agw')]",
+                        "[resourceId('Microsoft.Network/virtualNetworks', format('vnet-lhds-{0}', parameters('stampName')))]"
+                      ]
+                    },
+                    {
+                      "copy": {
+                        "name": "zones",
+                        "count": "[length(variables('zoneNames'))]"
+                      },
+                      "type": "Microsoft.Network/privateDnsZones",
+                      "apiVersion": "2024-06-01",
+                      "name": "[variables('zoneNames')[copyIndex()].name]",
+                      "location": "global",
+                      "tags": "[parameters('tags')]"
+                    },
+                    {
+                      "copy": {
+                        "name": "stampLinks",
+                        "count": "[length(variables('zoneNames'))]"
+                      },
+                      "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+                      "apiVersion": "2024-06-01",
+                      "name": "[format('{0}/{1}', variables('zoneNames')[copyIndex()].name, 'link-stamp')]",
+                      "location": "global",
+                      "tags": "[parameters('tags')]",
+                      "properties": {
+                        "registrationEnabled": false,
+                        "virtualNetwork": {
+                          "id": "[resourceId('Microsoft.Network/virtualNetworks', format('vnet-lhds-{0}', parameters('stampName')))]"
+                        }
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/virtualNetworks', format('vnet-lhds-{0}', parameters('stampName')))]",
+                        "[resourceId('Microsoft.Network/privateDnsZones', variables('zoneNames')[copyIndex()].name)]"
+                      ]
+                    },
+                    {
+                      "copy": {
+                        "name": "extraLinks",
+                        "count": "[length(flatten(map(range(0, length(variables('zoneNames'))), lambda('zi', map(parameters('extraDnsLinkVnetIds'), lambda('v', createObject('zoneIndex', lambdaVariables('zi'), 'vnetId', lambdaVariables('v'))))))))]",
+                        "mode": "serial",
+                        "batchSize": 1
+                      },
+                      "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+                      "apiVersion": "2024-06-01",
+                      "name": "[format('{0}/{1}', variables('zoneNames')[flatten(map(range(0, length(variables('zoneNames'))), lambda('zi', map(parameters('extraDnsLinkVnetIds'), lambda('v', createObject('zoneIndex', lambdaVariables('zi'), 'vnetId', lambdaVariables('v')))))))[copyIndex()].zoneIndex].name, format('link-{0}', uniqueString(flatten(map(range(0, length(variables('zoneNames'))), lambda('zi', map(parameters('extraDnsLinkVnetIds'), lambda('v', createObject('zoneIndex', lambdaVariables('zi'), 'vnetId', lambdaVariables('v')))))))[copyIndex()].vnetId)))]",
+                      "location": "global",
+                      "tags": "[parameters('tags')]",
+                      "properties": {
+                        "registrationEnabled": false,
+                        "virtualNetwork": {
+                          "id": "[flatten(map(range(0, length(variables('zoneNames'))), lambda('zi', map(parameters('extraDnsLinkVnetIds'), lambda('v', createObject('zoneIndex', lambdaVariables('zi'), 'vnetId', lambdaVariables('v')))))))[copyIndex()].vnetId]"
+                        }
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/privateDnsZones', variables('zoneNames')[flatten(map(range(0, length(variables('zoneNames'))), lambda('zi', map(parameters('extraDnsLinkVnetIds'), lambda('v', createObject('zoneIndex', lambdaVariables('zi'), 'vnetId', lambdaVariables('v')))))))[copyIndex()].zoneIndex].name)]"
+                      ]
+                    }
+                  ],
+                  "outputs": {
+                    "postgresZoneName": {
+                      "type": "string",
+                      "value": "[variables('postgresZoneName')]"
+                    },
+                    "vnetId": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Network/virtualNetworks', format('vnet-lhds-{0}', parameters('stampName')))]"
+                    },
+                    "vnetName": {
+                      "type": "string",
+                      "value": "[format('vnet-lhds-{0}', parameters('stampName'))]"
+                    },
+                    "aksSubnetId": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Network/virtualNetworks/subnets', format('vnet-lhds-{0}', parameters('stampName')), 'snet-aks')]"
+                    },
+                    "peSubnetId": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Network/virtualNetworks/subnets', format('vnet-lhds-{0}', parameters('stampName')), 'snet-pe')]"
+                    },
+                    "postgresSubnetId": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Network/virtualNetworks/subnets', format('vnet-lhds-{0}', parameters('stampName')), 'snet-postgres')]"
+                    },
+                    "agwSubnetId": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Network/virtualNetworks/subnets', format('vnet-lhds-{0}', parameters('stampName')), 'snet-agw')]"
+                    },
+                    "ingressIlbIp": {
+                      "type": "string",
+                      "value": "[variables('ingressIlbIp')]"
+                    },
+                    "routeTableId": {
+                      "type": "string",
+                      "value": "[if(variables('useFirewall'), resourceId('Microsoft.Network/routeTables', format('rt-lhds-{0}-aks', parameters('stampName'))), '')]"
+                    },
+                    "firewallPrivateIp": {
+                      "type": "string",
+                      "value": "[if(variables('useFirewall'), reference(resourceId('Microsoft.Network/azureFirewalls', format('fw-lhds-{0}', parameters('stampName'))), '2024-05-01').ipConfigurations[0].properties.privateIPAddress, '')]"
+                    },
+                    "firewallPublicIp": {
+                      "type": "string",
+                      "value": "[if(variables('useFirewall'), reference(resourceId('Microsoft.Network/publicIPAddresses', format('pip-fw-lhds-{0}', parameters('stampName'))), '2024-05-01').ipAddress, '')]"
+                    },
+                    "egressFqdns": {
+                      "type": "array",
+                      "value": "[if(variables('useFirewall'), variables('allowedFqdns'), createArray())]"
+                    },
+                    "privateDnsZoneIds": {
+                      "type": "object",
+                      "value": {
+                        "vault": "[resourceId('Microsoft.Network/privateDnsZones', variables('zoneNames')[0].name)]",
+                        "blob": "[resourceId('Microsoft.Network/privateDnsZones', variables('zoneNames')[1].name)]",
+                        "eventhubs": "[resourceId('Microsoft.Network/privateDnsZones', variables('zoneNames')[2].name)]"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "[format('lhds-{0}-keyvault', parameters('stampName'))]",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "stampName": {
+                    "value": "[parameters('stampName')]"
+                  },
+                  "tenantId": {
+                    "value": "[parameters('tenantId')]"
+                  },
+                  "adminEntraGroupId": {
+                    "value": "[parameters('adminEntraGroupId')]"
+                  },
+                  "peSubnetId": {
+                    "value": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-network', parameters('stampName'))), '2025-04-01').outputs.peSubnetId.value]"
+                  },
+                  "vaultZoneId": {
+                    "value": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-network', parameters('stampName'))), '2025-04-01').outputs.privateDnsZoneIds.value.vault]"
+                  },
+                  "workspaceId": {
+                    "value": "[resourceId('Microsoft.OperationalInsights/workspaces', format('log-lhds-{0}', parameters('stampName')))]"
+                  },
+                  "tags": {
+                    "value": "[variables('stampTags')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "16421830623154315345"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Region of the stamp."
+                      }
+                    },
+                    "stampName": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Stamp short name; folded into resource names."
+                      }
+                    },
+                    "tenantId": {
+                      "type": "string",
+                      "defaultValue": "[subscription().tenantId]",
+                      "metadata": {
+                        "description": "Entra tenant id that owns the vault."
+                      }
+                    },
+                    "adminEntraGroupId": {
+                      "type": "string",
+                      "defaultValue": "",
+                      "metadata": {
+                        "description": "Object id of the Entra group that administers the vault (Key Vault Administrator). Empty skips the grant; the operator then grants it out of band."
+                      }
+                    },
+                    "peSubnetId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Subnet that hosts the private endpoint."
+                      }
+                    },
+                    "vaultZoneId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Resource id of the privatelink.vaultcore private DNS zone."
+                      }
+                    },
+                    "workspaceId": {
+                      "type": "string",
+                      "defaultValue": "",
+                      "metadata": {
+                        "description": "Log Analytics workspace id for diagnostics. Empty skips the diagnostic setting."
+                      }
+                    },
+                    "keyNames": {
+                      "type": "array",
+                      "defaultValue": [
+                        "stamp-storage",
+                        "stamp-postgres",
+                        "stamp-eventhubs"
+                      ],
+                      "metadata": {
+                        "description": "Names of the stamp-level HSM-backed keys to create."
+                      }
+                    },
+                    "tags": {
+                      "type": "object",
+                      "defaultValue": {},
+                      "metadata": {
+                        "description": "Tags applied to every resource."
+                      }
+                    }
+                  },
+                  "variables": {
+                    "kvName": "[take(format('kv-lhds-{0}-{1}', take(parameters('stampName'), 6), take(uniqueString(resourceGroup().id), 8)), 24)]",
+                    "kvAdministratorRoleId": "00482a5a-887f-4fb3-b363-3b7fe8e74483",
+                    "kvCryptoServiceEncryptionUserRoleId": "e147488a-f6f5-4113-8e2d-b22465e65bf6"
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+                      "apiVersion": "2023-01-31",
+                      "name": "[format('id-lhds-{0}-cmk', parameters('stampName'))]",
+                      "location": "[parameters('location')]",
+                      "tags": "[parameters('tags')]"
+                    },
+                    {
+                      "type": "Microsoft.KeyVault/vaults",
+                      "apiVersion": "2024-11-01",
+                      "name": "[variables('kvName')]",
+                      "location": "[parameters('location')]",
+                      "tags": "[parameters('tags')]",
+                      "properties": {
+                        "sku": {
+                          "family": "A",
+                          "name": "premium"
+                        },
+                        "tenantId": "[parameters('tenantId')]",
+                        "enableRbacAuthorization": true,
+                        "enableSoftDelete": true,
+                        "softDeleteRetentionInDays": 90,
+                        "enablePurgeProtection": true,
+                        "publicNetworkAccess": "Disabled",
+                        "networkAcls": {
+                          "bypass": "AzureServices",
+                          "defaultAction": "Deny"
+                        }
+                      }
+                    },
+                    {
+                      "type": "Microsoft.Authorization/roleAssignments",
+                      "apiVersion": "2022-04-01",
+                      "scope": "[resourceId('Microsoft.KeyVault/vaults', variables('kvName'))]",
+                      "name": "[guid(resourceId('Microsoft.KeyVault/vaults', variables('kvName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-lhds-{0}-cmk', parameters('stampName'))), variables('kvCryptoServiceEncryptionUserRoleId'))]",
+                      "properties": {
+                        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('kvCryptoServiceEncryptionUserRoleId'))]",
+                        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-lhds-{0}-cmk', parameters('stampName'))), '2023-01-31').principalId]",
+                        "principalType": "ServicePrincipal",
+                        "description": "LHDS stamp CMK identity: wrap/unwrap keys for Storage, PostgreSQL and Event Hubs."
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-lhds-{0}-cmk', parameters('stampName')))]",
+                        "[resourceId('Microsoft.KeyVault/vaults', variables('kvName'))]"
+                      ]
+                    },
+                    {
+                      "condition": "[not(empty(parameters('adminEntraGroupId')))]",
+                      "type": "Microsoft.Authorization/roleAssignments",
+                      "apiVersion": "2022-04-01",
+                      "scope": "[resourceId('Microsoft.KeyVault/vaults', variables('kvName'))]",
+                      "name": "[guid(resourceId('Microsoft.KeyVault/vaults', variables('kvName')), parameters('adminEntraGroupId'), variables('kvAdministratorRoleId'))]",
+                      "properties": {
+                        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('kvAdministratorRoleId'))]",
+                        "principalId": "[parameters('adminEntraGroupId')]",
+                        "principalType": "Group"
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.KeyVault/vaults', variables('kvName'))]"
+                      ]
+                    },
+                    {
+                      "copy": {
+                        "name": "keys",
+                        "count": "[length(parameters('keyNames'))]"
+                      },
+                      "type": "Microsoft.KeyVault/vaults/keys",
+                      "apiVersion": "2024-11-01",
+                      "name": "[format('{0}/{1}', variables('kvName'), parameters('keyNames')[copyIndex()])]",
+                      "properties": {
+                        "kty": "RSA-HSM",
+                        "keySize": 3072,
+                        "keyOps": [
+                          "wrapKey",
+                          "unwrapKey"
+                        ],
+                        "attributes": {
+                          "enabled": true
+                        },
+                        "rotationPolicy": {
+                          "attributes": {
+                            "expiryTime": "P1Y"
+                          },
+                          "lifetimeActions": [
+                            {
+                              "trigger": {
+                                "timeBeforeExpiry": "P60D"
+                              },
+                              "action": {
+                                "type": "rotate"
+                              }
+                            },
+                            {
+                              "trigger": {
+                                "timeBeforeExpiry": "P90D"
+                              },
+                              "action": {
+                                "type": "notify"
+                              }
+                            }
+                          ]
+                        }
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.KeyVault/vaults', variables('kvName'))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Network/privateEndpoints",
+                      "apiVersion": "2024-05-01",
+                      "name": "[format('pe-{0}', variables('kvName'))]",
+                      "location": "[parameters('location')]",
+                      "tags": "[parameters('tags')]",
+                      "properties": {
+                        "subnet": {
+                          "id": "[parameters('peSubnetId')]"
+                        },
+                        "privateLinkServiceConnections": [
+                          {
+                            "name": "kv-link",
+                            "properties": {
+                              "privateLinkServiceId": "[resourceId('Microsoft.KeyVault/vaults', variables('kvName'))]",
+                              "groupIds": [
+                                "vault"
+                              ]
+                            }
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.KeyVault/vaults', variables('kvName'))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+                      "apiVersion": "2024-05-01",
+                      "name": "[format('{0}/{1}', format('pe-{0}', variables('kvName')), 'default')]",
+                      "properties": {
+                        "privateDnsZoneConfigs": [
+                          {
+                            "name": "vault",
+                            "properties": {
+                              "privateDnsZoneId": "[parameters('vaultZoneId')]"
+                            }
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/privateEndpoints', format('pe-{0}', variables('kvName')))]"
+                      ]
+                    },
+                    {
+                      "condition": "[not(empty(parameters('workspaceId')))]",
+                      "type": "Microsoft.Insights/diagnosticSettings",
+                      "apiVersion": "2021-05-01-preview",
+                      "scope": "[resourceId('Microsoft.KeyVault/vaults', variables('kvName'))]",
+                      "name": "diag-lhds-stamp",
+                      "properties": {
+                        "workspaceId": "[parameters('workspaceId')]",
+                        "logs": [
+                          {
+                            "categoryGroup": "allLogs",
+                            "enabled": true
+                          }
+                        ],
+                        "metrics": [
+                          {
+                            "category": "AllMetrics",
+                            "enabled": true
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.KeyVault/vaults', variables('kvName'))]"
+                      ]
+                    }
+                  ],
+                  "outputs": {
+                    "vaultId": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.KeyVault/vaults', variables('kvName'))]"
+                    },
+                    "vaultName": {
+                      "type": "string",
+                      "value": "[variables('kvName')]"
+                    },
+                    "vaultUri": {
+                      "type": "string",
+                      "value": "[reference(resourceId('Microsoft.KeyVault/vaults', variables('kvName')), '2024-11-01').vaultUri]"
+                    },
+                    "cmkIdentityId": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-lhds-{0}-cmk', parameters('stampName')))]"
+                    },
+                    "cmkIdentityClientId": {
+                      "type": "string",
+                      "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-lhds-{0}-cmk', parameters('stampName'))), '2023-01-31').clientId]"
+                    },
+                    "cmkIdentityPrincipalId": {
+                      "type": "string",
+                      "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-lhds-{0}-cmk', parameters('stampName'))), '2023-01-31').principalId]"
+                    },
+                    "keyUris": {
+                      "type": "object",
+                      "metadata": {
+                        "description": "Versionless key URIs by key name, so services follow automatic rotation."
+                      },
+                      "value": "[reduce(range(0, length(parameters('keyNames'))), createObject(), lambda('acc', 'i', union(lambdaVariables('acc'), createObject(format('{0}', parameters('keyNames')[lambdaVariables('i')]), format('{0}keys/{1}', reference(resourceId('Microsoft.KeyVault/vaults', variables('kvName')), '2024-11-01').vaultUri, parameters('keyNames')[lambdaVariables('i')])))))]"
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.OperationalInsights/workspaces', format('log-lhds-{0}', parameters('stampName')))]",
+                "[resourceId('Microsoft.Resources/deployments', format('lhds-{0}-network', parameters('stampName')))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "[format('lhds-{0}-storage-audit', parameters('stampName'))]",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "accountName": {
+                    "value": "[take(format('sthaud{0}{1}', take(variables('cleanStamp'), 6), variables('nameSeed')), 24)]"
+                  },
+                  "skuName": {
+                    "value": "[variables('storageSku')]"
+                  },
+                  "containers": {
+                    "value": [
+                      "audit"
+                    ]
+                  },
+                  "immutableVersioning": {
+                    "value": true
+                  },
+                  "immutabilityRetentionDays": {
+                    "value": "[parameters('auditRetentionDays')]"
+                  },
+                  "peSubnetId": {
+                    "value": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-network', parameters('stampName'))), '2025-04-01').outputs.peSubnetId.value]"
+                  },
+                  "blobZoneId": {
+                    "value": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-network', parameters('stampName'))), '2025-04-01').outputs.privateDnsZoneIds.value.blob]"
+                  },
+                  "cmkIdentityId": {
+                    "value": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-keyvault', parameters('stampName'))), '2025-04-01').outputs.cmkIdentityId.value]"
+                  },
+                  "keyVaultUri": {
+                    "value": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-keyvault', parameters('stampName'))), '2025-04-01').outputs.vaultUri.value]"
+                  },
+                  "keyName": {
+                    "value": "stamp-storage"
+                  },
+                  "workspaceId": {
+                    "value": "[resourceId('Microsoft.OperationalInsights/workspaces', format('log-lhds-{0}', parameters('stampName')))]"
+                  },
+                  "tags": {
+                    "value": "[variables('stampTags')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "17965389707666774522"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Region of the account."
+                      }
+                    },
+                    "accountName": {
+                      "type": "string",
+                      "minLength": 3,
+                      "maxLength": 24,
+                      "metadata": {
+                        "description": "Globally unique storage account name (3-24 lowercase letters and digits)."
+                      }
+                    },
+                    "skuName": {
+                      "type": "string",
+                      "defaultValue": "Standard_ZRS",
+                      "allowedValues": [
+                        "Standard_LRS",
+                        "Standard_ZRS",
+                        "Standard_GRS",
+                        "Standard_GZRS",
+                        "Standard_RAGRS",
+                        "Standard_RAGZRS"
+                      ],
+                      "metadata": {
+                        "description": "Replication. ZRS for class S/M/L; LRS is acceptable for the dev profile and for regions without availability zones."
+                      }
+                    },
+                    "containers": {
+                      "type": "array",
+                      "defaultValue": [],
+                      "metadata": {
+                        "description": "Blob containers to create."
+                      }
+                    },
+                    "immutableVersioning": {
+                      "type": "bool",
+                      "defaultValue": false,
+                      "metadata": {
+                        "description": "Keep every version of every blob and enable version-level immutability so a retention policy can be applied to the audit trail. Must be chosen at creation for the immutability setting."
+                      }
+                    },
+                    "immutabilityRetentionDays": {
+                      "type": "int",
+                      "defaultValue": 0,
+                      "minValue": 0,
+                      "maxValue": 146000,
+                      "metadata": {
+                        "description": "Time-based retention in days applied to new blob versions when immutableVersioning is true. 0 = immutability enabled but no default policy. The policy is created Unlocked; locking it is irreversible and is an operator decision."
+                      }
+                    },
+                    "softDeleteDays": {
+                      "type": "int",
+                      "defaultValue": 30,
+                      "minValue": 1,
+                      "maxValue": 365,
+                      "metadata": {
+                        "description": "Soft-delete retention in days for blobs and containers."
+                      }
+                    },
+                    "peSubnetId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Subnet that hosts the private endpoint."
+                      }
+                    },
+                    "blobZoneId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Resource id of the privatelink.blob private DNS zone."
+                      }
+                    },
+                    "cmkIdentityId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Resource id of the CMK user-assigned identity (needs Key Vault Crypto Service Encryption User on the vault)."
+                      }
+                    },
+                    "keyVaultUri": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Key Vault URI that holds the CMK (https://<vault>.<suffix>/)."
+                      }
+                    },
+                    "keyName": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Name of the CMK in the vault. Version-less: the account follows key rotation."
+                      }
+                    },
+                    "workspaceId": {
+                      "type": "string",
+                      "defaultValue": "",
+                      "metadata": {
+                        "description": "Log Analytics workspace id for diagnostics. Empty skips the diagnostic setting."
+                      }
+                    },
+                    "tags": {
+                      "type": "object",
+                      "defaultValue": {},
+                      "metadata": {
+                        "description": "Tags applied to every resource."
+                      }
+                    }
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.Storage/storageAccounts",
+                      "apiVersion": "2024-01-01",
+                      "name": "[parameters('accountName')]",
+                      "location": "[parameters('location')]",
+                      "tags": "[parameters('tags')]",
+                      "kind": "StorageV2",
+                      "sku": {
+                        "name": "[parameters('skuName')]"
+                      },
+                      "identity": {
+                        "type": "UserAssigned",
+                        "userAssignedIdentities": {
+                          "[format('{0}', parameters('cmkIdentityId'))]": {}
+                        }
+                      },
+                      "properties": {
+                        "accessTier": "Hot",
+                        "allowBlobPublicAccess": false,
+                        "allowSharedKeyAccess": false,
+                        "defaultToOAuthAuthentication": true,
+                        "minimumTlsVersion": "TLS1_2",
+                        "supportsHttpsTrafficOnly": true,
+                        "publicNetworkAccess": "Disabled",
+                        "networkAcls": {
+                          "bypass": "None",
+                          "defaultAction": "Deny"
+                        },
+                        "isHnsEnabled": false,
+                        "immutableStorageWithVersioning": "[if(parameters('immutableVersioning'), createObject('enabled', true(), 'immutabilityPolicy', if(greater(parameters('immutabilityRetentionDays'), 0), createObject('immutabilityPeriodSinceCreationInDays', max(1, parameters('immutabilityRetentionDays')), 'state', 'Unlocked'), null())), null())]",
+                        "encryption": {
+                          "keySource": "Microsoft.Keyvault",
+                          "requireInfrastructureEncryption": true,
+                          "identity": {
+                            "userAssignedIdentity": "[parameters('cmkIdentityId')]"
+                          },
+                          "keyvaultproperties": {
+                            "keyvaulturi": "[parameters('keyVaultUri')]",
+                            "keyname": "[parameters('keyName')]"
+                          },
+                          "services": {
+                            "blob": {
+                              "enabled": true,
+                              "keyType": "Account"
+                            },
+                            "file": {
+                              "enabled": true,
+                              "keyType": "Account"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "type": "Microsoft.Storage/storageAccounts/blobServices",
+                      "apiVersion": "2024-01-01",
+                      "name": "[format('{0}/{1}', parameters('accountName'), 'default')]",
+                      "properties": {
+                        "isVersioningEnabled": true,
+                        "deleteRetentionPolicy": {
+                          "enabled": true,
+                          "days": "[parameters('softDeleteDays')]"
+                        },
+                        "containerDeleteRetentionPolicy": {
+                          "enabled": true,
+                          "days": "[parameters('softDeleteDays')]"
+                        }
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Storage/storageAccounts', parameters('accountName'))]"
+                      ]
+                    },
+                    {
+                      "copy": {
+                        "name": "blobContainers",
+                        "count": "[length(parameters('containers'))]"
+                      },
+                      "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+                      "apiVersion": "2024-01-01",
+                      "name": "[format('{0}/{1}/{2}', parameters('accountName'), 'default', parameters('containers')[copyIndex()])]",
+                      "properties": {
+                        "publicAccess": "None"
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Storage/storageAccounts/blobServices', parameters('accountName'), 'default')]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Network/privateEndpoints",
+                      "apiVersion": "2024-05-01",
+                      "name": "[format('pe-{0}-blob', parameters('accountName'))]",
+                      "location": "[parameters('location')]",
+                      "tags": "[parameters('tags')]",
+                      "properties": {
+                        "subnet": {
+                          "id": "[parameters('peSubnetId')]"
+                        },
+                        "privateLinkServiceConnections": [
+                          {
+                            "name": "blob-link",
+                            "properties": {
+                              "privateLinkServiceId": "[resourceId('Microsoft.Storage/storageAccounts', parameters('accountName'))]",
+                              "groupIds": [
+                                "blob"
+                              ]
+                            }
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Storage/storageAccounts', parameters('accountName'))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+                      "apiVersion": "2024-05-01",
+                      "name": "[format('{0}/{1}', format('pe-{0}-blob', parameters('accountName')), 'default')]",
+                      "properties": {
+                        "privateDnsZoneConfigs": [
+                          {
+                            "name": "blob",
+                            "properties": {
+                              "privateDnsZoneId": "[parameters('blobZoneId')]"
+                            }
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/privateEndpoints', format('pe-{0}-blob', parameters('accountName')))]"
+                      ]
+                    },
+                    {
+                      "condition": "[not(empty(parameters('workspaceId')))]",
+                      "type": "Microsoft.Insights/diagnosticSettings",
+                      "apiVersion": "2021-05-01-preview",
+                      "scope": "[resourceId('Microsoft.Storage/storageAccounts/blobServices', parameters('accountName'), 'default')]",
+                      "name": "diag-lhds-blob",
+                      "properties": {
+                        "workspaceId": "[parameters('workspaceId')]",
+                        "logs": [
+                          {
+                            "category": "StorageRead",
+                            "enabled": true
+                          },
+                          {
+                            "category": "StorageWrite",
+                            "enabled": true
+                          },
+                          {
+                            "category": "StorageDelete",
+                            "enabled": true
+                          }
+                        ],
+                        "metrics": [
+                          {
+                            "category": "Transaction",
+                            "enabled": true
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Storage/storageAccounts/blobServices', parameters('accountName'), 'default')]"
+                      ]
+                    }
+                  ],
+                  "outputs": {
+                    "accountId": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Storage/storageAccounts', parameters('accountName'))]"
+                    },
+                    "accountName": {
+                      "type": "string",
+                      "value": "[parameters('accountName')]"
+                    },
+                    "blobEndpoint": {
+                      "type": "string",
+                      "value": "[reference(resourceId('Microsoft.Storage/storageAccounts', parameters('accountName')), '2024-01-01').primaryEndpoints.blob]"
+                    },
+                    "keyName": {
+                      "type": "string",
+                      "value": "[parameters('keyName')]"
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Resources/deployments', format('lhds-{0}-keyvault', parameters('stampName')))]",
+                "[resourceId('Microsoft.OperationalInsights/workspaces', format('log-lhds-{0}', parameters('stampName')))]",
+                "[resourceId('Microsoft.Resources/deployments', format('lhds-{0}-network', parameters('stampName')))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "[format('lhds-{0}-storage-export', parameters('stampName'))]",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "accountName": {
+                    "value": "[take(format('sthexp{0}{1}', take(variables('cleanStamp'), 6), variables('nameSeed')), 24)]"
+                  },
+                  "skuName": {
+                    "value": "[variables('storageSku')]"
+                  },
+                  "containers": {
+                    "value": [
+                      "export-staging"
+                    ]
+                  },
+                  "peSubnetId": {
+                    "value": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-network', parameters('stampName'))), '2025-04-01').outputs.peSubnetId.value]"
+                  },
+                  "blobZoneId": {
+                    "value": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-network', parameters('stampName'))), '2025-04-01').outputs.privateDnsZoneIds.value.blob]"
+                  },
+                  "cmkIdentityId": {
+                    "value": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-keyvault', parameters('stampName'))), '2025-04-01').outputs.cmkIdentityId.value]"
+                  },
+                  "keyVaultUri": {
+                    "value": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-keyvault', parameters('stampName'))), '2025-04-01').outputs.vaultUri.value]"
+                  },
+                  "keyName": {
+                    "value": "stamp-storage"
+                  },
+                  "workspaceId": {
+                    "value": "[resourceId('Microsoft.OperationalInsights/workspaces', format('log-lhds-{0}', parameters('stampName')))]"
+                  },
+                  "tags": {
+                    "value": "[variables('stampTags')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "17965389707666774522"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Region of the account."
+                      }
+                    },
+                    "accountName": {
+                      "type": "string",
+                      "minLength": 3,
+                      "maxLength": 24,
+                      "metadata": {
+                        "description": "Globally unique storage account name (3-24 lowercase letters and digits)."
+                      }
+                    },
+                    "skuName": {
+                      "type": "string",
+                      "defaultValue": "Standard_ZRS",
+                      "allowedValues": [
+                        "Standard_LRS",
+                        "Standard_ZRS",
+                        "Standard_GRS",
+                        "Standard_GZRS",
+                        "Standard_RAGRS",
+                        "Standard_RAGZRS"
+                      ],
+                      "metadata": {
+                        "description": "Replication. ZRS for class S/M/L; LRS is acceptable for the dev profile and for regions without availability zones."
+                      }
+                    },
+                    "containers": {
+                      "type": "array",
+                      "defaultValue": [],
+                      "metadata": {
+                        "description": "Blob containers to create."
+                      }
+                    },
+                    "immutableVersioning": {
+                      "type": "bool",
+                      "defaultValue": false,
+                      "metadata": {
+                        "description": "Keep every version of every blob and enable version-level immutability so a retention policy can be applied to the audit trail. Must be chosen at creation for the immutability setting."
+                      }
+                    },
+                    "immutabilityRetentionDays": {
+                      "type": "int",
+                      "defaultValue": 0,
+                      "minValue": 0,
+                      "maxValue": 146000,
+                      "metadata": {
+                        "description": "Time-based retention in days applied to new blob versions when immutableVersioning is true. 0 = immutability enabled but no default policy. The policy is created Unlocked; locking it is irreversible and is an operator decision."
+                      }
+                    },
+                    "softDeleteDays": {
+                      "type": "int",
+                      "defaultValue": 30,
+                      "minValue": 1,
+                      "maxValue": 365,
+                      "metadata": {
+                        "description": "Soft-delete retention in days for blobs and containers."
+                      }
+                    },
+                    "peSubnetId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Subnet that hosts the private endpoint."
+                      }
+                    },
+                    "blobZoneId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Resource id of the privatelink.blob private DNS zone."
+                      }
+                    },
+                    "cmkIdentityId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Resource id of the CMK user-assigned identity (needs Key Vault Crypto Service Encryption User on the vault)."
+                      }
+                    },
+                    "keyVaultUri": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Key Vault URI that holds the CMK (https://<vault>.<suffix>/)."
+                      }
+                    },
+                    "keyName": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Name of the CMK in the vault. Version-less: the account follows key rotation."
+                      }
+                    },
+                    "workspaceId": {
+                      "type": "string",
+                      "defaultValue": "",
+                      "metadata": {
+                        "description": "Log Analytics workspace id for diagnostics. Empty skips the diagnostic setting."
+                      }
+                    },
+                    "tags": {
+                      "type": "object",
+                      "defaultValue": {},
+                      "metadata": {
+                        "description": "Tags applied to every resource."
+                      }
+                    }
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.Storage/storageAccounts",
+                      "apiVersion": "2024-01-01",
+                      "name": "[parameters('accountName')]",
+                      "location": "[parameters('location')]",
+                      "tags": "[parameters('tags')]",
+                      "kind": "StorageV2",
+                      "sku": {
+                        "name": "[parameters('skuName')]"
+                      },
+                      "identity": {
+                        "type": "UserAssigned",
+                        "userAssignedIdentities": {
+                          "[format('{0}', parameters('cmkIdentityId'))]": {}
+                        }
+                      },
+                      "properties": {
+                        "accessTier": "Hot",
+                        "allowBlobPublicAccess": false,
+                        "allowSharedKeyAccess": false,
+                        "defaultToOAuthAuthentication": true,
+                        "minimumTlsVersion": "TLS1_2",
+                        "supportsHttpsTrafficOnly": true,
+                        "publicNetworkAccess": "Disabled",
+                        "networkAcls": {
+                          "bypass": "None",
+                          "defaultAction": "Deny"
+                        },
+                        "isHnsEnabled": false,
+                        "immutableStorageWithVersioning": "[if(parameters('immutableVersioning'), createObject('enabled', true(), 'immutabilityPolicy', if(greater(parameters('immutabilityRetentionDays'), 0), createObject('immutabilityPeriodSinceCreationInDays', max(1, parameters('immutabilityRetentionDays')), 'state', 'Unlocked'), null())), null())]",
+                        "encryption": {
+                          "keySource": "Microsoft.Keyvault",
+                          "requireInfrastructureEncryption": true,
+                          "identity": {
+                            "userAssignedIdentity": "[parameters('cmkIdentityId')]"
+                          },
+                          "keyvaultproperties": {
+                            "keyvaulturi": "[parameters('keyVaultUri')]",
+                            "keyname": "[parameters('keyName')]"
+                          },
+                          "services": {
+                            "blob": {
+                              "enabled": true,
+                              "keyType": "Account"
+                            },
+                            "file": {
+                              "enabled": true,
+                              "keyType": "Account"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "type": "Microsoft.Storage/storageAccounts/blobServices",
+                      "apiVersion": "2024-01-01",
+                      "name": "[format('{0}/{1}', parameters('accountName'), 'default')]",
+                      "properties": {
+                        "isVersioningEnabled": true,
+                        "deleteRetentionPolicy": {
+                          "enabled": true,
+                          "days": "[parameters('softDeleteDays')]"
+                        },
+                        "containerDeleteRetentionPolicy": {
+                          "enabled": true,
+                          "days": "[parameters('softDeleteDays')]"
+                        }
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Storage/storageAccounts', parameters('accountName'))]"
+                      ]
+                    },
+                    {
+                      "copy": {
+                        "name": "blobContainers",
+                        "count": "[length(parameters('containers'))]"
+                      },
+                      "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+                      "apiVersion": "2024-01-01",
+                      "name": "[format('{0}/{1}/{2}', parameters('accountName'), 'default', parameters('containers')[copyIndex()])]",
+                      "properties": {
+                        "publicAccess": "None"
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Storage/storageAccounts/blobServices', parameters('accountName'), 'default')]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Network/privateEndpoints",
+                      "apiVersion": "2024-05-01",
+                      "name": "[format('pe-{0}-blob', parameters('accountName'))]",
+                      "location": "[parameters('location')]",
+                      "tags": "[parameters('tags')]",
+                      "properties": {
+                        "subnet": {
+                          "id": "[parameters('peSubnetId')]"
+                        },
+                        "privateLinkServiceConnections": [
+                          {
+                            "name": "blob-link",
+                            "properties": {
+                              "privateLinkServiceId": "[resourceId('Microsoft.Storage/storageAccounts', parameters('accountName'))]",
+                              "groupIds": [
+                                "blob"
+                              ]
+                            }
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Storage/storageAccounts', parameters('accountName'))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+                      "apiVersion": "2024-05-01",
+                      "name": "[format('{0}/{1}', format('pe-{0}-blob', parameters('accountName')), 'default')]",
+                      "properties": {
+                        "privateDnsZoneConfigs": [
+                          {
+                            "name": "blob",
+                            "properties": {
+                              "privateDnsZoneId": "[parameters('blobZoneId')]"
+                            }
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/privateEndpoints', format('pe-{0}-blob', parameters('accountName')))]"
+                      ]
+                    },
+                    {
+                      "condition": "[not(empty(parameters('workspaceId')))]",
+                      "type": "Microsoft.Insights/diagnosticSettings",
+                      "apiVersion": "2021-05-01-preview",
+                      "scope": "[resourceId('Microsoft.Storage/storageAccounts/blobServices', parameters('accountName'), 'default')]",
+                      "name": "diag-lhds-blob",
+                      "properties": {
+                        "workspaceId": "[parameters('workspaceId')]",
+                        "logs": [
+                          {
+                            "category": "StorageRead",
+                            "enabled": true
+                          },
+                          {
+                            "category": "StorageWrite",
+                            "enabled": true
+                          },
+                          {
+                            "category": "StorageDelete",
+                            "enabled": true
+                          }
+                        ],
+                        "metrics": [
+                          {
+                            "category": "Transaction",
+                            "enabled": true
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Storage/storageAccounts/blobServices', parameters('accountName'), 'default')]"
+                      ]
+                    }
+                  ],
+                  "outputs": {
+                    "accountId": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Storage/storageAccounts', parameters('accountName'))]"
+                    },
+                    "accountName": {
+                      "type": "string",
+                      "value": "[parameters('accountName')]"
+                    },
+                    "blobEndpoint": {
+                      "type": "string",
+                      "value": "[reference(resourceId('Microsoft.Storage/storageAccounts', parameters('accountName')), '2024-01-01').primaryEndpoints.blob]"
+                    },
+                    "keyName": {
+                      "type": "string",
+                      "value": "[parameters('keyName')]"
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Resources/deployments', format('lhds-{0}-storage-audit', parameters('stampName')))]",
+                "[resourceId('Microsoft.Resources/deployments', format('lhds-{0}-keyvault', parameters('stampName')))]",
+                "[resourceId('Microsoft.OperationalInsights/workspaces', format('log-lhds-{0}', parameters('stampName')))]",
+                "[resourceId('Microsoft.Resources/deployments', format('lhds-{0}-network', parameters('stampName')))]"
+              ]
+            },
+            {
+              "condition": "[parameters('postgresQuotaAvailable')]",
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "[format('lhds-{0}-postgres', parameters('stampName'))]",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "stampName": {
+                    "value": "[parameters('stampName')]"
+                  },
+                  "skuName": {
+                    "value": "[variables('pgSkuName')]"
+                  },
+                  "tier": {
+                    "value": "[variables('p').pgTier]"
+                  },
+                  "storageSizeGB": {
+                    "value": "[variables('p').pgStorageGB]"
+                  },
+                  "highAvailabilityMode": {
+                    "value": "[variables('pgHa')]"
+                  },
+                  "replicaCount": {
+                    "value": "[variables('p').pgReplicas]"
+                  },
+                  "delegatedSubnetId": {
+                    "value": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-network', parameters('stampName'))), '2025-04-01').outputs.postgresSubnetId.value]"
+                  },
+                  "vnetId": {
+                    "value": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-network', parameters('stampName'))), '2025-04-01').outputs.vnetId.value]"
+                  },
+                  "privateDnsZoneName": {
+                    "value": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-network', parameters('stampName'))), '2025-04-01').outputs.postgresZoneName.value]"
+                  },
+                  "extraDnsLinkVnetIds": {
+                    "value": "[parameters('extraDnsLinkVnetIds')]"
+                  },
+                  "cmkIdentityId": {
+                    "value": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-keyvault', parameters('stampName'))), '2025-04-01').outputs.cmkIdentityId.value]"
+                  },
+                  "cmkKeyUri": {
+                    "value": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-keyvault', parameters('stampName'))), '2025-04-01').outputs.keyUris.value['stamp-postgres']]"
+                  },
+                  "tenantId": {
+                    "value": "[parameters('tenantId')]"
+                  },
+                  "adminEntraGroupId": {
+                    "value": "[parameters('adminEntraGroupId')]"
+                  },
+                  "workspaceId": {
+                    "value": "[resourceId('Microsoft.OperationalInsights/workspaces', format('log-lhds-{0}', parameters('stampName')))]"
+                  },
+                  "tags": {
+                    "value": "[variables('stampTags')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "1901044155388579683"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Region of the server. Gov default is usgovarizona (zone-redundant HA, W0-RECEIPT.md s4.1b); usgovvirginia is offer-restricted for the measured subscription."
+                      }
+                    },
+                    "stampName": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Stamp short name; folded into resource names."
+                      }
+                    },
+                    "skuName": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Server SKU name, for example Standard_D2ds_v5 (dev), Standard_E8ds_v5 (class S), Standard_E8ds_v4 (class S in Gov)."
+                      }
+                    },
+                    "tier": {
+                      "type": "string",
+                      "allowedValues": [
+                        "GeneralPurpose",
+                        "MemoryOptimized"
+                      ],
+                      "metadata": {
+                        "description": "Compute tier matching the SKU family."
+                      }
+                    },
+                    "postgresVersion": {
+                      "type": "string",
+                      "defaultValue": "16",
+                      "allowedValues": [
+                        "17",
+                        "16",
+                        "15",
+                        "14"
+                      ],
+                      "metadata": {
+                        "description": "PostgreSQL major version."
+                      }
+                    },
+                    "storageSizeGB": {
+                      "type": "int",
+                      "allowedValues": [
+                        32,
+                        64,
+                        128,
+                        256,
+                        512,
+                        1024,
+                        2048,
+                        4096,
+                        8192,
+                        16384,
+                        32767
+                      ],
+                      "metadata": {
+                        "description": "Storage in GB. Premium SSD ceiling is 32767 (32 TiB)."
+                      }
+                    },
+                    "highAvailabilityMode": {
+                      "type": "string",
+                      "defaultValue": "Disabled",
+                      "allowedValues": [
+                        "Disabled",
+                        "SameZone",
+                        "ZoneRedundant"
+                      ],
+                      "metadata": {
+                        "description": "High availability. ZoneRedundant needs a region that offers it (usgovarizona does; usgovtexas does not)."
+                      }
+                    },
+                    "replicaCount": {
+                      "type": "int",
+                      "defaultValue": 0,
+                      "minValue": 0,
+                      "maxValue": 5,
+                      "metadata": {
+                        "description": "Read replicas to create from the primary (class S 1, M and L 2). They share the delegated subnet and the CMK."
+                      }
+                    },
+                    "backupRetentionDays": {
+                      "type": "int",
+                      "defaultValue": 35,
+                      "minValue": 7,
+                      "maxValue": 35,
+                      "metadata": {
+                        "description": "Backup retention in days."
+                      }
+                    },
+                    "delegatedSubnetId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Delegated subnet for the server."
+                      }
+                    },
+                    "vnetId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Resource id of the stamp VNet; linked to the private DNS zone this module creates."
+                      }
+                    },
+                    "privateDnsZoneName": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Name of the private DNS zone to create. Must end in postgres.database.<cloud suffix>; network.bicep computes it per cloud."
+                      }
+                    },
+                    "extraDnsLinkVnetIds": {
+                      "type": "array",
+                      "defaultValue": [],
+                      "metadata": {
+                        "description": "Additional VNets (for example the hub) linked to the private DNS zone so they resolve the server."
+                      }
+                    },
+                    "cmkIdentityId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Resource id of the CMK user-assigned identity."
+                      }
+                    },
+                    "cmkKeyUri": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Versionless key URI of the PostgreSQL CMK."
+                      }
+                    },
+                    "tenantId": {
+                      "type": "string",
+                      "defaultValue": "[subscription().tenantId]",
+                      "metadata": {
+                        "description": "Entra tenant id for authentication."
+                      }
+                    },
+                    "adminEntraGroupId": {
+                      "type": "string",
+                      "defaultValue": "",
+                      "metadata": {
+                        "description": "Object id of the Entra group set as server administrator. Empty = no administrator is created and the operator adds one."
+                      }
+                    },
+                    "adminEntraGroupName": {
+                      "type": "string",
+                      "defaultValue": "lhds-pg-admins",
+                      "metadata": {
+                        "description": "Display name of the administrator group."
+                      }
+                    },
+                    "extensions": {
+                      "type": "array",
+                      "defaultValue": [
+                        "BTREE_GIN",
+                        "PG_TRGM",
+                        "BTREE_GIST",
+                        "UNACCENT"
+                      ],
+                      "metadata": {
+                        "description": "Extensions allow-listed through azure.extensions. These are what the FHIR/DICOM engines create (BTREE_GIN and PG_TRGM for search, BTREE_GIST for ranges, UNACCENT for name search)."
+                      }
+                    },
+                    "workspaceId": {
+                      "type": "string",
+                      "defaultValue": "",
+                      "metadata": {
+                        "description": "Log Analytics workspace id for diagnostics. Empty skips the diagnostic setting."
+                      }
+                    },
+                    "tags": {
+                      "type": "object",
+                      "defaultValue": {},
+                      "metadata": {
+                        "description": "Tags applied to every resource."
+                      }
+                    }
+                  },
+                  "variables": {
+                    "serverName": "[take(format('psql-lhds-{0}-{1}', parameters('stampName'), uniqueString(resourceGroup().id)), 63)]"
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.Network/privateDnsZones",
+                      "apiVersion": "2024-06-01",
+                      "name": "[parameters('privateDnsZoneName')]",
+                      "location": "global",
+                      "tags": "[parameters('tags')]"
+                    },
+                    {
+                      "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+                      "apiVersion": "2024-06-01",
+                      "name": "[format('{0}/{1}', parameters('privateDnsZoneName'), 'link-stamp')]",
+                      "location": "global",
+                      "tags": "[parameters('tags')]",
+                      "properties": {
+                        "registrationEnabled": false,
+                        "virtualNetwork": {
+                          "id": "[parameters('vnetId')]"
+                        }
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/privateDnsZones', parameters('privateDnsZoneName'))]"
+                      ]
+                    },
+                    {
+                      "copy": {
+                        "name": "extraLinks",
+                        "count": "[length(parameters('extraDnsLinkVnetIds'))]",
+                        "mode": "serial",
+                        "batchSize": 1
+                      },
+                      "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+                      "apiVersion": "2024-06-01",
+                      "name": "[format('{0}/{1}', parameters('privateDnsZoneName'), format('link-{0}', uniqueString(parameters('extraDnsLinkVnetIds')[copyIndex()])))]",
+                      "location": "global",
+                      "tags": "[parameters('tags')]",
+                      "properties": {
+                        "registrationEnabled": false,
+                        "virtualNetwork": {
+                          "id": "[parameters('extraDnsLinkVnetIds')[copyIndex()]]"
+                        }
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/privateDnsZones/virtualNetworkLinks', parameters('privateDnsZoneName'), 'link-stamp')]",
+                        "[resourceId('Microsoft.Network/privateDnsZones', parameters('privateDnsZoneName'))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.DBforPostgreSQL/flexibleServers",
+                      "apiVersion": "2024-08-01",
+                      "name": "[variables('serverName')]",
+                      "location": "[parameters('location')]",
+                      "tags": "[parameters('tags')]",
+                      "sku": {
+                        "name": "[parameters('skuName')]",
+                        "tier": "[parameters('tier')]"
+                      },
+                      "identity": {
+                        "type": "UserAssigned",
+                        "userAssignedIdentities": {
+                          "[format('{0}', parameters('cmkIdentityId'))]": {}
+                        }
+                      },
+                      "properties": {
+                        "version": "[parameters('postgresVersion')]",
+                        "storage": {
+                          "storageSizeGB": "[parameters('storageSizeGB')]",
+                          "autoGrow": "Enabled",
+                          "type": "Premium_LRS"
+                        },
+                        "authConfig": {
+                          "activeDirectoryAuth": "Enabled",
+                          "passwordAuth": "Disabled",
+                          "tenantId": "[parameters('tenantId')]"
+                        },
+                        "network": {
+                          "delegatedSubnetResourceId": "[parameters('delegatedSubnetId')]",
+                          "privateDnsZoneArmResourceId": "[resourceId('Microsoft.Network/privateDnsZones', parameters('privateDnsZoneName'))]",
+                          "publicNetworkAccess": "Disabled"
+                        },
+                        "highAvailability": {
+                          "mode": "[parameters('highAvailabilityMode')]"
+                        },
+                        "backup": {
+                          "backupRetentionDays": "[parameters('backupRetentionDays')]",
+                          "geoRedundantBackup": "Disabled"
+                        },
+                        "dataEncryption": {
+                          "type": "AzureKeyVault",
+                          "primaryKeyURI": "[parameters('cmkKeyUri')]",
+                          "primaryUserAssignedIdentityId": "[parameters('cmkIdentityId')]"
+                        }
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/privateDnsZones/virtualNetworkLinks', parameters('privateDnsZoneName'), 'link-stamp')]",
+                        "[resourceId('Microsoft.Network/privateDnsZones', parameters('privateDnsZoneName'))]"
+                      ]
+                    },
+                    {
+                      "condition": "[not(empty(parameters('adminEntraGroupId')))]",
+                      "type": "Microsoft.DBforPostgreSQL/flexibleServers/administrators",
+                      "apiVersion": "2024-08-01",
+                      "name": "[format('{0}/{1}', variables('serverName'), parameters('adminEntraGroupId'))]",
+                      "properties": {
+                        "principalName": "[parameters('adminEntraGroupName')]",
+                        "principalType": "Group",
+                        "tenantId": "[parameters('tenantId')]"
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('serverName'))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.DBforPostgreSQL/flexibleServers/configurations",
+                      "apiVersion": "2024-08-01",
+                      "name": "[format('{0}/{1}', variables('serverName'), 'azure.extensions')]",
+                      "properties": {
+                        "value": "[join(parameters('extensions'), ',')]",
+                        "source": "user-override"
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers/administrators', variables('serverName'), parameters('adminEntraGroupId'))]",
+                        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('serverName'))]"
+                      ]
+                    },
+                    {
+                      "copy": {
+                        "name": "replicas",
+                        "count": "[length(range(0, parameters('replicaCount')))]",
+                        "mode": "serial",
+                        "batchSize": 1
+                      },
+                      "type": "Microsoft.DBforPostgreSQL/flexibleServers",
+                      "apiVersion": "2024-08-01",
+                      "name": "[take(format('{0}-r{1}', variables('serverName'), add(range(0, parameters('replicaCount'))[copyIndex()], 1)), 63)]",
+                      "location": "[parameters('location')]",
+                      "tags": "[parameters('tags')]",
+                      "sku": {
+                        "name": "[parameters('skuName')]",
+                        "tier": "[parameters('tier')]"
+                      },
+                      "identity": {
+                        "type": "UserAssigned",
+                        "userAssignedIdentities": {
+                          "[format('{0}', parameters('cmkIdentityId'))]": {}
+                        }
+                      },
+                      "properties": {
+                        "createMode": "Replica",
+                        "sourceServerResourceId": "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('serverName'))]",
+                        "network": {
+                          "delegatedSubnetResourceId": "[parameters('delegatedSubnetId')]",
+                          "privateDnsZoneArmResourceId": "[resourceId('Microsoft.Network/privateDnsZones', parameters('privateDnsZoneName'))]",
+                          "publicNetworkAccess": "Disabled"
+                        },
+                        "dataEncryption": {
+                          "type": "AzureKeyVault",
+                          "primaryKeyURI": "[parameters('cmkKeyUri')]",
+                          "primaryUserAssignedIdentityId": "[parameters('cmkIdentityId')]"
+                        }
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers/configurations', variables('serverName'), 'azure.extensions')]",
+                        "[resourceId('Microsoft.Network/privateDnsZones', parameters('privateDnsZoneName'))]",
+                        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('serverName'))]"
+                      ]
+                    },
+                    {
+                      "condition": "[not(empty(parameters('workspaceId')))]",
+                      "type": "Microsoft.Insights/diagnosticSettings",
+                      "apiVersion": "2021-05-01-preview",
+                      "scope": "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('serverName'))]",
+                      "name": "diag-lhds-postgres",
+                      "properties": {
+                        "workspaceId": "[parameters('workspaceId')]",
+                        "logs": [
+                          {
+                            "category": "PostgreSQLLogs",
+                            "enabled": true
+                          },
+                          {
+                            "category": "PostgreSQLFlexSessions",
+                            "enabled": true
+                          },
+                          {
+                            "category": "PostgreSQLFlexQueryStoreRuntime",
+                            "enabled": true
+                          }
+                        ],
+                        "metrics": [
+                          {
+                            "category": "AllMetrics",
+                            "enabled": true
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('serverName'))]"
+                      ]
+                    }
+                  ],
+                  "outputs": {
+                    "serverId": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('serverName'))]"
+                    },
+                    "serverName": {
+                      "type": "string",
+                      "value": "[variables('serverName')]"
+                    },
+                    "fqdn": {
+                      "type": "string",
+                      "value": "[reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('serverName')), '2024-08-01').fullyQualifiedDomainName]"
+                    },
+                    "replicaNames": {
+                      "type": "array",
+                      "copy": {
+                        "count": "[length(range(0, parameters('replicaCount')))]",
+                        "input": "[take(format('{0}-r{1}', variables('serverName'), add(range(0, parameters('replicaCount'))[range(0, parameters('replicaCount'))[copyIndex()]], 1)), 63)]"
+                      }
+                    },
+                    "privateDnsZoneId": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Network/privateDnsZones', parameters('privateDnsZoneName'))]"
+                    },
+                    "extensionsAllowList": {
+                      "type": "string",
+                      "value": "[reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers/configurations', variables('serverName'), 'azure.extensions'), '2024-08-01').value]"
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Resources/deployments', format('lhds-{0}-keyvault', parameters('stampName')))]",
+                "[resourceId('Microsoft.OperationalInsights/workspaces', format('log-lhds-{0}', parameters('stampName')))]",
+                "[resourceId('Microsoft.Resources/deployments', format('lhds-{0}-network', parameters('stampName')))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "[format('lhds-{0}-eventing', parameters('stampName'))]",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "stampName": {
+                    "value": "[parameters('stampName')]"
+                  },
+                  "skuTier": {
+                    "value": "[variables('p').eventHubsTier]"
+                  },
+                  "capacity": {
+                    "value": "[variables('p').eventHubsCapacity]"
+                  },
+                  "peSubnetId": {
+                    "value": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-network', parameters('stampName'))), '2025-04-01').outputs.peSubnetId.value]"
+                  },
+                  "eventHubsZoneId": {
+                    "value": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-network', parameters('stampName'))), '2025-04-01').outputs.privateDnsZoneIds.value.eventhubs]"
+                  },
+                  "cmkIdentityId": {
+                    "value": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-keyvault', parameters('stampName'))), '2025-04-01').outputs.cmkIdentityId.value]"
+                  },
+                  "keyVaultUri": {
+                    "value": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-keyvault', parameters('stampName'))), '2025-04-01').outputs.vaultUri.value]"
+                  },
+                  "keyName": {
+                    "value": "stamp-eventhubs"
+                  },
+                  "workspaceId": {
+                    "value": "[resourceId('Microsoft.OperationalInsights/workspaces', format('log-lhds-{0}', parameters('stampName')))]"
+                  },
+                  "tags": {
+                    "value": "[variables('stampTags')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "11735666830639799623"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Region of the namespace."
+                      }
+                    },
+                    "stampName": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Stamp short name; folded into resource names."
+                      }
+                    },
+                    "skuTier": {
+                      "type": "string",
+                      "defaultValue": "Premium",
+                      "allowedValues": [
+                        "Standard",
+                        "Premium"
+                      ],
+                      "metadata": {
+                        "description": "Namespace tier. Premium for class S/M/L (CMK, zone redundancy, 90 day retention). Standard only for the dev profile."
+                      }
+                    },
+                    "capacity": {
+                      "type": "int",
+                      "defaultValue": 1,
+                      "minValue": 1,
+                      "maxValue": 16,
+                      "metadata": {
+                        "description": "Premium processing units (class S 1, M 2, L 4) or Standard throughput units (dev 1)."
+                      }
+                    },
+                    "eventHubs": {
+                      "type": "array",
+                      "defaultValue": [
+                        {
+                          "name": "lhds-outbox",
+                          "partitionCount": 8,
+                          "retentionDays": 7
+                        },
+                        {
+                          "name": "lhds-changefeed",
+                          "partitionCount": 8,
+                          "retentionDays": 7
+                        }
+                      ],
+                      "metadata": {
+                        "description": "Event hubs to create. Names are stamp-level streams; per-tenant hubs are created by tenant.bicep."
+                      }
+                    },
+                    "peSubnetId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Subnet that hosts the private endpoint."
+                      }
+                    },
+                    "eventHubsZoneId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Resource id of the privatelink.servicebus private DNS zone (Event Hubs uses the Service Bus zone)."
+                      }
+                    },
+                    "cmkIdentityId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Resource id of the CMK user-assigned identity. Used only when skuTier is Premium."
+                      }
+                    },
+                    "keyVaultUri": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Key Vault URI that holds the CMK."
+                      }
+                    },
+                    "keyName": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Name of the CMK in the vault (version-less)."
+                      }
+                    },
+                    "workspaceId": {
+                      "type": "string",
+                      "defaultValue": "",
+                      "metadata": {
+                        "description": "Log Analytics workspace id for diagnostics. Empty skips the diagnostic setting."
+                      }
+                    },
+                    "tags": {
+                      "type": "object",
+                      "defaultValue": {},
+                      "metadata": {
+                        "description": "Tags applied to every resource."
+                      }
+                    }
+                  },
+                  "variables": {
+                    "isPremium": "[equals(parameters('skuTier'), 'Premium')]",
+                    "nsName": "[take(format('evh-lhds-{0}-{1}', parameters('stampName'), uniqueString(resourceGroup().id)), 50)]"
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.EventHub/namespaces",
+                      "apiVersion": "2024-05-01-preview",
+                      "name": "[variables('nsName')]",
+                      "location": "[parameters('location')]",
+                      "tags": "[parameters('tags')]",
+                      "sku": {
+                        "name": "[parameters('skuTier')]",
+                        "tier": "[parameters('skuTier')]",
+                        "capacity": "[parameters('capacity')]"
+                      },
+                      "identity": "[if(variables('isPremium'), createObject('type', 'UserAssigned', 'userAssignedIdentities', createObject(format('{0}', parameters('cmkIdentityId')), createObject())), createObject('type', 'None'))]",
+                      "properties": {
+                        "disableLocalAuth": true,
+                        "minimumTlsVersion": "1.2",
+                        "publicNetworkAccess": "Disabled",
+                        "zoneRedundant": "[variables('isPremium')]",
+                        "encryption": "[if(variables('isPremium'), createObject('keySource', 'Microsoft.KeyVault', 'requireInfrastructureEncryption', true(), 'keyVaultProperties', createArray(createObject('keyName', parameters('keyName'), 'keyVaultUri', parameters('keyVaultUri'), 'identity', createObject('userAssignedIdentity', parameters('cmkIdentityId'))))), null())]"
+                      }
+                    },
+                    {
+                      "type": "Microsoft.EventHub/namespaces/networkRuleSets",
+                      "apiVersion": "2024-05-01-preview",
+                      "name": "[format('{0}/{1}', variables('nsName'), 'default')]",
+                      "properties": {
+                        "publicNetworkAccess": "Disabled",
+                        "defaultAction": "Deny",
+                        "trustedServiceAccessEnabled": false
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.EventHub/namespaces', variables('nsName'))]"
+                      ]
+                    },
+                    {
+                      "copy": {
+                        "name": "hubs",
+                        "count": "[length(parameters('eventHubs'))]"
+                      },
+                      "type": "Microsoft.EventHub/namespaces/eventhubs",
+                      "apiVersion": "2024-05-01-preview",
+                      "name": "[format('{0}/{1}', variables('nsName'), parameters('eventHubs')[copyIndex()].name)]",
+                      "properties": {
+                        "partitionCount": "[parameters('eventHubs')[copyIndex()].partitionCount]",
+                        "retentionDescription": "[if(variables('isPremium'), createObject('cleanupPolicy', 'Delete', 'retentionTimeInHours', mul(parameters('eventHubs')[copyIndex()].retentionDays, 24)), null())]",
+                        "messageRetentionInDays": "[if(variables('isPremium'), null(), min(parameters('eventHubs')[copyIndex()].retentionDays, 7))]"
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.EventHub/namespaces/networkRuleSets', variables('nsName'), 'default')]",
+                        "[resourceId('Microsoft.EventHub/namespaces', variables('nsName'))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Network/privateEndpoints",
+                      "apiVersion": "2024-05-01",
+                      "name": "[format('pe-{0}', variables('nsName'))]",
+                      "location": "[parameters('location')]",
+                      "tags": "[parameters('tags')]",
+                      "properties": {
+                        "subnet": {
+                          "id": "[parameters('peSubnetId')]"
+                        },
+                        "privateLinkServiceConnections": [
+                          {
+                            "name": "eventhubs-link",
+                            "properties": {
+                              "privateLinkServiceId": "[resourceId('Microsoft.EventHub/namespaces', variables('nsName'))]",
+                              "groupIds": [
+                                "namespace"
+                              ]
+                            }
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.EventHub/namespaces/networkRuleSets', variables('nsName'), 'default')]",
+                        "[resourceId('Microsoft.EventHub/namespaces', variables('nsName'))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+                      "apiVersion": "2024-05-01",
+                      "name": "[format('{0}/{1}', format('pe-{0}', variables('nsName')), 'default')]",
+                      "properties": {
+                        "privateDnsZoneConfigs": [
+                          {
+                            "name": "eventhubs",
+                            "properties": {
+                              "privateDnsZoneId": "[parameters('eventHubsZoneId')]"
+                            }
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/privateEndpoints', format('pe-{0}', variables('nsName')))]"
+                      ]
+                    },
+                    {
+                      "condition": "[not(empty(parameters('workspaceId')))]",
+                      "type": "Microsoft.Insights/diagnosticSettings",
+                      "apiVersion": "2021-05-01-preview",
+                      "scope": "[resourceId('Microsoft.EventHub/namespaces', variables('nsName'))]",
+                      "name": "diag-lhds-eventhubs",
+                      "properties": {
+                        "workspaceId": "[parameters('workspaceId')]",
+                        "logs": [
+                          {
+                            "categoryGroup": "allLogs",
+                            "enabled": true
+                          }
+                        ],
+                        "metrics": [
+                          {
+                            "category": "AllMetrics",
+                            "enabled": true
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.EventHub/namespaces', variables('nsName'))]"
+                      ]
+                    }
+                  ],
+                  "outputs": {
+                    "namespaceId": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.EventHub/namespaces', variables('nsName'))]"
+                    },
+                    "namespaceName": {
+                      "type": "string",
+                      "value": "[variables('nsName')]"
+                    },
+                    "serviceBusEndpoint": {
+                      "type": "string",
+                      "value": "[reference(resourceId('Microsoft.EventHub/namespaces', variables('nsName')), '2024-05-01-preview').serviceBusEndpoint]"
+                    },
+                    "eventHubNames": {
+                      "type": "array",
+                      "copy": {
+                        "count": "[length(parameters('eventHubs'))]",
+                        "input": "[parameters('eventHubs')[copyIndex()].name]"
+                      }
+                    },
+                    "customerManagedKey": {
+                      "type": "bool",
+                      "value": "[variables('isPremium')]"
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Resources/deployments', format('lhds-{0}-storage-export', parameters('stampName')))]",
+                "[resourceId('Microsoft.Resources/deployments', format('lhds-{0}-keyvault', parameters('stampName')))]",
+                "[resourceId('Microsoft.OperationalInsights/workspaces', format('log-lhds-{0}', parameters('stampName')))]",
+                "[resourceId('Microsoft.Resources/deployments', format('lhds-{0}-network', parameters('stampName')))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "[format('lhds-{0}-aks', parameters('stampName'))]",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "stampName": {
+                    "value": "[parameters('stampName')]"
+                  },
+                  "boundary": {
+                    "value": "[parameters('boundary')]"
+                  },
+                  "kubernetesVersion": {
+                    "value": "[parameters('kubernetesVersion')]"
+                  },
+                  "aksSubnetId": {
+                    "value": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-network', parameters('stampName'))), '2025-04-01').outputs.aksSubnetId.value]"
+                  },
+                  "vnetName": {
+                    "value": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-network', parameters('stampName'))), '2025-04-01').outputs.vnetName.value]"
+                  },
+                  "routeTableId": {
+                    "value": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-network', parameters('stampName'))), '2025-04-01').outputs.routeTableId.value]"
+                  },
+                  "outboundType": "[if(equals(variables('egressMode'), 'firewall'), createObject('value', 'userDefinedRouting'), createObject('value', 'loadBalancer'))]",
+                  "useAvailabilityZones": {
+                    "value": "[parameters('useAvailabilityZones')]"
+                  },
+                  "systemPool": {
+                    "value": "[variables('p').aksSystem]"
+                  },
+                  "enginesPool": {
+                    "value": "[variables('p').aksEngines]"
+                  },
+                  "egressPool": {
+                    "value": "[variables('p').aksEgress]"
+                  },
+                  "isolateSystemPool": {
+                    "value": "[variables('p').isolateSystemPool]"
+                  },
+                  "adminGroupObjectIds": "[if(empty(parameters('adminEntraGroupId')), createObject('value', createArray()), createObject('value', createArray(parameters('adminEntraGroupId'))))]",
+                  "workspaceId": {
+                    "value": "[resourceId('Microsoft.OperationalInsights/workspaces', format('log-lhds-{0}', parameters('stampName')))]"
+                  },
+                  "tags": {
+                    "value": "[variables('stampTags')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "8880115123316485721"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Region of the cluster."
+                      }
+                    },
+                    "stampName": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Stamp short name; folded into resource names."
+                      }
+                    },
+                    "boundary": {
+                      "type": "string",
+                      "allowedValues": [
+                        "Commercial",
+                        "GCC",
+                        "GCC-High",
+                        "IL5"
+                      ],
+                      "metadata": {
+                        "description": "Cloud boundary. KEDA is enabled as the AKS add-on outside Azure Government only; Gov availability of the add-on is unconfirmed (ADR-009), so Gov installs KEDA by Helm."
+                      }
+                    },
+                    "kubernetesVersion": {
+                      "type": "string",
+                      "defaultValue": "1.34",
+                      "metadata": {
+                        "description": "Kubernetes version. W0 read 1.31 through 1.37 as offered in all three Gov regions."
+                      }
+                    },
+                    "aksSubnetId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Node subnet id."
+                      }
+                    },
+                    "vnetName": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Name of the stamp VNet in this resource group. The cluster identity is granted Network Contributor on it."
+                      }
+                    },
+                    "routeTableId": {
+                      "type": "string",
+                      "defaultValue": "",
+                      "metadata": {
+                        "description": "Route table id when egress goes through the firewall; empty otherwise. The cluster identity needs Network Contributor on it."
+                      }
+                    },
+                    "outboundType": {
+                      "type": "string",
+                      "defaultValue": "userDefinedRouting",
+                      "allowedValues": [
+                        "loadBalancer",
+                        "userDefinedRouting"
+                      ],
+                      "metadata": {
+                        "description": "Outbound model. userDefinedRouting requires the route table from network.bicep."
+                      }
+                    },
+                    "podCidr": {
+                      "type": "string",
+                      "defaultValue": "10.244.0.0/16",
+                      "metadata": {
+                        "description": "Pod CIDR for Azure CNI overlay. Must not overlap the VNet or service CIDR."
+                      }
+                    },
+                    "serviceCidr": {
+                      "type": "string",
+                      "defaultValue": "10.250.0.0/16",
+                      "metadata": {
+                        "description": "Service CIDR."
+                      }
+                    },
+                    "dnsServiceIp": {
+                      "type": "string",
+                      "defaultValue": "10.250.0.10",
+                      "metadata": {
+                        "description": "DNS service IP inside the service CIDR."
+                      }
+                    },
+                    "useAvailabilityZones": {
+                      "type": "bool",
+                      "defaultValue": true,
+                      "metadata": {
+                        "description": "Spread node pools across availability zones. Set false for a region without zones."
+                      }
+                    },
+                    "systemPool": {
+                      "type": "object",
+                      "defaultValue": {
+                        "vmSize": "Standard_D4s_v5",
+                        "count": 3,
+                        "minCount": 3,
+                        "maxCount": 5
+                      },
+                      "metadata": {
+                        "description": "System pool shape."
+                      }
+                    },
+                    "enginesPool": {
+                      "type": "object",
+                      "defaultValue": {
+                        "vmSize": "Standard_D8s_v5",
+                        "count": 6,
+                        "minCount": 6,
+                        "maxCount": 12
+                      },
+                      "metadata": {
+                        "description": "Engines pool shape. Set count to 0 and maxCount to 0 to omit the pool (dev profile)."
+                      }
+                    },
+                    "egressPool": {
+                      "type": "object",
+                      "defaultValue": {
+                        "vmSize": "Standard_D4s_v5",
+                        "count": 0,
+                        "minCount": 0,
+                        "maxCount": 3
+                      },
+                      "metadata": {
+                        "description": "Egress pool shape. Scales from zero."
+                      }
+                    },
+                    "isolateSystemPool": {
+                      "type": "bool",
+                      "defaultValue": true,
+                      "metadata": {
+                        "description": "Taint the system pool with CriticalAddonsOnly so only add-ons schedule on it. False in the dev profile, where the single node must also run the engines."
+                      }
+                    },
+                    "adminGroupObjectIds": {
+                      "type": "array",
+                      "defaultValue": [],
+                      "metadata": {
+                        "description": "Object ids of Entra groups granted cluster-admin through Azure RBAC for Kubernetes. Empty = none; the control plane grants roles after creation."
+                      }
+                    },
+                    "workspaceId": {
+                      "type": "string",
+                      "defaultValue": "",
+                      "metadata": {
+                        "description": "Log Analytics workspace resource id (container insights + Defender). Empty = both off."
+                      }
+                    },
+                    "tags": {
+                      "type": "object",
+                      "defaultValue": {},
+                      "metadata": {
+                        "description": "Tags applied to every resource."
+                      }
+                    }
+                  },
+                  "variables": {
+                    "isGov": "[or(equals(parameters('boundary'), 'GCC-High'), equals(parameters('boundary'), 'IL5'))]",
+                    "zones": "[if(parameters('useAvailabilityZones'), createArray('1', '2', '3'), null())]",
+                    "hasEngines": "[greater(parameters('enginesPool').maxCount, 0)]",
+                    "routeTableName": "[if(empty(parameters('routeTableId')), 'unused', last(split(parameters('routeTableId'), '/')))]",
+                    "systemPoolProfile": {
+                      "name": "system",
+                      "mode": "System",
+                      "osType": "Linux",
+                      "osSKU": "AzureLinux",
+                      "vmSize": "[parameters('systemPool').vmSize]",
+                      "count": "[parameters('systemPool').count]",
+                      "minCount": "[parameters('systemPool').minCount]",
+                      "maxCount": "[parameters('systemPool').maxCount]",
+                      "enableAutoScaling": true,
+                      "vnetSubnetID": "[parameters('aksSubnetId')]",
+                      "availabilityZones": "[variables('zones')]",
+                      "nodeTaints": "[if(parameters('isolateSystemPool'), createArray('CriticalAddonsOnly=true:NoSchedule'), createArray())]"
+                    },
+                    "enginesPoolProfile": [
+                      {
+                        "name": "engines",
+                        "mode": "User",
+                        "osType": "Linux",
+                        "osSKU": "AzureLinux",
+                        "vmSize": "[parameters('enginesPool').vmSize]",
+                        "count": "[parameters('enginesPool').count]",
+                        "minCount": "[parameters('enginesPool').minCount]",
+                        "maxCount": "[parameters('enginesPool').maxCount]",
+                        "enableAutoScaling": true,
+                        "vnetSubnetID": "[parameters('aksSubnetId')]",
+                        "availabilityZones": "[variables('zones')]",
+                        "nodeLabels": {
+                          "workload": "engines"
+                        }
+                      }
+                    ],
+                    "egressPoolProfile": {
+                      "name": "egress",
+                      "mode": "User",
+                      "osType": "Linux",
+                      "osSKU": "AzureLinux",
+                      "vmSize": "[parameters('egressPool').vmSize]",
+                      "count": "[parameters('egressPool').count]",
+                      "minCount": "[parameters('egressPool').minCount]",
+                      "maxCount": "[parameters('egressPool').maxCount]",
+                      "enableAutoScaling": true,
+                      "vnetSubnetID": "[parameters('aksSubnetId')]",
+                      "availabilityZones": "[variables('zones')]",
+                      "nodeLabels": {
+                        "workload": "egress"
+                      },
+                      "nodeTaints": [
+                        "workload=egress:NoSchedule"
+                      ]
+                    }
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+                      "apiVersion": "2023-01-31",
+                      "name": "[format('id-lhds-{0}-aks', parameters('stampName'))]",
+                      "location": "[parameters('location')]",
+                      "tags": "[parameters('tags')]"
+                    },
+                    {
+                      "type": "Microsoft.Authorization/roleAssignments",
+                      "apiVersion": "2022-04-01",
+                      "scope": "[resourceId('Microsoft.Network/virtualNetworks', parameters('vnetName'))]",
+                      "name": "[guid(resourceId('Microsoft.Network/virtualNetworks', parameters('vnetName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-lhds-{0}-aks', parameters('stampName'))), '4d97b98b-1d4f-4787-a291-c67834d212e7')]",
+                      "properties": {
+                        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4d97b98b-1d4f-4787-a291-c67834d212e7')]",
+                        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-lhds-{0}-aks', parameters('stampName'))), '2023-01-31').principalId]",
+                        "principalType": "ServicePrincipal"
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-lhds-{0}-aks', parameters('stampName')))]"
+                      ]
+                    },
+                    {
+                      "condition": "[not(empty(parameters('routeTableId')))]",
+                      "type": "Microsoft.Authorization/roleAssignments",
+                      "apiVersion": "2022-04-01",
+                      "scope": "[resourceId('Microsoft.Network/routeTables', variables('routeTableName'))]",
+                      "name": "[guid(parameters('routeTableId'), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-lhds-{0}-aks', parameters('stampName'))), '4d97b98b-1d4f-4787-a291-c67834d212e7')]",
+                      "properties": {
+                        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4d97b98b-1d4f-4787-a291-c67834d212e7')]",
+                        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-lhds-{0}-aks', parameters('stampName'))), '2023-01-31').principalId]",
+                        "principalType": "ServicePrincipal"
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-lhds-{0}-aks', parameters('stampName')))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.ContainerService/managedClusters",
+                      "apiVersion": "2025-04-01",
+                      "name": "[format('aks-lhds-{0}', parameters('stampName'))]",
+                      "location": "[parameters('location')]",
+                      "tags": "[parameters('tags')]",
+                      "identity": {
+                        "type": "UserAssigned",
+                        "userAssignedIdentities": {
+                          "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-lhds-{0}-aks', parameters('stampName'))))]": {}
+                        }
+                      },
+                      "sku": {
+                        "name": "Base",
+                        "tier": "Standard"
+                      },
+                      "properties": {
+                        "dnsPrefix": "[format('lhds-{0}', parameters('stampName'))]",
+                        "kubernetesVersion": "[parameters('kubernetesVersion')]",
+                        "enableRBAC": true,
+                        "disableLocalAccounts": true,
+                        "aadProfile": {
+                          "managed": true,
+                          "enableAzureRBAC": true,
+                          "adminGroupObjectIDs": "[parameters('adminGroupObjectIds')]"
+                        },
+                        "apiServerAccessProfile": {
+                          "enablePrivateCluster": true,
+                          "privateDNSZone": "system",
+                          "enablePrivateClusterPublicFQDN": false
+                        },
+                        "agentPoolProfiles": "[concat(createArray(variables('systemPoolProfile')), if(variables('hasEngines'), variables('enginesPoolProfile'), createArray()), createArray(variables('egressPoolProfile')))]",
+                        "networkProfile": {
+                          "networkPlugin": "azure",
+                          "networkPluginMode": "overlay",
+                          "networkPolicy": "cilium",
+                          "networkDataplane": "cilium",
+                          "loadBalancerSku": "standard",
+                          "outboundType": "[parameters('outboundType')]",
+                          "podCidr": "[parameters('podCidr')]",
+                          "serviceCidr": "[parameters('serviceCidr')]",
+                          "dnsServiceIP": "[parameters('dnsServiceIp')]"
+                        },
+                        "autoUpgradeProfile": {
+                          "upgradeChannel": "patch",
+                          "nodeOSUpgradeChannel": "NodeImage"
+                        },
+                        "oidcIssuerProfile": {
+                          "enabled": true
+                        },
+                        "securityProfile": {
+                          "workloadIdentity": {
+                            "enabled": true
+                          },
+                          "imageCleaner": {
+                            "enabled": true,
+                            "intervalHours": 24
+                          },
+                          "defender": "[if(empty(parameters('workspaceId')), null(), createObject('logAnalyticsWorkspaceResourceId', parameters('workspaceId'), 'securityMonitoring', createObject('enabled', true())))]"
+                        },
+                        "workloadAutoScalerProfile": {
+                          "keda": {
+                            "enabled": "[not(variables('isGov'))]"
+                          }
+                        },
+                        "azureMonitorProfile": {
+                          "metrics": {
+                            "enabled": true
+                          }
+                        },
+                        "addonProfiles": "[union(createObject('azurepolicy', createObject('enabled', true())), if(empty(parameters('workspaceId')), createObject(), createObject('omsagent', createObject('enabled', true(), 'config', createObject('logAnalyticsWorkspaceResourceID', parameters('workspaceId'))))))]"
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-lhds-{0}-aks', parameters('stampName')))]",
+                        "[extensionResourceId(resourceId('Microsoft.Network/routeTables', variables('routeTableName')), 'Microsoft.Authorization/roleAssignments', guid(parameters('routeTableId'), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-lhds-{0}-aks', parameters('stampName'))), '4d97b98b-1d4f-4787-a291-c67834d212e7'))]",
+                        "[extensionResourceId(resourceId('Microsoft.Network/virtualNetworks', parameters('vnetName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.Network/virtualNetworks', parameters('vnetName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-lhds-{0}-aks', parameters('stampName'))), '4d97b98b-1d4f-4787-a291-c67834d212e7'))]"
+                      ]
+                    }
+                  ],
+                  "outputs": {
+                    "clusterId": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.ContainerService/managedClusters', format('aks-lhds-{0}', parameters('stampName')))]"
+                    },
+                    "clusterName": {
+                      "type": "string",
+                      "value": "[format('aks-lhds-{0}', parameters('stampName'))]"
+                    },
+                    "oidcIssuerUrl": {
+                      "type": "string",
+                      "value": "[reference(resourceId('Microsoft.ContainerService/managedClusters', format('aks-lhds-{0}', parameters('stampName'))), '2025-04-01').oidcIssuerProfile.issuerURL]"
+                    },
+                    "clusterIdentityPrincipalId": {
+                      "type": "string",
+                      "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-lhds-{0}-aks', parameters('stampName'))), '2023-01-31').principalId]"
+                    },
+                    "kubeletIdentityObjectId": {
+                      "type": "string",
+                      "value": "[reference(resourceId('Microsoft.ContainerService/managedClusters', format('aks-lhds-{0}', parameters('stampName'))), '2025-04-01').identityProfile.kubeletidentity.objectId]"
+                    },
+                    "kedaAddon": {
+                      "type": "bool",
+                      "value": "[not(variables('isGov'))]"
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.OperationalInsights/workspaces', format('log-lhds-{0}', parameters('stampName')))]",
+                "[resourceId('Microsoft.Resources/deployments', format('lhds-{0}-network', parameters('stampName')))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "[format('lhds-{0}-ingress', parameters('stampName'))]",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "stampName": {
+                    "value": "[parameters('stampName')]"
+                  },
+                  "agwSubnetId": {
+                    "value": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-network', parameters('stampName'))), '2025-04-01').outputs.agwSubnetId.value]"
+                  },
+                  "backendIp": {
+                    "value": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-network', parameters('stampName'))), '2025-04-01').outputs.ingressIlbIp.value]"
+                  },
+                  "tlsCertificateSecretUri": {
+                    "value": "[parameters('tlsCertificateSecretUri')]"
+                  },
+                  "keyVaultId": {
+                    "value": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-keyvault', parameters('stampName'))), '2025-04-01').outputs.vaultId.value]"
+                  },
+                  "minCapacity": {
+                    "value": "[variables('p').agwMin]"
+                  },
+                  "maxCapacity": {
+                    "value": "[variables('p').agwMax]"
+                  },
+                  "useAvailabilityZones": {
+                    "value": "[parameters('useAvailabilityZones')]"
+                  },
+                  "workspaceId": {
+                    "value": "[resourceId('Microsoft.OperationalInsights/workspaces', format('log-lhds-{0}', parameters('stampName')))]"
+                  },
+                  "tags": {
+                    "value": "[variables('stampTags')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "1991084655703178471"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Region of the gateway."
+                      }
+                    },
+                    "stampName": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Stamp short name; folded into resource names."
+                      }
+                    },
+                    "agwSubnetId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Gateway subnet id (snet-agw)."
+                      }
+                    },
+                    "backendIp": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Fixed private address of the in-cluster ingress controller internal load balancer (network.bicep output ingressIlbIp). The ingress controller Service must request this address."
+                      }
+                    },
+                    "backendHostName": {
+                      "type": "string",
+                      "defaultValue": "lhds.internal",
+                      "metadata": {
+                        "description": "Host name the in-cluster ingress routes on and the gateway sends as Host to the backend."
+                      }
+                    },
+                    "tlsCertificateSecretUri": {
+                      "type": "string",
+                      "defaultValue": "",
+                      "metadata": {
+                        "description": "Version-less Key Vault secret URI of the TLS certificate (https://<vault>/secrets/<name>). Empty = no TLS listener yet; port 80 only redirects."
+                      }
+                    },
+                    "keyVaultId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Resource id of the stamp Key Vault; the gateway identity is granted Key Vault Secrets User on it."
+                      }
+                    },
+                    "minCapacity": {
+                      "type": "int",
+                      "defaultValue": 1,
+                      "minValue": 0,
+                      "maxValue": 125,
+                      "metadata": {
+                        "description": "Autoscale minimum capacity units."
+                      }
+                    },
+                    "maxCapacity": {
+                      "type": "int",
+                      "defaultValue": 4,
+                      "minValue": 2,
+                      "maxValue": 125,
+                      "metadata": {
+                        "description": "Autoscale maximum capacity units."
+                      }
+                    },
+                    "useAvailabilityZones": {
+                      "type": "bool",
+                      "defaultValue": true,
+                      "metadata": {
+                        "description": "Spread the gateway across availability zones. Set false for a region without zones."
+                      }
+                    },
+                    "requestTimeoutSeconds": {
+                      "type": "int",
+                      "defaultValue": 300,
+                      "minValue": 1,
+                      "maxValue": 86400,
+                      "metadata": {
+                        "description": "Backend request timeout in seconds. Large DICOM STOW uploads and bulk reads need a long timeout; W1-6 tunes it per route."
+                      }
+                    },
+                    "workspaceId": {
+                      "type": "string",
+                      "defaultValue": "",
+                      "metadata": {
+                        "description": "Log Analytics workspace id for diagnostics. Empty skips the diagnostic setting."
+                      }
+                    },
+                    "tags": {
+                      "type": "object",
+                      "defaultValue": {},
+                      "metadata": {
+                        "description": "Tags applied to every resource."
+                      }
+                    }
+                  },
+                  "variables": {
+                    "gwName": "[format('agw-lhds-{0}', parameters('stampName'))]",
+                    "hasTls": "[not(empty(parameters('tlsCertificateSecretUri')))]",
+                    "zones": "[if(parameters('useAvailabilityZones'), createArray('1', '2', '3'), null())]",
+                    "secretsUserRoleId": "4633458b-17de-408a-b874-0445c86b69e6",
+                    "feName": "fe-public",
+                    "gwId": "[resourceId('Microsoft.Network/applicationGateways', variables('gwName'))]",
+                    "sslCertificates": "[if(variables('hasTls'), createArray(createObject('name', 'stamp-tls', 'properties', createObject('keyVaultSecretId', parameters('tlsCertificateSecretUri')))), createArray())]",
+                    "frontendPorts": "[concat(createArray(createObject('name', 'port80', 'properties', createObject('port', 80))), if(variables('hasTls'), createArray(createObject('name', 'port443', 'properties', createObject('port', 443))), createArray()))]",
+                    "httpListeners": "[concat(createArray(createObject('name', 'listener-http', 'properties', createObject('frontendIPConfiguration', createObject('id', format('{0}/frontendIPConfigurations/{1}', variables('gwId'), variables('feName'))), 'frontendPort', createObject('id', format('{0}/frontendPorts/port80', variables('gwId'))), 'protocol', 'Http'))), if(variables('hasTls'), createArray(createObject('name', 'listener-https', 'properties', createObject('frontendIPConfiguration', createObject('id', format('{0}/frontendIPConfigurations/{1}', variables('gwId'), variables('feName'))), 'frontendPort', createObject('id', format('{0}/frontendPorts/port443', variables('gwId'))), 'protocol', 'Https', 'sslCertificate', createObject('id', format('{0}/sslCertificates/stamp-tls', variables('gwId'))), 'firewallPolicy', createObject('id', resourceId('Microsoft.Network/ApplicationGatewayWebApplicationFirewallPolicies', format('wafpol-lhds-{0}', parameters('stampName'))))))), createArray()))]",
+                    "routingRules": "[concat(createArray(createObject('name', 'rule-http-redirect', 'properties', createObject('priority', 100, 'ruleType', 'Basic', 'httpListener', createObject('id', format('{0}/httpListeners/listener-http', variables('gwId'))), 'redirectConfiguration', createObject('id', format('{0}/redirectConfigurations/http-to-https', variables('gwId')))))), if(variables('hasTls'), createArray(createObject('name', 'rule-https-backend', 'properties', createObject('priority', 110, 'ruleType', 'Basic', 'httpListener', createObject('id', format('{0}/httpListeners/listener-https', variables('gwId'))), 'backendAddressPool', createObject('id', format('{0}/backendAddressPools/ingress-ilb', variables('gwId'))), 'backendHttpSettings', createObject('id', format('{0}/backendHttpSettingsCollection/ingress-http', variables('gwId')))))), createArray()))]"
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+                      "apiVersion": "2023-01-31",
+                      "name": "[format('id-lhds-{0}-agw', parameters('stampName'))]",
+                      "location": "[parameters('location')]",
+                      "tags": "[parameters('tags')]"
+                    },
+                    {
+                      "type": "Microsoft.Authorization/roleAssignments",
+                      "apiVersion": "2022-04-01",
+                      "scope": "[resourceId('Microsoft.KeyVault/vaults', last(split(parameters('keyVaultId'), '/')))]",
+                      "name": "[guid(resourceId('Microsoft.KeyVault/vaults', last(split(parameters('keyVaultId'), '/'))), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-lhds-{0}-agw', parameters('stampName'))), variables('secretsUserRoleId'))]",
+                      "properties": {
+                        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('secretsUserRoleId'))]",
+                        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-lhds-{0}-agw', parameters('stampName'))), '2023-01-31').principalId]",
+                        "principalType": "ServicePrincipal",
+                        "description": "LHDS ingress gateway: read the TLS certificate secret."
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-lhds-{0}-agw', parameters('stampName')))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Network/ApplicationGatewayWebApplicationFirewallPolicies",
+                      "apiVersion": "2024-05-01",
+                      "name": "[format('wafpol-lhds-{0}', parameters('stampName'))]",
+                      "location": "[parameters('location')]",
+                      "tags": "[parameters('tags')]",
+                      "properties": {
+                        "policySettings": {
+                          "mode": "Prevention",
+                          "state": "Enabled",
+                          "requestBodyCheck": true,
+                          "maxRequestBodySizeInKb": 128,
+                          "fileUploadLimitInMb": 100
+                        },
+                        "managedRules": {
+                          "managedRuleSets": [
+                            {
+                              "ruleSetType": "OWASP",
+                              "ruleSetVersion": "3.2"
+                            },
+                            {
+                              "ruleSetType": "Microsoft_BotManagerRuleSet",
+                              "ruleSetVersion": "1.0"
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "type": "Microsoft.Network/publicIPAddresses",
+                      "apiVersion": "2024-05-01",
+                      "name": "[format('pip-{0}', variables('gwName'))]",
+                      "location": "[parameters('location')]",
+                      "tags": "[parameters('tags')]",
+                      "sku": {
+                        "name": "Standard"
+                      },
+                      "zones": "[variables('zones')]",
+                      "properties": {
+                        "publicIPAllocationMethod": "Static",
+                        "publicIPAddressVersion": "IPv4",
+                        "dnsSettings": {
+                          "domainNameLabel": "[take(format('lhds-{0}-{1}', parameters('stampName'), uniqueString(resourceGroup().id)), 63)]"
+                        }
+                      }
+                    },
+                    {
+                      "type": "Microsoft.Network/applicationGateways",
+                      "apiVersion": "2024-05-01",
+                      "name": "[variables('gwName')]",
+                      "location": "[parameters('location')]",
+                      "tags": "[parameters('tags')]",
+                      "zones": "[variables('zones')]",
+                      "identity": {
+                        "type": "UserAssigned",
+                        "userAssignedIdentities": {
+                          "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-lhds-{0}-agw', parameters('stampName'))))]": {}
+                        }
+                      },
+                      "properties": {
+                        "sku": {
+                          "name": "WAF_v2",
+                          "tier": "WAF_v2"
+                        },
+                        "autoscaleConfiguration": {
+                          "minCapacity": "[parameters('minCapacity')]",
+                          "maxCapacity": "[parameters('maxCapacity')]"
+                        },
+                        "firewallPolicy": {
+                          "id": "[resourceId('Microsoft.Network/ApplicationGatewayWebApplicationFirewallPolicies', format('wafpol-lhds-{0}', parameters('stampName')))]"
+                        },
+                        "gatewayIPConfigurations": [
+                          {
+                            "name": "gw-ipconfig",
+                            "properties": {
+                              "subnet": {
+                                "id": "[parameters('agwSubnetId')]"
+                              }
+                            }
+                          }
+                        ],
+                        "frontendIPConfigurations": [
+                          {
+                            "name": "[variables('feName')]",
+                            "properties": {
+                              "publicIPAddress": {
+                                "id": "[resourceId('Microsoft.Network/publicIPAddresses', format('pip-{0}', variables('gwName')))]"
+                              }
+                            }
+                          }
+                        ],
+                        "frontendPorts": "[variables('frontendPorts')]",
+                        "sslCertificates": "[variables('sslCertificates')]",
+                        "sslPolicy": {
+                          "policyType": "Predefined",
+                          "policyName": "AppGwSslPolicy20220101S"
+                        },
+                        "backendAddressPools": [
+                          {
+                            "name": "ingress-ilb",
+                            "properties": {
+                              "backendAddresses": [
+                                {
+                                  "ipAddress": "[parameters('backendIp')]"
+                                }
+                              ]
+                            }
+                          }
+                        ],
+                        "backendHttpSettingsCollection": [
+                          {
+                            "name": "ingress-http",
+                            "properties": {
+                              "port": 80,
+                              "protocol": "Http",
+                              "cookieBasedAffinity": "Disabled",
+                              "pickHostNameFromBackendAddress": false,
+                              "hostName": "[parameters('backendHostName')]",
+                              "requestTimeout": "[parameters('requestTimeoutSeconds')]",
+                              "probe": {
+                                "id": "[format('{0}/probes/ingress-probe', variables('gwId'))]"
+                              }
+                            }
+                          }
+                        ],
+                        "probes": [
+                          {
+                            "name": "ingress-probe",
+                            "properties": {
+                              "protocol": "Http",
+                              "host": "[parameters('backendHostName')]",
+                              "path": "/",
+                              "interval": 30,
+                              "timeout": 30,
+                              "unhealthyThreshold": 3,
+                              "match": {
+                                "statusCodes": [
+                                  "200-499"
+                                ]
+                              }
+                            }
+                          }
+                        ],
+                        "httpListeners": "[variables('httpListeners')]",
+                        "redirectConfigurations": [
+                          "[if(variables('hasTls'), createObject('name', 'http-to-https', 'properties', createObject('redirectType', 'Permanent', 'targetListener', createObject('id', format('{0}/httpListeners/listener-https', variables('gwId'))), 'includePath', true(), 'includeQueryString', true())), createObject('name', 'http-to-https', 'properties', createObject('redirectType', 'Permanent', 'targetUrl', format('https://{0}', reference(resourceId('Microsoft.Network/publicIPAddresses', format('pip-{0}', variables('gwName'))), '2024-05-01').dnsSettings.fqdn), 'includePath', true(), 'includeQueryString', true())))]"
+                        ],
+                        "requestRoutingRules": "[variables('routingRules')]"
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-lhds-{0}-agw', parameters('stampName')))]",
+                        "[extensionResourceId(resourceId('Microsoft.KeyVault/vaults', last(split(parameters('keyVaultId'), '/'))), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.KeyVault/vaults', last(split(parameters('keyVaultId'), '/'))), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-lhds-{0}-agw', parameters('stampName'))), variables('secretsUserRoleId')))]",
+                        "[resourceId('Microsoft.Network/publicIPAddresses', format('pip-{0}', variables('gwName')))]",
+                        "[resourceId('Microsoft.Network/ApplicationGatewayWebApplicationFirewallPolicies', format('wafpol-lhds-{0}', parameters('stampName')))]"
+                      ]
+                    },
+                    {
+                      "condition": "[not(empty(parameters('workspaceId')))]",
+                      "type": "Microsoft.Insights/diagnosticSettings",
+                      "apiVersion": "2021-05-01-preview",
+                      "scope": "[resourceId('Microsoft.Network/applicationGateways', variables('gwName'))]",
+                      "name": "diag-lhds-agw",
+                      "properties": {
+                        "workspaceId": "[parameters('workspaceId')]",
+                        "logs": [
+                          {
+                            "categoryGroup": "allLogs",
+                            "enabled": true
+                          }
+                        ],
+                        "metrics": [
+                          {
+                            "category": "AllMetrics",
+                            "enabled": true
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/applicationGateways', variables('gwName'))]"
+                      ]
+                    }
+                  ],
+                  "outputs": {
+                    "gatewayId": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Network/applicationGateways', variables('gwName'))]"
+                    },
+                    "gatewayName": {
+                      "type": "string",
+                      "value": "[variables('gwName')]"
+                    },
+                    "wafPolicyId": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Network/ApplicationGatewayWebApplicationFirewallPolicies', format('wafpol-lhds-{0}', parameters('stampName')))]"
+                    },
+                    "publicIp": {
+                      "type": "string",
+                      "value": "[reference(resourceId('Microsoft.Network/publicIPAddresses', format('pip-{0}', variables('gwName'))), '2024-05-01').ipAddress]"
+                    },
+                    "publicFqdn": {
+                      "type": "string",
+                      "value": "[reference(resourceId('Microsoft.Network/publicIPAddresses', format('pip-{0}', variables('gwName'))), '2024-05-01').dnsSettings.fqdn]"
+                    },
+                    "gatewayIdentityPrincipalId": {
+                      "type": "string",
+                      "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-lhds-{0}-agw', parameters('stampName'))), '2023-01-31').principalId]"
+                    },
+                    "tlsConfigured": {
+                      "type": "bool",
+                      "value": "[variables('hasTls')]"
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Resources/deployments', format('lhds-{0}-keyvault', parameters('stampName')))]",
+                "[resourceId('Microsoft.OperationalInsights/workspaces', format('log-lhds-{0}', parameters('stampName')))]",
+                "[resourceId('Microsoft.Resources/deployments', format('lhds-{0}-network', parameters('stampName')))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "stamp": {
+              "type": "object",
+              "metadata": {
+                "description": "Stamp manifest: everything the control plane records in the stamp registry and tenant.bicep consumes."
+              },
+              "value": {
+                "stampName": "[parameters('stampName')]",
+                "profile": "[parameters('profile')]",
+                "boundary": "[parameters('boundary')]",
+                "location": "[parameters('location')]",
+                "pairedLocation": "[parameters('pairedLocation')]",
+                "resourceGroup": "[resourceGroup().name]",
+                "lawId": "[resourceId('Microsoft.OperationalInsights/workspaces', format('log-lhds-{0}', parameters('stampName')))]",
+                "vnetId": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-network', parameters('stampName'))), '2025-04-01').outputs.vnetId.value]",
+                "peSubnetId": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-network', parameters('stampName'))), '2025-04-01').outputs.peSubnetId.value]",
+                "privateDnsZoneIds": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-network', parameters('stampName'))), '2025-04-01').outputs.privateDnsZoneIds.value]",
+                "egressMode": "[variables('egressMode')]",
+                "egressFqdns": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-network', parameters('stampName'))), '2025-04-01').outputs.egressFqdns.value]",
+                "keyVaultId": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-keyvault', parameters('stampName'))), '2025-04-01').outputs.vaultId.value]",
+                "keyVaultUri": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-keyvault', parameters('stampName'))), '2025-04-01').outputs.vaultUri.value]",
+                "cmkIdentityId": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-keyvault', parameters('stampName'))), '2025-04-01').outputs.cmkIdentityId.value]",
+                "auditStorageAccount": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-storage-audit', parameters('stampName'))), '2025-04-01').outputs.accountName.value]",
+                "exportStorageAccount": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-storage-export', parameters('stampName'))), '2025-04-01').outputs.accountName.value]",
+                "postgresServerId": "[if(parameters('postgresQuotaAvailable'), reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-postgres', parameters('stampName'))), '2025-04-01').outputs.serverId.value, '')]",
+                "postgresFqdn": "[if(parameters('postgresQuotaAvailable'), reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-postgres', parameters('stampName'))), '2025-04-01').outputs.fqdn.value, '')]",
+                "postgresSku": "[variables('pgSkuName')]",
+                "eventHubsNamespace": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-eventing', parameters('stampName'))), '2025-04-01').outputs.namespaceName.value]",
+                "eventHubsCustomerManagedKey": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-eventing', parameters('stampName'))), '2025-04-01').outputs.customerManagedKey.value]",
+                "aksClusterName": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-aks', parameters('stampName'))), '2025-04-01').outputs.clusterName.value]",
+                "aksOidcIssuerUrl": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-aks', parameters('stampName'))), '2025-04-01').outputs.oidcIssuerUrl.value]",
+                "kedaAddon": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-aks', parameters('stampName'))), '2025-04-01').outputs.kedaAddon.value]",
+                "ingressPublicFqdn": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-ingress', parameters('stampName'))), '2025-04-01').outputs.publicFqdn.value]",
+                "ingressTlsConfigured": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-ingress', parameters('stampName'))), '2025-04-01').outputs.tlsConfigured.value]",
+                "wafPolicyId": "[reference(resourceId('Microsoft.Resources/deployments', format('lhds-{0}-ingress', parameters('stampName'))), '2025-04-01').outputs.wafPolicyId.value]"
+              }
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "healthRg"
+      ]
     }
   },
   "outputs": {
+    "healthStamp": {
+      "type": "object",
+      "metadata": {
+        "description": "LHDS stamp manifest (resource ids, endpoints, region, profile). Empty while healthEnabled is false."
+      },
+      "value": "[if(variables('healthDeploy'), reference('healthStamp').outputs.stamp.value, createObject())]"
+    },
     "dlzSynapseWorkspaceName": {
       "type": "string",
       "value": "[if(variables('useSingleDlz'), reference('singleDlz').outputs.synapseWorkspaceName.value, '')]"

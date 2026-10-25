@@ -523,3 +523,20 @@ param loomSelfHostedIrEnabled = true
 param observabilityConfig = {
   programBudgetStartDate: readEnvironmentVariable('LOOM_PROGRAM_BUDGET_START_DATE', '')
 }
+
+// ── Loom Health Data Services (LHDS) stamp (W1-1) ────────────────────────────
+// OFF by default. Flip healthEnabled to deploy a stamp into its own resource
+// group. Keys of healthConfig are documented above the health module in main.bicep.
+// Gov defaults: usgovarizona primary (zone-redundant PostgreSQL HA) paired with
+// usgovtexas; usgovvirginia is offer-restricted for PostgreSQL on the measured
+// subscription. PostgreSQL resolves to the v4 SKU generation (Gov has no v5 E-series).
+// Supported-in-code; never exercised until a What-If / deploy receipt exists.
+param healthEnabled = false
+param healthConfig = {
+  stampName: 'dev01'
+  profile: 'dev'
+  location: 'usgovarizona'
+  pairedLocation: 'usgovtexas'
+  // PostgreSQL Flexible measured available in usgovarizona (W0-RECEIPT s4.1b); overrides the Airflow posture hold on postgresQuotaAvailable.
+  postgres: 'enabled'
+}
