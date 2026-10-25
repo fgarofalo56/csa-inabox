@@ -9,6 +9,7 @@
 
 import { createHash } from 'node:crypto';
 import { badRequest, conflict, notFound, StoreConflictError } from '../http/errors.js';
+import { authoredMessage, publicErrorMessage } from '../safe-error.js';
 import type { Collection } from '../store/types.js';
 import {
   JobFailure,
@@ -223,8 +224,8 @@ export class JobRunner {
       // Only a JobFailure carries operator-safe text; anything else is internal.
       const error =
         e instanceof JobFailure
-          ? { code: e.code, message: e.message }
-          : { code: 'internal', message: 'job failed; see service logs' };
+          ? { code: e.code, message: authoredMessage(e) }
+          : { code: 'internal', message: publicErrorMessage(e, 'job failed; see service logs') };
       await finish({ state: 'failed', error });
       this.log('job.failed', { kind: current.kind, jobId: id, code: error.code });
     }

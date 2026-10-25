@@ -66,7 +66,7 @@ describe('JobRunner', () => {
     expect((await runner.get(f.job.id)).error).toEqual({ code: 'quota_exceeded', message: 'stamp has no headroom' });
     const crashed = await runner.get(c.job.id);
     expect(crashed.state).toBe('failed');
-    expect(crashed.error).toEqual({ code: 'internal', message: 'job failed; see service logs' });
+    expect(crashed.error).toEqual({ code: 'internal', message: expect.stringMatching(/^job failed; see service logs \(ref: [0-9a-f]{8}\)$/) });
     expect(JSON.stringify(crashed)).not.toContain('hunter2'); // breaks if raw error text is stored
     expect(logs.join('\n')).not.toContain('hunter2'); // ...or logged
   });

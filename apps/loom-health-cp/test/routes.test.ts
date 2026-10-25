@@ -165,7 +165,7 @@ describe('error hygiene', () => {
     h.stores.stamps.failWith = new Error(secretish);
     const r = await h.call('GET', '/api/health/stamps', { token: admin });
     expect(r.status).toBe(500);
-    expect(r.json).toEqual({ ok: false, error: { code: 'internal', message: 'internal error' } });
+    expect(r.json).toEqual({ ok: false, error: { code: 'internal', message: expect.stringMatching(/^internal error \(ref: [0-9a-f]{8}\)$/) } });
     // the message must be absent from the response AND from the logs
     expect(JSON.stringify(r.json)).not.toContain('cosmos-acct');
     expect(h.logs.join('\n')).not.toContain('SECRETVALUE');

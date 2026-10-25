@@ -3,6 +3,7 @@ import { compose } from './compose.js';
 import { ConfigError, loadConfig } from './config.js';
 import { authOptionsFromConfig } from './middleware/auth.js';
 import { createCosmosStores } from './store/cosmos.js';
+import { authoredMessage } from './safe-error.js';
 
 // One JSON line per event. Fields are ids, counts and status codes only: no
 // tokens, no request bodies, no clinical data.
@@ -15,7 +16,7 @@ function main(): void {
   try {
     cfg = loadConfig();
   } catch (e) {
-    process.stderr.write(`loom-health-cp: ${e instanceof ConfigError ? e.message : 'invalid configuration'}\n`);
+    process.stderr.write(`loom-health-cp: ${e instanceof ConfigError ? authoredMessage(e) : 'invalid configuration'}\n`);
     process.exit(1);
   }
   const app = compose({

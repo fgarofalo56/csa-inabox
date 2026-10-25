@@ -13,6 +13,7 @@ import type { Registry } from '../registry/registry.js';
 import type { RoutingPublisher } from '../routing/publisher.js';
 import type { SloService } from '../slo/aggregate.js';
 import { HttpError, badRequest, notFound } from './errors.js';
+import { authoredMessage, publicErrorMessage } from '../safe-error.js';
 
 export const MAX_BODY_BYTES = 64 * 1024;
 
@@ -208,14 +209,14 @@ export function createApp(deps: AppDeps) {
         send(
           res,
           status,
-          { ok: false, error: { code: e.code, message: e.message } },
+          { ok: false, error: { code: e.code, message: authoredMessage(e) } },
           status === 401 ? { 'www-authenticate': 'Bearer' } : {},
         );
       } else {
         status = 500;
         // Log the error class only: SDK messages can carry endpoints or ids.
         deps.log('http.internal_error', { requestId, error: e instanceof Error ? e.name : 'unknown' });
-        send(res, 500, { ok: false, error: { code: 'internal', message: 'internal error' } });
+        send(res, 500, { ok: false, error: { code: 'internal', message: publicErrorMessage(e, 'internal error') } });
       }
     } finally {
       deps.log('http.request', { requestId, method, route: routeTemplate, status, ms: Date.now() - started, caller });
