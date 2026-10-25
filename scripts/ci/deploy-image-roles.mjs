@@ -119,7 +119,7 @@ export const NOT_ROLL_BLOCKING = Object.freeze({
       'which pins `${acr}/loom-uat:latest` and re-pulls per execution — a tag ' +
       '`az acr build` pushes BEFORE the Trivy step runs, so gating the roll on ' +
       'it never protected that path anyway.',
-  },
+  }, 'loom-health-cp': { why: 'LHDS control plane (W1-3). Its bicep, health/control-plane.bicep, is a standalone entrypoint (deployed with az deployment group create into the stamp RG, default off) that main.bicep does not invoke, because embedding it pushed deploy-templates/main.json past the 4194304-byte ARM inline limit. So it has no appImageTags key, is not in the deploy contract, and no Container App runs it on the live estate (healthEnabled is false everywhere); redeploy-with-apps has nothing to roll. The matrix builds it so the image exists when the control plane is deployed.', consumedBy: 'modules/health/control-plane.bicep (Container App or AKS Deployment), only when an operator deploys it; the image reference is a template parameter.' },
 });
 
 /**

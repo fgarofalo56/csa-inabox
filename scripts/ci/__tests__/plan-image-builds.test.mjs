@@ -32,8 +32,8 @@ const names = MATRIX.map((a) => a.name);
 const SHA = 'a'.repeat(40);
 const BASE = 'b'.repeat(40);
 
-test('lifted matrix is the 13-app default set (input: an app dropped from or added to APPS)', () => {
-  assert.equal(MATRIX.length, 13, `matrix has ${MATRIX.length} apps; update this pin AND the carry contract if it changed on purpose`);
+test('lifted matrix is the 14-app default set (input: an app dropped from or added to APPS)', () => {
+  assert.equal(MATRIX.length, 14, `matrix has ${MATRIX.length} apps; update this pin AND the carry contract if it changed on purpose`);
 });
 
 test('a file in EACH matrix context builds exactly that app plus the always-built console', () => {
@@ -41,7 +41,7 @@ test('a file in EACH matrix context builds exactly that app plus the always-buil
     const p = planBuild({ changedFiles: [`${app.ctx.replace('./', '')}/src/x.ts`], matrix: MATRIX });
     const want = [...new Set([app.name, CONSOLE])].sort();
     assert.deepEqual([...p.build].sort(), want, `file under ${app.ctx}: must build ${want}, got ${p.build}`);
-    assert.equal(p.carry.length, 13 - want.length, `file under ${app.ctx}: the rest must be carried, got ${p.carry.length}`);
+    assert.equal(p.carry.length, 14 - want.length, `file under ${app.ctx}: the rest must be carried, got ${p.carry.length}`);
     assert.equal(p.mode, 'subset', `file under ${app.ctx}: mode must be subset`);
   }
 });
@@ -57,7 +57,7 @@ test('S2: console-embedded corpus paths alone still yield a plan WITH the consol
   for (const f of ['docs/fiab/x.md', 'PRPs/active/a.md', 'PRPs/completed/csa-loom-pillar/b.md', 'PRPs/archive/c.md']) {
     const p = planBuild({ changedFiles: [f], matrix: MATRIX });
     assert.deepEqual(p.build, [CONSOLE], `${f}: the corpus is baked into the console image; plan must build it, got ${p.build}`);
-    assert.equal(p.carry.length, 12, `${f}: the other 12 are carried`);
+    assert.equal(p.carry.length, 13, `${f}: the other 13 are carried`);
   }
 });
 
@@ -99,11 +99,11 @@ test('root build config forces ALL, a root README does not (inputs: package.json
   assert.deepEqual([...n.build].sort(), ['loom-console', 'loom-trino'], 'apps/loom-trino/package.json is that app only, not root config');
 });
 
-test('only unowned paths build JUST the console and carry the other 12 (input: docs + an unmatrixed app)', () => {
+test('only unowned paths build JUST the console and carry the other 13 (input: docs + an unmatrixed app)', () => {
   const p = planBuild({ changedFiles: ['docs/x.md', 'apps/fiab-dbt-runner/main.py'], matrix: MATRIX });
   assert.equal(p.mode, 'subset');
   assert.deepEqual(p.build, [CONSOLE], 'no matrix context changed, so only the always-built console');
-  assert.equal(p.carry.length, 12, 'every other app must still receive the new SHA tag');
+  assert.equal(p.carry.length, 13, 'every other app must still receive the new SHA tag');
   assert.ok(p.ignored.includes('apps/fiab-dbt-runner/main.py'), 'the unowned path is reported as ignored');
 });
 
@@ -186,7 +186,7 @@ test('CLI on a real repo: one-app commit builds one app; unknown/rewritten base 
     const p = plan(dir, c1, c2);
     assert.equal(p.mode, 'subset', `c1..c2 touched only apps/loom-trino: ${p.reason}`);
     assert.deepEqual([...p.build].sort(), ['loom-console', 'loom-trino'], 'only loom-trino changed between c1 and c2 (+ always-built console)');
-    assert.equal(p.carry.length, 11);
+    assert.equal(p.carry.length, 12);
 
     const absent = plan(dir, 'c'.repeat(40), c2);
     assert.equal(absent.mode, 'all', 'a base sha that is not in the repo (force push) must build ALL');
@@ -250,7 +250,7 @@ test('workflow: carry_forward exists, re-tags and VERIFIES, and is awaited by ac
 
 test('workflow: the guard-read default matrix literal is still the first APPS=[...] line', () => {
   const first = /APPS='(\[[^']*\])'/.exec(wfText);
-  assert.ok(first && JSON.parse(first[1]).length === 13, 'check-build-trigger-covers-matrix reads this literal; the plan must not replace it');
+  assert.ok(first && JSON.parse(first[1]).length === 14, 'check-build-trigger-covers-matrix reads this literal; the plan must not replace it');
 });
 
 test('roll gate has NO carried-forward skip: every push run builds and rolls the console (B1)', () => {
