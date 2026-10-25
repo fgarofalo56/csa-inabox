@@ -87,6 +87,9 @@ param logRetentionDays int = 90
 @description('Tags applied to every resource.')
 param tags object = {}
 
+@description('PostgreSQL gate (3449d). main.bicep forwards the per-stamp resolved value (healthPgAllowed); the stamp does not deploy a PostgreSQL server when false.')
+param postgresQuotaAvailable bool = true
+
 var isGov = boundary == 'GCC-High' || boundary == 'IL5'
 var stampTags = union(tags, {
   'lhds-stamp': stampName
@@ -260,7 +263,7 @@ module exportStorage 'storage.bicep' = {
 }
 
 // ── PostgreSQL ────────────────────────────────────────────────────────────────
-module postgres 'postgres.bicep' = {
+module postgres 'postgres.bicep' = if (postgresQuotaAvailable) {
   name: 'lhds-${stampName}-postgres'
   params: {
     location: location
@@ -364,8 +367,8 @@ output stamp object = {
   cmkIdentityId: keyvault.outputs.cmkIdentityId
   auditStorageAccount: auditStorage.outputs.accountName
   exportStorageAccount: exportStorage.outputs.accountName
-  postgresServerId: postgres.outputs.serverId
-  postgresFqdn: postgres.outputs.fqdn
+  postgresServerId: postgresQuotaAvailable ? postgres!.outputs.serverId : ''
+  postgresFqdn: postgresQuotaAvailable ? postgres!.outputs.fqdn : ''
   postgresSku: pgSkuName
   eventHubsNamespace: eventing.outputs.namespaceName
   eventHubsCustomerManagedKey: eventing.outputs.customerManagedKey

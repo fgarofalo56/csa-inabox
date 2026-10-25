@@ -3355,7 +3355,8 @@ module setupOrchestratorSpokeRbac 'modules/admin-plane/setup-orchestrator-rbac.b
 //   stampName, profile (dev|S|M|L), location, pairedLocation, adminEntraGroupId,
 //   vnetAddressPrefix, egressMode ('firewall'|'loadBalancer'), postgresHa,
 //   useAvailabilityZones, kubernetesVersion, acrLoginServer, extraAllowedFqdns,
-//   extraDnsLinkVnetIds, tlsCertificateSecretUri, auditRetentionDays, logRetentionDays.
+//   extraDnsLinkVnetIds, tlsCertificateSecretUri, auditRetentionDays, logRetentionDays,
+//   postgres ('enabled' or 'disabled': per-stamp override of postgresQuotaAvailable).
 // Gov boundaries default to usgovarizona (primary, zone-redundant PostgreSQL HA)
 // paired with usgovtexas: usgovvirginia is offer-restricted for PostgreSQL on the
 // measured subscription (PRPs/active/loom-health-data-services/W0-RECEIPT.md s4.1b).
@@ -3370,14 +3371,22 @@ var healthIsGov = boundary == 'GCC-High' || boundary == 'IL5'
 var healthStampName = string(healthConfig.?stampName ?? 'dev01')
 var healthLocation = string(healthConfig.?location ?? (healthIsGov ? 'usgovarizona' : location))
 var healthPairedLocation = string(healthConfig.?pairedLocation ?? (healthIsGov ? 'usgovtexas' : ''))
+// PostgreSQL gate (3449d): the engines cannot run without it, so the stamp consults
+// postgresQuotaAvailable through a per-consumer override (healthConfig.postgres =
+// 'enabled'|'disabled'), same pattern as weavePgAllowed in admin-plane. Gov param
+// files pin postgresQuotaAvailable=false as an Airflow posture hold, not a PostgreSQL
+// fact, so they set the override to 'enabled'.
+var healthPgOverride = toLower(string(healthConfig.?postgres ?? ''))
+var healthPgAllowed = healthPgOverride == 'enabled' ? true : (healthPgOverride == 'disabled' ? false : postgresQuotaAvailable)
+var healthDeploy = healthEnabled && healthPgAllowed
 
-resource healthRg 'Microsoft.Resources/resourceGroups@2024-03-01' = if (healthEnabled) {
+resource healthRg 'Microsoft.Resources/resourceGroups@2024-03-01' = if (healthDeploy) {
   name: 'rg-csa-loom-health-${healthStampName}-${healthLocation}'
   location: healthLocation
   tags: loomTags
 }
 
-module healthStamp 'modules/health/stamp.bicep' = if (healthEnabled) {
+module healthStamp 'modules/health/stamp.bicep' = if (healthDeploy) {
   name: 'lhds-stamp-${healthStampName}'
   scope: healthRg
   params: {
@@ -3385,6 +3394,7 @@ module healthStamp 'modules/health/stamp.bicep' = if (healthEnabled) {
     pairedLocation: healthPairedLocation
     stampName: healthStampName
     boundary: boundary
+    postgresQuotaAvailable: healthPgAllowed
     profile: healthConfig.?profile ?? 'dev'
     adminEntraGroupId: string(healthConfig.?adminEntraGroupId ?? adminEntraGroupId)
     vnetAddressPrefix: string(healthConfig.?vnetAddressPrefix ?? '10.60.0.0/16')
@@ -3403,7 +3413,7 @@ module healthStamp 'modules/health/stamp.bicep' = if (healthEnabled) {
 }
 
 @description('LHDS stamp manifest (resource ids, endpoints, region, profile). Empty while healthEnabled is false.')
-output healthStamp object = healthEnabled ? healthStamp!.outputs.stamp : {}
+output healthStamp object = healthDeploy ? healthStamp!.outputs.stamp : {}
 
 output dlzSynapseWorkspaceName string = useSingleDlz ? singleDlz!.outputs.synapseWorkspaceName : ''
 output dlzSynapseDedicatedPoolName string = useSingleDlz ? singleDlz!.outputs.synapseDedicatedPoolName : ''

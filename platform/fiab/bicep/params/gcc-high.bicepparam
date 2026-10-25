@@ -484,4 +484,6 @@ param healthConfig = {
   profile: 'dev'
   location: 'usgovarizona'
   pairedLocation: 'usgovtexas'
+  // PostgreSQL Flexible measured available in usgovarizona (W0-RECEIPT s4.1b); overrides the Airflow posture hold on postgresQuotaAvailable.
+  postgres: 'enabled'
 }
