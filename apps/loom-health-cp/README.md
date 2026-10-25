@@ -13,15 +13,19 @@ It holds identities, pointers, policy and telemetry only - never clinical data.
 Not in this service yet: the authorization server (W1-4, `src/auth/**`), tenant
 jobs (W1-2) and the MPI.
 
-Deployment: `platform/fiab/bicep/modules/health/control-plane.bicep`, a standalone
-entrypoint deployed into the stamp resource group with `az deployment group create`
-(command in the module header). `main.bicep` does not invoke it: embedding it pushed
-`deploy-templates/main.json` over ARM's 4 MiB inline limit. Nothing deploys it by
-default and no workflow dispatches it yet. It creates the Cosmos account with the
-five containers, the identity and its Data Contributor role, and the workload:
-a Container App (Commercial, GCC, GCC-High) or a Deployment on the stamp AKS
-cluster (IL5), chosen by the `platform` parameter, which is independent of the
-admin-plane `containerPlatform`. On AKS the Service is ClusterIP only: no route
+Deployment: `platform/fiab/bicep/modules/health/control-plane.bicep`, invoked by
+`platform/fiab/bicep/health.bicep`, LHDS's own subscription-level deployment unit
+with its own 4 MiB ARM budget (embedding it in `main.bicep` pushed
+`deploy-templates/main.json` over the inline limit). It is deployed by
+`.github/workflows/deploy-health.yml` (dispatch-only; Commercial and GCC-High;
+`whatif-only` by default; `healthEnabled` is false in every `health-*.bicepparam`).
+It creates the Cosmos account with the five containers, the identity and its Data
+Contributor role, and the workload: a Container App (Commercial, GCC, GCC-High) or
+a Deployment on the stamp AKS cluster (IL5, supported in code, not offered by the
+workflow), chosen by `controlPlaneConfig.controlPlane`, which is independent of the
+admin-plane `containerPlatform`. The stamp is created in the same deployment; the
+control plane is skipped, with the reason in the `healthControlPlaneState` output,
+unless `controlPlaneConfig.audiences` is set. On AKS the Service is ClusterIP only: no route
 from outside the cluster exists until the stamp ingress (W1-6) publishes one.
 Neither path has produced a deploy receipt (supported-in-code, never exercised).
 

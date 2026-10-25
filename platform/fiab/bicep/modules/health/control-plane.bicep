@@ -13,22 +13,12 @@
 //                   from a deployment script because the cluster is private and
 //                   local accounts are disabled.
 //
-// STANDALONE ENTRYPOINT. main.bicep does not invoke this module, on purpose: embedding it
-// grew apps/fiab-console/deploy-templates/main.json from 4,186,680 to 4,239,225 bytes, over
-// the 4,194,304-byte ARM inline-template limit that redis-retirement-2642.test.ts pins and
-// that lib/setup/user-arm-deploy.ts breaks above. It is listed in check-bicep-sync.mjs
-// ORPHAN_ALLOWLIST for that reason. Deploy it into the stamp resource group after the stamp:
-//   az deployment group create -g rg-csa-loom-health-<stamp>-<region> \
-//     -f platform/fiab/bicep/modules/health/control-plane.bicep \
-//     -p boundary=<Commercial|GCC|GCC-High|IL5> platform=<containerApps|aks> \
-//        image=<acr>/loom-health-cp:v0.1 acrLoginServer=<acr login server> \
-//        acrName=<acr> acrResourceGroup=<rg> audiences='["api://..."]' \
-//        environmentId=<CAE id>            (containerApps)
-//        aksClusterName=aks-lhds-<stamp> aksOidcIssuerUrl=<stamp output>  (aks)
-// The stamp manifest output (healthStamp) supplies aksClusterName, the OIDC issuer and lawId.
-// Follow-up needed: a dispatch workflow so this is not an operator-run command.
+// Invoked by platform/fiab/bicep/health.bicep, NOT by main.bicep: LHDS is its own
+// subscription-level deployment unit with its own 4 MiB ARM budget (embedding it in
+// main.bicep pushed deploy-templates/main.json over 4,194,304 bytes). Deployed by
+// .github/workflows/deploy-health.yml.
 //
-// Scope: the stamp resource group (created by main.bicep behind `healthEnabled`).
+// Scope: the stamp resource group (created by health.bicep behind `healthEnabled`).
 //
 // Not measured: a live deploy of either path (estate paused, Gov ADX stopped, #5123).
 // Supported-in-code only (cloud-parity.md); neither path has produced a deploy receipt.

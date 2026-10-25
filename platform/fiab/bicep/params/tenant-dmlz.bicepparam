@@ -333,13 +333,3 @@ param loomSynapseEnabled = true
 param loomDatabricksEnabled = true
 param loomDataFactoryEnabled = true
 param loomSelfHostedIrEnabled = true
-
-// ── Loom Health Data Services (LHDS) stamp (W1-1) ────────────────────────────
-// OFF by default. Flip healthEnabled to deploy a stamp into its own resource
-// group. Keys of healthConfig are documented above the health module in main.bicep.
-// This boundary: supported-in-code; never exercised until a What-If / deploy receipt exists.
-param healthEnabled = false
-param healthConfig = {
-  stampName: 'dev01'
-  profile: 'dev'
-}
