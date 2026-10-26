@@ -266,6 +266,20 @@ jobs:
         run: |
           set -uo pipefail
           HUB_RG="rg-csa-loom-admin-${HUB_LOCATION}"
+          # The stamp location in the params file need not be the hub region. If the
+          # derived name is absent, DISCOVER the hub: accept exactly one admin group,
+          # never guess between several (deploy-integrity R5).
+          az group exists -n "$HUB_RG" > temp/rgx.txt 2> temp/rgx.err || { echo "::error::Could not check whether $HUB_RG exists: $(head -c 400 temp/rgx.err)"; exit 1; }
+          if [ "$(tr -d '\r\n' < temp/rgx.txt)" != "true" ]; then
+            az group list --query "[?starts_with(name, 'rg-csa-loom-admin-')].name" -o json > temp/hubrg.json 2> temp/hubrg.err || { echo "::error::Could not list resource groups to discover the hub: $(head -c 400 temp/hubrg.err)"; exit 1; }
+            if [ "$(jq 'length' temp/hubrg.json)" = "1" ]; then
+              HUB_RG=$(jq -r '.[0]' temp/hubrg.json)
+              echo "::notice::there is no rg-csa-loom-admin-${HUB_LOCATION}; using the only one in this subscription: $HUB_RG."
+            else
+              echo "::error::NOT FOUND: no rg-csa-loom-admin-${HUB_LOCATION} and the subscription has $(jq 'length' temp/hubrg.json) admin groups ($(jq -r 'join(", ")' temp/hubrg.json)), so the hub cannot be chosen unambiguously."
+              exit 1
+            fi
+          fi
           fail() { # $1 = err file, $2 = what we were reading
             if grep -qiE 'AuthorizationFailed|does not have authorization' "$1"; then
               echo "::error::PERMISSION: the deploy principal cannot read $2 in $HUB_RG. Grant it Reader on the subscription: az role assignment create --assignee <deploy-sp-app-id> --role Reader --scope /subscriptions/<subscription-id>"
