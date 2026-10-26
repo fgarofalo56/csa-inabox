@@ -133,6 +133,10 @@ test_tenant_not_trimmed if {
 	d := dec(fx.tokens.valid, rq({"tenant": "visn-01 "}))
 	d.allow == false
 	d.reason == "tenant-mismatch"
+	# permit control: same token, exact tenant. Without it a deny for any other reason passes.
+	c := dec(fx.tokens.valid, rq({"tenant": "visn-01"}))
+	c.allow == true
+	c.reason == "permit"
 }
 
 # Breaks if: T3 is skipped (token and request agree on visn-09, not homed here).
@@ -220,12 +224,22 @@ test_out_of_order_scope_ignored if {
 test_unsupported_constraint_ignored if {
 	d := dec(fx.tokens.scope_unsupported_constraint, rq({}))
 	d.allow == false
+	d.reason == "scope-denied"
+	# permit control: same request, plain Observation.rs token. Without it a deny
+	# for a non-scope reason (or a broken request) would pass.
+	c := dec(fx.tokens.valid, rq({}))
+	c.allow == true
+	c.reason == "permit"
 }
 
 # Breaks if: a constraint on a wildcard type is accepted.
 test_wildcard_with_constraint_ignored if {
 	d := dec(fx.tokens.scope_wildcard_constraint, rq({}))
 	d.allow == false
+	d.reason == "scope-denied"
+	c := dec(fx.tokens.valid, rq({}))
+	c.allow == true
+	c.reason == "permit"
 }
 
 # Breaks if: the category constraint is dropped (N7): vital-signs read under a laboratory scope.

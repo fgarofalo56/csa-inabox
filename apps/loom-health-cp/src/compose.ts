@@ -2,6 +2,7 @@
 // Both main.ts (Cosmos + remote JWKS) and the tests (fakes at the Stores and
 // keyResolver seams) go through here, so the tested graph is the shipped graph.
 
+import type { BundleSource } from './pdp/bundles.js';
 import { createApp } from './http/app.js';
 import { builtinHandlers } from './jobs/builtin.js';
 import { JobRunner } from './jobs/runner.js';
@@ -18,6 +19,7 @@ export interface ComposeInput {
   auth: AuthOptions;
   sloAvailabilityTarget: number;
   log: Logger;
+  bundles?: BundleSource;
   now?: () => Date;
 }
 
@@ -37,6 +39,6 @@ export function compose(input: ComposeInput) {
     now,
   );
   for (const h of builtinHandlers({ routing })) jobs.register(h);
-  const handler = createApp({ authenticate: createAuthenticator(input.auth), registry, jobs, routing, slo, log });
+  const handler = createApp({ authenticate: createAuthenticator(input.auth), registry, jobs, routing, slo, bundles: input.bundles, log });
   return { handler, registry, jobs, routing, slo };
 }

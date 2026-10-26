@@ -26,6 +26,8 @@ export interface Config {
   cosmosEndpoint: string;
   cosmosDatabase: string;
   sloAvailabilityTarget: number;
+  /** Directory holding <stamp>.tar.gz signed PDP bundles. Empty = bundle route answers 503. */
+  pdpBundleDir: string;
 }
 
 export class ConfigError extends Error {}
@@ -89,5 +91,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     cosmosEndpoint,
     cosmosDatabase: (env.LOOM_HEALTH_CP_COSMOS_DATABASE ?? '').trim() || 'loom-health-cp',
     sloAvailabilityTarget: target,
+    pdpBundleDir: (env.LOOM_HEALTH_CP_PDP_BUNDLE_DIR ?? '').trim(),
   };
 }
