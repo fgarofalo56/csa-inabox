@@ -205,7 +205,8 @@ jobs:
           az bicep install
           az bicep build -f platform/fiab/bicep/health.bicep --outfile temp/health.json
           az bicep build-params -f "$PF" --stdout > temp/params.json
-          HUB_LOCATION=$(jq -r '.parameters.location.value' temp/params.json)
+          # build-params --stdout emits {"parametersJson":"<escaped JSON string>", ...}, so decode it first.
+          HUB_LOCATION=$(jq -r '.parametersJson | fromjson | .parameters.location.value' temp/params.json)
           if [ -z "$HUB_LOCATION" ] || [ "$HUB_LOCATION" = "null" ]; then
             echo "::error::$PF does not set a location, so the hub resource group cannot be named."
             exit 1
