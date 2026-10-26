@@ -13,12 +13,7 @@
  * Errors are TRUE (deploy-integrity R7): a refused or unreachable control plane
  * is reported as exactly that, never as "the tenant does not exist".
  */
-import {
-  DefaultAzureCredential,
-  ManagedIdentityCredential,
-  ChainedTokenCredential,
-} from '@azure/identity';
-import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
+import { uamiArmCredential } from '@/lib/azure/arm-credential';
 
 export interface CpConfig {
   baseUrl: string;
@@ -58,17 +53,10 @@ export function readCpConfig(env: NodeJS.ProcessEnv = process.env): CpConfig {
   return { baseUrl, audience };
 }
 
-let cachedCredential: ChainedTokenCredential | DefaultAzureCredential | undefined;
-function credential(): ChainedTokenCredential | DefaultAzureCredential {
-  if (cachedCredential) return cachedCredential;
-  const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-  cachedCredential = uamiClientId
-    ? new ChainedTokenCredential(
-        new AcaManagedIdentityCredential(),
-        new ManagedIdentityCredential({ clientId: uamiClientId }),
-        new DefaultAzureCredential(),
-      )
-    : new DefaultAzureCredential();
+let cachedCredential: ReturnType<typeof uamiArmCredential> | undefined;
+function credential(): ReturnType<typeof uamiArmCredential> {
+  // The shared credential factory, not a direct construction (ws-credential-adoption).
+  cachedCredential ??= uamiArmCredential();
   return cachedCredential;
 }
 
