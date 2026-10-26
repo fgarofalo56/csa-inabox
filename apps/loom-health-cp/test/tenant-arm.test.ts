@@ -96,6 +96,22 @@ describe('RestTenantArm', () => {
     await expect(arm.deployTenant({ resourceGroup: RG, slug: 'a', displayName: 'A', maxStorageGiB: 5, stamp: {} })).rejects.toMatchObject({ code: 'no_outputs' });
   });
 
+  it('manifest lookups tell 404 apart from a record without outputs', async () => {
+    expect((await rig([{ status: 404 }]).arm.getTenantManifest(RG, 'a')).state).toBe('absent');
+    // 200 with no outputs: conflating this with 404 is the defect under test.
+    expect((await rig([{ status: 200, body: { properties: { provisioningState: 'Failed' } } }]).arm.getTenantManifest(RG, 'a')).state).toBe('no_outputs');
+    expect((await rig([{ status: 200, body: { properties: { outputs: {} } } }]).arm.getStampManifest(RG, 'dev01')).state).toBe('no_outputs');
+    const ok = await rig([{ status: 200, body: { properties: { outputs: { stamp: { value: { stampName: 'dev01' } } } } } }]).arm.getStampManifest(RG, 'dev01');
+    expect(ok).toEqual({ state: 'found', value: { stampName: 'dev01' } });
+  });
+
+  it('findTenantStorage keeps only storage accounts from the tag query', async () => {
+    const sa = `/subscriptions/${SUB}/resourceGroups/${RG}/providers/Microsoft.Storage/storageAccounts/sthpxabc`;
+    const { arm, calls } = rig([{ status: 200, body: { value: [{ id: sa }, { id: HUB }] } }]);
+    expect(await arm.findTenantStorage(RG, 'a')).toEqual([sa]);
+    expect(decodeURIComponent(calls[0]?.url ?? '')).toContain("tagName eq 'lhds-tenant' and tagValue eq 'a'");
+  });
+
   it('readKey falls through to deletedkeys and reports the deleted and purge dates', async () => {
     const { arm, calls } = rig([{ status: 404 }, { status: 200, body: { deletedDate: 1792972800, scheduledPurgeDate: 1800748800 } }]);
     const k = await arm.readKey(VAULT, 't-a-pg');

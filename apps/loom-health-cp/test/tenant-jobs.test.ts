@@ -29,7 +29,15 @@ class FakeArm implements TenantArm {
   deployCalls = 0;
   deleteCalls: string[] = [];
   keyOps: string[] = [];
-  stampManifest: Record<string, unknown> | undefined = { keyVaultUri: VAULT, stampName: STAMP };
+  stampState: 'absent' | 'no_outputs' | 'found' = 'found';
+  tenantState: 'absent' | 'no_outputs' | 'found' | undefined; // undefined = follow the deployment
+  stampManifest: Record<string, unknown> = {
+    keyVaultUri: VAULT,
+    stampName: STAMP,
+    keyVaultId: id('Microsoft.KeyVault/vaults', 'kv'),
+    eventHubsNamespace: 'evh',
+    postgresServerId: id('Microsoft.DBforPostgreSQL/flexibleServers', 'pg'),
+  };
   throwOnDeploy: Error | undefined;
   stickyIds = new Set<string>(); // delete silently does nothing
   keyDeleteIsNoop = false;
@@ -37,10 +45,17 @@ class FakeArm implements TenantArm {
   private manifest: TenantManifest | undefined;
 
   async getStampManifest() {
-    return this.stampManifest;
+    return this.stampState === 'found' ? { state: 'found' as const, value: this.stampManifest } : { state: this.stampState };
   }
   async getTenantManifest() {
-    return this.manifest;
+    const s = this.tenantState ?? (this.manifest ? 'found' : 'absent');
+    return s === 'found' && this.manifest ? { state: 'found' as const, value: this.manifest } : { state: s === 'found' ? ('absent' as const) : s };
+  }
+  scopeFor(rg: string) {
+    return `/subscriptions/${SUB}/resourceGroups/${rg}`;
+  }
+  async findTenantStorage() {
+    return [...this.resources.keys()].filter((k) => k.includes('storageAccounts/'));
   }
   async deployTenant(i: { slug: string }): Promise<TenantManifest> {
     this.deployCalls++;
@@ -178,7 +193,7 @@ describe('tenant.create', () => {
     arm.keys.set(`t-${SLUG}-pg`, { name: `t-${SLUG}-pg`, exists: true, enabled: false });
     const job = await run('tenant.create', 'k1');
     expect(job.error?.code).toBe('readback_mismatch');
-    expect(job.error?.message).toContain(`key t-${SLUG}-pg is not enabled`);
+    expect(job.error?.message).toContain(`key t-${SLUG}-pg is disabled`);
     expect(tenants.docs.get(SLUG)?.status).toBe('creating');
   });
 
@@ -204,10 +219,31 @@ describe('tenant.create', () => {
 
   it('names the missing stamp deployment instead of guessing', async () => {
     const { arm, run } = setup();
-    arm.stampManifest = undefined;
+    arm.stampState = 'absent';
     const job = await run('tenant.create', 'k1');
     expect(job.error?.code).toBe('stamp_manifest_missing');
-    expect(job.error?.message).toContain(`lhds-stamp-${STAMP}`);
+    expect(job.error?.message).toContain('was not found');
+  });
+
+  it('a stamp deployment that exists without outputs is NOT reported as not found', async () => {
+    const { arm, run } = setup();
+    arm.stampState = 'no_outputs';
+    const job = await run('tenant.create', 'k1');
+    // Breaks if the two cases are conflated: the old wording said "was not found".
+    expect(job.error?.code).toBe('stamp_manifest_unreadable');
+    expect(job.error?.message).toContain('exists');
+    expect(job.error?.message).not.toContain('was not found');
+    expect(arm.deployCalls).toBe(0);
+  });
+
+  it('reports a key that is gone as missing, not disabled', async () => {
+    const { arm, run } = setup();
+    const gone = `t-${SLUG}-backup`;
+    arm.keys.set(gone, { name: gone, exists: false });
+    for (const k of tenantNames(STAMP, SLUG).keyNames) if (k !== gone) arm.keys.set(k, { name: k, exists: true, enabled: true });
+    const job = await run('tenant.create', 'k1');
+    expect(job.error?.message).toContain(`key ${gone} is missing`);
+    expect(job.error?.message).not.toContain('disabled');
   });
 
   it('maps an ARM 403 to a permission failure naming the operation, without the body', async () => {
@@ -255,6 +291,30 @@ describe('tenant.destroy', () => {
     const shred = job.receipts.filter((r) => r.step === 'key.shredded');
     expect(shred).toHaveLength(4);
     for (const r of shred) expect(r.detail).toMatch(/live=false deletedDate=2026-10-26T00:00:00\.000Z scheduledPurgeDate=2027-01-24/);
+  });
+
+  it('absent deployment record: fails naming 404, deletes and shreds nothing', async () => {
+    const { arm, run } = await created();
+    arm.tenantState = 'absent';
+    const job = await run('tenant.destroy', 'd1', { confirmTenantId: SLUG });
+    expect(job.error?.code).toBe('tenant_manifest_missing');
+    expect(job.error?.message).toContain('was not found');
+    expect(arm.deleteCalls).toEqual([]);
+    expect(arm.keyOps).toEqual([]);
+  });
+
+  it('record present WITHOUT outputs (failed re-run): destroy still deletes by derived names and shreds the keys', async () => {
+    const { arm, tenants, run } = await created();
+    arm.tenantState = 'no_outputs';
+    const job = await run('tenant.destroy', 'd1', { confirmTenantId: SLUG });
+    // The old behaviour failed here with tenant_manifest_missing and left the tenant undeletable.
+    expect(job.state, JSON.stringify(job.error)).toBe('succeeded');
+    expect(job.receipts.some((r) => r.step === 'manifest.derived')).toBe(true);
+    expect(arm.resources.size).toBe(0); // all 10: 6 resources + 4 keys, including the hash-named storage accounts
+    expect(arm.deleteCalls).toHaveLength(6);
+    expect(arm.deleteCalls.some((id) => id.endsWith(`/eventhubs/eh-t-${SLUG}`))).toBe(true);
+    expect(arm.keyOps.filter((o) => o.startsWith('delete:'))).toHaveLength(4);
+    expect(tenants.docs.get(SLUG)?.status).toBe('destroying');
   });
 
   it('does NOT shred any key while a resource survives the delete', async () => {

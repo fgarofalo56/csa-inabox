@@ -53,18 +53,25 @@ async function resolve(ctx: JobContext, deps: TenantJobDeps, needHealthyStamp: b
     throw new JobFailure('stamp_not_ready', `the stamp is ${stamp.status}; a tenant is created only on a healthy stamp`);
   }
   const rg = stampResourceGroup(stamp.id, stamp.region);
-  let stampManifest: Record<string, unknown> | undefined;
+  let lookup;
   try {
-    stampManifest = await deps.arm.getStampManifest(rg, stamp.id);
+    lookup = await deps.arm.getStampManifest(rg, stamp.id);
   } catch (e) {
     throw classifyArm(e);
   }
-  if (!stampManifest) {
+  if (lookup.state === 'absent') {
     throw new JobFailure(
       'stamp_manifest_missing',
       `the stamp deployment lhds-stamp-${stamp.id} was not found in ${rg}; it is the source of the stamp manifest (vault, DNS zones, subnet)`,
     );
   }
+  if (lookup.state === 'no_outputs') {
+    throw new JobFailure(
+      'stamp_manifest_unreadable',
+      `the stamp deployment lhds-stamp-${stamp.id} exists in ${rg} but returned no stamp outputs (a later run may have overwritten the record); redeploy the stamp so its outputs are recorded`,
+    );
+  }
+  const stampManifest = lookup.value;
   const vaultUri = String(stampManifest.keyVaultUri ?? '');
   if (!vaultUri) throw new JobFailure('stamp_manifest_incomplete', 'the stamp manifest has no keyVaultUri');
   return { tenant, stamp, stampManifest, rg, vaultUri };
@@ -73,16 +80,51 @@ async function resolve(ctx: JobContext, deps: TenantJobDeps, needHealthyStamp: b
 /** [kind, id, expected last path segment]. The expectation is the DERIVED name, never the one ARM returned. */
 function expectedResources(m: TenantManifest, stampName: string, slug: string): [string, string, string][] {
   const n = tenantNames(stampName, slug);
-  const out: [string, string, string][] = [
-    ['storage.pixel', m.pixelAccountId, m.pixelAccountName],
-    ['storage.audit', m.auditAccountId, m.auditAccountName],
+  // An empty id means "not found by the destroy fallback": nothing to delete or read.
+  const out: [string, string, string][] = [];
+  if (m.pixelAccountId) out.push(['storage.pixel', m.pixelAccountId, m.pixelAccountName]);
+  if (m.auditAccountId) out.push(['storage.audit', m.auditAccountId, m.auditAccountName]);
+  out.push(
     ['eventhub', m.eventHubId, n.eventHubName],
     ['identity', m.identityId, n.identityName],
     ['alert.capacity', m.capacityAlertId, n.alertName],
-  ];
+  );
   if (m.databaseId) out.push(['database', m.databaseId, n.databaseName]);
   m.keyIds.forEach((id, i) => out.push([`key.${n.keyNames[i] ?? i}`, id, n.keyNames[i] ?? '']));
   return out;
+}
+
+/** Build a manifest from derived names plus the stamp manifest. Storage ids come from a tag query (hash in the name). */
+async function deriveManifest(arm: TenantArm, r: Resolved): Promise<TenantManifest> {
+  const slug = r.tenant.id;
+  const n = tenantNames(r.stamp.id, slug);
+  const scope = arm.scopeFor(r.rg);
+  const sm = r.stampManifest;
+  const ns = String(sm.eventHubsNamespace ?? '');
+  const pg = String(sm.postgresServerId ?? '');
+  const vaultId = String(sm.keyVaultId ?? '');
+  if (!ns || !vaultId) throw new JobFailure('stamp_manifest_incomplete', 'the stamp manifest lacks eventHubsNamespace or keyVaultId, so tenant resource names cannot be derived');
+  const storage = await arm.findTenantStorage(r.rg, slug);
+  const pixel = storage.find((id) => lastSegment(id).startsWith('sthpx')) ?? '';
+  const audit = storage.find((id) => lastSegment(id).startsWith('sthta')) ?? '';
+  return {
+    tenantSlug: slug,
+    stampName: r.stamp.id,
+    pixelAccountId: pixel,
+    pixelAccountName: lastSegment(pixel),
+    auditAccountId: audit,
+    auditAccountName: lastSegment(audit),
+    databaseId: pg ? `${pg}/databases/${n.databaseName}` : '',
+    databaseName: n.databaseName,
+    eventHubId: `${scope}/providers/Microsoft.EventHub/namespaces/${ns}/eventhubs/${n.eventHubName}`,
+    eventHubName: n.eventHubName,
+    identityId: `${scope}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${n.identityName}`,
+    identityPrincipalId: '',
+    capacityAlertId: `${scope}/providers/Microsoft.Insights/metricAlerts/${n.alertName}`,
+    maxStorageGiB: r.tenant.quotas.maxStorageGiB,
+    keyIds: n.keyNames.map((k) => `${vaultId}/keys/${k}`),
+    keyNames: n.keyNames,
+  };
 }
 
 function lastSegment(id: string): string {
@@ -135,7 +177,7 @@ export function tenantCreateHandler(deps: TenantJobDeps): JobHandler {
           throw classifyArm(e);
         }
         await ctx.receipt('key.state', `key=${name} exists=${k.exists} enabled=${String(k.enabled)}`);
-        if (!k.exists || k.enabled !== true) problems.push(`key ${name} is not enabled`);
+        if (!k.exists || k.enabled !== true) problems.push(`key ${name} is ${k.exists ? 'disabled' : 'missing'}`);
       }
       if (problems.length > 0) {
         throw new JobFailure('readback_mismatch', `tenant resources did not read back: ${problems.join('; ')}`);
@@ -166,17 +208,30 @@ export function tenantDestroyHandler(deps: TenantJobDeps): JobHandler {
         await ctx.receipt('tenant.destroying', `tenant=${r.tenant.id}`);
       }
 
-      let manifest: TenantManifest | undefined;
+      let lookup;
       try {
-        manifest = await deps.arm.getTenantManifest(r.rg, r.tenant.id);
+        lookup = await deps.arm.getTenantManifest(r.rg, r.tenant.id);
       } catch (e) {
         throw classifyArm(e);
       }
-      if (!manifest) {
+      if (lookup.state === 'absent') {
         throw new JobFailure(
           'tenant_manifest_missing',
-          `the tenant deployment lhds-tenant-${r.tenant.id} was not found in ${r.rg}, so the resources to delete cannot be named; nothing was deleted and no key was shredded`,
+          `the tenant deployment lhds-tenant-${r.tenant.id} was not found in ${r.rg} (HTTP 404), so the resources to delete cannot be named; nothing was deleted and no key was shredded`,
         );
+      }
+      let manifest: TenantManifest;
+      if (lookup.state === 'found') {
+        manifest = lookup.value;
+      } else {
+        // The record exists but has no outputs (a failed re-run overwrote it). The names are
+        // derived, so destroy proceeds from them instead of leaving the tenant undeletable.
+        try {
+          manifest = await deriveManifest(deps.arm, r);
+        } catch (e) {
+          throw classifyArm(e);
+        }
+        await ctx.receipt('manifest.derived', `deployment lhds-tenant-${r.tenant.id} has no outputs; deleting by derived names`);
       }
 
       // 1. Data-bearing resources first. Keys outlive them until every consumer is gone.

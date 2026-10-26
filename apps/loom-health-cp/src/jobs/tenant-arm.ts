@@ -81,11 +81,22 @@ export interface KeyReadback {
   scheduledPurgeDate?: string;
 }
 
+/**
+ * Three-way answer for "read the outputs of deployment X". `absent` = ARM said 404.
+ * `no_outputs` = the deployment record EXISTS but carries no usable outputs (for example a
+ * failed incremental re-run overwrote the record). Callers must not conflate them.
+ */
+export type Lookup<T> = { state: 'absent' } | { state: 'no_outputs' } | { state: 'found'; value: T };
+
 export interface TenantArm {
-  /** Outputs of the stamp deployment (`stamp` object) or undefined when the stamp deployment is absent. */
-  getStampManifest(resourceGroup: string, stampId: string): Promise<Record<string, unknown> | undefined>;
-  /** Outputs of a previous tenant deployment or undefined when it was never run. */
-  getTenantManifest(resourceGroup: string, slug: string): Promise<TenantManifest | undefined>;
+  /** Outputs of the stamp deployment (`stamp` object). */
+  getStampManifest(resourceGroup: string, stampId: string): Promise<Lookup<Record<string, unknown>>>;
+  /** Outputs of the tenant deployment record. */
+  getTenantManifest(resourceGroup: string, slug: string): Promise<Lookup<TenantManifest>>;
+  /** `/subscriptions/<id>/resourceGroups/<rg>`, so derived resource ids need no manifest. */
+  scopeFor(resourceGroup: string): string;
+  /** Ids of storage accounts tagged lhds-tenant=<slug> in the resource group (their names embed a hash, so they cannot be derived). */
+  findTenantStorage(resourceGroup: string, slug: string): Promise<string[]>;
   /** Run tenant.bicep (incremental, idempotent) and return its outputs once provisioning succeeded. */
   deployTenant(input: {
     resourceGroup: string;
@@ -215,17 +226,30 @@ export class RestTenantArm implements TenantArm {
     return `/subscriptions/${this.o.subscriptionId}/resourceGroups/${rg}/providers/Microsoft.Resources/deployments/${name}`;
   }
 
-  async getStampManifest(rg: string, stampId: string): Promise<Json | undefined> {
-    const r = await this.call('GET', this.arm(this.deploymentPath(rg, stampDeploymentName(stampId))), this.armScope, 'read stamp deployment');
-    if (r.status === 404) return undefined;
-    const out = ((r.json?.properties as Json | undefined)?.outputs as Json | undefined)?.stamp as Json | undefined;
-    return (out?.value as Json | undefined) ?? undefined;
+  scopeFor(rg: string): string {
+    return `/subscriptions/${this.o.subscriptionId}/resourceGroups/${rg}`;
   }
 
-  async getTenantManifest(rg: string, slug: string): Promise<TenantManifest | undefined> {
+  async findTenantStorage(rg: string, slug: string): Promise<string[]> {
+    const filter = encodeURIComponent(`tagName eq 'lhds-tenant' and tagValue eq '${slug.replace(/[^a-z0-9-]/g, '')}'`);
+    const r = await this.call('GET', this.arm(`${this.scopeFor(rg)}/resources?$filter=${filter}`, '2021-04-01'), this.armScope, 'list tenant resources');
+    const value = Array.isArray(r.json?.value) ? (r.json?.value as Json[]) : [];
+    return value.map((v) => String(v.id ?? '')).filter((id) => resourceTypeOf(id) === 'microsoft.storage/storageaccounts');
+  }
+
+  async getStampManifest(rg: string, stampId: string): Promise<Lookup<Json>> {
+    const r = await this.call('GET', this.arm(this.deploymentPath(rg, stampDeploymentName(stampId))), this.armScope, 'read stamp deployment');
+    if (r.status === 404) return { state: 'absent' };
+    const out = ((r.json?.properties as Json | undefined)?.outputs as Json | undefined)?.stamp as Json | undefined;
+    const value = out?.value as Json | undefined;
+    return value ? { state: 'found', value } : { state: 'no_outputs' };
+  }
+
+  async getTenantManifest(rg: string, slug: string): Promise<Lookup<TenantManifest>> {
     const r = await this.call('GET', this.arm(this.deploymentPath(rg, tenantDeploymentName(slug))), this.armScope, 'read tenant deployment');
-    if (r.status === 404) return undefined;
-    return manifestFromOutputs((r.json?.properties as Json | undefined)?.outputs as Json | undefined);
+    if (r.status === 404) return { state: 'absent' };
+    const m = manifestFromOutputs((r.json?.properties as Json | undefined)?.outputs as Json | undefined);
+    return m ? { state: 'found', value: m } : { state: 'no_outputs' };
   }
 
   async deployTenant(i: { resourceGroup: string; slug: string; displayName: string; maxStorageGiB: number; stamp: Json }): Promise<TenantManifest> {
