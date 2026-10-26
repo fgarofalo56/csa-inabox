@@ -138,7 +138,7 @@ defaults.
 | Item | Status | Branch | Model | Evidence | Updated |
 |---|---|---|---|---|---|
 | W00-measurement-spike | merged | docs/lhds-w0-7-decision | sonnet | `W00-measurement-spike.md` (W0-3 #5092/#5094; W0-1/2/4/5 DEV function proof #5107, pass bars deferred to W7 on operator Q2 2026-10-24; W0-6 #5093; W0-7 decision #5118) | 2026-10-24 |
-| W01-control-plane-identity-stamp | in-progress | feat/lhds-w1-3-cp-bicep | sonnet | `W01-control-plane-identity-stamp.md` (merged, not deployed: W1-1 #5122, W1-3 service #5121, W1-4 design #5127, W1-5 Rego v1 #5125; W1-3 bicep #5126 = c39c7a42f; remaining W1-2, W1-4 server, W1-5 bicep + endpoint, W1-6..W1-9. Live stamps on the DEV profile in both clouds, operator 2026-10-24; What-If UNMEASURED while the estate is paused and the Gov ADX is stopped, #5123) | 2026-10-26 |
+| W01-control-plane-identity-stamp | in-progress | feat/lhds-w1-3-cp-bicep | sonnet | `W01-control-plane-identity-stamp.md` (merged, not deployed: W1-1 #5122, W1-3 service #5121, W1-4 design #5127, W1-5 Rego v1 #5125; W1-3 bicep #5126 = c39c7a42f; W1-2 tenant bicep #5130 = 66668f51c, W1-4 server #5131 = 47147f167, deploy-health.yml param/hub fix #5132 = d6a284504; remaining W1-4 wiring, W1-5 bicep + endpoint, W1-6..W1-9, and the DEV What-If + synthetic tenant receipt. Live stamps on the DEV profile in both clouds, operator 2026-10-24; What-If UNMEASURED while the estate is paused and the Gov ADX is stopped, #5123) | 2026-10-26 |
 | W02-fhir-core | todo | | sonnet | `W02-fhir-core.md` | 2026-10-22 |
 | W03-dicom-core-dicomweb | todo | | sonnet | `W03-dicom-core-dicomweb.md` | 2026-10-22 |
 | W04-terminology | todo | | sonnet | `W04-terminology.md` | 2026-10-22 |
