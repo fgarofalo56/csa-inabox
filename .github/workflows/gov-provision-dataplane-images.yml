@@ -231,7 +231,7 @@ jobs:
       # (Container Apps) and IL5 (AKS) once healthEnabled=true. Same firewall lease
       # as the builds above. Cloud parity: built for Gov, not Commercial-only. It is
       # NOT in the preflight tag assertions below: those list what the live Gov
-      # template pulls today, and healthEnabled is false in every health-*.bicepparam.
+      # template pulls today, and healthEnabled is false in every *-health.bicepparam.
       - name: Build loom-health-cp on the Gov ACR
         if: ${{ inputs.apply == 'true' }}
         run: |

@@ -18,7 +18,7 @@ Deployment: `platform/fiab/bicep/modules/health/control-plane.bicep`, invoked by
 with its own 4 MiB ARM budget (embedding it in `main.bicep` pushed
 `deploy-templates/main.json` over the inline limit). It is deployed by
 `.github/workflows/deploy-health.yml` (dispatch-only; Commercial and GCC-High;
-`whatif-only` by default; `healthEnabled` is false in every `health-*.bicepparam`).
+`whatif-only` by default; `healthEnabled` is false in every `*-health.bicepparam`).
 It creates the Cosmos account with the five containers, the identity and its Data
 Contributor role, and the workload: a Container App (Commercial, GCC, GCC-High) or
 a Deployment on the stamp AKS cluster (IL5, supported in code, not offered by the

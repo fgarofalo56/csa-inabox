@@ -12,12 +12,12 @@
 // install the console submits inline.
 //
 // Deployed by .github/workflows/deploy-health.yml (Commercial and GCC-High; IL5 and
-// DoD are supported in code through health-params/health-il5.bicepparam and have never been
+// DoD are supported in code through health-params/il5-health.bicepparam and have never been
 // exercised; GCC is not claimed). The workflow discovers the hub's registry and
 // Container Apps environment and passes them in `controlPlaneConfig`.
 //
 //   az deployment sub create --location <region> -f platform/fiab/bicep/health.bicep \
-//     -p platform/fiab/bicep/health-params/health-<boundary>.bicepparam \
+//     -p platform/fiab/bicep/health-params/<boundary>-health.bicepparam \
 //     healthEnabled=true adminEntraGroupId=<group> controlPlaneConfig=@cp.json
 //
 // One stamp = one resource group (ADR-005): rg-csa-loom-health-<stamp>-<region>.
