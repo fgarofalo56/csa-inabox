@@ -1,0 +1,406 @@
+name: deploy-health
+
+# CSA Loom Health Data Services (LHDS) - deploys platform/fiab/bicep/health.bicep, its
+# own subscription-level unit (stamp W1-1 + control plane W1-3), apart from main.bicep.
+# Dispatch-only: no schedule, so nothing here runs unless an operator asks.
+#
+# BOUNDARIES. Commercial and GCC-High. IL5 and DoD are supported in code through
+# health-params/il5-health.bicepparam and are deliberately not offered here (never exercised).
+# GCC is not claimed (no GCC tenant exists; cloud-parity.md). Neither offered boundary
+# has a deploy receipt until this lane has run an apply on it.
+#
+# MODES. whatif-only (default) previews health.bicep and applies NOTHING. full APPLIES it.
+# healthEnabled is false in every param file; this workflow is the only thing that
+# passes healthEnabled=true, and only in the what-if/apply steps below.
+#
+# ESTATE PAUSE (#5111, #5113, #5114). The control plane creates a Container App on the
+# hub environment, which a paused estate must not have rewritten. A full run STANDS DOWN
+# (applies nothing, says so) unless BOTH the checked-in declaration and the observed
+# Estate Power state say the estate is not paused. This lane is stricter than the
+# commercial dispatch path: an UNKNOWN verdict (the gate job failed, timed out or was
+# skipped) also stands the apply down, because a missed apply is cheap and can be
+# repeated, and override_estate_pause is the explicit way past it. A what-if is
+# read-only, so it is not gated.
+#
+# FAILURES are classified (permission / not found / transient / quota-capacity / template)
+# with a concrete remediation, and nothing here discards a result: no continue-on-error,
+# no `|| true`. A stood-down or what-if-only run is titled DRY RUN so it is never read
+# as a deployed SHA (deploy-integrity.md R2/R3).
+
+run-name: deploy-health ${{ inputs.boundary }}${{ inputs.run_mode != 'full' && ' - DRY RUN (whatif-only, applies nothing)' || '' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      boundary:
+        description: 'Cloud boundary. Commercial or GCC-High. IL5/DoD are supported in code only and are not offered.'
+        type: choice
+        default: Commercial
+        options:
+          - Commercial
+          - GCC-High
+      run_mode:
+        description: 'whatif-only PREVIEWS health.bicep and applies NOTHING. full APPLIES it: creates the stamp resource group and, when control_plane_audiences is set, the control plane.'
+        type: choice
+        default: whatif-only
+        options:
+          - whatif-only
+          - full
+      control_plane_audiences:
+        description: 'Comma-separated accepted token audiences (app id URI and/or client id) for loom-health-cp. EMPTY = the stamp deploys without the control plane, because the service refuses to start without an audience.'
+        type: string
+        required: false
+        default: ''
+      control_plane_platform:
+        description: 'auto = containerApps on these boundaries. aks = Deployment on the stamp cluster (the IL5 path; allowed here for testing).'
+        type: choice
+        default: auto
+        options:
+          - auto
+          - containerApps
+          - aks
+      allow_existing_hub:
+        description: 'Reconcile an LHDS stamp that already exists in this subscription. Default false: if an rg-csa-loom-health-* group exists the run refuses rather than silently adopting or duplicating it (deploy-integrity R5). The hub itself (registry + Container Apps environment) must already exist either way.'
+        type: boolean
+        default: false
+      override_estate_pause:
+        description: 'Apply even though the estate is PAUSED or its state is unknown. Default false: a full run then stands down and applies nothing. true = you accept that.'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-health-${{ inputs.boundary }}
+  cancel-in-progress: false
+
+jobs:
+  precheck:
+    name: Verify ${{ inputs.boundary }} secrets are configured
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - id: check
+        env:
+          BOUNDARY: ${{ inputs.boundary }}
+          C: ${{ inputs.boundary == 'GCC-High' && secrets.AZURE_GOV_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          S: ${{ inputs.boundary == 'GCC-High' && secrets.AZURE_GOV_CLIENT_SECRET || secrets.AZURE_CLIENT_SECRET }}
+          T: ${{ inputs.boundary == 'GCC-High' && secrets.AZURE_GOV_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          U: ${{ inputs.boundary == 'GCC-High' && secrets.AZURE_GOV_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          if [[ -z "$C" || -z "$S" || -z "$T" || -z "$U" ]]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::error::The $BOUNDARY deploy credentials (client id, secret, tenant, subscription) are not all configured, so nothing can be read or deployed. Bootstrap per docs/fiab/runbooks/secrets-bootstrap.md."
+            exit 1
+          fi
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+
+  # The DECLARATION half of the estate-pause verdict, computed with no Azure.
+  pause-declaration:
+    name: Is the ${{ inputs.boundary }} estate DECLARED paused?
+    runs-on: ubuntu-latest
+    outputs:
+      declared: ${{ steps.read.outputs.declared_paused }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - id: read
+        env:
+          BOUNDARY: ${{ inputs.boundary }}
+        run: node scripts/ci/estate-pause-declared.mjs --boundary "$BOUNDARY"
+
+  # The OBSERVED half: the console's Estate Power state, read as the deploy principal.
+  estate-gate:
+    name: Estate pause gate
+    needs: precheck
+    if: ${{ needs.precheck.outputs.configured == 'true' }}
+    uses: ./.github/workflows/estate-pause-gate.yml
+    secrets: inherit
+    with:
+      boundary: ${{ inputs.boundary }}
+      override_estate_pause: ${{ inputs.override_estate_pause == true }}
+
+  # The GCC-High apply keeps the manual approval the GCC-High deploy lane has
+  # (environment gcc-high-deploy). Commercial has no environment on its deploy lane,
+  # so this job is skipped there and the deploy job below does not wait on it.
+  approve-gov:
+    name: Approve the GCC-High apply
+    needs: precheck
+    if: ${{ inputs.boundary == 'GCC-High' && inputs.run_mode == 'full' && needs.precheck.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: gcc-high-deploy
+    steps:
+      - run: echo "Approved GCC-High apply of platform/fiab/bicep/health.bicep."
+
+  deploy:
+    name: ${{ inputs.run_mode == 'full' && 'Deploy' || 'What-if' }} LHDS (${{ inputs.boundary }})
+    needs: [precheck, pause-declaration, estate-gate, approve-gov]
+    # !cancelled() so a failed or skipped gate still reaches the verdict step, which
+    # fails closed; without it a gate failure would skip this job and read as a pass.
+    # approve-gov is skipped on Commercial and on what-if; a REJECTED approval fails it.
+    if: ${{ !cancelled() && needs.precheck.result == 'success' && (needs.approve-gov.result == 'success' || needs.approve-gov.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      BOUNDARY: ${{ inputs.boundary }}
+      RUN_MODE: ${{ inputs.run_mode }}
+      AUDIENCES: ${{ inputs.control_plane_audiences }}
+      CP_PLATFORM_INPUT: ${{ inputs.control_plane_platform }}
+      ALLOW_EXISTING: ${{ inputs.allow_existing_hub }}
+      OVERRIDE_PAUSE: ${{ inputs.override_estate_pause }}
+      DECLARED: ${{ needs.pause-declaration.outputs.declared }}
+      GATE_RESULT: ${{ needs.estate-gate.result }}
+      GATE_STANDDOWN: ${{ needs.estate-gate.outputs.standdown }}
+      GATE_STATE: ${{ needs.estate-gate.outputs.state }}
+      ADMIN_GROUP: ${{ inputs.boundary == 'GCC-High' && secrets.FIAB_GOV_ADMIN_GROUP_ID || secrets.FIAB_ADMIN_GROUP_ID }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Azure login (Commercial)
+        if: ${{ inputs.boundary == 'Commercial' }}
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      - name: Azure login (Gov)
+        if: ${{ inputs.boundary == 'GCC-High' }}
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        if: ${{ inputs.boundary == 'GCC-High' }}
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Resolve parameters and compile health.bicep
+        id: params
+        run: |
+          set -euo pipefail
+          mkdir -p temp
+          case "$BOUNDARY" in
+            Commercial) PF=platform/fiab/bicep/health-params/commercial-health.bicepparam ;;
+            GCC-High)   PF=platform/fiab/bicep/health-params/gcc-high-health.bicepparam ;;
+            *) echo "::error::Boundary '$BOUNDARY' is not offered by this lane (Commercial and GCC-High only)."; exit 1 ;;
+          esac
+          az bicep install
+          az bicep build -f platform/fiab/bicep/health.bicep --outfile temp/health.json
+          az bicep build-params -f "$PF" --stdout > temp/params.json
+          HUB_LOCATION=$(jq -r '.parameters.location.value' temp/params.json)
+          if [ -z "$HUB_LOCATION" ] || [ "$HUB_LOCATION" = "null" ]; then
+            echo "::error::$PF does not set a location, so the hub resource group cannot be named."
+            exit 1
+          fi
+          PLATFORM="$CP_PLATFORM_INPUT"
+          if [ "$PLATFORM" = "auto" ]; then PLATFORM=containerApps; fi
+          {
+            echo "pf=$PF"
+            echo "hub_location=$HUB_LOCATION"
+            echo "platform=$PLATFORM"
+          } >> "$GITHUB_OUTPUT"
+
+      # The apply verdict. FAIL-CLOSED on anything but a positive "not paused": the
+      # checked-in declaration must read exactly 'false', and the observed gate must
+      # have SUCCEEDED and said standdown == 'false'. A missing or failed verdict is an
+      # unknown, and an unknown is not a no.
+      - name: Estate pause verdict
+        id: verdict
+        run: |
+          set -euo pipefail
+          STAND=false
+          REASON=""
+          if [ "$RUN_MODE" = "full" ] && [ "$OVERRIDE_PAUSE" != "true" ]; then
+            if [ "$DECLARED" != "false" ]; then
+              STAND=true
+              if [ "$DECLARED" = "true" ]; then
+                REASON="$BOUNDARY is DECLARED paused in scripts/ci/estate-pause-declaration.json."
+              else
+                REASON="the declaration job published no verdict (got '${DECLARED}'), which is an unknown, not a no."
+              fi
+            elif [ "$GATE_RESULT" != "success" ]; then
+              STAND=true
+              REASON="the Estate pause gate did not succeed (result '${GATE_RESULT}'), so the observed state was not established."
+            elif [ "$GATE_STANDDOWN" != "false" ]; then
+              STAND=true
+              REASON="the Estate Power state is '${GATE_STATE}' (stand-down '${GATE_STANDDOWN}')."
+            fi
+          fi
+          echo "standdown=$STAND" >> "$GITHUB_OUTPUT"
+          if [ "$STAND" = "true" ]; then
+            echo "::notice::Stood down: ${REASON} This run applies NOTHING and is UNMEASURED, not clean. Resume the estate, or dispatch with override_estate_pause=true."
+            {
+              echo "### deploy-health: STOOD DOWN ($BOUNDARY)"
+              echo
+              echo "Reason: ${REASON}"
+              echo
+              echo "Nothing was applied. This run is not a deployed SHA and is UNMEASURED, not clean."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Discover the hub (registry and Container Apps environment)
+        id: hub
+        if: ${{ steps.verdict.outputs.standdown != 'true' }}
+        env:
+          HUB_LOCATION: ${{ steps.params.outputs.hub_location }}
+          PLATFORM: ${{ steps.params.outputs.platform }}
+        run: |
+          set -uo pipefail
+          HUB_RG="rg-csa-loom-admin-${HUB_LOCATION}"
+          fail() { # $1 = err file, $2 = what we were reading
+            if grep -qiE 'AuthorizationFailed|does not have authorization' "$1"; then
+              echo "::error::PERMISSION: the deploy principal cannot read $2 in $HUB_RG. Grant it Reader on the subscription: az role assignment create --assignee <deploy-sp-app-id> --role Reader --scope /subscriptions/<subscription-id>"
+            elif grep -qiE 'ResourceGroupNotFound|could not be found' "$1"; then
+              echo "::error::NOT FOUND: resource group $HUB_RG does not exist in this subscription, so $2 could not be read. LHDS needs the Loom hub first: run deploy-fiab-commercial.yml or deploy-fiab-gcch.yml, then re-run this lane."
+            elif grep -qiE 'timed out|Max retries|Connection|Name or service not known|ServiceUnavailable|TooManyRequests' "$1"; then
+              echo "::error::TRANSIENT: ARM did not answer while reading $2. Nothing was established about the hub; re-run this lane."
+            else
+              echo "::error::UNCLASSIFIED failure reading $2: $(head -c 400 "$1")"
+            fi
+            exit 1
+          }
+          az resource list -g "$HUB_RG" --resource-type Microsoft.ContainerRegistry/registries --query '[].name' -o json > temp/acr.json 2> temp/acr.err || fail temp/acr.err "the container registry"
+          N=$(jq 'length' temp/acr.json)
+          if [ "$N" != "1" ]; then
+            echo "::error::Expected exactly 1 container registry in $HUB_RG, found $N. $( [ "$N" = "0" ] && echo 'The hub registry does not exist yet.' || echo 'More than one is ambiguous and this lane will not guess which to pull from.')"
+            exit 1
+          fi
+          ACR=$(jq -r '.[0]' temp/acr.json)
+          az acr show -n "$ACR" -g "$HUB_RG" --query loginServer -o tsv > temp/acr.ls 2> temp/acr.ls.err || fail temp/acr.ls.err "the registry login server"
+          LOGIN=$(tr -d '\r\n' < temp/acr.ls)
+          CAE=""
+          if [ "$PLATFORM" = "containerApps" ]; then
+            az resource list -g "$HUB_RG" --resource-type Microsoft.App/managedEnvironments --query '[].id' -o json > temp/cae.json 2> temp/cae.err || fail temp/cae.err "the Container Apps environment"
+            M=$(jq 'length' temp/cae.json)
+            if [ "$M" != "1" ]; then
+              echo "::error::Expected exactly 1 Container Apps environment in $HUB_RG, found $M. The containerApps control plane needs one; use control_plane_platform=aks to host it on the stamp cluster instead."
+              exit 1
+            fi
+            CAE=$(jq -r '.[0]' temp/cae.json)
+          fi
+          jq -n --arg aud "$AUDIENCES" --arg platform "$PLATFORM" --arg acr "$ACR" --arg rg "$HUB_RG" \
+               --arg login "$LOGIN" --arg env "$CAE" \
+               '{ audiences: ($aud | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))),
+                  controlPlane: $platform, acrName: $acr, acrResourceGroup: $rg, acrLoginServer: $login, environmentId: $env }' > temp/cp.json
+          echo "acr=$ACR" >> "$GITHUB_OUTPUT"
+          echo "hub_rg=$HUB_RG" >> "$GITHUB_OUTPUT"
+          echo "::notice::Hub: registry $ACR, resource group $HUB_RG, control plane audiences $(jq '.audiences | length' temp/cp.json)."
+
+      - name: Refuse to adopt or duplicate an existing LHDS stamp
+        if: ${{ steps.verdict.outputs.standdown != 'true' && inputs.allow_existing_hub != true }}
+        run: |
+          set -uo pipefail
+          az group list --query "[?starts_with(name, 'rg-csa-loom-health-')].name" -o json > temp/health-rg.json 2> temp/health-rg.err || {
+            echo "::error::Could not list resource groups to check for an existing LHDS stamp: $(head -c 400 temp/health-rg.err). Nothing was established; re-run, or dispatch with allow_existing_hub=true to skip this check."
+            exit 1
+          }
+          N=$(jq 'length' temp/health-rg.json)
+          if [ "$N" != "0" ]; then
+            echo "::error::An LHDS stamp already exists in this subscription ($(jq -r 'join(", ")' temp/health-rg.json)). Dispatch with allow_existing_hub=true to reconcile it in place; this lane will not silently adopt or duplicate it."
+            exit 1
+          fi
+
+      - name: Image preflight - loom-health-cp tag exists in the registry
+        if: ${{ steps.verdict.outputs.standdown != 'true' && inputs.run_mode == 'full' && inputs.control_plane_audiences != '' }}
+        env:
+          ACR: ${{ steps.hub.outputs.acr }}
+          HUB_RG: ${{ steps.hub.outputs.hub_rg }}
+        run: |
+          set -uo pipefail
+          bash scripts/ci/assert-acr-image-tags.sh --acr "$ACR" --rg "$HUB_RG" --lease "loom-health-cp:v0.1"
+          RC=$?
+          case "$RC" in
+            0) ;;
+            3) echo "::error::MISSING: the registry answered and loom-health-cp:v0.1 is not in it. Build it first: full-app-deploy-commercial.yml (Commercial) or gov-provision-dataplane-images.yml with apply=true (GCC-High)."; exit 1 ;;
+            4) echo "::error::UNPROVEN: the registry could not be read, so whether loom-health-cp:v0.1 exists is unknown. This is not a claim that it is missing; re-run."; exit 1 ;;
+            5) echo "::error::The tag was verified present but re-locking the registry firewall is unproven; check the registry network rules before continuing."; exit 1 ;;
+            *) echo "::error::assert-acr-image-tags.sh exited $RC (usage or unclassified)."; exit 1 ;;
+          esac
+
+      - name: Bicep what-if
+        if: ${{ steps.verdict.outputs.standdown != 'true' && inputs.run_mode != 'full' }}
+        env:
+          PF: ${{ steps.params.outputs.pf }}
+          HUB_LOCATION: ${{ steps.params.outputs.hub_location }}
+        run: |
+          set -uo pipefail
+          CP_ARG=()
+          if [ -f temp/cp.json ]; then CP_ARG=(--parameters controlPlaneConfig=@temp/cp.json); fi
+          az deployment sub what-if --name "lhds-whatif-${GITHUB_RUN_ID}" --location "$HUB_LOCATION" \
+            --template-file platform/fiab/bicep/health.bicep --parameters "$PF" \
+            --parameters healthEnabled=true adminEntraGroupId="$ADMIN_GROUP" "${CP_ARG[@]}" > temp/whatif.out 2> temp/whatif.err
+          RC=$?
+          cat temp/whatif.out
+          if [ "$RC" != "0" ]; then
+            echo "::error::What-if failed ($(head -c 600 temp/whatif.err))"
+            exit 1
+          fi
+
+      - name: Deploy health.bicep
+        id: apply
+        if: ${{ steps.verdict.outputs.standdown != 'true' && inputs.run_mode == 'full' }}
+        env:
+          PF: ${{ steps.params.outputs.pf }}
+          HUB_LOCATION: ${{ steps.params.outputs.hub_location }}
+        run: |
+          set -uo pipefail
+          CP_ARG=()
+          if [ -f temp/cp.json ]; then CP_ARG=(--parameters controlPlaneConfig=@temp/cp.json); fi
+          az deployment sub create --name "lhds-${GITHUB_RUN_ID}" --location "$HUB_LOCATION" \
+            --template-file platform/fiab/bicep/health.bicep --parameters "$PF" \
+            --parameters healthEnabled=true adminEntraGroupId="$ADMIN_GROUP" "${CP_ARG[@]}" \
+            --query properties.outputs -o json > temp/outputs.json 2> temp/apply.err
+          RC=$?
+          if [ "$RC" != "0" ]; then
+            if grep -qiE 'AuthorizationFailed|does not have authorization|LinkedAuthorizationFailed' temp/apply.err; then
+              echo "::error::PERMISSION: the deploy principal lacks a role this template needs (it creates resource groups and writes role assignments). Grant Owner or Contributor plus User Access Administrator on the subscription. Detail: $(grep -iE 'Authorization' temp/apply.err | head -n 2 | head -c 500)"
+            elif grep -qiE 'QuotaExceeded|SkuNotAvailable|OfferRestricted|NotAvailableForSubscription|InsufficientCapacity|ZonalAllocationFailed' temp/apply.err; then
+              echo "::error::QUOTA/CAPACITY: the region refused a SKU or quota (PostgreSQL Flexible is offer-restricted in several regions; AKS node pools need regional vCPU quota). Run az postgres flexible-server list-skus and az vm list-usage for the stamp region, then set healthConfig.location. Detail: $(grep -iE 'Quota|Sku|Offer|Capacity' temp/apply.err | head -n 2 | head -c 500)"
+            elif grep -qiE 'InvalidTemplate|InvalidParameter|BCP[0-9]+|InvalidTemplateDeployment' temp/apply.err; then
+              echo "::error::TEMPLATE/PARAMETER defect, not transient (a retry cannot help). Detail: $(head -c 700 temp/apply.err)"
+            elif grep -qiE 'timed out|Max retries|Connection|ServiceUnavailable|TooManyRequests|RetryableError' temp/apply.err; then
+              echo "::error::TRANSIENT: ARM did not complete the deployment. Check the deployment lhds-${GITHUB_RUN_ID} in the portal for what was created, then re-run with allow_existing_hub=true."
+            else
+              echo "::error::UNCLASSIFIED deployment failure: $(head -c 700 temp/apply.err)"
+            fi
+            exit 1
+          fi
+
+      # Never report success over an unverified outcome (deploy-integrity R6): the
+      # template exits 0 when the control plane is SKIPPED, so read its own state back.
+      - name: Verify what was deployed
+        if: ${{ steps.verdict.outputs.standdown != 'true' && inputs.run_mode == 'full' }}
+        run: |
+          set -euo pipefail
+          jq -e '.healthStamp.value.stampName' temp/outputs.json > /dev/null || { echo "::error::The deployment returned no stamp manifest, so no stamp was created. healthEnabled=true was passed, so this is the PostgreSQL gate (healthConfig.postgres) or a template defect."; exit 1; }
+          DEPLOYED=$(jq -r '.healthControlPlaneState.value.deployed' temp/outputs.json)
+          {
+            echo "### deploy-health: APPLIED ($BOUNDARY)"
+            echo
+            echo "Stamp: $(jq -r '.healthStamp.value.stampName' temp/outputs.json) in $(jq -r '.healthStamp.value.resourceGroup' temp/outputs.json)"
+            echo "Control plane: $(jq -c '.healthControlPlaneState.value' temp/outputs.json)"
+            echo
+            echo "Deployed, NOT verified live: no request to the control plane health route was made."
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$AUDIENCES" != "" ] && [ "$DEPLOYED" != "true" ]; then
+            echo "::error::control_plane_audiences was set but the control plane was NOT deployed: $(jq -r '.healthControlPlaneState.value.reason' temp/outputs.json)"
+            exit 1
+          fi

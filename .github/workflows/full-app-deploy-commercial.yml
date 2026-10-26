@@ -501,6 +501,12 @@ jobs:
           # failure here means the ACR agent pool, not the code.
           - app: loom-directlake
             ctx: ./apps/loom-directlake
+          # LHDS control plane (W1-3). modules/health/control-plane.bicep references
+          # it only when healthEnabled=true (default false), so it is not yet a hard
+          # prerequisite of phase 2; it is built here so the image exists before the
+          # flag flips.
+          - app: loom-health-cp
+            ctx: ./apps/loom-health-cp
     steps:
       - uses: actions/checkout@v7.0.1
       - name: Azure login

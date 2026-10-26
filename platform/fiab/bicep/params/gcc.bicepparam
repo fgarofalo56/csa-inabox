@@ -276,13 +276,3 @@ param loomMsalClientId = readEnvironmentVariable('LOOM_MSAL_CLIENT_ID', '')
 param observabilityConfig = {
   programBudgetStartDate: readEnvironmentVariable('LOOM_PROGRAM_BUDGET_START_DATE', '')
 }
-
-// ── Loom Health Data Services (LHDS) stamp (W1-1) ────────────────────────────
-// OFF by default. Flip healthEnabled to deploy a stamp into its own resource
-// group. Keys of healthConfig are documented above the health module in main.bicep.
-// This boundary: supported-in-code; never exercised until a What-If / deploy receipt exists.
-param healthEnabled = false
-param healthConfig = {
-  stampName: 'dev01'
-  profile: 'dev'
-}

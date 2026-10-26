@@ -134,6 +134,10 @@ on:
       # admin-plane/main.bicep and bound LOOM_DIRECTLAKE_URL. Same reason as the
       # two above: without its image in ACR the Container App cannot start.
       - 'apps/loom-directlake/**'
+      # loom-health-cp is the LHDS control plane (W1-3); health/control-plane.bicep
+      # pulls its image once healthEnabled=true. Without a producer that PUT fails
+      # with MANIFEST_UNKNOWN. This lane builds for GCC-High/IL5 too (boundary input).
+      - 'apps/loom-health-cp/**'
       - '.github/workflows/build-fiab-images-acr-tasks.yml'
 
 permissions:
@@ -323,7 +327,7 @@ jobs:
             # would add ~10 min to each one for no benefit. It IS in the
             # from-scratch app phase (full-app-deploy-commercial.yml), and it can
             # be built on demand here with `apps: loom-uat`.
-            APPS='[{"name":"loom-console","ctx":"./apps/fiab-console"},{"name":"loom-setup-orchestrator","ctx":"./apps/fiab-setup-orchestrator"},{"name":"loom-mcp","ctx":"./apps/fiab-mcp-config"},{"name":"loom-mcp-bridge","ctx":"./apps/fiab-mcp-bridge"},{"name":"loom-activator","ctx":"./apps/fiab-activator-engine"},{"name":"loom-mirroring","ctx":"./apps/fiab-mirroring-engine"},{"name":"loom-direct-lake-shim","ctx":"./apps/fiab-direct-lake-shim"},{"name":"loom-copilot-maf","ctx":"./apps/copilot-maf"},{"name":"loom-unity","ctx":"./apps/loom-unity"},{"name":"loom-migrate","ctx":"./apps/loom-migrate"},{"name":"loom-risingwave","ctx":"./apps/loom-risingwave"},{"name":"loom-trino","ctx":"./apps/loom-trino"},{"name":"loom-directlake","ctx":"./apps/loom-directlake"}]'
+            APPS='[{"name":"loom-console","ctx":"./apps/fiab-console"},{"name":"loom-setup-orchestrator","ctx":"./apps/fiab-setup-orchestrator"},{"name":"loom-mcp","ctx":"./apps/fiab-mcp-config"},{"name":"loom-mcp-bridge","ctx":"./apps/fiab-mcp-bridge"},{"name":"loom-activator","ctx":"./apps/fiab-activator-engine"},{"name":"loom-mirroring","ctx":"./apps/fiab-mirroring-engine"},{"name":"loom-direct-lake-shim","ctx":"./apps/fiab-direct-lake-shim"},{"name":"loom-copilot-maf","ctx":"./apps/copilot-maf"},{"name":"loom-unity","ctx":"./apps/loom-unity"},{"name":"loom-migrate","ctx":"./apps/loom-migrate"},{"name":"loom-risingwave","ctx":"./apps/loom-risingwave"},{"name":"loom-trino","ctx":"./apps/loom-trino"},{"name":"loom-directlake","ctx":"./apps/loom-directlake"},{"name":"loom-health-cp","ctx":"./apps/loom-health-cp"}]'
           elif [[ "$INPUT" == "loom-copilot-maf" ]]; then
             # MAF tier lives at ./apps/copilot-maf (not the ./apps/fiab-* convention).
             APPS='[{"name":"loom-copilot-maf","ctx":"./apps/copilot-maf"}]'

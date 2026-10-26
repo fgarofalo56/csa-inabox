@@ -4,7 +4,9 @@
 // transcribed: lane names and job names come from the files themselves.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 
 const ROOT = join(import.meta.dirname, '..', '..', '..');
@@ -71,6 +73,7 @@ function topLevelOrs(cond) {
 }
 
 // lane file, boundary the gate is called with, the job that must stand down
+const DEDICATED_LANES = ['deploy-health.yml'];
 const LANES = [
   ['deploy-fiab-commercial.yml', 'Commercial', 'deploy-validate'],
   ['deploy-fiab-gcch.yml', 'GCC-High', 'deploy-validate'],
@@ -161,7 +164,99 @@ test('every workflow that calls the gate is in LANES (a new caller cannot skip t
   const called = readdirSync(join(ROOT, '.github', 'workflows'))
     .filter((f) => f.endsWith('.yml') && f !== 'estate-pause-gate.yml' && wf(f).includes('estate-pause-gate.yml'))
     .sort();
-  assert.deepEqual(called, LANES.map(([f]) => f).sort(), 'a workflow calls estate-pause-gate.yml but is not covered by the lane tests');
+  assert.deepEqual(called, [...LANES.map(([f]) => f), ...DEDICATED_LANES].sort(), 'a workflow calls estate-pause-gate.yml but is not covered by the lane tests');
+});
+
+// ── deploy-health.yml: dispatch-only, so it has no schedule branch and cannot use the LANES
+// expression shape. Its verdict lives in ONE step ("Estate pause verdict"), so these tests EXECUTE
+// that step's script under bash with chosen inputs instead of pattern-matching it.
+const HEALTH = 'deploy-health.yml';
+
+/** The `run:` script of the named step, lifted from the workflow text (not transcribed). */
+function stepScript(text, stepName) {
+  const lines = text.split('\n');
+  const i = lines.findIndex((l) => l.trim() === `- name: ${stepName}`);
+  assert.ok(i >= 0, `step "${stepName}" not found`);
+  const r = lines.findIndex((l, k) => k > i && /^ {8}run: \|$/.test(l));
+  assert.ok(r > i, `step "${stepName}" has no run: block`);
+  const body = [];
+  for (let k = r + 1; k < lines.length && (lines[k] === '' || /^ {10}/.test(lines[k])); k += 1) body.push(lines[k].slice(10));
+  return body.join('\n');
+}
+
+/** Run the verdict script; returns the standdown output it wrote. */
+function healthVerdict(env) {
+  const dir = mkdtempSync(join(tmpdir(), 'health-verdict-'));
+  const out = join(dir, 'out');
+  const summary = join(dir, 'summary');
+  writeFileSync(out, '');
+  writeFileSync(summary, '');
+  const script = stepScript(wf(HEALTH), 'Estate pause verdict');
+  const r = spawnSync('bash', ['-c', script], {
+    env: { PATH: process.env.PATH, BOUNDARY: 'Commercial', GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary, OVERRIDE_PAUSE: 'false', ...env },
+    encoding: 'utf8',
+  });
+  assert.equal(r.status, 0, `verdict script failed: ${r.stderr}`);
+  const m = readFileSync(out, 'utf8').match(/^standdown=(.*)$/m);
+  assert.ok(m, 'the verdict step wrote no standdown output at all');
+  return m[1];
+}
+
+const OK = { RUN_MODE: 'full', DECLARED: 'false', GATE_RESULT: 'success', GATE_STANDDOWN: 'false', GATE_STATE: 'RUNNING' };
+
+test('deploy-health: calls the reusable gate with the dispatched boundary, and the override defaults to false', () => {
+  const text = wf(HEALTH);
+  const gate = jobBlock(text, 'estate-gate');
+  assert.match(gate, /uses: \.\/\.github\/workflows\/estate-pause-gate\.yml/);
+  assert.match(gate, /boundary: \$\{\{ inputs\.boundary \}\}/, 'a hard-coded boundary would read the wrong estate for the other one');
+  assert.match(gate, /override_estate_pause: \$\{\{ inputs\.override_estate_pause == true \}\}/);
+  const m = text.match(/^ {6}override_estate_pause:\n([\s\S]*?)(?=^ {6}\S|^\S|^ {2}\S)/m);
+  assert.ok(m && /type: boolean/.test(m[1]) && /default: false/.test(m[1]), 'the override must be a boolean that is OFF by default');
+});
+
+test('deploy-health: every mutating step is guarded by the verdict, and the deploy job needs the gate and the declaration', () => {
+  const text = wf(HEALTH);
+  const deploy = jobBlock(text, 'deploy');
+  assert.match(deploy, /needs: \[[^\]]*estate-gate[^\]]*\]/, 'deploy must wait for the observed gate');
+  assert.match(deploy, /needs: \[[^\]]*pause-declaration[^\]]*\]/, 'deploy must wait for the declaration');
+  // FAILS IF: an apply, hub-discovery or guard step loses its `standdown != 'true'` clause.
+  for (const name of ['Discover the hub (registry and Container Apps environment)', 'Image preflight - loom-health-cp tag exists in the registry', 'Bicep what-if', 'Deploy health.bicep']) {
+    const i = deploy.split('\n').findIndex((l) => l.trim() === `- name: ${name}`);
+    assert.ok(i >= 0, `step ${name} not found`);
+    const window = deploy.split('\n').slice(i, i + 6).join('\n');
+    assert.match(window, /steps\.verdict\.outputs\.standdown != 'true'/, `${name} must stand down on the verdict`);
+  }
+});
+
+test('deploy-health: a full run STANDS DOWN when paused (inputs: gate standdown true; declaration true)', () => {
+  // FAILS IF: the observed clause is dropped (GATE_STANDDOWN=true would then proceed).
+  assert.equal(healthVerdict({ ...OK, GATE_STANDDOWN: 'true', GATE_STATE: 'PAUSED' }), 'true');
+  // FAILS IF: the declaration clause is dropped (DECLARED=true would then proceed).
+  assert.equal(healthVerdict({ ...OK, DECLARED: 'true' }), 'true');
+  // Positive control: the same env with nothing paused proceeds, so the two reds above are not a constant 'true'.
+  assert.equal(healthVerdict(OK), 'false');
+});
+
+test('deploy-health: a full run FAILS CLOSED on an unknown state (inputs: gate failure, empty standdown, empty declaration)', () => {
+  // FAILS IF: the gate-result check is dropped, since a failed gate leaves standdown empty and '' != 'true'.
+  for (const GATE_RESULT of ['failure', 'cancelled', 'skipped']) {
+    assert.equal(healthVerdict({ ...OK, GATE_RESULT, GATE_STANDDOWN: '' }), 'true', `gate ${GATE_RESULT} with no outputs must stand down`);
+  }
+  // The gate-result clause is the ONLY thing that catches a failed gate that still shows a stale
+  // standdown 'false' (with empty outputs the standdown clause catches it too, so the loop above
+  // cannot witness the result clause). FAILS IF: the GATE_RESULT check is dropped.
+  assert.equal(healthVerdict({ ...OK, GATE_RESULT: 'failure', GATE_STANDDOWN: 'false' }), 'true');
+  // FAILS IF: standdown is compared with != 'true' instead of != 'false' (an empty value from a succeeded gate).
+  assert.equal(healthVerdict({ ...OK, GATE_STANDDOWN: '' }), 'true');
+  // FAILS IF: an empty declaration is read as "not declared paused".
+  assert.equal(healthVerdict({ ...OK, DECLARED: '' }), 'true');
+});
+
+test('deploy-health: whatif-only never stands down, and the override is honoured only on a full run', () => {
+  // A what-if is read-only, so it must run on a paused estate. FAILS IF: the RUN_MODE guard is dropped.
+  assert.equal(healthVerdict({ ...OK, RUN_MODE: 'whatif-only', DECLARED: 'true', GATE_STANDDOWN: 'true', GATE_RESULT: 'failure' }), 'false');
+  // The explicit operator override proceeds past a paused estate. FAILS IF: the override is ignored.
+  assert.equal(healthVerdict({ ...OK, OVERRIDE_PAUSE: 'true', DECLARED: 'true', GATE_STANDDOWN: 'true' }), 'false');
 });
 
 test('commercial: a schedule cannot reach the override and whatif-only still runs', () => {

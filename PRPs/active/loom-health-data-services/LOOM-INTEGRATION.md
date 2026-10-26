@@ -87,8 +87,8 @@ radiologist and researcher personas: only the admin sees the two genuine ones.
 | `stamp.bicep` | RG, VNet/subnets (or spoke to the hub), private DNS, AKS (private, zones, KEDA, workload identity, Defender), PostgreSQL Flexible Server (HA, replicas, CMK), Blob accounts (audit immutable, export staging), Event Hubs namespace, Service Bus, Key Vault, Log Analytics, App Gateway WAF v2, Azure Firewall rules, identities, diagnostic settings, tags |
 | `tenant.bicep` | Databases, roles, Blob containers (pixel, per tenant), keys, hub, quotas record, DNS names, role assignments |
 | `engines.bicep` (+ Helm values as artifacts) | AKS workloads via the existing GitOps/Helm path used by `loom-trino-aks.bicep` |
-| `control-plane.bicep` | `loom-health-cp` Container App (Commercial/GCC-High) or AKS Deployment (IL5), Cosmos containers, MPI PostgreSQL |
-| `params/*.bicepparam` additions | `healthEnabled`, `healthStampClass`, `healthPrimaryRegion`, `healthAlternateRegion`, `healthManagedHsm`, `healthIsolatedNodes` (IL5) — every boundary file, including `il5.bicepparam`; DoD once the enum exists (D3) |
+| `control-plane.bicep` (invoked by `health.bicep`, the LHDS deployment unit, not by main.bicep) | `loom-health-cp` Container App (Commercial/GCC-High) or AKS Deployment (IL5), Cosmos containers, MPI PostgreSQL |
+| `health-params/<boundary>-health.bicepparam` (own files using `../health.bicep`; main.bicep and the boundary files are unchanged) | `healthEnabled`, `healthStampClass`, `healthPrimaryRegion`, `healthAlternateRegion`, `healthManagedHsm`, `healthIsolatedNodes` (IL5) — every boundary file, including `il5.bicepparam`; DoD once the enum exists (D3) |
 
 Bicep rules: one bicep PR in flight at a time across programs (MASTER-INDEX
 collision rule); every new env var is in the `apps[]` env list and passes
