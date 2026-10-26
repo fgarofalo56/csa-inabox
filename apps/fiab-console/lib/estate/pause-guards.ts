@@ -370,6 +370,79 @@ export function appGatewayTagGuard(
   return { eligible: true, reason: `${gateway.name} carries no exempt marker.` };
 }
 
+// ---------------------------------------------------------------------------
+// Health stamp guard (LHDS W1-8)
+// ---------------------------------------------------------------------------
+
+/** Tag stamped on every resource of a Loom Health Data Services stamp (value = stamp id). */
+export const HEALTH_STAMP_TAG = 'loom-health-stamp';
+/** `loom-health-tier=production` excludes a stamp from auto-pause by default (LHDS D18). */
+export const HEALTH_TIER_TAG = 'loom-health-tier';
+
+/**
+ * What the health control plane reports about a stamp. `null` = could not be
+ * established; the guard treats it exactly like "busy" (FAILS SAFE).
+ */
+export interface HealthStampActivity {
+  runningJobs: number | null;
+  activeFeeds: number | null;
+}
+
+/** True when the tags mark a resource as part of a health stamp. */
+export function isHealthStampResource(tags: Readonly<Record<string, string>> | null): boolean {
+  if (!tags) return false;
+  return Object.entries(tags).some(([k, v]) => k.toLowerCase() === HEALTH_STAMP_TAG && String(v).trim() !== '');
+}
+
+/**
+ * Decide whether a resource of a health stamp may be paused. FAILS SAFE: a stamp
+ * is eligible only when the control plane positively reports ZERO running
+ * lifecycle jobs and ZERO active feeds.
+ *
+ * Held out (left running) when ANY of these holds:
+ *   - the tags could not be read;
+ *   - `loom-health-tier=production` (excluded from auto-pause by default);
+ *   - `loom-estate-pause=exempt`;
+ *   - no activity was supplied, or either count is unknown (null / not a number);
+ *   - one or more lifecycle jobs are running, or one or more feeds are active.
+ * A resource with no `loom-health-stamp` tag is not this guard's business and is
+ * returned eligible (the type-specific guards still judge it).
+ */
+export function healthStampPauseGuard(
+  resource: { name: string; tags: Readonly<Record<string, string>> | null },
+  activity: HealthStampActivity | undefined,
+): { eligible: boolean; reason: string } {
+  const name = resource.name;
+  if (!resource.tags) {
+    return { eligible: false, reason: `The tags of ${name} could not be read, so it cannot be ruled out as a health stamp resource. Left RUNNING.` };
+  }
+  if (!isHealthStampResource(resource.tags)) return { eligible: true, reason: '' };
+  for (const [k, v] of Object.entries(resource.tags)) {
+    const key = k.toLowerCase();
+    const val = String(v).trim().toLowerCase();
+    if (key === HEALTH_TIER_TAG && val === 'production') {
+      return { eligible: false, reason: `${name} belongs to a production health stamp (${HEALTH_TIER_TAG}=production), excluded from auto-pause. Left RUNNING.` };
+    }
+    if (key === 'loom-estate-pause' && val === 'exempt') {
+      return { eligible: false, reason: `${name} is tagged loom-estate-pause=exempt. Left RUNNING.` };
+    }
+  }
+  const known = (n: number | null | undefined): n is number => typeof n === 'number' && Number.isFinite(n) && n >= 0;
+  if (!activity || !known(activity.runningJobs) || !known(activity.activeFeeds)) {
+    return {
+      eligible: false,
+      reason: `${name} belongs to a health stamp and the control plane did not report its running jobs and active feeds, so it cannot be established that the stamp is idle. Left RUNNING.`,
+    };
+  }
+  if (activity.runningJobs > 0) {
+    return { eligible: false, reason: `${name} belongs to a health stamp with ${activity.runningJobs} running lifecycle job(s); pausing would interrupt them. Left RUNNING.` };
+  }
+  if (activity.activeFeeds > 0) {
+    return { eligible: false, reason: `${name} belongs to a health stamp with ${activity.activeFeeds} active feed(s); pausing would backlog ingest. Left RUNNING.` };
+  }
+  return { eligible: true, reason: `${name}: the health stamp reports no running jobs and no active feeds.` };
+}
+
 /** True for the types whose loss can strand the console or an app, and so carry a per-resource guard. */
 export function guardedTierType(resourceType: string): boolean {
   const t = String(resourceType ?? '').toLowerCase();
@@ -389,8 +462,12 @@ export function tierPauseGuard(
   resource: { resourceType: string; name: string; tags: Readonly<Record<string, string>> | null },
   selfAppName: string | undefined,
   env: NodeJS.ProcessEnv = process.env,
+  healthActivity?: HealthStampActivity,
 ): { eligible: boolean; reason: string } {
   const t = String(resource.resourceType ?? '').toLowerCase();
+  // A health-stamp resource must also pass the stamp guard (additive: untagged resources are unaffected).
+  const stamp = healthStampPauseGuard(resource, healthActivity);
+  if (!stamp.eligible && isHealthStampResource(resource.tags)) return stamp;
   if (t === 'microsoft.app/containerapps') return containerAppPauseGuard(resource, selfAppName);
   if (t === 'microsoft.containerservice/managedclusters') return aksPauseGuard(resource, env);
   // The gateway's BACKEND-POOL guard needs an ARM read (./pause-appgateway-guard);
