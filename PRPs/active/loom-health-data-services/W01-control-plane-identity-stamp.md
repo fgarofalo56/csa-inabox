@@ -58,11 +58,11 @@ revertible.
 
 | Item | Status | Branch | Model | Evidence | Updated |
 |---|---|---|---|---|---|
-| W1-1 | todo | | sonnet | | 2026-10-22 |
+| W1-1 | merged | feat/lhds-w1-1-stamp-bicep | sonnet | #5122 = be5f24fc2 (round-2 APPROVE 6392252249, CI green). Merged, not deployed (healthEnabled=false everywhere). What-If UNMEASURED in both clouds: Commercial stood down (estate paused); GCC-High run 40206913648 blinded by a Stopped Gov ADX (#5123). Real DEV-profile What-If with healthEnabled=true moves to W1-2 step 1 (operator 2026-10-25) | 2026-10-25 |
 | W1-2 | todo | | sonnet | | 2026-10-22 |
-| W1-3 | todo | | sonnet | | 2026-10-22 |
-| W1-4 | todo | | opus | | 2026-10-22 |
-| W1-5 | todo | | sonnet | | 2026-10-22 |
+| W1-3 | merged | feat/lhds-w1-3-cp-bicep | sonnet | Merged, not deployed. Service half #5121 = 82844115d; bicep half #5126 = c39c7a42f (APPROVE at 59988120a by code reading, CI green, `--admin`): `modules/health/**` is its OWN deployment unit (`health.bicep`, `health-params/*-health.bicepparam`, dispatch-only `deploy-health.yml`) because `main.json` had 7,624 bytes of headroom under ARM's 4 MiB inline limit and the control plane alone is ~40 KB. Records `deploy-health.yml` in UNLEASED_ARM_IMAGE_WRITERS (it renders only `loom-health-cp`, which no leased roll writes; overlap with a roll is serialised only by the pause gate). Param files are named `*-health` because `check-msal-resolver-before-deploy.mjs` substring-matches guarded basenames (false positive; issue to harden the guard). What-If and every deploy step UNMEASURED | 2026-10-26 |
+| W1-4 | in-progress | feat/lhds-w1-4-scope-design | opus | Design pass merged: #5127 = 9ab55e19a (APPROVE; token contract `lhds-at/1`, role-scope map, ADR-010). Server implementation TODO. Operator defaults 2026-10-25: Q1 non-exportable KV HSM signing keys (accept the fallback authorizer if forced), Q3 `offline_access` only, Q4 control-plane client registry endpoint, Q6 three new Cosmos containers, Q7 Graph group check as a one-click Fix-it gate, Q8 single Entra tenant in W1 | 2026-10-26 |
+| W1-5 | in-progress | feat/lhds-w1-5-pdp | sonnet | Rego bundle v1 merged: #5125 = a1a606f43 (APPROVE by code reading; `opa test` 470/470 is the implementer's run, no reviewer ran it). TODO: control-plane bundle-serving endpoint, `engines.bicep` PDP workload (queued behind #5126), tighten three permit-less tests (`authz_test.rego:132,220,226`), CI step to run `gen-jwt-fixtures.mjs` before `opa test`. p95 < 10 ms UNMEASURED | 2026-10-26 |
 | W1-6 | todo | | sonnet | | 2026-10-22 |
 | W1-7 | todo | | sonnet | | 2026-10-22 |
 | W1-8 | todo | | sonnet | | 2026-10-22 |
