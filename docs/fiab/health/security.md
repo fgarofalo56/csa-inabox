@@ -1,12 +1,12 @@
 # Loom Health Data Services: security
 
-> **Status: design, not implemented.** This page currently holds only the
-> **authorization section** (PRP item W1-4, the L2 scope-mapping design pass,
-> 2026-10-25). Nothing described here is deployed or running. The LHDS
-> Authorization Server does not exist yet: `apps/loom-health-cp/src/auth/`
-> contains one data file (`role-scope-map.v1.json`) and no code. The rest of
-> this page (network, keys, audit, evidence pack) belongs to W1-9 and later
-> waves. Mapping only, no ATO, FedRAMP or HIPAA-compliance claim
+> **Status: A1-A11 are the design; A12 records the W1-4 server code. Merged
+> is not deployed.** This page currently holds only the **authorization
+> section** (PRP item W1-4). The Authorization Server code lives in
+> `apps/loom-health-cp/src/auth/` and is **not wired into `compose.ts` /
+> `main.ts`, not deployed, and not run against Entra, Key Vault or Graph**
+> (A12 lists what was and was not measured). The rest of this page (network,
+> keys, audit, evidence pack) belongs to W1-9 and later waves. Mapping only, no ATO, FedRAMP or HIPAA-compliance claim
 > (`PRPs/active/loom-health-data-services/SECURITY-AND-COMPLIANCE.md:3-10`).
 
 Paths below are repo-relative. `PRP/` is shorthand for
@@ -429,3 +429,15 @@ leaves A7 unchanged (ADR-010:39-41).
   longer?
 - **Q11** Purpose of use in W1: issue `TREAT` by default, or omit `pou` until
   W8?
+
+### A12. Implementation record (W1-4 server half)
+
+Code: `apps/loom-health-cp/src/auth/` (`scopes.ts` grammar and intersection, `role-map.ts` loader over the JSON, `grant.ts`, `signer.ts`, `tokens.ts`, `backend-auth.ts`, `federation.ts`, `server.ts`, `cosmos.ts`). Tests: `test/auth-core.test.ts`, `test/auth-server.test.ts`.
+
+**Decisions applied (operator, 2026-10-26).** Signing keys are non-exportable Key Vault keys (`KeyVaultSigner` signs a SHA-384 digest through the vault `sign` call, so no private key enters the process); `LocalSigner` is the disclosed fallback authorizer and is never selected by default. `offline_access` only (Q3). Client registration is a control-plane route family (Q4): `POST/GET /api/health/auth/clients`, `PATCH .../clients/{id}`, `PUT/GET .../tenants/{t}/bindings`, `POST .../launch`, `GET .../readiness`. Three Cosmos containers (Q6): `health-auth-config` (bindings and clients), `health-auth-replay` and `health-auth-grants` (both per-item TTL). The Graph consent check is a gate with a Fix-it descriptor on `readiness` (Q7). One Entra tenant in W1 (Q8).
+
+**Not built, by design or dependency.** The standalone patient picker (needs a FHIR engine, W2, and a UI): `launch/patient` without an EHR launch handle grants no patient context, so every `patient/` scope is dropped. `fhirUser` is granted only when an injected resolver returns a URL (none is wired; Q5). Not wired into `compose.ts` / `main.ts`, so no route is live. Gate-registry registration of the consent gate is a console change.
+
+**UNMEASURED.** The Inferno SMART App Launch kit (pass bar criterion 1) was not run. Key Vault `sign`, Entra token exchange and Graph `checkMemberGroups` were exercised only against fakes: their request shapes are unverified against the live services, and `GroupMember.Read.All` as the least-privilege permission stays UNVERIFIED (Q7). No cloud receipt exists for any boundary. N1-N8 (except N6/N8 grammar), N13-N17 and N21-N22 are PDP rows owned by W1-5.
+
+**Consequence of the intersection rule worth knowing.** A wildcard request (`user/*.cruds`) against a client allow-list naming specific types (`user/Patient.rs`) grants nothing, because rule 2 matches a `*` request only to a `*` ceiling. Register `*` allow-lists, or have apps request typed scopes.
