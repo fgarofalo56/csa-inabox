@@ -35,7 +35,11 @@
 //     param file including il5),
 //   environmentId (containerApps path), acrName + acrResourceGroup + acrLoginServer,
 //   imageTag (default v0.1), allowedCallerAppIds, privateEndpointSubnetId,
-//   cosmosPrivateDnsZoneId.
+//   cosmosPrivateDnsZoneId,
+//   pdpBundleVerificationPublicKeyPem (PUBLIC key; the per-stamp OPA PDP deploys only when
+//     this is set and the control plane deploys), pdpImageTag (default 1.9.0-static, image
+//     <acr>/opa), pdpControlPlaneBaseUrl (https; default https://<fqdn> on containerApps,
+//     required on aks), pdpReplicas (default 2).
 // Gov boundaries default to usgovarizona (primary, zone-redundant PostgreSQL HA) paired
 // with usgovtexas: usgovvirginia is offer-restricted for PostgreSQL on the measured
 // subscription (PRPs/active/loom-health-data-services/W0-RECEIPT.md s4.1b).
@@ -149,6 +153,43 @@ module healthControlPlane 'modules/health/control-plane.bicep' = if (cpDeploy) {
     workspaceId: healthStamp!.outputs.stamp.lawId
     tags: tags
   }
+}
+
+// ── PDP (apps/loom-health-pdp): one OPA per stamp, bundle pulled from the control plane ──
+var pdpPublicKey = string(controlPlaneConfig.?pdpBundleVerificationPublicKeyPem ?? '')
+var pdpCpBaseUrlOverride = string(controlPlaneConfig.?pdpControlPlaneBaseUrl ?? '')
+// The condition may not read module outputs, so the containerApps default is decided on inputs only.
+var pdpUrlKnown = startsWith(pdpCpBaseUrlOverride, 'https://') || cpPlatform == 'containerApps'
+var pdpDeploy = cpDeploy && !empty(pdpPublicKey) && pdpUrlKnown
+
+module healthPdp 'modules/health/engines.bicep' = if (pdpDeploy) {
+  name: 'lhds-pdp-${healthStampName}'
+  scope: healthRg
+  params: {
+    location: healthLocation
+    image: '${cpAcrLoginServer}/opa:${string(controlPlaneConfig.?pdpImageTag ?? '1.9.0-static')}'
+    acrName: cpAcrName
+    acrResourceGroup: cpAcrResourceGroup
+    stampId: healthStampName
+    controlPlaneBaseUrl: !empty(pdpCpBaseUrlOverride) ? pdpCpBaseUrlOverride : 'https://${healthControlPlane!.outputs.fqdn}'
+    controlPlaneAudience: string(first(cpAudiences) ?? '')
+    bundleVerificationPublicKeyPem: pdpPublicKey
+    aksClusterName: healthStamp!.outputs.stamp.aksClusterName
+    aksOidcIssuerUrl: healthStamp!.outputs.stamp.aksOidcIssuerUrl
+    replicas: int(controlPlaneConfig.?pdpReplicas ?? 2)
+    skipRoleGrants: skipRoleGrants
+    tags: tags
+  }
+}
+
+@description('PDP state. deployed:true with the in-cluster decision endpoint and identity, or deployed:false with the precondition that was missing.')
+output healthPdpState object = pdpDeploy ? {
+  deployed: true
+  decisionEndpoint: healthPdp!.outputs.decisionEndpoint
+  identityPrincipalId: healthPdp!.outputs.identityPrincipalId
+} : {
+  deployed: false
+  reason: !cpDeploy ? 'control plane not deployed' : (empty(pdpPublicKey) ? 'controlPlaneConfig.pdpBundleVerificationPublicKeyPem is empty' : 'controlPlaneConfig.pdpControlPlaneBaseUrl must be an https URL (required on the aks control-plane path)')
 }
 
 @description('LHDS stamp manifest (resource ids, endpoints, region, profile). Empty while healthEnabled is false.')
