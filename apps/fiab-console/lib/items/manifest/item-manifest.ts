@@ -189,6 +189,8 @@ export const PROVISIONABLE_ITEM_TYPES: readonly string[] = [
   // 1:1 against the live PROVISIONERS map, so registering a provisioner
   // WITHOUT adding the slug here fails `item-manifest.test.ts`.
   'stream-analytics-job',
+  // LHDS W1-7: tenant on a stamp via the health control plane (Azure-native).
+  'health-tenant',
 ];
 
 /**
@@ -343,6 +345,7 @@ export const AZURE_BACKENDS: Readonly<Record<string, string>> = {
   'adf-pipeline': 'Azure Data Factory pipeline (ARM)',
   'databricks-job': 'Azure Databricks Jobs 2.1',
   'synapse-serverless-sql-pool': 'Synapse serverless SQL endpoint over the lake abfss root',
+  'health-tenant': 'Health control plane tenant.create job (PostgreSQL Flexible Server + Blob + Event Hubs + Key Vault on a stamp)',
   'materialized-lake-view': 'Synapse Spark batch → Delta MLV + Cosmos lineage',
   'stream-analytics-job': 'Azure Stream Analytics job (Microsoft.StreamAnalytics/streamingjobs)',
 };
@@ -362,6 +365,7 @@ export const FAMILY_KIND: Readonly<Record<WorkloadCategory, FamilyKind>> = {
   'Power BI': 'fabric-parity',
   'APIs and functions': 'fabric-parity',
   'Loom Apps': 'fabric-parity',
+  'Health data': 'azure-service',
   'Synapse Analytics': 'azure-service',
   'Azure Databricks': 'azure-service',
   'Azure Data Factory': 'azure-service',

@@ -195,6 +195,12 @@ export const CAPABILITY_CATALOG: Capability[] = [
   { id: 'admin.attach-service',      domain: 'Admin',     workload: 'Tenant Admin',      name: 'Attach existing service', kind: 'admin', description: 'Landing zones — attach an EXISTING brownfield Azure service (Synapse / ADX / ADLS / …) to a Loom landing zone so it becomes part of Loom (governance, chargeback, navigators). Admin-only by default; an existing admin can delegate it by granting this capability at /admin/permissions.', parentId: 'workload.admin' },
   { id: 'admin.parity-autopilot',    domain: 'Admin',     workload: 'Tenant Admin',      name: 'Parity Autopilot', kind: 'admin', description: '/admin/ai-operations?tab=autopilot — WS-10.5: schedule Playwright captures, run an AOAI vision diff against the parity docs, and auto-file gap issues with a proposed plan. Read the run ledger + trigger a run. Admin-only by default; delegable at /admin/permissions.', parentId: 'workload.admin' },
 
+  // LHDS (D12): a distinct capability with NO parentId, so a grant on
+  // workload.admin never cascades to it. Health tenants hold identities and
+  // routing for regulated clinical data; the people who administer Loom are not
+  // automatically the people who administer health tenants.
+  { id: 'health.tenant-admin',       domain: 'Admin',     workload: 'Health Data Services', name: 'Health Tenant Admin', kind: 'admin', description: 'Create, provision and manage Health Data Services tenants (the health-tenant item and /api/health/tenants). Granted explicitly at /admin/permissions; it is not inherited from Tenant administration through a parent grant.' },
+
   // ============================================================
   // Domain: Governance
   // ============================================================

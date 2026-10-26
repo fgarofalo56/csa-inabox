@@ -48,6 +48,7 @@ import { synapseSqlPoolProvisioner } from './provisioners/synapse-serverless-sql
 import { workspaceMonitorProvisioner } from './provisioners/workspace-monitor';
 import { materializedLakeViewProvisioner } from './provisioners/materialized-lake-view';
 import { streamAnalyticsJobProvisioner } from './provisioners/stream-analytics-job';
+import { healthTenantProvisioner } from './provisioners/health-tenant';
 import { ITEM_PAIRING_RULES } from '@/lib/items/registry';
 import { createOwnedItem } from '@/app/api/items/_lib/item-crud';
 import { getPoolState, resumePool } from '@/lib/azure/synapse-pool-arm';
@@ -92,6 +93,7 @@ export const PROVISIONERS: Record<string, Provisioner> = {
   // resource was never created and the editor 404'd forever. Real ARM PUT, name
   // derived from the display name, reference recorded on the item.
   'stream-analytics-job': streamAnalyticsJobProvisioner,
+  'health-tenant': healthTenantProvisioner, // LHDS W1-7: tenant.create job on the health control plane + readback (Azure-native, no Fabric)
 };
 
 /** Item types that have a Phase-2 provisioner — exposed for the wizard

@@ -24,6 +24,7 @@ import { BUILDERS_ENV_CHECKS } from './builders';
 import { CATALOG_GOVERNANCE_ENV_CHECKS } from './catalog-governance';
 import { SECURITY_ENV_CHECKS } from './security';
 import { OBSERVABILITY_ENV_CHECKS } from './observability';
+import { HEALTH_ENV_CHECKS } from './health';
 
 export { IDENTITY_ENV_CHECKS } from './identity';
 export { DATA_PLANE_ENV_CHECKS } from './data-plane';
@@ -35,6 +36,7 @@ export { BUILDERS_ENV_CHECKS } from './builders';
 export { CATALOG_GOVERNANCE_ENV_CHECKS } from './catalog-governance';
 export { SECURITY_ENV_CHECKS } from './security';
 export { OBSERVABILITY_ENV_CHECKS } from './observability';
+export { HEALTH_ENV_CHECKS } from './health';
 
 /** The declarative env-presence checks (the backbone of the audit) — the
  * per-domain fragments merged into the SAME array shape as before the split. */
@@ -49,4 +51,5 @@ export const ENV_CHECKS: EnvSpec[] = [
   ...CATALOG_GOVERNANCE_ENV_CHECKS,
   ...SECURITY_ENV_CHECKS,
   ...OBSERVABILITY_ENV_CHECKS,
+  ...HEALTH_ENV_CHECKS,
 ];

@@ -1,6 +1,6 @@
 /**
  * GENERATED — do not edit by hand. TYPE-ONLY (no runtime import is emitted).
- * Source: apps/fiab-console/app/api/**\/route.ts   (1702 routes)
+ * Source: apps/fiab-console/app/api/**\/route.ts   (1704 routes)
  * Regenerate: node scripts/ci/generate-client-route-map.mjs
  * Drift gate:  node scripts/ci/generate-client-route-map.mjs --check
  *
@@ -488,6 +488,7 @@ export type StaticApiRoute =
   | '/api/governance/workspace-egress'
   | '/api/health'
   | '/api/health/deep'
+  | '/api/health/tenants'
   | '/api/help-copilot/chat'
   | '/api/help-copilot/reindex'
   | '/api/help-copilot/sessions'
@@ -1025,6 +1026,7 @@ export type DynamicApiRoute =
   | `/api/foundry/fine-tuning/${string}`
   | `/api/governance/label-propagation/${string}`
   | `/api/governance/workspace-egress/${string}`
+  | `/api/health/tenants/${string}`
   | `/api/insights/digests/${string}`
   | `/api/insights/digests/${string}/preview`
   | `/api/insights/digests/${string}/run`
