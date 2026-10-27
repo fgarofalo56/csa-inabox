@@ -39,6 +39,7 @@ Responses are `{ok:true,data}` or `{ok:false,error:{code,message}}`.
 | `GET /healthz` | none (liveness) |
 | `GET /api/health/stamps`, `/stamps/{id}`; `GET /tenants`, `/tenants/{id}`; `GET /routing-map`; `GET /slo`; `GET /jobs`, `/jobs/{id}` | `HealthCP.Reader` or `HealthCP.Admin` |
 | `POST /stamps`, `PATCH /stamps/{id}`, `POST /tenants`, `PATCH /tenants/{id}`, `POST /routing-map/publish`, `POST /jobs`, `POST /jobs/{id}/retry`, `/cancel` | `HealthCP.Admin` |
+| `GET /pdp/stamps/{id}/bundle.tar.gz` (signed OPA bundle, raw gzip, ETag / 304; 404 unknown stamp or unpublished bundle, 503 store unconfigured) | `HealthCP.Reader` or `HealthCP.Admin` |
 | `PUT /stamps/{id}/slo` | `HealthCP.StampReporter` or `HealthCP.Admin` |
 
 (All `/api/health/...` paths.) 401 = token cannot be verified (signature,
@@ -57,6 +58,7 @@ allowed caller app.
 | `LOOM_HEALTH_CP_ALLOWED_CALLER_APP_IDS` | no | Comma list; when set, the token `azp`/`appid` must be in it |
 | `LOOM_HEALTH_CP_AUTHORITY_HOST` | no | Bare-hostname override of the per-cloud authority |
 | `LOOM_HEALTH_CP_SLO_AVAILABILITY_TARGET` | no | Fraction in (0,1), default `0.999` |
+| `LOOM_HEALTH_CP_PDP_BUNDLE_DIR` | no | Directory of `<stamp>.tar.gz` bundles signed by `apps/loom-health-pdp/tools/build-bundle.sh`. Unset = bundle route answers 503 |
 | `PORT` | no | Listen port, default `8080` |
 | `AZURE_CLIENT_ID` | no | Client id of a user-assigned managed identity (read by `DefaultAzureCredential`) |
 

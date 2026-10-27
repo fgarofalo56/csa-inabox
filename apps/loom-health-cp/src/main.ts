@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { compose } from './compose.js';
 import { ConfigError, loadConfig } from './config.js';
+import { FileBundleSource } from './pdp/bundles.js';
 import { authOptionsFromConfig } from './middleware/auth.js';
 import { createCosmosStores } from './store/cosmos.js';
 import { authoredMessage } from './safe-error.js';
@@ -23,6 +24,7 @@ function main(): void {
     stores: createCosmosStores(cfg),
     auth: authOptionsFromConfig(cfg),
     sloAvailabilityTarget: cfg.sloAvailabilityTarget,
+    bundles: cfg.pdpBundleDir ? new FileBundleSource(cfg.pdpBundleDir) : undefined,
     log,
   });
   const server = createServer((req, res) => {

@@ -2,9 +2,11 @@
 // Both main.ts (Cosmos + remote JWKS) and the tests (fakes at the Stores and
 // keyResolver seams) go through here, so the tested graph is the shipped graph.
 
+import type { BundleSource } from './pdp/bundles.js';
 import { createApp } from './http/app.js';
 import { builtinHandlers } from './jobs/builtin.js';
 import { JobRunner } from './jobs/runner.js';
+import { postgresRestartHandler, scheduleStampRestarts, type StampPowerDeps } from './jobs/stamp-power.js';
 import { createAuthenticator, type AuthOptions } from './middleware/auth.js';
 import { Registry } from './registry/registry.js';
 import { RoutingPublisher } from './routing/publisher.js';
@@ -18,7 +20,9 @@ export interface ComposeInput {
   auth: AuthOptions;
   sloAvailabilityTarget: number;
   log: Logger;
+  bundles?: BundleSource;
   now?: () => Date;
+  postgresRestart?: Pick<StampPowerDeps, 'power' | 'getStampManifest'>;
 }
 
 export function compose(input: ComposeInput) {
@@ -37,6 +41,11 @@ export function compose(input: ComposeInput) {
     now,
   );
   for (const h of builtinHandlers({ routing })) jobs.register(h);
-  const handler = createApp({ authenticate: createAuthenticator(input.auth), registry, jobs, routing, slo, log });
-  return { handler, registry, jobs, routing, slo };
+  // W1-8: registered only when an ARM adapter is supplied (main.ts does not pass one yet, like the tenant jobs).
+  if (input.postgresRestart) {
+    jobs.register(postgresRestartHandler({ stamps: stores.stamps, ...input.postgresRestart }));
+  }
+  const scheduleRestarts = () => scheduleStampRestarts({ stamps: stores.stamps, jobs, now });
+  const handler = createApp({ authenticate: createAuthenticator(input.auth), registry, jobs, routing, slo, bundles: input.bundles, log });
+  return { handler, registry, jobs, routing, slo, scheduleRestarts };
 }

@@ -51,9 +51,13 @@ Interceptor rules the PDP relies on:
 | `data.lhds.stamp` | `{tenants: {<slug>: {bases: [<base url>...]}}}` | control plane routing map |
 
 Missing config or stamp makes every request deny (no token verifies / no tenant is
-homed). The control-plane endpoint that adds these and serves the signed tarball
-(`GET /api/health/pdp/stamps/{stamp}/bundle.tar.gz`) is NOT implemented yet; it is
-a follow-up item.
+homed). The control plane serves the signed tarball at
+`GET /api/health/pdp/stamps/{stamp}/bundle.tar.gz` (`apps/loom-health-cp`, ETag/304;
+it serves a bundle published at `<LOOM_HEALTH_CP_PDP_BUNDLE_DIR>/<stamp>.tar.gz`, it does
+not build or sign). NOT done: nothing yet adds `data.lhds.config` / `data.lhds.stamp` to a
+bundle per stamp, or publishes bundles into that directory. Until it does, a served
+bundle denies everything. The PDP workload is `platform/fiab/bicep/modules/health/engines.bicep`
+(not yet wired into `health.bicep`; no deploy receipt).
 
 ## Layout
 
@@ -71,7 +75,7 @@ a follow-up item.
 ## Test
 
 ```
-node tools/gen-jwt-fixtures.mjs   # required first: writes tests/jwt_fixtures.rego (gitignored)
+node tools/gen-jwt-fixtures.mjs   # required first (CI: .github/workflows/health-pdp-opa.yml): writes tests/jwt_fixtures.rego (gitignored)
 node tools/stage-policies.mjs ../../temp/stage
 node tools/gen-scope-matrix.mjs --check
 opa test ../../temp/stage tests
