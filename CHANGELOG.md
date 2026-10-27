@@ -25,6 +25,24 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.115.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.114.0...csa-inabox-v0.115.0) (2026-10-27)
+
+
+### Features
+
+* **health:** add DoD to the boundary enum, supported-in-code only (W1-8) ([#5146](https://github.com/fgarofalo56/csa-inabox/issues/5146)) ([a31e9c4](https://github.com/fgarofalo56/csa-inabox/commit/a31e9c45fdd310bffe29905bf4594aecb34fe13c))
+* **health:** APIM tenant routing wiring and tenant-independent discovery URL (W1-6 gaps) ([#5154](https://github.com/fgarofalo56/csa-inabox/issues/5154)) ([a13d13f](https://github.com/fgarofalo56/csa-inabox/commit/a13d13fe1ceb5e509f0ea84369beb2ea532593a1))
+* **health:** control-plane KV Crypto Officer + fail-closed tenant.destroy storage check ([#5157](https://github.com/fgarofalo56/csa-inabox/issues/5157)) ([1c68d16](https://github.com/fgarofalo56/csa-inabox/commit/1c68d160e232d431088e424b3b1dd52010130ddf))
+* **health:** health-tenant D12 exact-grant gate, quotas tab, Graph-consent gate (W1-7) ([#5159](https://github.com/fgarofalo56/csa-inabox/issues/5159)) ([bdccdd5](https://github.com/fgarofalo56/csa-inabox/commit/bdccdd5ed519389be10cee141fc68fcecd913264))
+* **health:** per-stamp PDP data and signed bundle publishing (W1-5) ([#5155](https://github.com/fgarofalo56/csa-inabox/issues/5155)) ([4a5bb2f](https://github.com/fgarofalo56/csa-inabox/commit/4a5bb2fca3118eb3f63358ed0d6ee8ce7b6a32fb))
+* **health:** wire the authorization server into the control plane (W1-4) ([#5156](https://github.com/fgarofalo56/csa-inabox/issues/5156)) ([caacd0c](https://github.com/fgarofalo56/csa-inabox/commit/caacd0c2c9e58e3db35016819c29f4d97579c12a))
+
+
+### Documentation
+
+* **lhds:** final W1 board sync - W1-6, W1-8, W1-9 merged, not deployed ([#5152](https://github.com/fgarofalo56/csa-inabox/issues/5152)) ([5cbc1b5](https://github.com/fgarofalo56/csa-inabox/commit/5cbc1b56bcc754147d0005c657b8c97186c27a51))
+* **lhds:** W1-9 health docs - greenfield, brownfield, per-cloud table, runbooks ([#5148](https://github.com/fgarofalo56/csa-inabox/issues/5148)) ([97ce3e5](https://github.com/fgarofalo56/csa-inabox/commit/97ce3e5cbc99229186b41d7334e37f1b1b6a10bd))
+
 ## [0.114.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.113.0...csa-inabox-v0.114.0) (2026-10-27)
 
 
