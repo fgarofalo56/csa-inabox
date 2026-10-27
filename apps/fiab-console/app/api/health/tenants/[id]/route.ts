@@ -7,8 +7,10 @@
  *         itself. Needs read access to the item.
  *   POST  Ensure: provision-and-bind, or self-heal a stale binding. Idempotent
  *         (N calls create ONE tenant and ONE create job). Body `{retry:true}`
- *         retries a failed create job. Needs the `health.tenant-admin`
- *         capability AND write access to the item.
+ *         retries a failed create job. Needs an explicit `health.tenant-admin`
+ *         grant (D12: not inherited from Loom Admin) AND write access to the item.
+ *   PATCH Edit the tenant's quotas on the control plane (`{quotas:{...}}`);
+ *         same authorization as POST.
  *
  * Outcomes map to HTTP like this, so a client never has to guess:
  *   bound / provisioning / failed -> 200 (202 while provisioning) with `phase`
@@ -16,7 +18,9 @@
  *   control plane unreachable     -> 502 with the control plane's own code
  */
 import { NextResponse } from 'next/server';
-import { withCapability, withWorkspaceOwner } from '@/lib/api/route-toolkit';
+import { withWorkspaceOwner } from '@/lib/api/route-toolkit';
+import { withHealthTenantAdmin } from '../_lib/tenant-admin-gate';
+import { parseQuotas } from '../_lib/quotas';
 import { apiError, apiOk } from '@/lib/api/respond';
 import { apiHonestGateError } from '@/lib/api/gate-envelope';
 import { loadOwnedItem } from '@/app/api/items/_lib/item-crud';
@@ -49,7 +53,28 @@ export const GET = withWorkspaceOwner(ITEM_TYPE, { allowReadRoles: true }, async
   return apiOk({ phase: binding.status, binding, tenant, job, liveError });
 });
 
-export const POST = withCapability<{ id: string }>('health.tenant-admin', 'Contributor', async (req, { session, params }) => {
+export const PATCH = withHealthTenantAdmin<{ id: string }>('Contributor', async (req, { session, params }) => {
+  const item = await loadOwnedItem(params.id, ITEM_TYPE, session.claims.oid, { session });
+  if (!item) return apiError('Health tenant not found', 404);
+  const binding = readBinding(item.state);
+  if (!binding) return apiError('This health tenant is not provisioned yet; open it first so it can be created.', 409);
+  let body: unknown;
+  try { body = await req.json(); } catch { return apiError('A JSON body is required', 400); }
+  const parsed = parseQuotas(body);
+  if ('error' in parsed) return apiError(parsed.error, 400);
+  try {
+    const tenant = await cp.updateTenantQuotas(binding.tenantId, parsed.quotas);
+    return apiOk({ tenant });
+  } catch (e) {
+    if (e instanceof CpNotConfiguredError) {
+      return apiHonestGateError('health-control-plane', { missing: e.missing, message: e.message });
+    }
+    if (e instanceof CpError) return apiError(`${e.code}: ${e.message}`, 502, { code: e.code });
+    throw e;
+  }
+});
+
+export const POST = withHealthTenantAdmin<{ id: string }>('Contributor', async (req, { session, params }) => {
   const item = await loadOwnedItem(params.id, ITEM_TYPE, session.claims.oid, { session });
   if (!item) return apiError('Health tenant not found', 404);
   let retry = false;

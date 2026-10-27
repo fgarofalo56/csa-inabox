@@ -41,6 +41,14 @@ export const HEALTH_GATE_META: Record<string, GateMeta> = {
       grantNote: 'Nothing for an operator to set by hand: the Gov image lanes must first gain a Trivy critical-vulnerability scan and cosign verification (#4584). That lane then records its verifying run id in LOOM_HEALTH_GOV_IMAGE_ATTESTATION. Until then a Gov health stamp is not rolled out.',
     },
   },
+  'health-auth-graph-consent': {
+    surfaces: [{ path: '/items/health-tenant/*', label: 'Health tenant editor (authorization server group check)' }],
+    fixit: {
+      kind: 'wizard',
+      grantNote: 'A Global Administrator grants admin consent to the authorization server identity for its Microsoft Graph group-membership permission (open the consent URL the control plane returns at /api/health/auth/readiness when graphConsentUrl is set). Then set LOOM_HEALTH_AUTH_GRAPH_CONSENT=granted here. This is tenant-level consent only a Global Administrator can give.',
+    },
+    autoResolveNote: 'Cannot auto-resolve: Entra admin consent is a tenant-level act only a Global Administrator can perform (the allowed exception in auto-bind-by-default.md).',
+  },
   'health-lakehouse-isolation': {
     surfaces: [{ path: '/items/health-tenant/*', label: 'Health tenant editor (lakehouse sink)' }],
     fixit: { kind: 'env-picker' },

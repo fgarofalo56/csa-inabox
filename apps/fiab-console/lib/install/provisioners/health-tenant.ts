@@ -27,7 +27,7 @@
  * host is reachable from this path.
  */
 import { itemsContainer } from '@/lib/azure/cosmos-client';
-import { enforceCapability } from '@/lib/auth/feature-gate';
+import { enforceHealthTenantAdmin } from '@/app/api/health/tenants/_lib/tenant-admin-gate';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import {
   cp as realCp,
@@ -384,7 +384,7 @@ export const healthTenantProvisioner: Provisioner = async (input) => {
   // FAIL CLOSED before any control-plane call. PROVISIONERS entries are run by the
   // app installer and by deployment-pipeline promotion with no capability gate of
   // their own, and this one creates real tenant resources on a stamp (D12).
-  const denied = await enforceCapability(input.session, 'health.tenant-admin', 'Contributor');
+  const denied = await enforceHealthTenantAdmin(input.session, 'Contributor');
   if (denied) {
     const body = (await denied.json().catch(() => ({}))) as { error?: string; reason?: string };
     return {

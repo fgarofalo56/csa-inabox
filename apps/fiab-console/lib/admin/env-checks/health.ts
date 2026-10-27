@@ -33,6 +33,7 @@ Object.assign(VALUE_HINT, {
   LOOM_HEALTH_GOV_STAMP_ID: '<gov-stamp-id>  (set once a Gov stamp is registered)',
   LOOM_HEALTH_GOV_IMAGE_ATTESTATION: '<workflow-run-id of the Trivy + cosign verification>',
   LOOM_HEALTH_LAKEHOUSE_ISOLATION: 'verified',
+  LOOM_HEALTH_AUTH_GRAPH_CONSENT: 'granted',
 } satisfies Record<string, string>);
 
 export const HEALTH_ENV_CHECKS: EnvSpec[] = [
@@ -75,5 +76,21 @@ export const HEALTH_ENV_CHECKS: EnvSpec[] = [
     appliesWhenPresent: { envVar: 'LOOM_HEALTH_CP_URL', notDeployedDetail: 'the health control plane is not deployed, so no health data can reach a lakehouse.' },
     remediation: 'Set LOOM_HEALTH_LAKEHOUSE_ISOLATION=verified only after the lakehouse isolation prerequisite is deployed AND verified on this estate (deployed, not merely merged). Until then the lakehouse sink stays disabled. Tracked as the ADR-016 prerequisite / decision Q7.',
     provisionedBy: 'Loom image roll carrying the lakehouse workspace-isolation fix; confirmed by the operator after a live check',
+  },
+  {
+    // W1-4 follow-up. The authorization server's group-membership check calls Microsoft Graph with
+    // an application permission only a tenant admin can consent to. The control plane reports the
+    // live state at GET /api/health/auth/readiness (gate id health-auth-graph-consent); the server
+    // half is not wired into the control plane's compose/main yet, so this gate records the
+    // operator's confirmation, like health-lakehouse-isolation, until that readiness is reachable.
+    id: 'health-auth-graph-consent', category: 'security',
+    title: 'Health authorization server: Microsoft Graph admin consent', severity: 'recommended',
+    required: ['LOOM_HEALTH_AUTH_GRAPH_CONSENT'],
+    warnOnMiss: true,
+    rejectValues: { LOOM_HEALTH_AUTH_GRAPH_CONSENT: ['false', '0', 'off', 'no', 'pending', 'needs-consent'] },
+    appliesWhenPresent: { envVar: 'LOOM_HEALTH_CP_URL', notDeployedDetail: 'the health control plane is not deployed, so there is no authorization server whose group check needs consent.' },
+    remediation: 'A Global Administrator grants admin consent to the authorization server identity for the Microsoft Graph application permission it uses to check group membership (the permission name is UNVERIFIED as the minimum; confirm it in the control plane readiness response before consenting). The control plane reports needs-consent at GET /api/health/auth/readiness (gate health-auth-graph-consent) and returns the consent URL when graphConsentUrl is configured. Then set LOOM_HEALTH_AUTH_GRAPH_CONSENT=granted here. Until consented, sign-in by group membership is refused rather than guessed.',
+    provisionedBy: 'Tenant-level consent only a Global Administrator can grant (auto-bind-by-default.md allowed exception); the control plane authorization server reports its live state',
+    role: 'Global Administrator (Microsoft Graph admin consent)',
   },
 ];
