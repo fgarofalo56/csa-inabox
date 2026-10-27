@@ -153,6 +153,7 @@ module healthControlPlane 'modules/health/control-plane.bicep' = if (cpDeploy) {
     aksOidcIssuerUrl: cpPlatform == 'aks' ? healthStamp!.outputs.stamp.aksOidcIssuerUrl : ''
     privateEndpointSubnetId: string(controlPlaneConfig.?privateEndpointSubnetId ?? '')
     cosmosPrivateDnsZoneId: string(controlPlaneConfig.?cosmosPrivateDnsZoneId ?? '')
+    keyVaultId: healthStamp!.outputs.stamp.keyVaultId
     skipRoleGrants: skipRoleGrants
     workspaceId: healthStamp!.outputs.stamp.lawId
     tags: tags

@@ -90,6 +90,9 @@ param cosmosMaxThroughput int = 1000
 @description('Spread the Cosmos account over availability zones. Off by default: not every region has zonal Cosmos capacity.')
 param cosmosZoneRedundant bool = false
 
+@description('Resource id of the stamp Key Vault (same resource group as this module). The control-plane identity is granted Key Vault Crypto Officer on it so tenant.destroy can disable and delete tenant keys (crypto-shred). Empty = no grant and tenant.destroy cannot shred. Scoped to the vault, the narrowest static scope: tenant keys are created at runtime, so a per-key scope cannot be written here.')
+param keyVaultId string = ''
+
 @description('Skip role assignments (re-deploys where the deployer cannot write RBAC).')
 param skipRoleGrants bool = false
 
@@ -182,6 +185,26 @@ resource cosmosDataRole 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignment
   dependsOn: [
     database
   ]
+}
+
+// ── Key Vault: crypto-shred (tenant.destroy disables, then deletes, tenant keys) ──
+// Key Vault Crypto Officer = key create/disable/delete/purge, NO secrets or certificates and no
+// role management. Assigned on the stamp vault only (not the resource group).
+var kvCryptoOfficerRoleId = '14b46e9e-c2b7-41b4-b07b-48a6ebf60603'
+
+resource stampVault 'Microsoft.KeyVault/vaults@2024-11-01' existing = if (!empty(keyVaultId)) {
+  name: last(split(keyVaultId, '/'))
+}
+
+resource cpKeyOfficer 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(keyVaultId) && !skipRoleGrants) {
+  scope: stampVault
+  name: guid(keyVaultId, cpIdentity.id, kvCryptoOfficerRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', kvCryptoOfficerRoleId)
+    principalId: cpIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    description: 'LHDS control plane: disable and delete tenant keys on tenant.destroy (crypto-shred).'
+  }
 }
 
 resource cosmosPe 'Microsoft.Network/privateEndpoints@2024-05-01' = if (!empty(privateEndpointSubnetId)) {

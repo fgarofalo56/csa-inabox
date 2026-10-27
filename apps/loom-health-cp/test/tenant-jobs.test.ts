@@ -54,8 +54,11 @@ class FakeArm implements TenantArm {
   scopeFor(rg: string) {
     return `/subscriptions/${SUB}/resourceGroups/${rg}`;
   }
+  storageQuery: 'all' | 'empty' | 'pixelOnly' = 'all'; // what the tag query returns
   async findTenantStorage() {
-    return [...this.resources.keys()].filter((k) => k.includes('storageAccounts/'));
+    if (this.storageQuery === 'empty') return [];
+    const all = [...this.resources.keys()].filter((k) => k.includes('storageAccounts/'));
+    return this.storageQuery === 'pixelOnly' ? all.filter((k) => k.includes('/sthpx')) : all;
   }
   async deployTenant(i: { slug: string }): Promise<TenantManifest> {
     this.deployCalls++;
@@ -315,6 +318,36 @@ describe('tenant.destroy', () => {
     expect(arm.deleteCalls.some((id) => id.endsWith(`/eventhubs/eh-t-${SLUG}`))).toBe(true);
     expect(arm.keyOps.filter((o) => o.startsWith('delete:'))).toHaveLength(4);
     expect(tenants.docs.get(SLUG)?.status).toBe('destroying');
+  });
+
+  it('derived fallback: a tag query that MISSES an account fails destroy_incomplete before anything is deleted or shredded', async () => {
+    const { arm, tenants, run } = await created();
+    arm.tenantState = 'no_outputs';
+    arm.storageQuery = 'pixelOnly'; // input that breaks it: the audit account is skipped silently
+    const job = await run('tenant.destroy', 'd1', { confirmTenantId: SLUG });
+    expect(job.error?.code).toBe('destroy_incomplete');
+    expect(job.error?.message).toContain('storage.audit');
+    expect(job.error?.message).not.toContain('storage.pixel,'); // pixel was found
+    expect(arm.deleteCalls).toEqual([]);
+    expect(arm.keyOps).toEqual([]);
+    // the receipt names found and skipped accounts
+    const derived = job.receipts.find((r) => r.step === 'manifest.derived');
+    expect(derived?.detail).toContain('found=[sthpxacmehealth1] skipped=[storage.audit]');
+    expect(tenants.docs.get(SLUG)?.status).toBe('destroying');
+  });
+
+  it('derived fallback: an EMPTY tag result fails for both accounts; allowMissingStorage=true proceeds and records both as skipped', async () => {
+    const { arm, run } = await created();
+    arm.tenantState = 'no_outputs';
+    arm.storageQuery = 'empty';
+    const refused = await run('tenant.destroy', 'd1', { confirmTenantId: SLUG });
+    expect(refused.error?.code).toBe('destroy_incomplete');
+    expect(refused.error?.message).toContain('storage.pixel, storage.audit');
+    expect(arm.keyOps).toEqual([]);
+    const allowed = await run('tenant.destroy', 'd2', { confirmTenantId: SLUG, allowMissingStorage: true });
+    expect(allowed.state, JSON.stringify(allowed.error)).toBe('succeeded');
+    expect(allowed.receipts.find((r) => r.step === 'manifest.derived')?.detail).toContain('found=[] skipped=[storage.pixel,storage.audit]');
+    expect(arm.deleteCalls).toHaveLength(4); // the 4 non-storage resources; the 2 skipped accounts are never touched
   });
 
   it('does NOT shred any key while a resource survives the delete', async () => {
