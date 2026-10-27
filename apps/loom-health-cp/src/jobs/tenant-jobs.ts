@@ -197,7 +197,7 @@ export function tenantDestroyHandler(deps: TenantJobDeps): JobHandler {
     subjectType: 'tenant',
     // The caller must restate the tenant id: a destroy is not something a stray retry or a
     // wrong-subject submit may trigger.
-    inputSchema: z.strictObject({ confirmTenantId: z.string().min(1).max(60) }),
+    inputSchema: z.strictObject({ confirmTenantId: z.string().min(1).max(60), allowMissingStorage: z.boolean().optional() }),
     async run(ctx) {
       if (ctx.input.confirmTenantId !== ctx.job.subjectId) {
         throw new JobFailure('confirmation_mismatch', 'confirmTenantId does not equal the tenant id; nothing was changed');
@@ -231,7 +231,24 @@ export function tenantDestroyHandler(deps: TenantJobDeps): JobHandler {
         } catch (e) {
           throw classifyArm(e);
         }
-        await ctx.receipt('manifest.derived', `deployment lhds-tenant-${r.tenant.id} has no outputs; deleting by derived names`);
+        // The two storage accounts are found by tag query (their names embed a hash). One the query
+        // MISSES would be neither deleted nor read back before the keys are shredded, so a miss is
+        // recorded in the receipt and fails closed unless the caller states it has verified the account is gone.
+        const skipped = [
+          ...(manifest.pixelAccountId ? [] : ['storage.pixel']),
+          ...(manifest.auditAccountId ? [] : ['storage.audit']),
+        ];
+        const found = [manifest.pixelAccountId, manifest.auditAccountId].filter((x) => x).map(lastSegment);
+        await ctx.receipt(
+          'manifest.derived',
+          `deployment lhds-tenant-${r.tenant.id} has no outputs; deleting by derived names; storage found=[${found.join(',')}] skipped=[${skipped.join(',')}]`,
+        );
+        if (skipped.length > 0 && ctx.input.allowMissingStorage !== true) {
+          throw new JobFailure(
+            'destroy_incomplete',
+            `the tag query lhds-tenant=${r.tenant.id} returned no account for: ${skipped.join(', ')}; nothing was deleted and no key was shredded. If you have confirmed those accounts no longer exist, resubmit with allowMissingStorage=true.`,
+          );
+        }
       }
 
       // 1. Data-bearing resources first. Keys outlive them until every consumer is gone.
