@@ -34,7 +34,12 @@ export function buildRoutingMap(stamps: StampDoc[], tenants: TenantDoc[]): Built
       skipped.push({ tenantSlug: t.id, reason: 'stamp-not-registered' });
       continue;
     }
-    const base = { tenantSlug: t.id, stampId: stamp.id, stampBaseUrl: stamp.baseUrl };
+    const base = {
+      tenantSlug: t.id,
+      stampId: stamp.id,
+      stampBaseUrl: stamp.baseUrl,
+      maxRequestsPerMinute: t.quotas.maxRequestsPerMinute,
+    };
     if (stamp.status === 'paused') {
       entries.push({
         ...base,

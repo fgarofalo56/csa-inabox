@@ -16,7 +16,16 @@ const tenant = (id: string, stampId: string, status: TenantDoc['status'] = 'acti
 describe('buildRoutingMap', () => {
   it('maps an active tenant on a healthy stamp to that stamp base URL', () => {
     const { entries } = buildRoutingMap([stamp('s1', 'healthy')], [tenant('t1', 's1')]);
-    expect(entries).toEqual([{ tenantSlug: 't1', stampId: 's1', stampBaseUrl: 'https://s1.example.us', status: 'active' }]);
+    expect(entries).toEqual([{ tenantSlug: 't1', stampId: 's1', stampBaseUrl: 'https://s1.example.us', maxRequestsPerMinute: 1, status: 'active' }]);
+  });
+
+  it('publishes each tenant own quota (60 vs 900), so the edge limits per tenant', () => {
+    const { entries } = buildRoutingMap(
+      [stamp('s1', 'healthy')],
+      [tenant('a', 's1', 'active', { quotas: { maxRequestsPerMinute: 60, maxStorageGiB: 1 } }), tenant('b', 's1', 'active', { quotas: { maxRequestsPerMinute: 900, maxStorageGiB: 1 } })],
+    );
+    // breaks if the quota is a constant or taken from the wrong tenant
+    expect(entries.map((e) => [e.tenantSlug, e.maxRequestsPerMinute])).toEqual([['a', 60], ['b', 900]]);
   });
 
   it('a draining tenant keeps routing to its SOURCE stamp (ADR-006)', () => {

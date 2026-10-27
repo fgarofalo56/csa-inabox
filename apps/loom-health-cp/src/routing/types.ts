@@ -7,6 +7,8 @@ export interface RoutingEntry {
   stampId: string;
   stampBaseUrl: string;
   status: RouteStatus;
+  /** Per-tenant quota the edge enforces (429 + Retry-After beyond it). From tenant.quotas. */
+  maxRequestsPerMinute: number;
   /** Present for paused routes: the edge answers 503 with this Retry-After. */
   retryAfterSeconds?: number;
   reason?: string;

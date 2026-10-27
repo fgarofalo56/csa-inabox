@@ -107,7 +107,7 @@ describe('routing map', () => {
     expect(pub.json.data).toMatchObject({ published: true, entryCount: 1 });
     const map = await h.call('GET', '/api/health/routing-map', { token: await readerToken() });
     expect(map.json.data.entries).toEqual([
-      { tenantSlug: 'visn-01', stampId: 'stamp-a', stampBaseUrl: 'https://stamp-a.health.example.us', status: 'active' },
+      { tenantSlug: 'visn-01', stampId: 'stamp-a', stampBaseUrl: 'https://stamp-a.health.example.us', maxRequestsPerMinute: 6000, status: 'active' },
     ]);
     expect(map.json.data.cacheTtlSeconds).toBe(60);
   });
