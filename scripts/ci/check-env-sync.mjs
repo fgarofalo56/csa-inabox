@@ -2352,6 +2352,7 @@ export const EXPECTED_ADOPT_PARAMS_FILES = Object.freeze([
   'commercial-full.bicepparam',
   'commercial.bicepparam',
   'dlz-attach.bicepparam',
+  'dod.bicepparam',
   'gcc-high.bicepparam',
   'gcc.bicepparam',
   'il5.bicepparam',

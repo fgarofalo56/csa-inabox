@@ -1011,7 +1011,7 @@ var redisSkuCapacity = redisIsPremium ? 1 : 0
 // purpose: if the boundary @allowed list ever grows, an unrecognised boundary
 // must fall to the universally-available classic provider, not to a
 // Public-cloud-only one.
-var redisBackend = effectiveBoundary == 'Commercial' ? 'managed' : 'classic'
+var redisBackend = boundary == 'Commercial' ? 'managed' : 'classic'
 
 // ---------- User access patterns ----------
 

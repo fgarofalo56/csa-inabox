@@ -237,7 +237,7 @@ test('the shipped param files pin a topology that makes BOTH DLZ gates false', (
   // for the adopt-keyed call site has to be re-examined rather than assumed.
   assert.deepEqual(
     bothFalse.sort(),
-    ['commercial-full.bicepparam', 'commercial.bicepparam', 'gcc-high.bicepparam', 'gcc.bicepparam', 'il5.bicepparam'],
+    ['commercial-full.bicepparam', 'commercial.bicepparam', 'dod.bicepparam', 'gcc-high.bicepparam', 'gcc.bicepparam', 'il5.bicepparam'],
     'the boundaries where NEITHER DLZ grant call site is reachable',
   );
   for (const f of bothFalse) {

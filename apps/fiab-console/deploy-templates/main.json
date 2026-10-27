@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "12609563702235282051"
+      "templateHash": "3981525872323491993"
     }
   },
   "definitions": {
@@ -2111,7 +2111,7 @@
     "redisIsPremium": "[equals(parameters('redisSkuName'), 'Premium')]",
     "redisSkuFamily": "[if(variables('redisIsPremium'), 'P', 'C')]",
     "redisSkuCapacity": "[if(variables('redisIsPremium'), 1, 0)]",
-    "redisBackend": "[if(equals(variables('effectiveBoundary'), 'Commercial'), 'managed', 'classic')]",
+    "redisBackend": "[if(equals(parameters('boundary'), 'Commercial'), 'managed', 'classic')]",
     "effShirAdminPassword": "[if(not(empty(parameters('shirAdminPassword'))), parameters('shirAdminPassword'), format('{0}{1}!7xQ', toUpper(substring(uniqueString(subscription().subscriptionId, 'loom-shir'), 0, 9)), substring(uniqueString(deployment().name, 'loom-shir-lower'), 0, 9)))]",
     "effectiveTopology": "[if(empty(parameters('topology')), parameters('deploymentMode'), parameters('topology'))]",
     "deployAdminPlane": "[not(equals(variables('effectiveTopology'), 'dlz-attach'))]",
