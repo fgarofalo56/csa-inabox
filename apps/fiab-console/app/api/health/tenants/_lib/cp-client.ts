@@ -151,6 +151,9 @@ export const cp = {
   },
   createTenant: (b: { id: string; displayName: string; stampId: string; quotas: CpTenant['quotas'] }) =>
     cpRequest<CpTenant>('POST', '/api/health/tenants', b),
+  /** Quota edit (control plane PATCH /tenants/{id}, strict schema: only the fields sent change). */
+  updateTenantQuotas: (id: string, quotas: CpTenant['quotas']) =>
+    cpRequest<CpTenant>('PATCH', `/api/health/tenants/${encodeURIComponent(id)}`, { quotas }),
   submitJob: (b: { kind: string; subjectType: 'tenant'; subjectId: string; idempotencyKey: string; input?: Record<string, unknown> }) =>
     cpRequest<CpJob>('POST', '/api/health/jobs', b),
   retryJob: (id: string) => cpRequest<CpJob>('POST', `/api/health/jobs/${encodeURIComponent(id)}/retry`),

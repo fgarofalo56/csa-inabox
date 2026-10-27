@@ -15,9 +15,9 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | --- | ---: |
 | Total routes | 1704 |
 | Public (no session) | 60 |
-| Session-only | 615 |
-| Owner-scoped | 697 |
-| Admin | 332 |
+| Session-only | 616 |
+| Owner-scoped | 698 |
+| Admin | 330 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 502 |
 | Areas | 122 |
@@ -1064,8 +1064,8 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | --- | --- | --- | :---: | --- |
 | `health/deep/route.ts` | GET | public |  | Cosmos |
 | `health/route.ts` | GET | public |  | — |
-| `health/tenants/[id]/route.ts` | GET POST | admin | ● | ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Loom service, Microsoft Graph |
-| `health/tenants/route.ts` | GET | admin | ● | ADX, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Loom service |
+| `health/tenants/[id]/route.ts` | GET POST PATCH | owner-scoped | ● | ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Loom service, Microsoft Graph |
+| `health/tenants/route.ts` | GET | session-only | ● | ADX, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Loom service |
 
 ## help-copilot
 

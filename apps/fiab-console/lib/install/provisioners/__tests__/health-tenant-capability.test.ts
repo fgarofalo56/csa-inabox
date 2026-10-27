@@ -5,7 +5,8 @@
  * promotion with no capability gate of their own, so the provisioner enforces it.
  * The REAL checkCapability runs; only the grants store and the control-plane
  * client are faked. The session is an ordinary non-admin (no admin group, no
- * bootstrap oid), because Loom tenant admins bypass the capability check.
+ * bootstrap oid); the D12 block at the end proves a Loom tenant admin is NOT
+ * admitted without an explicit grant.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -78,5 +79,32 @@ describe('healthTenantProvisioner capability gate', () => {
     // Breaks if the gate denies a granted user: getTenant is never reached and n stays 0.
     expect(cpCalls.names[0]).toBe('getTenant');
     expect(cpCalls.n).toBeGreaterThan(0);
+  });
+});
+
+describe('D12: a Loom tenant admin does not inherit health.tenant-admin', () => {
+  it('a Loom tenant admin (bootstrap oid) with NO health grant is denied and the control plane is never contacted', async () => {
+    vi.stubEnv('LOOM_TENANT_ADMIN_OID', 'loom-admin');
+    const r = await run('loom-admin');
+    // Reintroducing the isTenantAdmin bypass makes cpCalls.n >= 1 and the status stop being 'failed'.
+    expect(cpCalls.n, `control plane was called: ${cpCalls.names.join(',')}`).toBe(0);
+    expect(r.status).toBe('failed');
+    expect(r.error).toMatch(/health\.tenant-admin/);
+  });
+
+  it('a Loom tenant admin WITH an explicit grant proceeds (the grant, not the admin role, is what admits)', async () => {
+    vi.stubEnv('LOOM_TENANT_ADMIN_OID', 'loom-admin');
+    grants.rows = [{ capabilityId: 'health.tenant-admin', principalId: 'loom-admin', role: 'Contributor', tenantId: 'tid-1' }];
+    await run('loom-admin');
+    expect(cpCalls.names[0]).toBe('getTenant');
+  });
+
+  it('a grant on an ANCESTOR (workload.admin) does not admit, even if the store returns it', async () => {
+    // The fake store ignores the query filter and returns this row, as a loosened query would.
+    grants.rows = [{ capabilityId: 'workload.admin', principalId: 'parent-user', role: 'Admin', tenantId: 'tid-1' }];
+    const r = await run('parent-user');
+    // Widening the match to the ancestor chain makes n >= 1.
+    expect(cpCalls.n).toBe(0);
+    expect(r.status).toBe('failed');
   });
 });

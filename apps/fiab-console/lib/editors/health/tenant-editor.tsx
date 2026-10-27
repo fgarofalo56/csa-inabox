@@ -16,7 +16,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Badge, Body1, Button, Caption1, MessageBar, MessageBarActions, MessageBarBody, MessageBarTitle,
+  Badge, Body1, Button, Caption1, Field, Input, MessageBar, MessageBarActions, MessageBarBody, MessageBarTitle,
   ProgressBar, Subtitle2, Tab, TabList, Table, TableBody, TableCell, TableHeader, TableHeaderCell,
   TableRow, makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -84,7 +84,9 @@ function statusColor(s: string): 'success' | 'danger' | 'warning' | 'informative
 
 export function HealthTenantEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const [tab, setTab] = useState<'overview' | 'services'>('overview');
+  const [tab, setTab] = useState<'overview' | 'services' | 'quotas'>('overview');
+  const [qDraft, setQDraft] = useState<{ rpm: string; gib: string } | null>(null);
+  const [qMsg, setQMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
   const [view, setView] = useState<View>(EMPTY);
   const [busy, setBusy] = useState(false);
   const ensured = useRef(false);
@@ -105,7 +107,7 @@ export function HealthTenantEditor({ item, id }: { item: FabricItemType; id: str
     const j = await r.json();
     if (j?.gated) return { ...EMPTY, phase: 'unbound', gate: j.gate };
     if (r.status === 403) {
-      return { ...EMPTY, phase: 'unbound', problem: { title: 'Health Tenant Admin required', text: `${j?.error || 'You do not hold the health.tenant-admin capability.'} An administrator grants it at /admin/permissions.` } };
+      return { ...EMPTY, phase: 'unbound', problem: { title: 'Health Tenant Admin required', text: `${j?.error || 'You do not hold the health.tenant-admin capability.'} It is an explicit grant: Loom tenant administration does not include it. An administrator grants it at /admin/permissions.` } };
     }
     if (!j?.ok) return { ...EMPTY, phase: 'unbound', problem: { title: 'Provisioning could not start', text: j?.error || `HTTP ${r.status}` } };
     return { ...EMPTY, phase: (j.phase as Phase) ?? 'unbound', binding: j.binding, tenant: j.tenant ?? null, job: j.job ?? null };
@@ -145,6 +147,25 @@ export function HealthTenantEditor({ item, id }: { item: FabricItemType; id: str
     try { setView(await ensure(retry)); } finally { setBusy(false); }
   }, [ensure]);
 
+  const saveQuotas = useCallback(async (draft: { rpm: string; gib: string }) => {
+    setBusy(true);
+    setQMsg(null);
+    try {
+      const r = await clientFetch(`/api/health/tenants/${encodeURIComponent(id)}`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ quotas: { maxRequestsPerMinute: Number(draft.rpm), maxStorageGiB: Number(draft.gib) } }),
+      });
+      const j = await r.json();
+      if (j?.gated) { setView((v) => ({ ...v, gate: j.gate })); return; }
+      if (!j?.ok) { setQMsg({ intent: 'error', text: r.status === 403 ? `${j?.error || 'forbidden'}: ${j?.remediation || 'The Health Tenant Admin grant is required.'}` : (j?.error || `HTTP ${r.status}`) }); return; }
+      setView((v) => ({ ...v, tenant: j.tenant ?? v.tenant }));
+      setQDraft(null);
+      setQMsg({ intent: 'success', text: 'Quotas saved on the control plane.' });
+    } catch (e: any) {
+      setQMsg({ intent: 'error', text: e?.message || String(e) });
+    } finally { setBusy(false); }
+  }, [id]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Tenant', actions: [
@@ -154,6 +175,7 @@ export function HealthTenantEditor({ item, id }: { item: FabricItemType; id: str
       { label: 'View', actions: [
         { label: 'Overview', onClick: () => setTab('overview') },
         { label: 'Services', onClick: () => setTab('services') },
+        { label: 'Quotas', onClick: () => setTab('quotas') },
       ] },
     ] },
   ], [act, open, busy, view.gate]);
@@ -167,9 +189,10 @@ export function HealthTenantEditor({ item, id }: { item: FabricItemType; id: str
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <>
         <div className={s.tabs}>
-          <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'overview' | 'services')}>
+          <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'overview' | 'services' | 'quotas')}>
             <Tab value="overview">Overview</Tab>
             <Tab value="services">Services</Tab>
+            <Tab value="quotas">Quotas</Tab>
           </TabList>
         </div>
         <div className={s.pad}>
@@ -266,6 +289,32 @@ export function HealthTenantEditor({ item, id }: { item: FabricItemType; id: str
                   ],
                 }]}
               />
+            </div>
+          )}
+
+          {tab === 'quotas' && (
+            <div className={s.card}>
+              <Subtitle2>Quotas</Subtitle2>
+              <Caption1>Limits the control plane records for this tenant. Saving writes them to the control plane (PATCH), which is the authority.</Caption1>
+              {!t ? (
+                <MessageBar intent="info" layout="multiline">
+                  <MessageBarBody><MessageBarTitle>No tenant yet</MessageBarTitle>Quotas can be edited once the tenant is registered in the control plane.</MessageBarBody>
+                </MessageBar>
+              ) : (
+                <>
+                  <Field label="Requests per minute" hint="Whole number, 1 to 1,000,000.">
+                    <Input type="number" value={qDraft?.rpm ?? String(t.quotas.maxRequestsPerMinute)} onChange={(_, d) => setQDraft({ rpm: d.value, gib: qDraft?.gib ?? String(t.quotas.maxStorageGiB) })} />
+                  </Field>
+                  <Field label="Storage (GiB)" hint="Whole number, 1 to 10,000,000.">
+                    <Input type="number" value={qDraft?.gib ?? String(t.quotas.maxStorageGiB)} onChange={(_, d) => setQDraft({ rpm: qDraft?.rpm ?? String(t.quotas.maxRequestsPerMinute), gib: d.value })} />
+                  </Field>
+                  <div className={s.toolbar}>
+                    <Button appearance="primary" disabled={busy || !qDraft} onClick={() => qDraft && void saveQuotas(qDraft)}>Save quotas</Button>
+                    <Button disabled={busy || !qDraft} onClick={() => { setQDraft(null); setQMsg(null); }}>Discard</Button>
+                  </div>
+                </>
+              )}
+              {qMsg && <MessageBar intent={qMsg.intent} layout="multiline"><MessageBarBody>{qMsg.text}</MessageBarBody></MessageBar>}
             </div>
           )}
 
