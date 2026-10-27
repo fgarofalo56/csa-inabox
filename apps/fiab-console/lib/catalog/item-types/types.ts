@@ -29,7 +29,8 @@ export type WorkloadCategory =
   | 'Copilot Studio'
   | 'Power Platform'
   | 'AI & Agents'
-  | 'Loom Apps';
+  | 'Loom Apps'
+  | 'Health data';
 
 export interface LearnStep {
   title: string;

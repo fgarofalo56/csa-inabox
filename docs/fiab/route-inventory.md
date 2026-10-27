@@ -13,13 +13,13 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1702 |
+| Total routes | 1704 |
 | Public (no session) | 60 |
 | Session-only | 615 |
 | Owner-scoped | 697 |
-| Admin | 330 |
+| Admin | 332 |
 | Unknown (generator fails) | 0 |
-| Gated (backend config) | 500 |
+| Gated (backend config) | 502 |
 | Areas | 122 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
@@ -514,7 +514,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
-| `apps/[id]/install/route.ts` | POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, AML, APIM, ARM, Azure Monitor, Azure RBAC, Azure SQL, Azure Storage, Compute, Container Apps, Cosmos, Databricks, Event Hubs, Fabric, IoT Hub, Logic Apps, Managed Identity, Microsoft Graph, PostgreSQL, Power BI, Purview, Resource Graph, Service Bus, Stream Analytics, Synapse, Synapse SQL |
+| `apps/[id]/install/route.ts` | POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, AML, APIM, ARM, Azure Monitor, Azure RBAC, Azure SQL, Azure Storage, Compute, Container Apps, Cosmos, Databricks, Event Hubs, Fabric, IoT Hub, Logic Apps, Loom service, Managed Identity, Microsoft Graph, PostgreSQL, Power BI, Purview, Resource Graph, Service Bus, Stream Analytics, Synapse, Synapse SQL |
 | `apps/install-jobs/[jobId]/route.ts` | GET | owner-scoped |  | Cosmos |
 | `apps/supercharge/seed/route.ts` | POST | owner-scoped |  | ARM, Cosmos, Synapse |
 
@@ -838,10 +838,10 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `deployment-pipelines/git/[workspaceId]/initialize/route.ts` | POST | session-only |  | ARM, Fabric |
 | `deployment-pipelines/git/[workspaceId]/status/route.ts` | GET | session-only |  | ARM, Fabric |
 | `deployment-pipelines/git/[workspaceId]/update/route.ts` | POST | session-only |  | ARM, Fabric |
-| `deployment-pipelines/loom/[id]/approvals/[requestId]/route.ts` | POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, AML, APIM, ARM, Azure Monitor, Azure RBAC, Azure SQL, Azure Storage, Compute, Container Apps, Cosmos, Databricks, Event Hubs, Fabric, IoT Hub, Logic Apps, Managed Identity, Microsoft Graph, PostgreSQL, Power BI, Purview, Resource Graph, Service Bus, Stream Analytics, Synapse, Synapse SQL |
+| `deployment-pipelines/loom/[id]/approvals/[requestId]/route.ts` | POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, AML, APIM, ARM, Azure Monitor, Azure RBAC, Azure SQL, Azure Storage, Compute, Container Apps, Cosmos, Databricks, Event Hubs, Fabric, IoT Hub, Logic Apps, Loom service, Managed Identity, Microsoft Graph, PostgreSQL, Power BI, Purview, Resource Graph, Service Bus, Stream Analytics, Synapse, Synapse SQL |
 | `deployment-pipelines/loom/[id]/approvals/route.ts` | GET | owner-scoped |  | Cosmos |
 | `deployment-pipelines/loom/[id]/compare/route.ts` | GET | owner-scoped |  | ARM, Cosmos, Microsoft Graph |
-| `deployment-pipelines/loom/[id]/deploy/route.ts` | POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, AML, APIM, ARM, Azure Monitor, Azure RBAC, Azure SQL, Azure Storage, Compute, Container Apps, Cosmos, Databricks, Event Hubs, Fabric, IoT Hub, Logic Apps, Managed Identity, Microsoft Graph, PostgreSQL, Power BI, Purview, Resource Graph, Service Bus, Stream Analytics, Synapse, Synapse SQL |
+| `deployment-pipelines/loom/[id]/deploy/route.ts` | POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, AML, APIM, ARM, Azure Monitor, Azure RBAC, Azure SQL, Azure Storage, Compute, Container Apps, Cosmos, Databricks, Event Hubs, Fabric, IoT Hub, Logic Apps, Loom service, Managed Identity, Microsoft Graph, PostgreSQL, Power BI, Purview, Resource Graph, Service Bus, Stream Analytics, Synapse, Synapse SQL |
 | `deployment-pipelines/loom/[id]/history/route.ts` | GET | owner-scoped |  | Cosmos |
 | `deployment-pipelines/loom/[id]/route.ts` | GET DELETE | owner-scoped |  | Cosmos |
 | `deployment-pipelines/loom/[id]/stages/[stageId]/approvals/route.ts` | GET PUT | owner-scoped |  | Azure Monitor, Cosmos |
@@ -1064,6 +1064,8 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | --- | --- | --- | :---: | --- |
 | `health/deep/route.ts` | GET | public |  | Cosmos |
 | `health/route.ts` | GET | public |  | — |
+| `health/tenants/[id]/route.ts` | GET POST | admin | ● | ADX, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Loom service, Microsoft Graph |
+| `health/tenants/route.ts` | GET | admin | ● | ADX, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Loom service |
 
 ## help-copilot
 
@@ -1346,10 +1348,10 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/data-pipeline/import/route.ts` | POST | owner-scoped | ● | ADF, ARM, Cosmos, Resource Graph |
 | `items/data-pipeline/practice-seed/route.ts` | POST | owner-scoped | ● | ADF, ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Resource Graph |
 | `items/data-pipeline/route.ts` | GET POST | owner-scoped |  | ADF, ARM, Cosmos, Resource Graph |
-| `items/data-product-instance/[id]/provision/route.ts` | POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, AML, APIM, ARM, Azure Monitor, Azure RBAC, Azure SQL, Azure Storage, Compute, Container Apps, Cosmos, Databricks, Event Hubs, Fabric, IoT Hub, Logic Apps, Managed Identity, Microsoft Graph, PostgreSQL, Power BI, Purview, Resource Graph, Service Bus, Stream Analytics, Synapse, Synapse SQL |
+| `items/data-product-instance/[id]/provision/route.ts` | POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, AML, APIM, ARM, Azure Monitor, Azure RBAC, Azure SQL, Azure Storage, Compute, Container Apps, Cosmos, Databricks, Event Hubs, Fabric, IoT Hub, Logic Apps, Loom service, Managed Identity, Microsoft Graph, PostgreSQL, Power BI, Purview, Resource Graph, Service Bus, Stream Analytics, Synapse, Synapse SQL |
 | `items/data-product-instance/[id]/route.ts` | GET | owner-scoped |  | ARM, Cosmos, Microsoft Graph |
 | `items/data-product-instance/route.ts` | GET POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, ARM, Azure SQL, Azure Storage, Compute, Cosmos, Managed Identity, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Synapse |
-| `items/data-product-template/[id]/instantiate/route.ts` | POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, AML, APIM, ARM, Azure Monitor, Azure RBAC, Azure SQL, Azure Storage, Compute, Container Apps, Cosmos, Databricks, Event Hubs, Fabric, IoT Hub, Logic Apps, Managed Identity, Microsoft Graph, PostgreSQL, Power BI, Purview, Resource Graph, Service Bus, Stream Analytics, Synapse, Synapse SQL |
+| `items/data-product-template/[id]/instantiate/route.ts` | POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, AML, APIM, ARM, Azure Monitor, Azure RBAC, Azure SQL, Azure Storage, Compute, Container Apps, Cosmos, Databricks, Event Hubs, Fabric, IoT Hub, Logic Apps, Loom service, Managed Identity, Microsoft Graph, PostgreSQL, Power BI, Purview, Resource Graph, Service Bus, Stream Analytics, Synapse, Synapse SQL |
 | `items/data-product-template/[id]/route.ts` | GET | session-only |  | — |
 | `items/data-product-template/route.ts` | GET POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, ARM, Azure SQL, Azure Storage, Compute, Cosmos, Managed Identity, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Synapse |
 | `items/data-product/[id]/publish-api/route.ts` | POST | owner-scoped | ● | AI Search, APIM, ARM, Cosmos, Microsoft Graph |
@@ -1909,7 +1911,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
-| `learn/notebook-import/route.ts` | GET POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, AML, APIM, ARM, Azure Monitor, Azure RBAC, Azure SQL, Azure Storage, Compute, Container Apps, Cosmos, Databricks, Event Hubs, Fabric, IoT Hub, Logic Apps, Managed Identity, Microsoft Graph, PostgreSQL, Power BI, Purview, Resource Graph, Service Bus, Stream Analytics, Synapse, Synapse SQL |
+| `learn/notebook-import/route.ts` | GET POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, AML, APIM, ARM, Azure Monitor, Azure RBAC, Azure SQL, Azure Storage, Compute, Container Apps, Cosmos, Databricks, Event Hubs, Fabric, IoT Hub, Logic Apps, Loom service, Managed Identity, Microsoft Graph, PostgreSQL, Power BI, Purview, Resource Graph, Service Bus, Stream Analytics, Synapse, Synapse SQL |
 
 ## lineage
 
@@ -2551,7 +2553,7 @@ silently downgrading the route.
 
 ## Backend signals (derived)
 
-461 module(s) ORIGINATE a backend label — the derivation read an
+462 module(s) ORIGINATE a backend label — the derivation read an
 Azure identifier out of them. Every other route/module below inherits through the
 call graph. Nothing in this section is a Loom module name someone typed: the
 modules are derived, and only the Microsoft-owned identifier vocabulary is seeded.
@@ -2750,6 +2752,7 @@ this state that is NOT listed here fails the generator** — which is what makes
 | Module | Backend | Read at its definition |
 | --- | --- | --- |
 | `apps/fiab-console/app/api/dab/_lib/dab-runtime.ts` | Loom service | the Data API builder bridge. It calls a DAB engine at `LOOM_DAB_PREVIEW_URL` — the shared preview Container App from platform/fiab/bicep/modules/admin-plane/dab-runtime.bicep, one of Loom's own deployments. Whatever data source DAB is configured against is attributed there, not on the route. |
+| `apps/fiab-console/app/api/health/tenants/_lib/cp-client.ts` | Loom service | calls the `loom-health-cp` health control plane (apps/loom-health-cp) at `LOOM_HEALTH_CP_URL` with a bearer token for `LOOM_HEALTH_CP_AUDIENCE`. It is one of Loom's OWN services; the Azure resources its tenant.create job deploys (PostgreSQL, Blob, Event Hubs, Key Vault) are attributed in that service, never on the calling route, and the Console makes no ARM call for a tenant itself. |
 | `apps/fiab-console/lib/access/signin-access-request.ts` | — (none) | its one fetch (:123) POSTs to `LOOM_ACCESS_REQUEST_WEBHOOK` — an operator-supplied Teams incoming webhook or Logic App URL. Which service that is, is deployment configuration and not a property of the code; unset, the function returns false without calling anything. |
 | `apps/fiab-console/lib/azure/aca-managed-identity.ts` | — (none) | a custom TokenCredential that GETs the Container Apps managed-identity endpoint ($IDENTITY_ENDPOINT, a localhost-side IMDS-style URL) because @azure/identity cannot parse the ACA response. It mints a token; the service the token is spent on is attributed at the client that spends it. |
 | `apps/fiab-console/lib/azure/arm-credential.ts` | — (none) | acquires an ARM-scoped token from the UAMI → DefaultAzureCredential chain and returns it. The ARM base URL it is used WITH lives in cloud-endpoints (armBase()), which is where the ARM label is derived; this module reaches no service of its own. |
@@ -2828,6 +2831,7 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/app/api/governance-domains/route.ts` | Purview |
 | `apps/fiab-console/app/api/governance/govern/embed/route.ts` | Power BI |
 | `apps/fiab-console/app/api/governance/purview/status/route.ts` | Purview |
+| `apps/fiab-console/app/api/health/tenants/_lib/cp-client.ts` | Loom service |
 | `apps/fiab-console/app/api/items/[type]/[id]/security-roles/route.ts` | Fabric |
 | `apps/fiab-console/app/api/items/_lib/sql-server-scope.ts` | Azure SQL, PostgreSQL |
 | `apps/fiab-console/app/api/items/activator/[id]/history/route.ts` | Azure Monitor |
