@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "4634642744041404638"
+      "templateHash": "8765780802276289096"
     }
   },
   "definitions": {
@@ -207,7 +207,8 @@
         "Commercial",
         "GCC",
         "GCC-High",
-        "IL5"
+        "IL5",
+        "DoD"
       ],
       "metadata": {
         "description": "Cloud boundary"
@@ -2040,6 +2041,7 @@
         }
       }
     ],
+    "effectiveBoundary": "[if(or(equals(parameters('boundary'), 'DoD'), equals(parameters('boundary'), 'IL5')), 'IL5', if(equals(parameters('boundary'), 'GCC-High'), 'GCC-High', if(equals(parameters('boundary'), 'GCC'), 'GCC', 'Commercial')))]",
     "grafanaEmbedDayOne": "[and(parameters('managedGrafanaEnabled'), not(parameters('pbiEmbeddedEnabled')))]",
     "effectiveLoomReportKind": "[if(not(empty(parameters('loomReportKind'))), parameters('loomReportKind'), if(variables('grafanaEmbedDayOne'), 'grafana', ''))]",
     "effectiveLoomUsageReportKind": "[if(not(empty(parameters('loomUsageReportKind'))), parameters('loomUsageReportKind'), if(variables('grafanaEmbedDayOne'), 'grafana', ''))]",
@@ -2109,7 +2111,7 @@
     "redisIsPremium": "[equals(parameters('redisSkuName'), 'Premium')]",
     "redisSkuFamily": "[if(variables('redisIsPremium'), 'P', 'C')]",
     "redisSkuCapacity": "[if(variables('redisIsPremium'), 1, 0)]",
-    "redisBackend": "[if(equals(parameters('boundary'), 'Commercial'), 'managed', 'classic')]",
+    "redisBackend": "[if(equals(variables('effectiveBoundary'), 'Commercial'), 'managed', 'classic')]",
     "effShirAdminPassword": "[if(not(empty(parameters('shirAdminPassword'))), parameters('shirAdminPassword'), format('{0}{1}!7xQ', toUpper(substring(uniqueString(subscription().subscriptionId, 'loom-shir'), 0, 9)), substring(uniqueString(deployment().name, 'loom-shir-lower'), 0, 9)))]",
     "effectiveTopology": "[if(empty(parameters('topology')), parameters('deploymentMode'), parameters('topology'))]",
     "deployAdminPlane": "[not(equals(variables('effectiveTopology'), 'dlz-attach'))]",
@@ -2117,10 +2119,10 @@
     "useSingleDlz": "[and(variables('deployLandingZones'), equals(variables('effectiveTopology'), 'single-sub'))]",
     "useMultiDlz": "[and(variables('deployLandingZones'), not(equals(variables('effectiveTopology'), 'single-sub')))]",
     "adminPlaneRgName": "[if(and(not(variables('deployAdminPlane')), not(empty(string(coalesce(tryGet(parameters('hubCoordinates'), 'adminPlaneRgName'), ''))))), string(parameters('hubCoordinates').adminPlaneRgName), format('rg-csa-loom-admin-{0}', parameters('location')))]",
-    "gremlinHostSuffix": "[if(or(equals(parameters('boundary'), 'GCC-High'), equals(parameters('boundary'), 'IL5')), 'gremlin.cosmos.azure.us', 'gremlin.cosmos.azure.com')]",
-    "cosmosDocSuffix": "[if(or(equals(parameters('boundary'), 'GCC-High'), equals(parameters('boundary'), 'IL5')), 'azure.us', 'azure.com')]",
-    "pgHostSuffix": "[if(or(equals(parameters('boundary'), 'GCC-High'), equals(parameters('boundary'), 'IL5')), 'postgres.database.usgovcloudapi.net', 'postgres.database.azure.com')]",
-    "databricksAccountHost": "[if(or(equals(parameters('boundary'), 'GCC-High'), equals(parameters('boundary'), 'IL5')), 'accounts.azuredatabricks.us', 'accounts.azuredatabricks.net')]",
+    "gremlinHostSuffix": "[if(or(equals(variables('effectiveBoundary'), 'GCC-High'), equals(variables('effectiveBoundary'), 'IL5')), 'gremlin.cosmos.azure.us', 'gremlin.cosmos.azure.com')]",
+    "cosmosDocSuffix": "[if(or(equals(variables('effectiveBoundary'), 'GCC-High'), equals(variables('effectiveBoundary'), 'IL5')), 'azure.us', 'azure.com')]",
+    "pgHostSuffix": "[if(or(equals(variables('effectiveBoundary'), 'GCC-High'), equals(variables('effectiveBoundary'), 'IL5')), 'postgres.database.usgovcloudapi.net', 'postgres.database.azure.com')]",
+    "databricksAccountHost": "[if(or(equals(variables('effectiveBoundary'), 'GCC-High'), equals(variables('effectiveBoundary'), 'IL5')), 'accounts.azuredatabricks.us', 'accounts.azuredatabricks.net')]",
     "dlzAttachHubVnetId": "[string(coalesce(tryGet(parameters('hubCoordinates'), 'hubVnetId'), ''))]",
     "effHubAdxClusterRgName": "[if(not(empty(parameters('hubAdxClusterRgName'))), parameters('hubAdxClusterRgName'), variables('adminPlaneRgName'))]",
     "effHubAcrLoginServer": "[if(not(empty(parameters('hubAcrLoginServer'))), parameters('hubAcrLoginServer'), string(coalesce(tryGet(parameters('hubCoordinates'), 'acrLoginServer'), '')))]",
@@ -2186,10 +2188,10 @@
             "value": "[parameters('location')]"
           },
           "boundary": {
-            "value": "[parameters('boundary')]"
+            "value": "[variables('effectiveBoundary')]"
           },
           "loomCloudTier": {
-            "value": "[parameters('boundary')]"
+            "value": "[variables('effectiveBoundary')]"
           },
           "loomAzureCloud": {
             "value": "[parameters('loomAzureCloud')]"
@@ -30888,7 +30890,7 @@
             "value": "[parameters('location')]"
           },
           "boundary": {
-            "value": "[parameters('boundary')]"
+            "value": "[variables('effectiveBoundary')]"
           },
           "domainName": {
             "value": "default"
@@ -40774,7 +40776,7 @@
             "value": "[parameters('location')]"
           },
           "boundary": {
-            "value": "[parameters('boundary')]"
+            "value": "[variables('effectiveBoundary')]"
           },
           "domainName": {
             "value": "[parameters('dlzDomainNames')[copyIndex()]]"
@@ -50829,7 +50831,7 @@
             "value": "[parameters('location')]"
           },
           "boundary": {
-            "value": "[parameters('boundary')]"
+            "value": "[variables('effectiveBoundary')]"
           },
           "domainName": {
             "value": "[parameters('attachDomainName')]"

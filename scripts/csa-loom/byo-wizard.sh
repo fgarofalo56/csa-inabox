@@ -82,7 +82,7 @@ OUT_ENV="$TEMP_DIR/$OUT_NAME.byo-exports.sh"
 
 # Gov boundaries never offer Fabric (no Fabric in Azure Government).
 case "$BOUNDARY" in
-  gcc-high|il5|gcc) IS_GOV=1 ;;
+  gcc-high|il5|dod|gcc) IS_GOV=1 ;;
   *) IS_GOV=0 ;;
 esac
 

@@ -1574,8 +1574,8 @@ export const TRIAGED_INERT_BINDINGS = new Map([
     {
       issue: '#3433 (PR #3923)',
       param: 'loomCloudTier',
-      rootExpr: 'boundary',
-      compiledValue: "[parameters('boundary')]",
+      rootExpr: 'effectiveBoundary',
+      compiledValue: "[variables('effectiveBoundary')]",
       // #3956 — THE INVARIANT THE `why` BELOW RESTS ON, not just the expression.
       // The rationale is "`boundary` is @allowed([…]) so ARM itself constrains the
       // value". Measured: removing that decorator from main.bicep compiles
@@ -1584,7 +1584,7 @@ export const TRIAGED_INERT_BINDINGS = new Map([
       // the expression SAFE was unguarded. `boundary` reaching admin-plane
       // unconstrained would let a typo'd or empty boundary reach the IL5
       // Fabric-Admin-API compliance gate in domains-client.ts.
-      dependsOnAllowed: { param: 'boundary', values: ['Commercial', 'GCC', 'GCC-High', 'IL5'] },
+      dependsOnAllowed: { param: 'boundary', values: ['Commercial', 'GCC', 'GCC-High', 'IL5', 'DoD'] },
       why:
         'The cloud AUTHORIZATION tier five console paths compare against, one of which ' +
         '(lib/azure/domains-client.ts) uses it to skip the Fabric Admin API on IL5 because ' +

@@ -93,6 +93,9 @@ export const NO_AUTOMATED_DEPLOYER = Object.freeze({
   'tenant-dmlz.bicepparam':
     'operator/manual only — no automated caller (same finding as the appimagetags-coverage guard). ' +
     'Its tags cannot be silently reverted by CI because CI never deploys it.',
+  'dod.bicepparam':
+    'DoD is supported-in-code only, never exercised (D3, LHDS W1-8): no workflow deploys it by design ' +
+    '(cloud-parity.md). Its tags cannot be silently reverted by CI because CI never deploys it.',
 });
 
 /**

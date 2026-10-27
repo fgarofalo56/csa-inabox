@@ -17,8 +17,14 @@ param environment string
 param location string
 
 @description('Cloud boundary')
-@allowed(['Commercial', 'GCC', 'GCC-High', 'IL5'])
+@allowed(['Commercial', 'GCC', 'GCC-High', 'IL5', 'DoD'])
 param boundary string
+
+// D3 (LHDS W1-8): 'DoD' is SUPPORTED-IN-CODE ONLY, never exercised. DoD runs in the same Azure
+// Government DoD cloud as IL5, so every boundary conditional here and in the modules (endpoint
+// suffixes, DoD Graph/Power BI hosts, loomCloudTier IL5 restrictions) resolves as IL5. Modules
+// therefore never see 'DoD' and their own @allowed lists are unchanged.
+var effectiveBoundary = (boundary == 'DoD' || boundary == 'IL5') ? 'IL5' : (boundary == 'GCC-High' ? 'GCC-High' : (boundary == 'GCC' ? 'GCC' : 'Commercial'))
 
 @description('AZURE_CLOUD two-value discriminator for the Console (AzureCloud | AzureUSGovernment). Empty (default) = derived from boundary. Threaded to the admin-plane module so GCC-High / IL5 deployments can set AzureUSGovernment explicitly without relying on the 4-way boundary mapping.')
 @allowed(['', 'AzureCloud', 'AzureUSGovernment'])
@@ -1005,7 +1011,7 @@ var redisSkuCapacity = redisIsPremium ? 1 : 0
 // purpose: if the boundary @allowed list ever grows, an unrecognised boundary
 // must fall to the universally-available classic provider, not to a
 // Public-cloud-only one.
-var redisBackend = boundary == 'Commercial' ? 'managed' : 'classic'
+var redisBackend = effectiveBoundary == 'Commercial' ? 'managed' : 'classic'
 
 // ---------- User access patterns ----------
 
@@ -1237,13 +1243,13 @@ var adminPlaneRgName = (!deployAdminPlane && !empty(string(hubCoordinates.?admin
 // so the deterministic-name endpoints wired into the Console env (below) match
 // the accounts the module actually deploys. Commercial/GCC → azure.com;
 // GCC-High/IL5 (Azure US Government) → azure.us.
-var gremlinHostSuffix = (boundary == 'GCC-High' || boundary == 'IL5') ? 'gremlin.cosmos.azure.us' : 'gremlin.cosmos.azure.com'
-var cosmosDocSuffix = (boundary == 'GCC-High' || boundary == 'IL5') ? 'azure.us' : 'azure.com'
+var gremlinHostSuffix = (effectiveBoundary == 'GCC-High' || effectiveBoundary == 'IL5') ? 'gremlin.cosmos.azure.us' : 'gremlin.cosmos.azure.com'
+var cosmosDocSuffix = (effectiveBoundary == 'GCC-High' || effectiveBoundary == 'IL5') ? 'azure.us' : 'azure.com'
 // Weave (Semantic Ontology) PG flexible-server data-plane host suffix, mirrored
 // from postgres-weave.bicep so the deterministic-name FQDN wired into the Console
 // env (LOOM_WEAVE_PG_FQDN, below) matches the server the DLZ module deploys.
 // Commercial/GCC → postgres.database.azure.com; GCC-High/IL5 → .usgovcloudapi.net.
-var pgHostSuffix = (boundary == 'GCC-High' || boundary == 'IL5') ? 'postgres.database.usgovcloudapi.net' : 'postgres.database.azure.com'
+var pgHostSuffix = (effectiveBoundary == 'GCC-High' || effectiveBoundary == 'IL5') ? 'postgres.database.usgovcloudapi.net' : 'postgres.database.azure.com'
 // Databricks ACCOUNT control-plane host (accounts.azuredatabricks.*), forwarded
 // to the Console as LOOM_DATABRICKS_ACCOUNT_HOST so the Catalog → Metastores UC
 // account API (list/assign) and the bootstrap deploymentScript both target the
@@ -1252,7 +1258,7 @@ var pgHostSuffix = (boundary == 'GCC-High' || boundary == 'IL5') ? 'postgres.dat
 // .us host. UC itself is only enabled on Commercial/GCC (landing-zone
 // dlzUcSupported), so the .us branch is defensive — the env is harmless when
 // no account id is set.
-var databricksAccountHost = (boundary == 'GCC-High' || boundary == 'IL5') ? 'accounts.azuredatabricks.us' : 'accounts.azuredatabricks.net'
+var databricksAccountHost = (effectiveBoundary == 'GCC-High' || effectiveBoundary == 'IL5') ? 'accounts.azuredatabricks.us' : 'accounts.azuredatabricks.net'
 
 resource adminPlaneRg 'Microsoft.Resources/resourceGroups@2024-03-01' = if (deployAdminPlane) {
   name: adminPlaneRgName
@@ -1269,7 +1275,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
   scope: adminPlaneRg
   params: {
     location: location
-    boundary: boundary
+    boundary: effectiveBoundary
     // #3433 — LOOM_CLOUD_TIER: the cloud AUTHORIZATION tier the BFF enforces on.
     // admin-plane/main.bicep has declared `param loomCloudTier string = ''` and
     // emitted `{ name: 'LOOM_CLOUD_TIER', value: loomCloudTier }` since the IL5
@@ -1294,7 +1300,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     // admin-plane/main.bicep (L96); this populates it. Declared-param count is
     // unchanged at 239 of the 256 ceiling (verified against the compiled
     // main.json admin-plane nested template before and after).
-    loomCloudTier: boundary
+    loomCloudTier: effectiveBoundary
     loomAzureCloud: loomAzureCloud
     containerPlatform: containerPlatform
     // NOTE: functionsHostSku / capacitySku / openai* are NOT passed to the
@@ -2081,7 +2087,7 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (useSingleDlz) {
   scope: singleDlzRg
   params: {
     location: location
-    boundary: boundary
+    boundary: effectiveBoundary
     domainName: 'default'
     containerPlatform: containerPlatform
     capacitySku: capacitySku
@@ -2249,7 +2255,7 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
   scope: resourceGroup(subId, 'rg-csa-loom-dlz-${dlzDomainNames[i]}-${location}')
   params: {
     location: location
-    boundary: boundary
+    boundary: effectiveBoundary
     domainName: dlzDomainNames[i]
     containerPlatform: containerPlatform
     capacitySku: capacitySku
@@ -2499,7 +2505,7 @@ module dlzAttach 'modules/landing-zone/main.bicep' = if (topology == 'dlz-attach
   ]
   params: {
     location: location
-    boundary: boundary
+    boundary: effectiveBoundary
     domainName: attachDomainName
     containerPlatform: containerPlatform
     capacitySku: capacitySku

@@ -50,8 +50,12 @@ targetScope = 'subscription'
 param location string
 
 @description('Cloud boundary.')
-@allowed(['Commercial', 'GCC', 'GCC-High', 'IL5'])
+@allowed(['Commercial', 'GCC', 'GCC-High', 'IL5', 'DoD'])
 param boundary string
+
+// D3 (LHDS W1-8): 'DoD' is SUPPORTED-IN-CODE ONLY, never exercised; it resolves as IL5 (same
+// Azure Government DoD cloud) so the health modules never see 'DoD'.
+var effectiveBoundary = (boundary == 'DoD' || boundary == 'IL5') ? 'IL5' : (boundary == 'GCC-High' ? 'GCC-High' : (boundary == 'GCC' ? 'GCC' : 'Commercial'))
 
 @description('Deploy an LHDS stamp (private AKS, PostgreSQL Flexible Server, Blob, Event Hubs, Key Vault, WAF v2 ingress) into its own resource group. Default false: with false nothing is created.')
 param healthEnabled bool = false
@@ -74,7 +78,7 @@ param skipRoleGrants bool = false
 @description('Tags applied to every resource.')
 param tags object = {}
 
-var healthIsGov = boundary == 'GCC-High' || boundary == 'IL5'
+var healthIsGov = effectiveBoundary == 'GCC-High' || effectiveBoundary == 'IL5'
 var healthStampName = string(healthConfig.?stampName ?? 'dev01')
 var healthLocation = string(healthConfig.?location ?? (healthIsGov ? 'usgovarizona' : location))
 var healthPairedLocation = string(healthConfig.?pairedLocation ?? (healthIsGov ? 'usgovtexas' : ''))
@@ -96,7 +100,7 @@ module healthStamp 'modules/health/stamp.bicep' = if (healthDeploy) {
     location: healthLocation
     pairedLocation: healthPairedLocation
     stampName: healthStampName
-    boundary: boundary
+    boundary: effectiveBoundary
     postgresQuotaAvailable: healthPgAllowed
     profile: healthConfig.?profile ?? 'dev'
     adminEntraGroupId: string(healthConfig.?adminEntraGroupId ?? adminEntraGroupId)
@@ -116,7 +120,7 @@ module healthStamp 'modules/health/stamp.bicep' = if (healthDeploy) {
 }
 
 // ── Control plane (apps/loom-health-cp) ───────────────────────────────────────
-var cpPlatformRaw = toLower(string(controlPlaneConfig.?controlPlane ?? (boundary == 'IL5' ? 'aks' : 'containerApps')))
+var cpPlatformRaw = toLower(string(controlPlaneConfig.?controlPlane ?? (effectiveBoundary == 'IL5' ? 'aks' : 'containerApps')))
 var cpValidPlatform = contains(['containerApps', 'aks'], cpPlatformRaw)
 // An unrecognised value is NOT coerced into a deployment: cpDeploy requires cpValidPlatform
 // and the skip reason names the value.
@@ -136,7 +140,7 @@ module healthControlPlane 'modules/health/control-plane.bicep' = if (cpDeploy) {
   scope: healthRg
   params: {
     location: cpPlatform == 'aks' ? healthLocation : location
-    boundary: boundary
+    boundary: effectiveBoundary
     platform: cpPlatform
     image: '${cpAcrLoginServer}/loom-health-cp:${string(controlPlaneConfig.?imageTag ?? 'v0.1')}'
     acrLoginServer: cpAcrLoginServer
