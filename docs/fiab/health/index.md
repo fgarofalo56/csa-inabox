@@ -28,7 +28,7 @@ Design sources: `PRPs/active/loom-health-data-services/` (`ARCHITECTURE.md`,
 | Tenant bicep + jobs | `modules/health/tenant.bicep`, `tenant.create` / `tenant.destroy` | Merged (#5130); handlers not registered in `main.ts` |
 | Authorization server (SMART v2) | `apps/loom-health-cp/src/auth/` | Merged (#5131); not wired into `compose.ts` / `main.ts`. See [security](security.md) |
 | PDP (OPA) | `apps/loom-health-pdp`, `modules/health/engines.bicep` | Merged (#5125, #5137) |
-| Edge routing | `modules/health/ingress.bicep`, `apim-fragment.bicep` | Merged (#5145); APIM params not wired from the stamp |
+| Edge routing | `modules/health/ingress.bicep`, `apim-fragment.bicep` | Merged (#5145); APIM fragment + Reader grant wired from `health.bicep` via `controlPlaneConfig.apim` (merged, not deployed). The Reader grant is management-plane only and does NOT authorize the routing-map call: that still needs the `HealthCP.Reader` app role on the APIM identity and its application id in `allowedCallerAppIds` (not wired). The authorization server serves no root `/.well-known/openid-configuration` yet, so a deploy of this wiring 401s every token until it does. The APIM service needs a system-assigned identity. |
 | Loom item `health-tenant` | `apps/fiab-console/lib/catalog/item-types/health.ts`, provisioner, editor | Merged (#5139); no browser walk, not A-grade |
 | Estate power | `lib/estate/pause-guards.ts`, `src/jobs/stamp-power.ts` | Merged (#5138); not active |
 

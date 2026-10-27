@@ -2006,6 +2006,8 @@ const CROSS_SUB_CALLSITE_REGISTER = {
     'Subscription-scoped RBAC for the setup orchestrator in each spoke subscription.',
   [`${PLATFORM_PREFIX}modules/landing-zone/adx.bicep inner -> ${PLATFORM_PREFIX}modules/landing-zone/adx-db-inner.bicep`]:
     'ADX database creation against a cluster an estate may host in another subscription. Kusto, not storage.',
+  [`${PLATFORM_PREFIX}health.bicep healthApimFragment -> ${PLATFORM_PREFIX}modules/health/apim-fragment.bicep`]:
+    'Same fragment as the ingress.bicep entry below, published from the subscription-level health.bicep once the control plane URL is known (the stamp deploys before the control plane, so the stamp ingress cannot hold it). One Microsoft.ApiManagement policyFragments resource; the module contains no roleAssignments and nothing that reaches storage or the lake. The Reader grant is a separate module (apim-access.bicep) scoped to the stamp resource group.',
   [`${PLATFORM_PREFIX}modules/health/ingress.bicep apimFragment -> ${PLATFORM_PREFIX}modules/health/apim-fragment.bicep`]:
     'LHDS tenant-routing policy fragment published into an EXISTING API Management service that a brownfield estate may host in another subscription (apimSubscriptionId). Writes one Microsoft.ApiManagement policyFragments resource; the module contains no roleAssignments and nothing that reaches storage or the lake (verified by grep, 0 matches).',
 };

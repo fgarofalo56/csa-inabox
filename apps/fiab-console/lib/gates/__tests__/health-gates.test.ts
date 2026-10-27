@@ -9,10 +9,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getGate, gateStatus } from '../registry';
 import { getCapability, ancestorIds } from '@/lib/auth/feature-catalog';
 
-const IDS = ['health-control-plane', 'health-stamp-capacity', 'health-gov-image-gate', 'health-lakehouse-isolation'] as const;
+const IDS = ['health-control-plane', 'health-stamp-capacity', 'health-gov-image-gate', 'health-lakehouse-isolation', 'health-auth-graph-consent'] as const;
 const VARS = [
   'LOOM_HEALTH_CP_URL', 'LOOM_HEALTH_CP_AUDIENCE', 'LOOM_HEALTH_DEFAULT_STAMP_ID',
-  'LOOM_HEALTH_GOV_STAMP_ID', 'LOOM_HEALTH_GOV_IMAGE_ATTESTATION', 'LOOM_HEALTH_LAKEHOUSE_ISOLATION',
+  'LOOM_HEALTH_GOV_STAMP_ID', 'LOOM_HEALTH_GOV_IMAGE_ATTESTATION', 'LOOM_HEALTH_LAKEHOUSE_ISOLATION', 'LOOM_HEALTH_AUTH_GRAPH_CONSENT',
 ];
 
 function clean() { for (const v of VARS) vi.stubEnv(v, ''); }
@@ -81,6 +81,20 @@ describe('health gate evaluation', () => {
     }
     vi.stubEnv('LOOM_HEALTH_LAKEHOUSE_ISOLATION', 'verified');
     expect(gateStatus('health-lakehouse-isolation')!.status).toBe('configured');
+  });
+
+  it('Graph consent: silent until health is deployed, then blocked until "granted"; "needs-consent" does NOT satisfy it', () => {
+    clean();
+    expect(gateStatus('health-auth-graph-consent')!.status).toBe('configured');
+    vi.stubEnv('LOOM_HEALTH_CP_URL', 'https://loom-health-cp.example.azurecontainerapps.io');
+    expect(gateStatus('health-auth-graph-consent')!.status).toBe('blocked');
+    // A value that says consent is still outstanding must not flip the gate that detects it.
+    for (const v of ['needs-consent', 'pending', 'false']) {
+      vi.stubEnv('LOOM_HEALTH_AUTH_GRAPH_CONSENT', v);
+      expect(gateStatus('health-auth-graph-consent')!.status, `value ${v}`).toBe('blocked');
+    }
+    vi.stubEnv('LOOM_HEALTH_AUTH_GRAPH_CONSENT', 'granted');
+    expect(gateStatus('health-auth-graph-consent')!.status).toBe('configured');
   });
 
   it('Gov image gate applies only when a Gov stamp exists, then needs the attestation', () => {
