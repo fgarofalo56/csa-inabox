@@ -1,4 +1,6 @@
 import { createServer } from 'node:http';
+import { loadAuthServerConfig } from './auth/config.js';
+import { authServerInitFromConfig } from './auth/wire.js';
 import { compose } from './compose.js';
 import { ConfigError, loadConfig } from './config.js';
 import { FileBundleSource } from './pdp/bundles.js';
@@ -14,8 +16,10 @@ function log(event: string, fields: Record<string, string | number>): void {
 
 function main(): void {
   let cfg;
+  let authCfg;
   try {
     cfg = loadConfig();
+    authCfg = loadAuthServerConfig(cfg.cloud);
   } catch (e) {
     process.stderr.write(`loom-health-cp: ${e instanceof ConfigError ? authoredMessage(e) : 'invalid configuration'}\n`);
     process.exit(1);
@@ -25,6 +29,7 @@ function main(): void {
     auth: authOptionsFromConfig(cfg),
     sloAvailabilityTarget: cfg.sloAvailabilityTarget,
     bundles: cfg.pdpBundleDir ? new FileBundleSource(cfg.pdpBundleDir) : undefined,
+    authServer: authServerInitFromConfig(cfg, authCfg),
     log,
   });
   const server = createServer((req, res) => {

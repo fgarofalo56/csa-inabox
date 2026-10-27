@@ -56,6 +56,9 @@ export interface AuthServerDeps {
   now?: () => Date;
 }
 
+/** What the host supplies; compose() adds authenticate, tenants and log. */
+export type AuthServerInit = Omit<AuthServerDeps, 'authenticate' | 'tenants' | 'log' | 'now'>;
+
 const AUTHREQ_TTL_S = 600;
 const CODE_TTL_S = 60;
 const REFRESH_TTL_S = 30 * 24 * 3600;
@@ -322,7 +325,7 @@ export function createAuthServer(deps: AuthServerDeps) {
     try {
       identity = await deps.federation.exchange({ code, codeVerifier: ar.entraVerifier as string, redirectUri: callbackUrl, nonce: ar.entraNonce as string });
     } catch {
-      return back({ error: 'access_denied', error_description: 'sign-in could not be verified' });
+      return back({ error: 'access_denied', error_description: 'sign-in could not be completed' });
     }
     // T4: the Entra tid must equal the Entra tenant bound to the control plane.
     if (identity.tid !== deps.entraTenantId) return back({ error: 'access_denied', error_description: 'identity is not from the bound tenant' });
@@ -581,6 +584,8 @@ export function createAuthServer(deps: AuthServerDeps) {
         throw new OAuthError('invalid_grant', 'grant is invalid or already used');
       }
       await activeTenant(doc.tenant);
+      // Group re-check BEFORE the token is burned: a transient Graph failure must not cost the user their refresh token (#5134).
+      const roles = await rolesForUser(doc.tenant, doc.oid as string);
       await markUsed(doc);
       const original = doc.grantedScope ?? [];
       const originalData = dataScopesOf(original);
@@ -589,7 +594,6 @@ export function createAuthServer(deps: AuthServerDeps) {
         // A narrower scope may be asked for; it can never exceed the original grant.
         wanted = intersectWithCeilings(parseRequest(p.get('scope') as string, { v1: false }).data, originalData);
       }
-      const roles = await rolesForUser(doc.tenant, doc.oid as string);
       const g = computeGrant({
         grant: 'authorization_code',
         request: {
