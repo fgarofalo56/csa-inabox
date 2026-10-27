@@ -2,6 +2,10 @@
 // Both main.ts (Cosmos + remote JWKS) and the tests (fakes at the Stores and
 // keyResolver seams) go through here, so the tested graph is the shipped graph.
 
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import { createAuthServer, type AuthServerInit } from './auth/server.js';
+import { tenantHandlers } from './jobs/tenant-jobs.js';
+import type { TenantArm } from './jobs/tenant-arm.js';
 import type { BundleSource } from './pdp/bundles.js';
 import { createApp } from './http/app.js';
 import { builtinHandlers } from './jobs/builtin.js';
@@ -23,6 +27,10 @@ export interface ComposeInput {
   bundles?: BundleSource;
   now?: () => Date;
   postgresRestart?: Pick<StampPowerDeps, 'power' | 'getStampManifest'>;
+  /** Registers tenant.create / tenant.destroy. */
+  tenantArm?: TenantArm;
+  /** Serves the SMART/OAuth routes and /api/health/auth/*. */
+  authServer?: AuthServerInit;
 }
 
 export function compose(input: ComposeInput) {
@@ -46,6 +54,20 @@ export function compose(input: ComposeInput) {
     jobs.register(postgresRestartHandler({ stamps: stores.stamps, ...input.postgresRestart }));
   }
   const scheduleRestarts = () => scheduleStampRestarts({ stamps: stores.stamps, jobs, now });
-  const handler = createApp({ authenticate: createAuthenticator(input.auth), registry, jobs, routing, slo, bundles: input.bundles, log });
+  const authenticate = createAuthenticator(input.auth);
+  // W1-2: registered only when an ARM adapter is supplied; without one the tenant.* kinds answer "unknown job kind".
+  if (input.tenantArm) {
+    for (const h of tenantHandlers({ stamps: stores.stamps, tenants: stores.tenants, registry, arm: input.tenantArm })) jobs.register(h);
+  }
+  const app = createApp({ authenticate, registry, jobs, routing, slo, bundles: input.bundles, log });
+  // W1-4: the Authorization Server answers its own paths and hands everything else to the control-plane app.
+  const authServer = input.authServer
+    ? createAuthServer({ ...input.authServer, authenticate, tenants: stores.tenants, log, now: input.now })
+    : undefined;
+  const handler = authServer
+    ? async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+        if (!(await authServer.handle(req, res))) await app(req, res);
+      }
+    : app;
   return { handler, registry, jobs, routing, slo, scheduleRestarts };
 }

@@ -59,6 +59,11 @@ allowed caller app.
 | `LOOM_HEALTH_CP_AUTHORITY_HOST` | no | Bare-hostname override of the per-cloud authority |
 | `LOOM_HEALTH_CP_SLO_AVAILABILITY_TARGET` | no | Fraction in (0,1), default `0.999` |
 | `LOOM_HEALTH_CP_PDP_BUNDLE_DIR` | no | Directory of `<stamp>.tar.gz` bundles signed by `apps/loom-health-pdp/tools/build-bundle.sh`. Unset = bundle route answers 503 |
+| `LOOM_HEALTH_CP_ISSUER_URL` | yes | Public issuer URL of the Authorization Server including its path (`https://<host>/auth`). Startup fails if any of the four AS variables is missing |
+| `LOOM_HEALTH_CP_FHIR_BASE_URL` | yes | Public FHIR edge base; a tenant's FHIR base (token `aud`) is `<base>/<tenant>/fhir` |
+| `LOOM_HEALTH_CP_AS_CLIENT_ID` | yes | App registration GUID of the AS in this cloud's Entra tenant (federated credential, no secret) |
+| `LOOM_HEALTH_CP_SIGNING_KEY_ID` | yes | Versioned Key Vault key id (`https://<vault>.<cloud suffix>/keys/<name>/<version>`) that signs LHDS tokens |
+| `LOOM_HEALTH_CP_GRAPH_CONSENT_URL` | no | Admin-consent URL shown by the readiness gate's Fix-it |
 | `PORT` | no | Listen port, default `8080` |
 | `AZURE_CLIENT_ID` | no | Client id of a user-assigned managed identity (read by `DefaultAzureCredential`) |
 
