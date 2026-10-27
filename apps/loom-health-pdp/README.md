@@ -54,9 +54,21 @@ Missing config or stamp makes every request deny (no token verifies / no tenant 
 homed). The control plane serves the signed tarball at
 `GET /api/health/pdp/stamps/{stamp}/bundle.tar.gz` (`apps/loom-health-cp`, ETag/304;
 it serves a bundle published at `<LOOM_HEALTH_CP_PDP_BUNDLE_DIR>/<stamp>.tar.gz`, it does
-not build or sign). NOT done: nothing yet adds `data.lhds.config` / `data.lhds.stamp` to a
-bundle per stamp, or publishes bundles into that directory. Until it does, a served
-bundle denies everything. The PDP workload is `platform/fiab/bicep/modules/health/engines.bicep`
+not build or sign). Per-stamp publishing (pipeline step, not yet scheduled anywhere):
+
+```
+node apps/loom-health-cp/dist/pdp/pdp-stamp-inputs-cli.js routing-map.json <stamp> <issuer> jwks.json inputs.json
+STAMP_INPUTS=inputs.json PUBLISH_DIR=<LOOM_HEALTH_CP_PDP_BUNDLE_DIR> OPA=opa \
+  apps/loom-health-pdp/tools/build-bundle.sh <priv.pem> <pub.pem> <revision>
+```
+
+The first step derives `data.lhds.stamp` from the routing map (active tenants of that
+stamp only; bases are the path-prefix `<stampBaseUrl>/<tenant>/fhir` and `/dicomweb`;
+subdomain-form bases are not generated) and takes `data.lhds.config` from the AS issuer
+and JWKS. The second stages, signs, verifies and atomically publishes
+`<stamp>.tar.gz`. A bundle built without `STAMP_INPUTS` still denies everything.
+Not verified here: an end-to-end OPA load of a published bundle (opa not run locally;
+the CI step covers `opa test`). Decision latency is UNMEASURED. The PDP workload is `platform/fiab/bicep/modules/health/engines.bicep`
 (not yet wired into `health.bicep`; no deploy receipt).
 
 ## Layout
