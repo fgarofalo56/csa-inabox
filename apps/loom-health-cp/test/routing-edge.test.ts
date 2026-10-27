@@ -148,3 +148,39 @@ describe('lhds-tenant-routing.fragment.xml', () => {
     );
   });
 });
+
+describe('APIM quota ordering and bicep wiring (#5149)', () => {
+  const rl = xml.indexOf('<rate-limit-by-key');
+  it('the tenant quota is charged only after the tenant is authenticated, matched, known and active', () => {
+    // Input that breaks it: moving <rate-limit-by-key> above validate-jwt / the 403 / the 404 lets an
+    // unauthenticated caller or an unknown slug create and drain a per-tenant counter.
+    expect(rl).toBeGreaterThan(xml.lastIndexOf('<validate-jwt'));
+    expect(rl).toBeGreaterThan(xml.indexOf('<set-status code="403"'));
+    expect(rl).toBeGreaterThan(xml.indexOf('<set-status code="404" reason="Not Found" />', xml.indexOf('lhdsRoute')));
+    expect(rl).toBeGreaterThan(xml.indexOf('<set-status code="503" reason="Service Unavailable" />', xml.indexOf('lhdsRoute')));
+    expect(rl).toBeLessThan(xml.indexOf('<set-backend-service')); // a 429 never reaches the stamp
+  });
+
+  const bicepDir = resolve(__dirname, '../../../platform/fiab/bicep');
+  const health = readFileSync(resolve(bicepDir, 'health.bicep'), 'utf8');
+  const access = readFileSync(resolve(bicepDir, 'modules/health/apim-access.bicep'), 'utf8');
+
+  it('the discovery URL is tenant-independent (no tenant segment, not the per-tenant smart-configuration)', () => {
+    // Input that breaks it: deriving the URL from '/{tenant}/.well-known/smart-configuration'.
+    expect(health).toContain("'${apimIssuer}/.well-known/openid-configuration'");
+    expect(health).not.toMatch(/authServerOpenIdConfigUrl:[^\n]*smart-configuration/);
+  });
+
+  it('APIM identity gets the built-in Reader role on the control-plane resource, not a group or subscription', () => {
+    // Input that breaks it: a different role id (e.g. Contributor) or a resourceGroup()/subscription() scope.
+    expect(access).toContain("var readerRoleId = 'acdd72a7-3385-48ef-bd42-f606fba81ae7'");
+    const scopes = [...access.matchAll(/^\s+scope: (\w+)$/gm)].map((m) => m[1]).sort();
+    expect(scopes).toEqual(['cluster', 'cpApp']);
+  });
+
+  it('health.bicep invokes both APIM modules only when the control plane is deployed', () => {
+    expect(health).toMatch(/var apimDeploy = cpDeploy && /);
+    expect(health).toMatch(/module healthApimFragment [^\n]*= if \(apimDeploy\)/);
+    expect(health).toMatch(/module healthApimAccess [^\n]*= if \(apimDeploy\)/);
+  });
+});

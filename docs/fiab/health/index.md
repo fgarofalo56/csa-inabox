@@ -28,7 +28,7 @@ Design sources: `PRPs/active/loom-health-data-services/` (`ARCHITECTURE.md`,
 | Tenant bicep + jobs | `modules/health/tenant.bicep`, `tenant.create` / `tenant.destroy` | Merged (#5130); handlers not registered in `main.ts` |
 | Authorization server (SMART v2) | `apps/loom-health-cp/src/auth/` | Merged (#5131); not wired into `compose.ts` / `main.ts`. See [security](security.md) |
 | PDP (OPA) | `apps/loom-health-pdp`, `modules/health/engines.bicep` | Merged (#5125, #5137) |
-| Edge routing | `modules/health/ingress.bicep`, `apim-fragment.bicep` | Merged (#5145); APIM params not wired from the stamp |
+| Edge routing | `modules/health/ingress.bicep`, `apim-fragment.bicep` | Merged (#5145); APIM fragment + Reader grant wired from `health.bicep` via `controlPlaneConfig.apim` (merged, not deployed; the tenant-independent `/.well-known/openid-configuration` document must be served by the authorization server) |
 | Loom item `health-tenant` | `apps/fiab-console/lib/catalog/item-types/health.ts`, provisioner, editor | Merged (#5139); no browser walk, not A-grade |
 | Estate power | `lib/estate/pause-guards.ts`, `src/jobs/stamp-power.ts` | Merged (#5138); not active |
 

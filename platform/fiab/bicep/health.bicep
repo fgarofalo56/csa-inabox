@@ -39,7 +39,9 @@
 //   pdpBundleVerificationPublicKeyPem (PUBLIC key; the per-stamp OPA PDP deploys only when
 //     this is set and the control plane deploys), pdpImageTag (default 1.9.0-static, image
 //     <acr>/opa), pdpControlPlaneBaseUrl (https; default https://<fqdn> on containerApps,
-//     required on aks), pdpReplicas (default 2).
+//     required on aks), pdpReplicas (default 2),
+//   apim (object; publishes the lhds-tenant-routing fragment and grants the APIM identity
+//     Reader on the control plane; keys documented at the APIM section below).
 // Gov boundaries default to usgovarizona (primary, zone-redundant PostgreSQL HA) paired
 // with usgovtexas: usgovvirginia is offer-restricted for PostgreSQL on the measured
 // subscription (PRPs/active/loom-health-data-services/W0-RECEIPT.md s4.1b).
@@ -184,6 +186,69 @@ module healthPdp 'modules/health/engines.bicep' = if (pdpDeploy) {
     skipRoleGrants: skipRoleGrants
     tags: tags
   }
+}
+
+// ── APIM tenant-routing fragment (W1-6) ───────────────────────────────────────
+// Published from here, not from the stamp ingress: the fragment needs the control plane's
+// base URL, and the control plane deploys AFTER the stamp (it consumes the stamp's cluster
+// and workspace), so the stamp cannot hold it without a cycle. controlPlaneConfig.apim keys:
+//   serviceName (EXISTING APIM service; empty = fragment not published, REQUIRED to enable),
+//   resourceGroup + subscriptionId (default: the stamp group / this subscription),
+//   authServerIssuer (REQUIRED: public https issuer URL of the LHDS authorization server),
+//   controlPlaneBaseUrl (https; default https://<fqdn> on containerApps, required on aks),
+//   defaultRequestsPerMinute (default 600).
+// The openid-config URL is derived as {issuer}/.well-known/openid-configuration: a
+// TENANT-INDEPENDENT document. The per-tenant {issuer}/{tenant}/.well-known/smart-configuration
+// needs a tenant slug in the URL, which a gateway-wide validate-jwt cannot supply.
+var apimCfg = controlPlaneConfig.?apim ?? {}
+var apimServiceName = string(apimCfg.?serviceName ?? '')
+var apimSubscriptionId = string(apimCfg.?subscriptionId ?? subscription().subscriptionId)
+var apimResourceGroup = string(apimCfg.?resourceGroup ?? 'rg-csa-loom-health-${healthStampName}-${healthLocation}')
+var apimIssuerRaw = string(apimCfg.?authServerIssuer ?? '')
+// Bicep replace() is literal, not a regex: trim one trailing slash explicitly.
+var apimIssuer = endsWith(apimIssuerRaw, '/') ? take(apimIssuerRaw, max(length(apimIssuerRaw) - 1, 0)) : apimIssuerRaw
+var apimCpBaseOverride = string(apimCfg.?controlPlaneBaseUrl ?? '')
+var apimUrlKnown = startsWith(apimCpBaseOverride, 'https://') || cpPlatform == 'containerApps'
+var apimDeploy = cpDeploy && !empty(apimServiceName) && startsWith(apimIssuer, 'https://') && apimUrlKnown
+var apimSkipReason = empty(apimServiceName) ? 'controlPlaneConfig.apim.serviceName is empty' : (!cpDeploy ? 'control plane not deployed' : (!startsWith(apimIssuer, 'https://') ? 'controlPlaneConfig.apim.authServerIssuer must be an https URL' : 'controlPlaneConfig.apim.controlPlaneBaseUrl must be an https URL (required on the aks control-plane path)'))
+
+module healthApimFragment 'modules/health/apim-fragment.bicep' = if (apimDeploy) {
+  name: 'lhds-apim-fragment-${healthStampName}'
+  scope: resourceGroup(apimSubscriptionId, apimResourceGroup)
+  params: {
+    apimServiceName: apimServiceName
+    authServerOpenIdConfigUrl: '${apimIssuer}/.well-known/openid-configuration'
+    authServerIssuer: apimIssuer
+    controlPlaneBaseUrl: !empty(apimCpBaseOverride) ? apimCpBaseOverride : 'https://${healthControlPlane!.outputs.fqdn}'
+    controlPlaneAudience: string(first(cpAudiences) ?? '')
+    defaultRequestsPerMinute: int(apimCfg.?defaultRequestsPerMinute ?? 600)
+  }
+}
+
+module healthApimAccess 'modules/health/apim-access.bicep' = if (apimDeploy) {
+  name: 'lhds-apim-access-${healthStampName}'
+  scope: healthRg
+  params: {
+    apimServiceName: apimServiceName
+    apimResourceGroupName: apimResourceGroup
+    apimSubscriptionId: apimSubscriptionId
+    platform: cpPlatform
+    aksClusterName: cpPlatform == 'aks' ? healthStamp!.outputs.stamp.aksClusterName : ''
+    skipRoleGrants: skipRoleGrants
+  }
+  dependsOn: [
+    healthControlPlane
+  ]
+}
+
+@description('APIM fragment state. deployed:true with the fragment name, or deployed:false with the precondition that was missing.')
+output healthApimState object = apimDeploy ? {
+  deployed: true
+  fragmentName: healthApimFragment!.outputs.fragmentName
+  openIdConfigUrl: '${apimIssuer}/.well-known/openid-configuration'
+} : {
+  deployed: false
+  reason: apimSkipReason
 }
 
 @description('PDP state. deployed:true with the in-cluster decision endpoint and identity, or deployed:false with the precondition that was missing.')
