@@ -69,7 +69,7 @@ and JWKS. The second stages, signs, verifies and atomically publishes
 `<stamp>.tar.gz`. A bundle built without `STAMP_INPUTS` still denies everything.
 Not verified here: an end-to-end OPA load of a published bundle (opa not run locally;
 the CI step covers `opa test`). Decision latency is UNMEASURED. The PDP workload is `platform/fiab/bicep/modules/health/engines.bicep`
-(not yet wired into `health.bicep`; no deploy receipt).
+(wired into `health.bicep` as `healthPdp`; merged, not deployed; no deploy receipt).
 
 ## Layout
 
