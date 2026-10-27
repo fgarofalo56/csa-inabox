@@ -13,7 +13,7 @@ targetScope = 'resourceGroup'
 @description('Name of the existing API Management service.')
 param apimServiceName string
 
-@description('OpenID configuration document the gateway validates LHDS tokens against (must expose issuer and jwks_uri; the authorization server serves {issuer}/{tenant}/.well-known/smart-configuration).')
+@description('OpenID configuration document the gateway validates LHDS tokens against (must expose issuer and jwks_uri; tenant-independent, health.bicep derives {issuer}/.well-known/openid-configuration, which the authorization server must serve at its root; the per-tenant {issuer}/{tenant}/.well-known/smart-configuration is not usable here).')
 param authServerOpenIdConfigUrl string
 
 @description('Issuer claim of LHDS access tokens (the authorization server issuer URL).')

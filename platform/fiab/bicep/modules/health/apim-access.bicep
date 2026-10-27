@@ -1,12 +1,21 @@
-// CSA Loom Health Data Services (LHDS) - lets the APIM gateway read the control plane.
+// CSA Loom Health Data Services (LHDS) - management-plane Reader for the APIM identity.
 //
-// The lhds-tenant-routing fragment calls GET /api/health/routing-map on the control
-// plane with the APIM managed identity (authentication-managed-identity). This module
-// grants that identity Reader on the control-plane resource only (the Container App,
-// or the stamp cluster on the aks path), never on the resource group or subscription.
-// Reader is the narrowest built-in role that makes the control plane resource visible
-// to the gateway identity; the data-plane decision stays with the control plane's own
-// token validation (audience and allowed caller app ids).
+// This grants the APIM system-assigned identity the built-in Reader role on the
+// control-plane resource only (the Container App, or the stamp cluster on the aks
+// path), never on the resource group or subscription. Reader is an Azure
+// MANAGEMENT-plane role. It does NOT authorize the routing-map call the
+// lhds-tenant-routing fragment makes (GET /api/health/routing-map).
+//
+// REMAINING PREREQUISITES for that call (NOT wired here): the control plane authorizes
+// it from the token (apps/loom-health-cp/src/middleware/auth.ts) by (1) the app role
+// HealthCP.Reader (or HealthCP.Admin) assigned to the APIM identity on the control-plane
+// app registration, and (2) when LOOM_HEALTH_CP_ALLOWED_CALLER_APP_IDS is non-empty, the
+// APIM identity's application id being in controlPlaneConfig.allowedCallerAppIds.
+// Without both the gateway receives 403 on the routing map.
+//
+// PRECONDITION: the APIM service must have a SYSTEM-ASSIGNED managed identity enabled.
+// Without it `apim.identity.principalId` below fails the deployment; enable it first
+// (identity.type SystemAssigned on the APIM service).
 //
 // The APIM service may live in another resource group or subscription. Only its
 // system-assigned principal id is read; nothing is written to the APIM service here.
@@ -15,7 +24,7 @@
 
 targetScope = 'resourceGroup'
 
-@description('Name of the existing API Management service whose system-assigned identity receives Reader.')
+@description('Name of the existing API Management service whose system-assigned identity receives Reader. The service MUST have a system-assigned identity enabled or the deployment fails on identity.principalId.')
 param apimServiceName string
 
 @description('Resource group of the APIM service.')
@@ -62,7 +71,7 @@ resource readerOnApp 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', readerRoleId)
     principalId: apim.identity.principalId
     principalType: 'ServicePrincipal'
-    description: 'LHDS: APIM gateway identity reads the control plane routing map.'
+    description: 'LHDS: management-plane Reader for the APIM gateway identity on the control plane. Does not authorize the routing-map call.'
   }
 }
 
@@ -73,7 +82,7 @@ resource readerOnCluster 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', readerRoleId)
     principalId: apim.identity.principalId
     principalType: 'ServicePrincipal'
-    description: 'LHDS: APIM gateway identity reads the control plane routing map.'
+    description: 'LHDS: management-plane Reader for the APIM gateway identity on the control plane. Does not authorize the routing-map call.'
   }
 }
 

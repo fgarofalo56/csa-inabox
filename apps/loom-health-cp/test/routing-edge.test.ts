@@ -174,6 +174,10 @@ describe('APIM quota ordering and bicep wiring (#5149)', () => {
   it('APIM identity gets the built-in Reader role on the control-plane resource, not a group or subscription', () => {
     // Input that breaks it: a different role id (e.g. Contributor) or a resourceGroup()/subscription() scope.
     expect(access).toContain("var readerRoleId = 'acdd72a7-3385-48ef-bd42-f606fba81ae7'");
+    // Input that breaks it: swapping the literal into either roleDefinitionId while the var stays pinned.
+    const defs = [...access.matchAll(/roleDefinitionId: (.+)$/gm)].map((m) => m[1]);
+    expect(defs).toHaveLength(2);
+    for (const d of defs) expect(d).toBe("subscriptionResourceId('Microsoft.Authorization/roleDefinitions', readerRoleId)");
     const scopes = [...access.matchAll(/^\s+scope: (\w+)$/gm)].map((m) => m[1]).sort();
     expect(scopes).toEqual(['cluster', 'cpApp']);
   });
