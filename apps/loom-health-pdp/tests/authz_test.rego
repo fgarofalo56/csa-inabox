@@ -167,6 +167,26 @@ test_aud_unknown_base_denied if {
 	dec(fx.tokens.valid, rq({})).allow == true
 }
 
+# --- per-stamp bundle data (published by the control plane) ----------------------------
+# A configured stamp permits; the SAME request against a bundle lacking the per-stamp
+# data denies. Breaks if: absent data.lhds.config stops denying with token-invalid (a
+# token would verify without the AS key), or absent data.lhds.stamp stops denying with
+# tenant-not-on-stamp (a tenant would count as homed with no stamp map).
+test_unconfigured_stamp_denies_configured_permits if {
+	req := rq({})
+	dec(fx.tokens.valid, req).allow == true
+	no_cfg := authz.decision with input as {"access_token": fx.tokens.valid, "request": req}
+		with data.lhds.authz.now as fx.now
+		with data.lhds.stamp as stamp
+	no_cfg.allow == false
+	no_cfg.reason == "token-invalid"
+	no_stamp := authz.decision with input as {"access_token": fx.tokens.valid, "request": req}
+		with data.lhds.authz.now as fx.now
+		with data.lhds.config as cfg
+	no_stamp.allow == false
+	no_stamp.reason == "tenant-not-on-stamp"
+}
+
 # --- scopes -------------------------------------------------------------------------
 # Breaks if: a patient/ scope is honoured without the patient claim (N21).
 test_patient_scope_without_patient_claim_denied if {

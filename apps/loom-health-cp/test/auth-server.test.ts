@@ -40,7 +40,9 @@ class FakeFed implements Federation {
 class FakeGraph implements GraphMembership {
   members = new Map<string, Set<string>>();
   consent = false;
+  failWith: Error | undefined;
   async memberOf(oid: string, groupIds: string[]): Promise<string[]> {
+    if (this.failWith) throw this.failWith;
     if (this.consent) throw new GraphConsentRequiredError('x');
     const m = this.members.get(oid) ?? new Set();
     return groupIds.filter((g) => m.has(g));
@@ -378,6 +380,23 @@ describe('refresh (N20)', () => {
     const gone = await refresh(kept.json.refresh_token);
     expect(gone.status).toBe(400); // breaks if refresh replays the stored grant without re-running the mapping (mutation arm iii)
     expect(gone.json.error).toBe('invalid_grant');
+  });
+  it('a Graph outage during refresh issues no token and does not burn the refresh token (#5134)', async () => {
+    const c = await boot();
+    await c.registerApp('app-1');
+    await c.bind({ [G_READER]: 'fhir-data-reader' });
+    c.graph.members.set(USER, new Set([G_READER]));
+    const first = (await flow(c, 'user/Patient.rs offline_access')).token!;
+    const form = { grant_type: 'refresh_token', client_id: 'app-1', refresh_token: first.json.refresh_token };
+    c.graph.failWith = new Error('graph returned 503');
+    const down = await c.call('POST', '/auth/visn-01/token', { form });
+    expect(down.status).toBe(500);
+    expect(down.json.access_token).toBeUndefined(); // breaks if a token is minted without the membership check
+    c.graph.failWith = undefined;
+    const retry = await c.call('POST', '/auth/visn-01/token', { form });
+    // Breaks (400 invalid_grant) if the refresh token is marked used before the Graph re-check.
+    expect(retry.status).toBe(200);
+    expect(retry.json.access_token).toBeTruthy();
   });
   it('a used refresh token cannot be replayed, and a refresh can never add scopes', async () => {
     const c = await boot();
