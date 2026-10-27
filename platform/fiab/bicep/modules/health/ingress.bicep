@@ -5,8 +5,13 @@
 // certificate is supplied, and a backend pool that targets the internal load
 // balancer of the in-cluster ingress controller at a fixed address reserved by
 // network.bicep. The FHIR/DICOMweb-specific exclusions and per-tenant rate limits
-// are W1-6 and attach to the WAF policy this module creates (output wafPolicyId);
-// nothing here has to change for them.
+// are W1-6 and live on the WAF policy this module creates (output wafPolicyId):
+// FHIR/DICOMweb exclusions, a per-client-address volumetric rate limit, and
+// (optionally) the APIM tenant-routing fragment. The PER-TENANT quota cannot be a
+// WAF rule (Application Gateway rate-limit rules group by client address, geo or
+// nothing, never by a token claim), so it is enforced in the APIM fragment, which
+// answers 429 + Retry-After per tenant key. The WAF rate limit is the backstop
+// against one address flooding the stamp.
 //
 // TLS: the certificate is referenced by a version-less Key Vault secret URI, so
 // renewals roll without a redeploy. Until one is supplied the gateway has no TLS
@@ -55,6 +60,46 @@ param useAvailabilityZones bool = true
 @maxValue(86400)
 param requestTimeoutSeconds int = 300
 
+@description('Per-client-address requests per minute at the WAF (volumetric backstop; tenant quotas are enforced in APIM). 0 disables the rule. UNVERIFIED in Azure Government: set 0 there if the WAF rate-limit rule type is rejected.')
+@minValue(0)
+@maxValue(1000000)
+param wafClientRateLimitPerMinute int = 6000
+
+@description('Max request body the WAF accepts, in KB (DICOM STOW-RS multipart bodies are large).')
+@minValue(8)
+@maxValue(4000000)
+param wafMaxRequestBodyKb int = 2000000
+
+@description('Max file upload in MB (STOW-RS instances). Application Gateway WAF v2 caps this at 4000.')
+@minValue(1)
+@maxValue(4000)
+param wafFileUploadLimitMb int = 4000
+
+@description('Name of an EXISTING API Management service to publish the lhds-tenant-routing policy fragment to. Empty = no fragment (single-stamp deployments route at the stamp ingress).')
+param apimServiceName string = ''
+
+@description('Resource group of the APIM service. Empty = this resource group.')
+param apimResourceGroupName string = ''
+
+@description('Subscription of the APIM service. Empty = this subscription.')
+param apimSubscriptionId string = ''
+
+@description('OpenID configuration URL of the LHDS authorization server (needs issuer + jwks_uri). Required when apimServiceName is set.')
+param authServerOpenIdConfigUrl string = ''
+
+@description('Issuer of LHDS access tokens. Required when apimServiceName is set.')
+param authServerIssuer string = ''
+
+@description('Control plane base URL (no trailing slash). Required when apimServiceName is set.')
+param controlPlaneBaseUrl string = ''
+
+@description('Entra audience of the control plane. Required when apimServiceName is set.')
+param controlPlaneAudience string = ''
+
+@description('Requests per minute for a tenant whose routing entry carries no quota.')
+@minValue(1)
+param defaultTenantRequestsPerMinute int = 600
+
 @description('Log Analytics workspace id for diagnostics. Empty skips the diagnostic setting.')
 param workspaceId string = ''
 
@@ -64,6 +109,7 @@ param tags object = {}
 var gwName = 'agw-lhds-${stampName}'
 var hasTls = !empty(tlsCertificateSecretUri)
 var zones = useAvailabilityZones ? ['1', '2', '3'] : null
+var apimFragmentRequested = !empty(apimServiceName)
 var secretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
 
 resource kv 'Microsoft.KeyVault/vaults@2024-11-01' existing = {
@@ -87,6 +133,41 @@ resource gwSecretsRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
+// FHIR / DICOMweb exclusions. CRS 3.2 blocks traffic these APIs legitimately send:
+//  - 920420 rejects any Content-Type outside its allow-list; FHIR (application/fhir+json,
+//    application/json-patch+json) and DICOMweb (multipart/related; type="application/dicom",
+//    application/dicom+json) are not on it. Disabled for that one rule only.
+//  - The Prefer (respond-async, return=minimal), Accept and Content-Type header VALUES
+//    trip the protocol/SQLi groups; exclusions are by header NAME, limited to these
+//    three. Cookies, args and the body stay inspected.
+var wafExclusions = [
+  { matchVariable: 'RequestHeaderNames', selectorMatchOperator: 'Equals', selector: 'Prefer' }
+  { matchVariable: 'RequestHeaderNames', selectorMatchOperator: 'Equals', selector: 'Accept' }
+  { matchVariable: 'RequestHeaderNames', selectorMatchOperator: 'Equals', selector: 'Content-Type' }
+]
+
+var wafRateLimitRules = wafClientRateLimitPerMinute > 0 ? [
+  {
+    name: 'RateLimitPerClientAddress'
+    priority: 10
+    ruleType: 'RateLimitRule'
+    action: 'Block'
+    rateLimitDuration: 'OneMin'
+    rateLimitThreshold: wafClientRateLimitPerMinute
+    groupByUserSession: [
+      { groupByVariables: [{ variableName: 'ClientAddr' }] }
+    ]
+    matchConditions: [
+      {
+        matchVariables: [{ variableName: 'RequestUri' }]
+        operator: 'Contains'
+        negationConditon: false
+        matchValues: ['/']
+      }
+    ]
+  }
+] : []
+
 resource wafPolicy 'Microsoft.Network/ApplicationGatewayWebApplicationFirewallPolicies@2024-05-01' = {
   name: 'wafpol-lhds-${stampName}'
   location: location
@@ -96,14 +177,24 @@ resource wafPolicy 'Microsoft.Network/ApplicationGatewayWebApplicationFirewallPo
       mode: 'Prevention'
       state: 'Enabled'
       requestBodyCheck: true
-      maxRequestBodySizeInKb: 128
-      fileUploadLimitInMb: 100
+      maxRequestBodySizeInKb: wafMaxRequestBodyKb
+      fileUploadLimitInMb: wafFileUploadLimitMb
     }
+    customRules: wafRateLimitRules
     managedRules: {
+      exclusions: wafExclusions
       managedRuleSets: [
         {
           ruleSetType: 'OWASP'
           ruleSetVersion: '3.2'
+          ruleGroupOverrides: [
+            {
+              ruleGroupName: 'REQUEST-920-PROTOCOL-ENFORCEMENT'
+              rules: [
+                { ruleId: '920420', state: 'Disabled' }
+              ]
+            }
+          ]
         }
         {
           ruleSetType: 'Microsoft_BotManagerRuleSet'
@@ -111,6 +202,21 @@ resource wafPolicy 'Microsoft.Network/ApplicationGatewayWebApplicationFirewallPo
         }
       ]
     }
+  }
+}
+
+// APIM tenant-routing fragment (own module: the APIM service may live in another
+// resource group or subscription).
+module apimFragment 'apim-fragment.bicep' = if (apimFragmentRequested) {
+  name: 'lhds-${stampName}-apim-fragment'
+  scope: resourceGroup(empty(apimSubscriptionId) ? subscription().subscriptionId : apimSubscriptionId, empty(apimResourceGroupName) ? resourceGroup().name : apimResourceGroupName)
+  params: {
+    apimServiceName: apimServiceName
+    authServerOpenIdConfigUrl: authServerOpenIdConfigUrl
+    authServerIssuer: authServerIssuer
+    controlPlaneBaseUrl: controlPlaneBaseUrl
+    controlPlaneAudience: controlPlaneAudience
+    defaultRequestsPerMinute: defaultTenantRequestsPerMinute
   }
 }
 
@@ -317,3 +423,4 @@ output publicIp string = pip.properties.ipAddress
 output publicFqdn string = pip.properties.dnsSettings.fqdn
 output gatewayIdentityPrincipalId string = gwIdentity.properties.principalId
 output tlsConfigured bool = hasTls
+output apimFragmentName string = apimFragmentRequested ? apimFragment!.outputs.fragmentName : ''

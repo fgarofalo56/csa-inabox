@@ -52,6 +52,7 @@ import { azureSqlDatabaseItems } from './item-types/azure-sql-database';
 import { azureGeoanalyticsItems } from './item-types/azure-geoanalytics';
 import { azureGraphVectorItems } from './item-types/azure-graph-vector';
 import { aiAgentsItems } from './item-types/ai-agents';
+import { healthItems } from './item-types/health';
 
 /**
  * Authoritative Fabric item-type catalog, composed from the per-category slices
@@ -85,6 +86,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
   ...azureGeoanalyticsItems,
   ...azureGraphVectorItems,
   ...aiAgentsItems,
+  ...healthItems,
 ];
 
 
@@ -111,6 +113,7 @@ export const WORKLOAD_CATEGORIES: readonly WorkloadCategory[] = [
   'Power Platform',
   'AI & Agents',
   'Loom Apps',
+  'Health data',
 ];
 
 export function itemsByCategory(category: WorkloadCategory): FabricItemType[] {

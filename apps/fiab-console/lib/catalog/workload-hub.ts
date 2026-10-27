@@ -148,6 +148,13 @@ export const WORKLOAD_GROUPS: readonly WorkloadGroupDef[] = [
     categories: ['Loom Apps'],
   },
   {
+    key: 'health-data',
+    name: 'Health data',
+    description: 'Health Data Services tenants on regional stamps: per-tenant database, storage, event hub and keys, provisioned through the health control plane.',
+    tier: 'accelerator',
+    categories: ['Health data'],
+  },
+  {
     key: 'geoanalytics',
     name: 'Geoanalytics',
     description: 'H3/S2 spatial indexing, ST_* functions over the lakehouse, and Azure Maps integration.',

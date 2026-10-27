@@ -149,6 +149,11 @@
         "probe-aoai"
       ]
     },
+    "Health data": {
+      "checks": [
+        "health-control-plane"
+      ]
+    },
     "Loom Apps": {
       "checks": [
         "cosmos-config",

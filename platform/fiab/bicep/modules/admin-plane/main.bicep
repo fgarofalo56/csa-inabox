@@ -438,6 +438,30 @@ type observabilityConfigT = {
 
   @description('N5 — per-pass dispatch bound (LOOM_ASSET_MAX_TRIGGERS). 0 (default) uses the code default of 25. A pass can never dispatch more materializations than this.')
   assetReconcilerMaxTriggers: int?
+
+  // LHDS (Health Data Services) Console wiring. The health control plane is its
+  // OWN deployment unit (health.bicep / deploy-health.yml), so its outputs are not
+  // visible to this template; the operator supplies them here after that deploy.
+  // They ride this bag because main.bicep is at the 256-param ceiling. Every one
+  // defaults to empty: an estate that never turned health on sees the neutral
+  // opt-in gate, not an error. No secret or id is hardcoded.
+  @description('LHDS — HTTPS base URL of loom-health-cp (LOOM_HEALTH_CP_URL), e.g. the fqdn output of modules/health/control-plane.bicep. Empty = health not deployed.')
+  healthCpUrl: string?
+
+  @description('LHDS — token audience loom-health-cp accepts (LOOM_HEALTH_CP_AUDIENCE); one of the control_plane_audiences given to deploy-health.yml.')
+  healthCpAudience: string?
+
+  @description('LHDS — id of a registered, healthy stamp new health tenants are placed on (LOOM_HEALTH_DEFAULT_STAMP_ID).')
+  healthDefaultStampId: string?
+
+  @description('LHDS — id of the registered Gov health stamp (LOOM_HEALTH_GOV_STAMP_ID); empty until one exists. Switches the Gov image gate on.')
+  healthGovStampId: string?
+
+  @description('LHDS — id of the workflow run that verified the Gov image lane (Trivy + cosign) (LOOM_HEALTH_GOV_IMAGE_ATTESTATION). Empty until #4584 lands; do not set by hand.')
+  healthGovImageAttestation: string?
+
+  @description('LHDS — "verified" only once the lakehouse isolation prerequisite is deployed and checked live (LOOM_HEALTH_LAKEHOUSE_ISOLATION). Empty keeps the health lakehouse sink disabled.')
+  healthLakehouseIsolation: string?
 }
 
 @description('Observability settings bag (R0) — V1 synthetic-journey monitor + RUM1 client-RUM settings live here (+ the COST0 program-budget props, consumed at the top-level orchestrator); V5 bicep-drift and O1 alert-dispatch add properties to observabilityConfigT — never a new top-level param.')
@@ -5018,6 +5042,16 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // tab still writes Delta<->Iceberg dual metadata into the lake and
             // every catalog surface honest-gates with a Fix-it.
             { name: 'LOOM_ICEBERG_CATALOG_URL', value: icebergCatalogUrl }
+            // LHDS W1-7 — Console wiring for the health-tenant item and its four
+            // gates (health-control-plane / -stamp-capacity / -gov-image-gate /
+            // -lakehouse-isolation). Sourced from observabilityConfig.health*;
+            // empty = health not deployed (neutral opt-in, not an error).
+            { name: 'LOOM_HEALTH_CP_URL', value: observabilityConfig.?healthCpUrl ?? '' }
+            { name: 'LOOM_HEALTH_CP_AUDIENCE', value: observabilityConfig.?healthCpAudience ?? '' }
+            { name: 'LOOM_HEALTH_DEFAULT_STAMP_ID', value: observabilityConfig.?healthDefaultStampId ?? '' }
+            { name: 'LOOM_HEALTH_GOV_STAMP_ID', value: observabilityConfig.?healthGovStampId ?? '' }
+            { name: 'LOOM_HEALTH_GOV_IMAGE_ATTESTATION', value: observabilityConfig.?healthGovImageAttestation ?? '' }
+            { name: 'LOOM_HEALTH_LAKEHOUSE_ISOLATION', value: observabilityConfig.?healthLakehouseIsolation ?? '' }
             // #3339 fix 1 — the Entra audience the BFF mints its SUBJECT token
             // against before the RFC 8693 exchange at the catalog
             // (lib/azure/iceberg-catalog-client.ts `resolveIcebergAuth`).

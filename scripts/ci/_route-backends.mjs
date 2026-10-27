@@ -535,6 +535,17 @@ export const CLIENT_WITHOUT_AZURE_IDENTIFIER = new Map([
     },
   ],
   [
+    `${CONSOLE_ROOT}/app/api/health/tenants/_lib/cp-client.ts`,
+    {
+      backend: 'Loom service',
+      why:
+        'calls the `loom-health-cp` health control plane (apps/loom-health-cp) at `LOOM_HEALTH_CP_URL` with a ' +
+        'bearer token for `LOOM_HEALTH_CP_AUDIENCE`. It is one of Loom\'s OWN services; the Azure resources its ' +
+        'tenant.create job deploys (PostgreSQL, Blob, Event Hubs, Key Vault) are attributed in that service, ' +
+        'never on the calling route, and the Console makes no ARM call for a tenant itself.',
+    },
+  ],
+  [
     `${CONSOLE_ROOT}/lib/azure/loom-onelake-client.ts`,
     {
       backend: 'Loom service',
