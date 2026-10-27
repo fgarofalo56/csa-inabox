@@ -1,0 +1,56 @@
+name: health-pdp-opa
+
+# LHDS PDP (W1-5): runs the Rego suite for apps/loom-health-pdp. tests/jwt_fixtures.rego
+# is gitignored (secret scanners flag JWT-shaped strings), so gen-jwt-fixtures.mjs MUST
+# run before `opa test` or the suite cannot even load. No secrets: the fixture key is
+# throwaway and its private half is discarded by the generator.
+
+on:
+  pull_request:
+    paths:
+      - 'apps/loom-health-pdp/**'
+      - 'apps/loom-health-cp/src/auth/role-scope-map.v1.json'
+      - '.github/workflows/health-pdp-opa.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  OPA_VERSION: v1.9.0
+  # sha256 of opa_linux_amd64_static for v1.9.0 (from the release's .sha256 asset).
+  OPA_SHA256: 66fa66f3b730b2fb086003863428b382b2898d343adb4b5dfab5598b4d739eed
+
+jobs:
+  opa-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '20'
+      - name: Install pinned OPA
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/opa" "https://github.com/open-policy-agent/opa/releases/download/${OPA_VERSION}/opa_linux_amd64_static"
+          echo "${OPA_SHA256}  $RUNNER_TEMP/opa" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/opa"
+          "$RUNNER_TEMP/opa" version
+      - name: Generate fixtures and stage the bundle tree
+        working-directory: apps/loom-health-pdp
+        run: |
+          set -euo pipefail
+          node tools/gen-jwt-fixtures.mjs
+          node tools/stage-policies.mjs "$RUNNER_TEMP/stage"
+          node tools/gen-scope-matrix.mjs --check
+      - name: opa test
+        working-directory: apps/loom-health-pdp
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/opa" test "$RUNNER_TEMP/stage" tests
+      - name: opa check (strict, schema)
+        working-directory: apps/loom-health-pdp
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/opa" check --strict --schema input-contract.json "$RUNNER_TEMP/stage"

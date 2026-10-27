@@ -9,6 +9,7 @@ import { z } from 'zod';
 import type { JobRunner } from '../jobs/runner.js';
 import { SUBJECT_TYPES } from '../jobs/types.js';
 import type { Authenticator, Caller, Permission } from '../middleware/auth.js';
+import { bundleEtag, isGzip, type BundleSource } from '../pdp/bundles.js';
 import type { Registry } from '../registry/registry.js';
 import type { RoutingPublisher } from '../routing/publisher.js';
 import type { SloService } from '../slo/aggregate.js';
@@ -23,18 +24,23 @@ export interface AppDeps {
   jobs: JobRunner;
   routing: RoutingPublisher;
   slo: SloService;
+  /** Absent = bundle serving not configured (503 on the bundle route). */
+  bundles?: BundleSource;
   log: (event: string, fields: Record<string, string | number>) => void;
 }
 
 interface Reply {
   status: number;
   data: unknown;
+  /** Non-JSON body (the PDP bundle). Bypasses the {ok,data} envelope. */
+  raw?: { body: Buffer | undefined; headers: Record<string, string> };
 }
 
 interface Ctx {
   params: string[];
   body: unknown;
   caller: Caller;
+  ifNoneMatch: string | undefined;
 }
 
 interface Route {
@@ -110,6 +116,20 @@ export function buildRoutes(d: AppDeps): Route[] {
       return ok(m);
     }),
     r('POST', '/api/health/routing-map/publish', 'write', async () => ok(await d.routing.publish())),
+
+    r('GET', `/api/health/pdp/stamps/${ID}/bundle\\.tar\\.gz`, 'read', async (c) => {
+      if (!d.bundles) throw new HttpError(503, 'bundle_store_unconfigured', 'PDP bundle store is not configured');
+      const stampId = c.params[0] ?? '';
+      await d.registry.getStamp(stampId); // 404 for an unregistered stamp
+      const bytes = await d.bundles.get(stampId);
+      if (!bytes) throw notFound('bundle');
+      // A non-gzip file is a pipeline fault: say so rather than hand OPA garbage.
+      if (!isGzip(bytes)) throw new HttpError(502, 'bundle_invalid', 'published bundle is not a gzip tarball');
+      const etag = bundleEtag(bytes);
+      const headers = { etag, 'content-type': 'application/gzip' };
+      if (c.ifNoneMatch === etag) return { status: 304, data: undefined, raw: { body: undefined, headers } };
+      return { status: 200, data: undefined, raw: { body: bytes, headers } };
+    }),
 
     r('GET', '/api/health/slo', 'read', async () => ok(await d.slo.report())),
 
@@ -200,8 +220,20 @@ export function createApp(deps: AppDeps) {
       const who = await deps.authenticate(req.headers.authorization, route.permission);
       caller = who.id;
       const body = route.hasBody ? await readJson(req) : undefined;
-      const reply = await route.handle({ params, body, caller: who });
+      const inm = req.headers['if-none-match'];
+      const reply = await route.handle({ params, body, caller: who, ifNoneMatch: typeof inm === 'string' ? inm : undefined });
       status = reply.status;
+      if (reply.raw) {
+        const { body: raw, headers } = reply.raw;
+        res.writeHead(status, {
+          'content-length': raw ? raw.length : 0,
+          'cache-control': 'no-store',
+          'x-content-type-options': 'nosniff',
+          ...headers,
+        });
+        res.end(raw);
+        return;
+      }
       send(res, status, { ok: true, data: reply.data });
     } catch (e) {
       if (e instanceof HttpError) {
