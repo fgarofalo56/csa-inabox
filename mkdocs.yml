@@ -1492,6 +1492,12 @@ nav:
           - Multi-Subscription Multi-Tenant: fiab/deployment/multi-sub-multi-tenant.md
           - Upgrade Lifecycle: fiab/deployment/upgrade.md
           - Marketplace (deferred to backlog): fiab/deployment/marketplace.md
+          - "Health Data Services (LHDS, merged not deployed)":
+              - Overview and per-cloud status: fiab/health/index.md
+              - Greenfield: fiab/health/greenfield.md
+              - Brownfield: fiab/health/brownfield.md
+              - Runbook stubs: fiab/health/runbooks.md
+              - Security: fiab/health/security.md
 
       # ------------------------------------------------------------
       # 4. Workloads (Fabric workload parity)
