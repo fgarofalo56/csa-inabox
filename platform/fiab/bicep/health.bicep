@@ -39,7 +39,10 @@
 //   pdpBundleVerificationPublicKeyPem (PUBLIC key; the per-stamp OPA PDP deploys only when
 //     this is set and the control plane deploys), pdpImageTag (default 1.9.0-static, image
 //     <acr>/opa), pdpControlPlaneBaseUrl (https; default https://<fqdn> on containerApps,
-//     required on aks), pdpReplicas (default 2).
+//     required on aks), pdpReplicas (default 2),
+//   authIssuerUrl, authFhirBaseUrl, authAsClientId (authorization server; no deploy-time source,
+//     reported in healthControlPlaneState.authServerMissing when empty), authGraphConsentUrl
+//     (optional), authSigningKeyId (optional; default = a key created in the stamp vault).
 // Gov boundaries default to usgovarizona (primary, zone-redundant PostgreSQL HA) paired
 // with usgovtexas: usgovvirginia is offer-restricted for PostgreSQL on the measured
 // subscription (PRPs/active/loom-health-data-services/W0-RECEIPT.md s4.1b).
@@ -135,6 +138,19 @@ var cpHostable = cpPlatform == 'aks' || !empty(cpEnvironmentId)
 var cpDeploy = healthDeploy && !empty(cpAudiences) && cpValidPlatform && cpAcrKnown && cpHostable
 var cpSkipReason = !healthEnabled ? 'healthEnabled is false' : (!healthPgAllowed ? 'stamp not deployed: PostgreSQL unavailable in this region (healthConfig.postgres)' : (empty(cpAudiences) ? 'controlPlaneConfig.audiences is empty: the service refuses to start without an accepted token audience' : (!cpValidPlatform ? 'controlPlaneConfig.controlPlane must be containerApps or aks, got ${cpPlatformRaw}' : (!cpAcrKnown ? 'controlPlaneConfig needs acrName, acrLoginServer and acrResourceGroup' : (!cpHostable ? 'containerApps path needs controlPlaneConfig.environmentId; set controlPlane=aks to use the stamp cluster' : '')))))
 
+// Authorization server settings (W1-4). The signing key is created in the stamp vault unless
+// authSigningKeyId is supplied. The three values below have no deploy-time source (the public
+// issuer and FHIR edge URLs and the AS Entra app are not produced by this template), so a missing
+// one is reported in healthControlPlaneState.authServerMissing instead of being implied configured.
+var cpAuthIssuerUrl = string(controlPlaneConfig.?authIssuerUrl ?? '')
+var cpAuthFhirBaseUrl = string(controlPlaneConfig.?authFhirBaseUrl ?? '')
+var cpAuthAsClientId = string(controlPlaneConfig.?authAsClientId ?? '')
+var cpAuthMissing = concat(
+  empty(cpAuthIssuerUrl) ? ['authIssuerUrl'] : [],
+  empty(cpAuthFhirBaseUrl) ? ['authFhirBaseUrl'] : [],
+  empty(cpAuthAsClientId) ? ['authAsClientId'] : []
+)
+
 module healthControlPlane 'modules/health/control-plane.bicep' = if (cpDeploy) {
   name: 'lhds-control-plane-${healthStampName}'
   scope: healthRg
@@ -154,6 +170,11 @@ module healthControlPlane 'modules/health/control-plane.bicep' = if (cpDeploy) {
     privateEndpointSubnetId: string(controlPlaneConfig.?privateEndpointSubnetId ?? '')
     cosmosPrivateDnsZoneId: string(controlPlaneConfig.?cosmosPrivateDnsZoneId ?? '')
     keyVaultId: healthStamp!.outputs.stamp.keyVaultId
+    authIssuerUrl: cpAuthIssuerUrl
+    authFhirBaseUrl: cpAuthFhirBaseUrl
+    authAsClientId: cpAuthAsClientId
+    authGraphConsentUrl: string(controlPlaneConfig.?authGraphConsentUrl ?? '')
+    authSigningKeyId: string(controlPlaneConfig.?authSigningKeyId ?? '')
     skipRoleGrants: skipRoleGrants
     workspaceId: healthStamp!.outputs.stamp.lawId
     tags: tags
@@ -208,6 +229,8 @@ output healthControlPlaneState object = cpDeploy ? {
   cosmosAccountName: healthControlPlane!.outputs.cosmosAccountName
   cosmosNetworkPosture: healthControlPlane!.outputs.cosmosNetworkPosture
   identityClientId: healthControlPlane!.outputs.identityClientId
+  authServerMissing: cpAuthMissing
+  authFederatedCredential: healthControlPlane!.outputs.authFederatedCredential
 } : {
   deployed: false
   platform: cpPlatform
