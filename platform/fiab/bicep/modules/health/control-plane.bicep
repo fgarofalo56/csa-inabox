@@ -83,7 +83,7 @@ param privateEndpointSubnetId string = ''
 @description('Private DNS zone id (privatelink.documents.azure.<com|us>) for the Cosmos private endpoint. Empty skips the DNS zone group.')
 param cosmosPrivateDnsZoneId string = ''
 
-@description('Cosmos database autoscale ceiling in RU/s (shared by the five containers). Autoscale scales to 10 percent of this.')
+@description('Cosmos database autoscale ceiling in RU/s (shared by the eight containers). Autoscale scales to 10 percent of this.')
 @minValue(1000)
 param cosmosMaxThroughput int = 1000
 
@@ -92,6 +92,21 @@ param cosmosZoneRedundant bool = false
 
 @description('Resource id of the stamp Key Vault (same resource group as this module). The control-plane identity is granted Key Vault Crypto Officer on it so tenant.destroy can disable and delete tenant keys (crypto-shred). Empty = no grant and tenant.destroy cannot shred. Scoped to the vault, the narrowest static scope: tenant keys are created at runtime, so a per-key scope cannot be written here.')
 param keyVaultId string = ''
+
+@description('Authorization server: public issuer URL (https, with its path, no trailing slash). The AS is not optional in the service image, so leaving this empty means the control plane will not start on an image that includes it; health.bicep reports the gap in healthControlPlaneState.authServerMissing.')
+param authIssuerUrl string = ''
+
+@description('Authorization server: public FHIR edge base URL (https); a tenant FHIR base is {base}/{tenant}/fhir.')
+param authFhirBaseUrl string = ''
+
+@description('Authorization server: client id of its Entra app registration. The app must carry a federated identity credential trusting the control-plane identity (see output authFederatedCredential); that Entra object is not an ARM resource and is created by the post-deploy bootstrap, not here.')
+param authAsClientId string = ''
+
+@description('Authorization server: optional admin-consent URL surfaced by the Graph-consent readiness gate Fix-it.')
+param authGraphConsentUrl string = ''
+
+@description('Authorization server: versioned Key Vault key id to sign tokens with. Empty = this module creates an EC P-384 signing key in keyVaultId and uses it.')
+param authSigningKeyId string = ''
 
 @description('Skip role assignments (re-deploys where the deployer cannot write RBAC).')
 param skipRoleGrants bool = false
@@ -107,7 +122,18 @@ var cloudName = boundary == 'Commercial' ? 'commercial' : (boundary == 'GCC' ? '
 var cosmosSuffix = isGov ? 'azure.us' : 'azure.com'
 var accountName = take('cosmos-lhds-cp-${uniqueString(resourceGroup().id)}', 44)
 var databaseName = 'loom-health-cp'
-var containerNames = ['health-stamps', 'health-tenants', 'health-routing', 'health-jobs', 'health-slo']
+// defaultTtl -1 = TTL enabled with no default expiry, so each item's own `ttl` is honoured
+// (the authorization server writes a per-item ttl on replay ids and grants). 0 = TTL off.
+var containerDefs = [
+  { name: 'health-stamps', defaultTtl: 0 }
+  { name: 'health-tenants', defaultTtl: 0 }
+  { name: 'health-routing', defaultTtl: 0 }
+  { name: 'health-jobs', defaultTtl: 0 }
+  { name: 'health-slo', defaultTtl: 0 }
+  { name: 'health-auth-config', defaultTtl: 0 }
+  { name: 'health-auth-replay', defaultTtl: -1 }
+  { name: 'health-auth-grants', defaultTtl: -1 }
+]
 var onAks = platform == 'aks'
 var servicePort = 8080
 
@@ -160,16 +186,17 @@ resource database 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01
 
 // All containers are partitioned on /id (apps/loom-health-cp/README.md). Data-plane
 // RBAC cannot create containers, so they are created here, not by the service.
-resource containers 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-12-01-preview' = [for c in containerNames: {
+resource containers 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-12-01-preview' = [for c in containerDefs: {
   parent: database
-  name: c
+  name: c.name
   properties: {
     resource: {
-      id: c
+      id: c.name
       partitionKey: {
         paths: ['/id']
         kind: 'Hash'
       }
+      defaultTtl: c.defaultTtl == 0 ? null : c.defaultTtl
     }
   }
 }]
@@ -206,6 +233,41 @@ resource cpKeyOfficer 'Microsoft.Authorization/roleAssignments@2022-04-01' = if 
     description: 'LHDS control plane: disable and delete tenant keys on tenant.destroy (crypto-shred).'
   }
 }
+
+// ── Authorization server signing key (W1-4) ───────────────────────────────────
+// ES384 tokens (apps/loom-health-cp src/auth/signer.ts) are signed by Key Vault: the private key
+// never leaves the vault. Created through the ARM control plane (works with public network access
+// off, needs no data-plane role for the deployer). No rotation policy: the service publishes a
+// single JWKS key from the versioned id in LOOM_HEALTH_CP_SIGNING_KEY_ID, so an automatic new
+// version would leave tokens signed by a version the JWKS does not publish. Rotate by redeploying
+// with a new key name and rolling the app.
+var kvCryptoUserRoleId = '12338af0-0e69-4776-bea7-57ae8d297424'
+var createSigningKey = !empty(keyVaultId) && empty(authSigningKeyId)
+
+resource signingKey 'Microsoft.KeyVault/vaults/keys@2024-11-01' = if (createSigningKey) {
+  parent: stampVault
+  name: 'lhds-as-signing'
+  properties: {
+    kty: 'EC-HSM'
+    curveName: 'P-384'
+    keyOps: ['sign', 'verify']
+    attributes: { enabled: true }
+  }
+}
+
+// Crypto User on the signing key only (sign + get), so the AS can sign without the broader grant.
+resource cpSigningKeyUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (createSigningKey && !skipRoleGrants) {
+  scope: signingKey
+  name: guid(keyVaultId, 'lhds-as-signing', cpIdentity.id, kvCryptoUserRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', kvCryptoUserRoleId)
+    principalId: cpIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    description: 'LHDS control plane: sign LHDS access tokens with the authorization server key.'
+  }
+}
+
+var signingKeyIdEffective = !empty(authSigningKeyId) ? authSigningKeyId : (createSigningKey ? signingKey!.properties.keyUriWithVersion : '')
 
 resource cosmosPe 'Microsoft.Network/privateEndpoints@2024-05-01' = if (!empty(privateEndpointSubnetId)) {
   name: 'pe-${accountName}'
@@ -279,7 +341,18 @@ module kubeletAcrPull 'acr-pull.bicep' = if (onAks) {
 }
 
 // ── containerApps path ────────────────────────────────────────────────────────
-var cpEnv = [
+// Authorization server settings (names read by src/auth/config.ts). An empty value is never
+// emitted: the service names each missing variable at startup rather than reading a blank.
+var authEnvSource = [
+  { name: 'LOOM_HEALTH_CP_ISSUER_URL', value: authIssuerUrl }
+  { name: 'LOOM_HEALTH_CP_FHIR_BASE_URL', value: authFhirBaseUrl }
+  { name: 'LOOM_HEALTH_CP_AS_CLIENT_ID', value: authAsClientId }
+  { name: 'LOOM_HEALTH_CP_SIGNING_KEY_ID', value: signingKeyIdEffective }
+  { name: 'LOOM_HEALTH_CP_GRAPH_CONSENT_URL', value: authGraphConsentUrl }
+]
+var authEnv = filter(authEnvSource, e => !empty(e.value))
+
+var cpEnv = concat(authEnv, [
   { name: 'PORT', value: string(servicePort) }
   { name: 'LOOM_HEALTH_CP_CLOUD', value: cloudName }
   { name: 'LOOM_HEALTH_CP_TENANT_ID', value: entraTenantId }
@@ -289,7 +362,7 @@ var cpEnv = [
   { name: 'LOOM_HEALTH_CP_ALLOWED_CALLER_APP_IDS', value: join(allowedCallerAppIds, ',') }
   { name: 'LOOM_HEALTH_CP_SLO_AVAILABILITY_TARGET', value: sloAvailabilityTarget }
   { name: 'AZURE_CLIENT_ID', value: cpIdentity.properties.clientId }
-]
+])
 
 resource app 'Microsoft.App/containerApps@2025-02-02-preview' = if (!onAks) {
   name: name
@@ -551,3 +624,14 @@ output cosmosEndpoint string = cosmosEndpointUrl
 
 @description('Cosmos network posture, so a public account is visible in the deployment output rather than silent.')
 output cosmosNetworkPosture string = empty(privateEndpointSubnetId) ? 'public-network-access-enabled-aad-only' : 'private-endpoint'
+
+@description('Federated identity credential the authorization server Entra app (authAsClientId) must carry so the control-plane identity can mint its client assertion. An Entra object, not an ARM resource: the post-deploy bootstrap creates it from these values. Never reported as configured by this module.')
+output authFederatedCredential object = {
+  // loginEndpoint ends with '/' and is the deploying cloud's Entra host.
+  issuer: '${environment().authentication.loginEndpoint}${entraTenantId}/v2.0'
+  subject: cpIdentity.properties.principalId
+  audience: isGov ? 'api://AzureADTokenExchangeUSGov' : 'api://AzureADTokenExchange'
+}
+
+@description('Authorization-server environment variable names that were set on the workload (values are not echoed).')
+output authEnvNamesSet array = map(authEnv, e => e.name)
