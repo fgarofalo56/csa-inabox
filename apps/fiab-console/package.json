@@ -28,7 +28,7 @@
     "@azure/identity": "^4.5.0",
     "@azure/monitor-opentelemetry": "^1.10.0",
     "@azure/msal-browser": "^3.27.0",
-    "@azure/msal-node": "^2.16.0",
+    "@azure/msal-node": "^3.0.1",
     "@azure/storage-blob": "12.31.0",
     "@azure/storage-file-datalake": "^12.27.0",
     "@duckdb/duckdb-wasm": "^1.29.0",
@@ -76,7 +76,7 @@
     "eslint-config-next": "15.5.18",
     "jsdom": "^25.0.1",
     "typescript": "^5.6.0",
-    "vitest": "3.2.7"
+    "vitest": "5.0.5"
   },
   "pnpm": {
     "comment": "MIRRORS pnpm-workspace.yaml. Both are required: pnpm 9 (the Dockerfile + CI builder) reads ONLY this field and ignores pnpm-workspace.yaml; pnpm 10+ reads ONLY that file and warns this one is ignored. Declaring in one place alone makes the floors inert under the other major. scripts/ci/check-pnpm-overrides.mjs asserts the two stay identical.",
