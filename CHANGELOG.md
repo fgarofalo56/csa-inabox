@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.116.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.115.0...csa-inabox-v0.116.0) (2026-10-28)
+
+
+### Features
+
+* **health:** W1-4 auth infra - Cosmos containers, env vars, scoped signing key ([#5158](https://github.com/fgarofalo56/csa-inabox/issues/5158)) ([26ffc2b](https://github.com/fgarofalo56/csa-inabox/commit/26ffc2bfdd0ab37ee6b58f1511b36f6c4fae6057))
+
 ## [0.115.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.114.0...csa-inabox-v0.115.0) (2026-10-27)
 
 
