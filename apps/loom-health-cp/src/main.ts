@@ -7,6 +7,7 @@ import { FileBundleSource } from './pdp/bundles.js';
 import { authOptionsFromConfig } from './middleware/auth.js';
 import { createCosmosStores } from './store/cosmos.js';
 import { authoredMessage } from './safe-error.js';
+import { loadTenantArmConfig, tenantArmFromConfig } from './jobs/tenant-arm-config.js';
 
 // One JSON line per event. Fields are ids, counts and status codes only: no
 // tokens, no request bodies, no clinical data.
@@ -17,9 +18,11 @@ function log(event: string, fields: Record<string, string | number>): void {
 function main(): void {
   let cfg;
   let authCfg;
+  let tenantCfg;
   try {
     cfg = loadConfig();
     authCfg = loadAuthServerConfig(cfg.cloud);
+    tenantCfg = loadTenantArmConfig(cfg.cloud);
   } catch (e) {
     process.stderr.write(`loom-health-cp: ${e instanceof ConfigError ? authoredMessage(e) : 'invalid configuration'}\n`);
     process.exit(1);
@@ -30,6 +33,7 @@ function main(): void {
     sloAvailabilityTarget: cfg.sloAvailabilityTarget,
     bundles: cfg.pdpBundleDir ? new FileBundleSource(cfg.pdpBundleDir) : undefined,
     authServer: authServerInitFromConfig(cfg, authCfg),
+    tenantArm: tenantArmFromConfig(tenantCfg, cfg.authorityHost),
     log,
   });
   const server = createServer((req, res) => {
