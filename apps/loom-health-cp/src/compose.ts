@@ -55,7 +55,7 @@ export function compose(input: ComposeInput) {
   }
   const scheduleRestarts = () => scheduleStampRestarts({ stamps: stores.stamps, jobs, now });
   const authenticate = createAuthenticator(input.auth);
-  // W1-2: registered only when an ARM adapter is supplied; without one the tenant.* kinds answer "unknown job kind".
+  // W1-2: registered only when an ARM adapter is supplied (main.ts always passes one, #5162); without one the tenant.* kinds answer "unknown job kind".
   if (input.tenantArm) {
     for (const h of tenantHandlers({ stamps: stores.stamps, tenants: stores.tenants, registry, arm: input.tenantArm })) jobs.register(h);
   }
