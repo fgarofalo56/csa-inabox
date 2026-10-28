@@ -165,7 +165,7 @@ overrides:
   # advisory and CVE-2025-68121 by itself. An explicit 'esbuild: >=0.28.1'
   # override would pin a resolution vite already makes — and would silently
   # widen into a break the day vite's declared range and the override disagree.
-  vite: '^7.3.6'
+  vite: '^7.3.7'
   # GHSA-73wf-gq98-2v4g and GHSA-c83g-rgw3-j3cx (both HIGH), patched in 4.28.7.
   # Transitive only: browserslist arrives under @babel/helper-compilation-targets
   # (`browserslist: 4.28.2` in the lockfile) and under update-browserslist-db,
