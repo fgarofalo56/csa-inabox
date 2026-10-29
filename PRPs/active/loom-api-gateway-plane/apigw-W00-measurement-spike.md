@@ -76,12 +76,12 @@ Analytics queries; no new resources retained.
 
 | Item | Status | Branch | Model | Evidence | Updated |
 |---|---|---|---|---|---|
-| W0-1 | todo | | sonnet | | 2026-10-28 |
-| W0-2 | todo | | sonnet | | 2026-10-28 |
-| W0-3 | todo | | sonnet | | 2026-10-28 |
-| W0-4 | todo | | sonnet | | 2026-10-28 |
-| W0-5 | todo | | sonnet | | 2026-10-28 |
-| W0-6 | todo | | sonnet | | 2026-10-28 |
-| W0-7 | todo | | sonnet | | 2026-10-28 |
-| W0-8 | todo | | sonnet | | 2026-10-28 |
+| W0-1 | in-progress | feat/apigw-w00-lane-a | sonnet | dispatched | 2026-10-29 |
+| W0-2 | in-progress | feat/apigw-w00-lane-a | sonnet | dispatched | 2026-10-29 |
+| W0-3 | in-progress | feat/apigw-w00-lane-a | sonnet | dispatched | 2026-10-29 |
+| W0-4 | in-progress | feat/apigw-w00-lane-a | sonnet | dispatched | 2026-10-29 |
+| W0-5 | in-progress | feat/apigw-w00-lane-b | sonnet | dispatched | 2026-10-29 |
+| W0-6 | in-progress | feat/apigw-w00-lane-a | sonnet | dispatched | 2026-10-29 |
+| W0-7 | in-progress | feat/apigw-w00-lane-a | sonnet | dispatched | 2026-10-29 |
+| W0-8 | in-progress | read-only lane C | sonnet | dispatched | 2026-10-29 |
 | W0-9 | todo | | sonnet | | 2026-10-28 |

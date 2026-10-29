@@ -167,7 +167,7 @@ wave are filed as Q17+ in the risks file and wait for an answer.
 
 | Item | Status | Branch | Model | Evidence | Updated |
 |---|---|---|---|---|---|
-| W0 | todo | | sonnet | `apigw-W00-measurement-spike.md` | 2026-10-28 |
+| W0 | in-progress | feat/apigw-w00-measurement-spike | sonnet | `apigw-W00-measurement-spike.md` | 2026-10-29 |
 | W1 | todo | | sonnet | `apigw-W01-gateway-registry-observe.md` | 2026-10-28 |
 | W2 | todo | | sonnet (W2-1 opus) | `apigw-W02-publishing-plan-apply.md` | 2026-10-28 |
 | W3 | todo | | sonnet (W3-4 opus) | `apigw-W03-identity-entitlements.md` | 2026-10-28 |

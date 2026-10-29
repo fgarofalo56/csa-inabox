@@ -7,7 +7,7 @@
 | PRP | Priority | Progress | Items | Models | Review |
 |---|---|---|---|---|---|
 | [loom-health-data-services](active/loom-health-data-services/PRP.md) | P1 | 1/13 (7%) | todo 11, in-progress 1, merged 1 | sonnet / sonnet | required |
-| [apigw-W00-measurement-spike](active/loom-api-gateway-plane/apigw-W00-measurement-spike.md) | P1 | 0/9 (0%) | todo 9 | sonnet / sonnet | none |
+| [apigw-W00-measurement-spike](active/loom-api-gateway-plane/apigw-W00-measurement-spike.md) | P1 | 0/9 (0%) | todo 1, in-progress 8 | sonnet / sonnet | none |
 
 ## Backlog
 
