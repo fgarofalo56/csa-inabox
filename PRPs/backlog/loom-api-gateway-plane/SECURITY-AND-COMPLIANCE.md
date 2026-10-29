@@ -9,7 +9,7 @@ govern what may be said about Government.
 
 | Boundary | Credential | Rule |
 |---|---|---|
-| Browser → console | Loom session (existing MSAL sign-in) | plane admin routes require `withTenantAdmin`; self routes resolve the caller from the session only |
+| Browser → console | Loom session (existing MSAL sign-in) | plane admin routes require the `apiplane-admin` capability (tenant admins are a superset; Q9, 2026-10-29); self routes resolve the caller from the session only |
 | Console → ARM / Log Analytics / Graph / Key Vault | Console UAMI | reads everywhere it is granted; writes only to gateways in `manage` mode and only from a reviewed plan; Graph is read-only; Key Vault holds secret URIs the plane reads for key checks and writes once for pasted keys |
 | Client → gateway | APIM subscription key tied to one grant and cost center, or an Entra token for `api://<runtime>` | both must be valid and name the same grant if both are sent; neither enabled = deny; group grants are token-only |
 | Gateway → backend | APIM system-assigned identity (role at the account scope) or a Key Vault-backed `<backend>-key` named value | the plane never passes a key through itself to a backend; caller credentials are stripped before forwarding |

@@ -180,10 +180,11 @@ Operator questions still open (Q-items) and designer decisions with defaults
 (D-items) are in `RISKS-AND-OPEN-DECISIONS.md`. The two that most change the
 shape of W1–W3:
 
-- **Q9** — who is a "gateway administrator"? Default: Loom tenant admin
-  (`withTenantAdmin`) for every write; a scoped `apiplane-admin` capability is
-  a D-item for W9.
+- **Q9** — who is a "gateway administrator"? **Answered 2026-10-29:** a scoped
+  `apiplane-admin` capability (`withCapability`), assignable to an Entra group,
+  from W1 (item W1-8); tenant admins are a superset. Departs from the recommended
+  default.
 - **Q10** — does the plane take ownership of the bicep-authored day-one
   gateway (#4442 B1) in W7, or stay observe-only over it indefinitely?
   Default: adopt in W7 via a reviewed apply, with bicep continuing to author
-  until that apply succeeds.
+  until that apply succeeds. **Answered 2026-10-29: adopt in W7 (confirmed).**

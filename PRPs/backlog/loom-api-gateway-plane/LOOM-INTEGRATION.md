@@ -23,7 +23,7 @@ New pages (new): `app/admin/api-gateway/{page,gateways,models,pools,mcp-servers,
 
 | Route family | Wrapper | Notes |
 |---|---|---|
-| `app/api/admin/api-gateway/**` (new) | `withTenantAdmin` (`lib/api/route-toolkit.ts:175`) | every mutation audited via `auditLogContainer` with `kind:'apiplane.<area>.<verb>'` (pattern `kind:'finops.budget'` in `app/api/admin/finops/budgets/route.ts`) |
+| `app/api/admin/api-gateway/**` (new) | `withCapability('apiplane-admin')` (`lib/api/route-toolkit.ts:254`; tenant admins a superset; capability declared in `lib/auth/feature-catalog.ts`; Q9, 2026-10-29) | every mutation audited via `auditLogContainer` with `kind:'apiplane.<area>.<verb>'` (pattern `kind:'finops.budget'` in `app/api/admin/finops/budgets/route.ts`) |
 | `app/api/me/api-gateway/**` (new) | `withSession` (`:90`) | caller resolved from the session only; never a `subject` query parameter; `runtime.error` always `null` |
 | `app/api/apim/**` (existing 13 route dirs) | existing | add `?gateway=<id>`; resolution via `lib/api-gateway/registry/resolve-gateway.ts` (new) falling back to the deploy-owned gateway when omitted, so existing callers keep working |
 | `app/api/marketplace/catalog`, `products`, `subscriptions` | existing | catalog adds plane offerings; subscriptions for plane offerings redirect to grants |

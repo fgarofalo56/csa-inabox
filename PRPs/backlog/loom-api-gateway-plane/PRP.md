@@ -14,9 +14,9 @@ created: 2026-10-28
 
 | Field | Value |
 |---|---|
-| Status | DRAFT — design complete; W0 (measurement spike, no product code) may start immediately; everything else waits for W0's receipt or takes the recommended defaults in `RISKS-AND-OPEN-DECISIONS.md` |
+| Status | DRAFT — design complete; W0 (measurement spike, no product code) may start immediately; everything else waits for W0's receipt. **Q9–Q16 and #4442 Q5 answered 2026-10-29** (`OPERATOR-DECISIONS-2026-10-29.md`); no open operator question remains before W0 |
 | Created | 2026-10-28 |
-| Decision source | Operator mandate 2026-10-28 (verbatim in `README.md`) and operator decisions Q1–Q8 (`OPERATOR-DECISIONS-2026-10-28.md`) |
+| Decision source | Operator mandate 2026-10-28 (verbatim in `README.md`), operator decisions Q1–Q8 (`OPERATOR-DECISIONS-2026-10-28.md`) and Q9–Q16 + #4442 Q5 + sequencing (`OPERATOR-DECISIONS-2026-10-29.md`) |
 | Tracking issue | filed with this PR: "API & AI Gateway Plane (PRP): fold Mosaic into Loom — W0 measurement spike" |
 | Related rules | every file in `.claude/rules/` — section 8 says how each is met |
 | Related programs | `apim-ai-gateway` (#4442; greenlit 2026-10-28; W7 depends on its Waves A/B1; shares `apim.bicep`), `loom-health-data-services` (bicep collision rule; `health/apim-fragment.bicep` fragment pattern), `governance-autopilot`, `per-workspace-spark-identity` |
@@ -60,7 +60,7 @@ adoption.
 | Wave | File | Ships | Review | Depends on |
 |---|---|---|---|---|
 | W0 | `apigw-W00-measurement-spike.md` | measurements (Gov LLM logs/traces, `llm-*` policies, MCP API type, Agent ID, Retail Prices Gov, named-value latency, Anthropic-on-Foundry in Gov, Loom facts), decision pass | none (W0-1 item: required, new Gov workflow) | — |
-| W1 | `apigw-W01-gateway-registry-observe.md` | five containers; gateway registry + preflight + auto-registration; inventory sync + policy facets + detection; environment catalog + `permits()`; admin hub shell with the existing eight panes under Manage; gates; parity doc | none | W0 |
+| W1 | `apigw-W01-gateway-registry-observe.md` | five containers; gateway registry + preflight + auto-registration; inventory sync + policy facets + detection; environment catalog + `permits()`; admin hub shell with the existing eight panes under Manage; gates; scoped `apiplane-admin` capability (Q9); parity doc | none | W0 |
 | W2 | `apigw-W02-publishing-plan-apply.md` | plan/apply/rollback engine (Opus design pass); renderers + three shapes; endpoint registry + readiness; key-authenticated endpoints; publications workbench; adoption of existing APIs incl. the deploy-owned pool | **required** | W1 |
 | W3 | `apigw-W03-identity-entitlements.md` | two runtime registrations in bootstrap; principals; grants; governed-access renderer (Opus design pass); keys and reveal; access requests on the F16 engine; marketplace Models / My access; `verify-model-access.mjs` | **required** | W2 |
 | W4 | `apigw-W04-cost-centers-usage-pricing.md` | cost centers with per-workspace auto-bind; diagnostics writer + Telemetry card; rollup job; pricing; Analytics; chargeback join; user Usage & cost | none | W1 (items W4-3+ need W3-4 for attribution) |
@@ -68,7 +68,7 @@ adoption.
 | W6 | `apigw-W06-mcp-publishing.md` | MCP registry + discovery; MCP publication + PRM; MCP grants; model caller + on-behalf; Loom's own agents through the gateway; REST → MCP | **required** | W3 (W6-4 needs W4-3) |
 | W7 | `apigw-W07-model-pools-deployments.md` | model pools; health and suggestions; per-pool access; reviewed model deployment; adoption of the day-one gateway; console principal under `platform` | **required** | W2; #4442 Waves A/B1 (external) for W7-5 |
 | W8 | `apigw-W08-cross-cloud-connections.md` | management vault (opt-in); Azure connections; Government gateways via connection; disclosure; verifier | **required** | W2 |
-| W9 | `apigw-W09-approvals-copilot-hardening.md` | scheduled approval policies; advisory AI; Copilot tools; scoped admin capability; hardening; greenfield/brownfield/government docs; final parity | none | W3, W5 |
+| W9 | `apigw-W09-approvals-copilot-hardening.md` | scheduled approval policies; advisory AI; Copilot tools; scoped-admin hardening; drift and recovery hardening; greenfield/brownfield/government docs; final parity | none | W3, W5 |
 
 ## 4. Dependency graph and run order
 
@@ -152,10 +152,16 @@ a documented manual step).
 
 ## 10. Decisions needed
 
-Q9–Q16 in `RISKS-AND-OPEN-DECISIONS.md` § 2 with recommended defaults; W1
-needs Q9; W5 needs Q11, Q12, Q15; W7 needs Q10, Q16; W8 needs Q13; W4 needs
-Q14. A wave starts on the default if the answer is not in by its first
-session and records that it did.
+None open. Q9–Q16 were answered on 2026-10-29 (`OPERATOR-DECISIONS-2026-10-29.md`;
+answers beside their defaults in `RISKS-AND-OPEN-DECISIONS.md` § 2): Q9 scoped
+`apiplane-admin` capability from W1 (the one departure from a default, hence
+W1-8); Q10 adopt the day-one gateway in W7; Q11 new shared mailbox per
+boundary; Q12 Teams Workflows only; Q13 the operator creates the Government
+service principal; Q14 price seed per release plus an on-demand check; Q15
+no default budget on auto-created cost centers; Q16 platform traffic governed
+and visible in chargeback. #4442 Q5: stay on PremiumV2. W0's Commercial and
+Government probe runs are shared with #4442 Wave 0. New questions raised by a
+wave are filed as Q17+ in the risks file and wait for an answer.
 
 ## Execution state
 

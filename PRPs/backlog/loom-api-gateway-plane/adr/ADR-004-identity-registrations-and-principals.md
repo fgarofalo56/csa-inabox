@@ -17,7 +17,10 @@ a sign-in registration created by `scripts/csa-loom/bootstrap-msal-app-reg.sh`
 ## Decision
 
 1. **No new registrations for the console or marketplace.** Plane
-   administrators are Loom tenant admins (D6, Q9); portal users are any
+   administrators hold the scoped `apiplane-admin` capability (`withCapability`,
+   declared in `lib/auth/feature-catalog.ts`, assignable to an Entra group;
+   tenant admins are a superset) from W1-8 (D6; Q9 answered 2026-10-29, which
+   departed from the "tenant admin first" default); portal users are any
    signed-in Loom user; self routes resolve the caller from the session only.
 2. **Two runtime registrations**, created idempotently by the same bootstrap
    step in every boundary:
@@ -62,8 +65,8 @@ a sign-in registration created by `scripts/csa-loom/bootstrap-msal-app-reg.sh`
 
 ## Alternatives rejected
 
-- Mosaic's `Admin`/`User` app roles on Loom's sign-in app (duplicates
-  `withTenantAdmin` and the session); APIM developer-portal users and groups
+- Mosaic's `Admin`/`User` app roles on Loom's sign-in app (Loom's capability
+  model and the session already express them); APIM developer-portal users and groups
   as the identity model (gateway-local, no agents, no tokens); expanding group
   members into direct grants (drift, churn); calling Graph from the gateway
   (latency, coupling).

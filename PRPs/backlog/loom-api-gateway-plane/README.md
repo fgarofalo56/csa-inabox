@@ -3,7 +3,10 @@
 **Status (2026-10-28): DRAFT, design complete, docs only.** No product code
 exists for the control plane. W0 (measurement spike, no product code) may
 start in a fresh session; every later wave waits for W0's receipt or runs on
-the recommended defaults in `RISKS-AND-OPEN-DECISIONS.md`.
+the recommended defaults in `RISKS-AND-OPEN-DECISIONS.md`. **The operator
+answered Q9–Q16, #4442's Q5 and the sequencing questions on 2026-10-29**
+(`OPERATOR-DECISIONS-2026-10-29.md`); nothing is waiting on an operator answer
+before W0.
 
 **Public repo rules**: no secrets, no subscription keys, no tenant IDs other
 than the ones already in tracked files, no real usage figures. Every sample
@@ -29,7 +32,10 @@ MIT data artifacts ported where they are data.
 
 ## Operator decisions recorded 2026-10-28 (fixed inputs, not re-litigated)
 
-Full text with consequences: `OPERATOR-DECISIONS-2026-10-28.md`.
+Full text with consequences: `OPERATOR-DECISIONS-2026-10-28.md`. The follow-up
+answers of 2026-10-29 (Q9–Q16, #4442's Q5, PR handling, shared W0 probes) are
+in `OPERATOR-DECISIONS-2026-10-29.md`; the one departure from a recommended
+default is Q9, a scoped `apiplane-admin` capability from W1 (item W1-8).
 
 1. **Native rebuild in Loom** (TS BFF + Cosmos + Fluent v9), not a vendored
    Python service and not Mosaic-beside-Loom.
@@ -65,8 +71,8 @@ Full text with consequences: `OPERATOR-DECISIONS-2026-10-28.md`.
 5. `LOOM-INTEGRATION.md` — exactly where this plugs into existing Loom
    surfaces, routes, containers, bicep and bootstrap.
 6. `SECURITY-AND-COMPLIANCE.md`, `TEST-STRATEGY.md`.
-7. `RISKS-AND-OPEN-DECISIONS.md` — D-items with defaults, Q-items for the
-   operator.
+7. `RISKS-AND-OPEN-DECISIONS.md` — D-items with defaults, Q-items with the
+   operator's 2026-10-29 answers beside them.
 8. `PRP.md` (master) then `apigw-W00-*.md` .. `apigw-W09-*.md`.
 
 ## Evidence convention
