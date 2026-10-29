@@ -6,7 +6,7 @@
 
 | PRP | Priority | Progress | Items | Models | Review |
 |---|---|---|---|---|---|
-| [loom-health-data-services](active/loom-health-data-services/PRP.md) | P1 | 1/13 (7%) | todo 12, merged 1 | sonnet / sonnet | required |
+| [loom-health-data-services](active/loom-health-data-services/PRP.md) | P1 | 1/13 (7%) | todo 11, in-progress 1, merged 1 | sonnet / sonnet | required |
 
 ## Backlog
 
@@ -24,6 +24,17 @@
 | [W09-viewer-editors-copilot](active/loom-health-data-services/W09-viewer-editors-copilot.md) | P1 | 10 | W08-consent-segmentation-audit, W05-conversion-hl7v2-ccda | W08-consent-segmentation-audit (backlog); W05-conversion-hl7v2-ccda (backlog) | sonnet / sonnet | none |
 | [W11-hardening-dr-scale-out](active/loom-health-data-services/W11-hardening-dr-scale-out.md) | P1 | 12 | W09-viewer-editors-copilot | W09-viewer-editors-copilot (backlog) | sonnet / sonnet | required |
 | [W12-compliance-evidence-pack](active/loom-health-data-services/W12-compliance-evidence-pack.md) | P1 | 13 | W11-hardening-dr-scale-out | W11-hardening-dr-scale-out (backlog) | sonnet / sonnet | required |
+| [loom-api-gateway-plane](backlog/loom-api-gateway-plane/PRP.md) | P1 | 20 | - | - | sonnet / sonnet | none |
+| [apigw-W00-measurement-spike](backlog/loom-api-gateway-plane/apigw-W00-measurement-spike.md) | P1 | 21 | - | - | sonnet / sonnet | none |
+| [apigw-W01-gateway-registry-observe](backlog/loom-api-gateway-plane/apigw-W01-gateway-registry-observe.md) | P1 | 22 | apigw-W00-measurement-spike | apigw-W00-measurement-spike (backlog) | sonnet / sonnet | none |
+| [apigw-W02-publishing-plan-apply](backlog/loom-api-gateway-plane/apigw-W02-publishing-plan-apply.md) | P1 | 23 | apigw-W01-gateway-registry-observe | apigw-W01-gateway-registry-observe (backlog) | sonnet / sonnet | required |
+| [apigw-W03-identity-entitlements](backlog/loom-api-gateway-plane/apigw-W03-identity-entitlements.md) | P1 | 24 | apigw-W02-publishing-plan-apply | apigw-W02-publishing-plan-apply (backlog) | sonnet / sonnet | required |
+| [apigw-W04-cost-centers-usage-pricing](backlog/loom-api-gateway-plane/apigw-W04-cost-centers-usage-pricing.md) | P1 | 25 | apigw-W01-gateway-registry-observe | apigw-W01-gateway-registry-observe (backlog) | sonnet / sonnet | none |
+| [apigw-W05-budgets-notifications](backlog/loom-api-gateway-plane/apigw-W05-budgets-notifications.md) | P1 | 26 | apigw-W04-cost-centers-usage-pricing | apigw-W04-cost-centers-usage-pricing (backlog) | sonnet / sonnet | required |
+| [apigw-W06-mcp-publishing](backlog/loom-api-gateway-plane/apigw-W06-mcp-publishing.md) | P1 | 27 | apigw-W03-identity-entitlements | apigw-W03-identity-entitlements (backlog) | sonnet / sonnet | required |
+| [apigw-W07-model-pools-deployments](backlog/loom-api-gateway-plane/apigw-W07-model-pools-deployments.md) | P1 | 28 | apigw-W02-publishing-plan-apply | apigw-W02-publishing-plan-apply (backlog) | sonnet / sonnet | required |
+| [apigw-W08-cross-cloud-connections](backlog/loom-api-gateway-plane/apigw-W08-cross-cloud-connections.md) | P1 | 29 | apigw-W02-publishing-plan-apply | apigw-W02-publishing-plan-apply (backlog) | sonnet / sonnet | required |
+| [apigw-W09-approvals-copilot-hardening](backlog/loom-api-gateway-plane/apigw-W09-approvals-copilot-hardening.md) | P1 | 30 | apigw-W03-identity-entitlements, apigw-W05-budgets-notifications | apigw-W03-identity-entitlements (backlog); apigw-W05-budgets-notifications (backlog) | sonnet / sonnet | none |
 | [per-workspace-spark-identity](backlog/per-workspace-spark-identity/PRP.md) | P2 | 1 | - | - | opus / sonnet | none |
 | [loom-brain](backlog/loom-brain/PRP.md) | P2 | 3 | - | - | opus / sonnet | none |
 | [snowflake-parity](backlog/snowflake-parity/PRP.md) | P2 | 5 | - | - | opus / sonnet | none |

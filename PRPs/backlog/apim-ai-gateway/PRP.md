@@ -14,6 +14,14 @@ created: 2026-09-11
 
 **Status:** DRAFT (2026-09-10; corrected 2026-09-11) — design unblocked; no wave
 started. One question re-opened (Q5) — see §2.
+**2026-10-28 — GREENLIT by the operator.** The APIM-vs-direct direction this
+epic asked for is confirmed as **default-ON** (recorded on #4442). Waves 0, A
+and B1 may start. Q5 (PremiumV2 vs Premium classic in Commercial) is **still
+open** and blocks Wave C only. The control plane over this gateway — the
+`microsoft/mosaic-apim` fold-in (multi-gateway registry, reviewed publishing,
+entitlements, usage, pricing, cost centers, budgets, MCP, pools) — is a sibling
+set at `PRPs/backlog/loom-api-gateway-plane/`; its W7 depends on Waves A/B1
+here, and its W1 shares `apim.bicep` under the one-bicep-PR rule.
 **Issue:** #4442 (`epic`, `sprint:active`, `sp:13`, `lane:bicep`, `lane:console`)
 **Created:** 2026-09-10 · **Owner:** autonomous build program
 **Related rules:** `auto-bind-by-default.md`, `cloud-parity.md`,
