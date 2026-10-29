@@ -26,9 +26,9 @@
  * (the Learn REST sample `ApiManagementCreateMcpApi`, which sends endpoints) is
  * tried only if A is rejected by VALIDATION (400 / 422): a 409 / 412, a 5xx or a
  * permission answer is not an answer about the body. Every attempt is recorded
- * verbatim. If the create
- * is rejected in BOTH clouds that is an INSTRUMENT defect, not a finding - a
- * per-run script cannot see the other cloud, so each cell carries that rule.
+ * verbatim. If the create is rejected in BOTH clouds that is an INSTRUMENT
+ * defect, not a finding - a per-run script cannot see the other cloud, so each
+ * cell carries that rule.
  *
  * GROUNDING (Learn, fetched 2026-10-29)
  *   API create body incl. `type: "mcp"`, `mcpProperties{transportType, endpoints[{name,uriTemplate}]}`

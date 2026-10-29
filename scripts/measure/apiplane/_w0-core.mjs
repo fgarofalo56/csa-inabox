@@ -876,10 +876,11 @@ export const isValidationRejection = (result) => !result.ok && VALIDATION_STATUS
 export const WRITE_FAMILIES = Object.freeze(['policies', 'mcp', 'latency']);
 
 /**
- * May a write family start? A write against a service that is not in provisioningState `Succeeded` (Updating, Activating, Failed,
- * Deleting ...) is answered 409 or silently queued, so what it measured would say nothing about the feature. Returns null when
- * writes may proceed, else the evidence for the family's cells. A MISSING state is not assumed to be Succeeded: what was not
- * established is not asserted (deploy-integrity.md R7).
+ * May a write family start? The expectation (NOT observed by this probe) is that a write against a service that is not in
+ * provisioningState `Succeeded` - Updating, Activating, Failed, Deleting ... - is answered 409 or queued, so whatever it measured
+ * would say nothing about the feature. Returns null when writes may proceed, else the evidence for the family's cells. A MISSING
+ * state is not assumed to be Succeeded: what was not established is not asserted (deploy-integrity.md R7). The printed note states
+ * only what was established: the state, and that nothing was written.
  */
 export function writeGate(apim) {
   const state = apim?.provisioningState;
@@ -887,7 +888,7 @@ export function writeGate(apim) {
   const shown = typeof state === 'string' && state ? sanitize(state, 40) : null;
   return {
     provisioningState: shown,
-    note: `the APIM is not in provisioningState Succeeded (${shown ?? 'not reported'}), so nothing was written: a write against a busy or failed service answers 409 or queues`,
+    note: `the APIM is not in provisioningState Succeeded (${shown ?? 'not reported'}), so nothing was written`,
   };
 }
 
