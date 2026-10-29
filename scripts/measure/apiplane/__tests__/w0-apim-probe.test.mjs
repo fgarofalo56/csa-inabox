@@ -1859,6 +1859,27 @@ test('parseArgs: the documented flags parse, and every malformed invocation is a
   }
 });
 
+test('parseArgs: a path flag may not climb out with ".." or carry a NUL byte, and an ordinary path still parses', async () => {
+  // BREAKS IF: --out, --aggregate or --summary-file accepts a ".." segment (either slash style) or a NUL byte.
+  // Positive pair: a plain relative path, an absolute path and a name that merely CONTAINS two dots all parse, so a
+  // guard that rejects every path (or every dot) is red too.
+  const climbing = ['../escape', 'a/../b', '..', 'a\\..\\b', '..\\x', 'out/..', 'nul\u0000byte'];
+  for (const flag of ['--out', '--aggregate', '--summary-file']) {
+    for (const value of climbing) {
+      const argv = flag === '--aggregate'
+        ? ['--aggregate', value, '--expect', 'mcp', '--cloud', 'gov']
+        : ['--cloud', 'gov', '--family', 'mcp', flag, value];
+      assert.throws(() => probe.parseArgs(argv), probe.UsageError, `${flag} ${JSON.stringify(value)}`);
+    }
+  }
+  const fine = ['out-dir', 'temp/apiplane-w0', 'a..b', '/abs/dir', 'C:/abs/dir', '.hidden', 'dir.with.dots'];
+  for (const value of fine) {
+    assert.equal(probe.parseArgs(['--cloud', 'gov', '--family', 'mcp', '--out', value]).out, value);
+    assert.equal(probe.parseArgs(['--cloud', 'gov', '--family', 'mcp', '--summary-file', value]).summaryFile, value);
+    assert.equal(probe.parseArgs(['--aggregate', value, '--expect', 'mcp', '--cloud', 'gov']).aggregate, value);
+  }
+});
+
 test('runProbe writes <cloud>-<family>.json and .md, logs one line per cell, and returns the family exit code', async () => {
   // BREAKS IF: the file names or schema change, the markdown loses its verdict table or its INVALID banner, or the
   // exit code is not the family's.

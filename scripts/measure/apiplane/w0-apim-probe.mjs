@@ -138,6 +138,18 @@ export function runContext(env) {
 
 const APIM_NAME_RE = /^[a-zA-Z](?:[a-zA-Z0-9-]{0,48}[a-zA-Z0-9])?$/;
 
+/**
+ * A path flag may be absolute or relative, but never climbs out with a ".." segment (either slash
+ * style) and never carries a NUL byte. The values come from the operator or the workflow, not from
+ * a dispatch input; this closes the traversal class at the one place they enter (Snyk javascript/PT).
+ */
+function sanitizePathArg(flag, value) {
+  if (value.includes('\0') || value.split(/[\\/]+/).includes('..')) {
+    throw new UsageError(`${flag} must not contain '..' segments or NUL bytes`);
+  }
+  return value;
+}
+
 export function parseArgs(argv) {
   const o = { cloud: null, family: null, apimName: null, out: join('temp', 'apiplane-w0'), runner: 'hosted', latencyPollSeconds: 900, aggregate: null, expect: null, summaryFile: null };
   const known = new Set(['--cloud', '--family', '--apim-name', '--out', '--runner', '--latency-poll-seconds', '--aggregate', '--expect', '--summary-file']);
@@ -153,12 +165,12 @@ export function parseArgs(argv) {
       case '--cloud': o.cloud = value; break;
       case '--family': o.family = value; break;
       case '--apim-name': o.apimName = value; break;
-      case '--out': o.out = value; break;
+      case '--out': o.out = sanitizePathArg('--out', value); break;
       case '--runner': o.runner = value; break;
       case '--latency-poll-seconds': o.latencyPollSeconds = Number(value); break;
-      case '--aggregate': o.aggregate = value; break;
+      case '--aggregate': o.aggregate = sanitizePathArg('--aggregate', value); break;
       case '--expect': o.expect = value; break;
-      default: o.summaryFile = value;
+      default: o.summaryFile = sanitizePathArg('--summary-file', value);
     }
   }
   if (!Object.hasOwn(CLOUDS, String(o.cloud))) throw new UsageError(`--cloud must be one of ${Object.keys(CLOUDS).join('|')}`);
