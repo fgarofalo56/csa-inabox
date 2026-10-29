@@ -36,6 +36,8 @@ import { parseWorkflow } from '../../../ci/_workflow-yaml.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROBE_DIR = resolve(HERE, '..');
+/** Exact membership of a token audience: array equality, never a URL substring test. */
+const sawAudience = (est, audience) => est.audiences.some((a) => a === audience);
 const WORKFLOW_DIR = resolve(HERE, '../../../../.github/workflows');
 
 // ---------------------------------------------------------------------------
@@ -961,7 +963,7 @@ test('telemetry: the KQL getschema evidence is secondary - answered, table-missi
   assert.equal(q.length, 2);
   assert.match(q[0].body.query, /^ApiManagementGatewayLlmLog \| getschema/);
   assert.match(q[1].body.query, /^ApiManagementGatewayLogs \| getschema \| where ColumnName == 'TraceRecords'/);
-  assert.ok(est.audiences.includes('https://api.loganalytics.io'));
+  assert.ok(sawAudience(est, 'https://api.loganalytics.io'));
   assert.ok(q[0].path.includes(WORKSPACE_CUSTOMER) && !JSON.stringify(result).includes(WORKSPACE_CUSTOMER), 'the workspace id is used for the call and never printed');
 
   est.kql = () => jsonRes(400, { error: { code: 'BadArgumentError', message: "Failed to resolve table or column expression named 'ApiManagementGatewayLlmLog'" } });
@@ -1397,7 +1399,7 @@ test('identity: all three reads answered - yes/no cells, role NAMES only, and no
   const dump = JSON.stringify(result);
   for (const needle of [PRINCIPAL, GRAPH_SP_OBJECT, ROLE_DIRECTORY, ROLE_USER, ROLE_AGENT_RO, ROLE_AGENT_RW, OTHER_SP_OBJECT, GRAPH_APP_ID]) assert.ok(!dump.includes(needle), `leaked ${needle}`);
   // every Graph call used the run's own token audience and the right host
-  assert.ok(est.audiences.includes('https://graph.microsoft.com'));
+  assert.ok(sawAudience(est, 'https://graph.microsoft.com'));
   assert.equal(est.calls.filter((c) => c.origin === 'https://graph.microsoft.com').length, 3);
 });
 
@@ -1498,9 +1500,9 @@ test('identity in Government reads graph.microsoft.us with a graph.microsoft.us 
   const est = estate({ cloud: 'gov' });
   const { result } = await runFamily('identity', est);
   assert.equal(text(result, 'identity.graph.agentIdentityReadAll'), 'measured: yes (HTTP 200)');
-  assert.ok(est.audiences.includes('https://graph.microsoft.us'));
-  assert.ok(est.audiences.includes('https://management.usgovcloudapi.net'));
-  assert.ok(!est.audiences.includes('https://graph.microsoft.com'));
+  assert.ok(sawAudience(est, 'https://graph.microsoft.us'));
+  assert.ok(sawAudience(est, 'https://management.usgovcloudapi.net'));
+  assert.ok(!sawAudience(est, 'https://graph.microsoft.com'));
   assert.equal(result.cloud, 'gov');
 });
 
@@ -1880,6 +1882,39 @@ test('parseArgs: a path flag may not climb out with ".." or carry a NUL byte, an
   }
 });
 
+test('renderFamilyMarkdown: a backslash before a pipe cannot reopen a table column', () => {
+  // BREAKS IF: esc() escapes the pipe but not the backslash (CodeQL js/incomplete-sanitization). The input `x\|y` then
+  // renders as `x\\|y`, which a markdown table reads as an escaped backslash followed by a REAL column delimiter, so the
+  // row grows an extra cell. Positive pair: a plain pipe stays inside one cell and a lone backslash is doubled so markdown
+  // shows it once; an esc() that escapes nothing (or too much) is red too.
+  const unescapedPipes = (row) => {
+    let n = 0;
+    for (let i = 0; i < row.length; i += 1) {
+      if (row[i] === '\\') i += 1; // a backslash escapes whatever follows it
+      else if (row[i] === '|') n += 1;
+    }
+    return n;
+  };
+  const hostile = 'x\\|y';
+  const plain = 'x|y';
+  const lone = 'C:\\dir';
+  const result = {
+    cloud: 'gov', family: 'telemetry', exitCode: 0, valid: true, apim: null, discovery: { state: 'none', seen: 0 },
+    runner: 'hosted', notes: [], requests: [],
+    controls: [{ id: 'ctl', status: 'passed', detail: hostile }],
+    cells: [
+      core.measured('cell.hostile', hostile, { http: 200 }),
+      core.measured('cell.plain', plain, { http: 200 }),
+      core.measured('cell.lone', lone, { http: 200 }),
+    ],
+  };
+  const rows = probe.renderFamilyMarkdown(result).split('\n').filter((l) => /^\| (ctl|cell\.[a-z]+) \|/.test(l));
+  assert.equal(rows.length, 4, 'one control row and three cell rows');
+  for (const row of rows) assert.equal(unescapedPipes(row), 4, row);
+  const loneRow = rows.find((r) => r.startsWith('| cell.lone |'));
+  assert.ok(loneRow.includes('C:\\\\dir'), loneRow);
+});
+
 test('runProbe writes <cloud>-<family>.json and .md, logs one line per cell, and returns the family exit code', async () => {
   // BREAKS IF: the file names or schema change, the markdown loses its verdict table or its INVALID banner, or the
   // exit code is not the family's.
@@ -2152,7 +2187,9 @@ for (const which of ['gov', 'commercial']) {
       assert.equal(val(probeJob.environment), 'gcc-high-deploy', 'one manual approval, as governance-w0-measure.yml');
       assert.equal(val(login.uses), 'Azure/login@v2');
       assert.equal(val(login.with.environment), 'AzureUSGovernment');
-      assert.ok(creds.includes('https://management.usgovcloudapi.net/') && creds.includes('https://login.microsoftonline.us'));
+      const credsJson = JSON.parse(creds);
+      assert.equal(credsJson.resourceManagerEndpointUrl, 'https://management.usgovcloudapi.net/');
+      assert.equal(credsJson.activeDirectoryEndpointUrl, 'https://login.microsoftonline.us');
       const setCloud = steps.findIndex((s) => runOf(s).includes('az cloud set --name AzureUSGovernment'));
       assert.ok(setCloud > steps.indexOf(login), 'az cloud set must follow the login');
     } else {

@@ -362,7 +362,9 @@ export async function runFamilyProbe(opts, deps) {
 // ---------------------------------------------------------------------------
 
 const cellCount = (cells, v) => cells.filter((c) => c.verdict === v).length;
-const esc = (s) => String(s).replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+// Backslash FIRST, then pipe: escaping only the pipe turns an input of backslash-pipe into two backslashes and a REAL
+// column delimiter, so a hostile cell could add a column (CodeQL js/incomplete-sanitization).
+const esc = (s) => String(s).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 
 function evidenceLine(cell) {
   const ev = cell.evidence && typeof cell.evidence === 'object' ? { ...cell.evidence } : {};
