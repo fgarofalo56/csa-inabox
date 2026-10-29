@@ -35,7 +35,7 @@ Each wave that ships one of these functions attaches a mutation receipt
   double that records calls and returns recorded fixtures (lifted from real
   responses with identifiers scrubbed).
 - Route tests assert the envelope (`{ok, data|error}`), the wrapper
-  (`withTenantAdmin` refuses a non-admin session with 403, `withSession`
+  (`withCapability('apiplane-admin')` refuses a session holding neither the capability nor tenant admin with 403, `withSession`
   self routes ignore any `subject` parameter), and the audit write
   (`kind:'apiplane.*'` present with the expected actor).
 - Absence-only assertions are paired with a positive one (rule § done #4):
