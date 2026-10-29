@@ -800,15 +800,19 @@ const WRITE_ROLE = 'API Management Service Contributor';
  * proves nothing on its own: APIM can accept a document and drop what it does
  * not know. Outcomes:
  *   accepted | silent-drop | rejected | rejected-failed | unknown
- * `rejected` carries `attribute: true` when the message names an ATTRIBUTE
- * (a probe-authoring defect, to be classified tooling-error by the caller).
+ * `rejected` means the service answered with a VALIDATION status (400 / 422) and carries `attribute: true` when the message names
+ * an ATTRIBUTE (a probe-authoring defect, to be classified tooling-error by the caller). A 409 / 412, an exhausted 429 / 5xx, a
+ * 401 / 403 and any other non-2xx are `unknown`: they are not a verdict on the body.
  */
 export async function putAndReadBack(ctx, { put, read, xml, count, role = WRITE_ROLE }) {
   const p = await put();
   const base = { put: p, xml, count };
   const early = reasonForFailure(p, { role, scope: 'apim' });
   if (early) return { ...base, outcome: 'unknown', reason: early };
-  if (!p.ok) return { ...base, outcome: 'rejected', attribute: namesAnAttribute(p.errorMessage) };
+  if (!p.ok) {
+    if (isValidationRejection(p)) return { ...base, outcome: 'rejected', attribute: namesAnAttribute(p.errorMessage) };
+    return { ...base, outcome: 'unknown', reason: 'tooling-error', note: `the write answered HTTP ${p.status}, which is not a validation response (400/422): not a verdict on the body` };
+  }
   const w = await waitProvisioned(ctx, read);
   const get = w.last;
   if (w.state === 'read-failed') {
@@ -843,11 +847,45 @@ export function countElement(xml, name) {
   return (decoded.match(re) || []).length;
 }
 
-/** Map a non-2xx or transient result to the cell reason it implies, or null when it is a verdict-bearing 4xx. */
+/**
+ * Map a non-2xx or transient result to the cell reason it implies, or null when it is a verdict-bearing answer (a validation
+ * 400 / 422 on a write, a 404 on a read).
+ *
+ * 409 and 412 are NOT verdicts: a write that collides with the service's state (another operation in progress) or with a stale
+ * precondition (an ETag that moved) says nothing about whether the body is acceptable, so it is `transient-exhausted` - never
+ * `rejected`. The same holds for an exhausted 429 / 5xx or a network failure (the client sets `transientExhausted`).
+ */
 export function reasonForFailure(result, { role, scope }) {
   if (result.transientExhausted) return 'transient-exhausted';
   if (result.status === 401 || result.status === 403) return permissionReason(role, scope);
+  if (result.status === 409 || result.status === 412) return 'transient-exhausted';
   return null;
+}
+
+/**
+ * The only statuses that mean "the service read the body and refused it". `rejected` is a VERDICT about a body, so only these earn
+ * it; any other non-2xx on a write (a 404, 405, 413, 415 ...) is the probe's own request failing, not the gateway judging the body.
+ */
+export const VALIDATION_STATUSES = Object.freeze([400, 422]);
+export const isValidationRejection = (result) => !result.ok && VALIDATION_STATUSES.includes(result.status);
+
+/** Families that PUT or DELETE on the gateway. A source-shape test pins this list against the family modules that call withScratch(). */
+export const WRITE_FAMILIES = Object.freeze(['policies', 'mcp', 'latency']);
+
+/**
+ * May a write family start? A write against a service that is not in provisioningState `Succeeded` (Updating, Activating, Failed,
+ * Deleting ...) is answered 409 or silently queued, so what it measured would say nothing about the feature. Returns null when
+ * writes may proceed, else the evidence for the family's cells. A MISSING state is not assumed to be Succeeded: what was not
+ * established is not asserted (deploy-integrity.md R7).
+ */
+export function writeGate(apim) {
+  const state = apim?.provisioningState;
+  if (typeof state === 'string' && /^succeeded$/i.test(state)) return null;
+  const shown = typeof state === 'string' && state ? sanitize(state, 40) : null;
+  return {
+    provisioningState: shown,
+    note: `the APIM is not in provisioningState Succeeded (${shown ?? 'not reported'}), so nothing was written: a write against a busy or failed service answers 409 or queues`,
+  };
 }
 
 /** Trim a verbatim server message for the receipt. */

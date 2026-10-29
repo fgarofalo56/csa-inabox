@@ -61,9 +61,15 @@
  *   positive control (and policies a negative one); see each _w0-<family>.mjs. A
  *   failed control makes the family INVALID.
  * - SCRATCH OBJECTS are all named `w0-apiplane-*`, are swept before and after a
- *   family (the second sweep in `finally`), and EVERY delete goes through
- *   deleteScratch(), which throws on any other name. The family ends by LISTING
- *   leftovers (`cleanup` cell).
+ *   family (the second sweep in `finally`), EVERY delete goes through
+ *   deleteScratch() and EVERY PUT through a helper that starts with
+ *   assertScratchName(); both throw on any other name before a request is built.
+ *   The family ends by LISTING leftovers (`cleanup` cell).
+ * - WRITES ARE GATED ON SERVICE STATE. The write families (policies, mcp, latency)
+ *   do not start while the selected APIM is not in provisioningState Succeeded:
+ *   every cell is unknown:transient-exhausted with the state as evidence (exit 3)
+ *   and nothing is written, not even the sweep. A 409 / 412 on a write is never
+ *   `rejected` either: only a validation answer (400 / 422) is a verdict on a body.
  * - NEVER discard stderr or a result: no `2>/dev/null`, no `|| true`, no
  *   continue-on-error on a measurement step (deploy-integrity.md R6/R7).
  * - The bearer token comes from `az account get-access-token` via execFile (no
@@ -105,8 +111,8 @@ import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 import {
-  API, CLOUDS, FAMILIES, computeExit, createClient, deepSanitize, listAll, notMeasured, quote,
-  reasonForFailure, registerSecret, sanitize, sanitizeBlock, unknown, verdictText,
+  API, CLOUDS, FAMILIES, WRITE_FAMILIES, computeExit, createClient, deepSanitize, listAll, notMeasured, quote,
+  reasonForFailure, registerSecret, sanitize, sanitizeBlock, unknown, verdictText, writeGate,
 } from './_w0-core.mjs';
 import * as telemetry from './_w0-telemetry.mjs';
 import * as policies from './_w0-policies.mjs';
@@ -330,7 +336,15 @@ export async function runFamilyProbe(opts, deps) {
     if (disc.state === 'one') {
       ctx.apim = disc.apim;
       result.apim = publicApim(disc.apim);
-      await MODULES[opts.family].run(ctx, acc);
+      // A WRITE family does not start against a service that is not in provisioningState Succeeded: every cell is
+      // unknown:transient-exhausted with the state as evidence (required, so exit 3), and NOTHING is written - not even the sweep.
+      const gate = WRITE_FAMILIES.includes(opts.family) ? writeGate(disc.apim) : null;
+      if (gate) {
+        result.notes.push(`${opts.family}: ${gate.note}`);
+        acc.cells.push(...placeholders(opts.family, (cid) => unknown(cid, 'transient-exhausted', { evidence: { provisioningState: gate.provisioningState, note: gate.note } })));
+      } else {
+        await MODULES[opts.family].run(ctx, acc);
+      }
     } else if (disc.state === 'zero') {
       // Reachable ONLY with no --apim-name: a named gateway that is absent is 'named-not-found' (see discoverApim).
       acc.cells.push(...placeholders(opts.family, (cid) => notMeasured(cid, 'no-gateway-in-boundary', { evidence: { apimInstancesSeen: disc.seen } })));

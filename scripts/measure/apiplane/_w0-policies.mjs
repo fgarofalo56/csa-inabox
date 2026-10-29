@@ -55,8 +55,8 @@
  *     https://learn.microsoft.com/en-us/rest/api/apimanagement/api-policy/get
  */
 import {
-  API, armUrl, assertScratchName, deleteScratch, getApiPolicyRaw, getNamedValue, measured, putAndReadBack, putApi,
-  putApiPolicy, putNamedValue, quote, reasonForFailure, unknown, waitProvisioned, withScratch,
+  API, armUrl, assertScratchName, deleteScratch, getApiPolicyRaw, getNamedValue, isValidationRejection, measured,
+  putAndReadBack, putApi, putApiPolicy, putNamedValue, quote, reasonForFailure, unknown, waitProvisioned, withScratch,
 } from './_w0-core.mjs';
 
 const F = 'policies';
@@ -170,14 +170,17 @@ async function namedValueBlock(ctx, cells) {
   const put = await putNamedValue(ctx, NV_ID, 'w0-apiplane-probe');
   const early = reasonForFailure(put, { role: ROLE, scope: 'apim' });
   if (early || !put.ok) {
-    const putCell = early
-      ? unknown(id('namedValue.put'), early, { evidence: { put: quote(put) } })
-      : measured(id('namedValue.put'), 'rejected', { http: put.status, evidence: { put: quote(put) } });
+    // `rejected` only for a validation answer (400 / 422); a 409 / 412 is `early` (transient-exhausted); any other status is the
+    // probe's request failing (tooling-error), not the gateway judging the named value.
+    let putCell;
+    if (early) putCell = unknown(id('namedValue.put'), early, { evidence: { put: quote(put) } });
+    else if (isValidationRejection(put)) putCell = measured(id('namedValue.put'), 'rejected', { http: put.status, evidence: { put: quote(put) } });
+    else putCell = unknown(id('namedValue.put'), 'tooling-error', { evidence: { put: quote(put), note: `HTTP ${put.status} is not a validation response (400/422): not a verdict on the named value` } });
     cells.push(putCell);
     for (const n of ['namedValue.get', 'namedValue.delete']) {
       cells.push(early
         ? unknown(id(n), early, { evidence: { note: 'not attempted: the PUT could not be made' } })
-        : unknown(id(n), 'tooling-error', { evidence: { note: 'not attempted: the named value PUT was rejected' } }));
+        : unknown(id(n), 'tooling-error', { evidence: { note: 'not attempted: the named value PUT was not accepted' } }));
     }
     return;
   }

@@ -243,7 +243,8 @@ function estate({ cloud = 'commercial', clock = fakeClock() } = {}) {
                 p.mcpProperties = { ...p.mcpProperties, endpoints: [{ name: 'mcp', uriTemplate: '/mcp' }] };
               }
             }
-            if (p.path === '' && e.blankPathConflict) return jsonRes(409, { error: { code: 'ValidationError', message: 'Another API already uses the empty path.' } });
+            // `blankPathConflict` is the status to answer with (true = 409); the real status is NOT observed, which is why a test names it
+            if (p.path === '' && e.blankPathConflict) return jsonRes(e.blankPathConflict === true ? 409 : e.blankPathConflict, { error: { code: 'ValidationError', message: 'Another API already uses the empty path.' } });
             e.apis.set(apiId, p);
             return jsonRes(201, { name: apiId, properties: { ...p, provisioningState: 'InProgress' } });
           }
@@ -1485,12 +1486,14 @@ test('mcp: a 403 on the create is unknown:permission (and so are its dependents)
   assert.equal(result.exitCode, 3);
 });
 
-test('mcp: a blank-path API that conflicts is "rejected" with the verbatim message, and its operation is unknown (not attempted)', async () => {
-  // BREAKS IF: a path conflict with an existing root API is hidden, or the operation is called measured.
+test('mcp: a blank-path API refused by VALIDATION (400) is "rejected" with the verbatim message, and its operation is unknown (not attempted)', async () => {
+  // BREAKS IF: a path conflict with an existing root API is hidden, or the operation is called measured. The status is 400 on
+  // purpose: only a validation answer (400 / 422) is a verdict; the same body answered 409 is covered by the status-classification
+  // test below (unknown:transient-exhausted).
   const est = estate();
-  est.blankPathConflict = true;
+  est.blankPathConflict = 400;
   const { result } = await runFamily('mcp', est);
-  assert.equal(text(result, 'mcp.blankPath.api'), 'measured: rejected (HTTP 409)');
+  assert.equal(text(result, 'mcp.blankPath.api'), 'measured: rejected (HTTP 400)');
   assert.equal(cell(result, 'mcp.blankPath.api').evidence.put.message, 'Another API already uses the empty path.');
   assert.equal(text(result, 'mcp.blankPath.wellKnownOperation'), 'unknown:tooling-error');
   assert.equal(result.exitCode, 3);
@@ -2771,4 +2774,162 @@ test('every family JSON and the receipt quote the Actions run that produced them
   await probe.runProbe(aggregateArgs, { fs: m.fs, nowIso: () => 't', log: () => {}, env: {} });
   assert.match(m.files.get(resolve('run-ctx', 'receipt.md')), /Not an Actions run \(no GITHUB_RUN_ID\): a local invocation\./);
   assert.deepEqual(probe.runContext({}), { runId: null, attempt: null, workflow: null, ref: null, sha: null });
+});
+
+// ===========================================================================
+// 16. write safety: the service-state gate and the classification of a failed write
+// ===========================================================================
+
+test('writeGate: only provisioningState Succeeded (any case) opens the gate; anything else, a missing state included, closes it with the state as evidence', () => {
+  // BREAKS IF: a busy / failed / unreported service is let through. Each state below is such an input; a missing or non-string state
+  // must NOT be assumed Succeeded (what was not established is not asserted). Positive pair: the three spellings of Succeeded open it.
+  for (const s of ['Succeeded', 'succeeded', 'SUCCEEDED']) assert.equal(core.writeGate({ provisioningState: s }), null, s);
+  for (const s of ['Updating', 'Activating', 'Failed', 'Deleting', 'Terminating', 'Unsuccessful', '', undefined, null, 7]) {
+    const gate = core.writeGate({ provisioningState: s });
+    assert.ok(gate, `state ${String(s)} must close the gate`);
+    assert.equal(gate.provisioningState, typeof s === 'string' && s ? s : null, `state ${String(s)}`);
+    assert.match(gate.note, /nothing was written/);
+  }
+  assert.ok(core.writeGate(null) && core.writeGate(undefined), 'no APIM object at all is closed too');
+});
+
+test('a write family does not start while the APIM is not in provisioningState Succeeded: every cell is unknown:transient-exhausted with the state, exit 3, and NOTHING is written', async () => {
+  // BREAKS IF: a write family PUTs (or sweeps with a DELETE) against a service that is Updating / Activating / Failed / not
+  // reporting its state. The breaking input is apims[0].properties.provisioningState != Succeeded for each of policies, mcp and
+  // latency; the observable is est.calls - ONLY the APIM listing may have been made (no PUT, no DELETE, no POST). Positive pairs, so
+  // a gate that always closes (or closes for the read families too) is red: with Succeeded / succeeded the same families DO write,
+  // and telemetry, identity and foundry still read a busy service.
+  for (const family of core.WRITE_FAMILIES) {
+    for (const state of ['Updating', 'Activating', 'Failed', undefined]) {
+      const est = estate();
+      est.apims[0].properties.provisioningState = state;
+      const { result } = await runFamily(family, est);
+      const label = `${family} / ${String(state)}`;
+      assert.equal(result.cells.length, DECLARED[family], label);
+      for (const c of result.cells) {
+        assert.equal(core.verdictText(c), 'unknown:transient-exhausted', `${label} ${c.id}`);
+        assert.equal(c.evidence.provisioningState, state ?? null, `${label} ${c.id}: the state is the evidence`);
+        assert.equal(c.required, true, `${label} ${c.id}: required, so the family is exit 3 and not a quiet 0`);
+      }
+      assert.equal(result.exitCode, 3, label);
+      assert.equal(result.valid, true, `${label}: a busy service is not an invalid instrument`);
+      assert.ok(result.notes[0].startsWith(`${family}: the APIM is not in provisioningState Succeeded (${state ?? 'not reported'}), so nothing was written`), `${label}: ${result.notes[0]}`);
+      assert.deepEqual(est.calls.map((c) => c.method), ['GET'], `${label}: only the APIM listing may be called`);
+      assert.equal(est.calls.filter((c) => c.method !== 'GET').length, 0, `${label}: nothing may be written`);
+    }
+  }
+  for (const state of ['Succeeded', 'succeeded']) {
+    for (const family of core.WRITE_FAMILIES) {
+      const est = estate();
+      est.apims[0].properties.provisioningState = state;
+      const { result } = await runFamily(family, est);
+      assert.ok(est.callsMatching('PUT', /./).length > 0, `${family} / ${state}: a Succeeded service must be written to`);
+      assert.equal(result.exitCode, 0, `${family} / ${state}`);
+    }
+  }
+  for (const family of ['telemetry', 'identity', 'foundry']) {
+    const est = estate();
+    est.apims[0].properties.provisioningState = 'Updating';
+    const { result } = await runFamily(family, est);
+    assert.ok(est.calls.length > 1, `${family}: a read family still reads a busy service`);
+    assert.ok(result.cells.some((c) => c.verdict === 'measured'), `${family}: its cells are measured, not gated`);
+    assert.equal(est.calls.filter((c) => c.method === 'PUT' || c.method === 'DELETE').length, 0, `${family}: and writes nothing`);
+  }
+});
+
+test('SHAPE: WRITE_FAMILIES is exactly the families whose module writes - read from the family sources, not trusted', () => {
+  // BREAKS IF: a family that writes (calls withScratch or a PUT / DELETE helper) is missing from WRITE_FAMILIES, so the state gate
+  // never covers it, or a read-only family is listed (it would be gated for nothing). Derived from probeSources(). Positive pair:
+  // at least three writing families are found, so a scan that reads nothing is red.
+  const sources = new Map(probeSources());
+  const WRITES = /\b(?:withScratch|putNamedValue|putApi|putApiPolicy|putOperation|putFragment|putAndReadBack|deleteScratch)\(/;
+  const writers = core.FAMILIES.filter((f) => WRITES.test(sources.get(`_w0-${f}.mjs`)));
+  assert.ok(writers.length >= 3, `only ${writers.length} writing families found: ${writers.join(', ')}`);
+  assert.deepEqual([...core.WRITE_FAMILIES].sort(), [...writers].sort());
+});
+
+test('reasonForFailure and isValidationRejection: 409 / 412 are transient-exhausted, 401 / 403 are permission, and exactly 400 / 422 are validation answers', () => {
+  // BREAKS IF: a 409 or 412 is anything but transient-exhausted (it would be classified as a verdict), or the validation set
+  // widens past 400 / 422 (a 404, 409, 412, 429 ... would earn `rejected`). The loop pins EVERY status from 100 to 599.
+  const r = (status, extra = {}) => ({ ok: status !== null && status >= 200 && status < 300, status, transientExhausted: false, ...extra });
+  const ctx = { role: 'API Management Service Contributor', scope: 'apim' };
+  for (const s of [409, 412]) assert.equal(core.reasonForFailure(r(s), ctx), 'transient-exhausted', String(s));
+  for (const s of [401, 403]) assert.equal(core.reasonForFailure(r(s), ctx), 'permission:API Management Service Contributor@apim', String(s));
+  assert.equal(core.reasonForFailure(r(503, { transientExhausted: true }), ctx), 'transient-exhausted');
+  assert.equal(core.reasonForFailure(r(null, { transientExhausted: true }), ctx), 'transient-exhausted', 'a network failure');
+  for (const s of [400, 404, 422]) assert.equal(core.reasonForFailure(r(s), ctx), null, `${s} is a verdict-bearing answer, not a reason`);
+  assert.equal(core.reasonForFailure(r(200), ctx), null);
+  for (let s = 100; s <= 599; s += 1) assert.equal(core.isValidationRejection(r(s)), s === 400 || s === 422, `status ${s}`);
+  assert.equal(core.isValidationRejection(r(null)), false);
+  assert.deepEqual([...core.VALIDATION_STATUSES], [400, 422]);
+});
+
+test('a failed WRITE is "rejected" only for a validation status (400 / 422): 409 / 412 / exhausted 429 or 5xx are unknown:transient-exhausted, any other status is unknown:tooling-error - at all six write sites', async () => {
+  // BREAKS IF: any write site publishes a verdict about the BODY from an answer that is not one. The breaking inputs are 409 and 412
+  // (the service was busy or a precondition was stale), an exhausted 429 / 503, and a 404 / 405 / 415 (the probe's own request
+  // failing): none of them says whether APIM accepts the element / API / operation / named value. Each site is its own consumer of
+  // the classification (a mutation at one proves nothing about the others), so each is driven: the policies single-element
+  // row, the named-value PUT, the MCP create, the blank-path API, the blank-path operation and the latency family's scratch write.
+  // Positive pair: 400 and 422 stay `rejected` at the five sites that publish a verdict.
+  // [status, the cell, HTTP PUTs the MCP create makes]: variant B follows only a validation answer to variant A (2 calls), and the
+  // engine itself retries a 429 / 5xx three times per logical request (so one exhausted variant is 3 calls).
+  const CASES = [
+    [400, 'measured: rejected (HTTP 400)', 2], [422, 'measured: rejected (HTTP 422)', 2],
+    [409, 'unknown:transient-exhausted', 1], [412, 'unknown:transient-exhausted', 1], [429, 'unknown:transient-exhausted', 3], [503, 'unknown:transient-exhausted', 3],
+    [404, 'unknown:tooling-error', 1], [405, 'unknown:tooling-error', 1], [415, 'unknown:tooling-error', 1],
+  ];
+  const answer = (est, target, status) => {
+    est.rules.push((r) => (r.method === 'PUT' && target.test(r.path) ? jsonRes(status, { error: { code: 'X', message: 'm' } }) : undefined));
+    return est;
+  };
+  for (const [status, expected, mcpPuts] of CASES) {
+    const label = `HTTP ${status}`;
+
+    const pol = await runFamily('policies', answer(estate(), /policyFragments\/w0-apiplane-el-quota-by-key$/, status));
+    assert.equal(text(pol.result, 'policies.element.quota-by-key.single'), expected, `policies single row, ${label}`);
+    assert.equal(cell(pol.result, 'policies.element.quota-by-key.single').evidence.put.status, status, 'the status is quoted');
+    assert.equal(pol.result.exitCode, expected.startsWith('measured') ? 0 : 3, `policies single row exit, ${label}`);
+
+    const nv = await runFamily('policies', answer(estate(), /namedValues\/w0-apiplane-nv$/, status));
+    assert.equal(text(nv.result, 'policies.namedValue.put'), expected, `named-value PUT, ${label}`);
+
+    const create = estate();
+    answer(create, /apis\/w0-apiplane-mcp-api$/, status);
+    const mc = await runFamily('mcp', create);
+    assert.equal(text(mc.result, 'mcp.create.passthrough'), expected, `MCP create, ${label}`);
+    // variant B is tried only after a VALIDATION answer for variant A (and a 429 / 5xx is retried by the engine, not by the family)
+    assert.equal(create.callsMatching('PUT', /apis\/w0-apiplane-mcp-api$/).length, mcpPuts, `MCP create PUTs made, ${label}`);
+
+    const blank = estate();
+    blank.blankPathConflict = status;
+    const bp = await runFamily('mcp', blank);
+    assert.equal(text(bp.result, 'mcp.blankPath.api'), expected, `blank-path API, ${label}`);
+
+    const op = await runFamily('mcp', answer(estate(), /operations\/w0-apiplane-mcp-wk-op$/, status));
+    assert.equal(text(op.result, 'mcp.blankPath.wellKnownOperation'), expected, `blank-path operation, ${label}`);
+
+    // a sixth consumer: the latency family's own scratch write. It never says `rejected` (its writes are the instrument, not the
+    // subject), so 400 / 422 are tooling-error too; a 409 / 412 / exhausted 429 or 5xx is still transient-exhausted. Either way
+    // the cells are required (exit 3) and no scratch API is created behind a named value that was not written.
+    const latEst = answer(estate(), /namedValues\/w0-apiplane-latency$/, status);
+    const lat = await runFamily('latency', latEst);
+    const latExpected = expected === 'unknown:transient-exhausted' ? expected : 'unknown:tooling-error';
+    assert.equal(text(lat.result, 'latency.valueA'), latExpected, `latency named-value PUT, ${label}`);
+    assert.equal(lat.result.exitCode, 3, `latency exit, ${label}`);
+    assert.equal(latEst.callsMatching('PUT', /\/apis\//).length, 0, `latency: no API behind an unwritten named value, ${label}`);
+  }
+});
+
+test('a negative control whose PUT is answered 409 is unrunnable, never passed (a conflict is not a bogus element being refused)', async () => {
+  // BREAKS IF: a 409 on the bogus-element PUT is read as APIM refusing the element (control "passed"), which would let every
+  // "accepted" row in the family stand on a control that never ran. Positive pair: a 400 passes it.
+  const est = estate();
+  est.rules.push((r) => (r.method === 'PUT' && /policyFragments\/w0-apiplane-ctl-negative$/.test(r.path) ? jsonRes(409, { error: { code: 'Conflict', message: 'another operation is in progress' } }) : undefined));
+  const { result } = await runFamily('policies', est);
+  assert.equal(text(result, 'policies.control.negative'), 'unknown:transient-exhausted');
+  assert.equal(control(result, 'negative-bogus-element-not-retained').status, 'unrunnable');
+
+  const strict = estate();
+  const { result: rejected } = await runFamily('policies', strict);
+  assert.equal(control(rejected, 'negative-bogus-element-not-retained').status, 'passed');
 });
