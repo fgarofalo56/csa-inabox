@@ -46280,6 +46280,72 @@
           }
         },
         {
+          "id": "sec:publication:scripts/measure/apiplane/retail-prices-coverage.mjs#module",
+          "kind": "publication",
+          "provenance": "declared",
+          "label": "scripts/measure/apiplane/retail-prices-coverage.mjs",
+          "facet": {
+            "kind": "publication",
+            "module": "scripts/measure/apiplane/retail-prices-coverage.mjs",
+            "declaredSinkCount": 2,
+            "sinks": [
+              {
+                "id": "console:member:668",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:669",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              }
+            ]
+          }
+        },
+        {
+          "id": "sec:publication:scripts/measure/apiplane/w0-apim-probe.mjs#module",
+          "kind": "publication",
+          "provenance": "declared",
+          "label": "scripts/measure/apiplane/w0-apim-probe.mjs",
+          "facet": {
+            "kind": "publication",
+            "module": "scripts/measure/apiplane/w0-apim-probe.mjs",
+            "declaredSinkCount": 2,
+            "sinks": [
+              {
+                "id": "stdout:member:233",
+                "surface": "stdout",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "stderr:member:479",
+                "surface": "stderr",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              }
+            ]
+          }
+        },
+        {
           "id": "sec:publication:scripts/measure/drain-status.mjs#module",
           "kind": "publication",
           "provenance": "declared",
@@ -52943,6 +53009,16 @@
           "reason": "repository tooling — run by a developer or by CI, never by a deployed Loom service."
         },
         {
+          "nodeId": "sec:publication:scripts/measure/apiplane/retail-prices-coverage.mjs#module",
+          "codeModuleId": "code:scripts/measure/apiplane/retail-prices-coverage.mjs",
+          "reason": "repository tooling — run by a developer or by CI, never by a deployed Loom service."
+        },
+        {
+          "nodeId": "sec:publication:scripts/measure/apiplane/w0-apim-probe.mjs#module",
+          "codeModuleId": "code:scripts/measure/apiplane/w0-apim-probe.mjs",
+          "reason": "repository tooling — run by a developer or by CI, never by a deployed Loom service."
+        },
+        {
           "nodeId": "sec:publication:scripts/measure/drain-status.mjs#module",
           "codeModuleId": "code:scripts/measure/drain-status.mjs",
           "reason": "repository tooling — run by a developer or by CI, never by a deployed Loom service."
@@ -54132,6 +54208,14 @@
         {
           "subject": "scripts/measure/__tests__/injection-arms.mjs",
           "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 12). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+        },
+        {
+          "subject": "scripts/measure/apiplane/retail-prices-coverage.mjs",
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 2). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+        },
+        {
+          "subject": "scripts/measure/apiplane/w0-apim-probe.mjs",
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 2). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
           "subject": "scripts/measure/drain-status.mjs",
