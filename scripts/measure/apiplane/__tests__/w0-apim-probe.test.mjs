@@ -1743,9 +1743,11 @@ test('foundry: Anthropic is matched case-insensitively and the exact format stri
   assert.ok(cell(result, 'foundry.models.formats').value.formats.includes('anthropic'));
 });
 
-test('foundry DNS: ENOTFOUND is nxdomain, a persistent resolver failure is unknown:transient-exhausted after bounded retries', async () => {
-  // BREAKS IF: a resolver timeout is reported as nxdomain (a "no"), or the retries are unbounded / not slept.
+test('foundry DNS: ENOTFOUND for a real account\'s name is nxdomain, a persistent resolver failure is unknown:transient-exhausted after bounded retries', async () => {
+  // BREAKS IF: a resolver timeout is reported as nxdomain (a "no"), or the retries are unbounded / not slept. The nxdomain half
+  // uses a DISCOVERED account's own name: a real name that does not resolve is a finding (the synthetic-name case is below).
   const est = estate();
+  est.accounts = [{ kind: 'AIServices', properties: { customSubDomainName: 'acct-fixture-name' } }];
   const nx = mkDeps(est, { dnsLookup: async () => { throw Object.assign(new Error('x'), { code: 'ENOTFOUND' }); } });
   const { result } = await runFamily('foundry', est, { deps: nx });
   assert.equal(text(result, 'foundry.dns.servicesAiAzureCom'), 'measured: nxdomain (source: dns-lookup-from-in-vnet-runner)');
@@ -1779,6 +1781,107 @@ test('foundry: a 403 on the model list is unknown:permission:Reader@subscription
   assert.equal(text(result, 'foundry.models.formats'), 'unknown:permission:Reader@subscription');
   assert.equal(control(result, 'models-list-is-a-real-list').status, 'unrunnable');
   assert.equal(result.exitCode, 0);
+});
+
+test('foundry: a model list that did not FINISH (page cap reached, nextLink still pending) is unknown:tooling-error for both cells - never "none listed" - and the control is unrunnable, not failed', async () => {
+  // BREAKS IF: a truncated list is read as the whole catalogue. The breaking inputs are lists that never end: (Government) every
+  // page EMPTY, (Commercial) every page holds one OpenAI model. With the truncated branch disabled (measured in a sandbox copy)
+  // BOTH answer `measured: none listed (HTTP 200)` for the Anthropic cell - a false zero over a prefix of the catalogue.
+  // Positive pair: a list that FINISHES (three pages, the Anthropic model on the last) is read whole, so a fix that makes every
+  // multi-page list unknown is red too.
+  const paged = (est, pageOf, { endsAt = Infinity } = {}) => {
+    const state = { pages: 0 };
+    est.rules.push((r) => {
+      if (r.method !== 'GET' || !/locations\/[^/]+\/models$/.test(r.path)) return undefined;
+      state.pages += 1;
+      const body = { value: pageOf(state.pages) };
+      if (state.pages < endsAt) body.nextLink = `${est.arm}${r.path}?api-version=2024-10-01&page=${state.pages}`;
+      return jsonRes(200, body);
+    });
+    return state;
+  };
+  const unknownBoth = (result, label) => {
+    for (const cid of ['foundry.models.anthropic', 'foundry.models.formats']) {
+      assert.equal(text(result, cid), 'unknown:tooling-error', `${label} ${cid}`);
+      assert.equal(cell(result, cid).required, false, `${label} ${cid}: an unreadable catalogue is exit 0 (the PRP allows it)`);
+    }
+    assert.equal(control(result, 'models-list-is-a-real-list').status, 'unrunnable', label);
+    assert.equal(result.exitCode, 0, label);
+  };
+
+  const gov = estate({ cloud: 'gov' });
+  const govState = paged(gov, () => []);
+  const { result: govResult } = await runFamily('foundry', gov, { runner: 'hosted' });
+  assert.ok(govState.pages >= 2, 'the list really was paged');
+  unknownBoth(govResult, 'gov, every page empty');
+  assert.equal(cell(govResult, 'foundry.models.anthropic').evidence.entriesRead, 0);
+  assert.match(cell(govResult, 'foundry.models.anthropic').evidence.note, /truncated at the page cap/);
+
+  const com = estate();
+  const comState = paged(com, (n) => [{ kind: 'OpenAI', model: { format: 'OpenAI', name: `gpt-page-${n}` } }]);
+  const { result: comResult } = await runFamily('foundry', com);
+  unknownBoth(comResult, 'commercial, OpenAI-only pages');
+  assert.equal(cell(comResult, 'foundry.models.anthropic').evidence.entriesRead, comState.pages, 'one entry per page was read');
+
+  // an Anthropic model seen in the prefix is evidence, not a verdict
+  const seen = estate();
+  paged(seen, (n) => (n === 1 ? [{ kind: 'AIServices', model: { format: 'Anthropic', name: 'claude-page-one' } }, { kind: 'OpenAI', model: { format: 'OpenAI', name: 'gpt-x' } }] : []));
+  const { result: seenResult } = await runFamily('foundry', seen);
+  unknownBoth(seenResult, 'commercial, an Anthropic model on page one');
+  assert.deepEqual(cell(seenResult, 'foundry.models.anthropic').evidence.anthropicModelsSeenSoFar, ['claude-page-one']);
+
+  const finite = estate();
+  const finiteState = paged(finite, (n) => [n === 3
+    ? { kind: 'AIServices', model: { format: 'Anthropic', name: 'claude-page-three' } }
+    : { kind: 'OpenAI', model: { format: 'OpenAI', name: `gpt-page-${n}` } }], { endsAt: 3 });
+  const { result: finiteResult } = await runFamily('foundry', finite);
+  assert.equal(finiteState.pages, 3, 'all three pages were followed');
+  assert.equal(text(finiteResult, 'foundry.models.anthropic'), 'measured: claude-page-three (HTTP 200)');
+  assert.deepEqual(cell(finiteResult, 'foundry.models.formats').value, { formats: ['Anthropic', 'OpenAI'], totalModels: 3 });
+  assert.equal(control(finiteResult, 'models-list-is-a-real-list').status, 'passed');
+});
+
+test('foundry DNS: NXDOMAIN for the SYNTHETIC name is unknown:not-located; a resolving answer for it, any answer for a real account, and a hosted runner are unchanged', async () => {
+  // BREAKS IF: NXDOMAIN for a name that cannot exist is published as a measurement ("nxdomain" on a made-up name is true on EVERY
+  // resolver, private zone or not, so it says nothing about private resolution). The breaking input is the in-VNet runner with
+  // NO AI Services account in the subscription (the synthetic name) and a resolver that answers ENOTFOUND. Positive pairs, so a
+  // fix that makes every DNS cell unknown is red: private and public answers for the synthetic name stay measured, a REAL
+  // account's NXDOMAIN stays measured (a real name that does not resolve is a finding), and the hosted runner's structural
+  // not-measured verdict is untouched.
+  const nxdomain = async () => { throw Object.assign(new Error('x'), { code: 'ENOTFOUND' }); };
+  const dnsCase = async ({ accounts = [], dnsLookup, runner = 'in-vnet' }) => {
+    const est = estate();
+    est.accounts = accounts;
+    const { result } = await runFamily('foundry', est, { runner, deps: mkDeps(est, { dnsLookup }) });
+    return result;
+  };
+  const id = 'foundry.dns.servicesAiAzureCom';
+
+  const synthetic = await dnsCase({ dnsLookup: nxdomain });
+  assert.equal(text(synthetic, id), 'unknown:not-located');
+  assert.equal(cell(synthetic, id).evidence.nameSource, 'synthetic');
+  assert.equal(cell(synthetic, id).evidence.dnsAnswer, 'nxdomain', 'what was observed is kept as evidence');
+  assert.equal(cell(synthetic, id).required, false);
+  assert.equal(synthetic.exitCode, 0);
+
+  const priv = await dnsCase({ dnsLookup: async () => [IP_PRIVATE] });
+  assert.equal(text(priv, id), 'measured: resolves-private (source: dns-lookup-from-in-vnet-runner)');
+  assert.equal(cell(priv, id).evidence.nameSource, 'synthetic');
+  const pub = await dnsCase({ dnsLookup: async () => [IP_PUBLIC] });
+  assert.equal(text(pub, id), 'measured: resolves-public (source: dns-lookup-from-in-vnet-runner)');
+
+  const real = await dnsCase({ accounts: [{ kind: 'AIServices', properties: { customSubDomainName: 'acct-fixture-name' } }], dnsLookup: nxdomain });
+  assert.equal(text(real, id), 'measured: nxdomain (source: dns-lookup-from-in-vnet-runner)');
+  assert.equal(cell(real, id).evidence.nameSource, 'discovered-ai-services-account');
+
+  const hosted = await dnsCase({ dnsLookup: nxdomain, runner: 'hosted' });
+  assert.equal(text(hosted, id), 'not-measured:no-in-boundary-runner');
+  assert.equal(cell(hosted, id).evidence.hostedRunnerView, 'nxdomain');
+
+  for (const r of [synthetic, priv, pub, real, hosted]) {
+    const dump = JSON.stringify(r);
+    assert.ok(!dump.includes(IP_PRIVATE) && !dump.includes(IP_PUBLIC), 'the address must never be printed');
+  }
 });
 
 // ===========================================================================
