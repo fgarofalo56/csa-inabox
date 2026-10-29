@@ -20,8 +20,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readdirSync, readFileSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import * as core from '../_w0-core.mjs';
@@ -2561,6 +2562,69 @@ for (const which of ['gov', 'commercial']) {
     assert.ok(readFileSync(join(PROBE_DIR, 'w0-apim-probe.mjs'), 'utf8').length > 1000);
   });
 }
+
+/**
+ * The ABSOLUTE path of the bash the other workflow tests spawn, so a child can run with a PATH that holds nothing but stub tools
+ * (`cygpath` converts the MSYS path to a Windows one on Git Bash; on Linux `$BASH` is already absolute).
+ */
+function absoluteBashPath() {
+  const r = spawnSync('bash', ['-c', 'if command -v cygpath > /dev/null; then cygpath -w "$BASH"; else printf %s "$BASH"; fi'], { encoding: 'utf8' });
+  assert.equal(r.status, 0, `bash must be runnable to execute the toolchain step: ${r.stderr}`);
+  const bash = r.stdout.trim();
+  assert.ok(isAbsolute(bash) && existsSync(bash), `could not resolve an absolute path to bash: ${JSON.stringify(bash)}`);
+  return bash;
+}
+
+test('apiplane-w0-commercial-probe.yml: the FIRST step of the probe job fails closed, with a reason, unless node >= 20 and the az CLI are present - executed under a PATH that holds only stubs', () => {
+  // BREAKS IF: the self-hosted pool runner has a node older than 20, no node, or no az and the job carries on to die later in a
+  // stack trace - or the step is not first (the checkout and the login would run before the toolchain is known to be usable). Each
+  // failing input below is run for real: node 18 and 19 (either side of the cut), no node, node answering nothing or
+  // garbage, and no az. The stubs are shell scripts in a temp dir that is the ENTIRE PATH, so a real node or az on the
+  // machine cannot rescue a case. Positive pair, so a step that refuses everything is red: node 20, 22 and 100 (three digits)
+  // with az pass and say so.
+  const { doc } = loadWf('commercial');
+  const first = stepsOf(doc, 'probe')[0];
+  assert.ok(!('uses' in first), 'the toolchain check must be a run step, first - before the checkout and the login');
+  assert.match(String(val(first.name)), /node >= 20 and the az CLI/);
+  const script = runOf(first);
+  const bash = absoluteBashPath();
+  const execute = ({ nodeSays, az }) => {
+    const dir = mkdtempSync(join(tmpdir(), 'w0-toolchain-'));
+    try {
+      const stub = (name, body) => {
+        writeFileSync(join(dir, name), `#!/bin/sh\n${body}\n`);
+        chmodSync(join(dir, name), 0o755);
+      };
+      if (nodeSays !== undefined) stub('node', `echo '${nodeSays}'`);
+      if (az) stub('az', 'exit 0');
+      const r = spawnSync(bash, ['-c', script], { encoding: 'utf8', env: { PATH: dir } });
+      assert.equal(r.error, undefined, `the step must be runnable: ${r.error}`);
+      return { code: r.status, out: `${r.stdout}${r.stderr}` };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+  const refused = [
+    ['node 18', { nodeSays: '18', az: true }, /node on this runner reports major version '18'/],
+    ['node 19, one below the cut', { nodeSays: '19', az: true }, /reports major version '19'/],
+    ['no node at all', { nodeSays: undefined, az: true }, /node is not on this runner's PATH/],
+    ['node answers nothing', { nodeSays: '', az: true }, /reports major version ''/],
+    ['node answers garbage', { nodeSays: 'v?', az: true }, /reports major version 'v\?'/],
+    ['no az', { nodeSays: '22', az: false }, /the az CLI is not on this runner's PATH/],
+  ];
+  for (const [label, input, say] of refused) {
+    const r = execute(input);
+    assert.equal(r.code, 1, `${label} must fail closed: ${r.out}`);
+    assert.match(r.out, say, label);
+    assert.match(r.out, /::error::/, `${label}: the reason must be an annotation`);
+    assert.ok(!r.out.includes('toolchain ok'), `${label}: must not claim success`);
+  }
+  for (const major of ['20', '22', '100']) {
+    const r = execute({ nodeSays: major, az: true });
+    assert.equal(r.code, 0, `node ${major} with az must pass: ${r.out}`);
+    assert.ok(r.out.includes(`toolchain ok: node major ${major}, az present`), r.out);
+  }
+});
 
 test('the latency cap and the job timeout stay consistent: 2 x (the cap parseArgs accepts) + 15 min is below timeout-minutes of BOTH probe jobs, and both prechecks enforce that same cap', () => {
   // BREAKS IF: the cap is raised (parseArgs accepting 3600 gives 2 x 3600 s = 120 min + 15 > 90) or a probe job's timeout-minutes

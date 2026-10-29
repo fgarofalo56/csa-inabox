@@ -135,6 +135,28 @@ jobs:
       APIM_NAME: ${{ inputs.apim_name }}
       POLL_SECONDS: ${{ inputs.latency_poll_seconds }}
     steps:
+      # The pool runner is SELF-HOSTED, so its toolchain is not guaranteed the way ubuntu-latest plus setup-node is on the Gov
+      # lane. The probe needs Node >= 20 (global fetch, AbortSignal.timeout) and the az CLI (its tokens and account come from
+      # it). Fail closed HERE, with the reason, instead of letting a family step die in a stack trace after the login.
+      - name: Fail closed unless node >= 20 and the az CLI are on this runner
+        run: |
+          set -uo pipefail
+          node_bin="$(command -v node)"
+          if [[ -z "$node_bin" ]]; then
+            echo "::error::node is not on this runner's PATH. The probe needs Node >= 20 (global fetch, AbortSignal.timeout): install it on the loom-aca pool image or add a setup-node step."
+            exit 1
+          fi
+          major="$("$node_bin" -p 'process.versions.node.split(".")[0]')"
+          if ! [[ "$major" =~ ^[0-9]+$ ]] || (( major < 20 )); then
+            echo "::error::node on this runner reports major version '${major:0:20}', and the probe needs >= 20 (global fetch, AbortSignal.timeout). Update the loom-aca pool image or add a setup-node step."
+            exit 1
+          fi
+          if [[ -z "$(command -v az)" ]]; then
+            echo "::error::the az CLI is not on this runner's PATH. The probe gets its tokens and account from az: install it on the loom-aca pool image."
+            exit 1
+          fi
+          echo "toolchain ok: node major ${major}, az present"
+
       - uses: actions/checkout@v7.0.1
 
       # The deploy SP, as a CLIENT-SECRET login rather than OIDC, exactly as loom-aca-runner-smoke.yml:
