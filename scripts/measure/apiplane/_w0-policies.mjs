@@ -55,7 +55,7 @@
  *     https://learn.microsoft.com/en-us/rest/api/apimanagement/api-policy/get
  */
 import {
-  API, armUrl, deleteScratch, getApiPolicyRaw, getNamedValue, measured, putAndReadBack, putApi,
+  API, armUrl, assertScratchName, deleteScratch, getApiPolicyRaw, getNamedValue, measured, putAndReadBack, putApi,
   putApiPolicy, putNamedValue, quote, reasonForFailure, unknown, waitProvisioned, withScratch,
 } from './_w0-core.mjs';
 
@@ -98,10 +98,15 @@ const wrap = (inner) => `<fragment>${inner}</fragment>`;
 export const COMBINED_XML = wrap(ELEMENTS.map((e) => FRAGMENT_XML[e]).join(''));
 export const API_INCLUDE_POLICY = `<policies><inbound><base />${FRAGMENT_XML['include-fragment']}</inbound><backend><base /></backend><outbound><base /></outbound><on-error><base /></on-error></policies>`;
 
-const putFragment = (ctx, fragId, xml) => ctx.client.request({
-  service: 'arm', method: 'PUT', url: armUrl(ctx, `/policyFragments/${fragId}`, API.apim),
-  body: { properties: { format: 'xml', description: 'w0-apiplane scratch fragment (deleted in the same run)', value: xml } },
-});
+// A PUT helper like the ones in _w0-core.mjs: async, and the scratch-name guard comes FIRST (a source-shape test pins it).
+// Exported so the guard can be exercised directly.
+export const putFragment = async (ctx, fragId, xml) => {
+  assertScratchName(fragId, 'write');
+  return ctx.client.request({
+    service: 'arm', method: 'PUT', url: armUrl(ctx, `/policyFragments/${encodeURIComponent(fragId)}`, API.apim),
+    body: { properties: { format: 'xml', description: 'w0-apiplane scratch fragment (deleted in the same run)', value: xml } },
+  });
+};
 const readFragment = (ctx, fragId) => ctx.client.request({ service: 'arm', url: armUrl(ctx, `/policyFragments/${fragId}`, API.apim, 'format=rawxml') });
 
 const attempt = putAndReadBack;

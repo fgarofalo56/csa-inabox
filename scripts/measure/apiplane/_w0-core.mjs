@@ -13,8 +13,9 @@
  *   - the HTTP engine: Node global fetch with an injected bearer token, REAL
  *     statuses (`az rest` hides them), bounded retry on 429/5xx/network only;
  *   - the scratch-object contract: every object this probe creates is named
- *     `w0-apiplane-*` and EVERY DELETE goes through deleteScratch(), which
- *     throws on any other name before a request is built.
+ *     `w0-apiplane-*`; EVERY DELETE goes through deleteScratch() and EVERY PUT
+ *     through a helper that starts with assertScratchName(), and both throw on
+ *     any other name before a request is built.
  *
  * Nothing here knows about a family. Nothing here reads the clock, the network
  * or a process directly: fetch, clock, sleep and the token source are injected,
@@ -528,15 +529,25 @@ export async function listAll(ctx, firstUrl, { service = 'arm', maxPages = 25 } 
 const KIND_PATH = Object.freeze({ namedValue: 'namedValues', policyFragment: 'policyFragments', api: 'apis' });
 
 /**
+ * THE name guard. The one DELETE and EVERY PUT helper call it BEFORE a request is built, so a bug upstream can never turn into a
+ * write to (or a delete of) a customer's object on a live gateway. Anchored: SCRATCH_NAME_RE is `^...$`, so a name that merely
+ * starts with the prefix, a trailing newline, a path segment or a query string does not pass. `verb` is only the word in the
+ * message ('delete' | 'write'). (A source-shape test pins that every PUT site and the one DELETE sit behind it.)
+ */
+export function assertScratchName(name, verb) {
+  if (typeof name !== 'string' || !SCRATCH_NAME_RE.test(name)) {
+    throw new Error(`refusing to ${verb} a non-scratch object: '${sanitize(name, 80)}' (scratch names match ${SCRATCH_NAME_RE})`);
+  }
+}
+
+/**
  * THE ONLY DELETE IN THIS PROBE. It throws, before a request is built, on any
  * name that is not a scratch name - so a bug upstream can never turn into a
  * delete of a customer's API on a live gateway. (A source-shape test pins that
  * this is the only place the verb appears.)
  */
 export async function deleteScratch(ctx, kind, name, apiVersion = API.apim) {
-  if (typeof name !== 'string' || !SCRATCH_NAME_RE.test(name)) {
-    throw new Error(`refusing to delete a non-scratch object: '${sanitize(name, 80)}' (scratch names match ${SCRATCH_NAME_RE})`);
-  }
+  assertScratchName(name, 'delete');
   const seg = KIND_PATH[kind];
   if (!seg) throw new Error(`deleteScratch: unknown kind '${kind}'`);
   const url = armUrl(ctx, `/${seg}/${encodeURIComponent(name)}`, apiVersion);
@@ -684,29 +695,45 @@ export async function withScratch(ctx, family, acc, body) {
 
 const enc = encodeURIComponent;
 
-export const putNamedValue = (ctx, id, value, { update = false } = {}) => ctx.client.request({
-  service: 'arm', method: 'PUT', ifMatch: update ? '*' : undefined,
-  url: armUrl(ctx, `/namedValues/${enc(id)}`, API.apim),
-  body: { properties: { displayName: id, value, secret: false, tags: ['w0-apiplane'] } },
-});
+// EVERY PUT below is `async` and starts with assertScratchName(): the guard throws (as a rejection, like deleteScratch) BEFORE a
+// request is built, so a non-scratch name never reaches the gateway. A source-shape test pins that no PUT site lacks it.
+export const putNamedValue = async (ctx, id, value, { update = false } = {}) => {
+  assertScratchName(id, 'write');
+  return ctx.client.request({
+    service: 'arm', method: 'PUT', ifMatch: update ? '*' : undefined,
+    url: armUrl(ctx, `/namedValues/${enc(id)}`, API.apim),
+    body: { properties: { displayName: id, value, secret: false, tags: ['w0-apiplane'] } },
+  });
+};
 export const getNamedValue = (ctx, id) => ctx.client.request({ service: 'arm', url: armUrl(ctx, `/namedValues/${enc(id)}`, API.apim) });
 
-export const putApi = (ctx, apiId, properties, apiVersion = API.apim) => ctx.client.request({
-  service: 'arm', method: 'PUT', url: armUrl(ctx, `/apis/${enc(apiId)}`, apiVersion), body: { properties },
-});
+export const putApi = async (ctx, apiId, properties, apiVersion = API.apim) => {
+  assertScratchName(apiId, 'write');
+  return ctx.client.request({
+    service: 'arm', method: 'PUT', url: armUrl(ctx, `/apis/${enc(apiId)}`, apiVersion), body: { properties },
+  });
+};
 export const getApi = (ctx, apiId, apiVersion = API.apim) => ctx.client.request({ service: 'arm', url: armUrl(ctx, `/apis/${enc(apiId)}`, apiVersion) });
 
-export const putApiPolicy = (ctx, apiId, xml, apiVersion = API.apim) => ctx.client.request({
-  service: 'arm', method: 'PUT', url: armUrl(ctx, `/apis/${enc(apiId)}/policies/policy`, apiVersion),
-  body: { properties: { format: 'xml', value: xml } },
-});
+export const putApiPolicy = async (ctx, apiId, xml, apiVersion = API.apim) => {
+  assertScratchName(apiId, 'write');
+  return ctx.client.request({
+    service: 'arm', method: 'PUT', url: armUrl(ctx, `/apis/${enc(apiId)}/policies/policy`, apiVersion),
+    body: { properties: { format: 'xml', value: xml } },
+  });
+};
 export const getApiPolicyRaw = (ctx, apiId, apiVersion = API.apim) => ctx.client.request({
   service: 'arm', url: armUrl(ctx, `/apis/${enc(apiId)}/policies/policy`, apiVersion, 'format=rawxml'),
 });
 
-export const putOperation = (ctx, apiId, opId, properties, apiVersion = API.apim) => ctx.client.request({
-  service: 'arm', method: 'PUT', url: armUrl(ctx, `/apis/${enc(apiId)}/operations/${enc(opId)}`, apiVersion), body: { properties },
-});
+export const putOperation = async (ctx, apiId, opId, properties, apiVersion = API.apim) => {
+  // the API id AND the operation id: an operation is created UNDER an API, and both come from the caller
+  assertScratchName(apiId, 'write');
+  assertScratchName(opId, 'write');
+  return ctx.client.request({
+    service: 'arm', method: 'PUT', url: armUrl(ctx, `/apis/${enc(apiId)}/operations/${enc(opId)}`, apiVersion), body: { properties },
+  });
+};
 export const getOperation = (ctx, apiId, opId, apiVersion = API.apim) => ctx.client.request({
   service: 'arm', url: armUrl(ctx, `/apis/${enc(apiId)}/operations/${enc(opId)}`, apiVersion),
 });

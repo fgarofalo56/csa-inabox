@@ -20,7 +20,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -738,26 +738,100 @@ test('deleteScratch throws on every non-scratch name BEFORE building a request, 
   await assert.rejects(core.deleteScratch(ctx, 'bogus-kind', 'w0-apiplane-ok'), /unknown kind/);
 });
 
-test('SHAPE: the DELETE verb appears exactly once in the probe sources, inside deleteScratch', () => {
-  // BREAKS IF: a second delete path is added anywhere (it would bypass the prefix guard). Positive pair:
-  // the count is exactly 1, so deleting deleteScratch (count 0) is red too.
-  const files = ['_w0-core.mjs', '_w0-telemetry.mjs', '_w0-policies.mjs', '_w0-mcp.mjs', '_w0-identity.mjs', '_w0-latency.mjs', '_w0-foundry.mjs', 'w0-apim-probe.mjs'];
+/**
+ * The probe's own sources: w0-apim-probe.mjs and EVERY _w0-*.mjs, listed from the directory (not hard-coded) so a new family file
+ * cannot hide from a shape test. CRLF is normalised: a Windows checkout holds it.
+ */
+function probeSources() {
+  const files = readdirSync(PROBE_DIR).filter((f) => f === 'w0-apim-probe.mjs' || /^_w0-.+\.mjs$/.test(f)).sort();
+  // positive guard: a filter that finds nothing (or loses a known file) would make every shape assertion below vacuous
+  for (const known of ['_w0-core.mjs', '_w0-policies.mjs', '_w0-mcp.mjs', '_w0-latency.mjs', '_w0-foundry.mjs', '_w0-identity.mjs', '_w0-telemetry.mjs', 'w0-apim-probe.mjs']) {
+    assert.ok(files.includes(known), `the derived source list lost ${known}: ${files.join(', ')}`);
+  }
+  return files.map((f) => [f, readFileSync(join(PROBE_DIR, f), 'utf8').replace(/\r\n/g, '\n')]);
+}
+
+test('SHAPE: the DELETE verb appears exactly once in the probe sources, inside deleteScratch, behind the scratch-name guard', () => {
+  // BREAKS IF: a second delete path is added anywhere in the probe (it would bypass the guard) - INCLUDING in a NEW _w0-*.mjs file,
+  // because the scanned list comes from readdirSync, not from eight hard-coded names. Positive pair: the count is exactly 1, so
+  // deleting deleteScratch (count 0) is red too, and probeSources() refuses a list that lost a known file.
   let total = 0;
   const where = [];
-  for (const f of files) {
-    const src = readFileSync(join(PROBE_DIR, f), 'utf8').replace(/\r\n/g, '\n');
+  for (const [f, src] of probeSources()) {
     const n = (src.match(/['"]DELETE['"]/g) || []).length;
     total += n;
     if (n) where.push(f);
   }
-  assert.equal(total, 1);
+  assert.equal(total, 1, `the DELETE verb appears in: ${where.join(', ')}`);
   assert.deepEqual(where, ['_w0-core.mjs']);
   const core_ = readFileSync(join(PROBE_DIR, '_w0-core.mjs'), 'utf8').replace(/\r\n/g, '\n');
   const start = core_.indexOf('export async function deleteScratch');
   const end = core_.indexOf('\n}\n', start);
   assert.ok(start > 0 && end > start);
-  assert.ok(core_.slice(start, end).includes("method: 'DELETE'"), 'the one DELETE must live inside deleteScratch');
-  assert.ok(core_.slice(start, end).indexOf('SCRATCH_NAME_RE.test') < core_.slice(start, end).indexOf("method: 'DELETE'"), 'the guard must come before the request');
+  const body = core_.slice(start, end);
+  assert.ok(body.includes("method: 'DELETE'"), 'the one DELETE must live inside deleteScratch');
+  assert.ok(body.includes('assertScratchName(') && body.indexOf('assertScratchName(') < body.indexOf("method: 'DELETE'"), 'the guard must come before the request');
+});
+
+test('SHAPE: every PUT site in the probe sources is a helper that calls assertScratchName() BEFORE the request, and the set of PUT helpers is exactly the listed one', () => {
+  // BREAKS IF: a PUT is added without the guard, or the guard is removed from one PUT helper - a PUT is a WRITE to a live gateway
+  // and the name is the only thing between a bug upstream and a customer's object. Scanned over the DERIVED source list, so a PUT
+  // in a new _w0-*.mjs file is caught too. The enclosing helper is the nearest top-level (column 0) const / function BEFORE the
+  // verb, and the guard must sit inside it ahead of the request. Positive pair: the helpers found are EXACTLY the five listed, so a
+  // scan that finds none is red, and a new guarded PUT helper is red until it is listed (a deliberate review point).
+  const DEFINITION = /^(?:export )?(?:async )?(?:const|function) (\w+)/gm;
+  const found = [];
+  const unguarded = [];
+  for (const [f, src] of probeSources()) {
+    const defs = [...src.matchAll(DEFINITION)].map((m) => ({ name: m[1], at: m.index }));
+    for (const m of src.matchAll(/['"]PUT['"]/g)) {
+      const def = defs.filter((d) => d.at < m.index).pop();
+      assert.ok(def, `${f}: a PUT literal at offset ${m.index} sits outside any top-level definition`);
+      found.push(`${f}:${def.name}`);
+      if (!src.slice(def.at, m.index).includes('assertScratchName(')) unguarded.push(`${f}:${def.name}`);
+    }
+  }
+  assert.deepEqual(unguarded, [], `PUT sites with no scratch-name guard ahead of the request: ${unguarded.join(', ')}`);
+  assert.deepEqual(found.sort(), [
+    '_w0-core.mjs:putApi', '_w0-core.mjs:putApiPolicy', '_w0-core.mjs:putNamedValue', '_w0-core.mjs:putOperation', '_w0-policies.mjs:putFragment',
+  ], 'the PUT helpers are exactly the five listed: a new one must be added here AND carry the guard');
+});
+
+test('every PUT helper throws on a non-scratch name BEFORE building a request, and builds exactly one PUT for a scratch name', async () => {
+  // BREAKS IF: the guard is removed or loosened from ANY PUT helper - each name below (a customer API, a bare prefix, path
+  // traversal, a query injection, wrong case, a trailing newline, empty, null, a number) would reach a PUT on a live gateway. The
+  // operation helper takes TWO names and refuses either. Positive pair: a scratch name builds exactly one PUT to the expected
+  // path, so a guard that refuses everything is red too. deleteScratch is covered by its own test above.
+  const est = estate();
+  const ctx = await mkCtx(est);
+  est.reset();
+  const BAD = ['production-api', 'w0-apiplane', 'w0-apiplane-', '../w0-apiplane-x', 'w0-apiplane-x?y=1', 'w0-apiplane-x/../prod', 'W0-APIPLANE-X', 'w0-apiplane-x\n', '', undefined, null, 42];
+  const props = { displayName: 'x', method: 'GET', urlTemplate: '/x' };
+  const helpers = {
+    putNamedValue: (name) => core.putNamedValue(ctx, name, 'v'),
+    putApi: (name) => core.putApi(ctx, name, { displayName: 'x', path: 'x', protocols: ['https'] }),
+    putApiPolicy: (name) => core.putApiPolicy(ctx, name, '<policies />'),
+    'putOperation (api id)': (name) => core.putOperation(ctx, name, 'w0-apiplane-ok-op', props),
+    'putOperation (operation id)': (name) => core.putOperation(ctx, 'w0-apiplane-ok', name, props),
+    putFragment: (name) => policies.putFragment(ctx, name, '<fragment />'),
+  };
+  for (const [label, call] of Object.entries(helpers)) {
+    for (const bad of BAD) await assert.rejects(call(bad), /refusing to write a non-scratch object/, `${label} accepted ${JSON.stringify(bad)}`);
+  }
+  assert.equal(est.calls.length, 0, 'a refused name must not even build a request');
+
+  await helpers.putNamedValue('w0-apiplane-ok');
+  await helpers.putApi('w0-apiplane-ok');
+  await helpers.putApiPolicy('w0-apiplane-ok');
+  await core.putOperation(ctx, 'w0-apiplane-ok', 'w0-apiplane-ok-op', props);
+  await helpers.putFragment('w0-apiplane-ok');
+  assert.deepEqual(est.calls.map((c) => `${c.method} ${c.path.slice(est.armBase.length)}`), [
+    'PUT /namedValues/w0-apiplane-ok', 'PUT /apis/w0-apiplane-ok', 'PUT /apis/w0-apiplane-ok/policies/policy',
+    'PUT /apis/w0-apiplane-ok/operations/w0-apiplane-ok-op', 'PUT /policyFragments/w0-apiplane-ok',
+  ]);
+  // the guard itself: a scratch name passes, and the verb only changes the word in the message
+  assert.equal(core.assertScratchName('w0-apiplane-ok', 'write'), undefined);
+  assert.throws(() => core.assertScratchName('prod', 'delete'), /refusing to delete a non-scratch object/);
 });
 
 test('sweepScratch deletes only w0-apiplane-* objects, APIs before fragments before named values', async () => {
