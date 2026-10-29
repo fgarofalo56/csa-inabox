@@ -31,6 +31,11 @@ name: apiplane-w0-gov-probe
 #   2  a CONTROL FAILED or the script crashed - that family is INVALID, publish none of its cells
 #   3  a required cell is unknown (e.g. a 403 naming the role), or scratch objects were left behind
 #
+# TIMEOUT vs CAP. The `probe` job has timeout-minutes 90 and the latency family waits latency_poll_seconds up to
+# TWICE (value A, then value B), so the cap is 1800: 2 x 30 min + ~15 min for the rest of the job stays under 90. A
+# timeout kill skips the probe's `finally` sweep and would leave the scratch API and named value live on the gateway.
+# A test derives this relationship from the files, so raising the cap or lowering the timeout turns it red.
+#
 # PUBLIC REPO: Actions logs and artifacts are world-readable. The probe prints names, resource
 # groups, SKUs and states only and runs everything through scripts/ci/_azure-redact.mjs.
 #
@@ -59,7 +64,7 @@ on:
         required: false
         default: all
       latency_poll_seconds:
-        description: 'Cap in seconds on EACH named-value propagation wait (30-3600). A value never seen within the cap is recorded as not observed, never as a number.'
+        description: 'Cap in seconds on EACH named-value propagation wait (30-1800). A value never seen within the cap is recorded as not observed, never as a number.'
         type: string
         required: false
         default: '900'
@@ -100,8 +105,12 @@ jobs:
             echo "::error::apim_name is not a valid APIM service name"
             exit 1
           fi
-          if ! [[ "$IN_POLL" =~ ^[0-9]+$ ]] || (( IN_POLL < 30 || IN_POLL > 3600 )); then
-            echo "::error::latency_poll_seconds must be an integer from 30 to 3600"
+          # 1800 is the largest cap whose worst case fits the job: the latency family waits the cap up to TWICE (value A, then
+          # value B), so 2 x 1800 s = 60 min plus ~15 min for everything else stays under timeout-minutes 90. A timeout kill
+          # skips the probe's `finally` sweep and would leave the scratch API and named value live on the gateway. The digits are
+          # bounded (2-4, no leading zero) so the arithmetic is always sane: bash reads 0900 as octal, and a 20-digit value wraps.
+          if ! [[ "$IN_POLL" =~ ^[1-9][0-9]{1,3}$ ]] || (( IN_POLL < 30 || IN_POLL > 1800 )); then
+            echo "::error::latency_poll_seconds must be an integer from 30 to 1800"
             exit 1
           fi
           if [[ -z "$IN_FAMILIES" ]]; then

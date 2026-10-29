@@ -187,8 +187,11 @@ export function parseArgs(argv) {
   }
   if (!FAMILIES.includes(String(o.family))) throw new UsageError(`--family must be one of ${FAMILIES.join('|')}`);
   if (o.apimName !== null && !APIM_NAME_RE.test(o.apimName)) throw new UsageError('--apim-name is not a valid APIM service name');
-  if (!Number.isInteger(o.latencyPollSeconds) || o.latencyPollSeconds < 30 || o.latencyPollSeconds > 3600) {
-    throw new UsageError('--latency-poll-seconds must be an integer from 30 to 3600');
+  // The cap is spent TWICE by the latency family (value A, then value B), so its worst case is 2 x cap. 1800 keeps 2 x cap + the
+  // rest of the job under the workflows' timeout-minutes 90 (a test derives that from the files): a timeout kill SKIPS the
+  // `finally` sweep and would leave the scratch API and named value live on the gateway. Both prechecks carry the same bound.
+  if (!Number.isInteger(o.latencyPollSeconds) || o.latencyPollSeconds < 30 || o.latencyPollSeconds > 1800) {
+    throw new UsageError('--latency-poll-seconds must be an integer from 30 to 1800');
   }
   return o;
 }

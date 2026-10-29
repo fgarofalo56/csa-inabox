@@ -1956,6 +1956,18 @@ test('parseArgs: the documented flags parse, and every malformed invocation is a
   }
 });
 
+test('parseArgs: the latency cap is 1800 (30, 900 and 1800 parse; 5, 29, 1801, the old 3600 and 99999 do not) and the default is 900', () => {
+  // BREAKS IF: the cap moves. 3600 (the value this replaced) and 99999 must be refused, because 2 x cap has to fit the job timeout
+  // (the derived test below ties them together). Positive pair: 30, 900 and 1800 parse and the default is 900, so a parser that
+  // rejects everything - or one that loses the default - is red too. The message states the bound it enforces.
+  const poll = (n) => ['--cloud', 'gov', '--family', 'latency', '--latency-poll-seconds', String(n)];
+  for (const n of [30, 900, 1800]) assert.equal(probe.parseArgs(poll(n)).latencyPollSeconds, n, String(n));
+  for (const n of [5, 29, 1801, 3600, 99999]) {
+    assert.throws(() => probe.parseArgs(poll(n)), (e) => e instanceof probe.UsageError && /integer from 30 to 1800$/.test(e.message), String(n));
+  }
+  assert.equal(probe.parseArgs(['--cloud', 'gov', '--family', 'latency']).latencyPollSeconds, 900);
+});
+
 test('parseArgs: a path flag may not climb out with ".." or carry a NUL byte, and an ordinary path still parses', async () => {
   // BREAKS IF: --out, --aggregate or --summary-file accepts a ".." segment (either slash style) or a NUL byte.
   // Positive pair: a plain relative path, an absolute path and a name that merely CONTAINS two dots all parse, so a
@@ -2249,16 +2261,20 @@ for (const which of ['gov', 'commercial']) {
   });
 
   test(`${W.file}: the precheck rejects malformed inputs (apim_name, latency_poll_seconds, families) and accepts the documented ones`, () => {
-    // BREAKS IF: an input reaches the probe unvalidated (a name with spaces, a poll of 5 or 3601 or "abc", an unknown family,
-    // a family list with a space), or a valid one is refused.
+    // BREAKS IF: an input reaches the probe unvalidated (a name with spaces, a poll of 5, 29, 1801, the old maximum 3600, 99999
+    // or "abc", an unknown family, a family list with a space), or a valid one is refused. Three poll values are bash traps, each
+    // measured: `08` and `0900` are read as INVALID OCTAL, the arithmetic errors, the error reads as FALSE and the range check
+    // silently passes; `18446744073709552516` WRAPS to 900 in bash arithmetic and passes too. The digit regex has to catch them.
     const good = Object.fromEntries(W.envNames.map((n) => [n, 'present']));
     const run = (extra) => runPrecheck(which, { ...good, IN_APIM: '', IN_FAMILIES: 'all', IN_POLL: '900', ...extra });
-    for (const bad of [{ IN_APIM: 'bad name' }, { IN_APIM: '1abc' }, { IN_APIM: 'a'.repeat(51) }, { IN_POLL: '5' }, { IN_POLL: '3601' }, { IN_POLL: 'abc' }, { IN_POLL: '' },
+    for (const bad of [{ IN_APIM: 'bad name' }, { IN_APIM: '1abc' }, { IN_APIM: 'a'.repeat(51) },
+      { IN_POLL: '5' }, { IN_POLL: '29' }, { IN_POLL: '1801' }, { IN_POLL: '3600' }, { IN_POLL: '3601' }, { IN_POLL: '99999' }, { IN_POLL: 'abc' }, { IN_POLL: '' },
+      { IN_POLL: '08' }, { IN_POLL: '0900' }, { IN_POLL: '18446744073709552516' },
       { IN_FAMILIES: 'telemetry,bogus' }, { IN_FAMILIES: 'telemetry, policies' }, { IN_FAMILIES: '' }]) {
       const r = run(bad);
       assert.equal(r.code, 1, `${JSON.stringify(bad)} must be refused: ${r.out}`);
     }
-    for (const fine of [{ IN_APIM: 'apim-csa-loom-centralus' }, { IN_POLL: '30' }, { IN_POLL: '3600' }, { IN_FAMILIES: 'telemetry,mcp' }, { IN_FAMILIES: 'latency' }]) {
+    for (const fine of [{ IN_APIM: 'apim-csa-loom-centralus' }, { IN_POLL: '30' }, { IN_POLL: '900' }, { IN_POLL: '1800' }, { IN_FAMILIES: 'telemetry,mcp' }, { IN_FAMILIES: 'latency' }]) {
       const r = run(fine);
       assert.equal(r.code, 0, `${JSON.stringify(fine)} must be accepted: ${r.out}`);
     }
@@ -2365,6 +2381,53 @@ for (const which of ['gov', 'commercial']) {
     assert.ok(readFileSync(join(PROBE_DIR, 'w0-apim-probe.mjs'), 'utf8').length > 1000);
   });
 }
+
+test('the latency cap and the job timeout stay consistent: 2 x (the cap parseArgs accepts) + 15 min is below timeout-minutes of BOTH probe jobs, and both prechecks enforce that same cap', () => {
+  // BREAKS IF: the cap is raised (parseArgs accepting 3600 gives 2 x 3600 s = 120 min + 15 > 90) or a probe job's timeout-minutes
+  // is lowered below 2 x cap + 15. The latency family waits the cap up to TWICE (value A, then value B) and a timeout kill SKIPS
+  // the `finally` sweep, which would leave the scratch API (subscriptionRequired false) and the named value live on the gateway.
+  // The cap is DERIVED by probing parseArgs (the largest value it accepts) and the timeouts are read from the workflow files:
+  // neither is copied into this test. The 15 minutes is the hardening brief's allowance for everything else in the job
+  // (checkout, login, the five other families with their sweeps, the aggregate, the upload): a budget, NOT a measurement.
+  const accepts = (n) => {
+    try {
+      probe.parseArgs(['--cloud', 'gov', '--family', 'latency', '--latency-poll-seconds', String(n)]);
+      return true;
+    } catch (err) {
+      if (err instanceof probe.UsageError) return false;
+      throw err;
+    }
+  };
+  const SCAN_TO = 20_000;
+  let cap = 0;
+  for (let n = 1; n <= SCAN_TO; n += 1) if (accepts(n)) cap = n;
+  // positives that make the scan meaningful: a floor of 30, a ceiling INSIDE the scanned range, an accepted range that ends there
+  assert.ok(accepts(30) && !accepts(29), 'the floor is 30');
+  assert.ok(cap >= 30 && cap < SCAN_TO, `the cap (${cap}) must be a real ceiling inside the scanned range, not the edge of the scan`);
+  assert.ok(accepts(cap) && !accepts(cap + 1), 'the accepted range ends exactly at the cap');
+  assert.ok(accepts(900), 'the default 900 must stay accepted');
+
+  const worstCaseMinutes = (2 * cap) / 60 + 15;
+  for (const which of ['gov', 'commercial']) {
+    const minutes = Number(val(loadWf(which).doc.jobs.probe['timeout-minutes']));
+    assert.ok(Number.isInteger(minutes) && minutes > 0, `${WF[which].file}: timeout-minutes must be a positive integer`);
+    assert.ok(worstCaseMinutes < minutes, `${WF[which].file}: 2 x ${cap} s + 15 min = ${worstCaseMinutes} min must be below timeout-minutes ${minutes}`);
+    // the precheck enforces the SAME cap, and its error text states it
+    const good = Object.fromEntries(WF[which].envNames.map((n) => [n, 'present']));
+    const run = (poll) => runPrecheck(which, { ...good, IN_APIM: '', IN_FAMILIES: 'all', IN_POLL: String(poll) });
+    const atCap = run(cap);
+    assert.equal(atCap.code, 0, `${WF[which].file}: the precheck must accept the cap ${cap}: ${atCap.out}`);
+    const overCap = run(cap + 1);
+    assert.equal(overCap.code, 1, `${WF[which].file}: the precheck must refuse ${cap + 1}: ${overCap.out}`);
+    assert.ok(overCap.out.includes(`latency_poll_seconds must be an integer from 30 to ${cap}`), `${WF[which].file}: the error text must state the cap: ${overCap.out}`);
+    assert.ok(!atCap.out.includes('latency_poll_seconds must be'), 'an accepted value prints no poll error');
+  }
+  // both workflow input descriptions state the same range
+  for (const which of ['gov', 'commercial']) {
+    const desc = String(val(loadWf(which).doc.on.workflow_dispatch.inputs.latency_poll_seconds.description));
+    assert.ok(desc.includes(`(30-${cap})`), `${WF[which].file}: the input description must say (30-${cap}): ${desc}`);
+  }
+});
 
 // ===========================================================================
 // 15. edge cases that close the gaps found while reviewing the controls
