@@ -337,8 +337,28 @@ export function isApiVersionError(status, code, message) {
   return /api[- ]version/i.test(message || '');
 }
 
-/** An error message that names an ATTRIBUTE (a probe-authoring defect), not an element. */
-const ATTRIBUTE_RE = /(?:\battribute\s+['"`‘“][^'"`’”]+['"`’”]|\b(?:required|missing|invalid|unsupported|unknown|unexpected|illegal)\s+attribute\b)/i;
+/**
+ * Does a validation rejection name an ATTRIBUTE - a probe-authoring defect (the body this probe wrote is wrong, so the cell
+ * is unknown:tooling-error, exit 3, verbatim message kept) - rather than an ELEMENT (a real finding about what the gateway
+ * accepts, so `measured: rejected`)?
+ *
+ * APIM's validation text is XSD-style and quotes with SINGLE quotes. Learn does not publish it; these are the shapes the
+ * hardening review named, not observed from a gateway:
+ *   The 'x' attribute is not declared.
+ *   The required attribute 'counter-key' is missing.
+ *   The 'tokens-per-minute' attribute is invalid - The value 'abc' is invalid according to its datatype 'int'
+ * An element rejection never says "attribute":
+ *   The element 'inbound' has invalid child element 'llm-token-limit'. List of possible elements expected: ...
+ * The previous pattern keyed on a quote or a qualifier ADJACENT to the word and so missed the first and third shapes and every
+ * double-quoted form (`The "counter-key" attribute is required`); the bare word (and its plural) is what is left to match.
+ *
+ * OVER-MATCHING IS THE LOUD DIRECTION, and that is deliberate: a message that merely mentions an attribute becomes
+ * unknown:tooling-error and a human reads it, whereas a probe typo quietly published as `rejected` would be a false finding
+ * about the gateway. An attribute rejection is therefore never a verdict by itself: it is read against the Commercial row of
+ * the same cell. If Commercial accepts the same body and Gov names an attribute, THAT is a boundary difference, and the
+ * verbatim message kept next to the cell is how a reader recognises it.
+ */
+const ATTRIBUTE_RE = /\battributes?\b/i;
 export function namesAnAttribute(message) {
   return ATTRIBUTE_RE.test(String(message || ''));
 }

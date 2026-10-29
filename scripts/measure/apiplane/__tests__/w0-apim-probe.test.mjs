@@ -667,17 +667,52 @@ test('engine: a server that echoes the raw token back cannot put it in an error 
   core.clearSecretsForTest();
 });
 
-test('engine: the api-version and attribute classifiers key on the code and the message', () => {
+test('engine: the api-version classifier keys on the code and the message', () => {
   // BREAKS IF: an api-version failure is not recognised (a boundary finding becomes an instrument error),
-  // an ordinary 400 is mistaken for one, or an attribute-naming message is not recognised.
+  // or an ordinary 400 (here: a validation message about an attribute) is mistaken for one.
   assert.equal(core.isApiVersionError(400, 'InvalidApiVersionParameter', 'x'), true);
   assert.equal(core.isApiVersionError(400, 'NoRegisteredProviderFound', 'x'), true);
   assert.equal(core.isApiVersionError(400, 'SomethingElse', "The api-version '2025-09-01-preview' is not supported"), true);
   assert.equal(core.isApiVersionError(400, 'ValidationError', 'Required attribute calls is missing'), false);
   assert.equal(core.isApiVersionError(403, 'InvalidApiVersionParameter', 'x'), false, 'only 400/404 can be an api-version answer');
-  assert.equal(core.namesAnAttribute("Error in element 'quota-by-key' on line 1: Required attribute 'calls' is missing"), true);
-  assert.equal(core.namesAnAttribute("Error in element 'x': Unknown attribute 'foo'"), true);
-  assert.equal(core.namesAnAttribute("Error in element 'fragment' on line 1: The element 'quota-by-key' is not supported."), false);
+});
+
+// SYNTHETIC (the XSD-validator shapes named in the hardening review of PR #5181), not observed from a gateway. The ATTRIBUTE
+// list holds the three double-quoted strings the review showed the previous pattern missing, the XSD single-quoted shapes it
+// also missed (`not declared`, `is invalid - The value`), and ONE it did match (`required attribute 'x'`). Run over this list
+// (lifted from git, not transcribed) the previous pattern matched that one string only and flagged none of the ELEMENT list,
+// so a replacement that is merely the old pattern plus noise is red here. The ELEMENT list is what must stay a real finding.
+const ATTR_XSD = "The 'x' attribute is not declared.";
+const ELEM_XSD = "The element 'inbound' has invalid child element 'llm-token-limit'. List of possible elements expected: 'base, rate-limit, quota'.";
+const ATTRIBUTE_MESSAGES = [
+  'The "counter-key" attribute is required',
+  'The "x" attribute is not declared.',
+  'Value of "x" attribute is invalid',
+  ATTR_XSD,
+  "The required attribute 'counter-key' is missing.",
+  "The 'tokens-per-minute' attribute is invalid - The value 'abc' is invalid according to its datatype 'int'",
+  "Error in element 'rate-limit-by-key' on line 1, column 68: The 'calls' attribute is not declared.",
+  "THE 'X' ATTRIBUTE IS NOT DECLARED.",
+  "The attributes 'a' and 'b' are not declared.",
+];
+const ELEMENT_MESSAGES = [
+  ELEM_XSD,
+  "Error in element 'fragment' on line 1, column 11: The element 'quota-by-key' is not supported.",
+  'The "inbound" element has invalid child element "llm-token-limit".',
+  "Error in element 'fragment' on line 1, column 11: The element 'quota-by-key' is not supported on this gateway.",
+];
+
+test('engine: namesAnAttribute recognises the XSD single-quoted and the double-quoted attribute shapes, and leaves an element-only rejection a finding', () => {
+  // BREAKS IF: an attribute-naming rejection is missed (a probe typo is published as a finding about the gateway) - each of
+  // ATTRIBUTE_MESSAGES is such an input (the previous pattern missed eight of the nine) - or an element-only rejection is
+  // flagged (a real finding is hidden as a tooling error): each of ELEMENT_MESSAGES is such an input, and a classifier that
+  // answers true for everything is red on every one of them.
+  for (const m of ATTRIBUTE_MESSAGES) assert.equal(core.namesAnAttribute(m), true, m);
+  for (const m of ELEMENT_MESSAGES) assert.equal(core.namesAnAttribute(m), false, m);
+  // an empty or missing message names nothing
+  assert.equal(core.namesAnAttribute(''), false);
+  assert.equal(core.namesAnAttribute(undefined), false);
+  assert.equal(core.namesAnAttribute(null), false);
 });
 
 // ===========================================================================
@@ -1080,21 +1115,43 @@ test('policies: a validation rejection is "rejected" with the status and the ver
   assert.equal(result.exitCode, 0);
 });
 
-test('policies: a rejection that names an ATTRIBUTE is unknown:tooling-error (a probe defect), not "rejected"', async () => {
-  // BREAKS IF: the attribute-vs-element classifier is removed - the SAME status and code, with an element-naming
-  // message, must stay "rejected" (second half), so a classifier that always says tooling-error is red too.
-  const est = estate();
-  est.rules.push((r) => (r.method === 'PUT' && /policyFragments\/w0-apiplane-el-quota-by-key$/.test(r.path)
-    ? jsonRes(400, { error: { code: 'ValidationError', message: "Error in element 'quota-by-key' on line 1, column 11: Required attribute 'calls' is missing" } }) : undefined));
-  const { result } = await runFamily('policies', est);
-  assert.equal(text(result, 'policies.element.quota-by-key.single'), 'unknown:tooling-error');
-  assert.match(cell(result, 'policies.element.quota-by-key.single').evidence.why, /ATTRIBUTE/);
-  assert.equal(result.exitCode, 3);
+test('policies: a rejection that names an ATTRIBUTE (XSD single-quoted or double-quoted) is unknown:tooling-error, an element-only rejection stays "rejected" - at the single-element row AND at the combined rows', async () => {
+  // BREAKS IF: the attribute-vs-element classifier is removed, under-matches or over-matches. The breaking inputs are the
+  // strings of ATTRIBUTE_MESSAGES (same status 400, same code: must be tooling-error) and of ELEMENT_MESSAGES (must stay
+  // "rejected" with the verbatim message kept). A classifier that always says tooling-error is red on the second loop, one that
+  // never does is red on the first, and one that knows only the old `required attribute 'x'` shape is red on eight of the nine.
+  // The combined PUT is a SECOND consumer of the flag (combinedElementCell), so it is exercised with one string of each kind.
+  const rejectWith = (target, message) => {
+    const est = estate();
+    est.rules.push((r) => (r.method === 'PUT' && target.test(r.path) ? jsonRes(400, { error: { code: 'ValidationError', message } }) : undefined));
+    return est;
+  };
+  const singleRow = 'policies.element.quota-by-key.single';
+  const single = /policyFragments\/w0-apiplane-el-quota-by-key$/;
+  for (const message of ATTRIBUTE_MESSAGES) {
+    const { result } = await runFamily('policies', rejectWith(single, message));
+    assert.equal(text(result, singleRow), 'unknown:tooling-error', message);
+    assert.match(cell(result, singleRow).evidence.why, /ATTRIBUTE/, message);
+    assert.equal(cell(result, singleRow).evidence.put.message, message, 'the verbatim message is kept next to the verdict');
+    assert.equal(result.exitCode, 3, message);
+  }
+  for (const message of ELEMENT_MESSAGES) {
+    const { result } = await runFamily('policies', rejectWith(single, message));
+    assert.equal(text(result, singleRow), 'measured: rejected (HTTP 400)', message);
+    assert.equal(cell(result, singleRow).evidence.put.message, message, 'the verbatim message is kept next to the verdict');
+    assert.equal(result.exitCode, 0, message);
+  }
 
-  const est2 = estate();
-  est2.rules.push((r) => (r.method === 'PUT' && /policyFragments\/w0-apiplane-el-quota-by-key$/.test(r.path) ? jsonRes(400, rejectElementMessage('quota-by-key')) : undefined));
-  const { result: r2 } = await runFamily('policies', est2);
-  assert.equal(text(r2, 'policies.element.quota-by-key.single'), 'measured: rejected (HTTP 400)');
+  const combined = /policyFragments\/w0-apiplane-combined$/;
+  const { result: byAttribute } = await runFamily('policies', rejectWith(combined, ATTR_XSD));
+  assert.equal(text(byAttribute, 'policies.combined.put'), 'unknown:tooling-error');
+  for (const el of ELEMENTS) {
+    assert.equal(text(byAttribute, `policies.element.${el}.combined`), 'unknown:tooling-error', el);
+    assert.match(cell(byAttribute, `policies.element.${el}.combined`).evidence.why, /combined rejection names an ATTRIBUTE/, el);
+  }
+  const { result: byElement } = await runFamily('policies', rejectWith(combined, ELEM_XSD));
+  assert.equal(text(byElement, 'policies.combined.put'), 'measured: rejected (HTTP 400)');
+  for (const el of ELEMENTS) assert.match(text(byElement, `policies.element.${el}.combined`), /^measured: rejected \(the combined PUT was rejected as a whole/, el);
 });
 
 test('policies: a 403 on every write is unknown:permission naming the role - never "rejected" - and the controls are unrunnable, not failed', async () => {
