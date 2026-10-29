@@ -80,8 +80,8 @@ Analytics queries; no new resources retained.
 | W0-2 | in-progress | feat/apigw-w00-lane-a | sonnet | dispatched | 2026-10-29 |
 | W0-3 | in-progress | feat/apigw-w00-lane-a | sonnet | dispatched | 2026-10-29 |
 | W0-4 | in-progress | feat/apigw-w00-lane-a | sonnet | dispatched | 2026-10-29 |
-| W0-5 | in-progress | feat/apigw-w00-lane-b | sonnet | dispatched | 2026-10-29 |
+| W0-5 | merged | feat/apigw-w00-lane-b | sonnet | into integration branch f8ae153d5; 37 tests pass; 98 of 98 mutants RED; live run exit 3 (277 Commercial families lack Gov rows) | 2026-10-29 |
 | W0-6 | in-progress | feat/apigw-w00-lane-a | sonnet | dispatched | 2026-10-29 |
 | W0-7 | in-progress | feat/apigw-w00-lane-a | sonnet | dispatched | 2026-10-29 |
-| W0-8 | in-progress | read-only lane C | sonnet | dispatched | 2026-10-29 |
+| W0-8 | verifying | read-only lane C | sonnet | report verified: counts re-run at pin 007da59c4; section 8 lands in PR-2 | 2026-10-29 |
 | W0-9 | todo | | sonnet | | 2026-10-28 |
