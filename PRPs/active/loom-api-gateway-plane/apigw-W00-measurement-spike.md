@@ -76,12 +76,12 @@ Analytics queries; no new resources retained.
 
 | Item | Status | Branch | Model | Evidence | Updated |
 |---|---|---|---|---|---|
-| W0-1 | in-progress | feat/apigw-w00-lane-a | sonnet | dispatched | 2026-10-29 |
-| W0-2 | in-progress | feat/apigw-w00-lane-a | sonnet | dispatched | 2026-10-29 |
-| W0-3 | in-progress | feat/apigw-w00-lane-a | sonnet | dispatched | 2026-10-29 |
-| W0-4 | in-progress | feat/apigw-w00-lane-a | sonnet | dispatched | 2026-10-29 |
+| W0-1 | merged | feat/apigw-w00-lane-a | sonnet | into integration branch aa7203b14 (+fixes 295e05bf5, 0f9556590); 159 tests pass; 47 of 47 lane mutants RED; NOT yet run against Azure | 2026-10-29 |
+| W0-2 | merged | feat/apigw-w00-lane-a | sonnet | into integration branch aa7203b14 (+fixes 295e05bf5, 0f9556590); 159 tests pass; 47 of 47 lane mutants RED; NOT yet run against Azure | 2026-10-29 |
+| W0-3 | merged | feat/apigw-w00-lane-a | sonnet | into integration branch aa7203b14 (+fixes 295e05bf5, 0f9556590); 159 tests pass; 47 of 47 lane mutants RED; NOT yet run against Azure | 2026-10-29 |
+| W0-4 | merged | feat/apigw-w00-lane-a | sonnet | into integration branch aa7203b14 (+fixes 295e05bf5, 0f9556590); 159 tests pass; 47 of 47 lane mutants RED; NOT yet run against Azure | 2026-10-29 |
 | W0-5 | merged | feat/apigw-w00-lane-b | sonnet | into integration branch f8ae153d5; 37 tests pass; 98 of 98 mutants RED; live run exit 3 (277 Commercial families lack Gov rows) | 2026-10-29 |
-| W0-6 | in-progress | feat/apigw-w00-lane-a | sonnet | dispatched | 2026-10-29 |
-| W0-7 | in-progress | feat/apigw-w00-lane-a | sonnet | dispatched | 2026-10-29 |
+| W0-6 | merged | feat/apigw-w00-lane-a | sonnet | into integration branch aa7203b14 (+fixes 295e05bf5, 0f9556590); 159 tests pass; 47 of 47 lane mutants RED; NOT yet run against Azure | 2026-10-29 |
+| W0-7 | merged | feat/apigw-w00-lane-a | sonnet | into integration branch aa7203b14 (+fixes 295e05bf5, 0f9556590); 159 tests pass; 47 of 47 lane mutants RED; NOT yet run against Azure | 2026-10-29 |
 | W0-8 | verifying | read-only lane C | sonnet | report verified: counts re-run at pin 007da59c4; section 8 lands in PR-2 | 2026-10-29 |
 | W0-9 | todo | | sonnet | | 2026-10-28 |
