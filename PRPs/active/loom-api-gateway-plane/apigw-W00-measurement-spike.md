@@ -1,6 +1,7 @@
 ---
 name: apigw-W00-measurement-spike
-status: backlog
+status: active
+allow_parallel: true
 priority: P1
 order: 21
 depends_on: []
@@ -8,6 +9,8 @@ review: none
 orchestrator_model: sonnet
 implementer_model: sonnet
 created: 2026-10-28
+started: 2026-10-29
+branch: feat/apigw-w00-measurement-spike
 ---
 # W0 — Measurement and decision spike (no product code)
 

@@ -19,7 +19,7 @@ epic asked for is confirmed as **default-ON** (recorded on #4442). Waves 0, A
 and B1 may start. Q5 was answered on 2026-10-29: **stay on PremiumV2** in Commercial/GCC/DMLZ, Premium classic in Gov; Wave C is unblocked. The control plane over this gateway — the
 `microsoft/mosaic-apim` fold-in (multi-gateway registry, reviewed publishing,
 entitlements, usage, pricing, cost centers, budgets, MCP, pools) — is a sibling
-set at `PRPs/backlog/loom-api-gateway-plane/`; its W7 depends on Waves A/B1
+set at `PRPs/active/loom-api-gateway-plane/`; its W7 depends on Waves A/B1
 here, and its W1 shares `apim.bicep` under the one-bicep-PR rule.
 **Issue:** #4442 (`epic`, `sprint:active`, `sp:13`, `lane:bicep`, `lane:console`)
 **Created:** 2026-09-10 · **Owner:** autonomous build program
