@@ -708,14 +708,14 @@ test('SHAPE: the DELETE verb appears exactly once in the probe sources, inside d
   let total = 0;
   const where = [];
   for (const f of files) {
-    const src = readFileSync(join(PROBE_DIR, f), 'utf8');
+    const src = readFileSync(join(PROBE_DIR, f), 'utf8').replace(/\r\n/g, '\n');
     const n = (src.match(/['"]DELETE['"]/g) || []).length;
     total += n;
     if (n) where.push(f);
   }
   assert.equal(total, 1);
   assert.deepEqual(where, ['_w0-core.mjs']);
-  const core_ = readFileSync(join(PROBE_DIR, '_w0-core.mjs'), 'utf8');
+  const core_ = readFileSync(join(PROBE_DIR, '_w0-core.mjs'), 'utf8').replace(/\r\n/g, '\n');
   const start = core_.indexOf('export async function deleteScratch');
   const end = core_.indexOf('\n}\n', start);
   assert.ok(start > 0 && end > start);
