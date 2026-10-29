@@ -48,9 +48,12 @@
  * RULES THIS INSTRUMENT FOLLOWS (assertion-design.md applied to a measurement tool)
  * ---------------------------------------------------------------------------
  * - DISCOVER, DO NOT ASSUME. It lists the APIM instances in the logged-in
- *   subscription. One: use it. Zero: every family is
+ *   subscription. One: use it. Zero and no --apim-name: every family is
  *   not-measured:no-gateway-in-boundary and says how many it saw. More than one and
- *   no --apim-name: fail closed (exit 2) listing the NAMES. It prints names,
+ *   no --apim-name: fail closed (exit 2) listing the NAMES. A NAMED gateway
+ *   (--apim-name) that is not found exactly once - including an empty subscription -
+ *   fails closed too (exit 2, discovery state named-not-found): the operator said
+ *   it exists, so its absence is a failure, not "no gateway in the boundary". It prints names,
  *   resource group, SKU and state only - never a subscription id, tenant id,
  *   resource id, key, token or IP address (this repo is PUBLIC and Actions logs and
  *   artifacts are world-readable).
@@ -276,7 +279,10 @@ export async function discoverApim(ctx, apimName) {
   if (apimName) {
     const hit = all.filter((a) => a.name.toLowerCase() === apimName.toLowerCase());
     if (hit.length === 1) return { state: 'one', apim: { ...hit[0], httpStatus: r.last.status }, seen: all.length };
-    return all.length === 0 ? { state: 'zero', seen: 0 } : { state: 'named-not-found', seen: all.length, names };
+    // A NAMED gateway that is not found exactly once fails closed - including an EMPTY subscription. The operator
+    // asserted that this gateway exists; "no gateway in the boundary" is the honest answer only to a question that
+    // named none. `matched` is kept so the note can say how many matched (0, or 2+ if a listing repeated a name).
+    return { state: 'named-not-found', seen: all.length, names, matched: hit.length };
   }
   if (all.length === 0) return { state: 'zero', seen: 0 };
   if (all.length === 1) return { state: 'one', apim: { ...all[0], httpStatus: r.last.status }, seen: 1 };
@@ -323,16 +329,23 @@ export async function runFamilyProbe(opts, deps) {
       result.apim = publicApim(disc.apim);
       await MODULES[opts.family].run(ctx, acc);
     } else if (disc.state === 'zero') {
-      acc.cells.push(...placeholders(opts.family, (cid) => notMeasured(cid, 'no-gateway-in-boundary', { evidence: { apimInstancesSeen: disc.seen, ...(opts.apimName ? { requestedNameNotAmongThem: true } : {}) } })));
+      // Reachable ONLY with no --apim-name: a named gateway that is absent is 'named-not-found' (see discoverApim).
+      acc.cells.push(...placeholders(opts.family, (cid) => notMeasured(cid, 'no-gateway-in-boundary', { evidence: { apimInstancesSeen: disc.seen } })));
     } else if (disc.state === 'error') {
       const reason = reasonForFailure(disc.res, { role: 'Reader', scope: 'subscription' }) ?? 'tooling-error';
       acc.cells.push(...placeholders(opts.family, (cid) => unknown(cid, reason, { evidence: { note: 'the APIM instances could not be listed', ...quote(disc.res) } })));
     } else {
       hardStop = true;
       result.status = disc.state === 'many' ? 'AMBIGUOUS-GATEWAY' : 'NAMED-GATEWAY-NOT-FOUND';
-      result.notes.push(disc.state === 'many'
-        ? `${disc.seen} APIM instances are in this subscription and --apim-name was not given: refusing to guess. Names: ${disc.names.join(', ')}`
-        : `--apim-name matched none of the ${disc.seen} APIM instances in this subscription. Names: ${disc.names.join(', ')}`);
+      const names = disc.names.length ? disc.names.join(', ') : '(none)';
+      // The note must be TRUE (deploy-integrity.md R7): it says how many matched, so "matched none" is never printed over a
+      // listing that repeated the name, and an empty subscription is named as such rather than as "none of the 0".
+      let note;
+      if (disc.state === 'many') note = `${disc.seen} APIM instances are in this subscription and --apim-name was not given: refusing to guess. Names: ${names}`;
+      else if (disc.seen === 0) note = `--apim-name was given but this subscription holds no APIM instance (a named gateway that is absent is a failure, not "no gateway in the boundary"). Names: ${names}`;
+      else if (disc.matched === 0) note = `--apim-name matched none of the ${disc.seen} APIM instances in this subscription. Names: ${names}`;
+      else note = `--apim-name matched ${disc.matched} of the ${disc.seen} APIM instances in this subscription (exactly 1 is required). Names: ${names}`;
+      result.notes.push(note);
     }
   } catch (err) {
     crashed = true;

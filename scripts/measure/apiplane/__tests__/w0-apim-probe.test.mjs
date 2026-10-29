@@ -1789,11 +1789,49 @@ test('two APIM instances and no --apim-name: fail closed (exit 2) listing the NA
   assert.equal(missing.status, 'NAMED-GATEWAY-NOT-FOUND');
   assert.equal(missing.exitCode, 2);
   assert.match(missing.notes[0], /matched none of the 2 APIM instances.*Names: apim-a, apim-b/);
+});
 
-  const est4 = estate();
-  est4.apims = [];
-  const { result: nothing } = await runFamily('mcp', est4, { apimName: 'apim-zzz' });
-  assert.equal(nothing.discovery.state, 'zero', 'a name asked of an EMPTY subscription is no-gateway-in-boundary');
+test('a NAMED gateway in a subscription with NO APIM at all fails closed (exit 2, named-not-found) in every family; the same empty subscription with no name stays an honest not-measured', async () => {
+  // BREAKS IF: --apim-name against an EMPTY subscription is read as "no gateway in the boundary" (state 'zero', exit 0, every
+  // cell unmeasured: a green job over nothing). The breaking input is estate.apims = [] with apimName 'apim-zzz'. With one OTHER
+  // instance present the same name already exited 2, so the empty subscription must not be the quieter case.
+  // Positive pair (an absence-only test is satisfied by deleting the feature): the SAME empty subscription with NO name must
+  // still be exit 0 with every cell not-measured:no-gateway-in-boundary - the honest negative is kept.
+  for (const family of core.FAMILIES) {
+    const est = estate();
+    est.apims = [];
+    const { result } = await runFamily(family, est, { apimName: 'apim-zzz' });
+    assert.equal(result.status, 'NAMED-GATEWAY-NOT-FOUND', family);
+    assert.equal(result.exitCode, 2, family);
+    assert.equal(result.valid, false, family);
+    assert.deepEqual(result.discovery, { state: 'named-not-found', seen: 0, names: [] }, family);
+    assert.deepEqual(result.cells, [], `${family}: a hard stop publishes no cell`);
+    assert.match(result.notes[0], /^--apim-name was given but this subscription holds no APIM instance .*Names: \(none\)$/, family);
+    assert.equal(est.calls.length, 1, `${family}: nothing but the APIM listing may be called`);
+
+    const unnamed = estate();
+    unnamed.apims = [];
+    const { result: honest } = await runFamily(family, unnamed);
+    assert.equal(honest.discovery.state, 'zero', family);
+    assert.equal(honest.exitCode, 0, family);
+    assert.equal(honest.cells.length, DECLARED[family], family);
+    assert.ok(honest.cells.every((c) => core.verdictText(c) === 'not-measured:no-gateway-in-boundary'), family);
+  }
+});
+
+test('a name that matches TWO listed instances fails closed and the note says how many matched - it must not claim "none"', async () => {
+  // BREAKS IF: the matched count is dropped from the note, so a listing that repeated the name reads "matched none of the 2"
+  // (a false statement: deploy-integrity.md R7). The two names differ only by case, which --apim-name matches case-insensitively.
+  // This pins the MESSAGE; the exit code and the state are pinned by the empty-subscription test above and by the two-instance
+  // test, so a mutation that changes only the state is caught there, not here.
+  const est = estate();
+  est.apims = [apimArm('apim-dup'), apimArm('APIM-DUP')];
+  const { result } = await runFamily('mcp', est, { apimName: 'apim-dup' });
+  assert.equal(result.exitCode, 2);
+  assert.equal(result.status, 'NAMED-GATEWAY-NOT-FOUND');
+  assert.match(result.notes[0], /^--apim-name matched 2 of the 2 APIM instances in this subscription \(exactly 1 is required\)\. Names: APIM-DUP, apim-dup$/);
+  assert.ok(!/matched none/.test(result.notes[0]), result.notes[0]);
+  assert.equal(est.calls.length, 1);
 });
 
 test('the cloud guard refuses BEFORE any read when az is logged into the other cloud', async () => {
