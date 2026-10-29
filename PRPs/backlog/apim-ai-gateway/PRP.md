@@ -14,6 +14,13 @@ created: 2026-09-11
 
 **Status:** DRAFT (2026-09-10; corrected 2026-09-11) — design unblocked; no wave
 started. One question re-opened (Q5) — see §2.
+**2026-10-28 — GREENLIT by the operator.** The APIM-vs-direct direction this
+epic asked for is confirmed as **default-ON** (recorded on #4442). Waves 0, A
+and B1 may start. Q5 was answered on 2026-10-29: **stay on PremiumV2** in Commercial/GCC/DMLZ, Premium classic in Gov; Wave C is unblocked. The control plane over this gateway — the
+`microsoft/mosaic-apim` fold-in (multi-gateway registry, reviewed publishing,
+entitlements, usage, pricing, cost centers, budgets, MCP, pools) — is a sibling
+set at `PRPs/backlog/loom-api-gateway-plane/`; its W7 depends on Waves A/B1
+here, and its W1 shares `apim.bicep` under the one-bicep-PR rule.
 **Issue:** #4442 (`epic`, `sprint:active`, `sp:13`, `lane:bicep`, `lane:console`)
 **Created:** 2026-09-10 · **Owner:** autonomous build program
 **Related rules:** `auto-bind-by-default.md`, `cloud-parity.md`,
@@ -123,7 +130,7 @@ is untouched and still governs.
 | Q2 | Endpoint scope | **Multi-Azure endpoints** — N Foundry/AOAI accounts across regions/subscriptions in one priority-ordered pool, plus BYO. **Multi-vendor (Anthropic/Vertex) explicitly OUT of scope.** |
 | Q3 | Service breadth | **All four** — LLM inference, AI Search, Document Intelligence / Speech / Vision, and `llm-content-safety` at the gateway **in every boundary whose impact level authorizes Azure AI Content Safety**. IL5 does not; §3.4 states what IL5 runs instead. |
 | Q4 | Semantic cache in Gov | **Find a Gov-capable equivalent.** Do not ship a Commercial-only cache. Path: build on the existing `redisOss` app. |
-| **Q5** | **OPEN (2026-09-11)** | **Commercial/GCC/DMLZ are on PremiumV2, not Premium classic. Leave them, or migrate?** Recommendation + options below. Wave C does not start until this is answered. |
+| **Q5** | **ANSWERED 2026-10-29** | **Stay on PremiumV2 in Commercial/GCC/DMLZ; Premium classic stays in GCC-High/IL5** — the §2.4 recommendation, adopted by the operator. Wave C is unblocked and reduces to the per-boundary SKU contract in `docs/` plus capacity threading. |
 
 ### 2.1 Supported boundaries
 
@@ -221,7 +228,7 @@ Commercial choice is genuinely between **PremiumV2** (what is deployed) and
 **Premium classic** (what Gov deploys), and the only property separating them for
 our purposes is multi-region. That is Q5.
 
-### 2.4 Q5 — OPEN. Commercial/GCC/DMLZ: stay on PremiumV2, or migrate to Premium classic?
+### 2.4 Q5 — ANSWERED 2026-10-29: stay on PremiumV2 (Commercial/GCC/DMLZ); Premium classic in GCC-High/IL5
 
 Q1's decision text asserted "Zero networking rework… no estate migration",
 believing the alternative was `Developer`. Against the real tree that assertion
@@ -258,7 +265,7 @@ greenfield **and** brownfield per R4/R5.
 **Option C** — stay on PremiumV2 now, and treat multi-region as its own dated
 epic once the gateway carries real traffic and the need is evidenced.
 
-Wave C is blocked on this answer. Do not guess it.
+Answered 2026-10-29: the recommendation stands — stay on PremiumV2. Wave C is unblocked (docs contract + capacity).
 
 ---
 
@@ -764,7 +771,7 @@ without holding B1's four files hostage.
   control actually present in the authored policy XML for that boundary. A Gov
   deploy whose policy XML has no rate/token ceiling fails this wave.
 
-### Wave C — SKU + capacity — BLOCKED on Q5
+### Wave C — SKU + capacity — UNBLOCKED (Q5 answered 2026-10-29: stay on PremiumV2)
 **Owns:** `apimSku` in the six boundary param files, `capacity` threading from
 `platform/fiab/bicep/main.bicep` → `admin-plane/main.bicep:3763-3786` →
 `apim.bicep:28`.
@@ -935,7 +942,7 @@ the target:
 | Risk | Why it matters | Mitigation |
 |---|---|---|
 | Cutover breaks live AI | The gateway becomes the single path for all Loom AI traffic | Keep `aoaiGateway` / `aoaiViaApim` separable; author + smoke-test before routing |
-| A lane executes the withdrawn Q1 premise | "Flip the default from `Developer`" would move the **live** PremiumV2 estate to a classic resource shape — a stand-up-alongside migration, against a decision whose own text promised "no estate migration" | §0 C1/C2, §2.2, §2.4; Wave C is BLOCKED on Q5 |
+| A lane executes the withdrawn Q1 premise | "Flip the default from `Developer`" would move the **live** PremiumV2 estate to a classic resource shape — a stand-up-alongside migration, against a decision whose own text promised "no estate migration" | §0 C1/C2, §2.2, §2.4; Q5 answered 2026-10-29 (stay on PremiumV2), so no migration |
 | Undeclared IL5 content-safety gap | Shipping `llm-content-safety` "everywhere" would fail at IL5, or silently drop moderation | §3.4 — declared gap, substitute, owner, review date; gate on `contentSafetyEnabled`, not boundary name |
 | Prompt Shields at IL5 unverified | If unavailable, IL5 has no jailbreak defence and the §3.4 substitute is incomplete | Wave 0 task 3; declare a second gap if negative |
 | **IL5 may call a capability outside its audit scope** — UNDETERMINED | The stock IL5 deploy wires `LOOM_CONTENT_SAFETY_ENDPOINT` to the AIServices `/contentsafety` data plane (`admin-plane/main.bicep:6224`); `Foundry: Azure AI Content Safety` is blank at IL4/IL5WI/IL6 and the table has no multi-service row. Whether hosting inherits authorization is a **compliance determination, not a code read** | **Owned by #4458**, and recorded in-tree at `il5.bicepparam:378-390` at the same confidence. §3.4.1. Not live — IL5 has **never deployed** (`gh run list` → `[]`). **Wave 0 task 5 settles it BEFORE task 1 stands IL5 up.** |
@@ -966,7 +973,7 @@ Within this epic:
 ```
 Wave 0  →  (A ∥ B1)  →  D  →  B2  →  E  →  F  →  G
                                  ↑
-                        C  (blocked on Q5, joins once answered)
+                        C  (Q5 answered 2026-10-29: stay on PremiumV2; joins after Wave 0)
 ```
 
 Three hard edges, each for a measured reason rather than tidiness:
@@ -980,6 +987,4 @@ Three hard edges, each for a measured reason rather than tidiness:
 - **B2 sits AFTER D, not with B1.** Defaulting `aoaiViaApim` ON in GCC-High and
   IL5 before Wave D lands the #4460 remediation would route those boundaries with
   no spend control, and B's Commercial-only receipt would not catch it.
-- **C is blocked on Q5** and, if Q5 lands on Option B, splits out of this epic
-  entirely — a live-estate APIM migration is not a sub-task of turning a gateway
-  on.
+- **C is unblocked** (Q5 answered 2026-10-29: stay on PremiumV2, so no migration); it reduces to the docs contract and capacity threading, after Wave 0.
