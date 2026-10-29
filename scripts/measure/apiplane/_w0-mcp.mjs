@@ -24,9 +24,11 @@
  * server" form implies): type + path + serviceUrl + mcpProperties.transportType,
  * no endpoints, so whatever `endpoints` the GET-back shows is APIM's own. Variant B
  * (the Learn REST sample `ApiManagementCreateMcpApi`, which sends endpoints) is
- * tried only if A is rejected. Every attempt is recorded verbatim. If the create
- * is rejected in BOTH clouds that is an INSTRUMENT defect, not a finding - a
- * per-run script cannot see the other cloud, so each cell carries that rule.
+ * tried only if A is rejected by VALIDATION (400 / 422): a 409 / 412, a 5xx or a
+ * permission answer is not an answer about the body. Every attempt is recorded
+ * verbatim. If the create is rejected in BOTH clouds that is an INSTRUMENT
+ * defect, not a finding - a per-run script cannot see the other cloud, so each
+ * cell carries that rule.
  *
  * GROUNDING (Learn, fetched 2026-10-29)
  *   API create body incl. `type: "mcp"`, `mcpProperties{transportType, endpoints[{name,uriTemplate}]}`
@@ -43,9 +45,9 @@
  *     https://learn.microsoft.com/en-us/rest/api/apimanagement/api-operation/create-or-update
  */
 import {
-  API, armUrl, getApi, getOperation, isApiVersionError, listAll, measured, notMeasured, putAndReadBack,
-  putApi, putApiPolicy, getApiPolicyRaw, putOperation, quote, reasonForFailure, unknown, waitProvisioned,
-  withScratch,
+  API, armUrl, getApi, getOperation, isApiVersionError, isValidationRejection, listAll, measured, notMeasured,
+  putAndReadBack, putApi, putApiPolicy, getApiPolicyRaw, putOperation, quote, reasonForFailure, unknown,
+  waitProvisioned, withScratch,
 } from './_w0-core.mjs';
 
 const F = 'mcp';
@@ -143,7 +145,10 @@ async function createCells(ctx, cells) {
   for (const [variant, body] of [['A: transportType only', MCP_BODY_A], ['B: Learn sample with endpoints', MCP_BODY_B]]) {
     put = await putApi(ctx, MCP_API_ID, body, PREVIEW);
     attempts.push({ variant, ...quote(put), sent: body });
-    const stop = put.ok || put.transientExhausted || [401, 403].includes(put.status) || isApiVersionError(put.status, put.errorCode, put.errorMessage);
+    // Variant B is tried only when A drew a VALIDATION answer (400 / 422) that is not an api-version error. Anything else - a 409 / 412
+    // (service busy or a stale precondition), a 401 / 403, an exhausted 429 / 5xx, a 404 - is not an answer about the BODY, so a second
+    // body would prove nothing and could overwrite the real reason with a verdict.
+    const stop = put.ok || !isValidationRejection(put) || isApiVersionError(put.status, put.errorCode, put.errorMessage);
     if (stop) break;
   }
   const cid = id('create.passthrough');
@@ -152,10 +157,14 @@ async function createCells(ctx, cells) {
 
   if (!put.ok) {
     const s = structuralOrFailure(cid, put, ROLE_WRITE);
-    cells.push(s ?? measured(cid, 'rejected', { http: put.status, evidence: { attempts, crossRunRule: CROSS_RUN_RULE } }));
+    // `rejected` only for a validation answer (400 / 422); a 409 / 412 / exhausted 429 / 5xx / 401 / 403 is `s` (unknown), and any
+    // other status is the probe's request failing (tooling-error), not the gateway judging the create body.
+    if (s) cells.push(s);
+    else if (isValidationRejection(put)) cells.push(measured(cid, 'rejected', { http: put.status, evidence: { attempts, crossRunRule: CROSS_RUN_RULE } }));
+    else cells.push(unknown(cid, 'tooling-error', { evidence: { attempts, note: `HTTP ${put.status} is not a validation response (400/422): not a verdict on the create body` } }));
     const dep = (cellId) => (s
       ? { ...s, id: cellId, evidence: { dependsOn: cid, ...s.evidence } }
-      : unknown(cellId, 'tooling-error', { evidence: { note: 'not attempted: the MCP API create was rejected', dependsOn: cid } }));
+      : unknown(cellId, 'tooling-error', { evidence: { note: 'not attempted: the MCP API create was not accepted', dependsOn: cid } }));
     cells.push(dep(mid), dep(pid));
     return;
   }
@@ -209,8 +218,11 @@ async function blankPathCells(ctx, cells) {
     return;
   }
   if (!api.ok) {
-    cells.push(measured(aid, 'rejected', { http: api.status, evidence: { sent: sentApi, put: quote(api), note: 'a path conflict with an existing blank-path API in this estate would also look like this; the message is quoted verbatim' } }));
-    cells.push(unknown(oid, 'tooling-error', { evidence: { note: 'not attempted: the blank-path API PUT was rejected', dependsOn: aid } }));
+    // a 409 (`early` above, transient-exhausted) never reaches here: a conflict is not a verdict on the body
+    cells.push(isValidationRejection(api)
+      ? measured(aid, 'rejected', { http: api.status, evidence: { sent: sentApi, put: quote(api), note: 'a path conflict with an existing blank-path API in this estate would also look like this; the message is quoted verbatim' } })
+      : unknown(aid, 'tooling-error', { evidence: { sent: sentApi, put: quote(api), note: `HTTP ${api.status} is not a validation response (400/422): not a verdict on a blank-path API` } }));
+    cells.push(unknown(oid, 'tooling-error', { evidence: { note: 'not attempted: the blank-path API PUT was not accepted', dependsOn: aid } }));
     return;
   }
   cells.push(measured(aid, 'accepted (blank path)', { http: api.status, evidence: { sent: sentApi } }));
@@ -219,7 +231,12 @@ async function blankPathCells(ctx, cells) {
   const op = await putOperation(ctx, WK_API_ID, WK_OP_ID, sentOp);
   const opEarly = reasonForFailure(op, { role: ROLE_WRITE, scope: 'apim' });
   if (opEarly) { cells.push(unknown(oid, opEarly, { evidence: { sent: sentOp, put: quote(op) } })); return; }
-  if (!op.ok) { cells.push(measured(oid, 'rejected', { http: op.status, evidence: { sent: sentOp, put: quote(op) } })); return; }
+  if (!op.ok) {
+    cells.push(isValidationRejection(op)
+      ? measured(oid, 'rejected', { http: op.status, evidence: { sent: sentOp, put: quote(op) } })
+      : unknown(oid, 'tooling-error', { evidence: { sent: sentOp, put: quote(op), note: `HTTP ${op.status} is not a validation response (400/422): not a verdict on the operation` } }));
+    return;
+  }
   const back = await getOperation(ctx, WK_API_ID, WK_OP_ID);
   if (!back.ok) {
     cells.push(unknown(oid, reasonForFailure(back, { role: ROLE_READ, scope: 'apim' }) ?? 'tooling-error', { evidence: { sent: sentOp, put: quote(op), get: quote(back) } }));

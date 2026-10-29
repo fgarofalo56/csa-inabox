@@ -20,8 +20,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import * as core from '../_w0-core.mjs';
@@ -52,6 +53,9 @@ const ROLE_USER = '0b0b0b0b-1111-4222-8333-444444444444';
 const ROLE_AGENT_RO = '0c0c0c0c-1111-4222-8333-444444444444';
 const ROLE_AGENT_RW = '0d0d0d0d-1111-4222-8333-444444444444';
 const OTHER_SP_OBJECT = '99999999-aaaa-bbbb-cccc-999999999999';
+const SIGNIN_APP_ID = 'abababab-1111-2222-3333-cdcdcdcdcdcd';
+const SECOND_APP_OBJECT = 'bcbcbcbc-4444-5555-6666-dededededede';
+const SECOND_APP_ID = 'cdcdcdcd-7777-8888-9999-efefefefefef';
 const WORKSPACE_CUSTOMER = 'ffffffff-0000-1111-2222-333333333333';
 const IP_PUBLIC = '203.0.113.7'; // TEST-NET-3, documentation range
 const IP_PRIVATE = '10.20.30.40';
@@ -116,6 +120,25 @@ const KNOWN_ELEMENTS = new Set([
 const elementsIn = (xml) => [...String(xml).matchAll(/<([A-Za-z][\w-]*)/g)].map((m) => m[1]);
 const removeElement = (xml, name) => xml.replace(new RegExp(`<${name}(?:\\s[^>]*)?(?:/>|>[\\s\\S]*?</${name}>)`, 'g'), '');
 
+/**
+ * What the fake Graph does with the `$filter` of GET /applications: `startswith(displayName,'x')` and `displayName eq 'x'`, joined by
+ * ` or `, compared case-insensitively (an ASSUMPTION about Graph, like the rest of this fake). Any other filter THROWS, so a probe
+ * that changes its query cannot silently be answered with the whole list - a fixture whose shape is checked against the rule it
+ * must trigger. Without this the exact-name-first behaviour cannot be told apart from the prefix search.
+ */
+function appsMatching(apps, filter) {
+  if (!filter) return apps;
+  const unq = (s) => s.replace(/''/g, "'").toLowerCase();
+  const preds = filter.split(/\s+or\s+/).map((term) => {
+    let m = /^startswith\(displayName,'((?:[^']|'')*)'\)$/i.exec(term.trim());
+    if (m) { const p = unq(m[1]); return (a) => String(a.displayName).toLowerCase().startsWith(p); }
+    m = /^displayName eq '((?:[^']|'')*)'$/i.exec(term.trim());
+    if (m) { const n = unq(m[1]); return (a) => String(a.displayName).toLowerCase() === n; }
+    throw new Error(`fake Graph: unsupported $filter term ${JSON.stringify(term)}`);
+  });
+  return apps.filter((a) => preds.some((p) => p(a)));
+}
+
 const APIM_BASE = /^\/subscriptions\/[^/]+\/resourceGroups\/[^/]+\/providers\/Microsoft\.ApiManagement\/service\/([^/]+)(\/.*)?$/;
 const notFound = () => jsonRes(404, { error: { code: 'ResourceNotFound', message: 'The requested resource was not found.' } });
 
@@ -163,7 +186,10 @@ function estate({ cloud = 'commercial', clock = fakeClock() } = {}) {
       { appRoleId: ROLE_USER, resourceId: GRAPH_SP_OBJECT },
       { appRoleId: ROLE_AGENT_RO, resourceId: OTHER_SP_OBJECT }, // a role on ANOTHER api: counted, never named
     ] },
-    apps: [{ id: OTHER_SP_OBJECT, displayName: 'CSA Loom Console (kv-fixture)', groupMembershipClaims: 'SecurityGroup' }],
+    // the sign-in app is named after the Key Vault (bootstrap-msal-app-reg.sh: "CSA Loom Console (<KEYVAULT_NAME>)"); `id` and `appId` are
+    // GUID needles the cell must never carry
+    apps: [{ id: OTHER_SP_OBJECT, appId: SIGNIN_APP_ID, displayName: 'CSA Loom Console (kv-loom-fixture)', groupMembershipClaims: 'SecurityGroup' }],
+    keyVaults: [{ name: 'kv-loom-fixture' }, { name: 'kv-unrelated' }],
     models: { centralus: [{ kind: 'OpenAI', model: { format: 'OpenAI', name: 'gpt-fixture' } }, { kind: 'AIServices', model: { format: 'Anthropic', name: 'claude-fixture-b' } }, { kind: 'AIServices', model: { format: 'Anthropic', name: 'claude-fixture-a' } }, { kind: 'AIServices', model: { format: 'Anthropic', name: 'claude-fixture-a' } }] },
     accounts: [],
   };
@@ -243,7 +269,8 @@ function estate({ cloud = 'commercial', clock = fakeClock() } = {}) {
                 p.mcpProperties = { ...p.mcpProperties, endpoints: [{ name: 'mcp', uriTemplate: '/mcp' }] };
               }
             }
-            if (p.path === '' && e.blankPathConflict) return jsonRes(409, { error: { code: 'ValidationError', message: 'Another API already uses the empty path.' } });
+            // `blankPathConflict` is the status to answer with (true = 409); the real status is NOT observed, which is why a test names it
+            if (p.path === '' && e.blankPathConflict) return jsonRes(e.blankPathConflict === true ? 409 : e.blankPathConflict, { error: { code: 'ValidationError', message: 'Another API already uses the empty path.' } });
             e.apis.set(apiId, p);
             return jsonRes(201, { name: apiId, properties: { ...p, provisioningState: 'InProgress' } });
           }
@@ -289,7 +316,7 @@ function estate({ cloud = 'commercial', clock = fakeClock() } = {}) {
       if (r.method === 'GET' && r.path === `/v1.0/servicePrincipals(appId='${GRAPH_APP_ID}')`) return jsonRes(200, e.graphSp);
       const a = /^\/v1\.0\/servicePrincipals\/([^/]+)\/appRoleAssignments$/.exec(r.path);
       if (a && r.method === 'GET') return e.assignments[a[1]] ? jsonRes(200, { value: e.assignments[a[1]] }) : notFound();
-      if (r.method === 'GET' && r.path === '/v1.0/applications') return jsonRes(200, { value: e.apps });
+      if (r.method === 'GET' && r.path === '/v1.0/applications') return jsonRes(200, { value: appsMatching(e.apps, r.query.get('$filter')) });
       return undefined;
     },
 
@@ -298,6 +325,7 @@ function estate({ cloud = 'commercial', clock = fakeClock() } = {}) {
       if (r.origin !== e.arm || r.method !== 'GET') return undefined;
       if (r.path === `/subscriptions/${SUB}/providers/Microsoft.ManagedIdentity/userAssignedIdentities`) return jsonRes(200, { value: e.identities });
       if (r.path === `/subscriptions/${SUB}/providers/Microsoft.CognitiveServices/accounts`) return jsonRes(200, { value: e.accounts });
+      if (r.path === `/subscriptions/${SUB}/providers/Microsoft.KeyVault/vaults`) return jsonRes(200, { value: e.keyVaults });
       const m = /^\/subscriptions\/[^/]+\/providers\/Microsoft\.CognitiveServices\/locations\/([^/]+)\/models$/.exec(r.path);
       if (m) return e.models[m[1]] ? jsonRes(200, { value: e.models[m[1]] }) : jsonRes(404, { error: { code: 'LocationNotAvailableForResourceType', message: 'no such location' } });
       return undefined;
@@ -667,17 +695,52 @@ test('engine: a server that echoes the raw token back cannot put it in an error 
   core.clearSecretsForTest();
 });
 
-test('engine: the api-version and attribute classifiers key on the code and the message', () => {
+test('engine: the api-version classifier keys on the code and the message', () => {
   // BREAKS IF: an api-version failure is not recognised (a boundary finding becomes an instrument error),
-  // an ordinary 400 is mistaken for one, or an attribute-naming message is not recognised.
+  // or an ordinary 400 (here: a validation message about an attribute) is mistaken for one.
   assert.equal(core.isApiVersionError(400, 'InvalidApiVersionParameter', 'x'), true);
   assert.equal(core.isApiVersionError(400, 'NoRegisteredProviderFound', 'x'), true);
   assert.equal(core.isApiVersionError(400, 'SomethingElse', "The api-version '2025-09-01-preview' is not supported"), true);
   assert.equal(core.isApiVersionError(400, 'ValidationError', 'Required attribute calls is missing'), false);
   assert.equal(core.isApiVersionError(403, 'InvalidApiVersionParameter', 'x'), false, 'only 400/404 can be an api-version answer');
-  assert.equal(core.namesAnAttribute("Error in element 'quota-by-key' on line 1: Required attribute 'calls' is missing"), true);
-  assert.equal(core.namesAnAttribute("Error in element 'x': Unknown attribute 'foo'"), true);
-  assert.equal(core.namesAnAttribute("Error in element 'fragment' on line 1: The element 'quota-by-key' is not supported."), false);
+});
+
+// SYNTHETIC (the XSD-validator shapes named in the hardening review of PR #5181), not observed from a gateway. The ATTRIBUTE
+// list holds the three double-quoted strings the review showed the previous pattern missing, the XSD single-quoted shapes it
+// also missed (`not declared`, `is invalid - The value`), and ONE it did match (`required attribute 'x'`). Run over this list
+// (lifted from git, not transcribed) the previous pattern matched that one string only and flagged none of the ELEMENT list,
+// so a replacement that is merely the old pattern plus noise is red here. The ELEMENT list is what must stay a real finding.
+const ATTR_XSD = "The 'x' attribute is not declared.";
+const ELEM_XSD = "The element 'inbound' has invalid child element 'llm-token-limit'. List of possible elements expected: 'base, rate-limit, quota'.";
+const ATTRIBUTE_MESSAGES = [
+  'The "counter-key" attribute is required',
+  'The "x" attribute is not declared.',
+  'Value of "x" attribute is invalid',
+  ATTR_XSD,
+  "The required attribute 'counter-key' is missing.",
+  "The 'tokens-per-minute' attribute is invalid - The value 'abc' is invalid according to its datatype 'int'",
+  "Error in element 'rate-limit-by-key' on line 1, column 68: The 'calls' attribute is not declared.",
+  "THE 'X' ATTRIBUTE IS NOT DECLARED.",
+  "The attributes 'a' and 'b' are not declared.",
+];
+const ELEMENT_MESSAGES = [
+  ELEM_XSD,
+  "Error in element 'fragment' on line 1, column 11: The element 'quota-by-key' is not supported.",
+  'The "inbound" element has invalid child element "llm-token-limit".',
+  "Error in element 'fragment' on line 1, column 11: The element 'quota-by-key' is not supported on this gateway.",
+];
+
+test('engine: namesAnAttribute recognises the XSD single-quoted and the double-quoted attribute shapes, and leaves an element-only rejection a finding', () => {
+  // BREAKS IF: an attribute-naming rejection is missed (a probe typo is published as a finding about the gateway) - each of
+  // ATTRIBUTE_MESSAGES is such an input (the previous pattern missed eight of the nine) - or an element-only rejection is
+  // flagged (a real finding is hidden as a tooling error): each of ELEMENT_MESSAGES is such an input, and a classifier that
+  // answers true for everything is red on every one of them.
+  for (const m of ATTRIBUTE_MESSAGES) assert.equal(core.namesAnAttribute(m), true, m);
+  for (const m of ELEMENT_MESSAGES) assert.equal(core.namesAnAttribute(m), false, m);
+  // an empty or missing message names nothing
+  assert.equal(core.namesAnAttribute(''), false);
+  assert.equal(core.namesAnAttribute(undefined), false);
+  assert.equal(core.namesAnAttribute(null), false);
 });
 
 // ===========================================================================
@@ -703,26 +766,100 @@ test('deleteScratch throws on every non-scratch name BEFORE building a request, 
   await assert.rejects(core.deleteScratch(ctx, 'bogus-kind', 'w0-apiplane-ok'), /unknown kind/);
 });
 
-test('SHAPE: the DELETE verb appears exactly once in the probe sources, inside deleteScratch', () => {
-  // BREAKS IF: a second delete path is added anywhere (it would bypass the prefix guard). Positive pair:
-  // the count is exactly 1, so deleting deleteScratch (count 0) is red too.
-  const files = ['_w0-core.mjs', '_w0-telemetry.mjs', '_w0-policies.mjs', '_w0-mcp.mjs', '_w0-identity.mjs', '_w0-latency.mjs', '_w0-foundry.mjs', 'w0-apim-probe.mjs'];
+/**
+ * The probe's own sources: w0-apim-probe.mjs and EVERY _w0-*.mjs, listed from the directory (not hard-coded) so a new family file
+ * cannot hide from a shape test. CRLF is normalised: a Windows checkout holds it.
+ */
+function probeSources() {
+  const files = readdirSync(PROBE_DIR).filter((f) => f === 'w0-apim-probe.mjs' || /^_w0-.+\.mjs$/.test(f)).sort();
+  // positive guard: a filter that finds nothing (or loses a known file) would make every shape assertion below vacuous
+  for (const known of ['_w0-core.mjs', '_w0-policies.mjs', '_w0-mcp.mjs', '_w0-latency.mjs', '_w0-foundry.mjs', '_w0-identity.mjs', '_w0-telemetry.mjs', 'w0-apim-probe.mjs']) {
+    assert.ok(files.includes(known), `the derived source list lost ${known}: ${files.join(', ')}`);
+  }
+  return files.map((f) => [f, readFileSync(join(PROBE_DIR, f), 'utf8').replace(/\r\n/g, '\n')]);
+}
+
+test('SHAPE: the DELETE verb appears exactly once in the probe sources, inside deleteScratch, behind the scratch-name guard', () => {
+  // BREAKS IF: a second delete path is added anywhere in the probe (it would bypass the guard) - INCLUDING in a NEW _w0-*.mjs file,
+  // because the scanned list comes from readdirSync, not from eight hard-coded names. Positive pair: the count is exactly 1, so
+  // deleting deleteScratch (count 0) is red too, and probeSources() refuses a list that lost a known file.
   let total = 0;
   const where = [];
-  for (const f of files) {
-    const src = readFileSync(join(PROBE_DIR, f), 'utf8').replace(/\r\n/g, '\n');
+  for (const [f, src] of probeSources()) {
     const n = (src.match(/['"]DELETE['"]/g) || []).length;
     total += n;
     if (n) where.push(f);
   }
-  assert.equal(total, 1);
+  assert.equal(total, 1, `the DELETE verb appears in: ${where.join(', ')}`);
   assert.deepEqual(where, ['_w0-core.mjs']);
   const core_ = readFileSync(join(PROBE_DIR, '_w0-core.mjs'), 'utf8').replace(/\r\n/g, '\n');
   const start = core_.indexOf('export async function deleteScratch');
   const end = core_.indexOf('\n}\n', start);
   assert.ok(start > 0 && end > start);
-  assert.ok(core_.slice(start, end).includes("method: 'DELETE'"), 'the one DELETE must live inside deleteScratch');
-  assert.ok(core_.slice(start, end).indexOf('SCRATCH_NAME_RE.test') < core_.slice(start, end).indexOf("method: 'DELETE'"), 'the guard must come before the request');
+  const body = core_.slice(start, end);
+  assert.ok(body.includes("method: 'DELETE'"), 'the one DELETE must live inside deleteScratch');
+  assert.ok(body.includes('assertScratchName(') && body.indexOf('assertScratchName(') < body.indexOf("method: 'DELETE'"), 'the guard must come before the request');
+});
+
+test('SHAPE: every PUT site in the probe sources is a helper that calls assertScratchName() BEFORE the request, and the set of PUT helpers is exactly the listed one', () => {
+  // BREAKS IF: a PUT is added without the guard, or the guard is removed from one PUT helper - a PUT is a WRITE to a live gateway
+  // and the name is the only thing between a bug upstream and a customer's object. Scanned over the DERIVED source list, so a PUT
+  // in a new _w0-*.mjs file is caught too. The enclosing helper is the nearest top-level (column 0) const / function BEFORE the
+  // verb, and the guard must sit inside it ahead of the request. Positive pair: the helpers found are EXACTLY the five listed, so a
+  // scan that finds none is red, and a new guarded PUT helper is red until it is listed (a deliberate review point).
+  const DEFINITION = /^(?:export )?(?:async )?(?:const|function) (\w+)/gm;
+  const found = [];
+  const unguarded = [];
+  for (const [f, src] of probeSources()) {
+    const defs = [...src.matchAll(DEFINITION)].map((m) => ({ name: m[1], at: m.index }));
+    for (const m of src.matchAll(/['"]PUT['"]/g)) {
+      const def = defs.filter((d) => d.at < m.index).pop();
+      assert.ok(def, `${f}: a PUT literal at offset ${m.index} sits outside any top-level definition`);
+      found.push(`${f}:${def.name}`);
+      if (!src.slice(def.at, m.index).includes('assertScratchName(')) unguarded.push(`${f}:${def.name}`);
+    }
+  }
+  assert.deepEqual(unguarded, [], `PUT sites with no scratch-name guard ahead of the request: ${unguarded.join(', ')}`);
+  assert.deepEqual(found.sort(), [
+    '_w0-core.mjs:putApi', '_w0-core.mjs:putApiPolicy', '_w0-core.mjs:putNamedValue', '_w0-core.mjs:putOperation', '_w0-policies.mjs:putFragment',
+  ], 'the PUT helpers are exactly the five listed: a new one must be added here AND carry the guard');
+});
+
+test('every PUT helper throws on a non-scratch name BEFORE building a request, and builds exactly one PUT for a scratch name', async () => {
+  // BREAKS IF: the guard is removed or loosened from ANY PUT helper - each name below (a customer API, a bare prefix, path
+  // traversal, a query injection, wrong case, a trailing newline, empty, null, a number) would reach a PUT on a live gateway. The
+  // operation helper takes TWO names and refuses either. Positive pair: a scratch name builds exactly one PUT to the expected
+  // path, so a guard that refuses everything is red too. deleteScratch is covered by its own test above.
+  const est = estate();
+  const ctx = await mkCtx(est);
+  est.reset();
+  const BAD = ['production-api', 'w0-apiplane', 'w0-apiplane-', '../w0-apiplane-x', 'w0-apiplane-x?y=1', 'w0-apiplane-x/../prod', 'W0-APIPLANE-X', 'w0-apiplane-x\n', '', undefined, null, 42];
+  const props = { displayName: 'x', method: 'GET', urlTemplate: '/x' };
+  const helpers = {
+    putNamedValue: (name) => core.putNamedValue(ctx, name, 'v'),
+    putApi: (name) => core.putApi(ctx, name, { displayName: 'x', path: 'x', protocols: ['https'] }),
+    putApiPolicy: (name) => core.putApiPolicy(ctx, name, '<policies />'),
+    'putOperation (api id)': (name) => core.putOperation(ctx, name, 'w0-apiplane-ok-op', props),
+    'putOperation (operation id)': (name) => core.putOperation(ctx, 'w0-apiplane-ok', name, props),
+    putFragment: (name) => policies.putFragment(ctx, name, '<fragment />'),
+  };
+  for (const [label, call] of Object.entries(helpers)) {
+    for (const bad of BAD) await assert.rejects(call(bad), /refusing to write a non-scratch object/, `${label} accepted ${JSON.stringify(bad)}`);
+  }
+  assert.equal(est.calls.length, 0, 'a refused name must not even build a request');
+
+  await helpers.putNamedValue('w0-apiplane-ok');
+  await helpers.putApi('w0-apiplane-ok');
+  await helpers.putApiPolicy('w0-apiplane-ok');
+  await core.putOperation(ctx, 'w0-apiplane-ok', 'w0-apiplane-ok-op', props);
+  await helpers.putFragment('w0-apiplane-ok');
+  assert.deepEqual(est.calls.map((c) => `${c.method} ${c.path.slice(est.armBase.length)}`), [
+    'PUT /namedValues/w0-apiplane-ok', 'PUT /apis/w0-apiplane-ok', 'PUT /apis/w0-apiplane-ok/policies/policy',
+    'PUT /apis/w0-apiplane-ok/operations/w0-apiplane-ok-op', 'PUT /policyFragments/w0-apiplane-ok',
+  ]);
+  // the guard itself: a scratch name passes, and the verb only changes the word in the message
+  assert.equal(core.assertScratchName('w0-apiplane-ok', 'write'), undefined);
+  assert.throws(() => core.assertScratchName('prod', 'delete'), /refusing to delete a non-scratch object/);
 });
 
 test('sweepScratch deletes only w0-apiplane-* objects, APIs before fragments before named values', async () => {
@@ -1080,21 +1217,43 @@ test('policies: a validation rejection is "rejected" with the status and the ver
   assert.equal(result.exitCode, 0);
 });
 
-test('policies: a rejection that names an ATTRIBUTE is unknown:tooling-error (a probe defect), not "rejected"', async () => {
-  // BREAKS IF: the attribute-vs-element classifier is removed - the SAME status and code, with an element-naming
-  // message, must stay "rejected" (second half), so a classifier that always says tooling-error is red too.
-  const est = estate();
-  est.rules.push((r) => (r.method === 'PUT' && /policyFragments\/w0-apiplane-el-quota-by-key$/.test(r.path)
-    ? jsonRes(400, { error: { code: 'ValidationError', message: "Error in element 'quota-by-key' on line 1, column 11: Required attribute 'calls' is missing" } }) : undefined));
-  const { result } = await runFamily('policies', est);
-  assert.equal(text(result, 'policies.element.quota-by-key.single'), 'unknown:tooling-error');
-  assert.match(cell(result, 'policies.element.quota-by-key.single').evidence.why, /ATTRIBUTE/);
-  assert.equal(result.exitCode, 3);
+test('policies: a rejection that names an ATTRIBUTE (XSD single-quoted or double-quoted) is unknown:tooling-error, an element-only rejection stays "rejected" - at the single-element row AND at the combined rows', async () => {
+  // BREAKS IF: the attribute-vs-element classifier is removed, under-matches or over-matches. The breaking inputs are the
+  // strings of ATTRIBUTE_MESSAGES (same status 400, same code: must be tooling-error) and of ELEMENT_MESSAGES (must stay
+  // "rejected" with the verbatim message kept). A classifier that always says tooling-error is red on the second loop, one that
+  // never does is red on the first, and one that knows only the old `required attribute 'x'` shape is red on eight of the nine.
+  // The combined PUT is a SECOND consumer of the flag (combinedElementCell), so it is exercised with one string of each kind.
+  const rejectWith = (target, message) => {
+    const est = estate();
+    est.rules.push((r) => (r.method === 'PUT' && target.test(r.path) ? jsonRes(400, { error: { code: 'ValidationError', message } }) : undefined));
+    return est;
+  };
+  const singleRow = 'policies.element.quota-by-key.single';
+  const single = /policyFragments\/w0-apiplane-el-quota-by-key$/;
+  for (const message of ATTRIBUTE_MESSAGES) {
+    const { result } = await runFamily('policies', rejectWith(single, message));
+    assert.equal(text(result, singleRow), 'unknown:tooling-error', message);
+    assert.match(cell(result, singleRow).evidence.why, /ATTRIBUTE/, message);
+    assert.equal(cell(result, singleRow).evidence.put.message, message, 'the verbatim message is kept next to the verdict');
+    assert.equal(result.exitCode, 3, message);
+  }
+  for (const message of ELEMENT_MESSAGES) {
+    const { result } = await runFamily('policies', rejectWith(single, message));
+    assert.equal(text(result, singleRow), 'measured: rejected (HTTP 400)', message);
+    assert.equal(cell(result, singleRow).evidence.put.message, message, 'the verbatim message is kept next to the verdict');
+    assert.equal(result.exitCode, 0, message);
+  }
 
-  const est2 = estate();
-  est2.rules.push((r) => (r.method === 'PUT' && /policyFragments\/w0-apiplane-el-quota-by-key$/.test(r.path) ? jsonRes(400, rejectElementMessage('quota-by-key')) : undefined));
-  const { result: r2 } = await runFamily('policies', est2);
-  assert.equal(text(r2, 'policies.element.quota-by-key.single'), 'measured: rejected (HTTP 400)');
+  const combined = /policyFragments\/w0-apiplane-combined$/;
+  const { result: byAttribute } = await runFamily('policies', rejectWith(combined, ATTR_XSD));
+  assert.equal(text(byAttribute, 'policies.combined.put'), 'unknown:tooling-error');
+  for (const el of ELEMENTS) {
+    assert.equal(text(byAttribute, `policies.element.${el}.combined`), 'unknown:tooling-error', el);
+    assert.match(cell(byAttribute, `policies.element.${el}.combined`).evidence.why, /combined rejection names an ATTRIBUTE/, el);
+  }
+  const { result: byElement } = await runFamily('policies', rejectWith(combined, ELEM_XSD));
+  assert.equal(text(byElement, 'policies.combined.put'), 'measured: rejected (HTTP 400)');
+  for (const el of ELEMENTS) assert.match(text(byElement, `policies.element.${el}.combined`), /^measured: rejected \(the combined PUT was rejected as a whole/, el);
 });
 
 test('policies: a 403 on every write is unknown:permission naming the role - never "rejected" - and the controls are unrunnable, not failed', async () => {
@@ -1354,12 +1513,14 @@ test('mcp: a 403 on the create is unknown:permission (and so are its dependents)
   assert.equal(result.exitCode, 3);
 });
 
-test('mcp: a blank-path API that conflicts is "rejected" with the verbatim message, and its operation is unknown (not attempted)', async () => {
-  // BREAKS IF: a path conflict with an existing root API is hidden, or the operation is called measured.
+test('mcp: a blank-path API refused by VALIDATION (400) is "rejected" with the verbatim message, and its operation is unknown (not attempted)', async () => {
+  // BREAKS IF: a path conflict with an existing root API is hidden, or the operation is called measured. The status is 400 on
+  // purpose: only a validation answer (400 / 422) is a verdict; the same body answered 409 is covered by the status-classification
+  // test below (unknown:transient-exhausted).
   const est = estate();
-  est.blankPathConflict = true;
+  est.blankPathConflict = 400;
   const { result } = await runFamily('mcp', est);
-  assert.equal(text(result, 'mcp.blankPath.api'), 'measured: rejected (HTTP 409)');
+  assert.equal(text(result, 'mcp.blankPath.api'), 'measured: rejected (HTTP 400)');
   assert.equal(cell(result, 'mcp.blankPath.api').evidence.put.message, 'Another API already uses the empty path.');
   assert.equal(text(result, 'mcp.blankPath.wellKnownOperation'), 'unknown:tooling-error');
   assert.equal(result.exitCode, 3);
@@ -1397,7 +1558,7 @@ test('identity: all three reads answered - yes/no cells, role NAMES only, and no
   assert.equal(control(result, 'graph-service-principal-read-succeeded').status, 'passed');
   assert.equal(result.exitCode, 0);
   const dump = JSON.stringify(result);
-  for (const needle of [PRINCIPAL, GRAPH_SP_OBJECT, ROLE_DIRECTORY, ROLE_USER, ROLE_AGENT_RO, ROLE_AGENT_RW, OTHER_SP_OBJECT, GRAPH_APP_ID]) assert.ok(!dump.includes(needle), `leaked ${needle}`);
+  for (const needle of [PRINCIPAL, GRAPH_SP_OBJECT, ROLE_DIRECTORY, ROLE_USER, ROLE_AGENT_RO, ROLE_AGENT_RW, OTHER_SP_OBJECT, GRAPH_APP_ID, SIGNIN_APP_ID]) assert.ok(!dump.includes(needle), `leaked ${needle}`);
   // every Graph call used the run's own token audience and the right host
   assert.ok(sawAudience(est, 'https://graph.microsoft.com'));
   assert.equal(est.calls.filter((c) => c.origin === 'https://graph.microsoft.com').length, 3);
@@ -1469,6 +1630,151 @@ test('identity: the sign-in app answers yes/no only when EXACTLY ONE app matches
   assert.equal(url.headers.consistencylevel, 'eventual');
   assert.equal(url.query.get('$count'), 'true');
   assert.equal(url.query.get('$filter'), "startswith(displayName,'CSA Loom Console')");
+});
+
+const SIGNIN = 'identity.signinApp.groupMembershipClaims';
+const appQueries = (est) => est.calls.filter((c) => c.path === '/v1.0/applications');
+const appNamed = (displayName, object, appId, claim = 'None') => ({ id: object, appId, displayName, groupMembershipClaims: claim });
+
+test('identity: the sign-in app is looked up by its EXACT name first, which wins when the prefix also matches a second app; the prefix runs only when the exact name finds nothing', async () => {
+  // BREAKS IF: the prefix search runs first or alone. The breaking input is the live finding in miniature: the vault kv-loom-fixture,
+  // the app named for it AND a second app that merely shares the prefix - the prefix sees two and the cell goes unknown:not-located,
+  // while the exact name picks one. The verdict must come from the EXACT app: the two claims are flipped in the second run, so a cell
+  // that always answers "yes" is red. Positive pairs: an exact match makes ONE application query whose filter is the exact name (no
+  // prefix query), and when the exact name finds nothing the prefix query runs SECOND and answers.
+  const mk = (claimExact, claimOther) => {
+    const est = estate();
+    est.apps = [
+      appNamed('CSA Loom Console (kv-loom-fixture)', OTHER_SP_OBJECT, SIGNIN_APP_ID, claimExact),
+      appNamed('CSA Loom Console (rg-fixture)', SECOND_APP_OBJECT, SECOND_APP_ID, claimOther),
+    ];
+    return est;
+  };
+  const yes = mk('SecurityGroup', 'None');
+  const { result: r1 } = await runFamily('identity', yes);
+  assert.equal(text(r1, SIGNIN), 'measured: yes (HTTP 200)');
+  assert.equal(cell(r1, SIGNIN).evidence.matchedBy, 'exact-display-name');
+  assert.equal(cell(r1, SIGNIN).evidence.matchedDisplayName, 'CSA Loom Console (kv-loom-fixture)');
+  assert.deepEqual(appQueries(yes).map((c) => c.query.get('$filter')), ["displayName eq 'CSA Loom Console (kv-loom-fixture)'"], 'an exact match needs no prefix query');
+
+  const no = mk('None', 'SecurityGroup');
+  const { result: r2 } = await runFamily('identity', no);
+  assert.equal(text(r2, SIGNIN), 'measured: no (HTTP 200)', 'the verdict comes from the EXACT app, not from the one that only shares the prefix');
+  assert.equal(cell(r2, SIGNIN).evidence.groupMembershipClaims, 'None');
+
+  const fallback = estate();
+  fallback.apps = [appNamed('CSA Loom Console (something-else)', OTHER_SP_OBJECT, SIGNIN_APP_ID, 'SecurityGroup')];
+  const { result: r3 } = await runFamily('identity', fallback);
+  assert.equal(text(r3, SIGNIN), 'measured: yes (HTTP 200)');
+  assert.equal(cell(r3, SIGNIN).evidence.matchedBy, 'display-name-prefix');
+  assert.deepEqual(appQueries(fallback).map((c) => c.query.get('$filter')),
+    ["displayName eq 'CSA Loom Console (kv-loom-fixture)'", "startswith(displayName,'CSA Loom Console')"], 'the exact query first, the prefix second');
+});
+
+test('identity: several matches are unknown:not-located with the matched display NAMES listed and no id of any kind in the cell - at the exact step and at the prefix step', async () => {
+  // BREAKS IF: several matches are read as yes/no (the first is taken), the names are not listed (nobody can tell which app is the
+  // sign-in app - the live finding), or an id leaks. The breaking input at the EXACT step is two vaults named kv-loom-* each with a
+  // sign-in app named for it; at the PREFIX step it is no visible kv-loom* vault and two registrations sharing the prefix, one of
+  // whose NAMES embeds a GUID. Every app object carries `id` and `appId` GUID needles, and the assertion is on the SERIALISED CELL
+  // as the family built it (before any redaction), so only what the family chooses to put there counts. Positive pairs: the
+  // names ARE there, sorted; a duplicated name is listed twice (the same name on two registrations is itself the finding).
+  const GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+  const noIds = (c, label) => {
+    const dump = JSON.stringify(c);
+    for (const needle of [OTHER_SP_OBJECT, SIGNIN_APP_ID, SECOND_APP_OBJECT, SECOND_APP_ID]) assert.ok(!dump.includes(needle), `${label}: the cell leaked ${needle}`);
+    assert.ok(!GUID.test(dump), `${label}: a GUID-shaped string is in the cell: ${dump.slice(0, 300)}`);
+  };
+
+  const two = estate();
+  two.keyVaults = [{ name: 'kv-loom-a' }, { name: 'kv-loom-b' }, { name: 'kv-unrelated' }];
+  two.apps = [
+    appNamed('CSA Loom Console (kv-loom-b)', OTHER_SP_OBJECT, SIGNIN_APP_ID, 'SecurityGroup'),
+    appNamed('CSA Loom Console (kv-loom-a)', SECOND_APP_OBJECT, SECOND_APP_ID, 'None'),
+  ];
+  const { result: exact } = await runFamily('identity', two);
+  assert.equal(core.verdictText(cell(exact, SIGNIN)), 'unknown:not-located');
+  assert.equal(cell(exact, SIGNIN).evidence.matchedApps, 2);
+  assert.equal(cell(exact, SIGNIN).evidence.matchedBy, 'exact-display-name');
+  assert.deepEqual(cell(exact, SIGNIN).evidence.matchedDisplayNames, ['CSA Loom Console (kv-loom-a)', 'CSA Loom Console (kv-loom-b)']);
+  assert.deepEqual(cell(exact, SIGNIN).evidence.exactNamesSearched, ['CSA Loom Console (kv-loom-a)', 'CSA Loom Console (kv-loom-b)'], 'kv-unrelated is not a candidate');
+  assert.match(cell(exact, SIGNIN).evidence.note, /display names are listed/);
+  noIds(cell(exact, SIGNIN), 'exact step');
+  assert.equal(exact.exitCode, 0, 'a non-required cell that cannot be located is exit 0');
+
+  const dup = estate();
+  dup.apps = [
+    appNamed('CSA Loom Console (kv-loom-fixture)', OTHER_SP_OBJECT, SIGNIN_APP_ID, 'SecurityGroup'),
+    appNamed('CSA Loom Console (kv-loom-fixture)', SECOND_APP_OBJECT, SECOND_APP_ID, 'None'),
+  ];
+  const { result: dupResult } = await runFamily('identity', dup);
+  assert.equal(core.verdictText(cell(dupResult, SIGNIN)), 'unknown:not-located');
+  assert.deepEqual(cell(dupResult, SIGNIN).evidence.matchedDisplayNames, ['CSA Loom Console (kv-loom-fixture)', 'CSA Loom Console (kv-loom-fixture)']);
+  noIds(cell(dupResult, SIGNIN), 'duplicate names');
+
+  const prefix = estate();
+  prefix.keyVaults = [];
+  prefix.apps = [
+    appNamed('CSA Loom Console (rg-fixture)', OTHER_SP_OBJECT, SIGNIN_APP_ID, 'SecurityGroup'),
+    appNamed(`CSA Loom Console (${SECOND_APP_ID})`, SECOND_APP_OBJECT, SECOND_APP_ID, 'None'),
+  ];
+  const { result: byPrefix } = await runFamily('identity', prefix);
+  const pc = cell(byPrefix, SIGNIN);
+  assert.equal(core.verdictText(pc), 'unknown:not-located');
+  assert.equal(pc.evidence.matchedBy, 'display-name-prefix');
+  assert.equal(pc.evidence.matchedApps, 2);
+  assert.ok(pc.evidence.matchedDisplayNames.includes('CSA Loom Console (rg-fixture)'), JSON.stringify(pc.evidence.matchedDisplayNames));
+  assert.match(pc.evidence.exactNameStepSkipped, /no Key Vault named kv-loom\* is visible/);
+  noIds(pc, 'prefix step (a GUID inside a display name is redacted at the source)');
+});
+
+test('identity: zero matches by exact name AND by prefix stays unknown:not-located (unread, not unset), the two queries run in that order, and a Key Vault list that fails does not blank the cell', async () => {
+  // BREAKS IF: zero matches is rendered as "no" (the flag is unread, not unset), the fallback is not reached, or a Key Vault list that
+  // answered 403 / nothing useful turns the whole cell unknown instead of falling back to the prefix search. Positive pair: with
+  // the vault list forbidden the prefix search still ANSWERS (measured), and says why the exact step was skipped.
+  const none = estate();
+  none.apps = [appNamed('Some Unrelated App', OTHER_SP_OBJECT, SIGNIN_APP_ID, 'SecurityGroup')];
+  const { result: r1 } = await runFamily('identity', none);
+  assert.equal(core.verdictText(cell(r1, SIGNIN)), 'unknown:not-located');
+  assert.equal(cell(r1, SIGNIN).evidence.matchedApps, 0);
+  assert.match(cell(r1, SIGNIN).evidence.note, /unread, not unset/);
+  assert.deepEqual(cell(r1, SIGNIN).evidence.exactNamesSearched, ['CSA Loom Console (kv-loom-fixture)']);
+  assert.deepEqual(appQueries(none).map((c) => c.query.get('$filter')),
+    ["displayName eq 'CSA Loom Console (kv-loom-fixture)'", "startswith(displayName,'CSA Loom Console')"]);
+  assert.equal(r1.exitCode, 0);
+
+  const blind = estate();
+  blind.rules.push((r) => (r.origin === blind.arm && /Microsoft\.KeyVault\/vaults$/.test(r.path) ? arm403 : undefined));
+  const { result: r2 } = await runFamily('identity', blind);
+  assert.equal(text(r2, SIGNIN), 'measured: yes (HTTP 200)', 'the prefix search still answers when the vault list is forbidden');
+  assert.equal(cell(r2, SIGNIN).evidence.matchedBy, 'display-name-prefix');
+  assert.equal(cell(r2, SIGNIN).evidence.exactNameStepSkipped, 'the Key Vault list answered HTTP 403');
+  assert.deepEqual(cell(r2, SIGNIN).evidence.exactNamesSearched, []);
+  assert.deepEqual(appQueries(blind).map((c) => c.query.get('$filter')), ["startswith(displayName,'CSA Loom Console')"]);
+});
+
+test('identity: only a well-formed kv-loom* vault name ever reaches the $filter - an OData-injection name and an unrelated vault do not - and the candidates are capped at five', async () => {
+  // BREAKS IF: a vault name is spliced into the filter unchecked. The breaking input is a vault whose NAME carries OData
+  // (`kv-loom-0' or 'a' eq 'a`): spliced raw it would turn the exact query into a match-everything filter. Its name sorts BEFORE
+  // the good one on purpose, and the injection fixture holds only two candidates, so the five-name cap cannot hide it (a first draft
+  // of this test sorted it last behind five good names: the cap swallowed it and removing the check changed nothing). Positive pair:
+  // the well-formed name IS searched, so a check that refuses everything is red; an upper-case KV-LOOM name is a candidate too (the
+  // prefix is case-insensitive), kv-unrelated is not. The cap has its OWN fixture of six good names.
+  const inj = estate();
+  inj.keyVaults = [{ name: "kv-loom-0' or 'a' eq 'a" }, { name: 'kv-loom-good' }, { name: 'KV-LOOM-UPPER' }, { name: 'kv-unrelated' }];
+  inj.apps = [];
+  const { result } = await runFamily('identity', inj);
+  assert.deepEqual(cell(result, SIGNIN).evidence.exactNamesSearched, ['KV-LOOM-UPPER', 'kv-loom-good'].map((n) => `CSA Loom Console (${n})`));
+  const filter = appQueries(inj)[0].query.get('$filter');
+  assert.ok(!filter.includes("'a' eq 'a"), `an injection-shaped vault name reached the filter: ${filter}`);
+  assert.equal(filter, "displayName eq 'CSA Loom Console (KV-LOOM-UPPER)' or displayName eq 'CSA Loom Console (kv-loom-good)'");
+
+  const many = estate();
+  many.keyVaults = ['b', 'c', 'd', 'e', 'f', 'g'].map((s) => ({ name: `kv-loom-${s}` }));
+  many.apps = [];
+  const { result: capped } = await runFamily('identity', many);
+  assert.deepEqual(cell(capped, SIGNIN).evidence.exactNamesSearched, ['b', 'c', 'd', 'e', 'f'].map((s) => `CSA Loom Console (kv-loom-${s})`));
+  assert.equal(cell(capped, SIGNIN).evidence.exactNamesCapped, 5);
+  assert.equal(appQueries(many)[0].query.get('$filter').split(' or ').length, 5);
 });
 
 test('identity: a Console UAMI that is not among the identities is unknown:not-located, never "no roles"', async () => {
@@ -1686,9 +1992,11 @@ test('foundry: Anthropic is matched case-insensitively and the exact format stri
   assert.ok(cell(result, 'foundry.models.formats').value.formats.includes('anthropic'));
 });
 
-test('foundry DNS: ENOTFOUND is nxdomain, a persistent resolver failure is unknown:transient-exhausted after bounded retries', async () => {
-  // BREAKS IF: a resolver timeout is reported as nxdomain (a "no"), or the retries are unbounded / not slept.
+test('foundry DNS: ENOTFOUND for a real account\'s name is nxdomain, a persistent resolver failure is unknown:transient-exhausted after bounded retries', async () => {
+  // BREAKS IF: a resolver timeout is reported as nxdomain (a "no"), or the retries are unbounded / not slept. The nxdomain half
+  // uses a DISCOVERED account's own name: a real name that does not resolve is a finding (the synthetic-name case is below).
   const est = estate();
+  est.accounts = [{ kind: 'AIServices', properties: { customSubDomainName: 'acct-fixture-name' } }];
   const nx = mkDeps(est, { dnsLookup: async () => { throw Object.assign(new Error('x'), { code: 'ENOTFOUND' }); } });
   const { result } = await runFamily('foundry', est, { deps: nx });
   assert.equal(text(result, 'foundry.dns.servicesAiAzureCom'), 'measured: nxdomain (source: dns-lookup-from-in-vnet-runner)');
@@ -1722,6 +2030,107 @@ test('foundry: a 403 on the model list is unknown:permission:Reader@subscription
   assert.equal(text(result, 'foundry.models.formats'), 'unknown:permission:Reader@subscription');
   assert.equal(control(result, 'models-list-is-a-real-list').status, 'unrunnable');
   assert.equal(result.exitCode, 0);
+});
+
+test('foundry: a model list that did not FINISH (page cap reached, nextLink still pending) is unknown:tooling-error for both cells - never "none listed" - and the control is unrunnable, not failed', async () => {
+  // BREAKS IF: a truncated list is read as the whole catalogue. The breaking inputs are lists that never end: (Government) every
+  // page EMPTY, (Commercial) every page holds one OpenAI model. With the truncated branch disabled (measured in a sandbox copy)
+  // BOTH answer `measured: none listed (HTTP 200)` for the Anthropic cell - a false zero over a prefix of the catalogue.
+  // Positive pair: a list that FINISHES (three pages, the Anthropic model on the last) is read whole, so a fix that makes every
+  // multi-page list unknown is red too.
+  const paged = (est, pageOf, { endsAt = Infinity } = {}) => {
+    const state = { pages: 0 };
+    est.rules.push((r) => {
+      if (r.method !== 'GET' || !/locations\/[^/]+\/models$/.test(r.path)) return undefined;
+      state.pages += 1;
+      const body = { value: pageOf(state.pages) };
+      if (state.pages < endsAt) body.nextLink = `${est.arm}${r.path}?api-version=2024-10-01&page=${state.pages}`;
+      return jsonRes(200, body);
+    });
+    return state;
+  };
+  const unknownBoth = (result, label) => {
+    for (const cid of ['foundry.models.anthropic', 'foundry.models.formats']) {
+      assert.equal(text(result, cid), 'unknown:tooling-error', `${label} ${cid}`);
+      assert.equal(cell(result, cid).required, false, `${label} ${cid}: an unreadable catalogue is exit 0 (the PRP allows it)`);
+    }
+    assert.equal(control(result, 'models-list-is-a-real-list').status, 'unrunnable', label);
+    assert.equal(result.exitCode, 0, label);
+  };
+
+  const gov = estate({ cloud: 'gov' });
+  const govState = paged(gov, () => []);
+  const { result: govResult } = await runFamily('foundry', gov, { runner: 'hosted' });
+  assert.ok(govState.pages >= 2, 'the list really was paged');
+  unknownBoth(govResult, 'gov, every page empty');
+  assert.equal(cell(govResult, 'foundry.models.anthropic').evidence.entriesRead, 0);
+  assert.match(cell(govResult, 'foundry.models.anthropic').evidence.note, /truncated at the page cap/);
+
+  const com = estate();
+  const comState = paged(com, (n) => [{ kind: 'OpenAI', model: { format: 'OpenAI', name: `gpt-page-${n}` } }]);
+  const { result: comResult } = await runFamily('foundry', com);
+  unknownBoth(comResult, 'commercial, OpenAI-only pages');
+  assert.equal(cell(comResult, 'foundry.models.anthropic').evidence.entriesRead, comState.pages, 'one entry per page was read');
+
+  // an Anthropic model seen in the prefix is evidence, not a verdict
+  const seen = estate();
+  paged(seen, (n) => (n === 1 ? [{ kind: 'AIServices', model: { format: 'Anthropic', name: 'claude-page-one' } }, { kind: 'OpenAI', model: { format: 'OpenAI', name: 'gpt-x' } }] : []));
+  const { result: seenResult } = await runFamily('foundry', seen);
+  unknownBoth(seenResult, 'commercial, an Anthropic model on page one');
+  assert.deepEqual(cell(seenResult, 'foundry.models.anthropic').evidence.anthropicModelsSeenSoFar, ['claude-page-one']);
+
+  const finite = estate();
+  const finiteState = paged(finite, (n) => [n === 3
+    ? { kind: 'AIServices', model: { format: 'Anthropic', name: 'claude-page-three' } }
+    : { kind: 'OpenAI', model: { format: 'OpenAI', name: `gpt-page-${n}` } }], { endsAt: 3 });
+  const { result: finiteResult } = await runFamily('foundry', finite);
+  assert.equal(finiteState.pages, 3, 'all three pages were followed');
+  assert.equal(text(finiteResult, 'foundry.models.anthropic'), 'measured: claude-page-three (HTTP 200)');
+  assert.deepEqual(cell(finiteResult, 'foundry.models.formats').value, { formats: ['Anthropic', 'OpenAI'], totalModels: 3 });
+  assert.equal(control(finiteResult, 'models-list-is-a-real-list').status, 'passed');
+});
+
+test('foundry DNS: NXDOMAIN for the SYNTHETIC name is unknown:not-located; a resolving answer for it, any answer for a real account, and a hosted runner are unchanged', async () => {
+  // BREAKS IF: NXDOMAIN for a name that cannot exist is published as a measurement ("nxdomain" on a made-up name is true on EVERY
+  // resolver, private zone or not, so it says nothing about private resolution). The breaking input is the in-VNet runner with
+  // NO AI Services account in the subscription (the synthetic name) and a resolver that answers ENOTFOUND. Positive pairs, so a
+  // fix that makes every DNS cell unknown is red: private and public answers for the synthetic name stay measured, a REAL
+  // account's NXDOMAIN stays measured (a real name that does not resolve is a finding), and the hosted runner's structural
+  // not-measured verdict is untouched.
+  const nxdomain = async () => { throw Object.assign(new Error('x'), { code: 'ENOTFOUND' }); };
+  const dnsCase = async ({ accounts = [], dnsLookup, runner = 'in-vnet' }) => {
+    const est = estate();
+    est.accounts = accounts;
+    const { result } = await runFamily('foundry', est, { runner, deps: mkDeps(est, { dnsLookup }) });
+    return result;
+  };
+  const id = 'foundry.dns.servicesAiAzureCom';
+
+  const synthetic = await dnsCase({ dnsLookup: nxdomain });
+  assert.equal(text(synthetic, id), 'unknown:not-located');
+  assert.equal(cell(synthetic, id).evidence.nameSource, 'synthetic');
+  assert.equal(cell(synthetic, id).evidence.dnsAnswer, 'nxdomain', 'what was observed is kept as evidence');
+  assert.equal(cell(synthetic, id).required, false);
+  assert.equal(synthetic.exitCode, 0);
+
+  const priv = await dnsCase({ dnsLookup: async () => [IP_PRIVATE] });
+  assert.equal(text(priv, id), 'measured: resolves-private (source: dns-lookup-from-in-vnet-runner)');
+  assert.equal(cell(priv, id).evidence.nameSource, 'synthetic');
+  const pub = await dnsCase({ dnsLookup: async () => [IP_PUBLIC] });
+  assert.equal(text(pub, id), 'measured: resolves-public (source: dns-lookup-from-in-vnet-runner)');
+
+  const real = await dnsCase({ accounts: [{ kind: 'AIServices', properties: { customSubDomainName: 'acct-fixture-name' } }], dnsLookup: nxdomain });
+  assert.equal(text(real, id), 'measured: nxdomain (source: dns-lookup-from-in-vnet-runner)');
+  assert.equal(cell(real, id).evidence.nameSource, 'discovered-ai-services-account');
+
+  const hosted = await dnsCase({ dnsLookup: nxdomain, runner: 'hosted' });
+  assert.equal(text(hosted, id), 'not-measured:no-in-boundary-runner');
+  assert.equal(cell(hosted, id).evidence.hostedRunnerView, 'nxdomain');
+
+  for (const r of [synthetic, priv, pub, real, hosted]) {
+    const dump = JSON.stringify(r);
+    assert.ok(!dump.includes(IP_PRIVATE) && !dump.includes(IP_PUBLIC), 'the address must never be printed');
+  }
 });
 
 // ===========================================================================
@@ -1789,11 +2198,49 @@ test('two APIM instances and no --apim-name: fail closed (exit 2) listing the NA
   assert.equal(missing.status, 'NAMED-GATEWAY-NOT-FOUND');
   assert.equal(missing.exitCode, 2);
   assert.match(missing.notes[0], /matched none of the 2 APIM instances.*Names: apim-a, apim-b/);
+});
 
-  const est4 = estate();
-  est4.apims = [];
-  const { result: nothing } = await runFamily('mcp', est4, { apimName: 'apim-zzz' });
-  assert.equal(nothing.discovery.state, 'zero', 'a name asked of an EMPTY subscription is no-gateway-in-boundary');
+test('a NAMED gateway in a subscription with NO APIM at all fails closed (exit 2, named-not-found) in every family; the same empty subscription with no name stays an honest not-measured', async () => {
+  // BREAKS IF: --apim-name against an EMPTY subscription is read as "no gateway in the boundary" (state 'zero', exit 0, every
+  // cell unmeasured: a green job over nothing). The breaking input is estate.apims = [] with apimName 'apim-zzz'. With one OTHER
+  // instance present the same name already exited 2, so the empty subscription must not be the quieter case.
+  // Positive pair (an absence-only test is satisfied by deleting the feature): the SAME empty subscription with NO name must
+  // still be exit 0 with every cell not-measured:no-gateway-in-boundary - the honest negative is kept.
+  for (const family of core.FAMILIES) {
+    const est = estate();
+    est.apims = [];
+    const { result } = await runFamily(family, est, { apimName: 'apim-zzz' });
+    assert.equal(result.status, 'NAMED-GATEWAY-NOT-FOUND', family);
+    assert.equal(result.exitCode, 2, family);
+    assert.equal(result.valid, false, family);
+    assert.deepEqual(result.discovery, { state: 'named-not-found', seen: 0, names: [] }, family);
+    assert.deepEqual(result.cells, [], `${family}: a hard stop publishes no cell`);
+    assert.match(result.notes[0], /^--apim-name was given but this subscription holds no APIM instance .*Names: \(none\)$/, family);
+    assert.equal(est.calls.length, 1, `${family}: nothing but the APIM listing may be called`);
+
+    const unnamed = estate();
+    unnamed.apims = [];
+    const { result: honest } = await runFamily(family, unnamed);
+    assert.equal(honest.discovery.state, 'zero', family);
+    assert.equal(honest.exitCode, 0, family);
+    assert.equal(honest.cells.length, DECLARED[family], family);
+    assert.ok(honest.cells.every((c) => core.verdictText(c) === 'not-measured:no-gateway-in-boundary'), family);
+  }
+});
+
+test('a name that matches TWO listed instances fails closed and the note says how many matched - it must not claim "none"', async () => {
+  // BREAKS IF: the matched count is dropped from the note, so a listing that repeated the name reads "matched none of the 2"
+  // (a false statement: deploy-integrity.md R7). The two names differ only by case, which --apim-name matches case-insensitively.
+  // This pins the MESSAGE; the exit code and the state are pinned by the empty-subscription test above and by the two-instance
+  // test, so a mutation that changes only the state is caught there, not here.
+  const est = estate();
+  est.apims = [apimArm('apim-dup'), apimArm('APIM-DUP')];
+  const { result } = await runFamily('mcp', est, { apimName: 'apim-dup' });
+  assert.equal(result.exitCode, 2);
+  assert.equal(result.status, 'NAMED-GATEWAY-NOT-FOUND');
+  assert.match(result.notes[0], /^--apim-name matched 2 of the 2 APIM instances in this subscription \(exactly 1 is required\)\. Names: APIM-DUP, apim-dup$/);
+  assert.ok(!/matched none/.test(result.notes[0]), result.notes[0]);
+  assert.equal(est.calls.length, 1);
 });
 
 test('the cloud guard refuses BEFORE any read when az is logged into the other cloud', async () => {
@@ -1859,6 +2306,18 @@ test('parseArgs: the documented flags parse, and every malformed invocation is a
     assert.ok(deps.logs[0].startsWith('usage error:'));
     assert.equal(est.calls.length, 0);
   }
+});
+
+test('parseArgs: the latency cap is 1800 (30, 900 and 1800 parse; 5, 29, 1801, the old 3600 and 99999 do not) and the default is 900', () => {
+  // BREAKS IF: the cap moves. 3600 (the value this replaced) and 99999 must be refused, because 2 x cap has to fit the job timeout
+  // (the derived test below ties them together). Positive pair: 30, 900 and 1800 parse and the default is 900, so a parser that
+  // rejects everything - or one that loses the default - is red too. The message states the bound it enforces.
+  const poll = (n) => ['--cloud', 'gov', '--family', 'latency', '--latency-poll-seconds', String(n)];
+  for (const n of [30, 900, 1800]) assert.equal(probe.parseArgs(poll(n)).latencyPollSeconds, n, String(n));
+  for (const n of [5, 29, 1801, 3600, 99999]) {
+    assert.throws(() => probe.parseArgs(poll(n)), (e) => e instanceof probe.UsageError && /integer from 30 to 1800$/.test(e.message), String(n));
+  }
+  assert.equal(probe.parseArgs(['--cloud', 'gov', '--family', 'latency']).latencyPollSeconds, 900);
 });
 
 test('parseArgs: a path flag may not climb out with ".." or carry a NUL byte, and an ordinary path still parses', async () => {
@@ -2154,16 +2613,20 @@ for (const which of ['gov', 'commercial']) {
   });
 
   test(`${W.file}: the precheck rejects malformed inputs (apim_name, latency_poll_seconds, families) and accepts the documented ones`, () => {
-    // BREAKS IF: an input reaches the probe unvalidated (a name with spaces, a poll of 5 or 3601 or "abc", an unknown family,
-    // a family list with a space), or a valid one is refused.
+    // BREAKS IF: an input reaches the probe unvalidated (a name with spaces, a poll of 5, 29, 1801, the old maximum 3600, 99999
+    // or "abc", an unknown family, a family list with a space), or a valid one is refused. Three poll values are bash traps, each
+    // measured: `08` and `0900` are read as INVALID OCTAL, the arithmetic errors, the error reads as FALSE and the range check
+    // silently passes; `18446744073709552516` WRAPS to 900 in bash arithmetic and passes too. The digit regex has to catch them.
     const good = Object.fromEntries(W.envNames.map((n) => [n, 'present']));
     const run = (extra) => runPrecheck(which, { ...good, IN_APIM: '', IN_FAMILIES: 'all', IN_POLL: '900', ...extra });
-    for (const bad of [{ IN_APIM: 'bad name' }, { IN_APIM: '1abc' }, { IN_APIM: 'a'.repeat(51) }, { IN_POLL: '5' }, { IN_POLL: '3601' }, { IN_POLL: 'abc' }, { IN_POLL: '' },
+    for (const bad of [{ IN_APIM: 'bad name' }, { IN_APIM: '1abc' }, { IN_APIM: 'a'.repeat(51) },
+      { IN_POLL: '5' }, { IN_POLL: '29' }, { IN_POLL: '1801' }, { IN_POLL: '3600' }, { IN_POLL: '3601' }, { IN_POLL: '99999' }, { IN_POLL: 'abc' }, { IN_POLL: '' },
+      { IN_POLL: '08' }, { IN_POLL: '0900' }, { IN_POLL: '18446744073709552516' },
       { IN_FAMILIES: 'telemetry,bogus' }, { IN_FAMILIES: 'telemetry, policies' }, { IN_FAMILIES: '' }]) {
       const r = run(bad);
       assert.equal(r.code, 1, `${JSON.stringify(bad)} must be refused: ${r.out}`);
     }
-    for (const fine of [{ IN_APIM: 'apim-csa-loom-centralus' }, { IN_POLL: '30' }, { IN_POLL: '3600' }, { IN_FAMILIES: 'telemetry,mcp' }, { IN_FAMILIES: 'latency' }]) {
+    for (const fine of [{ IN_APIM: 'apim-csa-loom-centralus' }, { IN_POLL: '30' }, { IN_POLL: '900' }, { IN_POLL: '1800' }, { IN_FAMILIES: 'telemetry,mcp' }, { IN_FAMILIES: 'latency' }]) {
       const r = run(fine);
       assert.equal(r.code, 0, `${JSON.stringify(fine)} must be accepted: ${r.out}`);
     }
@@ -2270,6 +2733,116 @@ for (const which of ['gov', 'commercial']) {
     assert.ok(readFileSync(join(PROBE_DIR, 'w0-apim-probe.mjs'), 'utf8').length > 1000);
   });
 }
+
+/**
+ * The ABSOLUTE path of the bash the other workflow tests spawn, so a child can run with a PATH that holds nothing but stub tools
+ * (`cygpath` converts the MSYS path to a Windows one on Git Bash; on Linux `$BASH` is already absolute).
+ */
+function absoluteBashPath() {
+  const r = spawnSync('bash', ['-c', 'if command -v cygpath > /dev/null; then cygpath -w "$BASH"; else printf %s "$BASH"; fi'], { encoding: 'utf8' });
+  assert.equal(r.status, 0, `bash must be runnable to execute the toolchain step: ${r.stderr}`);
+  const bash = r.stdout.trim();
+  assert.ok(isAbsolute(bash) && existsSync(bash), `could not resolve an absolute path to bash: ${JSON.stringify(bash)}`);
+  return bash;
+}
+
+test('apiplane-w0-commercial-probe.yml: the FIRST step of the probe job fails closed, with a reason, unless node >= 20 and the az CLI are present - executed under a PATH that holds only stubs', () => {
+  // BREAKS IF: the self-hosted pool runner has a node older than 20, no node, or no az and the job carries on to die later in a
+  // stack trace - or the step is not first (the checkout and the login would run before the toolchain is known to be usable). Each
+  // failing input below is run for real: node 18 and 19 (either side of the cut), no node, node answering nothing or
+  // garbage, and no az. The stubs are shell scripts in a temp dir that is the ENTIRE PATH, so a real node or az on the
+  // machine cannot rescue a case. Positive pair, so a step that refuses everything is red: node 20, 22 and 100 (three digits)
+  // with az pass and say so.
+  const { doc } = loadWf('commercial');
+  const first = stepsOf(doc, 'probe')[0];
+  assert.ok(!('uses' in first), 'the toolchain check must be a run step, first - before the checkout and the login');
+  assert.match(String(val(first.name)), /node >= 20 and the az CLI/);
+  const script = runOf(first);
+  const bash = absoluteBashPath();
+  const execute = ({ nodeSays, az }) => {
+    const dir = mkdtempSync(join(tmpdir(), 'w0-toolchain-'));
+    try {
+      const stub = (name, body) => {
+        writeFileSync(join(dir, name), `#!/bin/sh\n${body}\n`);
+        chmodSync(join(dir, name), 0o755);
+      };
+      if (nodeSays !== undefined) stub('node', `echo '${nodeSays}'`);
+      if (az) stub('az', 'exit 0');
+      const r = spawnSync(bash, ['-c', script], { encoding: 'utf8', env: { PATH: dir } });
+      assert.equal(r.error, undefined, `the step must be runnable: ${r.error}`);
+      return { code: r.status, out: `${r.stdout}${r.stderr}` };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+  const refused = [
+    ['node 18', { nodeSays: '18', az: true }, /node on this runner reports major version '18'/],
+    ['node 19, one below the cut', { nodeSays: '19', az: true }, /reports major version '19'/],
+    ['no node at all', { nodeSays: undefined, az: true }, /node is not on this runner's PATH/],
+    ['node answers nothing', { nodeSays: '', az: true }, /reports major version ''/],
+    ['node answers garbage', { nodeSays: 'v?', az: true }, /reports major version 'v\?'/],
+    ['no az', { nodeSays: '22', az: false }, /the az CLI is not on this runner's PATH/],
+  ];
+  for (const [label, input, say] of refused) {
+    const r = execute(input);
+    assert.equal(r.code, 1, `${label} must fail closed: ${r.out}`);
+    assert.match(r.out, say, label);
+    assert.match(r.out, /::error::/, `${label}: the reason must be an annotation`);
+    assert.ok(!r.out.includes('toolchain ok'), `${label}: must not claim success`);
+  }
+  for (const major of ['20', '22', '100']) {
+    const r = execute({ nodeSays: major, az: true });
+    assert.equal(r.code, 0, `node ${major} with az must pass: ${r.out}`);
+    assert.ok(r.out.includes(`toolchain ok: node major ${major}, az present`), r.out);
+  }
+});
+
+test('the latency cap and the job timeout stay consistent: 2 x (the cap parseArgs accepts) + 15 min is below timeout-minutes of BOTH probe jobs, and both prechecks enforce that same cap', () => {
+  // BREAKS IF: the cap is raised (parseArgs accepting 3600 gives 2 x 3600 s = 120 min + 15 > 90) or a probe job's timeout-minutes
+  // is lowered below 2 x cap + 15. The latency family waits the cap up to TWICE (value A, then value B) and a timeout kill SKIPS
+  // the `finally` sweep, which would leave the scratch API (subscriptionRequired false) and the named value live on the gateway.
+  // The cap is DERIVED by probing parseArgs (the largest value it accepts) and the timeouts are read from the workflow files:
+  // neither is copied into this test. The 15 minutes is the hardening brief's allowance for everything else in the job
+  // (checkout, login, the five other families with their sweeps, the aggregate, the upload): a budget, NOT a measurement.
+  const accepts = (n) => {
+    try {
+      probe.parseArgs(['--cloud', 'gov', '--family', 'latency', '--latency-poll-seconds', String(n)]);
+      return true;
+    } catch (err) {
+      if (err instanceof probe.UsageError) return false;
+      throw err;
+    }
+  };
+  const SCAN_TO = 20_000;
+  let cap = 0;
+  for (let n = 1; n <= SCAN_TO; n += 1) if (accepts(n)) cap = n;
+  // positives that make the scan meaningful: a floor of 30, a ceiling INSIDE the scanned range, an accepted range that ends there
+  assert.ok(accepts(30) && !accepts(29), 'the floor is 30');
+  assert.ok(cap >= 30 && cap < SCAN_TO, `the cap (${cap}) must be a real ceiling inside the scanned range, not the edge of the scan`);
+  assert.ok(accepts(cap) && !accepts(cap + 1), 'the accepted range ends exactly at the cap');
+  assert.ok(accepts(900), 'the default 900 must stay accepted');
+
+  const worstCaseMinutes = (2 * cap) / 60 + 15;
+  for (const which of ['gov', 'commercial']) {
+    const minutes = Number(val(loadWf(which).doc.jobs.probe['timeout-minutes']));
+    assert.ok(Number.isInteger(minutes) && minutes > 0, `${WF[which].file}: timeout-minutes must be a positive integer`);
+    assert.ok(worstCaseMinutes < minutes, `${WF[which].file}: 2 x ${cap} s + 15 min = ${worstCaseMinutes} min must be below timeout-minutes ${minutes}`);
+    // the precheck enforces the SAME cap, and its error text states it
+    const good = Object.fromEntries(WF[which].envNames.map((n) => [n, 'present']));
+    const run = (poll) => runPrecheck(which, { ...good, IN_APIM: '', IN_FAMILIES: 'all', IN_POLL: String(poll) });
+    const atCap = run(cap);
+    assert.equal(atCap.code, 0, `${WF[which].file}: the precheck must accept the cap ${cap}: ${atCap.out}`);
+    const overCap = run(cap + 1);
+    assert.equal(overCap.code, 1, `${WF[which].file}: the precheck must refuse ${cap + 1}: ${overCap.out}`);
+    assert.ok(overCap.out.includes(`latency_poll_seconds must be an integer from 30 to ${cap}`), `${WF[which].file}: the error text must state the cap: ${overCap.out}`);
+    assert.ok(!atCap.out.includes('latency_poll_seconds must be'), 'an accepted value prints no poll error');
+  }
+  // both workflow input descriptions state the same range
+  for (const which of ['gov', 'commercial']) {
+    const desc = String(val(loadWf(which).doc.on.workflow_dispatch.inputs.latency_poll_seconds.description));
+    assert.ok(desc.includes(`(30-${cap})`), `${WF[which].file}: the input description must say (30-${cap}): ${desc}`);
+  }
+});
 
 // ===========================================================================
 // 15. edge cases that close the gaps found while reviewing the controls
@@ -2436,4 +3009,162 @@ test('every family JSON and the receipt quote the Actions run that produced them
   await probe.runProbe(aggregateArgs, { fs: m.fs, nowIso: () => 't', log: () => {}, env: {} });
   assert.match(m.files.get(resolve('run-ctx', 'receipt.md')), /Not an Actions run \(no GITHUB_RUN_ID\): a local invocation\./);
   assert.deepEqual(probe.runContext({}), { runId: null, attempt: null, workflow: null, ref: null, sha: null });
+});
+
+// ===========================================================================
+// 16. write safety: the service-state gate and the classification of a failed write
+// ===========================================================================
+
+test('writeGate: only provisioningState Succeeded (any case) opens the gate; anything else, a missing state included, closes it with the state as evidence', () => {
+  // BREAKS IF: a busy / failed / unreported service is let through. Each state below is such an input; a missing or non-string state
+  // must NOT be assumed Succeeded (what was not established is not asserted). Positive pair: the three spellings of Succeeded open it.
+  for (const s of ['Succeeded', 'succeeded', 'SUCCEEDED']) assert.equal(core.writeGate({ provisioningState: s }), null, s);
+  for (const s of ['Updating', 'Activating', 'Failed', 'Deleting', 'Terminating', 'Unsuccessful', '', undefined, null, 7]) {
+    const gate = core.writeGate({ provisioningState: s });
+    assert.ok(gate, `state ${String(s)} must close the gate`);
+    assert.equal(gate.provisioningState, typeof s === 'string' && s ? s : null, `state ${String(s)}`);
+    assert.match(gate.note, /nothing was written/);
+  }
+  assert.ok(core.writeGate(null) && core.writeGate(undefined), 'no APIM object at all is closed too');
+});
+
+test('a write family does not start while the APIM is not in provisioningState Succeeded: every cell is unknown:transient-exhausted with the state, exit 3, and NOTHING is written', async () => {
+  // BREAKS IF: a write family PUTs (or sweeps with a DELETE) against a service that is Updating / Activating / Failed / not
+  // reporting its state. The breaking input is apims[0].properties.provisioningState != Succeeded for each of policies, mcp and
+  // latency; the observable is est.calls - ONLY the APIM listing may have been made (no PUT, no DELETE, no POST). Positive pairs, so
+  // a gate that always closes (or closes for the read families too) is red: with Succeeded / succeeded the same families DO write,
+  // and telemetry, identity and foundry still read a busy service.
+  for (const family of core.WRITE_FAMILIES) {
+    for (const state of ['Updating', 'Activating', 'Failed', undefined]) {
+      const est = estate();
+      est.apims[0].properties.provisioningState = state;
+      const { result } = await runFamily(family, est);
+      const label = `${family} / ${String(state)}`;
+      assert.equal(result.cells.length, DECLARED[family], label);
+      for (const c of result.cells) {
+        assert.equal(core.verdictText(c), 'unknown:transient-exhausted', `${label} ${c.id}`);
+        assert.equal(c.evidence.provisioningState, state ?? null, `${label} ${c.id}: the state is the evidence`);
+        assert.equal(c.required, true, `${label} ${c.id}: required, so the family is exit 3 and not a quiet 0`);
+      }
+      assert.equal(result.exitCode, 3, label);
+      assert.equal(result.valid, true, `${label}: a busy service is not an invalid instrument`);
+      assert.ok(result.notes[0].startsWith(`${family}: the APIM is not in provisioningState Succeeded (${state ?? 'not reported'}), so nothing was written`), `${label}: ${result.notes[0]}`);
+      assert.deepEqual(est.calls.map((c) => c.method), ['GET'], `${label}: only the APIM listing may be called`);
+      assert.equal(est.calls.filter((c) => c.method !== 'GET').length, 0, `${label}: nothing may be written`);
+    }
+  }
+  for (const state of ['Succeeded', 'succeeded']) {
+    for (const family of core.WRITE_FAMILIES) {
+      const est = estate();
+      est.apims[0].properties.provisioningState = state;
+      const { result } = await runFamily(family, est);
+      assert.ok(est.callsMatching('PUT', /./).length > 0, `${family} / ${state}: a Succeeded service must be written to`);
+      assert.equal(result.exitCode, 0, `${family} / ${state}`);
+    }
+  }
+  for (const family of ['telemetry', 'identity', 'foundry']) {
+    const est = estate();
+    est.apims[0].properties.provisioningState = 'Updating';
+    const { result } = await runFamily(family, est);
+    assert.ok(est.calls.length > 1, `${family}: a read family still reads a busy service`);
+    assert.ok(result.cells.some((c) => c.verdict === 'measured'), `${family}: its cells are measured, not gated`);
+    assert.equal(est.calls.filter((c) => c.method === 'PUT' || c.method === 'DELETE').length, 0, `${family}: and writes nothing`);
+  }
+});
+
+test('SHAPE: WRITE_FAMILIES is exactly the families whose module writes - read from the family sources, not trusted', () => {
+  // BREAKS IF: a family that writes (calls withScratch or a PUT / DELETE helper) is missing from WRITE_FAMILIES, so the state gate
+  // never covers it, or a read-only family is listed (it would be gated for nothing). Derived from probeSources(). Positive pair:
+  // at least three writing families are found, so a scan that reads nothing is red.
+  const sources = new Map(probeSources());
+  const WRITES = /\b(?:withScratch|putNamedValue|putApi|putApiPolicy|putOperation|putFragment|putAndReadBack|deleteScratch)\(/;
+  const writers = core.FAMILIES.filter((f) => WRITES.test(sources.get(`_w0-${f}.mjs`)));
+  assert.ok(writers.length >= 3, `only ${writers.length} writing families found: ${writers.join(', ')}`);
+  assert.deepEqual([...core.WRITE_FAMILIES].sort(), [...writers].sort());
+});
+
+test('reasonForFailure and isValidationRejection: 409 / 412 are transient-exhausted, 401 / 403 are permission, and exactly 400 / 422 are validation answers', () => {
+  // BREAKS IF: a 409 or 412 is anything but transient-exhausted (it would be classified as a verdict), or the validation set
+  // widens past 400 / 422 (a 404, 409, 412, 429 ... would earn `rejected`). The loop pins EVERY status from 100 to 599.
+  const r = (status, extra = {}) => ({ ok: status !== null && status >= 200 && status < 300, status, transientExhausted: false, ...extra });
+  const ctx = { role: 'API Management Service Contributor', scope: 'apim' };
+  for (const s of [409, 412]) assert.equal(core.reasonForFailure(r(s), ctx), 'transient-exhausted', String(s));
+  for (const s of [401, 403]) assert.equal(core.reasonForFailure(r(s), ctx), 'permission:API Management Service Contributor@apim', String(s));
+  assert.equal(core.reasonForFailure(r(503, { transientExhausted: true }), ctx), 'transient-exhausted');
+  assert.equal(core.reasonForFailure(r(null, { transientExhausted: true }), ctx), 'transient-exhausted', 'a network failure');
+  for (const s of [400, 404, 422]) assert.equal(core.reasonForFailure(r(s), ctx), null, `${s} is a verdict-bearing answer, not a reason`);
+  assert.equal(core.reasonForFailure(r(200), ctx), null);
+  for (let s = 100; s <= 599; s += 1) assert.equal(core.isValidationRejection(r(s)), s === 400 || s === 422, `status ${s}`);
+  assert.equal(core.isValidationRejection(r(null)), false);
+  assert.deepEqual([...core.VALIDATION_STATUSES], [400, 422]);
+});
+
+test('a failed WRITE is "rejected" only for a validation status (400 / 422): 409 / 412 / exhausted 429 or 5xx are unknown:transient-exhausted, any other status is unknown:tooling-error - at all six write sites', async () => {
+  // BREAKS IF: any write site publishes a verdict about the BODY from an answer that is not one. The breaking inputs are 409 and 412
+  // (the service was busy or a precondition was stale), an exhausted 429 / 503, and a 404 / 405 / 415 (the probe's own request
+  // failing): none of them says whether APIM accepts the element / API / operation / named value. Each site is its own consumer of
+  // the classification (a mutation at one proves nothing about the others), so each is driven: the policies single-element
+  // row, the named-value PUT, the MCP create, the blank-path API, the blank-path operation and the latency family's scratch write.
+  // Positive pair: 400 and 422 stay `rejected` at the five sites that publish a verdict.
+  // [status, the cell, HTTP PUTs the MCP create makes]: variant B follows only a validation answer to variant A (2 calls), and the
+  // engine itself retries a 429 / 5xx three times per logical request (so one exhausted variant is 3 calls).
+  const CASES = [
+    [400, 'measured: rejected (HTTP 400)', 2], [422, 'measured: rejected (HTTP 422)', 2],
+    [409, 'unknown:transient-exhausted', 1], [412, 'unknown:transient-exhausted', 1], [429, 'unknown:transient-exhausted', 3], [503, 'unknown:transient-exhausted', 3],
+    [404, 'unknown:tooling-error', 1], [405, 'unknown:tooling-error', 1], [415, 'unknown:tooling-error', 1],
+  ];
+  const answer = (est, target, status) => {
+    est.rules.push((r) => (r.method === 'PUT' && target.test(r.path) ? jsonRes(status, { error: { code: 'X', message: 'm' } }) : undefined));
+    return est;
+  };
+  for (const [status, expected, mcpPuts] of CASES) {
+    const label = `HTTP ${status}`;
+
+    const pol = await runFamily('policies', answer(estate(), /policyFragments\/w0-apiplane-el-quota-by-key$/, status));
+    assert.equal(text(pol.result, 'policies.element.quota-by-key.single'), expected, `policies single row, ${label}`);
+    assert.equal(cell(pol.result, 'policies.element.quota-by-key.single').evidence.put.status, status, 'the status is quoted');
+    assert.equal(pol.result.exitCode, expected.startsWith('measured') ? 0 : 3, `policies single row exit, ${label}`);
+
+    const nv = await runFamily('policies', answer(estate(), /namedValues\/w0-apiplane-nv$/, status));
+    assert.equal(text(nv.result, 'policies.namedValue.put'), expected, `named-value PUT, ${label}`);
+
+    const create = estate();
+    answer(create, /apis\/w0-apiplane-mcp-api$/, status);
+    const mc = await runFamily('mcp', create);
+    assert.equal(text(mc.result, 'mcp.create.passthrough'), expected, `MCP create, ${label}`);
+    // variant B is tried only after a VALIDATION answer for variant A (and a 429 / 5xx is retried by the engine, not by the family)
+    assert.equal(create.callsMatching('PUT', /apis\/w0-apiplane-mcp-api$/).length, mcpPuts, `MCP create PUTs made, ${label}`);
+
+    const blank = estate();
+    blank.blankPathConflict = status;
+    const bp = await runFamily('mcp', blank);
+    assert.equal(text(bp.result, 'mcp.blankPath.api'), expected, `blank-path API, ${label}`);
+
+    const op = await runFamily('mcp', answer(estate(), /operations\/w0-apiplane-mcp-wk-op$/, status));
+    assert.equal(text(op.result, 'mcp.blankPath.wellKnownOperation'), expected, `blank-path operation, ${label}`);
+
+    // a sixth consumer: the latency family's own scratch write. It never says `rejected` (its writes are the instrument, not the
+    // subject), so 400 / 422 are tooling-error too; a 409 / 412 / exhausted 429 or 5xx is still transient-exhausted. Either way
+    // the cells are required (exit 3) and no scratch API is created behind a named value that was not written.
+    const latEst = answer(estate(), /namedValues\/w0-apiplane-latency$/, status);
+    const lat = await runFamily('latency', latEst);
+    const latExpected = expected === 'unknown:transient-exhausted' ? expected : 'unknown:tooling-error';
+    assert.equal(text(lat.result, 'latency.valueA'), latExpected, `latency named-value PUT, ${label}`);
+    assert.equal(lat.result.exitCode, 3, `latency exit, ${label}`);
+    assert.equal(latEst.callsMatching('PUT', /\/apis\//).length, 0, `latency: no API behind an unwritten named value, ${label}`);
+  }
+});
+
+test('a negative control whose PUT is answered 409 is unrunnable, never passed (a conflict is not a bogus element being refused)', async () => {
+  // BREAKS IF: a 409 on the bogus-element PUT is read as APIM refusing the element (control "passed"), which would let every
+  // "accepted" row in the family stand on a control that never ran. Positive pair: a 400 passes it.
+  const est = estate();
+  est.rules.push((r) => (r.method === 'PUT' && /policyFragments\/w0-apiplane-ctl-negative$/.test(r.path) ? jsonRes(409, { error: { code: 'Conflict', message: 'another operation is in progress' } }) : undefined));
+  const { result } = await runFamily('policies', est);
+  assert.equal(text(result, 'policies.control.negative'), 'unknown:transient-exhausted');
+  assert.equal(control(result, 'negative-bogus-element-not-retained').status, 'unrunnable');
+
+  const strict = estate();
+  const { result: rejected } = await runFamily('policies', strict);
+  assert.equal(control(rejected, 'negative-bogus-element-not-retained').status, 'passed');
 });

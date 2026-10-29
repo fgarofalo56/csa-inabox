@@ -8,11 +8,18 @@
  *           location is `usgovvirginia` in Government and the APIM's own region in
  *           Commercial. The cell is the model NAMES whose `model.format` is
  *           `Anthropic` (or "none listed") plus the distinct formats observed.
+ *           A list that did not FINISH (listAll hit its page cap with a nextLink
+ *           pending) is a prefix of the catalogue: both cells are
+ *           unknown:tooling-error, never "none listed" (a false zero).
  *   dns     one name is resolved and reported ONLY as resolves-private |
  *           resolves-public | nxdomain - never the address. A name from a real AI
  *           Services account in this subscription is used when one exists (a
  *           made-up name says nothing about private resolution); otherwise a
- *           synthetic one, and the cell says which.
+ *           synthetic one, and the cell says which. NXDOMAIN for the SYNTHETIC
+ *           name is unknown:not-located (a name that cannot exist is NXDOMAIN on
+ *           every resolver, so it says nothing about private resolution); a
+ *           resolving answer for it, and any answer for a real account's name,
+ *           stays measured.
  *
  * CONTROL
  *   commercial  the list must contain format `OpenAI` - a Commercial region with no
@@ -116,6 +123,17 @@ export async function run(ctx, acc) {
   } else if (r.malformed) {
     controls.push({ id: 'models-list-is-a-real-list', status: 'failed', detail: 'HTTP 200 without a value[] array: not a model list' });
     cells.push(unknown(aid, 'tooling-error', { ...opt, evidence: { note: '200 without value[]' } }), unknown(fid, 'tooling-error', { ...opt, evidence: { note: '200 without value[]' } }));
+  } else if (r.truncated) {
+    // listAll stopped at its page cap with a nextLink still pending: what it holds is a PREFIX of the catalogue. "none listed" over
+    // a prefix is a false zero and a format set over a prefix is a partial census, so BOTH cells are unknown. The control is
+    // unrunnable, not failed: a partial Commercial list can lack OpenAI without the instrument being broken.
+    const seen = [...new Set(r.items.filter((m) => /^anthropic$/i.test(String(m?.model?.format))).map((m) => m?.model?.name).filter((n) => typeof n === 'string'))].sort();
+    const evidence = {
+      location, entriesRead: r.items.length, anthropicModelsSeenSoFar: seen,
+      note: 'the model list was truncated at the page cap with a nextLink still pending: a partial list cannot support "none listed" or a format set',
+    };
+    controls.push({ id: 'models-list-is-a-real-list', status: 'unrunnable', detail: `the model list was truncated at the page cap (${r.items.length} entries read), so the control cannot be judged` });
+    cells.push(unknown(aid, 'tooling-error', { ...opt, evidence }), unknown(fid, 'tooling-error', { ...opt, evidence }));
   } else {
     const items = r.items;
     const wellFormed = items.every((m) => m && typeof m === 'object');
@@ -153,9 +171,20 @@ export async function run(ctx, acc) {
     if (sub) { host = `${sub.properties.customSubDomainName}.services.ai.azure.com`; nameSource = 'discovered-ai-services-account'; }
   }
   const d = await dnsVerdict(ctx.dnsLookup, ctx.sleep, host);
-  const evidence = { hostPattern: '*.services.ai.azure.com', nameSource, accountListStatus: accounts.last?.status ?? null, runner: ctx.runner };
+  const evidence = {
+    hostPattern: '*.services.ai.azure.com', nameSource, accountListStatus: accounts.last?.status ?? null,
+    accountListTruncated: Boolean(accounts.truncated), runner: ctx.runner,
+  };
   if (d.verdict === null) {
     cells.push(unknown(did, 'transient-exhausted', { ...opt, evidence: { ...evidence, dnsErrorClass: d.errorClass } }));
+  } else if (ctx.runner === 'in-vnet' && d.verdict === 'nxdomain' && nameSource === 'synthetic') {
+    // NXDOMAIN for a name that cannot exist says nothing about private resolution: a made-up name is NXDOMAIN on every resolver,
+    // private zone or not. Only a RESOLVING answer (private or public) says something about a synthetic name, and a real
+    // account's own name is a real question. So the answer is kept as evidence and the cell is "not located".
+    cells.push(unknown(did, 'not-located', {
+      ...opt,
+      evidence: { ...evidence, dnsAnswer: 'nxdomain', note: 'the name resolved was SYNTHETIC (no AI Services account with a customSubDomainName was found in this subscription): NXDOMAIN for a name that cannot exist is not a private-resolution verdict' },
+    }));
   } else if (ctx.runner === 'in-vnet') {
     cells.push(measured(did, d.verdict, { ...opt, source: 'dns-lookup-from-in-vnet-runner', evidence }));
   } else {

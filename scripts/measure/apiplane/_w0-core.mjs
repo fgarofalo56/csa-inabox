@@ -13,8 +13,9 @@
  *   - the HTTP engine: Node global fetch with an injected bearer token, REAL
  *     statuses (`az rest` hides them), bounded retry on 429/5xx/network only;
  *   - the scratch-object contract: every object this probe creates is named
- *     `w0-apiplane-*` and EVERY DELETE goes through deleteScratch(), which
- *     throws on any other name before a request is built.
+ *     `w0-apiplane-*`; EVERY DELETE goes through deleteScratch() and EVERY PUT
+ *     through a helper that starts with assertScratchName(), and both throw on
+ *     any other name before a request is built.
  *
  * Nothing here knows about a family. Nothing here reads the clock, the network
  * or a process directly: fetch, clock, sleep and the token source are injected,
@@ -93,6 +94,9 @@ export const API = Object.freeze({
   logAnalyticsMgmt: '2022-10-01',
   cognitive: '2024-10-01',
   managedIdentity: '2023-01-31',
+  // Key Vault list (names only): the api-version the Console itself uses for the same list in both clouds
+  // (apps/fiab-console/lib/gates/registry/types.ts); Learn's current page is 2024-11-01 with the same path and shape.
+  keyVault: '2023-07-01',
 });
 
 export const FAMILIES = Object.freeze(['telemetry', 'policies', 'mcp', 'identity', 'latency', 'foundry']);
@@ -337,8 +341,28 @@ export function isApiVersionError(status, code, message) {
   return /api[- ]version/i.test(message || '');
 }
 
-/** An error message that names an ATTRIBUTE (a probe-authoring defect), not an element. */
-const ATTRIBUTE_RE = /(?:\battribute\s+['"`‘“][^'"`’”]+['"`’”]|\b(?:required|missing|invalid|unsupported|unknown|unexpected|illegal)\s+attribute\b)/i;
+/**
+ * Does a validation rejection name an ATTRIBUTE - a probe-authoring defect (the body this probe wrote is wrong, so the cell
+ * is unknown:tooling-error, exit 3, verbatim message kept) - rather than an ELEMENT (a real finding about what the gateway
+ * accepts, so `measured: rejected`)?
+ *
+ * APIM's validation text is XSD-style and quotes with SINGLE quotes. Learn does not publish it; these are the shapes the
+ * hardening review named, not observed from a gateway:
+ *   The 'x' attribute is not declared.
+ *   The required attribute 'counter-key' is missing.
+ *   The 'tokens-per-minute' attribute is invalid - The value 'abc' is invalid according to its datatype 'int'
+ * An element rejection never says "attribute":
+ *   The element 'inbound' has invalid child element 'llm-token-limit'. List of possible elements expected: ...
+ * The previous pattern keyed on a quote or a qualifier ADJACENT to the word and so missed the first and third shapes and every
+ * double-quoted form (`The "counter-key" attribute is required`); the bare word (and its plural) is what is left to match.
+ *
+ * OVER-MATCHING IS THE LOUD DIRECTION, and that is deliberate: a message that merely mentions an attribute becomes
+ * unknown:tooling-error and a human reads it, whereas a probe typo quietly published as `rejected` would be a false finding
+ * about the gateway. An attribute rejection is therefore never a verdict by itself: it is read against the Commercial row of
+ * the same cell. If Commercial accepts the same body and Gov names an attribute, THAT is a boundary difference, and the
+ * verbatim message kept next to the cell is how a reader recognises it.
+ */
+const ATTRIBUTE_RE = /\battributes?\b/i;
 export function namesAnAttribute(message) {
   return ATTRIBUTE_RE.test(String(message || ''));
 }
@@ -508,15 +532,25 @@ export async function listAll(ctx, firstUrl, { service = 'arm', maxPages = 25 } 
 const KIND_PATH = Object.freeze({ namedValue: 'namedValues', policyFragment: 'policyFragments', api: 'apis' });
 
 /**
+ * THE name guard. The one DELETE and EVERY PUT helper call it BEFORE a request is built, so a bug upstream can never turn into a
+ * write to (or a delete of) a customer's object on a live gateway. Anchored: SCRATCH_NAME_RE is `^...$`, so a name that merely
+ * starts with the prefix, a trailing newline, a path segment or a query string does not pass. `verb` is only the word in the
+ * message ('delete' | 'write'). (A source-shape test pins that every PUT site and the one DELETE sit behind it.)
+ */
+export function assertScratchName(name, verb) {
+  if (typeof name !== 'string' || !SCRATCH_NAME_RE.test(name)) {
+    throw new Error(`refusing to ${verb} a non-scratch object: '${sanitize(name, 80)}' (scratch names match ${SCRATCH_NAME_RE})`);
+  }
+}
+
+/**
  * THE ONLY DELETE IN THIS PROBE. It throws, before a request is built, on any
  * name that is not a scratch name - so a bug upstream can never turn into a
  * delete of a customer's API on a live gateway. (A source-shape test pins that
  * this is the only place the verb appears.)
  */
 export async function deleteScratch(ctx, kind, name, apiVersion = API.apim) {
-  if (typeof name !== 'string' || !SCRATCH_NAME_RE.test(name)) {
-    throw new Error(`refusing to delete a non-scratch object: '${sanitize(name, 80)}' (scratch names match ${SCRATCH_NAME_RE})`);
-  }
+  assertScratchName(name, 'delete');
   const seg = KIND_PATH[kind];
   if (!seg) throw new Error(`deleteScratch: unknown kind '${kind}'`);
   const url = armUrl(ctx, `/${seg}/${encodeURIComponent(name)}`, apiVersion);
@@ -664,29 +698,45 @@ export async function withScratch(ctx, family, acc, body) {
 
 const enc = encodeURIComponent;
 
-export const putNamedValue = (ctx, id, value, { update = false } = {}) => ctx.client.request({
-  service: 'arm', method: 'PUT', ifMatch: update ? '*' : undefined,
-  url: armUrl(ctx, `/namedValues/${enc(id)}`, API.apim),
-  body: { properties: { displayName: id, value, secret: false, tags: ['w0-apiplane'] } },
-});
+// EVERY PUT below is `async` and starts with assertScratchName(): the guard throws (as a rejection, like deleteScratch) BEFORE a
+// request is built, so a non-scratch name never reaches the gateway. A source-shape test pins that no PUT site lacks it.
+export const putNamedValue = async (ctx, id, value, { update = false } = {}) => {
+  assertScratchName(id, 'write');
+  return ctx.client.request({
+    service: 'arm', method: 'PUT', ifMatch: update ? '*' : undefined,
+    url: armUrl(ctx, `/namedValues/${enc(id)}`, API.apim),
+    body: { properties: { displayName: id, value, secret: false, tags: ['w0-apiplane'] } },
+  });
+};
 export const getNamedValue = (ctx, id) => ctx.client.request({ service: 'arm', url: armUrl(ctx, `/namedValues/${enc(id)}`, API.apim) });
 
-export const putApi = (ctx, apiId, properties, apiVersion = API.apim) => ctx.client.request({
-  service: 'arm', method: 'PUT', url: armUrl(ctx, `/apis/${enc(apiId)}`, apiVersion), body: { properties },
-});
+export const putApi = async (ctx, apiId, properties, apiVersion = API.apim) => {
+  assertScratchName(apiId, 'write');
+  return ctx.client.request({
+    service: 'arm', method: 'PUT', url: armUrl(ctx, `/apis/${enc(apiId)}`, apiVersion), body: { properties },
+  });
+};
 export const getApi = (ctx, apiId, apiVersion = API.apim) => ctx.client.request({ service: 'arm', url: armUrl(ctx, `/apis/${enc(apiId)}`, apiVersion) });
 
-export const putApiPolicy = (ctx, apiId, xml, apiVersion = API.apim) => ctx.client.request({
-  service: 'arm', method: 'PUT', url: armUrl(ctx, `/apis/${enc(apiId)}/policies/policy`, apiVersion),
-  body: { properties: { format: 'xml', value: xml } },
-});
+export const putApiPolicy = async (ctx, apiId, xml, apiVersion = API.apim) => {
+  assertScratchName(apiId, 'write');
+  return ctx.client.request({
+    service: 'arm', method: 'PUT', url: armUrl(ctx, `/apis/${enc(apiId)}/policies/policy`, apiVersion),
+    body: { properties: { format: 'xml', value: xml } },
+  });
+};
 export const getApiPolicyRaw = (ctx, apiId, apiVersion = API.apim) => ctx.client.request({
   service: 'arm', url: armUrl(ctx, `/apis/${enc(apiId)}/policies/policy`, apiVersion, 'format=rawxml'),
 });
 
-export const putOperation = (ctx, apiId, opId, properties, apiVersion = API.apim) => ctx.client.request({
-  service: 'arm', method: 'PUT', url: armUrl(ctx, `/apis/${enc(apiId)}/operations/${enc(opId)}`, apiVersion), body: { properties },
-});
+export const putOperation = async (ctx, apiId, opId, properties, apiVersion = API.apim) => {
+  // the API id AND the operation id: an operation is created UNDER an API, and both come from the caller
+  assertScratchName(apiId, 'write');
+  assertScratchName(opId, 'write');
+  return ctx.client.request({
+    service: 'arm', method: 'PUT', url: armUrl(ctx, `/apis/${enc(apiId)}/operations/${enc(opId)}`, apiVersion), body: { properties },
+  });
+};
 export const getOperation = (ctx, apiId, opId, apiVersion = API.apim) => ctx.client.request({
   service: 'arm', url: armUrl(ctx, `/apis/${enc(apiId)}/operations/${enc(opId)}`, apiVersion),
 });
@@ -753,15 +803,19 @@ const WRITE_ROLE = 'API Management Service Contributor';
  * proves nothing on its own: APIM can accept a document and drop what it does
  * not know. Outcomes:
  *   accepted | silent-drop | rejected | rejected-failed | unknown
- * `rejected` carries `attribute: true` when the message names an ATTRIBUTE
- * (a probe-authoring defect, to be classified tooling-error by the caller).
+ * `rejected` means the service answered with a VALIDATION status (400 / 422) and carries `attribute: true` when the message names
+ * an ATTRIBUTE (a probe-authoring defect, to be classified tooling-error by the caller). A 409 / 412, an exhausted 429 / 5xx, a
+ * 401 / 403 and any other non-2xx are `unknown`: they are not a verdict on the body.
  */
 export async function putAndReadBack(ctx, { put, read, xml, count, role = WRITE_ROLE }) {
   const p = await put();
   const base = { put: p, xml, count };
   const early = reasonForFailure(p, { role, scope: 'apim' });
   if (early) return { ...base, outcome: 'unknown', reason: early };
-  if (!p.ok) return { ...base, outcome: 'rejected', attribute: namesAnAttribute(p.errorMessage) };
+  if (!p.ok) {
+    if (isValidationRejection(p)) return { ...base, outcome: 'rejected', attribute: namesAnAttribute(p.errorMessage) };
+    return { ...base, outcome: 'unknown', reason: 'tooling-error', note: `the write answered HTTP ${p.status}, which is not a validation response (400/422): not a verdict on the body` };
+  }
   const w = await waitProvisioned(ctx, read);
   const get = w.last;
   if (w.state === 'read-failed') {
@@ -796,11 +850,46 @@ export function countElement(xml, name) {
   return (decoded.match(re) || []).length;
 }
 
-/** Map a non-2xx or transient result to the cell reason it implies, or null when it is a verdict-bearing 4xx. */
+/**
+ * Map a non-2xx or transient result to the cell reason it implies, or null when it is a verdict-bearing answer (a validation
+ * 400 / 422 on a write, a 404 on a read).
+ *
+ * 409 and 412 are NOT verdicts: a write that collides with the service's state (another operation in progress) or with a stale
+ * precondition (an ETag that moved) says nothing about whether the body is acceptable, so it is `transient-exhausted` - never
+ * `rejected`. The same holds for an exhausted 429 / 5xx or a network failure (the client sets `transientExhausted`).
+ */
 export function reasonForFailure(result, { role, scope }) {
   if (result.transientExhausted) return 'transient-exhausted';
   if (result.status === 401 || result.status === 403) return permissionReason(role, scope);
+  if (result.status === 409 || result.status === 412) return 'transient-exhausted';
   return null;
+}
+
+/**
+ * The only statuses that mean "the service read the body and refused it". `rejected` is a VERDICT about a body, so only these earn
+ * it; any other non-2xx on a write (a 404, 405, 413, 415 ...) is the probe's own request failing, not the gateway judging the body.
+ */
+export const VALIDATION_STATUSES = Object.freeze([400, 422]);
+export const isValidationRejection = (result) => !result.ok && VALIDATION_STATUSES.includes(result.status);
+
+/** Families that PUT or DELETE on the gateway. A source-shape test pins this list against the family modules that call withScratch(). */
+export const WRITE_FAMILIES = Object.freeze(['policies', 'mcp', 'latency']);
+
+/**
+ * May a write family start? The expectation (NOT observed by this probe) is that a write against a service that is not in
+ * provisioningState `Succeeded` - Updating, Activating, Failed, Deleting ... - is answered 409 or queued, so whatever it measured
+ * would say nothing about the feature. Returns null when writes may proceed, else the evidence for the family's cells. A MISSING
+ * state is not assumed to be Succeeded: what was not established is not asserted (deploy-integrity.md R7). The printed note states
+ * only what was established: the state, and that nothing was written.
+ */
+export function writeGate(apim) {
+  const state = apim?.provisioningState;
+  if (typeof state === 'string' && /^succeeded$/i.test(state)) return null;
+  const shown = typeof state === 'string' && state ? sanitize(state, 40) : null;
+  return {
+    provisioningState: shown,
+    note: `the APIM is not in provisioningState Succeeded (${shown ?? 'not reported'}), so nothing was written`,
+  };
 }
 
 /** Trim a verbatim server message for the receipt. */
