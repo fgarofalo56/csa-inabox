@@ -53,6 +53,9 @@ const ROLE_USER = '0b0b0b0b-1111-4222-8333-444444444444';
 const ROLE_AGENT_RO = '0c0c0c0c-1111-4222-8333-444444444444';
 const ROLE_AGENT_RW = '0d0d0d0d-1111-4222-8333-444444444444';
 const OTHER_SP_OBJECT = '99999999-aaaa-bbbb-cccc-999999999999';
+const SIGNIN_APP_ID = 'abababab-1111-2222-3333-cdcdcdcdcdcd';
+const SECOND_APP_OBJECT = 'bcbcbcbc-4444-5555-6666-dededededede';
+const SECOND_APP_ID = 'cdcdcdcd-7777-8888-9999-efefefefefef';
 const WORKSPACE_CUSTOMER = 'ffffffff-0000-1111-2222-333333333333';
 const IP_PUBLIC = '203.0.113.7'; // TEST-NET-3, documentation range
 const IP_PRIVATE = '10.20.30.40';
@@ -117,6 +120,25 @@ const KNOWN_ELEMENTS = new Set([
 const elementsIn = (xml) => [...String(xml).matchAll(/<([A-Za-z][\w-]*)/g)].map((m) => m[1]);
 const removeElement = (xml, name) => xml.replace(new RegExp(`<${name}(?:\\s[^>]*)?(?:/>|>[\\s\\S]*?</${name}>)`, 'g'), '');
 
+/**
+ * What the fake Graph does with the `$filter` of GET /applications: `startswith(displayName,'x')` and `displayName eq 'x'`, joined by
+ * ` or `, compared case-insensitively (an ASSUMPTION about Graph, like the rest of this fake). Any other filter THROWS, so a probe
+ * that changes its query cannot silently be answered with the whole list - a fixture whose shape is checked against the rule it
+ * must trigger. Without this the exact-name-first behaviour cannot be told apart from the prefix search.
+ */
+function appsMatching(apps, filter) {
+  if (!filter) return apps;
+  const unq = (s) => s.replace(/''/g, "'").toLowerCase();
+  const preds = filter.split(/\s+or\s+/).map((term) => {
+    let m = /^startswith\(displayName,'((?:[^']|'')*)'\)$/i.exec(term.trim());
+    if (m) { const p = unq(m[1]); return (a) => String(a.displayName).toLowerCase().startsWith(p); }
+    m = /^displayName eq '((?:[^']|'')*)'$/i.exec(term.trim());
+    if (m) { const n = unq(m[1]); return (a) => String(a.displayName).toLowerCase() === n; }
+    throw new Error(`fake Graph: unsupported $filter term ${JSON.stringify(term)}`);
+  });
+  return apps.filter((a) => preds.some((p) => p(a)));
+}
+
 const APIM_BASE = /^\/subscriptions\/[^/]+\/resourceGroups\/[^/]+\/providers\/Microsoft\.ApiManagement\/service\/([^/]+)(\/.*)?$/;
 const notFound = () => jsonRes(404, { error: { code: 'ResourceNotFound', message: 'The requested resource was not found.' } });
 
@@ -164,7 +186,10 @@ function estate({ cloud = 'commercial', clock = fakeClock() } = {}) {
       { appRoleId: ROLE_USER, resourceId: GRAPH_SP_OBJECT },
       { appRoleId: ROLE_AGENT_RO, resourceId: OTHER_SP_OBJECT }, // a role on ANOTHER api: counted, never named
     ] },
-    apps: [{ id: OTHER_SP_OBJECT, displayName: 'CSA Loom Console (kv-fixture)', groupMembershipClaims: 'SecurityGroup' }],
+    // the sign-in app is named after the Key Vault (bootstrap-msal-app-reg.sh: "CSA Loom Console (<KEYVAULT_NAME>)"); `id` and `appId` are
+    // GUID needles the cell must never carry
+    apps: [{ id: OTHER_SP_OBJECT, appId: SIGNIN_APP_ID, displayName: 'CSA Loom Console (kv-loom-fixture)', groupMembershipClaims: 'SecurityGroup' }],
+    keyVaults: [{ name: 'kv-loom-fixture' }, { name: 'kv-unrelated' }],
     models: { centralus: [{ kind: 'OpenAI', model: { format: 'OpenAI', name: 'gpt-fixture' } }, { kind: 'AIServices', model: { format: 'Anthropic', name: 'claude-fixture-b' } }, { kind: 'AIServices', model: { format: 'Anthropic', name: 'claude-fixture-a' } }, { kind: 'AIServices', model: { format: 'Anthropic', name: 'claude-fixture-a' } }] },
     accounts: [],
   };
@@ -291,7 +316,7 @@ function estate({ cloud = 'commercial', clock = fakeClock() } = {}) {
       if (r.method === 'GET' && r.path === `/v1.0/servicePrincipals(appId='${GRAPH_APP_ID}')`) return jsonRes(200, e.graphSp);
       const a = /^\/v1\.0\/servicePrincipals\/([^/]+)\/appRoleAssignments$/.exec(r.path);
       if (a && r.method === 'GET') return e.assignments[a[1]] ? jsonRes(200, { value: e.assignments[a[1]] }) : notFound();
-      if (r.method === 'GET' && r.path === '/v1.0/applications') return jsonRes(200, { value: e.apps });
+      if (r.method === 'GET' && r.path === '/v1.0/applications') return jsonRes(200, { value: appsMatching(e.apps, r.query.get('$filter')) });
       return undefined;
     },
 
@@ -300,6 +325,7 @@ function estate({ cloud = 'commercial', clock = fakeClock() } = {}) {
       if (r.origin !== e.arm || r.method !== 'GET') return undefined;
       if (r.path === `/subscriptions/${SUB}/providers/Microsoft.ManagedIdentity/userAssignedIdentities`) return jsonRes(200, { value: e.identities });
       if (r.path === `/subscriptions/${SUB}/providers/Microsoft.CognitiveServices/accounts`) return jsonRes(200, { value: e.accounts });
+      if (r.path === `/subscriptions/${SUB}/providers/Microsoft.KeyVault/vaults`) return jsonRes(200, { value: e.keyVaults });
       const m = /^\/subscriptions\/[^/]+\/providers\/Microsoft\.CognitiveServices\/locations\/([^/]+)\/models$/.exec(r.path);
       if (m) return e.models[m[1]] ? jsonRes(200, { value: e.models[m[1]] }) : jsonRes(404, { error: { code: 'LocationNotAvailableForResourceType', message: 'no such location' } });
       return undefined;
@@ -1532,7 +1558,7 @@ test('identity: all three reads answered - yes/no cells, role NAMES only, and no
   assert.equal(control(result, 'graph-service-principal-read-succeeded').status, 'passed');
   assert.equal(result.exitCode, 0);
   const dump = JSON.stringify(result);
-  for (const needle of [PRINCIPAL, GRAPH_SP_OBJECT, ROLE_DIRECTORY, ROLE_USER, ROLE_AGENT_RO, ROLE_AGENT_RW, OTHER_SP_OBJECT, GRAPH_APP_ID]) assert.ok(!dump.includes(needle), `leaked ${needle}`);
+  for (const needle of [PRINCIPAL, GRAPH_SP_OBJECT, ROLE_DIRECTORY, ROLE_USER, ROLE_AGENT_RO, ROLE_AGENT_RW, OTHER_SP_OBJECT, GRAPH_APP_ID, SIGNIN_APP_ID]) assert.ok(!dump.includes(needle), `leaked ${needle}`);
   // every Graph call used the run's own token audience and the right host
   assert.ok(sawAudience(est, 'https://graph.microsoft.com'));
   assert.equal(est.calls.filter((c) => c.origin === 'https://graph.microsoft.com').length, 3);
@@ -1604,6 +1630,151 @@ test('identity: the sign-in app answers yes/no only when EXACTLY ONE app matches
   assert.equal(url.headers.consistencylevel, 'eventual');
   assert.equal(url.query.get('$count'), 'true');
   assert.equal(url.query.get('$filter'), "startswith(displayName,'CSA Loom Console')");
+});
+
+const SIGNIN = 'identity.signinApp.groupMembershipClaims';
+const appQueries = (est) => est.calls.filter((c) => c.path === '/v1.0/applications');
+const appNamed = (displayName, object, appId, claim = 'None') => ({ id: object, appId, displayName, groupMembershipClaims: claim });
+
+test('identity: the sign-in app is looked up by its EXACT name first, which wins when the prefix also matches a second app; the prefix runs only when the exact name finds nothing', async () => {
+  // BREAKS IF: the prefix search runs first or alone. The breaking input is the live finding in miniature: the vault kv-loom-fixture,
+  // the app named for it AND a second app that merely shares the prefix - the prefix sees two and the cell goes unknown:not-located,
+  // while the exact name picks one. The verdict must come from the EXACT app: the two claims are flipped in the second run, so a cell
+  // that always answers "yes" is red. Positive pairs: an exact match makes ONE application query whose filter is the exact name (no
+  // prefix query), and when the exact name finds nothing the prefix query runs SECOND and answers.
+  const mk = (claimExact, claimOther) => {
+    const est = estate();
+    est.apps = [
+      appNamed('CSA Loom Console (kv-loom-fixture)', OTHER_SP_OBJECT, SIGNIN_APP_ID, claimExact),
+      appNamed('CSA Loom Console (rg-fixture)', SECOND_APP_OBJECT, SECOND_APP_ID, claimOther),
+    ];
+    return est;
+  };
+  const yes = mk('SecurityGroup', 'None');
+  const { result: r1 } = await runFamily('identity', yes);
+  assert.equal(text(r1, SIGNIN), 'measured: yes (HTTP 200)');
+  assert.equal(cell(r1, SIGNIN).evidence.matchedBy, 'exact-display-name');
+  assert.equal(cell(r1, SIGNIN).evidence.matchedDisplayName, 'CSA Loom Console (kv-loom-fixture)');
+  assert.deepEqual(appQueries(yes).map((c) => c.query.get('$filter')), ["displayName eq 'CSA Loom Console (kv-loom-fixture)'"], 'an exact match needs no prefix query');
+
+  const no = mk('None', 'SecurityGroup');
+  const { result: r2 } = await runFamily('identity', no);
+  assert.equal(text(r2, SIGNIN), 'measured: no (HTTP 200)', 'the verdict comes from the EXACT app, not from the one that only shares the prefix');
+  assert.equal(cell(r2, SIGNIN).evidence.groupMembershipClaims, 'None');
+
+  const fallback = estate();
+  fallback.apps = [appNamed('CSA Loom Console (something-else)', OTHER_SP_OBJECT, SIGNIN_APP_ID, 'SecurityGroup')];
+  const { result: r3 } = await runFamily('identity', fallback);
+  assert.equal(text(r3, SIGNIN), 'measured: yes (HTTP 200)');
+  assert.equal(cell(r3, SIGNIN).evidence.matchedBy, 'display-name-prefix');
+  assert.deepEqual(appQueries(fallback).map((c) => c.query.get('$filter')),
+    ["displayName eq 'CSA Loom Console (kv-loom-fixture)'", "startswith(displayName,'CSA Loom Console')"], 'the exact query first, the prefix second');
+});
+
+test('identity: several matches are unknown:not-located with the matched display NAMES listed and no id of any kind in the cell - at the exact step and at the prefix step', async () => {
+  // BREAKS IF: several matches are read as yes/no (the first is taken), the names are not listed (nobody can tell which app is the
+  // sign-in app - the live finding), or an id leaks. The breaking input at the EXACT step is two vaults named kv-loom-* each with a
+  // sign-in app named for it; at the PREFIX step it is no visible kv-loom* vault and two registrations sharing the prefix, one of
+  // whose NAMES embeds a GUID. Every app object carries `id` and `appId` GUID needles, and the assertion is on the SERIALISED CELL
+  // as the family built it (before any redaction), so only what the family chooses to put there counts. Positive pairs: the
+  // names ARE there, sorted; a duplicated name is listed twice (the same name on two registrations is itself the finding).
+  const GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+  const noIds = (c, label) => {
+    const dump = JSON.stringify(c);
+    for (const needle of [OTHER_SP_OBJECT, SIGNIN_APP_ID, SECOND_APP_OBJECT, SECOND_APP_ID]) assert.ok(!dump.includes(needle), `${label}: the cell leaked ${needle}`);
+    assert.ok(!GUID.test(dump), `${label}: a GUID-shaped string is in the cell: ${dump.slice(0, 300)}`);
+  };
+
+  const two = estate();
+  two.keyVaults = [{ name: 'kv-loom-a' }, { name: 'kv-loom-b' }, { name: 'kv-unrelated' }];
+  two.apps = [
+    appNamed('CSA Loom Console (kv-loom-b)', OTHER_SP_OBJECT, SIGNIN_APP_ID, 'SecurityGroup'),
+    appNamed('CSA Loom Console (kv-loom-a)', SECOND_APP_OBJECT, SECOND_APP_ID, 'None'),
+  ];
+  const { result: exact } = await runFamily('identity', two);
+  assert.equal(core.verdictText(cell(exact, SIGNIN)), 'unknown:not-located');
+  assert.equal(cell(exact, SIGNIN).evidence.matchedApps, 2);
+  assert.equal(cell(exact, SIGNIN).evidence.matchedBy, 'exact-display-name');
+  assert.deepEqual(cell(exact, SIGNIN).evidence.matchedDisplayNames, ['CSA Loom Console (kv-loom-a)', 'CSA Loom Console (kv-loom-b)']);
+  assert.deepEqual(cell(exact, SIGNIN).evidence.exactNamesSearched, ['CSA Loom Console (kv-loom-a)', 'CSA Loom Console (kv-loom-b)'], 'kv-unrelated is not a candidate');
+  assert.match(cell(exact, SIGNIN).evidence.note, /display names are listed/);
+  noIds(cell(exact, SIGNIN), 'exact step');
+  assert.equal(exact.exitCode, 0, 'a non-required cell that cannot be located is exit 0');
+
+  const dup = estate();
+  dup.apps = [
+    appNamed('CSA Loom Console (kv-loom-fixture)', OTHER_SP_OBJECT, SIGNIN_APP_ID, 'SecurityGroup'),
+    appNamed('CSA Loom Console (kv-loom-fixture)', SECOND_APP_OBJECT, SECOND_APP_ID, 'None'),
+  ];
+  const { result: dupResult } = await runFamily('identity', dup);
+  assert.equal(core.verdictText(cell(dupResult, SIGNIN)), 'unknown:not-located');
+  assert.deepEqual(cell(dupResult, SIGNIN).evidence.matchedDisplayNames, ['CSA Loom Console (kv-loom-fixture)', 'CSA Loom Console (kv-loom-fixture)']);
+  noIds(cell(dupResult, SIGNIN), 'duplicate names');
+
+  const prefix = estate();
+  prefix.keyVaults = [];
+  prefix.apps = [
+    appNamed('CSA Loom Console (rg-fixture)', OTHER_SP_OBJECT, SIGNIN_APP_ID, 'SecurityGroup'),
+    appNamed(`CSA Loom Console (${SECOND_APP_ID})`, SECOND_APP_OBJECT, SECOND_APP_ID, 'None'),
+  ];
+  const { result: byPrefix } = await runFamily('identity', prefix);
+  const pc = cell(byPrefix, SIGNIN);
+  assert.equal(core.verdictText(pc), 'unknown:not-located');
+  assert.equal(pc.evidence.matchedBy, 'display-name-prefix');
+  assert.equal(pc.evidence.matchedApps, 2);
+  assert.ok(pc.evidence.matchedDisplayNames.includes('CSA Loom Console (rg-fixture)'), JSON.stringify(pc.evidence.matchedDisplayNames));
+  assert.match(pc.evidence.exactNameStepSkipped, /no Key Vault named kv-loom\* is visible/);
+  noIds(pc, 'prefix step (a GUID inside a display name is redacted at the source)');
+});
+
+test('identity: zero matches by exact name AND by prefix stays unknown:not-located (unread, not unset), the two queries run in that order, and a Key Vault list that fails does not blank the cell', async () => {
+  // BREAKS IF: zero matches is rendered as "no" (the flag is unread, not unset), the fallback is not reached, or a Key Vault list that
+  // answered 403 / nothing useful turns the whole cell unknown instead of falling back to the prefix search. Positive pair: with
+  // the vault list forbidden the prefix search still ANSWERS (measured), and says why the exact step was skipped.
+  const none = estate();
+  none.apps = [appNamed('Some Unrelated App', OTHER_SP_OBJECT, SIGNIN_APP_ID, 'SecurityGroup')];
+  const { result: r1 } = await runFamily('identity', none);
+  assert.equal(core.verdictText(cell(r1, SIGNIN)), 'unknown:not-located');
+  assert.equal(cell(r1, SIGNIN).evidence.matchedApps, 0);
+  assert.match(cell(r1, SIGNIN).evidence.note, /unread, not unset/);
+  assert.deepEqual(cell(r1, SIGNIN).evidence.exactNamesSearched, ['CSA Loom Console (kv-loom-fixture)']);
+  assert.deepEqual(appQueries(none).map((c) => c.query.get('$filter')),
+    ["displayName eq 'CSA Loom Console (kv-loom-fixture)'", "startswith(displayName,'CSA Loom Console')"]);
+  assert.equal(r1.exitCode, 0);
+
+  const blind = estate();
+  blind.rules.push((r) => (r.origin === blind.arm && /Microsoft\.KeyVault\/vaults$/.test(r.path) ? arm403 : undefined));
+  const { result: r2 } = await runFamily('identity', blind);
+  assert.equal(text(r2, SIGNIN), 'measured: yes (HTTP 200)', 'the prefix search still answers when the vault list is forbidden');
+  assert.equal(cell(r2, SIGNIN).evidence.matchedBy, 'display-name-prefix');
+  assert.equal(cell(r2, SIGNIN).evidence.exactNameStepSkipped, 'the Key Vault list answered HTTP 403');
+  assert.deepEqual(cell(r2, SIGNIN).evidence.exactNamesSearched, []);
+  assert.deepEqual(appQueries(blind).map((c) => c.query.get('$filter')), ["startswith(displayName,'CSA Loom Console')"]);
+});
+
+test('identity: only a well-formed kv-loom* vault name ever reaches the $filter - an OData-injection name and an unrelated vault do not - and the candidates are capped at five', async () => {
+  // BREAKS IF: a vault name is spliced into the filter unchecked. The breaking input is a vault whose NAME carries OData
+  // (`kv-loom-0' or 'a' eq 'a`): spliced raw it would turn the exact query into a match-everything filter. Its name sorts BEFORE
+  // the good one on purpose, and the injection fixture holds only two candidates, so the five-name cap cannot hide it (a first draft
+  // of this test sorted it last behind five good names: the cap swallowed it and removing the check changed nothing). Positive pair:
+  // the well-formed name IS searched, so a check that refuses everything is red; an upper-case KV-LOOM name is a candidate too (the
+  // prefix is case-insensitive), kv-unrelated is not. The cap has its OWN fixture of six good names.
+  const inj = estate();
+  inj.keyVaults = [{ name: "kv-loom-0' or 'a' eq 'a" }, { name: 'kv-loom-good' }, { name: 'KV-LOOM-UPPER' }, { name: 'kv-unrelated' }];
+  inj.apps = [];
+  const { result } = await runFamily('identity', inj);
+  assert.deepEqual(cell(result, SIGNIN).evidence.exactNamesSearched, ['KV-LOOM-UPPER', 'kv-loom-good'].map((n) => `CSA Loom Console (${n})`));
+  const filter = appQueries(inj)[0].query.get('$filter');
+  assert.ok(!filter.includes("'a' eq 'a"), `an injection-shaped vault name reached the filter: ${filter}`);
+  assert.equal(filter, "displayName eq 'CSA Loom Console (KV-LOOM-UPPER)' or displayName eq 'CSA Loom Console (kv-loom-good)'");
+
+  const many = estate();
+  many.keyVaults = ['b', 'c', 'd', 'e', 'f', 'g'].map((s) => ({ name: `kv-loom-${s}` }));
+  many.apps = [];
+  const { result: capped } = await runFamily('identity', many);
+  assert.deepEqual(cell(capped, SIGNIN).evidence.exactNamesSearched, ['b', 'c', 'd', 'e', 'f'].map((s) => `CSA Loom Console (kv-loom-${s})`));
+  assert.equal(cell(capped, SIGNIN).evidence.exactNamesCapped, 5);
+  assert.equal(appQueries(many)[0].query.get('$filter').split(' or ').length, 5);
 });
 
 test('identity: a Console UAMI that is not among the identities is unknown:not-located, never "no roles"', async () => {

@@ -94,6 +94,9 @@ export const API = Object.freeze({
   logAnalyticsMgmt: '2022-10-01',
   cognitive: '2024-10-01',
   managedIdentity: '2023-01-31',
+  // Key Vault list (names only): the api-version the Console itself uses for the same list in both clouds
+  // (apps/fiab-console/lib/gates/registry/types.ts); Learn's current page is 2024-11-01 with the same path and shape.
+  keyVault: '2023-07-01',
 });
 
 export const FAMILIES = Object.freeze(['telemetry', 'policies', 'mcp', 'identity', 'latency', 'foundry']);

@@ -26,8 +26,17 @@
  *     user-assigned identities and matches that prefix.
  *   - the sign-in app is "CSA Loom Console (<KEYVAULT_NAME>)" (APP_DISPLAY_NAME in
  *     scripts/csa-loom/bootstrap-msal-app-reg.sh), which sets
- *     `groupMembershipClaims=SecurityGroup`. The probe matches the display-name
- *     prefix "CSA Loom Console"; exactly one match is required to answer yes/no.
+ *     `groupMembershipClaims=SecurityGroup`. The exact name needs the Key Vault name,
+ *     and the bootstrap workflow resolves that vault as the one named kv-loom*
+ *     (keyvault.bicep: kv-loom-<uniqueString>), so the probe lists the Key Vaults,
+ *     builds "CSA Loom Console (<kv-loom* name>)" and queries `displayName eq '<that>'`
+ *     FIRST. Only when the exact name finds nothing (or no kv-loom* vault is visible)
+ *     does it fall back to the display-name prefix "CSA Loom Console". Exactly one
+ *     match is required to answer yes/no; zero or several is unknown:not-located and
+ *     several lists the matched display NAMES (never an appId, object id or any GUID).
+ *     NOTE the in-bicep path (main.bicep, off by default) names its app after the
+ *     RESOURCE GROUP instead - "CSA Loom Console (<resource group>)" - so an estate
+ *     that ran both paths holds two registrations, which is what the names expose.
  *
  * GROUNDING (Learn, fetched 2026-10-29)
  *   GET /servicePrincipals(appId='{appId}') and $select; least privilege Application.Read.All:
@@ -38,12 +47,16 @@
  *     https://learn.microsoft.com/en-us/graph/api/application-list
  *   `AgentIdentity.Read.All` is a Graph application permission:
  *     https://learn.microsoft.com/en-us/graph/permissions-reference
+ *   Key Vaults - List By Subscription (value[].name, nextLink; this probe reads names only). The
+ *   Console uses api-version 2023-07-01 for the same list in both clouds
+ *   (apps/fiab-console/lib/gates/registry/types.ts); Learn's current page is 2024-11-01:
+ *     https://learn.microsoft.com/en-us/rest/api/keyvault/keyvault/vaults/list-by-subscription
  *   User-assigned identities list (properties.principalId), 2023-01-31:
  *     https://learn.microsoft.com/en-us/rest/api/managedidentity/user-assigned-identities/list-by-subscription?view=rest-managedidentity-2023-01-31
  *   Graph endpoint per cloud (graph.microsoft.com / graph.microsoft.us):
  *     https://learn.microsoft.com/en-us/graph/deployments
  */
-import { API, listAll, measured, quote, reasonForFailure, unknown } from './_w0-core.mjs';
+import { API, listAll, measured, quote, reasonForFailure, sanitize, unknown } from './_w0-core.mjs';
 
 const F = 'identity';
 const id = (s) => `${F}.${s}`;
@@ -57,6 +70,9 @@ const GRAPH_APP_ID = '00000003-0000-0000-c000-000000000000';
 const ROLE = 'Application.Read.All';
 const UAMI_PREFIX = 'uami-loom-console';
 const SIGNIN_APP_PREFIX = 'CSA Loom Console';
+const KV_PREFIX = 'kv-loom';
+const KV_NAME_RE = /^[a-zA-Z0-9-]{3,24}$/;
+const MAX_EXACT_NAMES = 5;
 const GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 const graphFail = (res) => reasonForFailure(res, { role: ROLE, scope: 'tenant' }) ?? 'tooling-error';
@@ -143,25 +159,76 @@ export async function run(ctx, acc) {
   }
 
   // ---- (c) groupMembershipClaims on the sign-in app registration ----
-  const cid = id('signinApp.groupMembershipClaims');
-  const filter = encodeURIComponent(`startswith(displayName,'${SIGNIN_APP_PREFIX}')`);
-  const apps = await ctx.client.request({
-    service: 'graph', headers: { ConsistencyLevel: 'eventual' },
-    url: `${graph}/v1.0/applications?$filter=${filter}&$select=id,displayName,groupMembershipClaims&$count=true`,
-  });
-  if (!apps.ok) {
-    cells.push(unknown(cid, graphFail(apps), { ...opt, evidence: quote(apps) }));
-  } else if (!Array.isArray(apps.json?.value)) {
-    cells.push(unknown(cid, 'tooling-error', { ...opt, evidence: { note: 'HTTP 200 without value[]' } }));
-  } else if (apps.json.value.length !== 1) {
-    cells.push(unknown(cid, 'not-located', {
-      ...opt,
-      evidence: { matchedApps: apps.json.value.length, searchedDisplayNamePrefix: SIGNIN_APP_PREFIX, note: apps.json.value.length === 0 ? 'no app registration matched: the flag is unread, not unset' : 'more than one matched: which one is the sign-in app is ambiguous' },
-    }));
-  } else {
-    const claim = apps.json.value[0]?.groupMembershipClaims ?? null;
-    cells.push(measured(cid, claim === 'SecurityGroup' ? 'yes' : 'no', { ...opt, http: apps.status, evidence: { groupMembershipClaims: claim, matchedApps: 1 } }));
+  cells.push(await signinAppCell(ctx, opt));
+}
+
+/**
+ * The Key Vault names the sign-in app can be named after. bootstrap-msal-app-reg.sh names the app "CSA Loom Console
+ * (<KEYVAULT_NAME>)" and the bootstrap workflow resolves that vault as the one named kv-loom* (keyvault.bicep:
+ * kv-loom-<uniqueString>), so the EXACT display name is derivable from a Key Vault list. Returns the exact display names to
+ * search for, or why there are none (the lookup then falls back to the prefix search - a failed list must not blank the cell).
+ */
+async function exactSigninNames(ctx) {
+  const vaults = await listAll(ctx, `${ctx.cloud.arm}/subscriptions/${encodeURIComponent(ctx.subscriptionId)}/providers/Microsoft.KeyVault/vaults?api-version=${API.keyVault}`);
+  if (!vaults.ok) {
+    return { names: [], skipped: vaults.malformed ? 'the Key Vault list answered 200 without value[]' : `the Key Vault list answered HTTP ${vaults.last?.status ?? 'network'}` };
   }
+  // KV_NAME_RE is the Key Vault naming rule AND what makes a name safe to splice into an OData string literal
+  const found = [...new Set(vaults.items.map((v) => v?.name).filter((n) => typeof n === 'string' && KV_NAME_RE.test(n) && n.toLowerCase().startsWith(KV_PREFIX)))].sort();
+  if (found.length === 0) {
+    return { names: [], skipped: `no Key Vault named ${KV_PREFIX}* is visible (${vaults.items.length} vault(s) listed${vaults.truncated ? ', the list is truncated' : ''})` };
+  }
+  return { names: found.slice(0, MAX_EXACT_NAMES).map((n) => `${SIGNIN_APP_PREFIX} (${n})`), skipped: null, capped: found.length > MAX_EXACT_NAMES };
+}
+
+/**
+ * Which app registration is the sign-in app, and does it carry groupMembershipClaims=SecurityGroup? EXACT display name FIRST
+ * (built from the kv-loom* vault), the display-name PREFIX only when the exact name finds nothing. Exactly one match answers
+ * yes/no; zero or several is unknown:not-located, and several lists the matched display NAMES (names only: never an appId, an
+ * object id or any GUID) so the ambiguity can be diagnosed from the artifact.
+ */
+async function signinAppCell(ctx, opt) {
+  const cid = id('signinApp.groupMembershipClaims');
+  const query = (filter) => ctx.client.request({
+    service: 'graph', headers: { ConsistencyLevel: 'eventual' },
+    url: `${ctx.cloud.graph}/v1.0/applications?$filter=${encodeURIComponent(filter)}&$select=id,displayName,groupMembershipClaims&$count=true`,
+  });
+
+  const exact = await exactSigninNames(ctx);
+  const search = {
+    exactNamesSearched: exact.names, exactNameStepSkipped: exact.skipped, searchedDisplayNamePrefix: SIGNIN_APP_PREFIX,
+    ...(exact.capped ? { exactNamesCapped: MAX_EXACT_NAMES } : {}),
+  };
+  let matchedBy = 'exact-display-name';
+  let res = null;
+  if (exact.names.length) {
+    res = await query(exact.names.map((n) => `displayName eq '${n}'`).join(' or '));
+    if (res.ok && Array.isArray(res.json?.value) && res.json.value.length === 0) res = null; // nothing by exact name: fall back
+  }
+  if (res === null) {
+    matchedBy = 'display-name-prefix';
+    res = await query(`startswith(displayName,'${SIGNIN_APP_PREFIX}')`);
+  }
+  if (!res.ok) return unknown(cid, graphFail(res), { ...opt, evidence: { ...quote(res), ...search } });
+  if (!Array.isArray(res.json?.value)) return unknown(cid, 'tooling-error', { ...opt, evidence: { note: 'HTTP 200 without value[]', ...search } });
+
+  const apps = res.json.value;
+  // NAMES only, and only the name: the objects also carry id / appId, which must never reach an output. sanitize() redacts a
+  // GUID that a display name itself happens to contain.
+  const names = apps.map((a) => sanitize(String(a?.displayName ?? ''), 120)).sort();
+  if (apps.length === 0) {
+    return unknown(cid, 'not-located', { ...opt, evidence: { matchedApps: 0, ...search, note: 'no app registration matched: the flag is unread, not unset' } });
+  }
+  if (apps.length > 1) {
+    return unknown(cid, 'not-located', {
+      ...opt,
+      evidence: { matchedApps: apps.length, matchedBy, matchedDisplayNames: names.slice(0, 20), ...search, note: 'more than one matched: which one is the sign-in app is ambiguous - the matched display names are listed' },
+    });
+  }
+  const claim = apps[0]?.groupMembershipClaims ?? null;
+  return measured(cid, claim === 'SecurityGroup' ? 'yes' : 'no', {
+    ...opt, http: res.status, evidence: { groupMembershipClaims: claim, matchedApps: 1, matchedBy, matchedDisplayName: names[0], ...search },
+  });
 }
 
 /** The ARM identities list needs Reader on the subscription: name that, not the Graph role. */
