@@ -61,9 +61,9 @@ Monitoring Reader grant harmless.
 | Item | Status | Branch | Model | Evidence | Updated |
 |---|---|---|---|---|---|
 | W1-1 | merged | feat/apigw-w01-w1-1 | sonnet | vitest lib/api-gateway 12/12; mutation RED 2/12 in sandbox; bicep build + 8 build-params rc=0; template-sync PASS; merge a69b8080c | 2026-10-30 |
-| W1-2 | todo | | sonnet | | 2026-10-28 |
+| W1-2 | in-progress | feat/apigw-w01-w1-2 | sonnet | | 2026-10-30 |
 | W1-3 | todo | | sonnet | | 2026-10-28 |
-| W1-4 | todo | | sonnet | | 2026-10-28 |
+| W1-4 | in-progress | feat/apigw-w01-w1-4 | sonnet | | 2026-10-30 |
 | W1-5 | todo | | sonnet | | 2026-10-28 |
 | W1-6 | todo | | sonnet | | 2026-10-28 |
 | W1-7 | todo | | sonnet | | 2026-10-28 |
