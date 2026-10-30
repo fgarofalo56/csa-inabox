@@ -7,8 +7,8 @@
  *  - deploy-owned removal: dropping the ownedBy guard turns the 409 into a delete.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { ApiplaneAuditRecord, ApiplaneRepo } from '../../types';
-import { InMemoryApiplaneRepo } from '../../__tests__/repos/in-memory-repo';
+import type { ApiplaneAuditRecord } from '../../types';
+import { MemoryGatewayRepo } from './memory-gateway-repo';
 import {
   ensureDeployGateway,
   gatewayId,
@@ -18,16 +18,16 @@ import {
   type Actor,
   type RegistryDeps,
 } from '../gateway-service';
-import type { GatewayDoc } from '../types';
+
 import { armDouble, CONTRIBUTOR_PERMS, GW_ID, READER_PERMS } from './arm-double';
 
 const actor: Actor = { tenantId: 't1', who: 'a@x', actorOid: 'oid-a', capability: 'tenant-admin' };
 let audits: ApiplaneAuditRecord[];
-let repo: InMemoryApiplaneRepo<GatewayDoc>;
+let repo: MemoryGatewayRepo;
 
 function deps(arm = armDouble({ permissions: CONTRIBUTOR_PERMS })): RegistryDeps {
   return {
-    repo: repo as unknown as ApiplaneRepo<GatewayDoc>,
+    repo,
     arm,
     writeAudit: async (r) => {
       audits.push(r);
@@ -39,7 +39,7 @@ function deps(arm = armDouble({ permissions: CONTRIBUTOR_PERMS })): RegistryDeps
 
 beforeEach(() => {
   audits = [];
-  repo = new InMemoryApiplaneRepo<GatewayDoc>();
+  repo = new MemoryGatewayRepo();
 });
 
 describe('ensureDeployGateway', () => {

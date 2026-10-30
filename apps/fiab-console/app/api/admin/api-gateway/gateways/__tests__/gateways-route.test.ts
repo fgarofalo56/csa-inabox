@@ -10,7 +10,7 @@
  *  - auto-registration: GET twice leaves exactly one gateway (a second insert makes it 2).
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { InMemoryApiplaneRepo } from '@/lib/api-gateway/__tests__/repos/in-memory-repo';
+import { MemoryGatewayRepo } from '@/lib/api-gateway/registry/__tests__/memory-gateway-repo';
 import type { RegistryDeps } from '@/lib/api-gateway/registry/gateway-service';
 import type { GatewayDoc } from '@/lib/api-gateway/registry/types';
 import { armDouble, CONTRIBUTOR_PERMS, GW_ID, OID } from '@/lib/api-gateway/registry/__tests__/arm-double';
@@ -20,7 +20,10 @@ vi.mock('@/lib/auth/session', async (orig) => ({
   getSession: vi.fn(),
 }));
 const depsRef: { current: RegistryDeps } = { current: undefined as unknown as RegistryDeps };
-vi.mock('@/lib/api-gateway/registry/deps', () => ({ registryDeps: () => depsRef.current }));
+vi.mock('@/lib/api-gateway/registry/deps', () => ({
+  registryDeps: () => depsRef.current,
+  cosmosGatewayRepo: () => depsRef.current.repo,
+}));
 
 import { getSession } from '@/lib/auth/session';
 import { DELETE } from '../[id]/route';
@@ -31,12 +34,12 @@ const session = (oid: string) => ({ claims: { oid, tid: 'tenant-1', name: 'N', u
 const jsonReq = (body: unknown) => ({ nextUrl: new URL('http://x/'), url: 'http://x/', json: async () => body }) as never;
 const idCtx = (id: string) => ({ params: Promise.resolve({ id }) });
 
-let repo: InMemoryApiplaneRepo<GatewayDoc>;
+let repo: MemoryGatewayRepo;
 let audits: unknown[];
 
 function setDeps(arm: ReturnType<typeof armDouble>) {
   depsRef.current = {
-    repo: repo as never,
+    repo,
     arm,
     writeAudit: async (r) => {
       audits.push(r);
@@ -47,7 +50,7 @@ function setDeps(arm: ReturnType<typeof armDouble>) {
 
 beforeEach(() => {
   vi.resetAllMocks();
-  repo = new InMemoryApiplaneRepo<GatewayDoc>();
+  repo = new MemoryGatewayRepo();
   audits = [];
   process.env.LOOM_TENANT_ADMIN_OID = ADMIN;
   delete process.env.LOOM_APIPLANE_DEPLOY_GATEWAY_ID;

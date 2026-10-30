@@ -10,6 +10,7 @@
  * Tenant-admin only (W1-8 swaps in the apiplane-admin capability).
  */
 import { NextResponse } from 'next/server';
+import '@/lib/api-gateway/registry/register';
 import { withTenantAdmin } from '@/lib/api/route-toolkit';
 import { actorFromSession } from '@/lib/api-gateway/registry/actor';
 import { registryDeps } from '@/lib/api-gateway/registry/deps';

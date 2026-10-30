@@ -2,16 +2,37 @@
  * Production wiring of the registry ports: Cosmos `apiplane-desired`, the host
  * ARM port, and the shared audit-log container. Routes import this; tests mock it.
  */
-import type { Container } from '@azure/cosmos';
+import { BulkOperationType, type Container, type OperationInput } from '@azure/cosmos';
 import { apiplaneDesiredContainer, auditLogContainer } from '@/lib/azure/cosmos-client';
 import { detectCloud } from '@/lib/azure/cloud-endpoints';
-import type { ApiplaneRepo } from '../types';
+import { ClassificationConflictError } from '../environments/types';
 import { hostArmPort } from './arm-port';
-import type { RegistryDeps } from './gateway-service';
+import type { GatewayRepo, RegistryDeps } from './gateway-service';
 import type { GatewayDoc } from './types';
 
-function cosmosRepo(get: () => Promise<Container>): ApiplaneRepo<GatewayDoc> {
+function cosmosRepo(get: () => Promise<Container>): GatewayRepo {
   return {
+    /** One Cosmos transactional batch (single partition = tenantId); any 412 (stale _etag) aborts all. */
+    async replaceBatch(tenantId, items) {
+      if (items.length === 0) return;
+      const c = await get();
+      const ops = items.map(({ doc, expectedEtag }) => ({
+        operationType: BulkOperationType.Replace as typeof BulkOperationType.Replace,
+        id: doc.id,
+        resourceBody: doc as unknown as Record<string, unknown>,
+        ifMatch: expectedEtag,
+      })) as OperationInput[];
+      const res = await c.items.batch(ops, tenantId);
+      const results = res.result ?? [];
+      const failed = results.findIndex((r) => r.statusCode >= 400 && r.statusCode !== 424);
+      if (failed >= 0 || (res.code !== undefined && res.code >= 400)) {
+        const idx = failed >= 0 ? failed : 0;
+        if (failed < 0 || results[failed].statusCode === 412 || results[failed].statusCode === 404) {
+          throw new ClassificationConflictError(items[idx].doc.id);
+        }
+        throw new Error(`Gateway batch replace failed with status ${results[failed].statusCode}`);
+      }
+    },
     async upsert(doc) {
       const c = await get();
       await c.items.upsert(doc);
@@ -48,9 +69,13 @@ function cosmosRepo(get: () => Promise<Container>): ApiplaneRepo<GatewayDoc> {
   };
 }
 
+export function cosmosGatewayRepo(): GatewayRepo {
+  return cosmosRepo(apiplaneDesiredContainer);
+}
+
 export function registryDeps(): RegistryDeps {
   return {
-    repo: cosmosRepo(apiplaneDesiredContainer),
+    repo: cosmosGatewayRepo(),
     arm: hostArmPort(),
     async writeAudit(rec) {
       const al = await auditLogContainer();

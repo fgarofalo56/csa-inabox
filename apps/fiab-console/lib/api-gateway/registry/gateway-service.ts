@@ -8,13 +8,23 @@
  */
 import { createHash } from 'node:crypto';
 import { buildApiplaneAuditRecord } from '../audit';
+import { ClassificationConflictError } from '../environments/types';
 import type { ApiplaneAuditRecord, ApiplaneRepo } from '../types';
 import { preflightGateway, type ArmPort } from './preflight';
 import { parseApimResourceId } from './resource-id';
 import type { GatewayAccess, GatewayCloud, GatewayDoc, GatewayOwner } from './types';
 
+/**
+ * Repository port. `replaceBatch` is ATOMIC: every doc is replaced against its
+ * expected etag in one transaction; a stale etag throws ClassificationConflictError
+ * (carrying that doc id) and writes nothing.
+ */
+export interface GatewayRepo extends ApiplaneRepo<GatewayDoc> {
+  replaceBatch(tenantId: string, items: Array<{ doc: GatewayDoc; expectedEtag?: string }>): Promise<void>;
+}
+
 export interface RegistryDeps {
-  repo: ApiplaneRepo<GatewayDoc>;
+  repo: GatewayRepo;
   arm: ArmPort;
   writeAudit(rec: ApiplaneAuditRecord): Promise<void>;
   cloud(): GatewayCloud;
@@ -63,6 +73,7 @@ function newDoc(
     resourceId: p.resourceId,
     cloud,
     managementMode: 'observe',
+    environmentKey: null,
     access,
     capabilities: { tier: 'unknown', mcpServers: 'unknown', llmPolicies: 'unknown' },
     inventory: { apis: 0, products: 0, subscriptions: 0, backends: 0, namedValues: 0, mcpServers: 0, partialTypes: [] },
@@ -132,12 +143,29 @@ export async function registerGateway(
   }
 
   const displayName = typeof input.displayName === 'string' ? input.displayName : undefined;
-  const doc: GatewayDoc = existing
-    ? { ...existing, access }
-    : newDoc(actor, { resourceId: target.resourceId, name: target.name, displayName, ownedBy }, access, d.cloud(), now.toISOString());
+  if (existing) {
+    // Re-registration refreshes ONLY access, on a fresh read, etag-guarded: it must never
+    // overwrite environmentKey (or any other field) a concurrent classification just wrote.
+    return { ok: true, data: await refreshAccess(d, actor.tenantId, id, access) };
+  }
+  const doc = newDoc(actor, { resourceId: target.resourceId, name: target.name, displayName, ownedBy }, access, d.cloud(), now.toISOString());
   await d.repo.upsert(doc);
-  if (!existing) await audit(d, actor, 'register', id, null, { resourceId: doc.resourceId, ownedBy: doc.ownedBy }, now);
+  await audit(d, actor, 'register', id, null, { resourceId: doc.resourceId, ownedBy: doc.ownedBy }, now);
   return { ok: true, data: doc };
+}
+
+async function refreshAccess(d: RegistryDeps, tenantId: string, id: string, access: GatewayAccess): Promise<GatewayDoc> {
+  for (let attempt = 0; ; attempt++) {
+    const cur = await d.repo.get(tenantId, id);
+    if (!cur) throw new Error(`Gateway ${id} disappeared during refresh`);
+    const next: GatewayDoc = { ...cur, access };
+    try {
+      await d.repo.replaceBatch(tenantId, [{ doc: next, expectedEtag: cur._etag }]);
+      return next;
+    } catch (e) {
+      if (!(e instanceof ClassificationConflictError) || attempt >= 2) throw e;
+    }
+  }
 }
 
 export async function listGateways(d: RegistryDeps, tenantId: string): Promise<GatewayDoc[]> {

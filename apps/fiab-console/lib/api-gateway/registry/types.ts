@@ -40,7 +40,12 @@ export interface GatewayDoc extends ApiplaneDoc {
   /** undefined = host identity (Console UAMI). */
   connectionId?: string;
   managementMode: ManagementMode;
-  environment?: string;
+  /** Environment catalog key; null = Unclassified (default). Written ONLY by the classification store. */
+  environmentKey: string | null;
+  /** Tags as seen on the ARM response (suggestions only; never written back). */
+  armTags?: Record<string, string>;
+  /** Cosmos concurrency token; assigned by the repository on every write. */
+  _etag?: string;
   access: GatewayAccess;
   capabilities: {
     skuName?: string;
