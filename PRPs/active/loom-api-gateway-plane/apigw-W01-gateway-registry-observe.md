@@ -1,6 +1,8 @@
 ---
 name: apigw-W01-gateway-registry-observe
-status: backlog
+status: active
+started: 2026-10-30
+branch: feat/apigw-w01
 priority: P1
 order: 22
 depends_on: [apigw-W00-measurement-spike]
