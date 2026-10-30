@@ -14,6 +14,7 @@ import {
 import { Copy16Regular } from '@fluentui/react-icons';
 import type { GatewayDoc } from '@/lib/api-gateway/registry/types';
 import { registerGateway, syncGateway, type HubResult } from './_lib/hub-api';
+import { DiscoveryList } from './discovery-list';
 
 const useStyles = makeStyles({
   form: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0 },
@@ -71,6 +72,10 @@ export function RegisterGatewayDialog({ open, onClose, onRegistered }: {
                 Register an existing Azure API Management service. Loom checks what the Console identity can do
                 at that scope and reads its inventory; nothing is changed in the service.
               </Body1>
+              <DiscoveryList
+                selectedResourceId={resourceId}
+                onPick={(c) => { setResourceId(c.resourceId); setDisplayName(c.name); setFail(null); }}
+              />
               <Field label="APIM resource id" required>
                 <Input
                   value={resourceId}

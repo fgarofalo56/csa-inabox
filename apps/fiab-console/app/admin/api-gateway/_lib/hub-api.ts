@@ -1,6 +1,7 @@
 /** Client helpers for the API Gateway hub (W1-5). Thin: the W1-2/W1-3 routes own every rule. */
 import { clientFetch } from '@/lib/client-fetch';
 import type { GatewayDoc, MissingRole } from '@/lib/api-gateway/registry/types';
+import type { DiscoveryResult } from '@/lib/api-gateway/registry/discovery/types';
 
 const BASE = '/api/admin/api-gateway/gateways';
 
@@ -54,6 +55,8 @@ async function call<T>(path: string, init?: { method?: string; body?: unknown })
 }
 
 export const listGateways = () => call<GatewayList>('');
+/** Read-only brownfield scan (W1-9); registers nothing. */
+export const discoverGateways = () => call<DiscoveryResult>('/discover');
 export const registerGateway = (resourceId: string, displayName?: string) =>
   call<GatewayDoc>('', { method: 'POST', body: { resourceId, ...(displayName ? { displayName } : {}) } });
 export const syncGateway = (id: string) => call<SyncData>(`/${encodeURIComponent(id)}/sync`, { method: 'POST' });
