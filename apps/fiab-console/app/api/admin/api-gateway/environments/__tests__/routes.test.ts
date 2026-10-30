@@ -15,19 +15,29 @@ vi.mock('@/lib/auth/session', () => ({
   tenantScopeId: (s: { claims: { tid?: string; oid: string } }) => s.claims.tid || s.claims.oid,
 }));
 vi.mock('@/lib/auth/feature-gate', () => ({
-  requireTenantAdmin: () => (state.admin ? null : NextResponse.json({ ok: false, error: 'forbidden' }, { status: 403 })),
+  // W1-8: routes are withCapability('apiplane-admin'); state.admin models holding it (or being a tenant admin)
+  enforceCapability: async () => (state.admin ? null : NextResponse.json({ ok: false, error: 'forbidden' }, { status: 403 })),
+  isTenantAdmin: () => state.admin,
 }));
 vi.mock('@/lib/api-gateway/environments/deps', () => ({
   getEnvironmentDeps: () => (state.world as { deps: unknown }).deps,
   getFindingsSource: () => state.findings,
 }));
 
-import { GET as getRoot, POST as postRoot, PUT as putSettings } from '../route';
-import { PUT as putKey, DELETE as delKey } from '../[key]/route';
-import { GET as getMatrix } from '../matrix/route';
-import { POST as postReclassify } from '../reclassify/route';
-import { GET as getSuggestions } from '../suggestions/route';
-import { GET as getFindings } from '../findings/route';
+import * as rootRoute from '../route';
+import * as keyRoute from '../[key]/route';
+import * as matrixRoute from '../matrix/route';
+import * as reclassifyRoute from '../reclassify/route';
+import * as suggestionsRoute from '../suggestions/route';
+import * as findingsRoute from '../findings/route';
+
+// W1-8: the handlers are withCapability-wrapped (req, ctx); these tests drive them loosely, as before.
+type Loose = (req?: Request, ctx?: unknown) => Promise<Response>;
+const loose = (h: unknown) => h as Loose;
+const getRoot = loose(rootRoute.GET), postRoot = loose(rootRoute.POST), putSettings = loose(rootRoute.PUT);
+const putKey = loose(keyRoute.PUT), delKey = loose(keyRoute.DELETE);
+const getMatrix = loose(matrixRoute.GET), postReclassify = loose(reclassifyRoute.POST);
+const getSuggestions = loose(suggestionsRoute.GET), getFindings = loose(findingsRoute.GET);
 
 const PUB: AppliedPublication = { id: 'pub-1', displayName: 'Orders MCP', gatewayId: 'g1', resources: [{ kind: 'mcp', id: 'm1' }] };
 const req = (body?: unknown) => new Request('http://x/api', { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) });

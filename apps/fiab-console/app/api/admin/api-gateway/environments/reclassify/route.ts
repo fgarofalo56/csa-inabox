@@ -6,8 +6,10 @@
  * resource. Refused (409, with the publications listed) if it would block an
  * applied publication.
  */
+import { withCapability } from '@/lib/api/route-toolkit';
+import { PLANE_ADMIN_CAPABILITY, withPlaneGroupHint } from '@/lib/api-gateway/admin-gate';
 import { apiBadRequest } from '@/lib/api/respond';
-import { adminContext, isResponse, readJson, respond, serverError } from '@/lib/api-gateway/environments/route-helpers';
+import { adminContext, readJson, respond, serverError } from '@/lib/api-gateway/environments/route-helpers';
 import { reclassify } from '@/lib/api-gateway/environments/service';
 import type { ClassificationChange } from '@/lib/api-gateway/environments/types';
 
@@ -16,9 +18,8 @@ export const dynamic = 'force-dynamic';
 
 const KINDS = new Set(['gateway', 'endpoint', 'mcp']);
 
-export async function POST(req: Request) {
-  const ctx = adminContext();
-  if (isResponse(ctx)) return ctx;
+export const POST = withPlaneGroupHint(withCapability(PLANE_ADMIN_CAPABILITY, 'Admin', async (req, { session }) => {
+  const ctx = adminContext(session);
   const body = await readJson(req);
   const raw = body?.changes;
   if (!Array.isArray(raw)) return apiBadRequest('changes (array) is required');
@@ -35,4 +36,4 @@ export async function POST(req: Request) {
   } catch (e) {
     return serverError(e);
   }
-}
+}));

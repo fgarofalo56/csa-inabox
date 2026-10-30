@@ -1,16 +1,17 @@
 /** GET /api/admin/api-gateway/environments/findings -> advisory findings (never block). Gateways x MCP servers now; W2 adds endpoint producers. */
+import { withCapability } from '@/lib/api/route-toolkit';
+import { PLANE_ADMIN_CAPABILITY, withPlaneGroupHint } from '@/lib/api-gateway/admin-gate';
 import { apiOk } from '@/lib/api/respond';
 import { getFindingsSource } from '@/lib/api-gateway/environments/deps';
 import { runFindings } from '@/lib/api-gateway/environments/findings';
-import { adminContext, isResponse, serverError } from '@/lib/api-gateway/environments/route-helpers';
+import { adminContext, serverError } from '@/lib/api-gateway/environments/route-helpers';
 import { loadCatalog, settingsOf } from '@/lib/api-gateway/environments/service';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  const ctx = adminContext();
-  if (isResponse(ctx)) return ctx;
+export const GET = withPlaneGroupHint(withCapability(PLANE_ADMIN_CAPABILITY, 'Admin', async (_req, { session }) => {
+  const ctx = adminContext(session);
   try {
     const source = getFindingsSource();
     if (!ctx.deps.classification || !source) {
@@ -26,4 +27,4 @@ export async function GET() {
   } catch (e) {
     return serverError(e);
   }
-}
+}));
