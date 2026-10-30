@@ -65,6 +65,6 @@ Monitoring Reader grant harmless.
 | W1-3 | in-progress | feat/apigw-w01-w1-3 | sonnet | | 2026-10-30 |
 | W1-4 | merged | feat/apigw-w01-w1-4 | sonnet | vitest 43/43 (5 files); permits() mutation RED 4 tests in sandbox; no tsc errors in owned paths; eslint not run (no flat config); route map NOT regenerated, do once before PR; merge 7221cff5a | 2026-10-30 |
 | W1-5 | todo | | sonnet | | 2026-10-28 |
-| W1-6 | in-progress | feat/apigw-w01-w1-6 | sonnet | | 2026-10-30 |
+| W1-6 | merged | feat/apigw-w01-w1-6 | sonnet | vitest lib/gates 74/74; mutations RED (fixit kind 2 fail; unregistered 13/13); gates exported as API_GATEWAY_GATES, NOT yet in GATES/admin gate page nor consumed by UI (W1-5 must consume); docs 7.6 has no mkdocs-strict receipt (strict fails on base too, Material banner); merge 245c654a4 | 2026-10-30 |
 | W1-7 | todo | | sonnet | | 2026-10-28 |
 | W1-8 | in-progress | feat/apigw-w01-w1-8 | sonnet | | 2026-10-30 |
