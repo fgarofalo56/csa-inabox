@@ -17,10 +17,18 @@ COPY apps/loom-health-cp/tsconfig.json ./
 COPY apps/loom-health-cp/src ./src
 RUN npm run build && npm prune --omit=dev
 
+# ---- template stage: tenant.bicep -> ARM JSON for the tenant.* jobs ---------
+# The build fails if the template does not compile; nothing is swallowed.
+FROM mcr.microsoft.com/azure-cli:2.67.0 AS template
+WORKDIR /bicep
+COPY platform/fiab/bicep/modules/health/ ./health/
+RUN az bicep install && az bicep build --file health/tenant.bicep --outfile /tenant.json
+
 # ---- runtime stage ---------------------------------------------------------
 FROM node:22-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
+COPY --from=template /tenant.json ./templates/tenant.json
 COPY --from=build /build/package.json ./package.json
 COPY --from=build /build/node_modules ./node_modules
 COPY --from=build /build/dist ./dist

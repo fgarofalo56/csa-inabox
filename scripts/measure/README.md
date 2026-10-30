@@ -63,6 +63,7 @@ measureWithControl({
 | `drain-status.mjs` | Worked example: PR merge-readiness. A failed read prints `QUERY-FAILED` **with the reason** and exits non-zero, so it cannot be quoted as a state. The bash version it replaced reported `0/0/0` for twenty PRs during an HTTP 403. |
 | `red-tally.mjs` | Names the red checks across PRs to expose a shared cause. Reports `cancelled` **separately** from `failed` — a cancelled check did not finish, so it is UNKNOWN, not a verdict. Flattening them made a one-file docs PR look broken. |
 | `estate-resume.mjs` | Undoes the 2026-08-23 **Commercial** pause. `--dry-run` by default; `--apply` to act. Scope is a **fixed list**, never discovered — only 1 of the 13 Container App environments in these subscriptions is Loom's. Every action verifies its own outcome and it is idempotent. **It REFUSES to run unless `az account show` reports `environmentName == AzureCloud`** (#4149) — see below. |
+| `apiplane/` | Instruments for the Loom API & AI Gateway Plane W0 spike (PRP `loom-api-gateway-plane`, `apigw-W00`). `w0-apim-probe.mjs` plus its `_w0-*.mjs` modules measure APIM telemetry categories, policy authoring, the MCP API type, Entra Agent ID and Graph, named-value propagation latency and Foundry model availability; the `apiplane-w0-gov-probe` and `apiplane-w0-commercial-probe` workflows run it in GCC-High and Commercial. `retail-prices-coverage.mjs` counts Azure Retail Prices rows for Government against Commercial. Every cell is `measured`, `not-measured:<reason>` or `unknown:<reason>`, each family carries positive controls, and a failed query is never printed as 0 (R1, R5). |
 
 ## Launching `az` / `gh` on Windows — three ways to get a fake result
 
@@ -255,4 +256,3 @@ rotted unrun — the same failure mode as a dispatch-only runbook nobody dispatc
 guarded by a win32 check is discovered, reported, and skipped. The injection suite has four
 of those. Closing that gap needs a `windows-latest` job; until one exists, its cmd.exe
 evidence is local-only and its header says so.
-
