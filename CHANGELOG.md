@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.117.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.117.0...csa-inabox-v0.117.1) (2026-10-30)
+
+
+### Documentation
+
+* **lhds:** record the six W1 follow-up PRs as merged, not deployed ([#5164](https://github.com/fgarofalo56/csa-inabox/issues/5164)) ([c84e6c5](https://github.com/fgarofalo56/csa-inabox/commit/c84e6c5927cc342cc04b24f03fb1945a4daec476))
+
 ## [0.117.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.116.0...csa-inabox-v0.117.0) (2026-10-30)
 
 
