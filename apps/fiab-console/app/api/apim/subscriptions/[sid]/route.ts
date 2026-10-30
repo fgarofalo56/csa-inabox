@@ -15,6 +15,7 @@ import {
 } from '@/lib/azure/apim-client';
 import { apiHonestGateError } from '@/lib/api/gate-envelope';
 import { withSession } from '@/lib/api/route-toolkit';
+import { scopeRoute } from '@/lib/api-gateway/registry/resolve-gateway';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -40,7 +41,7 @@ function fail(e: any) {
 }
 
 // WS-D1: session-only routes adopted onto `withSession` (params resolved by the wrapper).
-export const PATCH = withSession<{ sid: string }>(async (req, { params }) => {
+const PATCH_h = withSession<{ sid: string }>(async (req, { params }) => {
   const g = gate(); if (g) return g;
   const sid = params.sid;
   const body = await req.json().catch(() => ({}));
@@ -61,10 +62,14 @@ export const PATCH = withSession<{ sid: string }>(async (req, { params }) => {
   } catch (e: any) { return fail(e); }
 });
 
-export const DELETE = withSession<{ sid: string }>(async (_req, { params }) => {
+const DELETE_h = withSession<{ sid: string }>(async (_req, { params }) => {
   const g = gate(); if (g) return g;
   try {
     await deleteSubscription(params.sid);
     return NextResponse.json({ ok: true });
   } catch (e: any) { return fail(e); }
 });
+
+// `?gateway=<id>` retargets the handler at a registered gateway; absent = unchanged.
+export const PATCH = scopeRoute(PATCH_h);
+export const DELETE = scopeRoute(DELETE_h);

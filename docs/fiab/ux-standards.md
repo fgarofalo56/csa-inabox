@@ -445,6 +445,25 @@ the review gate — reviewers reject a surface with unchecked boxes and no gate.
 - [ ] Real backend on Finish; honest gate if infra missing; success confirmation
       + next-step guidance.
 
+### 7.6 Content and state rules (API Gateway Plane surfaces)
+
+Adopted from the Mosaic `DESIGN.md` rules (PRD R6; capability map row 7.7). They
+apply to every API Gateway Plane surface and to any surface showing measured
+usage, cost or health.
+
+- [ ] **Unknown is never shown as zero** — a count or value that was not
+      measured renders as unknown, not `0`.
+- [ ] **Missing telemetry is never shown as healthy** — no data is a distinct
+      state, not a green one.
+- [ ] **Unpriced usage is never shown as free** — "No price" never renders as
+      `$0`.
+- [ ] **A failed query is never an empty result** — a query error renders as an
+      error surface, not as "no rows".
+- [ ] **No "Live data" label** on data that is not live.
+- [ ] **Drafts are protected** — unsaved draft state is not lost on navigation
+      (see 4.2).
+- [ ] **Credentials never appear in URLs, history or browser storage.**
+
 ---
 
 ## 8. Verification (per `no-scaffold`)
