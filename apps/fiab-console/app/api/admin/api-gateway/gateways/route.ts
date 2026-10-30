@@ -7,11 +7,12 @@
  *        Runs the access preflight; an unreadable service returns ok:false with the exact
  *        role, scope and az command.
  *
- * Tenant-admin only (W1-8 swaps in the apiplane-admin capability).
+ * Gated by the apiplane-admin capability (tenant admins a superset; Q9, W1-8).
  */
 import { NextResponse } from 'next/server';
 import '@/lib/api-gateway/registry/register';
-import { withTenantAdmin } from '@/lib/api/route-toolkit';
+import { withCapability } from '@/lib/api/route-toolkit';
+import { PLANE_ADMIN_CAPABILITY, withPlaneGroupHint } from '@/lib/api-gateway/admin-gate';
 import { actorFromSession } from '@/lib/api-gateway/registry/actor';
 import { registryDeps } from '@/lib/api-gateway/registry/deps';
 import { ensureDeployGateway, listGateways, registerGateway } from '@/lib/api-gateway/registry/gateway-service';
@@ -19,7 +20,7 @@ import { ensureDeployGateway, listGateways, registerGateway } from '@/lib/api-ga
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export const GET = withTenantAdmin(async (_req, { session }) => {
+export const GET = withPlaneGroupHint(withCapability(PLANE_ADMIN_CAPABILITY, 'Admin', async (_req, { session }) => {
   const deps = registryDeps();
   const actor = actorFromSession(session);
   const reg = await ensureDeployGateway(deps, actor);
@@ -33,9 +34,9 @@ export const GET = withTenantAdmin(async (_req, { session }) => {
         : { ok: false, code: reg.code, error: reg.error },
     },
   });
-});
+}));
 
-export const POST = withTenantAdmin(async (req, { session }) => {
+export const POST = withPlaneGroupHint(withCapability(PLANE_ADMIN_CAPABILITY, 'Admin', async (req, { session }) => {
   let body: { resourceId?: unknown; displayName?: unknown };
   try {
     body = (await req.json()) as typeof body;
@@ -47,4 +48,4 @@ export const POST = withTenantAdmin(async (req, { session }) => {
     return NextResponse.json({ ok: false, error: r.error, code: r.code, data: r.data }, { status: r.status });
   }
   return NextResponse.json({ ok: true, data: r.data }, { status: 201 });
-});
+}));

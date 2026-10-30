@@ -33,6 +33,26 @@ the APIM instance. When APIM isn't provisioned, or the role is missing, the page
 shows an honest `MessageBar` with the resource / role to set rather than an empty
 console.
 
+## Who can administer the API Gateway Plane
+
+Every plane admin route (`/api/admin/api-gateway/**`) requires the scoped
+**`apiplane-admin`** capability ("API Gateway Plane administration"); tenant
+admins always have it, so they are a superset. To delegate, a tenant admin
+grants the capability (role **Admin**) to an Entra group at
+`/admin/permissions` and adds people to that group. It is deliberately not a
+child of Tenant administration, so a grant on tenant administration does not
+cascade to it.
+
+- A caller with neither gets a 403 whose remediation names the group(s) to
+  join, or says that no group holds the capability yet.
+- **Settings -> Runtime** (under API Gateway) lists the group(s) holding the
+  capability and, when none does, the remediation plus a **Grant to a group**
+  link.
+- Every audited plane write records the capability used (`apiplane-admin` or
+  `tenant-admin`) in the audit record's `capability` field.
+- Admin-tier: an interactive browser sign-in is required; a CLI device-code
+  session is refused.
+
 ## Related
 
 - [Scale by SKU](scaling.md) — change the APIM SKU + capacity.

@@ -4,17 +4,18 @@
  * PUT  /api/admin/api-gateway/environments -> settings { requireClassification }
  * Tenant-admin gated; every write is audited and passes the ADR-008 invariant.
  */
+import { withCapability } from '@/lib/api/route-toolkit';
+import { PLANE_ADMIN_CAPABILITY, withPlaneGroupHint } from '@/lib/api-gateway/admin-gate';
 import { apiBadRequest, apiOk } from '@/lib/api/respond';
-import { adminContext, isResponse, readJson, respond, serverError } from '@/lib/api-gateway/environments/route-helpers';
+import { adminContext, readJson, respond, serverError } from '@/lib/api-gateway/environments/route-helpers';
 import { loadCatalog, mutateCatalog } from '@/lib/api-gateway/environments/service';
 import type { EnvironmentInput } from '@/lib/api-gateway/environments/catalog';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  const ctx = adminContext();
-  if (isResponse(ctx)) return ctx;
+export const GET = withPlaneGroupHint(withCapability(PLANE_ADMIN_CAPABILITY, 'Admin', async (_req, { session }) => {
+  const ctx = adminContext(session);
   try {
     const catalog = await loadCatalog(ctx.deps, ctx.tenantId);
     const resources = ctx.deps.classification ? await ctx.deps.classification.list(ctx.tenantId) : [];
@@ -32,11 +33,10 @@ export async function GET() {
   } catch (e) {
     return serverError(e);
   }
-}
+}));
 
-export async function POST(req: Request) {
-  const ctx = adminContext();
-  if (isResponse(ctx)) return ctx;
+export const POST = withPlaneGroupHint(withCapability(PLANE_ADMIN_CAPABILITY, 'Admin', async (req, { session }) => {
+  const ctx = adminContext(session);
   const body = await readJson(req);
   if (!body || typeof body.displayName !== 'string') return apiBadRequest('displayName is required');
   const { displayName, ...input } = body;
@@ -45,11 +45,10 @@ export async function POST(req: Request) {
   } catch (e) {
     return serverError(e);
   }
-}
+}));
 
-export async function PUT(req: Request) {
-  const ctx = adminContext();
-  if (isResponse(ctx)) return ctx;
+export const PUT = withPlaneGroupHint(withCapability(PLANE_ADMIN_CAPABILITY, 'Admin', async (req, { session }) => {
+  const ctx = adminContext(session);
   const body = await readJson(req);
   if (!body || typeof body.requireClassification !== 'boolean') return apiBadRequest('requireClassification (boolean) is required');
   try {
@@ -57,4 +56,4 @@ export async function PUT(req: Request) {
   } catch (e) {
     return serverError(e);
   }
-}
+}));

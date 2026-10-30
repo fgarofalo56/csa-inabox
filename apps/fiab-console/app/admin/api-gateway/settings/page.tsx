@@ -10,10 +10,12 @@ import { Tab, TabList, makeStyles, tokens } from '@fluentui/react-components';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { EnvironmentsTab } from './environments-tab';
 import { FindingsTab } from './findings-tab';
+import { RuntimeTab } from './runtime-tab';
 
 const TABS = [
   { id: 'environments', label: 'Environments' },
   { id: 'findings', label: 'Findings' },
+  { id: 'runtime', label: 'Runtime' },
 ] as const;
 
 const useStyles = makeStyles({
@@ -40,7 +42,7 @@ export default function ApiGatewaySettingsPage() {
         {TABS.map((t) => <Tab key={t.id} value={t.id}>{t.label}</Tab>)}
       </TabList>
       <div className={s.body}>
-        {tab === 'environments' ? <EnvironmentsTab /> : <FindingsTab />}
+        {tab === 'environments' ? <EnvironmentsTab /> : tab === 'findings' ? <FindingsTab /> : <RuntimeTab />}
       </div>
     </AdminShell>
   );
