@@ -67,4 +67,4 @@ Monitoring Reader grant harmless.
 | W1-5 | todo | | sonnet | | 2026-10-28 |
 | W1-6 | merged | feat/apigw-w01-w1-6 | sonnet | vitest lib/gates 74/74; mutations RED (fixit kind 2 fail; unregistered 13/13); gates exported as API_GATEWAY_GATES, NOT yet in GATES/admin gate page nor consumed by UI (W1-5 must consume); docs 7.6 has no mkdocs-strict receipt (strict fails on base too, Material banner); merge 245c654a4 | 2026-10-30 |
 | W1-7 | todo | | sonnet | | 2026-10-28 |
-| W1-8 | in-progress | feat/apigw-w01-w1-8 | sonnet | | 2026-10-30 |
+| W1-8 | merged | feat/apigw-w01-w1-8 | sonnet | combined vitest 826/826 (60 files) incl lib/auth; guards + toolkit OK; mutations RED (3); orchestrator fixed on top: sync route gated on apiplane-admin, apim keys handler inline (durable-access test), findings source wired + findings-wiring test RED when import removed; Runtime tab not click-walked (W1-7); merge 66efd3574 | 2026-10-30 |
