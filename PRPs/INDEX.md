@@ -49,7 +49,7 @@ _none_
 
 | PRP | Shipped | PR |
 |---|---|---|
-| [apigw-W00-measurement-spike](active/loom-api-gateway-plane/apigw-W00-measurement-spike.md) | 2026-10-29 |  |
+| [apigw-W00-measurement-spike](active/loom-api-gateway-plane/apigw-W00-measurement-spike.md) | 2026-10-29 | #5188 |
 | [canvas-stacked-docks-minimap](shipped/canvas-stacked-docks-minimap/PRP.md) | 2026-10-23 | #5095 |
 
 ## Abandoned

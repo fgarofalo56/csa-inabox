@@ -11,6 +11,7 @@ implementer_model: sonnet
 created: 2026-10-28
 started: 2026-10-29
 shipped: 2026-10-29
+pr: 5188
 branch: feat/apigw-w00-measurement-spike
 ---
 # W0 — Measurement and decision spike (no product code)
@@ -91,7 +92,7 @@ Analytics queries; no new resources retained.
 
 Shipped 2026-10-29. W0 measured both clouds that can be measured (Commercial and GCC-High); IL5 and GCC are not measured and are labelled so. The receipt is `W0-RECEIPT.md`.
 
-- PRs: #5181 (probes, merge `d877782a8`), #5183 (hardening H1 to H7, merge `0f1ff4d7b`), and the receipts PR. Probe runs: Commercial 40956953993 (read-only) and 40974529572 (all families); GCC-High 40975571002.
+- PRs: #5181 (probes, merge `d877782a8`), #5183 (hardening H1 to H7, merge `0f1ff4d7b`), and #5188 (receipts and decision pass). Probe runs: Commercial 40956953993 (read-only) and 40974529572 (all families); GCC-High 40975571002.
 - Deviations from the blueprint: one shared probe script with two thin workflows instead of two bash probes; W0-4 folded into the same two runs; the Government workflow fails closed on missing secrets even on dispatch and runs behind the `gcc-high-deploy` approval; #4442 Wave 0 task 1 evidence came from W0-1's list call, and task 3 (Prompt Shields) is a Learn lookup whose result is UNVERIFIED; the combined fragment contained `include-fragment`, which is invalid at fragment scope.
 - Descoped: none. Not measured, by the boundary: GCC-High named-value latency, runtime enforcement and VNet DNS (the gateway is unreachable from Actions); GCC-High Agent ID, UAMI roles and the sign-in app (the Government deploy SP lacks `Application.Read.All`); everything in IL5 and GCC.
 - Ten `policies` cells per cloud stay unknown by one shared signature (a 2xx PUT then a 404 GET); the refinement is #5186 item 1. Follow-ups: #5184, #5185, #5186. W1 sub-issue: #5187.
