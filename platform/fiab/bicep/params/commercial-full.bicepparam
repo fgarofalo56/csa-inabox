@@ -511,5 +511,7 @@ param loomSelfHostedIrEnabled = true
 // and because the deployment is incremental a live budget is left untouched and
 // still alerting. Without this line that export is INERT.
 param observabilityConfig = {
+  // API Gateway Plane W1-2 - GatewayLlmLogs APIM diagnostic category. W0-9: offered on Commercial.
+  apiplaneLlmLogs: true
   programBudgetStartDate: readEnvironmentVariable('LOOM_PROGRAM_BUDGET_START_DATE', '')
 }

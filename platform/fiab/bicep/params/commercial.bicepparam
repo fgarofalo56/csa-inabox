@@ -413,5 +413,7 @@ param loomMsalClientId = readEnvironmentVariable('LOOM_MSAL_CLIENT_ID', '')
 // back to being skipped — so the budget would silently stop being managed.
 // Mirrors gcc/gcc-high/il5.bicepparam.
 param observabilityConfig = {
+  // API Gateway Plane W1-2 - GatewayLlmLogs APIM diagnostic category. W0-9: offered on Commercial.
+  apiplaneLlmLogs: true
   programBudgetStartDate: readEnvironmentVariable('LOOM_PROGRAM_BUDGET_START_DATE', '')
 }
