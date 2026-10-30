@@ -8,7 +8,7 @@
 |---|---|---|---|---|---|
 | [loom-health-data-services](active/loom-health-data-services/PRP.md) | P1 | 1/13 (7%) | todo 11, in-progress 1, merged 1 | sonnet / sonnet | required |
 | [loom-api-gateway-plane](active/loom-api-gateway-plane/PRP.md) | P1 | 1/10 (10%) | todo 9, merged 1 | sonnet / sonnet | none |
-| [apigw-W01-gateway-registry-observe](active/loom-api-gateway-plane/apigw-W01-gateway-registry-observe.md) | P1 | 7/8 (87%) | in-progress 1, merged 7 | sonnet / sonnet | none |
+| [apigw-W01-gateway-registry-observe](active/loom-api-gateway-plane/apigw-W01-gateway-registry-observe.md) | P1 | 7/8 (87%) | merged 7, blocked 1 | sonnet / sonnet | none |
 
 ## Backlog
 
