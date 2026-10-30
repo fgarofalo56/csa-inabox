@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "3981525872323491993"
+      "templateHash": "11714549729871007331"
     }
   },
   "definitions": {
@@ -31087,7 +31087,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "6765520873705654304"
+              "templateHash": "1227805635147848771"
             }
           },
           "functions": [
@@ -36904,7 +36904,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "6225619290637947769"
+                      "templateHash": "7622592429565311180"
                     }
                   },
                   "parameters": {
@@ -37294,6 +37294,31 @@
                       {
                         "name": "brain-findings",
                         "partitionKey": "/estateId",
+                        "ttl": -1
+                      },
+                      {
+                        "name": "apiplane-desired",
+                        "partitionKey": "/tenantId",
+                        "ttl": -1
+                      },
+                      {
+                        "name": "apiplane-observed",
+                        "partitionKey": "/tenantId",
+                        "ttl": -1
+                      },
+                      {
+                        "name": "apiplane-plans",
+                        "partitionKey": "/tenantId",
+                        "ttl": -1
+                      },
+                      {
+                        "name": "apiplane-usage",
+                        "partitionKey": "/tenantId",
+                        "ttl": -1
+                      },
+                      {
+                        "name": "apiplane-notify",
+                        "partitionKey": "/tenantId",
                         "ttl": -1
                       },
                       {
@@ -40964,7 +40989,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "6765520873705654304"
+              "templateHash": "1227805635147848771"
             }
           },
           "functions": [
@@ -46781,7 +46806,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "6225619290637947769"
+                      "templateHash": "7622592429565311180"
                     }
                   },
                   "parameters": {
@@ -47171,6 +47196,31 @@
                       {
                         "name": "brain-findings",
                         "partitionKey": "/estateId",
+                        "ttl": -1
+                      },
+                      {
+                        "name": "apiplane-desired",
+                        "partitionKey": "/tenantId",
+                        "ttl": -1
+                      },
+                      {
+                        "name": "apiplane-observed",
+                        "partitionKey": "/tenantId",
+                        "ttl": -1
+                      },
+                      {
+                        "name": "apiplane-plans",
+                        "partitionKey": "/tenantId",
+                        "ttl": -1
+                      },
+                      {
+                        "name": "apiplane-usage",
+                        "partitionKey": "/tenantId",
+                        "ttl": -1
+                      },
+                      {
+                        "name": "apiplane-notify",
+                        "partitionKey": "/tenantId",
                         "ttl": -1
                       },
                       {
@@ -51006,7 +51056,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "6765520873705654304"
+              "templateHash": "1227805635147848771"
             }
           },
           "functions": [
@@ -56823,7 +56873,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "6225619290637947769"
+                      "templateHash": "7622592429565311180"
                     }
                   },
                   "parameters": {
@@ -57213,6 +57263,31 @@
                       {
                         "name": "brain-findings",
                         "partitionKey": "/estateId",
+                        "ttl": -1
+                      },
+                      {
+                        "name": "apiplane-desired",
+                        "partitionKey": "/tenantId",
+                        "ttl": -1
+                      },
+                      {
+                        "name": "apiplane-observed",
+                        "partitionKey": "/tenantId",
+                        "ttl": -1
+                      },
+                      {
+                        "name": "apiplane-plans",
+                        "partitionKey": "/tenantId",
+                        "ttl": -1
+                      },
+                      {
+                        "name": "apiplane-usage",
+                        "partitionKey": "/tenantId",
+                        "ttl": -1
+                      },
+                      {
+                        "name": "apiplane-notify",
+                        "partitionKey": "/tenantId",
                         "ttl": -1
                       },
                       {
