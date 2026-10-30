@@ -17,7 +17,10 @@ export const dynamic = 'force-dynamic';
 
 // WS-D1: session-only route adopted onto `withSession` (params resolved by the
 // wrapper). WS-D2: the inline APIM config gate normalized onto svc-apim.
-const GET_h = withSession<{ sid: string }>(async (_req, { params }) => {
+// `?gateway=<id>` retargets the handler at a registered gateway; absent = unchanged.
+// The handler stays inline under the export: durable-access-routes.test.ts reads the
+// credential-minting call from the exported method's own text.
+export const GET = scopeRoute(withSession<{ sid: string }>(async (_req, { params }) => {
   const g = apimConfigGate();
   if (g) {
     return apiHonestGateError('svc-apim', {
@@ -32,7 +35,4 @@ const GET_h = withSession<{ sid: string }>(async (_req, { params }) => {
     const status = e instanceof ApimError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });
   }
-});
-
-// `?gateway=<id>` retargets the handler at a registered gateway; absent = unchanged.
-export const GET = scopeRoute(GET_h);
+}));

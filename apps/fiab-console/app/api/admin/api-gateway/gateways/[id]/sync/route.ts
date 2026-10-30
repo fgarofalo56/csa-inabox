@@ -3,12 +3,13 @@
  *
  *   POST /api/admin/api-gateway/gateways/[id]/sync -> { ok, data: { counts, partialTypes, swept, mcp } }
  *
- * 409 when a sync of the same gateway is already running. Tenant-admin only
- * (W1-8 swaps in the apiplane-admin capability).
+ * 409 when a sync of the same gateway is already running. Requires the
+ * apiplane-admin capability (tenant admins are a superset).
  */
 import { NextResponse } from 'next/server';
 import '@/lib/api-gateway/observe/register';
-import { withTenantAdmin } from '@/lib/api/route-toolkit';
+import { withCapability } from '@/lib/api/route-toolkit';
+import { PLANE_ADMIN_CAPABILITY, withPlaneGroupHint } from '@/lib/api-gateway/admin-gate';
 import { actorFromSession } from '@/lib/api-gateway/registry/actor';
 import { syncDeps } from '@/lib/api-gateway/observe/deps';
 import { syncGateway } from '@/lib/api-gateway/observe/sync';
@@ -16,7 +17,7 @@ import { syncGateway } from '@/lib/api-gateway/observe/sync';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export const POST = withTenantAdmin<{ id: string }>(async (_req, { session, params }) => {
+export const POST = withPlaneGroupHint<{ id: string }>(withCapability<{ id: string }>(PLANE_ADMIN_CAPABILITY, 'Admin', async (_req, { session, params }) => {
   const actor = actorFromSession(session);
   const r = await syncGateway(syncDeps(), actor.tenantId, params.id);
   if (!r.ok) {
@@ -24,4 +25,4 @@ export const POST = withTenantAdmin<{ id: string }>(async (_req, { session, para
     return NextResponse.json({ ok: false, error: r.error, code: r.status }, { status });
   }
   return NextResponse.json({ ok: true, data: r });
-});
+}));

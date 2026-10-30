@@ -6,6 +6,7 @@
 import { tenantScopeId, type SessionPayload } from '@/lib/auth/session';
 import { planeCapabilityUsed } from '@/lib/api-gateway/admin-gate';
 import { apiError, apiOk, apiServerError } from '@/lib/api/respond';
+import '@/lib/api-gateway/observe/register'; // findings source: gateways x MCP servers
 import { getEnvironmentDeps } from './deps';
 import type { Actor, EnvironmentDeps, ServiceResult } from './service';
 

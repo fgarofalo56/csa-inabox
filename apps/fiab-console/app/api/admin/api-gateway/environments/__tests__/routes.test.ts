@@ -23,6 +23,8 @@ vi.mock('@/lib/api-gateway/environments/deps', () => ({
   getEnvironmentDeps: () => (state.world as { deps: unknown }).deps,
   getFindingsSource: () => state.findings,
 }));
+// The real registration is exercised in findings-wiring.test.ts; here the findings source is `state.findings`.
+vi.mock('@/lib/api-gateway/observe/register', () => ({}));
 
 import * as rootRoute from '../route';
 import * as keyRoute from '../[key]/route';
