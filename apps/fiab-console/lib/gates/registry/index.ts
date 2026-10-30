@@ -44,6 +44,9 @@ import { readRuntimeFailure, readRuntimeValue } from '@/lib/azure/runtime-produc
 export type { Avail, ServiceAvailability } from '@/lib/admin/env-checks';
 
 export * from './types';
+// API Gateway Plane gate family (W1-6): per-gateway state, not env-var presence,
+// so it is exported beside GATES rather than inside it (see api-gateway.ts).
+export * from './api-gateway';
 import {
   type GateDef,
   type GateFixit,
