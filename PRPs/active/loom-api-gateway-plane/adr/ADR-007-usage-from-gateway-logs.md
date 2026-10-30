@@ -1,6 +1,6 @@
 # ADR-007 — Measured usage from each gateway's resource logs, attributed by policy traces, folded by a job
 
-**Status:** Proposed 2026-10-28; accepted when W4 ships.
+**Status:** Proposed 2026-10-28; accepted when W4 ships. W0 (2026-10-29): `GatewayLlmLogs` is offered on Commercial and absent on GCC-High (only `GatewayLogs` and `AllMetrics`); the live diagnostic setting on both is the legacy `AzureDiagnostics` destination (`W0-RECEIPT.md` section 1).
 **Mosaic lineage:** ADR 0019 (usage telemetry) and its amendments, 0025
 (on-behalf), `usage-analytics.md`.
 

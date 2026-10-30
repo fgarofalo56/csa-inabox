@@ -25,7 +25,7 @@ the operator. Operator decisions Q1–Q8 (2026-10-28) are fixed inputs
 | D14 | Day-one gateway ownership | bicep keeps authoring the #4442 pool; the plane registers it `ownedBy:'deploy'` (observe, drift reported) in W1 and adopts it in W7 through a reviewed apply that flips `loomBackends.aoaiGateway` to `'plane'` | W1, W7 | — (Q10 confirmed 2026-10-29) |
 | D15 | Loom's own MCP items | console-hosted endpoint stays for in-product use; "Publish through gateway" offered on the same dialog | W6 | — |
 | D16 | Unified model API (preview) | not used; pools give one URL per vendor and shape | — | review 2027-04-28 with Q3 |
-| D17 | Sovereign LLM-policy gap | consumed from #4460 / #4442 Wave D; where `llm-token-limit` is unavailable, grants use `rate-limit-by-key` / `quota-by-key` labelled **request-counting**; token limits are refused on that gateway, never silently substituted | W3 | #4460 closes |
+| D17 | Sovereign LLM-policy gap | consumed from #4460 / #4442 Wave D. MEASURED in W0 (2026-10-29, `W0-RECEIPT.md` sections 2 and 9.2): `llm-token-limit` and `llm-emit-token-metric` are authorable on Commercial PremiumV2 and on GCC-High Premium, so the gap #4460 assumed does not exist there; the measured GCC-High gaps are LLM logs (`GatewayLlmLogs` absent) and the MCP API type (api-version `2025-09-01-preview` not registered); runtime enforcement on GCC-High is unmeasured; IL5 and GCC are not measured and keep the rule below. Where `llm-token-limit` is unavailable, grants use `rate-limit-by-key` / `quota-by-key` labelled **request-counting**; token limits are refused on that gateway, never silently substituted | W3 | #4460 closes |
 | D18 | Graph permissions | `User.ReadBasic.All`, `GroupMember.Read.All`, `AgentIdentity.Read.All` requested by bootstrap; `Application.Read.All` optional via Fix-it | W3 | — |
 | D19 | Retention | daily facts/summaries 400 days (min 62); monthly kept; first rollup backfills 90 days; manual backfill ≤ 730 | W4 | storage cost evidence |
 | D20 | Monitoring Reader | granted by bicep on the deploy-owned gateway; Fix-it `role-grant` for registered ones | W1 | — |
@@ -34,6 +34,8 @@ the operator. Operator decisions Q1–Q8 (2026-10-28) are fixed inputs
 | D23 | Legacy `environmentLabel`-style free text | none introduced; classification only | W1 | — |
 | D24 | Token-limit counters | per grant (keys and tokens share one counter identity); publication safeguards separate; group counters per member `oid` | W3 | — |
 | D25 | Anthropic shape limits on classic tiers | token metering only on v2 tiers; classic tiers use call limits with a plan warning; unknown tier blocks publishing until the access check runs | W2 | — |
+| D26 | `apiplaneLlmLogs` per boundary | Commercial `true`; GCC-High `false`; IL5 `false`; GCC `false` (IL5 and GCC not measured, so off until measured); written by W1-2 | W1 | an IL5 or GCC measurement, or a Government category list that offers `GatewayLlmLogs` |
+| D27 | Diagnostic destination type | the live setting `diag-loom-stdz` is the legacy `AzureDiagnostics` destination on both gateways; the resource-specific table `ApiManagementGatewayLlmLog` needs a Dedicated destination, so W1-2 plans that move and offers it and never flips an existing setting silently | W1 | - |
 
 ## 2. Questions for the operator — answered 2026-10-29
 
@@ -52,20 +54,28 @@ where the operator departed from the recommendation (only Q9).
 | Q14 | Price seed refresh: per release (Mosaic's model) or a monthly job that proposes a new version for review? | per release plus an on-demand "Check for newer prices" admin action that proposes versions | **Per release plus the on-demand check** (default) | W4 |
 | Q15 | Budgets on auto-created workspace cost centers: none, warn-only at a default amount, or block? | none until an owner sets one; the Overview lists centers without budgets | **None until an owner sets one** (default) | W5 |
 | Q16 | Do Loom's own Copilot calls move onto a governed pool model under a `platform` cost center at W7 (R9), accepting that platform usage then appears in chargeback? | yes | **Yes, visible in chargeback** (default) | W7 |
+| Q17 | Are the plane's worker job (W4-3) and management vault (W8-1) still their own deploy units, now that `main.json` has 196,393 B of ARM headroom at `007da59c4` (this set said 7,624 B)? | wire the small job module into `main.bicep` after `cost-anomaly-monitor-job.bicep` (it fits); keep LHDS-scale stamps separate; decide the vault when W8 is planned | **Open** (raised by W0, 2026-10-29) | W4 |
+| Q18 | The GCC-High gateway is VNet-internal and unreachable from GitHub-hosted runners: add an in-boundary measurement path (an in-boundary runner or a probe Container Apps Job) so latency and runtime enforcement can be measured there? | yes, as part of W1's Government verifier; until then those cells stay declared gaps | **Open** (raised by W0, 2026-10-29) | W1 |
+| Q19 | Grant the Government deploy SP `Application.Read.All` (application permission, admin consent in the Government tenant) so the three W0-4 Government cells can be measured? | yes, read-only; then re-run the `identity` family | **Open** (raised by W0, 2026-10-29) | W3 |
+| Q20 | The sign-in app is named `CSA Loom Console (<resource group>)` by `main.bicep` and `(<KEYVAULT_NAME>)` by `bootstrap-msal-app-reg.sh` (#5184): which form is canonical? | the script form (the live Commercial app uses it); find the app by a stable key, not a display name | **Open** (raised by W0, 2026-10-29) | W1 |
 
 ## 3. Risks
 
 | Risk | Why it matters | Mitigation |
 |---|---|---|
-| `llm-*` policies, LLM logs or `TraceRecords` absent in a Government tier | metering and token limits are the plane's spine | W0-1/W0-2 measure through Actions; declared gaps with substitutes (D17); readiness states per boundary |
+| `llm-*` policies, LLM logs or `TraceRecords` absent in a Government tier | metering and token limits are the plane's spine | MEASURED in W0 (2026-10-29): LLM logs are absent on GCC-High, the `llm-*` elements are authorable on both clouds and the `TraceRecords` column exists (`W0-RECEIPT.md` 9.2 and 9.5); declared gaps with substitutes (D17); readiness states per boundary |
 | APIM preview surfaces (MCP APIs `2025-09-01-preview`, `.well-known` paths) change | MCP publishing breaks silently | W0-3 measures; the MCP client pins the version; plan refuses unknown shapes; Mosaic's live-verification list is carried in `TEST-STRATEGY.md` |
 | Entra Agent ID unavailable in a tenant or boundary | agent grants cannot be created | W0-4; `agentIdentity` principals gated per boundary with a stated reason |
 | Tenant blocks user consent for the model client | Entra-token access fails for users | Fix-it gate with the exact command; key access unaffected; documented |
 | Two writers (bicep and the plane) on one gateway | drift and overwrites on Loom's own APIM | D14: deploy-owned resources are read-only to the plane until adopted; plan refuses to take over resources it did not create |
-| ARM template headroom (7,624 B) | new modules cannot be wired into `main.bicep` | job and vault as their own deploy units (`LOOM-INTEGRATION.md` § 5) |
+| ARM template headroom (196,393 B at `007da59c4`; this row said 7,624 B, the W1-1-embedded intermediate) | a LHDS-scale stamp cannot be wired into `main.bicep`; a small job module can | Q17: job and vault as their own deploy units (`LOOM-INTEGRATION.md` section 5) or wired into `main.bicep`; re-measure with `git cat-file -s` at the ref before wiring |
 | Rollup cost (Log Analytics queries, Cosmos RU) | estate spend is watched (`csa_loom_cost_and_estate_power_findings_2026_10_19`) | windows halve to fit limits; pages read only Cosmos summaries; retention defaults; W4 records RU/day on the estate |
 | Personal data in rollups | object IDs and client IDs | retention, user-scoped views, documented in `SECURITY-AND-COMPLIANCE.md` § 2 |
 | Budget block latency misread as a hard cap | up to 30 min of spend past the amount | copy on the budget form states it; forecast shown |
 | Cross-cloud boundary misunderstood as sovereign | compliance exposure | opt-in flag, disclosure text, readiness label, key-only runtime, blocked list |
 | Scope creep into APIM features outside the AI gateway (developer portal designer, certificates, workspaces) | this set never finishes | `PRD.md` § 4 non-goals; parity rows stay on `apim-service.md` |
 | Review load | gateway-write waves need a reviewer | one reviewer, one round where possible; findings fixed in-round |
+| A fragment PUT is not a verdict | APIM answers 201 for an invalid policy fragment and then drops it (GET 404), measured on Commercial and GCC-High | W2 apply verifies by read-back and treats a 404 after a 2xx as rejected (ADR-003) |
+| GCC-High has no LLM logs and no MCP API type | `GatewayLlmLogs` is absent; api-version `2025-09-01-preview` is not registered (newest `2024-10-01-preview`) | declared gaps with owners and dates in `W0-RECEIPT.md` 9.5; substitutes per D26 and D15 |
+| The Government gateway is unreachable from Actions | VNet-internal gateway, DNS failure from a hosted runner; latency and runtime enforcement are unmeasured there | Q18: the W1 Government verifier runs in-boundary |
+| The live diagnostic setting is the legacy destination | moving to a resource-specific table changes where `GatewayLogs` lands and can break existing queries | D27: plan and offer the move, never flip silently |

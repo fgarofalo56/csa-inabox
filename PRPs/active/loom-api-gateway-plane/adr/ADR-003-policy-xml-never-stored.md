@@ -1,6 +1,6 @@
 # ADR-003 — Policy XML is never stored or rendered; `loom-*` fragments are the write boundary
 
-**Status:** Proposed 2026-10-28; accepted when W1 (facets) and W2 (fragments) ship.
+**Status:** Proposed 2026-10-28; accepted when W1 (facets) and W2 (fragments) ship. W0 (2026-10-29): the element set the renderers need is authorable on Commercial and GCC-High (`llm-token-limit`, `llm-emit-token-metric`, `trace` with metadata, `validate-azure-ad-token`, `rate-limit-by-key`, `quota-by-key`); `include-fragment` is API-scope only; a fragment PUT answers 201 even for an invalid fragment, which then disappears (GET 404), so apply must verify by read-back (`W0-RECEIPT.md` section 2).
 **Mosaic lineage:** ADR 0004 (policy abstraction, fragments as the future write
 boundary), 0010 (thin `include-fragment` API policy), 0018 (key headers set in
 the fragment).
