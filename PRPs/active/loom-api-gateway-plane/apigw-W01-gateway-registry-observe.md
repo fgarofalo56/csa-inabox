@@ -62,9 +62,9 @@ Monitoring Reader grant harmless.
 |---|---|---|---|---|---|
 | W1-1 | merged | feat/apigw-w01-w1-1 | sonnet | vitest lib/api-gateway 12/12; mutation RED 2/12 in sandbox; bicep build + 8 build-params rc=0; template-sync PASS; merge a69b8080c | 2026-10-30 |
 | W1-2 | merged | feat/apigw-w01-w1-2 | sonnet | vitest W1-1/2/4 93/93; mutations RED (role name, --scope, auto-reg); bicep build + build-params rc=0; template-sync PASS 4005432 B; ClassificationStore wired; no Commercial roll receipt yet; merge edd7cb51e | 2026-10-30 |
-| W1-3 | todo | | sonnet | | 2026-10-28 |
+| W1-3 | in-progress | feat/apigw-w01-w1-3 | sonnet | | 2026-10-30 |
 | W1-4 | merged | feat/apigw-w01-w1-4 | sonnet | vitest 43/43 (5 files); permits() mutation RED 4 tests in sandbox; no tsc errors in owned paths; eslint not run (no flat config); route map NOT regenerated, do once before PR; merge 7221cff5a | 2026-10-30 |
 | W1-5 | todo | | sonnet | | 2026-10-28 |
-| W1-6 | todo | | sonnet | | 2026-10-28 |
+| W1-6 | in-progress | feat/apigw-w01-w1-6 | sonnet | | 2026-10-30 |
 | W1-7 | todo | | sonnet | | 2026-10-28 |
-| W1-8 | todo | | sonnet | | 2026-10-29 |
+| W1-8 | in-progress | feat/apigw-w01-w1-8 | sonnet | | 2026-10-30 |
