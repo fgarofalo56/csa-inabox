@@ -1,6 +1,6 @@
 # ADR-004 — Two runtime registrations, Loom's own sign-in, six principal kinds
 
-**Status:** Proposed 2026-10-28; accepted when W3 ships.
+**Status:** Proposed 2026-10-28; accepted when W3 ships. W0 (2026-10-29): Commercial Graph exposes the Entra Agent ID app roles (`AgentIdentity.Read.All` and five more) and the sign-in app carries `groupMembershipClaims: SecurityGroup`; Government is unknown:permission because the Government deploy SP lacks `Application.Read.All` (`W0-RECEIPT.md` section 4).
 **Mosaic lineage:** ADR 0003 (registrations), 0008 (role separation), 0011
 (model client, consent), 0016 (agent identities, security groups). Operator
 decision Q6 (keys and tokens day one).

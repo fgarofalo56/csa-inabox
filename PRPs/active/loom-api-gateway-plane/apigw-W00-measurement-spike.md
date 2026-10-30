@@ -1,6 +1,6 @@
 ---
 name: apigw-W00-measurement-spike
-status: active
+status: shipped
 allow_parallel: true
 priority: P1
 order: 21
@@ -10,6 +10,7 @@ orchestrator_model: sonnet
 implementer_model: sonnet
 created: 2026-10-28
 started: 2026-10-29
+shipped: 2026-10-29
 branch: feat/apigw-w00-measurement-spike
 ---
 # W0 — Measurement and decision spike (no product code)
@@ -76,12 +77,21 @@ Analytics queries; no new resources retained.
 
 | Item | Status | Branch | Model | Evidence | Updated |
 |---|---|---|---|---|---|
-| W0-1 | merged | feat/apigw-w00-lane-a | sonnet | into integration branch aa7203b14 (+fixes 295e05bf5, 0f9556590); 159 tests pass; 47 of 47 lane mutants RED; NOT yet run against Azure | 2026-10-29 |
-| W0-2 | merged | feat/apigw-w00-lane-a | sonnet | into integration branch aa7203b14 (+fixes 295e05bf5, 0f9556590); 159 tests pass; 47 of 47 lane mutants RED; NOT yet run against Azure | 2026-10-29 |
-| W0-3 | merged | feat/apigw-w00-lane-a | sonnet | into integration branch aa7203b14 (+fixes 295e05bf5, 0f9556590); 159 tests pass; 47 of 47 lane mutants RED; NOT yet run against Azure | 2026-10-29 |
-| W0-4 | merged | feat/apigw-w00-lane-a | sonnet | into integration branch aa7203b14 (+fixes 295e05bf5, 0f9556590); 159 tests pass; 47 of 47 lane mutants RED; NOT yet run against Azure | 2026-10-29 |
-| W0-5 | merged | feat/apigw-w00-lane-b | sonnet | into integration branch f8ae153d5; 37 tests pass; 98 of 98 mutants RED; live run exit 3 (277 Commercial families lack Gov rows) | 2026-10-29 |
-| W0-6 | merged | feat/apigw-w00-lane-a | sonnet | into integration branch aa7203b14 (+fixes 295e05bf5, 0f9556590); 159 tests pass; 47 of 47 lane mutants RED; NOT yet run against Azure | 2026-10-29 |
-| W0-7 | merged | feat/apigw-w00-lane-a | sonnet | into integration branch aa7203b14 (+fixes 295e05bf5, 0f9556590); 159 tests pass; 47 of 47 lane mutants RED; NOT yet run against Azure | 2026-10-29 |
-| W0-8 | verifying | read-only lane C | sonnet | report verified: counts re-run at pin 007da59c4; section 8 lands in PR-2 | 2026-10-29 |
-| W0-9 | todo | | sonnet | | 2026-10-28 |
+| W0-1 | merged | feat/apigw-w00-lane-a | sonnet | PRs #5181 #5183; Commercial run 40974529572 and GCC-High run 40975571002: GatewayLlmLogs present on Commercial and ABSENT on GCC-High; receipt section 1 | 2026-10-29 |
+| W0-2 | merged | feat/apigw-w00-lane-a | sonnet | both clouds: llm-token-limit and five more elements accepted; 10 cells unknown per cloud by the 201-then-404 signature; receipt section 2 | 2026-10-29 |
+| W0-3 | merged | feat/apigw-w00-lane-a | sonnet | Commercial measured; GCC-High not measured (api-version 2025-09-01-preview not registered); receipt section 3 | 2026-10-29 |
+| W0-4 | merged | feat/apigw-w00-lane-a | sonnet | Commercial measured (Agent ID yes); GCC-High unknown:permission, needs Application.Read.All; receipt section 4 | 2026-10-29 |
+| W0-5 | merged | feat/apigw-w00-lane-b | sonnet | PR #5181; 37 tests, 98 of 98 mutants RED; own runs exit 2 (default pair) and exit 3 (Foundry Models, 277 of 390 families absent in Government); receipt section 5 | 2026-10-29 |
+| W0-6 | merged | feat/apigw-w00-lane-a | sonnet | Commercial 7.1 s; GCC-High not measured (gateway unreachable from a hosted runner); receipt section 6 | 2026-10-29 |
+| W0-7 | merged | feat/apigw-w00-lane-a | sonnet | Commercial 14 Anthropic models; GCC-High none listed; Prompt Shields UNVERIFIED; receipt section 7 | 2026-10-29 |
+| W0-8 | merged | feat/apigw-w00-receipts | sonnet | report verified at pin 007da59c4; ARM headroom 196,393 B not 7,624 B; receipt section 8 | 2026-10-29 |
+| W0-9 | merged | feat/apigw-w00-receipts | sonnet | decision pass in receipt section 9: ADR-003/004/007, D17, D26, D27, Q17-Q20; issues #5184 #5185 #5186 #5187 | 2026-10-29 |
+
+## Completion note
+
+Shipped 2026-10-29. W0 measured both clouds that can be measured (Commercial and GCC-High); IL5 and GCC are not measured and are labelled so. The receipt is `W0-RECEIPT.md`.
+
+- PRs: #5181 (probes, merge `d877782a8`), #5183 (hardening H1 to H7, merge `0f1ff4d7b`), and the receipts PR. Probe runs: Commercial 40956953993 (read-only) and 40974529572 (all families); GCC-High 40975571002.
+- Deviations from the blueprint: one shared probe script with two thin workflows instead of two bash probes; W0-4 folded into the same two runs; the Government workflow fails closed on missing secrets even on dispatch and runs behind the `gcc-high-deploy` approval; #4442 Wave 0 task 1 evidence came from W0-1's list call, and task 3 (Prompt Shields) is a Learn lookup whose result is UNVERIFIED; the combined fragment contained `include-fragment`, which is invalid at fragment scope.
+- Descoped: none. Not measured, by the boundary: GCC-High named-value latency, runtime enforcement and VNet DNS (the gateway is unreachable from Actions); GCC-High Agent ID, UAMI roles and the sign-in app (the Government deploy SP lacks `Application.Read.All`); everything in IL5 and GCC.
+- Ten `policies` cells per cloud stay unknown by one shared signature (a 2xx PUT then a 404 GET); the refinement is #5186 item 1. Follow-ups: #5184, #5185, #5186. W1 sub-issue: #5187.

@@ -7,7 +7,7 @@
 | PRP | Priority | Progress | Items | Models | Review |
 |---|---|---|---|---|---|
 | [loom-health-data-services](active/loom-health-data-services/PRP.md) | P1 | 1/13 (7%) | todo 11, in-progress 1, merged 1 | sonnet / sonnet | required |
-| [apigw-W00-measurement-spike](active/loom-api-gateway-plane/apigw-W00-measurement-spike.md) | P1 | 7/9 (77%) | todo 1, verifying 1, merged 7 | sonnet / sonnet | none |
+| [loom-api-gateway-plane](active/loom-api-gateway-plane/PRP.md) | P1 | 1/10 (10%) | todo 9, merged 1 | sonnet / sonnet | none |
 
 ## Backlog
 
@@ -25,8 +25,7 @@
 | [W09-viewer-editors-copilot](active/loom-health-data-services/W09-viewer-editors-copilot.md) | P1 | 10 | W08-consent-segmentation-audit, W05-conversion-hl7v2-ccda | W08-consent-segmentation-audit (backlog); W05-conversion-hl7v2-ccda (backlog) | sonnet / sonnet | none |
 | [W11-hardening-dr-scale-out](active/loom-health-data-services/W11-hardening-dr-scale-out.md) | P1 | 12 | W09-viewer-editors-copilot | W09-viewer-editors-copilot (backlog) | sonnet / sonnet | required |
 | [W12-compliance-evidence-pack](active/loom-health-data-services/W12-compliance-evidence-pack.md) | P1 | 13 | W11-hardening-dr-scale-out | W11-hardening-dr-scale-out (backlog) | sonnet / sonnet | required |
-| [loom-api-gateway-plane](active/loom-api-gateway-plane/PRP.md) | P1 | 20 | - | - | sonnet / sonnet | none |
-| [apigw-W01-gateway-registry-observe](active/loom-api-gateway-plane/apigw-W01-gateway-registry-observe.md) | P1 | 22 | apigw-W00-measurement-spike | apigw-W00-measurement-spike (active) | sonnet / sonnet | none |
+| [apigw-W01-gateway-registry-observe](active/loom-api-gateway-plane/apigw-W01-gateway-registry-observe.md) | P1 | 22 | apigw-W00-measurement-spike | - | sonnet / sonnet | none |
 | [apigw-W02-publishing-plan-apply](active/loom-api-gateway-plane/apigw-W02-publishing-plan-apply.md) | P1 | 23 | apigw-W01-gateway-registry-observe | apigw-W01-gateway-registry-observe (backlog) | sonnet / sonnet | required |
 | [apigw-W03-identity-entitlements](active/loom-api-gateway-plane/apigw-W03-identity-entitlements.md) | P1 | 24 | apigw-W02-publishing-plan-apply | apigw-W02-publishing-plan-apply (backlog) | sonnet / sonnet | required |
 | [apigw-W04-cost-centers-usage-pricing](active/loom-api-gateway-plane/apigw-W04-cost-centers-usage-pricing.md) | P1 | 25 | apigw-W01-gateway-registry-observe | apigw-W01-gateway-registry-observe (backlog) | sonnet / sonnet | none |
@@ -50,6 +49,7 @@ _none_
 
 | PRP | Shipped | PR |
 |---|---|---|
+| [apigw-W00-measurement-spike](active/loom-api-gateway-plane/apigw-W00-measurement-spike.md) | 2026-10-29 |  |
 | [canvas-stacked-docks-minimap](shipped/canvas-stacked-docks-minimap/PRP.md) | 2026-10-23 | #5095 |
 
 ## Abandoned
