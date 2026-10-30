@@ -59,6 +59,8 @@ allowed caller app.
 | `LOOM_HEALTH_CP_AUTHORITY_HOST` | no | Bare-hostname override of the per-cloud authority |
 | `LOOM_HEALTH_CP_SLO_AVAILABILITY_TARGET` | no | Fraction in (0,1), default `0.999` |
 | `LOOM_HEALTH_CP_PDP_BUNDLE_DIR` | no | Directory of `<stamp>.tar.gz` bundles signed by `apps/loom-health-pdp/tools/build-bundle.sh`. Unset = bundle route answers 503 |
+| `LOOM_HEALTH_CP_SUBSCRIPTION_ID` | yes | Subscription GUID holding the stamp resource groups; `tenant.create` / `tenant.destroy` deploy there. Startup fails naming it if unset |
+| `LOOM_HEALTH_CP_TENANT_TEMPLATE_PATH` | yes | Path of the compiled `tenant.bicep` (the image carries it at `/app/templates/tenant.json`). Startup fails naming it if unset or not an ARM template |
 | `LOOM_HEALTH_CP_ISSUER_URL` | yes | Public issuer URL of the Authorization Server including its path (`https://<host>/auth`). Startup fails if any of the four AS variables is missing |
 | `LOOM_HEALTH_CP_FHIR_BASE_URL` | yes | Public FHIR edge base; a tenant's FHIR base (token `aud`) is `<base>/<tenant>/fhir` |
 | `LOOM_HEALTH_CP_AS_CLIENT_ID` | yes | App registration GUID of the AS in this cloud's Entra tenant (federated credential, no secret) |

@@ -104,7 +104,7 @@ export const POST = withSession<{ type: string }>(async (req: NextRequest, { ses
     // can produce an item whose backing Azure object does not exist yet.
     // Create-or-attach it now, named after the item, so the editor that opens
     // next already has a canvas. Deadline-bounded and never-throwing.
-    if (resource) await autoBindOnCreate(resource);
+    if (resource) await autoBindOnCreate(resource, { session });
     return NextResponse.json({ ok: true, item: resource });
   } catch (e: any) {
     return err(e?.message || 'Failed to create item', 500, 'cosmos_error');

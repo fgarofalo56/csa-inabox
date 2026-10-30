@@ -25,6 +25,34 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.117.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.116.0...csa-inabox-v0.117.0) (2026-10-30)
+
+
+### Features
+
+* **apiplane:** W0 APIM measurement probes and Retail Prices coverage script ([#5181](https://github.com/fgarofalo56/csa-inabox/issues/5181)) ([d877782](https://github.com/fgarofalo56/csa-inabox/commit/d877782a8298268af8c0a2613ae3e5154c6b09a9)), closes [#5179](https://github.com/fgarofalo56/csa-inabox/issues/5179)
+* **health:** provision health-tenant backing tenant at create time ([#5172](https://github.com/fgarofalo56/csa-inabox/issues/5172)) ([b9decb4](https://github.com/fgarofalo56/csa-inabox/commit/b9decb4a8dcb883ddd90988360ac8e689b50e161))
+* **health:** wire tenant ARM adapter into control-plane main ([#5170](https://github.com/fgarofalo56/csa-inabox/issues/5170)) ([089ff80](https://github.com/fgarofalo56/csa-inabox/commit/089ff80e7c1c35682a40d49d8740272001560ee7))
+
+
+### Bug Fixes
+
+* **apiplane:** harden the W0 probes after the 5181 review, H1-H7 ([#5183](https://github.com/fgarofalo56/csa-inabox/issues/5183)) ([0f1ff4d](https://github.com/fgarofalo56/csa-inabox/commit/0f1ff4d7b934ee27baf5c1b35cd733d45e4c1724)), closes [#5179](https://github.com/fgarofalo56/csa-inabox/issues/5179)
+* **console:** pin vitest back to 3.2.7 (5.0.5 broke main's vitest job) ([#5174](https://github.com/fgarofalo56/csa-inabox/issues/5174)) ([1e58004](https://github.com/fgarofalo56/csa-inabox/commit/1e58004dccf09e214353efdb742fb68e18e1a5a8))
+
+
+### Documentation
+
+* **apigw:** W0 receipt, decision pass and wrap-up of the measurement spike ([#5188](https://github.com/fgarofalo56/csa-inabox/issues/5188)) ([a74908d](https://github.com/fgarofalo56/csa-inabox/commit/a74908d104c18533b90cd472c7c2b7a6b61575a6)), closes [#5179](https://github.com/fgarofalo56/csa-inabox/issues/5179)
+* **prp:** Loom API & AI Gateway Plane PRD + PRP set (Mosaic fold-in) ([#5180](https://github.com/fgarofalo56/csa-inabox/issues/5180)) ([007da59](https://github.com/fgarofalo56/csa-inabox/commit/007da59c49350ccab0c79e4cbeab62e883c5264c))
+
+## [0.116.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.115.0...csa-inabox-v0.116.0) (2026-10-28)
+
+
+### Features
+
+* **health:** W1-4 auth infra - Cosmos containers, env vars, scoped signing key ([#5158](https://github.com/fgarofalo56/csa-inabox/issues/5158)) ([26ffc2b](https://github.com/fgarofalo56/csa-inabox/commit/26ffc2bfdd0ab37ee6b58f1511b36f6c4fae6057))
+
 ## [0.115.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.114.0...csa-inabox-v0.115.0) (2026-10-27)
 
 
