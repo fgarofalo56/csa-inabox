@@ -361,6 +361,10 @@ var cpEnv = concat(authEnv, [
   { name: 'LOOM_HEALTH_CP_COSMOS_DATABASE', value: databaseName }
   { name: 'LOOM_HEALTH_CP_ALLOWED_CALLER_APP_IDS', value: join(allowedCallerAppIds, ',') }
   { name: 'LOOM_HEALTH_CP_SLO_AVAILABILITY_TARGET', value: sloAvailabilityTarget }
+  // tenant.create / tenant.destroy ARM adapter (#5162). The template is tenant.bicep compiled into the
+  // image at this path by apps/loom-health-cp/Dockerfile; the service fails startup if either is missing.
+  { name: 'LOOM_HEALTH_CP_SUBSCRIPTION_ID', value: subscription().subscriptionId }
+  { name: 'LOOM_HEALTH_CP_TENANT_TEMPLATE_PATH', value: '/app/templates/tenant.json' }
   { name: 'AZURE_CLIENT_ID', value: cpIdentity.properties.clientId }
 ])
 

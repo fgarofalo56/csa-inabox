@@ -1,0 +1,246 @@
+name: apiplane-w0-commercial-probe
+
+# CSA Loom - API & AI Gateway Plane W0 measurement, COMMERCIAL half
+# (PRPs/active/loom-api-gateway-plane/apigw-W00-measurement-spike.md, items W0-1, W0-2,
+# W0-3, W0-4, W0-6, W0-7; one measurement shared with #4442 Wave 0 tasks 1-3 / #4460).
+#
+# WHAT IT DOES. The same scripts/measure/apiplane/w0-apim-probe.mjs the Gov workflow runs, one
+# step per family, against the ONE APIM instance in the Commercial subscription (PremiumV2,
+# virtualNetworkType Internal). It runs on the in-VNet pool runner so the gateway DATA plane is
+# reachable (latency, reachability) and DNS verdicts are real VNet verdicts. The logic is in the
+# .mjs (tests: scripts/measure/apiplane/__tests__/); this file authenticates, calls it, merges
+# the results and uploads them.
+#
+# WHAT IT TOUCHES. Reads: APIM, Monitor, Log Analytics, Graph, Cognitive Services. Writes: ONLY
+# objects named `w0-apiplane-*` (named values, policy fragments, APIs), swept before and after
+# every family and listed at the end; every delete goes through one function that throws on any
+# other name. Nothing is retained.
+#
+# LOGIN. The deploy SP with a CLIENT SECRET (the same step as loom-aca-runner-smoke.yml "Azure
+# login (deploy SP ...)"), NOT OIDC: the OIDC federated credential is pinned to refs/heads/main,
+# so a branch dispatch would die at AADSTS700213, and this probe is dispatched from a branch.
+#
+# FAILS CLOSED. The precheck exits 1 on any missing secret or malformed input, on every trigger.
+# A measurement that did not run must not look like a pass (deploy-integrity.md R3).
+#
+# EXIT CODES (per family step; any non-zero fails the job, and the aggregate step re-checks):
+#   0  controls passed, every required cell measured or not-measured
+#   2  a CONTROL FAILED or the script crashed - that family is INVALID, publish none of its cells
+#   3  a required cell is unknown (e.g. a 403 naming the role), or scratch objects were left behind
+#
+# TIMEOUT vs CAP. The `probe` job has timeout-minutes 90 and the latency family waits latency_poll_seconds up to
+# TWICE (value A, then value B), so the cap is 1800: 2 x 30 min + ~15 min for the rest of the job stays under 90. A
+# timeout kill skips the probe's `finally` sweep and would leave the scratch API and named value live on the gateway.
+# A test derives this relationship from the files, so raising the cap or lowering the timeout turns it red.
+#
+# PUBLIC REPO: Actions logs and artifacts are world-readable. The probe prints names, resource
+# groups, SKUs and states only and runs everything through scripts/ci/_azure-redact.mjs.
+#
+# No approval environment (Commercial, scratch objects only). One `probe` job, one step per family
+# with `if: always()` so a failing family does not hide the others. No step uses
+# continue-on-error, `|| true`, or discards stderr.
+#
+# Dispatch:
+#   gh workflow run apiplane-w0-commercial-probe.yml --ref <branch>
+#   gh workflow run apiplane-w0-commercial-probe.yml --ref <branch> -f families=policies,mcp
+#   gh workflow run apiplane-w0-commercial-probe.yml --ref <branch> -f latency_poll_seconds=300
+
+run-name: apiplane-w0-commercial-probe commercial families=${{ inputs.families }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      apim_name:
+        description: 'APIM service name. Empty = the single APIM in the Commercial subscription (the probe refuses to guess when there are several).'
+        type: string
+        required: false
+        default: ''
+      families:
+        description: 'Comma-separated families to run, or "all": telemetry,policies,mcp,identity,latency,foundry'
+        type: string
+        required: false
+        default: all
+      latency_poll_seconds:
+        description: 'Cap in seconds on EACH named-value propagation wait (30-1800). A value never seen within the cap is recorded as not observed, never as a number.'
+        type: string
+        required: false
+        default: '900'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apiplane-w0-commercial-probe
+  cancel-in-progress: false
+
+jobs:
+  precheck:
+    name: Verify Commercial secrets and inputs (fails closed)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail closed on a missing secret or a malformed input
+        env:
+          COM_C: ${{ secrets.AZURE_CLIENT_ID }}
+          COM_S: ${{ secrets.AZURE_CLIENT_SECRET }}
+          COM_T: ${{ secrets.AZURE_TENANT_ID }}
+          COM_U: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          IN_APIM: ${{ inputs.apim_name }}
+          IN_FAMILIES: ${{ inputs.families }}
+          IN_POLL: ${{ inputs.latency_poll_seconds }}
+        run: |
+          set -uo pipefail
+          missing=""
+          [[ -z "$COM_C" ]] && missing="$missing AZURE_CLIENT_ID"
+          [[ -z "$COM_S" ]] && missing="$missing AZURE_CLIENT_SECRET"
+          [[ -z "$COM_T" ]] && missing="$missing AZURE_TENANT_ID"
+          [[ -z "$COM_U" ]] && missing="$missing AZURE_SUBSCRIPTION_ID"
+          if [[ -n "$missing" ]]; then
+            echo "::error::apiplane-w0-commercial-probe cannot authenticate - missing secret(s):$missing. Failing instead of reporting a green run that measured nothing, on every trigger including a manual dispatch."
+            exit 1
+          fi
+          if [[ -n "$IN_APIM" ]] && ! [[ "$IN_APIM" =~ ^[a-zA-Z]([a-zA-Z0-9-]{0,48}[a-zA-Z0-9])?$ ]]; then
+            echo "::error::apim_name is not a valid APIM service name"
+            exit 1
+          fi
+          # 1800 is the largest cap whose worst case fits the job: the latency family waits the cap up to TWICE (value A, then
+          # value B), so 2 x 1800 s = 60 min plus ~15 min for everything else stays under timeout-minutes 90. A timeout kill
+          # skips the probe's `finally` sweep and would leave the scratch API and named value live on the gateway. The digits are
+          # bounded (2-4, no leading zero) so the arithmetic is always sane: bash reads 0900 as octal, and a 20-digit value wraps.
+          if ! [[ "$IN_POLL" =~ ^[1-9][0-9]{1,3}$ ]] || (( IN_POLL < 30 || IN_POLL > 1800 )); then
+            echo "::error::latency_poll_seconds must be an integer from 30 to 1800"
+            exit 1
+          fi
+          if [[ -z "$IN_FAMILIES" ]]; then
+            echo "::error::families must not be empty (use all, or a comma-separated list of telemetry,policies,mcp,identity,latency,foundry)"
+            exit 1
+          fi
+          if [[ "$IN_FAMILIES" != "all" ]]; then
+            IFS=',' read -ra wanted <<< "$IN_FAMILIES"
+            for f in "${wanted[@]}"; do
+              case "$f" in
+                telemetry|policies|mcp|identity|latency|foundry) ;;
+                *) echo "::error::unknown family '$f' (use all, or a comma-separated list of telemetry,policies,mcp,identity,latency,foundry)"; exit 1 ;;
+              esac
+            done
+          fi
+          echo "precheck ok: 4 Commercial secrets present, inputs valid"
+
+  probe:
+    name: Probe the Commercial APIM (in-VNet pool runner, one step per family)
+    needs: [precheck]
+    runs-on: [self-hosted, loom-aca]
+    timeout-minutes: 90
+    env:
+      FAMILIES: ${{ inputs.families }}
+      APIM_NAME: ${{ inputs.apim_name }}
+      POLL_SECONDS: ${{ inputs.latency_poll_seconds }}
+    steps:
+      # The pool runner is SELF-HOSTED, so its toolchain is not guaranteed the way ubuntu-latest plus setup-node is on the Gov
+      # lane. The probe needs Node >= 20 (global fetch, AbortSignal.timeout) and the az CLI (its tokens and account come from
+      # it). Fail closed HERE, with the reason, instead of letting a family step die in a stack trace after the login.
+      - name: Fail closed unless node >= 20 and the az CLI are on this runner
+        run: |
+          set -uo pipefail
+          node_bin="$(command -v node)"
+          if [[ -z "$node_bin" ]]; then
+            echo "::error::node is not on this runner's PATH. The probe needs Node >= 20 (global fetch, AbortSignal.timeout): install it on the loom-aca pool image or add a setup-node step."
+            exit 1
+          fi
+          major="$("$node_bin" -p 'process.versions.node.split(".")[0]')"
+          if ! [[ "$major" =~ ^[0-9]+$ ]] || (( major < 20 )); then
+            echo "::error::node on this runner reports major version '${major:0:20}', and the probe needs >= 20 (global fetch, AbortSignal.timeout). Update the loom-aca pool image or add a setup-node step."
+            exit 1
+          fi
+          if [[ -z "$(command -v az)" ]]; then
+            echo "::error::the az CLI is not on this runner's PATH. The probe gets its tokens and account from az: install it on the loom-aca pool image."
+            exit 1
+          fi
+          echo "toolchain ok: node major ${major}, az present"
+
+      - uses: actions/checkout@v7.0.1
+
+      # The deploy SP, as a CLIENT-SECRET login rather than OIDC, exactly as loom-aca-runner-smoke.yml:
+      # the OIDC federated credential is pinned to refs/heads/main and a branch dispatch dies at AADSTS700213.
+      - name: Azure login (deploy SP - client secret, so a branch dispatch works)
+        uses: azure/login@v2.3.0
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      - name: Prepare the output directory
+        run: |
+          set -uo pipefail
+          OUT="$RUNNER_TEMP/apiplane-w0-commercial"
+          mkdir -p "$OUT"
+          echo "OUT=$OUT" >> "$GITHUB_ENV"
+
+      - name: telemetry (W0-1) - diagnostic categories, Log Analytics tables
+        if: ${{ always() && (env.FAMILIES == 'all' || contains(env.FAMILIES, 'telemetry')) }}
+        run: |
+          set -uo pipefail
+          args=(--cloud commercial --family telemetry --runner in-vnet --out "$OUT")
+          [[ -n "$APIM_NAME" ]] && args+=(--apim-name "$APIM_NAME")
+          node scripts/measure/apiplane/w0-apim-probe.mjs "${args[@]}"
+
+      - name: policies (W0-2) - llm-* family and friends, with controls
+        if: ${{ always() && (env.FAMILIES == 'all' || contains(env.FAMILIES, 'policies')) }}
+        run: |
+          set -uo pipefail
+          args=(--cloud commercial --family policies --runner in-vnet --out "$OUT")
+          [[ -n "$APIM_NAME" ]] && args+=(--apim-name "$APIM_NAME")
+          node scripts/measure/apiplane/w0-apim-probe.mjs "${args[@]}"
+
+      - name: mcp (W0-3) - MCP API type, mcpProperties, .well-known
+        if: ${{ always() && (env.FAMILIES == 'all' || contains(env.FAMILIES, 'mcp')) }}
+        run: |
+          set -uo pipefail
+          args=(--cloud commercial --family mcp --runner in-vnet --out "$OUT")
+          [[ -n "$APIM_NAME" ]] && args+=(--apim-name "$APIM_NAME")
+          node scripts/measure/apiplane/w0-apim-probe.mjs "${args[@]}"
+
+      - name: identity (W0-4) - Graph reads with the run's own identity
+        if: ${{ always() && (env.FAMILIES == 'all' || contains(env.FAMILIES, 'identity')) }}
+        run: |
+          set -uo pipefail
+          args=(--cloud commercial --family identity --runner in-vnet --out "$OUT")
+          [[ -n "$APIM_NAME" ]] && args+=(--apim-name "$APIM_NAME")
+          node scripts/measure/apiplane/w0-apim-probe.mjs "${args[@]}"
+
+      - name: latency (W0-6) - named-value propagation at the gateway
+        if: ${{ always() && (env.FAMILIES == 'all' || contains(env.FAMILIES, 'latency')) }}
+        run: |
+          set -uo pipefail
+          args=(--cloud commercial --family latency --runner in-vnet --out "$OUT" --latency-poll-seconds "$POLL_SECONDS")
+          [[ -n "$APIM_NAME" ]] && args+=(--apim-name "$APIM_NAME")
+          node scripts/measure/apiplane/w0-apim-probe.mjs "${args[@]}"
+
+      - name: foundry (W0-7) - Anthropic-on-Foundry models and DNS
+        if: ${{ always() && (env.FAMILIES == 'all' || contains(env.FAMILIES, 'foundry')) }}
+        run: |
+          set -uo pipefail
+          args=(--cloud commercial --family foundry --runner in-vnet --out "$OUT")
+          [[ -n "$APIM_NAME" ]] && args+=(--apim-name "$APIM_NAME")
+          node scripts/measure/apiplane/w0-apim-probe.mjs "${args[@]}"
+
+      - name: Aggregate the receipt (redacted), append it to the summary, fail if any family failed
+        if: ${{ always() }}
+        run: |
+          set -uo pipefail
+          test -n "${OUT:-}" || { echo "::error::the output directory was never prepared; nothing ran"; exit 1; }
+          expect="$FAMILIES"
+          [[ "$expect" == "all" ]] && expect="telemetry,policies,mcp,identity,latency,foundry"
+          node scripts/measure/apiplane/w0-apim-probe.mjs --aggregate "$OUT" --expect "$expect" --cloud commercial --summary-file "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload receipt and per-family JSON (names, resource groups, SKUs, states only)
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: apiplane-w0-commercial
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 14

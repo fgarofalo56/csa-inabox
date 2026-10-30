@@ -84,6 +84,8 @@
  * component.
  */
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import type { SessionPayload } from '@/lib/auth/session';
+import type { EnsureDeps, EnsureOutcome } from '@/lib/install/provisioners/health-tenant';
 import { withoutLakehouseCreateState } from './backing-name';
 
 /** The item facts a provider needs. Deliberately not the whole `WorkspaceItem`. */
@@ -788,12 +790,28 @@ export function autoBindWireStatus(outcome: AutoBindOutcome): {
  */
 export async function autoBindOnCreate(
   item: WorkspaceItem,
-  opts: EnsureAutoBindingOptions & { timeoutMs?: number } = {},
+  opts: EnsureAutoBindingOptions & {
+    timeoutMs?: number;
+    /** The creating caller. Required for `health-tenant` (D12: tenant creation is capability-gated). */
+    session?: SessionPayload;
+    /** Test seam: control-plane dependencies for the `health-tenant` arm. */
+    healthDeps?: EnsureDeps;
+  } = {},
 ): Promise<AutoBindOutcome | null> {
   const timeoutMs = opts.timeoutMs ?? 8000;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     await clearServerOwnedKeysOnCreate(item);
+    if (item?.itemType === 'health-tenant') {
+      // Not an engine provider: provisioning is a control-plane JOB, not a probe/create of one
+      // Azure object, and it carries its own binding (`state.healthTenant`). The outcome is not
+      // an AutoBindOutcome, so the caller gets null; the editor reads `state.healthTenant`.
+      const deadline = new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), timeoutMs);
+      });
+      await Promise.race([healthTenantAutoBindOnCreate(item, opts.session, opts.healthDeps), deadline]);
+      return null;
+    }
     const work = autoBindOnOpen(item, undefined, opts).then((r) => r.outcome);
     const deadline = new Promise<null>((resolve) => {
       timer = setTimeout(() => resolve(null), timeoutMs);
@@ -803,6 +821,39 @@ export async function autoBindOnCreate(
     return null;
   } finally {
     if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * The `health-tenant` create-time arm (#5161). Provisions and binds the item's backing tenant
+ * through the SAME `ensureHealthTenant` the editor's first open uses, so the two paths cannot
+ * diverge and first-open remains the self-heal path (idempotent: N calls, ONE tenant, ONE job).
+ *
+ * AUTHORIZATION (D12): creating a tenant deploys real resources, and `health.tenant-admin` is
+ * not inherited from Loom Admin. With no session, or a session lacking an explicit Contributor
+ * grant, this does NOTHING and the item is created unbound; the first open binds it for an
+ * authorized caller. It never throws and never fails item creation.
+ *
+ * Passes `state: undefined` deliberately: a create body or copied state must not name another
+ * item's tenant. The tenant is derived from this item's display name (adopting an existing
+ * tenant only when its display name matches).
+ */
+export async function healthTenantAutoBindOnCreate(
+  item: WorkspaceItem,
+  session: SessionPayload | undefined,
+  deps?: EnsureDeps,
+): Promise<EnsureOutcome | null> {
+  try {
+    if (item?.itemType !== 'health-tenant' || !session) return null;
+    const { enforceHealthTenantAdmin } = await import('@/app/api/health/tenants/_lib/tenant-admin-gate');
+    if (await enforceHealthTenantAdmin(session, 'Contributor')) return null;
+    const { ensureHealthTenant, realDeps } = await import('@/lib/install/provisioners/health-tenant');
+    return await ensureHealthTenant(
+      { itemId: item.id, displayName: item.displayName, state: undefined },
+      deps ?? realDeps(item.id, item.workspaceId),
+    );
+  } catch {
+    return null;
   }
 }
 
