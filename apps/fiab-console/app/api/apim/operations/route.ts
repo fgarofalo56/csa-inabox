@@ -11,6 +11,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { apimConfigGate, listOperations, ApimError } from '@/lib/azure/apim-client';
 import { apiHonestGateError } from '@/lib/api/gate-envelope';
 import { withSession } from '@/lib/api/route-toolkit';
+import { scopeRoute } from '@/lib/api-gateway/registry/resolve-gateway';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -28,7 +29,7 @@ function gate() {
 }
 
 // WS-D1: session-only route adopted onto `withSession`.
-export const GET = withSession(async (req: NextRequest) => {
+const GET_h = withSession(async (req: NextRequest) => {
   const g = gate(); if (g) return g;
   const apiId = req.nextUrl.searchParams.get('apiId')?.trim();
   if (!apiId) return NextResponse.json({ ok: false, error: 'apiId is required' }, { status: 400 });
@@ -39,3 +40,6 @@ export const GET = withSession(async (req: NextRequest) => {
     return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });
   }
 });
+
+// `?gateway=<id>` retargets the handler at a registered gateway; absent = unchanged.
+export const GET = scopeRoute(GET_h);

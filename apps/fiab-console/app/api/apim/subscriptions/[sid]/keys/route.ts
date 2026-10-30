@@ -10,13 +10,14 @@ import { NextResponse } from 'next/server';
 import { apimConfigGate, getSubscriptionKeys, ApimError } from '@/lib/azure/apim-client';
 import { apiHonestGateError } from '@/lib/api/gate-envelope';
 import { withSession } from '@/lib/api/route-toolkit';
+import { scopeRoute } from '@/lib/api-gateway/registry/resolve-gateway';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 // WS-D1: session-only route adopted onto `withSession` (params resolved by the
 // wrapper). WS-D2: the inline APIM config gate normalized onto svc-apim.
-export const GET = withSession<{ sid: string }>(async (_req, { params }) => {
+const GET_h = withSession<{ sid: string }>(async (_req, { params }) => {
   const g = apimConfigGate();
   if (g) {
     return apiHonestGateError('svc-apim', {
@@ -32,3 +33,6 @@ export const GET = withSession<{ sid: string }>(async (_req, { params }) => {
     return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });
   }
 });
+
+// `?gateway=<id>` retargets the handler at a registered gateway; absent = unchanged.
+export const GET = scopeRoute(GET_h);

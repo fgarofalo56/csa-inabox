@@ -17,6 +17,7 @@
  * BFF can surface APIM's own validation messages to the editor UI.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import {
   DefaultAzureCredential,
@@ -58,7 +59,20 @@ function apimSub(): string {
   return v;
 }
 
+/**
+ * Per-request gateway override (API Gateway Plane, `?gateway=<id>`). Absent =
+ * the deploy-default service named by env, exactly as before.
+ */
+const gatewayOverride = new AsyncLocalStorage<string>();
+
+/** Run `fn` with every apim-client call targeting the APIM service `resourceId` (an ARM service id). */
+export function withApimGateway<T>(resourceId: string | undefined, fn: () => Promise<T>): Promise<T> {
+  return resourceId ? gatewayOverride.run(resourceId, fn) : fn();
+}
+
 function apimBase(): string {
+  const ov = gatewayOverride.getStore();
+  if (ov) return `${armBase()}${ov}`;
   const sub = apimSub();
   const rg = process.env.LOOM_APIM_RG || 'rg-csa-loom-admin-eastus2';
   const name = process.env.LOOM_APIM_NAME || 'apim-csa-loom-eastus2';
@@ -103,7 +117,7 @@ export class ApimError extends Error {
 
 async function apimFetch(
   path: string,
-  init: RequestInit & { query?: Record<string, string> } = {},
+  init: RequestInit & { query?: Record<string, string>; apiVersion?: string } = {},
 ): Promise<Response> {
   const token = await credential.getToken(ARM_SCOPE);
   if (!token?.token) throw new Error('Failed to acquire ARM token for APIM');
@@ -111,8 +125,8 @@ async function apimFetch(
   const query = init.query
     ? '&' + new URLSearchParams(init.query).toString()
     : '';
-  const url = `${apimBase()}${path}${sep}api-version=${APIM_API}${query}`;
-  const { query: _q, ...rest } = init;
+  const url = `${apimBase()}${path}${sep}api-version=${init.apiVersion ?? APIM_API}${query}`;
+  const { query: _q, apiVersion: _v, ...rest } = init;
   return armCountedFetch(url, {
     ...rest,
     headers: {
@@ -1508,6 +1522,65 @@ export async function getServiceInfo(): Promise<{
     managementApiUrl: j?.properties?.managementApiUrl,
     developerPortalStatus: j?.properties?.developerPortalStatus,
   };
+}
+
+// ---------------- Inventory read helpers (API Gateway Plane, W1-3) ----------------
+
+export const APIM_MCP_API = '2025-09-01-preview';
+
+export interface ApimPagedList {
+  items: any[];
+  /** false = a page failed or the page cap was hit; the caller must not treat absence as deletion. */
+  complete: boolean;
+  error?: string;
+}
+
+/** Follow nextLink to the end (cap 50 pages). nextLink must stay on the ARM host or it is not followed. */
+export async function pagedGet(resourceId: string, path: string, apiVersion: string): Promise<ApimPagedList> {
+  return withApimGateway(resourceId, async () => {
+    const items: any[] = [];
+    let res = await apimFetch(path, { apiVersion });
+    for (let page = 0; page < 50; page++) {
+      const j = await readJson<{ value?: any[]; nextLink?: string }>(res);
+      if (!j) throw new ApimError(404, null, `APIM list ${path} answered 404`);
+      items.push(...(j.value || []));
+      if (!j.nextLink) return { items, complete: true };
+      if (!j.nextLink.startsWith(armBase())) return { items, complete: false, error: 'nextLink left the ARM host; not followed' };
+      const token = await credential.getToken(ARM_SCOPE);
+      if (!token?.token) throw new Error('Failed to acquire ARM token for APIM');
+      res = await armCountedFetch(j.nextLink, { headers: { authorization: `Bearer ${token.token}` } });
+    }
+    return { items, complete: false, error: 'page cap (50) reached' };
+  });
+}
+
+/** GET /policyFragments (policy fragments with their XML value). Throws ApimError on non-2xx. */
+export function listPolicyFragments(resourceId: string): Promise<ApimPagedList> {
+  return pagedGet(resourceId, '/policyFragments', APIM_API);
+}
+
+/**
+ * GET /apis at api-version 2025-09-01-preview, filtered to type `mcp`. A gateway that
+ * has not registered that version rejects the call (400/404/501): that is reported as
+ * `{ status: 'unavailable' }`, never as an empty list. Any other failure throws.
+ */
+export async function listMcpApis(
+  resourceId: string,
+): Promise<({ status: 'ok' } & ApimPagedList) | { status: 'unavailable'; reason: string }> {
+  try {
+    const r = await pagedGet(resourceId, '/apis', APIM_MCP_API);
+    return {
+      status: 'ok',
+      complete: r.complete,
+      error: r.error,
+      items: r.items.filter((a) => String(a?.properties?.type ?? a?.properties?.apiType ?? '').toLowerCase() === 'mcp'),
+    };
+  } catch (e) {
+    if (e instanceof ApimError && [400, 404, 405, 501].includes(e.status)) {
+      return { status: 'unavailable', reason: `The gateway rejected api-version ${APIM_MCP_API} (HTTP ${e.status}): ${e.message}` };
+    }
+    throw e;
+  }
 }
 
 // ---------------- Developer portal (portalRevisions) ----------------
