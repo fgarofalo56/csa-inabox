@@ -48,6 +48,7 @@ const ICON_BY_HREF: Record<string, FluentIcon> = {
   '/admin/env-config': Wrench24Regular,
   '/admin/gates': Wrench24Regular,
   '/admin/runtime-flags': ToggleLeft24Regular,
+  '/admin/api-gateway': Globe24Regular,
   '/admin/api-management': Settings24Regular,
   '/admin/catalog': DatabaseLink24Regular,
   '/admin/domains': Organization24Regular,

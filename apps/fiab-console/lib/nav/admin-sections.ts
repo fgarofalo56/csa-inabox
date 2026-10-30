@@ -67,6 +67,7 @@ export const ADMIN_SECTIONS: AdminSectionGroup[] = [
       { href: '/admin/env-config', label: 'Runtime configuration', desc: 'View/set the console deployment env vars (Cosmos, AOAI, Synapse, ADX, …) from the UI — real ARM revision + audit trail, no Azure portal. Includes a bicep reconcile snippet so changes survive the next deployment.' },
       { href: '/admin/gates', label: 'Gate registry', desc: 'The complete registry of every configuration gate — live configured/blocked status, required env vars/roles/resources per gate, owning surfaces, and a one-click Fix-it wizard that discovers real Azure resources and applies through the audited env-config write path.' },
       { href: '/admin/runtime-flags', label: 'Runtime flags', desc: 'Operational kill-switches for user-visible features: flip a registered flag OFF to revert its surface to the previous behavior in seconds — no rebuild, no revision roll. Default-ON, never a spend/config gate; every flip is audited.' },
+      { href: '/admin/api-gateway', label: 'API Gateway', desc: 'The API Gateway hub: register API Management gateways by resource id, see each gateway\'s observed inventory, telemetry checks and open gates with Fix its, and manage its APIs, products, subscriptions, policies, named values and backends. /admin/api-management and /admin/mcp-servers redirect here.' },
       { href: '/admin/api-management', label: 'API Management', desc: 'Manage APIM APIs, products, subscriptions, policies, named values, backends — full marketplace administration.' },
     ],
   },
