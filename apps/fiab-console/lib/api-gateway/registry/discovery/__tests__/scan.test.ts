@@ -164,6 +164,32 @@ describe('partial reads', () => {
     expect(r.failures[0]).toMatchObject({ scope: 'subscriptions', status: 429 });
   });
 
+  it('a nextLink on a look-alike host is never fetched with the token and the scan is partial', async () => {
+    // Breaking value: `https://management.usgovcloudapi.net.evil.test/...` begins with the ARM base, so a
+    // startsWith pin follows it and hands over the token; an origin pin refuses it.
+    const evil = 'https://management.usgovcloudapi.net.evil.test/subscriptions?api-version=2022-12-01&$skiptoken=p2';
+    const w = world({
+      subs: [{ subscriptionId: SUB_A }],
+      extra: { [evil]: { status: 200, body: { value: [{ subscriptionId: SUB_B }] } } },
+      services: { [SUB_A]: { value: [svc(SUB_A, 'apim-a')] }, [SUB_B]: { value: [svc(SUB_B, 'apim-b')] } },
+    });
+    const first = w.arm.get;
+    w.arm.get = async (url, tok) => {
+      const res = await first(url, tok);
+      return url.includes('/subscriptions?api-version') && url !== evil
+        ? { status: 200, body: { ...(res.body as object), nextLink: evil } }
+        : res;
+    };
+    const asked: string[] = [];
+    const inner = w.arm.get;
+    w.arm.get = async (url, tok) => { asked.push(url); return inner(url, tok); };
+    const r = await discoverGateways({ arm: w.arm, repo: new MemoryGatewayRepo(), now: NOW }, 't1');
+    expect(asked).not.toContain(evil);
+    expect(r.candidates.map((c) => c.name)).toEqual(['apim-a']);
+    expect(r.partial).toBe(true);
+    expect(r.failures[0]).toMatchObject({ scope: 'subscriptions' });
+  });
+
   it('an access check that throws is a failure (partial) and the candidate is Access unchecked, not read:false by assumption', async () => {
     const w = world({ subs: [{ subscriptionId: SUB_A }], services: { [SUB_A]: { value: [svc(SUB_A, 'apim-a')] } } });
     let n = 0;

@@ -65,4 +65,14 @@ describe('listMcpApis / listPolicyFragments', () => {
     expect(bad.complete).toBe(false);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it('a nextLink on a look-alike host that merely STARTS with the ARM base is not followed', async () => {
+    // Breaking value: `https://management.azure.com.evil.test/x` passes a startsWith(armBase()) pin and would
+    // receive the ARM bearer token; only an origin comparison refuses it.
+    fetchMock.mockResolvedValueOnce(json({ value: [{ name: 'a' }], nextLink: 'https://management.azure.com.evil.test/x' }));
+    const bad = await listPolicyFragments(OTHER);
+    expect(bad.complete).toBe(false);
+    expect(bad.items.map((i) => i.name)).toEqual(['a']);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });
