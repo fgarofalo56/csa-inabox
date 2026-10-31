@@ -58,3 +58,14 @@ export async function apimFetchJson(input: string, init?: RequestInit): Promise<
 
   return parsed;
 }
+
+/**
+ * Scope a `/api/apim/*` (or `/api/items/apim-*`) URL to one registered gateway.
+ * With no `gatewayId` the URL is returned UNCHANGED (the deploy-owned default,
+ * no behaviour change). Preserves any existing query string.
+ */
+export function withGateway(url: string, gatewayId?: string): string {
+  if (!gatewayId) return url;
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}gateway=${encodeURIComponent(gatewayId)}`;
+}

@@ -361,6 +361,9 @@ type observabilityConfigT = {
   @description('Deploy the V1 scheduled synthetic-journey monitor (loom-synthetic-monitor Container App Job — six real journeys incl. the TRUE MSAL login probe, every 15 min, in-VNet). Default ON (opt-out) per loom_default_on_opt_out; only honored on containerApps + deployAppsEnabled (the loom-uat image carries the specs).')
   syntheticMonitorEnabled: bool?
 
+  @description('API Gateway Plane W1-2 - enable the GatewayLlmLogs APIM diagnostic category. Set per boundary from the W0-9 measurement: true on Commercial, false on GCC-High (category absent) and on IL5 / GCC / DoD (unmeasured). Unset = false.')
+  apiplaneLlmLogs: bool?
+
   @description('Cron for the synthetic-journey runs. Default every 15 minutes.')
   syntheticMonitorCron: string?
 
@@ -3830,6 +3833,8 @@ module apim 'apim.bicep' = if (apimEnabled && empty(existingApimName)) {
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     skipRoleGrants: skipRoleGrants
     seedSampleApi: seedSampleApi
+    // API Gateway Plane W1-2 - GatewayLlmLogs per boundary (observabilityConfig bag; measured in W0-9).
+    apiplaneLlmLogs: observabilityConfig.?apiplaneLlmLogs ?? false
     // Model-strategy M4 — OPT-IN AI-gateway (default OFF). Authored only when
     // opted in AND a real AOAI endpoint exists; else the console uses direct-with-MI.
     aoaiApimGatewayEnabled: aoaiApimGatewayEnabled
@@ -5500,6 +5505,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_APIM_NAME',          value: !empty(existingApimName) ? existingApimName : (apimEnabled ? apim!.outputs.apimName : '') }
             { name: 'LOOM_APIM_RG',            value: !empty(existingApimName) ? byoApimRg : (apimEnabled ? resourceGroup().name : '') }
             { name: 'LOOM_APIM_SUB',           value: !empty(existingApimName) ? byoApimSub : (apimEnabled ? subscription().subscriptionId : '') }
+            // API Gateway Plane (W1-2): feature switch (default ON, opt-out) and the
+            // deploy-owned gateway ARM id the Console auto-registers on first admin load.
+            { name: 'LOOM_APIPLANE_ENABLED',   value: 'true' }
+            { name: 'LOOM_APIPLANE_DEPLOY_GATEWAY_ID', value: !empty(existingApimName) ? '/subscriptions/${byoApimSub}/resourceGroups/${byoApimRg}/providers/Microsoft.ApiManagement/service/${existingApimName}' : (apimEnabled ? apim!.outputs.apimResourceId : '') }
             // Cosmos DB control-plane navigator (databases/containers/sprocs). This
             // is the USER-navigated account (distinct from Loom's own store at
             // LOOM_COSMOS_ENDPOINT) and lives in the DLZ RG. Requires the Console

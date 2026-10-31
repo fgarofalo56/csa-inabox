@@ -1,6 +1,6 @@
 /**
  * GENERATED — do not edit by hand. TYPE-ONLY (no runtime import is emitted).
- * Source: apps/fiab-console/app/api/**\/route.ts   (1704 routes)
+ * Source: apps/fiab-console/app/api/**\/route.ts   (1715 routes)
  * Regenerate: node scripts/ci/generate-client-route-map.mjs
  * Drift gate:  node scripts/ci/generate-client-route-map.mjs --check
  *
@@ -44,6 +44,14 @@ export type StaticApiRoute =
   | '/api/admin/access-requests'
   | '/api/admin/agent-quality'
   | '/api/admin/agent-quality/eval-alert'
+  | '/api/admin/api-gateway/environments'
+  | '/api/admin/api-gateway/environments/findings'
+  | '/api/admin/api-gateway/environments/matrix'
+  | '/api/admin/api-gateway/environments/reclassify'
+  | '/api/admin/api-gateway/environments/suggestions'
+  | '/api/admin/api-gateway/gateways'
+  | '/api/admin/api-gateway/gateways/discover'
+  | '/api/admin/api-gateway/runtime'
   | '/api/admin/audit-logs'
   | '/api/admin/autopilot'
   | '/api/admin/autopilot/apply'
@@ -878,6 +886,9 @@ export type DynamicApiRoute =
   | `/api/admin/access-requests/${string}`
   | `/api/admin/access-requests/${string}/create-user`
   | `/api/admin/access-requests/${string}/invite-guest`
+  | `/api/admin/api-gateway/environments/${string}`
+  | `/api/admin/api-gateway/gateways/${string}`
+  | `/api/admin/api-gateway/gateways/${string}/sync`
   | `/api/admin/copilot-quality/${string}`
   | `/api/admin/copilot-quality/prompts/${string}`
   | `/api/admin/copilot/memory/${string}`

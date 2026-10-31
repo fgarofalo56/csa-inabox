@@ -13,6 +13,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { apimConfigGate, listProducts, upsertProduct, deleteProduct, ApimError } from '@/lib/azure/apim-client';
 import { apiHonestGateError } from '@/lib/api/gate-envelope';
 import { withSession } from '@/lib/api/route-toolkit';
+import { scopeRoute } from '@/lib/api-gateway/registry/resolve-gateway';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -39,14 +40,14 @@ function fail(e: any) {
 }
 
 // WS-D1: session-only routes adopted onto `withSession`.
-export const GET = withSession(async () => {
+const GET_h = withSession(async () => {
   const g = gate(); if (g) return g;
   try {
     return NextResponse.json({ ok: true, products: await listProducts() });
   } catch (e: any) { return fail(e); }
 });
 
-export const POST = withSession(async (req: NextRequest) => {
+const POST_h = withSession(async (req: NextRequest) => {
   const g = gate(); if (g) return g;
   const body = await req.json().catch(() => ({}));
   if (!body?.displayName) return NextResponse.json({ ok: false, error: 'displayName is required' }, { status: 400 });
@@ -63,7 +64,7 @@ export const POST = withSession(async (req: NextRequest) => {
   } catch (e: any) { return fail(e); }
 });
 
-export const DELETE = withSession(async (req: NextRequest) => {
+const DELETE_h = withSession(async (req: NextRequest) => {
   const g = gate(); if (g) return g;
   const id = req.nextUrl.searchParams.get('id')?.trim();
   if (!id) return NextResponse.json({ ok: false, error: 'id is required' }, { status: 400 });
@@ -72,3 +73,8 @@ export const DELETE = withSession(async (req: NextRequest) => {
     return NextResponse.json({ ok: true });
   } catch (e: any) { return fail(e); }
 });
+
+// `?gateway=<id>` retargets the handler at a registered gateway; absent = unchanged.
+export const GET = scopeRoute(GET_h);
+export const POST = scopeRoute(POST_h);
+export const DELETE = scopeRoute(DELETE_h);

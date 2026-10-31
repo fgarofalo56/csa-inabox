@@ -8,7 +8,7 @@ import {
 } from '@fluentui/react-components';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { ApimServiceShape } from '@/lib/azure/apim-client';
-import { apimFetchJson } from './apim-pane-fetch';
+import { apimFetchJson, withGateway } from './apim-pane-fetch';
 
 const useStyles = makeStyles({
   stats: {
@@ -31,7 +31,7 @@ const useStyles = makeStyles({
 const SKU_OPTIONS = ['Developer', 'Basic', 'Standard', 'Premium', 'BasicV2', 'StandardV2'];
 const CAPACITY_RANGE = { min: 1, max: 10 };
 
-export function ApimServicePane() {
+export function ApimServicePane({ gatewayId }: { gatewayId?: string } = {}) {
   const styles = useStyles();
   const [service, setService] = useState<ApimServiceShape | null>(null);
   const [loading, setLoading] = useState(true);
@@ -41,7 +41,7 @@ export function ApimServicePane() {
   const [scaling, setScaling] = useState(false);
 
   useEffect(() => {
-    apimFetchJson('/api/apim/service')
+    apimFetchJson(withGateway('/api/apim/service', gatewayId))
       .then((d) => {
         if (d.ok && d.service) {
           const svc = d.service as ApimServiceShape;
@@ -54,13 +54,13 @@ export function ApimServicePane() {
         setLoading(false);
       })
       .catch((e) => { setError(e instanceof Error ? e.message : String(e)); setLoading(false); });
-  }, []);
+  }, [gatewayId]);
 
   async function handleScale() {
     setScaling(true);
     setError(null);
     try {
-      const d = await apimFetchJson('/api/apim/service', {
+      const d = await apimFetchJson(withGateway('/api/apim/service', gatewayId), {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sku: newSku, capacity: newCapacity }),

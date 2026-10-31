@@ -58,6 +58,9 @@ param skipRoleGrants bool = false
 @description('Seed a self-contained sample API (mocked 200) + product + active subscription so the API Marketplace Try console and curl samples work end-to-end out of the box. The mock returns 200 at the gateway with no backend dependency — proving the subscription-key flow. BYO-APIM deployments skip this module entirely, so the sample is only seeded on Loom-provisioned APIM.')
 param seedSampleApi bool = true
 
+@description('API Gateway Plane (W1-2): enable the GatewayLlmLogs diagnostic category. Measured per boundary in W0-9 (W0-RECEIPT.md section 9): Commercial offers the category (true); GCC-High does not offer it (false); IL5 and GCC are NOT measured (false, because unmeasured, not because known absent). Never applied in a sovereign boundary: the diagnosticSettings PUT fails with BadRequest for an unsupported category. Default false keeps every caller byte-identical.')
+param apiplaneLlmLogs bool = false
+
 // ───────────────────────────────────────────────────────────────────────────
 // AI-gateway (GenAI gateway for Azure OpenAI / Foundry) — OPT-IN, default OFF.
 // ───────────────────────────────────────────────────────────────────────────
@@ -212,7 +215,10 @@ resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
       isSovereign ? [] : [
         { category: 'DeveloperPortalAuditLogs', enabled: true }
         { category: 'WebSocketConnectionLogs', enabled: true }
-      ]
+      ],
+      (apiplaneLlmLogs && !isSovereign) ? [
+        { category: 'GatewayLlmLogs', enabled: true }
+      ] : []
     )
     metrics: [
       { category: 'AllMetrics', enabled: true }
@@ -233,6 +239,20 @@ resource consoleApimContributor 'Microsoft.Authorization/roleAssignments@2022-04
   name: guid(apim.id, consolePrincipalId, '312a565d-c81f-4fd8-895a-4e21e48d571c')
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '312a565d-c81f-4fd8-895a-4e21e48d571c')
+    principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// ---- Console UAMI -> Monitoring Reader at the APIM scope (API Gateway Plane W1-2) ----
+// The plane's telemetry readiness probe reads the service's diagnostic settings
+// and metrics through ARM; Monitoring Reader at the service scope is the least
+// privilege that allows it. Sits beside the Contributor grant above.
+resource consoleApimMonitoringReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
+  scope: apim
+  name: guid(apim.id, consolePrincipalId, '43d0d8ad-25c7-4714-9337-8ba259a9fe05')
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '43d0d8ad-25c7-4714-9337-8ba259a9fe05')
     principalId: consolePrincipalId
     principalType: 'ServicePrincipal'
   }
@@ -562,3 +582,11 @@ resource aoaiCompletionsOp 'Microsoft.ApiManagement/service/apis/operations@2024
 output aoaiGatewayActive bool = aoaiGatewayActive
 @description('Gateway URL the console sets as LOOM_AOAI_APIM_URL when routing AOAI through APIM. Empty when the AI-gateway is not authored.')
 output aoaiGatewayUrl string = aoaiGatewayActive ? apim.properties.gatewayUrl : ''
+
+@description('Full ARM resource id of this APIM service. The Console registers the deploy-owned gateway from this value (LOOM_APIPLANE_DEPLOY_GATEWAY_ID).')
+output apimResourceId string = apim.id
+@description('Name of the AOAI backend pool when the AI-gateway was authored; empty otherwise.')
+output aoaiPoolName string = aoaiGatewayActive ? 'aoai-pool' : ''
+var aoaiBackendNameList = [for (ep, i) in aoaiBackendEndpoints: 'aoai-backend-${i}']
+@description('Names of the per-endpoint AOAI backends when the AI-gateway was authored; empty array otherwise.')
+output aoaiBackendNames array = aoaiGatewayActive ? aoaiBackendNameList : []
