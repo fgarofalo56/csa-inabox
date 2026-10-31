@@ -2628,6 +2628,21 @@ export const ACCEPTED = [
       'outcome than this entry.',
   },
   {
+    file: 'apps/fiab-console/app/admin/api-gateway/register-dialog.tsx',
+    sites: 1,
+    kind: 'byo',
+    ref: 'deploy-integrity.md §R5',
+    why:
+      'The ARM id of an API Management instance to register. THE ENUMERABLE CASE IS ALREADY A PICKER: ' +
+      'the dialog opens on discovery-list.tsx, which lists every APIM the signed-in user can read across ' +
+      'subscriptions (GET /api/admin/api-gateway/gateways/discover, a real ARM scan) and fills ' +
+      'this field when one is picked, so the typed box is reached only for an instance the scan could not ' +
+      'see (another tenant, or a subscription the Console identity has no Reader on) — which no discovery ' +
+      'call can answer. REJECTED ALTERNATIVE: dropping the box and requiring a pick would delete the ' +
+      'supplied-values path R5.5 requires, and the id is then validated by preflight (SKU, role, ' +
+      'reachability), not trusted as typed.',
+  },
+  {
     file: 'apps/fiab-console/lib/editors/loom-app-runtime-editor.tsx',
     sites: 1,
     kind: 'byo',

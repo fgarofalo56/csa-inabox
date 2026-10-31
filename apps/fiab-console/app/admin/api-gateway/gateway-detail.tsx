@@ -64,7 +64,7 @@ const MANAGE_TABS = [
   { id: 'apis', label: 'APIs', icon: <Apps24Regular />, itemRoutes: true },
   { id: 'products', label: 'Products', icon: <Box24Regular />, itemRoutes: true },
   { id: 'subscriptions', label: 'Subscriptions', icon: <Key24Regular />, itemRoutes: false },
-  { id: 'named-values', label: 'Named values', icon: <Tag24Regular />, itemRoutes: false },
+  { id: 'named-values', label: 'Named values', icon: <Tag24Regular />, itemRoutes: true },
   { id: 'backends', label: 'Backends', icon: <Server24Regular />, itemRoutes: false },
   { id: 'policies', label: 'Policies', icon: <ShieldTask24Regular />, itemRoutes: true },
   { id: 'developer-portal', label: 'Developer portal', icon: <PersonBoard24Regular />, itemRoutes: false },
@@ -79,7 +79,7 @@ export function ManagePanes({ gatewayId, tab }: { gatewayId?: string; tab: Manag
     case 'apis': return <ApimApisPane key={key} gatewayId={gatewayId} />;
     case 'products': return <ApimProductsPane key={key} gatewayId={gatewayId} />;
     case 'subscriptions': return <ApimSubscriptionsPane key={key} gatewayId={gatewayId} />;
-    case 'named-values': return <ApimNamedValuesPane key={key} gatewayId={gatewayId} />;
+    case 'named-values': return <ApimNamedValuesPane key={key} />;
     case 'backends': return <ApimBackendsPane key={key} gatewayId={gatewayId} />;
     case 'policies': return <ApimPoliciesPane key={key} gatewayId={gatewayId} />;
     case 'developer-portal': return <ApimDeveloperPortalPane key={key} gatewayId={gatewayId} />;
@@ -231,9 +231,9 @@ export function GatewayDetail({ gateway, onChanged, onRemove }: {
             {paneId && active.itemRoutes ? (
               <MessageBar intent="info" data-testid="manage-unscoped">
                 <MessageBarBody>
-                  {active.label} for a registered gateway is not available yet: this pane reads through
-                  item routes that are not gateway-scoped, so it would show the deploy-owned gateway&apos;s
-                  data. Service &amp; SKU, Subscriptions, Named values, Backends and Developer portal are scoped.
+                  {active.label} for a registered gateway is not available yet: this pane is not
+                  gateway-scoped, so it would show the deploy-owned gateway&apos;s data. Service &amp; SKU,
+                  Subscriptions, Backends and Developer portal are scoped.
                 </MessageBarBody>
               </MessageBar>
             ) : (

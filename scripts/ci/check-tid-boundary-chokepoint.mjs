@@ -4720,6 +4720,18 @@ const CENSUS_VERDICTS = new Set(['NARROWS', 'ORG-WIDE', 'UNRESOLVED']);
 
 const ADMIN_SHAPE_UNSCOPED = new Map([
   [
+    'lib/api-gateway/admin-gate.ts:planeCapabilityUsed',
+    {
+      verdict: 'ORG-WIDE',
+      requires: ['isTenantAdmin('],
+      why:
+        'ORG-WIDE (function scope), and it grants nothing. `planeCapabilityUsed(session)` is called ' +
+        'only AFTER `withCapability(\'apiplane-admin\')` has already passed or refused the request; ' +
+        'it reads `isTenantAdmin` solely to choose the label (`tenant-admin` vs `apiplane-admin`) ' +
+        'recorded on the audit row. It reads no workspace document and returns no data.',
+    },
+  ],
+  [
     'app/api/admin/workspaces/[id]/folders/route.ts:guard',
     {
       verdict: 'ORG-WIDE',

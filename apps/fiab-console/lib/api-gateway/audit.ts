@@ -4,6 +4,7 @@
  * Pure: builds `apiplane.<area>.<verb>` kinds and the audit-log row shape
  * (pattern: lib/admin/finops-audit.ts). Writing the row stays with the caller.
  */
+import { randomSuffix } from '@/lib/util/random-id';
 import type { ApiplaneAuditArea, ApiplaneAuditRecord } from './types';
 
 const SEGMENT = /^[a-z][a-z0-9]*$/;
@@ -32,7 +33,7 @@ export function buildApiplaneAuditRecord(i: ApiplaneAuditInput): ApiplaneAuditRe
   const kind = apiplaneAuditKind(i.area, i.verb);
   const now = i.now ?? new Date();
   return {
-    id: `audit-${now.getTime()}-${i.nonce ?? Math.random().toString(36).slice(2, 8)}`,
+    id: `audit-${now.getTime()}-${i.nonce ?? randomSuffix(6)}`,
     itemId: `${kind}:${i.target}`,
     tenantId: i.tenantId,
     who: i.who,

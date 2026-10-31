@@ -13,6 +13,7 @@
  */
 import { preflightGateway, type ArmPort } from '../preflight';
 import { parseApimResourceId } from '../resource-id';
+import { resolveSameOriginUrl } from '@/lib/util/same-origin-url';
 import type { GatewayRepo } from '../gateway-service';
 import type {
   ApimNetworkMode, DiscoveredAccess, DiscoveryCandidate, DiscoveryFailure, DiscoveryResult,
@@ -71,7 +72,12 @@ async function listPaged<T>(arm: ArmPort, firstUrl: string, token: string): Prom
     if (res.status !== 200) return { items, failure: { status: res.status, reason: armReason(res.status, res.body) } };
     const b = res.body as { value?: unknown; nextLink?: unknown } | null;
     if (Array.isArray(b?.value)) items.push(...(b.value as T[]));
-    url = typeof b?.nextLink === 'string' && b.nextLink ? b.nextLink : undefined;
+    const link = typeof b?.nextLink === 'string' && b.nextLink ? b.nextLink : undefined;
+    if (link) {
+      // nextLink comes out of a RESPONSE BODY and is fetched with the ARM token: pin it by origin.
+      try { url = resolveSameOriginUrl(link, arm.armBase(), 'the ARM token'); }
+      catch { return { items, failure: { status: 200, reason: 'A nextLink left the ARM host and was not followed; more results may exist.' } }; }
+    } else url = undefined;
   }
   return { items };
 }

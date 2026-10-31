@@ -27,6 +27,7 @@ import {
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope, stripArmBase } from './cloud-endpoints';
 import { trimEdges } from '@/lib/util/trim';
+import { resolveSameOriginUrl } from '@/lib/util/same-origin-url';
 
 const ARM_SCOPE = armScope();
 const APIM_API = '2024-06-01-preview';
@@ -1545,10 +1546,14 @@ export async function pagedGet(resourceId: string, path: string, apiVersion: str
       if (!j) throw new ApimError(404, null, `APIM list ${path} answered 404`);
       items.push(...(j.value || []));
       if (!j.nextLink) return { items, complete: true };
-      if (!j.nextLink.startsWith(armBase())) return { items, complete: false, error: 'nextLink left the ARM host; not followed' };
+      // nextLink is read out of a RESPONSE BODY and gets the ARM token: pin it by ORIGIN, not by prefix
+      // (`https://management.azure.com.evil.test/` passes startsWith). Off-origin is a partial result, not a fetch.
+      let next: string;
+      try { next = resolveSameOriginUrl(j.nextLink, armBase(), 'the ARM token'); }
+      catch { return { items, complete: false, error: 'nextLink left the ARM host; not followed' }; }
       const token = await credential.getToken(ARM_SCOPE);
       if (!token?.token) throw new Error('Failed to acquire ARM token for APIM');
-      res = await armCountedFetch(j.nextLink, { headers: { authorization: `Bearer ${token.token}` } });
+      res = await armCountedFetch(next, { headers: { authorization: `Bearer ${token.token}` } });
     }
     return { items, complete: false, error: 'page cap (50) reached' };
   });

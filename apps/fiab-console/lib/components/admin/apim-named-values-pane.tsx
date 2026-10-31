@@ -10,7 +10,7 @@ import { Delete24Regular, Edit24Regular, KeyMultiple24Regular } from '@fluentui/
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { ApimNamedValueSummary } from '@/lib/azure/apim-client';
-import { apimFetchJson, withGateway } from './apim-pane-fetch';
+import { apimFetchJson } from './apim-pane-fetch';
 
 type NamedValueMode = 'inline' | 'keyvault';
 
@@ -31,7 +31,7 @@ const EMPTY_FORM: NamedValueForm = {
 // A KV secret identifier, e.g. https://my-vault.vault.azure.net/secrets/my-secret[/version].
 const KV_SECRET_ID_RE = /^https:\/\/[a-z0-9-]+\.vault\.[a-z0-9.-]+\/secrets\/[^/\s]+(\/[^/\s]+)?\/?$/i;
 
-export function ApimNamedValuesPane({ gatewayId }: { gatewayId?: string } = {}) {
+export function ApimNamedValuesPane() {
   const [values, setValues] = useState<ApimNamedValueSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -52,7 +52,7 @@ export function ApimNamedValuesPane({ gatewayId }: { gatewayId?: string } = {}) 
   const reload = useCallback(() => {
     setLoading(true);
     setError(null);
-    apimFetchJson(withGateway('/api/apim/named-values', gatewayId))
+    apimFetchJson('/api/apim/named-values')
       .then((d) => {
         if (d.ok && Array.isArray(d.namedValues)) {
           setValues(d.namedValues as ApimNamedValueSummary[]);
@@ -62,7 +62,7 @@ export function ApimNamedValuesPane({ gatewayId }: { gatewayId?: string } = {}) 
         setLoading(false);
       })
       .catch((e) => { setError(e instanceof Error ? e.message : String(e)); setLoading(false); });
-  }, [gatewayId]);
+  }, []);
 
   useEffect(() => { reload(); }, [reload]);
 
@@ -113,7 +113,7 @@ export function ApimNamedValuesPane({ gatewayId }: { gatewayId?: string } = {}) 
       // POST upserts by id/displayName (edit reuses the existing displayName).
       // The route does a real ARM PUT /namedValues.
       const tags = form.tags.split(',').map((t) => t.trim()).filter(Boolean);
-      const d = await apimFetchJson(withGateway('/api/apim/named-values', gatewayId), {
+      const d = await apimFetchJson('/api/apim/named-values', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -143,7 +143,7 @@ export function ApimNamedValuesPane({ gatewayId }: { gatewayId?: string } = {}) 
     if (!deleting) return;
     setDeleteBusy(true);
     try {
-      const d = await apimFetchJson(withGateway(`/api/apim/named-values?id=${encodeURIComponent(deleting.name)}`, gatewayId), {
+      const d = await apimFetchJson(`/api/apim/named-values?id=${encodeURIComponent(deleting.name)}`, {
         method: 'DELETE',
       });
       if (d.ok) {

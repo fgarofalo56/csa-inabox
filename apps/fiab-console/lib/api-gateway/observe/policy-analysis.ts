@@ -41,7 +41,12 @@ export function redactUrl(raw: string): { url: string; host: string } | undefine
 interface Tag { name: string; attrs: Record<string, string> }
 
 function* tags(xml: string): Generator<Tag> {
-  const stripped = xml.replace(/<!--[\s\S]*?-->/g, '').replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, '');
+  // Re-apply until stable: one pass over `<!<!-- -->--` leaves a fresh comment behind (CodeQL js/incomplete-multi-character-sanitization).
+  let stripped = xml;
+  for (let prev = ''; prev !== stripped; ) {
+    prev = stripped;
+    stripped = stripped.replace(/<!--[\s\S]*?-->/g, '').replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, '');
+  }
   const re = /<([A-Za-z][\w.-]*)((?:\s+[\w:.-]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*\/?>/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(stripped))) {

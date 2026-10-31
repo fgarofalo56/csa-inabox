@@ -151,11 +151,13 @@ They behave as they did on the old single-gateway page; the Manage tab passes
 the selected gateway to each.
 
 **Known W1 gap.** For a gateway other than the deploy-owned one, **Service &
-SKU, Subscriptions, Named values, Backends and Developer portal** are scoped to
-that gateway. **APIs, Products and Policies** are not: they read through
-`/api/items/apim-api|apim-product|apim-policy`, which are not gateway-scoped, so
-for a registered (non-default) gateway those three tabs show a "not available
-yet" message instead of data (they would otherwise show the deploy-owned
+SKU, Subscriptions, Backends and Developer portal** are scoped to that gateway.
+**APIs, Products and Policies** are not: they read through
+`/api/items/apim-api|apim-product|apim-policy`, which are not gateway-scoped.
+**Named values** has a scoped route but its pane is not wired to it yet (it
+still carries a typed Key Vault secret URL that must become a picker first). For
+a registered (non-default) gateway those four tabs show a "not available yet"
+message instead of data (they would otherwise show the deploy-owned
 gateway's data under the wrong name). For the deploy-owned gateway all eight
 work as before.
 
