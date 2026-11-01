@@ -2,22 +2,13 @@
  * Production ArmPort for the gateway preflight: Console UAMI credential chain
  * (same chain as lib/azure/apim-client.ts) + the counted ARM fetch.
  */
-import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
-import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
+import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { armCountedFetch } from '@/lib/azure/arm-counted-fetch';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
 import type { ArmPort } from './preflight';
 
-function credential(): ChainedTokenCredential | DefaultAzureCredential {
-  const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-  return uamiClientId
-    ? new ChainedTokenCredential(
-        new AcaManagedIdentityCredential(),
-        new ManagedIdentityCredential({ clientId: uamiClientId }),
-        new DefaultAzureCredential(),
-      )
-    : new DefaultAzureCredential();
-}
+// Pure ARM-plane client: the shared Console UAMI chain, not a per-file construction.
+const credential = uamiArmCredential;
 
 export function hostArmPort(): ArmPort {
   const cred = credential();

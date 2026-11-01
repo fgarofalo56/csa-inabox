@@ -11,6 +11,30 @@ const SECRET_POLICY = `<policies><inbound><base />
   <set-header name="x-api-key" exists-action="override"><value>TOPSECRETVALUE</value></set-header>
 </inbound></policies>`;
 
+describe('analyzePolicy comment and CDATA stripping', () => {
+  // Breaking value: a rate-limit inside a comment counted as live (limits.length 1), or an element that
+  // sits AFTER a comment dropped with it (externalElementNames []).
+  it('ignores elements inside comments and CDATA but keeps the ones around them', () => {
+    const a = analyzePolicy(
+      '<policies><inbound><!-- <rate-limit calls="1" renewal-period="1" /> --><my-live /><![CDATA[<other-ghost />]]></inbound></policies>',
+    );
+    expect(a.facets.limits).toEqual([]);
+    expect(a.externalElementNames).toEqual(['my-live']);
+  });
+
+  // Breaking value: `<!<!-- x -->-- ... -->` — a replace() pass splices a NEW comment opener out of the text
+  // around the removed one and swallows the live rate-limit that follows it.
+  it('does not splice a new comment out of the text around a removed one', () => {
+    const a = analyzePolicy('<policies><!<!-- x -->-- <rate-limit calls="5" renewal-period="9" /> --></policies>');
+    expect(a.facets.limits).toHaveLength(1);
+    expect(a.facets.limits[0]).toMatchObject({ element: 'rate-limit', calls: 5 });
+  });
+
+  it('an unterminated comment swallows the rest, as a parser would', () => {
+    expect(analyzePolicy('<policies><!-- <my-ghost /></policies>').externallyAuthored).toBe(0);
+  });
+});
+
 describe('analyzePolicy', () => {
   it('yields host h and the stored document carries no query, fragment or secret (paired positive + absence)', () => {
     const a = analyzePolicy(SECRET_POLICY);

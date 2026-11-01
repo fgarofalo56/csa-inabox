@@ -1547,7 +1547,7 @@ export async function pagedGet(resourceId: string, path: string, apiVersion: str
       items.push(...(j.value || []));
       if (!j.nextLink) return { items, complete: true };
       // nextLink is read out of a RESPONSE BODY and gets the ARM token: pin it by ORIGIN, not by prefix
-      // (`https://management.azure.com.evil.test/` passes startsWith). Off-origin is a partial result, not a fetch.
+      // (an ARM host name with a suffix appended passes startsWith). Off-origin is a partial result, not a fetch.
       let next: string;
       try { next = resolveSameOriginUrl(j.nextLink, armBase(), 'the ARM token'); }
       catch { return { items, complete: false, error: 'nextLink left the ARM host; not followed' }; }

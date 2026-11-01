@@ -40,13 +40,33 @@ export function redactUrl(raw: string): { url: string; host: string } | undefine
 
 interface Tag { name: string; attrs: Record<string, string> }
 
-function* tags(xml: string): Generator<Tag> {
-  // Re-apply until stable: one pass over `<!<!-- -->--` leaves a fresh comment behind (CodeQL js/incomplete-multi-character-sanitization).
-  let stripped = xml;
-  for (let prev = ''; prev !== stripped; ) {
-    prev = stripped;
-    stripped = stripped.replace(/<!--[\s\S]*?-->/g, '').replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, '');
+/**
+ * Drop XML comments and CDATA sections in ONE left-to-right scan. A replace() pass can splice the text
+ * either side of a removed section into a new marker (`<!<!-- x -->--`); this never re-reads its output.
+ * An unterminated section runs to the end of the input, as an XML parser would treat it.
+ */
+function stripSections(xml: string): string {
+  const out: string[] = [];
+  let i = 0;
+  while (i < xml.length) {
+    const comment = xml.startsWith('<!--', i);
+    const cdata = !comment && xml.startsWith('<![CDATA[', i);
+    if (!comment && !cdata) {
+      const next = xml.indexOf('<!', i + 1);
+      const stop = next === -1 ? xml.length : next;
+      out.push(xml.slice(i, stop));
+      i = stop;
+      continue;
+    }
+    const open = comment ? 4 : 9;
+    const end = xml.indexOf(comment ? '-->' : ']]>', i + open);
+    i = end === -1 ? xml.length : end + 3;
   }
+  return out.join('');
+}
+
+function* tags(xml: string): Generator<Tag> {
+  const stripped = stripSections(xml);
   const re = /<([A-Za-z][\w.-]*)((?:\s+[\w:.-]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*\/?>/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(stripped))) {
