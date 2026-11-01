@@ -22,8 +22,8 @@ describe('analyzePolicy comment and CDATA stripping', () => {
     expect(a.externalElementNames).toEqual(['my-live']);
   });
 
-  // Breaking value: `<!<!-- x -->-- ... -->` — a replace() pass splices a NEW comment opener out of the text
-  // around the removed one and swallows the live rate-limit that follows it.
+  // DOCUMENTATION / regression guard, not a kill: the old single replace() pass also passes this (measured in
+  // a sandbox copy — only the two tests above go RED). It pins that the spliced text stays unread by the tags.
   it('does not splice a new comment out of the text around a removed one', () => {
     const a = analyzePolicy('<policies><!<!-- x -->-- <rate-limit calls="5" renewal-period="9" /> --></policies>');
     expect(a.facets.limits).toHaveLength(1);
