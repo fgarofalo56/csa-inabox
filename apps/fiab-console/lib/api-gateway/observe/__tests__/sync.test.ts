@@ -5,7 +5,7 @@ import type { GatewayDoc } from '../../registry/types';
 import { observedFindingsSource } from '../findings-source';
 import { observedId } from '../ids';
 import { sweep } from '../sweep';
-import { isSyncInFlight, syncGateway, type SyncDeps } from '../sync';
+import { isSyncInFlight, READ_CONCURRENCY, syncGateway, WRITE_CONCURRENCY, type SyncDeps } from '../sync';
 import type { McpListing, ObservedDoc, ObservedType, ObserveSource, TypeListing } from '../types';
 
 const T = 'tenant-1';
@@ -227,5 +227,69 @@ describe('observedFindingsSource', () => {
     expect(servers).toHaveLength(1);
     expect(servers[0]).toMatchObject({ gatewayId: GW, name: 'M1', url: 'https://t.example/mcp' });
     expect(await s.mcpEndpoints(T)).toEqual([]);
+  });
+});
+
+describe('syncGateway concurrency', () => {
+  const API_COUNT = 20;
+  const tick = () => new Promise<void>((r) => setTimeout(r, 5));
+
+  /** Wraps `fn` so `peak.max` records the most calls ever in flight at once. */
+  function tracked<A extends unknown[], R>(peak: { cur: number; max: number }, fn: (...a: A) => Promise<R>) {
+    return async (...a: A): Promise<R> => {
+      peak.cur++; peak.max = Math.max(peak.max, peak.cur);
+      try { await tick(); return await fn(...a); } finally { peak.cur--; }
+    };
+  }
+
+  // Breaking values: a serial walk peaks at 1 (fails > 1); an unbounded Promise.all peaks at 20 or 40 (fails <= cap).
+  it('reads and writes fan out, but never past the caps', async () => {
+    const apiNames = Array.from({ length: API_COUNT }, (_, i) => `api-${i}`);
+    script.lists.api = ok(...apiNames);
+    for (const n of apiNames) script.ops[n] = ok('get', 'post');
+    const reads = { cur: 0, max: 0 };
+    const writes = { cur: 0, max: 0 };
+    const base = source(script);
+    const slow: ObserveSource = {
+      ...base,
+      apiPolicy: tracked(reads, base.apiPolicy),
+      operations: tracked(reads, base.operations),
+    };
+    const realUpsert = observed.upsert.bind(observed);
+    observed.upsert = tracked(writes, realUpsert);
+
+    const r = await syncGateway({ ...deps, source: () => slow }, T, GW);
+
+    // 20 APIs x 2 reads each = 40 reads, 20 + 40 = 60 observed docs: more than either cap, so a cap can bind.
+    expect(r.ok && r.counts.api).toBe(API_COUNT);
+    expect(r.ok && r.counts.operation).toBe(API_COUNT * 2);
+    expect(reads.max).toBeGreaterThan(1);
+    expect(reads.max).toBeLessThanOrEqual(READ_CONCURRENCY);
+    expect(writes.max).toBeGreaterThan(1);
+    expect(writes.max).toBeLessThanOrEqual(WRITE_CONCURRENCY);
+  });
+
+  // Breaking value: results written in completion order, not list order (names would shuffle and an API
+  // would take another API's policy). Different delays per API make completion order differ from list order.
+  it('an API keeps ITS OWN policy and operations even when reads finish out of order', async () => {
+    const apiNames = Array.from({ length: 8 }, (_, i) => `api-${i}`);
+    script.lists.api = ok(...apiNames);
+    for (const n of apiNames) {
+      script.ops[n] = ok(`op-of-${n}`);
+      script.policies[n] = `<policies><inbound><rate-limit calls="${n.slice(4)}1" renewal-period="9" /></inbound></policies>`;
+    }
+    const base = source(script);
+    const delay = (n: string) => new Promise<void>((r) => setTimeout(r, (8 - Number(n.slice(4))) * 4));
+    const shuffled: ObserveSource = {
+      ...base,
+      async apiPolicy(n) { await delay(n); return base.apiPolicy(n); },
+      async operations(n) { await delay(n); return base.operations(n); },
+    };
+    await syncGateway({ ...deps, source: () => shuffled }, T, GW);
+    for (const n of apiNames) {
+      const doc = (await observed.list(T, 'observed:api')).find((d) => d.name === n)!;
+      expect(doc.policyAnalysis?.facets.limits[0]?.calls, n).toBe(Number(`${n.slice(4)}1`));
+    }
+    expect(await names('operation')).toEqual(apiNames.map((n) => `${n}/op-of-${n}`).sort());
   });
 });

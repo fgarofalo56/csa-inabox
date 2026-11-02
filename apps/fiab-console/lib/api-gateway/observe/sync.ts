@@ -78,6 +78,21 @@ function shapeProps(type: ObservedType, p: Record<string, unknown>): Record<stri
   }
 }
 
+/** In-flight ceilings: ARM reads of one APIM, and Cosmos writes. Both small enough not to trip throttling. */
+export const READ_CONCURRENCY = 6;
+export const WRITE_CONCURRENCY = 8;
+
+/** Order-preserving map with at most `limit` calls in flight; rejects on the first failure. */
+async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T, i: number) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let cursor = 0;
+  const worker = async (): Promise<void> => {
+    for (let i = cursor++; i < items.length; i = cursor++) out[i] = await fn(items[i], i);
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
 const DEFAULT_TYPES = ['api', 'product', 'subscription', 'user', 'group', 'backend', 'namedValue'] as const;
 
 export async function syncGateway(deps: SyncDeps, tenantId: string, gatewayIdValue: string): Promise<SyncResult> {
@@ -129,14 +144,16 @@ async function run(deps: SyncDeps, tenantId: string, gw: GatewayDoc): Promise<Sy
     return doc;
   };
 
-  for (const type of DEFAULT_TYPES) {
-    const l = await safe(() => src.list(type));
+  // Reads fan out under a cap; every put() below still runs in list order, so the result is the
+  // same as the old one-at-a-time walk (which made ~2 ARM reads per API, one after another, and
+  // passed the UI's 20 s timeout on a modest estate).
+  const listings = await mapLimit(DEFAULT_TYPES, READ_CONCURRENCY, (type) => safe(() => src.list(type)));
+  for (const [ti, type] of DEFAULT_TYPES.entries()) {
+    const l = listings[ti];
     if (!l.complete) partial.add(type);
-    for (const raw of l.items) {
-      const name = str(raw.name);
-      if (!name) continue;
-      if (type !== 'api') { put(type, name, {}, raw); continue; }
-      const p = rec(raw.properties);
+    const named = l.items.flatMap((raw) => { const name = str(raw.name); return name ? [{ name, raw }] : []; });
+    if (type !== 'api') { for (const { name, raw } of named) put(type, name, {}, raw); continue; }
+    const reads = await mapLimit(named, READ_CONCURRENCY, async ({ name }) => {
       let analysis: PolicyAnalysis | undefined;
       let policyFailed = false;
       try {
@@ -145,9 +162,13 @@ async function run(deps: SyncDeps, tenantId: string, gw: GatewayDoc): Promise<Sy
       } catch {
         policyFailed = true; // keep the previous analysis rather than erasing it
       }
+      return { analysis, policyFailed, ops: await safe(() => src.operations(name)) };
+    });
+    for (const [i, { name, raw }] of named.entries()) {
+      const { analysis, policyFailed, ops } = reads[i];
+      const p = rec(raw.properties);
       const ai = detectAiSurface({ serviceUrl: str(p.serviceUrl), path: str(p.path), policy: analysis });
       put('api', name, { policyAnalysis: analysis, aiSurface: ai }, raw, policyFailed);
-      const ops = await safe(() => src.operations(name));
       if (!ops.complete) partial.add('operation');
       for (const op of ops.items) {
         const on = str(op.name);
@@ -188,9 +209,9 @@ async function run(deps: SyncDeps, tenantId: string, gw: GatewayDoc): Promise<Sy
     partial.add('mcp');
   }
 
-  for (const d of next.values()) await deps.observed.upsert(d);
+  await mapLimit([...next.values()], WRITE_CONCURRENCY, (d) => deps.observed.upsert(d));
   const stale = sweep(prior, new Set(next.keys()), partial);
-  for (const id of stale) await deps.observed.remove(tenantId, id);
+  await mapLimit(stale, WRITE_CONCURRENCY, (id) => deps.observed.remove(tenantId, id));
 
   const kept = new Map(prior.filter((d) => !stale.includes(d.id)).map((d) => [d.id, d]));
   for (const d of next.values()) kept.set(d.id, d);

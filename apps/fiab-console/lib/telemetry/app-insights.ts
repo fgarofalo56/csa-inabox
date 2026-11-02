@@ -47,16 +47,46 @@ export function isTelemetryEnabled(): boolean {
  * degraded, app still serving — while re-throwing genuinely unrelated faults so
  * real bugs still surface.
  */
+const isTelemetryFault = (err: unknown): boolean => {
+  const s = String((err as Error)?.stack || err || '');
+  return /monitor-opentelemetry|applicationinsights|opentelemetry|live[\s-]?metrics|quickpulse/i.test(s);
+};
+
+/**
+ * A client that hangs up mid-request makes Node emit `Error: aborted` (ECONNRESET) on the
+ * request stream; with no listener it surfaces as an uncaughtException. It is the CLIENT's
+ * fault, not the process's: rethrowing it killed the replica with exit code 7 on 2026-11-02
+ * (a slow request abandoned at the UI's 20 s timeout), 503ing every other in-flight request.
+ * Matched on all three of code, message and the http-server frame, so an ECONNRESET from an
+ * outbound call (a real fault) is still rethrown.
+ */
+export function isClientAbort(err: unknown): boolean {
+  const e = err as { code?: unknown; message?: unknown; stack?: unknown } | null;
+  return (
+    e?.code === 'ECONNRESET' &&
+    e?.message === 'aborted' &&
+    /_http_server|abortIncoming/.test(String(e?.stack ?? ''))
+  );
+}
+
+/** What the uncaughtException handler does with `err`: log-and-continue, or rethrow. */
+export function classifyUncaught(err: unknown): 'telemetry' | 'client-abort' | 'rethrow' {
+  if (isTelemetryFault(err)) return 'telemetry';
+  if (isClientAbort(err)) return 'client-abort';
+  return 'rethrow';
+}
+
 function installCrashGuard(): void {
   if (_guardInstalled) return;
   _guardInstalled = true;
-  const isTelemetryFault = (err: unknown): boolean => {
-    const s = String((err as Error)?.stack || err || '');
-    return /monitor-opentelemetry|applicationinsights|opentelemetry|live[\s-]?metrics|quickpulse/i.test(s);
-  };
   process.on('uncaughtException', (err) => {
-    if (isTelemetryFault(err)) {
+    const verdict = classifyUncaught(err);
+    if (verdict === 'telemetry') {
       console.error('[telemetry] swallowed uncaughtException from telemetry layer; app continues:', err);
+      return;
+    }
+    if (verdict === 'client-abort') {
+      console.warn('[console] client aborted an in-flight request (ECONNRESET); not a process fault, app continues');
       return;
     }
     throw err;

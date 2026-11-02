@@ -29,7 +29,10 @@ export interface SyncData {
   mcp: 'available' | 'unavailable' | 'unknown';
 }
 
-async function call<T>(path: string, init?: { method?: string; body?: unknown }): Promise<HubResult<T>> {
+/** A sync reads every API, policy and operation of the gateway; the default client timeout is too short for it. */
+export const SYNC_TIMEOUT_MS = 120_000;
+
+async function call<T>(path: string, init?: { method?: string; body?: unknown; timeoutMs?: number }): Promise<HubResult<T>> {
   try {
     // Computed URL (wide `string`) passes clientFetch's route check by design; the R17 guard
     // matches the literal prefix in BASE.
@@ -39,7 +42,7 @@ async function call<T>(path: string, init?: { method?: string; body?: unknown })
       cache: 'no-store',
       headers: init?.body === undefined ? undefined : { 'content-type': 'application/json' },
       body: init?.body === undefined ? undefined : JSON.stringify(init.body),
-    });
+    }, init?.timeoutMs);
     const json = await res.json().catch(() => ({}));
     return {
       ok: Boolean(json.ok),
@@ -59,5 +62,5 @@ export const listGateways = () => call<GatewayList>('');
 export const discoverGateways = () => call<DiscoveryResult>('/discover');
 export const registerGateway = (resourceId: string, displayName?: string) =>
   call<GatewayDoc>('', { method: 'POST', body: { resourceId, ...(displayName ? { displayName } : {}) } });
-export const syncGateway = (id: string) => call<SyncData>(`/${encodeURIComponent(id)}/sync`, { method: 'POST' });
+export const syncGateway = (id: string) => call<SyncData>(`/${encodeURIComponent(id)}/sync`, { method: 'POST', timeoutMs: SYNC_TIMEOUT_MS });
 export const removeGateway = (id: string) => call<{ id: string }>(`/${encodeURIComponent(id)}`, { method: 'DELETE' });
