@@ -13,11 +13,11 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1704 |
+| Total routes | 1715 |
 | Public (no session) | 60 |
 | Session-only | 616 |
 | Owner-scoped | 698 |
-| Admin | 330 |
+| Admin | 341 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 502 |
 | Areas | 122 |
@@ -197,6 +197,17 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `admin/access-requests/route.ts` | GET | admin |  | Cosmos |
 | `admin/agent-quality/eval-alert/route.ts` | GET POST DELETE | admin | ● | ARM, Azure Monitor |
 | `admin/agent-quality/route.ts` | GET | admin | ● | AI Foundry, Cosmos |
+| `admin/api-gateway/environments/[key]/route.ts` | PUT DELETE | admin |  | Cosmos |
+| `admin/api-gateway/environments/findings/route.ts` | GET | admin |  | Cosmos |
+| `admin/api-gateway/environments/matrix/route.ts` | GET | admin |  | Cosmos |
+| `admin/api-gateway/environments/reclassify/route.ts` | POST | admin |  | Cosmos |
+| `admin/api-gateway/environments/route.ts` | GET POST PUT | admin |  | Cosmos |
+| `admin/api-gateway/environments/suggestions/route.ts` | GET | admin |  | Cosmos |
+| `admin/api-gateway/gateways/[id]/route.ts` | DELETE | admin |  | ARM, Cosmos |
+| `admin/api-gateway/gateways/[id]/sync/route.ts` | POST | admin |  | APIM, ARM, Cosmos |
+| `admin/api-gateway/gateways/discover/route.ts` | GET | admin |  | APIM, ARM, Azure RBAC, Cosmos |
+| `admin/api-gateway/gateways/route.ts` | GET POST | admin |  | APIM, ARM, Azure RBAC, Cosmos |
+| `admin/api-gateway/runtime/route.ts` | GET | admin |  | Cosmos |
 | `admin/audit-logs/route.ts` | GET | admin |  | ARM, Azure Cache for Redis, Cosmos, Log Analytics, Purview |
 | `admin/autopilot/apply/route.ts` | POST | admin |  | ADX, AKS, ARM, Azure Cache for Redis, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Resource Graph, Synapse |
 | `admin/autopilot/route.ts` | GET PUT | admin |  | ADX, AKS, ARM, Azure Cache for Redis, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics, Resource Graph, Synapse |
@@ -483,19 +494,19 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
-| `apim/apis/route.ts` | GET POST DELETE | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
-| `apim/backends/route.ts` | GET POST DELETE | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
-| `apim/developer-portal/route.ts` | GET POST | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
-| `apim/gateways/route.ts` | GET | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
-| `apim/import/route.ts` | POST | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
+| `apim/apis/route.ts` | GET POST DELETE | session-only | ● | ADX, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
+| `apim/backends/route.ts` | GET POST DELETE | session-only | ● | ADX, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
+| `apim/developer-portal/route.ts` | GET POST | session-only | ● | ADX, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
+| `apim/gateways/route.ts` | GET | session-only | ● | ADX, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
+| `apim/import/route.ts` | POST | session-only | ● | ADX, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
 | `apim/instances/route.ts` | GET | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
 | `apim/named-values/route.ts` | GET POST DELETE | admin | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cost Management, Key Vault, Log Analytics |
-| `apim/operations/route.ts` | GET | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
-| `apim/products/route.ts` | GET POST DELETE | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
-| `apim/service/route.ts` | GET PATCH | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
+| `apim/operations/route.ts` | GET | session-only | ● | ADX, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
+| `apim/products/route.ts` | GET POST DELETE | session-only | ● | ADX, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
+| `apim/service/route.ts` | GET PATCH | session-only | ● | ADX, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
 | `apim/subscriptions/[sid]/keys/route.ts` | GET | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
-| `apim/subscriptions/[sid]/route.ts` | PATCH DELETE | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
-| `apim/subscriptions/route.ts` | GET POST DELETE | session-only | ● | ADX, APIM, ARM, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
+| `apim/subscriptions/[sid]/route.ts` | PATCH DELETE | session-only | ● | ADX, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
+| `apim/subscriptions/route.ts` | GET POST DELETE | session-only | ● | ADX, Azure Monitor, Azure Networking, Container Apps, Cosmos, Cost Management, Log Analytics |
 
 ## app-templates
 
@@ -2553,7 +2564,7 @@ silently downgrading the route.
 
 ## Backend signals (derived)
 
-462 module(s) ORIGINATE a backend label — the derivation read an
+471 module(s) ORIGINATE a backend label — the derivation read an
 Azure identifier out of them. Every other route/module below inherits through the
 call graph. Nothing in this section is a Loom module name someone typed: the
 modules are derived, and only the Microsoft-owned identifier vocabulary is seeded.
@@ -2789,6 +2800,7 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 
 | Module | Backends |
 | --- | --- |
+| `apps/fiab-console/app/admin/api-gateway/register-dialog.tsx` | APIM |
 | `apps/fiab-console/app/admin/capacity/page.tsx` | Power BI |
 | `apps/fiab-console/app/admin/migrate/page.tsx` | Key Vault |
 | `apps/fiab-console/app/admin/scaling/page.tsx` | AML |
@@ -2896,6 +2908,7 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/app/copilot/page.tsx` | AI Foundry |
 | `apps/fiab-console/app/governance/purview/page.tsx` | Purview |
 | `apps/fiab-console/app/governance/scans/page.tsx` | ADLS |
+| `apps/fiab-console/e2e/api-gateway-registry.uat.ts` | APIM |
 | `apps/fiab-console/e2e/catalog.uat.ts` | Databricks |
 | `apps/fiab-console/lib/admin/env-checks/azure-services.ts` | Azure OpenAI, Container Apps, Cost Management |
 | `apps/fiab-console/lib/admin/env-checks/core.ts` | ADX, Azure Monitor, Azure Networking, Container Apps, Cost Management, Log Analytics |
@@ -2905,6 +2918,12 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/admin/lcu-autopilot-loop.ts` | ADX, Synapse |
 | `apps/fiab-console/lib/admin/self-audit.ts` | AI Search, Azure AI Services, Microsoft Graph |
 | `apps/fiab-console/lib/admin/service-probes.ts` | Power Platform |
+| `apps/fiab-console/lib/api-gateway/environments/deps.ts` | Cosmos |
+| `apps/fiab-console/lib/api-gateway/registry/deps.ts` | Cosmos |
+| `apps/fiab-console/lib/api-gateway/registry/discovery/scan.ts` | APIM |
+| `apps/fiab-console/lib/api-gateway/registry/gateway-service.ts` | APIM |
+| `apps/fiab-console/lib/api-gateway/registry/preflight.ts` | APIM, Azure RBAC |
+| `apps/fiab-console/lib/api-gateway/registry/resource-id.ts` | APIM |
 | `apps/fiab-console/lib/apps/app-resources.ts` | ADX, AI Search, Azure AI Services, Azure RBAC, Azure Storage, Cosmos, Event Hubs, Key Vault, PostgreSQL, Resource Graph |
 | `apps/fiab-console/lib/apps/content-bundles/app-data-governance.ts` | Purview |
 | `apps/fiab-console/lib/apps/content-bundles/app-direct-lake-replacement.ts` | ADLS, Azure SQL, Azure Storage, Power BI |
@@ -3209,6 +3228,7 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/estate/pause-container-apps.ts` | Container Apps |
 | `apps/fiab-console/lib/estate/pause-orchestrator.ts` | AAS, ADX, Compute, Synapse |
 | `apps/fiab-console/lib/estate/pause-tag-discovery.ts` | Resource Graph |
+| `apps/fiab-console/lib/gates/registry/api-gateway.ts` | AI Foundry |
 | `apps/fiab-console/lib/gates/registry/azure-services.ts` | Cost Management |
 | `apps/fiab-console/lib/gates/registry/data-plane.ts` | Azure RBAC |
 | `apps/fiab-console/lib/gates/registry/types.ts` | AAS, ADF, ADX, AI Search, AML, APIM, Azure AI Services, Azure Maps, Azure SQL, Azure Storage, Batch, Container Apps, Cosmos, Databricks, Event Hubs, Key Vault, Log Analytics, PostgreSQL, Purview, Service Bus, Synapse |
