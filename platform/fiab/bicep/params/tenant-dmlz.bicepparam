@@ -333,3 +333,8 @@ param loomSynapseEnabled = true
 param loomDatabricksEnabled = true
 param loomDataFactoryEnabled = true
 param loomSelfHostedIrEnabled = true
+
+// API Gateway Plane W1-2 - GatewayLlmLogs APIM diagnostic category. W0-9: offered on Commercial.
+param observabilityConfig = {
+  apiplaneLlmLogs: true
+}

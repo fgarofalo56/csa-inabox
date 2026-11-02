@@ -1,6 +1,8 @@
 ---
 name: apigw-W01-gateway-registry-observe
-status: backlog
+status: active
+started: 2026-10-30
+branch: feat/apigw-w01
 priority: P1
 order: 22
 depends_on: [apigw-W00-measurement-spike]
@@ -32,6 +34,9 @@ ADR-001, ADR-003 (facets), ADR-004 (administration), ADR-008 (catalog), ADR-010.
 | W1-6 | Gates `api-gateway.gateway-role`, `api-gateway.monitoring-reader`, `api-gateway.llm-logs-unavailable` with Fix-its; readiness rows per boundary (declared gaps from W0-9); DESIGN.md content/state rules added to `docs/fiab/ux-standards.md` § 7 checklist | `lib/gates/registry/api-gateway.ts` (new), `lib/gates/registry/index.ts` (one import), `docs/fiab/ux-standards.md` (one subsection) | W1-2 | Sonnet | none | gate test: a double reporting a missing Monitoring Reader yields the gate with a `role-grant` Fix-it; the readiness page lists the gaps with owners |
 | W1-7 | Docs and receipts: rewrite `docs/fiab/admin/api-management.md`; create `docs/fiab/parity/apim-ai-gateway.md` from `AZURE-PARITY-INVENTORY.md` with W1 rows flipped; brownfield receipt (register a second, pre-existing APIM through discovery — **offered**, not adopted); G1 walk Commercial; GCC-High: register the Gov APIM through Actions and quote inventory counts | `docs/fiab/admin/api-management.md`, `docs/fiab/parity/apim-ai-gateway.md` (new), `e2e/api-gateway-registry.uat.ts` (new), `scripts/measure/apiplane/registry-probe.mjs` (new) | W1-1..W1-6 | Sonnet | none (G1 walk) | screenshots dark + light; Gov run id; parity doc shows W1 rows ✅ and every other row ❌ or → W# |
 | W1-8 | Scoped administration (Q9, 2026-10-29): an `apiplane-admin` capability declared in `lib/auth/feature-catalog.ts`, enforced by `withCapability` (`lib/api/route-toolkit.ts:254`) on every plane admin route from day one, assignable to an Entra group; tenant admins remain a superset; every audited write records the capability used; Settings → Runtime shows which group holds it and the remediation when none does | `lib/auth/feature-catalog.ts` (one capability), `app/api/admin/api-gateway/**` (wrapper), `lib/api/route-toolkit.ts` (only if a tenant-admin-superset helper is needed), `docs/fiab/admin/api-management.md` (one section) | W1-2 | Sonnet | none | route enumeration: every plane admin route refuses a session holding neither tenant admin nor the capability with a 403 that names the group to join; a session holding only the capability gets 200 on a read route and its write is audited with the capability name |
+| W1-9 | Brownfield discovery (deploy-integrity R5; operator decision 2026-10-30): scan the subscriptions the Console identity can read for APIM instances; return each candidate with its sku, region, network mode, whether the identity can read and write it, whether it is already registered, and what Loom would do in observe mode; flag partial reads (subscription or page not readable) so absence is never reported as zero; discovery WRITES nothing and never adopts; the register dialog offers candidates and registers only the one the operator picks | `lib/api-gateway/registry/discovery/**` (new), `app/api/admin/api-gateway/gateways/discover/**` (new), the register dialog under `app/admin/api-gateway/**` (discovery list only) | W1-2, W1-5, W1-8 | Sonnet | none | route test: a double with two subscriptions, one unreadable, returns the readable candidates and a partial-read flag naming the unreadable subscription (never an empty result presented as complete); an already-registered candidate is marked; discovery performs zero writes (asserted on the doubles); route is gated by apiplane-admin |
+
+W1-9 (operator decision 2026-10-30) follows W1-5 and W1-8, ahead of the W1-7 live receipts.
 
 Lanes: L1 = W1-1 → W1-2 → W1-3; L2 = W1-4 (after W1-1); L3 = W1-5 (after
 W1-3), W1-6 and W1-8 (after W1-2); W1-7 last. Bicep: W1-2 only.
@@ -58,11 +63,12 @@ Monitoring Reader grant harmless.
 
 | Item | Status | Branch | Model | Evidence | Updated |
 |---|---|---|---|---|---|
-| W1-1 | todo | | sonnet | | 2026-10-28 |
-| W1-2 | todo | | sonnet | | 2026-10-28 |
-| W1-3 | todo | | sonnet | | 2026-10-28 |
-| W1-4 | todo | | sonnet | | 2026-10-28 |
-| W1-5 | todo | | sonnet | | 2026-10-28 |
-| W1-6 | todo | | sonnet | | 2026-10-28 |
-| W1-7 | todo | | sonnet | | 2026-10-28 |
-| W1-8 | todo | | sonnet | | 2026-10-29 |
+| W1-1 | merged | feat/apigw-w01-w1-1 | sonnet | vitest lib/api-gateway 12/12; mutation RED 2/12 in sandbox; bicep build + 8 build-params rc=0; template-sync PASS; merge a69b8080c | 2026-10-30 |
+| W1-2 | merged | feat/apigw-w01-w1-2 | sonnet | vitest W1-1/2/4 93/93; mutations RED (role name, --scope, auto-reg); bicep build + build-params rc=0; template-sync PASS 4005432 B; ClassificationStore wired; no Commercial roll receipt yet; merge edd7cb51e | 2026-10-30 |
+| W1-3 | merged | feat/apigw-w01-w1-3 | sonnet | vitest W1-1/2/3/4/6 combined 247/247 (27 files); sweep mutation RED 5 tests; facets absence paired with host positive; observe/register.ts findings source NOT yet imported by environments routes (wire after W1-8); no live inventory-count receipt (W1-7); merge 1b9cf64e9 | 2026-10-30 |
+| W1-4 | merged | feat/apigw-w01-w1-4 | sonnet | vitest 43/43 (5 files); permits() mutation RED 4 tests in sandbox; no tsc errors in owned paths; eslint not run (no flat config); route map NOT regenerated, do once before PR; merge 7221cff5a | 2026-10-30 |
+| W1-5 | merged | feat/apigw-w01-w1-5 | sonnet | combined vitest 704 files / 9129 tests incl lib/auth + app/api; guards OK; 6 mutations RED; Playwright spec WRITTEN NOT RUN (W1-7 G1 walk); gap: items/apim-api,product,policy routes not scopeRoute-wrapped so those 3 tabs say not scoped yet for non-default gateways (follow-up); telemetry card read-access only; merge 875009dd1 | 2026-10-30 |
+| W1-6 | merged | feat/apigw-w01-w1-6 | sonnet | vitest lib/gates 74/74; mutations RED (fixit kind 2 fail; unregistered 13/13); gates exported as API_GATEWAY_GATES, NOT yet in GATES/admin gate page nor consumed by UI (W1-5 must consume); docs 7.6 has no mkdocs-strict receipt (strict fails on base too, Material banner); merge 245c654a4 | 2026-10-30 |
+| W1-7 | blocked | feat/apigw-w01-w1-7 | sonnet | offline part MERGED eaabf3d5f: docs + parity doc + registry-probe (16/16 node tests, mutation RED 2) + uat spec WRITTEN NOT RUN. OPEN: live receipts need a deploy (Commercial roll + G1 walk; GCC-High probe via Actions); brownfield DISCOVERY (R5) not built, awaiting decision | 2026-10-30 |
+| W1-8 | merged | feat/apigw-w01-w1-8 | sonnet | combined vitest 826/826 (60 files) incl lib/auth; guards + toolkit OK; mutations RED (3); orchestrator fixed on top: sync route gated on apiplane-admin, apim keys handler inline (durable-access test), findings source wired + findings-wiring test RED when import removed; Runtime tab not click-walked (W1-7); merge 66efd3574 | 2026-10-30 |
+| W1-9 | merged | feat/apigw-w01-w1-9 | sonnet | vitest 50 files / 729 tests incl lib/auth + route enumeration; guards + toolkit OK; 7 mutations RED; route map regenerated (1715); ARM zero-write is by construction (ArmPort has get only); not run live, no G1 walk; merge 85c29acba | 2026-10-30 |

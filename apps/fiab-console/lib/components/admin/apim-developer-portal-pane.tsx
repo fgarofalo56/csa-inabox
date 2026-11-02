@@ -10,7 +10,7 @@ import { Open24Regular, ArrowSync24Regular } from '@fluentui/react-icons';
 import { Section } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import type { ApimPortalRevision } from '@/lib/azure/apim-client';
-import { apimFetchJson } from './apim-pane-fetch';
+import { apimFetchJson, withGateway } from './apim-pane-fetch';
 
 const useStyles = makeStyles({
   urls: {
@@ -49,7 +49,7 @@ function statusColor(s?: string): 'success' | 'warning' | 'danger' | 'subtle' {
   return 'subtle';
 }
 
-export function ApimDeveloperPortalPane() {
+export function ApimDeveloperPortalPane({ gatewayId }: { gatewayId?: string } = {}) {
   const styles = useStyles();
   const [data, setData] = useState<PortalData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -62,7 +62,7 @@ export function ApimDeveloperPortalPane() {
   const reload = useCallback(() => {
     setLoading(true);
     setError(null);
-    apimFetchJson('/api/apim/developer-portal')
+    apimFetchJson(withGateway('/api/apim/developer-portal', gatewayId))
       .then((d) => {
         if (d.ok) {
           setData({
@@ -79,7 +79,7 @@ export function ApimDeveloperPortalPane() {
         setLoading(false);
       })
       .catch((e) => { setError(e instanceof Error ? e.message : String(e)); setLoading(false); });
-  }, []);
+  }, [gatewayId]);
 
   useEffect(() => { reload(); }, [reload]);
 
@@ -88,7 +88,7 @@ export function ApimDeveloperPortalPane() {
     setError(null);
     setNote(null);
     try {
-      const d = await apimFetchJson('/api/apim/developer-portal', {
+      const d = await apimFetchJson(withGateway('/api/apim/developer-portal', gatewayId), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ description: publishDesc.trim() || undefined, isCurrent: true }),
