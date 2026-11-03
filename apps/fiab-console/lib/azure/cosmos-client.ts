@@ -89,6 +89,12 @@ let _lakehouseSchemas: Container | null = null;
 let _vectorSyncManifests: Container | null = null;
 let _modelFabric: Container | null = null;
 let _autopilot: Container | null = null;
+// API Gateway Plane (W1-1) — five apiplane-* containers, PK /tenantId, TTL enabled.
+let _apiplaneDesired: Container | null = null;
+let _apiplaneObserved: Container | null = null;
+let _apiplanePlans: Container | null = null;
+let _apiplaneUsage: Container | null = null;
+let _apiplaneNotify: Container | null = null;
 let _networkingConfig: Container | null = null;
 let _copilotConfig: Container | null = null;
 let _workspaceAgentConfig: Container | null = null;
@@ -1365,6 +1371,13 @@ async function ensure() {
   // N17 — observability monitors + incidents. PK /tenantId; withMigrations (MIG1).
   _monitors = withMigrations((await database.containers.createIfNotExists({ id: MONITOR_CONTAINER, partitionKey: { paths: ['/tenantId'] } })).container, MONITOR_CONTAINER);
   _incidents = withMigrations((await database.containers.createIfNotExists({ id: INCIDENT_CONTAINER, partitionKey: { paths: ['/tenantId'] } })).container, INCIDENT_CONTAINER);
+  // API Gateway Plane (W1-1) — PK /tenantId; defaultTtl -1 (TTL ON, no blanket expiry) so
+  // usage facts / leases can carry per-doc ttl. Declared in landing-zone/cosmos.bicep too.
+  _apiplaneDesired = await createTtlEnabledContainer(database, 'apiplane-desired', '/tenantId');
+  _apiplaneObserved = await createTtlEnabledContainer(database, 'apiplane-observed', '/tenantId');
+  _apiplanePlans = await createTtlEnabledContainer(database, 'apiplane-plans', '/tenantId');
+  _apiplaneUsage = await createTtlEnabledContainer(database, 'apiplane-usage', '/tenantId');
+  _apiplaneNotify = await createTtlEnabledContainer(database, 'apiplane-notify', '/tenantId');
   _ensured = true;
 }
 
@@ -1606,6 +1619,11 @@ export async function vectorSyncManifestsContainer(): Promise<Container> { await
 export async function modelFabricContainer(): Promise<Container> { await ensure(); return _modelFabric!; }
 export async function autopilotContainer(): Promise<Container> { await ensure(); return _autopilot!; }
 export async function networkingConfigContainer(): Promise<Container> { await ensure(); return _networkingConfig!; }
+export async function apiplaneDesiredContainer(): Promise<Container> { await ensure(); return _apiplaneDesired!; }
+export async function apiplaneObservedContainer(): Promise<Container> { await ensure(); return _apiplaneObserved!; }
+export async function apiplanePlansContainer(): Promise<Container> { await ensure(); return _apiplanePlans!; }
+export async function apiplaneUsageContainer(): Promise<Container> { await ensure(); return _apiplaneUsage!; }
+export async function apiplaneNotifyContainer(): Promise<Container> { await ensure(); return _apiplaneNotify!; }
 
 export async function marketplaceListingsContainer(): Promise<Container> {
   await ensure();

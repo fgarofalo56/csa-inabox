@@ -25,10 +25,9 @@
 | [W09-viewer-editors-copilot](active/loom-health-data-services/W09-viewer-editors-copilot.md) | P1 | 10 | W08-consent-segmentation-audit, W05-conversion-hl7v2-ccda | W08-consent-segmentation-audit (backlog); W05-conversion-hl7v2-ccda (backlog) | sonnet / sonnet | none |
 | [W11-hardening-dr-scale-out](active/loom-health-data-services/W11-hardening-dr-scale-out.md) | P1 | 12 | W09-viewer-editors-copilot | W09-viewer-editors-copilot (backlog) | sonnet / sonnet | required |
 | [W12-compliance-evidence-pack](active/loom-health-data-services/W12-compliance-evidence-pack.md) | P1 | 13 | W11-hardening-dr-scale-out | W11-hardening-dr-scale-out (backlog) | sonnet / sonnet | required |
-| [apigw-W01-gateway-registry-observe](active/loom-api-gateway-plane/apigw-W01-gateway-registry-observe.md) | P1 | 22 | apigw-W00-measurement-spike | - | sonnet / sonnet | none |
-| [apigw-W02-publishing-plan-apply](active/loom-api-gateway-plane/apigw-W02-publishing-plan-apply.md) | P1 | 23 | apigw-W01-gateway-registry-observe | apigw-W01-gateway-registry-observe (backlog) | sonnet / sonnet | required |
+| [apigw-W02-publishing-plan-apply](active/loom-api-gateway-plane/apigw-W02-publishing-plan-apply.md) | P1 | 23 | apigw-W01-gateway-registry-observe | - | sonnet / sonnet | required |
 | [apigw-W03-identity-entitlements](active/loom-api-gateway-plane/apigw-W03-identity-entitlements.md) | P1 | 24 | apigw-W02-publishing-plan-apply | apigw-W02-publishing-plan-apply (backlog) | sonnet / sonnet | required |
-| [apigw-W04-cost-centers-usage-pricing](active/loom-api-gateway-plane/apigw-W04-cost-centers-usage-pricing.md) | P1 | 25 | apigw-W01-gateway-registry-observe | apigw-W01-gateway-registry-observe (backlog) | sonnet / sonnet | none |
+| [apigw-W04-cost-centers-usage-pricing](active/loom-api-gateway-plane/apigw-W04-cost-centers-usage-pricing.md) | P1 | 25 | apigw-W01-gateway-registry-observe | - | sonnet / sonnet | none |
 | [apigw-W05-budgets-notifications](active/loom-api-gateway-plane/apigw-W05-budgets-notifications.md) | P1 | 26 | apigw-W04-cost-centers-usage-pricing | apigw-W04-cost-centers-usage-pricing (backlog) | sonnet / sonnet | required |
 | [apigw-W06-mcp-publishing](active/loom-api-gateway-plane/apigw-W06-mcp-publishing.md) | P1 | 27 | apigw-W03-identity-entitlements | apigw-W03-identity-entitlements (backlog) | sonnet / sonnet | required |
 | [apigw-W07-model-pools-deployments](active/loom-api-gateway-plane/apigw-W07-model-pools-deployments.md) | P1 | 28 | apigw-W02-publishing-plan-apply | apigw-W02-publishing-plan-apply (backlog) | sonnet / sonnet | required |
@@ -49,6 +48,7 @@ _none_
 
 | PRP | Shipped | PR |
 |---|---|---|
+| [apigw-W01-gateway-registry-observe](active/loom-api-gateway-plane/apigw-W01-gateway-registry-observe.md) | 2026-11-02 | #5191 |
 | [apigw-W00-measurement-spike](active/loom-api-gateway-plane/apigw-W00-measurement-spike.md) | 2026-10-29 | #5188 |
 | [canvas-stacked-docks-minimap](shipped/canvas-stacked-docks-minimap/PRP.md) | 2026-10-23 | #5095 |
 

@@ -18,6 +18,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { apimConfigGate, importApiFromOpenApi, ApimError } from '@/lib/azure/apim-client';
 import { apiHonestGateError } from '@/lib/api/gate-envelope';
 import { withSession } from '@/lib/api/route-toolkit';
+import { scopeRoute } from '@/lib/api-gateway/registry/resolve-gateway';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -42,7 +43,7 @@ function fail(e: any) {
   return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });
 }
 
-export const POST = withSession(async (req: NextRequest) => {
+const POST_h = withSession(async (req: NextRequest) => {
   const g = gate(); if (g) return g;
   const body = await req.json().catch(() => ({}));
   const apiId = body?.apiId && String(body.apiId).trim();
@@ -63,3 +64,6 @@ export const POST = withSession(async (req: NextRequest) => {
     return NextResponse.json({ ok: true, api });
   } catch (e: any) { return fail(e); }
 });
+
+// `?gateway=<id>` retargets the handler at a registered gateway; absent = unchanged.
+export const POST = scopeRoute(POST_h);

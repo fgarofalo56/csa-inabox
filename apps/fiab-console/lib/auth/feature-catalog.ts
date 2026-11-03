@@ -201,6 +201,11 @@ export const CAPABILITY_CATALOG: Capability[] = [
   // automatically the people who administer health tenants.
   { id: 'health.tenant-admin',       domain: 'Admin',     workload: 'Health Data Services', name: 'Health Tenant Admin', kind: 'admin', description: 'Create, provision and manage Health Data Services tenants (the health-tenant item and /api/health/tenants). Granted explicitly at /admin/permissions; it is not inherited from Tenant administration through a parent grant.' },
 
+  // API Gateway Plane (Q9, 2026-10-29): scoped plane administration, assignable to an Entra
+  // group at /admin/permissions. NO parentId, so a grant on workload.admin never cascades to
+  // it; tenant admins pass every capability check and so remain a superset.
+  { id: 'apiplane-admin',            domain: 'Admin',     workload: 'API Gateway Plane', name: 'API Gateway Plane administration', kind: 'admin', description: 'Register and administer API Management gateways, environments and the API Gateway Plane under /admin/api-gateway and /api/admin/api-gateway. Grant to an Entra group at /admin/permissions (role Admin); tenant admins hold it implicitly.' },
+
   // ============================================================
   // Domain: Governance
   // ============================================================

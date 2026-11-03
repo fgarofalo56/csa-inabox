@@ -10,7 +10,7 @@ import { Delete24Regular, Edit24Regular } from '@fluentui/react-icons';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { ApimProductSummary } from '@/lib/azure/apim-client';
-import { apimFetchJson } from './apim-pane-fetch';
+import { apimFetchJson, withGateway } from './apim-pane-fetch';
 
 interface ProductForm {
   id: string;
@@ -30,7 +30,7 @@ const EMPTY_FORM: ProductForm = {
   approvalRequired: false,
 };
 
-export function ApimProductsPane() {
+export function ApimProductsPane({ gatewayId }: { gatewayId?: string } = {}) {
   const [products, setProducts] = useState<ApimProductSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -53,7 +53,7 @@ export function ApimProductsPane() {
     setError(null);
     // apimFetchJson surfaces a non-JSON body / honest 503 gate as a readable
     // error instead of crashing the pane with "Unexpected token '<'".
-    apimFetchJson('/api/items/apim-product')
+    apimFetchJson(withGateway('/api/items/apim-product', gatewayId))
       .then((d) => {
         if (d.ok && Array.isArray(d.products)) {
           setProducts(d.products as ApimProductSummary[]);
@@ -63,7 +63,7 @@ export function ApimProductsPane() {
         setLoading(false);
       })
       .catch((e) => { setError(e instanceof Error ? e.message : String(e)); setLoading(false); });
-  }, []);
+  }, [gatewayId]);
 
   useEffect(() => { reload(); }, [reload]);
 
@@ -95,7 +95,7 @@ export function ApimProductsPane() {
     try {
       // POST upserts: create derives an id from displayName server-side; edit
       // reuses the existing name. The route does a real ARM PUT /products.
-      const d = await apimFetchJson('/api/items/apim-product', {
+      const d = await apimFetchJson(withGateway('/api/items/apim-product', gatewayId), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -124,7 +124,7 @@ export function ApimProductsPane() {
     if (!deleting) return;
     setDeleteBusy(true);
     try {
-      const d = await apimFetchJson(`/api/items/apim-product/${encodeURIComponent(deleting.name)}`, {
+      const d = await apimFetchJson(withGateway(`/api/items/apim-product/${encodeURIComponent(deleting.name)}`, gatewayId), {
         method: 'DELETE',
       });
       if (d.ok) {

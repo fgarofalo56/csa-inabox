@@ -7,7 +7,7 @@ import {
 } from '@fluentui/react-components';
 import { Section } from '@/lib/components/ui/section';
 import type { ApimApiSummary, ApimProductSummary } from '@/lib/azure/apim-client';
-import { apimFetchJson, type ApimJsonOk } from './apim-pane-fetch';
+import { apimFetchJson, withGateway, type ApimJsonOk } from './apim-pane-fetch';
 
 const useStyles = makeStyles({
   container: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL },
@@ -45,7 +45,7 @@ const SNIPPETS: { label: string; xml: string }[] = [
   { label: 'IP filter', xml: '<ip-filter action="allow">\n      <address-range from="10.0.0.0" to="10.255.255.255" />\n    </ip-filter>' },
 ];
 
-export function ApimPoliciesPane() {
+export function ApimPoliciesPane({ gatewayId }: { gatewayId?: string } = {}) {
   const styles = useStyles();
   const [kind, setKind] = useState<ScopeKind>('service');
   const [apis, setApis] = useState<ApimApiSummary[]>([]);
@@ -70,8 +70,8 @@ export function ApimPoliciesPane() {
   useEffect(() => {
     setListLoading(true);
     Promise.all([
-      apimFetchJson('/api/apim/apis').catch((e): ApimJsonOk => ({ ok: false, error: e instanceof Error ? e.message : String(e) })),
-      apimFetchJson('/api/apim/products').catch((e): ApimJsonOk => ({ ok: false, error: e instanceof Error ? e.message : String(e) })),
+      apimFetchJson(withGateway('/api/apim/apis', gatewayId)).catch((e): ApimJsonOk => ({ ok: false, error: e instanceof Error ? e.message : String(e) })),
+      apimFetchJson(withGateway('/api/apim/products', gatewayId)).catch((e): ApimJsonOk => ({ ok: false, error: e instanceof Error ? e.message : String(e) })),
     ])
       .then(([a, p]) => {
         if (a.ok && Array.isArray(a.apis)) setApis(a.apis as ApimApiSummary[]);
@@ -79,14 +79,14 @@ export function ApimPoliciesPane() {
         if (!a.ok && !p.ok) setError((a.error as string) || (p.error as string) || 'Failed to load APIs/products.');
         setListLoading(false);
       });
-  }, []);
+  }, [gatewayId]);
 
   const loadPolicy = useCallback((s: string) => {
     if (s === '') { setPolicyText(''); return; }
     setLoading(true);
     setError(null);
     setSavedNote(null);
-    apimFetchJson(`/api/items/apim-policy?scope=${encodeURIComponent(s)}`)
+    apimFetchJson(withGateway(`/api/items/apim-policy?scope=${encodeURIComponent(s)}`, gatewayId))
       .then((d) => {
         if (d.ok) {
           setPolicyText(((d.value as string) || '').trim() || EMPTY_POLICY);
@@ -96,7 +96,7 @@ export function ApimPoliciesPane() {
         setLoading(false);
       })
       .catch((e) => { setError(e instanceof Error ? e.message : String(e)); setLoading(false); });
-  }, []);
+  }, [gatewayId]);
 
   // Reload whenever the resolved scope changes (scope picker or target select).
   useEffect(() => { loadPolicy(scope); }, [scope, loadPolicy]);
@@ -107,7 +107,7 @@ export function ApimPoliciesPane() {
     setError(null);
     setSavedNote(null);
     try {
-      const d = await apimFetchJson('/api/items/apim-policy', {
+      const d = await apimFetchJson(withGateway('/api/items/apim-policy', gatewayId), {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ scope, value: policyText }),

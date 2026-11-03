@@ -10,7 +10,7 @@ import { Delete24Regular, Edit24Regular, ShieldKeyhole20Regular } from '@fluentu
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { ApimBackendSummary } from '@/lib/azure/apim-client';
-import { apimFetchJson } from './apim-pane-fetch';
+import { apimFetchJson, withGateway } from './apim-pane-fetch';
 
 type AuthMode = 'none' | 'authorization' | 'header' | 'query';
 
@@ -36,7 +36,7 @@ const EMPTY_FORM: BackendForm = {
   validateCertChain: true, validateCertName: true,
 };
 
-export function ApimBackendsPane() {
+export function ApimBackendsPane({ gatewayId }: { gatewayId?: string } = {}) {
   const [backends, setBackends] = useState<ApimBackendSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -57,7 +57,7 @@ export function ApimBackendsPane() {
   const reload = useCallback(() => {
     setLoading(true);
     setError(null);
-    apimFetchJson('/api/apim/backends')
+    apimFetchJson(withGateway('/api/apim/backends', gatewayId))
       .then((d) => {
         if (d.ok && Array.isArray(d.backends)) {
           setBackends(d.backends as ApimBackendSummary[]);
@@ -67,7 +67,7 @@ export function ApimBackendsPane() {
         setLoading(false);
       })
       .catch((e) => { setError(e instanceof Error ? e.message : String(e)); setLoading(false); });
-  }, []);
+  }, [gatewayId]);
 
   useEffect(() => { reload(); }, [reload]);
 
@@ -143,7 +143,7 @@ export function ApimBackendsPane() {
     try {
       // POST upserts by name (edit reuses the existing name; create derives one
       // from name or URL server-side). The route does a real ARM PUT /backends.
-      const d = await apimFetchJson('/api/apim/backends', {
+      const d = await apimFetchJson(withGateway('/api/apim/backends', gatewayId), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -173,7 +173,7 @@ export function ApimBackendsPane() {
     if (!deleting) return;
     setDeleteBusy(true);
     try {
-      const d = await apimFetchJson(`/api/apim/backends?id=${encodeURIComponent(deleting.name)}`, {
+      const d = await apimFetchJson(withGateway(`/api/apim/backends?id=${encodeURIComponent(deleting.name)}`, gatewayId), {
         method: 'DELETE',
       });
       if (d.ok) {
