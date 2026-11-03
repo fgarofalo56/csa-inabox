@@ -20,6 +20,7 @@ import { authoredMessage } from '../safe-error.js';
 import type { Collection } from '../store/types.js';
 import { ASSERTION_TYPE, verifyClientAssertion, type JwksFetcher } from './backend-auth.js';
 import { computeGrant } from './grant.js';
+import { MIN_RSA_BITS, isPrivateHost, rsaModulusBits } from './jwks-guard.js';
 import { GraphConsentRequiredError, isGuid, type Federation, type GraphMembership } from './federation.js';
 import { ROLE_IDS, SCOPE_MAP_VERSION } from './role-map.js';
 import { parseDataScope, parseRequest, intersectWithCeilings, type DataScope } from './scopes.js';
@@ -90,9 +91,18 @@ function sendJson(res: ServerResponse, status: number, body: unknown, extra: Rec
   });
   res.end(text);
 }
-function redirect(res: ServerResponse, location: string): void {
-  res.writeHead(302, { location, 'cache-control': 'no-store' });
+function redirect(res: ServerResponse, location: string, extra: Record<string, string> = {}): void {
+  res.writeHead(302, { location, 'cache-control': 'no-store', ...extra });
   res.end();
+}
+/** The browser-binding cookie is named per authorization request so concurrent sign-ins do not clobber each other. */
+const bindCookieName = (reqId: string): string => `lhds_ar_${reqId}`;
+function readCookie(req: string | undefined, name: string): string {
+  for (const part of (req ?? '').split(';')) {
+    const i = part.indexOf('=');
+    if (i > 0 && part.slice(0, i).trim() === name) return part.slice(i + 1).trim();
+  }
+  return '';
 }
 async function readBody(req: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
@@ -281,9 +291,13 @@ export function createAuthServer(deps: AuthServerDeps) {
     const entraVerifier = rand(48);
     const id = rand(24);
     const entraNonce = rand(16);
+    // Bind this request to the browser that started it: a random secret goes to the browser as an
+    // HttpOnly cookie, only its hash is stored, and the callback refuses a state without the cookie (#5134).
+    const browserSecret = rand(24);
     await stores.grants.create({
       id,
       kind: 'authreq',
+      browserBinding: sha256hex(browserSecret),
       ttl: AUTHREQ_TTL_S,
       expiresAt: expiry(AUTHREQ_TTL_S),
       tenant: tenantSlug,
@@ -298,14 +312,24 @@ export function createAuthServer(deps: AuthServerDeps) {
       aud: q.get('aud') as string,
       ...(q.get('launch') ? { launchHandle: sha256hex(q.get('launch') as string) } : {}),
     });
-    redirect(res, deps.federation.authorizeUrl({ state: id, nonce: entraNonce, codeChallenge: s256(entraVerifier), redirectUri: callbackUrl }));
+    // SameSite=Lax: the Entra redirect back is a top-level GET, which Lax sends; a cross-site POST/subresource does not.
+    const secure = issuer.startsWith('https:') ? '; Secure' : '';
+    const cookie = `${bindCookieName(id)}=${browserSecret}; HttpOnly; SameSite=Lax; Path=${base}/callback; Max-Age=${AUTHREQ_TTL_S}${secure}`;
+    redirect(res, deps.federation.authorizeUrl({ state: id, nonce: entraNonce, codeChallenge: s256(entraVerifier), redirectUri: callbackUrl }), {
+      'set-cookie': cookie,
+    });
   }
 
   // ---- Entra callback ----
-  async function callback(res: ServerResponse, q: URLSearchParams): Promise<void> {
+  async function callback(res: ServerResponse, q: URLSearchParams, cookieHeader: string | undefined): Promise<void> {
     const reqId = q.get('state') ?? '';
     const ar = reqId ? await stores.grants.get(reqId) : undefined;
     if (!ar || ar.kind !== 'authreq' || ar.used || expired(ar)) throw new OAuthError('invalid_request', 'unknown or expired authorization request');
+    // Checked BEFORE the request is consumed, so a forged callback cannot burn the victim's pending sign-in.
+    if (!ar.browserBinding || !safeEq(sha256hex(readCookie(cookieHeader, bindCookieName(reqId))), ar.browserBinding)) {
+      deps.log('auth.state_binding_mismatch', {});
+      throw new OAuthError('invalid_request', 'authorization request does not belong to this browser session');
+    }
     try {
       await stores.grants.replace({ ...ar, used: true }); // single use; a concurrent second callback loses the etag race
     } catch (e) {
@@ -423,6 +447,8 @@ export function createAuthServer(deps: AuthServerDeps) {
     roles: string[];
     refresh: boolean;
     launched: boolean;
+    /** Rotation chain to continue; a fresh sign-in starts a new one. */
+    family?: string;
   }): Promise<Record<string, unknown>> {
     const t = now();
     const accessToken = await mintAccessToken(deps.signer, {
@@ -469,6 +495,7 @@ export function createAuthServer(deps: AuthServerDeps) {
       await stores.grants.create({
         id: sha256hex(rt),
         kind: 'refresh',
+        family: g.family ?? rand(16),
         ttl: REFRESH_TTL_S,
         expiresAt: expiry(REFRESH_TTL_S),
         tenant: g.tenant,
@@ -580,7 +607,21 @@ export function createAuthServer(deps: AuthServerDeps) {
       // refresh_token: re-run the FULL mapping; scopes can only shrink (A3, N20).
       const rtIn = p.get('refresh_token') ?? '';
       const doc = rtIn ? await stores.grants.get(sha256hex(rtIn)) : undefined;
-      if (!doc || doc.kind !== 'refresh' || doc.used || expired(doc) || doc.clientId !== client.clientId || doc.tenant !== tenantSlug) {
+      if (!doc || doc.kind !== 'refresh' || expired(doc) || doc.clientId !== client.clientId || doc.tenant !== tenantSlug) {
+        throw new OAuthError('invalid_grant', 'grant is invalid or already used');
+      }
+      // Reuse detection (#5134): a refresh token is single-use, so a SECOND presentation means two parties hold it.
+      // Revoke the whole rotation chain so the legitimate holder must sign in again. The client was authenticated
+      // and matches the token above, so a third party cannot trigger this by replaying someone else's token.
+      if (doc.used || (doc.family && (await stores.grants.get(`revoked-${doc.family}`)))) {
+        if (doc.used && doc.family) {
+          try {
+            await stores.grants.create({ id: `revoked-${doc.family}`, kind: 'revoked', ttl: REFRESH_TTL_S, expiresAt: expiry(REFRESH_TTL_S), tenant: doc.tenant, clientId: doc.clientId, family: doc.family });
+          } catch (e) {
+            if (!(e instanceof StoreConflictError)) throw e; // already revoked is the goal state
+          }
+          deps.log('auth.refresh_reuse_revoked', { tenant: doc.tenant });
+        }
         throw new OAuthError('invalid_grant', 'grant is invalid or already used');
       }
       await activeTenant(doc.tenant);
@@ -623,6 +664,7 @@ export function createAuthServer(deps: AuthServerDeps) {
         roles,
         refresh: g.scope.includes('offline_access'),
         launched: !!doc.launchHandle,
+        ...(doc.family ? { family: doc.family } : {}),
       });
     }
     throw new OAuthError('unsupported_grant_type', 'unsupported grant_type');
@@ -648,6 +690,10 @@ export function createAuthServer(deps: AuthServerDeps) {
       }
       for (const k of c.jwks?.keys ?? []) {
         if (PRIVATE_JWK_MEMBERS.some((m) => m in k)) throw badRequest('jwks must contain public keys only');
+        if (k.kty === 'RSA' && rsaModulusBits(k.n) < MIN_RSA_BITS) throw badRequest(`jwks: RSA keys must be at least ${MIN_RSA_BITS} bits`);
+      }
+      if (c.jwksUrl && isPrivateHost(new URL(c.jwksUrl).hostname)) {
+        throw badRequest('jwksUrl must point to a public host (loopback, private, link-local and internal names are refused)');
       }
       for (const s of c.allowedScopes) if (!parseDataScope(s, { v1: false })) throw badRequest(`allowedScopes: not an accepted scope: ${s.slice(0, 80)}`);
       for (const r of c.roleIds) if (!ROLE_IDS.has(r)) throw badRequest(`roleIds: unknown role ${r.slice(0, 60)}`);
@@ -798,7 +844,7 @@ export function createAuthServer(deps: AuthServerDeps) {
       }
       if (path === `${base}/callback` && method === 'GET') {
         status = 302;
-        await callback(res, url.searchParams);
+        await callback(res, url.searchParams, req.headers.cookie);
         return true;
       }
       const m = /^\/([a-z0-9-]{2,40})\/(\.well-known\/smart-configuration|authorize|token)$/.exec(path.slice(base.length));
