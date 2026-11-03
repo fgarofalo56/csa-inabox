@@ -16,7 +16,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { planBuild, readChangedFiles, SHARED_PREFIXES, CONSOLE } from '../plan-image-builds.mjs';
+import { planBuild, readChangedFiles, SHARED_PREFIXES, CONSOLE, ownerDirs } from '../plan-image-builds.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..', '..', '..');
@@ -38,12 +38,25 @@ test('lifted matrix is the 14-app default set (input: an app dropped from or add
 
 test('a file in EACH matrix context builds exactly that app plus the always-built console', () => {
   for (const app of MATRIX) {
-    const p = planBuild({ changedFiles: [`${app.ctx.replace('./', '')}/src/x.ts`], matrix: MATRIX });
+    const p = planBuild({ changedFiles: [`${ownerDirs(app)[0]}/src/x.ts`], matrix: MATRIX });
     const want = [...new Set([app.name, CONSOLE])].sort();
     assert.deepEqual([...p.build].sort(), want, `file under ${app.ctx}: must build ${want}, got ${p.build}`);
     assert.equal(p.carry.length, 14 - want.length, `file under ${app.ctx}: the rest must be carried, got ${p.carry.length}`);
     assert.equal(p.mode, 'subset', `file under ${app.ctx}: mode must be subset`);
   }
+});
+
+test('#5171: a root-context image owns its Dockerfile dir + declared watch dirs, NOT the whole repo', () => {
+  const hcp = MATRIX.find((a) => a.name === 'loom-health-cp');
+  assert.equal(hcp.ctx, '.', 'loom-health-cp must build from the repo root (its Dockerfile COPYs platform/...)');
+  assert.deepEqual(ownerDirs(hcp), ['apps/loom-health-cp', 'platform/fiab/bicep/modules/health']);
+  // negative: an unrelated app's file must not rebuild health-cp (the defect a naive ctx "." causes)
+  const other = planBuild({ changedFiles: ['apps/loom-unity/src/a.py'], matrix: MATRIX });
+  assert.ok(!other.build.includes('loom-health-cp'), `ctx "." must not own every file; build=${other.build}`);
+  // positive: the bicep dir the Dockerfile COPYs does rebuild it
+  const bicep = planBuild({ changedFiles: ['platform/fiab/bicep/modules/health/tenant.bicep'], matrix: MATRIX });
+  assert.ok(bicep.build.includes('loom-health-cp'), `a change to a COPYed dir must rebuild the image; build=${bicep.build}`);
+  assert.equal(bicep.carry.length, 12, 'only health-cp and the console are built');
 });
 
 test('B1: the console is in the plan for a loom-unity-ONLY push (input: apps/loom-unity/x, no console path)', () => {
