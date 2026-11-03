@@ -18,7 +18,7 @@ const QUOTA = 20;
 
 /** Stub of the fragment: token claim `tenant` = the Authorization value (tA/tB). */
 function gateway(opts = {}) {
-  const counts = { acme: 0, zeta: 0 };
+  const counts = new Map([['acme', 0], ['zeta', 0]]);
   const srv = createServer((req, res) => {
     const tenant = req.url.split('/')[1];
     const tok = (req.headers.authorization || '').replace('Bearer ', '');
@@ -26,8 +26,8 @@ function gateway(opts = {}) {
     if (opts.mismatchAllowed !== true && tokenTenant !== tenant) { res.statusCode = 403; return res.end('{}'); }
     if (opts.noPositive) { res.statusCode = 401; return res.end('{}'); }
     const key = opts.sharedCounter ? 'acme' : tenant;
-    counts[key] += 1;
-    if (!opts.noLimit && counts[key] > QUOTA) {
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+    if (!opts.noLimit && counts.get(key) > QUOTA) {
       res.statusCode = 429;
       if (opts.retryAfter !== null) res.setHeader('Retry-After', opts.retryAfter ?? '30');
       return res.end('{}');
