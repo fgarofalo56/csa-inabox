@@ -1,7 +1,9 @@
 ---
 name: apigw-W01-gateway-registry-observe
-status: active
+status: shipped
 started: 2026-10-30
+shipped: 2026-11-02
+pr: 5191
 branch: feat/apigw-w01
 priority: P1
 order: 22
@@ -72,3 +74,13 @@ Monitoring Reader grant harmless.
 | W1-7 | merged | feat/apigw-w01-w1-7 | sonnet | offline part MERGED eaabf3d5f (docs, parity doc, registry-probe 16/16, uat spec). LIVE RECEIPTS: Commercial rolled to ffb03de1a; Loom own gateway + brownfield apim-keystone-dev-tcigwh registered through discovery, stored counts == ARM (10/0/1/20/23). GCC-High: Actions run 41531061836 registered apim-csa-loom-usgovvirginia (gw-5e7fc5744d6424f4, observe), sync ok, probe MATCH on APIs only (ARM 2 == Loom 2); mcp partial (type unregistered in GCC-High; Q18 stays a declared gap). CLOSED WITH DECLARED GAPS, all tracked in #5210 (not done, not claimed): G1 walk incomplete (light theme and narrow width blocked by Dark Reader and a window that will not resize; Settings/MCP tabs; Gov click-walk); APIs/Products/Named values/Policies tabs say not gateway-scoped for registered gateways; Playwright uat specs never run; GCC-High probe compared the API count only | 2026-11-02 |
 | W1-8 | merged | feat/apigw-w01-w1-8 | sonnet | combined vitest 826/826 (60 files) incl lib/auth; guards + toolkit OK; mutations RED (3); orchestrator fixed on top: sync route gated on apiplane-admin, apim keys handler inline (durable-access test), findings source wired + findings-wiring test RED when import removed; Runtime tab not click-walked (W1-7); merge 66efd3574 | 2026-10-30 |
 | W1-9 | merged | feat/apigw-w01-w1-9 | sonnet | vitest 50 files / 729 tests incl lib/auth + route enumeration; guards + toolkit OK; 7 mutations RED; route map regenerated (1715); ARM zero-write is by construction (ArmPort has get only); not run live, no G1 walk; merge 85c29acba | 2026-10-30 |
+
+## Completion note
+
+**Shipped 2026-11-02 with declared gaps.** PR #5191 (merge 387c3f629), rolled to Commercial at ffb03de1a and to Gov at ffb03de1. Follow-ups: #5205 (crash guard and sync concurrency), #5206 and #5208 (Gov receipt workflow), #5209 (board).
+
+**Deviations:** W1-9 (brownfield discovery) added to this wave by operator decision 2026-10-30. The Named values pane edit was reverted by operator choice, so that tab says not scoped for registered gateways.
+
+**Receipts:** Commercial: Loom own gateway and brownfield apim-keystone-dev-tcigwh registered through discovery, stored counts equal ARM (10/0/1/20/23). GCC-High: Actions run 41531061836, apim-csa-loom-usgovvirginia registered and synced, probe MATCH on the API count only.
+
+**Not done, not claimed (tracked in #5210):** the deploy-owned gateway is not auto-registered on the live estate; APIs, Products, Named values and Policies tabs are not gateway-scoped for registered gateways; the G1 browser walk is incomplete (light theme, narrow width, Settings and MCP tabs, Gov click-walk); the Playwright uat specs never ran; Q18 (in-boundary GCC-High measurement) stays a declared gap. GCC-High has no GatewayLlmLogs and no MCP type.
