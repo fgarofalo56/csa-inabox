@@ -45,7 +45,9 @@ pydantic==2.11.10
 
 # Observability
 azure-monitor-opentelemetry==1.6.4
-opentelemetry-api==1.45.1
+# MUST equal opentelemetry-sdk: sdk X depends on api==X exactly. Bump both together
+# (a lone api bump broke the resolve, 2026-11-02).
+opentelemetry-api==1.28.2
 opentelemetry-sdk==1.28.2
 opentelemetry-instrumentation-fastapi==0.49b2
 opentelemetry-instrumentation-requests==0.49b2
