@@ -444,6 +444,10 @@ jobs:
           # NO `|| true`: a swallowed failure here is exactly the bug this lane
           # exists to catch.
           pip install -r apps/loom-duckdb/requirements.txt
+          # duckdb 2.x no longer pulls numpy; tests/loom_duckdb registers a
+          # Python UDF (test_http_tier TestExplain), which needs it. Test-only:
+          # the app image does not use numpy, so it stays out of requirements.txt.
+          pip install numpy
           # Assert it actually won. Prints every pinned distribution with its
           # resolved version and FAILS the step on any mismatch, so a new
           # requirements.txt landing later in `find` order, or a future
@@ -1219,4 +1223,3 @@ jobs:
                 body,
               });
             }
-

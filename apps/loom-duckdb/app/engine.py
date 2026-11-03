@@ -21,6 +21,7 @@ attempting egress.
 No Microsoft Fabric / OneLake / Power BI host is contacted from any path here
 (.claude/rules/no-fabric-dependency.md).
 """
+
 from __future__ import annotations
 
 import logging
@@ -91,9 +92,7 @@ class QueryResult:
 
     def to_json(self) -> dict[str, Any]:
         """A JSON-safe projection for callers that did not ask for Arrow IPC."""
-        columns = [
-            {"name": f.name, "type": str(f.type)} for f in self.table.schema
-        ]
+        columns = [{"name": f.name, "type": str(f.type)} for f in self.table.schema]
         rows = [list(r.values()) for r in self.table.to_pylist()]
         return {
             "columns": columns,
@@ -108,7 +107,9 @@ class QueryResult:
 
 
 def _bounded_direct_fetch(
-    cursor: duckdb.DuckDBPyConnection, statement: str, cap: int,
+    cursor: duckdb.DuckDBPyConnection,
+    statement: str,
+    cap: int,
 ) -> pa.Table:
     """Execute `statement` RAW, but pull at most ``cap + 1`` rows off the result.
 
@@ -119,12 +120,19 @@ def _bounded_direct_fetch(
     the caller submitted.
 
     So the bound is applied by STREAMING the result and stopping as soon as
-    ``cap + 1`` rows are in hand. `fetch_record_batch` pulls lazily, so an
+    ``cap + 1`` rows are in hand. `to_arrow_reader` pulls lazily, so an
     unwrappable statement over a large source never materializes in full — which
     is the blow-up the cap exists to prevent (#2575). ``cap + 1`` rather than
     ``cap`` so the caller can still tell "exactly at the cap" from "truncated".
     """
-    reader = cursor.execute(statement).fetch_record_batch(FALLBACK_BATCH_ROWS)
+    # `cursor.sql(...)` (a relation), NOT `cursor.execute(...)`: on duckdb 2.x
+    # `execute().to_arrow_reader()` is a DB-API result that copies every row
+    # first, which defeats the streaming bound (measured: 977 ms vs 1140 ms
+    # full materialization on a 4M-row source).
+    relation = cursor.sql(statement)
+    if relation is None:
+        return pa.table({})
+    reader = relation.to_arrow_reader(FALLBACK_BATCH_ROWS)
     schema = reader.schema
     batches: list[pa.RecordBatch] = []
     rows = 0
@@ -257,7 +265,7 @@ class DuckDbEngine:
                 # than the cap is still capped, and a smaller one still wins.
                 wrapped = f"SELECT * FROM ({statement}) AS loom_q LIMIT {cap + 1}"
                 try:
-                    table = cursor.execute(wrapped).fetch_arrow_table()
+                    table = cursor.execute(wrapped).to_arrow_table()
                 except duckdb.Error:
                     # Statements that cannot be wrapped in a subquery (SHOW,
                     # DESCRIBE, PRAGMA, EXPLAIN) run directly — but STREAMED and
