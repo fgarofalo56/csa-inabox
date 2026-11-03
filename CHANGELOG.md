@@ -25,6 +25,32 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.118.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.117.1...csa-inabox-v0.118.0) (2026-11-03)
+
+
+### Features
+
+* **apigw:** Gov registry receipt workflow (W1-7 GCC-High) ([#5206](https://github.com/fgarofalo56/csa-inabox/issues/5206)) ([942abc5](https://github.com/fgarofalo56/csa-inabox/commit/942abc57a501ca77086ecffd37f78af63fd6f713))
+* **apigw:** W1 gateway registry, observe mode, environments, hub shell ([#5191](https://github.com/fgarofalo56/csa-inabox/issues/5191)) ([387c3f6](https://github.com/fgarofalo56/csa-inabox/commit/387c3f6299e356b39ea2f51e07bf66f3dd8c91d2))
+* **health:** edge probe for tenant 403 and quota 429 + Retry-After ([#5149](https://github.com/fgarofalo56/csa-inabox/issues/5149)) ([76b5aa0](https://github.com/fgarofalo56/csa-inabox/commit/76b5aa0b1021302a41ae090b5be3c22a87d5547a))
+
+
+### Bug Fixes
+
+* **apigw:** accept a service name in the Gov registry receipt ([#5208](https://github.com/fgarofalo56/csa-inabox/issues/5208)) ([45555a4](https://github.com/fgarofalo56/csa-inabox/commit/45555a4fc4a982a7c9ca7067b85013def4ce0f00))
+* **console,apigw:** a client hang-up no longer kills the replica; inventory sync fans out ([#5205](https://github.com/fgarofalo56/csa-inabox/issues/5205)) ([ffb03de](https://github.com/fgarofalo56/csa-inabox/commit/ffb03de1ad2bddcae06c6d92a4e7e5658a6b632a))
+* **console,lhds:** thread session into workspace items create; log failed health-tenant bind ([#5177](https://github.com/fgarofalo56/csa-inabox/issues/5177)) ([#5214](https://github.com/fgarofalo56/csa-inabox/issues/5214)) ([c829736](https://github.com/fgarofalo56/csa-inabox/commit/c8297368528807aea10a0b395d4d508c401fd2fa))
+* **deps:** pin opentelemetry-api to 1.28.2 to match sdk in ai-agents ([c134a32](https://github.com/fgarofalo56/csa-inabox/commit/c134a32da6585682f8df1186fbef0ada74167205))
+* **health:** build loom-health-cp with the repo root as context ([#5171](https://github.com/fgarofalo56/csa-inabox/issues/5171)) ([73b45dc](https://github.com/fgarofalo56/csa-inabox/commit/73b45dc55dd51e9c098d86eb3e690620701b8893))
+* **lhds:** auth server reuse detection, state binding, key guards ([#5134](https://github.com/fgarofalo56/csa-inabox/issues/5134)) ([#5216](https://github.com/fgarofalo56/csa-inabox/issues/5216)) ([09f7611](https://github.com/fgarofalo56/csa-inabox/commit/09f761112fbd18c3ffac01146627dc1b54eca27c))
+* **lhds:** root openid-configuration for APIM validate-jwt ([#5160](https://github.com/fgarofalo56/csa-inabox/issues/5160)) ([#5213](https://github.com/fgarofalo56/csa-inabox/issues/5213)) ([6d38194](https://github.com/fgarofalo56/csa-inabox/commit/6d3819439a0284a0b22b5b4f60718ab481861ac4))
+
+
+### Documentation
+
+* **apigw:** close W1-7 with declared gaps tracked in [#5210](https://github.com/fgarofalo56/csa-inabox/issues/5210) ([#5209](https://github.com/fgarofalo56/csa-inabox/issues/5209)) ([80b5b42](https://github.com/fgarofalo56/csa-inabox/commit/80b5b427e70c3390de3033004f80bbaf05846635))
+* **apigw:** mark PRP apigw-W01 shipped with declared gaps ([#5211](https://github.com/fgarofalo56/csa-inabox/issues/5211)) ([49fbd26](https://github.com/fgarofalo56/csa-inabox/commit/49fbd265d6d2f846e32a3e74a15d973ca320017d))
+
 ## [0.117.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.117.0...csa-inabox-v0.117.1) (2026-10-30)
 
 
