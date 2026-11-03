@@ -42,3 +42,24 @@
   6-day window.
 - **Not active**: bicep emits no `loom-health-stamp` tag, nothing passes stamp
   activity to the orchestrator, and `main.ts` does not run the restart scheduler.
+
+## Edge probe (tenant 403 and quota 429 + Retry-After)
+
+Until this has been run against a deployed gateway, the cross-tenant 403 and the
+per-tenant 429 are **modelled only** (`routing-edge.test.ts`). The quota is
+enforced in APIM (`rate-limit-by-key` keyed on the URL tenant); a WAF rate-limit
+rule cannot key on a token claim, so the WAF rule is only a per-client-address
+volumetric backstop.
+
+```bash
+LHDS_EDGE_BASE_URL=https://<gateway> LHDS_TENANT_A=<slug> LHDS_TENANT_B=<slug> \
+LHDS_QUOTA_RPM=<tenant A effective requests per minute> \
+LHDS_TOKEN_A=<token with tenant claim A> LHDS_TOKEN_B=<token with tenant claim B> \
+node scripts/measure/health/edge-probe.mjs
+```
+
+Exit 0 = every check passed, 1 = the gateway answered wrongly (defect),
+2 = unmeasured (bad config, no response, or the positive control failed; this is
+not a claim the edge is broken). Run it per cloud: Commercial and GCC-High each
+need their own receipt. The WAF per-address rule is untested in Azure Government;
+if the rule type is rejected there, set `wafClientRateLimitPerMinute` to 0.
