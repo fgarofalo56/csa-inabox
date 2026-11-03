@@ -206,6 +206,18 @@ describe('discovery and jwks', () => {
     expect((await c.call('GET', '/auth/visn-01/.well-known/smart-configuration')).status).toBe(200); // paired permit
     expect((await c.call('GET', '/api/health/stamps')).status).toBe(404); // falls through to the host app
   });
+  it('root openid-configuration returns issuer + jwks_uri with no tenant lookup', async () => {
+    const c = await boot();
+    const r = await c.call('GET', '/auth/.well-known/openid-configuration');
+    expect(r.status).toBe(200);
+    // breaks if issuer or jwks_uri drift from what tokens carry / the jwks route serves
+    expect(r.json.issuer).toBe(ISSUER);
+    expect(r.json.jwks_uri).toBe(`${ISSUER}/jwks.json`);
+    // paired: the advertised jwks_uri resolves to a key; a suspended tenant does not affect the root doc
+    expect((await c.call('GET', '/auth/jwks.json')).json.keys).toHaveLength(1);
+    expect((await c.call('GET', '/auth/visn-02/.well-known/smart-configuration')).status).toBe(400);
+    expect((await c.call('POST', '/auth/.well-known/openid-configuration')).status).not.toBe(200);
+  });
   it('jwks.json carries the public key only', async () => {
     const c = await boot();
     const j = (await c.call('GET', '/auth/jwks.json')).json;

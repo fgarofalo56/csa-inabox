@@ -796,6 +796,12 @@ export function createAuthServer(deps: AuthServerDeps) {
         sendJson(res, 200, { keys: [await deps.signer.publicJwk()] });
         return true;
       }
+      if (path === `${base}/.well-known/openid-configuration` && method === 'GET') {
+        // Tenant-independent OIDC discovery for the APIM validate-jwt (#5160): no tenant lookup.
+        status = 200;
+        sendJson(res, 200, { issuer, jwks_uri: `${issuer}/jwks.json` });
+        return true;
+      }
       if (path === `${base}/callback` && method === 'GET') {
         status = 302;
         await callback(res, url.searchParams);
