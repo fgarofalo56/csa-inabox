@@ -1,12 +1,12 @@
-fastapi==0.146.0
+fastapi==0.162.0
 uvicorn[standard]==0.54.0
-pydantic==2.14.1
+pydantic==2.14.2
 # --- the engine ---------------------------------------------------------------
 # DuckDB is a single embedded OSS binary; the azure/httpfs/delta/iceberg
 # extensions are INSTALLed into the image at build time (see Dockerfile) so a
 # disconnected IL5 enclave never reaches an extension repository at runtime.
-duckdb==1.5.6
+duckdb==2.0.0
 # pyarrow provides both the Arrow IPC serialization for the HTTP tier and the
 # Flight SQL server for the ADBC/JDBC serving wire (N3).
 pyarrow==25.0.1
-azure-identity==1.26.0
+azure-identity==1.27.0
