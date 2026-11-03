@@ -35,6 +35,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { ownerDirs } from './plan-image-builds.mjs';
 
 const ROOT = process.cwd();
 const WF = join(ROOT, '.github', 'workflows', 'build-fiab-images-acr-tasks.yml');
@@ -124,7 +125,11 @@ function covered(ctx) {
   });
 }
 
-const missing = apps.filter((a) => !covered(a.ctx));
+// Owner dirs, not the raw ctx: a root-context image (ctx ".", #5171) is owned by its Dockerfile dir + declared watch dirs.
+const missing = apps.filter((a) => {
+  const dirs = ownerDirs(a);
+  return dirs.length === 0 || !dirs.every((d) => covered(d));
+});
 
 if (missing.length > 0) {
   console.error(
@@ -133,7 +138,7 @@ if (missing.length > 0) {
       'and the image on the estate stays whatever was last pushed.',
   );
   for (const m of missing) {
-    const want = `${m.ctx.replace(/^\.\//, '')}/**`;
+    const want = ownerDirs(m).map((d) => `${d}/**`).join(' and ') || `${m.ctx}/** (root context with no "file": cannot derive a path)`;
     console.error(
       `::error file=.github/workflows/build-fiab-images-acr-tasks.yml::${m.name} builds from ${m.ctx}, which no push path matches. Add "${want}".`,
     );
