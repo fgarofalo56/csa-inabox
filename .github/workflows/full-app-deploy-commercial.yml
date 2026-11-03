@@ -505,8 +505,12 @@ jobs:
           # it only when healthEnabled=true (default false), so it is not yet a hard
           # prerequisite of phase 2; it is built here so the image exists before the
           # flag flips.
+          # BUILD CONTEXT IS THE REPO ROOT (#5171): the Dockerfile COPYs
+          # apps/loom-health-cp/** AND platform/fiab/bicep/modules/health/ (to
+          # compile tenant.bicep), so an app-dir context fails the build.
           - app: loom-health-cp
-            ctx: ./apps/loom-health-cp
+            ctx: .
+            file: ./apps/loom-health-cp/Dockerfile
     steps:
       - uses: actions/checkout@v7.0.1
       - name: Azure login
