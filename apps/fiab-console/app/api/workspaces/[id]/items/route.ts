@@ -162,7 +162,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     // Create-or-attach the Azure object named after this item before returning,
     // so no editor can open on a "bind me first" form. Deadline-bounded,
     // never-throwing, and a no-op for types with no backing service.
-    if (resource) await autoBindOnCreate(resource);
+    if (resource) await autoBindOnCreate(resource, { session });
 
     // Fabric parity: creating a Lakehouse also provisions a paired SQL
     // analytics endpoint (a Warehouse-typed item). Both live in the same

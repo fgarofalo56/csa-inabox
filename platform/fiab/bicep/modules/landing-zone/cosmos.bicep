@@ -545,6 +545,15 @@ var loomContainers = [
   // The lazy createIfNotExists STAYS — it is what makes a fresh estate work
   // before this template has run (auto-bind-by-default.md §5: the deploy is the
   // primary path, the lazy call is the idempotent fallback).
+  // API Gateway Plane (W1-1) — five containers, PK /tenantId so every tenant read is a
+  // single logical partition (PRP D1). ttl: -1 turns TTL ON without a blanket expiry; usage
+  // facts and leases carry per-document ttl. Keep in step with the apiplane* accessors in
+  // apps/fiab-console/lib/azure/cosmos-client.ts (lazy createIfNotExists is the fallback).
+  { name: 'apiplane-desired',  partitionKey: '/tenantId', ttl: -1 }
+  { name: 'apiplane-observed', partitionKey: '/tenantId', ttl: -1 }
+  { name: 'apiplane-plans',    partitionKey: '/tenantId', ttl: -1 }
+  { name: 'apiplane-usage',    partitionKey: '/tenantId', ttl: -1 }
+  { name: 'apiplane-notify',   partitionKey: '/tenantId', ttl: -1 }
   { name: 'sql-cancel-intents',    partitionKey: '/requestId', ttl: 120 }
 ]
 
