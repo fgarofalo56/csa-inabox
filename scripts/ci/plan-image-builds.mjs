@@ -64,6 +64,22 @@ export const CONSOLE = 'loom-console';
 const norm = (p) => p.replace(/\\/g, '/').replace(/^\.\//, '');
 const ctxDir = (ctx) => norm(ctx).replace(/\/+$/, '');
 
+/**
+ * The directories whose change rebuilds a matrix entry. Normally the build
+ * context. An image built with the REPO ROOT as context (ctx ".", #5171) would
+ * otherwise "own" every file in the repo, so its owner dir is the directory of
+ * its Dockerfile, and any further directories it COPYs are declared in `watch`.
+ */
+export function ownerDirs(a) {
+  const ctx = ctxDir(a.ctx);
+  const root = ctx === '.' || ctx === '';
+  const dirs = [];
+  if (!root) dirs.push(ctx);
+  else if (a.file) dirs.push(norm(a.file).replace(/\/[^/]*$/, ''));
+  for (const w of a.watch ?? []) dirs.push(ctxDir(w));
+  return dirs;
+}
+
 /** A plan that builds everything. `reason` is always user-visible in the log. */
 function all(names, reason) {
   return { mode: 'all', reason, build: [...names], carry: [], ignored: [] };
@@ -87,7 +103,7 @@ export function planBuild({ changedFiles, matrix, unknown }) {
     // what a mis-resolved base looks like. Build everything rather than nothing.
     return all(names, 'diff between base and sha is EMPTY - not trusting an empty diff, building ALL');
   }
-  const ctxs = matrix.map((a) => ({ name: a.name, dir: ctxDir(a.ctx) }));
+  const ctxs = matrix.map((a) => ({ name: a.name, dirs: ownerDirs(a) }));
   const hit = new Set();
   const ignored = [];
   for (const raw of changedFiles) {
@@ -98,7 +114,7 @@ export function planBuild({ changedFiles, matrix, unknown }) {
     if (!f.includes('/') && ROOT_CONFIG_RE.test(f)) {
       return all(names, `root build config changed: ${f} - building ALL`);
     }
-    const owner = ctxs.find((c) => f.startsWith(`${c.dir}/`));
+    const owner = ctxs.find((c) => c.dirs.some((d) => f.startsWith(`${d}/`)));
     if (owner) {
       hit.add(owner.name);
       continue;

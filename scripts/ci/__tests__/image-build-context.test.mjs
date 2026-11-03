@@ -57,6 +57,12 @@ test('RED: az acr build with trailing app-dir positional (the gov defect)', () =
 test('GREEN: az acr build --file apps/hcp/Dockerfile . is accepted', () => {
   check('steps:\n  - run: az acr build --registry "$ACR" --image "hcp:$TAG" --file apps/hcp/Dockerfile .\n', 0);
 });
+test('RED: the defect split over a backslash continuation is still seen (logical lines, not physical)', () => {
+  check('steps:\n  - run: |\n      az acr build --registry "$ACR" \\\n        --image "hcp:$TAG" \\\n        apps/hcp\n', 1);
+});
+test('GREEN: the fixed build split over a backslash continuation is accepted', () => {
+  check('steps:\n  - run: |\n      az acr build --registry "$ACR" \\\n        --file apps/hcp/Dockerfile \\\n        .\n', 0);
+});
 test('RED: JSON matrix ctx (the acr-tasks defect)', () => {
   check(`steps:\n  - run: |\n      APPS='[{"name":"hcp","ctx":"./apps/hcp"}]'\n`, 1);
 });

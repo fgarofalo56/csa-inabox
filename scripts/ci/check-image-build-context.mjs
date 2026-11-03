@@ -21,6 +21,7 @@
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readLogicalLines } from './_logical-lines.mjs';
 
 const ROOT_SRC = /^\s*(?:COPY|ADD)\s+(?!--from=)(?:--\S+\s+)*(?:apps|platform)\//im;
 
@@ -41,15 +42,15 @@ export function findViolations(root, apps) {
   const out = [];
   const files = existsSync(dir) ? readdirSync(dir).filter((f) => /\.ya?ml$/.test(f)).sort() : [];
   for (const wf of files) {
-    const lines = readFileSync(join(dir, wf), 'utf8').split(/\r?\n/);
-    lines.forEach((raw, i) => {
+    const lines = readLogicalLines(readFileSync(join(dir, wf), 'utf8'));
+    lines.forEach(({ line, text: raw }) => {
       if (/^\s*#/.test(raw)) return;
       for (const app of apps) {
         const a = esc(app);
         const matrixCtx = new RegExp(`(?:^\\s*ctx:\\s*|"ctx"\\s*:\\s*")["']?\\.?/?apps/${a}/?["']?\\s*(?:$|")`);
         const trailingCtx = new RegExp(`az\\s+acr\\s+build\\b.*\\s["']?\\.?/?apps/${a}/?["']?\\s*$`);
         if (matrixCtx.test(raw) || trailingCtx.test(raw) || new RegExp(`"name"\\s*:\\s*"${a}"[^}]*"ctx"\\s*:\\s*"\\.?/?apps/${a}"`).test(raw)) {
-          out.push({ wf, line: i + 1, app });
+          out.push({ wf, line, app });
         }
       }
     });
