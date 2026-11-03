@@ -26,6 +26,9 @@
  * unparseable matrix, a change to a shared build input. "all" is today's
  * behaviour, so a wrong guess costs time, never a missing image.
  *
+ * PHYSICAL-LINES-OK: this judges `git diff -z` PATH names and matrix JSON, never
+ * shell or YAML bodies; a path cannot continue onto a next line.
+ *
  * CLI:
  *   node plan-image-builds.mjs --matrix '<json array of {name,ctx}>' --sha <40hex> [--base <40hex>]
  * stdout: ONE line of JSON {mode, reason, build[], carry[], ignored[]}.
