@@ -3028,6 +3028,76 @@ jobs:
             bash scripts/csa-loom/verify-console-runtime.sh \
             || echo "::warning::console-runtime verification reported drift — see log (probes/resources/telemetry)."
 
+      - name: LHDS control-plane Entra wiring (federated credential, HealthCP app roles, caller allowlist) — Refs #5163
+        id: lhds_entra
+        # The Entra half of the health control plane that no bicep performs
+        # (health.bicep -> control-plane.bicep output authFederatedCredential; apim-access.bicep
+        # notes Reader on the resource is management-plane only). Runs the SAME script a human
+        # would, so there is no operator paste (auto-bind-by-default). The script derives every
+        # value from the deployed control plane Container App and this deploy's Console UAMI /
+        # APIM; it is idempotent and verifies by read-back.
+        #   - NO control-plane app deployed (0 found)  -> ::notice and skip: LHDS is opt-in.
+        #   - more than one found                      -> FAIL (never guess which; R5).
+        #   - any Graph/az read that errors            -> FAIL with the class (R6/R7); an
+        #     unreadable list is never treated as an empty one.
+        # NOT continue-on-error: a failure here fails the job. if: !cancelled() so an earlier
+        # failure does not hide it. Needs Graph Application.ReadWrite.All +
+        # AppRoleAssignment.ReadWrite.All (admin-consented) or Application Administrator; the
+        # failure output names them. Container Apps control plane only; aks is refused (exit 5).
+        # Env var drift: a later deploy-health run re-renders LOOM_HEALTH_CP_ALLOWED_CALLER_APP_IDS
+        # from controlPlaneConfig.allowedCallerAppIds, so re-run this bootstrap after it.
+        if: ${{ !cancelled() }}
+        env:
+          AZURE_CLOUD: ${{ ((inputs.boundary == 'GCC-High' || inputs.boundary == 'IL5') && 'AzureUSGovernment') || 'AzureCloud' }}
+          LHDS_CP_APP_CLIENT_ID_OVERRIDE: ${{ vars.LOOM_HEALTH_CP_APP_CLIENT_ID || '' }}
+        run: |
+          set -uo pipefail
+          mkdir -p temp
+          fail() { echo "::error::LHDS Entra wiring FAILED [$1]: $2"; exit 1; }
+          az containerapp list --subscription "$ADMIN_SUB" --query "[?name=='loom-health-cp']" -o json > temp/lhds-cp.json 2> temp/lhds-cp.err \
+            || fail "azure-read" "could not LIST Container Apps in subscription $ADMIN_SUB, so whether the LHDS control plane exists is UNKNOWN (not a claim that it is absent). az said: $(head -c 400 temp/lhds-cp.err). The deploy identity needs Reader on the subscription."
+          N=$(jq 'length' temp/lhds-cp.json)
+          if [ "$N" = "0" ]; then
+            echo "::notice::No loom-health-cp Container App in subscription $ADMIN_SUB: the LHDS control plane is not deployed here (or is on the aks path, which this step does not wire). Nothing to do. Run deploy-health first, then re-run this bootstrap."
+            exit 0
+          fi
+          [ "$N" = "1" ] || fail "ambiguous" "$N Container Apps named loom-health-cp in $ADMIN_SUB ($(jq -r 'map(.id) | join(", ")' temp/lhds-cp.json)); refusing to guess which stamp to wire."
+          CP_NAME=loom-health-cp
+          CP_RG=$(jq -r '.[0].resourceGroup' temp/lhds-cp.json)
+          envval() { jq -r --arg n "$1" '[.[0].properties.template.containers[].env[]? | select(.name==$n) | .value] | first // ""' temp/lhds-cp.json; }
+          TENANT=$(envval LOOM_HEALTH_CP_TENANT_ID)
+          AS_CLIENT=$(envval LOOM_HEALTH_CP_AS_CLIENT_ID)
+          AUDIENCES=$(envval LOOM_HEALTH_CP_AUDIENCE)
+          [ -n "$AS_CLIENT" ] || fail "configuration" "loom-health-cp has no LOOM_HEALTH_CP_AS_CLIENT_ID, so there is no authorization-server Entra app to attach the federated credential to. Set controlPlaneConfig.authAsClientId and re-run deploy-health (health.bicep reports it in healthControlPlaneState.authServerMissing)."
+          # The token audience app (carries the HealthCP.* roles): repo var wins, else the first
+          # audience that is a bare GUID or api://<GUID>.
+          CP_APP="$LHDS_CP_APP_CLIENT_ID_OVERRIDE"
+          if [ -z "$CP_APP" ]; then
+            CP_APP=$(printf '%s' "$AUDIENCES" | tr ',' '\n' | sed -E 's#^api://##' | grep -E '^[0-9a-fA-F-]{36}$' | head -n 1 || true)
+          fi
+          [ -n "$CP_APP" ] || fail "configuration" "no control-plane app client id: LOOM_HEALTH_CP_AUDIENCE='$AUDIENCES' holds no GUID or api://<GUID>. Set the repo variable LOOM_HEALTH_CP_APP_CLIENT_ID to the app registration that carries the HealthCP roles."
+          CP_IDENTITY=$(jq -r '[.[0].identity.userAssignedIdentities // {} | to_entries[].value.principalId] | if length==1 then .[0] else "" end' temp/lhds-cp.json)
+          [ -n "$CP_IDENTITY" ] || fail "configuration" "loom-health-cp does not have exactly one user-assigned identity, so the federated credential subject is ambiguous."
+          # APIM gateway: system-assigned identity. An unreadable list fails; an empty one is "no APIM".
+          APIM_PRINCIPAL=$(az apim list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[?name=='$APIM_NAME'].identity.principalId | [0]" -o tsv 2> temp/lhds-apim.err) \
+            || fail "azure-read" "could not LIST API Management in $ADMIN_RG, so whether $APIM_NAME exists is UNKNOWN. az said: $(head -c 400 temp/lhds-apim.err)"
+          [ "$APIM_PRINCIPAL" = "None" ] && APIM_PRINCIPAL=""
+          [ -n "$APIM_PRINCIPAL" ] || echo "::warning::$APIM_NAME was not found in $ADMIN_RG or has no system-assigned identity: the APIM gateway will NOT be given HealthCP.Reader and the routing-map call will 403 until it is. The Console wiring still runs."
+          ARGS=(--as-client-id "$AS_CLIENT" --cp-app-client-id "$CP_APP" --tenant-id "$TENANT" --cp-identity-principal-id "$CP_IDENTITY"
+                --cp-app-name "$CP_NAME" --cp-resource-group "$CP_RG" --subscription "$ADMIN_SUB" --platform containerApps)
+          [ -n "$APIM_PRINCIPAL" ] && ARGS+=(--apim-principal-id "$APIM_PRINCIPAL")
+          [ -n "${CONSOLE_UAMI_CLIENT:-}" ] && ARGS+=(--console-client-id "$CONSOLE_UAMI_CLIENT")
+          [ -n "${CONSOLE_UAMI_PRINCIPAL:-}" ] && ARGS+=(--console-principal-id "$CONSOLE_UAMI_PRINCIPAL")
+          node scripts/csa-loom/bootstrap-health-cp-entra.mjs "${ARGS[@]}"
+          RC=$?
+          case "$RC" in
+            0) ;;
+            3) fail "permission" "see the Graph permissions named above (Application.ReadWrite.All + AppRoleAssignment.ReadWrite.All with admin consent, or Application Administrator)." ;;
+            4) fail "transient" "Graph or the Container App update kept failing after bounded retries; re-run the bootstrap." ;;
+            5) fail "unsupported" "the control plane is not on the Container Apps path." ;;
+            *) fail "defect-or-configuration" "exit $RC; read the script output above." ;;
+          esac
+
       - name: Restore Loom Key Vault private (verified)
         # Runs always() — including after a failed or cancelled earlier step,
         # which is exactly when the vault is most likely to have been left open.
