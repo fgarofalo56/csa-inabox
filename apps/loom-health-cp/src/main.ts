@@ -3,7 +3,7 @@ import { loadAuthServerConfig } from './auth/config.js';
 import { authServerInitFromConfig } from './auth/wire.js';
 import { compose } from './compose.js';
 import { ConfigError, loadConfig } from './config.js';
-import { FileBundleSource } from './pdp/bundles.js';
+import { CollectionBundleSource, FileBundleSource } from './pdp/bundles.js';
 import { authOptionsFromConfig } from './middleware/auth.js';
 import { createCosmosStores } from './store/cosmos.js';
 import { authoredMessage } from './safe-error.js';
@@ -27,11 +27,13 @@ function main(): void {
     process.stderr.write(`loom-health-cp: ${e instanceof ConfigError ? authoredMessage(e) : 'invalid configuration'}\n`);
     process.exit(1);
   }
+  const stores = createCosmosStores(cfg);
   const app = compose({
-    stores: createCosmosStores(cfg),
+    stores,
     auth: authOptionsFromConfig(cfg),
     sloAvailabilityTarget: cfg.sloAvailabilityTarget,
-    bundles: cfg.pdpBundleDir ? new FileBundleSource(cfg.pdpBundleDir) : undefined,
+    // Cosmos-backed by default (published via PUT .../bundle); a configured dir overrides it (read-only, dev).
+    bundles: cfg.pdpBundleDir ? new FileBundleSource(cfg.pdpBundleDir) : new CollectionBundleSource(stores.pdpBundles),
     authServer: authServerInitFromConfig(cfg, authCfg),
     tenantArm: tenantArmFromConfig(tenantCfg, cfg.authorityHost),
     log,

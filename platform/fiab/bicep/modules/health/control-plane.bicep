@@ -130,6 +130,7 @@ var containerDefs = [
   { name: 'health-routing', defaultTtl: 0 }
   { name: 'health-jobs', defaultTtl: 0 }
   { name: 'health-slo', defaultTtl: 0 }
+  { name: 'health-pdp-bundles', defaultTtl: 0 }
   { name: 'health-auth-config', defaultTtl: 0 }
   { name: 'health-auth-replay', defaultTtl: -1 }
   { name: 'health-auth-grants', defaultTtl: -1 }

@@ -82,5 +82,6 @@ export function createCosmosStores(cfg: Config): Stores {
     routing: new CosmosCollection(c(CONTAINER_NAMES.routing)),
     jobs: new CosmosCollection(c(CONTAINER_NAMES.jobs)),
     slo: new CosmosCollection(c(CONTAINER_NAMES.slo)),
+    pdpBundles: new CosmosCollection(c(CONTAINER_NAMES.pdpBundles)),
   };
 }

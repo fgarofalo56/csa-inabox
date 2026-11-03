@@ -52,14 +52,25 @@ Interceptor rules the PDP relies on:
 
 Missing config or stamp makes every request deny (no token verifies / no tenant is
 homed). The control plane serves the signed tarball at
-`GET /api/health/pdp/stamps/{stamp}/bundle.tar.gz` (`apps/loom-health-cp`, ETag/304;
-it serves a bundle published at `<LOOM_HEALTH_CP_PDP_BUNDLE_DIR>/<stamp>.tar.gz`, it does
-not build or sign). Per-stamp publishing (pipeline step, not yet scheduled anywhere):
+`GET /api/health/pdp/stamps/{stamp}/bundle.tar.gz` (`apps/loom-health-cp`, ETag/304; it
+does not build or sign). Publish target (decision, W1-5 follow-up; the design left it
+open): the control plane's own Cosmos account, container `health-pdp-bundles`, one
+document per stamp, written by `PUT /api/health/pdp/stamps/{stamp}/bundle`
+(`HealthCP.Admin`). Chosen because it needs no file share or storage account, the same
+code serves Container Apps and AKS, and the control plane already holds Cosmos data-plane
+RBAC; a bundle is ~10 KB. A `LOOM_HEALTH_CP_PDP_BUNDLE_DIR` file source still exists for
+dev (read-only). Integrity: the publisher sends the tarball's sha256, the control plane
+rejects a mismatch and re-checks it on every read; the publisher reads the bundle back and
+compares. Trust is OPA's ES256 signature check with the key the PDP was deployed with.
+
+Pipeline: `.github/workflows/health-pdp-bundle-publish.yml` (dispatch; gate = the OPA
+suite + the end-to-end check below; `mode=publish` pulls the ES256 key from Key Vault,
+derives the inputs from the live routing map and AS JWKS, then runs):
 
 ```
 node apps/loom-health-cp/dist/pdp/pdp-stamp-inputs-cli.js routing-map.json <stamp> <issuer> jwks.json inputs.json
-STAMP_INPUTS=inputs.json PUBLISH_DIR=<LOOM_HEALTH_CP_PDP_BUNDLE_DIR> OPA=opa \
-  apps/loom-health-pdp/tools/build-bundle.sh <priv.pem> <pub.pem> <revision>
+STAMP_INPUTS=inputs.json OPA=opa apps/loom-health-pdp/tools/build-bundle.sh <priv.pem> <pub.pem> <revision> <outdir>
+LHDS_CP_TOKEN=<bearer> node apps/loom-health-pdp/tools/publish-bundle.mjs <outdir>/lhds-pdp.tar.gz <stamp> <cp-url> <revision>
 ```
 
 The first step derives `data.lhds.stamp` from the routing map (active tenants of that
@@ -67,8 +78,13 @@ stamp only; bases are the path-prefix `<stampBaseUrl>/<tenant>/fhir` and `/dicom
 subdomain-form bases are not generated) and takes `data.lhds.config` from the AS issuer
 and JWKS. The second stages, signs, verifies and atomically publishes
 `<stamp>.tar.gz`. A bundle built without `STAMP_INPUTS` still denies everything.
-Not verified here: an end-to-end OPA load of a published bundle (opa not run locally;
-the CI step covers `opa test`). Decision latency is UNMEASURED. The PDP workload is `platform/fiab/bicep/modules/health/engines.bicep`
+`tools/e2e-published-bundle.mjs` runs the published artifact in a real OPA that pulls it
+and verifies the ES256 signature: it asserts allow for a homed tenant, deny for a paused,
+foreign-stamp or out-of-scope request, deny for the same request on a policy-only bundle,
+and that a corrupted or wrongly-keyed bundle is never activated (throwaway keys only).
+Not verified: any run on a live stamp or in CI (the workflows have not run), the
+`health-pdp-publish` environment, the Entra grant of `HealthCP.Admin` to the deploy
+principal, GCC-High. Decision latency is UNMEASURED. The PDP workload is `platform/fiab/bicep/modules/health/engines.bicep`
 (wired into `health.bicep` as `healthPdp`; merged, not deployed; no deploy receipt).
 
 ## Layout

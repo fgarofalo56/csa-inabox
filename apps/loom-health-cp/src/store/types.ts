@@ -24,6 +24,7 @@ export const CONTAINER_NAMES = {
   routing: 'health-routing',
   jobs: 'health-jobs',
   slo: 'health-slo',
+  pdpBundles: 'health-pdp-bundles',
 } as const;
 
 export interface Stores {
@@ -32,4 +33,5 @@ export interface Stores {
   routing: Collection<import('../routing/types.js').RoutingMapDoc>;
   jobs: Collection<import('../jobs/types.js').JobDoc>;
   slo: Collection<import('../slo/types.js').SloSampleDoc>;
+  pdpBundles: Collection<import('../pdp/bundles.js').PdpBundleDoc>;
 }

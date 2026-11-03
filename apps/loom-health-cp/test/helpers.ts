@@ -7,6 +7,7 @@ import type { AddressInfo } from 'node:net';
 import { SignJWT, generateKeyPair, type JWTVerifyGetKey } from 'jose';
 import { compose } from '../src/compose.js';
 import { StoreConflictError } from '../src/http/errors.js';
+import type { BundleSource } from '../src/pdp/bundles.js';
 import type { Collection, Doc, Stores } from '../src/store/types.js';
 
 export class MemoryCollection<T extends Doc> implements Collection<T> {
@@ -53,6 +54,7 @@ export function memoryStores(): Stores & { [K in keyof Stores]: MemoryCollection
     routing: new MemoryCollection(),
     jobs: new MemoryCollection(),
     slo: new MemoryCollection(),
+    pdpBundles: new MemoryCollection(),
   } as never;
 }
 
@@ -101,7 +103,7 @@ export interface Harness {
 }
 
 export async function startHarness(
-  over: { allowedCallerAppIds?: string[]; now?: () => Date; stores?: ReturnType<typeof memoryStores> } = {},
+  over: { allowedCallerAppIds?: string[]; now?: () => Date; stores?: ReturnType<typeof memoryStores>; bundles?: BundleSource } = {},
 ): Promise<Harness> {
   const stores = over.stores ?? memoryStores();
   const logs: string[] = [];
@@ -117,6 +119,7 @@ export async function startHarness(
     sloAvailabilityTarget: 0.999,
     log: (event, fields) => logs.push(JSON.stringify({ event, ...fields })),
     now: over.now,
+    bundles: over.bundles,
   });
   const server: Server = createServer((req, res) => void app.handler(req, res));
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));

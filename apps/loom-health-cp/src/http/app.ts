@@ -55,6 +55,12 @@ interface Route {
 const ID = '([a-z0-9-]{2,40})';
 const JOB_ID = '(job-[0-9a-f]{32})';
 
+const BundlePublishSchema = z.strictObject({
+  revision: z.string(),
+  sha256: z.string(),
+  bundleBase64: z.string(),
+});
+
 const JobSubmitSchema = z.strictObject({
   kind: z.string().regex(/^[a-z][a-z0-9.-]{1,60}$/),
   subjectType: z.enum(SUBJECT_TYPES),
@@ -130,6 +136,24 @@ export function buildRoutes(d: AppDeps): Route[] {
       if (c.ifNoneMatch === etag) return { status: 304, data: undefined, raw: { body: undefined, headers } };
       return { status: 200, data: undefined, raw: { body: bytes, headers } };
     }),
+
+    r(
+      'PUT',
+      `/api/health/pdp/stamps/${ID}/bundle`,
+      'write',
+      async (c) => {
+        const put = d.bundles?.put?.bind(d.bundles);
+        if (!put) throw new HttpError(503, 'bundle_publish_unconfigured', 'PDP bundle publishing is not configured');
+        const p = BundlePublishSchema.safeParse(c.body);
+        if (!p.success) throw badRequest(`${p.error.issues[0]?.path.join('.') || 'body'}: ${p.error.issues[0]?.message ?? 'invalid'}`);
+        const stampId = c.params[0] ?? '';
+        await d.registry.getStamp(stampId); // 404 for an unregistered stamp
+        const out = await put(stampId, p.data, c.caller.id);
+        d.log('pdp.bundle_published', { stampId, revision: out.revision, bytes: out.bytes });
+        return ok(out);
+      },
+      true,
+    ),
 
     r('GET', '/api/health/slo', 'read', async () => ok(await d.slo.report())),
 
