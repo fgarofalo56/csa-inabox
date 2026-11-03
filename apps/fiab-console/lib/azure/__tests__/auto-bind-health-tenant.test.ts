@@ -146,3 +146,42 @@ describe('health-tenant create-time arm', () => {
     if (open.phase === 'provisioning') expect(open.binding.tenantId).toBe('mercy-general');
   });
 });
+
+describe('health-tenant create-time failure is visible (#5177)', () => {
+  const LEAK = 'https://cp.internal/x?sig=LEAKME123';
+
+  it('a control-plane failure (reported as an outcome, not a throw) logs ONE redacted line', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const f = fake({ getTenant: async () => { throw new Error(`upstream said ${LEAK}`); } });
+    const r = await healthTenantAutoBindOnCreate(item(), SESSION, f.deps);
+    // Positive: the failure is still returned, not swallowed as success.
+    expect(r?.phase).toBe('cp-error');
+    // Breaks if the failed bind is silent again (0 calls) or logged more than once.
+    expect(warn).toHaveBeenCalledTimes(1);
+    const line = warn.mock.calls[0].map(String).join(' ');
+    expect(line).toContain('item-abc123');
+    expect(line).toContain('cp-error');
+    // Breaks if the raw message (which carries the upstream URL) is logged.
+    expect(line).not.toContain('LEAKME123');
+    warn.mockRestore();
+  });
+
+  it('a thrown failure (the catch arm) logs ONE redacted line and resolves null', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.mocked(enforceHealthTenantAdmin).mockRejectedValue(Object.assign(new Error(`gate said ${LEAK}`), { code: 'GATE_500' }));
+    await expect(healthTenantAutoBindOnCreate(item(), SESSION, fake().deps)).resolves.toBeNull();
+    expect(warn).toHaveBeenCalledTimes(1);
+    const line = warn.mock.calls[0].map(String).join(' ');
+    expect(line).toContain('GATE_500');
+    expect(line).not.toContain('LEAKME123');
+    warn.mockRestore();
+  });
+
+  it('a successful bind logs nothing (pairs with the failure cases)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const r = await healthTenantAutoBindOnCreate(item(), SESSION, fake().deps);
+    expect(r?.phase).toBe('provisioning');
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});
