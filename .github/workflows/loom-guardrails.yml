@@ -424,6 +424,9 @@ jobs:
       - name: image-producer-coverage (every apps/*/Dockerfile is built by a workflow — #2619)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-image-producer-coverage.mjs
+      - name: image-build-context (root-context Dockerfiles are not built with the app dir as context - #5171)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-image-build-context.mjs
       # image-producer-coverage says the image gets BUILT. This says it gets built
       # FOR AZURE GOVERNMENT TOO. loom-transform-runner — the dbt/SQLMesh execution
       # surface — had exactly one producer, full-app-deploy-commercial.yml, which
