@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       resource_id:
-        description: 'APIM resource id to register + probe. Leave EMPTY to only list discovered candidates.'
+        description: 'APIM service name (or full resource id) to register + probe. Leave EMPTY to only list discovered candidates.'
         type: string
         required: false
         default: ''

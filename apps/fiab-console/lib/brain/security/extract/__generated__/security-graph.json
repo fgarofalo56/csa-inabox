@@ -46166,7 +46166,7 @@
           "facet": {
             "kind": "publication",
             "module": "scripts/measure/apiplane/registry-receipt.mjs",
-            "declaredSinkCount": 12,
+            "declaredSinkCount": 13,
             "sinks": [
               {
                 "id": "console:member:31",
@@ -46239,7 +46239,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:85",
+                "id": "console:member:91",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -46249,7 +46249,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:92",
+                "id": "console:member:98",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -46259,7 +46259,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:94",
+                "id": "console:member:105",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -46269,7 +46269,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:100",
+                "id": "console:member:107",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -46279,7 +46279,17 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "inherited-fd:spawn-stdio:104",
+                "id": "console:member:113",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "inherited-fd:spawn-stdio:117",
                 "surface": "inherited-fd",
                 "accessPath": "spawn-stdio",
                 "wholeExpressionBounded": false,
@@ -46564,6 +46574,29 @@
             "sinks": [
               {
                 "id": "console:member:70",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              }
+            ]
+          }
+        },
+        {
+          "id": "sec:publication:scripts/measure/health/edge-probe.mjs#module",
+          "kind": "publication",
+          "provenance": "declared",
+          "label": "scripts/measure/health/edge-probe.mjs",
+          "facet": {
+            "kind": "publication",
+            "module": "scripts/measure/health/edge-probe.mjs",
+            "declaredSinkCount": 1,
+            "sinks": [
+              {
+                "id": "console:member:23",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -53020,6 +53053,11 @@
           "reason": "repository tooling — run by a developer or by CI, never by a deployed Loom service."
         },
         {
+          "nodeId": "sec:publication:scripts/measure/health/edge-probe.mjs#module",
+          "codeModuleId": "code:scripts/measure/health/edge-probe.mjs",
+          "reason": "repository tooling — run by a developer or by CI, never by a deployed Loom service."
+        },
+        {
           "nodeId": "sec:publication:scripts/measure/measure.mjs#module",
           "codeModuleId": "code:scripts/measure/measure.mjs",
           "reason": "repository tooling — run by a developer or by CI, never by a deployed Loom service."
@@ -54186,7 +54224,7 @@
         },
         {
           "subject": "scripts/measure/apiplane/registry-receipt.mjs",
-          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 12). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 13). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
           "subject": "scripts/measure/apiplane/retail-prices-coverage.mjs",
@@ -54214,6 +54252,10 @@
         },
         {
           "subject": "scripts/measure/governance-run.mjs",
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 1). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+        },
+        {
+          "subject": "scripts/measure/health/edge-probe.mjs",
           "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 1). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {

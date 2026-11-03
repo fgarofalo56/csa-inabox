@@ -35,7 +35,7 @@ const SS = need('SS');
 const OID = need('OID');
 const BASE = need('BASE').replace(/\/+$/, '');
 const ARM = need('ARM_ENDPOINT');
-const RESOURCE_ID = (process.env.RESOURCE_ID ?? '').trim();
+const RESOURCE_INPUT = (process.env.RESOURCE_ID ?? '').trim();
 const DISPLAY_NAME = (process.env.DISPLAY_NAME ?? '').trim();
 
 function mintCookie() {
@@ -76,9 +76,22 @@ for (const c of found.candidates) {
 }
 for (const f of found.failures) console.log(`  discovery failure: ${f.kind} status=${f.status} ${String(f.reason).slice(0, 160)}`);
 
-if (!RESOURCE_ID) {
-  console.log('No RESOURCE_ID given: discovery only. Re-run with the resource id of the service to register.');
+if (!RESOURCE_INPUT) {
+  console.log('No RESOURCE_ID given: discovery only. Re-run with the service name (or its full resource id) to register.');
   process.exit(0);
+}
+
+// Actions masks the subscription id in logs, so the printed resource ids cannot be copied back in.
+// A bare service name is therefore accepted and resolved against the discovery list; it must match
+// exactly one candidate, so nothing is adopted by guesswork (R5).
+let RESOURCE_ID = RESOURCE_INPUT;
+if (!RESOURCE_INPUT.startsWith('/')) {
+  const named = found.candidates.filter((c) => c.name.toLowerCase() === RESOURCE_INPUT.toLowerCase());
+  if (named.length !== 1) {
+    console.error(`::error::"${RESOURCE_INPUT}" matched ${named.length} discovered service(s); supply the full resource id`);
+    process.exit(2);
+  }
+  RESOURCE_ID = named[0].resourceId;
 }
 
 const chosen = found.candidates.find((c) => c.resourceId.toLowerCase() === RESOURCE_ID.toLowerCase());

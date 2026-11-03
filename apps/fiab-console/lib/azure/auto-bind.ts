@@ -825,6 +825,22 @@ export async function autoBindOnCreate(
 }
 
 /**
+ * One redacted line for a failed create-time bind (#5177). Logs item id, a phase/error class
+ * and a short code only. The message is deliberately NOT logged: it can carry an upstream
+ * response body or URL. Creation is never failed by this; first open re-binds.
+ */
+function logCreateBindFailure(itemId: string | undefined, kind: string, code: unknown): void {
+  console.warn(
+    '[auto-bind] health-tenant create-time bind failed; first open will retry',
+    JSON.stringify({
+      itemId,
+      kind,
+      code: typeof code === 'string' && /^[A-Za-z0-9_.-]{1,64}$/.test(code) ? code : undefined,
+    }),
+  );
+}
+
+/**
  * The `health-tenant` create-time arm (#5161). Provisions and binds the item's backing tenant
  * through the SAME `ensureHealthTenant` the editor's first open uses, so the two paths cannot
  * diverge and first-open remains the self-heal path (idempotent: N calls, ONE tenant, ONE job).
@@ -848,11 +864,19 @@ export async function healthTenantAutoBindOnCreate(
     const { enforceHealthTenantAdmin } = await import('@/app/api/health/tenants/_lib/tenant-admin-gate');
     if (await enforceHealthTenantAdmin(session, 'Contributor')) return null;
     const { ensureHealthTenant, realDeps } = await import('@/lib/install/provisioners/health-tenant');
-    return await ensureHealthTenant(
+    const outcome = await ensureHealthTenant(
       { itemId: item.id, displayName: item.displayName, state: undefined },
       deps ?? realDeps(item.id, item.workspaceId),
     );
-  } catch {
+    // ensureHealthTenant reports most failures as an OUTCOME, not a throw (#5177).
+    if (outcome.phase === 'cp-error' || outcome.phase === 'failed') {
+      logCreateBindFailure(item.id, outcome.phase, outcome.code);
+    } else if (outcome.phase === 'unconfigured' || outcome.phase === 'no-stamp') {
+      logCreateBindFailure(item.id, outcome.phase, outcome.gateId);
+    }
+    return outcome;
+  } catch (e) {
+    logCreateBindFailure(item?.id, e instanceof Error ? e.name : typeof e, (e as { code?: unknown } | null)?.code);
     return null;
   }
 }

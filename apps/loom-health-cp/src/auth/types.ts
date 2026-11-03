@@ -60,7 +60,11 @@ export interface ReplayDoc extends Doc {
 }
 
 export interface GrantDoc extends Doc {
-  kind: 'authreq' | 'code' | 'refresh' | 'launch';
+  kind: 'authreq' | 'code' | 'refresh' | 'launch' | 'revoked';
+  /** authreq: sha256 of the browser-binding cookie secret (#5134). */
+  browserBinding?: string;
+  /** code + refresh: id shared by every rotation of one sign-in; revoking it kills the chain (#5134). */
+  family?: string;
   ttl: number;
   used?: boolean;
   tenant: string;

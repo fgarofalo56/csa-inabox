@@ -3,7 +3,7 @@
 // named after the negative-scope matrix in docs/fiab/health/security.md A9.
 // Every deny is paired with a permit control that differs by ONE variable.
 
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { SignJWT, createLocalJWKSet, exportJWK, generateKeyPair, jwtVerify, type JWK } from 'jose';
@@ -63,7 +63,7 @@ interface Ctx {
   jwksFetched: string[];
   jwksByUrl: Map<string, JWK[]>;
   signer: LocalSigner;
-  call(method: string, path: string, o?: { token?: string; json?: unknown; form?: Record<string, string> }): Promise<{ status: number; json: any; headers: Headers }>;
+  call(method: string, path: string, o?: { token?: string; json?: unknown; form?: Record<string, string>; cookie?: string }): Promise<{ status: number; json: any; headers: Headers }>;
   admin(method: string, path: string, json?: unknown): Promise<{ status: number; json: any }>;
   registerApp(id: string, o?: { scopes?: string[]; tenant?: string }): Promise<void>;
   bind(groups: Record<string, string>, v1?: boolean, tenant?: string): Promise<void>;
@@ -120,6 +120,7 @@ async function boot(): Promise<Ctx> {
   const call: Ctx['call'] = async (method, path, o = {}) => {
     const headers: Record<string, string> = {};
     if (o.token) headers.authorization = `Bearer ${o.token}`;
+    if (o.cookie) headers.cookie = o.cookie;
     let body: string | undefined;
     if (o.json !== undefined) {
       headers['content-type'] = 'application/json';
@@ -161,7 +162,8 @@ async function boot(): Promise<Ctx> {
       expect(a.status).toBe(302);
       const loc = new URL(a.headers.get('location')!);
       if (loc.host !== 'entra.test') return { redirect: loc }; // refused before Entra (error redirect)
-      const cb = await call('GET', `/auth/callback?code=entra-code&state=${loc.searchParams.get('state')}`);
+      const cookie = (a.headers.get('set-cookie') ?? '').split(';')[0] ?? ''; // the browser returns the binding cookie
+      const cb = await call('GET', `/auth/callback?code=entra-code&state=${loc.searchParams.get('state')}`, { cookie });
       expect(cb.status).toBe(302);
       return { redirect: new URL(cb.headers.get('location')!) };
     },
@@ -205,6 +207,18 @@ describe('discovery and jwks', () => {
     expect((await c.call('GET', '/auth/visn-02/.well-known/smart-configuration')).status).toBe(400); // T4 at discovery
     expect((await c.call('GET', '/auth/visn-01/.well-known/smart-configuration')).status).toBe(200); // paired permit
     expect((await c.call('GET', '/api/health/stamps')).status).toBe(404); // falls through to the host app
+  });
+  it('root openid-configuration returns issuer + jwks_uri with no tenant lookup', async () => {
+    const c = await boot();
+    const r = await c.call('GET', '/auth/.well-known/openid-configuration');
+    expect(r.status).toBe(200);
+    // breaks if issuer or jwks_uri drift from what tokens carry / the jwks route serves
+    expect(r.json.issuer).toBe(ISSUER);
+    expect(r.json.jwks_uri).toBe(`${ISSUER}/jwks.json`);
+    // paired: the advertised jwks_uri resolves to a key; a suspended tenant does not affect the root doc
+    expect((await c.call('GET', '/auth/jwks.json')).json.keys).toHaveLength(1);
+    expect((await c.call('GET', '/auth/visn-02/.well-known/smart-configuration')).status).toBe(400);
+    expect((await c.call('POST', '/auth/.well-known/openid-configuration')).status).not.toBe(200);
   });
   it('jwks.json carries the public key only', async () => {
     const c = await boot();
@@ -364,6 +378,29 @@ describe('EHR launch (N19)', () => {
   });
 });
 
+describe('authorize state is bound to the browser session (#5134)', () => {
+  it('a callback without the starting browser cookie is refused and does not consume the request', async () => {
+    const c = await boot();
+    await c.registerApp('app-1');
+    await c.bind({ [G_SMART]: 'fhir-smart-user' });
+    c.graph.members.set(USER, new Set([G_SMART]));
+    const start = async () => {
+      const q = new URLSearchParams({ response_type: 'code', client_id: 'app-1', redirect_uri: 'https://app.test/cb', scope: 'user/Patient.rs', state: 's', aud: fhir('visn-01'), code_challenge: 'x'.repeat(43), code_challenge_method: 'S256' });
+      const a = await c.call('GET', `/auth/visn-01/authorize?${q}`);
+      return { state: new URL(a.headers.get('location')!).searchParams.get('state')!, setCookie: a.headers.get('set-cookie') ?? '' };
+    };
+    const v = await start();
+    const other = await start();
+    expect(v.setCookie).toContain('HttpOnly'); // breaks if the binding cookie is readable by page script
+    expect(v.setCookie).toContain('SameSite=Lax');
+    const cb = (cookie?: string) => c.call('GET', `/auth/callback?code=entra-code&state=${v.state}`, cookie ? { cookie } : {});
+    expect((await cb()).status).toBe(400); // attacker-delivered link: no cookie
+    expect((await cb(other.setCookie.split(';')[0])).status).toBe(400); // another request's cookie
+    // Breaks (400 here) if a forged callback burns the pending request; also proves the genuine browser still passes.
+    expect((await cb(v.setCookie.split(';')[0])).status).toBe(302);
+  });
+});
+
 describe('refresh (N20)', () => {
   it('scopes shrink after a group removal and are refused when nothing remains; membership intact keeps them', async () => {
     const c = await boot();
@@ -397,6 +434,29 @@ describe('refresh (N20)', () => {
     // Breaks (400 invalid_grant) if the refresh token is marked used before the Graph re-check.
     expect(retry.status).toBe(200);
     expect(retry.json.access_token).toBeTruthy();
+  });
+  it('replaying a rotated refresh token revokes the whole chain, but an honest rotation chain keeps working (#5134)', async () => {
+    const c = await boot();
+    await c.registerApp('app-1');
+    await c.bind({ [G_READER]: 'fhir-data-reader' });
+    c.graph.members.set(USER, new Set([G_READER]));
+    const refresh = (rt: string) => c.call('POST', '/auth/visn-01/token', { form: { grant_type: 'refresh_token', client_id: 'app-1', refresh_token: rt } });
+    // control: two honest rotations, no replay
+    const a1 = (await flow(c, 'user/Patient.rs offline_access')).token!;
+    const a2 = await refresh(a1.json.refresh_token);
+    const a3 = await refresh(a2.json.refresh_token);
+    expect(a3.status).toBe(200);
+    // attack: rt1 is stolen and replayed after the user already rotated to rt2
+    const b1 = (await flow(c, 'user/Patient.rs offline_access')).token!;
+    const b2 = await refresh(b1.json.refresh_token);
+    expect(b2.status).toBe(200);
+    expect((await refresh(b1.json.refresh_token)).json.error).toBe('invalid_grant'); // the replay itself
+    const afterReplay = await refresh(b2.json.refresh_token);
+    // Breaks (200) if a replay does not revoke the family: the current, unused rt2 must now be dead too.
+    expect(afterReplay.status).toBe(400);
+    expect(afterReplay.json.access_token).toBeUndefined();
+    // the other chain is untouched by that revocation
+    expect((await refresh(a3.json.refresh_token)).status).toBe(200);
   });
   it('a used refresh token cannot be replayed, and a refresh can never add scopes', async () => {
     const c = await boot();
@@ -551,6 +611,21 @@ describe('client registry, bindings and gate (admin API)', () => {
     expect(await status({ tenant: 'no-such-tenant' })).toBe(404);
     expect(await status({})).toBe(201); // paired permit
     expect(await status({})).toBe(409);
+  });
+  it('refuses an RSA key under 2048 bits and a private/loopback jwksUrl, and accepts the paired public ones (#5134)', async () => {
+    const c = await boot();
+    const ok = { clientId: 'svc-r', tenant: 'visn-01', clientType: 'backend', displayName: 'x', allowedScopes: ['system/*.rs'], roleIds: ['fhir-data-exporter'] };
+    const post = async (over: Record<string, unknown>) => (await c.admin('POST', '/api/health/auth/clients', { ...ok, ...over })).status;
+    // node:crypto, because jose refuses to generate keys under 2048 bits
+    const rsa = async (bits: number, kid: string) => ({ ...generateKeyPairSync('rsa', { modulusLength: bits }).publicKey.export({ format: 'jwk' }), kid });
+    // breaks (201) if the minimum-size check is removed
+    expect(await post({ jwks: { keys: [await rsa(1024, 'k1')] } })).toBe(400);
+    expect(await post({ jwks: { keys: [await rsa(2048, 'k2')] } })).toBe(201); // paired: 2048 is accepted
+    for (const [i, h] of ['127.0.0.1', 'localhost', '10.0.0.5', '169.254.169.254', '[::1]', '[::ffff:7f00:1]', 'intranet'].entries()) {
+      // each breaks (201) if that range/name is dropped from isPrivateHost
+      expect(await post({ clientId: `svc-p${i}`, jwksUrl: `https://${h}/jwks.json` }), h).toBe(400);
+    }
+    expect(await post({ clientId: 'svc-pub', jwksUrl: 'https://keys.client.test/jwks.json' })).toBe(201); // paired
   });
   it('lists clients without binding documents or secrets', async () => {
     const c = await boot();
