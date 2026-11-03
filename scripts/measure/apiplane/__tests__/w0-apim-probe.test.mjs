@@ -2707,7 +2707,7 @@ for (const which of ['gov', 'commercial']) {
     assert.ok(!/^\s*exit 0\s*$/m.test(run));
     const up = steps[upIdx];
     assert.equal(String(val(up.if)), '${{ always() }}');
-    assert.equal(val(up.uses), 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a');
+    assert.equal(val(up.uses), 'actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9');
     assert.equal(val(up.with['if-no-files-found']), 'error');
     assert.equal(val(up.with.path), '${{ env.OUT }}');
   });
