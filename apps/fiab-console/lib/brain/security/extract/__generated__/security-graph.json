@@ -46639,6 +46639,29 @@
           }
         },
         {
+          "id": "sec:publication:scripts/measure/health/edge-probe.mjs#module",
+          "kind": "publication",
+          "provenance": "declared",
+          "label": "scripts/measure/health/edge-probe.mjs",
+          "facet": {
+            "kind": "publication",
+            "module": "scripts/measure/health/edge-probe.mjs",
+            "declaredSinkCount": 1,
+            "sinks": [
+              {
+                "id": "console:member:23",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              }
+            ]
+          }
+        },
+        {
           "id": "sec:publication:scripts/measure/measure.mjs#module",
           "kind": "publication",
           "provenance": "declared",
@@ -53088,6 +53111,11 @@
           "reason": "repository tooling — run by a developer or by CI, never by a deployed Loom service."
         },
         {
+          "nodeId": "sec:publication:scripts/measure/health/edge-probe.mjs#module",
+          "codeModuleId": "code:scripts/measure/health/edge-probe.mjs",
+          "reason": "repository tooling — run by a developer or by CI, never by a deployed Loom service."
+        },
+        {
           "nodeId": "sec:publication:scripts/measure/measure.mjs#module",
           "codeModuleId": "code:scripts/measure/measure.mjs",
           "reason": "repository tooling — run by a developer or by CI, never by a deployed Loom service."
@@ -54286,6 +54314,10 @@
         },
         {
           "subject": "scripts/measure/governance-run.mjs",
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 1). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+        },
+        {
+          "subject": "scripts/measure/health/edge-probe.mjs",
           "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 1). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
