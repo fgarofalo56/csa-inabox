@@ -40,6 +40,7 @@ Responses are `{ok:true,data}` or `{ok:false,error:{code,message}}`.
 | `GET /api/health/stamps`, `/stamps/{id}`; `GET /tenants`, `/tenants/{id}`; `GET /routing-map`; `GET /slo`; `GET /jobs`, `/jobs/{id}` | `HealthCP.Reader` or `HealthCP.Admin` |
 | `POST /stamps`, `PATCH /stamps/{id}`, `POST /tenants`, `PATCH /tenants/{id}`, `POST /routing-map/publish`, `POST /jobs`, `POST /jobs/{id}/retry`, `/cancel` | `HealthCP.Admin` |
 | `GET /pdp/stamps/{id}/bundle.tar.gz` (signed OPA bundle, raw gzip, ETag / 304; 404 unknown stamp or unpublished bundle, 503 store unconfigured) | `HealthCP.Reader` or `HealthCP.Admin` |
+| `PUT /pdp/stamps/{id}/bundle` body `{revision, sha256, bundleBase64}` (publish a pipeline-built bundle into the `health-pdp-bundles` container; 400 on a sha256 mismatch, non-gzip or oversize (40 KiB) bundle, 404 unknown stamp, 503 when `LOOM_HEALTH_CP_PDP_BUNDLE_DIR` selects the read-only file source) | `HealthCP.Admin` |
 | `PUT /stamps/{id}/slo` | `HealthCP.StampReporter` or `HealthCP.Admin` |
 
 (All `/api/health/...` paths.) 401 = token cannot be verified (signature,
@@ -58,7 +59,7 @@ allowed caller app.
 | `LOOM_HEALTH_CP_ALLOWED_CALLER_APP_IDS` | no | Comma list; when set, the token `azp`/`appid` must be in it |
 | `LOOM_HEALTH_CP_AUTHORITY_HOST` | no | Bare-hostname override of the per-cloud authority |
 | `LOOM_HEALTH_CP_SLO_AVAILABILITY_TARGET` | no | Fraction in (0,1), default `0.999` |
-| `LOOM_HEALTH_CP_PDP_BUNDLE_DIR` | no | Directory of `<stamp>.tar.gz` bundles signed by `apps/loom-health-pdp/tools/build-bundle.sh`. Unset = bundle route answers 503 |
+| `LOOM_HEALTH_CP_PDP_BUNDLE_DIR` | no | Directory of `<stamp>.tar.gz` bundles signed by `apps/loom-health-pdp/tools/build-bundle.sh`. Set = read-only file source (dev), publishing answers 503. Unset (the deployed default) = bundles live in the `health-pdp-bundles` Cosmos container and are published with `PUT .../bundle` |
 | `LOOM_HEALTH_CP_SUBSCRIPTION_ID` | yes | Subscription GUID holding the stamp resource groups; `tenant.create` / `tenant.destroy` deploy there. Startup fails naming it if unset |
 | `LOOM_HEALTH_CP_TENANT_TEMPLATE_PATH` | yes | Path of the compiled `tenant.bicep` (the image carries it at `/app/templates/tenant.json`). Startup fails naming it if unset or not an ARM template |
 | `LOOM_HEALTH_CP_ISSUER_URL` | yes | Public issuer URL of the Authorization Server including its path (`https://<host>/auth`). Startup fails if any of the four AS variables is missing |

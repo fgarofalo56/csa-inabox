@@ -10,8 +10,13 @@ on:
     paths:
       - 'apps/loom-health-pdp/**'
       - 'apps/loom-health-cp/src/auth/role-scope-map.v1.json'
+      - 'apps/loom-health-cp/src/pdp/**'
+      - 'apps/loom-health-cp/src/http/app.ts'
+      - 'apps/loom-health-cp/test/pdp-*.ts'
       - '.github/workflows/health-pdp-opa.yml'
   workflow_dispatch: {}
+  # Reused as the test gate of health-pdp-bundle-publish.yml.
+  workflow_call: {}
 
 permissions:
   contents: read
@@ -54,3 +59,17 @@ jobs:
         run: |
           set -euo pipefail
           "$RUNNER_TEMP/opa" check --strict --schema input-contract.json "$RUNNER_TEMP/stage"
+      - name: Publish-path tests (control plane endpoint, publish script)
+        working-directory: apps/loom-health-cp
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npx vitest run test/pdp-bundle.test.ts test/pdp-bundle-publish.test.ts test/pdp-stamp-data.test.ts
+          npm run build
+      - name: End-to-end - a signed per-stamp bundle in a real OPA allows and denies
+        working-directory: apps/loom-health-pdp
+        env:
+          OPA: ${{ runner.temp }}/opa
+        run: |
+          set -euo pipefail
+          node tools/e2e-published-bundle.mjs

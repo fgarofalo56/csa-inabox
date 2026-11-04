@@ -1,0 +1,214 @@
+name: health-pdp-bundle-publish
+
+# LHDS PDP (W1-5): builds, tests, ES256-signs, verifies and PUBLISHES the per-stamp Rego
+# bundle to the stamp's control plane (PUT /api/health/pdp/stamps/<stamp>/bundle, stored in
+# the health-pdp-bundles Cosmos container; the stamp's OPA pulls it from
+# GET .../bundle.tar.gz and verifies the signature itself). Until a bundle is published a
+# stamp's PDP has no data and denies every request.
+#
+# Dispatch-only. mode=build-only (default) runs the full test gate and publishes NOTHING.
+# mode=publish additionally needs the `health-pdp-publish` environment (configure required
+# reviewers on it; not verified to exist) and an operator-supplied control plane.
+#
+# SECRETS. The bundle signing key is read from Key Vault by name into a 0600 file on the
+# runner, never echoed, and removed in an always() step. This workflow never prints a key,
+# token or bundle body. A failure at any step fails the run; nothing here uses
+# continue-on-error or `|| true`.
+#
+# BOUNDARIES. Commercial and GCC-High are selectable (same shape as deploy-health.yml).
+# Neither has a receipt: this workflow has never run, no bundle has been served from a live
+# stamp, and the Entra role `HealthCP.Admin` (publish needs 'write') must be granted to the
+# deploy principal by hand. GCC is not claimed. IL5/DoD are not offered.
+
+run-name: health-pdp-bundle-publish ${{ inputs.boundary }} ${{ inputs.stamp_id }}${{ inputs.mode != 'publish' && ' - BUILD ONLY (publishes nothing)' || '' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      boundary:
+        description: 'Cloud boundary. Commercial or GCC-High.'
+        type: choice
+        default: Commercial
+        options: [Commercial, GCC-High]
+      mode:
+        description: 'build-only runs the test gate and the build, publishes NOTHING. publish also signs with the Key Vault key and PUTs to the control plane.'
+        type: choice
+        default: build-only
+        options: [build-only, publish]
+      stamp_id:
+        description: 'Stamp id (slug) to publish for, as registered in the control plane.'
+        type: string
+        required: true
+      control_plane_url:
+        description: 'https base URL of loom-health-cp (publish mode).'
+        type: string
+        default: ''
+      control_plane_audience:
+        description: 'Token audience of loom-health-cp (its app id URI or client id) (publish mode).'
+        type: string
+        default: ''
+      issuer_url:
+        description: 'Authorization server issuer URL; its /jwks.json goes into the bundle (publish mode).'
+        type: string
+        default: ''
+      key_vault_name:
+        description: 'Key Vault holding the bundle signing key (publish mode).'
+        type: string
+        default: ''
+      signing_secret_name:
+        description: 'Key Vault secret holding the ES256 PKCS8 PEM private key.'
+        type: string
+        default: lhds-pdp-bundle-signing
+      expected_pubkey_sha256:
+        description: 'sha256 of the PEM public key the stamp PDP was deployed with (pdpBundleVerificationPublicKeyPem). When set, publish refuses if the signing key does not match it. Empty = not checked.'
+        type: string
+        default: ''
+      allow_empty_stamp:
+        description: 'Publish even if the stamp homes zero active tenants (that bundle denies every request). Default false: refuse.'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: health-pdp-bundle-${{ inputs.stamp_id }}
+  cancel-in-progress: false
+
+jobs:
+  # The same gate as a PR: opa test, strict check, publish-path tests, and the end-to-end
+  # run of a signed bundle in a real OPA. Publishing never starts without it.
+  gate:
+    uses: ./.github/workflows/health-pdp-opa.yml
+
+  publish:
+    name: Build, sign and publish (${{ inputs.boundary }}, ${{ inputs.stamp_id }})
+    needs: gate
+    if: ${{ inputs.mode == 'publish' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: health-pdp-publish
+    env:
+      CP_URL: ${{ inputs.control_plane_url }}
+      CP_AUDIENCE: ${{ inputs.control_plane_audience }}
+      ISSUER_URL: ${{ inputs.issuer_url }}
+      KV_NAME: ${{ inputs.key_vault_name }}
+      KV_SECRET: ${{ inputs.signing_secret_name }}
+      STAMP: ${{ inputs.stamp_id }}
+      EXPECTED_PUB_SHA: ${{ inputs.expected_pubkey_sha256 }}
+      ALLOW_EMPTY: ${{ inputs.allow_empty_stamp }}
+      OPA_VERSION: v1.9.0
+      OPA_SHA256: 66fa66f3b730b2fb086003863428b382b2898d343adb4b5dfab5598b4d739eed
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '20'
+
+      - name: Check publish inputs
+        run: |
+          set -euo pipefail
+          for v in CP_URL CP_AUDIENCE ISSUER_URL KV_NAME KV_SECRET STAMP; do
+            if [ -z "${!v}" ]; then echo "::error::publish mode needs input for $v (it is empty); nothing was sent"; exit 1; fi
+          done
+          case "$CP_URL$ISSUER_URL" in *http://*) echo "::error::control_plane_url and issuer_url must be https"; exit 1;; esac
+
+      - name: Azure login (Commercial)
+        if: ${{ inputs.boundary == 'Commercial' }}
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      - name: Azure login (Gov)
+        if: ${{ inputs.boundary == 'GCC-High' }}
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        if: ${{ inputs.boundary == 'GCC-High' }}
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Install pinned OPA and build the control plane CLI
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/opa" "https://github.com/open-policy-agent/opa/releases/download/${OPA_VERSION}/opa_linux_amd64_static"
+          echo "${OPA_SHA256}  $RUNNER_TEMP/opa" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/opa"
+          cd apps/loom-health-cp
+          npm ci --no-audit --no-fund
+          npm run build
+
+      - name: Fetch the signing key and the control plane token (neither is printed)
+        run: |
+          set -euo pipefail
+          umask 077
+          work="$RUNNER_TEMP/pdp-publish"; mkdir -p "$work"
+          echo "WORK=$work" >> "$GITHUB_ENV"
+          # stderr is kept: a permission or not-found failure must say so (deploy-integrity R6/R7).
+          az keyvault secret show --vault-name "$KV_NAME" --name "$KV_SECRET" --query value -o tsv > "$work/sign.pem"
+          # Parse it rather than pattern-match it: must be an EC P-256 key (what ES256 needs). openssl's own error is kept.
+          curve="$(openssl pkey -in "$work/sign.pem" -noout -text | sed -n 's/^ASN1 OID: //p')"
+          [ "$curve" = "prime256v1" ] || { echo "::error::Key Vault secret $KV_SECRET in $KV_NAME is not an EC P-256 (prime256v1) PEM private key (got curve '${curve:-none}'); nothing was built"; exit 1; }
+          tok="$(az account get-access-token --resource "$CP_AUDIENCE" --query accessToken -o tsv)"
+          [ -n "$tok" ] || { echo "::error::no access token for audience $CP_AUDIENCE"; exit 1; }
+          echo "::add-mask::$tok"
+          printf 'authorization: Bearer %s\n' "$tok" > "$work/auth.hdr"
+          echo "LHDS_CP_TOKEN=$tok" >> "$GITHUB_ENV"
+
+      - name: Derive the verification key and check it against the stamp's
+        run: |
+          set -euo pipefail
+          openssl pkey -in "$WORK/sign.pem" -pubout -out "$WORK/verify.pem"
+          got="$(sha256sum "$WORK/verify.pem" | cut -d' ' -f1)"
+          echo "bundle verification key sha256: $got"
+          if [ -n "$EXPECTED_PUB_SHA" ] && [ "$got" != "$EXPECTED_PUB_SHA" ]; then
+            echo "::error::signing key does not match expected_pubkey_sha256 (got $got). A bundle signed with it would be rejected by the stamp's OPA. Nothing was published."
+            exit 1
+          fi
+          [ -n "$EXPECTED_PUB_SHA" ] || echo "::warning::expected_pubkey_sha256 not supplied: the match with the deployed pdpBundleVerificationPublicKeyPem is NOT checked"
+
+      - name: Derive stamp inputs from the live routing map and AS JWKS
+        run: |
+          set -euo pipefail
+          # -f makes an HTTP error fail the step; the response body is never printed.
+          curl -fsS -H @"$WORK/auth.hdr" -o "$WORK/routing-resp.json" "${CP_URL%/}/api/health/routing-map"
+          node -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); if(!r.ok||!r.data||!Array.isArray(r.data.entries)){console.error("routing-map response has no data.entries");process.exit(1)} require("fs").writeFileSync(process.argv[2],JSON.stringify(r.data))' "$WORK/routing-resp.json" "$WORK/routing.json"
+          curl -fsS -o "$WORK/jwks.json" "${ISSUER_URL%/}/jwks.json"
+          node apps/loom-health-cp/dist/pdp/pdp-stamp-inputs-cli.js "$WORK/routing.json" "$STAMP" "$ISSUER_URL" "$WORK/jwks.json" "$WORK/inputs.json"
+          n="$(node -e 'console.log(Object.keys(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).stamp.tenants).length)' "$WORK/inputs.json")"
+          if [ "$n" = "0" ] && [ "$ALLOW_EMPTY" != "true" ]; then
+            echo "::error::stamp $STAMP homes 0 active tenants in the routing map, so this bundle would deny every request. Check the stamp id, or set allow_empty_stamp to publish it anyway. Nothing was published."
+            exit 1
+          fi
+
+      - name: Build, sign, verify and publish
+        run: |
+          set -euo pipefail
+          rev="${GITHUB_SHA::12}-${GITHUB_RUN_ID}"
+          OPA="$RUNNER_TEMP/opa" STAMP_INPUTS="$WORK/inputs.json" \
+            bash apps/loom-health-pdp/tools/build-bundle.sh "$WORK/sign.pem" "$WORK/verify.pem" "$rev" "$WORK/out"
+          node apps/loom-health-pdp/tools/publish-bundle.mjs "$WORK/out/lhds-pdp.tar.gz" "$STAMP" "$CP_URL" "$rev" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove key material
+        if: ${{ always() }}
+        run: |
+          if [ -n "${WORK:-}" ] && [ -d "$WORK" ]; then rm -rf "$WORK"; fi
