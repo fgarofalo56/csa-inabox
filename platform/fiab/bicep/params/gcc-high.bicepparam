@@ -390,6 +390,15 @@ param aiSearchEnabled = true
 // fall back to Synapse-Serverless / Loom-native here per the documented boundary.
 param aasEnabled = false
 param adxEnabled = true
+// ADX SKU: Standard_E8as_v5+1TB_PS (the admin-plane GCC-High default) is NOT offered in
+// usgovvirginia - MEASURED by gov-adx-sku-probe run 41880903882 (2026-11-04), which
+// listed 5 Virginia SKUs, none restricted; the live cluster could not start for
+// capacity (deploy run 41875055921). L8as_v3 is offered in BOTH Gov regions this
+// estate targets. The live cluster must be scaled to it out-of-band BEFORE the next
+// full apply or the preflight dies again; this value stops the apply reverting it.
+param adxConfig = {
+  adxSkuName: 'Standard_L8as_v3'
+}
 // RTI backends — Event Hubs + Stream Analytics ON by default (opt-out). Entra-
 // only auth (the only IL5/GCC-High-allowed posture). Set the env var to 'false'
 // to skip, or reuse an existing namespace/job via the EXISTING_* vars above.
