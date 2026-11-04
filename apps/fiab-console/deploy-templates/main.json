@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "10191331540133519161"
+      "templateHash": "8188678988180002688"
     }
   },
   "definitions": {
@@ -2628,7 +2628,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "10419478345174581956"
+              "templateHash": "9939448332918237878"
             }
           },
           "definitions": {
@@ -2768,7 +2768,8 @@
                     "Standard_E80ids_v4+32TB_PS",
                     "Standard_E8a_v4",
                     "Standard_E8as_v5+1TB_PS",
-                    "Standard_E8as_v5+2TB_PS"
+                    "Standard_E8as_v5+2TB_PS",
+                    "Standard_L8as_v3"
                   ],
                   "nullable": true,
                   "metadata": {
@@ -13951,7 +13952,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "4222873540946473042"
+                      "templateHash": "10671743453658088483"
                     }
                   },
                   "parameters": {
@@ -13985,10 +13986,11 @@
                         "Standard_E16as_v5+3TB_PS",
                         "Standard_E16as_v5+4TB_PS",
                         "Standard_E80ids_v4",
-                        "Standard_E80ids_v4+32TB_PS"
+                        "Standard_E80ids_v4+32TB_PS",
+                        "Standard_L8as_v3"
                       ],
                       "metadata": {
-                        "description": "SKU name. The E*a_v4 family is the Commercial default. The Gov entries below were MEASURED against the Kusto RP in Azure Government on 2026-08-27 (gov-adx-sku-probe, run 33120409251) — not carried forward from a prior note. usgovvirginia offers 9 SKUs and usgovarizona 14; the six listed here are the intersection, i.e. the ones that work in EVERY Gov region this estate targets, so one value needs no second regional decision. CRITICAL: Azure Government offers NO Dev(No SLA)/Basic-tier ADX SKU in either region, so the two Dev entries are COMMERCIAL-ONLY and a Gov deploy that lands on one cannot start (#4141, #4072)."
+                        "description": "SKU name. The E*a_v4 family is the Commercial default. The Gov entries below were MEASURED against the Kusto RP in Azure Government on 2026-08-27 (gov-adx-sku-probe, run 33120409251) — not carried forward from a prior note. usgovvirginia offers 9 SKUs and usgovarizona 14; the six listed here are the intersection, i.e. the ones that work in EVERY Gov region this estate targets, so one value needs no second regional decision. CRITICAL: Azure Government offers NO Dev(No SLA)/Basic-tier ADX SKU in either region, so the two Dev entries are COMMERCIAL-ONLY and a Gov deploy that lands on one cannot start (#4141, #4072). RE-MEASURED 2026-11-04 (gov-adx-sku-probe run 41880903882): usgovvirginia now offers only 5 SKUs and NOT the E8as_v5 entries; Standard_L8as_v3 is the smallest SKU offered in both regions."
                       }
                     },
                     "skuTier": {
