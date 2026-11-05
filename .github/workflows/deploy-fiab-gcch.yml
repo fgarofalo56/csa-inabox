@@ -1443,6 +1443,9 @@ jobs:
         if: (github.event_name == 'schedule' || inputs.run_mode == 'full') && steps.adx_preflight.outputs.estate_paused != 'true'
         env:
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+          # Same acknowledgement the revert gate reads. pin-refresh honours it ONLY for apps that run by
+          # digest; unset arrives as '' and the script tests === 'true', so the default stays: refuse.
+          LOOM_ALLOW_IMAGE_TAG_REVERT: ${{ vars.LOOM_ALLOW_IMAGE_TAG_REVERT }}
         run: |
           set -uo pipefail
           # dlz-attach provisions a landing zone into a DIFFERENT subscription and

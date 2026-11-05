@@ -6181,3 +6181,95 @@ test('SHELL: a CLAIMED run that lost the race does NOT clear the winner tags', {
   assert.doesNotMatch(r.out, /Two lanes believed they held the same mutex/,
     'R7: this run never confirmed, so it cannot assert that two lanes held the mutex');
 });
+
+// ---------------------------------------------------------------------------
+// LOOM_ALLOW_IMAGE_TAG_REVERT reaches pin-refresh (Gov run 41977484915)
+// ---------------------------------------------------------------------------
+// The revert gate accepted the acknowledgement and the very next step refused the same digest-pinned app,
+// so the override was reachable and useless. Each control below names the value that breaks it.
+
+const DIGEST_UNITY = [{ name: 'loom-unity', image: 'acr1.azurecr.io/loom-unity@sha256:' + 'b'.repeat(64) }];
+
+test('ACK: a digest-pinned app proceeds when acknowledged, and the verdict NAMES what was acknowledged', () => {
+  // Breaks if: acknowledgeDigestPinned is ignored (decision stays 'refuse') or acknowledged comes back empty.
+  const v = decidePinRefresh({
+    deployAppsEnabled: 'true',
+    previous: { unity: 'v0.1' },
+    resolution: resolveRunningImageTags(DIGEST_UNITY),
+    acknowledgeDigestPinned: true,
+  });
+  assert.equal(v.decision, 'proceed', v.reason);
+  assert.deepEqual(v.acknowledged.map((u) => u.key), ['unity']);
+  assert.match(v.reason, /ACKNOWLEDGED via LOOM_ALLOW_IMAGE_TAG_REVERT=true: unity run by digest/);
+});
+
+test('ACK CONTROL: the SAME state without the acknowledgement still REFUSES (the default is unchanged)', () => {
+  // Breaks if: the acknowledgement defaults on. Only the flag differs from the test above.
+  const v = decidePinRefresh({
+    deployAppsEnabled: 'true',
+    previous: { unity: 'v0.1' },
+    resolution: resolveRunningImageTags(DIGEST_UNITY),
+  });
+  assert.equal(v.decision, 'refuse');
+  assert.match(v.reason, /UNKNOWN is not "unchanged"/);
+  assert.deepEqual(v.acknowledged, []);
+});
+
+test('ACK DOES NOT WIDEN: an acknowledged run still refuses an unknown that is NOT a digest', () => {
+  // Breaks if: the acknowledgement covers every unknown. A console running two different tags is ambiguous,
+  // not digest-pinned, and an operator who acknowledged a digest revert said nothing about that.
+  const resolution = resolveRunningImageTags([
+    { name: 'loom-console', image: 'acr1.azurecr.io/loom-console:aaaa1111' },
+    { name: 'loom-console-b', image: 'acr1.azurecr.io/loom-console:bbbb2222' },
+  ]);
+  assert.ok(resolution.unknown.length >= 1 && resolution.unknown.every((u) => u.digest !== true), JSON.stringify(resolution.unknown));
+  const v = decidePinRefresh({
+    deployAppsEnabled: 'true',
+    previous: { [CONSOLE_IMAGE_KEY]: STALE },
+    resolution,
+    acknowledgeDigestPinned: true,
+  });
+  assert.equal(v.decision, 'refuse', v.reason);
+});
+
+test('ACK, mixed: one digest app acknowledged plus one ambiguous app REFUSES, and names only the ambiguous one', () => {
+  // Breaks if: a single acknowledged key clears the whole unknown list.
+  const resolution = resolveRunningImageTags([
+    ...DIGEST_UNITY,
+    { name: 'loom-console', image: 'acr1.azurecr.io/loom-console:aaaa1111' },
+    { name: 'loom-console-b', image: 'acr1.azurecr.io/loom-console:bbbb2222' },
+  ]);
+  const v = decidePinRefresh({
+    deployAppsEnabled: 'true',
+    previous: { unity: 'v0.1', [CONSOLE_IMAGE_KEY]: STALE },
+    resolution,
+    acknowledgeDigestPinned: true,
+  });
+  assert.equal(v.decision, 'refuse', v.reason);
+  assert.match(v.reason, new RegExp(`${CONSOLE_IMAGE_KEY} \\(pinned`));
+  assert.doesNotMatch(v.reason, /unity \(pinned/, 'the acknowledged key must not be listed as the blocker');
+});
+
+test('CLI ACK: LOOM_ALLOW_IMAGE_TAG_REVERT=true exits 0 and warns; unset or anything else exits 1', () => {
+  // Breaks if: cliMain stops reading the variable, or reads it loosely ("1", "yes", "TRUE" must not enable it).
+  const run = (value) => runCli(
+    ['pin-refresh', '--deploy-apps-enabled', 'true', '--containers', 'c.json'],
+    { env: { LOOM_UNITY_TAG: 'v0.1', ...(value === undefined ? {} : { LOOM_ALLOW_IMAGE_TAG_REVERT: value }) }, files: { 'c.json': JSON.stringify(DIGEST_UNITY) } },
+  );
+  const on = run('true');
+  assert.equal(on.code, 0, on.logs);
+  assert.match(on.logs, /::warning::\[pin-refresh\] ACKNOWLEDGED loom-unity/);
+  for (const off of [undefined, '', 'false', '1', 'yes', 'TRUE']) {
+    const r = run(off);
+    assert.equal(r.code, 1, `value ${JSON.stringify(off)} must not enable the acknowledgement`);
+    assert.match(r.logs, /PIN REFRESH REFUSED/);
+  }
+});
+
+test('ACK WIRING: the GCC-High re-pin step passes vars.LOOM_ALLOW_IMAGE_TAG_REVERT through env:', () => {
+  // Breaks if: the env: line is deleted or the variable renamed, which makes the acknowledgement unreachable here again.
+  const wf = readFileSync('.github/workflows/deploy-fiab-gcch.yml', 'utf8').replace(/\r\n/g, '\n');
+  const step = wf.split(/\n {6}- /).find((st) => st.includes('id: repin'));
+  assert.ok(step, 'the re-pin step (id: repin) was not found');
+  assert.match(step, /\n {10}LOOM_ALLOW_IMAGE_TAG_REVERT: \$\{\{ vars\.LOOM_ALLOW_IMAGE_TAG_REVERT \}\}\n/);
+});
