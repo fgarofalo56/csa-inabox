@@ -622,3 +622,23 @@ test('CONTROL: no template in this repo writes a DIGEST-pinned ESTATE-ACR image'
   }
   assert.deepEqual(offenders, [], 'a template that composed a digest ref for an estate-ACR app image would make the pin in-band');
 });
+
+test('CONTROL: the GCC-High lane exports the escape hatch to the gate step, so the documented override is reachable', () => {
+  // The gate reads process.env.LOOM_ALLOW_IMAGE_TAG_REVERT (assert-no-silent-image-tag-revert.mjs).
+  // On 2026-11-05 an operator set that variable on the gcc-high-deploy environment and it did
+  // NOTHING, because no workflow step exported it: the override existed only in a doc comment.
+  // Value that breaks this: deleting the `env:` line from the step (or renaming the variable),
+  // which leaves the override unreachable again. Mutation proof is in the PR body.
+  const wf = readFileSync('.github/workflows/deploy-fiab-gcch.yml', 'utf8').replace(/\r\n/g, '\n');
+  const steps = wf.split(/\n {6}- /);
+  const gate = steps.filter((st) => st.includes('node scripts/ci/assert-no-silent-image-tag-revert.mjs'));
+  assert.equal(gate.length, 1, `expected exactly one gate step in deploy-fiab-gcch.yml, found ${gate.length}`);
+  assert.match(
+    gate[0],
+    /\n {8}env:\n(?: {10}#.*\n)* {10}LOOM_ALLOW_IMAGE_TAG_REVERT: \$\{\{ vars\.LOOM_ALLOW_IMAGE_TAG_REVERT \}\}\n/,
+    'the gate step must pass vars.LOOM_ALLOW_IMAGE_TAG_REVERT through env: or the override is unreachable',
+  );
+  // POSITIVE half: the default must still be "refuse". The script compares the value to the literal 'true'.
+  const script = readFileSync('scripts/ci/assert-no-silent-image-tag-revert.mjs', 'utf8');
+  assert.match(script, /process\.env\.LOOM_ALLOW_IMAGE_TAG_REVERT \|\| ''\) === 'true'/, 'an unset or empty variable must not enable the override');
+});
