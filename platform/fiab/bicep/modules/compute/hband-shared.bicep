@@ -353,9 +353,9 @@ resource acrPullBroker 'Microsoft.Authorization/roleAssignments@2022-04-01' = if
 // modules/shared/diagnostic-settings.bicep helper can only deploy at
 // resourceGroup scope (BCP134), so cross-resource diag settings are declared
 // where the resource lives. Same name (diag-loom-stdz), same categories
-// (allLogs + AllMetrics) as that helper so DSC drift-detection stays consistent —
-// the diag pattern every H-band ACA app follows (the per-service app modules
-// declare the identical block scoped to their Container App).
+// (allLogs + AllMetrics) as that helper so DSC drift-detection stays consistent.
+// This holds for a Redis cache. It does NOT hold for a Container App target, which
+// exposes no log category groups: see modules/shared/redis-oss-aca.bicep.
 resource redisDiag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!useManagedRedis && !empty(workspaceId)) {
   name: 'diag-loom-stdz'
   scope: redis
