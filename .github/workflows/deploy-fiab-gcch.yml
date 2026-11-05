@@ -1355,6 +1355,11 @@ jobs:
         # Gov (the #4064 class). It is filed separately; the moment the
         # declaration is deleted this gate runs again and refuses again.
         if: (github.event_name == 'schedule' || inputs.run_mode == 'full') && steps.adx_preflight.outputs.estate_paused != 'true'
+        env:
+          # The gate's documented escape hatch (assert-no-silent-image-tag-revert.mjs:145)
+          # reads process.env, and nothing exported it, so setting the variable did nothing.
+          # Unset arrives as '' and the script tests === 'true', so the default stays: refuse.
+          LOOM_ALLOW_IMAGE_TAG_REVERT: ${{ vars.LOOM_ALLOW_IMAGE_TAG_REVERT }}
         run: |
           set -euo pipefail
           # dlz-attach provisions a landing zone into a DIFFERENT subscription
