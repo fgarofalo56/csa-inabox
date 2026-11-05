@@ -330,6 +330,26 @@
       }
     },
     {
+      "name": "permission — a nested roleAssignments/write denial wrapped in InvalidTemplateDeployment, verbatim",
+      "source": "deploy-fiab-gcch run 42106150785 (Gov, usgovvirginia), 2026-11-05, Provision leaf from the redacted deploy-failure.json artifact. Classified `defect` / not-remediable (\"file a bug\") before this case existed, although the cause was the deploy identity lacking roleAssignments/write on the adopted lake in the DLZ resource group.",
+      "input": "InvalidTemplateDeployment: The template deployment failed with error: 'Authorization failed for template resource '<guid>' of type 'Microsoft.Authorization/roleAssignments'. The client '<guid>' with object id '<guid>' does not have permission to perform action 'Microsoft.Authorization/roleAssignments/write' at scope '/subscriptions/<redacted>/resourceGroups/rg-csa-loom-dlz--usgovvirginia/providers/Microsoft.Storage/storageAccounts/saloomlv6hjg46gtu66/providers/Microsoft.Authorization/roleAssignments/<guid>'.'.",
+      "expect": {
+        "class": "permission",
+        "signalId": "permission.authorization-failed",
+        "retryable": false
+      }
+    },
+    {
+      "name": "permission — the same denial reaching the classifier as the multi-error wrapper",
+      "source": "the second leaf of the same run: 'Deployment failed with multiple errors', carrying the identical authorization wording.",
+      "input": "InvalidTemplateDeployment: The template deployment failed with error: 'Deployment failed with multiple errors: 'Authorization failed for template resource '<guid>' of type 'Microsoft.Authorization/roleAssignments'. The client '<guid>' with object id '<guid>' does not have permission to perform action 'Microsoft.Authorization/roleAssignments/write' at scope '/subscriptions/<redacted>/resourceGroups/rg-csa-loom-dlz--usgovvirginia/providers/Microsoft.Storage/storageAccounts/saloomlv6hjg46gtu66''.'.",
+      "expect": {
+        "class": "permission",
+        "signalId": "permission.authorization-failed",
+        "retryable": false
+      }
+    },
+    {
       "name": "defect — an InvalidTemplateDeployment with NO quota wording is still a defect (proves the new exclusion did not blind the signal)",
       "source": "synthesised; the control for the `not` clause added for the tenant-cap case",
       "input": "ERROR: InvalidTemplateDeployment - The template deployment 'main' is not valid according to the validation procedure. Unable to process template language expressions.",
