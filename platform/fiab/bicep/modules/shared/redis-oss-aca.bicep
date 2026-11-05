@@ -529,7 +529,7 @@ resource app 'Microsoft.App/containerApps@2025-02-02-preview' = {
   }
 }
 
-// Same name/categories as modules/shared/diagnostic-settings.bicep so DSC
+// Same NAME as modules/shared/diagnostic-settings.bicep so DSC
 // drift-detection stays consistent (that helper deploys only at resourceGroup
 // scope — BCP134 — so a cross-resource diag setting is declared where the
 // resource lives).

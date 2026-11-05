@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "15147984077300163729"
+      "templateHash": "16868205151653731285"
     }
   },
   "definitions": {
@@ -2629,7 +2629,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "1856644809500624189"
+              "templateHash": "11512441259772110180"
             }
           },
           "definitions": {
@@ -13947,7 +13947,7 @@
                   },
                   "adlsAccountName": "[if(variables('loomStorageGrantable'), createObject('value', parameters('loomStorageAccount')), createObject('value', ''))]",
                   "adlsAccountRg": {
-                    "value": "[parameters('loomDlzRg')]"
+                    "value": "[variables('loomStorageRg')]"
                   },
                   "ehNamespaceName": {
                     "value": "[parameters('loomEventHubNamespace')]"
@@ -14640,7 +14640,7 @@
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "adx-export-rbac",
-              "resourceGroup": "[if(not(empty(parameters('loomRtiExportAdlsRg'))), parameters('loomRtiExportAdlsRg'), resourceGroup().name)]",
+              "resourceGroup": "[if(not(empty(parameters('loomRtiExportAdlsRg'))), parameters('loomRtiExportAdlsRg'), if(empty(parameters('loomRtiExportAdls')), variables('loomStorageRg'), resourceGroup().name))]",
               "properties": {
                 "expressionEvaluationOptions": {
                   "scope": "inner"

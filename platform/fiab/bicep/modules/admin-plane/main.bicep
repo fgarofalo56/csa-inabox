@@ -3928,7 +3928,7 @@ module adxCluster 'adx-cluster.bicep' = if (adxEnabled && empty(existingAdxClust
     // subscription (a sub-scoped deployment cannot grant there) → grant is
     // skipped → wizard shows the honest gate. The console still binds the name.
     adlsAccountName: loomStorageGrantable ? loomStorageAccount : ''
-    adlsAccountRg: loomDlzRg
+    adlsAccountRg: loomStorageRg
     // EH data connections: grant cluster MI Azure Event Hubs Data Receiver on the DLZ EH namespace.
     // The namespace name follows the single-sub DLZ convention set in loomEventHubNamespace.
     ehNamespaceName: loomEventHubNamespace
@@ -3968,7 +3968,7 @@ module aasServer 'aas-server.bicep' = if (aasEnabled && empty(existingAasServerN
 // at the storage account's RG (DLZ lake account is commonly in a different RG).
 module adxExportRbac 'adx-export-rbac.bicep' = if (adxEnabled && empty(existingAdxClusterName) && !skipRoleGrants && (!empty(loomRtiExportAdls) || loomStorageGrantable)) {
   name: 'adx-export-rbac'
-  scope: resourceGroup(!empty(loomRtiExportAdlsRg) ? loomRtiExportAdlsRg : resourceGroup().name)
+  scope: resourceGroup(!empty(loomRtiExportAdlsRg) ? loomRtiExportAdlsRg : (empty(loomRtiExportAdls) ? loomStorageRg : resourceGroup().name))
   params: {
     exportAdlsAccountName: !empty(loomRtiExportAdls) ? loomRtiExportAdls : loomStorageAccount
     clusterPrincipalId: adxCluster!.outputs.clusterPrincipalId

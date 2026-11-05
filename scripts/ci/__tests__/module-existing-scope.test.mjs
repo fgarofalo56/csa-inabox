@@ -2883,3 +2883,18 @@ test('DIAG: the Redis OSS Container App declares no log category group, and stil
   assert.ok(diag.includes('logs: []'), 'logs must be an explicit empty array');
   assert.ok(diag.includes("category: 'AllMetrics'"), 'metrics must still be shipped');
 });
+
+test('LAKE RG: the two consumers that name their RG outside the `scope:` line also resolve to the lake RG', () => {
+  // Breaks if: adxCluster's adlsAccountRg goes back to loomDlzRg, or adxExportRbac's default RG goes back to the
+  // admin RG (`resourceGroup().name`) while its account still defaults to the lake. These two were found by
+  // independent review of the first cut: neither passes `storageAccountName`, so the population test above
+  // cannot see them.
+  const src = lf(ADMIN_PLANE_MAIN);
+  assert.ok(src.includes('\n    adlsAccountRg: loomStorageRg\n'), 'adxCluster must hand the ADX module the lake RG');
+  assert.ok(!src.includes('\n    adlsAccountRg: loomDlzRg\n'), 'adlsAccountRg must not fall back to the DLZ/admin RG');
+  const exp = src.slice(src.indexOf('module adxExportRbac '));
+  const scopeLine = /\n {2}scope: (resourceGroup\([^\n]*\))\n/.exec(exp)?.[1] ?? '';
+  assert.ok(scopeLine.includes('loomStorageRg'), `adxExportRbac scope must reach loomStorageRg, got: ${scopeLine}`);
+  assert.ok(scopeLine.includes('loomRtiExportAdlsRg'), 'an explicitly named export RG must still win');
+  assert.ok(scopeLine.includes('resourceGroup().name'), 'a custom export account with no RG keeps the old admin-RG fallback');
+});
