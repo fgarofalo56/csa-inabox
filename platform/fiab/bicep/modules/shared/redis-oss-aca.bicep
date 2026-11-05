@@ -538,12 +538,11 @@ resource appDiag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if
   scope: app
   properties: {
     workspaceId: workspaceId
-    logs: [
-      {
-        categoryGroup: 'allLogs'
-        enabled: true
-      }
-    ]
+    // No `logs`: a Microsoft.App/containerApps resource exposes no diagnostic log category groups, so
+    // `allLogs` is rejected (Gov run 42082972878: BadRequest "CategoryGroup: 'allLogs' is not supported,
+    // supported ones are: ''"). Container stdout/stderr already reach Log Analytics through the managed
+    // environment's appLogsConfiguration.
+    logs: []
     metrics: [
       {
         category: 'AllMetrics'

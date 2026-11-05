@@ -1672,6 +1672,11 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     loomStorageAccountSameSub: empty(adoptName(adopt, 'storage-adls'))
       ? true
       : (empty(adoptSub(adopt, 'storage-adls')) || adoptSub(adopt, 'storage-adls') == subscription().subscriptionId)
+    // The lake's own resource group, so the storage-grant modules are scoped to where the account
+    // really is. loomDlzRg is the ADMIN RG whenever useSingleDlz is false. Empty when nothing is
+    // adopted or the lake is cross-subscription (those grants are made elsewhere), so the default
+    // behaviour is unchanged.
+    loomStorageAccountRg: lakeIsCrossSub ? '' : lakeAdoptRg
     // #3336 — "the grant this module cannot make HAS AN OWNER." True exactly when
     // `dlzLakeGrantPass` below will run. It arms NO grant inside admin-plane
     // (every module there still keys on loomStorageGrantable); it only stops a

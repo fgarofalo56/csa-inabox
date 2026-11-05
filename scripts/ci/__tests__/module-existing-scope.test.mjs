@@ -2832,3 +2832,54 @@ test('blankComments preserves length and does not blank a `//` inside a string l
   assert.match(out, /'it\\'s \/\/ not a comment'/);
   assert.match(out, /https:\/\/example\.invalid/);
 });
+
+// ---------------------------------------------------------------------------
+// The lake's own resource group (Gov run 42082972878)
+// ---------------------------------------------------------------------------
+// loomDlzRg is the ADMIN resource group whenever useSingleDlz is false, so storage-grant modules scoped to it
+// looked for the ADOPTED lake in the wrong RG (ResourceNotFound / ParentResourceNotFound). The fix scopes them
+// to loomStorageRg, which falls back to loomDlzRg unless the root passes the adopted lake's RG.
+
+const ADMIN_PLANE_MAIN = 'modules/admin-plane/main.bicep';
+const lf = (rel) => readBicep(rel).replace(/\r\n/g, '\n');
+
+test('LAKE RG: every SCOPED module that is handed the lake account name is scoped to loomStorageRg', () => {
+  // Breaks if: any one of the nine scope lines goes back to resourceGroup(loomDlzRg), or the variable is renamed.
+  // `loomDirectLake` is excluded on purpose: it is a Container App at the admin RG that only receives the account
+  // NAME as a setting and dereferences nothing, so it has no `scope:` line to be wrong.
+  const chunks = lf(ADMIN_PLANE_MAIN).split(/\nmodule /).slice(1);
+  const scoped = chunks
+    .map((c) => ({ name: c.split(' ')[0], head: c.slice(0, 1500) }))
+    .filter((m) => /\n {4}storageAccountName: loomStorageAccount\n/.test(m.head) && /\n {2}scope: /.test(m.head));
+  assert.ok(scoped.length >= 9, `population floor: expected at least 9 scoped lake modules, found ${scoped.length}`);
+  const wrong = scoped.filter((m) => !m.head.includes('\n  scope: resourceGroup(loomStorageRg)\n')).map((m) => m.name);
+  assert.deepEqual(wrong, [], 'these lake-grant modules look for the account in the wrong resource group');
+});
+
+test('LAKE RG: loomStorageRg falls back to loomDlzRg, so an estate that deploys its own lake is unchanged', () => {
+  // Breaks if: the fallback is flipped or dropped (every non-adopt estate would then scope to an empty RG name).
+  const src = lf(ADMIN_PLANE_MAIN);
+  assert.ok(
+    src.includes('var loomStorageRg = empty(loomStorageAccountRg) ? loomDlzRg : loomStorageAccountRg\n'),
+    'loomStorageRg must be `empty(loomStorageAccountRg) ? loomDlzRg : loomStorageAccountRg`',
+  );
+  assert.ok(src.includes("param loomStorageAccountRg string = ''\n"), "the parameter must default to '' so the fallback is the default");
+});
+
+test('LAKE RG: the root passes the adopted lake RG, and nothing for a cross-subscription lake', () => {
+  // Breaks if: the pass-through is deleted (the parameter stays '' and the bug silently returns) or inverted.
+  const root = lf('main.bicep');
+  assert.ok(root.includes('    loomStorageAccountRg: lakeIsCrossSub ? \'\' : lakeAdoptRg\n'), 'root must pass the adopted lake RG to admin-plane');
+  assert.ok(root.includes('var lakeAdoptRg = adoptRg(adopt, \'storage-adls\')\n'), 'lakeAdoptRg must still come from the adopt plan');
+});
+
+test('DIAG: the Redis OSS Container App declares no log category group, and still ships metrics', () => {
+  // Breaks if: `categoryGroup: 'allLogs'` returns (ARM answers BadRequest on a Microsoft.App/containerApps target) or
+  // the metrics block is lost along with it (the absence-only half would then pass on an empty setting).
+  const src = lf('modules/shared/redis-oss-aca.bicep');
+  const diag = src.slice(src.indexOf("resource appDiag 'Microsoft.Insights/diagnosticSettings"));
+  assert.ok(diag.includes('name: \'diag-loom-stdz\''), 'the diagnostic setting must still exist');
+  assert.ok(!diag.includes("categoryGroup: 'allLogs'"), 'allLogs is rejected on a Container App target');
+  assert.ok(diag.includes('logs: []'), 'logs must be an explicit empty array');
+  assert.ok(diag.includes("category: 'AllMetrics'"), 'metrics must still be shipped');
+});

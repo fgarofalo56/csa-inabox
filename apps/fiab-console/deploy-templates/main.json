@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "8188678988180002688"
+      "templateHash": "15147984077300163729"
     }
   },
   "definitions": {
@@ -2428,6 +2428,7 @@
           },
           "loomStorageAccount": "[if(not(empty(__bicep.adoptName(parameters('adopt'), 'storage-adls'))), createObject('value', __bicep.adoptName(parameters('adopt'), 'storage-adls')), if(variables('useSingleDlz'), createObject('value', take(format('saloomdefault{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', format('rg-csa-loom-dlz-single-{0}', parameters('location'))))), 24)), createObject('value', '')))]",
           "loomStorageAccountSameSub": "[if(empty(__bicep.adoptName(parameters('adopt'), 'storage-adls')), createObject('value', true()), createObject('value', or(empty(__bicep.adoptSub(parameters('adopt'), 'storage-adls')), equals(__bicep.adoptSub(parameters('adopt'), 'storage-adls'), subscription().subscriptionId))))]",
+          "loomStorageAccountRg": "[if(variables('lakeIsCrossSub'), createObject('value', ''), createObject('value', variables('lakeAdoptRg')))]",
           "loomStorageGrantedElsewhere": {
             "value": "[variables('crossSubLakeGrantsActive')]"
           },
@@ -2628,7 +2629,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "9939448332918237878"
+              "templateHash": "1856644809500624189"
             }
           },
           "definitions": {
@@ -4365,6 +4366,13 @@
                 "description": "True when loomStorageAccount lives in THIS subscription, so RBAC grants against it can be created by this deployment. False for a multi-sub / dlz-attach estate whose lake is in another subscription: the console still BINDS to the account (LOOM_ADLS_ACCOUNT and every derived URL are plain strings) but the grant modules skip, because a subscription-scoped deployment cannot create a role assignment in another subscription. Splitting these two concerns is what lets a multi-sub estate be wired at all — before this flag, loomStorageAccount had to stay EMPTY on that topology purely to keep the grants from firing, which left LOOM_ADLS_ACCOUNT blank and hard-blocked svc-adls, medallion Silver/Gold, sample-data, RTI-export, CSV-imports and the S3 gateway. The old workaround was patch-navigator-env.sh AFTER the deploy, which the next deploy then reverted (auto-bind-by-default.md §5)."
               }
             },
+            "loomStorageAccountRg": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Resource group that holds the lake storage account (loomStorageAccount). Empty = loomDlzRg, which is right whenever this template deployed the lake. Set it when the lake is ADOPTED from a different resource group in this subscription: loomDlzRg is the ADMIN resource group whenever useSingleDlz is false, so every storage-grant module scoped to it looked for the account in the wrong RG (Gov run 42082972878: ResourceNotFound / ParentResourceNotFound on the adopted lake under loom-s3-gateway-lake-rbac and org-visuals-rbac)."
+              }
+            },
             "loomStorageGrantedElsewhere": {
               "type": "bool",
               "defaultValue": false,
@@ -5298,6 +5306,7 @@
             "loomBatchRg": "[if(not(empty(coalesce(tryGet(parameters('byoExisting'), 'batchRg'), ''))), parameters('byoExisting').batchRg, parameters('loomDlzRg'))]",
             "loomConsoleBaseUrl": "",
             "loomStorageGrantable": "[and(not(empty(parameters('loomStorageAccount'))), parameters('loomStorageAccountSameSub'))]",
+            "loomStorageRg": "[if(empty(parameters('loomStorageAccountRg')), parameters('loomDlzRg'), parameters('loomStorageAccountRg'))]",
             "loomStorageWillBeGranted": "[and(not(empty(parameters('loomStorageAccount'))), or(variables('loomStorageGrantable'), parameters('loomStorageGrantedElsewhere')))]",
             "byoAiSearchRg": "[if(not(empty(parameters('existingAiSearchRg'))), parameters('existingAiSearchRg'), resourceGroup().name)]",
             "byoApimRg": "[if(not(empty(parameters('existingApimRg'))), parameters('existingApimRg'), resourceGroup().name)]",
@@ -14696,7 +14705,7 @@
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "label-rbac-grants",
-              "resourceGroup": "[parameters('loomDlzRg')]",
+              "resourceGroup": "[variables('loomStorageRg')]",
               "properties": {
                 "expressionEvaluationOptions": {
                   "scope": "inner"
@@ -14772,7 +14781,7 @@
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "console-azure-connections-rbac",
-              "resourceGroup": "[parameters('loomDlzRg')]",
+              "resourceGroup": "[variables('loomStorageRg')]",
               "properties": {
                 "expressionEvaluationOptions": {
                   "scope": "inner"
@@ -14964,7 +14973,7 @@
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "org-visuals-rbac",
-              "resourceGroup": "[parameters('loomDlzRg')]",
+              "resourceGroup": "[variables('loomStorageRg')]",
               "properties": {
                 "expressionEvaluationOptions": {
                   "scope": "inner"
@@ -18607,7 +18616,7 @@
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "loom-transform-runner-lake-rbac",
-              "resourceGroup": "[parameters('loomDlzRg')]",
+              "resourceGroup": "[variables('loomStorageRg')]",
               "properties": {
                 "expressionEvaluationOptions": {
                   "scope": "inner"
@@ -20443,7 +20452,7 @@
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "loom-serving-tier-lake-rbac",
-              "resourceGroup": "[parameters('loomDlzRg')]",
+              "resourceGroup": "[variables('loomStorageRg')]",
               "properties": {
                 "expressionEvaluationOptions": {
                   "scope": "inner"
@@ -20919,7 +20928,7 @@
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "loom-s3-gateway-lake-rbac",
-              "resourceGroup": "[parameters('loomDlzRg')]",
+              "resourceGroup": "[variables('loomStorageRg')]",
               "properties": {
                 "expressionEvaluationOptions": {
                   "scope": "inner"
@@ -23159,7 +23168,7 @@
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "risingwave-lake-rbac",
-              "resourceGroup": "[parameters('loomDlzRg')]",
+              "resourceGroup": "[variables('loomStorageRg')]",
               "properties": {
                 "expressionEvaluationOptions": {
                   "scope": "inner"
@@ -23554,7 +23563,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "7316584991739259447"
+                      "templateHash": "7344980816097583313"
                     }
                   },
                   "parameters": {
@@ -23787,12 +23796,7 @@
                       "name": "diag-loom-stdz",
                       "properties": {
                         "workspaceId": "[variables('workspaceId')]",
-                        "logs": [
-                          {
-                            "categoryGroup": "allLogs",
-                            "enabled": true
-                          }
-                        ],
+                        "logs": [],
                         "metrics": [
                           {
                             "category": "AllMetrics",
@@ -23893,7 +23897,7 @@
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "loom-directlake-lake-rbac",
-              "resourceGroup": "[parameters('loomDlzRg')]",
+              "resourceGroup": "[variables('loomStorageRg')]",
               "properties": {
                 "expressionEvaluationOptions": {
                   "scope": "inner"
@@ -29939,7 +29943,7 @@
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "aas-direct-lake-shim",
-              "resourceGroup": "[parameters('loomDlzRg')]",
+              "resourceGroup": "[variables('loomStorageRg')]",
               "properties": {
                 "expressionEvaluationOptions": {
                   "scope": "inner"

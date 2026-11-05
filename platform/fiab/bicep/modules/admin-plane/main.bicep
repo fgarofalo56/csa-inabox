@@ -1925,9 +1925,13 @@ param loomStorageAccount string = ''
 @description('True when loomStorageAccount lives in THIS subscription, so RBAC grants against it can be created by this deployment. False for a multi-sub / dlz-attach estate whose lake is in another subscription: the console still BINDS to the account (LOOM_ADLS_ACCOUNT and every derived URL are plain strings) but the grant modules skip, because a subscription-scoped deployment cannot create a role assignment in another subscription. Splitting these two concerns is what lets a multi-sub estate be wired at all — before this flag, loomStorageAccount had to stay EMPTY on that topology purely to keep the grants from firing, which left LOOM_ADLS_ACCOUNT blank and hard-blocked svc-adls, medallion Silver/Gold, sample-data, RTI-export, CSV-imports and the S3 gateway. The old workaround was patch-navigator-env.sh AFTER the deploy, which the next deploy then reverted (auto-bind-by-default.md §5).')
 param loomStorageAccountSameSub bool = true
 
+@description('Resource group that holds the lake storage account (loomStorageAccount). Empty = loomDlzRg, which is right whenever this template deployed the lake. Set it when the lake is ADOPTED from a different resource group in this subscription: loomDlzRg is the ADMIN resource group whenever useSingleDlz is false, so every storage-grant module scoped to it looked for the account in the wrong RG (Gov run 42082972878: ResourceNotFound / ParentResourceNotFound on the adopted lake under loom-s3-gateway-lake-rbac and org-visuals-rbac).')
+param loomStorageAccountRg string = ''
+
 // Grants may only be attempted when the account is BOTH configured and local.
 // Every consumer below uses this instead of `!empty(loomStorageAccount)`.
 var loomStorageGrantable = !empty(loomStorageAccount) && loomStorageAccountSameSub
+var loomStorageRg = empty(loomStorageAccountRg) ? loomDlzRg : loomStorageAccountRg
 
 @description('True when a DIFFERENT pass in the same deployment owns the lake grants this module cannot make — platform/fiab/bicep/main.bicep\'s `dlzLakeGrantPass` (modules/data-plane/dlz-lake-grant-pass.bicep, #3336), invoked at `resourceGroup(<lakeSub>, <lakeRg>)` with coordinates read from the adopt plan. Set by the orchestrator ONLY after the deploy lane has MEASURED that the deploying identity holds Microsoft.Authorization/roleAssignments/write at the lake (scripts/csa-loom/probe-lake-grant-rights.mjs). It does NOT arm any grant in THIS module — every module here still keys on loomStorageGrantable, so nothing new can fail in this subscription. It exists so a capability whose grant has an owner ELSEWHERE is not also blocked from DEPLOYING here, which is the defect that left svc-s3-gateway with no deploy path on any tenant estate whose lake is cross-sub (#3337).')
 param loomStorageGrantedElsewhere bool = false
@@ -3979,7 +3983,7 @@ module adxExportRbac 'adx-export-rbac.bicep' = if (adxEnabled && empty(existingA
 // editor) when loomStorageAccount is unset.
 module labelRbacGrants 'label-rbac-grants.bicep' = if (!skipRoleGrants && loomStorageGrantable) {
   name: 'label-rbac-grants'
-  scope: resourceGroup(loomDlzRg)
+  scope: resourceGroup(loomStorageRg)
   params: {
     storageAccountName: loomStorageAccount
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
@@ -4003,7 +4007,7 @@ module labelRbacGrants 'label-rbac-grants.bicep' = if (!skipRoleGrants && loomSt
 // from grant on 4 of 7 consumers; this is one of the ones it missed.
 module azureConnectionsRbac 'azure-connections-rbac.bicep' = if (!skipRoleGrants && loomStorageGrantable) {
   name: 'console-azure-connections-rbac'
-  scope: resourceGroup(loomDlzRg)
+  scope: resourceGroup(loomStorageRg)
   params: {
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     storageAccountName: loomStorageAccount
@@ -4040,7 +4044,7 @@ module azureConnectionsLawRbac 'azure-connections-rbac.bicep' = if (!skipRoleGra
 // the parent resource '…/saloomdefaulttr4nm4dcgsq' could not be found".
 module orgVisualsRbac '../landing-zone/org-visuals-rbac.bicep' = if (!skipRoleGrants && loomStorageGrantable && (loomBackends.?orgVisuals ?? 'enabled') != 'disabled') {
   name: 'org-visuals-rbac'
-  scope: resourceGroup(loomDlzRg)
+  scope: resourceGroup(loomStorageRg)
   params: {
     storageAccountName: loomStorageAccount
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
@@ -7136,7 +7140,7 @@ module transformRunner '../integration/transform-runner-aca.bicep' = if (transfo
 //    isolated scratch-RG experiment against THIS role and THIS scope.
 module transformRunnerLakeRbac '../data-plane/transform-runner-lake-rbac.bicep' = if (transformRunnerActive && !skipRoleGrants && loomStorageGrantable) {
   name: 'loom-transform-runner-lake-rbac'
-  scope: resourceGroup(loomDlzRg)
+  scope: resourceGroup(loomStorageRg)
   params: {
     storageAccountName: loomStorageAccount
     principalId: identity.outputs.uamiConsolePrincipalId
@@ -7433,7 +7437,7 @@ module icebergCatalog '../data-plane/iceberg-catalog-aca.bicep' = if (icebergCat
 // blanket grant, or a move to dedicated per-app identities.
 module servingTierLakeRbac '../data-plane/serving-tier-lake-rbac.bicep' = if ((duckdbTierActive || icebergCatalogActive) && !skipRoleGrants && loomStorageGrantable) {
   name: 'loom-serving-tier-lake-rbac'
-  scope: resourceGroup(loomDlzRg)
+  scope: resourceGroup(loomStorageRg)
   params: {
     storageAccountName: loomStorageAccount
     principalId: identity.outputs.uamiConsolePrincipalId
@@ -7494,7 +7498,7 @@ module s3Gateway '../data-plane/s3-gateway-aca.bicep' = if (s3GatewayActive) {
 // that does not hold the account (#3202's remaining consumers).
 module s3GatewayLakeRbac '../data-plane/s3-gateway-lake-rbac.bicep' = if (s3GatewayActive && !skipRoleGrants && loomStorageGrantable) {
   name: 'loom-s3-gateway-lake-rbac'
-  scope: resourceGroup(loomDlzRg)
+  scope: resourceGroup(loomStorageRg)
   params: {
     storageAccountName: loomStorageAccount
     principalId: s3Gateway!.outputs.storageUamiPrincipalId
@@ -8057,7 +8061,7 @@ resource risingwaveAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' 
 // account name either way; only the grant is conditional.
 module risingwaveLakeRbac 'azure-connections-rbac.bicep' = if (risingwaveActive && !skipRoleGrants && loomStorageGrantable) {
   name: 'risingwave-lake-rbac'
-  scope: resourceGroup(loomDlzRg)
+  scope: resourceGroup(loomStorageRg)
   params: {
     consolePrincipalId: risingwaveUami!.properties.principalId
     storageAccountName: loomStorageAccount
@@ -8250,7 +8254,7 @@ resource directLakeAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' 
 // inside the container — fail-closed and legible, never a silent wrong answer.
 module directLakeLakeRbac '../data-plane/s3-gateway-lake-rbac.bicep' = if (directLakeSvcActive && !skipRoleGrants && loomStorageGrantable) {
   name: 'loom-directlake-lake-rbac'
-  scope: resourceGroup(loomDlzRg)
+  scope: resourceGroup(loomStorageRg)
   params: {
     storageAccountName: loomStorageAccount
     principalId: directLakeUami!.properties.principalId
@@ -9061,7 +9065,7 @@ module workspaceRbac 'workspace-rbac.bicep' = if (!empty(loomDlzRg) && !skipRole
 // was not found" — the lake lives in the DLZ subscription, not the admin RG.
 module aasShim 'aas.bicep' = if (loomDirectLakeShimEnabled && !empty(loomDlzRg) && loomStorageGrantable) {
   name: 'aas-direct-lake-shim'
-  scope: resourceGroup(loomDlzRg)
+  scope: resourceGroup(loomStorageRg)
   params: {
     location: location
     storageAccountName: loomStorageAccount
