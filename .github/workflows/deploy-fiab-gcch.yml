@@ -1706,6 +1706,17 @@ jobs:
       # nothing else. This lane's tag set (Environment=GCC-High, DISA_IL=IL4,
       # Data_Classification=CUI, M365_Boundary=GCC-High, …) comes from
       # gcc-high.bicepparam, so it cannot drift from what the deployment used.
+      # The failure artifact deploy-retry.mjs writes (--artifact) was never uploaded, so the leaf detail it
+      # holds (type, name, deployment chain) died with the runner. The file passes through redact() as a whole
+      # (#3829) and deploy-notify-failure.mjs already posts it to a public issue, so this adds no new surface.
+      - name: Upload the Provision failure artifact
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gov-provision-failure-gcch-${{ github.run_id }}
+          path: ${{ github.workspace }}/deploy-failure.json
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Apply ACR compliance tags (merge-patch, out-of-band — #3714)
         if: steps.provision.conclusion == 'success'
         run: |

@@ -139,3 +139,15 @@ test('self-check: a bare invocation IS detected even when its block mentions dep
   const azd = classifyInvocations(mutant, /\bazd\s+provision\b/);
   assert.equal(azd.bare.length, 1, 'the bare sibling branch must be visible');
 });
+
+test('PROVISION FAILURE ARTIFACT: deploy-fiab-gcch.yml uploads the exact file deploy-retry writes, and only on failure', () => {
+  // Breaks if: the upload step is deleted, loses `if: failure()`, or its path drifts from the --artifact path the
+  // Provision step passes (a renamed file would upload nothing and `if-no-files-found: ignore` would stay green).
+  const wf = fs.readFileSync(path.join(WF_DIR, 'deploy-fiab-gcch.yml'), 'utf8').replace(/\r\n/g, '\n');
+  const written = /--artifact "\$GITHUB_WORKSPACE\/([^"]+)"/.exec(wf);
+  assert.ok(written, 'the Provision step no longer passes --artifact; this wiring test has nothing to compare');
+  const step = wf.split(/\n {6}- /).find((st) => st.startsWith('name: Upload the Provision failure artifact'));
+  assert.ok(step, 'the failure-artifact upload step is missing');
+  assert.match(step, /\n {8}if: failure\(\)\n/, 'it must run only on failure');
+  assert.ok(step.includes(`path: \${{ github.workspace }}/${written[1]}`), `its path must be the file deploy-retry writes (${written[1]})`);
+});
