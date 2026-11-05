@@ -296,7 +296,10 @@ export function collectArmLeafErrors({
     leaves.push(entry);
   };
 
-  const walk = (node, depth, isRoot) => {
+  const walk = (node, depth, isRoot, chain = []) => {
+    // The nested-deployment path from the root to this node. A leaf that says only "blobServices write failed"
+    // does not say which MODULE wrote it; this does.
+    const here = [...chain, node.name];
     const key = `${node.scope}:${node.resourceGroup ?? '-'}:${node.name}`;
     if (visited.includes(key)) return;
     visited.push(key);
@@ -343,7 +346,7 @@ export function collectArmLeafErrors({
       // cause. Keep its leaves anyway — when the recursion is blocked (RBAC on
       // the child RG, say) the nested `details[]` chain is the only evidence
       // left, and on run 31069329802 it in fact already carried both causes.
-      for (const leaf of errorLeaves(op?.properties?.statusMessage?.error)) push(leaf, desc);
+      for (const leaf of errorLeaves(op?.properties?.statusMessage?.error)) push(leaf, { ...desc, via: here.join(' > ') });
     }
 
     for (const child of nestedDeploymentTargets(ops)) {
@@ -353,7 +356,7 @@ export function collectArmLeafErrors({
         );
         continue;
       }
-      walk({ scope: 'group', name: child.name, resourceGroup: child.resourceGroup }, depth + 1, false);
+      walk({ scope: 'group', name: child.name, resourceGroup: child.resourceGroup }, depth + 1, false, here);
     }
   };
 
@@ -415,7 +418,8 @@ export function renderLeaves(result) {
       const where = l.resourceType
         ? ` [${l.resourceType}${l.resourceName ? ` '${l.resourceName}'` : ''}]`
         : '';
-      return `  ${l.code ?? 'NoCode'}: ${redact(l.message)}${where}`;
+      const via = l.via ? ` via ${l.via}` : '';
+      return `  ${l.code ?? 'NoCode'}: ${redact(l.message)}${where}${via}`;
     });
     const warn = result.warnings.map((w) => `  (partial) ${w}`);
     out = [head, ...body, ...warn].join('\n');

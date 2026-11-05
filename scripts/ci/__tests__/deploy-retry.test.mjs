@@ -1635,3 +1635,13 @@ test('D6: a capacity leaf elevates the backoff base to the taxonomy 300s; non-re
   assert.equal(effectiveBackoffBase(45, defect), 45, 'a non-retryable leaf must not inflate the backoff');
   assert.equal(effectiveBackoffBase(600, cap), 600, 'an operator-widened base is never shrunk');
 });
+
+test('VIA: the artifact keeps each leaf\'s deployment chain (end to end through the real CLI)', () => {
+  // Breaks if: deploy-retry stops copying `via` into armDrilldown.leaves (the field becomes null/undefined), which
+  // is the half of the diagnostic that lands in the uploaded artifact rather than the run log.
+  const { raw } = runWithFakeAz(LEAKY_OPS);
+  const a = JSON.parse(raw);
+  assert.equal(a.armDrilldown.status, 'found');
+  assert.ok(a.armDrilldown.leaves.length >= 1);
+  assert.equal(a.armDrilldown.leaves[0].via, 'csa-loom-ci-1', 'a leaf on the root deployment carries the root name as its chain');
+});

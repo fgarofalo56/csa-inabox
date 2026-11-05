@@ -984,6 +984,7 @@ async function main() {
                   message: redact(l.message),
                   resourceType: l.resourceType,
                   resourceName: l.resourceName,
+                  via: l.via ?? null,
                 })),
               },
             }

@@ -1850,6 +1850,13 @@ const DISPOSITIONS = new Map([
       why: 'the `failure()` notifier. Gating it on the pause verdict is the precise way 47 days of silent daily failure happened before (deploy-integrity R3) — it must always run.',
     },
   ],
+  [
+    'Upload the Provision failure artifact',
+    {
+      mode: 'exempt',
+      why: 'a `failure()` step that uploads the local deploy-failure.json (already redacted as a whole, #3829). No az call, no estate read or write, and the file exists only if Provision ran. Gating a failure-time diagnostic on the pause verdict is how it goes missing exactly when needed.',
+    },
+  ],
 ]);
 
 /**

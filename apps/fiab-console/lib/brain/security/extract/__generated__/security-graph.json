@@ -38489,7 +38489,7 @@
             "declaredSinkCount": 6,
             "sinks": [
               {
-                "id": "stdout:member:519",
+                "id": "stdout:member:523",
                 "surface": "stdout",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -38499,18 +38499,8 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stdout:member:521",
+                "id": "stdout:member:525",
                 "surface": "stdout",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "stderr:member:488",
-                "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
                 "boundary": null,
@@ -38540,6 +38530,16 @@
               },
               {
                 "id": "stderr:member:500",
+                "surface": "stderr",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "stderr:member:504",
                 "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -38944,7 +38944,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stderr:member:1024",
+                "id": "stderr:member:1025",
                 "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -38954,7 +38954,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stderr:member:1037",
+                "id": "stderr:member:1038",
                 "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
