@@ -43,12 +43,12 @@ test('SUSTAINED PROBE: the gate result is acted on, not discarded, and an unconf
   assert.ok(SCRIPT.slice(finalCheck, finalCheck + 2500).includes('exit 1'), 'the hard check must still exit 1');
 });
 
-test('SUSTAINED PROBE: the gate script the preflight calls exists, is executable, and takes the flags used', () => {
+test('SUSTAINED PROBE: the gate script the preflight calls exists and takes the flags used', () => {
   // Breaks if: the gate is renamed or loses a flag (the call would error and, under `if !`, quietly degrade to the old
-  // behaviour), or its executable bit is lost.
+  // behaviour). The executable bit is deliberately NOT asserted: every caller runs `bash <path>` and git stores these
+  // scripts as 100644, so an exec-bit check can only pass on Windows (it failed on Linux CI in the first cut).
   const gatePath = path.join(ROOT, 'scripts/ci/acr-dataplane-gate.sh');
   assert.ok(fs.existsSync(gatePath), 'scripts/ci/acr-dataplane-gate.sh must exist');
   const gate = fs.readFileSync(gatePath, 'utf8');
   for (const flag of ['--acr', '--timeout-seconds', '--on-unconfirmed']) assert.ok(gate.includes(flag), `the gate must accept ${flag}`);
-  if (process.platform !== 'win32') assert.ok((fs.statSync(gatePath).mode & 0o111) !== 0, 'the gate must be executable');
 });
