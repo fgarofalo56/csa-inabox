@@ -40166,6 +40166,59 @@
           }
         },
         {
+          "id": "sec:publication:scripts/ci/gov-adx-capacity-probe.mjs#module",
+          "kind": "publication",
+          "provenance": "declared",
+          "label": "scripts/ci/gov-adx-capacity-probe.mjs",
+          "facet": {
+            "kind": "publication",
+            "module": "scripts/ci/gov-adx-capacity-probe.mjs",
+            "declaredSinkCount": 4,
+            "sinks": [
+              {
+                "id": "console:member:112",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:122",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:127",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:131",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              }
+            ]
+          }
+        },
+        {
           "id": "sec:publication:scripts/ci/gov-roll-staleness-gate.mjs#module",
           "kind": "publication",
           "provenance": "declared",
@@ -52756,6 +52809,11 @@
           "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
         },
         {
+          "nodeId": "sec:publication:scripts/ci/gov-adx-capacity-probe.mjs#module",
+          "codeModuleId": "code:scripts/ci/gov-adx-capacity-probe.mjs",
+          "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
+        },
+        {
           "nodeId": "sec:publication:scripts/ci/gov-roll-staleness-gate.mjs#module",
           "codeModuleId": "code:scripts/ci/gov-roll-staleness-gate.mjs",
           "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
@@ -54047,6 +54105,10 @@
         {
           "subject": "scripts/ci/ghsa-v2g8-mutation-receipts.mjs",
           "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 9). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+        },
+        {
+          "subject": "scripts/ci/gov-adx-capacity-probe.mjs",
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 4). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
           "subject": "scripts/ci/gov-roll-staleness-gate.mjs",
