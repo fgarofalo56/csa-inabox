@@ -1,0 +1,91 @@
+name: gov-adx-capacity-probe
+
+# Create-and-delete ADX capacity probe for Azure Government. Refs #5123.
+#
+# The GCC-High deploy has been refused `InsufficientResourcesForSubscription`
+# for ADX in usgovvirginia (L8as_v3) and usgovarizona (E8as_v5) for ~18 hours.
+# `gov-adx-sku-probe.yml` is read-only (list-sku) and cannot see that runtime
+# refusal; only an actual create can. This job creates one throwaway cluster per
+# candidate SKU in a throwaway resource group, reports which are ACCEPTED, and
+# deletes everything, including the resource group, in an always() step.
+#
+# COST: each accepted cluster bills (capacity 2) until the delete lands, a few
+# minutes to ~25. Candidates run sequentially so they do not compete for the
+# same capacity. A deployment still running at max_wait is reported
+# `inconclusive` - not refused, not accepted.
+#
+# THE RUN CONCLUSION: GREEN = at least one SKU was accepted. RED = none was.
+# Only the cleanup step is allowed to be a no-op; its failure is RED.
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: Gov region to probe
+        default: usgovarizona
+      skus:
+        description: Comma-separated ADX SKUs (adx-cluster.bicep @allowed)
+        default: Standard_E8as_v5+1TB_PS,Standard_E8a_v4,Standard_E4a_v4,Standard_E16a_v4,Standard_L8as_v3
+      capacity:
+        description: Instance count
+        default: '2'
+      max_wait:
+        description: Seconds to wait per SKU before reporting inconclusive
+        default: '1500'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gov-adx-capacity-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      PROBE_RG: rg-adxprobe-${{ github.run_id }}
+      PROBE_REGION: ${{ inputs.region }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Azure login (Gov)
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Install the kusto CLI extension
+        run: az extension add --name kusto --only-show-errors
+
+      - name: Create the throwaway resource group
+        run: az group create -n "$PROBE_RG" -l "$PROBE_REGION" --tags purpose=adx-capacity-probe -o none
+
+      - name: Probe each SKU
+        env:
+          SKUS: ${{ inputs.skus }}
+          CAPACITY: ${{ inputs.capacity }}
+          MAX_WAIT: ${{ inputs.max_wait }}
+        run: node scripts/ci/gov-adx-capacity-probe.mjs --rg "$PROBE_RG" --region "$PROBE_REGION" --skus "$SKUS" --capacity "$CAPACITY" --max-wait "$MAX_WAIT"
+
+      - name: Delete the throwaway resource group
+        if: always()
+        run: |
+          az group delete -n "$PROBE_RG" --yes --no-wait
+          echo "Requested deletion of $PROBE_RG (async). Verify it is gone:"
+          az group exists -n "$PROBE_RG"
