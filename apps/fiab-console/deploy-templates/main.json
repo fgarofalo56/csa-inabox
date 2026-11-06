@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "7939670596006549877"
+      "templateHash": "17333493511261621109"
     }
   },
   "definitions": {
@@ -2639,7 +2639,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "13926890231921400636"
+              "templateHash": "12680801221324748776"
             }
           },
           "definitions": {
@@ -2794,6 +2794,13 @@
                   "maxLength": 22,
                   "metadata": {
                     "description": "Explicit ADX cluster name (4-22 chars, lowercase letters, digits and hyphens). Unset = the derived name adx-csa-loom-<6 hex of the subscription id>. Needed when a deleted cluster's name is still reserved (Gov run 42106150785: InvalidClusterName \"already taken\" about 20 hours after the delete). A landing zone attaching to this cluster must be given the same name (LOOM_ADMIN_ADX_CLUSTER / adminPlaneAdxClusterName)."
+                  }
+                },
+                "adxLocation": {
+                  "type": "string",
+                  "nullable": true,
+                  "metadata": {
+                    "description": "Region for the ADX cluster. Unset = the hub location. Gov run 42157975744: a fresh Standard_L8as_v3 cluster in usgovvirginia was refused (InsufficientResourcesForSubscription, \"no available resources for the cluster\"), so GCC-High places it in usgovarizona. ADX has no private endpoint in this topology, so there is no subnet region to match; endpoints come from the cluster outputs."
                   }
                 },
                 "adxEnableOptimizedAutoscale": {
@@ -5200,6 +5207,7 @@
             "copilotEvalJudgeDailyCap": "[coalesce(tryGet(parameters('functionAppsConfig'), 'copilotEvalJudgeDailyCap'), 5000)]",
             "adxSkuName": "[coalesce(tryGet(parameters('adxConfig'), 'adxSkuName'), 'Dev(No SLA)_Standard_E2a_v4')]",
             "adxClusterNameEff": "[coalesce(tryGet(parameters('adxConfig'), 'adxClusterName'), format('adx-csa-loom-{0}', take(uniqueString(subscription().id), 6)))]",
+            "adxLocationEff": "[coalesce(tryGet(parameters('adxConfig'), 'adxLocation'), parameters('location'))]",
             "adxEnableOptimizedAutoscale": "[coalesce(tryGet(parameters('adxConfig'), 'adxEnableOptimizedAutoscale'), false())]",
             "adxAutoscaleMinimum": "[coalesce(tryGet(parameters('adxConfig'), 'adxAutoscaleMinimum'), 2)]",
             "adxAutoscaleMaximum": "[coalesce(tryGet(parameters('adxConfig'), 'adxAutoscaleMaximum'), 10)]",
@@ -13951,7 +13959,7 @@
                 "mode": "Incremental",
                 "parameters": {
                   "location": {
-                    "value": "[parameters('location')]"
+                    "value": "[variables('adxLocationEff')]"
                   },
                   "clusterName": {
                     "value": "[variables('adxClusterNameEff')]"
@@ -15120,7 +15128,7 @@
                 "mode": "Incremental",
                 "parameters": {
                   "location": {
-                    "value": "[parameters('location')]"
+                    "value": "[variables('adxLocationEff')]"
                   },
                   "adxClusterName": {
                     "value": "[reference('adxCluster').outputs.clusterName.value]"

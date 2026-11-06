@@ -263,6 +263,9 @@ type adxConfigT = {
   @maxLength(22)
   adxClusterName: string?
 
+  @description('Region for the ADX cluster. Unset = the hub location. Gov run 42157975744: a fresh Standard_L8as_v3 cluster in usgovvirginia was refused (InsufficientResourcesForSubscription, "no available resources for the cluster"), so GCC-High places it in usgovarizona. ADX has no private endpoint in this topology, so there is no subnet region to match; endpoints come from the cluster outputs.')
+  adxLocation: string?
+
   @description('Enable ADX optimized auto-scale. Requires a Standard-tier adxSkuName (Basic/Dev SKUs reject it).')
   adxEnableOptimizedAutoscale: bool?
 
@@ -543,6 +546,9 @@ var copilotEvalJudgeDailyCap = functionAppsConfig.?copilotEvalJudgeDailyCap ?? 5
 var adxSkuName = adxConfig.?adxSkuName ?? 'Dev(No SLA)_Standard_E2a_v4'
 // Same expression as adx-cluster.bicep's own default, so a boundary that sets no name keeps its derived name.
 var adxClusterNameEff = adxConfig.?adxClusterName ?? 'adx-csa-loom-${take(uniqueString(subscription().id), 6)}'
+// Unset = the hub location, byte-for-byte the old behaviour. The cluster, its databases and their data connections
+// must all share this region (an ADX database's `location` must equal its cluster's).
+var adxLocationEff = adxConfig.?adxLocation ?? location
 var adxEnableOptimizedAutoscale = adxConfig.?adxEnableOptimizedAutoscale ?? false
 var adxAutoscaleMinimum = adxConfig.?adxAutoscaleMinimum ?? 2
 var adxAutoscaleMaximum = adxConfig.?adxAutoscaleMaximum ?? 10
@@ -3916,7 +3922,7 @@ var effectiveAdxSkuName = (boundary == 'GCC-High' || boundary == 'IL5') && start
 module adxCluster 'adx-cluster.bicep' = if (adxEnabled && empty(existingAdxClusterName)) {
   name: 'adx-cluster'
   params: {
-    location: location
+    location: adxLocationEff
     clusterName: adxClusterNameEff
     skuName: effectiveAdxSkuName
     enableOptimizedAutoscale: adxEnableOptimizedAutoscale
@@ -4072,7 +4078,8 @@ module orgVisualsRbac '../landing-zone/org-visuals-rbac.bicep' = if (!skipRoleGr
 module workspaceMonitor 'workspace-monitor.bicep' = if (workspaceMonitorEnabled && adxEnabled && empty(existingAdxClusterName)) {
   name: 'workspace-monitor'
   params: {
-    location: location
+    // Its only uses of `location` are the ADX database and data connection, which must follow the cluster's region.
+    location: adxLocationEff
     adxClusterName: adxCluster!.outputs.clusterName
     monitorDbName: workspaceMonitorDbName
     lawName: monitoring.outputs.lawName

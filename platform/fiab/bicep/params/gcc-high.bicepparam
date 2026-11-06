@@ -394,17 +394,16 @@ param aiSearchLocation = 'usgovarizona'
 // fall back to Synapse-Serverless / Loom-native here per the documented boundary.
 param aasEnabled = false
 param adxEnabled = true
-// ADX SKU: Standard_E8as_v5+1TB_PS (the admin-plane GCC-High default) is NOT offered in
-// usgovvirginia - MEASURED by gov-adx-sku-probe run 41880903882 (2026-11-04), which
-// listed 5 Virginia SKUs, none restricted; the live cluster could not start for
-// capacity (deploy run 41875055921). L8as_v3 is offered in BOTH Gov regions this
-// estate targets. The live cluster must be scaled to it out-of-band BEFORE the next
-// full apply or the preflight dies again; this value stops the apply reverting it.
-// adxClusterName: the deleted cluster's name (adx-csa-loom-fmezxj) was still 'already taken' about 20 hours after
-// the delete (Gov run 42106150785). Any landing zone attaching to this cluster needs the same name.
+// ADX placement. usgovvirginia offers only 5 ADX SKUs (gov-adx-sku-probe run 41880903882, 2026-11-04), not the
+// admin-plane GCC-High default Standard_E8as_v5+1TB_PS, and a fresh Standard_L8as_v3 there was refused for capacity
+// (Gov run 42157975744). usgovarizona offers 24 SKUs including that default, so the SKU override is dropped and the
+// default applies. Capacity in usgovarizona is NOT measured: only a live create shows it.
+// adxClusterName: the deleted cluster's name (adx-csa-loom-fmezxj) stayed 'already taken' for 20+ hours (run 42106150785).
+// Any landing zone attaching to this cluster needs the same name AND its region (adxLocation); the DLZ attach path
+// does not take a cluster region yet (tracked, untested).
 param adxConfig = {
-  adxSkuName: 'Standard_L8as_v3'
   adxClusterName: 'adx-csa-loom-gcch1'
+  adxLocation: 'usgovarizona'
 }
 // RTI backends — Event Hubs + Stream Analytics ON by default (opt-out). Entra-
 // only auth (the only IL5/GCC-High-allowed posture). Set the env var to 'false'
