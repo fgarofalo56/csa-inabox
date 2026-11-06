@@ -233,6 +233,14 @@ else
   fi
   if bash "$LEASE_SCRIPT" acquire --acr "$ACR"; then
     LEASE_HELD="true"
+    # `az acr repository list` authenticates through an ARM-mediated token exchange and can answer before the firewall
+    # rule reaches the data plane (30-90 s), so ONE success is not "up". Gov run 42147678921: the first probe passed and
+    # the very next one failed, 80 s after the open, and the deploy stopped. Wait on the HTTP-path probe, which needs N
+    # CONSECUTIVE answers (the producers do the same), then keep the az read below as the final check: a registry that is
+    # genuinely unreachable still stops the deploy, with the same honest message.
+    if ! bash "$SCRIPT_DIR/../ci/acr-dataplane-gate.sh" --acr "$ACR" --timeout-seconds 180 --on-unconfirmed warn; then
+      note "preflight: the data-plane gate could not confirm $ACR is serving this runner; the az read below decides."
+    fi
     for _ in $(seq 1 12); do data_plane_up && break; sleep 15; done
   elif [[ "$FIRST_PROBE_OK" == "true" ]]; then
     # Could not take our own lease, but the plane was reachable a moment ago.
