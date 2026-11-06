@@ -82,6 +82,12 @@ export async function probeOne({ az, sku, idx, rg, region, capacity, maxWait, po
       }
       if (['Succeeded', 'Failed', 'Canceled'].includes(parsed.s)) {
         detail = parsed.e ? JSON.stringify(parsed.e) : '';
+        if (parsed.s !== 'Succeeded') {
+          // The deployment error only says "terminal provisioning state Failed"; the
+          // RP's real message (e.g. InsufficientResourcesForSubscription) lives on the operation.
+          const ops = az(['deployment', 'operation', 'group', 'list', '-g', rg, '-n', dep, '--query', "[?properties.provisioningState=='Failed'].properties.statusMessage", '-o', 'json']);
+          detail += ops.status === 0 ? ` OPERATIONS=${ops.stdout.replace(/\s+/g, ' ').trim()}` : ' OPERATIONS=unreadable';
+        }
         return { sku, cluster, verdict: classify(parsed.s, detail), detail };
       }
       await sleepFn(poll);
@@ -119,7 +125,7 @@ export async function main(argv, az = azRunner) {
     // Sequential: parallel creates would compete for the same capacity and blur each verdict.
     for (let i = 0; i < skus.length; i++) {
       const r = await probeOne({ az, sku: skus[i], idx: i, rg: o.rg, region: o.region, capacity: o.capacity, maxWait: o.maxWait, poll: o.poll, dir, runId });
-      console.log(`${r.verdict.padEnd(17)} ${r.sku}  (${o.region}, capacity ${o.capacity})  ${r.detail.slice(0, 300)}`);
+      console.log(`${r.verdict.padEnd(17)} ${r.sku}  (${o.region}, capacity ${o.capacity})  ${r.detail.slice(-1200)}`);
       results.push(r);
     }
   } finally {

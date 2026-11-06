@@ -36,6 +36,21 @@ test('probeOne: a Failed deployment with the capacity error is refused, and the 
   assert.ok(calls.some((c) => c.startsWith('kusto cluster delete') && c.includes('adxprobe-10')), calls.join('\n'));
 });
 
+test('probeOne: a generic Failed deployment is classified from the OPERATION message, not left failed-other', async () => {
+  const generic = { code: 'DeploymentFailed', message: "reached terminal provisioning state 'Failed'" };
+  const op = JSON.stringify([{ code: 'InsufficientResourcesForSubscription', message: 'no available resources for the cluster' }]);
+  const calls = [];
+  const az = (a) => {
+    calls.push(a.join(' '));
+    if (a[2] === 'show') return { status: 0, stdout: JSON.stringify({ s: 'Failed', e: generic }), stderr: '' };
+    if (a[0] === 'deployment' && a[1] === 'operation') return { status: 0, stdout: op, stderr: '' };
+    return { status: 0, stdout: '', stderr: '' };
+  };
+  const r = await probeOne(base(az));
+  assert.equal(r.verdict, 'capacity-refused', r.detail);
+  assert.ok(calls.some((c) => c.startsWith('deployment operation group list')));
+});
+
 test('probeOne: Succeeded is accepted', async () => {
   const { az } = fakeAz([{ s: 'Succeeded', e: null }]);
   assert.equal((await probeOne(base(az))).verdict, 'accepted');
