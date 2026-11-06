@@ -31,6 +31,7 @@ function consumerImages() {
   const files = {
     'azure-functions/lineage-extractor': 'platform/fiab/bicep/modules/admin-plane/lineage-extractor-job.bicep',
     'azure-functions/secret-expiry-monitor': 'platform/fiab/bicep/modules/admin-plane/secret-expiry-monitor-job.bicep',
+    'azure-functions/report-subscriptions': 'platform/fiab/bicep/modules/admin-plane/report-subscriptions-job.bicep',
   };
   const out = {};
   for (const [ctx, rel] of Object.entries(files)) {
@@ -53,7 +54,7 @@ test('GOV JOB IMAGES: the producer builds exactly the images the bicep consumers
   const step = stepOf(wf, BUILD);
   assert.ok(step, `step "${BUILD}" is missing`);
   const consumers = consumerImages();
-  assert.equal(Object.keys(consumers).length, 2, 'population floor: two Job images are expected');
+  assert.equal(Object.keys(consumers).length, 3, 'population floor: three Job images are expected');
   for (const [ctx, image] of Object.entries(consumers)) {
     assert.ok(step.includes(`--image "${image}:latest"`), `${image}:latest must be built (the bicep default pulls exactly that)`);
     assert.ok(step.includes(`--image "${image}:$SHA"`), `${image}:$SHA must also be pushed (traceability)`);
