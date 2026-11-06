@@ -473,6 +473,9 @@ param apimEnabled bool = true
 @description('Deploy AI Search. Day-one default ON so the AI Search / reindex / data-product-search / help-copilot surfaces resolve without a setup gate; set false to opt out (e.g. if regional capacity is intermittent).')
 param aiSearchEnabled bool = true
 
+@description('Region for Azure AI Search. Empty = the hub location (every boundary but GCC-High). GCC-High sets usgovarizona because standard-tier capacity is unavailable in usgovvirginia (Gov run 42106150785).')
+param aiSearchLocation string = ''
+
 @description('Deploy Azure Analysis Services (the Azure-native tabular engine backing the semantic-model / BI surfaces). Day-one default ON so the AAS / XMLA / DirectQuery surfaces resolve without a setup gate; set false to opt out (e.g. GCC-High / DoD where AAS is unavailable — the documented Synapse-Serverless / Loom-native fallback applies). Passed through to admin-plane/main.bicep aasEnabled. No Power BI / Fabric required (XMLA is the opt-in alternative).')
 param aasEnabled bool = true
 
@@ -1373,6 +1376,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     loomAmlRg: loomAmlRg
     apimEnabled: (loomApimEnabled && provisionApim)
     aiSearchEnabled: provisionAiSearch
+    aiSearchLocation: aiSearchLocation
     adxEnabled: provisionAdx
     // #4122 — same defect class as the aasEnabled / reportSubscriptionsEnabled
     // gap recorded just below: adxConfig was declared on admin-plane/main.bicep

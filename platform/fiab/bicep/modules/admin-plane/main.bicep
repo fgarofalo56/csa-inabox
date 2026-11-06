@@ -651,6 +651,9 @@ param apimEnabled bool = false
 @description('Deploy AI Search. Capacity in certain regions is intermittent; default off so first deploy succeeds even when AI Search SKUs are over-subscribed.')
 param aiSearchEnabled bool = false
 
+@description('Region for the AI Search service. Empty = the hub location. Gov run 42106150785: Microsoft.Search `standard` was unavailable in usgovvirginia ("does not have enough resources available"), so GCC-High sets usgovarizona. The private endpoint stays in the hub subnet; a private endpoint may target a service in another region.')
+param aiSearchLocation string = ''
+
 @description('Deploy shared ADX cluster in the admin plane. Each DLZ then attaches its own database to this single cluster.')
 param adxEnabled bool = false
 
@@ -3499,7 +3502,10 @@ module aiSearch 'ai-search.bicep' = if (aiSearchEnabled && empty(existingAiSearc
   // HUB PE-writer serialization chain (see consoleCosmos header).
   dependsOn: [ keyvault, consoleCosmos, registry ]
   params: {
-    location: location
+    location: empty(aiSearchLocation) ? location : aiSearchLocation
+    // The endpoint lives in the hub VNet, so it stays in the hub region; so does the (VNet-injected) script host.
+    privateEndpointLocation: location
+    scriptLocation: location
     privateEndpointSubnetId: network.outputs.privateEndpointsSubnetId
     privateDnsZoneSearchId: network.outputs.privateDnsZoneIds.search
     workspaceId: monitoring.outputs.lawId
