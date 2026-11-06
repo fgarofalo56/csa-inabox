@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "16868205151653731285"
+      "templateHash": "12261978811749727531"
     }
   },
   "definitions": {
@@ -935,6 +935,13 @@
       "defaultValue": true,
       "metadata": {
         "description": "Deploy AI Search. Day-one default ON so the AI Search / reindex / data-product-search / help-copilot surfaces resolve without a setup gate; set false to opt out (e.g. if regional capacity is intermittent)."
+      }
+    },
+    "aiSearchLocation": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Region for Azure AI Search. Empty = the hub location (every boundary but GCC-High). GCC-High sets usgovarizona because standard-tier capacity is unavailable in usgovvirginia (Gov run 42106150785)."
       }
     },
     "aasEnabled": {
@@ -2292,6 +2299,9 @@
           "aiSearchEnabled": {
             "value": "[variables('provisionAiSearch')]"
           },
+          "aiSearchLocation": {
+            "value": "[parameters('aiSearchLocation')]"
+          },
           "adxEnabled": {
             "value": "[variables('provisionAdx')]"
           },
@@ -2629,7 +2639,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "11512441259772110180"
+              "templateHash": "10232335616907687960"
             }
           },
           "definitions": {
@@ -3685,6 +3695,13 @@
               "defaultValue": false,
               "metadata": {
                 "description": "Deploy AI Search. Capacity in certain regions is intermittent; default off so first deploy succeeds even when AI Search SKUs are over-subscribed."
+              }
+            },
+            "aiSearchLocation": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Region for the AI Search service. Empty = the hub location. Gov run 42106150785: Microsoft.Search `standard` was unavailable in usgovvirginia (\"does not have enough resources available\"), so GCC-High sets usgovarizona. The private endpoint stays in the hub subnet; a private endpoint may target a service in another region."
               }
             },
             "adxEnabled": {
@@ -10091,9 +10108,7 @@
                 },
                 "mode": "Incremental",
                 "parameters": {
-                  "location": {
-                    "value": "[parameters('location')]"
-                  },
+                  "location": "[if(empty(parameters('aiSearchLocation')), createObject('value', parameters('location')), createObject('value', parameters('aiSearchLocation')))]",
                   "privateEndpointSubnetId": {
                     "value": "[reference('network').outputs.privateEndpointsSubnetId.value]"
                   },

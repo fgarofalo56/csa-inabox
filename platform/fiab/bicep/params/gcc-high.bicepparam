@@ -385,6 +385,10 @@ param hubFirewallEnabled = true
 // call fails honestly (not vaporware) — flip back to false or set the EXISTING_*
 // AI Search vars to reuse a tenant service.
 param aiSearchEnabled = true
+// usgovvirginia has no standard-tier AI Search capacity (Gov run 42106150785, ResourcesForSkuUnavailable);
+// usgovarizona is where this estate already places its OpenAI embeddings. Capacity THERE is not measured:
+// only a live create proves it. IL5/DoD share usgovvirginia and are unprobed, so they are left unchanged.
+param aiSearchLocation = 'usgovarizona'
 // Azure Analysis Services is NOT available in GCC-High — pin OFF (main.bicep now
 // defaults aasEnabled=true for Commercial day-one). The semantic-model surfaces
 // fall back to Synapse-Serverless / Loom-native here per the documented boundary.
