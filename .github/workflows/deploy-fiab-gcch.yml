@@ -1314,7 +1314,9 @@ jobs:
             --skip-if-registry-absent \
             "loom-duckdb:${LOOM_DUCKDB_TAG:?not exported — the 'Adopt the image tags this estate is running' step must run before this preflight (#3449)}" \
             "loom-unity:${LOOM_UNITY_TAG:?not exported — the 'Adopt the image tags this estate is running' step must run before this preflight (#3449)}" \
-            "$VALKEY_REF"
+            "$VALKEY_REF" \
+            "loom-lineage-extractor:latest" \
+            "loom-secret-expiry-monitor:latest"
 
       # ── SILENT-REVERT GATE (#3161, the runtime half) ────────────────────────
       # Having the tag in scope is necessary and NOT sufficient. In scope with

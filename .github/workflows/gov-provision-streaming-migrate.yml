@@ -264,6 +264,24 @@ jobs:
             --image "loom-risingwave:latest" \
             apps/loom-risingwave
 
+      # The two Container App Job images the admin-plane template references as LITERAL `:latest` (not through
+      # appImageTags): modules/admin-plane/lineage-extractor-job.bicep and secret-expiry-monitor-job.bicep. Gov had no
+      # producer, so Provision failed InvalidParameterValueInContainerTemplate / MANIFEST_UNKNOWN on both (Gov run
+      # 42106150785). Built here, inside the ACR firewall lease the step above acquired and the always-step below
+      # releases; $SHA was exported by that step. Same contexts the dispatch workflows build from.
+      - name: Build the Job images on the Gov ACR (lineage extractor + secret-expiry monitor)
+        if: ${{ env.MODE != 'whatif' && steps.discover.outputs.estate == 'present' }}
+        run: |
+          set -euo pipefail
+          az acr build --registry "$ACR" --no-logs \
+            --image "loom-lineage-extractor:latest" \
+            --image "loom-lineage-extractor:$SHA" \
+            azure-functions/lineage-extractor
+          az acr build --registry "$ACR" --no-logs \
+            --image "loom-secret-expiry-monitor:latest" \
+            --image "loom-secret-expiry-monitor:$SHA" \
+            azure-functions/secret-expiry-monitor
+
       - name: Prove both manifests exist at the deploy tag
         if: ${{ env.MODE != 'whatif' && steps.discover.outputs.estate == 'present' }}
         run: |
@@ -288,6 +306,29 @@ jobs:
               RC=1
             else
               echo "::error::could NOT READ $ACR for $IMG:$IMAGE_TAG (see the resolver output above). Its existence is UNPROVEN, not disproven — this says nothing about whether a deploy would fail. Most likely the ACR firewall is closed to this runner or a change has not propagated."
+              RC=1
+            fi
+          done
+          exit $RC
+
+      - name: Prove the Job image manifests exist at :latest
+        if: ${{ env.MODE != 'whatif' && steps.discover.outputs.estate == 'present' }}
+        run: |
+          set -euo pipefail
+          # deploy-integrity R7: absent and unreadable are different answers and must read differently.
+          RC=0
+          for IMG in loom-lineage-extractor loom-secret-expiry-monitor; do
+            set +e
+            D=$(bash "$GITHUB_WORKSPACE/scripts/ci/resolve-acr-digest.sh" --acr "$ACR" --image "$IMG:latest")
+            DRC=$?
+            set -e
+            if [ $DRC -eq 0 ] && [ -n "$D" ]; then
+              echo "::notice::$ACR_LOGIN/$IMG:latest -> $D"
+            elif [ $DRC -eq 3 ]; then
+              echo "::error::$IMG:latest is NOT in $ACR: the registry ANSWERED not-found on every attempt, so the Job that pulls it cannot start."
+              RC=1
+            else
+              echo "::error::could NOT READ $ACR for $IMG:latest (see the resolver output above). Its existence is UNPROVEN, not disproven."
               RC=1
             fi
           done
