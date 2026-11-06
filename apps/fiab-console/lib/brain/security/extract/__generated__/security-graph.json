@@ -38904,7 +38904,7 @@
             "declaredSinkCount": 8,
             "sinks": [
               {
-                "id": "stdout:member:560",
+                "id": "stdout:member:591",
                 "surface": "stdout",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -38914,7 +38914,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stdout:member:709",
+                "id": "stdout:member:740",
                 "surface": "stdout",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -38924,7 +38924,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stderr:member:713",
+                "id": "stderr:member:744",
                 "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -38934,7 +38934,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stderr:member:767",
+                "id": "stderr:member:798",
                 "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -38944,7 +38944,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stderr:member:1025",
+                "id": "stderr:member:1064",
                 "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -38954,7 +38954,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stderr:member:1038",
+                "id": "stderr:member:1077",
                 "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -38964,7 +38964,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "inherited-fd:spawn-stdio:541",
+                "id": "inherited-fd:spawn-stdio:572",
                 "surface": "inherited-fd",
                 "accessPath": "spawn-stdio",
                 "wholeExpressionBounded": false,
@@ -38974,7 +38974,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "inherited-fd:spawn-stdio:897",
+                "id": "inherited-fd:spawn-stdio:933",
                 "surface": "inherited-fd",
                 "accessPath": "spawn-stdio",
                 "wholeExpressionBounded": false,

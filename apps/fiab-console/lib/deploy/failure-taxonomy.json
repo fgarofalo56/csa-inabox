@@ -566,6 +566,21 @@
       "grantHint": "az provider register --namespace <namespace> --wait"
     },
     {
+      "id": "eventual.account-provisioning-state",
+      "class": "eventual-consistency",
+      "anyOf": [
+        "accountprovisioningstateinvalid"
+      ],
+      "not": [
+        "in state failed",
+        "in state canceled",
+        "in state deleting"
+      ],
+      "observed": "A Cognitive Services / Foundry account PUT returns before its async provisioning finishes, so a private endpoint created against it in the same deployment is refused AccountProvisioningStateInvalid \"in state Accepted\". Gov run 42167265779 (2026-11-06): pe-aifndry-loom-usgovvirginia refused; the portal showed the account Succeeded afterwards. Terminal states (Failed, Canceled, Deleting) are excluded: those are not a wait.",
+      "remediationKind": "platform-will-fix",
+      "remediation": "The account was still provisioning when its private endpoint was created. It reaches Succeeded on its own; the platform waits and retries. No operator action."
+    },
+    {
       "id": "eventual.principal-not-found",
       "class": "eventual-consistency",
       "anyOf": [

@@ -140,6 +140,26 @@
       }
     },
     {
+      "name": "eventual-consistency — a private endpoint refused while its Foundry account is still Accepted, verbatim",
+      "source": "deploy-fiab-gcch run 42167265779 (Gov, usgovvirginia), 2026-11-06, Provision leaf (module admin-plane > agent-foundry). Classified unknown / [no signal] before this case existed, so it was never retried although the portal showed the account Succeeded afterwards.",
+      "input": "AccountProvisioningStateInvalid: Call to Microsoft.CognitiveServices/accounts failed. Error message: Account /subscriptions/<redacted>/resourceGroups/rg-csa-loom-admin-usgovvirginia/providers/Microsoft.CognitiveServices/accounts/aifndry-loom-usgovvirginia in state Accepted",
+      "expect": {
+        "class": "eventual-consistency",
+        "signalId": "eventual.account-provisioning-state",
+        "retryable": true
+      }
+    },
+    {
+      "name": "NOT eventual — the same code in a TERMINAL state is not a wait (control for the exclusion)",
+      "source": "synthesised; the control for the `not` clause on eventual.account-provisioning-state",
+      "input": "AccountProvisioningStateInvalid: Call to Microsoft.CognitiveServices/accounts failed. Error message: Account /subscriptions/<redacted>/resourceGroups/rg-csa-loom-admin-usgovvirginia/providers/Microsoft.CognitiveServices/accounts/aifndry-loom-usgovvirginia in state Failed",
+      "expect": {
+        "class": "unknown",
+        "signalId": null,
+        "retryable": false
+      }
+    },
+    {
       "name": "eventual-consistency — Entra replication lag on a just-created UAMI",
       "source": "ARM RBAC on a principal created earlier in the same deployment",
       "input": "ERROR: (PrincipalNotFound) Principal 3f2b… does not exist in the directory 9c1e….",
