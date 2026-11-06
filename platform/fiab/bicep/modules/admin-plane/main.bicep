@@ -5455,7 +5455,9 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_KUSTO_CLUSTER_NAME', value: !empty(existingAdxClusterName) ? existingAdxClusterName : (adxEnabled ? adxCluster!.outputs.clusterName : '') }
             { name: 'LOOM_KUSTO_RG',           value: !empty(existingAdxClusterName) ? byoAdxRg : (adxEnabled ? resourceGroup().name : '') }
             { name: 'LOOM_KUSTO_SUB',          value: !empty(existingAdxClusterName) ? byoAdxSub : ((adxEnabled) ? subscription().subscriptionId : '') }
-            { name: 'LOOM_KUSTO_LOCATION',     value: (!empty(existingAdxClusterName) || adxEnabled) ? location : '' }
+            // Console-created ADX children (KQL databases, Eventhouse data connections) must carry the CLUSTER's region.
+            // A cluster this template creates is in adxLocationEff; an adopted one is assumed to be in the hub location.
+            { name: 'LOOM_KUSTO_LOCATION',     value: !empty(existingAdxClusterName) ? location : (adxEnabled ? adxLocationEff : '') }
             // Per-DLZ ADX database is named loomdb_<domain>; the single-sub DLZ
             // uses domain "default" → loomdb_default. Underscore (not hyphen) so
             // the name is a valid bare KQL identifier. For a reused cluster the

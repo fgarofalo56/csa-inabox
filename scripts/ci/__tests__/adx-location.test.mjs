@@ -69,3 +69,14 @@ test('ADX LOCATION: only GCC-High sets a region, to usgovarizona, and no longer 
   assert.ok(!read('params/gcc-high.bicepparam').includes("adxSkuName: 'Standard_L8as_v3'"), 'the refused Virginia SKU override must not return');
   assert.ok(read(AP).includes("'Standard_E8as_v5+1TB_PS'"), 'the GCC-High default SKU substitution must still exist in admin-plane');
 });
+
+test('ADX LOCATION: the Console is told the CLUSTER region, so databases it creates carry the right location', () => {
+  // Breaks if: LOOM_KUSTO_LOCATION goes back to the hub `location` for a created cluster (the console would PUT KQL
+  // databases and data connections in usgovvirginia against an Arizona cluster and ARM would refuse), or the adopted-cluster
+  // branch stops using the hub location. Found by independent review of the first cut: the runtime clients
+  // (kusto-arm-client.ts, kusto-client.ts, the eventhouse ingest route) read this variable before the live cluster lookup.
+  const src = read(AP);
+  const line = /\n +\{ name: 'LOOM_KUSTO_LOCATION', +value: ([^\n]*) \}\n/.exec(src);
+  assert.ok(line, 'LOOM_KUSTO_LOCATION must still be declared');
+  assert.equal(line[1], "!empty(existingAdxClusterName) ? location : (adxEnabled ? adxLocationEff : '')");
+});
