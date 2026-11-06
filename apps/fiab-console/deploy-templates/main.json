@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "16868205151653731285"
+      "templateHash": "18137112382066239744"
     }
   },
   "definitions": {
@@ -935,6 +935,13 @@
       "defaultValue": true,
       "metadata": {
         "description": "Deploy AI Search. Day-one default ON so the AI Search / reindex / data-product-search / help-copilot surfaces resolve without a setup gate; set false to opt out (e.g. if regional capacity is intermittent)."
+      }
+    },
+    "aiSearchLocation": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Region for Azure AI Search. Empty = the hub location (every boundary but GCC-High). GCC-High sets usgovarizona because standard-tier capacity is unavailable in usgovvirginia (Gov run 42106150785)."
       }
     },
     "aasEnabled": {
@@ -2292,6 +2299,9 @@
           "aiSearchEnabled": {
             "value": "[variables('provisionAiSearch')]"
           },
+          "aiSearchLocation": {
+            "value": "[parameters('aiSearchLocation')]"
+          },
           "adxEnabled": {
             "value": "[variables('provisionAdx')]"
           },
@@ -2629,7 +2639,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "11512441259772110180"
+              "templateHash": "11147755412027964191"
             }
           },
           "definitions": {
@@ -3685,6 +3695,13 @@
               "defaultValue": false,
               "metadata": {
                 "description": "Deploy AI Search. Capacity in certain regions is intermittent; default off so first deploy succeeds even when AI Search SKUs are over-subscribed."
+              }
+            },
+            "aiSearchLocation": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Region for the AI Search service. Empty = the hub location. Gov run 42106150785: Microsoft.Search `standard` was unavailable in usgovvirginia (\"does not have enough resources available\"), so GCC-High sets usgovarizona. The private endpoint stays in the hub subnet; a private endpoint may target a service in another region."
               }
             },
             "adxEnabled": {
@@ -10091,7 +10108,11 @@
                 },
                 "mode": "Incremental",
                 "parameters": {
-                  "location": {
+                  "location": "[if(empty(parameters('aiSearchLocation')), createObject('value', parameters('location')), createObject('value', parameters('aiSearchLocation')))]",
+                  "privateEndpointLocation": {
+                    "value": "[parameters('location')]"
+                  },
+                  "scriptLocation": {
                     "value": "[parameters('location')]"
                   },
                   "privateEndpointSubnetId": {
@@ -10133,7 +10154,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "3977516044276470005"
+                      "templateHash": "12058569855321649982"
                     }
                   },
                   "parameters": {
@@ -10259,6 +10280,13 @@
                         "description": "Location of the deployment script (kept distinct so the script can run in a region with ACI quota)."
                       }
                     },
+                    "privateEndpointLocation": {
+                      "type": "string",
+                      "defaultValue": "[parameters('location')]",
+                      "metadata": {
+                        "description": "Region of the private endpoint. A private endpoint must be in the SAME region as the virtual network that holds its subnet, while the service it targets may be elsewhere. Defaults to `location`; admin-plane passes the HUB region when the service is placed in another one (aiSearchLocation)."
+                      }
+                    },
                     "debugSessionStorageId": {
                       "type": "string",
                       "defaultValue": "",
@@ -10367,7 +10395,7 @@
                       "type": "Microsoft.Network/privateEndpoints",
                       "apiVersion": "2024-05-01",
                       "name": "[format('pe-{0}', variables('searchName'))]",
-                      "location": "[parameters('location')]",
+                      "location": "[parameters('privateEndpointLocation')]",
                       "tags": "[parameters('complianceTags')]",
                       "properties": {
                         "subnet": {
