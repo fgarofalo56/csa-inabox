@@ -50,3 +50,21 @@ test('SEARCH REGION: only the GCC-High param file sets it, and to usgovarizona',
   }
   assert.deepEqual(setters, { 'gcc-high.bicepparam': 'usgovarizona' });
 });
+
+test('SEARCH REGION: the private endpoint and script host stay in the HUB region, not the service region', () => {
+  // Breaks if: the PE goes back to `location: location` (it would be declared in usgovarizona against a usgovvirginia
+  // subnet and ARM would refuse the region mismatch), or admin-plane stops passing the hub region so the module
+  // defaults to the service region. Found by independent review of the first cut, which only moved `location`.
+  const mod = read('modules/admin-plane/ai-search.bicep');
+  assert.ok(mod.includes("param privateEndpointLocation string = location\n"), 'the module must expose privateEndpointLocation');
+  const pe = mod.slice(mod.indexOf("resource pe 'Microsoft.Network/privateEndpoints"));
+  assert.ok(/\n {2}location: privateEndpointLocation\n/.test(pe.slice(0, 300)), 'the private endpoint must use privateEndpointLocation');
+  assert.ok(mod.includes("resource search 'Microsoft.Search/searchServices") || mod.includes('searchServices@'), 'sanity: the service resource still exists');
+  const svc = mod.slice(mod.indexOf('Microsoft.Search/searchServices@'));
+  assert.ok(/\n {2}location: location\n/.test(svc.slice(0, 300)), 'the service itself must still use `location`');
+  const ap = read('modules/admin-plane/main.bicep');
+  const call = ap.slice(ap.indexOf("module aiSearch 'ai-search.bicep'"));
+  const head = call.slice(0, call.indexOf('\n}\n'));
+  assert.ok(head.includes('\n    privateEndpointLocation: location\n'), 'admin-plane must pass the HUB region for the endpoint');
+  assert.ok(head.includes('\n    scriptLocation: location\n'), 'admin-plane must keep the script host in the HUB region');
+});

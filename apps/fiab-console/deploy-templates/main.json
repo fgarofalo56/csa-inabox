@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "12261978811749727531"
+      "templateHash": "18137112382066239744"
     }
   },
   "definitions": {
@@ -2639,7 +2639,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "10232335616907687960"
+              "templateHash": "11147755412027964191"
             }
           },
           "definitions": {
@@ -10109,6 +10109,12 @@
                 "mode": "Incremental",
                 "parameters": {
                   "location": "[if(empty(parameters('aiSearchLocation')), createObject('value', parameters('location')), createObject('value', parameters('aiSearchLocation')))]",
+                  "privateEndpointLocation": {
+                    "value": "[parameters('location')]"
+                  },
+                  "scriptLocation": {
+                    "value": "[parameters('location')]"
+                  },
                   "privateEndpointSubnetId": {
                     "value": "[reference('network').outputs.privateEndpointsSubnetId.value]"
                   },
@@ -10148,7 +10154,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "3977516044276470005"
+                      "templateHash": "12058569855321649982"
                     }
                   },
                   "parameters": {
@@ -10274,6 +10280,13 @@
                         "description": "Location of the deployment script (kept distinct so the script can run in a region with ACI quota)."
                       }
                     },
+                    "privateEndpointLocation": {
+                      "type": "string",
+                      "defaultValue": "[parameters('location')]",
+                      "metadata": {
+                        "description": "Region of the private endpoint. A private endpoint must be in the SAME region as the virtual network that holds its subnet, while the service it targets may be elsewhere. Defaults to `location`; admin-plane passes the HUB region when the service is placed in another one (aiSearchLocation)."
+                      }
+                    },
                     "debugSessionStorageId": {
                       "type": "string",
                       "defaultValue": "",
@@ -10382,7 +10395,7 @@
                       "type": "Microsoft.Network/privateEndpoints",
                       "apiVersion": "2024-05-01",
                       "name": "[format('pe-{0}', variables('searchName'))]",
-                      "location": "[parameters('location')]",
+                      "location": "[parameters('privateEndpointLocation')]",
                       "tags": "[parameters('complianceTags')]",
                       "properties": {
                         "subnet": {

@@ -65,6 +65,9 @@ param consolePrincipalId string = ''
 @description('Location of the deployment script (kept distinct so the script can run in a region with ACI quota).')
 param scriptLocation string = location
 
+@description('Region of the private endpoint. A private endpoint must be in the SAME region as the virtual network that holds its subnet, while the service it targets may be elsewhere. Defaults to `location`; admin-plane passes the HUB region when the service is placed in another one (aiSearchLocation).')
+param privateEndpointLocation string = location
+
 @description('''Resource ID of the storage account that holds debug-session
 state (container ms-az-cognitive-search-debugsession). When set, the search
 service's system-assigned managed identity is granted Storage Blob Data
@@ -178,7 +181,7 @@ resource debugSessionStorageRole 'Microsoft.Authorization/roleAssignments@2022-0
 
 resource pe 'Microsoft.Network/privateEndpoints@2024-05-01' = {
   name: 'pe-${searchName}'
-  location: location
+  location: privateEndpointLocation
   tags: complianceTags
   properties: {
     subnet: { id: privateEndpointSubnetId }

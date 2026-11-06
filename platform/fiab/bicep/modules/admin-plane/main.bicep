@@ -3496,6 +3496,9 @@ module aiSearch 'ai-search.bicep' = if (aiSearchEnabled && empty(existingAiSearc
   dependsOn: [ keyvault, consoleCosmos, registry ]
   params: {
     location: empty(aiSearchLocation) ? location : aiSearchLocation
+    // The endpoint lives in the hub VNet, so it stays in the hub region; so does the (VNet-injected) script host.
+    privateEndpointLocation: location
+    scriptLocation: location
     privateEndpointSubnetId: network.outputs.privateEndpointsSubnetId
     privateDnsZoneSearchId: network.outputs.privateDnsZoneIds.search
     workspaceId: monitoring.outputs.lawId
