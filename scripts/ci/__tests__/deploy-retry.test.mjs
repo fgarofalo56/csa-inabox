@@ -1645,3 +1645,108 @@ test('VIA: the artifact keeps each leaf\'s deployment chain (end to end through 
   assert.ok(a.armDrilldown.leaves.length >= 1);
   assert.equal(a.armDrilldown.leaves[0].via, 'csa-loom-ci-1', 'a leaf on the root deployment carries the root name as its chain');
 });
+
+// ---------------------------------------------------------------------------
+// One remediation pass converges EVERY named stray, bounded (Gov run 42167265779)
+// ---------------------------------------------------------------------------
+// ARM named THREE conflicting assignments at once; the planner read only the first, so each run converged one and then
+// stopped. The ids below are the three real ones from that run. The converger still proves each one on its own.
+import { MAX_CONVERGE_PER_PASS } from '../deploy-retry.mjs';
+
+const RAE = (id) => `RoleAssignmentExists: The role assignment already exists. The ID of the existing role assignment is ${id}.`;
+const REAL_IDS = ['435cafeb134e4c12a3418a233db07654', 'b9dda2a923655967820ec2bdf4ab7b1c', '61b569936a664b7ca58f04df3081a35a'];
+const dashed = (h) => `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+const multi = (ids) => ids.map(RAE).join('\n');
+
+test('CONVERGE ALL: three distinct strays produce three converge argvs, each with its own name and --apply', () => {
+  // Breaks if: the planner goes back to the first id only (argvs length 1), or an argv loses --apply / its own name.
+  const text = multi(REAL_IDS);
+  const plan = planRemediation(classify(text), text);
+  assert.equal(plan.kind, 'converge-role-assignment');
+  assert.deepEqual(plan.assignmentNames, REAL_IDS);
+  assert.equal(plan.argvs.length, 3);
+  plan.argvs.forEach((argv, i) => {
+    assert.equal(argv[argv.indexOf('--assignment-name') + 1], REAL_IDS[i]);
+    assert.ok(argv.includes('--apply'));
+  });
+  assert.deepEqual(plan.argv, plan.argvs[0], 'argv stays the first converge, for existing consumers');
+  assert.match(plan.why, /ARM named 3 conflicting assignments/);
+});
+
+test('CONVERGE ALL: the dashed and undashed spellings of ONE id are one stray, not two', () => {
+  // Breaks if: de-duplication is removed (the same assignment would be converged twice).
+  const text = `${RAE(REAL_IDS[0])}\n${RAE(dashed(REAL_IDS[0]))}\n${RAE(REAL_IDS[1])}`;
+  const plan = planRemediation(classify(text), text);
+  assert.equal(plan.argvs.length, 2);
+  assert.deepEqual(plan.assignmentNames.map((n) => n.replace(/-/g, '')), [REAL_IDS[0], REAL_IDS[1]]);
+});
+
+test('CONVERGE ALL: past the cap the remainder is REPORTED, not converged', () => {
+  // Breaks if: the cap is removed (an unbounded delete loop on the one destructive action) or the deferred count is not said.
+  const many = Array.from({ length: MAX_CONVERGE_PER_PASS + 4 }, (_, i) => (i + 1).toString(16).padStart(32, '0'));
+  const text = multi(many);
+  const plan = planRemediation(classify(text), text);
+  assert.equal(plan.argvs.length, MAX_CONVERGE_PER_PASS);
+  assert.equal(plan.deferred, 4);
+  assert.match(plan.why, /4 more were NOT converged in this pass/);
+});
+
+test('CONVERGE ALL: a single stray still yields exactly the old plan (no "ARM named N" preamble)', () => {
+  // Breaks if: the multi-stray wording leaks into the one-stray case, which other tests pin word for word.
+  const text = RAE(REAL_IDS[0]);
+  const plan = planRemediation(classify(text), text);
+  assert.equal(plan.argvs.length, 1);
+  assert.doesNotMatch(plan.why, /ARM named/);
+  assert.equal(plan.deferred, 0);
+});
+
+import { runRemediationPass } from '../deploy-retry.mjs';
+
+const stubSpawn = (statuses, calls = []) => (cmd, args, opts) => {
+  calls.push({ cmd, args, opts });
+  const status = statuses[calls.length - 1];
+  return { status, error: undefined, stderr: status === 0 ? '' : 'refused' };
+};
+const ARGVS = [['node', 'conv.mjs', '--assignment-name', 'a'], ['node', 'conv.mjs', '--assignment-name', 'b'], ['node', 'conv.mjs', '--assignment-name', 'c']];
+
+test('CONVERGE ALL: a pass STOPS at the first failure: statuses [0,1,0] make exactly 2 calls and converge 1', () => {
+  // Breaks if: the loop keeps deleting after a failure (3 calls), or the break is placed so the failing one is not the last
+  // call. This is the destructive action: nothing may be removed after something the converger refused.
+  const calls = [];
+  const r = runRemediationPass(ARGVS, stubSpawn([0, 1, 0], calls));
+  assert.equal(calls.length, 2);
+  assert.equal(r.converged, 1);
+  assert.equal(r.ok, false);
+  assert.equal(r.last.stderr, 'refused');
+});
+
+test('CONVERGE ALL: a pass where every converge succeeds runs all of them and reports ok', () => {
+  // Breaks if: the pass stops early on success (calls < 3), or ok is not true / converged is miscounted.
+  const calls = [];
+  const r = runRemediationPass(ARGVS, stubSpawn([0, 0, 0], calls));
+  assert.equal(calls.length, 3);
+  assert.deepEqual(calls.map((c) => c.args[c.args.indexOf('--assignment-name') + 1]), ['a', 'b', 'c']);
+  assert.equal(r.converged, 3);
+  assert.equal(r.ok, true);
+});
+
+test('CONVERGE ALL: a spawn ERROR is a failure even when the status reads 0, and an empty plan is never ok', () => {
+  // Breaks if: `error` is ignored (a child that never started would count as converged) or an empty argv list reports ok.
+  const errored = runRemediationPass([ARGVS[0]], () => ({ status: 0, error: new Error('ENOENT'), stderr: '' }));
+  assert.equal(errored.ok, false);
+  assert.equal(errored.converged, 0);
+  const empty = runRemediationPass([], stubSpawn([]));
+  assert.equal(empty.ok, false);
+  assert.equal(empty.converged, 0);
+});
+
+test('CONVERGE ALL: each child inherits stdout (its own publication boundary) and pipes stderr; and there is ONE spawn site', () => {
+  // Breaks if: stdio changes (stderr would reach the public log unredacted) or a second inherited-stream spawn is added.
+  const calls = [];
+  runRemediationPass([ARGVS[0]], stubSpawn([0], calls));
+  assert.deepEqual(calls[0].opts.stdio, ['inherit', 'inherit', 'pipe']);
+  assert.equal(calls[0].opts.shell, false);
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'deploy-retry.mjs'), 'utf8').replace(/\r\n/g, '\n');
+  assert.equal((src.match(/stdio: \['inherit', 'inherit', 'pipe'\]/g) ?? []).length, 1, 'exactly one inherited-stream spawn site');
+  assert.ok(src.includes('runRemediationPass(plan.argvs ?? [plan.argv])'), 'the retry loop must run the pass over plan.argvs');
+});
