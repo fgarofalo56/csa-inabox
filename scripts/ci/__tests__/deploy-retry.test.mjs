@@ -1700,11 +1700,53 @@ test('CONVERGE ALL: a single stray still yields exactly the old plan (no "ARM na
   assert.equal(plan.deferred, 0);
 });
 
-test('CONVERGE ALL: the retry loop runs every planned argv, stops at the first failure, and has ONE inherited spawn', () => {
-  // Breaks if: the loop goes back to `plan.argv` only, keeps deleting after a failure, or a second inherited-stream spawn
-  // appears (the publication-surface enumeration this file already guards).
+import { runRemediationPass } from '../deploy-retry.mjs';
+
+const stubSpawn = (statuses, calls = []) => (cmd, args, opts) => {
+  calls.push({ cmd, args, opts });
+  const status = statuses[calls.length - 1];
+  return { status, error: undefined, stderr: status === 0 ? '' : 'refused' };
+};
+const ARGVS = [['node', 'conv.mjs', '--assignment-name', 'a'], ['node', 'conv.mjs', '--assignment-name', 'b'], ['node', 'conv.mjs', '--assignment-name', 'c']];
+
+test('CONVERGE ALL: a pass STOPS at the first failure: statuses [0,1,0] make exactly 2 calls and converge 1', () => {
+  // Breaks if: the loop keeps deleting after a failure (3 calls), or the break is placed so the failing one is not the last
+  // call. This is the destructive action: nothing may be removed after something the converger refused.
+  const calls = [];
+  const r = runRemediationPass(ARGVS, stubSpawn([0, 1, 0], calls));
+  assert.equal(calls.length, 2);
+  assert.equal(r.converged, 1);
+  assert.equal(r.ok, false);
+  assert.equal(r.last.stderr, 'refused');
+});
+
+test('CONVERGE ALL: a pass where every converge succeeds runs all of them and reports ok', () => {
+  // Breaks if: the pass stops early on success (calls < 3), or ok is not true / converged is miscounted.
+  const calls = [];
+  const r = runRemediationPass(ARGVS, stubSpawn([0, 0, 0], calls));
+  assert.equal(calls.length, 3);
+  assert.deepEqual(calls.map((c) => c.args[c.args.indexOf('--assignment-name') + 1]), ['a', 'b', 'c']);
+  assert.equal(r.converged, 3);
+  assert.equal(r.ok, true);
+});
+
+test('CONVERGE ALL: a spawn ERROR is a failure even when the status reads 0, and an empty plan is never ok', () => {
+  // Breaks if: `error` is ignored (a child that never started would count as converged) or an empty argv list reports ok.
+  const errored = runRemediationPass([ARGVS[0]], () => ({ status: 0, error: new Error('ENOENT'), stderr: '' }));
+  assert.equal(errored.ok, false);
+  assert.equal(errored.converged, 0);
+  const empty = runRemediationPass([], stubSpawn([]));
+  assert.equal(empty.ok, false);
+  assert.equal(empty.converged, 0);
+});
+
+test('CONVERGE ALL: each child inherits stdout (its own publication boundary) and pipes stderr; and there is ONE spawn site', () => {
+  // Breaks if: stdio changes (stderr would reach the public log unredacted) or a second inherited-stream spawn is added.
+  const calls = [];
+  runRemediationPass([ARGVS[0]], stubSpawn([0], calls));
+  assert.deepEqual(calls[0].opts.stdio, ['inherit', 'inherit', 'pipe']);
+  assert.equal(calls[0].opts.shell, false);
   const src = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'deploy-retry.mjs'), 'utf8').replace(/\r\n/g, '\n');
-  assert.ok(src.includes('for (const argv of plan.argvs ?? [plan.argv]) {'), 'the loop must iterate plan.argvs');
-  assert.ok(src.includes('if (!(rem.status === 0 && !rem.error)) break;'), 'the loop must stop at the first failure');
   assert.equal((src.match(/stdio: \['inherit', 'inherit', 'pipe'\]/g) ?? []).length, 1, 'exactly one inherited-stream spawn site');
+  assert.ok(src.includes('runRemediationPass(plan.argvs ?? [plan.argv])'), 'the retry loop must run the pass over plan.argvs');
 });

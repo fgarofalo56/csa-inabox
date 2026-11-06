@@ -574,6 +574,7 @@
       "not": [
         "in state failed",
         "in state canceled",
+        "in state cancelled",
         "in state deleting"
       ],
       "observed": "A Cognitive Services / Foundry account PUT returns before its async provisioning finishes, so a private endpoint created against it in the same deployment is refused AccountProvisioningStateInvalid \"in state Accepted\". Gov run 42167265779 (2026-11-06): pe-aifndry-loom-usgovvirginia refused; the portal showed the account Succeeded afterwards. Terminal states (Failed, Canceled, Deleting) are excluded: those are not a wait.",

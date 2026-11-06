@@ -349,6 +349,30 @@ const EXISTING_ASSIGNMENT_RE_ALL = new RegExp(EXISTING_ASSIGNMENT_RE.source, 'gi
 export const MAX_CONVERGE_PER_PASS = 8;
 
 /**
+ * Run ONE remediation pass: each argv in order, STOPPING at the first failure so nothing is deleted after something this
+ * code could not establish. `spawn` is injectable so the stop-at-first-failure rule is testable without Gov access.
+ * The stdio is deliberately inherited for stdout (the child owns that publication boundary, #3861) and piped for stderr.
+ *
+ * @param {string[][]} argvs
+ * @param {typeof spawnSync} [spawn]
+ * @returns {{ok:boolean, converged:number, last:object|null}} ok only when at least one ran and EVERY one succeeded
+ */
+export function runRemediationPass(argvs, spawn = spawnSync) {
+  let last = null;
+  let converged = 0;
+  for (const argv of argvs) {
+    last = spawn(argv[0], argv.slice(1), {
+      stdio: ['inherit', 'inherit', 'pipe'],
+      encoding: 'utf8',
+      shell: false,
+    });
+    if (!(last.status === 0 && !last.error)) return { ok: false, converged, last };
+    converged += 1;
+  }
+  return { ok: converged > 0, converged, last };
+}
+
+/**
  * What the PLATFORM can do about this failure itself (auto-bind-by-default §5).
  * Pure: returns the plan, does not execute it. `null` when there is nothing the
  * platform may safely perform unattended.
@@ -924,27 +948,16 @@ async function main() {
         // inherited-stream surface is ENUMERATED` in this script's suite, so a
         // SECOND one cannot appear silently. The child's stderr is `pipe`d and
         // reaches the log only through ghAnnotate() below, which redacts.
-        // One remediation PASS may converge several strays (plan.argvs); it stops at the first failure so nothing is
-        // deleted after something this code could not establish.
-        let rem = null;
-        let converged = 0;
-        for (const argv of plan.argvs ?? [plan.argv]) {
-          rem = spawnSync(argv[0], argv.slice(1), {
-            stdio: ['inherit', 'inherit', 'pipe'],
-            encoding: 'utf8',
-            shell: false,
-          });
-          if (!(rem.status === 0 && !rem.error)) break;
-          converged += 1;
-        }
-        if (rem && rem.status === 0 && !rem.error) {
-          ghAnnotate('notice', `deploy-retry: remediation succeeded (${plan.kind}, ${converged} converged); retrying once.`);
+        // One remediation PASS may converge several strays (plan.argvs); see runRemediationPass for the stop rule.
+        const pass = runRemediationPass(plan.argvs ?? [plan.argv]);
+        if (pass.ok) {
+          ghAnnotate('notice', `deploy-retry: remediation succeeded (${plan.kind}, ${pass.converged} converged); retrying once.`);
           continue; // one extra attempt, deliberately outside the retry budget
         }
         ghAnnotate(
           'warning',
-          `deploy-retry: the platform attempted the remediation (${plan.kind}) and it FAILED after ${converged} converged. ` +
-            `Falling back to reporting it. ${redact(rem?.stderr ?? '')}`,
+          `deploy-retry: the platform attempted the remediation (${plan.kind}) and it FAILED after ${pass.converged} converged. ` +
+            `Falling back to reporting it. ${redact(pass.last?.stderr ?? '')}`,
         );
       } else if (plan) {
         ghAnnotate('warning', `deploy-retry: ${plan.why}`);
