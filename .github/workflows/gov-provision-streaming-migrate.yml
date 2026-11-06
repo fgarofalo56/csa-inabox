@@ -269,7 +269,7 @@ jobs:
       # producer, so Provision failed InvalidParameterValueInContainerTemplate / MANIFEST_UNKNOWN on both (Gov run
       # 42106150785). Built here, inside the ACR firewall lease the step above acquired and the always-step below
       # releases; $SHA was exported by that step. Same contexts the dispatch workflows build from.
-      - name: Build the Job images on the Gov ACR (lineage extractor + secret-expiry monitor)
+      - name: Build the Job images on the Gov ACR (lineage extractor + secret-expiry monitor + report subscriptions)
         if: ${{ env.MODE != 'whatif' && steps.discover.outputs.estate == 'present' }}
         run: |
           set -euo pipefail
@@ -281,6 +281,12 @@ jobs:
             --image "loom-secret-expiry-monitor:latest" \
             --image "loom-secret-expiry-monitor:$SHA" \
             azure-functions/secret-expiry-monitor
+          # Third literal-:latest Job image (modules/admin-plane/report-subscriptions-job.bicep). It surfaced only once the
+          # earlier failures cleared (Gov run 42276278995: MANIFEST_UNKNOWN on loom-report-subscriptions:latest).
+          az acr build --registry "$ACR" --no-logs \
+            --image "loom-report-subscriptions:latest" \
+            --image "loom-report-subscriptions:$SHA" \
+            azure-functions/report-subscriptions
 
       - name: Prove both manifests exist at the deploy tag
         if: ${{ env.MODE != 'whatif' && steps.discover.outputs.estate == 'present' }}
@@ -317,7 +323,7 @@ jobs:
           set -euo pipefail
           # deploy-integrity R7: absent and unreadable are different answers and must read differently.
           RC=0
-          for IMG in loom-lineage-extractor loom-secret-expiry-monitor; do
+          for IMG in loom-lineage-extractor loom-secret-expiry-monitor loom-report-subscriptions; do
             set +e
             D=$(bash "$GITHUB_WORKSPACE/scripts/ci/resolve-acr-digest.sh" --acr "$ACR" --image "$IMG:latest")
             DRC=$?
