@@ -258,6 +258,11 @@ type adxConfigT = {
   @description('ADX cluster SKU. Dev(No SLA) SKUs are ~$140/mo and are COMMERCIAL-ONLY — Azure Government offers no Dev/Basic-tier ADX SKU in usgovvirginia or usgovarizona (MEASURED 2026-08-27, gov-adx-sku-probe run 33120409251). The six Standard_E*as_v5 / E80ids_v4 entries are the intersection of what both Gov regions offer. Standard tier has a 2-node minimum, so a Gov cluster costs two instances, not one (#4141, #4072).')
   adxSkuName: ('Dev(No SLA)_Standard_E2a_v4' | 'Dev(No SLA)_Standard_D11_v2' | 'Standard_E2a_v4' | 'Standard_E4a_v4' | 'Standard_E8a_v4' | 'Standard_E16a_v4' | 'Standard_E2ads_v5' | 'Standard_E4ads_v5' | 'Standard_E8as_v5+1TB_PS' | 'Standard_E8as_v5+2TB_PS' | 'Standard_E16as_v5+3TB_PS' | 'Standard_E16as_v5+4TB_PS' | 'Standard_E80ids_v4' | 'Standard_E80ids_v4+32TB_PS' | 'Standard_L8as_v3')?
 
+  @description('Explicit ADX cluster name (4-22 chars, lowercase letters, digits and hyphens). Unset = the derived name adx-csa-loom-<6 hex of the subscription id>. Needed when a deleted cluster\'s name is still reserved (Gov run 42106150785: InvalidClusterName "already taken" about 20 hours after the delete). A landing zone attaching to this cluster must be given the same name (LOOM_ADMIN_ADX_CLUSTER / adminPlaneAdxClusterName).')
+  @minLength(4)
+  @maxLength(22)
+  adxClusterName: string?
+
   @description('Enable ADX optimized auto-scale. Requires a Standard-tier adxSkuName (Basic/Dev SKUs reject it).')
   adxEnableOptimizedAutoscale: bool?
 
@@ -536,6 +541,8 @@ var sparkKeepWarmCron = functionAppsConfig.?sparkKeepWarmCron ?? '*/5 * * * *'
 // copilot-evaluator-job.bicep. Must match that the module default.
 var copilotEvalJudgeDailyCap = functionAppsConfig.?copilotEvalJudgeDailyCap ?? 5000
 var adxSkuName = adxConfig.?adxSkuName ?? 'Dev(No SLA)_Standard_E2a_v4'
+// Same expression as adx-cluster.bicep's own default, so a boundary that sets no name keeps its derived name.
+var adxClusterNameEff = adxConfig.?adxClusterName ?? 'adx-csa-loom-${take(uniqueString(subscription().id), 6)}'
 var adxEnableOptimizedAutoscale = adxConfig.?adxEnableOptimizedAutoscale ?? false
 var adxAutoscaleMinimum = adxConfig.?adxAutoscaleMinimum ?? 2
 var adxAutoscaleMaximum = adxConfig.?adxAutoscaleMaximum ?? 10
@@ -3904,6 +3911,7 @@ module adxCluster 'adx-cluster.bicep' = if (adxEnabled && empty(existingAdxClust
   name: 'adx-cluster'
   params: {
     location: location
+    clusterName: adxClusterNameEff
     skuName: effectiveAdxSkuName
     enableOptimizedAutoscale: adxEnableOptimizedAutoscale
     autoscaleMinimum: adxAutoscaleMinimum
