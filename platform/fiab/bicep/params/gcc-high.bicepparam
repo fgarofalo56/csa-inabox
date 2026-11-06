@@ -400,8 +400,11 @@ param adxEnabled = true
 // capacity (deploy run 41875055921). L8as_v3 is offered in BOTH Gov regions this
 // estate targets. The live cluster must be scaled to it out-of-band BEFORE the next
 // full apply or the preflight dies again; this value stops the apply reverting it.
+// adxClusterName: the deleted cluster's name (adx-csa-loom-fmezxj) was still 'already taken' about 20 hours after
+// the delete (Gov run 42106150785). Any landing zone attaching to this cluster needs the same name.
 param adxConfig = {
   adxSkuName: 'Standard_L8as_v3'
+  adxClusterName: 'adx-csa-loom-gcch1'
 }
 // RTI backends — Event Hubs + Stream Analytics ON by default (opt-out). Entra-
 // only auth (the only IL5/GCC-High-allowed posture). Set the env var to 'false'
