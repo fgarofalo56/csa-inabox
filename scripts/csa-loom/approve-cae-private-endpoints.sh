@@ -104,12 +104,28 @@ API_CANDIDATES="2024-10-02-preview 2024-08-02-preview 2024-02-02-preview 2023-11
 API_VERSION=""
 LAST_API_ERR=""
 
+# The ARM host is the ACTIVE cloud's, never a literal: Gov run 42335318755 hit
+# `SubscriptionNotFound` because this script called management.azure.com from an
+# AzureUSGovernment session. An unreadable endpoint is an error, not a default.
+if [ -z "${RM_ENDPOINT:-}" ]; then
+  if ! RM_ENDPOINT="$(az cloud show --query endpoints.resourceManager -o tsv 2>&1)"; then
+    echo "::error::approve-cae-private-endpoints: could not read the active cloud's Resource Manager endpoint (az cloud show failed): ${RM_ENDPOINT}"
+    exit 1
+  fi
+fi
+RM_ENDPOINT="$(printf '%s' "$RM_ENDPOINT" | tr -d '[:space:]')"
+RM_ENDPOINT="${RM_ENDPOINT%/}"
+case "$RM_ENDPOINT" in
+  https://*) ;;
+  *) echo "::error::approve-cae-private-endpoints: the Resource Manager endpoint '${RM_ENDPOINT}' is not an https URL; refusing to call it."; exit 1 ;;
+esac
+
 read_connections() {
   # Emits the raw JSON on stdout; returns 0 only when a version actually answered.
   local v out
   for v in ${API_VERSION:-$API_CANDIDATES}; do
     out="$(az rest --method get \
-      --url "https://management.azure.com${CAE_ID}/privateEndpointConnections?api-version=${v}" \
+      --url "${RM_ENDPOINT}${CAE_ID}/privateEndpointConnections?api-version=${v}" \
       -o json 2>&1 | grep -v '^WARNING')"
     if printf '%s' "$out" | grep -q '"value"'; then
       API_VERSION="$v"
@@ -157,7 +173,7 @@ while :; do
       echo "[cae-pe] approving pending connection '${conn##*/}'"
       set +e
       APV_OUT="$(az rest --method put \
-        --url "https://management.azure.com${conn}?api-version=${API_VERSION}" \
+        --url "${RM_ENDPOINT}${conn}?api-version=${API_VERSION}" \
         --headers "Content-Type=application/json" \
         --body '{"properties":{"privateLinkServiceConnectionState":{"status":"Approved","description":"Auto-approved by CSA Loom deploy (Front Door -> Container Apps env)"}}}' \
         -o none 2>&1)"
