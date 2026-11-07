@@ -112,7 +112,10 @@ var contacts = {
   contactRoles: ['Owner']
 }
 
-resource programBudget 'Microsoft.Consumption/budgets@2024-08-01' = {
+// 2023-11-01, not 2024-08-01: Gov run 42325936769 failed `InvalidResourceType ... 'Budgets' could not be found in the
+// namespace 'Microsoft.Consumption' for api version '2024-08-01'`; the Gov RP lists 2023-11-01 as supported. Every
+// property used below exists in 2023-11-01, and it is also valid in Commercial, so one version serves every boundary.
+resource programBudget 'Microsoft.Consumption/budgets@2023-11-01' = {
   name: budgetName
   properties: {
     category: 'Cost'
