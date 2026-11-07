@@ -75,7 +75,7 @@ RUN set -euo pipefail; \
         ca-certificates curl jq git unzip gnupg lsb-release apt-transport-https \
         sudo libicu70 liblttng-ust1 libssl3 zlib1g libatomic1 acl \
         software-properties-common \
-        make build-essential python3-pip python3-venv python3-dev \
+        make build-essential python3-pip python3-venv python3-dev python-is-python3 \
         zip rsync openssh-client; \
     rm -rf /var/lib/apt/lists/*
 
