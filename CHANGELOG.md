@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.120.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.119.0...csa-inabox-v0.120.0) (2026-11-07)
+
+
+### Features
+
+* **lhds:** bootstrap control-plane Entra wiring (fed credential, HealthCP roles, allowlist) ([#5223](https://github.com/fgarofalo56/csa-inabox/issues/5223)) ([0d6f0c6](https://github.com/fgarofalo56/csa-inabox/commit/0d6f0c6a62a9ffdd1e699e85017d1246fb6f3d0e))
+
 ## [0.119.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.118.0...csa-inabox-v0.119.0) (2026-11-07)
 
 
