@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "14914195829028935881"
+      "templateHash": "12572535011997427948"
     }
   },
   "definitions": {
@@ -67946,7 +67946,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "3557289169492134669"
+              "templateHash": "16829771756775306814"
             }
           },
           "parameters": {
@@ -68018,7 +68018,7 @@
           "resources": [
             {
               "type": "Microsoft.Consumption/budgets",
-              "apiVersion": "2024-08-01",
+              "apiVersion": "2023-11-01",
               "name": "[parameters('budgetName')]",
               "properties": {
                 "category": "Cost",
