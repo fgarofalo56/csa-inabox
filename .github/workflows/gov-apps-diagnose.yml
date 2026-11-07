@@ -1,0 +1,92 @@
+name: gov-apps-diagnose
+
+# READ-ONLY Gov diagnosis of the secondary Container Apps behind Front Door. Refs #5123.
+#
+# Gov run 42341756803: Provision succeeded and Console /api/health answers 200 through
+# Front Door, but MCP, Setup Orchestrator, Direct-Lake-Shim, activator-engine and
+# mirroring-engine return a Front Door 404. A workstation cannot read the Gov estate, so
+# the cause (app absent, app unhealthy, FD route/origin missing, not yet propagated) is
+# unmeasured. This prints, per app: provisioning/running state, image, replicas, ingress
+# FQDN; plus the Front Door profiles' routes and origins.
+#
+# Every Azure call is list/show. No create, update, delete or role assignment may be
+# added here. A read that fails prints UNREADABLE and fails the run: it never degrades
+# into "nothing found" (deploy-integrity.md R7). `az cloud set` and `az extension add`
+# only change the runner's CLI profile.
+
+on:
+  workflow_dispatch:
+    inputs:
+      resource_group:
+        description: Admin-plane resource group
+        default: rg-csa-loom-admin-usgovvirginia
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RG: ${{ inputs.resource_group }}
+    steps:
+      - name: Azure login (Gov)
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Install the containerapp and front-door CLI extensions
+        run: az extension add --name containerapp --only-show-errors && az extension add --name front-door --only-show-errors
+
+      - name: Container Apps in the admin RG
+        run: |
+          set -euo pipefail
+          az containerapp list -g "$RG" --query "[].{name:name, prov:properties.provisioningState, run:properties.runningStatus, rev:properties.latestReadyRevisionName, fqdn:properties.configuration.ingress.fqdn, ext:properties.configuration.ingress.external, image:properties.template.containers[0].image, minR:properties.template.scale.minReplicas}" -o table
+
+      - name: Replicas and revision health per app
+        run: |
+          set -uo pipefail
+          FAIL=0
+          for app in $(az containerapp list -g "$RG" --query "[].name" -o tsv); do
+            echo "== $app"
+            if ! az containerapp revision list -g "$RG" -n "$app" --query "[].{rev:name, active:properties.active, health:properties.healthState, run:properties.runningState, replicas:properties.replicas}" -o table; then
+              echo "UNREADABLE: revisions of $app"; FAIL=1
+            fi
+          done
+          exit $FAIL
+
+      - name: Front Door profiles, endpoints, origins, routes
+        run: |
+          set -uo pipefail
+          FAIL=0
+          PROFILES=$(az afd profile list -g "$RG" --query "[].name" -o tsv) || { echo "UNREADABLE: afd profiles"; exit 1; }
+          [ -n "$PROFILES" ] || { echo "No Front Door profile in $RG (this is a measured absence: the list call succeeded)."; exit 0; }
+          for p in $PROFILES; do
+            echo "== profile $p"
+            az afd endpoint list -g "$RG" --profile-name "$p" --query "[].{name:name, host:hostName, state:enabledState}" -o table || { echo "UNREADABLE: endpoints"; FAIL=1; }
+            for og in $(az afd origin-group list -g "$RG" --profile-name "$p" --query "[].name" -o tsv); do
+              echo "-- origin group $og"
+              az afd origin list -g "$RG" --profile-name "$p" --origin-group-name "$og" --query "[].{name:name, host:hostName, state:enabledState}" -o table || { echo "UNREADABLE: origins of $og"; FAIL=1; }
+            done
+            for ep in $(az afd endpoint list -g "$RG" --profile-name "$p" --query "[].name" -o tsv); do
+              echo "-- routes of endpoint $ep"
+              az afd route list -g "$RG" --profile-name "$p" --endpoint-name "$ep" --query "[].{name:name, group:originGroup.id, patterns:patternsToMatch, state:enabledState}" -o table || { echo "UNREADABLE: routes of $ep"; FAIL=1; }
+            done
+          done
+          exit $FAIL
