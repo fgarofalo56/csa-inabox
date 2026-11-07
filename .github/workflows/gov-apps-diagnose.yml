@@ -1,15 +1,18 @@
 name: gov-apps-diagnose
 
-# READ-ONLY Gov diagnosis of the secondary Container Apps behind Front Door. Refs #5123.
+# READ-ONLY Gov diagnosis of the Container Apps behind Front Door. Refs #5123.
 #
 # Gov run 42341756803: Provision succeeded and Console /api/health answers 200 through
 # Front Door, but MCP, Setup Orchestrator, Direct-Lake-Shim, activator-engine and
-# mirroring-engine return a Front Door 404. A workstation cannot read the Gov estate, so
-# the cause (app absent, app unhealthy, FD route/origin missing, not yet propagated) is
-# unmeasured. This prints, per app: provisioning/running state, image, replicas, ingress
-# FQDN; plus the Front Door profiles' routes and origins.
+# mirroring-engine return a Front Door 404. First run of this workflow (42388902521)
+# showed why: the :v0.1 revisions of loom-mcp, loom-mcp-bridge, loom-activator,
+# loom-mirroring and loom-direct-lake-shim are Unhealthy/ActivationFailed, and
+# loom-setup-orchestrator, loom-presidio-analyzer and loom-presidio-anonymizer are
+# provisioningState Failed. This version prints WHY: per unhealthy revision the
+# runningStateDetails and the system log tail, and the Front Door tree via ARM REST
+# (the `az afd` commands pulled a preview `cdn` extension whose api-version Gov lacks).
 #
-# Every Azure call is list/show. No create, update, delete or role assignment may be
+# Every Azure call is list/show/logs. No create, update, delete or role assignment may be
 # added here. A read that fails prints UNREADABLE and fails the run: it never degrades
 # into "nothing found" (deploy-integrity.md R7). `az cloud set` and `az extension add`
 # only change the runner's CLI profile.
@@ -27,7 +30,7 @@ permissions:
 jobs:
   diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       RG: ${{ inputs.resource_group }}
     steps:
@@ -51,42 +54,53 @@ jobs:
       - name: Set Azure cloud to Gov
         run: az cloud set --name AzureUSGovernment
 
-      - name: Install the containerapp and front-door CLI extensions
-        run: az extension add --name containerapp --only-show-errors && az extension add --name front-door --only-show-errors
+      - name: Install the containerapp CLI extension
+        run: az extension add --name containerapp --only-show-errors
 
       - name: Container Apps in the admin RG
         run: |
           set -euo pipefail
-          az containerapp list -g "$RG" --query "[].{name:name, prov:properties.provisioningState, run:properties.runningStatus, rev:properties.latestReadyRevisionName, fqdn:properties.configuration.ingress.fqdn, ext:properties.configuration.ingress.external, image:properties.template.containers[0].image, minR:properties.template.scale.minReplicas}" -o table
+          az containerapp list -g "$RG" --query "[].{name:name, prov:properties.provisioningState, run:properties.runningStatus, rev:properties.latestReadyRevisionName, image:properties.template.containers[0].image}" -o table
 
-      - name: Replicas and revision health per app
+      - name: Why each unhealthy revision or Failed app is not running
         run: |
           set -uo pipefail
           FAIL=0
           for app in $(az containerapp list -g "$RG" --query "[].name" -o tsv); do
-            echo "== $app"
-            if ! az containerapp revision list -g "$RG" -n "$app" --query "[].{rev:name, active:properties.active, health:properties.healthState, run:properties.runningState, replicas:properties.replicas}" -o table; then
-              echo "UNREADABLE: revisions of $app"; FAIL=1
-            fi
+            PROV=$(az containerapp show -g "$RG" -n "$app" --query properties.provisioningState -o tsv) || { echo "UNREADABLE: $app"; FAIL=1; continue; }
+            BAD=$(az containerapp revision list -g "$RG" -n "$app" --query "[?properties.healthState!='Healthy' && properties.runningState!='ScaledToZero'].name" -o tsv) || { echo "UNREADABLE: revisions of $app"; FAIL=1; continue; }
+            if [ "$PROV" = "Succeeded" ] && [ -z "$BAD" ]; then continue; fi
+            echo "================ $app  provisioningState=$PROV"
+            az containerapp show -g "$RG" -n "$app" --query "{image:properties.template.containers[0].image, cpu:properties.template.containers[0].resources.cpu, mem:properties.template.containers[0].resources.memory, ingress:properties.configuration.ingress.targetPort, registries:properties.configuration.registries[].server, identity:identity.type}" -o json || { echo "UNREADABLE: show $app"; FAIL=1; }
+            for rev in $BAD; do
+              echo "---- revision $rev"
+              az containerapp revision show -g "$RG" -n "$app" --revision "$rev" --query "{health:properties.healthState, run:properties.runningState, details:properties.runningStateDetails, created:properties.createdTime, replicas:properties.replicas}" -o json || { echo "UNREADABLE: revision show $rev"; FAIL=1; }
+            done
+            echo "---- system log tail"
+            az containerapp logs show -g "$RG" -n "$app" --type system --tail 30 --format text || echo "system log not readable for $app (not a verdict)"
           done
           exit $FAIL
 
-      - name: Front Door profiles, endpoints, origins, routes
+      - name: Front Door profiles, endpoints, origins, routes (ARM REST)
         run: |
           set -uo pipefail
           FAIL=0
-          PROFILES=$(az afd profile list -g "$RG" --query "[].name" -o tsv) || { echo "UNREADABLE: afd profiles"; exit 1; }
-          [ -n "$PROFILES" ] || { echo "No Front Door profile in $RG (this is a measured absence: the list call succeeded)."; exit 0; }
+          RM=$(az cloud show --query endpoints.resourceManager -o tsv | tr -d '[:space:]'); RM=${RM%/}
+          SUB=$(az account show --query id -o tsv)
+          BASE="$RM/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.Cdn/profiles"
+          API="api-version=2021-06-01"
+          PROFILES=$(az rest --method get --url "$BASE?$API" --query "value[].name" -o tsv) || { echo "UNREADABLE: front door profiles"; exit 1; }
+          [ -n "$PROFILES" ] || { echo "No Front Door profile in $RG (measured absence: the list call succeeded)."; exit 0; }
           for p in $PROFILES; do
             echo "== profile $p"
-            az afd endpoint list -g "$RG" --profile-name "$p" --query "[].{name:name, host:hostName, state:enabledState}" -o table || { echo "UNREADABLE: endpoints"; FAIL=1; }
-            for og in $(az afd origin-group list -g "$RG" --profile-name "$p" --query "[].name" -o tsv); do
+            az rest --method get --url "$BASE/$p/afdEndpoints?$API" --query "value[].{name:name, host:properties.hostName, state:properties.enabledState}" -o table || { echo "UNREADABLE: endpoints"; FAIL=1; }
+            for og in $(az rest --method get --url "$BASE/$p/originGroups?$API" --query "value[].name" -o tsv); do
               echo "-- origin group $og"
-              az afd origin list -g "$RG" --profile-name "$p" --origin-group-name "$og" --query "[].{name:name, host:hostName, state:enabledState}" -o table || { echo "UNREADABLE: origins of $og"; FAIL=1; }
+              az rest --method get --url "$BASE/$p/originGroups/$og/origins?$API" --query "value[].{name:name, host:properties.hostName, state:properties.enabledState, privateLink:properties.sharedPrivateLinkResource.privateLink.id}" -o table || { echo "UNREADABLE: origins of $og"; FAIL=1; }
             done
-            for ep in $(az afd endpoint list -g "$RG" --profile-name "$p" --query "[].name" -o tsv); do
+            for ep in $(az rest --method get --url "$BASE/$p/afdEndpoints?$API" --query "value[].name" -o tsv); do
               echo "-- routes of endpoint $ep"
-              az afd route list -g "$RG" --profile-name "$p" --endpoint-name "$ep" --query "[].{name:name, group:originGroup.id, patterns:patternsToMatch, state:enabledState}" -o table || { echo "UNREADABLE: routes of $ep"; FAIL=1; }
+              az rest --method get --url "$BASE/$p/afdEndpoints/$ep/routes?$API" --query "value[].{name:name, group:properties.originGroup.id, patterns:properties.patternsToMatch, state:properties.enabledState}" -o table || { echo "UNREADABLE: routes of $ep"; FAIL=1; }
             done
           done
           exit $FAIL
