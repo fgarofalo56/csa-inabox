@@ -33,8 +33,10 @@
    URL for the LHDS authorization server, which the APIM fragment requires.
 6. **Per-stamp PDP data and bundle publishing pipeline** (see
    [greenfield](greenfield.md#not-yet-implemented)).
-7. **`HealthCP.Reader` app role**, **Console UAMI in `allowedCallerAppIds`** and
-   **`HealthCP.Admin`** are manual Entra steps.
+7. **`HealthCP.Reader` / `HealthCP.Admin` app roles**, the federated credential and
+   the caller allowlist are done by the post-deploy bootstrap step
+   `bootstrap-health-cp-entra.mjs` (#5163; merged, not deployed, never run against a
+   tenant). It needs the Graph permissions named in its failure output.
 
 ## Interim operator path (unverified)
 

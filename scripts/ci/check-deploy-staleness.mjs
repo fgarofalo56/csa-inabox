@@ -171,6 +171,8 @@ export const WATCHED = [
       'azure-functions/posture-refresh/**',
       'azure-functions/report-subscriptions/**',
       'scripts/csa-loom/bootstrap-msal-app-reg.sh',
+      // #5163 — the bootstrap wires the LHDS control-plane Entra objects through this script.
+      'scripts/csa-loom/bootstrap-health-cp-entra.mjs',
       'scripts/csa-loom/bootstrap-weave-pg.sh',
       'scripts/csa-loom/dataverse-add-appuser.sh',
       'scripts/csa-loom/enable-all-diagnostics.sh',

@@ -54,9 +54,14 @@ availability assumption.
   register them or pass an ARM adapter, so a `health-tenant` create cannot run
   the job end to end today.
 - The authorization server is not wired into `compose.ts` / `main.ts`.
-- Console UAMI client id is not in `allowedCallerAppIds`, and the `HealthCP.Admin`
-  app role is a manual Entra step. `HealthCP.Reader` (PDP bundle fetch) is also a
-  manual Entra step; see #5140 for the endpoint not scoping by stamp.
+- The Entra wiring (federated credential on the authorization-server app,
+  `HealthCP.Reader` to the APIM gateway, `HealthCP.Admin` to the Console UAMI, both
+  ids in `LOOM_HEALTH_CP_ALLOWED_CALLER_APP_IDS`) is done by the post-deploy bootstrap
+  step "LHDS control-plane Entra wiring" (`scripts/csa-loom/bootstrap-health-cp-entra.mjs`,
+  #5163). Merged, not deployed; offline-tested only, never run against a tenant, Commercial
+  or GCC-High. Container Apps control plane only (aks refused). Re-run the bootstrap after
+  a deploy-health run: health.bicep re-renders the allowlist env var. The PDP bundle
+  endpoint not scoping by stamp is still #5140.
 - Per-stamp PDP data (`data.lhds.config` / `data.lhds.stamp`) and a bundle
   publishing pipeline do not exist. The control plane serves a bundle from a
   directory (`pdpBundleDir`); a served bundle denies everything until populated.
