@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.120.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.120.1...csa-inabox-v0.120.2) (2026-11-07)
+
+
+### Bug Fixes
+
+* **gov:** resolve the ARM host from the active cloud in approve-cae-private-endpoints ([#5255](https://github.com/fgarofalo56/csa-inabox/issues/5255)) ([1126de1](https://github.com/fgarofalo56/csa-inabox/commit/1126de168d972792cc13763e162ee62364a7f95c)), closes [#5123](https://github.com/fgarofalo56/csa-inabox/issues/5123)
+
 ## [0.120.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.120.0...csa-inabox-v0.120.1) (2026-11-07)
 
 
