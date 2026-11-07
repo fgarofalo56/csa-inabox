@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.120.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.120.0...csa-inabox-v0.120.1) (2026-11-07)
+
+
+### Bug Fixes
+
+* **gov:** use a Microsoft.Consumption/budgets api version Azure Government supports ([#5251](https://github.com/fgarofalo56/csa-inabox/issues/5251)) ([dee03c2](https://github.com/fgarofalo56/csa-inabox/commit/dee03c2bc1696b2f1ae046feb6203c1625eb79e0)), closes [#5123](https://github.com/fgarofalo56/csa-inabox/issues/5123)
+
 ## [0.120.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.119.0...csa-inabox-v0.120.0) (2026-11-07)
 
 
