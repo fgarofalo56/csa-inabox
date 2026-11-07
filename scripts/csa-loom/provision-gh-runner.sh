@@ -101,7 +101,7 @@ RUNNER_UAMI_ID="${RUNNER_UAMI_ID:-/subscriptions/${SUB}/resourceGroups/${ADMIN_R
 # REFUSE to provision with the console identity, however it was supplied. A
 # comment is not a control: without this, one stale env var or one copy-pasted
 # command silently restores subscription Contributor to CI.
-case "$RUNNER_UAMI_ID" in
+case "${RUNNER_UAMI_ID,,}" in
   *uami-loom-console*)
     cat >&2 <<'IDERR'
 [provision-gh-runner][FATAL] RUNNER_UAMI_ID names the CONSOLE identity.
