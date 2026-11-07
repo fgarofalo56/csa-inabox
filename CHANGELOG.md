@@ -25,6 +25,46 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.119.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.118.0...csa-inabox-v0.119.0) (2026-11-07)
+
+
+### Features
+
+* **gov:** add a create-and-delete ADX capacity probe for usgovarizona ([#5247](https://github.com/fgarofalo56/csa-inabox/issues/5247)) ([e511211](https://github.com/fgarofalo56/csa-inabox/commit/e5112111baa93a7acca441077bd0402562066ee2))
+* **gov:** build the third literal-:latest Job image, loom-report-subscriptions, on the Gov ACR ([af810af](https://github.com/fgarofalo56/csa-inabox/commit/af810af61b2419d4760d1d02b34c9b29d99b8dc7))
+* **gov:** build the two Container App Job images on the Gov ACR and name them in the preflight ([fe48794](https://github.com/fgarofalo56/csa-inabox/commit/fe48794b37792822708e53e1825060c7f0c18669))
+* **gov:** explicit ADX cluster name via adxConfig; GCC-High uses adx-csa-loom-gcch1 ([6b4b78e](https://github.com/fgarofalo56/csa-inabox/commit/6b4b78e6308f9ca3cb6d18e16316c35c32ef6e31))
+* **gov:** place AI Search in usgovarizona for GCC-High via aiSearchLocation ([6c1f29c](https://github.com/fgarofalo56/csa-inabox/commit/6c1f29c301222545e39ab2184a8f6cc103ba31c6))
+* **gov:** place the GCC-High ADX cluster in usgovarizona via adxConfig.adxLocation ([4f4b78d](https://github.com/fgarofalo56/csa-inabox/commit/4f4b78d3cb425b5971357a10a83e902b9778b0d1))
+* **health:** PDP bundle publishing pipeline and control-plane publish target (W1-5) ([2c2543b](https://github.com/fgarofalo56/csa-inabox/commit/2c2543b3c3cf5fd055e36834fab6dfec51492b42))
+
+
+### Bug Fixes
+
+* **deploy:** classify a wrapped authorization denial as permission, not a Loom defect ([ef85cd6](https://github.com/fgarofalo56/csa-inabox/commit/ef85cd6fb4eaac200496cc5a7aba9e4abd273c07))
+* **deploy:** converge every named RoleAssignmentExists stray in one pass; retry the Accepted-account race ([ca0c925](https://github.com/fgarofalo56/csa-inabox/commit/ca0c925dcf885f8ec25b6f2614b35c1f23ee8c19))
+* **gov:** export LOOM_ALLOW_IMAGE_TAG_REVERT to the GCC-High revert gate ([4c5dbd4](https://github.com/fgarofalo56/csa-inabox/commit/4c5dbd43f42b9ade531b4bf662ca74290cab1043))
+* **gov:** make the ADX capacity probe read the operation error, not just the generic deployment one ([#5248](https://github.com/fgarofalo56/csa-inabox/issues/5248)) ([ffb99b8](https://github.com/fgarofalo56/csa-inabox/commit/ffb99b8955d083a5eaac73a50d9e15eaa6e4e9e9)), closes [#5123](https://github.com/fgarofalo56/csa-inabox/issues/5123)
+* **gov:** move GCC-High ADX to Standard_L8as_v3, the SKU Virginia still offers ([b009279](https://github.com/fgarofalo56/csa-inabox/commit/b0092799c16553ae8b10d5ee761dd1e4c3cad468))
+* **gov:** pin-refresh honours LOOM_ALLOW_IMAGE_TAG_REVERT for digest-pinned apps ([b0b1447](https://github.com/fgarofalo56/csa-inabox/commit/b0b144704eadc7308ec37f0cd2429615c2710f0c))
+* **gov:** record each ARM leaf's deployment chain and upload the Provision failure artifact ([d1635ad](https://github.com/fgarofalo56/csa-inabox/commit/d1635ada627e75deb8b860a2af9dcf6956cd1039))
+* **gov:** scope lake-grant modules to the adopted lake's resource group; drop allLogs on the Redis Container App ([5969522](https://github.com/fgarofalo56/csa-inabox/commit/5969522167a80823a41ce0816f5638f0f9c6484a))
+* **gov:** turn ADX off for GCC-High until a SKU is accepted (capacity probe) ([#5249](https://github.com/fgarofalo56/csa-inabox/issues/5249)) ([f31f5f8](https://github.com/fgarofalo56/csa-inabox/commit/f31f5f84883350cf55b93ec060ad4de6161fe6f1)), closes [#5123](https://github.com/fgarofalo56/csa-inabox/issues/5123)
+* **gov:** wait on the sustained ACR data-plane probe in the adoption image preflight ([432bc58](https://github.com/fgarofalo56/csa-inabox/commit/432bc5837d36cb45125eef84af2948f49f5de140))
+
+
+### Documentation
+
+* **lhds:** record the 2026-11-05/06 Gov deploy-lane PRs as merged, not deployed ([#5224](https://github.com/fgarofalo56/csa-inabox/issues/5224) [#5227](https://github.com/fgarofalo56/csa-inabox/issues/5227)-[#5240](https://github.com/fgarofalo56/csa-inabox/issues/5240)) ([b2ff899](https://github.com/fgarofalo56/csa-inabox/commit/b2ff89929ae59f73df3cafeebf41904746da3faa))
+* **lhds:** record W1 follow-ups as merged, not deployed ([#5220](https://github.com/fgarofalo56/csa-inabox/issues/5220)) ([8c17480](https://github.com/fgarofalo56/csa-inabox/commit/8c17480e9cc2772931d9e90ebc833025b6646e39))
+
+
+### Miscellaneous
+
+* **gov:** expire the GCC-High pause declaration again for the fresh-cluster deploy ([4fe9781](https://github.com/fgarofalo56/csa-inabox/commit/4fe97815d8a7892a67e0eb0be54773b229be4436))
+* **gov:** expire the GCC-High pause declaration for one validation window ([23a8909](https://github.com/fgarofalo56/csa-inabox/commit/23a8909dbba1a261b2f26bf3d904b7371652bbff))
+* **gov:** restore the GCC-High pause declaration after the ADX capacity block ([0f07b0d](https://github.com/fgarofalo56/csa-inabox/commit/0f07b0da4ec46ec1bc626553285d313832d25dc8))
+
 ## [0.118.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.117.1...csa-inabox-v0.118.0) (2026-11-03)
 
 
