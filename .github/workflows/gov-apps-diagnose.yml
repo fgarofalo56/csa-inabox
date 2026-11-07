@@ -76,8 +76,11 @@ jobs:
               echo "---- revision $rev"
               az containerapp revision show -g "$RG" -n "$app" --revision "$rev" --query "{health:properties.healthState, run:properties.runningState, details:properties.runningStateDetails, created:properties.createdTime, replicas:properties.replicas}" -o json || { echo "UNREADABLE: revision show $rev"; FAIL=1; }
             done
-            echo "---- system log tail"
-            az containerapp logs show -g "$RG" -n "$app" --type system --tail 30 --format text || echo "system log not readable for $app (not a verdict)"
+            # system logs only support --format json (run 42397249545: "only json logs supported")
+            echo "---- system log tail (json)"
+            az containerapp logs show -g "$RG" -n "$app" --type system --tail 30 --format json || echo "system log not readable for $app (not a verdict)"
+            echo "---- console log tail (the app's own stdout/stderr, if a replica ever started)"
+            az containerapp logs show -g "$RG" -n "$app" --type console --tail 30 --format text || echo "console log not readable for $app (not a verdict)"
           done
           exit $FAIL
 
