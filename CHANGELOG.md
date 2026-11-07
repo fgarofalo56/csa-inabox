@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.122.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.121.0...csa-inabox-v0.122.0) (2026-11-07)
+
+
+### Features
+
+* **gov:** add a read-only Gov apps/Front Door diagnosis workflow ([#5259](https://github.com/fgarofalo56/csa-inabox/issues/5259)) ([ca1430b](https://github.com/fgarofalo56/csa-inabox/commit/ca1430bf1011f07bc05cad0bda1459cef0a646ec)), closes [#5123](https://github.com/fgarofalo56/csa-inabox/issues/5123)
+
 ## [0.121.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.120.2...csa-inabox-v0.121.0) (2026-11-07)
 
 
